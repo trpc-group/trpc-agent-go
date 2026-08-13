@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -596,15 +597,128 @@ func encodeSnapshotStateValue(value replaytest.StateValueSnapshot) ([]byte, erro
 	}
 }
 
+func encodeJSONLikeRaw(value any) (json.RawMessage, error) {
+	prepared, err := prepareJSONLikeRaw(value)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(prepared)
+	if err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
+func prepareJSONLikeRawFields(values map[string]any) (map[string]any, error) {
+	if values == nil {
+		return nil, nil
+	}
+	prepared, err := prepareJSONLikeRaw(values)
+	if err != nil {
+		return nil, err
+	}
+	fields, ok := prepared.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("extra fields have type %T", prepared)
+	}
+	return fields, nil
+}
+
+func prepareJSONLikeRaw(value any) (any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	return prepareJSONLikeRawValue(reflect.ValueOf(value))
+}
+
+func prepareJSONLikeRawValue(value reflect.Value) (any, error) {
+	if !value.IsValid() {
+		return nil, nil
+	}
+	if value.CanInterface() {
+		switch typed := value.Interface().(type) {
+		case json.RawMessage:
+			return validRawJSON(typed)
+		case []byte:
+			return validRawJSON(typed)
+		}
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return nil, nil
+		}
+		return prepareJSONLikeRawValue(value.Elem())
+	case reflect.Map:
+		return prepareJSONLikeRawMap(value)
+	case reflect.Slice, reflect.Array:
+		return prepareJSONLikeRawSlice(value)
+	default:
+		if value.CanInterface() {
+			return value.Interface(), nil
+		}
+		return fmt.Sprint(value), nil
+	}
+}
+
+func prepareJSONLikeRawMap(value reflect.Value) (map[string]any, error) {
+	if value.IsNil() {
+		return nil, nil
+	}
+	if value.Type().Key().Kind() != reflect.String {
+		return nil, fmt.Errorf("map key type %s is not supported", value.Type().Key())
+	}
+	prepared := make(map[string]any, value.Len())
+	iterator := value.MapRange()
+	for iterator.Next() {
+		item, err := prepareJSONLikeRawValue(iterator.Value())
+		if err != nil {
+			return nil, err
+		}
+		prepared[iterator.Key().String()] = item
+	}
+	return prepared, nil
+}
+
+func prepareJSONLikeRawSlice(value reflect.Value) ([]any, error) {
+	if value.Kind() == reflect.Slice && value.IsNil() {
+		return nil, nil
+	}
+	prepared := make([]any, value.Len())
+	for i := 0; i < value.Len(); i++ {
+		item, err := prepareJSONLikeRawValue(value.Index(i))
+		if err != nil {
+			return nil, err
+		}
+		prepared[i] = item
+	}
+	return prepared, nil
+}
+
+func validRawJSON(raw []byte) (json.RawMessage, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	var decoded any
+	if err := decodeJSONUseNumber(raw, &decoded); err != nil {
+		return nil, fmt.Errorf("invalid raw JSON: %w", err)
+	}
+	return json.RawMessage(append([]byte(nil), raw...)), nil
+}
+
 func toEvent(snapshot *replaytest.EventSnapshot) (*event.Event, error) {
 	message := model.Message{
 		Role:    model.Role(snapshot.Role),
 		Content: snapshot.Content,
 	}
 	for _, call := range snapshot.ToolCalls {
-		arguments, err := json.Marshal(call.Arguments)
+		arguments, err := encodeJSONLikeRaw(call.Arguments)
 		if err != nil {
 			return nil, fmt.Errorf("marshal tool call %q arguments: %w", call.ID, err)
+		}
+		extra, err := prepareJSONLikeRawFields(call.Extra)
+		if err != nil {
+			return nil, fmt.Errorf("marshal tool call %q extra: %w", call.ID, err)
 		}
 		message.ToolCalls = append(message.ToolCalls, model.ToolCall{
 			Type: "function",
@@ -613,7 +727,7 @@ func toEvent(snapshot *replaytest.EventSnapshot) (*event.Event, error) {
 				Name:      call.Name,
 				Arguments: arguments,
 			},
-			ExtraFields: call.Extra,
+			ExtraFields: extra,
 		})
 	}
 	if snapshot.ToolResponse != nil {
@@ -624,19 +738,19 @@ func toEvent(snapshot *replaytest.EventSnapshot) (*event.Event, error) {
 	}
 	extensions := make(map[string]json.RawMessage, len(snapshot.Extensions)+1)
 	for key, value := range snapshot.Extensions {
-		encoded, err := json.Marshal(value)
+		encoded, err := encodeJSONLikeRaw(value)
 		if err != nil {
 			return nil, fmt.Errorf("marshal event extension %q: %w", key, err)
 		}
 		extensions[key] = encoded
 	}
+	if hasReservedToolResponseExtraExtension(snapshot.Extensions) {
+		return nil, fmt.Errorf(
+			"event extension %q is reserved", toolResponseExtraExtensionKey,
+		)
+	}
 	if snapshot.ToolResponse != nil && len(snapshot.ToolResponse.Extra) > 0 {
-		if _, exists := extensions[toolResponseExtraExtensionKey]; exists {
-			return nil, fmt.Errorf(
-				"event extension %q is reserved", toolResponseExtraExtensionKey,
-			)
-		}
-		encoded, err := json.Marshal(snapshot.ToolResponse.Extra)
+		encoded, err := encodeJSONLikeRaw(snapshot.ToolResponse.Extra)
 		if err != nil {
 			return nil, fmt.Errorf("marshal tool response extra: %w", err)
 		}
@@ -794,11 +908,10 @@ func toEventSnapshot(
 		StateDelta:   decodeStateMap(evt.StateDelta),
 		Extensions:   decodeRawMap(evt.Extensions),
 	}
-	responseExtra := takeToolResponseExtra(snapshot.Extensions, allowNestedToolResponseExtra)
-	if len(snapshot.Extensions) == 0 {
-		snapshot.Extensions = nil
-	}
 	if evt.Response == nil || len(evt.Response.Choices) == 0 {
+		if len(snapshot.Extensions) == 0 {
+			snapshot.Extensions = nil
+		}
 		return snapshot
 	}
 	snapshot.Object = evt.Response.Object
@@ -815,6 +928,7 @@ func toEventSnapshot(
 		})
 	}
 	if message.ToolID != "" || message.Role == model.RoleTool {
+		responseExtra := takeToolResponseExtra(snapshot.Extensions, allowNestedToolResponseExtra)
 		snapshot.ToolResponse = &replaytest.ToolResponse{
 			ToolCallID: message.ToolID,
 			Name:       message.ToolName,
@@ -822,7 +936,53 @@ func toEventSnapshot(
 			Extra:      responseExtra,
 		}
 	}
+	if len(snapshot.Extensions) == 0 {
+		snapshot.Extensions = nil
+	}
 	return snapshot
+}
+
+func hasReservedToolResponseExtraExtension(extensions map[string]any) bool {
+	if _, exists := extensions[toolResponseExtraExtensionKey]; exists {
+		return true
+	}
+	namespace, exists := extensions[replayAppName]
+	return exists && hasToolResponseExtraKey(namespace)
+}
+
+func hasToolResponseExtraKey(value any) bool {
+	if decoded, ok := decodeJSONLikeObject(value); ok {
+		value = decoded
+	}
+	reflected := reflect.ValueOf(value)
+	for reflected.IsValid() && reflected.Kind() == reflect.Interface {
+		if reflected.IsNil() {
+			return false
+		}
+		reflected = reflected.Elem()
+	}
+	if !reflected.IsValid() || reflected.Kind() != reflect.Map ||
+		reflected.Type().Key().Kind() != reflect.String {
+		return false
+	}
+	return reflected.MapIndex(reflect.ValueOf("tool_response_extra")).IsValid()
+}
+
+func decodeJSONLikeObject(value any) (map[string]any, bool) {
+	var raw []byte
+	switch typed := value.(type) {
+	case json.RawMessage:
+		raw = typed
+	case []byte:
+		raw = typed
+	default:
+		return nil, false
+	}
+	var decoded map[string]any
+	if err := decodeJSONUseNumber(raw, &decoded); err != nil {
+		return nil, false
+	}
+	return decoded, true
 }
 
 func takeToolResponseExtra(
@@ -833,8 +993,11 @@ func takeToolResponseExtra(
 		return nil
 	}
 	if value, ok := extensions[toolResponseExtraExtensionKey]; ok {
+		responseExtra, ok := value.(map[string]any)
+		if !ok {
+			return nil
+		}
 		delete(extensions, toolResponseExtraExtensionKey)
-		responseExtra, _ := value.(map[string]any)
 		return responseExtra
 	}
 	if !allowNested {
@@ -848,11 +1011,14 @@ func takeToolResponseExtra(
 	if !ok {
 		return nil
 	}
+	responseExtra, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
 	delete(namespace, "tool_response_extra")
 	if len(namespace) == 0 {
 		delete(extensions, replayAppName)
 	}
-	responseExtra, _ := value.(map[string]any)
 	return responseExtra
 }
 
@@ -868,7 +1034,7 @@ func decodeRawMap[T ~[]byte](values map[string]T) map[string]any {
 		}
 		var item any
 		if err := decodeJSONUseNumber(value, &item); err != nil {
-			item = string(value)
+			item = json.RawMessage(append([]byte(nil), value...))
 		}
 		decoded[key] = item
 	}

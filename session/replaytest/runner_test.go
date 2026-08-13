@@ -208,7 +208,7 @@ func TestRunnerRejectsInvalidOrUnusedAllowedDiffRules(t *testing.T) {
 		{
 			name: "baseline only", backends: []Backend{baseline()},
 			cases: []ReplayCase{{Name: "case"}}, rule: validRule,
-			want: "unused allowed diff rule",
+			want: "unknown backend",
 		},
 		{
 			name: "candidate unsupported", backends: []Backend{
@@ -240,20 +240,56 @@ func TestRunnerRejectsInvalidOrUnusedAllowedDiffRules(t *testing.T) {
 }
 
 func TestRunnerValidatesAllowedDiffRulesBeforeCreatingFixtures(t *testing.T) {
-	newCalls := 0
-	runner := Runner{
-		Backends: []Backend{{Name: "baseline", New: func(context.Context, string) (Fixture, error) {
-			newCalls++
-			return &fakeFixture{name: "baseline", capabilities: allCapabilities()}, nil
-		}}},
-		CompareOptions: CompareOptions{AllowedDiffRules: []AllowedDiffRule{{Path: "$.sessions"}}},
+	tests := []struct {
+		name string
+		rule AllowedDiffRule
+		want string
+	}{
+		{
+			name: "missing fields",
+			rule: AllowedDiffRule{Path: "$.sessions"},
+			want: "requires case",
+		},
+		{
+			name: "unknown backend",
+			rule: AllowedDiffRule{
+				Case: "case", Backend: "unknown", Path: "$.sessions",
+				Explanation: "known diff",
+			},
+			want: "unknown backend",
+		},
+		{
+			name: "unknown case",
+			rule: AllowedDiffRule{
+				Case: "unknown", Backend: "candidate", Path: "$.sessions",
+				Explanation: "known diff",
+			},
+			want: "unknown case",
+		},
 	}
-	_, err := runner.Run(context.Background(), []ReplayCase{{Name: "case"}})
-	if err == nil || !strings.Contains(err.Error(), "requires case") {
-		t.Fatalf("Runner.Run() error = %v", err)
-	}
-	if newCalls != 0 {
-		t.Fatalf("backend.New() calls = %d, want 0", newCalls)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			newCalls := 0
+			newBackend := func(name string) Backend {
+				return Backend{Name: name, New: func(context.Context, string) (Fixture, error) {
+					newCalls++
+					return &fakeFixture{name: name, capabilities: allCapabilities()}, nil
+				}}
+			}
+			runner := Runner{
+				Backends: []Backend{newBackend("baseline"), newBackend("candidate")},
+				CompareOptions: CompareOptions{
+					AllowedDiffRules: []AllowedDiffRule{test.rule},
+				},
+			}
+			_, err := runner.Run(context.Background(), []ReplayCase{{Name: "case"}})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Runner.Run() error = %v, want %q", err, test.want)
+			}
+			if newCalls != 0 {
+				t.Fatalf("backend.New() calls = %d, want 0", newCalls)
+			}
+		})
 	}
 }
 

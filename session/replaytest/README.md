@@ -40,10 +40,12 @@ report, err := runner.Run(ctx, replaytest.StandardReplayCases())
 ## 比较规则
 
 - 只归一化自动生成或后端私有字段；标准矩阵保留 fixture 显式指定的 Event ID，防止后端篡改被逻辑 ID 映射掩盖。
+- `TimePrecision` 覆盖 Session/Summary/Track/Memory 时间及 Memory `metadata["event_time"]`；Memory 空检索结果统一规范化为 `[]`；开启 `NormalizeToolCallIDs` 时，`trpc_agent.tool_call_args` 的 tool-call-ID key 也会使用同一逻辑 ID 映射。
 - Track duration 保留原值，比较器默认使用 `1ms` 绝对误差容限，不做分桶。
 - 未声明的差异默认失败，并生成非空 `Explanation`。
-- `allowed_diff` 必须精确绑定 backend、case 和 path/capability；通配路径、重复规则和未消费规则均视为配置错误。
-- `MarshalReport` 使用 `baseline_missing` / `actual_missing` 明确表示字段不存在，缺失侧不输出 `baseline` / `actual` 值；显式 JSON `null` 仍写入 `baseline` / `actual`。报告 JSON 解码回 `Report` 后仍保留缺失标记，重新调用 `MarshalReport` 不会把 missing 退化为 `null`。
+- `allowed_diff` 必须精确绑定 backend、case 和 path/capability；未知 backend/case、通配路径、重复规则和未消费规则均视为配置错误。
+- `MarshalReport` 使用 `baseline_missing` / `actual_missing` 明确表示字段不存在，缺失侧不输出 `baseline` / `actual` 值；显式 JSON `null` 仍写入 `baseline` / `actual`。报告 JSON 解码回 `Report` 后仍保留缺失标记，`baseline` / `actual` 中的 JSON number 以 `json.Number` 保留精度，重新调用 `MarshalReport` 不会把 missing 退化为 `null` 或改变数字文本。
+- 无法解码的 raw JSON 使用 `baseline_invalid_json_raw` / `actual_invalid_json_raw` 标记，避免和合法业务字符串或对象值碰撞。
 - `Runner.Run` 会在创建任何 Fixture 前校验完整 case 配置，包括 Operation 负载、顶层依赖、并发依赖图和 Snapshot invariant 形状。
 - Operation 中的 JSON-like 负载会在进入 Fixture 前深拷贝。包含私有可变字段、无法安全隔离的自定义结构会在校验阶段被拒绝。
 

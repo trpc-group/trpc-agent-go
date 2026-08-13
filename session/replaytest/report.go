@@ -77,16 +77,59 @@ type reportWire struct {
 }
 
 type differenceWire struct {
-	Case            string          `json:"case"`
-	Backend         string          `json:"backend"`
-	Path            string          `json:"path"`
-	Locator         Locator         `json:"locator,omitempty"`
-	Baseline        json.RawMessage `json:"baseline,omitempty"`
-	Actual          json.RawMessage `json:"actual,omitempty"`
-	BaselineMissing bool            `json:"baseline_missing,omitempty"`
-	ActualMissing   bool            `json:"actual_missing,omitempty"`
-	AllowedDiff     bool            `json:"allowed_diff"`
-	Explanation     string          `json:"explanation,omitempty"`
+	Case                   string          `json:"case"`
+	Backend                string          `json:"backend"`
+	Path                   string          `json:"path"`
+	Locator                Locator         `json:"locator,omitempty"`
+	Baseline               json.RawMessage `json:"baseline,omitempty"`
+	Actual                 json.RawMessage `json:"actual,omitempty"`
+	BaselineMissing        bool            `json:"baseline_missing,omitempty"`
+	ActualMissing          bool            `json:"actual_missing,omitempty"`
+	BaselineInvalidRawJSON bool            `json:"baseline_invalid_json_raw,omitempty"`
+	ActualInvalidRawJSON   bool            `json:"actual_invalid_json_raw,omitempty"`
+	AllowedDiff            bool            `json:"allowed_diff"`
+	Explanation            string          `json:"explanation,omitempty"`
+}
+
+// UnmarshalJSON decodes a Difference while preserving report number precision.
+func (difference *Difference) UnmarshalJSON(data []byte) error {
+	var wired differenceWire
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&wired); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("decode replay report difference: multiple JSON values")
+	}
+	decoded := Difference{
+		Case:                   wired.Case,
+		Backend:                wired.Backend,
+		Path:                   wired.Path,
+		Locator:                wired.Locator,
+		BaselineMissing:        wired.BaselineMissing,
+		ActualMissing:          wired.ActualMissing,
+		BaselineInvalidRawJSON: wired.BaselineInvalidRawJSON,
+		ActualInvalidRawJSON:   wired.ActualInvalidRawJSON,
+		AllowedDiff:            wired.AllowedDiff,
+		Explanation:            wired.Explanation,
+	}
+	if !wired.BaselineMissing && len(wired.Baseline) > 0 {
+		value, err := decodeReportValue(wired.Baseline)
+		if err != nil {
+			return fmt.Errorf("decode replay report difference baseline: %w", err)
+		}
+		decoded.Baseline = value
+	}
+	if !wired.ActualMissing && len(wired.Actual) > 0 {
+		value, err := decodeReportValue(wired.Actual)
+		if err != nil {
+			return fmt.Errorf("decode replay report difference actual: %w", err)
+		}
+		decoded.Actual = value
+	}
+	*difference = decoded
+	return nil
 }
 
 func reportForWire(report Report) (reportWire, error) {
@@ -98,8 +141,14 @@ func reportForWire(report Report) (reportWire, error) {
 	for i, difference := range report.Differences {
 		baselineMissing := difference.BaselineMissing || isMissingValue(difference.Baseline)
 		actualMissing := difference.ActualMissing || isMissingValue(difference.Actual)
+		baselineInvalidRawJSON := difference.BaselineInvalidRawJSON
+		actualInvalidRawJSON := difference.ActualInvalidRawJSON
 		var baseline json.RawMessage
 		if !baselineMissing {
+			if raw, ok := normalizeInvalidRawJSON(difference.Baseline); ok {
+				baselineInvalidRawJSON = true
+				difference.Baseline = raw.raw()
+			}
 			encoded, err := marshalReportValue(difference.Baseline)
 			if err != nil {
 				return reportWire{}, err
@@ -108,6 +157,10 @@ func reportForWire(report Report) (reportWire, error) {
 		}
 		var actual json.RawMessage
 		if !actualMissing {
+			if raw, ok := normalizeInvalidRawJSON(difference.Actual); ok {
+				actualInvalidRawJSON = true
+				difference.Actual = raw.raw()
+			}
 			encoded, err := marshalReportValue(difference.Actual)
 			if err != nil {
 				return reportWire{}, err
@@ -118,7 +171,9 @@ func reportForWire(report Report) (reportWire, error) {
 			Case: difference.Case, Backend: difference.Backend, Path: difference.Path,
 			Locator: difference.Locator, Baseline: baseline, Actual: actual,
 			BaselineMissing: baselineMissing, ActualMissing: actualMissing,
-			AllowedDiff: difference.AllowedDiff, Explanation: difference.Explanation,
+			BaselineInvalidRawJSON: baselineInvalidRawJSON,
+			ActualInvalidRawJSON:   actualInvalidRawJSON,
+			AllowedDiff:            difference.AllowedDiff, Explanation: difference.Explanation,
 		}
 	}
 	return wired, nil
@@ -132,6 +187,19 @@ func marshalReportValue(value any) (json.RawMessage, error) {
 		return nil, err
 	}
 	return json.RawMessage(bytes.TrimSuffix(output.Bytes(), []byte{'\n'})), nil
+}
+
+func decodeReportValue(raw json.RawMessage) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("multiple JSON values")
+	}
+	return value, nil
 }
 
 func cloneAndSortProbeResults(results []CapabilityProbeResult) []CapabilityProbeResult {

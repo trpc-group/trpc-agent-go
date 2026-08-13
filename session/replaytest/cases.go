@@ -280,7 +280,7 @@ func validatePreferenceMetadata(metadata map[string]any) error {
 	eventTime, ok := metadata["event_time"].(string)
 	parsedTime, err := time.Parse(time.RFC3339Nano, eventTime)
 	participants, participantsOK := metadata["participants"].([]any)
-	if !ok || err != nil || !parsedTime.Equal(standardTime.Add(-time.Hour)) ||
+	if !ok || err != nil || !parsedTime.Equal(time.Unix(0, 1).UTC()) ||
 		metadata["location"] != "Shenzhen" ||
 		!participantsOK || !sameStringSet(participants, "user", "assistant") {
 		return fmt.Errorf("preference metadata = %#v, want event_time, location, and participants",

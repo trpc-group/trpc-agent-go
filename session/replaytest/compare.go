@@ -118,7 +118,114 @@ func snapshotValue(snapshot Snapshot) (any, error) {
 	if err := decoder.Decode(&value); err != nil {
 		return nil, err
 	}
-	return value, nil
+	return overlaySpecialSnapshotValues(reflect.ValueOf(snapshot), value), nil
+}
+
+func overlaySpecialSnapshotValues(source reflect.Value, target any) any {
+	source = unwrapSnapshotValue(source)
+	if !source.IsValid() {
+		return target
+	}
+	if source.CanInterface() {
+		if invalid, ok := normalizeInvalidRawJSON(source.Interface()); ok {
+			return invalid
+		}
+	}
+	switch source.Kind() {
+	case reflect.Map:
+		return overlaySpecialMapValues(source, target)
+	case reflect.Slice, reflect.Array:
+		return overlaySpecialSliceValues(source, target)
+	case reflect.Struct:
+		if source.Type() == reflect.TypeOf(time.Time{}) {
+			return target
+		}
+		return overlaySpecialStructValues(source, target)
+	default:
+		return target
+	}
+}
+
+func unwrapSnapshotValue(value reflect.Value) reflect.Value {
+	for value.IsValid() && (value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) {
+		if value.IsNil() {
+			return reflect.Value{}
+		}
+		value = value.Elem()
+	}
+	return value
+}
+
+func overlaySpecialMapValues(source reflect.Value, target any) any {
+	targetMap, ok := target.(map[string]any)
+	if !ok {
+		return target
+	}
+	iterator := source.MapRange()
+	for iterator.Next() {
+		key := iterator.Key()
+		if key.Kind() != reflect.String {
+			continue
+		}
+		name := key.String()
+		child, ok := targetMap[name]
+		if !ok {
+			continue
+		}
+		targetMap[name] = overlaySpecialSnapshotValues(iterator.Value(), child)
+	}
+	return targetMap
+}
+
+func overlaySpecialSliceValues(source reflect.Value, target any) any {
+	targetSlice, ok := target.([]any)
+	if !ok {
+		return target
+	}
+	limit := source.Len()
+	if len(targetSlice) < limit {
+		limit = len(targetSlice)
+	}
+	for i := 0; i < limit; i++ {
+		targetSlice[i] = overlaySpecialSnapshotValues(source.Index(i), targetSlice[i])
+	}
+	return targetSlice
+}
+
+func overlaySpecialStructValues(source reflect.Value, target any) any {
+	targetMap, ok := target.(map[string]any)
+	if !ok {
+		return target
+	}
+	sourceType := source.Type()
+	for i := 0; i < source.NumField(); i++ {
+		field := sourceType.Field(i)
+		name, ok := jsonFieldName(field)
+		if !ok {
+			continue
+		}
+		child, exists := targetMap[name]
+		if !exists {
+			continue
+		}
+		targetMap[name] = overlaySpecialSnapshotValues(source.Field(i), child)
+	}
+	return targetMap
+}
+
+func jsonFieldName(field reflect.StructField) (string, bool) {
+	if field.PkgPath != "" {
+		return "", false
+	}
+	tag := field.Tag.Get("json")
+	if tag == "-" {
+		return "", false
+	}
+	name := strings.Split(tag, ",")[0]
+	if name == "" {
+		name = field.Name
+	}
+	return name, true
 }
 
 func (comparator *snapshotComparator) compareValues(
@@ -197,14 +304,14 @@ func (comparator *snapshotComparator) compareMaps(
 		}
 		switch {
 		case !baselineOK:
-			if _, ok := actualValue.([]any); ok {
+			if isKnownSnapshotSlicePath(childPath, actualValue) {
 				comparator.compareValues(childPath, []any{}, actualValue, childLocator)
 				continue
 			}
 			comparator.differences = append(comparator.differences,
 				comparator.newDifference(childPath, childLocator, missingValueMarker, actualValue))
 		case !actualOK:
-			if _, ok := baselineValue.([]any); ok {
+			if isKnownSnapshotSlicePath(childPath, baselineValue) {
 				comparator.compareValues(childPath, baselineValue, []any{}, childLocator)
 				continue
 			}
@@ -214,6 +321,42 @@ func (comparator *snapshotComparator) compareMaps(
 			comparator.compareValues(childPath, baselineValue, actualValue, childLocator)
 		}
 	}
+}
+
+func isKnownSnapshotSlicePath(path string, value any) bool {
+	if _, ok := value.([]any); !ok {
+		return false
+	}
+	switch path {
+	case "$.sessions", "$.memories", "$.memory_searches", "$.unsupported":
+		return true
+	}
+	for _, suffix := range []string{".events", ".summaries", ".tracks"} {
+		parent := strings.TrimSuffix(path, suffix)
+		if parent != path && isCollectionItem(parent, "sessions") {
+			return true
+		}
+	}
+	for _, suffix := range []string{".tool_calls"} {
+		parent := strings.TrimSuffix(path, suffix)
+		if parent != path && isSessionEventItem(parent) {
+			return true
+		}
+	}
+	for _, suffix := range []string{".results"} {
+		parent := strings.TrimSuffix(path, suffix)
+		if parent != path && isCollectionItem(parent, "memory_searches") {
+			return true
+		}
+	}
+	for _, suffix := range []string{".topics"} {
+		parent := strings.TrimSuffix(path, suffix)
+		if parent != path && isMemoryItemPath(parent) {
+			return true
+		}
+	}
+	parent := strings.TrimSuffix(path, ".events")
+	return parent != path && isCollectionItem(parent, "tracks")
 }
 
 func appendMapPath(path, key string) string {
@@ -274,19 +417,28 @@ func (comparator *snapshotComparator) newDifference(
 	actual any,
 ) Difference {
 	difference := Difference{
-		Case:        comparator.caseName,
-		Backend:     comparator.backend,
-		Path:        path,
-		Locator:     locator,
-		Baseline:    baseline,
-		Actual:      actual,
-		Explanation: "unexpected normalized snapshot difference",
+		Case:                   comparator.caseName,
+		Backend:                comparator.backend,
+		Path:                   path,
+		Locator:                locator,
+		Baseline:               baseline,
+		Actual:                 actual,
+		BaselineMissing:        isMissingValue(baseline),
+		ActualMissing:          isMissingValue(actual),
+		BaselineInvalidRawJSON: isInvalidRawJSON(baseline),
+		ActualInvalidRawJSON:   isInvalidRawJSON(actual),
+		Explanation:            "unexpected normalized snapshot difference",
 	}
 	if rule, ok := comparator.rules.consume(comparator.caseName, comparator.backend, path); ok {
 		difference.AllowedDiff = true
 		difference.Explanation = rule.Explanation
 	}
 	return difference
+}
+
+func isInvalidRawJSON(value any) bool {
+	_, ok := normalizeInvalidRawJSON(value)
+	return ok
 }
 
 type allowedDiffTracker struct {

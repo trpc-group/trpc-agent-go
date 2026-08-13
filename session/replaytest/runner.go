@@ -60,6 +60,11 @@ func (runner Runner) Run(ctx context.Context, cases []ReplayCase) (Report, error
 	if err != nil {
 		return Report{}, err
 	}
+	if err := validateAllowedDiffRuleScopes(
+		runner.CompareOptions.AllowedDiffRules, runner.Backends, cases,
+	); err != nil {
+		return Report{}, err
+	}
 	allowances, err := validateUnsupportedAllowances(
 		runner.UnsupportedAllowances, runner.Backends, cases,
 	)
@@ -521,16 +526,47 @@ func unsupportedDifferences(
 			allAllowed = false
 		}
 		differences = append(differences, Difference{
-			Case:        caseName,
-			Backend:     backend,
-			Path:        "$.unsupported." + string(capability),
-			Baseline:    missingValueMarker,
-			Actual:      string(capability),
-			AllowedDiff: allowed,
-			Explanation: explanation,
+			Case:            caseName,
+			Backend:         backend,
+			Path:            "$.unsupported." + string(capability),
+			Baseline:        missingValueMarker,
+			Actual:          string(capability),
+			BaselineMissing: true,
+			AllowedDiff:     allowed,
+			Explanation:     explanation,
 		})
 	}
 	return differences, allAllowed
+}
+
+func validateAllowedDiffRuleScopes(
+	rules []AllowedDiffRule,
+	backends []Backend,
+	cases []ReplayCase,
+) error {
+	backendNames := make(map[string]struct{}, len(backends))
+	for _, backend := range backends {
+		backendNames[backend.Name] = struct{}{}
+	}
+	caseNames := make(map[string]struct{}, len(cases))
+	for _, replayCase := range cases {
+		caseNames[replayCase.Name] = struct{}{}
+	}
+	for i, rule := range rules {
+		if _, ok := backendNames[rule.Backend]; !ok {
+			return fmt.Errorf(
+				"allowed diff rule %d references unknown backend %q",
+				i, rule.Backend,
+			)
+		}
+		if _, ok := caseNames[rule.Case]; !ok {
+			return fmt.Errorf(
+				"allowed diff rule %d references unknown case %q",
+				i, rule.Case,
+			)
+		}
+	}
+	return nil
 }
 
 type unsupportedAllowanceKey struct {

@@ -164,7 +164,121 @@ func TestCompareSnapshotsDistinguishesMissingFromLiteralMissingText(t *testing.T
 				isMissingValue(differences[0].Baseline) == isMissingValue(differences[0].Actual) {
 				t.Fatalf("missing difference = %#v", differences)
 			}
+			if test.name == "baseline missing" &&
+				(!differences[0].BaselineMissing || differences[0].ActualMissing) {
+				t.Fatalf("baseline missing flags = %#v", differences[0])
+			}
+			if test.name == "actual missing" &&
+				(!differences[0].ActualMissing || differences[0].BaselineMissing) {
+				t.Fatalf("actual missing flags = %#v", differences[0])
+			}
 		})
+	}
+}
+
+func TestCompareSnapshotsDoesNotTreatMissingMapKeyAsEmptySlice(t *testing.T) {
+	tests := []struct {
+		name                string
+		baseline            Snapshot
+		actual              Snapshot
+		path                string
+		wantBaselineMissing bool
+		wantActualMissing   bool
+	}{
+		{
+			name: "extension baseline missing",
+			baseline: Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+				Extensions: map[string]any{"shared": "value"},
+			}}}}},
+			actual: Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+				Extensions: map[string]any{"shared": "value", "empty": []any{}},
+			}}}}},
+			path: "$.sessions[0].events[0].extensions.empty", wantBaselineMissing: true,
+		},
+		{
+			name: "extension actual missing",
+			baseline: Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+				Extensions: map[string]any{"shared": "value", "empty": []any{}},
+			}}}}},
+			actual: Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+				Extensions: map[string]any{"shared": "value"},
+			}}}}},
+			path: "$.sessions[0].events[0].extensions.empty", wantActualMissing: true,
+		},
+		{
+			name: "state baseline missing",
+			baseline: Snapshot{Sessions: []SessionSnapshot{{State: map[string]StateValueSnapshot{
+				"profile": JSONStateValue(map[string]any{"shared": "value"}),
+			}}}},
+			actual: Snapshot{Sessions: []SessionSnapshot{{State: map[string]StateValueSnapshot{
+				"profile": JSONStateValue(map[string]any{"shared": "value", "tags": []any{}}),
+			}}}},
+			path: "$.sessions[0].state.profile.value.tags", wantBaselineMissing: true,
+		},
+		{
+			name: "state actual missing",
+			baseline: Snapshot{Sessions: []SessionSnapshot{{State: map[string]StateValueSnapshot{
+				"profile": JSONStateValue(map[string]any{"shared": "value", "tags": []any{}}),
+			}}}},
+			actual: Snapshot{Sessions: []SessionSnapshot{{State: map[string]StateValueSnapshot{
+				"profile": JSONStateValue(map[string]any{"shared": "value"}),
+			}}}},
+			path: "$.sessions[0].state.profile.value.tags", wantActualMissing: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			differences, err := CompareSnapshots(CompareInput{
+				Case:     "missing-empty-slice",
+				Backend:  "candidate",
+				Baseline: test.baseline,
+				Actual:   test.actual,
+			})
+			if err != nil {
+				t.Fatalf("CompareSnapshots() error = %v", err)
+			}
+			difference := differenceAt(t, differences, test.path)
+			if difference.BaselineMissing != test.wantBaselineMissing ||
+				difference.ActualMissing != test.wantActualMissing {
+				t.Fatalf("missing empty-slice difference flags = %#v", difference)
+			}
+		})
+	}
+}
+
+func TestCompareSnapshotsDistinguishesInvalidRawJSONFromLiteralValues(t *testing.T) {
+	baseline := NormalizeSnapshot(Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+		Extensions: map[string]any{"raw": json.RawMessage(`value`)},
+	}}}}}, DefaultNormalizeOptions())
+	actualString := NormalizeSnapshot(Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+		Extensions: map[string]any{"raw": "value"},
+	}}}}}, DefaultNormalizeOptions())
+	differences, err := CompareSnapshots(CompareInput{
+		Case: "invalid-raw", Backend: "candidate", Baseline: baseline, Actual: actualString,
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() string error = %v", err)
+	}
+	difference := differenceAt(t, differences, "$.sessions[0].events[0].extensions.raw")
+	if _, ok := normalizeInvalidRawJSON(difference.Baseline); !ok ||
+		!difference.BaselineInvalidRawJSON || difference.ActualInvalidRawJSON ||
+		difference.Actual != "value" {
+		t.Fatalf("invalid raw/string difference = %#v", difference)
+	}
+
+	actualObject := NormalizeSnapshot(Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+		Extensions: map[string]any{"raw": map[string]any{"replaytest.invalid_json_raw": "value"}},
+	}}}}}, DefaultNormalizeOptions())
+	differences, err = CompareSnapshots(CompareInput{
+		Case: "invalid-raw", Backend: "candidate", Baseline: baseline, Actual: actualObject,
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() object error = %v", err)
+	}
+	difference = differenceAt(t, differences, "$.sessions[0].events[0].extensions.raw")
+	if _, ok := normalizeInvalidRawJSON(difference.Baseline); !ok ||
+		!difference.BaselineInvalidRawJSON || difference.ActualInvalidRawJSON {
+		t.Fatalf("invalid raw/object difference = %#v", difference)
 	}
 }
 

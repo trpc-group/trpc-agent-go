@@ -17,6 +17,12 @@ import (
 	"time"
 )
 
+type userInvalidRawJSONMethodValue string
+
+func (value userInvalidRawJSONMethodValue) InvalidRawJSON() string {
+	return string(value)
+}
+
 func TestNormalizeSnapshotRemovesOnlyBackendNoise(t *testing.T) {
 	baseline := normalizationFixture(
 		"event-a", "memory-a", "invocation-a",
@@ -211,6 +217,28 @@ func TestNormalizeSnapshotPreservesMemorySearchOrder(t *testing.T) {
 	}
 }
 
+func TestNormalizeSnapshotTreatsNilAndEmptyMemorySearchResultsAsEquivalent(t *testing.T) {
+	baseline := Snapshot{MemorySearches: []MemorySearchSnapshot{{
+		AppName: "app",
+		UserID:  "user",
+		Query:   "missing",
+	}}}
+	actual := Snapshot{MemorySearches: []MemorySearchSnapshot{{
+		AppName: "app",
+		UserID:  "user",
+		Query:   "missing",
+		Results: []MemorySnapshot{},
+	}}}
+	gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+	gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	if !reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatalf("nil and empty memory search results differ:\nbaseline: %#v\nactual: %#v", gotBaseline, gotActual)
+	}
+	if gotBaseline.MemorySearches[0].Results == nil {
+		t.Fatal("nil memory search results were not canonicalized")
+	}
+}
+
 func TestNormalizeSnapshotPreservesToolCallIDsByDefault(t *testing.T) {
 	baseline := normalizationFixture(
 		"event-a", "memory-a", "invocation-a",
@@ -226,6 +254,113 @@ func TestNormalizeSnapshotPreservesToolCallIDsByDefault(t *testing.T) {
 		NormalizeSnapshot(actual, DefaultNormalizeOptions()),
 	) {
 		t.Fatal("tool call ID difference was normalized away by default")
+	}
+}
+
+func TestNormalizeSnapshotRewritesToolCallArgsExtensionKeys(t *testing.T) {
+	baseline := toolCallArgsExtensionSnapshot("baseline-call")
+	actual := toolCallArgsExtensionSnapshot("actual-call")
+	options := DefaultNormalizeOptions()
+	options.NormalizeToolCallIDs = true
+	gotBaseline := NormalizeSnapshot(baseline, options)
+	gotActual := NormalizeSnapshot(actual, options)
+	if !reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatalf("tool call args extension keys differ:\nbaseline: %#v\nactual: %#v", gotBaseline, gotActual)
+	}
+	extension, ok := gotActual.Sessions[0].Events[0].
+		Extensions[toolCallArgsExtensionKey].(map[string]any)
+	if !ok {
+		t.Fatalf("tool args extension has type %T", gotActual.Sessions[0].Events[0].
+			Extensions[toolCallArgsExtensionKey])
+	}
+	if _, ok := extension["tool-call-0001"]; !ok {
+		t.Fatalf("tool args extension did not use logical ID: %#v", extension)
+	}
+	if _, ok := extension["actual-call"]; ok {
+		t.Fatalf("tool args extension kept backend ID: %#v", extension)
+	}
+}
+
+func TestNormalizeSnapshotScopesToolCallIDsBySession(t *testing.T) {
+	baseline := Snapshot{Sessions: []SessionSnapshot{
+		toolCallArgsExtensionSession("session-1", "baseline-call-a"),
+		toolCallArgsExtensionSession("session-2", "baseline-call-b"),
+	}}
+	actual := Snapshot{Sessions: []SessionSnapshot{
+		toolCallArgsExtensionSession("session-1", "call-1"),
+		toolCallArgsExtensionSession("session-2", "call-1"),
+	}}
+	options := DefaultNormalizeOptions()
+	options.NormalizeToolCallIDs = true
+	gotBaseline := NormalizeSnapshot(baseline, options)
+	gotActual := NormalizeSnapshot(actual, options)
+	if !reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatalf("tool call IDs are not scoped per session:\nbaseline: %#v\nactual: %#v", gotBaseline, gotActual)
+	}
+	for _, session := range gotActual.Sessions {
+		extension := session.Events[0].Extensions[toolCallArgsExtensionKey].(map[string]any)
+		if _, ok := extension["tool-call-0001"]; !ok {
+			t.Fatalf("session tool args extension did not share scoped ID map: %#v", session)
+		}
+	}
+}
+
+func TestNormalizeSnapshotPreservesUnknownToolCallArgsExtensionKeys(t *testing.T) {
+	baseline := toolCallArgsExtensionSnapshot("call-1")
+	baselineArgs := baseline.Sessions[0].Events[0].
+		Extensions[toolCallArgsExtensionKey].(map[string]any)
+	baselineArgs["stale-a"] = map[string]any{"query": "old"}
+	actual := toolCallArgsExtensionSnapshot("call-1")
+	actualArgs := actual.Sessions[0].Events[0].
+		Extensions[toolCallArgsExtensionKey].(map[string]any)
+	actualArgs["stale-b"] = map[string]any{"query": "old"}
+
+	options := DefaultNormalizeOptions()
+	options.NormalizeToolCallIDs = true
+	gotBaseline := NormalizeSnapshot(baseline, options)
+	gotActual := NormalizeSnapshot(actual, options)
+	if reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatal("unknown tool args extension keys were normalized away")
+	}
+	extension := gotActual.Sessions[0].Events[0].Extensions[toolCallArgsExtensionKey].(map[string]any)
+	if _, ok := extension["stale-b"]; !ok {
+		t.Fatalf("unknown extension key was not preserved: %#v", extension)
+	}
+	if _, ok := extension["tool-call-0002"]; ok {
+		t.Fatalf("unknown extension key allocated a logical ID: %#v", extension)
+	}
+}
+
+func TestNormalizeSnapshotPreservesToolCallArgsExtensionKeyCollisions(t *testing.T) {
+	baseline := toolCallArgsExtensionSnapshot("baseline-call")
+	baselineArgs := baseline.Sessions[0].Events[0].
+		Extensions[toolCallArgsExtensionKey].(map[string]any)
+	baselineArgs["tool-call-0001"] = map[string]any{"query": "stale"}
+	actual := toolCallArgsExtensionSnapshot("actual-call")
+	actualArgs := actual.Sessions[0].Events[0].
+		Extensions[toolCallArgsExtensionKey].(map[string]any)
+	actualArgs["tool-call-0001"] = map[string]any{"query": "stale"}
+
+	options := DefaultNormalizeOptions()
+	options.NormalizeToolCallIDs = true
+	gotBaseline := NormalizeSnapshot(baseline, options)
+	gotActual := NormalizeSnapshot(actual, options)
+	if !reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatalf("tool args collision normalized differently:\nbaseline: %#v\nactual: %#v",
+			gotBaseline, gotActual)
+	}
+	entries, ok := gotActual.Sessions[0].Events[0].
+		Extensions[toolCallArgsExtensionKey].([]map[string]any)
+	if !ok {
+		t.Fatalf("tool args collision was not represented as tagged entries: %#v",
+			gotActual.Sessions[0].Events[0].Extensions[toolCallArgsExtensionKey])
+	}
+	if len(entries) != 2 {
+		t.Fatalf("tool args collision lost entries: %#v", entries)
+	}
+	if entries[0][toolCallArgsEntryKnown] != true ||
+		entries[1][toolCallArgsEntryKnown] != false {
+		t.Fatalf("tool args collision did not distinguish known and unknown keys: %#v", entries)
 	}
 }
 
@@ -431,9 +566,14 @@ func TestNormalizeJSONLikeHandlesFallbackRepresentations(t *testing.T) {
 		json.RawMessage(`{"invalid"`),
 		[]byte(`{"invalid"`),
 	} {
-		if _, ok := normalizeJSONLike(value, options).(string); !ok {
-			t.Fatalf("invalid JSON representation was not preserved as text: %#v", value)
+		if _, ok := normalizeInvalidRawJSON(normalizeJSONLike(value, options)); !ok {
+			t.Fatalf("invalid JSON representation was not preserved as invalid raw: %#v", value)
 		}
+	}
+	if _, ok := normalizeInvalidRawJSON(
+		normalizeJSONLike(userInvalidRawJSONMethodValue("business"), options),
+	); ok {
+		t.Fatal("business value with InvalidRawJSON method was treated as invalid raw JSON")
 	}
 	if _, ok := normalizeJSONLike(make(chan int), options).(string); !ok {
 		t.Fatal("unencodable value was not converted to diagnostic text")
@@ -710,38 +850,77 @@ func TestNormalizeSnapshotBoundsAllTimestampCollections(t *testing.T) {
 }
 
 func TestNormalizeSnapshotNormalizesSummaryBoundaryCutoffPrecision(t *testing.T) {
-	base := time.Unix(100, 0)
-	baseline := Snapshot{Sessions: []SessionSnapshot{{
-		Events: []EventSnapshot{{Timestamp: base}},
-		Summaries: []SummarySnapshot{{
-			FilterKey: "branch/main",
-			UpdatedAt: base.Add(2 * time.Millisecond),
-			Boundary: map[string]any{
-				"cutoff_at":     base.Add(500 * time.Microsecond),
-				"last_event_id": "event-1",
-			},
-		}},
-	}}}
-	actual := Snapshot{Sessions: []SessionSnapshot{{
-		Events: []EventSnapshot{{Timestamp: base}},
-		Summaries: []SummarySnapshot{{
-			FilterKey: "branch/main",
-			UpdatedAt: base.Add(2 * time.Millisecond),
-			Boundary: map[string]any{
-				"cutoff_at":     base,
-				"last_event_id": "event-1",
-			},
-		}},
-	}}}
-	if got, want := NormalizeSnapshot(actual, DefaultNormalizeOptions()),
-		NormalizeSnapshot(baseline, DefaultNormalizeOptions()); !reflect.DeepEqual(got, want) {
-		t.Fatalf("precision-truncated cutoff differs:\ngot:  %#v\nwant: %#v", got, want)
+	base := time.Unix(100, 0).UTC()
+	baseline := summaryCutoffSnapshot(base, base.Add(500*time.Microsecond))
+	pointerCutoff := base
+	tests := []struct {
+		name   string
+		cutoff any
+	}{
+		{name: "time", cutoff: base},
+		{name: "time pointer", cutoff: &pointerCutoff},
+		{name: "rfc3339 string", cutoff: base.Format(time.RFC3339)},
+		{
+			name:   "rfc3339nano string",
+			cutoff: base.Add(500 * time.Microsecond).Format(time.RFC3339Nano),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual := summaryCutoffSnapshot(base, test.cutoff)
+			if got, want := NormalizeSnapshot(actual, DefaultNormalizeOptions()),
+				NormalizeSnapshot(baseline, DefaultNormalizeOptions()); !reflect.DeepEqual(got, want) {
+				t.Fatalf("precision-truncated cutoff differs:\ngot:  %#v\nwant: %#v", got, want)
+			}
+		})
 	}
 
-	actual.Sessions[0].Summaries[0].Boundary["cutoff_at"] = base.Add(2 * time.Millisecond)
+	actual := summaryCutoffSnapshot(
+		base, base.Add(2*time.Millisecond).Format(time.RFC3339Nano),
+	)
 	if got, want := NormalizeSnapshot(actual, DefaultNormalizeOptions()),
 		NormalizeSnapshot(baseline, DefaultNormalizeOptions()); reflect.DeepEqual(got, want) {
 		t.Fatalf("material cutoff shift was normalized away:\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+func summaryCutoffSnapshot(base time.Time, cutoff any) Snapshot {
+	return Snapshot{Sessions: []SessionSnapshot{{
+		Events: []EventSnapshot{{Timestamp: base}},
+		Summaries: []SummarySnapshot{{
+			FilterKey: "branch/main",
+			UpdatedAt: base.Add(2 * time.Millisecond),
+			Boundary: map[string]any{
+				"cutoff_at":     cutoff,
+				"last_event_id": "event-1",
+			},
+		}},
+	}}}
+}
+
+func TestNormalizeSnapshotNormalizesMemoryEventTimePrecision(t *testing.T) {
+	scope := MemoryScope{AppName: "replay", UserID: "user-1"}
+	base := time.Unix(100, 123456789).UTC()
+	second := base.Add(2 * time.Millisecond)
+	baseline := memoryEventTimeSnapshot(scope, base, second)
+	actual := memoryEventTimeSnapshot(
+		scope,
+		base.Add(500*time.Microsecond).Format(time.RFC3339Nano),
+		second,
+	)
+	if got, want := NormalizeSnapshot(actual, DefaultNormalizeOptions()),
+		NormalizeSnapshot(baseline, DefaultNormalizeOptions()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("precision-truncated memory event_time differs:\ngot:  %#v\nwant: %#v", got, want)
+	}
+
+	actual = memoryEventTimeSnapshot(
+		scope,
+		base.Add(1500*time.Microsecond).Format(time.RFC3339Nano),
+		second,
+	)
+	if got, want := NormalizeSnapshot(actual, DefaultNormalizeOptions()),
+		NormalizeSnapshot(baseline, DefaultNormalizeOptions()); reflect.DeepEqual(got, want) {
+		t.Fatalf("material memory event_time shift was normalized away:\ngot:  %#v\nwant: %#v", got, want)
 	}
 }
 
@@ -761,6 +940,57 @@ func TestNormalizeSnapshotAssignsInvocationIDsAfterTrackSorting(t *testing.T) {
 	}
 }
 
+func TestNormalizeSnapshotScopesInvocationIDsBySession(t *testing.T) {
+	baseline := Snapshot{Sessions: []SessionSnapshot{
+		invocationScopedSession("session-1", "baseline-event-a", "baseline-track-a", "first"),
+		invocationScopedSession("session-2", "baseline-event-b", "baseline-track-b", "second"),
+	}}
+	actual := Snapshot{Sessions: []SessionSnapshot{
+		invocationScopedSession("session-1", "invocation-1", "invocation-2", "first"),
+		invocationScopedSession("session-2", "invocation-1", "invocation-2", "second"),
+	}}
+	options := DefaultNormalizeOptions()
+	options.NormalizeInvocationIDs = true
+	if got, want := NormalizeSnapshot(actual, options), NormalizeSnapshot(baseline, options); !reflect.DeepEqual(got, want) {
+		t.Fatalf("invocation IDs are not scoped per session:\ngot:  %#v\nwant: %#v", got, want)
+	}
+	for _, session := range NormalizeSnapshot(actual, options).Sessions {
+		if session.Events[0].InvocationID != "invocation-0001" ||
+			session.Tracks[0].Events[0].InvocationID != "invocation-0002" {
+			t.Fatalf("session events and tracks did not share invocation ID scope: %#v", session)
+		}
+	}
+}
+
+func toolCallArgsExtensionSnapshot(callID string) Snapshot {
+	return Snapshot{Sessions: []SessionSnapshot{
+		toolCallArgsExtensionSession("session-1", callID),
+	}}
+}
+
+func toolCallArgsExtensionSession(sessionID string, callID string) SessionSnapshot {
+	return SessionSnapshot{
+		ID:      sessionID,
+		AppName: "replay",
+		UserID:  "user-1",
+		Events: []EventSnapshot{{
+			ID:   "event-1",
+			Role: "assistant",
+			ToolCalls: []ToolCallSnapshot{{
+				ID:        callID,
+				Name:      "lookup",
+				Arguments: map[string]any{"query": "weather"},
+			}},
+			ToolResponse: &ToolResponse{ToolCallID: callID, Name: "lookup"},
+			Extensions: map[string]any{
+				toolCallArgsExtensionKey: map[string]any{
+					callID: map[string]any{"query": "weather"},
+				},
+			},
+		}},
+	}
+}
+
 func scopedEventSession(sessionID, eventID, content string) SessionSnapshot {
 	return SessionSnapshot{
 		ID:      sessionID,
@@ -777,6 +1007,48 @@ func scopedEventSession(sessionID, eventID, content string) SessionSnapshot {
 			FilterKey: "branch/main",
 			Text:      "summary " + content,
 			Boundary:  map[string]any{"last_event_id": eventID},
+		}},
+	}
+}
+
+func invocationScopedSession(sessionID, eventInvocationID, trackInvocationID, content string) SessionSnapshot {
+	return SessionSnapshot{
+		ID:      sessionID,
+		AppName: "replay",
+		UserID:  "user-1",
+		Events: []EventSnapshot{{
+			ID:           "event-1",
+			InvocationID: eventInvocationID,
+			Author:       "assistant",
+			Role:         "assistant",
+			Content:      content,
+		}},
+		Tracks: []TrackSnapshot{{
+			Name: "tool",
+			Events: []TrackEventSnapshot{{
+				EventType:    "completed",
+				InvocationID: trackInvocationID,
+			}},
+		}},
+	}
+}
+
+func memoryEventTimeSnapshot(
+	scope MemoryScope,
+	firstEventTime any,
+	secondEventTime any,
+) Snapshot {
+	first := scopedMemory("memory-1", scope, "first")
+	first.Metadata = map[string]any{memoryEventTimeMetadataKey: firstEventTime}
+	second := scopedMemory("memory-2", scope, "second")
+	second.Metadata = map[string]any{memoryEventTimeMetadataKey: secondEventTime}
+	return Snapshot{
+		Memories: []MemorySnapshot{first, second},
+		MemorySearches: []MemorySearchSnapshot{{
+			AppName: scope.AppName,
+			UserID:  scope.UserID,
+			Query:   "first",
+			Results: []MemorySnapshot{first},
 		}},
 	}
 }

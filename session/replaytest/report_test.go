@@ -150,6 +150,54 @@ func TestMarshalReportDistinguishesMissingFromLiteralMissingText(t *testing.T) {
 	}
 }
 
+func TestMarshalReportDistinguishesInvalidRawJSONFromLiteralValues(t *testing.T) {
+	report := Report{Differences: []Difference{
+		{
+			Case: "case", Backend: "sqlite", Path: "$.baseline",
+			Baseline: invalidRawJSONValue("value"), Actual: "value",
+		},
+		{
+			Case: "case", Backend: "sqlite", Path: "$.actual",
+			Baseline: map[string]any{"replaytest.invalid_json_raw": "value"},
+			Actual:   invalidRawJSONValue("value"),
+		},
+	}}
+	encoded, err := MarshalReport(report)
+	if err != nil {
+		t.Fatalf("MarshalReport() error = %v", err)
+	}
+	var decoded struct {
+		Differences []map[string]json.RawMessage `json:"differences"`
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	byPath := make(map[string]map[string]json.RawMessage, len(decoded.Differences))
+	for _, difference := range decoded.Differences {
+		var path string
+		if err := json.Unmarshal(difference["path"], &path); err != nil {
+			t.Fatalf("unmarshal difference path: %v", err)
+		}
+		byPath[path] = difference
+	}
+	if string(byPath["$.baseline"]["baseline_invalid_json_raw"]) != "true" ||
+		string(byPath["$.baseline"]["baseline"]) != `"value"` ||
+		string(byPath["$.baseline"]["actual"]) != `"value"` {
+		t.Fatalf("baseline invalid raw wire = %s", encoded)
+	}
+	if string(byPath["$.actual"]["actual_invalid_json_raw"]) != "true" ||
+		string(byPath["$.actual"]["actual"]) != `"value"` {
+		t.Fatalf("actual invalid raw wire = %s", encoded)
+	}
+	var baselineObject map[string]string
+	if err := json.Unmarshal(byPath["$.actual"]["baseline"], &baselineObject); err != nil {
+		t.Fatalf("unmarshal baseline object: %v", err)
+	}
+	if baselineObject["replaytest.invalid_json_raw"] != "value" {
+		t.Fatalf("actual invalid raw baseline = %#v", baselineObject)
+	}
+}
+
 func TestMarshalReportRoundTripsMissingDifferenceValues(t *testing.T) {
 	report := Report{Differences: []Difference{
 		{
@@ -167,6 +215,16 @@ func TestMarshalReportRoundTripsMissingDifferenceValues(t *testing.T) {
 		{
 			Case: "case", Backend: "sqlite", Path: "$.actual_literal",
 			Baseline: missingValue, Actual: missingValueMarker,
+		},
+		{
+			Case: "case", Backend: "sqlite", Path: "$.large_integer",
+			Baseline: json.Number("9007199254740993"),
+			Actual:   json.Number("9007199254740994"),
+		},
+		{
+			Case: "case", Backend: "sqlite", Path: "$.decimal",
+			Baseline: json.Number("1.0000000000000000001"),
+			Actual:   json.Number("1.0000000000000000002"),
 		},
 	}}
 	encoded, err := MarshalReport(report)
@@ -192,6 +250,22 @@ func TestMarshalReportRoundTripsMissingDifferenceValues(t *testing.T) {
 		byPath["$.actual_literal"].Baseline != missingValue ||
 		!byPath["$.actual_literal"].ActualMissing {
 		t.Fatalf("decoded literal missing differences = %#v", byPath)
+	}
+	if got, ok := byPath["$.large_integer"].Baseline.(json.Number); !ok ||
+		got.String() != "9007199254740993" {
+		t.Fatalf("decoded large integer baseline = %#v", byPath["$.large_integer"].Baseline)
+	}
+	if got, ok := byPath["$.large_integer"].Actual.(json.Number); !ok ||
+		got.String() != "9007199254740994" {
+		t.Fatalf("decoded large integer actual = %#v", byPath["$.large_integer"].Actual)
+	}
+	if got, ok := byPath["$.decimal"].Baseline.(json.Number); !ok ||
+		got.String() != "1.0000000000000000001" {
+		t.Fatalf("decoded decimal baseline = %#v", byPath["$.decimal"].Baseline)
+	}
+	if got, ok := byPath["$.decimal"].Actual.(json.Number); !ok ||
+		got.String() != "1.0000000000000000002" {
+		t.Fatalf("decoded decimal actual = %#v", byPath["$.decimal"].Actual)
 	}
 	roundTrip, err := MarshalReport(decoded)
 	if err != nil {

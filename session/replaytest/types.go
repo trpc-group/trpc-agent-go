@@ -236,9 +236,13 @@ type Difference struct {
 	// BaselineMissing reports that the baseline value is absent rather than JSON null.
 	BaselineMissing bool `json:"baseline_missing,omitempty"`
 	// ActualMissing reports that the actual value is absent rather than JSON null.
-	ActualMissing bool   `json:"actual_missing,omitempty"`
-	AllowedDiff   bool   `json:"allowed_diff"`
-	Explanation   string `json:"explanation,omitempty"`
+	ActualMissing bool `json:"actual_missing,omitempty"`
+	// BaselineInvalidRawJSON reports that baseline is undecodable raw JSON bytes.
+	BaselineInvalidRawJSON bool `json:"baseline_invalid_json_raw,omitempty"`
+	// ActualInvalidRawJSON reports that actual is undecodable raw JSON bytes.
+	ActualInvalidRawJSON bool   `json:"actual_invalid_json_raw,omitempty"`
+	AllowedDiff          bool   `json:"allowed_diff"`
+	Explanation          string `json:"explanation,omitempty"`
 }
 
 // AllowedDiffRule permits one exact Difference.Path or a deliberately bounded

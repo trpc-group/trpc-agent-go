@@ -46,6 +46,26 @@ type mapTimeReference struct {
 	value  *time.Time
 }
 
+type invalidRawJSONValue string
+
+const (
+	toolCallArgsExtensionKey   = "trpc_agent.tool_call_args"
+	toolCallArgsEntryKey       = "key"
+	toolCallArgsEntryKnown     = "known"
+	toolCallArgsEntryValue     = "value"
+	memoryEventTimeMetadataKey = "event_time"
+)
+
+type toolCallArgsEntry struct {
+	key   string
+	known bool
+	value any
+}
+
+func (value invalidRawJSONValue) raw() string {
+	return string(value)
+}
+
 // DefaultNormalizeOptions returns conservative cross-backend defaults.
 func DefaultNormalizeOptions() NormalizeOptions {
 	return NormalizeOptions{
@@ -82,16 +102,23 @@ func NormalizeSnapshot(snapshot Snapshot, options NormalizeOptions) Snapshot {
 	})
 
 	memoryIDs := newScopedLogicalIDMaps("memory")
-	ids := normalizationIDs{
-		invocations: newLogicalIDMap("invocation"),
-		toolCalls:   newLogicalIDMap("tool-call"),
-	}
+	ids := normalizationIDs{}
 	for i := range normalized.Sessions {
 		normalizeSession(&normalized.Sessions[i], options, ids)
 	}
 	for i := range normalized.Memories {
 		normalizeMemoryValues(&normalized.Memories[i], options)
 	}
+	for i := range normalized.MemorySearches {
+		search := &normalized.MemorySearches[i]
+		if search.Results == nil {
+			search.Results = []MemorySnapshot{}
+		}
+		for j := range search.Results {
+			normalizeMemoryValues(&search.Results[j], options)
+		}
+	}
+	normalizeMemoryEventTimes(&normalized, options.TimePrecision)
 	if options.SortMemories {
 		sort.SliceStable(normalized.Memories, func(i, j int) bool {
 			return memorySortKey(normalized.Memories[i]) < memorySortKey(normalized.Memories[j])
@@ -106,12 +133,7 @@ func NormalizeSnapshot(snapshot Snapshot, options NormalizeOptions) Snapshot {
 			UserID:  normalized.MemorySearches[i].UserID,
 		}
 		for j := range normalized.MemorySearches[i].Results {
-			normalizeMemory(
-				&normalized.MemorySearches[i].Results[j],
-				options,
-				memoryIDs,
-				searchScope,
-			)
+			normalizeMemoryID(&normalized.MemorySearches[i].Results[j], options, memoryIDs, searchScope)
 		}
 	}
 	return normalized
@@ -123,6 +145,8 @@ func normalizeSession(
 	ids normalizationIDs,
 ) {
 	ids.events = newLogicalIDMap("event")
+	ids.invocations = newLogicalIDMap("invocation")
+	ids.toolCalls = newLogicalIDMap("tool-call")
 	normalizeSessionTimes(snapshot, options.TimePrecision)
 	snapshot.State = normalizeStateMap(snapshot.State, options)
 	for i := range snapshot.Events {
@@ -134,7 +158,6 @@ func normalizeSession(
 			event.InvocationID = ids.invocations.value(event.InvocationID)
 		}
 		event.StateDelta = normalizeStateMap(event.StateDelta, options)
-		event.Extensions = normalizeStringMap(event.Extensions, options)
 		for j := range event.ToolCalls {
 			if options.NormalizeToolCallIDs {
 				event.ToolCalls[j].ID = ids.toolCalls.value(event.ToolCalls[j].ID)
@@ -150,6 +173,7 @@ func normalizeSession(
 			response.Extra = normalizeStringMap(response.Extra, options)
 			event.ToolResponse = &response
 		}
+		event.Extensions = normalizeEventExtensions(event.Extensions, options, ids)
 	}
 	sort.Slice(snapshot.Summaries, func(i, j int) bool {
 		return snapshot.Summaries[i].FilterKey < snapshot.Summaries[j].FilterKey
@@ -217,6 +241,86 @@ func normalizeStringMap(value map[string]any, options NormalizeOptions) map[stri
 	return normalized
 }
 
+func normalizeEventExtensions(
+	value map[string]any,
+	options NormalizeOptions,
+	ids normalizationIDs,
+) map[string]any {
+	if value == nil {
+		return nil
+	}
+	normalized := make(map[string]any, len(value))
+	for key, item := range value {
+		if key == toolCallArgsExtensionKey && options.NormalizeToolCallIDs && ids.toolCalls != nil {
+			normalized[key] = normalizeToolCallArgsExtension(item, options, ids.toolCalls)
+			continue
+		}
+		normalized[key] = normalizeJSONLike(item, options)
+	}
+	return normalized
+}
+
+func normalizeToolCallArgsExtension(
+	value any,
+	options NormalizeOptions,
+	toolCalls *logicalIDMap,
+) any {
+	normalized := normalizeJSONLike(value, options)
+	args, ok := normalized.(map[string]any)
+	if !ok {
+		return normalized
+	}
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	entries := make([]toolCallArgsEntry, 0, len(args))
+	seen := make(map[string]struct{}, len(args))
+	collided := false
+	for _, key := range keys {
+		normalizedKey, known := toolCalls.lookup(key)
+		if !known {
+			normalizedKey = key
+		}
+		if _, exists := seen[normalizedKey]; exists {
+			collided = true
+		}
+		seen[normalizedKey] = struct{}{}
+		entries = append(entries, toolCallArgsEntry{
+			key:   normalizedKey,
+			known: known,
+			value: args[key],
+		})
+	}
+	if collided {
+		sort.SliceStable(entries, func(i, j int) bool {
+			if entries[i].key != entries[j].key {
+				return entries[i].key < entries[j].key
+			}
+			return entries[i].known && !entries[j].known
+		})
+		return toolCallArgsEntries(entries)
+	}
+	remapped := make(map[string]any, len(args))
+	for _, entry := range entries {
+		remapped[entry.key] = entry.value
+	}
+	return remapped
+}
+
+func toolCallArgsEntries(entries []toolCallArgsEntry) []map[string]any {
+	normalized := make([]map[string]any, len(entries))
+	for i, entry := range entries {
+		normalized[i] = map[string]any{
+			toolCallArgsEntryKey:   entry.key,
+			toolCallArgsEntryKnown: entry.known,
+			toolCallArgsEntryValue: entry.value,
+		}
+	}
+	return normalized
+}
+
 func normalizeStateMap(
 	values map[string]StateValueSnapshot,
 	options NormalizeOptions,
@@ -255,7 +359,75 @@ func normalizeMetadataMap(value map[string]any, options NormalizeOptions) map[st
 	return normalized
 }
 
+func normalizeMemoryEventTimes(snapshot *Snapshot, precision time.Duration) {
+	references := make([]mapTimeReference, 0)
+	for i := range snapshot.Memories {
+		references = appendMemoryEventTimeReference(references, snapshot.Memories[i].Metadata)
+	}
+	for i := range snapshot.MemorySearches {
+		for j := range snapshot.MemorySearches[i].Results {
+			references = appendMemoryEventTimeReference(
+				references,
+				snapshot.MemorySearches[i].Results[j].Metadata,
+			)
+		}
+	}
+	if len(references) == 0 {
+		return
+	}
+	times := make([]*time.Time, 0, len(references))
+	for _, reference := range references {
+		times = append(times, reference.value)
+	}
+	normalizeTimes(times, precision)
+	for _, reference := range references {
+		reference.values[reference.key] = reference.value.UTC().Format(time.RFC3339Nano)
+	}
+}
+
+func appendMemoryEventTimeReference(
+	references []mapTimeReference,
+	values map[string]any,
+) []mapTimeReference {
+	if values == nil {
+		return references
+	}
+	timestamp, ok := memoryEventTime(values[memoryEventTimeMetadataKey])
+	if !ok || timestamp.IsZero() {
+		return references
+	}
+	value := timestamp
+	return append(references, mapTimeReference{
+		values: values,
+		key:    memoryEventTimeMetadataKey,
+		value:  &value,
+	})
+}
+
+func memoryEventTime(value any) (time.Time, bool) {
+	switch typed := value.(type) {
+	case time.Time:
+		return typed, true
+	case *time.Time:
+		if typed == nil {
+			return time.Time{}, false
+		}
+		return *typed, true
+	case string:
+		timestamp, err := time.Parse(time.RFC3339Nano, typed)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return timestamp, true
+	default:
+		return time.Time{}, false
+	}
+}
+
 func normalizeJSONLike(value any, options NormalizeOptions) any {
+	if invalid, ok := normalizeInvalidRawJSON(value); ok {
+		return invalid
+	}
 	switch typed := value.(type) {
 	case nil:
 		return typed
@@ -265,12 +437,12 @@ func normalizeJSONLike(value any, options NormalizeOptions) any {
 		if decoded, valid := decodeJSON(typed); valid {
 			return normalizeJSONLike(decoded, options)
 		}
-		return string(typed)
+		return invalidRawJSONValue(typed)
 	case []byte:
 		if decoded, valid := decodeJSON(typed); valid {
 			return normalizeJSONLike(decoded, options)
 		}
-		return string(typed)
+		return invalidRawJSONValue(typed)
 	case map[string]any:
 		return normalizeStringMap(typed, options)
 	case []any:
@@ -292,6 +464,14 @@ func normalizeJSONLike(value any, options NormalizeOptions) any {
 		return fmt.Sprint(value)
 	}
 	return normalizeJSONLike(decoded, options)
+}
+
+func normalizeInvalidRawJSON(value any) (invalidRawJSONValue, bool) {
+	invalid, ok := value.(invalidRawJSONValue)
+	if !ok {
+		return "", false
+	}
+	return invalid, true
 }
 
 func normalizeScalar(value any) (any, bool) {
@@ -475,8 +655,29 @@ func summaryBoundaryCutoffTime(boundary map[string]any) (time.Time, bool) {
 	if boundary == nil {
 		return time.Time{}, false
 	}
-	value, ok := boundary["cutoff_at"].(time.Time)
-	if !ok || value.IsZero() {
+	raw, ok := boundary["cutoff_at"]
+	if !ok {
+		return time.Time{}, false
+	}
+	var value time.Time
+	switch typed := raw.(type) {
+	case time.Time:
+		value = typed
+	case *time.Time:
+		if typed == nil {
+			return time.Time{}, false
+		}
+		value = *typed
+	case string:
+		parsed, err := time.Parse(time.RFC3339Nano, typed)
+		if err != nil {
+			return time.Time{}, false
+		}
+		value = parsed
+	default:
+		return time.Time{}, false
+	}
+	if value.IsZero() {
 		return time.Time{}, false
 	}
 	return value, true
@@ -1013,4 +1214,12 @@ func (mapping *logicalIDMap) value(id string) string {
 	value := fmt.Sprintf("%s-%04d", mapping.prefix, len(mapping.values)+1)
 	mapping.values[id] = value
 	return value
+}
+
+func (mapping *logicalIDMap) lookup(id string) (string, bool) {
+	if id == "" {
+		return "", true
+	}
+	value, ok := mapping.values[id]
+	return value, ok
 }

@@ -47,6 +47,30 @@ func TestFixtureJSONDecodingPreservesExactNumbers(t *testing.T) {
 	}
 }
 
+func TestFixtureJSONDecodingTagsInvalidRawJSON(t *testing.T) {
+	decoded := decodeRawMap(map[string]json.RawMessage{
+		"invalid": json.RawMessage(`value`),
+		"string":  json.RawMessage(`"value"`),
+	})
+	if decoded["string"] != "value" {
+		t.Fatalf("valid JSON string = %#v, want value", decoded["string"])
+	}
+	invalid, ok := decoded["invalid"].(json.RawMessage)
+	if !ok || string(invalid) != "value" {
+		t.Fatalf("invalid JSON raw = %#v", decoded["invalid"])
+	}
+	if reflect.DeepEqual(decoded["invalid"], decoded["string"]) {
+		t.Fatalf("invalid raw JSON collides with valid string: %#v", decoded)
+	}
+	object := decodeRawMap(map[string]json.RawMessage{
+		"invalid": json.RawMessage(`value`),
+		"object":  json.RawMessage(`{"replaytest.invalid_json_raw":"value"}`),
+	})
+	if reflect.DeepEqual(object["invalid"], object["object"]) {
+		t.Fatalf("invalid raw JSON collides with valid object: %#v", object)
+	}
+}
+
 const (
 	overlapOperationCount = 2
 	overlapTestTimeout    = 2 * time.Second
@@ -572,6 +596,80 @@ func TestEventConversionRoundTripsToolResponseExtra(t *testing.T) {
 	}
 }
 
+func TestEventConversionPreservesRawJSONPayloads(t *testing.T) {
+	want := &replaytest.EventSnapshot{
+		ID:           "event-raw",
+		InvocationID: "invocation-raw",
+		Author:       "assistant",
+		Role:         "assistant",
+		Object:       "chat.completion",
+		Done:         true,
+		ToolCalls: []replaytest.ToolCallSnapshot{{
+			ID:        "call-1",
+			Name:      "weather",
+			Arguments: []byte(`{"city":"Shenzhen"}`),
+			Extra: map[string]any{
+				"raw":         []byte(`{"provider_status":"ok"}`),
+				"raw_message": json.RawMessage(`[true]`),
+				"nested":      map[string]any{"raw": []byte(`{"inner":true}`)},
+			},
+		}},
+		Extensions: map[string]any{
+			"raw":         []byte(`{"value":1}`),
+			"raw_message": json.RawMessage(`[true]`),
+			"nested":      map[string]any{"raw": []byte(`{"inner":true}`)},
+		},
+		ToolResponse: &replaytest.ToolResponse{
+			ToolCallID: "call-1",
+			Name:       "weather",
+			Content:    "sunny",
+			Extra: map[string]any{
+				"raw": []byte(`{"provider_status":"ok"}`),
+			},
+		},
+	}
+	evt, err := toEvent(want)
+	if err != nil {
+		t.Fatalf("toEvent() error = %v", err)
+	}
+	if got := string(evt.Response.Choices[0].Message.ToolCalls[0].Function.Arguments); got != `{"city":"Shenzhen"}` {
+		t.Fatalf("tool arguments = %q, want raw JSON object", got)
+	}
+	encodedToolCall, err := json.Marshal(evt.Response.Choices[0].Message.ToolCalls[0])
+	if err != nil {
+		t.Fatalf("marshal tool call: %v", err)
+	}
+	var decodedToolCall struct {
+		ExtraFields map[string]any `json:"extra_fields"`
+	}
+	if err := decodeJSONUseNumber(encodedToolCall, &decodedToolCall); err != nil {
+		t.Fatalf("decode encoded tool call: %v", err)
+	}
+	if got, want := decodedToolCall.ExtraFields["raw"],
+		map[string]any{"provider_status": "ok"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tool call raw extra = %#v, want %#v", got, want)
+	}
+	if got, want := decodedToolCall.ExtraFields["raw_message"], []any{true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tool call raw message extra = %#v, want %#v", got, want)
+	}
+	if got, want := decodedToolCall.ExtraFields["nested"],
+		map[string]any{"raw": map[string]any{"inner": true}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tool call nested raw extra = %#v, want %#v", got, want)
+	}
+	if got := string(evt.Extensions["raw"]); got != `{"value":1}` {
+		t.Fatalf("raw extension = %q, want raw JSON object", got)
+	}
+	if got := string(evt.Extensions["raw_message"]); got != `[true]` {
+		t.Fatalf("raw message extension = %q, want raw JSON array", got)
+	}
+	if got := string(evt.Extensions["nested"]); got != `{"raw":{"inner":true}}` {
+		t.Fatalf("nested raw extension = %q, want nested raw JSON object", got)
+	}
+	if got := string(evt.Extensions[toolResponseExtraExtensionKey]); got != `{"raw":{"provider_status":"ok"}}` {
+		t.Fatalf("tool response extra = %q, want nested raw JSON object", got)
+	}
+}
+
 func TestTakeToolResponseExtraSupportsClickHouseNestedJSON(t *testing.T) {
 	extensions := map[string]any{
 		replayAppName: map[string]any{
@@ -606,6 +704,43 @@ func TestTakeToolResponseExtraPreservesNestedJSONOutsideClickHouse(t *testing.T)
 	}
 	if !reflect.DeepEqual(extensions, want) {
 		t.Fatalf("extensions = %#v, want preserved %#v", extensions, want)
+	}
+}
+
+func TestTakeToolResponseExtraPreservesWrongTypeReservedValues(t *testing.T) {
+	extensions := map[string]any{
+		toolResponseExtraExtensionKey: "wrong-type",
+	}
+	if got := takeToolResponseExtra(extensions, true); got != nil {
+		t.Fatalf("takeToolResponseExtra() = %#v, want nil", got)
+	}
+	if extensions[toolResponseExtraExtensionKey] != "wrong-type" {
+		t.Fatalf("top-level wrong type was deleted: %#v", extensions)
+	}
+
+	extensions = map[string]any{
+		replayAppName: map[string]any{"tool_response_extra": "wrong-type"},
+	}
+	if got := takeToolResponseExtra(extensions, true); got != nil {
+		t.Fatalf("nested takeToolResponseExtra() = %#v, want nil", got)
+	}
+	if !reflect.DeepEqual(extensions, map[string]any{
+		replayAppName: map[string]any{"tool_response_extra": "wrong-type"},
+	}) {
+		t.Fatalf("nested wrong type was deleted: %#v", extensions)
+	}
+}
+
+func TestEventSnapshotPreservesReservedExtensionOnNonToolEvent(t *testing.T) {
+	evt := event.NewResponseEvent("invocation-1", "assistant", nil)
+	evt.Extensions = map[string]json.RawMessage{
+		toolResponseExtraExtensionKey: json.RawMessage(`{"provider_status":"user-value"}`),
+	}
+	got := toEventSnapshot(evt, false)
+	if !reflect.DeepEqual(got.Extensions, map[string]any{
+		toolResponseExtraExtensionKey: map[string]any{"provider_status": "user-value"},
+	}) {
+		t.Fatalf("reserved non-tool extension was consumed: %#v", got.Extensions)
 	}
 }
 
@@ -651,6 +786,21 @@ func TestEventConversionPropagatesSerializationErrors(t *testing.T) {
 			want: "tool call",
 		},
 		{
+			name: "invalid raw tool arguments",
+			event: &replaytest.EventSnapshot{ToolCalls: []replaytest.ToolCallSnapshot{{
+				ID: "call-1", Arguments: []byte(`{"city"`),
+			}}},
+			want: "invalid raw JSON",
+		},
+		{
+			name: "invalid raw tool call extra",
+			event: &replaytest.EventSnapshot{ToolCalls: []replaytest.ToolCallSnapshot{{
+				ID:    "call-1",
+				Extra: map[string]any{"raw": []byte(`{"bad"`)},
+			}}},
+			want: "invalid raw JSON",
+		},
+		{
 			name: "state delta",
 			event: &replaytest.EventSnapshot{StateDelta: map[string]replaytest.StateValueSnapshot{
 				"bad": replaytest.JSONStateValue(make(chan int)),
@@ -661,6 +811,51 @@ func TestEventConversionPropagatesSerializationErrors(t *testing.T) {
 			name:  "extension",
 			event: &replaytest.EventSnapshot{Extensions: map[string]any{"bad": make(chan int)}},
 			want:  "event extension",
+		},
+		{
+			name:  "invalid raw extension",
+			event: &replaytest.EventSnapshot{Extensions: map[string]any{"raw": json.RawMessage(`{"bad"`)}},
+			want:  "invalid raw JSON",
+		},
+		{
+			name:  "invalid byte extension",
+			event: &replaytest.EventSnapshot{Extensions: map[string]any{"raw": []byte(`{"bad"`)}},
+			want:  "invalid raw JSON",
+		},
+		{
+			name: "invalid tool response extra bytes",
+			event: &replaytest.EventSnapshot{ToolResponse: &replaytest.ToolResponse{
+				Extra: map[string]any{"raw": []byte(`{"bad"`)},
+			}},
+			want: "invalid raw JSON",
+		},
+		{
+			name: "reserved extension",
+			event: &replaytest.EventSnapshot{Extensions: map[string]any{
+				toolResponseExtraExtensionKey: map[string]any{"provider_status": "user-value"},
+			}},
+			want: "reserved",
+		},
+		{
+			name: "nested reserved extension",
+			event: &replaytest.EventSnapshot{Extensions: map[string]any{
+				replayAppName: map[string]string{"tool_response_extra": "user-value"},
+			}},
+			want: "reserved",
+		},
+		{
+			name: "raw nested reserved extension",
+			event: &replaytest.EventSnapshot{Extensions: map[string]any{
+				replayAppName: json.RawMessage(`{"tool_response_extra":{"provider_status":"user-value"}}`),
+			}},
+			want: "reserved",
+		},
+		{
+			name: "byte nested reserved extension",
+			event: &replaytest.EventSnapshot{Extensions: map[string]any{
+				replayAppName: []byte(`{"tool_response_extra":{"provider_status":"user-value"}}`),
+			}},
+			want: "reserved",
 		},
 		{
 			name: "tool response extra",
