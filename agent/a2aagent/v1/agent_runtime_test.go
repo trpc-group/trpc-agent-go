@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -154,6 +155,67 @@ func TestNewDiscoversCardFromPathPrefixWithLegacyFallback(t *testing.T) {
 		requestPaths[0] != wantPaths[0] ||
 		requestPaths[1] != wantPaths[1] {
 		t.Fatalf("request paths = %#v, want %#v", requestPaths, wantPaths)
+	}
+}
+
+func TestNewUsesPrimaryInterfaceBindingAndTenant(t *testing.T) {
+	var requestErr error
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/tenant-a/message:send" {
+			requestErr = fmt.Errorf("path = %s", r.URL.EscapedPath())
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			requestErr = err
+		}
+		if body["tenant"] != "tenant-a" {
+			requestErr = fmt.Errorf("tenant = %v", body["tenant"])
+		}
+		w.Header().Set("Content-Type", protocol.MediaTypeA2AJSON)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": body["message"]})
+	}))
+	defer server.Close()
+
+	remote, err := New(WithAgentCard(&protocolserver.AgentCard{
+		Name: "remote",
+		SupportedInterfaces: []protocolserver.AgentInterface{{
+			URL:             server.URL,
+			ProtocolBinding: protocol.ProtocolBindingHTTPJSON,
+			ProtocolVersion: protocol.ProtocolVersionV1,
+			Tenant:          "tenant-a",
+		}},
+	}))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	message := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]*protocol.Part{protocol.NewTextPart("hello")},
+	)
+	if _, err := remote.a2aClient.SendMessage(context.Background(), protocol.SendMessageParams{
+		Message: message,
+	}); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+	if requestErr != nil {
+		t.Fatal(requestErr)
+	}
+}
+
+func TestNewExplicitClientOptionsOverrideAgentCardBinding(t *testing.T) {
+	_, err := New(
+		WithAgentCard(&protocolserver.AgentCard{
+			Name: "remote",
+			SupportedInterfaces: []protocolserver.AgentInterface{{
+				URL:             "http://localhost:8080",
+				ProtocolBinding: "unsupported",
+				ProtocolVersion: protocol.ProtocolVersionV1,
+			}},
+		}),
+		WithA2AClientExtraOptions(client.WithProtocolBinding(protocol.ProtocolBindingJSONRPC)),
+	)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
 	}
 }
 

@@ -122,16 +122,13 @@ func New(opts ...Option) (*A2AAgent, error) {
 	// Normalize the URL to ensure it has a proper scheme
 	agentURL = ia2a.NormalizeURL(agentURL)
 
-	// Create A2A client first
-	a2aClient, err := client.NewA2AClient(agentURL, agent.extraA2AOptions...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentURL, err)
-	}
-	agent.a2aClient = a2aClient
-
 	// If agent card is not set, fetch it using A2A client's GetAgentCard method
 	if agent.agentCard == nil {
-		agentCard, err := a2aClient.GetAgentCard(context.Background(), "")
+		discoveryClient, err := client.NewA2AClient(agentURL, agent.extraA2AOptions...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentURL, err)
+		}
+		agentCard, err := discoveryClient.GetAgentCard(context.Background(), "")
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch agent card from %s: %w", agentURL, err)
 		}
@@ -141,6 +138,7 @@ func New(opts ...Option) (*A2AAgent, error) {
 		card := *agent.agentCard
 		agent.agentCard = &card
 	}
+	agent.agentCard.NormalizeInterfaces()
 
 	if agent.name == "" {
 		agent.name = agent.agentCard.Name
@@ -154,13 +152,24 @@ func New(opts ...Option) (*A2AAgent, error) {
 	}
 	resolvedURL = ia2a.NormalizeURL(resolvedURL)
 	agent.agentCard.URL = resolvedURL
-	if resolvedURL != agentURL {
-		a2aClient, err := client.NewA2AClient(resolvedURL, agent.extraA2AOptions...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create A2A client for %s: %w", resolvedURL, err)
+	clientOptions := make([]client.Option, 0, len(agent.extraA2AOptions)+2)
+	if len(agent.agentCard.SupportedInterfaces) > 0 {
+		primary := agent.agentCard.SupportedInterfaces[0]
+		if primary.ProtocolBinding != "" {
+			clientOptions = append(clientOptions, client.WithProtocolBinding(primary.ProtocolBinding))
 		}
-		agent.a2aClient = a2aClient
+		if primary.Tenant != "" {
+			clientOptions = append(clientOptions, client.WithTenant(primary.Tenant))
+		}
 	}
+	// Explicit client options take precedence over values discovered from the
+	// Agent Card.
+	clientOptions = append(clientOptions, agent.extraA2AOptions...)
+	a2aClient, err := client.NewA2AClient(resolvedURL, clientOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create A2A client for %s: %w", resolvedURL, err)
+	}
+	agent.a2aClient = a2aClient
 
 	return agent, nil
 }

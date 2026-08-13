@@ -161,6 +161,20 @@ func TestAgentCardValidationToolsAndHandler(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSONRPCEndpoint(t *testing.T) {
+	tests := map[string]string{
+		"localhost:8080":                        "http://localhost:8080/",
+		"http://example.com/api/v1":             "http://example.com/api/v1/",
+		"http://example.com/api/v1/":            "http://example.com/api/v1/",
+		"http://example.com/a%2Fb?access_key=1": "http://example.com/a%2Fb/?access_key=1",
+	}
+	for input, want := range tests {
+		if got := normalizeJSONRPCEndpoint(input); got != want {
+			t.Errorf("normalizeJSONRPCEndpoint(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestServerContextAuthenticationAndOptions(t *testing.T) {
 	if id, ok := UserIDFromContext(nil); ok || id != "" {
 		t.Fatalf("nil context user = (%q, %v)", id, ok)

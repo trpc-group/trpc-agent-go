@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -134,6 +135,16 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	agentCard := *options.agentCard
 	if agentCard.Name == "" {
 		return nil, errors.New("agent card name is required")
+	}
+	agentCard.NormalizeInterfaces()
+	if len(agentCard.SupportedInterfaces) > 0 &&
+		strings.EqualFold(agentCard.SupportedInterfaces[0].ProtocolBinding, "JSONRPC") {
+		primaryURL := agentCard.SupportedInterfaces[0].URL
+		exactEndpoint := normalizeJSONRPCEndpoint(primaryURL)
+		agentCard.SupportedInterfaces[0].URL = exactEndpoint
+		if agentCard.URL == primaryURL {
+			agentCard.URL = exactEndpoint
+		}
 	}
 
 	builtInProcessor, err := buildProcessor(agentCard.Name, options)

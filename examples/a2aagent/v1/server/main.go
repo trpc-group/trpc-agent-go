@@ -135,7 +135,16 @@ func main() {
 		serverOptions = append(serverOptions, a2aserver.WithTaskManagerBuilder(func(
 			processor taskmanager.MessageProcessor,
 		) (taskmanager.TaskManager, error) {
-			return memorytaskmanager.NewTaskManager(processor)
+			return memorytaskmanager.NewTaskManager(
+				processor,
+				memorytaskmanager.WithOwnerResolver(func(ctx context.Context) (string, error) {
+					userID, ok := a2aserver.UserIDFromContext(ctx)
+					if !ok || userID == "" {
+						return "", fmt.Errorf("authenticated user ID is required for retained tasks")
+					}
+					return userID, nil
+				}),
+			)
 		}))
 	}
 

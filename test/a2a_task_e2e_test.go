@@ -10,6 +10,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -378,6 +379,79 @@ func TestA2ARetainingTaskManagerE2E(t *testing.T) {
 		)
 		require.Equal(t, legacyprotocol.TaskStateCanceled, legacyView.Status.State)
 	})
+}
+
+func TestA2ARetainedTasksAreScopedByUser(t *testing.T) {
+	server := newV1A2AE2EServer(
+		t,
+		&a2aE2ERunner{},
+		false,
+		a2aserver.WithTaskManagerBuilder(func(
+			processor taskmanager.MessageProcessor,
+		) (taskmanager.TaskManager, error) {
+			return memory.NewTaskManager(
+				processor,
+				memory.WithOwnerResolver(func(ctx context.Context) (string, error) {
+					userID, ok := a2aserver.UserIDFromContext(ctx)
+					if !ok || userID == "" {
+						return "", errors.New("authenticated user ID is required")
+					}
+					return userID, nil
+				}),
+			)
+		}),
+	)
+	client, err := v1client.NewA2AClient(server.URL)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	returnImmediately := true
+	response, err := client.SendMessage(
+		ctx,
+		v1protocol.SendMessageParams{
+			Message: v1protocol.NewMessage(
+				v1protocol.MessageRoleUser,
+				[]*v1protocol.Part{v1protocol.NewTextPart("owner-scoped")},
+			),
+			Configuration: &v1protocol.SendMessageConfiguration{
+				ReturnImmediately: &returnImmediately,
+			},
+		},
+		v1client.WithRequestHeader("X-User-ID", "owner-a"),
+	)
+	require.NoError(t, err)
+	task := response.GetTask()
+	require.NotNil(t, task)
+
+	_, err = client.GetTasks(
+		ctx,
+		v1protocol.TaskQueryParams{ID: task.ID},
+		v1client.WithRequestHeader("X-User-ID", "owner-a"),
+	)
+	require.NoError(t, err)
+	_, err = client.GetTasks(
+		ctx,
+		v1protocol.TaskQueryParams{ID: task.ID},
+		v1client.WithRequestHeader("X-User-ID", "owner-b"),
+	)
+	require.Error(t, err)
+
+	ownerATasks, err := client.ListTasks(
+		ctx,
+		v1protocol.ListTasksParams{},
+		v1client.WithRequestHeader("X-User-ID", "owner-a"),
+	)
+	require.NoError(t, err)
+	require.Len(t, ownerATasks.Tasks, 1)
+	require.Equal(t, task.ID, ownerATasks.Tasks[0].ID)
+	ownerBTasks, err := client.ListTasks(
+		ctx,
+		v1protocol.ListTasksParams{},
+		v1client.WithRequestHeader("X-User-ID", "owner-b"),
+	)
+	require.NoError(t, err)
+	require.Empty(t, ownerBTasks.Tasks)
 }
 
 func TestA2AStatelessTaskAPIBoundariesE2E(t *testing.T) {

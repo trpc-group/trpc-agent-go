@@ -86,6 +86,8 @@ immediate Task snapshot, polls it with `tasks/get`, and finally verifies it with
 and resubscription. Continuation still requires a processor that emits an
 interrupted state, and push delivery requires additional push configuration.
 
+The retained example scopes Tasks by the authenticated `X-User-ID`; all send, lookup, list, cancel, and resubscribe requests for one Task must use the same user ID.
+
 Session state and A2A Task state remain independent: the Runner's session
 service owns conversation context, while the memory TaskManager retains A2A
 Task lifecycle state. Both are cleared when the server process restarts.
