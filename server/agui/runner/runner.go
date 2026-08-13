@@ -443,6 +443,23 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		span.End()
 		return nil, fmt.Errorf("register running context: %w", err)
 	}
+	if input.enableTrack && r.messagesSnapshotFollowEnabled && r.flushInterval > 0 {
+		markerCtx, markerCancel := r.newTrackPersistenceContext(ctx)
+		err := writeMessagesSnapshotFollowRunMarker(
+			markerCtx,
+			r.sessionService,
+			input.key,
+			input.runID,
+			r.messagesSnapshotFollowMarkerLease(ctx),
+		)
+		markerCancel()
+		if err != nil {
+			cancel(err)
+			r.unregister(input.key)
+			span.End()
+			return nil, fmt.Errorf("write messages snapshot follow run marker: %w", err)
+		}
+	}
 	if r.distributedCancelEnabled {
 		stopDistributedCancel, err := r.startDistributedCancel(ctx, input.key, cancel)
 		if err != nil {
@@ -453,6 +470,24 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	}
 	go r.run(ctx, cancel, input.key, input, events)
 	return events, nil
+}
+
+func (r *runner) messagesSnapshotFollowMarkerLease(ctx context.Context) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	lease := time.Until(deadline)
+	if lease < 0 {
+		lease = 0
+	}
+	if r.postRunFinalizationTimeout > 0 {
+		lease += r.postRunFinalizationTimeout
+	}
+	if r.trackPersistenceTimeout > 0 {
+		lease += r.trackPersistenceTimeout
+	}
+	return lease
 }
 
 func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key session.Key, input *runInput, events chan<- aguievents.Event) {
@@ -487,15 +522,29 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 			if stopTrackFlush != nil {
 				stopTrackFlush()
 			}
-			if err := r.closeTrack(ctx, input.key); err != nil {
+			closeErr := r.closeTrack(ctx, input.key)
+			if closeErr != nil {
 				log.WarnfContext(
 					ctx,
 					"agui run: threadID: %s, runID: %s, "+
 						"close track events: %v",
 					threadID,
 					runID,
-					err,
+					closeErr,
 				)
+			}
+			if closeErr != nil && r.messagesSnapshotFollowEnabled && r.flushInterval > 0 {
+				markerCtx, markerCancel := r.newTrackPersistenceContext(ctx)
+				markerErr := finishMessagesSnapshotFollowRunMarker(
+					markerCtx,
+					r.sessionService,
+					input.key,
+					input.runID,
+				)
+				markerCancel()
+				if markerErr != nil {
+					log.WarnfContext(ctx, "agui run: finish messages snapshot follow marker: %v", markerErr)
+				}
 			}
 		}()
 		if input.messages.inputMessage.Role == model.RoleUser {

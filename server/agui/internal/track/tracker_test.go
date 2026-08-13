@@ -545,7 +545,7 @@ func TestTrackerFlushFailureRetriesUnprocessedSuffixBeforeNewEvents(t *testing.T
 	requireTrackEventType(t, trackEvents.Events[3], aguievents.EventTypeCustom)
 }
 
-func TestTrackerCloseFailureKeepsUnprocessedSuffixBeforeNewEvents(t *testing.T) {
+func TestTrackerCloseFailureReleasesStateBeforeNewEvents(t *testing.T) {
 	ctx := context.Background()
 	svc := newHookSessionService()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
@@ -558,26 +558,27 @@ func TestTrackerCloseFailureKeepsUnprocessedSuffixBeforeNewEvents(t *testing.T) 
 		}
 		return svc.SessionService.AppendTrackEvent(ctx, sess, evt, opts...)
 	}
-	tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	tr, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
 	require.NoError(t, err)
-	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
-	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("middle")))
-	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunFinishedEvent("thread", "run")))
-	err = tracker.Close(ctx, key)
+	require.NoError(t, tr.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
+	require.NoError(t, tr.AppendEvent(ctx, key, aguievents.NewCustomEvent("middle")))
+	require.NoError(t, tr.AppendEvent(ctx, key, aguievents.NewRunFinishedEvent("thread", "run")))
+	err = tr.Close(ctx, key)
 	require.ErrorContains(t, err, "append broke")
-	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("after")))
+	impl, ok := tr.(*tracker)
+	require.True(t, ok)
+	require.Nil(t, impl.getExistingSessionState(key))
+	require.NoError(t, tr.AppendEvent(ctx, key, aguievents.NewCustomEvent("after")))
 	failSecond = false
-	require.NoError(t, tracker.Close(ctx, key))
+	require.NoError(t, tr.Close(ctx, key))
 	sess, err := svc.GetSession(ctx, key)
 	require.NoError(t, err)
 	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
 	require.NoError(t, err)
-	require.Len(t, trackEvents.Events, 4)
+	require.Len(t, trackEvents.Events, 2)
 	requireTrackEventType(t, trackEvents.Events[0], aguievents.EventTypeRunStarted)
 	requireTrackEventType(t, trackEvents.Events[1], aguievents.EventTypeCustom)
-	requireTrackEventType(t, trackEvents.Events[2], aguievents.EventTypeRunFinished)
-	requireTrackEventType(t, trackEvents.Events[3], aguievents.EventTypeCustom)
-	err = tracker.Flush(ctx, key)
+	err = tr.Flush(ctx, key)
 	require.ErrorContains(t, err, "session state not found")
 }
 

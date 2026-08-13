@@ -150,10 +150,11 @@ func (t *tracker) Close(ctx context.Context, key session.Key) error {
 	if state == nil {
 		return nil
 	}
-	if err := t.closeState(ctx, key, state); err != nil {
+	err := t.closeState(ctx, key, state)
+	t.deleteSessionState(key, state)
+	if err != nil {
 		return fmt.Errorf("flush: %w", err)
 	}
-	t.deleteSessionState(key, state)
 	return nil
 }
 
@@ -276,18 +277,10 @@ func (t *tracker) closeState(ctx context.Context, key session.Key, state *sessio
 	defer state.persistMu.Unlock()
 	batch, err := t.drainPendingForClose(ctx, state)
 	if err != nil {
-		t.reopenState(state)
 		return err
 	}
-	processed, persistErr := t.persistEvents(ctx, key, state, batch)
-	if persistErr != nil {
-		state.mu.Lock()
-		t.prependPending(state, batch[processed:])
-		state.closing = false
-		state.mu.Unlock()
-		return persistErr
-	}
-	return nil
+	_, persistErr := t.persistEvents(ctx, key, state, batch)
+	return persistErr
 }
 
 func (t *tracker) drainPending(ctx context.Context, state *sessionState) ([]aguievents.Event, error) {
@@ -313,12 +306,6 @@ func (t *tracker) drainPendingLocked(ctx context.Context, state *sessionState) (
 	batch = append(batch, events...)
 	state.pending = nil
 	return batch, nil
-}
-
-func (t *tracker) reopenState(state *sessionState) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.closing = false
 }
 
 func (t *tracker) prependPending(state *sessionState, events []aguievents.Event) {

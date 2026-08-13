@@ -101,7 +101,7 @@ curl -N -X POST http://localhost:8080/history \
 - `aggregator.WithEnabled(true)` 用于控制是否启用事件聚合，默认开启。
 - `agui.WithFlushInterval(time.Second)` 用于控制历史事件写入会话存储的刷新间隔，默认 `1s`。设置为 `0` 表示不进行运行中的定时写入；这种配置通常适合不需要在运行中通过 `/history` 续传事件的场景，历史事件主要会在运行结束收尾时写入。运行时间较长或事件量较大时，未写入的历史事件会持续占用进程内存，直到运行结束收尾。
 - `agui.WithTrackPersistenceTimeout(5*time.Second)` 用于限制单次历史事件写入会话存储的最长等待时间，默认 `5s`。设置为 `0` 表示不设置超时。
-- `agui.WithPostRunFinalizationTimeout(5*time.Second)` 用于限制运行结束后收尾流程的最长执行时间，默认 `5s`。收尾流程会补齐仍然打开的协议结束事件，并尽量把剩余历史事件写入 `SessionService`。如果会话存储变慢或异常，超时可以避免请求长时间阻塞。设置为 `0` 表示不设置超时。
+- `agui.WithPostRunFinalizationTimeout(5*time.Second)` 用于限制运行结束后收尾流程的最长执行时间，默认 `5s`。收尾流程会补齐仍然打开的协议结束事件，并尽量把剩余历史事件写入 `SessionService`。如果最终写入失败，错误会被记录，同时释放已结束 run 的进程内 tracker 状态；尚未写入的剩余事件会被丢弃，而不会无限期滞留。如果会话存储变慢或异常，超时可以避免请求长时间阻塞。设置为 `0` 表示不设置超时。
 
 ```go
 import (
@@ -246,6 +246,8 @@ server, err := agui.New(
 开启续传后，服务端会在发送 `MESSAGES_SNAPSHOT` 后继续读取并转发后续 AG-UI 事件，直到读到 `RUN_FINISHED` 或 `RUN_ERROR`。返回序列变为：
 
 `RUN_STARTED → MESSAGES_SNAPSHOT → 后续 AG-UI 事件 → RUN_FINISHED/RUN_ERROR`
+
+对于已启用历史追踪、消息快照续传且刷新间隔为正的运行，Runner 会在 `Run` 返回前向共享的 `SessionService` 写入一个很小的“最新运行”标记。当缓冲的 track 事件尚不可见时，其他实例可通过该标记区分“新运行已开始”与“历史为空或末尾仍是上一轮终态”。标记不会在运行结束时立即清除，而是由下一轮运行覆盖；当同一 run 的终态事件已经持久化时，该标记即视为已完成。设置了执行截止时间的 run 会使用有界租期，避免终态事件永久缺失时一直被误判为活跃；已知最终写入失败时也会将本轮标记为已完成。标记通过 session state 读写，不经过 track 事件的异步持久化队列，因此异步 track 写入不会丢失活跃运行信号。如果标记写入失败，`Run` 会返回错误，避免在无法保证跨实例续传可见性时启动运行。与 Runner 现有的本地运行注册表一致，不支持同一个 session key 同时启动多个 run。
 
 相关配置如下：
 

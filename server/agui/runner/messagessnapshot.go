@@ -123,9 +123,17 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 		return
 	}
 
-	if r.messagesSnapshotFollowEnabled && r.shouldFollowMessagesSnapshot(input.key, trackEvents) {
-		r.messagesSnapshotFollow(ctx, input, events, trackEvents)
-		return
+	if r.messagesSnapshotFollowEnabled {
+		follow, marker, followErr := r.shouldFollowMessagesSnapshot(ctx, input.key, trackEvents)
+		if followErr != nil {
+			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("check history follow: %v", followErr),
+				aguievents.WithRunID(runID)), input)
+			return
+		}
+		if follow {
+			r.messagesSnapshotFollow(ctx, input, events, trackEvents, marker)
+			return
+		}
 	}
 	// Emit a RUN_FINISHED event to signal downstream consumers there is no more data.
 	if !r.emitEvent(ctx, events, aguievents.NewRunFinishedEvent(threadID, runID), input) {
@@ -208,6 +216,7 @@ func (r *runner) messagesSnapshotFollow(
 	input *runInput,
 	events chan<- aguievents.Event,
 	initial *session.TrackEvents,
+	marker *messagesSnapshotFollowRunMarker,
 ) {
 	cursorTime := lastTrackTimestamp(initial)
 	pollInterval := r.flushInterval
@@ -238,24 +247,35 @@ func (r *runner) messagesSnapshotFollow(
 				aguievents.WithRunID(input.runID)), input)
 			return
 		case <-ticker.C:
-			if !r.handleMessagesSnapshotFollowTick(ctx, input, events, &cursorTime) {
+			if !r.handleMessagesSnapshotFollowTick(ctx, input, events, &cursorTime, marker) {
 				return
 			}
 		}
 	}
 }
 
-func (r *runner) shouldFollowMessagesSnapshot(key session.Key, trackEvents *session.TrackEvents) bool {
-	if trackEvents == nil || trackEndsWithTerminalRunEvent(trackEvents.Events) {
-		return false
+func (r *runner) shouldFollowMessagesSnapshot(
+	ctx context.Context,
+	key session.Key,
+	trackEvents *session.TrackEvents,
+) (bool, *messagesSnapshotFollowRunMarker, error) {
+	if trackEvents == nil {
+		return false, nil, nil
 	}
 	if r.flushInterval <= 0 {
-		return false
+		return false, nil, nil
+	}
+	marker, err := readMessagesSnapshotFollowRunMarker(ctx, r.sessionService, key)
+	if err != nil {
+		return false, nil, err
+	}
+	if marker != nil {
+		return !trackContainsTerminalForFollowRun(trackEvents, marker), marker, nil
 	}
 	if len(trackEvents.Events) > 0 {
-		return true
+		return !trackEndsWithTerminalRunEvent(trackEvents.Events), nil, nil
 	}
-	return r.isRunning(key)
+	return r.isRunning(key), nil, nil
 }
 
 func (r *runner) handleMessagesSnapshotFollowTick(
@@ -263,6 +283,7 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 	input *runInput,
 	events chan<- aguievents.Event,
 	cursorTime *time.Time,
+	marker *messagesSnapshotFollowRunMarker,
 ) bool {
 	trackEvents, err := r.tracker.GetEvents(ctx, input.key, session.WithEventTime(*cursorTime))
 	if err != nil {
@@ -281,6 +302,9 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 			continue
 		}
 		*cursorTime = trackEvent.Timestamp
+		if marker != nil && trackEvent.Timestamp.Before(marker.StartedAt) {
+			continue
+		}
 		if len(trackEvent.Payload) == 0 {
 			continue
 		}
@@ -291,6 +315,9 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 		}
 		terminal, terminalErr := terminalRunSignal(evt)
 		if terminal {
+			if marker != nil && (trackEvent.Timestamp.Before(marker.StartedAt) || evt.RunID() != marker.RunID) {
+				continue
+			}
 			if terminalErr != "" {
 				r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(terminalErr,
 					aguievents.WithRunID(input.runID)), input)

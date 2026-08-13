@@ -101,7 +101,7 @@ Related configuration:
 - `aggregator.WithEnabled(true)` controls whether streaming chunks are merged. It is enabled by default.
 - `agui.WithFlushInterval(time.Second)` controls how often history events are written to session storage. The default is `1s`. Setting it to `0` disables periodic writes while a run is active. This is usually appropriate when you do not need `/history` follow during an active run; history events are mainly written during post-run finalization. During long-running or high-volume runs, unwritten history events remain in process memory until finalization.
 - `agui.WithTrackPersistenceTimeout(5*time.Second)` limits how long one history persistence attempt can wait for session storage. The default is `5s`. Setting it to `0` means no timeout is applied.
-- `agui.WithPostRunFinalizationTimeout(5*time.Second)` limits the maximum duration of post-run finalization. The default is `5s`. Finalization fills in protocol closing events that are still open and tries to write remaining history events to `SessionService`. If session storage becomes slow or fails, the timeout prevents the request from blocking for too long. Setting it to `0` means no timeout is applied.
+- `agui.WithPostRunFinalizationTimeout(5*time.Second)` limits the maximum duration of post-run finalization. The default is `5s`. Finalization fills in protocol closing events that are still open and tries to write remaining history events to `SessionService`. If the final write fails, the error is logged and the completed run's in-process tracker state is released; any remaining unwritten events are discarded rather than retained indefinitely. If session storage becomes slow or fails, the timeout prevents the request from blocking for too long. Setting it to `0` means no timeout is applied.
 
 ```go
 import (
@@ -246,6 +246,8 @@ By default, the messages snapshot route returns a one-shot snapshot and immediat
 After continuation is enabled, the server continues reading and forwarding subsequent AG-UI events after sending `MESSAGES_SNAPSHOT`, until it reads `RUN_FINISHED` or `RUN_ERROR`. The returned sequence becomes:
 
 `RUN_STARTED → MESSAGES_SNAPSHOT → subsequent AG-UI events → RUN_FINISHED/RUN_ERROR`
+
+For a tracked run with continuation enabled and a positive flush interval, the runner writes a small latest-run marker to the shared `SessionService` before `Run` returns. The marker lets another instance distinguish a newly active run from empty history or the previous run's terminal event while buffered track events are not yet visible. It is overwritten by the next run rather than cleared at completion, and a matching persisted terminal event marks it complete. Runs with an execution deadline use a bounded lease to prevent a missing terminal event from leaving the marker active indefinitely; a known final-write failure also marks the run complete. Writing or reading this marker uses session state rather than the track-event persistence queue, so asynchronous track persistence does not remove the active-run signal. If the marker cannot be written, `Run` returns an error instead of starting without cross-instance continuation visibility. As with the runner's existing local run registry, starting concurrent runs for the same session key is unsupported.
 
 Related configuration:
 

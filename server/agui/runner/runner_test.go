@@ -3364,7 +3364,233 @@ func TestRunFlushesTracker(t *testing.T) {
 	assert.NoError(t, err)
 	collectEvents(t, ch)
 	assert.GreaterOrEqual(t, recorder.appendCount, 1)
+	assert.Equal(t, 0, recorder.flushCount)
 	assert.Equal(t, 1, recorder.closeCount)
+}
+
+func TestRunWritesMessagesSnapshotFollowMarkerBeforeReturning(t *testing.T) {
+	for _, role := range []types.Role{types.RoleUser, types.RoleTool} {
+		t.Run(string(role), func(t *testing.T) {
+			markerStarted := make(chan struct{})
+			releaseMarker := make(chan struct{})
+			baseStarted := make(chan struct{}, 1)
+			svc := &blockingFollowMarkerSessionService{
+				SessionService: inmemory.NewSessionService(),
+				started:        markerStarted,
+				release:        releaseMarker,
+			}
+			_, err := svc.SessionService.CreateSession(context.Background(), session.Key{
+				AppName: "demo", UserID: "user", SessionID: "thread",
+			}, session.StateMap{})
+			require.NoError(t, err)
+			underlying := &fakeRunner{run: func(context.Context, string, string, model.Message,
+				...agent.RunOption) (<-chan *agentevent.Event, error) {
+				baseStarted <- struct{}{}
+				ch := make(chan *agentevent.Event)
+				close(ch)
+				return ch, nil
+			}}
+			r := New(
+				underlying,
+				WithAppName("demo"),
+				WithSessionService(svc),
+				WithMessagesSnapshotFollowEnabled(true),
+			).(*runner)
+			message := types.Message{Role: role, Content: "input"}
+			if role == types.RoleTool {
+				message.ToolCallID = "call"
+			}
+			type runResult struct {
+				events <-chan aguievents.Event
+				err    error
+			}
+			result := make(chan runResult, 1)
+			go func() {
+				events, err := r.Run(context.Background(), &adapter.RunAgentInput{
+					ThreadID: "thread", RunID: "run", Messages: []types.Message{message},
+				})
+				result <- runResult{events: events, err: err}
+			}()
+			select {
+			case <-markerStarted:
+			case <-time.After(time.Second):
+				require.FailNow(t, "timeout waiting for follow marker write")
+			}
+			select {
+			case <-result:
+				require.FailNow(t, "Run returned before follow marker became visible")
+			case <-baseStarted:
+				require.FailNow(t, "base runner started before follow marker became visible")
+			default:
+			}
+			close(releaseMarker)
+			out := <-result
+			require.NoError(t, out.err)
+			collectEvents(t, out.events)
+			marker, err := readMessagesSnapshotFollowRunMarker(context.Background(), svc,
+				session.Key{AppName: "demo", UserID: "user", SessionID: "thread"})
+			require.NoError(t, err)
+			require.NotNil(t, marker)
+			require.Equal(t, "run", marker.RunID)
+		})
+	}
+}
+
+func TestRunSkipsMessagesSnapshotFollowMarkerWhenUnused(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		follow   bool
+		interval time.Duration
+	}{
+		{name: "follow disabled", interval: time.Second},
+		{name: "periodic flush disabled", follow: true, interval: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &countingFollowMarkerSessionService{SessionService: inmemory.NewSessionService()}
+			underlying := &fakeRunner{run: func(context.Context, string, string, model.Message,
+				...agent.RunOption) (<-chan *agentevent.Event, error) {
+				ch := make(chan *agentevent.Event)
+				close(ch)
+				return ch, nil
+			}}
+			r := New(
+				underlying,
+				WithAppName("demo"),
+				WithSessionService(svc),
+				WithMessagesSnapshotFollowEnabled(tt.follow),
+				WithFlushInterval(tt.interval),
+			)
+			events, err := r.Run(context.Background(), &adapter.RunAgentInput{
+				ThreadID: "thread", RunID: "run",
+				Messages: []types.Message{{Role: types.RoleUser, Content: "input"}},
+			})
+			require.NoError(t, err)
+			collectEvents(t, events)
+			require.Equal(t, 0, svc.updates)
+			sess, err := svc.GetSession(context.Background(), session.Key{
+				AppName: "demo", UserID: "user", SessionID: "thread",
+			})
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			_, marked := sess.GetState(messagesSnapshotFollowRunMarkerKey)
+			require.False(t, marked)
+		})
+	}
+}
+
+func TestRunFollowMarkerFailureDoesNotStartOrLeakRun(t *testing.T) {
+	markerErr := errors.New("marker failed")
+	svc := &failingFollowMarkerSessionService{
+		SessionService: inmemory.NewSessionService(),
+		err:            markerErr,
+	}
+	key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
+	_, err := svc.SessionService.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+	underlying := &fakeRunner{}
+	r := New(
+		underlying,
+		WithAppName("demo"),
+		WithSessionService(svc),
+		WithMessagesSnapshotFollowEnabled(true),
+	).(*runner)
+	events, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread", RunID: "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "input"}},
+	})
+	require.Nil(t, events)
+	require.ErrorIs(t, err, markerErr)
+	require.Equal(t, 0, underlying.calls)
+	require.False(t, r.isRunning(key))
+}
+
+func TestMessagesSnapshotFollowMarkerLeaseUsesExecutionDeadline(t *testing.T) {
+	t.Run("unbounded execution has no lease", func(t *testing.T) {
+		r := &runner{
+			postRunFinalizationTimeout: time.Second,
+			trackPersistenceTimeout:    time.Second,
+		}
+		require.Zero(t, r.messagesSnapshotFollowMarkerLease(context.Background()))
+	})
+	t.Run("bounded execution includes cleanup grace", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r := &runner{
+			postRunFinalizationTimeout: 2 * time.Second,
+			trackPersistenceTimeout:    3 * time.Second,
+		}
+		lease := r.messagesSnapshotFollowMarkerLease(ctx)
+		require.Greater(t, lease, 5*time.Second)
+		require.LessOrEqual(t, lease, 6*time.Second)
+	})
+}
+
+func TestFinishMessagesSnapshotFollowRunMarkerMarksCurrentRunFinished(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
+	svc := inmemory.NewSessionService()
+	require.NoError(t, writeMessagesSnapshotFollowRunMarker(ctx, svc, key, "run", time.Minute))
+	require.NoError(t, finishMessagesSnapshotFollowRunMarker(ctx, svc, key, "run"))
+	marker, err := readMessagesSnapshotFollowRunMarker(ctx, svc, key)
+	require.NoError(t, err)
+	require.NotNil(t, marker)
+	require.True(t, marker.Finished)
+	require.NoError(t, finishMessagesSnapshotFollowRunMarker(ctx, svc, key, "other-run"))
+	marker, err = readMessagesSnapshotFollowRunMarker(ctx, svc, key)
+	require.NoError(t, err)
+	require.True(t, marker.Finished)
+}
+
+type blockingFollowMarkerSessionService struct {
+	*inmemory.SessionService
+	started chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingFollowMarkerSessionService) UpdateSessionState(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+) error {
+	if _, ok := state[messagesSnapshotFollowRunMarkerKey]; ok {
+		s.once.Do(func() { close(s.started) })
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.SessionService.UpdateSessionState(ctx, key, state)
+}
+
+type countingFollowMarkerSessionService struct {
+	*inmemory.SessionService
+	updates int
+}
+
+type failingFollowMarkerSessionService struct {
+	*inmemory.SessionService
+	err error
+}
+
+func (s *failingFollowMarkerSessionService) UpdateSessionState(
+	context.Context,
+	session.Key,
+	session.StateMap,
+) error {
+	return s.err
+}
+
+func (s *countingFollowMarkerSessionService) UpdateSessionState(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+) error {
+	if _, ok := state[messagesSnapshotFollowRunMarkerKey]; ok {
+		s.updates++
+	}
+	return s.SessionService.UpdateSessionState(ctx, key, state)
 }
 
 func TestRecordTrackEventUsesDetachedPersistenceContext(t *testing.T) {
