@@ -210,7 +210,9 @@ func TestSaveArtifact(t *testing.T) {
 		art := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
 
 		invalidNames := []string{
-			"path/to/file.txt", // contains /
+			"/absolute.txt",    // absolute path
+			"path//file.txt",   // non-canonical separators
+			"path/./file.txt",  // non-canonical current directory
 			"..\\etc\\passwd",  // contains \ and ..
 			"../parent.txt",    // path traversal
 			"file\x00name.txt", // null byte
@@ -360,7 +362,7 @@ func TestLoadArtifact(t *testing.T) {
 		ctx := context.Background()
 		info := testSessionInfo()
 
-		_, err := svc.LoadArtifact(ctx, info, "path/to/file.txt", nil)
+		_, err := svc.LoadArtifact(ctx, info, "/path/to/file.txt", nil)
 		assert.ErrorIs(t, err, ErrInvalidFilename)
 	})
 
@@ -400,6 +402,66 @@ func TestLoadArtifact(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Nil(t, art)
 	})
+}
+
+func TestNestedArtifactLifecycle(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	info := testSessionInfo()
+	filename := "out/site.html"
+	descendant := "out/site.html/assets/app.js"
+
+	version, err := svc.SaveArtifact(ctx, info, filename, &artifact.Artifact{
+		Data:     []byte("site-v0"),
+		MimeType: "text/html",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, version)
+
+	for i, data := range []string{"asset-v0", "asset-v1"} {
+		version, err = svc.SaveArtifact(ctx, info, descendant, &artifact.Artifact{
+			Data:     []byte(data),
+			MimeType: "text/javascript",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, i, version)
+	}
+
+	version, err = svc.SaveArtifact(ctx, info, filename, &artifact.Artifact{
+		Data:     []byte("site-v1"),
+		MimeType: "text/html",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, version)
+
+	keys, err := svc.ListArtifactKeys(ctx, info)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filename, descendant}, keys)
+
+	versions, err := svc.ListVersions(ctx, info, filename)
+	require.NoError(t, err)
+	assert.Equal(t, []int{0, 1}, versions)
+
+	loaded, err := svc.LoadArtifact(ctx, info, filename, nil)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, []byte("site-v1"), loaded.Data)
+
+	require.NoError(t, svc.DeleteArtifact(ctx, info, filename))
+
+	loaded, err = svc.LoadArtifact(ctx, info, filename, nil)
+	require.NoError(t, err)
+	assert.Nil(t, loaded)
+
+	loaded, err = svc.LoadArtifact(ctx, info, descendant, nil)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, []byte("asset-v1"), loaded.Data)
+
+	require.NoError(t, svc.DeleteArtifact(ctx, info, filename))
+	keys, err = svc.ListArtifactKeys(ctx, info)
+	require.NoError(t, err)
+	assert.Equal(t, []string{descendant}, keys)
 }
 
 func TestListArtifactKeys(t *testing.T) {
@@ -601,7 +663,7 @@ func TestListVersions(t *testing.T) {
 		ctx := context.Background()
 		info := testSessionInfo()
 
-		_, err := svc.ListVersions(ctx, info, "path/file.txt")
+		_, err := svc.ListVersions(ctx, info, "path/../file.txt")
 		assert.ErrorIs(t, err, ErrInvalidFilename)
 	})
 
@@ -621,7 +683,10 @@ func TestValidateFilename(t *testing.T) {
 			"my-document.pdf",
 			"image_001.png",
 			"report.2024.xlsx",
+			"out/site.html",
+			"out/assets/app.js",
 			"user:profile.json", // user namespace prefix is valid
+			"user:out/report.json",
 			"user:settings.yaml",
 			"名前.txt", // unicode is OK
 			"файл.doc",
@@ -636,12 +701,15 @@ func TestValidateFilename(t *testing.T) {
 	t.Run("invalid filenames", func(t *testing.T) {
 		invalidNames := []string{
 			"",                   // empty
-			"path/to/file.txt",   // forward slash
+			"/path/to/file.txt",  // absolute path
+			"path//to/file.txt",  // repeated separator
+			"path/./file.txt",    // current directory segment
+			"path/to/file.txt/",  // trailing separator
 			"path\\to\\file.txt", // backslash
 			"../parent.txt",      // path traversal
 			"..\\parent.txt",     // path traversal with backslash
 			"file\x00name.txt",   // null byte
-			"a/b",                // simple slash
+			".",                  // current directory
 		}
 
 		for _, name := range invalidNames {
@@ -671,6 +739,18 @@ func TestExtractFilename(t *testing.T) {
 			expected: "user:profile.txt",
 		},
 		{
+			name:     "nested session scoped",
+			key:      "app/user/session/out/site.html/12",
+			prefix:   "app/user/session/",
+			expected: "out/site.html",
+		},
+		{
+			name:     "nested user scoped",
+			key:      "app/user/user/user:out/report.json/3",
+			prefix:   "app/user/user/",
+			expected: "user:out/report.json",
+		},
+		{
 			name:     "no match",
 			key:      "other/path/file.txt",
 			prefix:   "app/user/session/",
@@ -682,12 +762,55 @@ func TestExtractFilename(t *testing.T) {
 			prefix:   "app/user/session/",
 			expected: "",
 		},
+		{
+			name:     "missing version",
+			key:      "app/user/session/out/site.html/",
+			prefix:   "app/user/session/",
+			expected: "",
+		},
+		{
+			name:     "non-numeric version",
+			key:      "app/user/session/out/site.html/latest",
+			prefix:   "app/user/session/",
+			expected: "",
+		},
+		{
+			name:     "invalid artifact path",
+			key:      "app/user/session/out//site.html/0",
+			prefix:   "app/user/session/",
+			expected: "",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			result := extractFilename(tc.key, tc.prefix)
 			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestExtractVersion(t *testing.T) {
+	prefix := "app/user/session/out/site.html/"
+	tests := []struct {
+		name     string
+		key      string
+		expected int
+		ok       bool
+	}{
+		{name: "direct version", key: prefix + "12", expected: 12, ok: true},
+		{name: "descendant artifact", key: prefix + "assets/app.js/3"},
+		{name: "negative version", key: prefix + "-1"},
+		{name: "signed version", key: prefix + "+1"},
+		{name: "non-numeric version", key: prefix + "latest"},
+		{name: "different prefix", key: "other/path/12"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			version, ok := extractVersion(tc.key, prefix)
+			assert.Equal(t, tc.ok, ok)
+			assert.Equal(t, tc.expected, version)
 		})
 	}
 }
