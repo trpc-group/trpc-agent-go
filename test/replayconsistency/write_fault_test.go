@@ -148,7 +148,7 @@ func TestStandardReplayCasesDetectWriteBoundaryFaults(t *testing.T) {
 		),
 		"memory-read-write": onceWriteFault(
 			func(operation replaytest.Operation) bool {
-				return operation.Memory != nil && operation.Memory.ID == "memory-2"
+				return operation.Memory != nil && operation.Memory.Content == "lives in Shenzhen"
 			},
 			func(operation *replaytest.Operation) { operation.Memory.Content = "lives in Guangzhou" },
 		),

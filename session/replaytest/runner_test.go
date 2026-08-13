@@ -406,6 +406,23 @@ func TestRunnerRejectsInvalidCasesBeforeCreatingFixtures(t *testing.T) {
 			want:  "dependency cycle",
 		},
 		{
+			name: "parallel unordered state conflict",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					{
+						Kind: OperationUpdateState, SessionID: "session",
+						StateUpdates: map[string]any{"status": "ready"},
+					},
+					{
+						Kind: OperationUpdateState, SessionID: "session",
+						StateDeletes: []string{"status"},
+					},
+				},
+			}}}},
+			want: `parallel state operations for session "session" key "status" must be ordered`,
+		},
+		{
 			name: "nested parallel invalid operation",
 			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
 				Kind: OperationParallel,
@@ -434,6 +451,36 @@ func TestRunnerRejectsInvalidCasesBeforeCreatingFixtures(t *testing.T) {
 				t.Fatalf("backend.New() calls = %d, want 0", newCalls)
 			}
 		})
+	}
+}
+
+func TestRunnerAllowsOrderedParallelStateMutations(t *testing.T) {
+	fixture := &fakeFixture{name: "inmemory", capabilities: allCapabilities()}
+	runner := Runner{Backends: []Backend{fakeBackend("inmemory", fixture)}}
+	report, err := runner.Run(context.Background(), []ReplayCase{{
+		Name: "ordered-state",
+		Operations: []Operation{{
+			Kind: OperationParallel,
+			Parallel: []Operation{
+				namedOperation(Operation{
+					Kind: OperationUpdateState, SessionID: "session",
+					StateUpdates: map[string]any{"status": "ready"},
+				}, "write"),
+				namedOperation(Operation{
+					Kind: OperationUpdateState, SessionID: "session",
+					StateDeletes: []string{"status"},
+				}, "delete", "write"),
+			},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+	if len(report.Differences) != 0 {
+		t.Fatalf("Runner.Run() differences = %#v", report.Differences)
+	}
+	if got := fixture.operationNames(); strings.Join(got, ",") != "write,delete" {
+		t.Fatalf("parallel state operation order = %v, want [write delete]", got)
 	}
 }
 
@@ -715,7 +762,7 @@ func TestRunnerDoesNotAllowUnsupportedCapabilitiesByDefault(t *testing.T) {
 	report, err := runner.Run(context.Background(), []ReplayCase{{
 		Name:         "memory",
 		Capabilities: []Capability{CapabilityMemory},
-		Operations:   []Operation{writeMemory("memory-1", "content", "fact")},
+		Operations:   []Operation{writeMemory("content", "fact")},
 	}})
 	if err != nil {
 		t.Fatalf("Runner.Run() error = %v", err)

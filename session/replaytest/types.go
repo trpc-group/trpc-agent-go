@@ -174,10 +174,11 @@ type TrackEventSnapshot struct {
 	Timestamp    time.Time      `json:"timestamp,omitempty"`
 }
 
-// MemorySnapshot captures one persisted memory entry. Write-memory operations
-// require AppName and UserID. Scope may be left zero-valued on write input
-// because fixtures populate the observed namespace; when non-zero, it must
-// match AppName and UserID.
+// MemorySnapshot captures one persisted memory entry. Write-memory operations require
+// AppName and UserID. Scope may be left zero-valued on write input because fixtures
+// populate the observed namespace; when non-zero, it must match AppName and UserID.
+// ID, Score, CreatedAt, and UpdatedAt are read-only output fields and must be
+// zero-valued for write input.
 type MemorySnapshot struct {
 	ID        string         `json:"id"`
 	AppName   string         `json:"app_name"`

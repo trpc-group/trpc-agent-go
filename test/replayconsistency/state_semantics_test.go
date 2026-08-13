@@ -10,8 +10,13 @@ package replayconsistency
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
+	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest"
 )
 
@@ -84,4 +89,112 @@ func TestNormalizeDeletedStatePreservesStaleValue(t *testing.T) {
 	if _, exists := state["tombstone"]; exists {
 		t.Fatalf("raw tombstone remains: %#v", state["tombstone"])
 	}
+}
+
+func TestReplayFixtureOrdersStateDeleteBookkeepingWithWrites(t *testing.T) {
+	sessionService := &delayedStateSessionService{
+		SessionService:  sessioninmemory.NewSessionService(),
+		firstCommitted:  make(chan struct{}),
+		releaseFirst:    make(chan struct{}),
+		secondCommitted: make(chan struct{}),
+	}
+	fixture := newReplayFixture(replayFixtureConfig{
+		name:           "state-order",
+		sessionService: sessionService,
+		memoryService:  memoryinmemory.NewMemoryService(),
+		summarizer:     &replaySummarizer{},
+	})
+	defer func() {
+		sessionService.release()
+		if err := fixture.Close(); err != nil {
+			t.Errorf("close fixture: %v", err)
+		}
+	}()
+	if err := fixture.Apply(context.Background(), replaytest.Operation{
+		Kind: replaytest.OperationCreateSession, SessionID: stateSemanticsSessionID,
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- fixture.Apply(context.Background(), replaytest.Operation{
+			Kind: replaytest.OperationUpdateState, SessionID: stateSemanticsSessionID,
+			StateUpdates: map[string]any{deletedStateKey: "value"},
+		})
+	}()
+	select {
+	case <-sessionService.firstCommitted:
+	case <-time.After(time.Second):
+		t.Fatal("first state update did not commit")
+	}
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- fixture.Apply(context.Background(), replaytest.Operation{
+			Kind: replaytest.OperationUpdateState, SessionID: stateSemanticsSessionID,
+			StateDeletes: []string{deletedStateKey},
+		})
+	}()
+	select {
+	case <-sessionService.secondCommitted:
+		t.Fatal("delete committed before earlier write completed bookkeeping")
+	case <-time.After(25 * time.Millisecond):
+	}
+	sessionService.release()
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first update: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second update: %v", err)
+	}
+	snapshot, err := fixture.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	state := snapshot.Sessions[firstStateSessionIndex].State
+	if _, exists := state[deletedStateKey]; exists {
+		t.Fatalf("deleted state remains: %#v", state[deletedStateKey])
+	}
+}
+
+type delayedStateSessionService struct {
+	*sessioninmemory.SessionService
+	firstCommitted  chan struct{}
+	releaseFirst    chan struct{}
+	secondCommitted chan struct{}
+	firstOnce       sync.Once
+	secondOnce      sync.Once
+	releaseOnce     sync.Once
+}
+
+func (service *delayedStateSessionService) UpdateSessionState(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+) error {
+	value, hasTarget := state[deletedStateKey]
+	if hasTarget && value != nil {
+		err := service.SessionService.UpdateSessionState(ctx, key, state)
+		service.firstOnce.Do(func() { close(service.firstCommitted) })
+		select {
+		case <-service.releaseFirst:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if hasTarget && value == nil {
+		select {
+		case <-service.firstCommitted:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		err := service.SessionService.UpdateSessionState(ctx, key, state)
+		service.secondOnce.Do(func() { close(service.secondCommitted) })
+		return err
+	}
+	return service.SessionService.UpdateSessionState(ctx, key, state)
+}
+
+func (service *delayedStateSessionService) release() {
+	service.releaseOnce.Do(func() { close(service.releaseFirst) })
 }

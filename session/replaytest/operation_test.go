@@ -192,6 +192,46 @@ func TestOperationValidateRejectsInvalidConfigurations(t *testing.T) {
 			want: "scope must match",
 		},
 		{
+			name: "write memory with id",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					ID: "memory", AppName: "app", UserID: "user",
+				},
+			},
+			want: "read-only",
+		},
+		{
+			name: "write memory with score",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app", UserID: "user", Score: 0.5,
+				},
+			},
+			want: "read-only",
+		},
+		{
+			name: "write memory with created time",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app", UserID: "user", CreatedAt: time.Unix(1, 0),
+				},
+			},
+			want: "read-only",
+		},
+		{
+			name: "write memory with updated time",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app", UserID: "user", UpdatedAt: time.Unix(1, 0),
+				},
+			},
+			want: "read-only",
+		},
+		{
 			name: "search score above one",
 			operation: Operation{
 				Kind: OperationSearchMemory, SearchQuery: "query", SearchLimit: 1,

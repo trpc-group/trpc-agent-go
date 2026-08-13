@@ -469,7 +469,116 @@ func parallelDependencies(operations []Operation) (map[string]chan struct{}, err
 	if hasDependencyCycle(dependencies) {
 		return nil, fmt.Errorf("parallel operations contain dependency cycle")
 	}
+	if err := validateParallelStateMutations(operations, dependencies); err != nil {
+		return nil, err
+	}
 	return done, nil
+}
+
+type stateMutationRef struct {
+	sessionID string
+	key       string
+}
+
+func validateParallelStateMutations(
+	operations []Operation,
+	dependencies map[string][]string,
+) error {
+	mutations := make([]map[stateMutationRef]struct{}, len(operations))
+	for i, operation := range operations {
+		mutations[i] = operationStateMutations(operation)
+	}
+	for i := 0; i < len(operations); i++ {
+		for j := i + 1; j < len(operations); j++ {
+			if parallelOperationsOrdered(operations[i], operations[j], dependencies) {
+				continue
+			}
+			overlap := overlappingStateMutations(mutations[i], mutations[j])
+			if len(overlap) > 0 {
+				ref := overlap[0]
+				return fmt.Errorf(
+					"parallel state operations for session %q key %q must be ordered with dependencies",
+					ref.sessionID, ref.key,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func overlappingStateMutations(
+	left map[stateMutationRef]struct{},
+	right map[stateMutationRef]struct{},
+) []stateMutationRef {
+	refs := make([]stateMutationRef, 0)
+	for ref := range left {
+		if _, exists := right[ref]; exists {
+			refs = append(refs, ref)
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].sessionID != refs[j].sessionID {
+			return refs[i].sessionID < refs[j].sessionID
+		}
+		return refs[i].key < refs[j].key
+	})
+	return refs
+}
+
+func operationStateMutations(operation Operation) map[stateMutationRef]struct{} {
+	mutations := make(map[stateMutationRef]struct{})
+	collectStateMutations(operation, mutations)
+	return mutations
+}
+
+func collectStateMutations(operation Operation, mutations map[stateMutationRef]struct{}) {
+	switch operation.Kind {
+	case OperationUpdateState:
+		for key := range operation.StateUpdates {
+			mutations[stateMutationRef{sessionID: operation.SessionID, key: key}] = struct{}{}
+		}
+		for _, key := range operation.StateDeletes {
+			mutations[stateMutationRef{sessionID: operation.SessionID, key: key}] = struct{}{}
+		}
+	case OperationParallel:
+		for _, child := range operation.Parallel {
+			collectStateMutations(child, mutations)
+		}
+	}
+}
+
+func parallelOperationsOrdered(
+	first Operation,
+	second Operation,
+	dependencies map[string][]string,
+) bool {
+	if first.Name == "" || second.Name == "" {
+		return false
+	}
+	return parallelOperationDependsOn(first.Name, second.Name, dependencies, nil) ||
+		parallelOperationDependsOn(second.Name, first.Name, dependencies, nil)
+}
+
+func parallelOperationDependsOn(
+	name string,
+	dependency string,
+	dependencies map[string][]string,
+	visited map[string]struct{},
+) bool {
+	if visited == nil {
+		visited = make(map[string]struct{})
+	}
+	if _, exists := visited[name]; exists {
+		return false
+	}
+	visited[name] = struct{}{}
+	for _, after := range dependencies[name] {
+		if after == dependency ||
+			parallelOperationDependsOn(after, dependency, dependencies, visited) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasDependencyCycle(dependencies map[string][]string) bool {

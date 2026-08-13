@@ -64,6 +64,7 @@ type replayFixture struct {
 	replayWindows     map[string]string
 	memoryScopes      map[replaytest.MemoryScope]memory.UserKey
 	stateDeletes      map[string]map[string]struct{}
+	stateWriteLocks   map[string]*sync.Mutex
 	searches          []replaytest.MemorySearchSnapshot
 }
 
@@ -108,6 +109,7 @@ func newReplayFixture(config replayFixtureConfig) *replayFixture {
 		replayWindows:     make(map[string]string),
 		memoryScopes:      make(map[replaytest.MemoryScope]memory.UserKey),
 		stateDeletes:      make(map[string]map[string]struct{}),
+		stateWriteLocks:   make(map[string]*sync.Mutex),
 	}
 }
 
@@ -213,6 +215,9 @@ func (fixture *replayFixture) applyUpdateState(
 	ctx context.Context,
 	operation replaytest.Operation,
 ) error {
+	stateLock := fixture.stateWriteLock(operation.SessionID)
+	stateLock.Lock()
+	defer stateLock.Unlock()
 	state, err := toStateMap(operation.StateUpdates, operation.StateDeletes)
 	if err != nil {
 		return err
@@ -451,6 +456,17 @@ func (fixture *replayFixture) recordStateDeletes(operation replaytest.Operation)
 	for _, key := range operation.StateDeletes {
 		keys[key] = struct{}{}
 	}
+}
+
+func (fixture *replayFixture) stateWriteLock(sessionID string) *sync.Mutex {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	stateLock := fixture.stateWriteLocks[sessionID]
+	if stateLock == nil {
+		stateLock = &sync.Mutex{}
+		fixture.stateWriteLocks[sessionID] = stateLock
+	}
+	return stateLock
 }
 
 func normalizeDeletedState(

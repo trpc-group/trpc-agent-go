@@ -146,8 +146,8 @@ func stateUpdateCase() ReplayCase {
 }
 
 func memoryCase() ReplayCase {
-	preference := writeMemory("memory-1", "prefers concise answers", "preference")
-	isolated := writeMemory("memory-4", "must remain isolated", "private")
+	preference := writeMemory("prefers concise answers", "preference")
+	isolated := writeMemory("must remain isolated", "private")
 	isolated.Memory.UserID = "user-2"
 	eventTime := standardTime.Add(-time.Hour)
 	preference.Memory.Metadata["event_time"] = eventTime
@@ -163,8 +163,8 @@ func memoryCase() ReplayCase {
 		}},
 		Operations: []Operation{
 			preference,
-			writeMemory("memory-2", "lives in Shenzhen", "fact"),
-			writeMemory("memory-3", "verify tests before delivery", "experience"),
+			writeMemory("lives in Shenzhen", "fact"),
+			writeMemory("verify tests before delivery", "experience"),
 			isolated,
 			{
 				Kind:           OperationSearchMemory,
@@ -508,7 +508,7 @@ func recoveryCase() ReplayCase {
 		SessionID:    standardSessionID,
 		StateUpdates: map[string]any{"status": "recovered"},
 	}
-	memoryRetry := writeMemory("memory-1", "retry-safe memory", "experience")
+	memoryRetry := writeMemory("retry-safe memory", "experience")
 	return ReplayCase{
 		Name:         "failure-retry",
 		Description:  "failed writes and retries do not leave duplicates or dirty data",
@@ -803,11 +803,10 @@ func appendEventForSession(sessionID, id, author, content string, second int) Op
 	return operation
 }
 
-func writeMemory(id, content, kind string) Operation {
+func writeMemory(content, kind string) Operation {
 	return Operation{
 		Kind: OperationWriteMemory,
 		Memory: &MemorySnapshot{
-			ID:       id,
 			AppName:  "replaytest",
 			UserID:   "user-1",
 			Content:  content,

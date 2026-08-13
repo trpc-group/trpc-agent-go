@@ -39,7 +39,9 @@ const (
 	OperationParallel        OperationKind = "parallel"
 )
 
-// Operation is a backend-neutral action in a replay case.
+// Operation is a backend-neutral action in a replay case. Parallel children may
+// run concurrently; children that mutate the same session state key must declare
+// an ordering with Name and After.
 type Operation struct {
 	Kind                  OperationKind
 	Name                  string
@@ -175,6 +177,10 @@ func validateWriteMemory(operation Operation) error {
 	}
 	if operation.Memory.AppName == "" || operation.Memory.UserID == "" {
 		return fmt.Errorf("write memory requires app name and user id")
+	}
+	if operation.Memory.ID != "" || operation.Memory.Score != 0 ||
+		!operation.Memory.CreatedAt.IsZero() || !operation.Memory.UpdatedAt.IsZero() {
+		return fmt.Errorf("write memory id, score, created time, and updated time are read-only")
 	}
 	wantScope := MemoryScope{
 		AppName: operation.Memory.AppName,

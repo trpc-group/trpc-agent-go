@@ -11,6 +11,7 @@ package replaytest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -245,6 +246,7 @@ type modelFixture struct {
 	name        string
 	sessions    map[string]*SessionSnapshot
 	memoryOrder []string
+	memoryIDs   map[string]string
 	memories    map[string]*MemorySnapshot
 	searches    []Operation
 	mutate      func(*Snapshot)
@@ -252,9 +254,10 @@ type modelFixture struct {
 
 func newModelFixture(name string) *modelFixture {
 	return &modelFixture{
-		name:     name,
-		sessions: make(map[string]*SessionSnapshot),
-		memories: make(map[string]*MemorySnapshot),
+		name:      name,
+		sessions:  make(map[string]*SessionSnapshot),
+		memoryIDs: make(map[string]string),
+		memories:  make(map[string]*MemorySnapshot),
 	}
 }
 
@@ -329,12 +332,29 @@ func (fixture *modelFixture) applyUpdateState(operation Operation) error {
 }
 
 func (fixture *modelFixture) applyWriteMemory(operation Operation) {
-	if _, exists := fixture.memories[operation.Memory.ID]; !exists {
-		fixture.memoryOrder = append(fixture.memoryOrder, operation.Memory.ID)
+	key := memoryWriteKey(operation.Memory)
+	id, exists := fixture.memoryIDs[key]
+	if !exists {
+		id = fmt.Sprintf("memory-%d", len(fixture.memoryOrder)+1)
+		fixture.memoryIDs[key] = id
+		fixture.memoryOrder = append(fixture.memoryOrder, id)
 	}
 	memory := *operation.Memory
+	memory.ID = id
 	memory.Scope = MemoryScope{AppName: memory.AppName, UserID: memory.UserID}
 	fixture.memories[memory.ID] = &memory
+}
+
+func memoryWriteKey(memory *MemorySnapshot) string {
+	if memory == nil {
+		return ""
+	}
+	metadata, _ := json.Marshal(memory.Metadata)
+	topics, _ := json.Marshal(memory.Topics)
+	return fmt.Sprintf(
+		"%s\x00%s\x00%s\x00%s\x00%s",
+		memory.AppName, memory.UserID, memory.Content, topics, metadata,
+	)
 }
 
 func (fixture *modelFixture) applyUpdateSummary(operation Operation) error {
