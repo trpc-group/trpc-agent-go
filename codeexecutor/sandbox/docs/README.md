@@ -84,14 +84,20 @@ per-run variables, and sandbox-owned workspace variables are still applied.
 - managed backend preflight status (`ready`, `failed`, `not-required`, or
   `unsupported`)
 
-Explain reuses the same normalized permission profile and managed-backend
-preflight paths that execution uses: `linuxPreflight` on Linux and
-`macosPreflight` on macOS. Restricted network does not run a separate seccomp
-probe. Explain never runs a caller command, never acquires a workspace run
-lock, and never creates a workspace. On managed profiles it may run the same
+Explain reuses the same normalized permission profile and the same
+platform-specific preflight probe used by execution. Restricted network does
+not run a separate namespace or seccomp probe. `PreflightReady` means the
+core backend probe succeeded; it does not prove that every reported
+boundary, such as `NetworkRestricted` isolation, can be established.
+Explain never runs a caller command, never acquires a workspace run lock,
+and never creates a workspace. On managed profiles it may run the same
 short backend probe used by execution (for example `/bin/true` under
 bubblewrap) and cache that result on the Runtime, which can change when the
 first execution probe happens.
+
+`workspace-write` includes workspace special-path writes and
+workspace-relative `WithWritePaths` grants. Host-absolute write grants alone
+keep the filesystem type `read-only`.
 
 When managed preflight fails, Explain still returns the configured status
 fields together with a short `PreflightError`. That summary includes the error

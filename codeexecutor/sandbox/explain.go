@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -22,15 +23,19 @@ import (
 type PreflightStatus string
 
 const (
-	// PreflightReady means managed backend preflight succeeded.
+	// PreflightReady means the managed backend core probe succeeded. It does
+	// not verify every reported policy boundary, such as network-namespace
+	// isolation for NetworkRestricted.
 	PreflightReady PreflightStatus = "ready"
 	// PreflightFailed means managed backend preflight ran and failed.
 	PreflightFailed PreflightStatus = "failed"
 	// PreflightNotRequired means the active profile does not need a managed
 	// OS sandbox backend.
 	PreflightNotRequired PreflightStatus = "not-required"
-	// PreflightUnsupported means the profile or platform cannot use a managed
-	// OS sandbox backend.
+	// PreflightUnsupported means a managed OS sandbox backend is not used.
+	// External profiles return this status with a nil error because an outside
+	// sandbox is expected to enforce policy. Unsupported platforms and
+	// incompatible backends return this status with a non-nil error.
 	PreflightUnsupported PreflightStatus = "unsupported"
 )
 
@@ -40,10 +45,11 @@ type FileSystemSandboxType string
 
 const (
 	// FileSystemSandboxWorkspaceWrite means the managed profile grants write
-	// access to workspace special paths.
+	// access inside the workspace, via special paths or workspace-relative
+	// path rules. Host-absolute write grants alone do not select this type.
 	FileSystemSandboxWorkspaceWrite FileSystemSandboxType = "workspace-write"
 	// FileSystemSandboxReadOnly means the managed profile does not grant
-	// workspace special-path writes.
+	// workspace writes.
 	FileSystemSandboxReadOnly FileSystemSandboxType = "read-only"
 	// FileSystemSandboxDisabled means OS sandbox enforcement is off.
 	FileSystemSandboxDisabled FileSystemSandboxType = "disabled"
@@ -56,11 +62,22 @@ const (
 // It is intentionally small: it reports backend selection, filesystem sandbox
 // type, network mode, and preflight readiness. It is not a full policy dump.
 type ExplainReport struct {
-	RequestedBackend  BackendType
-	ResolvedBackend   BackendType
+	// RequestedBackend is the backend selected by the caller. An empty value
+	// means the caller did not set WithBackend and is treated as BackendAuto.
+	RequestedBackend BackendType
+	// ResolvedBackend is the backend the current platform would use for the
+	// requested value. It is BackendAuto when the platform has no managed
+	// backend.
+	ResolvedBackend BackendType
+	// FileSystemSandbox is the reported filesystem sandbox mode. An empty
+	// value is treated as FileSystemSandboxDisabled by String().
 	FileSystemSandbox FileSystemSandboxType
-	NetworkMode       NetworkMode
-	PreflightStatus   PreflightStatus
+	// NetworkMode is the effective network mode of the normalized profile. An
+	// empty value is treated as NetworkRestricted by String().
+	NetworkMode NetworkMode
+	// PreflightStatus is the managed backend readiness status. An empty value
+	// is treated as PreflightNotRequired by String().
+	PreflightStatus PreflightStatus
 	// PreflightError is a short operator-facing summary when PreflightStatus
 	// is failed or unsupported after a managed backend probe. It includes the
 	// error kind, backend name, and a sanitized cause. Probe stderr, host
@@ -71,12 +88,19 @@ type ExplainReport struct {
 
 // Explain reports high-level sandbox status for the runtime.
 //
-// It reuses the same normalized PermissionProfile and managed-backend
-// preflight paths that execution uses (linuxPreflight / macosPreflight).
-// Explain never runs a caller command, never acquires a workspace run lock,
-// and never creates a workspace. On managed profiles it may run the same
-// short backend probe used by execution (for example /bin/true under
-// bubblewrap) and cache the result on the Runtime.
+// It reuses the same normalized PermissionProfile and the same
+// platform-specific preflight probe used by execution. Explain never runs a
+// caller command, never acquires a workspace run lock, and never creates a
+// workspace. On managed profiles it may run that short backend probe (for
+// example /bin/true under bubblewrap) and cache the result on the Runtime.
+// PreflightReady means the core backend probe succeeded; it does not prove
+// that every reported boundary, such as NetworkRestricted isolation, can be
+// established.
+//
+// Context cancellation is checked before the managed probe starts. If the
+// caller cancels after the probe has started, Explain does not interrupt it
+// and may wait for the probe's bounded timeout before returning the probe
+// result.
 //
 // When managed preflight fails, Explain still returns a populated report so
 // callers can inspect the configured status, and also returns the preflight
@@ -190,13 +214,20 @@ func fileSystemSandboxType(profile PermissionProfile) FileSystemSandboxType {
 
 func hasWorkspaceWrite(profile PermissionProfile) bool {
 	for _, rule := range profile.fileSystem.Rules {
-		if rule.Kind != ruleSpecial || rule.Access != accessWrite {
+		if rule.Access != accessWrite {
 			continue
 		}
-		switch rule.Special {
-		case specialWorkspace, specialWork, specialHome, specialTmp,
-			specialRuns, specialOut, specialSkills:
-			return true
+		switch rule.Kind {
+		case ruleSpecial:
+			switch rule.Special {
+			case specialWorkspace, specialWork, specialHome, specialTmp,
+				specialRuns, specialOut, specialSkills:
+				return true
+			}
+		case rulePath:
+			if rule.Path != "" && !filepath.IsAbs(rule.Path) {
+				return true
+			}
 		}
 	}
 	return false

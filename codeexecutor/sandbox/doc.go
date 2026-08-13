@@ -14,7 +14,9 @@
 // Runtime.Explain reports a high-level status summary for operators: requested
 // and resolved backend, filesystem sandbox type, network mode, and managed
 // backend preflight readiness. On managed profiles it may run the same short
-// backend probe used by execution and cache the result on the Runtime. It is
-// not a full policy dump and does not describe path grants, environment
-// inheritance, timeouts, or resource quotas.
+// backend probe used by execution and cache the result on the Runtime.
+// PreflightReady means the core backend probe succeeded, not that every
+// reported policy boundary is enforceable. It is not a full policy dump and
+// does not describe path grants, environment inheritance, timeouts, or
+// resource quotas.
 package sandbox

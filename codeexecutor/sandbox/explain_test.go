@@ -12,9 +12,13 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
 func TestExplainProfilesAndNetworkModes(t *testing.T) {
@@ -26,7 +30,6 @@ func TestExplainProfilesAndNetworkModes(t *testing.T) {
 		wantFS     FileSystemSandboxType
 		wantNet    NetworkMode
 		wantStatus PreflightStatus
-		wantErr    bool
 	}{
 		{
 			name:       "workspace-write restricted",
@@ -38,6 +41,20 @@ func TestExplainProfilesAndNetworkModes(t *testing.T) {
 		{
 			name:       "read-only restricted",
 			profile:    ReadOnlyProfile(),
+			wantFS:     FileSystemSandboxReadOnly,
+			wantNet:    NetworkRestricted,
+			wantStatus: "",
+		},
+		{
+			name:       "read-only with workspace-relative write path",
+			profile:    ReadOnlyProfile().WithWritePaths("work"),
+			wantFS:     FileSystemSandboxWorkspaceWrite,
+			wantNet:    NetworkRestricted,
+			wantStatus: "",
+		},
+		{
+			name:       "read-only with host-absolute write path",
+			profile:    ReadOnlyProfile().WithWritePaths("/tmp/host-write"),
 			wantFS:     FileSystemSandboxReadOnly,
 			wantNet:    NetworkRestricted,
 			wantStatus: "",
@@ -170,6 +187,60 @@ func TestExplainContextCanceled(t *testing.T) {
 	if report.FileSystemSandbox != "" || report.PreflightStatus != "" {
 		// Before preflight starts, canceled context returns immediately.
 		t.Fatalf("unexpected partial report on canceled context: %+v", report)
+	}
+}
+
+func TestExplainDoesNotCreateWorkspace(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	rt := NewRuntime(
+		WithWorkspaceRoot(root),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	if _, err := rt.Explain(context.Background()); err != nil &&
+		!isKind(err, ErrUnsupportedBackend) && !isKind(err, ErrSetupFailed) {
+		t.Fatalf("Explain() unexpected error: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("Explain created files under workspace root: %v", names)
+	}
+}
+
+func TestExplainDoesNotAcquireRunLock(t *testing.T) {
+	t.Parallel()
+
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	ws := codeexecutor.Workspace{ID: "explain-lock", Path: t.TempDir()}
+	unlock, err := rt.lockWorkspaceRunContext(context.Background(), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		_, explainErr := rt.Explain(context.Background())
+		done <- explainErr
+	}()
+	select {
+	case err := <-done:
+		if err != nil && !isKind(err, ErrUnsupportedBackend) && !isKind(err, ErrSetupFailed) {
+			t.Fatalf("Explain() unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Explain blocked on workspace run lock")
 	}
 }
 
