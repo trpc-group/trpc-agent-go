@@ -60,6 +60,8 @@ Per-request `PATH` and `PATHEXT` overrides are denied because they can replace
 an allowlisted executable. `HOME` requires human review because it changes
 shell profiles and global tool configuration. Process-startup injection
 variables such as `BASH_ENV` and `LD_PRELOAD` are denied even if listed.
+Git and SSH executable selectors, including `GIT_SSH_COMMAND`, editor, pager,
+diff, askpass and executable-path variables, are handled the same way.
 
 `Guard.Scan` returns `allow`, `deny`, `ask` or `needs_human_review` with a risk
 level, rule ID, evidence, recommendation, tool, backend and blocked flag.
@@ -77,8 +79,15 @@ that risk. This parser is not a complete shell interpreter and cannot resolve
 all expansions, aliases, sourced files or runtime-generated commands.
 
 Permission scanning also treats interpreter and `-f -` stdin as executable
-content, checks path-bearing arguments and Skill output globs, and reviews Git
+content, scans credential-shaped values across command argument boundaries,
+checks path-bearing arguments and Skill output globs, and reviews Git
 configuration that selects aliases, hooks, helpers or external programs.
+Inline AWK process bridges and SSH `LocalCommand` or `KnownHostsCommand`
+options are command indirection: literal nested commands are scanned by the
+same command policy, while dynamic or ambiguous forms require review. A tool
+that publishes destructive metadata also requires review even when its schema
+does not expose recognizable execution fields; stronger deny findings still
+take precedence.
 
 ## Filter and permission boundaries
 

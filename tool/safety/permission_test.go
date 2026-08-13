@@ -244,6 +244,25 @@ func TestPermissionPolicyClassifiesExecutionSensitiveEnvironment(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyRejectsAllowlistedGitExecutionEnvironment(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"git"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	guardPolicy.EnvAllowlist = append(guardPolicy.EnvAllowlist, "GIT_SSH_COMMAND")
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	decision, err := policy.CheckToolPermission(
+		context.Background(),
+		workspacePermissionRequest(
+			`{"command":"git fetch ssh://git@api.github.com/org/repo",`+
+				`"env":{"GIT_SSH_COMMAND":"unlisted-helper --payload"}}`,
+		),
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "environment.code_injection")
+}
+
 func TestPermissionPolicySkillWriteStdinSemantics(t *testing.T) {
 	guard := mustPermissionGuard(t, DefaultPolicy())
 	tests := []struct {
@@ -604,6 +623,36 @@ func TestPermissionPolicyClosedWorldNonExecutionAllowsWithoutScan(t *testing.T) 
 	require.Equal(t, DecisionAllow, events[0].Decision)
 	require.Equal(t, RiskLow, events[0].RiskLevel)
 	require.Equal(t, "safety.no_execution", events[0].RuleID)
+}
+
+func TestPermissionPolicyReviewsDestructiveOpaqueTool(t *testing.T) {
+	guard := mustPermissionGuard(t, DefaultPolicy())
+	sink := &recordingAuditSink{}
+	policy := NewPermissionPolicy(guard, WithAuditSink(sink))
+	req := &tool.PermissionRequest{
+		Tool:      declarationOnlyTool("delete_record", "resource_id"),
+		ToolName:  "delete_record",
+		Arguments: []byte(`{"resource_id":"production"}`),
+		Metadata:  tool.ToolMetadata{Destructive: true},
+	}
+
+	decision, err := policy.CheckToolPermission(context.Background(), req)
+
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Contains(t, decision.Reason, "tool.destructive")
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+	require.Equal(t, DecisionNeedsHumanReview, events[0].Decision)
+	require.Equal(t, "tool.destructive", events[0].RuleID)
+	require.True(t, events[0].Intercepted)
+
+	report := guard.Scan(Request{
+		Command:  "rm -rf /",
+		Metadata: tool.ToolMetadata{Destructive: true},
+	})
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "dangerous.rm_rf", report.RuleID)
 }
 
 func TestPermissionPolicyScansPathBearingArguments(t *testing.T) {

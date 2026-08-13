@@ -11,6 +11,7 @@ package safety_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -73,6 +74,67 @@ func TestGuardDeniesRecursiveCurrentDirectoryDeletion(t *testing.T) {
 		report := guard.Scan(safety.Request{Command: tc.command})
 		require.Equal(t, tc.decision, report.Decision, tc.command)
 		require.Equal(t, tc.rule, report.RuleID, tc.command)
+	}
+}
+
+func TestGuardScansSensitiveArgs(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = []string{"curl"}
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		secret   string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			name:     "GitHub token",
+			args:     []string{"curl", "-H", "TOKEN", "https://api.github.com/resource"},
+			secret:   "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "sensitive.secret",
+		},
+		{
+			name: "private key",
+			args: []string{"curl", "-H", "TOKEN", "https://api.github.com/resource"},
+			secret: "-----BEGIN PRIVATE KEY-----\n" +
+				"private-argument-material\n-----END PRIVATE KEY-----",
+			decision: safety.DecisionDeny,
+			rule:     "sensitive.private_key",
+		},
+		{
+			name:     "split user password",
+			args:     []string{"curl", "-u", "TOKEN", "https://api.github.com/resource"},
+			secret:   "alice:password-secret",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "sensitive.secret",
+		},
+		{
+			name:     "attached user password",
+			args:     []string{"curl", "--user=TOKEN", "https://api.github.com/resource"},
+			secret:   "alice:password-secret",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "sensitive.secret",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string(nil), tc.args...)
+			for index := range args {
+				args[index] = strings.ReplaceAll(args[index], "TOKEN", tc.secret)
+			}
+			report := guard.Scan(safety.Request{
+				Args: args,
+			})
+
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, tc.rule, report.RuleID)
+			require.True(t, report.Redacted)
+			encoded, err := json.Marshal(report)
+			require.NoError(t, err)
+			require.NotContains(t, string(encoded), tc.secret)
+		})
 	}
 }
 
@@ -436,7 +498,10 @@ func TestGuardScansGitProxyConfigurations(t *testing.T) {
 func TestGuardRejectsAllowlistedEnvironmentCodeInjection(t *testing.T) {
 	for _, key := range []string{
 		"BASH_ENV", "PYTHONPATH", "NODE_OPTIONS", "RUBYOPT", "PERL5OPT",
-		"JAVA_TOOL_OPTIONS", "GIT_CONFIG_COUNT",
+		"JAVA_TOOL_OPTIONS", "GIT_CONFIG_COUNT", "GIT_SSH_COMMAND", "GIT_SSH",
+		"GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_PAGER", "GIT_EXTERNAL_DIFF",
+		"GIT_ASKPASS", "SSH_ASKPASS", "GIT_EXEC_PATH", "GIT_PROXY_COMMAND",
+		"git_ssh_command",
 	} {
 		policy := safety.DefaultPolicy()
 		policy.EnvAllowlist = append(policy.EnvAllowlist, key)
@@ -445,6 +510,25 @@ func TestGuardRejectsAllowlistedEnvironmentCodeInjection(t *testing.T) {
 		})
 		require.Equal(t, safety.DecisionDeny, report.Decision, key)
 		require.Equal(t, "environment.code_injection", report.RuleID, key)
+	}
+}
+
+func TestGuardScopesGitFallbackExecutionEnvironment(t *testing.T) {
+	for _, key := range []string{"EDITOR", "VISUAL", "PAGER"} {
+		policy := safety.DefaultPolicy()
+		policy.EnvAllowlist = append(policy.EnvAllowlist, key)
+		guard := mustGuard(t, policy)
+
+		gitReport := guard.Scan(safety.Request{
+			Command: "git status", Env: map[string]string{key: "./helper"},
+		})
+		require.Equal(t, safety.DecisionDeny, gitReport.Decision, key)
+		require.Equal(t, "environment.code_injection", gitReport.RuleID, key)
+
+		ordinaryReport := guard.Scan(safety.Request{
+			Command: "go test", Env: map[string]string{key: "./helper"},
+		})
+		require.Equal(t, safety.DecisionAllow, ordinaryReport.Decision, key)
 	}
 }
 
@@ -711,6 +795,229 @@ func TestGuardScansInlineInterpreterPayloads(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			report := guard.Scan(safety.Request{Command: tc.command})
 			require.Equal(t, safety.DecisionDeny, report.Decision)
+			require.Equal(t, tc.rule, report.RuleID)
+		})
+	}
+}
+
+func TestGuardScansAWKInlinePrograms(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = []string{"awk", "gawk", "mawk", "nawk", "cat"}
+	guard := mustGuard(t, policy)
+	for _, executable := range []string{"awk", "gawk", "mawk", "nawk"} {
+		t.Run(executable+" literal system", func(t *testing.T) {
+			report := guard.Scan(safety.Request{
+				Command: executable + ` 'BEGIN { system("rm -rf .") }'`,
+			})
+			require.Equal(t, safety.DecisionDeny, report.Decision)
+			require.Equal(t, "dangerous.rm_rf", report.RuleID)
+		})
+	}
+
+	for _, tc := range []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			name: "options before program",
+			command: `awk -F ':' -v mode=safe ` +
+				`'BEGIN { system("rm -rf .") }'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "gawk source option",
+			command:  `gawk --source='BEGIN { system("rm -rf .") }'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "POSIX W option before program",
+			command:  `awk -W posix 'BEGIN { system("rm -rf .") }'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "dynamic system",
+			command:  `awk '{ system(command) }' input.txt`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "empty regex before system",
+			command:  `awk 'BEGIN { if (//) system("rm -rf .") }'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "post increment before system",
+			command:  `awk 'BEGIN { x=4; y=x++/2; system("rm -rf .") }'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "post decrement before system",
+			command:  `awk 'BEGIN { x=4; y=x--/2; system("rm -rf .") }'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "empty regex before command pipe",
+			command:  `awk 'BEGIN { if (//) "rm -rf ." | getline output }'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "command pipe to getline",
+			command:  `awk 'BEGIN { "rm -rf ." | getline output }'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "print to command pipe",
+			command:  `awk 'BEGIN { print "data" | "rm -rf ." }'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "dangerous-looking print data",
+			command:  `awk 'BEGIN { print "rm -rf ." | "cat" }'`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "dangerous-looking data after getline",
+			command:  `awk 'BEGIN { "cat" | getline line; print "rm -rf ." }'`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "benign projection",
+			command:  `awk '{ print $1 }' input.txt`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "benign regex containing pipe",
+			command:  `awk '$0 ~ /foo|bar/ { print $1 }' input.txt`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "benign regex containing system text",
+			command:  `awk '$0 ~ /system\\(/ { print $1 }' input.txt`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "abbreviated source option",
+			command:  `gawk --sour='BEGIN { system("rm -rf .") }'`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, tc.rule, report.RuleID)
+		})
+	}
+}
+
+func TestGuardScansSSHExecutionOptions(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = []string{"ssh", "scp", "sftp"}
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			name: "separate option",
+			command: `ssh -o PermitLocalCommand=yes -o ` +
+				`'LocalCommand=rm -rf .' api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name: "attached option",
+			command: `ssh -oPermitLocalCommand=yes ` +
+				`-oLocalCommand='rm -rf .' api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name: "combined short option",
+			command: `ssh -oPermitLocalCommand=yes ` +
+				`-voLocalCommand='rm -rf .' api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name: "other option with separate value",
+			command: `ssh -v -p 22 -oPermitLocalCommand=yes ` +
+				`-oLocalCommand='rm -rf .' api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "scp local command",
+			command:  `scp -oLocalCommand='rm -rf .' README.md api.github.com:/tmp/x`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "sftp local command",
+			command:  `sftp -oLocalCommand='rm -rf .' api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "known hosts command",
+			command:  `ssh -oKnownHostsCommand='rm -rf .' api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "space separated setting",
+			command:  `ssh -o 'LocalCommand rm -rf .' api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "empty local command",
+			command:  `ssh -o LocalCommand= api.github.com`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name: "local command after destination",
+			command: `ssh api.github.com -oPermitLocalCommand=yes ` +
+				`-oLocalCommand='rm -rf .'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "benign ssh",
+			command:  `ssh api.github.com`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "remote command argument resembles option",
+			command:  `ssh api.github.com echo -oLocalCommand='rm -rf .'`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision)
 			require.Equal(t, tc.rule, report.RuleID)
 		})
 	}

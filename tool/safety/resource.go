@@ -30,7 +30,7 @@ var (
 )
 
 func scanResources(policy Policy, req Request, segments [][]string) []Finding {
-	findings := scanEnvironment(policy, req.Env)
+	findings := scanEnvironment(policy, req.Env, segments)
 	effectiveTimeout := req.TimeoutSeconds
 	hasExecution := strings.TrimSpace(req.Command) != "" || len(req.Args) > 0 ||
 		len(req.CodeBlocks) > 0
@@ -90,7 +90,11 @@ func scanResources(policy Policy, req Request, segments [][]string) []Finding {
 	return findings
 }
 
-func scanEnvironment(policy Policy, environment map[string]string) []Finding {
+func scanEnvironment(
+	policy Policy,
+	environment map[string]string,
+	segments [][]string,
+) []Finding {
 	keys := make([]string, 0, len(environment))
 	for key := range environment {
 		keys = append(keys, key)
@@ -98,7 +102,7 @@ func scanEnvironment(policy Policy, environment map[string]string) []Finding {
 	sort.Strings(keys)
 	var findings []Finding
 	for _, key := range keys {
-		switch executionEnvironmentClass(key) {
+		switch executionEnvironmentClass(key, segmentsContainCommand(segments, "git")) {
 		case environmentExecutablePath:
 			findings = append(findings, newFinding(
 				DecisionDeny, RiskCritical, "environment.executable_path",
@@ -142,9 +146,12 @@ const (
 	environmentExecutionContext
 )
 
-func executionEnvironmentClass(key string) environmentClass {
+func executionEnvironmentClass(key string, gitInvocation bool) environmentClass {
 	key = strings.ToUpper(strings.TrimSpace(key))
 	if strings.HasPrefix(key, "GIT_CONFIG_") {
+		return environmentCodeInjection
+	}
+	if gitInvocation && (key == "EDITOR" || key == "VISUAL" || key == "PAGER") {
 		return environmentCodeInjection
 	}
 	switch key {
@@ -153,13 +160,25 @@ func executionEnvironmentClass(key string) environmentClass {
 	case "BASH_ENV", "ENV", "ZDOTDIR", "LD_PRELOAD", "LD_LIBRARY_PATH",
 		"LD_AUDIT", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH",
 		"PYTHONSTARTUP", "PYTHONPATH", "NODE_OPTIONS", "RUBYOPT",
-		"PERL5OPT", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH":
+		"PERL5OPT", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH",
+		"GIT_SSH_COMMAND", "GIT_SSH", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR",
+		"GIT_PAGER", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS",
+		"GIT_EXEC_PATH", "GIT_PROXY_COMMAND":
 		return environmentCodeInjection
 	case "HOME":
 		return environmentExecutionContext
 	default:
 		return environmentOrdinary
 	}
+}
+
+func segmentsContainCommand(segments [][]string, command string) bool {
+	for _, argv := range segments {
+		if len(argv) > 0 && commandBase(argv[0]) == command {
+			return true
+		}
+	}
+	return false
 }
 
 func scanSegmentResources(policy Policy, argv []string) []Finding {

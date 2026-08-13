@@ -11,6 +11,7 @@ package safety
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -52,6 +53,7 @@ func (g *Guard) Scan(req Request) Report {
 	findings = append(findings, scanCodeBlocks(g.policy, req.CodeBlocks)...)
 	findings = append(findings, scanRawArguments(g.policy, req.RawArguments)...)
 	report := aggregateReport(req, findings)
+	report.Redacted = findingsContainSensitiveInput(findings)
 	report.DurationMillis = time.Since(started).Milliseconds()
 	redactReport(&report)
 	return report
@@ -63,17 +65,46 @@ func scanExecution(policy Policy, req Request) []Finding {
 
 func scanExecutionMode(policy Policy, req Request, indirectionDepth int) []Finding {
 	segments, findings := scanCommand(policy, req)
+	findings = append(findings, scanToolMetadata(req)...)
 	findings = append(findings, scanPaths(policy, req.Cwd, segments)...)
 	findings = append(findings, scanNetwork(policy, segments)...)
 	findings = append(findings, scanResources(policy, req, segments)...)
-	findings = append(findings, scanInlineInterpreters(policy, segments)...)
+	findings = append(findings, scanInlineInterpreters(
+		policy, segments, indirectionDepth,
+	)...)
 	if indirectionDepth >= 0 {
 		findings = append(findings, scanCommandIndirectionAtDepth(
 			policy, req, segments, indirectionDepth,
 		)...)
 	}
 	findings = append(findings, scanSensitiveContent(req.Command)...)
+	if len(req.Args) > 0 {
+		findings = append(findings, scanSensitiveContent(
+			strings.Join(req.Args, " "),
+		)...)
+	}
 	return findings
+}
+
+func scanToolMetadata(req Request) []Finding {
+	if !req.Metadata.Destructive {
+		return nil
+	}
+	return []Finding{newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "tool.destructive",
+		"tool metadata declares potentially irreversible external changes",
+		"review the target and impact before executing the destructive tool",
+	)}
+}
+
+func findingsContainSensitiveInput(findings []Finding) bool {
+	for _, finding := range findings {
+		if finding.RuleID == "sensitive.secret" ||
+			finding.RuleID == "sensitive.private_key" {
+			return true
+		}
+	}
+	return false
 }
 
 func aggregateReport(req Request, findings []Finding) Report {

@@ -50,7 +50,9 @@ pipeline_action: needs_human_review
 环境变量白名单不能覆盖与执行相关的安全语义。请求级 `PATH` 和 `PATHEXT`
 会改变白名单命令对应的实际可执行文件，因此始终拒绝；`HOME` 会改变 Shell
 启动文件和工具全局配置，因此需要人工复核；`BASH_ENV`、`LD_PRELOAD` 等
-进程启动注入变量即使写入白名单也会拒绝。
+进程启动注入变量即使写入白名单也会拒绝。Git 与 SSH 的可执行程序选择变量
+也按相同方式处理，包括 `GIT_SSH_COMMAND`、editor、pager、diff、askpass 和
+可执行路径变量。
 
 `Guard.Scan` 返回 `allow`、`deny`、`ask` 或 `needs_human_review`，报告包含
 风险等级、rule ID、evidence、recommendation、Tool、backend 和 blocked。
@@ -65,8 +67,12 @@ Guard 复用 `internal/shellsafe`，只解析一次命令结构，再对参数�
 所有变量、alias、source 文件或运行时生成的命令。
 
 Permission 扫描还会把解释器 stdin 和 `-f -` stdin 作为可执行内容处理，
-检查路径类参数与 Skill 输出 glob，并复核会选择 alias、hook、helper 或外部
-程序的 Git 配置。
+跨命令参数边界扫描凭据形态的值，检查路径类参数与 Skill 输出 glob，并复核
+会选择 alias、hook、helper 或外部程序的 Git 配置。AWK 内联程序中的进程桥接
+以及 SSH 的 `LocalCommand`、`KnownHostsCommand` 都属于命令间接执行：字面量
+嵌套命令复用相同的命令策略扫描，动态或无法明确解析的形式进入人工复核。
+如果 Tool metadata 声明 destructive，即使 schema 中没有可识别的执行字段也
+至少需要人工复核；已有的更强 deny 结论仍然优先。
 
 ## Filter 与 Permission 边界
 

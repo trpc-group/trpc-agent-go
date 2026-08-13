@@ -97,13 +97,23 @@ func scannerLanguage(language string) (string, bool) {
 	}
 }
 
-func scanInlineInterpreters(policy Policy, segments [][]string) []Finding {
+func scanInlineInterpreters(
+	policy Policy,
+	segments [][]string,
+	indirectionDepth int,
+) []Finding {
 	var findings []Finding
 	for _, argv := range segments {
 		if len(argv) == 0 {
 			continue
 		}
 		base := commandBase(argv[0])
+		if isAWKInterpreter(base) {
+			findings = append(findings, scanAWKInlinePrograms(
+				policy, argv[1:], indirectionDepth,
+			)...)
+			continue
+		}
 		if isPythonInterpreter(base) {
 			if module, rest, ok := interpreterModule(argv[1:]); ok {
 				if module == "pip" {
@@ -136,6 +146,447 @@ func scanInlineInterpreters(policy Policy, segments [][]string) []Finding {
 		}
 	}
 	return findings
+}
+
+func isAWKInterpreter(base string) bool {
+	switch base {
+	case "awk", "gawk", "mawk", "nawk":
+		return true
+	default:
+		return false
+	}
+}
+
+func scanAWKInlinePrograms(
+	policy Policy,
+	args []string,
+	indirectionDepth int,
+) []Finding {
+	programs, unresolved := awkInlinePrograms(args)
+	var findings []Finding
+	if unresolved {
+		findings = append(findings, awkExecutionReview(
+			"AWK inline program options could not be parsed conservatively",
+		))
+	}
+	for _, program := range programs {
+		findings = append(findings, scanAWKInlineProgram(
+			policy, program, indirectionDepth,
+		)...)
+	}
+	return findings
+}
+
+func awkInlinePrograms(args []string) ([]string, bool) {
+	var state awkProgramOptionState
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			if !state.sourceSpecified && index+1 < len(args) {
+				state.programs = append(state.programs, args[index+1])
+			}
+			return state.programs, state.unresolved
+		}
+		if consumed, handled := state.consumeCompatibility(args, index); handled {
+			index += consumed
+			continue
+		}
+		if consumed, handled := state.consumeInlineSource(args, index); handled {
+			index += consumed
+			continue
+		}
+		if consumed, handled := state.consumeValueOption(args, index); handled {
+			index += consumed
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			state.unresolved = true
+			continue
+		}
+		if !state.sourceSpecified {
+			state.programs = append(state.programs, arg)
+		}
+		return state.programs, state.unresolved
+	}
+	return state.programs, state.unresolved
+}
+
+type awkProgramOptionState struct {
+	programs        []string
+	sourceSpecified bool
+	unresolved      bool
+}
+
+func (s *awkProgramOptionState) consumeCompatibility(
+	args []string,
+	index int,
+) (int, bool) {
+	arg := args[index]
+	if arg != "-W" && !(strings.HasPrefix(arg, "-W") && len(arg) > 2) {
+		return 0, false
+	}
+	if arg == "-W" {
+		if index+1 >= len(args) {
+			s.unresolved = true
+			return 0, true
+		}
+		s.addCompatibility(args[index+1])
+		return 1, true
+	}
+	s.addCompatibility(arg[2:])
+	return 0, true
+}
+
+func (s *awkProgramOptionState) addCompatibility(value string) {
+	program, inline, file, understood := awkCompatibilityOption(value)
+	if inline {
+		s.programs = append(s.programs, program)
+	}
+	s.sourceSpecified = s.sourceSpecified || inline || file
+	s.unresolved = s.unresolved || !understood
+}
+
+func (s *awkProgramOptionState) consumeInlineSource(
+	args []string,
+	index int,
+) (int, bool) {
+	arg := args[index]
+	if arg == "-e" || arg == "--source" {
+		if index+1 >= len(args) {
+			s.unresolved = true
+			return 0, true
+		}
+		s.programs = append(s.programs, args[index+1])
+		s.sourceSpecified = true
+		return 1, true
+	}
+	if strings.HasPrefix(arg, "-e") && len(arg) > 2 {
+		s.programs = append(s.programs, strings.TrimPrefix(arg, "-e"))
+		s.sourceSpecified = true
+		return 0, true
+	}
+	if strings.HasPrefix(arg, "--source=") {
+		s.programs = append(s.programs, strings.TrimPrefix(arg, "--source="))
+		s.sourceSpecified = true
+		return 0, true
+	}
+	return 0, false
+}
+
+func (s *awkProgramOptionState) consumeValueOption(
+	args []string,
+	index int,
+) (int, bool) {
+	arg := args[index]
+	if awkOptionConsumesValue(arg) {
+		s.sourceSpecified = s.sourceSpecified || awkFileSourceOption(arg)
+		if index+1 >= len(args) {
+			s.unresolved = true
+			return 0, true
+		}
+		return 1, true
+	}
+	if !awkAttachedValueOption(arg) {
+		return 0, false
+	}
+	s.sourceSpecified = s.sourceSpecified || awkFileSourceOption(arg)
+	return 0, true
+}
+
+func awkCompatibilityOption(value string) (string, bool, bool, bool) {
+	value = strings.TrimSpace(value)
+	name, argument, hasArgument := strings.Cut(value, "=")
+	switch strings.ToLower(name) {
+	case "source":
+		return argument, hasArgument, false, hasArgument
+	case "exec":
+		return "", false, hasArgument, hasArgument
+	case "posix", "traditional", "lint", "lint-old", "re-interval",
+		"compat", "version", "dump-variables", "profile", "pretty-print",
+		"sandbox", "characters-as-bytes", "bignum", "non-decimal-data",
+		"gen-pot", "help", "copyright", "optimize", "no-optimize":
+		return "", false, false, true
+	default:
+		return "", false, false, false
+	}
+}
+
+func awkOptionConsumesValue(arg string) bool {
+	switch arg {
+	case "-F", "-v", "-f", "--field-separator", "--assign", "--file",
+		"-i", "--include", "-l", "--load", "-E", "--exec":
+		return true
+	default:
+		return false
+	}
+}
+
+func awkAttachedValueOption(arg string) bool {
+	if strings.HasPrefix(arg, "--field-separator=") ||
+		strings.HasPrefix(arg, "--assign=") ||
+		strings.HasPrefix(arg, "--file=") ||
+		strings.HasPrefix(arg, "--include=") ||
+		strings.HasPrefix(arg, "--load=") ||
+		strings.HasPrefix(arg, "--exec=") {
+		return true
+	}
+	return len(arg) > 2 && (strings.HasPrefix(arg, "-F") ||
+		strings.HasPrefix(arg, "-v") || strings.HasPrefix(arg, "-f") ||
+		strings.HasPrefix(arg, "-i") || strings.HasPrefix(arg, "-l") ||
+		strings.HasPrefix(arg, "-E"))
+}
+
+func awkFileSourceOption(arg string) bool {
+	return arg == "-f" || arg == "--file" || arg == "-E" || arg == "--exec" ||
+		strings.HasPrefix(arg, "-f") || strings.HasPrefix(arg, "-E") ||
+		strings.HasPrefix(arg, "--file=") || strings.HasPrefix(arg, "--exec=")
+}
+
+func scanAWKInlineProgram(
+	policy Policy,
+	program string,
+	indirectionDepth int,
+) []Finding {
+	var findings []Finding
+	for _, args := range findCallArgumentsAt(
+		program, "system", awkCodePositionExecutable,
+	) {
+		findings = append(findings, awkExecutionReview(
+			"AWK system() executes an embedded command",
+		))
+		findings = append(findings, scanAWKCommandLiterals(
+			policy, args, indirectionDepth,
+		)...)
+	}
+	pipeCommands := awkCommandPipeExpressions(program)
+	if len(pipeCommands) > 0 {
+		findings = append(findings, awkExecutionReview(
+			"AWK command pipe executes an embedded command",
+		))
+		findings = append(findings, scanAWKCommandLiterals(
+			policy, pipeCommands, indirectionDepth,
+		)...)
+	}
+	return findings
+}
+
+func scanAWKCommandLiterals(
+	policy Policy,
+	expressions []string,
+	indirectionDepth int,
+) []Finding {
+	if indirectionDepth >= maxCommandIndirectionDepth {
+		return nil
+	}
+	var findings []Finding
+	for _, expression := range expressions {
+		for _, literal := range quotedLiterals(expression) {
+			findings = append(findings, scanNestedCommandAtDepth(
+				policy, literal, indirectionDepth+1,
+			)...)
+		}
+	}
+	return findings
+}
+
+func awkCommandPipeExpressions(program string) []string {
+	var expressions []string
+	for index := 0; index < len(program); index++ {
+		if program[index] != '|' || !awkCodePositionExecutable(program, index) {
+			continue
+		}
+		previousPipe := index > 0 && program[index-1] == '|'
+		nextPipe := index+1 < len(program) && program[index+1] == '|'
+		if previousPipe || nextPipe {
+			continue
+		}
+		start := awkStatementStart(program, index)
+		end := awkStatementEnd(program, index+1)
+		right := strings.TrimSpace(program[index+1 : end])
+		right = strings.TrimSpace(strings.TrimPrefix(right, "&"))
+		if awkStartsWithWord(right, "getline") {
+			expressions = append(expressions, program[start:index])
+			continue
+		}
+		expressions = append(expressions, right)
+	}
+	return expressions
+}
+
+func awkStatementStart(program string, before int) int {
+	start := 0
+	for index := 0; index < before; index++ {
+		if !awkCodePositionExecutable(program, index) {
+			continue
+		}
+		switch program[index] {
+		case '{', '}', ';', '\n':
+			start = index + 1
+		}
+	}
+	return start
+}
+
+func awkStatementEnd(program string, after int) int {
+	for index := after; index < len(program); index++ {
+		if !awkCodePositionExecutable(program, index) {
+			continue
+		}
+		switch program[index] {
+		case '}', ';', '\n':
+			return index
+		}
+	}
+	return len(program)
+}
+
+func awkStartsWithWord(value, word string) bool {
+	if !strings.HasPrefix(value, word) {
+		return false
+	}
+	return len(value) == len(word) || !isCodeIdentifierByte(value[len(word)])
+}
+
+func awkCodePositionExecutable(code string, position int) bool {
+	state := awkCodePositionState{expectOperand: true}
+	for index := 0; index < position; index++ {
+		consumed := state.consume(code, index, position)
+		index += consumed
+	}
+	return !state.comment && state.quote == 0 && !state.regexp
+}
+
+type awkCodePositionState struct {
+	quote         byte
+	regexp        bool
+	escaped       bool
+	characterSet  bool
+	comment       bool
+	expectOperand bool
+}
+
+func (s *awkCodePositionState) consume(code string, index, limit int) int {
+	current := code[index]
+	if s.comment {
+		if current == '\n' {
+			s.comment = false
+		}
+		return 0
+	}
+	if s.quote != 0 {
+		s.consumeQuote(current)
+		return 0
+	}
+	if s.regexp {
+		s.consumeRegexp(current)
+		return 0
+	}
+	if current == '#' {
+		s.comment = true
+		return 0
+	}
+	if current == '"' {
+		s.quote = current
+		s.expectOperand = false
+		return 0
+	}
+	if current == '/' && s.expectOperand {
+		s.regexp = true
+		s.expectOperand = false
+		return 0
+	}
+	if isAWKIdentifierStart(current) {
+		end := index + 1
+		for end < limit && isCodeIdentifierByte(code[end]) {
+			end++
+		}
+		s.expectOperand = awkKeywordExpectsOperand(code[index:end])
+		return end - index - 1
+	}
+	if (current == '+' || current == '-') && index+1 < limit &&
+		code[index+1] == current {
+		prefix := s.expectOperand
+		s.expectOperand = prefix
+		return 1
+	}
+	s.consumeOperator(current)
+	return 0
+}
+
+func (s *awkCodePositionState) consumeQuote(current byte) {
+	if s.escaped {
+		s.escaped = false
+		return
+	}
+	if current == '\\' {
+		s.escaped = true
+		return
+	}
+	if current == s.quote {
+		s.quote = 0
+	}
+}
+
+func (s *awkCodePositionState) consumeRegexp(current byte) {
+	if s.escaped {
+		s.escaped = false
+		return
+	}
+	if current == '\\' {
+		s.escaped = true
+		return
+	}
+	if current == '[' {
+		s.characterSet = true
+		return
+	}
+	if current == ']' && s.characterSet {
+		s.characterSet = false
+		return
+	}
+	if current == '/' && !s.characterSet {
+		s.regexp = false
+	}
+}
+
+func (s *awkCodePositionState) consumeOperator(current byte) {
+	if current == ' ' || current == '\t' || current == '\n' || current == '\r' {
+		return
+	}
+	switch current {
+	case ')', ']':
+		s.expectOperand = false
+	case '(', '{', '[', ',', ';', '=', '~', '?', ':', '+', '-', '*', '%',
+		'^', '!', '<', '>', '&', '|', '$', '/':
+		s.expectOperand = true
+	case '}':
+		s.expectOperand = false
+	default:
+		s.expectOperand = current < '0' || current > '9'
+	}
+}
+
+func isAWKIdentifierStart(value byte) bool {
+	return value == '_' || value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z'
+}
+
+func awkKeywordExpectsOperand(value string) bool {
+	switch value {
+	case "if", "else", "while", "do", "for", "print", "printf", "return",
+		"exit", "next", "nextfile", "delete", "in", "getline":
+		return true
+	default:
+		return false
+	}
+}
+
+func awkExecutionReview(evidence string) Finding {
+	return newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "command.indirect_execution",
+		evidence,
+		"remove AWK process execution or review the embedded command",
+	)
 }
 
 func scanExecutableStdin(policy Policy, command, stdin string) []Finding {
@@ -911,6 +1362,14 @@ func localPathExpression(quoted string) string {
 // source positions. It intentionally stays conservative: malformed or dynamic
 // calls are returned as unresolved and require review by the caller.
 func findCallArguments(code, name string) [][]string {
+	return findCallArgumentsAt(code, name, codePositionExecutable)
+}
+
+func findCallArgumentsAt(
+	code string,
+	name string,
+	positionExecutable func(string, int) bool,
+) [][]string {
 	var calls [][]string
 	for offset := 0; offset < len(code); {
 		relative := strings.Index(code[offset:], name)
@@ -920,7 +1379,7 @@ func findCallArguments(code, name string) [][]string {
 		start := offset + relative
 		offset = start + len(name)
 		if (start > 0 && isCodeIdentifierByte(code[start-1])) ||
-			!codePositionExecutable(code, start) {
+			!positionExecutable(code, start) {
 			continue
 		}
 		open := offset

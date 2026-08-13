@@ -31,7 +31,7 @@ func scanCommandIndirectionAtDepth(
 		if len(argv) == 0 {
 			continue
 		}
-		switch commandBase(argv[0]) {
+		switch base := commandBase(argv[0]); base {
 		case "git":
 			findings = append(findings, scanGitExecutionConfigs(
 				policy, req.Env, argv[1:], depth+1,
@@ -47,9 +47,135 @@ func scanCommandIndirectionAtDepth(
 			findings = append(findings, scanFindExecutionActions(
 				policy, argv[1:], depth+1,
 			)...)
+		case "ssh", "scp", "sftp":
+			findings = append(findings, scanSSHExecutionOptions(
+				policy, base, argv[1:], depth+1,
+			)...)
 		}
 	}
 	return findings
+}
+
+func scanSSHExecutionOptions(
+	policy Policy,
+	client string,
+	args []string,
+	depth int,
+) []Finding {
+	var findings []Finding
+	for _, option := range sshConfigurationOptions(client, args) {
+		value, name, matched := sshExecutionCommand(option)
+		if !matched {
+			continue
+		}
+		findings = append(findings, newFinding(
+			DecisionNeedsHumanReview, RiskHigh, "command.indirect_execution",
+			"SSH "+name+" can execute a local command",
+			"remove the command-selecting SSH option or review its complete command",
+		))
+		findings = append(findings, scanNestedCommandAtDepth(
+			policy, value, depth,
+		)...)
+	}
+	return findings
+}
+
+func sshConfigurationOptions(client string, args []string) []string {
+	var options []string
+	destinationSeen := false
+	for index := 0; index < len(args); {
+		arg := args[index]
+		if arg == "--" || arg == "-" {
+			break
+		}
+		if !strings.HasPrefix(arg, "-") {
+			if client != "ssh" || destinationSeen {
+				break
+			}
+			destinationSeen = true
+			index++
+			continue
+		}
+		value, consumesNext, found := sshConfigurationOption(arg)
+		if !found {
+			if sshOptionConsumesNext(arg) && index+1 < len(args) {
+				index += 2
+				continue
+			}
+			index++
+			continue
+		}
+		if !consumesNext {
+			options = append(options, value)
+			index++
+			continue
+		}
+		if index+1 < len(args) {
+			options = append(options, args[index+1])
+			index += 2
+			continue
+		}
+		index++
+	}
+	return options
+}
+
+func sshConfigurationOption(arg string) (string, bool, bool) {
+	if len(arg) < 2 || arg[0] != '-' || strings.HasPrefix(arg, "--") {
+		return "", false, false
+	}
+	const noValueOptions = "46AaCfGgKkMNnqsTtVvXxYy"
+	for index := 1; index < len(arg); index++ {
+		if arg[index] == 'o' {
+			if index+1 == len(arg) {
+				return "", true, true
+			}
+			return arg[index+1:], false, true
+		}
+		if !strings.ContainsRune(noValueOptions, rune(arg[index])) {
+			return "", false, false
+		}
+	}
+	return "", false, false
+}
+
+func sshOptionConsumesNext(arg string) bool {
+	if len(arg) != 2 || arg[0] != '-' {
+		return false
+	}
+	const valueOptions = "BbCcDEeFIiJLlmOopQRSWw"
+	return strings.ContainsRune(valueOptions, rune(arg[1]))
+}
+
+func sshExecutionCommand(option string) (string, string, bool) {
+	option = strings.TrimSpace(option)
+	if key, value, ok := strings.Cut(option, "="); ok {
+		name, matched := sshExecutionOptionName(key)
+		if !matched {
+			return "", "", false
+		}
+		return strings.TrimSpace(value), name, true
+	}
+	fields := strings.Fields(option)
+	if len(fields) == 0 {
+		return "", "", false
+	}
+	name, matched := sshExecutionOptionName(fields[0])
+	if !matched {
+		return "", "", false
+	}
+	return strings.Join(fields[1:], " "), name, true
+}
+
+func sshExecutionOptionName(value string) (string, bool) {
+	switch {
+	case strings.EqualFold(strings.TrimSpace(value), "LocalCommand"):
+		return "LocalCommand", true
+	case strings.EqualFold(strings.TrimSpace(value), "KnownHostsCommand"):
+		return "KnownHostsCommand", true
+	default:
+		return "", false
+	}
 }
 
 func scanGitExecutionConfigs(
