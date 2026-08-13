@@ -709,9 +709,14 @@ stateGraph.AddLLMNode("analyze", model,
   互相覆盖/清空。若由单个上游节点同时为多个 LLM 节点准备输入，推荐使用
   `graph.SetOneShotMessagesByNode(...)` 一次性写入所有 entry。
 - 所有状态更新都是原子性的，确保一致性。
-- GraphAgent/Runner 仅设置 `user_input`，不再预先把用户消息写入
-  `messages`。这样可以允许在 LLM 节点之前的任意节点对 `user_input`
-  进行修改，并能在同一轮生效。
+- GraphAgent/Runner 会从本轮用户消息设置 `user_input`（优先使用
+  `Content`；`Content` 为空时再拼接文本 `ContentParts`），并且对普通
+  字符串输入不再预先写入 `messages`。这样可以允许在 LLM 节点之前的任意
+  节点对 `user_input` 进行修改，并能在同一轮生效。当用户消息带有
+  `ContentParts`（例如 AG-UI 多模态输入）且没有会话历史时，GraphAgent
+  也会把原始消息放入 `messages`，以保留图片等非文本部分。若前置节点改写了
+  `user_input` 文本，LLM 节点会在模型请求与持久化 `messages` 中同步更新
+  最后一条 user 消息的文本，并保留图片等非文本 `ContentParts`。
 - Graph 在执行子 Agent 时会保留父调用的 `RequestID`（请求标识），
   确保当会话历史里已包含本轮用户输入时，不会在提示词中重复插入。
 
@@ -942,6 +947,9 @@ sg.AddJoinEdge([]string{"produce", "consume"}, "finish")
     本轮的用户输入合并后发起调用。结束后会把用户输入与助手回复通过
     `MessageOp`（例如 `AppendMessages`、`ReplaceLastUser`）原子性写入
     到 `messages`，并自动清空 `user_input` 以避免重复追加。
+  - 当持久化历史末尾的 user 消息是多模态，且其文本与 `user_input` 不一致时，
+    LLM 节点会在模型请求与持久化状态中同步改写该消息的文本，并保留非文本
+    `ContentParts`（例如图片）。
   - 适用场景：普通对话式工作流，允许在前置节点动态调整用户输入。
   - 默认用户输入 key 为 `StateKeyUserInput`。如果需要从其他一次性 key
     读取输入，可在该节点上配置 `graph.WithUserInputKey(...)`。
@@ -1728,7 +1736,8 @@ appRunner := runner.NewRunner(
 )
 
 // 使用 Runner 执行工作流
-// Runner 仅设置 StateKeyUserInput，不再预先写入 StateKeyMessages。
+// Runner 从用户消息文本设置 StateKeyUserInput。普通字符串输入不会预先
+// 写入 StateKeyMessages；带 ContentParts 的多模态消息会写入。
 message := model.NewUserMessage("用户输入")
 eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```
@@ -3763,7 +3772,7 @@ sg.AddToolsConditionalEdges(nodeAsk, nodeExecTools, nodeFallback)
 
 GraphAgent 会把当前 `*session.Session` 放入状态（`graph.StateKeySession` 键），LLM 节点会在执行前对指令进行占位符展开。
 
-提示：GraphAgent 会从会话事件播种 `graph.StateKeyMessages` 以保证多轮连贯；从检查点恢复时，若用户消息仅为 "resume"，不会注入到 `graph.StateKeyUserInput`，以避免干扰已恢复的状态。
+提示：GraphAgent 会从会话事件播种 `graph.StateKeyMessages` 以保证多轮连贯；从检查点恢复时，仅纯文本/text-only 的 "resume" 哨兵（`Content == "resume"`，或仅为文本且拼接结果为 "resume" 的 `ContentParts`）不会注入到 `graph.StateKeyUserInput`，以避免干扰已恢复的状态。若 `ContentParts` 文本为 "resume" 但还包含非文本部分（图片/文件/音频/视频等），则视为有意义的用户输入。
 
 ### 并发执行和状态安全
 
@@ -4653,7 +4662,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 **Q6: 从检查点恢复未按预期继续**
 
 - 通过 `agent.WithRuntimeState(map[string]any{ graph.CfgKeyLineageID: "...", graph.CfgKeyCheckpointID: "..." })` 传入；
-- HITL 恢复时提供 `ResumeMap`；纯 "resume" 文本不会注入到 `graph.StateKeyUserInput`。
+- HITL 恢复时提供 `ResumeMap`；纯文本/text-only 的 "resume" 不会注入到 `graph.StateKeyUserInput`；多模态下 "resume" 文本叠加非文本部分视为有意义输入。
 
 **Q7: 并行下状态冲突**
 

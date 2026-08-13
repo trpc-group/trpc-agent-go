@@ -809,6 +809,33 @@ func TestDeepCopyWrapperHelperCoverage(t *testing.T) {
 		_, ok = copiedOp.(ReplaceLastUser)
 		require.True(t, ok)
 
+		text := "caption"
+		replaceMsg := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeText, Text: &text},
+				{
+					Type:  model.ContentTypeImage,
+					Image: &model.Image{Data: []byte("img")},
+				},
+			},
+		}
+		copiedOp, ok = deepCopyMessageOp(replaceLastUserMessage{Message: replaceMsg})
+		require.True(t, ok)
+		copiedReplace, ok := copiedOp.(replaceLastUserMessage)
+		require.True(t, ok)
+		require.NotSame(
+			t,
+			replaceMsg.ContentParts[1].Image,
+			copiedReplace.Message.ContentParts[1].Image,
+		)
+		replaceMsg.ContentParts[1].Image.Data[0] = 'X'
+		assert.Equal(
+			t,
+			"img",
+			string(copiedReplace.Message.ContentParts[1].Image.Data),
+		)
+
 		copiedOp, ok = deepCopyMessageOp(RemoveAllMessages{})
 		require.True(t, ok)
 		_, ok = copiedOp.(RemoveAllMessages)

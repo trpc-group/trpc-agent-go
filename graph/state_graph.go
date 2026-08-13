@@ -38,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -45,6 +46,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
+	utilmessage "trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -1367,9 +1369,17 @@ func (r *llmRunner) executeUserInputStage(
 	used = r.insertFewShot(state, used)
 	var ops []MessageOp
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
-		if used[len(used)-1].Content != userInput {
-			used[len(used)-1] = model.NewUserMessage(userInput)
-			ops = append(ops, ReplaceLastUser{Content: userInput})
+		last := used[len(used)-1]
+		if shouldRewriteLastUserMessage(state, userInputKey, userInput, last) {
+			if len(last.ContentParts) == 0 {
+				// Exact legacy mismatch path for ordinary string messages.
+				used[len(used)-1] = model.NewUserMessage(userInput)
+				ops = append(ops, ReplaceLastUser{Content: userInput})
+			} else {
+				rewritten := rewriteUserMessageText(last, userInput)
+				used[len(used)-1] = rewritten
+				ops = append(ops, replaceLastUserMessage{Message: rewritten})
+			}
 		}
 	} else {
 		used = append(used, model.NewUserMessage(userInput))
@@ -1395,6 +1405,42 @@ func (r *llmRunner) executeUserInputStage(
 			r.nodeID: asst.Content,
 		},
 	}, nil
+}
+
+func shouldRewriteLastUserMessage(
+	state State,
+	userInputKey string,
+	userInput string,
+	last model.Message,
+) bool {
+	var lastText string
+	if len(last.ContentParts) == 0 {
+		lastText = last.Content
+	} else {
+		lastText = utilmessage.TextContent(last)
+	}
+	if lastText == userInput {
+		return false
+	}
+	// A mismatch is processor enrichment when user_input still equals the
+	// original invocation projection. Rewrite only when a pre-LLM node (or
+	// equivalent) actually changed user_input, or when no baseline exists.
+	return !userInputUnchangedFromBaseline(state, userInputKey, userInput)
+}
+
+func userInputUnchangedFromBaseline(
+	state State,
+	userInputKey string,
+	userInput string,
+) bool {
+	if userInputKey != "" && userInputKey != StateKeyUserInput {
+		return false
+	}
+	baseline, ok := state[userinputkey.Baseline].(string)
+	if !ok {
+		return false
+	}
+	return baseline == userinputkey.Fingerprint(userInput)
 }
 
 func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span oteltrace.Span) (any, error) {

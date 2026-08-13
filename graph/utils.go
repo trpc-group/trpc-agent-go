@@ -304,6 +304,8 @@ func canDeepCopyMessageOpFastPath(op MessageOp) bool {
 		return true
 	case ReplaceLastUser:
 		return true
+	case replaceLastUserMessage:
+		return true
 	case RemoveAllMessages:
 		return true
 	default:
@@ -381,6 +383,10 @@ func deepCopyMessageOpWithVisited(
 		}
 		return v, true
 	case ReplaceLastUser:
+		return v, true
+	case replaceLastUserMessage:
+		msgs := deepCopyModelMessagesWithVisited([]model.Message{v.Message}, visited)
+		v.Message = msgs[0]
 		return v, true
 	case RemoveAllMessages:
 		return v, true

@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -453,6 +454,7 @@ func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializab
 		StateKeyAgentCallbacks: "ac",
 		StateKeyCurrentNodeID:  "nid",
 		StateKeySession:        "sid",
+		userinputkey.Baseline:  userinputkey.Fingerprint("raw-user"),
 		// Unserializable value; json.Marshal should fail and be ignored.
 		"bad": func() {},
 	}
@@ -478,6 +480,7 @@ func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializab
 	require.NotContains(t, e.StateDelta, StateKeyAgentCallbacks)
 	require.NotContains(t, e.StateDelta, StateKeyCurrentNodeID)
 	require.NotContains(t, e.StateDelta, StateKeySession)
+	require.NotContains(t, e.StateDelta, userinputkey.Baseline)
 	require.NotContains(t, e.StateDelta, "bad")
 
 	var cm CompletionMetadata

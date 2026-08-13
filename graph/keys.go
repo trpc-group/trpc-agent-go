@@ -10,6 +10,8 @@
 
 package graph
 
+import "trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
+
 // Config map keys (used under config["configurable"])
 const (
 	CfgKeyConfigurable = "configurable"
@@ -121,7 +123,8 @@ func isInternalStateKey(key string) bool {
 	case MetadataKeyNode, MetadataKeyPregel, MetadataKeyChannel,
 		MetadataKeyState, MetadataKeyCompletion, MetadataKeyNodeCustom,
 		MetadataKeyNodeEmitter,
-		stateKeyCompletedToolMessages:
+		stateKeyCompletedToolMessages,
+		userinputkey.Baseline:
 		return true
 	default:
 		return false

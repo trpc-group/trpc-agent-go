@@ -59,3 +59,57 @@ type RemoveAllMessages struct{}
 
 // Apply implements the MessageOp interface.
 func (RemoveAllMessages) Apply(_ []model.Message) []model.Message { return nil }
+
+// replaceLastUserMessage replaces the last user message with Message.
+// If no user message is found, it appends Message.
+// Unlike ReplaceLastUser, it persists the full rewritten message so
+// multimodal ContentParts stay consistent with the model request.
+type replaceLastUserMessage struct{ Message model.Message }
+
+// Apply implements the MessageOp interface.
+func (op replaceLastUserMessage) Apply(dst []model.Message) []model.Message {
+	for i := len(dst) - 1; i >= 0; i-- {
+		if dst[i].Role == model.RoleUser {
+			dst[i] = op.Message
+			return dst
+		}
+	}
+	return append(dst, op.Message)
+}
+
+// rewriteUserMessageText rewrites msg's textual content to userInput.
+// Messages without ContentParts use the legacy mismatch path:
+// model.NewUserMessage(userInput) (Content only; metadata is not copied).
+// Messages with ContentParts keep non-text parts and all non-textual
+// metadata, collapse textual parts to exactly userInput (no stale text),
+// and add a text part when none existed. userInput must be non-empty.
+func rewriteUserMessageText(msg model.Message, userInput string) model.Message {
+	if len(msg.ContentParts) == 0 {
+		return model.NewUserMessage(userInput)
+	}
+	text := userInput
+	textPart := model.ContentPart{
+		Type: model.ContentTypeText,
+		Text: &text,
+	}
+	parts := make([]model.ContentPart, 0, len(msg.ContentParts))
+	added := false
+	for _, part := range msg.ContentParts {
+		if part.Type == model.ContentTypeText {
+			if !added {
+				parts = append(parts, textPart)
+				added = true
+			}
+			continue
+		}
+		parts = append(parts, part)
+	}
+	if !added {
+		parts = append([]model.ContentPart{textPart}, parts...)
+	}
+	out := msg
+	out.Role = model.RoleUser
+	out.Content = ""
+	out.ContentParts = parts
+	return out
+}

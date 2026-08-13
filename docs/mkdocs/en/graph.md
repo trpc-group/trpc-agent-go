@@ -718,7 +718,16 @@ Important notes:
   multiple LLM nodes, prefer `graph.SetOneShotMessagesByNode(...)` to write all
   entries at once.
 - All state updates are atomic.
-- GraphAgent/Runner only sets `user_input` and no longer pre-populates `messages` with a user message. This allows any pre-LLM node to modify `user_input` and have it take effect in the same round.
+- GraphAgent/Runner sets `user_input` from the invocation user message
+  (`Content`, or textual `ContentParts` when `Content` is empty) and does
+  not pre-populate `messages` for ordinary string-only user input. This
+  allows any pre-LLM node to modify `user_input` and have it take effect
+  in the same round. When the user message has `ContentParts` (for example
+  AG-UI multimodal input) and there is no session history, GraphAgent also
+  places that original message on `messages` so non-text parts are preserved.
+  If a pre-LLM node rewrites `user_input` text, the LLM node updates the last
+  user message text for both the model request and durable `messages` while
+  keeping non-text `ContentParts` (for example images).
 - When Graph runs sub-agents, it preserves the parent run's `RequestID`
   (request identifier) so the current user input is included exactly once,
   even when it already exists in session history.
@@ -950,6 +959,9 @@ Notes
 - UserInput (`StateKeyUserInput`):
 
   - When non-empty, the LLM node uses durable `messages` plus this round's user input to call the model. After the call, it writes the user input and assistant reply to `messages` using `MessageOp` (e.g., `AppendMessages`, `ReplaceLastUser`) atomically, and clears `user_input` to avoid repeated appends.
+  - When the last durable user message is multimodal and its text differs from
+    `user_input`, the LLM node rewrites that message's text for both the model
+    request and durable state, while preserving non-text `ContentParts`.
   - Use case: conversational flows where pre-nodes may adjust user input.
   - By default, the user input key is `StateKeyUserInput`. To read one-shot
     input from a different key, use `graph.WithUserInputKey(...)` on that node.
@@ -1743,7 +1755,8 @@ appRunner := runner.NewRunner(
 )
 
 // Use Runner to execute workflow.
-// Runner only sets StateKeyUserInput; it no longer pre-populates StateKeyMessages.
+// Runner sets StateKeyUserInput from the user message text. Ordinary string
+// input is not pre-written to StateKeyMessages; multimodal ContentParts are.
 message := model.NewUserMessage("User input")
 eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```
@@ -3863,7 +3876,7 @@ sg.AddToolsConditionalEdges(nodeAsk, nodeExecTools, nodeFallback)
 
 GraphAgent stores the current `*session.Session` into state (`graph.StateKeySession`) and expands placeholders before the LLM call.
 
-Tip: GraphAgent seeds `graph.StateKeyMessages` from prior session events for multi‑turn continuity. When resuming from a checkpoint, a plain "resume" message is not injected as `graph.StateKeyUserInput`, preserving the recovered state.
+Tip: GraphAgent seeds `graph.StateKeyMessages` from prior session events for multi‑turn continuity. When resuming from a checkpoint, a plain/text-only "resume" message (`Content == "resume"`, or ContentParts that are text-only and resolve to "resume") is not injected as `graph.StateKeyUserInput`, preserving the recovered state. A ContentParts message whose text is "resume" but that also includes non-text parts (image/file/audio/video/etc.) is treated as meaningful input.
 
 ### Concurrency and State Safety
 
@@ -4740,7 +4753,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 **Q6: Resume did not continue where expected**
 
 - Pass `agent.WithRuntimeState(map[string]any{ graph.CfgKeyLineageID: "...", graph.CfgKeyCheckpointID: "..." })`.
-- Provide `ResumeMap` for HITL continuation when needed. A plain "resume" message is not added to `graph.StateKeyUserInput`.
+- Provide `ResumeMap` for HITL continuation when needed. A plain/text-only "resume" message is not added to `graph.StateKeyUserInput`; multimodal "resume" text plus non-text parts is meaningful input.
 
 **Q7: State conflicts in parallel**
 
