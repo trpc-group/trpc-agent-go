@@ -248,42 +248,63 @@ func collectResultByteReplacements(
 			collectResultByteSlice(value, replacements)
 			return nil
 		}
-		for index := 0; index < value.Len(); index++ {
-			if err := collectResultByteReplacements(
-				value.Index(index), depth+1, replacements,
-			); err != nil {
-				return err
-			}
-		}
+		return collectResultByteElements(value, depth, replacements)
 	case reflect.Array:
-		for index := 0; index < value.Len(); index++ {
-			if err := collectResultByteReplacements(
-				value.Index(index), depth+1, replacements,
-			); err != nil {
-				return err
-			}
-		}
+		return collectResultByteElements(value, depth, replacements)
 	case reflect.Map:
-		iterator := value.MapRange()
-		for iterator.Next() {
-			if err := collectResultByteReplacements(
-				iterator.Value(), depth+1, replacements,
-			); err != nil {
-				return err
-			}
-		}
+		return collectResultByteMap(value, depth, replacements)
 	case reflect.Struct:
-		for index := 0; index < value.NumField(); index++ {
-			field := value.Type().Field(index)
-			if field.PkgPath != "" ||
-				strings.SplitN(field.Tag.Get("json"), ",", 2)[0] == "-" {
-				continue
-			}
-			if err := collectResultByteReplacements(
-				value.Field(index), depth+1, replacements,
-			); err != nil {
-				return err
-			}
+		return collectResultByteStruct(value, depth, replacements)
+	}
+	return nil
+}
+
+func collectResultByteElements(
+	value reflect.Value,
+	depth int,
+	replacements map[string]resultByteReplacement,
+) error {
+	for index := 0; index < value.Len(); index++ {
+		if err := collectResultByteReplacements(
+			value.Index(index), depth+1, replacements,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectResultByteMap(
+	value reflect.Value,
+	depth int,
+	replacements map[string]resultByteReplacement,
+) error {
+	iterator := value.MapRange()
+	for iterator.Next() {
+		if err := collectResultByteReplacements(
+			iterator.Value(), depth+1, replacements,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectResultByteStruct(
+	value reflect.Value,
+	depth int,
+	replacements map[string]resultByteReplacement,
+) error {
+	for index := 0; index < value.NumField(); index++ {
+		field := value.Type().Field(index)
+		if field.PkgPath != "" ||
+			strings.SplitN(field.Tag.Get("json"), ",", 2)[0] == "-" {
+			continue
+		}
+		if err := collectResultByteReplacements(
+			value.Field(index), depth+1, replacements,
+		); err != nil {
+			return err
 		}
 	}
 	return nil
