@@ -94,7 +94,7 @@ Real-time streaming output is split into many small events. Writing every small 
 
 Within one flush interval, the framework merges text chunks from the same assistant message, reasoning chunks from the same assistant message, and argument chunks from the same tool call. Other events are still stored in their original order; when such an event appears, chunks before and after it are not merged across that event. `TOOL_CALL_RESULT` represents the complete result of one tool call and is not merged.
 
-Real-time SSE output does not wait for history persistence to finish, so the frontend still receives model output immediately. `/history` reads only the content that has already been written to session storage. When a conversation is still running, a messages snapshot may therefore show the state from the last successful flush. When follow mode is enabled, later successfully flushed events are pushed to the client.
+Except for the initial best-effort flush described under Messages Snapshot Continuation, real-time SSE output does not wait for history persistence to finish, so the frontend still receives model output immediately. `/history` reads only the content that has already been written to session storage. When a conversation is still running, a messages snapshot may therefore show the state from the last successful flush. When follow mode is enabled, later successfully flushed events are pushed to the client.
 
 Related configuration:
 
@@ -247,7 +247,7 @@ After continuation is enabled, the server continues reading and forwarding subse
 
 `RUN_STARTED → MESSAGES_SNAPSHOT → subsequent AG-UI events → RUN_FINISHED/RUN_ERROR`
 
-For a tracked run with continuation enabled and a positive flush interval, the runner writes a small latest-run marker to the shared `SessionService` before `Run` returns. The marker lets another instance distinguish a newly active run from empty history or the previous run's terminal event while buffered track events are not yet visible. It is overwritten by the next run rather than cleared at completion, and a matching persisted terminal event marks it complete. Runs with an execution deadline use a bounded lease to prevent a missing terminal event from leaving the marker active indefinitely; a known final-write failure also marks the run complete. Writing or reading this marker uses session state rather than the track-event persistence queue, so asynchronous track persistence does not remove the active-run signal. If the marker cannot be written, `Run` returns an error instead of starting without cross-instance continuation visibility. As with the runner's existing local run registry, starting concurrent runs for the same session key is unsupported.
+For a tracked run with continuation enabled and a positive flush interval, the runner makes a best-effort flush after recording the initial `RUN_STARTED` event and before emitting that event to the real-time SSE stream. After a successful flush with a synchronous `TrackService`, another instance sharing the same `SessionService` can therefore observe a non-terminal event once `RUN_STARTED` has been emitted, while later events continue to use periodic buffering. A failed initial flush is logged without stopping the run, and the pending events remain available for a later periodic flush or final close. Asynchronous `TrackService` implementations may still delay cross-instance visibility after the flush call returns.
 
 Related configuration:
 

@@ -11,7 +11,6 @@ package runner
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -736,11 +735,6 @@ func TestMessagesSnapshotFollowReceivesPeriodicFlushedContent(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "timeout waiting for runner start")
 	}
-	require.NoError(t, r.flushTrack(context.Background(), session.Key{
-		AppName:   "demo",
-		UserID:    "user",
-		SessionID: "thread",
-	}))
 	runDone := make(chan struct{})
 	go func() {
 		for range runStream {
@@ -1411,7 +1405,7 @@ func TestMessagesSnapshotFollowStartsFromEmptyTrackWhenRunIsActive(t *testing.T)
 	require.Equal(t, 2, calls)
 }
 
-func TestMessagesSnapshotFollowAcrossRunnersUsesSharedRunMarker(t *testing.T) {
+func TestMessagesSnapshotFollowAcrossRunnersAfterOwnerRunStarted(t *testing.T) {
 	tests := []struct {
 		name         string
 		seedHistory  bool
@@ -1421,13 +1415,13 @@ func TestMessagesSnapshotFollowAcrossRunnersUsesSharedRunMarker(t *testing.T) {
 		{
 			name:         "empty history with user input",
 			input:        types.Message{ID: "new-user", Role: types.RoleUser, Content: "new"},
-			wantMessages: 0,
+			wantMessages: 1,
 		},
 		{
 			name:         "previous terminal history with user input",
 			seedHistory:  true,
 			input:        types.Message{ID: "new-user", Role: types.RoleUser, Content: "new"},
-			wantMessages: 1,
+			wantMessages: 2,
 		},
 		{
 			name:        "previous terminal history with tool input",
@@ -1470,6 +1464,17 @@ func TestMessagesSnapshotFollowAcrossRunnersUsesSharedRunMarker(t *testing.T) {
 				Messages: []types.Message{tt.input},
 			})
 			require.NoError(t, err)
+			ownerStarted, ok := nextAGUIEvent(t, ownerStream).(*aguievents.RunStartedEvent)
+			require.True(t, ok)
+			require.Equal(t, "owner-run", ownerStarted.RunID())
+			ownerRest := make(chan []aguievents.Event, 1)
+			go func() {
+				var rest []aguievents.Event
+				for evt := range ownerStream {
+					rest = append(rest, evt)
+				}
+				ownerRest <- rest
+			}()
 
 			follower := New(
 				noopBaseRunner{},
@@ -1502,142 +1507,36 @@ func TestMessagesSnapshotFollowAcrossRunnersUsesSharedRunMarker(t *testing.T) {
 				}}
 				close(agentEvents)
 			}()
-			collectEvents(t, ownerStream)
+			select {
+			case <-ownerRest:
+			case <-time.After(time.Second):
+				require.FailNow(t, "timeout waiting for owner stream to finish")
+			}
 			followed := collectEvents(t, followStream)
 			require.NotEmpty(t, followed)
-			var ownerStarted int
+			var followedOwnerStarted int
 			for _, evt := range followed {
 				if started, ok := evt.(*aguievents.RunStartedEvent); ok && started.RunID() == "owner-run" {
-					ownerStarted++
+					followedOwnerStarted++
 				}
 			}
-			require.Equal(t, 1, ownerStarted)
+			require.Zero(t, followedOwnerStarted)
+			persisted, err := svc.GetTrackEvents(ctx,
+				session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}, track.TrackAGUI)
+			require.NoError(t, err)
+			persistedOwnerStarted := 0
+			for _, trackEvent := range persisted.Events {
+				evt, decodeErr := aguievents.EventFromJSON(trackEvent.Payload)
+				if decodeErr == nil && evt.Type() == aguievents.EventTypeRunStarted && evt.RunID() == "owner-run" {
+					persistedOwnerStarted++
+				}
+			}
+			require.Equal(t, 1, persistedOwnerStarted)
 			finished, ok := followed[len(followed)-1].(*aguievents.RunFinishedEvent)
 			require.True(t, ok)
 			require.Equal(t, "follow-run", finished.RunID())
 		})
 	}
-}
-
-func TestMessagesSnapshotFollowMarkerTreatsMatchingTerminalAsComplete(t *testing.T) {
-	ctx := context.Background()
-	key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
-	svc := inmemory.NewSessionService()
-	startedAt := time.Now().Add(-time.Second).UTC()
-	raw, err := json.Marshal(messagesSnapshotFollowRunMarker{RunID: "real-run", StartedAt: startedAt})
-	require.NoError(t, err)
-	sess, err := svc.CreateSession(ctx, key, session.StateMap{messagesSnapshotFollowRunMarkerKey: raw})
-	require.NoError(t, err)
-	boundary := newUserMessageTrackEventAt(t, "user", "input", startedAt.Add(-time.Millisecond))
-	require.NoError(t, svc.AppendTrackEvent(ctx, sess, &boundary))
-	terminal := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "real-run"), startedAt.Add(time.Millisecond))
-	require.NoError(t, svc.AppendTrackEvent(ctx, sess, &terminal))
-	r := New(
-		noopBaseRunner{},
-		WithAppName("demo"),
-		WithSessionService(svc),
-		WithFlushInterval(time.Millisecond),
-		WithMessagesSnapshotFollowEnabled(true),
-	).(*runner)
-	stream, err := r.MessagesSnapshot(ctx, &adapter.RunAgentInput{ThreadID: "thread", RunID: "follow-run"})
-	require.NoError(t, err)
-	collected := collectAGUIEvents(t, stream)
-	require.Len(t, collected, 3)
-	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
-}
-
-func TestMessagesSnapshotFollowIgnoresExpiredRunMarker(t *testing.T) {
-	ctx := context.Background()
-	key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
-	svc := inmemory.NewSessionService()
-	startedAt := time.Now().Add(-time.Minute).UTC()
-	raw, err := json.Marshal(messagesSnapshotFollowRunMarker{
-		RunID: "abandoned-run", StartedAt: startedAt, ExpiresAt: startedAt.Add(time.Second),
-	})
-	require.NoError(t, err)
-	_, err = svc.CreateSession(ctx, key, session.StateMap{messagesSnapshotFollowRunMarkerKey: raw})
-	require.NoError(t, err)
-	r := New(
-		noopBaseRunner{},
-		WithAppName("demo"),
-		WithSessionService(svc),
-		WithFlushInterval(time.Millisecond),
-		WithMessagesSnapshotFollowEnabled(true),
-	).(*runner)
-	stream, err := r.MessagesSnapshot(ctx, &adapter.RunAgentInput{ThreadID: "thread", RunID: "follow-run"})
-	require.NoError(t, err)
-	collected := collectAGUIEvents(t, stream)
-	require.Len(t, collected, 3)
-	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
-}
-
-func TestMessagesSnapshotFollowMarkerIgnoresStaleTerminal(t *testing.T) {
-	ctx := context.Background()
-	key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
-	svc := inmemory.NewSessionService()
-	startedAt := time.Now().Add(-time.Second).UTC()
-	raw, err := json.Marshal(messagesSnapshotFollowRunMarker{RunID: "new-run", StartedAt: startedAt})
-	require.NoError(t, err)
-	sess, err := svc.CreateSession(ctx, key, session.StateMap{messagesSnapshotFollowRunMarkerKey: raw})
-	require.NoError(t, err)
-	boundary := newUserMessageTrackEventAt(t, "user", "input", startedAt.Add(-time.Millisecond))
-	require.NoError(t, svc.AppendTrackEvent(ctx, sess, &boundary))
-	oldTerminal := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "old-run"), startedAt.Add(time.Millisecond))
-	require.NoError(t, svc.AppendTrackEvent(ctx, sess, &oldTerminal))
-	r := New(
-		noopBaseRunner{},
-		WithAppName("demo"),
-		WithSessionService(svc),
-		WithFlushInterval(time.Millisecond),
-		WithMessagesSnapshotFollowEnabled(true),
-		WithMessagesSnapshotFollowMaxDuration(time.Second),
-	).(*runner)
-	stream, err := r.MessagesSnapshot(ctx, &adapter.RunAgentInput{ThreadID: "thread", RunID: "follow-run"})
-	require.NoError(t, err)
-	require.IsType(t, (*aguievents.RunStartedEvent)(nil), nextAGUIEvent(t, stream))
-	require.IsType(t, (*aguievents.MessagesSnapshotEvent)(nil), nextAGUIEvent(t, stream))
-	newTerminal := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "new-run"), startedAt.Add(2*time.Millisecond))
-	require.NoError(t, svc.AppendTrackEvent(ctx, sess, &newTerminal))
-	finished, ok := nextAGUIEvent(t, stream).(*aguievents.RunFinishedEvent)
-	require.True(t, ok)
-	require.Equal(t, "follow-run", finished.RunID())
-}
-
-func TestMessagesSnapshotFollowMarkerIgnoresTerminalArrivingAfterFollowStarts(t *testing.T) {
-	ctx := context.Background()
-	key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
-	svc := inmemory.NewSessionService()
-	startedAt := time.Now().Add(-time.Second).UTC()
-	raw, err := json.Marshal(messagesSnapshotFollowRunMarker{RunID: "new-run", StartedAt: startedAt})
-	require.NoError(t, err)
-	sess, err := svc.CreateSession(ctx, key, session.StateMap{messagesSnapshotFollowRunMarkerKey: raw})
-	require.NoError(t, err)
-	boundary := newUserMessageTrackEventAt(t, "user", "input", startedAt.Add(-time.Millisecond))
-	require.NoError(t, svc.AppendTrackEvent(ctx, sess, &boundary))
-	r := New(
-		noopBaseRunner{},
-		WithAppName("demo"),
-		WithSessionService(svc),
-		WithFlushInterval(time.Millisecond),
-		WithMessagesSnapshotFollowEnabled(true),
-		WithMessagesSnapshotFollowMaxDuration(time.Second),
-	).(*runner)
-	stream, err := r.MessagesSnapshot(ctx, &adapter.RunAgentInput{ThreadID: "thread", RunID: "follow-run"})
-	require.NoError(t, err)
-	require.IsType(t, (*aguievents.RunStartedEvent)(nil), nextAGUIEvent(t, stream))
-	require.IsType(t, (*aguievents.MessagesSnapshotEvent)(nil), nextAGUIEvent(t, stream))
-	oldTerminal := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "old-run"), startedAt.Add(time.Millisecond))
-	require.NoError(t, svc.AppendTrackEvent(ctx, sess, &oldTerminal))
-	sentinel := newTrackEventAt(t, aguievents.NewCustomEvent("after-stale-terminal"), startedAt.Add(2*time.Millisecond))
-	require.NoError(t, svc.AppendTrackEvent(ctx, sess, &sentinel))
-	custom, ok := nextAGUIEvent(t, stream).(*aguievents.CustomEvent)
-	require.True(t, ok)
-	require.Equal(t, "after-stale-terminal", custom.Name)
-	newTerminal := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "new-run"), startedAt.Add(3*time.Millisecond))
-	require.NoError(t, svc.AppendTrackEvent(ctx, sess, &newTerminal))
-	finished, ok := nextAGUIEvent(t, stream).(*aguievents.RunFinishedEvent)
-	require.True(t, ok)
-	require.Equal(t, "follow-run", finished.RunID())
 }
 
 func TestMessagesSnapshotFollowSkipsEmptyActiveRunWhenFlushDisabled(t *testing.T) {

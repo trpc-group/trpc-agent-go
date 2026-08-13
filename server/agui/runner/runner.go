@@ -157,21 +157,22 @@ type sessionContext struct {
 }
 
 type runInput struct {
-	key             session.Key
-	threadID        string
-	runID           string
-	userID          string
-	messages        *runAgentMessages
-	runOption       []agent.RunOption
-	translator      translator.Translator
-	enableTrack     bool
-	startTrackFlush func()
-	span            trace.Span
-	resume          *resumeInfo
-	terminalEmitted bool
-	runAgentInput   *adapter.RunAgentInput
-	done            chan struct{}
-	consumerDone    <-chan struct{}
+	key                       session.Key
+	threadID                  string
+	runID                     string
+	userID                    string
+	messages                  *runAgentMessages
+	runOption                 []agent.RunOption
+	translator                translator.Translator
+	enableTrack               bool
+	startTrackFlush           func()
+	span                      trace.Span
+	resume                    *resumeInfo
+	terminalEmitted           bool
+	flushTrackBeforeNextWrite bool
+	runAgentInput             *adapter.RunAgentInput
+	done                      chan struct{}
+	consumerDone              <-chan struct{}
 }
 
 type runAgentResult struct {
@@ -443,23 +444,6 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		span.End()
 		return nil, fmt.Errorf("register running context: %w", err)
 	}
-	if input.enableTrack && r.messagesSnapshotFollowEnabled && r.flushInterval > 0 {
-		markerCtx, markerCancel := r.newTrackPersistenceContext(ctx)
-		err := writeMessagesSnapshotFollowRunMarker(
-			markerCtx,
-			r.sessionService,
-			input.key,
-			input.runID,
-			r.messagesSnapshotFollowMarkerLease(ctx),
-		)
-		markerCancel()
-		if err != nil {
-			cancel(err)
-			r.unregister(input.key)
-			span.End()
-			return nil, fmt.Errorf("write messages snapshot follow run marker: %w", err)
-		}
-	}
 	if r.distributedCancelEnabled {
 		stopDistributedCancel, err := r.startDistributedCancel(ctx, input.key, cancel)
 		if err != nil {
@@ -470,24 +454,6 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	}
 	go r.run(ctx, cancel, input.key, input, events)
 	return events, nil
-}
-
-func (r *runner) messagesSnapshotFollowMarkerLease(ctx context.Context) time.Duration {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return 0
-	}
-	lease := time.Until(deadline)
-	if lease < 0 {
-		lease = 0
-	}
-	if r.postRunFinalizationTimeout > 0 {
-		lease += r.postRunFinalizationTimeout
-	}
-	if r.trackPersistenceTimeout > 0 {
-		lease += r.trackPersistenceTimeout
-	}
-	return lease
 }
 
 func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key session.Key, input *runInput, events chan<- aguievents.Event) {
@@ -522,29 +488,15 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 			if stopTrackFlush != nil {
 				stopTrackFlush()
 			}
-			closeErr := r.closeTrack(ctx, input.key)
-			if closeErr != nil {
+			if err := r.closeTrack(ctx, input.key); err != nil {
 				log.WarnfContext(
 					ctx,
 					"agui run: threadID: %s, runID: %s, "+
 						"close track events: %v",
 					threadID,
 					runID,
-					closeErr,
+					err,
 				)
-			}
-			if closeErr != nil && r.messagesSnapshotFollowEnabled && r.flushInterval > 0 {
-				markerCtx, markerCancel := r.newTrackPersistenceContext(ctx)
-				markerErr := finishMessagesSnapshotFollowRunMarker(
-					markerCtx,
-					r.sessionService,
-					input.key,
-					input.runID,
-				)
-				markerCancel()
-				if markerErr != nil {
-					log.WarnfContext(ctx, "agui run: finish messages snapshot follow marker: %v", markerErr)
-				}
 			}
 		}()
 		if input.messages.inputMessage.Role == model.RoleUser {
@@ -557,11 +509,12 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 					runID,
 					err,
 				)
-			} else {
+			} else if !r.shouldFlushInitialTrack() {
 				input.startTrackFlush()
 			}
 		}
 	}
+	input.flushTrackBeforeNextWrite = input.enableTrack && r.shouldFlushInitialTrack()
 	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
 		return
 	}
@@ -592,6 +545,10 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 	cancel(nil)
 	waitForRunHooks(hookDone, hookRemaining)
 	<-agentRunDone
+}
+
+func (r *runner) shouldFlushInitialTrack() bool {
+	return r.messagesSnapshotFollowEnabled && r.flushInterval > 0
 }
 
 func (r *runner) runEventLoop(
@@ -1218,6 +1175,7 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 		input.threadID,
 		input.runID,
 	)
+	tracked := false
 	if input.enableTrack && r.shouldTrackEvent(event) {
 		if err := r.recordTrackEvent(ctx, input.key, event); err != nil {
 			log.WarnfContext(
@@ -1228,9 +1186,25 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 				input.runID,
 				err,
 			)
-		} else if input.startTrackFlush != nil {
-			input.startTrackFlush()
+		} else {
+			tracked = true
 		}
+	}
+	flushInitial := input.flushTrackBeforeNextWrite
+	input.flushTrackBeforeNextWrite = false
+	if flushInitial {
+		if err := r.flushTrack(ctx, input.key); err != nil {
+			log.WarnfContext(
+				ctx,
+				"agui run: threadID: %s, runID: %s, flush initial track events: %v",
+				input.threadID,
+				input.runID,
+				err,
+			)
+		}
+	}
+	if (tracked || flushInitial) && input.startTrackFlush != nil {
+		input.startTrackFlush()
 	}
 	select {
 	case events <- event:
