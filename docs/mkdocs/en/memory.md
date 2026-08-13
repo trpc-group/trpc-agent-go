@@ -351,6 +351,107 @@ continue, and the extraction watermark advances after the batch is processed.
 To roll back, remove the option or set it to `UpdatePolicyMergeSimilar`. No data
 migration is required.
 
+### Opt-in Assistant Episode Extraction
+
+Auto extraction normally uses the standard fact and episode tools. Applications
+that also need to recall reusable information from earlier assistant responses
+can enable assistant episode extraction when constructing the extractor:
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithAssistantEpisodeExtraction(),
+)
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(memExtractor),
+)
+```
+
+The option uses two isolated extraction stages. The first stage keeps the
+standard memory tools, restricted by `WithUpdatePolicy` and enabled-tool
+configuration when present. It retains assistant turns as context for
+interpreting references, confirmations, and short user replies, but only user
+messages can supply or authorize ordinary memory operations. When collecting a
+session delta, the enabled option uses only
+the primary choice from each model response event; alternative choices are not
+treated as consecutive assistant replies. The extractor then considers
+eligible user/assistant pairs in the extraction delta in chronological order.
+The deterministic prefilter is language-neutral and examines response shape,
+not request keywords: it selects an assistant response containing at least two
+Markdown or numbered list items, or one that introduces a numeric token not
+already present in the user request. The second-stage prompt makes the final
+semantic decision about whether the result is durable and reusable. A prose
+result without a list or a newly introduced number does not currently trigger
+the second stage. Before storing a generated episode, a deterministic guard
+checks ASCII numbers and adjacent signs, currency symbols, and percent signs
+against the source response. Natural-language units and currency labels remain
+the responsibility of the second-stage prompt, which requires preserving them
+exactly. Eligible pairs are considered in chronological order within
+a private per-request pair and source-size budget. Candidates past that budget
+are omitted because assistant-result extraction is best effort.
+The selected pairs are combined into one second request that exposes only the
+private `memory_assistant_episode` tool. This tool is never visible to the
+application Agent. An application policy configured through `WithPrompt` or
+`SetPrompt` also constrains the second-stage request. When the ordinary stage
+produces a Clear operation, candidate pairs at or before its request-local
+`source_user_index` are excluded. A Delete operation excludes only the pairs
+explicitly listed in its request-local `affected_source_user_indexes`;
+unrelated pairs remain eligible. If a destructive operation has missing or
+invalid request-local scope, the extractor conservatively skips the optional
+stage for that call. This decision uses request-local operation provenance
+rather than a language-specific interpretation of the conversation.
+
+Assistant output is stored as attributed conversation history rather than as a
+verified fact or user preference. The framework converts every accepted call
+to an ordinary `KindEpisode` add operation, fixes the participants to `User`
+and `Assistant`, and uses the extraction reference date as the event time when
+one is present. The textual prefix shown below is descriptive only; it does not
+grant special reconciliation behavior or carry trusted provenance. For example:
+
+```json
+{
+  "memory": "Assistant-provided conversation episode: When the user asked for compact-kitchen products, the assistant recommended Alpha and Beta.",
+  "kind": "episode",
+  "participants": ["User", "Assistant"]
+}
+```
+
+The second-stage model supplies only the episode text and optional retrieval
+topics. It cannot override the memory kind, participants, event time, or
+location. The framework rejects empty text, text over 4,096 bytes, and ASCII
+numeric values whose normalized value or adjacent sign, currency symbol, or
+percent sign is not grounded in the selected conversation pair. Natural-language
+units and currency labels are enforced by the second-stage prompt rather than
+the deterministic validator. To bound each
+source's contribution to the optional request, every source message is
+represented by a deterministic 8,192-byte excerpt that preserves its beginning
+and end.
+
+The assistant request uses a child deadline that ends before the parent
+extraction deadline, reserving time to persist ordinary first-stage operations.
+If that child deadline expires, or if the optional request or its callbacks
+fail, the failure is logged and the ordinary operations are preserved. A true
+parent-context cancellation still aborts the complete extraction. Deterministic
+model-output rejections, such as invalid tool arguments, oversized text, or an
+ungrounded quantity, skip only the affected assistant episode. A rejected call
+for one pair does not discard valid calls for other pairs in the same response.
+
+This feature is backend-neutral. It does not add a memory kind, field, database
+column, table, or migration. Selected pairs in the same delta share one
+second-stage model request, so extraction uses at most two model calls per
+delta: one ordinary request and one assistant request. The option is fixed for
+the lifetime of the extractor and is captured by the Auto memory worker when it
+is constructed; it does not alter the extractor's descriptive `Metadata()`.
+To disable it, construct a new extractor and memory service without the option.
+A transparent decorator can preserve this setting by implementing
+`UnwrapMemoryExtractor() extractor.MemoryExtractor`. A custom extractor or
+non-cooperating decorator keeps ordinary single-stage extraction. Nil unwrap
+results and unwrap cycles also fall back to the disabled setting.
+Previously stored assistant episodes remain ordinary episodic memories and
+continue to participate in normal retrieval, extraction context, and
+reconciliation. Operations produced by the optional stage pass through the
+same selected update policy and reconciliation path as other memory operations.
+
 ### Configuration Comparison
 
 | Step                | Agentic Mode                        | Auto Mode                              |
