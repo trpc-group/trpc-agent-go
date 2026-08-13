@@ -28,7 +28,15 @@ nav:
       - Prompt Template: prompt.md
       - Callbacks: callbacks.md
       - Plugins: plugin.md
-      - Memory: memory.md
+      - Memory:
+          - Overview: memory/index.md
+          - Usage Guide: memory/usage.md
+          - Full Example: memory/example.md
+          - Storage Backends: memory/storage.md
+          - FAQ: memory/faq.md
+          - Advanced Configuration: memory/advanced.md
+          - mem0 Integration: memory/mem0.md
+          - TencentDB Agent Memory: memory/tencentdb.md
       - Artifact: artifact.md
       - Skill: skill.md
       - Evolution: evolution.md
@@ -145,7 +153,15 @@ plugins:
                 - Prompt Template: prompt.md
                 - Callbacks: callbacks.md
                 - Plugins: plugin.md
-                - Memory: memory.md
+                - Memory:
+                    - 概览: memory/index.md
+                    - 使用指南: memory/usage.md
+                    - 完整示例: memory/example.md
+                    - 存储后端: memory/storage.md
+                    - 常见问题: memory/faq.md
+                    - 高级配置: memory/advanced.md
+                    - mem0 集成: memory/mem0.md
+                    - TencentDB Agent Memory: memory/tencentdb.md
                 - Artifact: artifact.md
                 - Skill: skill.md
                 - Evolution: evolution.md
