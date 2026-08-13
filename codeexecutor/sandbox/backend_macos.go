@@ -77,6 +77,14 @@ func (r *Runtime) osSandboxCommand(
 	return cmd, string(BackendMacOSSandboxExec), cleanup, nil
 }
 
+func (r *Runtime) explainManagedPreflight(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := r.macosPreflight()
+	return err
+}
+
 func (r *Runtime) macosPreflight() (string, error) {
 	r.preflightOnce.Do(func() {
 		if r.backend != BackendAuto && r.backend != BackendMacOSSandboxExec {
