@@ -597,6 +597,10 @@ func (s *Service) initDB(ctx context.Context) error {
 		indexes = tdsqlIndexDefs
 		log.InfoContext(ctx, "TDSQL sharding mode enabled, using TDSQL schema")
 	}
+	if !s.opts.stateInitializationEnabled {
+		tables = withoutStateInitializationLeaseTable(tables)
+		indexes = withoutStateInitializationLeaseIndexes(indexes)
+	}
 
 	// Group index definitions by their table so a freshly created table can be
 	// populated with its indexes in the same bootstrap step.
@@ -687,6 +691,9 @@ func (s *Service) verifySchema(ctx context.Context) error {
 		tables = tdsqlTableDefs
 		schemas = tdsqlExpectedSchema
 	}
+	if !s.opts.stateInitializationEnabled {
+		tables = withoutStateInitializationLeaseTable(tables)
+	}
 	for _, tableDef := range tables {
 		tableName := tableDef.name
 		schema, ok := schemas[tableName]
@@ -717,6 +724,94 @@ func (s *Service) verifySchema(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+func withoutStateInitializationLeaseTable(
+	tables []tableDefinition,
+) []tableDefinition {
+	filtered := make([]tableDefinition, 0, len(tables))
+	for _, table := range tables {
+		if table.name != tableNameStateInitializationLeases {
+			filtered = append(filtered, table)
+		}
+	}
+	return filtered
+}
+
+func withoutStateInitializationLeaseIndexes(
+	indexes []indexDefinition,
+) []indexDefinition {
+	filtered := make([]indexDefinition, 0, len(indexes))
+	for _, index := range indexes {
+		if index.table != tableNameStateInitializationLeases {
+			filtered = append(filtered, index)
+		}
+	}
+	return filtered
+}
+
+func (s *Service) verifyStateInitializationSchema(ctx context.Context) error {
+	schemas := expectedSchema
+	if s.opts.tdsqlSharding {
+		schemas = tdsqlExpectedSchema
+	}
+	leaseSchema := schemas[tableNameStateInitializationLeases]
+	requirements := []struct {
+		table   string
+		columns []tableColumn
+		indexes []tableIndex
+	}{
+		{
+			table: s.tableSessionStates,
+			columns: []tableColumn{
+				{"created_at", "timestamp", false},
+			},
+			indexes: nil,
+		},
+		{
+			table:   s.tableStateInitializationLeases,
+			columns: leaseSchema.columns,
+			indexes: leaseSchema.indexes,
+		},
+	}
+	for _, requirement := range requirements {
+		exists, err := s.tableExists(ctx, requirement.table)
+		if err != nil {
+			return fmt.Errorf(
+				"check table %s existence failed: %w",
+				requirement.table,
+				err,
+			)
+		}
+		if !exists {
+			return fmt.Errorf("table %s does not exist", requirement.table)
+		}
+		if err := s.verifyColumns(
+			ctx,
+			requirement.table,
+			requirement.columns,
+		); err != nil {
+			return fmt.Errorf(
+				"verify columns for table %s failed: %w",
+				requirement.table,
+				err,
+			)
+		}
+		if len(requirement.indexes) > 0 {
+			if err := s.verifyIndexes(
+				ctx,
+				requirement.table,
+				requirement.indexes,
+			); err != nil {
+				return fmt.Errorf(
+					"verify indexes for table %s failed: %w",
+					requirement.table,
+					err,
+				)
+			}
+		}
+	}
 	return nil
 }
 
@@ -781,6 +876,7 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 
 	var timestampMismatches []string
 	var timestampAlterClauses []string
+	var stateInitializationTimestampMismatches []string
 
 	// Check each expected column
 	for _, expected := range expectedColumns {
@@ -803,6 +899,14 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 				}
 				timestampMismatches = append(timestampMismatches, fmt.Sprintf("%s uses %s", expected.name, actualType))
 				timestampAlterClauses = append(timestampAlterClauses, alterTimestampPrecisionClause(expected))
+				if s.opts.stateInitializationEnabled &&
+					((tableName == s.tableSessionStates && expected.name == "created_at") ||
+						tableName == s.tableStateInitializationLeases) {
+					stateInitializationTimestampMismatches = append(
+						stateInitializationTimestampMismatches,
+						fmt.Sprintf("%s.%s uses %s", tableName, expected.name, actualType),
+					)
+				}
 			}
 		}
 
@@ -824,6 +928,12 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 			strings.Join(timestampMismatches, ", "),
 			tableName,
 			strings.Join(timestampAlterClauses, ", "),
+		)
+	}
+	if len(stateInitializationTimestampMismatches) > 0 {
+		return fmt.Errorf(
+			"state initialization requires TIMESTAMP(6): %s",
+			strings.Join(stateInitializationTimestampMismatches, ", "),
 		)
 	}
 

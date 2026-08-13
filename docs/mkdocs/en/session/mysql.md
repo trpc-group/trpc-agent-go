@@ -57,6 +57,7 @@ MySQL storage is suitable for production environments and applications requiring
 | --- | --- | --- | --- |
 | `WithTablePrefix(prefix string)` | `string` | `""` | Table name prefix |
 | `WithSkipDBInit(skip bool)` | `bool` | `false` | Skip automatic table creation |
+| `WithStateInitialization(enabled bool)` | `bool` | `true` | Enable coordinated session-state initialization |
 
 ### Hook Configuration
 
@@ -394,3 +395,4 @@ SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique
 4. **Soft delete**: Enabled by default; queries automatically filter deleted records
 5. **MySQL version**: Requires MySQL 5.6.5+ for multiple TIMESTAMP columns with CURRENT_TIMESTAMP
 6. **Unique constraint**: MySQL's UNIQUE constraint does not prevent multiple NULL values; the application layer handles active record uniqueness
+7. **Coordinated initialization migration**: With state initialization enabled, `WithSkipDBInit(true)` still verifies that `session_states.created_at` uses `TIMESTAMP(6)` and that the lease table and required indexes exist. Use `WithStateInitialization(false)` only as a temporary migration opt-out; it disables lease cleanup and causes consumers such as anonymous A2A coordination to use their unavailable-capability behavior.

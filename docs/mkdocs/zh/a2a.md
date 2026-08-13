@@ -968,8 +968,14 @@ subAgent, _ := a2aagent.New(
 使用该能力。它会在共享同一后端的多个 agent 实例之间协调首次匿名 Cookie
 初始化。in-memory session service 只协调共享同一个 service 实例的调用方；
 Redis、MySQL 和 TDSQL session service 可以在共享同一后端时跨 service 实例协调。
-使用 `WithSkipDBInit(true)` 的部署必须先按当前 MySQL 或 TDSQL schema 创建
-`state_initialization_leases` 表及其索引，再依赖该协调能力。
+MySQL 和 TDSQL 默认开启该能力。使用 `WithSkipDBInit(true)` 的部署必须先按当前
+schema 创建 `state_initialization_leases` 表及其索引，并将
+`session_states.created_at` 迁移为 `TIMESTAMP(6)`。即使跳过 DDL 初始化，服务启动时
+仍会执行只读的前置条件校验。
+
+分阶段迁移 schema 时，可配置 `mysql.WithStateInitialization(false)`。此时 lenient
+模式会保留原有的单 agent 回退路径，并且不会访问 lease 表；strict 模式仍会因为
+协调能力不可用而在联系远端 agent 前失败。所有实例都使用新 schema 后再重新开启。
 
 如果后端不支持该能力，agent 会保留现有的单 agent 初始化锁和持久化行为。
 如果业务必须保证跨实例协调，可以开启 fail-closed 模式：
@@ -982,7 +988,7 @@ a2aAgent, err := a2aagent.New(
 ```
 
 该选项默认为 `false`。启用后，strict 模式在缺少稳定持久化 session key，或
-`SessionService` 不支持协调能力时，会在联系远端 agent 前使调用失败。该能力检查
+`SessionService` 未提供可用协调能力时，会在联系远端 agent 前使调用失败。该能力检查
 无法判断不同 service 实例是否实际共享协调状态。需要跨进程协调的部署必须使用
 Redis、MySQL 或 TDSQL 等共享后端，而不能使用相互独立的 in-memory service。
 

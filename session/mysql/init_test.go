@@ -33,7 +33,7 @@ func datetimePrecisionForType(dataType string) any {
 
 // mockVerifySchemaQueries adds mock expectations for verifySchema queries
 func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
-	tableNames := []string{
+	mockVerifySchemaQueriesForTables(mock, tablePrefix, []string{
 		sqldb.TableNameSessionStates,
 		tableNameStateInitializationLeases,
 		sqldb.TableNameSessionEvents,
@@ -41,8 +41,14 @@ func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
 		sqldb.TableNameSessionSummaries,
 		sqldb.TableNameAppStates,
 		sqldb.TableNameUserStates,
-	}
+	})
+}
 
+func mockVerifySchemaQueriesForTables(
+	mock sqlmock.Sqlmock,
+	tablePrefix string,
+	tableNames []string,
+) {
 	for _, tableName := range tableNames {
 		fullTableName := sqldb.BuildTableName(tablePrefix, tableName)
 		schema := expectedSchema[tableName]
@@ -125,6 +131,27 @@ func TestInitDB_ExistingTablesSkipDDL(t *testing.T) {
 	// No CREATE expectations were registered: if initDB had issued any DDL,
 	// sqlmock would have failed on an unexpected Exec.
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestInitDB_StateInitializationDisabledSkipsLeaseSchema(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithStateInitialization(false))
+	tables := withoutStateInitializationLeaseTable(tableDefs)
+	tableNames := make([]string, 0, len(tables))
+	for _, tableDef := range tables {
+		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableDef.name)
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+			WithArgs(fullTableName).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+		tableNames = append(tableNames, tableDef.name)
+	}
+	mockVerifySchemaQueriesForTables(mock, s.opts.tablePrefix, tableNames)
+
+	require.NoError(t, s.initDB(context.Background()))
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestInitDB_TableExistsCheckError(t *testing.T) {
@@ -224,10 +251,11 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 
 	// Create service with table prefix
 	serviceOpts := ServiceOpts{
-		sessionEventLimit: defaultSessionEventLimit,
-		asyncPersisterNum: defaultAsyncPersisterNum,
-		softDelete:        true,
-		tablePrefix:       "trpc",
+		sessionEventLimit:          defaultSessionEventLimit,
+		asyncPersisterNum:          defaultAsyncPersisterNum,
+		softDelete:                 true,
+		stateInitializationEnabled: true,
+		tablePrefix:                "trpc",
 	}
 
 	s := &Service{
@@ -761,6 +789,9 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 			}()
 
 			tableName := "test_table"
+			if tt.name == "timestamp precision mismatch logs error" {
+				s.opts.stateInitializationEnabled = false
+			}
 
 			// Build mock rows from actualColumns
 			rows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION"})
@@ -798,6 +829,85 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+func TestVerifyColumnsRejectsUnsafeStateInitializationGenerationPrecision(
+	t *testing.T,
+) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
+		WithArgs(s.tableSessionStates).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION",
+		}).AddRow("created_at", "timestamp", "NO", 0))
+
+	err = s.verifyColumns(
+		context.Background(),
+		s.tableSessionStates,
+		[]tableColumn{{"created_at", "timestamp", false}},
+	)
+	require.ErrorContains(t, err, "state initialization requires TIMESTAMP(6)")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVerifyStateInitializationSchemaWithSkipDBInit(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs(s.tableSessionStates).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
+		WithArgs(s.tableSessionStates).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION",
+		}).AddRow("created_at", "timestamp", "NO", 6))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs(s.tableStateInitializationLeases).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	leaseSchema := expectedSchema[tableNameStateInitializationLeases]
+	columnRows := sqlmock.NewRows([]string{
+		"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION",
+	})
+	for _, column := range leaseSchema.columns {
+		nullable := "NO"
+		if column.nullable {
+			nullable = "YES"
+		}
+		columnRows.AddRow(
+			column.name,
+			column.dataType,
+			nullable,
+			datetimePrecisionForType(column.dataType),
+		)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
+		WithArgs(s.tableStateInitializationLeases).
+		WillReturnRows(columnRows)
+	indexRows := sqlmock.NewRows([]string{
+		"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE",
+	})
+	for _, index := range leaseSchema.indexes {
+		name := sqldb.BuildIndexName("", index.table, index.suffix)
+		nonUnique := 1
+		if index.unique {
+			nonUnique = 0
+		}
+		for _, column := range index.columns {
+			indexRows.AddRow(name, column, nonUnique)
+		}
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
+		WithArgs(s.tableStateInitializationLeases).
+		WillReturnRows(indexRows)
+
+	require.NoError(t, s.verifyStateInitializationSchema(context.Background()))
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestVerifySchema_TableExistsError(t *testing.T) {

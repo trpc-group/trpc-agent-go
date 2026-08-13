@@ -57,6 +57,7 @@ MySQL 存储适用于生产环境和需要复杂查询的应用，MySQL 是广�
 | --- | --- | --- | --- |
 | `WithTablePrefix(prefix string)` | `string` | `""` | 表名前缀 |
 | `WithSkipDBInit(skip bool)` | `bool` | `false` | 跳过自动建表 |
+| `WithStateInitialization(enabled bool)` | `bool` | `true` | 开启协调式 session state 初始化 |
 
 ### Hook 配置
 
@@ -421,3 +422,4 @@ SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique
 4. **软删除**：默认启用软删除，查询时自动过滤已删除记录
 5. **MySQL 版本**：需要 MySQL 5.6.5+ 以支持多个 TIMESTAMP 列的 CURRENT_TIMESTAMP
 6. **唯一约束**：MySQL 的 UNIQUE 约束不会阻止多个 NULL 值，应用层处理活跃记录的唯一性
+7. **协调初始化迁移**：开启 state initialization 时，`WithSkipDBInit(true)` 仍会校验 `session_states.created_at` 是否为 `TIMESTAMP(6)`，以及 lease 表和必要索引是否存在。`WithStateInitialization(false)` 仅用于临时迁移；它会停用 lease 清理，并让匿名 A2A 协调等消费者按能力不可用路径处理。

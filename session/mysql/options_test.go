@@ -208,6 +208,17 @@ func TestWithSkipDBInit(t *testing.T) {
 	assert.False(t, opts.skipDBInit)
 }
 
+func TestWithStateInitialization(t *testing.T) {
+	opts := defaultOptions
+	assert.True(t, opts.stateInitializationEnabled)
+
+	WithStateInitialization(false)(&opts)
+	assert.False(t, opts.stateInitializationEnabled)
+
+	WithStateInitialization(true)(&opts)
+	assert.True(t, opts.stateInitializationEnabled)
+}
+
 func TestWithTablePrefix(t *testing.T) {
 	tests := []struct {
 		name     string

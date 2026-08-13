@@ -68,6 +68,10 @@ type ServiceOpts struct {
 	// Useful when user doesn't have DDL permissions or when tables are managed externally.
 	skipDBInit bool
 
+	// stateInitializationEnabled exposes coordinated state initialization and
+	// owns the corresponding lease schema and cleanup lifecycle.
+	stateInitializationEnabled bool
+
 	// tablePrefix is the prefix for all table names.
 	// Default is empty string (no prefix).
 	tablePrefix string
@@ -87,12 +91,13 @@ type ServiceOpt func(*ServiceOpts)
 
 var (
 	defaultOptions = ServiceOpts{
-		sessionEventLimit: defaultSessionEventLimit,
-		asyncPersisterNum: defaultAsyncPersisterNum,
-		asyncSummaryNum:   defaultAsyncSummaryNum,
-		summaryQueueSize:  defaultSummaryQueueSize,
-		summaryJobTimeout: defaultSummaryJobTimeout,
-		softDelete:        true, // default: enable soft delete
+		sessionEventLimit:          defaultSessionEventLimit,
+		asyncPersisterNum:          defaultAsyncPersisterNum,
+		asyncSummaryNum:            defaultAsyncSummaryNum,
+		summaryQueueSize:           defaultSummaryQueueSize,
+		summaryJobTimeout:          defaultSummaryJobTimeout,
+		softDelete:                 true, // default: enable soft delete
+		stateInitializationEnabled: true,
 	}
 )
 
@@ -281,6 +286,17 @@ func WithCleanupInterval(interval time.Duration) ServiceOpt {
 func WithSkipDBInit(skip bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.skipDBInit = skip
+	}
+}
+
+// WithStateInitialization controls coordinated session-state initialization.
+// It is enabled by default. When enabled with WithSkipDBInit(true), service
+// startup still verifies the required lease schema and TIMESTAMP(6) generation
+// column. Disable it during schema migration to omit the capability, skip its
+// schema and cleanup lifecycle, and retain caller-specific fallback behavior.
+func WithStateInitialization(enabled bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.stateInitializationEnabled = enabled
 	}
 }
 

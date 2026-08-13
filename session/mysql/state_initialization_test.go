@@ -22,6 +22,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	drivermysql "github.com/go-sql-driver/mysql"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -29,6 +30,19 @@ import (
 
 type sessionStateJSONArgument struct {
 	match func(*SessionState) bool
+}
+
+type stateInitializationResult struct {
+	rows int64
+	err  error
+}
+
+func (r stateInitializationResult) LastInsertId() (int64, error) {
+	return 0, nil
+}
+
+func (r stateInitializationResult) RowsAffected() (int64, error) {
+	return r.rows, r.err
 }
 
 func (a sessionStateJSONArgument) Match(value driver.Value) bool {
@@ -90,6 +104,26 @@ func expectStateInitializationLoad(
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "state", "created_at"}).
 			AddRow(generation.rowID, stateBytes, generation.createdAt))
+}
+
+func expectStateInitializationWriterLoad(
+	mock sqlmock.Sqlmock,
+	key session.Key,
+	generation stateInitializationGeneration,
+	stateBytes []byte,
+) {
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(
+		`SELECT id, state, created_at FROM session_states
+			WHERE app_name = ? AND user_id = ? AND session_id = ?
+			AND deleted_at IS NULL
+			AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(6))
+			FOR UPDATE`,
+	)).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "state", "created_at"}).
+			AddRow(generation.rowID, stateBytes, generation.createdAt))
+	mock.ExpectCommit()
 }
 
 func newStateInitializationSQLMockService(
@@ -182,6 +216,130 @@ func TestLoadOrInitializeSessionStateMissingSessionDoesNotRunCallback(t *testing
 	require.Zero(t, callbackCalls.Load())
 }
 
+func TestLoadOrInitializeSessionStateDisabled(t *testing.T) {
+	service, _, cleanup := newStateInitializationSQLMockService(t)
+	defer cleanup()
+	service.opts.stateInitializationEnabled = false
+
+	var callbackCalls atomic.Int32
+	_, didInitialize, err := service.LoadOrInitializeSessionState(
+		context.Background(),
+		stateInitializationTestKey(),
+		"state",
+		func([]byte) bool { return false },
+		func(context.Context) ([]byte, error) {
+			callbackCalls.Add(1)
+			return []byte("value"), nil
+		},
+	)
+	require.ErrorIs(t, err, errStateInitializationDisabled)
+	require.False(t, didInitialize)
+	require.False(t, service.StateInitializationAvailable())
+	require.Zero(t, callbackCalls.Load())
+}
+
+func TestLoadStateInitializationValueForUpdateErrors(t *testing.T) {
+	key := stateInitializationTestKey()
+	tests := []struct {
+		name       string
+		expect     func(sqlmock.Sqlmock)
+		wantErr    error
+		contains   string
+		stateBytes []byte
+	}{
+		{
+			name: "missing session",
+			expect: func(mock sqlmock.Sqlmock) {
+				mock.ExpectBegin()
+				mock.ExpectQuery(regexp.QuoteMeta(
+					"SELECT id, state, created_at FROM session_states",
+				)).WillReturnError(sql.ErrNoRows)
+				mock.ExpectRollback()
+			},
+			wantErr: errStateInitializationSessionNotFound,
+		},
+		{
+			name: "locking read error",
+			expect: func(mock sqlmock.Sqlmock) {
+				mock.ExpectBegin()
+				mock.ExpectQuery(regexp.QuoteMeta(
+					"SELECT id, state, created_at FROM session_states",
+				)).WillReturnError(assert.AnError)
+				mock.ExpectRollback()
+			},
+			contains: "lock session for initialization recheck",
+		},
+		{
+			name: "invalid state JSON",
+			expect: func(mock sqlmock.Sqlmock) {
+				mock.ExpectBegin()
+				mock.ExpectQuery(regexp.QuoteMeta(
+					"SELECT id, state, created_at FROM session_states",
+				)).WillReturnRows(sqlmock.NewRows([]string{
+					"id", "state", "created_at",
+				}).AddRow(42, []byte("{"), time.Now()))
+				mock.ExpectCommit()
+			},
+			contains: "unmarshal writer session state",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service, mock, cleanup := newStateInitializationSQLMockService(t)
+			defer cleanup()
+			test.expect(mock)
+			_, _, _, err := service.loadStateInitializationValueForUpdate(
+				context.Background(), key, "state",
+			)
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+			}
+			if test.contains != "" {
+				require.ErrorContains(t, err, test.contains)
+			}
+		})
+	}
+}
+
+func TestLoadStateInitializationValueErrors(t *testing.T) {
+	key := stateInitializationTestKey()
+	for _, test := range []struct {
+		name     string
+		row      *sqlmock.Rows
+		err      error
+		contains string
+	}{
+		{
+			name:     "query error",
+			err:      assert.AnError,
+			contains: "load session",
+		},
+		{
+			name: "invalid state JSON",
+			row: sqlmock.NewRows([]string{"id", "state", "created_at"}).
+				AddRow(42, []byte("{"), time.Now()),
+			contains: "unmarshal session state",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, mock, cleanup := newStateInitializationSQLMockService(t)
+			defer cleanup()
+			expectation := mock.ExpectQuery(regexp.QuoteMeta(
+				"SELECT id, state, created_at FROM session_states",
+			)).WithArgs(key.AppName, key.UserID, key.SessionID)
+			if test.err != nil {
+				expectation.WillReturnError(test.err)
+			} else {
+				expectation.WillReturnRows(test.row)
+			}
+			_, _, _, err := service.loadStateInitializationValue(
+				context.Background(), key, "state",
+			)
+			require.ErrorContains(t, err, test.contains)
+		})
+	}
+}
+
 func TestLoadOrInitializeSessionStateCommitsProjectionsAtomically(t *testing.T) {
 	service, mock, cleanup := newStateInitializationSQLMockService(t)
 	defer cleanup()
@@ -205,7 +363,7 @@ func TestLoadOrInitializeSessionStateCommitsProjectionsAtomically(t *testing.T) 
 			int64(defaultStateInitializationLeaseTTL/time.Microsecond),
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	expectStateInitializationLoad(mock, key, generation, stateBytes)
+	expectStateInitializationWriterLoad(mock, key, generation, stateBytes)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE state_initialization_leases")).
 		WithArgs(
 			int64(defaultStateInitializationLeaseTTL/time.Microsecond),
@@ -306,7 +464,7 @@ func TestLoadOrInitializeSessionStateRecheckReturnsConcurrentValidValue(t *testi
 	expectStateInitializationLoad(mock, key, generation, invalidState)
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO state_initialization_leases")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	expectStateInitializationLoad(mock, key, generation, validState)
+	expectStateInitializationWriterLoad(mock, key, generation, validState)
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM state_initialization_leases")).
 		WithArgs(
 			coordinationKey[:],
@@ -389,7 +547,7 @@ func TestLoadOrInitializeSessionStateFailurePathsReleaseLease(t *testing.T) {
 			expectStateInitializationLoad(mock, key, generation, stateBytes)
 			mock.ExpectExec(regexp.QuoteMeta("INSERT INTO state_initialization_leases")).
 				WillReturnResult(sqlmock.NewResult(1, 1))
-			expectStateInitializationLoad(mock, key, generation, stateBytes)
+			expectStateInitializationWriterLoad(mock, key, generation, stateBytes)
 			mock.ExpectExec(regexp.QuoteMeta("UPDATE state_initialization_leases")).
 				WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectExec(regexp.QuoteMeta("DELETE FROM state_initialization_leases")).
@@ -592,6 +750,94 @@ func TestTryAcquireStateInitializationLeaseDoesNotLetStaleGenerationSteal(t *tes
 	require.False(t, acquired)
 }
 
+func TestTryAcquireStateInitializationLeaseErrors(t *testing.T) {
+	key := stateInitializationTestKey()
+	generation := stateInitializationTestGeneration()
+	coordinationKey := stateInitializationCoordinationKey(key, "state")
+
+	t.Run("insert", func(t *testing.T) {
+		service, mock, cleanup := newStateInitializationSQLMockService(t)
+		defer cleanup()
+		mock.ExpectExec(regexp.QuoteMeta(
+			"INSERT INTO state_initialization_leases",
+		)).WillReturnError(assert.AnError)
+		acquired, _, err := service.tryAcquireStateInitializationLease(
+			context.Background(), key, coordinationKey, "owner", generation,
+		)
+		require.False(t, acquired)
+		require.ErrorContains(t, err, "acquire session state initialization lease")
+	})
+
+	t.Run("lease lock", func(t *testing.T) {
+		service, mock, cleanup := newStateInitializationSQLMockService(t)
+		defer cleanup()
+		mock.ExpectExec(regexp.QuoteMeta(
+			"INSERT INTO state_initialization_leases",
+		)).WillReturnError(&drivermysql.MySQLError{
+			Number: sqldb.MySQLErrDuplicateEntry,
+		})
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta(
+			"SELECT session_row_id, session_created_at,",
+		)).WillReturnError(assert.AnError)
+		mock.ExpectRollback()
+		acquired, _, err := service.tryAcquireStateInitializationLease(
+			context.Background(), key, coordinationKey, "owner", generation,
+		)
+		require.False(t, acquired)
+		require.ErrorContains(t, err, "lock initialization lease")
+	})
+}
+
+func TestRenewAndAbortStateInitializationLeaseErrors(t *testing.T) {
+	key := stateInitializationTestKey()
+	generation := stateInitializationTestGeneration()
+	coordinationKey := stateInitializationCoordinationKey(key, "state")
+	for _, operation := range []struct {
+		name      string
+		sqlPrefix string
+		call      func(*Service) (bool, error)
+	}{
+		{
+			name:      "renew",
+			sqlPrefix: "UPDATE state_initialization_leases",
+			call: func(service *Service) (bool, error) {
+				return service.renewStateInitializationLease(
+					context.Background(), key, coordinationKey, "owner", generation,
+				)
+			},
+		},
+		{
+			name:      "abort",
+			sqlPrefix: "DELETE FROM state_initialization_leases",
+			call: func(service *Service) (bool, error) {
+				return service.abortStateInitializationLease(
+					context.Background(), key, coordinationKey, "owner", generation,
+				)
+			},
+		},
+	} {
+		t.Run(operation.name+" execution", func(t *testing.T) {
+			service, mock, cleanup := newStateInitializationSQLMockService(t)
+			defer cleanup()
+			mock.ExpectExec(regexp.QuoteMeta(operation.sqlPrefix)).
+				WillReturnError(assert.AnError)
+			owned, err := operation.call(service)
+			require.False(t, owned)
+			require.Error(t, err)
+		})
+		t.Run(operation.name+" rows affected", func(t *testing.T) {
+			service, mock, cleanup := newStateInitializationSQLMockService(t)
+			defer cleanup()
+			mock.ExpectExec(regexp.QuoteMeta(operation.sqlPrefix)).
+				WillReturnResult(stateInitializationResult{err: assert.AnError})
+			owned, err := operation.call(service)
+			require.False(t, owned)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestInitializeSessionStateRejectsOwnershipLossBeforeCallback(t *testing.T) {
 	service, mock, cleanup := newStateInitializationSQLMockService(t)
 	defer cleanup()
@@ -599,7 +845,7 @@ func TestInitializeSessionStateRejectsOwnershipLossBeforeCallback(t *testing.T) 
 	generation := stateInitializationTestGeneration()
 	stateBytes := marshalStateInitializationSession(t, key, nil, generation)
 	coordinationKey := stateInitializationCoordinationKey(key, "state")
-	expectStateInitializationLoad(mock, key, generation, stateBytes)
+	expectStateInitializationWriterLoad(mock, key, generation, stateBytes)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE state_initialization_leases")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM state_initialization_leases")).
@@ -877,4 +1123,10 @@ func TestStateInitializationHelpers(t *testing.T) {
 		sqlCreateStateInitializationLeasesTable,
 		"session_created_at TIMESTAMP(6) NOT NULL",
 	))
+
+	service, _, cleanup := newStateInitializationSQLMockService(t)
+	defer cleanup()
+	service.stateInitializationLeaseTTL = 0
+	require.Equal(t, time.Millisecond, service.effectiveStateInitializationLeaseTTL())
+	require.Equal(t, int64(1), stateInitializationLeaseMicros(0))
 }

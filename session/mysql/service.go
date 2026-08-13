@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ import (
 var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
 var _ session.StateInitializationService = (*Service)(nil)
+var _ session.StateInitializationAvailability = (*Service)(nil)
 
 var errSessionNotFound = errors.New("session not found")
 
@@ -138,13 +140,23 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		tableStateInitializationLeases:   tableStateInitializationLeases,
 	}
 
-	// Initialize database if needed
+	// Initialize or verify the database schema as configured.
 	if !opts.skipDBInit {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := s.initDB(ctx); err != nil {
 			_ = mysqlClient.Close()
 			return nil, fmt.Errorf("init database failed: %w", err)
+		}
+	} else if opts.stateInitializationEnabled {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s.verifyStateInitializationSchema(ctx); err != nil {
+			_ = mysqlClient.Close()
+			return nil, fmt.Errorf(
+				"verify state initialization schema failed: %w",
+				err,
+			)
 		}
 	}
 
@@ -169,9 +181,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		s.asyncWorker.Start()
 	}
 
-	// Start cleanup routine if any TTL is configured
+	// Start cleanup for TTL data and abandoned initialization leases.
 	if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 ||
-		opts.effectiveTrackEventTTL() > 0 {
+		opts.effectiveTrackEventTTL() > 0 || opts.stateInitializationEnabled {
 		s.startCleanupRoutine()
 	}
 
@@ -969,6 +981,13 @@ func (s *Service) stopCleanupRoutine() {
 // cleanupExpiredData cleans up expired session states, events, summaries, and app/user states.
 func (s *Service) cleanupExpiredData(ctx context.Context) {
 	now := time.Now()
+	if s.opts.stateInitializationEnabled {
+		if s.opts.tdsqlSharding {
+			s.tdsqlCleanupExpiredStateInitializationLeases(ctx)
+		} else {
+			s.cleanupExpiredStateInitializationLeases(ctx)
+		}
+	}
 
 	// Clean up expired sessions
 	if s.opts.sessionTTL > 0 {
@@ -997,6 +1016,101 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 			s.tdsqlCleanupExpiredUserStates(ctx, now)
 		} else {
 			s.cleanupExpiredUserStates(ctx, now)
+		}
+	}
+}
+
+func (s *Service) cleanupExpiredStateInitializationLeases(
+	ctx context.Context,
+) {
+	result, err := s.mysqlClient.Exec(
+		ctx,
+		fmt.Sprintf(`DELETE FROM %s
+			WHERE expires_at <= CURRENT_TIMESTAMP(6)
+			LIMIT 1000`, s.tableStateInitializationLeases),
+	)
+	if err != nil {
+		log.ErrorfContext(
+			ctx,
+			"cleanup expired state initialization leases failed: %v",
+			err,
+		)
+		return
+	}
+	deleted, err := result.RowsAffected()
+	if err == nil && deleted > 0 {
+		log.InfofContext(
+			ctx,
+			"cleaned up %d expired state initialization leases",
+			deleted,
+		)
+	}
+}
+
+func (s *Service) tdsqlCleanupExpiredStateInitializationLeases(
+	ctx context.Context,
+) {
+	type leaseID struct {
+		id     int64
+		userID string
+	}
+	var leases []leaseID
+	err := s.mysqlClient.Query(
+		ctx,
+		func(rows *sql.Rows) error {
+			var lease leaseID
+			if err := rows.Scan(&lease.id, &lease.userID); err != nil {
+				return err
+			}
+			leases = append(leases, lease)
+			return nil
+		},
+		fmt.Sprintf(`SELECT id, user_id FROM %s
+			WHERE expires_at <= CURRENT_TIMESTAMP(6)
+			LIMIT 1000`, s.tableStateInitializationLeases),
+	)
+	if err != nil {
+		log.ErrorfContext(
+			ctx,
+			"tdsql cleanup: scan expired state initialization leases failed: %v",
+			err,
+		)
+		return
+	}
+	grouped := make(map[string][]int64)
+	for _, lease := range leases {
+		grouped[lease.userID] = append(grouped[lease.userID], lease.id)
+	}
+	userIDs := make([]string, 0, len(grouped))
+	for userID := range grouped {
+		userIDs = append(userIDs, userID)
+	}
+	sort.Strings(userIDs)
+	for _, userID := range userIDs {
+		ids := grouped[userID]
+		placeholders := make([]string, len(ids))
+		args := make([]any, 0, len(ids)+1)
+		for i, id := range ids {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		args = append(args, userID)
+		_, err := s.mysqlClient.Exec(
+			ctx,
+			fmt.Sprintf(`DELETE FROM %s
+				WHERE id IN (%s) AND user_id = ?
+				AND expires_at <= CURRENT_TIMESTAMP(6)`,
+				s.tableStateInitializationLeases,
+				strings.Join(placeholders, ","),
+			),
+			args...,
+		)
+		if err != nil {
+			log.ErrorfContext(
+				ctx,
+				"tdsql cleanup: delete expired state initialization leases failed: %v",
+				err,
+			)
 		}
 	}
 }

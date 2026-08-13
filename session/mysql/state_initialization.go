@@ -49,11 +49,20 @@ var (
 	errStateInitializationGenerationChanged = errors.New(
 		"initialize session state: session generation changed",
 	)
+	errStateInitializationDisabled = errors.New(
+		"mysql session state initialization is disabled",
+	)
 )
 
 type stateInitializationGeneration struct {
 	rowID     int64
 	createdAt time.Time
+}
+
+// StateInitializationAvailable implements
+// session.StateInitializationAvailability.
+func (s *Service) StateInitializationAvailable() bool {
+	return s != nil && s.opts.stateInitializationEnabled
 }
 
 func (g stateInitializationGeneration) equal(other stateInitializationGeneration) bool {
@@ -69,6 +78,9 @@ func (s *Service) LoadOrInitializeSessionState(
 	initialize func(context.Context) ([]byte, error),
 	projections ...session.StateInitializationProjection,
 ) ([]byte, bool, error) {
+	if !s.StateInitializationAvailable() {
+		return nil, false, errStateInitializationDisabled
+	}
 	if err := validateStateInitializationArguments(
 		key,
 		stateKey,
@@ -248,6 +260,50 @@ func (s *Service) loadStateInitializationValue(
 	if err := json.Unmarshal(stateBytes, &sessState); err != nil {
 		return nil, false, stateInitializationGeneration{}, fmt.Errorf(
 			"initialize session state: unmarshal session state: %w",
+			err,
+		)
+	}
+	value, present := sessState.State[stateKey]
+	return cloneStateInitializationValue(value), present, generation, nil
+}
+
+func (s *Service) loadStateInitializationValueForUpdate(
+	ctx context.Context,
+	key session.Key,
+	stateKey string,
+) ([]byte, bool, stateInitializationGeneration, error) {
+	var (
+		generation stateInitializationGeneration
+		stateBytes []byte
+	)
+	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(
+			ctx,
+			fmt.Sprintf(`SELECT id, state, created_at FROM %s
+				WHERE app_name = ? AND user_id = ? AND session_id = ?
+				AND deleted_at IS NULL
+				AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(6))
+				FOR UPDATE`, s.tableSessionStates),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).Scan(&generation.rowID, &stateBytes, &generation.createdAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errStateInitializationSessionNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("lock session for initialization recheck: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, stateInitializationGeneration{}, err
+	}
+
+	var sessState SessionState
+	if err := json.Unmarshal(stateBytes, &sessState); err != nil {
+		return nil, false, stateInitializationGeneration{}, fmt.Errorf(
+			"initialize session state: unmarshal writer session state: %w",
 			err,
 		)
 	}
@@ -480,7 +536,7 @@ func (s *Service) initializeSessionState(
 		}
 	}()
 
-	value, present, generation, err := s.loadStateInitializationValue(
+	value, present, generation, err := s.loadStateInitializationValueForUpdate(
 		initializeCtx,
 		key,
 		stateKey,

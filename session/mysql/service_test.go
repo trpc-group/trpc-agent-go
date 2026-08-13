@@ -95,9 +95,10 @@ func createTestService(t *testing.T, db *sql.DB, opts ...ServiceOpt) *Service {
 
 	// Apply default options
 	serviceOpts := ServiceOpts{
-		sessionEventLimit: defaultSessionEventLimit,
-		asyncPersisterNum: defaultAsyncPersisterNum,
-		softDelete:        true,
+		sessionEventLimit:          defaultSessionEventLimit,
+		asyncPersisterNum:          defaultAsyncPersisterNum,
+		softDelete:                 true,
+		stateInitializationEnabled: true,
 	}
 	for _, opt := range opts {
 		opt(&serviceOpts)
@@ -2873,6 +2874,8 @@ func TestCleanupExpiredData(t *testing.T) {
 	)
 
 	ctx := context.Background()
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM state_initialization_leases")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	// Mock cleanup sessions in transaction
 	mock.ExpectBegin()
@@ -2952,11 +2955,113 @@ func TestCleanupExpiredData_TrackEventTTL(t *testing.T) {
 				WithTrackEventTTL(time.Hour),
 				WithTDSQLSharding(tt.tdsqlShard),
 			)
+			if tt.tdsqlShard {
+				mock.ExpectQuery(regexp.QuoteMeta(
+					"SELECT id, user_id FROM state_initialization_leases",
+				)).WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
+			} else {
+				mock.ExpectExec(regexp.QuoteMeta(
+					"DELETE FROM state_initialization_leases",
+				)).WillReturnResult(sqlmock.NewResult(0, 0))
+			}
 			tt.expectCleanup(mock)
 			s.cleanupExpiredData(context.Background())
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+func TestCleanupExpiredStateInitializationLeases(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		result driver.Result
+		err    error
+	}{
+		{name: "empty", result: sqlmock.NewResult(0, 0)},
+		{name: "deletes bounded batch", result: sqlmock.NewResult(0, 17)},
+		{name: "delete error", err: assert.AnError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			service := createTestService(t, db)
+			expectation := mock.ExpectExec(regexp.QuoteMeta(
+				"DELETE FROM state_initialization_leases",
+			))
+			if test.err != nil {
+				expectation.WillReturnError(test.err)
+			} else {
+				expectation.WillReturnResult(test.result)
+			}
+			service.cleanupExpiredStateInitializationLeases(
+				context.Background(),
+			)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestTDSQLCleanupExpiredStateInitializationLeases(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	service := createTestService(t, db, WithTDSQLSharding(true))
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT id, user_id FROM state_initialization_leases",
+	)).WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).
+		AddRow(1, "user-a").
+		AddRow(2, "user-a").
+		AddRow(3, "user-b"))
+	mock.ExpectExec(regexp.QuoteMeta(
+		"DELETE FROM state_initialization_leases",
+	)).
+		WithArgs(int64(1), int64(2), "user-a").
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(regexp.QuoteMeta(
+		"DELETE FROM state_initialization_leases",
+	)).
+		WithArgs(int64(3), "user-b").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	service.tdsqlCleanupExpiredStateInitializationLeases(
+		context.Background(),
+	)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTDSQLCleanupExpiredStateInitializationLeasesErrors(t *testing.T) {
+	t.Run("scan", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		service := createTestService(t, db, WithTDSQLSharding(true))
+		mock.ExpectQuery(regexp.QuoteMeta(
+			"SELECT id, user_id FROM state_initialization_leases",
+		)).WillReturnError(assert.AnError)
+		service.tdsqlCleanupExpiredStateInitializationLeases(
+			context.Background(),
+		)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		service := createTestService(t, db, WithTDSQLSharding(true))
+		mock.ExpectQuery(regexp.QuoteMeta(
+			"SELECT id, user_id FROM state_initialization_leases",
+		)).WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).
+			AddRow(1, "user"))
+		mock.ExpectExec(regexp.QuoteMeta(
+			"DELETE FROM state_initialization_leases",
+		)).WithArgs(int64(1), "user").WillReturnError(assert.AnError)
+		service.tdsqlCleanupExpiredStateInitializationLeases(
+			context.Background(),
+		)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
 }
 
 // TestCleanupExpiredSessions_HardDelete tests hard delete of sessions
@@ -3181,6 +3286,8 @@ func TestNewService_WithDSN_Success(t *testing.T) {
 	assert.Equal(t, defaultSessionEventLimit, svc.opts.sessionEventLimit)
 	assert.Equal(t, defaultAsyncPersisterNum, svc.opts.asyncPersisterNum)
 	assert.True(t, svc.opts.softDelete)
+	assert.True(t, svc.StateInitializationAvailable())
+	assert.NotNil(t, svc.cleanupTicker)
 
 	// Verify table names
 	assert.Equal(t, "session_states", svc.tableSessionStates)
@@ -3247,6 +3354,7 @@ func TestNewService_WithSkipDBInit(t *testing.T) {
 	svc, err := NewService(
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
 		WithSkipDBInit(true),
+		WithStateInitialization(false),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
@@ -3254,6 +3362,37 @@ func TestNewService_WithSkipDBInit(t *testing.T) {
 	err = svc.Close()
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_WithSkipDBInitRejectsTimestampZeroGeneration(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+	storage.SetClientBuilder(func(
+		...storage.ClientBuilderOpt,
+	) (storage.Client, error) {
+		return &mockMySQLClient{db: db}, nil
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs("session_states").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
+		WithArgs("session_states").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION",
+		}).AddRow("created_at", "timestamp", "NO", 0))
+
+	service, err := NewService(
+		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
+		WithSkipDBInit(true),
+	)
+	require.Nil(t, service)
+	require.ErrorContains(t, err, "state initialization requires TIMESTAMP(6)")
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestNewService_MissingDSNAndInstance(t *testing.T) {
@@ -3495,6 +3634,7 @@ func TestNewService_WithSummarizerStartsAsyncWorker(t *testing.T) {
 	svc, err := NewService(
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
 		WithSkipDBInit(true),
+		WithStateInitialization(false),
 		WithAsyncSummaryNum(2),
 		WithSummarizer(&mockSummarizer{}),
 	)
@@ -4540,6 +4680,9 @@ func TestTDSQLCleanupExpiredData(t *testing.T) {
 		WithSoftDelete(true),
 	)
 	ctx := context.Background()
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT id, user_id FROM state_initialization_leases",
+	)).WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
 
 	// TDSQL session cleanup
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states")).
