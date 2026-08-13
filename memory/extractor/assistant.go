@@ -160,22 +160,24 @@ func (e *memoryExtractor) extractAssistantEpisodeOrdinaryStage(
 	_, deleteEnabled := ordinaryTools[memory.DeleteToolName]
 	_, clearEnabled := ordinaryTools[memory.ClearToolName]
 	trackDestructiveSource := deleteEnabled || clearEnabled
-	ordinaryMessages := assistantEpisodeUserMessages(messages)
+	ordinaryInput, userMessageCount := assistantEpisodeOrdinaryMessages(messages)
 	nextCtx := ctx
-	if len(ordinaryMessages) > 0 {
+	if userMessageCount > 0 {
 		if trackDestructiveSource {
 			ordinaryTools = assistantEpisodeOrdinaryTools(
 				ordinaryTools,
-				len(ordinaryMessages),
+				userMessageCount,
 			)
 		}
+		ordinaryMessages := ordinaryExtractor.buildMessages(
+			ctx,
+			ordinaryInput,
+			existing,
+		)
+		ordinaryMessages[0].Content += assistantEpisodeOrdinaryContextPolicy
 		req := &model.Request{
-			Messages: ordinaryExtractor.buildMessages(
-				ctx,
-				ordinaryMessages,
-				existing,
-			),
-			Tools: ordinaryTools,
+			Messages: ordinaryMessages,
+			Tools:    ordinaryTools,
 		}
 		var err error
 		nextCtx, err = ordinaryExtractor.runExtractionRequest(
@@ -187,7 +189,7 @@ func (e *memoryExtractor) extractAssistantEpisodeOrdinaryStage(
 					switch op.Type {
 					case OperationClear:
 						sourceIndex, ok := assistantEpisodeOperationSourceIndex(
-							call, len(ordinaryMessages),
+							call, userMessageCount,
 						)
 						if !ok {
 							result.destructiveScopeUnknown = true
@@ -196,7 +198,7 @@ func (e *memoryExtractor) extractAssistantEpisodeOrdinaryStage(
 						}
 					case OperationDelete:
 						indexes, ok := assistantEpisodeDeleteSourceIndexes(
-							call, len(ordinaryMessages),
+							call, userMessageCount,
 						)
 						if !ok {
 							result.destructiveScopeUnknown = true
@@ -459,14 +461,21 @@ func eligibleAssistantEpisodeMessage(message model.Message, role model.Role) boo
 		len(message.ToolCalls) == 0 && assistantEpisodeMessageText(message) != ""
 }
 
-func assistantEpisodeUserMessages(messages []model.Message) []model.Message {
+func assistantEpisodeOrdinaryMessages(
+	messages []model.Message,
+) ([]model.Message, int) {
 	result := make([]model.Message, 0, len(messages))
+	userCount := 0
 	for _, message := range messages {
-		if eligibleAssistantEpisodeMessage(message, model.RoleUser) {
+		switch {
+		case eligibleAssistantEpisodeMessage(message, model.RoleUser):
+			result = append(result, message)
+			userCount++
+		case eligibleAssistantEpisodeMessage(message, model.RoleAssistant):
 			result = append(result, message)
 		}
 	}
-	return result
+	return result, userCount
 }
 
 func assistantEpisodeMessageText(message model.Message) string {
@@ -809,6 +818,16 @@ func newAssistantEpisodeTool(
 		},
 	}}
 }
+
+const assistantEpisodeOrdinaryContextPolicy = `
+
+<assistant_context_policy>
+Only user messages can supply or authorize ordinary memory operations in this
+stage. Assistant messages are context only: use them to interpret references,
+confirmations, and short user replies. Do not create, update, delete, or clear
+memory from information supplied only by an assistant message. Reusable
+assistant results are handled by a separate extraction stage.
+</assistant_context_policy>`
 
 const assistantEpisodeSystemPrompt = `You extract durable results previously
 provided by the assistant as attributed conversation episodes.

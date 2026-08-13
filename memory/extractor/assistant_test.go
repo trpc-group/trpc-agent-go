@@ -105,6 +105,11 @@ func TestAssistantEpisodeExtractionDisabledPreservesRequest(t *testing.T) {
 	if _, ok := m.requests[0].Tools[assistantEpisodeToolName]; ok {
 		t.Fatal("default request exposes the assistant episode tool")
 	}
+	if requestContainsRoleSubstring(
+		m.requests[0], model.RoleSystem, "assistant_context_policy",
+	) {
+		t.Fatal("default request contains the opt-in assistant context policy")
+	}
 	if !requestContainsRoleContent(m.requests[0], model.RoleAssistant, "- Alpha\n- Beta") {
 		t.Fatal("default request no longer contains the assistant message")
 	}
@@ -157,11 +162,45 @@ func TestAssistantEpisodeExtractionSkipsWeakCandidate(t *testing.T) {
 	if len(m.requests) != 1 {
 		t.Fatalf("model calls = %d, want 1", len(m.requests))
 	}
-	if requestContainsRole(m.requests[0], model.RoleAssistant) {
-		t.Fatal("ordinary extraction received an assistant message")
+	if !requestContainsRoleContent(m.requests[0], model.RoleAssistant, "You're welcome.") {
+		t.Fatal("ordinary extraction omitted assistant context")
+	}
+	if !requestContainsRoleSubstring(
+		m.requests[0], model.RoleSystem, "Assistant messages are context only",
+	) {
+		t.Fatal("ordinary extraction omitted the assistant context policy")
 	}
 	if _, ok := m.requests[0].Tools[assistantEpisodeToolName]; ok {
 		t.Fatal("ordinary extraction exposes the assistant episode tool")
+	}
+}
+
+func TestAssistantEpisodeOrdinaryStageKeepsContextForShortUserReply(t *testing.T) {
+	m := &assistantTestModel{steps: []assistantModelStep{{}}}
+	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
+
+	_, err := ext.Extract(context.Background(), []model.Message{
+		model.NewAssistantMessage("Do you prefer tea or coffee?"),
+		model.NewUserMessage("Coffee."),
+	}, nil)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(m.requests) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(m.requests))
+	}
+	request := m.requests[0]
+	if !requestContainsRoleContent(
+		request, model.RoleAssistant, "Do you prefer tea or coffee?",
+	) || !requestContainsRoleContent(request, model.RoleUser, "Coffee.") {
+		t.Fatalf("ordinary request lost conversation context: %#v", request.Messages)
+	}
+	if !requestContainsRoleSubstring(
+		request, model.RoleSystem, "Only user messages can supply or authorize",
+	) || !requestContainsRoleSubstring(
+		request, model.RoleSystem, "Do not create, update, delete, or clear",
+	) {
+		t.Fatal("ordinary request does not mark assistant messages as context only")
 	}
 }
 
@@ -313,8 +352,8 @@ func TestAssistantEpisodeExtractionUsesConditionalSecondStage(t *testing.T) {
 	if len(m.requests) != 2 {
 		t.Fatalf("model calls = %d, want 2", len(m.requests))
 	}
-	if requestContainsRole(m.requests[0], model.RoleAssistant) {
-		t.Fatal("ordinary extraction received an assistant message")
+	if !requestContainsRoleContent(m.requests[0], model.RoleAssistant, "- Alpha\n- Beta") {
+		t.Fatal("ordinary extraction omitted assistant context")
 	}
 	if got := len(m.requests[1].Tools); got != 1 {
 		t.Fatalf("second-stage tool count = %d, want 1", got)

@@ -338,8 +338,9 @@ memoryService := memoryinmemory.NewMemoryService(
 ```
 
 该 option 使用两个彼此隔离的提取阶段。第一阶段继续使用标准 memory tools；如果
-配置了 `WithUpdatePolicy` 或 enabled tools，也会应用对应的工具约束，并且仅从
-user message 提取普通用户事实和事件。收集 session delta 时，功能开启后只使用每个
+配置了 `WithUpdatePolicy` 或 enabled tools，也会应用对应的工具约束。Assistant
+消息会作为上下文保留，用于理解指代、确认和简短的 user 回复，但只有 user 消息
+能够提供或授权普通 memory operation。收集 session delta 时，功能开启后只使用每个
 模型响应事件的 primary choice，不会把同一响应的备选 choice 当作连续的 assistant
 回复。随后，提取器会按时间顺序检查当前 extraction delta 中符合条件的
 user/assistant pair。确定性预筛选与语言无关，只检查响应形态而不匹配请求关键词：
@@ -373,9 +374,10 @@ reconcile 行为。例如：
 ```
 
 第二阶段模型只能提供 episode 正文和可选的检索 topics，不能覆盖 memory kind、
-participants、event time 或 location。正文为空、超过 4,096 bytes，或包含无法在
-当前 conversation pair 中找到依据的数量时，调用会被拒绝。数量校验会保留正负号、
-币种、百分号和已识别单位，同时允许 `$5` 与 `USD 5` 等等价写法。为了限制每条
+participants、event time 或 location。正文为空、超过 4,096 bytes，或者 ASCII
+数值的规范化数值及紧邻的正负号、货币符号或百分号无法在当前 conversation pair 中
+找到依据时，调用会被拒绝。自然语言单位和货币名称由第二阶段 prompt 约束，不属于
+确定性校验器的检查范围。为了限制每条
 source message 对可选请求的体积贡献，每条消息都会被表示为确定性的 8,192-byte
 摘录，并保留首尾内容。
 

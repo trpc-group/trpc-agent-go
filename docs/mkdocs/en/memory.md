@@ -369,8 +369,10 @@ memoryService := memoryinmemory.NewMemoryService(
 
 The option uses two isolated extraction stages. The first stage keeps the
 standard memory tools, restricted by `WithUpdatePolicy` and enabled-tool
-configuration when present, and extracts ordinary user facts and events from
-user messages. When collecting a session delta, the enabled option uses only
+configuration when present. It retains assistant turns as context for
+interpreting references, confirmations, and short user replies, but only user
+messages can supply or authorize ordinary memory operations. When collecting a
+session delta, the enabled option uses only
 the primary choice from each model response event; alternative choices are not
 treated as consecutive assistant replies. The extractor then considers
 eligible user/assistant pairs in the extraction delta in chronological order.
@@ -416,10 +418,11 @@ grant special reconciliation behavior or carry trusted provenance. For example:
 
 The second-stage model supplies only the episode text and optional retrieval
 topics. It cannot override the memory kind, participants, event time, or
-location. The framework rejects empty text, text over 4,096 bytes, and
-quantities that are not grounded in the selected conversation pair. Quantity
-validation preserves signs, currencies, percentages, and recognized units
-while accepting equivalent forms such as `$5` and `USD 5`. To bound each
+location. The framework rejects empty text, text over 4,096 bytes, and ASCII
+numeric values whose normalized value or adjacent sign, currency symbol, or
+percent sign is not grounded in the selected conversation pair. Natural-language
+units and currency labels are enforced by the second-stage prompt rather than
+the deterministic validator. To bound each
 source's contribution to the optional request, every source message is
 represented by a deterministic 8,192-byte excerpt that preserves its beginning
 and end.
