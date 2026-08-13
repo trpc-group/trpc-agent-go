@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,7 +26,51 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 )
+
+type blockingCleanupClient struct {
+	storage.Client
+
+	started         chan struct{}
+	exited          chan struct{}
+	release         chan struct{}
+	startOnce       sync.Once
+	exitOnce        sync.Once
+	releaseOnce     sync.Once
+	cancelled       atomic.Bool
+	closeCalled     atomic.Bool
+	closeBeforeExit atomic.Bool
+}
+
+func (c *blockingCleanupClient) Exec(
+	ctx context.Context,
+	_ string,
+	_ ...any,
+) (sql.Result, error) {
+	c.startOnce.Do(func() { close(c.started) })
+	select {
+	case <-ctx.Done():
+		c.cancelled.Store(true)
+	case <-c.release:
+	}
+	c.exitOnce.Do(func() { close(c.exited) })
+	return sqlmock.NewResult(0, 0), ctx.Err()
+}
+
+func (c *blockingCleanupClient) releaseCleanup() {
+	c.releaseOnce.Do(func() { close(c.release) })
+}
+
+func (c *blockingCleanupClient) Close() error {
+	select {
+	case <-c.exited:
+	default:
+		c.closeBeforeExit.Store(true)
+	}
+	c.closeCalled.Store(true)
+	return nil
+}
 
 // TestGetSession tests various GetSession error scenarios
 func TestGetSession(t *testing.T) {
@@ -1434,6 +1480,65 @@ func TestClose_WithCleanupRoutine(t *testing.T) {
 	// Calling close twice should not panic
 	err = s.Close()
 	assert.NoError(t, err)
+}
+
+// TestClose_WaitsForCleanupRoutine verifies that Close cancels and waits for
+// in-flight cleanup work before closing the MySQL client.
+func TestClose_WaitsForCleanupRoutine(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithCleanupInterval(time.Millisecond))
+	client := &blockingCleanupClient{
+		Client:  s.mysqlClient,
+		started: make(chan struct{}),
+		exited:  make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	s.mysqlClient = client
+	s.startCleanupRoutine()
+	t.Cleanup(func() {
+		client.releaseCleanup()
+		select {
+		case <-client.exited:
+		case <-time.After(time.Second):
+		}
+	})
+
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup routine did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- s.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		client.releaseCleanup()
+		select {
+		case err := <-closeDone:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("service close did not complete")
+		}
+	}
+	client.releaseCleanup()
+
+	assert.True(t, client.cancelled.Load())
+	assert.True(t, client.closeCalled.Load())
+	assert.False(t, client.closeBeforeExit.Load())
+	select {
+	case <-client.exited:
+	default:
+		t.Fatal("cleanup routine was not stopped before client close")
+	}
 }
 
 // TestCreateSession_ExistingWithoutExpiry tests creating session when an existing non-expiring session exists

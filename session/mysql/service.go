@@ -55,7 +55,9 @@ type Service struct {
 	asyncWorker     *isummary.AsyncSummaryWorker // async summary worker
 	cleanupTicker   *time.Ticker                 // ticker for automatic cleanup
 	cleanupDone     chan struct{}                // signal to stop cleanup routine
+	cleanupCancel   context.CancelFunc           // cancel in-flight cleanup work
 	cleanupOnce     sync.Once                    // ensure cleanup routine is stopped only once
+	cleanupWg       sync.WaitGroup               // wait for cleanup routine to exit
 	persistWg       sync.WaitGroup               // wait group for persist workers
 	once            sync.Once
 
@@ -941,8 +943,12 @@ func (s *Service) startCleanupRoutine() {
 
 	s.cleanupTicker = time.NewTicker(interval)
 	s.cleanupDone = make(chan struct{})
+	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
+	s.cleanupCancel = cleanupCancel
+	s.cleanupWg.Add(1)
 
 	go func() {
+		defer s.cleanupWg.Done()
 		log.InfofContext(
 			context.Background(),
 			"started cleanup routine for mysql session service "+
@@ -952,7 +958,10 @@ func (s *Service) startCleanupRoutine() {
 		for {
 			select {
 			case <-s.cleanupTicker.C:
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				if cleanupCtx.Err() != nil {
+					return
+				}
+				ctx, cancel := context.WithTimeout(cleanupCtx, 5*time.Minute)
 				s.cleanupExpiredData(ctx)
 				cancel()
 			case <-s.cleanupDone:
@@ -972,10 +981,14 @@ func (s *Service) stopCleanupRoutine() {
 		if s.cleanupTicker != nil {
 			s.cleanupTicker.Stop()
 		}
+		if s.cleanupCancel != nil {
+			s.cleanupCancel()
+		}
 		if s.cleanupDone != nil {
 			close(s.cleanupDone)
 		}
 	})
+	s.cleanupWg.Wait()
 }
 
 // cleanupExpiredData cleans up expired session states, events, summaries, and app/user states.
