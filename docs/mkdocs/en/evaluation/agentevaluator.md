@@ -19,11 +19,12 @@ The structures of `EvaluationResult` and `EvaluationCaseResult` are defined as f
 
 ```go
 type EvaluationResult struct {
-	AppName       string                  // AppName is the application name.
-	EvalSetID     string                  // EvalSetID is the evaluation set identifier.
-	OverallStatus status.EvalStatus       // OverallStatus is the overall status.
-	ExecutionTime time.Duration           // ExecutionTime is the execution duration.
-	EvalCases     []*EvaluationCaseResult // EvalCases are the list of case results.
+	AppName       string                    // AppName is the application name.
+	EvalSetID     string                    // EvalSetID is the evaluation set identifier.
+	OverallStatus status.EvalStatus         // OverallStatus is the overall status.
+	ExecutionTime time.Duration             // ExecutionTime is the execution duration.
+	EvalCases     []*EvaluationCaseResult   // EvalCases are the list of case results.
+	EvalResult    *evalresult.EvalSetResult // EvalResult is the persisted EvalSetResult.
 }
 
 type EvaluationCaseResult struct {
@@ -31,8 +32,25 @@ type EvaluationCaseResult struct {
 	OverallStatus   status.EvalStatus              // OverallStatus is the aggregated status for this case.
 	EvalCaseResults []*evalresult.EvalCaseResult   // EvalCaseResults are the per-run case results.
 	MetricResults   []*evalresult.EvalMetricResult // MetricResults are the aggregated metric results.
+	RunDetails      []*EvaluationCaseRunDetails    // RunDetails are optional per-run inference details.
+}
+
+type EvaluationCaseRunDetails struct {
+	RunID     int                         // RunID identifies the evaluation run.
+	Inference *EvaluationInferenceDetails // Inference stores details captured during this run.
+}
+
+type EvaluationInferenceDetails struct {
+	SessionID       string                // SessionID identifies the inference session.
+	UserID          string                // UserID identifies the user used for this run.
+	Status          status.EvalStatus     // Status records inference status.
+	ErrorMessage    string                // ErrorMessage records inference failure when present.
+	Inferences      []*evalset.Invocation // Inferences stores invocation outputs.
+	ExecutionTraces []*trace.Trace        // ExecutionTraces stores execution traces.
 }
 ```
+
+`EvalResult` contains the aggregated EvalSetResult that can be persisted by EvalResultManager. `RunDetails` is filled only when run details are enabled, and each item is associated with a specific run ID.
 
 By default, `evaluation.New` creates AgentEvaluator and uses in-memory EvalSetManager, MetricManager, EvalResultManager, and the default Registry, and also creates a local Service. If you want to read EvalSet and metric configuration from local files and write results to files, you need to inject Local Managers explicitly.
 

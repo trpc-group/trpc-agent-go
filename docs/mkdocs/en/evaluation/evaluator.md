@@ -441,7 +441,7 @@ Example metric configuration for LLM pairwise comparison:
           "apiKey": "${JUDGE_MODEL_API_KEY}",
           "numSamples": 1,
           "generationConfig": {
-            "max_tokens": 128,
+            "max_tokens": 1200,
             "temperature": 0,
             "stream": false,
             "logprobs": true,
@@ -466,7 +466,7 @@ Example metric configuration for LLM pairwise comparison:
 
 The LLM template evaluator uses the evaluator name `llm_judge_template` and belongs to the LLM Judge evaluator family. It is suitable for scenarios where the evaluation orchestration stays the same, but you want to reduce the number of evaluator definitions by customizing the judge prompt, variable bindings, and response parsing strategy. Unlike the `llm_rubric_*` family, template evaluators do not evaluate structured `rubrics` by default; evaluation criteria usually belong in `criterion.llmJudge.template.prompt`, and prompts can explicitly bind `metric.rubrics` when they need the current metric rubrics.
 
-Template evaluators are typically configured with `evaluatorName: "llm_judge_template"`, while `metricName` remains the metric instance name. This allows one metric file to define multiple template metrics, such as one using `single_score`, another using `rubric_scores`, and another using a platform-registered scorer, while reusing the same evaluator implementation and keeping distinct `metricName` values in results.
+Template evaluators are the main case where `evaluatorName` is useful: one metric file can define multiple template metrics, such as one using `single_score`, another using `rubric_scores`, and another using a platform-registered scorer, while reusing `llm_judge_template` and keeping distinct `metricName` values in results.
 
 The template evaluator runs as follows:
 
@@ -525,8 +525,12 @@ Platforms can register custom template operators and inject them when creating t
 
 ```go
 opRegistry := operatorregistry.New()
-_ = opRegistry.RegisterResponseScorer("platform_score", platformScorer{})
-_ = opRegistry.RegisterStructuredOutput("platform_schema", platformStructuredOutput{})
+if err := opRegistry.RegisterResponseScorer("platform_score", platformScorer{}); err != nil {
+	log.Fatalf("register response scorer: %v", err)
+}
+if err := opRegistry.RegisterStructuredOutput("platform_schema", platformStructuredOutput{}); err != nil {
+	log.Fatalf("register structured output: %v", err)
+}
 
 evalRegistry := evaluatorregistry.New(
 	evaluatorregistry.WithLLMOperatorRegistry(opRegistry),
@@ -894,7 +898,7 @@ See [examples/evaluation/llm/knowledgerecall](https://github.com/trpc-group/trpc
 
 ## Evaluator Registry
 
-Registry manages evaluator registrations. Evaluation fetches the corresponding Evaluator from Registry. The framework registers the following evaluators by default:
+Registry manages evaluator registrations. Most metric configs use `metricName` as both the metric identifier and the Registry lookup name. The framework registers the following evaluators by default:
 
 - `tool_trajectory_avg_score`: tool trajectory consistency evaluator, requires expected output.
 - `final_response_avg_score`: final response evaluator, does not require LLM, requires expected output.
@@ -916,7 +920,9 @@ import (
 )
 
 reg := registry.New()
-reg.Register("myEvaluator", myevaluator.New())
+if err := reg.Register("myEvaluator", myevaluator.New()); err != nil {
+	log.Fatalf("register evaluator: %v", err)
+}
 
 agentEvaluator, err := evaluation.New(
 	appName,
@@ -927,7 +933,7 @@ agentEvaluator, err := evaluation.New(
 
 ## Custom Evaluators
 
-When built-in evaluators do not cover a business rule, implement `evaluator.Evaluator` and register it in Registry. A metric file uses `metricName` to select the evaluator implementation and to identify the metric in results. If the evaluator needs extra configuration, put it in `extension` and read it from the custom evaluator.
+When built-in evaluators do not cover a business rule, implement `evaluator.Evaluator` and register it in Registry. Usually, set `metricName` to the registered evaluator name. Use `evaluatorName` only when multiple metric instances need to reuse the same evaluator implementation while keeping distinct `metricName` values in results. If the evaluator needs extra configuration, put it in `extension` and read it from the custom evaluator.
 
 Example metric configuration:
 

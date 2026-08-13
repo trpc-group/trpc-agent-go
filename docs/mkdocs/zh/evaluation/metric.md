@@ -1,6 +1,6 @@
 # 评估指标 EvalMetric
 
-EvalMetric 用于定义评估指标，它通过 `metricName` 选择评估器实现，通过 `criterion` 描述评估准则，通过 `threshold` 定义阈值。一次评估可以同时配置多条评估指标，评估执行会逐条应用这些指标，并分别产出分数与状态。
+EvalMetric 用于定义评估指标，它通过 `metricName` 标识指标，通过 `criterion` 描述评估准则，并通过 `threshold` 定义阈值。一次评估可以同时配置多条评估指标，评估执行会逐条应用这些指标，并分别产出分数与状态。
 
 ## 结构定义
 
@@ -31,7 +31,7 @@ type Criterion struct {
 }
 ```
 
-`metricName` 用于从 Registry 选择评估器实现，并作为结果中的指标标识。常见内置评估器如下：
+常规用法下，`metricName` 作为结果中的指标标识，并用于从 Registry 选择评估器实现。常见内置评估器如下：
 
 - `tool_trajectory_avg_score`：工具轨迹一致性评估器，需要配置预期输出。
 - `final_response_avg_score`：最终响应评估器，不需要 LLM，需要配置预期输出。
@@ -1014,7 +1014,7 @@ type RubricContent struct {
 
 其中 `metricName` 指向要追加细则的 metric。上例会把 `case:compound-profit` 追加到 `llm_rubric_response` 的 rubrics 中。
 
-以下给出一条模板评估指标配置示例，通过 `evaluatorName` 显式选择 `llm_judge_template`，并让 `metricName` 仅作为结果中的指标实例名。
+以下给出一条模板评估指标配置示例。这是多个指标实例复用同一个评估器实现时才需要的高级用法：通过 `evaluatorName` 显式选择 `llm_judge_template`，并让 `metricName` 仅作为结果中的指标实例名。
 
 ```json
 [

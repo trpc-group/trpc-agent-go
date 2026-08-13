@@ -1,6 +1,6 @@
 # EvalMetric
 
-EvalMetric defines evaluation metrics. It selects an evaluator implementation by `metricName`, describes criteria with `criterion`, and defines thresholds with `threshold`. A single evaluation can configure multiple metrics. The evaluation run applies them in order and produces scores and statuses for each.
+EvalMetric defines evaluation metrics. It identifies the metric with `metricName`, describes criteria with `criterion`, and defines thresholds with `threshold`. A single evaluation can configure multiple metrics. The evaluation run applies them in order and produces scores and statuses for each.
 
 ## Structure Definition
 
@@ -31,7 +31,7 @@ type Criterion struct {
 }
 ```
 
-`metricName` selects the evaluator implementation from Registry and identifies the metric in results. The following evaluators are built in by default:
+For common usage, `metricName` identifies the metric in results and selects the evaluator implementation from Registry. The following evaluators are built in by default:
 
 - `tool_trajectory_avg_score`: tool trajectory consistency evaluator, requires expected output.
 - `final_response_avg_score`: final response evaluator, does not require LLM, requires expected output.
@@ -1017,7 +1017,7 @@ Case-level rubrics are configured directly in `EvalCase.rubrics`, for example:
 
 Here, `metricName` selects the metric that receives the extra criterion. This example appends `case:compound-profit` to the rubrics for `llm_rubric_response`.
 
-Below is an example template metric configuration. It explicitly selects `llm_judge_template` via `evaluatorName`, while keeping `metricName` as the metric instance name in results.
+Below is an example template metric configuration. This is the advanced case where several metric instances reuse the same evaluator implementation: `evaluatorName` selects `llm_judge_template`, while `metricName` remains the metric instance name in results.
 
 ```json
 [

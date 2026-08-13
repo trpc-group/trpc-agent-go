@@ -1,6 +1,6 @@
 # 评估集 EvalSet
 
-EvalSet 用于描述评估覆盖的场景集合，提供评估集输入。每个场景对应一个评估用例 EvalCase，EvalCase 再按轮组织 Invocation。默认模式支持两种推理输入：静态 `conversation` 与动态 `conversationScenario`。使用 `conversation` 时，框架会按轮读取 `userContent` 驱动 Runner 推理；使用 `conversationScenario` 时，框架会通过 UserSimulator 动态生成下一轮用户输入并采集实际轨迹。预期轨迹默认来自 `conversation`；使用 `conversationScenario` 且未开启 `expectedRunnerEnabled` 时，评估阶段会根据实际轨迹构造仅保留 `userContent` 的占位 expecteds；当用例开启 `expectedRunnerEnabled` 时，框架会在推理阶段通过 ExpectedRunner 预生成 expecteds，并在评估阶段直接复用。Trace 模式会跳过推理并使用 `actualConversation` 作为实际轨迹。评估运行时，Service 会将实际轨迹与预期轨迹交给 Evaluator 对比打分。
+EvalSet 用于描述评估覆盖的场景集合，提供评估集输入。每个场景对应一个评估用例 EvalCase，EvalCase 再按轮组织 Invocation。默认模式支持两种推理输入：静态 `conversation` 与动态 `conversationScenario`。使用 `conversation` 时，框架会按轮读取 `userContent` 驱动 Runner 推理；使用 `conversationScenario` 时，框架会通过 UserSimulator 动态生成下一轮用户输入并采集实际轨迹。预期轨迹默认来自 `conversation`；使用 `conversationScenario` 且未开启 `expectedRunnerEnabled` 时，评估阶段会根据实际轨迹构造仅保留 `userContent` 的占位 expecteds；当用例开启 `expectedRunnerEnabled` 时，框架会在推理阶段通过 ExpectedRunner 预生成 expecteds，并在评估阶段直接复用。Trace 模式会跳过推理，并由 `actualConversation` 提供实际轨迹。评估运行时，Service 会将实际轨迹与预期轨迹交给 Evaluator 对比打分。
 
 ## 结构定义
 
@@ -310,11 +310,10 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_eval_cases` (
 
 Trace 模式用于评估既有轨迹，可以将一次真实运行采集到的 Invocation 轨迹写入评估集 EvalSet，并在运行评估时跳过推理阶段。
 
-启用方式是在 EvalCase 中将 `evalMode` 设为 `trace`。Trace 模式下 `actualConversation` 表示实际输出，`conversation` 表示预期输出，有三种配置方式：
+启用方式是在 EvalCase 中将 `evalMode` 设为 `trace`。Trace 模式下 `actualConversation` 表示实际输出，`conversation` 表示预期输出，有两种配置方式：
 
 - 仅配置 `actualConversation`：`actualConversation` 作为实际轨迹，不提供预期轨迹。
 - 同时配置 `actualConversation` 与 `conversation`：`actualConversation` 作为实际轨迹，`conversation` 作为预期轨迹，按轮次对齐。
-- 仅配置 `conversation`：`conversation` 作为实际轨迹，不提供预期轨迹（仅为兼容历史行为）。
 
 ```json
 {
@@ -393,7 +392,7 @@ Trace 模式用于评估既有轨迹，可以将一次真实运行采集到的 I
 }
 ```
 
-在 Trace 模式下，推理阶段不会运行 Runner，而是直接将 `actualConversation` 写入 `InferenceResult.Inferences` 作为实际轨迹。`conversation` 用于提供预期轨迹；当未配置 `conversation` 时，评估阶段会生成仅保留每轮 `userContent` 的占位 expecteds，避免将 trace 轨迹误当作参考答案参与对比。
+在 Trace 模式下，推理阶段不会运行 Runner，而是直接将 `actualConversation` 写入 `InferenceResult.Inferences` 作为实际轨迹。`conversation` 可选用于提供预期输出；未配置 `conversation` 时，应使用不依赖预期输出的指标，评估阶段会生成仅保留每轮 `userContent` 的占位 expecteds，避免将 trace 轨迹误当作参考答案参与对比。
 
 当只提供实际轨迹时，适合只依赖实际轨迹的指标，例如 `llm_rubric_response`、`llm_rubric_knowledge_recall` 与 `llm_hallucinations`。如果需要对比参考工具轨迹或参考最终回答，例如 `llm_final_response`、`llm_rubric_critic` 或 `llm_rubric_reference_critic`，可以额外配置预期轨迹。
 
@@ -403,7 +402,7 @@ Trace 模式用于评估既有轨迹，可以将一次真实运行采集到的 I
 
 有些评估任务里，希望使用动态的预期输出，而非静态内容。例如，参考答案需要由一套参考 Runner 基于输入样本实时生成。此时可以为 EvalCase 开启 `expectedRunnerEnabled`，并在创建 AgentEvaluator 时注入 ExpectedRunner，由推理阶段预生成 expecteds。
 
-当 `expectedRunnerEnabled=true` 时，标准评测流程会在推理阶段使用 ExpectedRunner 对同一组 `userContent` 按轮推理生成 expecteds，并将结果写入 `InferenceResult.ExpectedInferences`。默认模式下如果使用静态 `conversation`，`userContent` 直接来自该对话；如果使用 `conversationScenario`，则取决于 `driver`：当 `driver=expected` 时，由 ExpectedRunner 先驱动整段 transcript，再由 target runner 回放这组生成出的 `userContent`；否则 `userContent` 来自 `conversationScenario` 生成出的实际轨迹。Trace 模式下 `userContent` 来自 `actualConversation`，若未配置则回退为 `conversation`。评估阶段会直接复用这组 expecteds 与 actuals 按轮对齐后交给 Evaluator。此时 EvalSet 中的预期输出字段可以省略，只需保留每轮 `userContent`。
+当 `expectedRunnerEnabled=true` 时，标准评测流程会在推理阶段使用 ExpectedRunner 对同一组 `userContent` 按轮推理生成 expecteds，并将结果写入 `InferenceResult.ExpectedInferences`。默认模式下如果使用静态 `conversation`，`userContent` 直接来自该对话；如果使用 `conversationScenario`，则取决于 `driver`：当 `driver=expected` 时，由 ExpectedRunner 先驱动整段 transcript，再由 target runner 回放这组生成出的 `userContent`；否则 `userContent` 来自 `conversationScenario` 生成出的实际轨迹。Trace 模式下 `userContent` 来自 `actualConversation`。评估阶段会直接复用这组 expecteds 与 actuals 按轮对齐后交给 Evaluator。此时 EvalSet 中的预期输出字段可以省略，只需保留每轮 `userContent`。
 
 配置文件示例如下：
 
@@ -741,9 +740,6 @@ Simulated user:
 
 ```go
 import (
-	"log"
-	"time"
-
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/recorder"

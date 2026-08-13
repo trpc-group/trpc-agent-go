@@ -1,6 +1,6 @@
 # EvalSet
 
-EvalSet describes the set of covered scenarios and provides evaluation input. Each scenario corresponds to an EvalCase, and EvalCase organizes Invocations per turn. Default mode supports two inference inputs: static `conversation` and dynamic `conversationScenario`. With `conversation`, the framework reads `userContent` turn by turn and drives Runner inference. With `conversationScenario`, the framework uses UserSimulator to generate the next user turn dynamically and collect actual traces. Expected traces come from `conversation` by default. When `conversationScenario` is used without `expectedRunnerEnabled`, the evaluation phase builds placeholder expecteds that keep only `userContent` from actual traces. When a case enables `expectedRunnerEnabled`, the framework pre-generates expecteds during inference through ExpectedRunner and reuses them directly during evaluation. In trace mode, inference is skipped and `actualConversation` is used as actual traces. During evaluation, Service passes actual and expected traces to Evaluator for comparison and scoring.
+EvalSet describes the set of covered scenarios and provides evaluation input. Each scenario corresponds to an EvalCase, and EvalCase organizes Invocations per turn. Default mode supports two inference inputs: static `conversation` and dynamic `conversationScenario`. With `conversation`, the framework reads `userContent` turn by turn and drives Runner inference. With `conversationScenario`, the framework uses UserSimulator to generate the next user turn dynamically and collect actual traces. Expected traces come from `conversation` by default. When `conversationScenario` is used without `expectedRunnerEnabled`, the evaluation phase builds placeholder expecteds that keep only `userContent` from actual traces. When a case enables `expectedRunnerEnabled`, the framework pre-generates expecteds during inference through ExpectedRunner and reuses them directly during evaluation. In trace mode, inference is skipped and `actualConversation` provides actual traces. During evaluation, Service passes actual and expected traces to Evaluator for comparison and scoring.
 
 ## Structure Definition
 
@@ -30,7 +30,7 @@ type EvalCase struct {
 	ContextMessages       []*model.Message      // ContextMessages are context messages, optional.
 	Conversation          []*Invocation         // Conversation is the static multi-turn interaction sequence. In default mode it is mutually exclusive with ConversationScenario.
 	ConversationScenario  *ConversationScenario // ConversationScenario is the dynamic user simulation scenario. In default mode it is mutually exclusive with Conversation.
-	ActualConversation    []*Invocation         // ActualConversation is the actual trace in trace mode. It is required in trace mode.
+	ActualConversation    []*Invocation         // ActualConversation is the actual trace in trace mode.
 	SessionInput          *SessionInput         // SessionInput is session initialization info, required.
 	Rubrics               []*EvalCaseRubric     // Rubrics contains case-level rubrics, optional.
 	CreationTimestamp     *epochtime.EpochTime  // CreationTimestamp is the creation timestamp, optional.
@@ -52,7 +52,7 @@ type EvalCaseRubricContent struct {
 
 // ConversationScenario represents a dynamic user simulation scenario.
 type ConversationScenario struct {
-	Driver                string // Driver selects whether actual or expected runner drives the conversation transcript. It is optional and defaults to actual.
+	Driver                ConversationScenarioDriver // Driver selects whether actual or expected runner drives the conversation transcript. It is optional and defaults to actual.
 	StartingPrompt        string // StartingPrompt is the fixed first-turn input. It is optional.
 	ConversationPlan      string // ConversationPlan describes the user goal, constraints, and stop condition. It is required.
 	StopSignal            string // StopSignal is the marker that ends the conversation when emitted by the simulated user. It is optional.
@@ -99,7 +99,7 @@ In trace mode, you can configure actual output traces explicitly via `actualConv
 
 If both `conversation` and `actualConversation` are provided in trace mode, they must be aligned by turn, and each turn in `actualConversation` should include `userContent`. If only `actualConversation` is provided and `conversation` is omitted, it means no static expected outputs are provided. If the case enables `expectedRunnerEnabled` and an ExpectedRunner is injected, the standard evaluation flow will pre-generate expected outputs during inference.
 
-When `evalMode` is empty, it is the default mode. In this mode, you must configure exactly one of `conversation` or `conversationScenario`. When `evalMode` is `trace`, inference is skipped and `actualConversation` is used as actual traces for evaluation. `conversation` can be provided optionally as expected outputs, while `conversationScenario` is not supported in trace mode.
+When `evalMode` is empty, it is the default mode. In this mode, you must configure exactly one of `conversation` or `conversationScenario`. When `evalMode` is `trace`, inference is skipped and `actualConversation` is used as actual traces for evaluation. `conversation` can optionally provide expected outputs; `conversationScenario` is not supported in trace mode.
 
 ## EvalSet Manager
 
@@ -308,11 +308,10 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}evaluation_eval_cases` (
 
 Trace mode evaluates existing traces by writing Invocation traces from a real run into EvalSet and skipping inference during evaluation.
 
-Enable it by setting `evalMode` to `trace` in EvalCase. In trace mode, `actualConversation` represents actual outputs and `conversation` represents expected outputs. There are three supported layouts:
+Enable it by setting `evalMode` to `trace` in EvalCase. In trace mode, `actualConversation` represents actual outputs and `conversation` represents expected outputs. There are two layouts:
 
 - `actualConversation` only: `actualConversation` is used as actual traces, without expected traces.
 - `actualConversation` + `conversation`: `actualConversation` is used as actual traces, and `conversation` is used as expected traces, aligned by turn.
-- `conversation` only: `conversation` is used as actual traces without expected traces (for backward compatibility only).
 
 ```json
 {
@@ -391,7 +390,7 @@ Enable it by setting `evalMode` to `trace` in EvalCase. In trace mode, `actualCo
 }
 ```
 
-In Trace mode, the inference phase does not run Runner and instead writes `actualConversation` into `InferenceResult.Inferences` as actual traces. `conversation` provides expected traces. If `conversation` is omitted, the evaluation phase builds placeholder expecteds that keep only per-turn `userContent`, to avoid treating trace outputs as reference answers in comparisons.
+In Trace mode, the inference phase does not run Runner and instead writes `actualConversation` into `InferenceResult.Inferences` as actual traces. `conversation` can optionally provide expected outputs. If `conversation` is omitted, use metrics that do not require expected outputs; the evaluation phase builds placeholder expecteds that keep only per-turn `userContent`, to avoid treating trace outputs as reference answers in comparisons.
 
 When only actual traces are provided, it is suitable for metrics that depend only on actual traces, such as `llm_rubric_response`, `llm_rubric_knowledge_recall`, and `llm_hallucinations`. If you need metrics that compare reference tool traces or reference final responses, such as `llm_final_response`, `llm_rubric_critic`, or `llm_rubric_reference_critic`, you can additionally configure expected traces.
 
@@ -401,7 +400,7 @@ See [examples/evaluation/trace](https://github.com/trpc-group/trpc-agent-go/tree
 
 In some evaluation tasks, you may want dynamic expected outputs rather than static content. For example, reference answers may need to be generated on the fly by a reference Runner based on input samples. In this case, you can enable `expectedRunnerEnabled` for an EvalCase and inject an ExpectedRunner when creating AgentEvaluator, so the inference phase pre-generates expecteds.
 
-When `expectedRunnerEnabled=true`, the standard evaluation flow runs ExpectedRunner during inference on the same `userContent` turn by turn and stores the results in `InferenceResult.ExpectedInferences`. In default mode with static `conversation`, `userContent` comes from that conversation directly. In default mode with `conversationScenario`, the source depends on `driver`: when `driver=expected`, ExpectedRunner drives the transcript first and the target runner replays the generated `userContent` turns; otherwise, `userContent` comes from actual traces generated by `conversationScenario`. In trace mode, `userContent` comes from `actualConversation`, or falls back to `conversation` if `actualConversation` is not configured. The evaluation phase then reuses those expecteds directly and aligns them turn by turn with actuals before passing them to Evaluator. In this mode, expected output fields in EvalSet can be omitted as long as per-turn `userContent` is present.
+When `expectedRunnerEnabled=true`, the standard evaluation flow runs ExpectedRunner during inference on the same `userContent` turn by turn and stores the results in `InferenceResult.ExpectedInferences`. In default mode with static `conversation`, `userContent` comes from that conversation directly. In default mode with `conversationScenario`, the source depends on `driver`: when `driver=expected`, ExpectedRunner drives the transcript first and the target runner replays the generated `userContent` turns; otherwise, `userContent` comes from actual traces generated by `conversationScenario`. In trace mode, `userContent` comes from `actualConversation`. The evaluation phase then reuses those expecteds directly and aligns them turn by turn with actuals before passing them to Evaluator. In this mode, expected output fields in EvalSet can be omitted as long as per-turn `userContent` is present.
 
 Example configuration:
 
@@ -739,9 +738,6 @@ By default, the recorder uses `sessionID` as both `EvalSetID` and `EvalCase.Eval
 
 ```go
 import (
-	"log"
-	"time"
-
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/recorder"

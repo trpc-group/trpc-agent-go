@@ -41,6 +41,7 @@ server, err := sevaluation.New(
 	sevaluation.WithBasePath("/evaluation"),
 	sevaluation.WithAgentEvaluator(agentEvaluator),
 	sevaluation.WithEvalSetManager(evalSetManager),
+	sevaluation.WithMetricManager(metricManager),
 	sevaluation.WithEvalResultManager(evalResultManager),
 )
 if err != nil {
@@ -51,9 +52,10 @@ if err := http.ListenAndServe(":8080", server.Handler()); err != nil {
 }
 ```
 
-By default, the service exposes three resource groups:
+The service exposes four resource groups:
 
 - `sets`: query evaluation sets and individual set details.
+- `metrics`: query evaluation metrics and individual metric details.
 - `runs`: trigger an evaluation execution.
 - `results`: query evaluation results and individual result details.
 

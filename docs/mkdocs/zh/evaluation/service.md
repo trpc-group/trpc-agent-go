@@ -100,9 +100,9 @@ Local 实现支持 EvalCase 级并发推理。开启后会并行运行多个用�
 
 评估阶段由 `Evaluate` 方法负责，以 `InferenceResult` 为输入，加载对应的 EvalCase，构造 actuals 与 expecteds 两组 Invocation 列表。默认情况下，expecteds 来自 EvalSet 的 `conversation`；若用例使用 `conversationScenario` 且未开启 `expectedRunnerEnabled`，则会基于实际轨迹构造仅保留 `userContent` 的占位 expecteds；当 EvalCase 开启 `expectedRunnerEnabled` 时，评估阶段直接复用推理阶段已经生成好的 `ExpectedInferences`。然后按 `EvaluateConfig.EvalMetrics` 逐条执行评估器。
 
-Local 实现会通过 Registry 按 `MetricName` 获取 Evaluator，并调用 `Evaluator.Evaluate` 完成打分。该调用以 EvalCase 为粒度，actuals 与 expecteds 均来自同一个用例，并按轮次对齐。
+Local 实现会通过 Registry 获取 Evaluator，并调用 `Evaluator.Evaluate` 完成打分。该调用以 EvalCase 为粒度，actuals 与 expecteds 均来自同一个用例，并按轮次对齐。
 
-当 `evalMode` 为 `trace` 时，推理阶段跳过 Runner；若配置了 `actualConversation`，则实际轨迹 actuals 来自 `actualConversation`，而 `conversation` 继续表示预期轨迹。若未配置 `actualConversation`，则 `conversation` 会被视为实际轨迹，评估阶段再基于该轨迹构造仅保留 `userContent` 的占位 expecteds；开启 `expectedRunnerEnabled` 时，评估阶段则直接复用推理阶段已经生成好的 `ExpectedInferences`。
+当 `evalMode` 为 `trace` 时，推理阶段跳过 Runner，实际轨迹 actuals 来自 `actualConversation`。`conversation` 可选用于提供预期输出；开启 `expectedRunnerEnabled` 时，预期轨迹来自推理阶段生成好的 `ExpectedInferences`。
 
 所有指标评估完成后，Local 实现会把当前用例、实际推理结果、实际执行的指标列表和对应指标结果交给 `EvalCaseResultAggregator`，由它计算 `EvalCaseResult.score` 与 `EvalCaseResult.finalEvalStatus`。评估完成后会生成 `EvalSetRunResult` 并返回给 AgentEvaluator。
 

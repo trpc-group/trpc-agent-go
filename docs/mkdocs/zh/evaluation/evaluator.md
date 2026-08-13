@@ -1,6 +1,6 @@
 # 评估器 Evaluator
 
-Evaluator 是评估器接口，用于实现某一条评估指标的打分逻辑。评估执行时会按 `metricName` 从 `Registry` 获取对应 Evaluator，传入实际轨迹与预期轨迹并得到分数与状态。
+Evaluator 是评估器接口，用于实现某一条评估指标的打分逻辑。评估执行时会从 `Registry` 获取对应 Evaluator，传入实际轨迹与预期轨迹并得到分数与状态。
 
 ## 接口定义
 
@@ -465,7 +465,7 @@ LLM 成对比较评估指标配置示例如下：
 
 LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM Judge 类评估器。它适用于这样一类场景：评估执行链路本身没有变化，但希望通过自定义 prompt、变量绑定和响应解析策略来减少新评估器定义数量。与 `llm_rubric_*` 系列不同，模板评估器默认不会按结构化 `rubrics` 执行评估；评估标准通常直接写入 `criterion.llmJudge.template.prompt`，需要复用当前指标 rubric 时再通过 `metric.rubrics` 显式绑定。
 
-模板评估器通常配合 `evaluatorName: "llm_judge_template"` 使用，并让 `metricName` 仅承担指标实例名的职责。这样一份指标文件里可以同时配置多条模板评估指标，例如一条走 `single_score`，另一条走 `rubric_scores`，另一条走平台注册的 scorer，它们都复用同一个评估器实现，但结果中的 `metricName` 彼此独立。
+模板评估器是 `evaluatorName` 的主要使用场景，一份指标文件里可以同时配置多条模板评估指标，例如一条走 `single_score`，另一条走 `rubric_scores`，另一条走平台注册的 scorer，它们都复用 `llm_judge_template`，但结果中的 `metricName` 彼此独立。
 
 模板评估器的运行方式如下：
 
@@ -524,8 +524,12 @@ LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM
 
 ```go
 opRegistry := operatorregistry.New()
-_ = opRegistry.RegisterResponseScorer("platform_score", platformScorer{})
-_ = opRegistry.RegisterStructuredOutput("platform_schema", platformStructuredOutput{})
+if err := opRegistry.RegisterResponseScorer("platform_score", platformScorer{}); err != nil {
+	log.Fatalf("register response scorer: %v", err)
+}
+if err := opRegistry.RegisterStructuredOutput("platform_schema", platformStructuredOutput{}); err != nil {
+	log.Fatalf("register structured output: %v", err)
+}
 
 evalRegistry := evaluatorregistry.New(
 	evaluatorregistry.WithLLMOperatorRegistry(opRegistry),
@@ -916,7 +920,9 @@ import (
 )
 
 reg := registry.New()
-reg.Register("myEvaluator", myevaluator.New())
+if err := reg.Register("myEvaluator", myevaluator.New()); err != nil {
+	log.Fatalf("register evaluator: %v", err)
+}
 
 agentEvaluator, err := evaluation.New(
 	appName,
@@ -927,7 +933,7 @@ agentEvaluator, err := evaluation.New(
 
 ## 自定义评估器
 
-当内置评估器不能覆盖业务规则时，可以实现 `evaluator.Evaluator` 并注册到 Registry。指标文件通过 `metricName` 选择评估器实现，并把它作为结果中的指标标识。如果评估器需要额外配置，可以放在 `extension` 中，由自定义评估器自行读取。
+当内置评估器不能覆盖业务规则时，可以实现 `evaluator.Evaluator` 并注册到 Registry。通常直接让 `metricName` 等于注册的评估器名称。只有当多个指标实例需要复用同一个评估器实现、同时又要在结果中保留不同 `metricName` 时，才需要使用 `evaluatorName`。如果评估器需要额外配置，可以放在 `extension` 中，由自定义评估器自行读取。
 
 指标配置示例：
 

@@ -102,7 +102,7 @@ The evaluation phase is handled by `Evaluate`. It takes `InferenceResult` as inp
 
 The local implementation looks up Evaluators from Registry and calls `Evaluator.Evaluate`. This operates per EvalCase, with actuals and expecteds from the same case aligned by turn.
 
-When `evalMode` is `trace`, inference is skipped. If `actualConversation` is configured, actual traces come from `actualConversation` and `conversation` continues to represent expected traces. If `actualConversation` is omitted, `conversation` is treated as the actual trace and the evaluation phase builds placeholder expecteds that preserve only `userContent`. When `expectedRunnerEnabled` is enabled, the evaluation phase instead reuses the `ExpectedInferences` that were already generated during inference.
+When `evalMode` is `trace`, inference is skipped and actual traces come from `actualConversation`. `conversation` can optionally provide expected outputs. When `expectedRunnerEnabled` is enabled, expected traces come from the `ExpectedInferences` generated during inference.
 
 After all metrics are evaluated, the local implementation passes the current case, actual inference result, actually executed metric list, and corresponding metric results to `EvalCaseResultAggregator`. The aggregator computes `EvalCaseResult.score` and `EvalCaseResult.finalEvalStatus`. Evaluation then generates `EvalSetRunResult` and returns it to AgentEvaluator.
 

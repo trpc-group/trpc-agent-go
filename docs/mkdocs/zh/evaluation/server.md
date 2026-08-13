@@ -41,6 +41,7 @@ server, err := sevaluation.New(
 	sevaluation.WithBasePath("/evaluation"),
 	sevaluation.WithAgentEvaluator(agentEvaluator),
 	sevaluation.WithEvalSetManager(evalSetManager),
+	sevaluation.WithMetricManager(metricManager),
 	sevaluation.WithEvalResultManager(evalResultManager),
 )
 if err != nil {
@@ -51,9 +52,10 @@ if err := http.ListenAndServe(":8080", server.Handler()); err != nil {
 }
 ```
 
-该服务默认提供三类资源：
+该服务提供 4 类资源：
 
 - `sets`：查询评估集列表与单个评估集详情。
+- `metrics`：查询评估指标列表与单个评估指标详情。
 - `runs`：触发一次评估执行。
 - `results`：查询评估结果列表与单个评估结果详情。
 

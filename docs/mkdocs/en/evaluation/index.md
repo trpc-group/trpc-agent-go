@@ -93,9 +93,12 @@ func calculate(_ context.Context, args calculatorArgs) (calculatorResult, error)
 	case "multiply", "*":
 		result = args.A * args.B
 	case "divide", "/":
-		if args.B != 0 {
-			result = args.A / args.B
+		if args.B == 0 {
+			return calculatorResult{}, fmt.Errorf("division by zero")
 		}
+		result = args.A / args.B
+	default:
+		return calculatorResult{}, fmt.Errorf("unsupported operation %q", args.Operation)
 	}
 	return calculatorResult{
 		Operation: args.Operation,
@@ -399,7 +402,6 @@ agentEvaluator, err := evaluation.New(
 )
 if err != nil {
 	log.Fatalf("create evaluator: %v", err)
-}
 }
 defer agentEvaluator.Close()
 // Run evaluation.

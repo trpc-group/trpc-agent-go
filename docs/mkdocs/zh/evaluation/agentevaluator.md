@@ -19,11 +19,12 @@ type AgentEvaluator interface {
 
 ```go
 type EvaluationResult struct {
-	AppName       string                  // AppName 是应用名
-	EvalSetID     string                  // EvalSetID 是评估集标识
-	OverallStatus status.EvalStatus       // OverallStatus 是整体状态
-	ExecutionTime time.Duration           // ExecutionTime 是执行耗时
-	EvalCases     []*EvaluationCaseResult // EvalCases 是用例结果列表
+	AppName       string                    // AppName 是应用名
+	EvalSetID     string                    // EvalSetID 是评估集标识
+	OverallStatus status.EvalStatus         // OverallStatus 是整体状态
+	ExecutionTime time.Duration             // ExecutionTime 是执行耗时
+	EvalCases     []*EvaluationCaseResult   // EvalCases 是用例结果列表
+	EvalResult    *evalresult.EvalSetResult // EvalResult 是持久化的 EvalSetResult
 }
 
 type EvaluationCaseResult struct {
@@ -31,8 +32,25 @@ type EvaluationCaseResult struct {
 	OverallStatus   status.EvalStatus              // OverallStatus 是该用例的聚合状态
 	EvalCaseResults []*evalresult.EvalCaseResult   // EvalCaseResults 是每次运行的用例结果
 	MetricResults   []*evalresult.EvalMetricResult // MetricResults 是聚合后的指标结果
+	RunDetails      []*EvaluationCaseRunDetails    // RunDetails 是可选的逐 run 推理详情
+}
+
+type EvaluationCaseRunDetails struct {
+	RunID     int                         // RunID 是本次运行标识
+	Inference *EvaluationInferenceDetails // Inference 是本次运行采集到的推理详情
+}
+
+type EvaluationInferenceDetails struct {
+	SessionID       string                // SessionID 是本次运行使用的会话标识
+	UserID          string                // UserID 是本次运行使用的用户标识
+	Status          status.EvalStatus     // Status 是推理状态
+	ErrorMessage    string                // ErrorMessage 是推理失败信息
+	Inferences      []*evalset.Invocation // Inferences 是推理输出
+	ExecutionTraces []*trace.Trace        // ExecutionTraces 是执行轨迹
 }
 ```
+
+`EvalResult` 包含可由 EvalResultManager 持久化的聚合 EvalSetResult。`RunDetails` 只会在开启 run details 后填充，每条明细都对应一次具体运行。
 
 默认情况下，`evaluation.New` 会创建 AgentEvaluator 并使用 InMemory 的 EvalSetManager、MetricManager、EvalResultManager 与默认 Registry，同时创建本地 Service。若希望从本地文件读取 EvalSet 与指标配置，并将结果写入文件，需要显式注入 Local Manager。
 
