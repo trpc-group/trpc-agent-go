@@ -2,10 +2,11 @@
 
 ## 与 Agent 集成
 
-使用**两步方法**将 Memory Service 集成到 Agent：
+使用**三步方法**将 Memory Service 集成到 Agent：
 
-1. **注册工具**：使用 `llmagent.WithTools(memoryService.Tools())` 向 Agent 注册记忆工具
-2. **设置服务**：使用 `runner.WithMemoryService(memoryService)` 在 Runner 中设置记忆服务
+1. **创建服务**：构造负责保存记忆的后端
+2. **注册工具**：使用 `llmagent.WithTools(memoryService.Tools())` 向 Agent 注册记忆工具
+3. **设置服务**：使用 `runner.WithMemoryService(memoryService)` 在 Runner 中设置记忆服务
 
 ```go
 import (
@@ -42,6 +43,8 @@ appRunner := runner.NewRunner(
 
 ```go
 import (
+    "os"
+
     memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
     memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
     memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
@@ -71,11 +74,7 @@ if err != nil {
 
 // 4. PostgreSQL 存储（生产环境 - JSONB 支持）
 postgresService, err := memorypostgres.NewService(
-    memorypostgres.WithHost("localhost"),
-    memorypostgres.WithPort(5432),
-    memorypostgres.WithUser("postgres"),
-    memorypostgres.WithPassword("password"),
-    memorypostgres.WithDatabase("dbname"),
+    memorypostgres.WithPostgresClientDSN(os.Getenv("POSTGRES_DSN")),
     memorypostgres.WithSoftDelete(true), // 可选：启用软删除
 )
 if err != nil {
@@ -152,6 +151,13 @@ memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithAutoMemoryExposedTools(memory.AddToolName),
 )
 ```
+
+`WithPostgresClientDSN` 是推荐的 PostgreSQL 连接方式，优先级高于
+`WithHost`、`WithPort`、`WithUser`、`WithPassword`、`WithDatabase` 和
+`WithSSLMode`。请通过环境变量或密钥管理系统提供 `POSTGRES_DSN`。生产环境应
+使用校验证书的 DSN，例如
+`postgres://<user>:<password>@db.example.com:5432/dbname?sslmode=verify-full&sslrootcert=<trusted-ca-path>`；
+其中主机名必须与服务端证书匹配。`sslmode=disable` 只适合可信的本地开发环境。
 
 ## 覆盖语义（ID 与重复）
 
@@ -342,17 +348,21 @@ Available tools: memory_add, memory_update, memory_search, memory_load
 
 ### 代码示例
 
-完整代码请参考 [examples/memory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory)，核心实现：
+完整代码请参考 [examples/memory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory)。
+下面的片段有意只保留 InMemory、Redis、MySQL 和 PostgreSQL；可运行示例通过
+共享的
+[`NewMemoryServiceByType`](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/memory/util.go)
+工厂支持全部 9 个内置后端，包括 MySQLVec 和 pgvector。
 
 ```go
 package main
 
 import (
-    "context"
     "flag"
     "fmt"
     "log"
     "os"
+    "strconv"
 
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/memory"
@@ -374,8 +384,6 @@ func main() {
         modelName  = flag.String("model", "deepseek-v4-flash", "模型名称")
     )
     flag.Parse()
-
-    ctx := context.Background()
 
     // 1. 创建记忆服务
     memoryService, err := createMemoryService(*memType, *softDelete)
@@ -454,10 +462,15 @@ func createMemoryService(memType string, softDelete bool) (
             memorypostgres.WithToolEnabled(memory.DeleteToolName, false),
         )
 
-    default: // inmemory
+    case "inmemory":
         return memoryinmemory.NewMemoryService(
             memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
         ), nil
+    default:
+        return nil, fmt.Errorf(
+            "unsupported memory service type %q in abbreviated example",
+            memType,
+        )
     }
 }
 
@@ -479,6 +492,14 @@ func getEnv(key, defaultVal string) string {
         return val
     }
     return defaultVal
+}
+
+func getEnvInt(key string, defaultVal int) int {
+    value, err := strconv.Atoi(os.Getenv(key))
+    if err != nil {
+        return defaultVal
+    }
+    return value
 }
 
 func intPtr(i int) *int             { return &i }
@@ -559,12 +580,14 @@ memExtractor := extractor.NewExtractor(
 ```go
 type ExtractionContext struct {
     UserKey       memory.UserKey  // 用户标识。
-    Messages      []model.Message // 自上次提取以来累积的消息。
+    Messages      []model.Message // 自上次提取以来经过滤的消息。
     LastExtractAt *time.Time      // 上次提取时间戳，首次提取时为 nil。
 }
 ```
 
-**注意**：`Messages` 包含自上次成功提取以来累积的所有消息。当检查器返回 `false` 时，消息会被累积，并在下次提取时一并处理。这确保了使用轮数或时间检查器时不会丢失对话上下文。
+**注意**：`Messages` 从上次成功提取后开始累积，但只包含有内容的 user/assistant
+消息；tool call、tool result 和空消息会被排除。当检查器返回 `false` 时，过滤后的
+消息会保留到下一次提取检查。
 
 ### 工具控制
 
@@ -662,7 +685,7 @@ llmAgent := llmagent.New(
 ```go
 // 自动提取 + 搜索工具 + 预加载。
 memoryService := memoryinmemory.NewMemoryService(
-    memoryinmemory.WithExtractor(extractor),
+    memoryinmemory.WithExtractor(memExtractor),
 )
 
 llmAgent := llmagent.New(

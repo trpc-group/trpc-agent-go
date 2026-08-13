@@ -28,7 +28,8 @@ gateway/SDK 侧。直接访问 VectorDB 或 SQLite 只能访问存储层，不�
 
 ## 启动 TencentDB Agent Memory Gateway
 
-先克隆 SDK 仓库并启动 standalone gateway：
+[上游 package](https://github.com/Tencent/TencentDB-Agent-Memory/blob/main/package.json)
+要求 Node.js 22.16.0 或更高版本。先克隆 SDK 仓库并启动 standalone gateway：
 
 ```bash
 git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
@@ -173,9 +174,9 @@ memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
   任务判断；该请求仍会携带最新 user prompt 和有界的近期对话上下文。之后
   plugin 会估算 message tokens，并在达到 `CompactionRatio` 后调用
   `POST /v2/offload/compact`。失败时保留原始 model context。
-- `memSvc.Tools()` 只额外暴露 `tdai_read_offload_ref`，底层调用
-  `POST /v2/offload/read-ref`，支持全文、关键词附近或行范围读取，并受
-  `max_tokens` 限制。
+- 除其他已启用的检索工具外，`memSvc.Tools()` 还会增加 offload 专用的
+  `tdai_read_offload_ref`，底层调用 `POST /v2/offload/read-ref`，支持全文、
+  关键词附近或行范围读取，并受 `max_tokens` 限制。
 - adapter 将集成面严格限制在完成该生命周期所需的三个路由。存储、摘要、
   任务图和 offload 策略仍由 gateway 负责。
 

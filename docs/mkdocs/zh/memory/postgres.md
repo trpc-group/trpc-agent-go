@@ -4,22 +4,33 @@
 
 **适用场景**：生产环境、需要 JSONB 高级特性
 
+请通过环境变量或密钥管理系统设置 `POSTGRES_DSN`。生产 DSN 应校验服务端证书，
+并使用证书覆盖的主机名：
+
+```text
+postgres://<user>:<password>@db.example.com:5432/dbname?sslmode=verify-full&sslrootcert=<trusted-ca-path>
+```
+
 ```go
-import memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
+import (
+    "os"
+
+    memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
+)
 
 postgresService, err := memorypostgres.NewService(
-    memorypostgres.WithHost("localhost"),
-    memorypostgres.WithPort(5432),
-    memorypostgres.WithUser("postgres"),
-    memorypostgres.WithPassword("password"),
-    memorypostgres.WithDatabase("dbname"),
+    memorypostgres.WithPostgresClientDSN(os.Getenv("POSTGRES_DSN")),
     memorypostgres.WithSoftDelete(true),
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 **配置选项**：
 
-- `WithHost/WithPort/WithUser/WithPassword/WithDatabase`: 连接参数
+- `WithPostgresClientDSN(dsn)`: 推荐的连接方式，优先级最高
+- `WithHost/WithPort/WithUser/WithPassword/WithDatabase`: 可选的分字段连接参数
 - `WithSSLMode(mode)`: SSL 模式（默认 "disable"）
 - `WithPostgresInstance(name)`: 使用预注册的 PostgreSQL 实例
 - `WithSoftDelete(enabled)`: 启用软删除（默认 false）
@@ -31,9 +42,35 @@ postgresService, err := memorypostgres.NewService(
 - `WithExtraOptions(...options)`: 传递给 PostgreSQL 客户端的额外选项
 - `WithSkipDBInit(skip)`: 跳过表初始化（适用于无 DDL 权限场景）
 
-**注意**：直接连接参数优先级高于 `WithPostgresInstance`
+**注意**：DSN 优先于分字段连接参数，这两种直接连接方式都优先于
+`WithPostgresInstance`。SSL mode 默认为 `disable`，只应在可信的本地开发环境
+使用，不要用于生产环境。
 
-**表结构**（自动创建）：
+**注册实例示例**：
+
+```go
+import (
+    "os"
+
+    memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
+    storagepostgres "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
+)
+
+storagepostgres.RegisterPostgresInstance(
+    "my-postgres",
+    storagepostgres.WithClientConnString(os.Getenv("POSTGRES_DSN")),
+)
+postgresService, err := memorypostgres.NewService(
+    memorypostgres.WithPostgresInstance("my-postgres"),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+**默认表结构**（自动创建于 `public.memories`）：
+
+`WithSchema` 和 `WithTableName` 会替换以下 DDL 及索引语句中的 schema 和表名。
 
 ```sql
 CREATE TABLE memories (

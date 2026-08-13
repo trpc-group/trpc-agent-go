@@ -36,7 +36,9 @@ recall before model calls, and external SDK-owned memory extraction.
 
 ## Start the TencentDB Agent Memory Gateway
 
-Clone the SDK repository and start the standalone gateway:
+The [upstream package](https://github.com/Tencent/TencentDB-Agent-Memory/blob/main/package.json)
+requires Node.js 22.16.0 or later. Clone the SDK repository and start the
+standalone gateway:
 
 ```bash
 git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
@@ -189,7 +191,8 @@ At runtime:
   tokens and calls
   `POST /v2/offload/compact` after `CompactionRatio` is reached. Failures are
   best effort: the original model context is retained.
-- `memSvc.Tools()` exposes only `tdai_read_offload_ref`, backed by
+- Alongside the other enabled search tools, `memSvc.Tools()` adds the
+  offload-specific `tdai_read_offload_ref`, backed by
   `POST /v2/offload/read-ref`. It supports full, query-centered, or line-range
   recovery, bounded by `max_tokens`.
 - The adapter deliberately limits its integration to the three routes needed

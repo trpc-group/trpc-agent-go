@@ -13,11 +13,15 @@ mysqlService, err := memorymysql.NewService(
     memorymysql.WithMySQLClientDSN(dsn),
     memorymysql.WithSoftDelete(true),
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 **Configuration options**:
 
-- `WithMySQLClientDSN(dsn)`: MySQL DSN connection string (recommended, requires `parseTime=true`)
+- `WithMySQLClientDSN(dsn)`: MySQL DSN connection string (recommended;
+  requires `parseTime=true`)
 - `WithMySQLInstance(name)`: Use pre-registered MySQL instance
 - `WithSoftDelete(enabled)`: Enable soft delete (default false)
 - `WithTableName(name)`: Custom table name (default "memories")
@@ -25,15 +29,20 @@ mysqlService, err := memorymysql.NewService(
 - `WithCustomTool(toolName, creator)`: Register custom tool
 - `WithToolEnabled(toolName, enabled)`: Enable/disable tool
 - `WithExtraOptions(...options)`: Extra options passed to MySQL client
-- `WithSkipDBInit(skip)`: Skip table initialization (for users without DDL permissions)
+- `WithSkipDBInit(skip)`: Skip table initialization (for users without DDL
+  permissions)
+
+`WithMySQLClientDSN` takes priority over `WithMySQLInstance` when both are set.
 
 **DSN example**:
 
-```
+```text
 root:password@tcp(localhost:3306)/memory_db?parseTime=true&charset=utf8mb4
 ```
 
-**Table schema** (auto-created):
+**Default table schema** (auto-created):
+
+`WithTableName` replaces `memories` in this DDL.
 
 ```sql
 CREATE TABLE memories (

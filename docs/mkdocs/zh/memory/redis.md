@@ -10,6 +10,9 @@ import memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 redisService, err := memoryredis.NewService(
     memoryredis.WithRedisClientURL("redis://localhost:6379"),
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 **配置选项**：
@@ -25,7 +28,7 @@ redisService, err := memoryredis.NewService(
 **注意**：`WithRedisClientURL` 优先级高于 `WithRedisInstance`
 
 **Redis ACL 要求**：`UpdateMemory` 使用服务端 Lua 脚本，以原子方式校验并
-轮换记忆 ID。除脚本使用的 `HEXISTS`、`HSET`、`HDEL` 命令和对应记忆 key
+轮换记忆 ID。除 `HGET`、脚本使用的 `HEXISTS`、`HSET`、`HDEL` 命令和对应记忆 key
 访问权限外，ACL 用户还必须具有 `EVALSHA` 和 `EVAL` 权限；脚本尚未缓存时
 需要 `EVAL`。Redis 重启或执行 `SCRIPT FLUSH` 后脚本缓存可能被清除，因此
 不能只在预热阶段临时授予 `EVAL`。
@@ -37,4 +40,7 @@ redisService, err := memoryredis.NewService(
     memoryredis.WithRedisClientURL("redis://localhost:6379"),
     memoryredis.WithKeyPrefix("prod"),
 )
+if err != nil {
+    panic(err)
+}
 ```

@@ -11,6 +11,9 @@ import memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 redisService, err := memoryredis.NewService(
     memoryredis.WithRedisClientURL("redis://localhost:6379"),
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 **Configuration options**:
@@ -28,7 +31,7 @@ redisService, err := memoryredis.NewService(
 **Redis ACL requirement**: `UpdateMemory` uses a server-side Lua script to
 atomically validate and rotate memory IDs. ACL users must be allowed to run
 `EVALSHA` and `EVAL` (`EVAL` is required when the script is not yet cached), in
-addition to the script's `HEXISTS`, `HSET`, and `HDEL` commands and access to
+addition to `HGET` and the script's `HEXISTS`, `HSET`, and `HDEL` commands and access to
 the configured memory-key pattern. Do not remove `EVAL` after warm-up because
 the Redis script cache can be cleared by a restart or `SCRIPT FLUSH`.
 
@@ -39,4 +42,7 @@ redisService, err := memoryredis.NewService(
     memoryredis.WithRedisClientURL("redis://localhost:6379"),
     memoryredis.WithKeyPrefix("prod"),
 )
+if err != nil {
+    panic(err)
+}
 ```

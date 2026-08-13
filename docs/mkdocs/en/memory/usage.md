@@ -2,10 +2,11 @@
 
 ## Integrate with Agent
 
-Use a **two-step approach** to integrate the Memory Service with an Agent:
+Use a **three-step approach** to integrate the Memory Service with an Agent:
 
-1. **Register tools**: Use `llmagent.WithTools(memoryService.Tools())` to register memory tools with the Agent
-2. **Set service**: Use `runner.WithMemoryService(memoryService)` to set the memory service in the Runner
+1. **Create the service**: Construct the backend that owns the memories
+2. **Register tools**: Use `llmagent.WithTools(memoryService.Tools())` to register memory tools with the Agent
+3. **Set the service**: Use `runner.WithMemoryService(memoryService)` to set the memory service in the Runner
 
 ```go
 import (
@@ -44,6 +45,8 @@ and ChromaDB.
 
 ```go
 import (
+    "os"
+
     memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
     memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
     memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
@@ -75,7 +78,7 @@ if err != nil {
 // PostgreSQL implementation for production (relational database).
 // Table is automatically created on service initialization (unless skipped). Returns error on failure.
 postgresService, err := memorypostgres.NewService(
-    memorypostgres.WithPostgresClientDSN("postgres://user:password@localhost:5432/dbname?sslmode=disable"),
+    memorypostgres.WithPostgresClientDSN(os.Getenv("POSTGRES_DSN")),
     memorypostgres.WithSoftDelete(true), // Enable soft delete.
     memorypostgres.WithToolEnabled(memory.DeleteToolName, true), // Enable delete.
 )
@@ -96,6 +99,14 @@ runner := runner.NewRunner(
     runner.WithMemoryService(memService), // Or redisService, mysqlService, or postgresService.
 )
 ```
+
+`WithPostgresClientDSN` is the recommended PostgreSQL connection form and has
+priority over `WithHost`, `WithPort`, `WithUser`, `WithPassword`,
+`WithDatabase`, and `WithSSLMode`. Supply `POSTGRES_DSN` through environment or
+secret management. In production, use a certificate-validating DSN such as
+`postgres://<user>:<password>@db.example.com:5432/dbname?sslmode=verify-full&sslrootcert=<trusted-ca-path>`;
+the host must match the server certificate. `sslmode=disable` is appropriate
+only for trusted local development.
 
 ## Memory Tool Configuration
 
@@ -165,8 +176,8 @@ memoryService := memoryinmemory.NewMemoryService(
   episodic metadata. Topics are intentionally excluded, so changing tags does
   not create a new memory. Adding the same content and identity metadata for the
   same user is idempotent and overwrites the existing entry (not append).
-  UpdatedAt is refreshed. If that canonical ID belongs to a soft-deleted row,
-  `AddMemory` reactivates it.
+  The stored topics are replaced and `UpdatedAt` is refreshed. If that
+  canonical ID belongs to a soft-deleted row, `AddMemory` reactivates it.
 - If you need append semantics or different duplicate-handling strategies, you can
   implement custom tools or extend the service with policy options (e.g. allow/overwrite/ignore).
 
@@ -355,17 +366,21 @@ The more you share with me, the better I'll be able to remember and help you in 
 
 ### Code Example
 
-For full code, see [examples/memory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory). Core implementation:
+For full code, see [examples/memory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory).
+The excerpt below is intentionally limited to InMemory, Redis, MySQL, and
+PostgreSQL. The runnable example uses the shared
+[`NewMemoryServiceByType`](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/memory/util.go)
+factory for all nine built-in backends, including MySQLVec and pgvector.
 
 ```go
 package main
 
 import (
-    "context"
     "flag"
     "fmt"
     "log"
     "os"
+    "strconv"
 
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/memory"
@@ -387,8 +402,6 @@ func main() {
         modelName  = flag.String("model", "deepseek-v4-flash", "Model name")
     )
     flag.Parse()
-
-    ctx := context.Background()
 
     // 1. Create memory service
     memoryService, err := createMemoryService(*memType, *softDelete)
@@ -468,10 +481,15 @@ func createMemoryService(memType string, softDelete bool) (
             memorypostgres.WithToolEnabled(memory.DeleteToolName, false),
         )
 
-    default: // inmemory
+    case "inmemory":
         return memoryinmemory.NewMemoryService(
             memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
         ), nil
+    default:
+        return nil, fmt.Errorf(
+            "unsupported memory service type %q in abbreviated example",
+            memType,
+        )
     }
 }
 
@@ -493,6 +511,14 @@ func getEnv(key, defaultVal string) string {
         return val
     }
     return defaultVal
+}
+
+func getEnvInt(key string, defaultVal int) int {
+    value, err := strconv.Atoi(os.Getenv(key))
+    if err != nil {
+        return defaultVal
+    }
+    return value
 }
 
 func intPtr(i int) *int             { return &i }
@@ -573,12 +599,15 @@ The `ExtractionContext` provides information for checker decisions:
 ```go
 type ExtractionContext struct {
     UserKey       memory.UserKey  // User identifier.
-    Messages      []model.Message // Accumulated messages since last extraction.
+    Messages      []model.Message // Filtered messages since last extraction.
     LastExtractAt *time.Time      // Last extraction timestamp, nil if never extracted.
 }
 ```
 
-**Note**: `Messages` contains all accumulated messages since the last successful extraction. When a checker returns `false`, messages are accumulated and will be included in the next extraction. This ensures no conversation context is lost when using turn-based or time-based checkers.
+`Messages` accumulates since the last successful extraction, but contains only
+user/assistant messages with content. Tool calls, tool results, and empty
+messages are excluded. When a checker returns `false`, the filtered messages
+remain available to the next extraction check.
 
 ### Tool Control
 
@@ -690,7 +719,7 @@ You can combine both approaches:
 ```go
 // Auto extraction + search tool + preloading.
 memoryService := memoryinmemory.NewMemoryService(
-    memoryinmemory.WithExtractor(extractor),
+    memoryinmemory.WithExtractor(memExtractor),
 )
 
 llmAgent := llmagent.New(

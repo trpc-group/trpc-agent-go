@@ -20,7 +20,7 @@ import (
 
 db, err := sql.Open("sqlite3", "file:memories_vec.db?_busy_timeout=5000")
 if err != nil {
-    // handle error
+    panic(err)
 }
 
 emb := openaiembedder.New(
@@ -34,7 +34,8 @@ memoryService, err := memorysqlitevec.NewService(
     memorysqlitevec.WithMemoryLimit(200),
 )
 if err != nil {
-    // handle error
+    _ = db.Close()
+    panic(err)
 }
 defer memoryService.Close()
 ```

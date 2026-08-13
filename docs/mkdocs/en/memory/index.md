@@ -181,7 +181,7 @@ func main() {
 
 **Conversation example**:
 
-```
+```text
 User: My name is Alice and I work at TechCorp.
 
 Agent: Nice to meet you, Alice! I'll remember that you work at TechCorp.
@@ -270,7 +270,7 @@ func main() {
 
 **Conversation example**:
 
-```
+```text
 User: My name is Alice and I work at TechCorp.
 
 Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp.
@@ -469,7 +469,7 @@ is the core of tRPC-Agent-Go's memory management. It provides complete memory
 storage and retrieval capabilities with a modular design that supports
 multiple storage backends and memory tools.
 
-```textplain
+```text
 memory/
 ├── memory.go          # Core interface definitions.
 ├── inmemory/          # In-memory memory service implementation.
@@ -511,64 +511,18 @@ integration, extraction modes, and tool behavior are covered in
 
 **Selection guide**:
 
-```
+```text
 Development/Testing → InMemory (zero config, fast)
 Local Persistence → SQLite (single-file DB, easy setup)
 Local Vector Search → SQLiteVec (single-file DB + embeddings)
 High Concurrency → Redis (memory-level performance)
 ACID Requirements → MySQL/PostgreSQL (transaction guarantees)
 Complex JSON → PostgreSQL (JSONB indexing and queries)
-MySQL Vector Search → mysqlvec (similarity search on MySQL 9.0+)
+MySQL Vector Search → mysqlvec (native VECTOR when available, BLOB fallback otherwise)
 Vector Search → pgvector (similarity search with embeddings)
 Managed Vector Service → ChromaDB (REST-based cosine and hybrid search)
 Audit Trail → MySQL/MySQL Vec/PostgreSQL/pgvector/SQLite/SQLiteVec/ChromaDB (soft delete support)
 ```
-
-**Register PostgreSQL Instance (Optional):**
-
-```go
-import (
-    storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
-    memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
-)
-
-// Register PostgreSQL instance
-storage.RegisterPostgresInstance("my-postgres",
-    storage.WithClientConnString("postgres://user:password@localhost:5432/dbname"),
-)
-
-// Use registered instance
-postgresService, err := memorypostgres.NewService(
-    memorypostgres.WithPostgresInstance("my-postgres"),
-)
-```
-
-## Storage Backend Comparison
-
-| Feature                  | In-Memory | SQLite     | SQLiteVec    | Redis      | MySQL          | MySQL Vec     | PostgreSQL     | pgvector      | ChromaDB       |
-| ------------------------ | --------- | ---------- | ------------ | ---------- | -------------- | ------------- | -------------- | ------------- | -------------- |
-| Data Persistence         | ❌        | ✅         | ✅           | ✅         | ✅             | ✅            | ✅             | ✅            | ✅             |
-| Distributed Support      | ❌        | ❌         | ❌           | ✅         | ✅             | ✅            | ✅             | ✅            | ✅             |
-| Transaction Support      | ❌        | ✅ (ACID)  | ✅ (ACID)    | Partial    | ✅ (ACID)      | ✅ (ACID)     | ✅ (ACID)      | ✅ (ACID)     | Best effort    |
-| Query Capability         | Simple    | SQL        | SQL + Vector | Medium     | Powerful (SQL) | SQL + Vector  | Powerful (SQL) | SQL + Vectors | Vector + Local |
-| JSON Support             | ❌        | Basic      | Basic        | Partial    | ✅ (JSON)      | ✅ (JSON)     | ✅ (JSONB)     | ✅ (JSONB)    | Metadata       |
-| Performance              | Very High | Med-High   | Medium-High  | High       | Medium-High    | Medium-High   | Medium-High    | Medium-High   | High           |
-| Configuration Complexity | Low       | Low        | Medium       | Medium     | Medium         | Medium        | Medium         | Medium        | Medium         |
-| Use Case                 | Dev/Test  | Local Dev  | Local Vector | Production | Production     | MySQL Vector  | Production     | Vector Search | Vector Service |
-| Monitoring Tools         | None      | None       | None         | Rich       | Very Rich      | Very Rich     | Very Rich      | Very Rich     | Chroma tooling |
-
-**Selection Guide:**
-
-- **Development/Testing**: Use in-memory storage for fast iteration
-- **Local Development (Persistent)**: Use SQLite when you want persistence without operating an external database
-- **Local Development (Vector Search)**: Use SQLiteVec when you want semantic search in a single-file SQLite DB
-- **Production (High Performance)**: Use Redis storage for high concurrency scenarios
-- **Production (Data Integrity)**: Use MySQL storage when ACID guarantees and complex queries are needed
-- **Production (MySQL Vector Search)**: Use MySQL Vec for similarity search on MySQL 9.0+
-- **Production (PostgreSQL)**: Use PostgreSQL storage when JSONB support and advanced PostgreSQL features are needed
-- **Production (Vector Search)**: Use pgvector storage when similarity search with embeddings is needed
-- **Production (Vector Service)**: Use ChromaDB for REST-based cosine and hybrid memory search
-- **Hybrid Deployment**: Choose different storage backends based on different application scenarios
 
 ## FAQ
 
@@ -618,6 +572,9 @@ memory.AddMemory(ctx, userKey, "User likes programming", []string{"interests"})
 
 - ✅ **Natural deduplication**: Avoids redundant storage
 - ✅ **Idempotent operations**: Repeated additions don't create multiple records
+  when the content and identity metadata are unchanged
+- ℹ️ **Episode identity**: Changing `eventTime`, `participants`, `location`, or
+  another canonical identity field can produce a different ID for the same text
 - ⚠️ **Overwrite update**: Cannot append same content (add timestamp or sequence number if append is needed)
 
 ### Search Behavior Notes
@@ -678,6 +635,9 @@ mysqlService, err := memorymysql.NewService(
     memorymysql.WithMySQLClientDSN("..."),
     memorymysql.WithSoftDelete(true), // Enable soft delete
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 **Behavior differences**:
@@ -688,6 +648,11 @@ mysqlService, err := memorymysql.NewService(
 | Query     | Not visible       | Auto-filtered (WHERE deleted_at IS NULL) |
 | Recovery  | Cannot recover    | Re-add or rotate an update to the same ID |
 | Storage   | Saves space       | Occupies space                           |
+
+`AddMemory` reactivates a tombstone when the new entry has that same canonical
+ID. `UpdateMemory` cannot use a soft-deleted record as its source. An update
+from an active source reactivates a soft-deleted target only when the updated
+content and identity metadata rotate to that target's canonical ID.
 
 **Migration trap**:
 
@@ -706,11 +671,8 @@ mysqlService, err := memorymysql.NewService(
 ```go
 // ✅ Recommended configuration
 postgresService, err := memorypostgres.NewService(
-    // Use environment variables for sensitive info
-    memorypostgres.WithHost(os.Getenv("DB_HOST")),
-    memorypostgres.WithUser(os.Getenv("DB_USER")),
-    memorypostgres.WithPassword(os.Getenv("DB_PASSWORD")),
-    memorypostgres.WithDatabase(os.Getenv("DB_NAME")),
+    // POSTGRES_DSN should use sslmode=verify-full in production.
+    memorypostgres.WithPostgresClientDSN(os.Getenv("POSTGRES_DSN")),
 
     // Enable soft delete (for recovery)
     memorypostgres.WithSoftDelete(true),
@@ -718,6 +680,9 @@ postgresService, err := memorypostgres.NewService(
     // Reasonable limit
     memorypostgres.WithMemoryLimit(1000),
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 ### Error Handling

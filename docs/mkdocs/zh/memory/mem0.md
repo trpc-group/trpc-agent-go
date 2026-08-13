@@ -2,7 +2,10 @@
 
 `memory/mem0` 是当前对 [mem0](https://mem0.ai) 的集成实现，适合把长期记忆的提取与存储交给外部托管平台，同时仍然让 Agent 通过标准记忆工具查询结果。
 
-它与上文介绍的内置 Memory 后端不同：`memory/mem0` **不是** 完整的 `memory.Service` 实现，而是采用 ingest-first 模式。Runner 会在每轮对话后把 session transcript 发送给 mem0，由 mem0 在平台侧完成提取，Agent 再通过只读工具读取结果。
+它与上文介绍的内置 Memory 后端不同：`memory/mem0` **不是** 完整的
+`memory.Service` 实现，而是采用 ingest-first 模式。每轮结束后，Runner 把当前
+Session 交给 ingestor；ingestor 只选择尚未摄取且非空的 user/assistant 增量并
+转发给 mem0。mem0 在平台侧完成提取，Agent 再通过只读工具读取结果。
 
 **适用场景**：外部长时记忆平台、每轮响应后的后台提取，以及不需要本地 CRUD 写路径的场景。
 
@@ -48,7 +51,8 @@ defer r.Close()
 **接入要点**：
 
 - 通过 `llmagent.WithTools(mem0Svc.Tools())` 注册工具
-- 通过 `runner.WithSessionIngestor(mem0Svc)` 把 session transcript 交给 mem0
+- 通过 `runner.WithSessionIngestor(mem0Svc)` 把 Session 交给 ingestor；它只把此前
+  尚未摄取的消息增量发送给 mem0
 - 可选启用 `llmagent.WithPreloadMemory(N)`；由于 `mem0Svc` 同时实现 `memory.Reader`，Runner 可以用它执行只读预加载
 - 不要对该集成使用 `runner.WithMemoryService(...)`
 
@@ -56,16 +60,24 @@ defer r.Close()
 
 `runner.WithMemoryService(...)` 面向的是实现完整 `memory.Service` 契约的内置 Memory 后端。这个契约除了读接口，还包括 `AddMemory`、`UpdateMemory`、`DeleteMemory`、`ClearMemories`、`EnqueueAutoMemoryJob(...)` 等由框架直接拥有语义的写入与自动提取能力。
 
-`memory/mem0` 的边界不同。它并不把完整的 CRUD 生命周期暴露给框架，而是接收完整的 session transcript，转交给 mem0 做托管提取，然后再通过只读工具把检索能力暴露给 Agent。
+`memory/mem0` 的边界不同。它并不把完整的 CRUD 生命周期暴露给框架，而是接收
+当前 Session，选择此前尚未摄取且非空的增量消息，转交给 mem0 做托管提取，
+然后再通过只读工具把检索能力暴露给 Agent。
 
 使用 `runner.WithSessionIngestor(...)` 可以更准确地表达这层边界：
 
-- Runner 在每轮结束后把完整 session transcript 发送出去
+- Runner 在每轮结束后传入当前 Session；ingestor 只发送晚于 session watermark
+  的 user/assistant 消息
 - 记忆提取与存储由 mem0 在服务端完成
 - `metadata`、`agent_id`、`run_id` 这类按请求传递的 ingest 字段，可以通过 `session.IngestOption` 透传
 - 不会把该集成误解成支持完整框架侧 CRUD 的内置后端；显式启用的框架侧 preload 只使用只读 `memory.Reader` 能力
 
-简单说，`MemoryService` 表示“框架直接管理记忆”，而 `SessionIngestor` 表示“框架把 transcript 交给外部记忆系统”。`mem0` 属于后者。
+ingestor 会在每个 session 的锁内预留所选 watermark，再把任务放入队列，因此
+并发调用不会重复提交同一段增量。异步提交失败后不会自动从 Session 重放，运维
+层面的重试需要在此适配层之外处理。
+
+简单说，`MemoryService` 表示“框架直接管理记忆”，而 `SessionIngestor` 表示
+“框架把 Session 交给外部记忆适配层”。`mem0` 属于后者。
 
 ## 配置选项
 
@@ -74,7 +86,7 @@ defer r.Close()
 | `WithAPIKey(key)` | mem0 API Key；托管平台必填，本地 OSS 且关闭鉴权时可为空。 | 必填 |
 | `WithHost(url)` | 覆盖 mem0 API Host / Base URL。 | `https://api.mem0.ai` |
 | `WithSelfHostedOSS()` | 使用本地 Mem0 OSS REST API（`/memories`、`/search`、`X-API-Key`）。开启后如果没有设置 `WithHost`，host 默认 `http://localhost:8888`；OSS 模式会拒绝托管平台默认 host。 | 关闭 |
-| `WithSelfHostedOSSIncludeUnscopedMemories()` | 包含没有 `metadata.trpc_app_name` 的历史 OSS 记录；已标记为其他 app 的记录仍会隐藏。 | 关闭 |
+| `WithSelfHostedOSSIncludeUnscopedMemories()` | 包含没有 `metadata.trpc_app_name` 的历史 OSS 记录；已标记为其他 app 的记录仍会隐藏。该选项会弱化 app 隔离，只应在受控迁移期间启用。 | 关闭 |
 | `WithSelfHostedIngestPrompt(prompt)` | 为该 service 的所有本地 Mem0 写入设置提取 prompt。 | 服务端默认值 |
 | `WithSelfHostedIngestExpirationDateResolver(resolver)` | 为每次本地 Mem0 写入独立解析 `expiration_date`。 | 不发送 |
 | `WithIngestInference(bool)` | 控制 Mem0 是否从 transcript 中提取记忆；同时适用于托管和本地写入。 | `true` |
@@ -196,8 +208,8 @@ API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`
 ## 注意事项
 
 - `Tools()` 默认暴露 `memory_search`；`memory_load` 可按需开启。
-- 所有读取仍然基于当前 `<appName, userID>` 做隔离。
-- 本地 OSS 没有 top-level `app_id`，适配层使用 `metadata.trpc_app_name` 做 app 隔离。已有 OSS 记录如果缺少这个 metadata，默认会被隐藏，直到重新 ingest 或回填 metadata。迁移期确实需要读取这些历史记录时，可显式开启 `WithSelfHostedOSSIncludeUnscopedMemories()`。
+- 默认情况下，读取会基于当前 `<appName, userID>` 做隔离。
+- 本地 OSS 没有 top-level `app_id`，适配层使用 `metadata.trpc_app_name` 做 app 隔离。已有 OSS 记录如果缺少这个 metadata，默认会被隐藏，直到重新 ingest 或回填 metadata。`WithSelfHostedOSSIncludeUnscopedMemories()` 会让共用同一 `user_id` 的不同 app 都看到未标记记录，因此会弱化隔离，只应在受控迁移期间启用。
 - 当前 OSS `GET /memories` API 最多返回 1000 条 user 级结果，不支持分页，也不能在服务端表达 `metadata.trpc_app_name` 过滤。因此 `ReadMemories` 要求传入大于 0 且不超过 1000 的 limit，并且只会在 OSS 返回的前 1000 条 user 级记录内尽力做本地 app 隔离。
 - Runner 会自动把 session 上下文带入 `IngestSession`。自定义调用方可通过 `session.WithIngestMetadata`、`session.WithIngestAgentID` 与 `session.WithIngestRunID` 设置单次调用的通用字段；Mem0 专属字段通过 service option 配置。
 - 当同一个 mem0 service 通过 `runner.WithSessionIngestor(mem0Svc)` 配置后，`WithPreloadMemory(N)` 可以使用 mem0 的只读能力；生产环境建议使用正数预算。

@@ -18,7 +18,7 @@ import (
 
 db, err := sql.Open("sqlite3", "file:memories.db?_busy_timeout=5000")
 if err != nil {
-    // handle error
+    panic(err)
 }
 
 memoryService, err := memorysqlite.NewService(
@@ -27,7 +27,8 @@ memoryService, err := memorysqlite.NewService(
     memorysqlite.WithMemoryLimit(200),
 )
 if err != nil {
-    // handle error
+    _ = db.Close()
+    panic(err)
 }
 defer memoryService.Close()
 ```
@@ -44,4 +45,5 @@ defer memoryService.Close()
 **Notes**:
 
 - This backend uses `github.com/mattn/go-sqlite3` and requires CGO.
-- `NewService` owns the `*sql.DB` and closes it in `Close()`.
+- After `NewService` succeeds, the service owns the `*sql.DB` and closes it in
+  `Close()`. The caller must close `db` if construction fails.

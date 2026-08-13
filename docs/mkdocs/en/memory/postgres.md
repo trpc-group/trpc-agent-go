@@ -5,22 +5,33 @@ For common Agent integration, extraction modes, and tool configuration, see
 
 **Use case**: Production, advanced JSONB features
 
+Set `POSTGRES_DSN` through environment or secret management. A production DSN
+should validate the server certificate and use a host name covered by it:
+
+```text
+postgres://<user>:<password>@db.example.com:5432/dbname?sslmode=verify-full&sslrootcert=<trusted-ca-path>
+```
+
 ```go
-import memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
+import (
+    "os"
+
+    memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
+)
 
 postgresService, err := memorypostgres.NewService(
-    memorypostgres.WithHost("localhost"),
-    memorypostgres.WithPort(5432),
-    memorypostgres.WithUser("postgres"),
-    memorypostgres.WithPassword("password"),
-    memorypostgres.WithDatabase("dbname"),
+    memorypostgres.WithPostgresClientDSN(os.Getenv("POSTGRES_DSN")),
     memorypostgres.WithSoftDelete(true),
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 **Configuration options**:
 
-- `WithHost/WithPort/WithUser/WithPassword/WithDatabase`: Connection parameters
+- `WithPostgresClientDSN(dsn)`: Recommended connection form; has the highest priority
+- `WithHost/WithPort/WithUser/WithPassword/WithDatabase`: Alternative field-based connection parameters
 - `WithSSLMode(mode)`: SSL mode (default "disable")
 - `WithPostgresInstance(name)`: Use pre-registered PostgreSQL instance
 - `WithSoftDelete(enabled)`: Enable soft delete (default false)
@@ -32,9 +43,36 @@ postgresService, err := memorypostgres.NewService(
 - `WithExtraOptions(...options)`: Extra options passed to PostgreSQL client
 - `WithSkipDBInit(skip)`: Skip table initialization (for users without DDL permissions)
 
-**Note**: Direct connection parameters take priority over `WithPostgresInstance`
+**Note**: A DSN takes priority over the field-based connection parameters. Both
+direct forms take priority over `WithPostgresInstance`. The default SSL mode is
+`disable`; use it only for trusted local development, not production.
 
-**Table schema** (auto-created):
+**Registered instance example**:
+
+```go
+import (
+    "os"
+
+    memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
+    storagepostgres "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
+)
+
+storagepostgres.RegisterPostgresInstance(
+    "my-postgres",
+    storagepostgres.WithClientConnString(os.Getenv("POSTGRES_DSN")),
+)
+postgresService, err := memorypostgres.NewService(
+    memorypostgres.WithPostgresInstance("my-postgres"),
+)
+if err != nil {
+    panic(err)
+}
+```
+
+**Default table schema** (auto-created in `public.memories`):
+
+`WithSchema` and `WithTableName` replace the schema and table identifiers in
+this DDL and its index statements.
 
 ```sql
 CREATE TABLE memories (

@@ -17,7 +17,7 @@ import (
 
 db, err := sql.Open("sqlite3", "file:memories.db?_busy_timeout=5000")
 if err != nil {
-    // 处理错误
+    panic(err)
 }
 
 memoryService, err := memorysqlite.NewService(
@@ -26,7 +26,8 @@ memoryService, err := memorysqlite.NewService(
     memorysqlite.WithMemoryLimit(200),
 )
 if err != nil {
-    // 处理错误
+    _ = db.Close()
+    panic(err)
 }
 defer memoryService.Close()
 ```
@@ -43,4 +44,5 @@ defer memoryService.Close()
 **注意事项**：
 
 - 该后端使用 `github.com/mattn/go-sqlite3`，需要 CGO。
-- `NewService` 会在 `Close()` 时关闭传入的 `*sql.DB`。
+- `NewService` 成功后，service 会接管传入的 `*sql.DB` 并在 `Close()` 时关闭；
+  如果构造失败，调用方必须自行关闭 `db`。

@@ -171,7 +171,7 @@ func main() {
 
 **对话示例**：
 
-```
+```text
 用户：我叫张三，在腾讯工作。
 
 Agent：你好张三！很高兴认识你。我会记住你在腾讯工作。
@@ -254,7 +254,7 @@ func main() {
 
 **对话示例**：
 
-```
+```text
 用户：我叫张三，在腾讯工作。
 
 Agent：你好张三！很高兴认识腾讯的朋友。今天有什么可以帮你的？
@@ -418,7 +418,7 @@ update policy 和 reconcile 路径。
 
 Memory 模块采用分层设计，由以下核心组件组成：
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                         Agent                                │
 │  ┌──────────────────────────────────────────────────────┐   │
@@ -474,7 +474,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
 
 #### 记忆的生命周期
 
-```
+```text
 ┌──────────────┐
 │ 1. 创建记忆   │  用户对话 → Agent 判断 → 调用 memory_add
 └──────┬───────┘
@@ -546,8 +546,9 @@ memoryID := SHA256(content) // 64 位十六进制字符串
 
 **特性**：
 
-- **幂等性**：重复添加相同内容不会创建新记忆，而是覆盖更新
-- **一致性**：相同内容在不同时间添加产生相同 ID
+- **幂等性**：内容和身份元数据都相同时，重复添加不会创建新记忆，而是覆盖更新
+- **一致性**：内容和身份元数据相同，即使记录的创建时间不同也会产生相同 ID；
+  如果 `eventTime`、`participants`、`location` 等身份元数据变化，ID 也会变化
 - **去重**：天然支持去重，避免冗余存储
 
 ## 存储后端
@@ -581,14 +582,14 @@ memoryID := SHA256(content) // 64 位十六进制字符串
 
 **选择建议**：
 
-```
+```text
 开发/测试 → InMemory（零配置，快速启动）
 本地持久化 → SQLite（单文件数据库，易部署）
 本地向量检索 → SQLiteVec（单文件数据库 + embedding）
 高并发读写 → Redis（内存级性能）
 需要 ACID → MySQL/PostgreSQL（事务保证）
 复杂 JSON → PostgreSQL（JSONB 索引和查询）
-MySQL 向量检索 → MySQLVec（MySQL 9.0+ 相似度检索）
+MySQL 向量检索 → MySQLVec（可用时使用原生 VECTOR，否则使用 BLOB 降级路径）
 向量搜索 → pgvector（基于 embedding 的相似度搜索）
 向量服务 → ChromaDB（基于 REST 的余弦与混合检索）
 审计追踪 → MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB/SQLite/SQLiteVec（软删除支持）
@@ -639,7 +640,7 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"兴趣"})
 **影响**：
 
 - ✅ **天然去重**：避免冗余存储
-- ✅ **幂等操作**：重复添加不会创建多条记录
+- ✅ **幂等操作**：内容和身份元数据不变时，重复添加不会创建多条记录
 - ⚠️ **覆盖更新**：无法追加相同内容（如需追加，可在内容中加时间戳或序号）
 
 ### 搜索行为说明
@@ -700,6 +701,9 @@ mysqlService, err := memorymysql.NewService(
     memorymysql.WithMySQLClientDSN("..."),
     memorymysql.WithSoftDelete(true), // 启用软删除
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 **行为差异**：
@@ -710,6 +714,10 @@ mysqlService, err := memorymysql.NewService(
 | 查询 | 不可见   | 自动过滤（WHERE deleted_at IS NULL） |
 | 恢复 | 无法恢复 | 重新 Add，或将更新轮转到相同 ID      |
 | 存储 | 节省空间 | 占用空间                             |
+
+当新记忆的规范 ID 与 tombstone 相同时，`AddMemory` 会重新激活该记录。
+`UpdateMemory` 不能以软删除记录作为 source；只有从 active source 更新后，内容和
+身份元数据轮转到软删除 target 的规范 ID 时，才会重新激活该 target。
 
 **迁移陷阱**：
 
@@ -728,11 +736,8 @@ mysqlService, err := memorymysql.NewService(
 ```go
 // ✅ 推荐配置
 postgresService, err := memorypostgres.NewService(
-    // 使用环境变量管理敏感信息
-    memorypostgres.WithHost(os.Getenv("DB_HOST")),
-    memorypostgres.WithUser(os.Getenv("DB_USER")),
-    memorypostgres.WithPassword(os.Getenv("DB_PASSWORD")),
-    memorypostgres.WithDatabase(os.Getenv("DB_NAME")),
+    // 生产环境的 POSTGRES_DSN 应使用 sslmode=verify-full。
+    memorypostgres.WithPostgresClientDSN(os.Getenv("POSTGRES_DSN")),
 
     // 启用软删除（便于恢复）
     memorypostgres.WithSoftDelete(true),
@@ -740,6 +745,9 @@ postgresService, err := memorypostgres.NewService(
     // 合理限制
     memorypostgres.WithMemoryLimit(1000),
 )
+if err != nil {
+    panic(err)
+}
 ```
 
 ### 错误处理
