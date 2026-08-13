@@ -32,11 +32,24 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
+func TestSeccompAddressFamilyConstants(t *testing.T) {
+	t.Parallel()
+	if afUNIX != uint32(unix.AF_UNIX) {
+		t.Fatalf("afUNIX=%d AF_UNIX=%d", afUNIX, unix.AF_UNIX)
+	}
+	if uint32(unix.AF_LOCAL) != uint32(unix.AF_UNIX) {
+		t.Fatalf("AF_LOCAL=%d AF_UNIX=%d, filter treats them as the same family", unix.AF_LOCAL, unix.AF_UNIX)
+	}
+	if afVSOCK != uint32(unix.AF_VSOCK) {
+		t.Fatalf("afVSOCK=%d AF_VSOCK=%d", afVSOCK, unix.AF_VSOCK)
+	}
+}
+
 func TestUnixSocketpairReconnectClass(t *testing.T) {
 	t.Parallel()
 	// STREAM/SEQPACKET socketpair endpoints are already connected and cannot be
 	// retargeted to a pathname socket. DGRAM can, which is why the filter denies
-	// only AF_UNIX datagram socketpair.
+	// AF_UNIX datagram socketpair. AF_VSOCK is denied for every socket type.
 	if ok, err := probeUnixSocketpairReconnect(unix.SOCK_STREAM); ok || !strings.Contains(err, "already connected") {
 		t.Fatalf("STREAM reconnect = ok=%v err=%q, want already connected", ok, err)
 	}
@@ -165,6 +178,20 @@ func TestAssembleSeccompFilterSemantics(t *testing.T) {
 					want: seccompRetEPERM,
 				},
 				{
+					name: "deny AF_VSOCK socket",
+					nr:   policy.socket,
+					arch: policy.auditArch,
+					args: []uint64{afVSOCK},
+					want: seccompRetEPERM,
+				},
+				{
+					name: "deny AF_VSOCK socket with high arg0 bits",
+					nr:   policy.socket,
+					arch: policy.auditArch,
+					args: []uint64{afVSOCK | uint64(0xffffffff)<<32},
+					want: seccompRetEPERM,
+				},
+				{
 					name: "allow AF_UNIX stream socketpair",
 					nr:   policy.socketpair,
 					arch: policy.auditArch,
@@ -205,6 +232,20 @@ func TestAssembleSeccompFilterSemantics(t *testing.T) {
 					arch: policy.auditArch,
 					args: []uint64{uint64(unix.AF_INET), uint64(unix.SOCK_DGRAM)},
 					want: seccompRetAllow,
+				},
+				{
+					name: "deny AF_VSOCK stream socketpair",
+					nr:   policy.socketpair,
+					arch: policy.auditArch,
+					args: []uint64{afVSOCK, uint64(unix.SOCK_STREAM)},
+					want: seccompRetEPERM,
+				},
+				{
+					name: "deny AF_VSOCK datagram socketpair",
+					nr:   policy.socketpair,
+					arch: policy.auditArch,
+					args: []uint64{afVSOCK, uint64(unix.SOCK_DGRAM)},
+					want: seccompRetEPERM,
 				},
 				{
 					name: "deny io_uring_setup",
@@ -275,6 +316,13 @@ func TestAssembleSeccompFilterSemantics(t *testing.T) {
 						want: seccompRetEPERM,
 					},
 					caseSpec{
+						name: "compat deny AF_VSOCK socket",
+						nr:   compat.socket,
+						arch: compat.auditArch,
+						args: []uint64{afVSOCK},
+						want: seccompRetEPERM,
+					},
+					caseSpec{
 						name: "compat allow AF_INET socket",
 						nr:   compat.socket,
 						arch: compat.auditArch,
@@ -294,6 +342,13 @@ func TestAssembleSeccompFilterSemantics(t *testing.T) {
 						arch: compat.auditArch,
 						args: []uint64{afUNIX, uint64(unix.SOCK_STREAM)},
 						want: seccompRetAllow,
+					},
+					caseSpec{
+						name: "compat deny AF_VSOCK stream socketpair",
+						nr:   compat.socketpair,
+						arch: compat.auditArch,
+						args: []uint64{afVSOCK, uint64(unix.SOCK_STREAM)},
+						want: seccompRetEPERM,
 					},
 					caseSpec{
 						name: "compat deny io_uring_setup",
@@ -369,8 +424,8 @@ func TestValidateSeccompRulesErrors(t *testing.T) {
 	if err := validateSeccompRules([]seccompRule{{NR: 0}}); err == nil {
 		t.Fatal("expected zero syscall error")
 	}
-	if err := validateSeccompRules([]seccompRule{{NR: 1}, {NR: 1}}); err == nil {
-		t.Fatal("expected duplicate syscall error")
+	if err := validateSeccompRules([]seccompRule{{NR: 1}, {NR: 1}}); err != nil {
+		t.Fatalf("duplicate syscall numbers are OR alternatives: %v", err)
 	}
 	if err := validateSeccompRules([]seccompRule{{
 		NR: 1,
@@ -703,6 +758,12 @@ func TestSeccompFilterGolden(t *testing.T) {
 			}
 			got := formatSeccompFilterGolden(policy.name, raw)
 			path := filepath.Join("testdata", "seccomp_filter_"+policy.name+".golden")
+			if os.Getenv("UPDATE_SECCOMP_GOLDEN") == "1" {
+				if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+					t.Fatalf("write golden %s: %v", path, err)
+				}
+				return
+			}
 			want, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatalf("read golden %s: %v", path, err)
@@ -1035,6 +1096,30 @@ func TestLinuxSeccompHelper(t *testing.T) {
 		_ = unix.Close(fd)
 		fmt.Fprintln(os.Stdout, "INET_OK")
 		os.Exit(0)
+	case "vsock":
+		fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
+		if err == nil {
+			_ = unix.Close(fd)
+			fmt.Fprintln(os.Stdout, "VSOCK_SOCKET_OK")
+			os.Exit(2)
+		}
+		if !errors.Is(err, unix.EPERM) {
+			fmt.Fprintf(os.Stdout, "VSOCK_SOCKET_ERR %v\n", err)
+			os.Exit(2)
+		}
+		fds, err := unix.Socketpair(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
+		if err == nil {
+			_ = unix.Close(fds[0])
+			_ = unix.Close(fds[1])
+			fmt.Fprintln(os.Stdout, "VSOCK_SOCKETPAIR_OK")
+			os.Exit(2)
+		}
+		if !errors.Is(err, unix.EPERM) {
+			fmt.Fprintf(os.Stdout, "VSOCK_SOCKETPAIR_ERR %v\n", err)
+			os.Exit(2)
+		}
+		fmt.Fprintln(os.Stdout, "VSOCK_EPERM")
+		os.Exit(0)
 	case "io-uring":
 		for _, nr := range []uintptr{
 			uintptr(unix.SYS_IO_URING_SETUP),
@@ -1241,6 +1326,14 @@ func TestLinuxRestrictedBlocksIOUring(t *testing.T) {
 	res := runLinuxSeccompHelper(t, rt, ws, "io-uring", "")
 	if !strings.Contains(res.Stdout, "IO_URING_EPERM") {
 		t.Fatalf("io_uring = %#v, want EPERM for all three syscalls", res)
+	}
+}
+
+func TestLinuxRestrictedBlocksVSOCK(t *testing.T) {
+	rt, ws := newLinuxSeccompRuntime(t, WorkspaceWriteProfile())
+	res := runLinuxSeccompHelper(t, rt, ws, "vsock", "")
+	if !strings.Contains(res.Stdout, "VSOCK_EPERM") {
+		t.Fatalf("vsock = %#v, want EPERM for socket and socketpair", res)
 	}
 }
 

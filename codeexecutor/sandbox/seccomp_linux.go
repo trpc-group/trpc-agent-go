@@ -39,6 +39,7 @@ const (
 	x32SyscallBit = 0x40000000
 
 	afUNIX       = 1
+	afVSOCK      = 40
 	sockDGRAM    = 2
 	sockTypeMask = 0xf
 
@@ -178,8 +179,8 @@ type seccompArgMatch struct {
 
 // seccompRule denies one syscall number with EPERM when every match succeeds.
 // Match is an AND chain. An empty Match means unconditional EPERM.
-// Only one rule per syscall number is allowed; OR of alternate parameter
-// combinations is intentionally unsupported.
+// Multiple rules with the same syscall number are OR alternatives: the filter
+// denies if any alternative matches.
 type seccompRule struct {
 	NR    uint32
 	Match []seccompArgMatch
@@ -310,6 +311,36 @@ func validateSeccompPolicy(policy seccompArchPolicy) error {
 		if compat.auditArch == policy.auditArch {
 			return errors.New("compat seccomp audit architecture duplicates native")
 		}
+		if err := uniqueNonZeroSyscalls([]uint32{
+			compat.socket,
+			compat.socketpair,
+			compat.socketcall,
+			compat.ioUringSetup,
+			compat.ioUringEnter,
+			compat.ioUringRegister,
+		}); err != nil {
+			return err
+		}
+	}
+	return uniqueNonZeroSyscalls([]uint32{
+		policy.socket,
+		policy.socketpair,
+		policy.ioUringSetup,
+		policy.ioUringEnter,
+		policy.ioUringRegister,
+	})
+}
+
+func uniqueNonZeroSyscalls(nums []uint32) error {
+	seen := map[uint32]struct{}{}
+	for _, n := range nums {
+		if n == 0 {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			return fmt.Errorf("duplicate seccomp syscall number %d", n)
+		}
+		seen[n] = struct{}{}
 	}
 	return nil
 }
@@ -318,8 +349,8 @@ func rulesForPolicy(policy seccompArchPolicy) ([]seccompRule, error) {
 	if err := validateSeccompPolicy(policy); err != nil {
 		return nil, err
 	}
-	// One rule per syscall; Match is AND. Do not encode OR by stacking
-	// alternate parameter shapes into a single rule.
+	// Match is AND within a rule. Repeated syscall numbers are OR alternatives
+	// so socket() can deny both AF_UNIX and AF_VSOCK.
 	rules := []seccompRule{
 		{
 			NR: policy.socket,
@@ -327,6 +358,14 @@ func rulesForPolicy(policy seccompArchPolicy) ([]seccompRule, error) {
 				Arg:   0,
 				Kind:  seccompArgEqual,
 				Value: afUNIX,
+			}},
+		},
+		{
+			NR: policy.socket,
+			Match: []seccompArgMatch{{
+				Arg:   0,
+				Kind:  seccompArgEqual,
+				Value: afVSOCK,
 			}},
 		},
 		{
@@ -344,6 +383,14 @@ func rulesForPolicy(policy seccompArchPolicy) ([]seccompRule, error) {
 					Value: sockDGRAM,
 				},
 			},
+		},
+		{
+			NR: policy.socketpair,
+			Match: []seccompArgMatch{{
+				Arg:   0,
+				Kind:  seccompArgEqual,
+				Value: afVSOCK,
+			}},
 		},
 		{NR: policy.ioUringSetup},
 		{NR: policy.ioUringEnter},
@@ -366,6 +413,14 @@ func rulesForCompatPolicy(policy seccompCompatPolicy) ([]seccompRule, error) {
 			}},
 		},
 		{
+			NR: policy.socket,
+			Match: []seccompArgMatch{{
+				Arg:   0,
+				Kind:  seccompArgEqual,
+				Value: afVSOCK,
+			}},
+		},
+		{
 			NR: policy.socketpair,
 			Match: []seccompArgMatch{
 				{
@@ -380,6 +435,14 @@ func rulesForCompatPolicy(policy seccompCompatPolicy) ([]seccompRule, error) {
 					Value: sockDGRAM,
 				},
 			},
+		},
+		{
+			NR: policy.socketpair,
+			Match: []seccompArgMatch{{
+				Arg:   0,
+				Kind:  seccompArgEqual,
+				Value: afVSOCK,
+			}},
 		},
 	}
 	if policy.socketcall != 0 {
@@ -404,15 +467,10 @@ func validateSeccompRules(rules []seccompRule) error {
 	if len(rules) == 0 {
 		return errors.New("seccomp rule table is empty")
 	}
-	seen := make(map[uint32]struct{}, len(rules))
 	for i, rule := range rules {
 		if rule.NR == 0 {
 			return fmt.Errorf("seccomp rule %d has zero syscall number", i)
 		}
-		if _, dup := seen[rule.NR]; dup {
-			return fmt.Errorf("duplicate seccomp syscall number %d", rule.NR)
-		}
-		seen[rule.NR] = struct{}{}
 		for j, match := range rule.Match {
 			if match.Arg != 0 && match.Arg != 1 {
 				return fmt.Errorf("seccomp rule %d match %d: unsupported arg index %d", i, j, match.Arg)
@@ -545,55 +603,90 @@ func compileSeccompFilter(policy seccompArchPolicy, rules []seccompRule) ([]bpf.
 	return b.insns, nil
 }
 
+func groupSeccompRuleIndexes(rules []seccompRule) [][]int {
+	type group struct {
+		nr   uint32
+		idxs []int
+	}
+	groups := make([]group, 0, len(rules))
+	index := make(map[uint32]int, len(rules))
+	for i, rule := range rules {
+		if g, ok := index[rule.NR]; ok {
+			groups[g].idxs = append(groups[g].idxs, i)
+			continue
+		}
+		index[rule.NR] = len(groups)
+		groups = append(groups, group{nr: rule.NR, idxs: []int{i}})
+	}
+	out := make([][]int, len(groups))
+	for i, g := range groups {
+		out[i] = g.idxs
+	}
+	return out
+}
+
 func emitSeccompRuleProgram(
 	b *filterBuilder,
 	prefix string,
 	rules []seccompRule,
 ) error {
+	groups := groupSeccompRuleIndexes(rules)
 	b.emit(bpf.LoadAbsolute{Off: seccompDataOffNR, Size: 4})
-	for i := range rules {
-		target := ruleLabel(prefix, i)
-		b.jumpIf(bpf.JumpEqual, rules[i].NR, &target, nil)
+	for _, idxs := range groups {
+		target := ruleLabel(prefix, idxs[0])
+		b.jumpIf(bpf.JumpEqual, rules[idxs[0]].NR, &target, nil)
 	}
 	b.emit(bpf.RetConstant{Val: seccompRetAllow})
 
-	for i, rule := range rules {
-		if err := b.define(ruleLabel(prefix, i)); err != nil {
-			return err
-		}
-		allow := ruleAllowLabel(prefix, i)
-		if len(rule.Match) == 0 {
-			b.emit(bpf.RetConstant{Val: seccompRetEPERM})
-			continue
-		}
-		for j, match := range rule.Match {
-			var nextTrue seccompLabel
-			if j+1 < len(rule.Match) {
-				nextTrue = seccompLabel(
-					fmt.Sprintf("%s_rule_%d_m%d", prefix, i, j+1),
-				)
-			} else {
-				nextTrue = seccompLabel(prefix + "_deny_eperm")
+	deny := seccompLabel(prefix + "_deny_eperm")
+	for _, idxs := range groups {
+		for n, i := range idxs {
+			if err := b.define(ruleLabel(prefix, i)); err != nil {
+				return err
 			}
-			if j > 0 {
-				matchLabel := seccompLabel(
-					fmt.Sprintf("%s_rule_%d_m%d", prefix, i, j),
-				)
-				if err := b.define(matchLabel); err != nil {
+			rule := rules[i]
+			last := n == len(idxs)-1
+			var onFail seccompLabel
+			if last {
+				onFail = ruleAllowLabel(prefix, i)
+			} else {
+				onFail = ruleLabel(prefix, idxs[n+1])
+			}
+			if len(rule.Match) == 0 {
+				b.emit(bpf.RetConstant{Val: seccompRetEPERM})
+				continue
+			}
+			for j, match := range rule.Match {
+				var nextTrue seccompLabel
+				if j+1 < len(rule.Match) {
+					nextTrue = seccompLabel(
+						fmt.Sprintf("%s_rule_%d_m%d", prefix, i, j+1),
+					)
+				} else {
+					nextTrue = deny
+				}
+				if j > 0 {
+					matchLabel := seccompLabel(
+						fmt.Sprintf("%s_rule_%d_m%d", prefix, i, j),
+					)
+					if err := b.define(matchLabel); err != nil {
+						return err
+					}
+				}
+				if err := emitArgMatch(b, match, nextTrue, onFail); err != nil {
 					return err
 				}
 			}
-			if err := emitArgMatch(b, match, nextTrue, allow); err != nil {
-				return err
+			if last {
+				if err := b.define(onFail); err != nil {
+					return err
+				}
+				b.emit(bpf.RetConstant{Val: seccompRetAllow})
 			}
 		}
-		if err := b.define(allow); err != nil {
-			return err
-		}
-		b.emit(bpf.RetConstant{Val: seccompRetAllow})
 	}
 
-	if err := b.define(seccompLabel(prefix + "_deny_eperm")); err != nil {
+	if err := b.define(deny); err != nil {
 		return err
 	}
 	b.emit(bpf.RetConstant{Val: seccompRetEPERM})

@@ -38,11 +38,12 @@ host network access:
 
 - `NetworkRestricted` asks the backend to block outbound networking when it can
   enforce that boundary. On Linux this also denies pathname and abstract AF_UNIX
-  sockets through seccomp; anonymous stream and seqpacket socketpairs remain
-  available. Pathname or abstract Unix IPC requires `NetworkEnabled`.
+  sockets and AF_VSOCK through seccomp; anonymous stream and seqpacket
+  socketpairs remain available. Pathname or abstract Unix IPC, or AF_VSOCK,
+  requires `NetworkEnabled`.
 - `NetworkEnabled` allows the command to use the host network. On Linux this
   means the command is launched without network namespace isolation and without
-  the AF_UNIX seccomp filter. On macOS this means the generated Seatbelt
+  the AF_UNIX/AF_VSOCK seccomp filter. On macOS this means the generated Seatbelt
   profile includes broad network allow rules.
 
 ## File System

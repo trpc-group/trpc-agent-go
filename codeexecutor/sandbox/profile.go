@@ -68,9 +68,9 @@ func (p PermissionProfile) enforcement() enforcement {
 
 // ReadOnlyProfile returns a managed profile with read-only host visibility and
 // restricted networking. On Linux, restricted networking denies pathname and
-// abstract AF_UNIX sockets while leaving anonymous stream and seqpacket
-// socketpairs available; use NetworkEnabled when the command needs pathname or
-// abstract Unix IPC.
+// abstract AF_UNIX sockets and AF_VSOCK, while leaving anonymous stream and
+// seqpacket socketpairs available; use NetworkEnabled when the command needs
+// pathname or abstract Unix IPC, or AF_VSOCK.
 func ReadOnlyProfile() PermissionProfile {
 	return PermissionProfile{
 		typ: profileManaged,
@@ -89,8 +89,9 @@ func ReadOnlyProfile() PermissionProfile {
 // WorkspaceWriteProfile returns the default managed profile: read-only host
 // root, writable session workspace, protected metadata, restricted networking.
 // On Linux, that restricted default denies pathname and abstract AF_UNIX
-// sockets while leaving anonymous stream and seqpacket socketpairs available;
-// use NetworkEnabled when the command needs pathname or abstract Unix IPC.
+// sockets and AF_VSOCK, while leaving anonymous stream and seqpacket
+// socketpairs available; use NetworkEnabled when the command needs pathname or
+// abstract Unix IPC, or AF_VSOCK.
 func WorkspaceWriteProfile() PermissionProfile {
 	p := ReadOnlyProfile()
 	p.fileSystem.Rules = append(p.fileSystem.Rules,
@@ -142,7 +143,8 @@ func (p PermissionProfile) WithMacOSWeakerNetworkIsolation() PermissionProfile {
 
 // WithMacOSUnixSocketPaths allows macOS Seatbelt access to exact AF_UNIX socket
 // paths. Linux NetworkRestricted combines network-namespace isolation with
-// AF_UNIX/io_uring seccomp and does not use these macOS-specific path grants.
+// AF_UNIX/AF_VSOCK/io_uring seccomp and does not use these macOS-specific path
+// grants.
 func (p PermissionProfile) WithMacOSUnixSocketPaths(paths ...string) PermissionProfile {
 	var filtered []string
 	for _, path := range paths {

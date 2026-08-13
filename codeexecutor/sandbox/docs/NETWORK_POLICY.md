@@ -13,7 +13,7 @@ explicitly selects `NetworkEnabled`.
   networking when the backend can enforce it.
 - `NetworkEnabled` allows the command to use the host network. On Linux this
   means the command is launched without network namespace isolation and without
-  the AF_UNIX seccomp filter described below.
+  the AF_UNIX/AF_VSOCK seccomp filter described below.
 
 Profile enforcement is separate from network policy. `DangerFullAccessProfile()`
 intentionally runs without local sandbox enforcement and is normalized to
@@ -32,6 +32,9 @@ interfaces.
 `bwrap --seccomp FD`. The filter:
 
 - returns `EPERM` for `socket(AF_UNIX, ...)` / `socket(AF_LOCAL, ...)`;
+- returns `EPERM` for `socket(AF_VSOCK, ...)` and `socketpair(AF_VSOCK, ...)`,
+  because VM sockets use a host-global transport and are not isolated by
+  `--unshare-net`;
 - returns `EPERM` for `socketpair(AF_UNIX, SOCK_DGRAM, ...)`, including socket
   type flags, because datagram socketpair endpoints can reconnect to pathname
   sockets;
@@ -43,7 +46,8 @@ interfaces.
 
 On `amd64`, the same filter also accepts the i386 compat audit architecture;
 on `arm64`, it accepts AArch32. Direct compat socket syscalls receive the same
-AF_UNIX checks as native syscalls, and compat `io_uring_*` calls are denied.
+AF_UNIX and AF_VSOCK checks as native syscalls, and compat `io_uring_*` calls
+are denied.
 The legacy i386 `socketcall` multiplexor is denied in full because classic
 seccomp BPF cannot safely dereference its userspace argument array. As a result,
 i386 programs using modern direct socket syscalls retain anonymous stream and
@@ -54,8 +58,10 @@ Because the managed Linux profile still uses `--ro-bind / /`, host socket paths
 such as `docker.sock` remain visible in the mount namespace. The seccomp filter
 is what makes them unusable: the guest cannot create a new AF_UNIX file
 descriptor to `connect(2)` them. The same rule also blocks guest-local pathname
-and abstract Unix sockets. Callers that need pathname or abstract Unix socket IPC must
-choose `NetworkEnabled` (including through temporary `WithAdditionalPermissions`);
+and abstract Unix sockets. AF_VSOCK is denied independently because it talks to
+the host vsock transport even inside an empty network namespace. Callers that
+need pathname or abstract Unix socket IPC, or AF_VSOCK, must choose
+`NetworkEnabled` (including through temporary `WithAdditionalPermissions`);
 anonymous stream and seqpacket socketpairs remain available in `NetworkRestricted`.
 
 Restricted Linux runs fail closed when:
@@ -69,9 +75,9 @@ the compat ABI listed above are terminated before their syscall executes.
 
 On Linux 4.8–4.13, seccomp may degrade `SECCOMP_RET_KILL_PROCESS` to
 kill-thread for the wrong-architecture and amd64 x32 reject paths. The denied
-syscall still does not execute, and the AF_UNIX / `io_uring` `EPERM` returns are
-unchanged. The minimum kernel remains 4.8; this is a compatibility note, not a
-fail-open path.
+syscall still does not execute, and the AF_UNIX / AF_VSOCK / `io_uring` `EPERM`
+returns are unchanged. The minimum kernel remains 4.8; this is a compatibility
+note, not a fail-open path.
 
 When `NetworkEnabled` is selected, the backend omits `--unshare-net` and the
 seccomp filter. The command then shares the host network namespace and may use
