@@ -1174,6 +1174,53 @@ func TestProcessStreamingResponses_DisableResponseUsageTrackingStillRecordsMetri
 	require.NotEmpty(t, rm.ScopeMetrics)
 }
 
+func TestObservabilityInvocationViewsExcludeState(t *testing.T) {
+	const stateKey = "benchmark:large-state"
+	baseModel := &mockModel{}
+	selectedModel := &mockIterModel{}
+	baseSession := &session.Session{
+		ID:      "session-base",
+		UserID:  "user-base",
+		AppName: "app-base",
+	}
+	base := agent.NewInvocation(
+		agent.WithInvocationID("invocation-base"),
+		agent.WithInvocationModel(baseModel),
+		agent.WithInvocationSession(baseSession),
+	)
+	base.AgentName = "agent-base"
+	base.SetState(stateKey, make([]byte, 1024))
+
+	callView := observabilityInvocationForModel(base, selectedModel)
+	require.NotSame(t, base, callView)
+	require.Equal(t, base.InvocationID, callView.InvocationID)
+	require.Equal(t, base.AgentName, callView.AgentName)
+	require.Same(t, baseSession, callView.Session)
+	require.Same(t, selectedModel, callView.Model)
+	_, ok := agent.GetStateValue[[]byte](callView, stateKey)
+	require.False(t, ok)
+
+	require.Same(t, callView, observabilityInvocationForCurrent(base, callView))
+	updatedSession := &session.Session{
+		ID:      "session-updated",
+		UserID:  "user-updated",
+		AppName: "app-updated",
+	}
+	updated := agent.NewInvocation(
+		agent.WithInvocationID("invocation-updated"),
+		agent.WithInvocationModel(baseModel),
+		agent.WithInvocationSession(updatedSession),
+	)
+	updated.AgentName = "agent-updated"
+	updatedView := observabilityInvocationForCurrent(updated, callView)
+	require.Equal(t, base.InvocationID, updatedView.InvocationID)
+	require.Equal(t, base.AgentName, updatedView.AgentName)
+	require.Same(t, updatedSession, updatedView.Session)
+	require.Same(t, selectedModel, updatedView.Model)
+	_, ok = agent.GetStateValue[[]byte](updatedView, stateKey)
+	require.False(t, ok)
+}
+
 func TestProcessStreamingResponses_UsesStableInvocationForMetricsMetadata(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
