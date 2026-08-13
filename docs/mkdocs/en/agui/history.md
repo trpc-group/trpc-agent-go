@@ -99,7 +99,7 @@ Real-time SSE output does not wait for history persistence to finish, so the fro
 Related configuration:
 
 - `aggregator.WithEnabled(true)` controls whether streaming chunks are merged. It is enabled by default.
-- `agui.WithFlushInterval(time.Second)` controls how often history events are written to session storage. The default is `1s`. Setting it to `0` disables periodic writes while a run is active. This is usually appropriate when you do not need `/history` follow during an active run; history events are mainly written during post-run finalization.
+- `agui.WithFlushInterval(time.Second)` controls how often history events are written to session storage. The default is `1s`. Setting it to `0` disables periodic writes while a run is active. This is usually appropriate when you do not need `/history` follow during an active run; history events are mainly written during post-run finalization. During long-running or high-volume runs, unwritten history events remain in process memory until finalization.
 - `agui.WithTrackPersistenceTimeout(5*time.Second)` limits how long one history persistence attempt can wait for session storage. The default is `5s`. Setting it to `0` means no timeout is applied.
 - `agui.WithPostRunFinalizationTimeout(5*time.Second)` limits the maximum duration of post-run finalization. The default is `5s`. Finalization fills in protocol closing events that are still open and tries to write remaining history events to `SessionService`. If session storage becomes slow or fails, the timeout prevents the request from blocking for too long. Setting it to `0` means no timeout is applied.
 

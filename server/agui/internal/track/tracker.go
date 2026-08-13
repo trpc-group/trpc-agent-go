@@ -197,7 +197,7 @@ func (t *tracker) persistEvents(
 		processed++
 	}
 	if overallErr != nil {
-		return processed, fmt.Errorf("persist events: %v", overallErr)
+		return processed, fmt.Errorf("persist events: %w", overallErr)
 	}
 	return processed, nil
 }

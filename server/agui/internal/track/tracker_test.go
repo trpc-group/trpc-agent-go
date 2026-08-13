@@ -106,8 +106,9 @@ func TestTrackerAppendEventErrors(t *testing.T) {
 	})
 	t.Run("append track event error", func(t *testing.T) {
 		svc := newHookSessionService()
+		appendErr := errors.New("append broke")
 		svc.appendTrackFn = func(context.Context, *session.Session, *session.TrackEvent, ...session.Option) error {
-			return errors.New("append broke")
+			return appendErr
 		}
 		tracker, err := New(svc)
 		require.NoError(t, err)
@@ -115,6 +116,7 @@ func TestTrackerAppendEventErrors(t *testing.T) {
 		require.NoError(t, err)
 		err = tracker.Flush(ctx, validKey)
 		require.ErrorContains(t, err, "persist events: append track event")
+		require.ErrorIs(t, err, appendErr)
 	})
 }
 

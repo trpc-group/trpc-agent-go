@@ -249,10 +249,13 @@ func (r *runner) shouldFollowMessagesSnapshot(key session.Key, trackEvents *sess
 	if trackEvents == nil || trackEndsWithTerminalRunEvent(trackEvents.Events) {
 		return false
 	}
+	if r.flushInterval <= 0 {
+		return false
+	}
 	if len(trackEvents.Events) > 0 {
 		return true
 	}
-	return r.flushInterval > 0 && r.isRunning(key)
+	return r.isRunning(key)
 }
 
 func (r *runner) handleMessagesSnapshotFollowTick(
