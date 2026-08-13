@@ -607,24 +607,39 @@ func TestEventConversionPreservesRawJSONPayloads(t *testing.T) {
 		ToolCalls: []replaytest.ToolCallSnapshot{{
 			ID:        "call-1",
 			Name:      "weather",
-			Arguments: []byte(`{"city":"Shenzhen"}`),
+			Arguments: pointerToBytes([]byte(`{"city":"Shenzhen"}`)),
 			Extra: map[string]any{
-				"raw":         []byte(`{"provider_status":"ok"}`),
-				"raw_message": json.RawMessage(`[true]`),
-				"nested":      map[string]any{"raw": []byte(`{"inner":true}`)},
+				"raw":            []byte(`{"provider_status":"ok"}`),
+				"raw_message":    json.RawMessage(`[true]`),
+				"nested":         map[string]any{"raw": []byte(`{"inner":true}`)},
+				"pointer_nested": pointerToAnyMap(map[string]any{"raw": []byte(`{"inner":true}`)}),
 			},
 		}},
 		Extensions: map[string]any{
-			"raw":         []byte(`{"value":1}`),
-			"raw_message": json.RawMessage(`[true]`),
-			"nested":      map[string]any{"raw": []byte(`{"inner":true}`)},
+			"raw":            []byte(`{"value":1}`),
+			"raw_message":    json.RawMessage(`[true]`),
+			"nested":         map[string]any{"raw": []byte(`{"inner":true}`)},
+			"pointer_nested": pointerToAnyMap(map[string]any{"raw": []byte(`{"inner":true}`)}),
+			"custom_map": pointerToCustomMarshalerMap(
+				customMarshalerMap{"raw": []byte(`{"inner":true}`)},
+			),
+			"custom_slice": pointerToCustomMarshalerSlice(
+				customMarshalerSlice{[]byte(`{"inner":true}`)},
+			),
+			"value_custom_map": customValueMarshalerMap{
+				"raw": []byte(`{"inner":true}`),
+			},
+			"value_custom_slice": customValueMarshalerSlice{
+				[]byte(`{"inner":true}`),
+			},
 		},
 		ToolResponse: &replaytest.ToolResponse{
 			ToolCallID: "call-1",
 			Name:       "weather",
 			Content:    "sunny",
 			Extra: map[string]any{
-				"raw": []byte(`{"provider_status":"ok"}`),
+				"raw":            []byte(`{"provider_status":"ok"}`),
+				"pointer_nested": pointerToAnyMap(map[string]any{"raw": []byte(`{"inner":true}`)}),
 			},
 		},
 	}
@@ -656,6 +671,10 @@ func TestEventConversionPreservesRawJSONPayloads(t *testing.T) {
 		map[string]any{"raw": map[string]any{"inner": true}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("tool call nested raw extra = %#v, want %#v", got, want)
 	}
+	if got, want := decodedToolCall.ExtraFields["pointer_nested"],
+		map[string]any{"raw": map[string]any{"inner": true}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tool call pointer nested raw extra = %#v, want %#v", got, want)
+	}
 	if got := string(evt.Extensions["raw"]); got != `{"value":1}` {
 		t.Fatalf("raw extension = %q, want raw JSON object", got)
 	}
@@ -665,8 +684,43 @@ func TestEventConversionPreservesRawJSONPayloads(t *testing.T) {
 	if got := string(evt.Extensions["nested"]); got != `{"raw":{"inner":true}}` {
 		t.Fatalf("nested raw extension = %q, want nested raw JSON object", got)
 	}
-	if got := string(evt.Extensions[toolResponseExtraExtensionKey]); got != `{"raw":{"provider_status":"ok"}}` {
+	if got := string(evt.Extensions["pointer_nested"]); got != `{"raw":{"inner":true}}` {
+		t.Fatalf("pointer nested raw extension = %q, want nested raw JSON object", got)
+	}
+	if got := string(evt.Extensions["custom_map"]); got != `{"custom":"map"}` {
+		t.Fatalf("custom marshaler map extension = %q, want custom JSON", got)
+	}
+	if got := string(evt.Extensions["custom_slice"]); got != `["custom","slice"]` {
+		t.Fatalf("custom marshaler slice extension = %q, want custom JSON", got)
+	}
+	if got := string(evt.Extensions["value_custom_map"]); got != `{"custom":"value-map"}` {
+		t.Fatalf("custom value marshaler map extension = %q, want custom JSON", got)
+	}
+	if got := string(evt.Extensions["value_custom_slice"]); got != `["custom","value-slice"]` {
+		t.Fatalf("custom value marshaler slice extension = %q, want custom JSON", got)
+	}
+	if got := string(evt.Extensions[toolResponseExtraExtensionKey]); got !=
+		`{"pointer_nested":{"raw":{"inner":true}},"raw":{"provider_status":"ok"}}` {
 		t.Fatalf("tool response extra = %q, want nested raw JSON object", got)
+	}
+}
+
+func TestEventConversionUsesEncodedReservedExtensionContract(t *testing.T) {
+	event := &replaytest.EventSnapshot{
+		ID: "event-marshaler", Author: "assistant", Role: "assistant",
+		Object: "chat.completion", Done: true,
+		Extensions: map[string]any{
+			replayAppName: pointerToCustomMarshalerMap(customMarshalerMap{
+				"tool_response_extra": "not-on-wire",
+			}),
+		},
+	}
+	evt, err := toEvent(event)
+	if err != nil {
+		t.Fatalf("toEvent() error = %v", err)
+	}
+	if got := string(evt.Extensions[replayAppName]); got != `{"custom":"map"}` {
+		t.Fatalf("encoded namespace = %q, want custom marshaler output", got)
 	}
 }
 
@@ -801,6 +855,21 @@ func TestEventConversionPropagatesSerializationErrors(t *testing.T) {
 			want: "invalid raw JSON",
 		},
 		{
+			name: "cyclic tool arguments",
+			event: &replaytest.EventSnapshot{ToolCalls: []replaytest.ToolCallSnapshot{{
+				ID: "call-1", Arguments: cyclicMap(),
+			}}},
+			want: "cyclic",
+		},
+		{
+			name: "cyclic tool call extra",
+			event: &replaytest.EventSnapshot{ToolCalls: []replaytest.ToolCallSnapshot{{
+				ID:    "call-1",
+				Extra: map[string]any{"cycle": cyclicSlice()},
+			}}},
+			want: "cyclic",
+		},
+		{
 			name: "state delta",
 			event: &replaytest.EventSnapshot{StateDelta: map[string]replaytest.StateValueSnapshot{
 				"bad": replaytest.JSONStateValue(make(chan int)),
@@ -811,6 +880,11 @@ func TestEventConversionPropagatesSerializationErrors(t *testing.T) {
 			name:  "extension",
 			event: &replaytest.EventSnapshot{Extensions: map[string]any{"bad": make(chan int)}},
 			want:  "event extension",
+		},
+		{
+			name:  "cyclic extension",
+			event: &replaytest.EventSnapshot{Extensions: map[string]any{"cycle": cyclicMap()}},
+			want:  "cyclic",
 		},
 		{
 			name:  "invalid raw extension",
@@ -864,6 +938,47 @@ func TestEventConversionPropagatesSerializationErrors(t *testing.T) {
 			}},
 			want: "tool response extra",
 		},
+		{
+			name: "cyclic tool response extra",
+			event: &replaytest.EventSnapshot{ToolResponse: &replaytest.ToolResponse{
+				Extra: map[string]any{"cycle": cyclicMap()},
+			}},
+			want: "cyclic",
+		},
+		{
+			name: "nested reserved extension with named string key",
+			event: &replaytest.EventSnapshot{Extensions: map[string]any{
+				replayAppName: map[namedExtensionKey]any{
+					"tool_response_extra": "user-value",
+				},
+			}},
+			want: "reserved",
+		},
+		{
+			name: "nested reserved extension through pointer",
+			event: &replaytest.EventSnapshot{Extensions: map[string]any{
+				replayAppName: pointerToMap(map[namedExtensionKey]any{
+					"tool_response_extra": "user-value",
+				}),
+			}},
+			want: "reserved",
+		},
+		{
+			name: "nested reserved extension through raw pointer",
+			event: &replaytest.EventSnapshot{Extensions: map[string]any{
+				replayAppName: pointerToRawMessage(
+					json.RawMessage(`{"tool_response_extra":"user-value"}`),
+				),
+			}},
+			want: "reserved",
+		},
+		{
+			name: "nested reserved extension through marshaler",
+			event: &replaytest.EventSnapshot{Extensions: map[string]any{
+				replayAppName: reservedExtensionPayload{},
+			}},
+			want: "reserved",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -873,6 +988,74 @@ func TestEventConversionPropagatesSerializationErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+type namedExtensionKey string
+
+type reservedExtensionPayload struct{}
+
+func (reservedExtensionPayload) MarshalJSON() ([]byte, error) {
+	return []byte(`{"tool_response_extra":"user-value"}`), nil
+}
+
+type customMarshalerMap map[string]any
+
+func (*customMarshalerMap) MarshalJSON() ([]byte, error) {
+	return []byte(`{"custom":"map"}`), nil
+}
+
+type customMarshalerSlice []any
+
+func (*customMarshalerSlice) MarshalJSON() ([]byte, error) {
+	return []byte(`["custom","slice"]`), nil
+}
+
+type customValueMarshalerMap map[string]any
+
+func (customValueMarshalerMap) MarshalJSON() ([]byte, error) {
+	return []byte(`{"custom":"value-map"}`), nil
+}
+
+type customValueMarshalerSlice []any
+
+func (customValueMarshalerSlice) MarshalJSON() ([]byte, error) {
+	return []byte(`["custom","value-slice"]`), nil
+}
+
+func cyclicMap() map[string]any {
+	value := map[string]any{}
+	value["self"] = value
+	return value
+}
+
+func cyclicSlice() []any {
+	value := make([]any, 1)
+	value[0] = value
+	return value
+}
+
+func pointerToBytes(value []byte) *[]byte {
+	return &value
+}
+
+func pointerToRawMessage(value json.RawMessage) *json.RawMessage {
+	return &value
+}
+
+func pointerToAnyMap(value map[string]any) *map[string]any {
+	return &value
+}
+
+func pointerToCustomMarshalerMap(value customMarshalerMap) *customMarshalerMap {
+	return &value
+}
+
+func pointerToCustomMarshalerSlice(value customMarshalerSlice) *customMarshalerSlice {
+	return &value
+}
+
+func pointerToMap(value map[namedExtensionKey]any) *map[namedExtensionKey]any {
+	return &value
 }
 
 func TestStateConversionPreservesStorageSemantics(t *testing.T) {

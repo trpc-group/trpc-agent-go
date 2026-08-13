@@ -628,10 +628,25 @@ func prepareJSONLikeRaw(value any) (any, error) {
 	if value == nil {
 		return nil, nil
 	}
-	return prepareJSONLikeRawValue(reflect.ValueOf(value))
+	preparer := jsonLikeRawPreparer{
+		visiting: make(map[jsonLikeRawReference]struct{}),
+	}
+	return preparer.prepareValue(reflect.ValueOf(value))
 }
 
-func prepareJSONLikeRawValue(value reflect.Value) (any, error) {
+type jsonLikeRawReference struct {
+	typeOf   reflect.Type
+	kind     reflect.Kind
+	pointer  uintptr
+	length   int
+	capacity int
+}
+
+type jsonLikeRawPreparer struct {
+	visiting map[jsonLikeRawReference]struct{}
+}
+
+func (preparer jsonLikeRawPreparer) prepareValue(value reflect.Value) (any, error) {
 	if !value.IsValid() {
 		return nil, nil
 	}
@@ -642,17 +657,25 @@ func prepareJSONLikeRawValue(value reflect.Value) (any, error) {
 		case []byte:
 			return validRawJSON(typed)
 		}
+		if value.Kind() != reflect.Pointer ||
+			value.IsNil() || !isJSONLikeRawPointer(value) {
+			if _, ok := value.Interface().(json.Marshaler); ok {
+				return value.Interface(), nil
+			}
+		}
 	}
 	switch value.Kind() {
 	case reflect.Interface:
 		if value.IsNil() {
 			return nil, nil
 		}
-		return prepareJSONLikeRawValue(value.Elem())
+		return preparer.prepareValue(value.Elem())
+	case reflect.Pointer:
+		return preparer.preparePointer(value)
 	case reflect.Map:
-		return prepareJSONLikeRawMap(value)
+		return preparer.prepareMap(value)
 	case reflect.Slice, reflect.Array:
-		return prepareJSONLikeRawSlice(value)
+		return preparer.prepareSlice(value)
 	default:
 		if value.CanInterface() {
 			return value.Interface(), nil
@@ -661,17 +684,84 @@ func prepareJSONLikeRawValue(value reflect.Value) (any, error) {
 	}
 }
 
-func prepareJSONLikeRawMap(value reflect.Value) (map[string]any, error) {
+func (preparer jsonLikeRawPreparer) preparePointer(value reflect.Value) (any, error) {
+	if value.IsNil() {
+		return nil, nil
+	}
+	if isJSONLikeRawPointer(value) {
+		reference := pointerJSONLikeRawReference(value)
+		if err := preparer.enter(reference); err != nil {
+			return nil, err
+		}
+		defer preparer.leave(reference)
+		return preparer.prepareValue(value.Elem())
+	}
+	if value.CanInterface() {
+		if _, ok := value.Interface().(json.Marshaler); ok {
+			return value.Interface(), nil
+		}
+	}
+	if !shouldPrepareJSONLikeRawPointer(value.Elem()) {
+		if value.CanInterface() {
+			return value.Interface(), nil
+		}
+		return fmt.Sprint(value), nil
+	}
+	reference := pointerJSONLikeRawReference(value)
+	if err := preparer.enter(reference); err != nil {
+		return nil, err
+	}
+	defer preparer.leave(reference)
+	return preparer.prepareValue(value.Elem())
+}
+
+func isJSONLikeRawPointer(value reflect.Value) bool {
+	if !value.Elem().CanInterface() {
+		return false
+	}
+	switch value.Elem().Interface().(type) {
+	case json.RawMessage, []byte:
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldPrepareJSONLikeRawPointer(value reflect.Value) bool {
+	if !value.IsValid() {
+		return true
+	}
+	if value.CanInterface() {
+		switch value.Interface().(type) {
+		case json.RawMessage, []byte:
+			return true
+		}
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Map, reflect.Pointer,
+		reflect.Slice, reflect.Array:
+		return true
+	default:
+		return false
+	}
+}
+
+func (preparer jsonLikeRawPreparer) prepareMap(value reflect.Value) (map[string]any, error) {
 	if value.IsNil() {
 		return nil, nil
 	}
 	if value.Type().Key().Kind() != reflect.String {
 		return nil, fmt.Errorf("map key type %s is not supported", value.Type().Key())
 	}
+	reference := mapJSONLikeRawReference(value)
+	if err := preparer.enter(reference); err != nil {
+		return nil, err
+	}
+	defer preparer.leave(reference)
 	prepared := make(map[string]any, value.Len())
 	iterator := value.MapRange()
 	for iterator.Next() {
-		item, err := prepareJSONLikeRawValue(iterator.Value())
+		item, err := preparer.prepareValue(iterator.Value())
 		if err != nil {
 			return nil, err
 		}
@@ -680,19 +770,58 @@ func prepareJSONLikeRawMap(value reflect.Value) (map[string]any, error) {
 	return prepared, nil
 }
 
-func prepareJSONLikeRawSlice(value reflect.Value) ([]any, error) {
+func (preparer jsonLikeRawPreparer) prepareSlice(value reflect.Value) ([]any, error) {
 	if value.Kind() == reflect.Slice && value.IsNil() {
 		return nil, nil
 	}
+	var reference jsonLikeRawReference
+	if value.Kind() == reflect.Slice {
+		reference = sliceJSONLikeRawReference(value)
+		if err := preparer.enter(reference); err != nil {
+			return nil, err
+		}
+		defer preparer.leave(reference)
+	}
 	prepared := make([]any, value.Len())
 	for i := 0; i < value.Len(); i++ {
-		item, err := prepareJSONLikeRawValue(value.Index(i))
+		item, err := preparer.prepareValue(value.Index(i))
 		if err != nil {
 			return nil, err
 		}
 		prepared[i] = item
 	}
 	return prepared, nil
+}
+
+func (preparer jsonLikeRawPreparer) enter(reference jsonLikeRawReference) error {
+	if _, ok := preparer.visiting[reference]; ok {
+		return fmt.Errorf("cyclic JSON value contains %s", reference.kind)
+	}
+	preparer.visiting[reference] = struct{}{}
+	return nil
+}
+
+func (preparer jsonLikeRawPreparer) leave(reference jsonLikeRawReference) {
+	delete(preparer.visiting, reference)
+}
+
+func mapJSONLikeRawReference(value reflect.Value) jsonLikeRawReference {
+	return jsonLikeRawReference{
+		typeOf: value.Type(), kind: value.Kind(), pointer: value.Pointer(),
+	}
+}
+
+func pointerJSONLikeRawReference(value reflect.Value) jsonLikeRawReference {
+	return jsonLikeRawReference{
+		typeOf: value.Type(), kind: value.Kind(), pointer: value.Pointer(),
+	}
+}
+
+func sliceJSONLikeRawReference(value reflect.Value) jsonLikeRawReference {
+	return jsonLikeRawReference{
+		typeOf: value.Type(), kind: value.Kind(), pointer: value.Pointer(),
+		length: value.Len(), capacity: value.Cap(),
+	}
 }
 
 func validRawJSON(raw []byte) (json.RawMessage, error) {
@@ -744,7 +873,7 @@ func toEvent(snapshot *replaytest.EventSnapshot) (*event.Event, error) {
 		}
 		extensions[key] = encoded
 	}
-	if hasReservedToolResponseExtraExtension(snapshot.Extensions) {
+	if hasEncodedReservedToolResponseExtraExtension(extensions) {
 		return nil, fmt.Errorf(
 			"event extension %q is reserved", toolResponseExtraExtensionKey,
 		)
@@ -942,7 +1071,9 @@ func toEventSnapshot(
 	return snapshot
 }
 
-func hasReservedToolResponseExtraExtension(extensions map[string]any) bool {
+func hasEncodedReservedToolResponseExtraExtension(
+	extensions map[string]json.RawMessage,
+) bool {
 	if _, exists := extensions[toolResponseExtraExtensionKey]; exists {
 		return true
 	}
@@ -951,21 +1082,25 @@ func hasReservedToolResponseExtraExtension(extensions map[string]any) bool {
 }
 
 func hasToolResponseExtraKey(value any) bool {
-	if decoded, ok := decodeJSONLikeObject(value); ok {
-		value = decoded
-	}
 	reflected := reflect.ValueOf(value)
-	for reflected.IsValid() && reflected.Kind() == reflect.Interface {
+	for reflected.IsValid() &&
+		(reflected.Kind() == reflect.Interface || reflected.Kind() == reflect.Pointer) {
 		if reflected.IsNil() {
 			return false
 		}
 		reflected = reflected.Elem()
 	}
+	if reflected.IsValid() && reflected.CanInterface() {
+		if decoded, ok := decodeJSONLikeObject(reflected.Interface()); ok {
+			reflected = reflect.ValueOf(decoded)
+		}
+	}
 	if !reflected.IsValid() || reflected.Kind() != reflect.Map ||
 		reflected.Type().Key().Kind() != reflect.String {
 		return false
 	}
-	return reflected.MapIndex(reflect.ValueOf("tool_response_extra")).IsValid()
+	key := reflect.ValueOf("tool_response_extra").Convert(reflected.Type().Key())
+	return reflected.MapIndex(key).IsValid()
 }
 
 func decodeJSONLikeObject(value any) (map[string]any, bool) {
