@@ -452,9 +452,13 @@ func createMemoryService(memType string, softDelete bool) (
         )
 
     case "postgres":
+        port, err := getEnvInt("PG_PORT", 5432)
+        if err != nil {
+            return nil, err
+        }
         return memorypostgres.NewService(
             memorypostgres.WithHost(getEnv("PG_HOST", "localhost")),
-            memorypostgres.WithPort(getEnvInt("PG_PORT", 5432)),
+            memorypostgres.WithPort(port),
             memorypostgres.WithUser(getEnv("PG_USER", "postgres")),
             memorypostgres.WithPassword(getEnv("PG_PASSWORD", "")),
             memorypostgres.WithDatabase(getEnv("PG_DATABASE", "trpc-agent-go-pgmemory")),
@@ -494,12 +498,20 @@ func getEnv(key, defaultVal string) string {
     return defaultVal
 }
 
-func getEnvInt(key string, defaultVal int) int {
-    value, err := strconv.Atoi(os.Getenv(key))
-    if err != nil {
-        return defaultVal
+func getEnvInt(key string, defaultVal int) (int, error) {
+    raw := os.Getenv(key)
+    if raw == "" {
+        return defaultVal, nil
     }
-    return value
+    value, err := strconv.Atoi(raw)
+    if err != nil || value < 1 || value > 65535 {
+        return 0, fmt.Errorf(
+            "invalid %s %q: must be an integer in [1, 65535]",
+            key,
+            raw,
+        )
+    }
+    return value, nil
 }
 
 func intPtr(i int) *int             { return &i }

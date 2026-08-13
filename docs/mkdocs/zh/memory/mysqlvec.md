@@ -46,6 +46,11 @@ if err != nil {
 - `WithSkipDBInit(skip)`: 跳过表初始化（适用于无 DDL 权限场景）
 
 同时设置时，`WithMySQLClientDSN` 的优先级高于 `WithMySQLInstance`。
+使用 `WithSkipDBInit(true)` 时，必须在启动前预建表。service 仍会探测原生
+`VECTOR` 支持，因此探测成功时 `embedding` 列必须是
+`VECTOR(<配置的维度>)`，否则必须是 `BLOB`。原生和降级路径的权威 DDL 请以
+[`memory/mysqlvec/init.go`](https://github.com/trpc-group/trpc-agent-go/blob/main/memory/mysqlvec/init.go)
+为准。
 
 **注意**：需要 MySQL 5.7.8+（JSON 列类型）。服务会探测原生 `VECTOR`
 支持，探测失败时自动降级为 BLOB + Go 侧余弦相似度。不需要额外的向量库。

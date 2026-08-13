@@ -587,7 +587,7 @@ memoryID := SHA256(content) // 64 位十六进制字符串
 本地持久化 → SQLite（单文件数据库，易部署）
 本地向量检索 → SQLiteVec（单文件数据库 + embedding）
 高并发读写 → Redis（内存级性能）
-需要 ACID → MySQL/PostgreSQL（事务保证）
+需要 ACID → SQLite/SQLiteVec/MySQL/PostgreSQL（事务保证）
 复杂 JSON → PostgreSQL（JSONB 索引和查询）
 MySQL 向量检索 → MySQLVec（可用时使用原生 VECTOR，否则使用 BLOB 降级路径）
 向量搜索 → pgvector（基于 embedding 的相似度搜索）

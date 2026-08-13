@@ -42,6 +42,12 @@ if err != nil {
 - `WithSkipDBInit(skip)`: Skip table initialization (for users without DDL permissions)
 
 `WithMySQLClientDSN` takes priority over `WithMySQLInstance` when both are set.
+With `WithSkipDBInit(true)`, provision the table before startup. The service
+still probes native `VECTOR` support, so the `embedding` column must be
+`VECTOR(<configured dimension>)` when that probe succeeds and `BLOB` otherwise.
+Use
+[`memory/mysqlvec/init.go`](https://github.com/trpc-group/trpc-agent-go/blob/main/memory/mysqlvec/init.go)
+as the authoritative native and fallback DDL.
 
 **Note**: Requires MySQL 5.7.8+ for the JSON column type. The service probes
 native `VECTOR` support and falls back to BLOB + Go-side cosine similarity when
