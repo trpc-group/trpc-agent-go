@@ -12,8 +12,9 @@
 // It loads the same documents twice, once on the default per-document path
 // and once with knowledge.WithEmbeddingBatchSize, and reports how many
 // embedding requests each load issued. The embedder is wrapped in a counter
-// because the guaranteed effect of batching is a lower request count, not a
-// different document set or different vectors.
+// because the guaranteed effect of batching is a lower request count for the
+// same documents. Whether a provider returns identical vectors for a text
+// embedded alone and in a batch is a property of that provider.
 //
 // Required environment variables:
 //   - OPENAI_API_KEY: API key for the embedding provider

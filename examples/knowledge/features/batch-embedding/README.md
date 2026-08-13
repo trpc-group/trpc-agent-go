@@ -76,9 +76,11 @@ Both runs embed the same 12 documents; only the number of requests carrying them
 differs. For one source with `N` documents and batch size `B`, the batched run
 issues `ceil(N/B)` requests, here `ceil(12/8) = 2` requests of 8 and 4 documents.
 
-The example does not compare vectors or search results. Batching sends the same
-texts to the same model, so it is not expected to change what is indexed, and a
-retrieval comparison would only add provider noise.
+The example does not compare vectors or search results. Both runs send the same
+texts to the same model and index the same documents, but whether a provider
+returns identical vectors for a text embedded alone and in a batch is a property
+of that provider, so comparing them would measure the provider rather than
+batching.
 
 Elapsed time is printed because it is the reason most callers are interested in
 batching, but it is a single sample from one run against one provider. It is not
