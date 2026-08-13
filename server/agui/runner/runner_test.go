@@ -32,7 +32,9 @@ import (
 	baserunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
 	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
+	aguitrack "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -64,6 +66,852 @@ func TestNew(t *testing.T) {
 		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	assert.NoError(t, err)
 	assert.Equal(t, "user", userID)
+}
+
+func TestWithRunHookAppends(t *testing.T) {
+	var called int
+	hook := func(context.Context, *Run) error {
+		called++
+		return nil
+	}
+	opts := NewOptions(WithRunHook(hook), WithRunHook(nil), WithRunHook(hook))
+	require.Len(t, opts.RunHooks, 2)
+	require.NoError(t, opts.RunHooks[0](context.Background(), nil))
+	require.NoError(t, opts.RunHooks[1](context.Background(), nil))
+	assert.Equal(t, 2, called)
+}
+
+func TestRunFromContextUnavailableWithoutRun(t *testing.T) {
+	run, ok := RunFromContext(context.Background())
+	assert.False(t, ok)
+	assert.Nil(t, run)
+}
+
+func TestRunContextHelpersHandleNilInputs(t *testing.T) {
+	ctx := newRunContext(nil, nil)
+	require.NotNil(t, ctx)
+	run, ok := RunFromContext(ctx)
+	assert.False(t, ok)
+	assert.Nil(t, run)
+	run, ok = RunFromContext(nil)
+	assert.False(t, ok)
+	assert.Nil(t, run)
+}
+
+func TestRunInputReturnsNilWhenUnavailable(t *testing.T) {
+	var run *Run
+	assert.Nil(t, run.Input())
+	run = newRun(nil, nil, nil)
+	assert.Nil(t, run.Input())
+}
+
+func TestRunEmitWaitsForReplyAfterEventEnqueued(t *testing.T) {
+	emit := make(chan hookEvent, 1)
+	done := make(chan struct{})
+	run := newRun(&adapter.RunAgentInput{}, emit, done)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run.Emit(ctx, aguievents.NewCustomEvent("background.report"))
+	}()
+	var req hookEvent
+	select {
+	case req = <-emit:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for hook event")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		require.FailNowf(t, "emit returned before event reply", "%v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	req.reply <- nil
+	require.NoError(t, <-errCh)
+}
+
+func TestRunEmitRejectsInvalidStates(t *testing.T) {
+	custom := aguievents.NewCustomEvent("background.report")
+	var run *Run
+	assert.ErrorIs(t, run.Emit(context.Background(), custom), errRunClosed)
+	done := make(chan struct{})
+	close(done)
+	run = newRun(&adapter.RunAgentInput{}, make(chan hookEvent, 1), done)
+	assert.ErrorIs(t, run.Emit(context.Background(), custom), errRunClosed)
+	run = newRun(&adapter.RunAgentInput{}, make(chan hookEvent, 1), make(chan struct{}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.ErrorIs(t, run.Emit(ctx, custom), context.Canceled)
+	assert.ErrorIs(t, run.Emit(context.Background(), nil), errInvalidRunEvent)
+}
+
+func TestRunEmitRejectsInvalidEventsBeforeEnqueue(t *testing.T) {
+	emit := make(chan hookEvent, 1)
+	run := newRun(&adapter.RunAgentInput{}, emit, make(chan struct{}))
+	err := run.Emit(context.Background(), aguievents.NewCustomEvent(""))
+	assert.ErrorIs(t, err, errInvalidRunEvent)
+	assertNoHookEvent(t, emit)
+	err = run.Emit(context.Background(), aguievents.NewCustomEvent("background.report",
+		aguievents.WithValue(func() {})))
+	assert.ErrorIs(t, err, errInvalidRunEvent)
+	assertNoHookEvent(t, emit)
+}
+
+func TestRunEmitReturnsRunClosedAfterEventEnqueued(t *testing.T) {
+	emit := make(chan hookEvent, 1)
+	done := make(chan struct{})
+	run := newRun(&adapter.RunAgentInput{}, emit, done)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run.Emit(context.Background(), aguievents.NewCustomEvent("background.report"))
+	}()
+	select {
+	case <-emit:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for hook event")
+	}
+	close(done)
+	require.ErrorIs(t, <-errCh, errRunClosed)
+}
+
+func TestStartRunHooksSkipsNilHooks(t *testing.T) {
+	r := &runner{runHooks: []RunHook{nil}}
+	hookDone, remaining := r.startRunHooks(context.Background(), newRun(&adapter.RunAgentInput{}, nil, nil))
+	assert.Nil(t, hookDone)
+	assert.Equal(t, 0, remaining)
+}
+
+func TestRunRunHookRecoversPanic(t *testing.T) {
+	err := runRunHook(context.Background(), func(context.Context, *Run) error {
+		panic("boom")
+	}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "panic: boom")
+}
+
+func TestHandleHookEventWithoutReplyWritesEvent(t *testing.T) {
+	r := &runner{}
+	events := make(chan aguievents.Event, 1)
+	input := &runInput{threadID: "thread", runID: "run"}
+	ok := r.handleHookEvent(context.Background(), events, input, hookEvent{
+		event: aguievents.NewCustomEvent("background.report"),
+	})
+	require.True(t, ok)
+	assert.IsType(t, (*aguievents.CustomEvent)(nil), <-events)
+}
+
+func TestHandleHookEventReportsClosedRunWhenWriteFails(t *testing.T) {
+	r := &runner{}
+	events := make(chan aguievents.Event)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	reply := make(chan error, 1)
+	input := &runInput{threadID: "thread", runID: "run"}
+	ok := r.handleHookEvent(ctx, events, input, hookEvent{
+		event: aguievents.NewCustomEvent("background.report"),
+		reply: reply,
+	})
+	require.False(t, ok)
+	require.ErrorIs(t, <-reply, errRunClosed)
+}
+
+func TestRunFromContextAvailableToHookAndUnderlyingRunner(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- &agentevent.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	}
+	close(agentEvents)
+	hookSeen := make(chan runContextObservation, 1)
+	runnerSeen := make(chan runContextObservation, 1)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			run, ok := RunFromContext(ctx)
+			runnerSeen <- runContextObservation{fromContext: run, ok: ok}
+			return agentEvents, nil
+		},
+	}
+	r := New(underlying, WithRunHook(func(ctx context.Context, run *Run) error {
+		fromContext, ok := RunFromContext(ctx)
+		hookSeen <- runContextObservation{argument: run, fromContext: fromContext, ok: ok}
+		return nil
+	}))
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	collectEvents(t, eventsCh)
+	hookObservation := waitForRunContextObservation(t, hookSeen)
+	runnerObservation := waitForRunContextObservation(t, runnerSeen)
+	require.True(t, hookObservation.ok)
+	require.True(t, runnerObservation.ok)
+	require.NotNil(t, hookObservation.argument)
+	require.Same(t, hookObservation.argument, hookObservation.fromContext)
+	require.Same(t, hookObservation.argument, runnerObservation.fromContext)
+}
+
+func TestRunHookEmitsBeforeDelayedRunFinished(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- &agentevent.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	}
+	close(agentEvents)
+	allowHook := make(chan struct{})
+	hookStarted := make(chan struct{})
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	r := New(underlying, WithRunHook(func(ctx context.Context, run *Run) error {
+		close(hookStarted)
+		<-allowHook
+		return run.Emit(ctx, aguievents.NewCustomEvent("background.report", aguievents.WithValue("ready")))
+	}))
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	select {
+	case <-hookStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for hook start")
+	}
+	select {
+	case evt := <-eventsCh:
+		require.FailNowf(t, "unexpected event before hook emits", "%T", evt)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(allowHook)
+	custom, ok := waitForNextEvent(t, eventsCh).(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Equal(t, "background.report", custom.Name)
+	assert.Equal(t, "ready", custom.Value)
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), waitForNextEvent(t, eventsCh))
+	waitForChannelClose(t, eventsCh)
+}
+
+func TestRunHookFailureCancelsBlockedRunnerStartup(t *testing.T) {
+	runnerStarted := make(chan struct{})
+	runnerCanceled := make(chan struct{})
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			close(runnerStarted)
+			<-ctx.Done()
+			close(runnerCanceled)
+			return nil, ctx.Err()
+		},
+	}
+	r := New(underlying, WithRunHook(func(ctx context.Context, run *Run) error {
+		return errors.New("hook failed")
+	}))
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	select {
+	case <-runnerStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for runner start")
+	}
+	events := collectEvents(t, eventsCh)
+	select {
+	case <-runnerCanceled:
+	default:
+		require.FailNow(t, "runner was not canceled before run cleanup waited")
+	}
+	require.True(t, hasRunErrorEvent(events))
+}
+
+func TestRunTerminalEventWaitsForAgentStreamCloseBeforeReleasingSession(t *testing.T) {
+	releaseAgentClose := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseAgentClose)
+		})
+	}
+	t.Cleanup(release)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event, 1)
+			agentEvents <- &agentevent.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Done:   true,
+				},
+			}
+			go func() {
+				<-releaseAgentClose
+				close(agentEvents)
+			}()
+			return agentEvents, nil
+		},
+	}
+	r := New(underlying)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), waitForNextEvent(t, eventsCh))
+	assertNoAGUIEvent(t, eventsCh, 20*time.Millisecond)
+	events2, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run-2",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi again"}},
+	})
+	require.Nil(t, events2)
+	require.ErrorIs(t, err, ErrRunAlreadyExists)
+	release()
+	waitForChannelClose(t, eventsCh)
+}
+
+func TestRunCancellationWaitsForHookBeforeReleasingSession(t *testing.T) {
+	releaseHook := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseHook)
+		})
+	}
+	t.Cleanup(release)
+	hookStarted := make(chan struct{})
+	hookCanceled := make(chan struct{})
+	runnerCanceled := make(chan struct{})
+	var hookStartOnce sync.Once
+	var hookCancelOnce sync.Once
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			go func() {
+				<-ctx.Done()
+				close(runnerCanceled)
+				close(agentEvents)
+			}()
+			return agentEvents, nil
+		},
+	}
+	r := New(underlying, WithRunHook(func(ctx context.Context, run *Run) error {
+		hookStartOnce.Do(func() {
+			close(hookStarted)
+		})
+		<-ctx.Done()
+		hookCancelOnce.Do(func() {
+			close(hookCanceled)
+		})
+		<-releaseHook
+		return nil
+	})).(*runner)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	waitForHookStart(t, hookStarted)
+	require.NoError(t, r.Cancel(context.Background(), input))
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), waitForNextEvent(t, eventsCh))
+	select {
+	case <-runnerCanceled:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for runner cancellation")
+	}
+	select {
+	case <-hookCanceled:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for hook cancellation")
+	}
+	time.Sleep(20 * time.Millisecond)
+	events2, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run-2",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi again"}},
+	})
+	require.Nil(t, events2)
+	require.ErrorIs(t, err, ErrRunAlreadyExists)
+	release()
+	waitForChannelClose(t, eventsCh)
+}
+
+func TestRunHookEmitsBeforeDelayedRunnerError(t *testing.T) {
+	allowHook := make(chan struct{})
+	hookStarted := make(chan struct{})
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return nil, errors.New("runner failed")
+		},
+	}
+	r := New(underlying, WithRunHook(func(ctx context.Context, run *Run) error {
+		close(hookStarted)
+		<-allowHook
+		return run.Emit(ctx, aguievents.NewCustomEvent("background.report", aguievents.WithValue("ready")))
+	}))
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	waitForHookStart(t, hookStarted)
+	assertNoAGUIEvent(t, eventsCh, 50*time.Millisecond)
+	close(allowHook)
+	custom, ok := waitForNextEvent(t, eventsCh).(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Equal(t, "background.report", custom.Name)
+	runErr, ok := waitForNextEvent(t, eventsCh).(*aguievents.RunErrorEvent)
+	require.True(t, ok)
+	assert.Contains(t, runErr.Message, "runner failed")
+	waitForChannelClose(t, eventsCh)
+}
+
+func TestRunHookEmitsBeforeAfterTranslateTerminalReplacement(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- agentevent.New("inv", "assistant")
+	close(agentEvents)
+	allowHook := make(chan struct{})
+	hookStarted := make(chan struct{})
+	fakeTrans := &fakeTranslator{events: [][]aguievents.Event{{aguievents.NewCustomEvent("agent.status")}}}
+	callbacks := translator.NewCallbacks().
+		RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
+			custom, ok := evt.(*aguievents.CustomEvent)
+			if ok && custom.Name == "agent.status" {
+				return aguievents.NewRunFinishedEvent("thread", "run"), nil
+			}
+			return nil, nil
+		})
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithTranslatorFactory(func(context.Context, *adapter.RunAgentInput, ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		}),
+		WithTranslateCallbacks(callbacks),
+		WithRunHook(func(ctx context.Context, run *Run) error {
+			close(hookStarted)
+			<-allowHook
+			return run.Emit(ctx, aguievents.NewCustomEvent("background.report"))
+		}),
+	)
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	waitForHookStart(t, hookStarted)
+	assertNoAGUIEvent(t, eventsCh, 50*time.Millisecond)
+	close(allowHook)
+	custom, ok := waitForNextEvent(t, eventsCh).(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Equal(t, "background.report", custom.Name)
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), waitForNextEvent(t, eventsCh))
+	waitForChannelClose(t, eventsCh)
+}
+
+func TestRunHookEventTrackedButNotSessionEvents(t *testing.T) {
+	ctx := context.Background()
+	sessionService := inmemory.NewSessionService()
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- &agentevent.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	}
+	close(agentEvents)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithAppName("app"),
+		WithSessionService(sessionService),
+		WithRunHook(func(ctx context.Context, run *Run) error {
+			input := run.Input()
+			return run.Emit(ctx, aguievents.NewCustomEvent("background.report",
+				aguievents.WithValue(map[string]any{"threadId": input.ThreadID})))
+		}),
+	)
+	eventsCh, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{ID: "user-1", Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	var streamed bool
+	for _, evt := range evts {
+		custom, ok := evt.(*aguievents.CustomEvent)
+		if ok && custom.Name == "background.report" {
+			streamed = true
+		}
+	}
+	assert.True(t, streamed)
+	sess, err := sessionService.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "thread",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Empty(t, sess.Events)
+	trackEvents, err := sess.GetTrackEvents(aguitrack.TrackAGUI)
+	require.NoError(t, err)
+	var tracked bool
+	for _, evt := range trackEvents.Events {
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(evt.Payload, &payload))
+		if payload["type"] == string(aguievents.EventTypeCustom) && payload["name"] == "background.report" {
+			tracked = true
+		}
+	}
+	assert.True(t, tracked)
+}
+
+func TestRunHookEventBypassesAfterTranslateCallback(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- &agentevent.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	}
+	close(agentEvents)
+	var hookEventPassedThroughCallback bool
+	callbacks := translator.NewCallbacks().
+		RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
+			custom, ok := evt.(*aguievents.CustomEvent)
+			if ok && custom.Name == "background.report" {
+				hookEventPassedThroughCallback = true
+				return aguievents.NewCustomEvent("rewritten"), nil
+			}
+			return nil, nil
+		})
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithTranslateCallbacks(callbacks),
+		WithRunHook(func(ctx context.Context, run *Run) error {
+			return run.Emit(ctx, aguievents.NewCustomEvent("background.report"))
+		}),
+	)
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	var foundHookEvent bool
+	for _, evt := range evts {
+		custom, ok := evt.(*aguievents.CustomEvent)
+		if ok && custom.Name == "background.report" {
+			foundHookEvent = true
+		}
+	}
+	assert.True(t, foundHookEvent)
+	assert.False(t, hookEventPassedThroughCallback)
+}
+
+func TestRunEmitRejectsAfterTranslateCallbackReentrancy(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- agentevent.New("inv", "assistant")
+	close(agentEvents)
+	emitErrs := make(chan error, 1)
+	fakeTrans := &fakeTranslator{events: [][]aguievents.Event{{aguievents.NewCustomEvent("agent.status")}}}
+	callbacks := translator.NewCallbacks().
+		RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
+			custom, ok := evt.(*aguievents.CustomEvent)
+			if !ok || custom.Name != "agent.status" {
+				return evt, nil
+			}
+			run, ok := RunFromContext(ctx)
+			if !ok {
+				emitErrs <- errors.New("run missing from context")
+				return evt, nil
+			}
+			emitErrs <- run.Emit(ctx, aguievents.NewCustomEvent("callback.report"))
+			return evt, nil
+		})
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithTranslatorFactory(func(context.Context, *adapter.RunAgentInput, ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		}),
+		WithTranslateCallbacks(callbacks),
+	)
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	select {
+	case emitErr := <-emitErrs:
+		require.ErrorIs(t, emitErr, errRunEmitReentrant)
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for reentrant emit error")
+	}
+	assert.True(t, hasCustomEventNamed(evts, "agent.status"))
+	assert.False(t, hasCustomEventNamed(evts, "callback.report"))
+}
+
+func TestRunAfterTranslateFailureCancelsAgentStream(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- agentevent.New("inv", "assistant")
+	runnerCanceled := make(chan struct{})
+	var cancelOnce sync.Once
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			go func() {
+				<-ctx.Done()
+				cancelOnce.Do(func() {
+					close(runnerCanceled)
+				})
+				close(agentEvents)
+			}()
+			return agentEvents, nil
+		},
+	}
+	fakeTrans := &fakeTranslator{events: [][]aguievents.Event{{aguievents.NewCustomEvent("agent.status")}}}
+	callbacks := translator.NewCallbacks().
+		RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
+			custom, ok := evt.(*aguievents.CustomEvent)
+			if ok && custom.Name == "agent.status" {
+				return nil, errors.New("after translate failed")
+			}
+			return nil, nil
+		})
+	r := New(
+		underlying,
+		WithTranslatorFactory(func(context.Context, *adapter.RunAgentInput, ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		}),
+		WithTranslateCallbacks(callbacks),
+	)
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	runErr, ok := waitForNextEvent(t, eventsCh).(*aguievents.RunErrorEvent)
+	require.True(t, ok)
+	assert.Contains(t, runErr.Message, "after translate failed")
+	select {
+	case <-runnerCanceled:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for runner cancellation")
+	}
+	waitForChannelClose(t, eventsCh)
+}
+
+func TestRunHookRejectsFrameworkOwnedEvents(t *testing.T) {
+	errCh := make(chan error, 1)
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- &agentevent.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	}
+	close(agentEvents)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	r := New(underlying, WithRunHook(func(ctx context.Context, run *Run) error {
+		errCh <- run.Emit(ctx, aguievents.NewRunFinishedEvent("thread", "run"))
+		return nil
+	}))
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	select {
+	case hookErr := <-errCh:
+		assert.ErrorIs(t, hookErr, errInvalidRunEvent)
+	default:
+		require.FailNow(t, "hook did not report emit error")
+	}
+	var finished int
+	for _, evt := range evts {
+		if _, ok := evt.(*aguievents.RunFinishedEvent); ok {
+			finished++
+		}
+	}
+	assert.Equal(t, 1, finished)
+}
+
+func TestRunHookErrorEmitsRunError(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- &agentevent.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	}
+	close(agentEvents)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	r := New(underlying, WithRunHook(func(context.Context, *Run) error {
+		return errors.New("hook failed")
+	}))
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	runErr, ok := evts[1].(*aguievents.RunErrorEvent)
+	require.True(t, ok)
+	assert.Contains(t, runErr.Message, "hook failed")
+	assert.False(t, hasRunFinishedEvent(evts))
+}
+
+func TestRunHookFailureRetainsSessionUntilAgentStreamCloses(t *testing.T) {
+	releaseAgentClose := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseAgentClose)
+		})
+	}
+	t.Cleanup(release)
+	runnerCanceled := make(chan struct{})
+	var cancelOnce sync.Once
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			go func() {
+				<-ctx.Done()
+				cancelOnce.Do(func() {
+					close(runnerCanceled)
+				})
+				<-releaseAgentClose
+				close(agentEvents)
+			}()
+			return agentEvents, nil
+		},
+	}
+	r := New(underlying, WithRunHook(func(context.Context, *Run) error {
+		return errors.New("hook failed")
+	}))
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	runErr, ok := waitForNextEvent(t, eventsCh).(*aguievents.RunErrorEvent)
+	require.True(t, ok)
+	assert.Contains(t, runErr.Message, "hook failed")
+	select {
+	case <-runnerCanceled:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for runner cancellation")
+	}
+	events2, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run-2",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi again"}},
+	})
+	require.Nil(t, events2)
+	require.ErrorIs(t, err, ErrRunAlreadyExists)
+	release()
+	waitForChannelClose(t, eventsCh)
 }
 
 func TestRunEventSourceMetadataEnabledAttachesRawEvent(t *testing.T) {
@@ -641,6 +1489,63 @@ func TestRunIgnoresRequestCancelButRespectsBackendTimeout(t *testing.T) {
 	evts := collectEvents(t, eventsCh)
 	assert.False(t, hasRunFinishedEvent(evts))
 	assert.True(t, hasRunErrorEvent(evts))
+}
+
+func TestWriteEventAfterConsumerDone(t *testing.T) {
+	t.Run("active run does not block", func(t *testing.T) {
+		consumerDone := make(chan struct{})
+		close(consumerDone)
+		input := &runInput{
+			threadID:     "thread",
+			runID:        "run",
+			consumerDone: consumerDone,
+		}
+		events := make(chan aguievents.Event)
+		event := aguievents.NewRunFinishedEvent("thread", "run")
+
+		written := (&runner{}).writeEvent(context.Background(), events, event, input)
+
+		assert.True(t, written)
+		assert.True(t, input.terminalEmitted)
+	})
+
+	t.Run("canceled run still stops", func(t *testing.T) {
+		consumerDone := make(chan struct{})
+		close(consumerDone)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		input := &runInput{
+			threadID:     "thread",
+			runID:        "run",
+			consumerDone: consumerDone,
+		}
+		events := make(chan aguievents.Event)
+		event := aguievents.NewRunFinishedEvent("thread", "run")
+
+		written := (&runner{}).writeEvent(ctx, events, event, input)
+
+		assert.False(t, written)
+		assert.False(t, input.terminalEmitted)
+	})
+
+	t.Run("expired deadline still stops", func(t *testing.T) {
+		consumerDone := make(chan struct{})
+		close(consumerDone)
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		input := &runInput{
+			threadID:     "thread",
+			runID:        "run",
+			consumerDone: consumerDone,
+		}
+		events := make(chan aguievents.Event)
+		event := aguievents.NewRunFinishedEvent("thread", "run")
+
+		written := (&runner{}).writeEvent(ctx, events, event, input)
+
+		assert.False(t, written)
+		assert.False(t, input.terminalEmitted)
+	})
 }
 
 func TestRunCancelsOnRequestCancelWhenEnabled(t *testing.T) {
@@ -1255,6 +2160,33 @@ func TestRunTailToolMessagesPersistThroughBaseRunner(t *testing.T) {
 	assert.Equal(t, "agent", persistedEvents[2].Author)
 }
 
+func TestRunFromContextAvailableInsideBaseRunnerAgent(t *testing.T) {
+	ctx := context.Background()
+	sessionService := inmemory.NewSessionService()
+	ag := &capturingAGUIInvocationAgent{name: "agent", emitAGUICustomEvent: true}
+	base := baserunner.NewRunner("app", ag, baserunner.WithSessionService(sessionService))
+	defer base.Close()
+	r := New(base)
+	eventsCh, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.True(t, ag.hasAGUIRun)
+	require.NotNil(t, ag.aguiRun)
+	require.NoError(t, ag.aguiEmitErr)
+	var found bool
+	for _, evt := range evts {
+		custom, ok := evt.(*aguievents.CustomEvent)
+		if ok && custom.Name == "agent.status" {
+			found = true
+		}
+	}
+	assert.True(t, found)
+}
+
 func TestRunTailToolMessagesComposeUserMessageRewriter(t *testing.T) {
 	var called bool
 	var customRewriterCalled bool
@@ -1457,12 +2389,10 @@ func TestRecordUserMessageTracksCustomEvent(t *testing.T) {
 	r := &runner{tracker: tracker}
 	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
 	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
-
-	err := r.recordUserMessage(context.Background(), key, msg)
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, nil))
 	require.NoError(t, err)
 	assert.Empty(t, msg.ID)
 	assert.Empty(t, msg.Name)
-
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 	require.Len(t, tracker.events, 1)
@@ -1477,6 +2407,137 @@ func TestRecordUserMessageTracksCustomEvent(t *testing.T) {
 	content, ok := userMessage.ContentString()
 	require.True(t, ok)
 	assert.Equal(t, "hi", content)
+}
+
+func TestRecordUserMessageTracksForwardedPropsSourceMetadata(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	forwardedProps := map[string]any{
+		"file_url": "https://example.com/demo.png",
+		"attachments": []any{
+			map[string]any{"id": "file-1", "mimeType": "image/png"},
+		},
+	}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: forwardedProps,
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	got, ok := custom.GetBaseEvent().RawEvent.(runForwardedPropsSourceMetadata)
+	require.True(t, ok)
+	assert.Equal(t, "run", got.RunID)
+	metadata, ok := source.FromRawEvent(got)
+	require.True(t, ok)
+	assert.Equal(t, "demo-user", metadata.Author)
+	assert.Equal(t, forwardedProps, metadata.ForwardedProps)
+	payload, err := custom.ToJSON()
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(payload, &decoded))
+	rawEvent, ok := decoded["rawEvent"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "run", rawEvent["runId"])
+}
+
+func TestRecordUserMessageSkipsForwardedPropsMetadataByDefault(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"file_url": "https://example.com/demo.png"},
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
+}
+
+func TestRecordUserMessageSkipsInvalidForwardedPropsMetadata(t *testing.T) {
+	originalErrorfContext := log.ErrorfContext
+	errorCalls := 0
+	var gotFormat string
+	log.ErrorfContext = func(_ context.Context, format string, _ ...any) {
+		errorCalls++
+		gotFormat = format
+	}
+	t.Cleanup(func() {
+		log.ErrorfContext = originalErrorfContext
+	})
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"bad": func() {}},
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
+	assert.Equal(t, 1, errorCalls)
+	assert.Contains(t, gotFormat, "marshal forwardedProps source metadata")
+}
+
+func TestRecordUserMessageSkipsNilForwardedPropsMetadata(t *testing.T) {
+	var forwardedProps map[string]any
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: forwardedProps,
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
+}
+
+func TestRecordUserMessageSkipsMissingForwardedPropsMetadata(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
 }
 
 func TestRunUsesResolvedAppNameForTrackKey(t *testing.T) {
@@ -1518,6 +2579,88 @@ func TestRunUsesResolvedAppNameForTrackKey(t *testing.T) {
 		assert.Equal(t, "demo-user", key.UserID)
 		assert.Equal(t, "thread", key.SessionID)
 	}
+}
+
+func TestRunUsesResolvedAppNameForUnderlyingRunner(t *testing.T) {
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithAppName("static-app"),
+		WithAppNameResolver(forwardedPropsAppNameResolver),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"appName": "dynamic-app"},
+		Messages:       []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+	assert.Equal(t, "dynamic-app", gotOptions.AppName)
+}
+
+func TestRunUsesStaticAppNameForUnderlyingRunner(t *testing.T) {
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(underlying, WithAppName("static-app"))
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+	assert.Equal(t, "static-app", gotOptions.AppName)
+}
+
+func TestRunResolvedAppNameOverridesRunOptionResolverAppName(t *testing.T) {
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithAppName("static-app"),
+		WithAppNameResolver(forwardedPropsAppNameResolver),
+		WithRunOptionResolver(func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			return []agent.RunOption{agent.WithAppName("custom-app")}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"appName": "dynamic-app"},
+		Messages:       []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+	assert.Equal(t, "dynamic-app", gotOptions.AppName)
 }
 
 func TestRunAppNameResolverError(t *testing.T) {
@@ -1570,12 +2713,31 @@ func TestResolveAppNameReturnsResolverError(t *testing.T) {
 func TestRecordUserMessageRejectsNilAndNonUserRole(t *testing.T) {
 	r := &runner{}
 	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
-
-	err := r.recordUserMessage(context.Background(), key, nil)
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, nil, nil))
 	assert.ErrorContains(t, err, "user message is nil")
-
-	err = r.recordUserMessage(context.Background(), key, &types.Message{Role: types.RoleTool, Content: "hi"})
+	err = r.recordUserMessage(context.Background(), recordUserMessageInput(
+		key,
+		&types.Message{Role: types.RoleTool, Content: "hi"},
+		nil,
+	))
 	assert.ErrorContains(t, err, "user message role must be user")
+}
+
+func recordUserMessageInput(
+	key session.Key,
+	message *types.Message,
+	runAgentInput *adapter.RunAgentInput,
+) *runInput {
+	if runAgentInput == nil {
+		runAgentInput = &adapter.RunAgentInput{}
+	}
+	return &runInput{
+		key:           key,
+		threadID:      runAgentInput.ThreadID,
+		runID:         runAgentInput.RunID,
+		runAgentInput: runAgentInput,
+		messages:      &runAgentMessages{userMessage: message},
+	}
 }
 
 func TestRunUserMessageRecordedInTrackAsCustomEventWithStringContent(t *testing.T) {
@@ -2011,7 +3173,13 @@ func TestRunLastMessageContentArray(t *testing.T) {
 		Messages: []types.Message{{
 			Role: types.RoleUser,
 			Content: []types.InputContent{
-				{Type: types.InputContentTypeBinary, MimeType: "image/jpeg", URL: "https://example.com/resource/download?id=1"},
+				{
+					Type: types.InputContentTypeImage,
+					Source: &types.InputContentSource{
+						Type:  types.InputContentSourceTypeURL,
+						Value: "https://example.com/resource/download?id=1",
+					},
+				},
 				{Type: types.InputContentTypeText, Text: "图中有哪些信息?"},
 			},
 		}},
@@ -2196,7 +3364,7 @@ func TestRunFlushesTracker(t *testing.T) {
 	assert.NoError(t, err)
 	collectEvents(t, ch)
 	assert.GreaterOrEqual(t, recorder.appendCount, 1)
-	assert.Equal(t, 1, recorder.flushCount)
+	assert.Equal(t, 1, recorder.closeCount)
 }
 
 func TestRecordTrackEventUsesDetachedPersistenceContext(t *testing.T) {
@@ -2413,7 +3581,7 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 	assert.Equal(t, 1, underlying.calls)
 }
 
-func TestRunStateResolverOverridesRuntimeState(t *testing.T) {
+func TestRunStateResolverMergesRuntimeState(t *testing.T) {
 	var runOpts agent.RunOptions
 	underlying := &fakeRunner{
 		run: func(ctx context.Context,
@@ -2457,8 +3625,37 @@ func TestRunStateResolverOverridesRuntimeState(t *testing.T) {
 	require.NotNil(t, runOpts.RuntimeState)
 	assert.Equal(t, "v1", runOpts.RuntimeState["k1"])
 	assert.Equal(t, "from-state", runOpts.RuntimeState[graph.CfgKeyLineageID])
-	_, ok := runOpts.RuntimeState["k2"]
-	assert.False(t, ok)
+	assert.Equal(t, "v2", runOpts.RuntimeState["k2"])
+}
+
+func TestRunDefaultStateResolverForwardsObjectState(t *testing.T) {
+	var runOpts agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			for _, opt := range opts {
+				opt(&runOpts)
+			}
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(underlying)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		State:    map[string]any{"document": "hello"},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	_ = collectEvents(t, eventsCh)
+
+	require.NotNil(t, runOpts.RuntimeState)
+	assert.Equal(t, "hello", runOpts.RuntimeState["document"])
 }
 
 func TestRunStateResolverError(t *testing.T) {
@@ -2984,6 +4181,7 @@ func (f *fakeTranslator) Translate(ctx context.Context, evt *agentevent.Event) (
 type flushRecorder struct {
 	appendCount int
 	flushCount  int
+	closeCount  int
 }
 
 func (f *flushRecorder) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
@@ -2997,6 +4195,11 @@ func (f *flushRecorder) GetEvents(ctx context.Context, key session.Key, opts ...
 
 func (f *flushRecorder) Flush(ctx context.Context, key session.Key) error {
 	f.flushCount++
+	return nil
+}
+
+func (f *flushRecorder) Close(ctx context.Context, key session.Key) error {
+	f.closeCount++
 	return nil
 }
 
@@ -3021,6 +4224,10 @@ func (c *contextRecorderTracker) Flush(context.Context, session.Key) error {
 	return nil
 }
 
+func (c *contextRecorderTracker) Close(context.Context, session.Key) error {
+	return nil
+}
+
 type deadlineWaitingTracker struct{}
 
 func (deadlineWaitingTracker) AppendEvent(ctx context.Context, _ session.Key, _ aguievents.Event) error {
@@ -3037,11 +4244,16 @@ func (deadlineWaitingTracker) Flush(context.Context, session.Key) error {
 	return nil
 }
 
+func (deadlineWaitingTracker) Close(context.Context, session.Key) error {
+	return nil
+}
+
 type recordingTracker struct {
 	mu         sync.Mutex
 	events     []aguievents.Event
 	keys       []session.Key
 	flushCount int
+	closeCount int
 }
 
 func (r *recordingTracker) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
@@ -3063,10 +4275,21 @@ func (r *recordingTracker) Flush(ctx context.Context, key session.Key) error {
 	return nil
 }
 
+func (r *recordingTracker) Close(ctx context.Context, key session.Key) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closeCount++
+	return nil
+}
+
 type capturingAGUIInvocationAgent struct {
-	name        string
-	message     model.Message
-	hasRewriter bool
+	name                string
+	message             model.Message
+	hasRewriter         bool
+	aguiRun             *Run
+	hasAGUIRun          bool
+	emitAGUICustomEvent bool
+	aguiEmitErr         error
 }
 
 func (a *capturingAGUIInvocationAgent) Info() agent.Info {
@@ -3091,9 +4314,22 @@ func (a *capturingAGUIInvocationAgent) Run(
 ) (<-chan *agentevent.Event, error) {
 	a.message = invocation.Message
 	a.hasRewriter = invocation.RunOptions.UserMessageRewriter != nil
+	if run, ok := RunFromContext(ctx); ok {
+		a.aguiRun = run
+		a.hasAGUIRun = true
+		if a.emitAGUICustomEvent {
+			a.aguiEmitErr = run.Emit(ctx, aguievents.NewCustomEvent("agent.status", aguievents.WithValue("ready")))
+		}
+	}
 	ch := make(chan *agentevent.Event)
 	close(ch)
 	return ch, nil
+}
+
+type runContextObservation struct {
+	argument    *Run
+	fromContext *Run
+	ok          bool
 }
 
 type errorTracker struct {
@@ -3112,6 +4348,11 @@ func (e *errorTracker) GetEvents(ctx context.Context,
 }
 
 func (e *errorTracker) Flush(ctx context.Context,
+	_ session.Key) error {
+	return e.flushErr
+}
+
+func (e *errorTracker) Close(ctx context.Context,
 	_ session.Key) error {
 	return e.flushErr
 }
@@ -3306,6 +4547,146 @@ func TestRunUsesCanonicalToolCallIDFromInstalledPlugin(t *testing.T) {
 	require.Equal(t, startID, resultID)
 	require.NotEqual(t, "call-1", startID)
 	require.Contains(t, startID, "trpc-agent-go-toolcall:")
+}
+
+func TestRunEmitsToolResultsAsEachParallelCallCompletes(t *testing.T) {
+	slowStarted := make(chan struct{})
+	releaseSlow := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseSlow)
+		})
+	}
+	t.Cleanup(release)
+
+	slowTool := function.NewFunctionTool(
+		func(ctx context.Context, _ struct{}) (string, error) {
+			close(slowStarted)
+			select {
+			case <-releaseSlow:
+				return "slow", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+		function.WithName("slow"),
+		function.WithDescription("Waits until released."),
+	)
+	fastTool := function.NewFunctionTool(
+		func(ctx context.Context, _ struct{}) (string, error) {
+			select {
+			case <-slowStarted:
+				return "fast", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+		function.WithName("fast"),
+		function.WithDescription("Returns after the slow tool starts."),
+	)
+	modelStub := &toolCallIDRunnerIntegrationModel{
+		responses: [][]*model.Response{
+			{{
+				ID:     "tool-calls",
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{
+								ID:   "call-slow",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "slow",
+									Arguments: []byte(`{}`),
+								},
+							},
+							{
+								ID:   "call-fast",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "fast",
+									Arguments: []byte(`{}`),
+								},
+							},
+						},
+					},
+				}},
+			}},
+			{{
+				ID:     "final",
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("done"),
+				}},
+			}},
+		},
+	}
+	ag := llmagent.New(
+		"assistant",
+		llmagent.WithModel(modelStub),
+		llmagent.WithTools([]tool.Tool{slowTool, fastTool}),
+		llmagent.WithEnableParallelTools(true),
+	)
+	underlying := baserunner.NewRunner("per-tool-result-agui-app", ag)
+	t.Cleanup(func() {
+		require.NoError(t, underlying.Close())
+	})
+	r := New(
+		underlying,
+		WithRunOptionResolver(func(
+			context.Context,
+			*adapter.RunAgentInput,
+		) ([]agent.RunOption, error) {
+			return []agent.RunOption{
+				agent.WithToolResultEventPerCallEnabled(true),
+			}, nil
+		}),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "run tools"}},
+	})
+	require.NoError(t, err)
+
+	var events []aguievents.Event
+	for {
+		select {
+		case evt, ok := <-eventCh:
+			require.True(t, ok, "event stream closed before the first tool result")
+			events = append(events, evt)
+			result, ok := evt.(*aguievents.ToolCallResultEvent)
+			if !ok {
+				continue
+			}
+			require.Equal(t, "call-fast", result.ToolCallID)
+			goto firstResultReceived
+		case <-ctx.Done():
+			require.FailNow(t, "timeout waiting for the first tool result")
+		}
+	}
+
+firstResultReceived:
+	release()
+	events = append(events, collectEvents(t, eventCh)...)
+
+	var resultIDs []string
+	for _, evt := range events {
+		if result, ok := evt.(*aguievents.ToolCallResultEvent); ok {
+			resultIDs = append(resultIDs, result.ToolCallID)
+		}
+	}
+	require.Equal(t, []string{"call-fast", "call-slow"}, resultIDs)
+	require.NoError(t, aguievents.ValidateSequence(events))
 }
 
 func TestRunGraphToolMetadataUsesCanonicalToolCallID(t *testing.T) {
@@ -4155,6 +5536,45 @@ func waitForNextEvent(t *testing.T, ch <-chan aguievents.Event) aguievents.Event
 	}
 }
 
+func assertNoAGUIEvent(t *testing.T, ch <-chan aguievents.Event, wait time.Duration) {
+	t.Helper()
+	select {
+	case evt, ok := <-ch:
+		require.True(t, ok, "channel closed before next event")
+		require.FailNowf(t, "unexpected event", "%T", evt)
+	case <-time.After(wait):
+	}
+}
+
+func assertNoHookEvent(t *testing.T, ch <-chan hookEvent) {
+	t.Helper()
+	select {
+	case req := <-ch:
+		require.FailNowf(t, "unexpected hook event", "%T", req.event)
+	default:
+	}
+}
+
+func waitForHookStart(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for hook start")
+	}
+}
+
+func waitForRunContextObservation(t *testing.T, ch <-chan runContextObservation) runContextObservation {
+	t.Helper()
+	select {
+	case observation := <-ch:
+		return observation
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for run context observation")
+		return runContextObservation{}
+	}
+}
+
 func hasRunFinishedEvent(events []aguievents.Event) bool {
 	for _, evt := range events {
 		if _, ok := evt.(*aguievents.RunFinishedEvent); ok {
@@ -4167,6 +5587,16 @@ func hasRunFinishedEvent(events []aguievents.Event) bool {
 func hasRunErrorEvent(events []aguievents.Event) bool {
 	for _, evt := range events {
 		if _, ok := evt.(*aguievents.RunErrorEvent); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCustomEventNamed(events []aguievents.Event, name string) bool {
+	for _, evt := range events {
+		custom, ok := evt.(*aguievents.CustomEvent)
+		if ok && custom.Name == name {
 			return true
 		}
 	}
@@ -4213,16 +5643,17 @@ func TestTranslateCallbackError(t *testing.T) {
 			RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
 				return nil, errors.New("fail")
 			})
-		r := &runner{
-			runner: &fakeRunner{
-				run: func(ctx context.Context, userID, sessionID string, message model.Message,
-					opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
-					ch := make(chan *agentevent.Event, 1)
-					ch <- agentevent.New("inv", "assistant")
-					close(ch)
-					return ch, nil
-				},
+		underlying := &fakeRunner{
+			run: func(ctx context.Context, userID, sessionID string, message model.Message,
+				opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+				ch := make(chan *agentevent.Event, 1)
+				ch <- agentevent.New("inv", "assistant")
+				close(ch)
+				return ch, nil
 			},
+		}
+		r := &runner{
+			runner:             underlying,
 			translateCallbacks: callbacks,
 			translatorFactory:  defaultTranslatorFactory,
 			userIDResolver:     defaultUserIDResolver,
@@ -4241,6 +5672,7 @@ func TestTranslateCallbackError(t *testing.T) {
 		assert.Len(t, evts, 1)
 		_, ok := evts[0].(*aguievents.RunErrorEvent)
 		assert.True(t, ok)
+		assert.Equal(t, 0, underlying.calls)
 	})
 }
 

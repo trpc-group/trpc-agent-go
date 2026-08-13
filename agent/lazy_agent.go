@@ -41,6 +41,12 @@ type lazyAgent struct {
 // still advertise the lazy agent through transfer_to_agent because Info is
 // available without constructing the concrete implementation.
 //
+// Do not use a lazy agent as the root of a Runner run that declares
+// invocation-scoped skill loads. The Runner must determine the selected
+// agent's capabilities before calling Run, while a lazy agent cannot know the
+// capabilities of its factory result until Run. Use runner.AgentFactory for a
+// request-scoped root agent instead.
+//
 // The factory should return an Agent with the same Info().Name as info.Name so
 // traces, transfer targets, and session branches remain easy to follow.
 func NewLazyAgent(

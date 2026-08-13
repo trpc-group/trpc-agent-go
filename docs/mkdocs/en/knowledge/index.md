@@ -1,5 +1,7 @@
 # Knowledge Documentation
 
+![Knowledge Chunking Viewer](../../assets/img/knowledge/chunk-viewer.png)
+
 ## Overview
 
 Knowledge is the knowledge management system in the tRPC-Agent-Go framework, providing Retrieval-Augmented Generation (RAG) capabilities for Agents. By integrating vector data, embedding models, and document processing components, the Knowledge system helps Agents access and retrieve relevant knowledge information, providing more accurate and well-grounded responses.
@@ -394,6 +396,12 @@ To ensure fair comparison, all four systems use identical configurations:
 | **Embedding Model** | server:274214 (1024 dims) |
 | **Vector Store** | PGVector (CrewAI uses ChromaDB) |
 | **Agent Model** | DeepSeek-V3.2 |
+
+### Corpus-Specific Contextual Retrieval Trial
+
+The [contextual retrieval example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/contextual-retrieval) uses the existing public `source.Source` and `document.Document.EmbeddingText` contracts to compare original and contextualized index text while returning the original chunk content to the Agent.
+
+This is an opt-in, corpus-specific evaluation recipe, not a default Knowledge behavior or a claim of general benefit. Keep the model, embedder, chunking, vector store, retrieval settings, query set, and evaluation protocol identical between variants, and review the example's data-handling and cost notes before sending parent documents to the configured context model.
 
 
 ## More Content

@@ -45,6 +45,10 @@ workflow 语言是 Runtime 的选择，不是 Dynamic Workflow 的本质约束�
 Runtime 使用 Python；对已注册 Agent 和工具的调用会通过显式 bridge/RPC 回到 Go
 宿主，而不是在脚本中运行另一套 Agent SDK。
 
+模型生成的 workflow 代码应保持为简短的编排胶水：只表达角色委派、数据流、分支、
+并发和有界循环，具体的调研、写作、编码或工具操作交给子 Agent。不要把任务报告、
+源码文件或大段 shell 脚本直接嵌入 workflow 代码。
+
 ## 最小接入
 
 下面是最小接入方式：注册一个中性的基础 Agent，然后把 `run_workflow`
@@ -77,6 +81,9 @@ general := llmagent.New(
     llmagent.WithInstruction(
         "Follow the dynamic instruction supplied for this workflow-local role.",
     ),
+    // 让每个临时角色只关注自己的分支；同一 workflow 请求内复用
+    // instance_id 时仍会共享对应历史。
+    llmagent.WithMessageFilterMode(llmagent.IsolatedRequest),
 )
 
 // 创建 run_workflow 工具。
@@ -149,16 +156,80 @@ review = await agent(
 常用选项只有几个：
 
 - `instruction`：这次子 Agent 的临时角色说明。
+- `model`：宿主通过 `WithAgentModelProfile` 注册 profile 后可选的模型别名；
+  省略则继承模板模型。
 - `tools` / `skills`：省略表示继承基础 Agent；`[]` 表示这次禁用；非空列表表示在基础 Agent 已有能力上收窄。
 - `structured_output` / `schema`：要求这次子 Agent 返回结构化 JSON。
 - `instance_id`：同一个 workflow 内多次调用复用同一个子 Agent 历史。
 
-默认不传 `instance_id` 时，每次 `agent(...)` 调用都会创建独立的子 Agent
-历史，适合并发分支。显式传相同 `instance_id` 表示复用同一条子历史；
-并发调用同一个 `instance_id` 会被串行执行，避免同时读写同一段会话历史。
+### 宿主授权的模型 profile
 
-这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变模型、权限策略，
-也不能新增基础 Agent 本来没有的宿主能力。
+默认情况下，每次子 Agent 调用使用模板 Agent 已注册的模型。若要让 workflow
+在少数宿主持有模型之间选择，可注册 profile 别名：
+
+```go
+fast := openai.New("gpt-5-mini")
+deep := openai.New("gpt-5")
+
+workflow, err := dynamicworkflow.NewTool(
+    dynamicworkflow.LocalRunner{},
+    []agent.Agent{general},
+    dynamicworkflow.WithAgentModelProfile(
+        "fast",
+        "Low-latency drafting and simple extraction.",
+        fast,
+    ),
+    dynamicworkflow.WithAgentModelProfile(
+        "deep",
+        "Careful review and multi-step reasoning.",
+        deep,
+    ),
+)
+```
+
+workflow 可在单次子 Agent 调用中选择 profile：
+
+```python
+draft = await agent(
+    "Write a short draft.",
+    instruction="Draft quickly.",
+    model="fast",
+)
+review = await agent(
+    {"draft": draft["text"]},
+    instruction="Review carefully.",
+    model="deep",
+)
+```
+
+profile 是白名单。每个 `model.Model` 实例由宿主持有；workflow 代码不能传入
+提供商模型标识符，也不能自行构造模型。省略 `model` 会完整保留模板模型。只有
+在有明确任务原因时才应选择覆盖。选中的 profile 对 `LLMAgent` 模板，以及会遵守
+invocation surface patch 的自定义 Agent 生效；其他 Agent 仍使用各自已配置的模型。
+
+默认不传 `instance_id` 时，每次 `agent(...)` 调用都会创建独立的子 Agent
+历史，适合并发分支。对于 `LLMAgent` 模板，如果临时角色不应继承根分支对话，
+请像上例一样配置 `llmagent.IsolatedRequest`。显式传相同 `instance_id` 表示
+复用同一条子历史；并发调用同一个 `instance_id` 会被串行执行，避免同时读写
+同一段会话历史。
+
+复用的历史包含子 Agent 的输入和产生的事件。动态 `instruction` 只配置当前这次
+调用，不会作为对话消息持久化；后续调用必须记住的事实应放在 `input` 中。
+
+这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变权限策略、发明模型
+接入点，也不能新增基础 Agent 本来没有的宿主能力。模型选择仅限于宿主通过
+`WithAgentModelProfile` 注册的别名。
+
+`agent(...)` 返回的 envelope 包含 `text`、可选的 `structured` 结果和执行元数据。
+下游需要普通文本时应传 `result["text"]`，需要稳定字段时传
+`result["structured"]`；除非确实需要元数据，否则不要继续传递完整 envelope。
+后续分支或循环需要稳定字段时，应请求 `schema` 并使用 `structured`，不要要求子
+Agent 返回 JSON 文本后再在 workflow 中解析。
+
+如果一个角色必须明确调用工具，而后续代码又需要结构化判断，应拆成两次子 Agent
+调用：先获取未结构化但有工具依据的文本，再把这份证据交给带 `schema`、且
+`tools=[]` 的子 Agent。这样无需依赖模型服务在同一轮里同时支持工具调用和结构化
+响应模式。
 
 ## 一个完整例子
 
@@ -235,7 +306,8 @@ return {
 
 ## 并发与批处理
 
-`parallel` 用于同时执行互不依赖的分支，并按输入顺序返回结果：
+`parallel` 用于同时执行互不依赖的分支，并按输入顺序返回结果；失败的独立分支返回
+`None`：
 
 ```python
 reviews = await parallel([
@@ -252,6 +324,16 @@ reviews = await parallel([
 `pipeline(items, stage1, stage2, ...)` 用于对一批对象执行重复的多阶段处理。
 每个 item 会按 stage 顺序前进；一个 item 完成前一阶段后，就可以进入下一阶段，
 不需要等待整批 item。
+
+每个 stage 可以接收一、二或三个位置参数：
+
+- `stage(previous)`
+- `stage(previous, original)`
+- `stage(previous, original, index)`
+
+第一阶段的 `previous` 就是原始 item。简单阶段可以只写一个参数；后续阶段仍可按需
+读取原始 item 和 index。所有 stage 的签名会在任何 item 启动前完成校验。如果某个
+stage 失败或返回 `None`，该 item 的最终结果就是 `None`，后续 stage 不再执行。
 
 ```python
 async def analyze(previous, original, index):
@@ -289,6 +371,11 @@ facts = await call_tool("search_catalog", query="trail backpack")
 
 `call_tool` 只能调用 `WithCodeCallableTools` 显式传入的工具。它不会自动看到根 Agent 的工具。
 
+`agent(..., tools=[...])` 只是授权子 Agent 使用这些工具，并不保证模型一定调用；
+结构化输出约束的是子 Agent 最终回答的形状，而不是字段的数据来源。如果 Python
+控制流必须使用宿主工具的精确结果，应先通过 `call_tool` 取得原始数据，再交给
+Agent 解读。
+
 不要把执行类工具、`run_workflow` 自身、`execute_tool_code`、`transfer_to_agent`、
 `await_user_reply`、workspace 工具或 AgentTool 放进 `WithCodeCallableTools`。这些工具容易形成
 递归或混合控制流边界；workflow 调用子 Agent 应使用 `agent(...)`。
@@ -296,8 +383,10 @@ facts = await call_tool("search_catalog", query="trail backpack")
 ## 事件、Session 与执行边界
 
 Dynamic Workflow 采用前台、一次性执行。workflow 代码负责表达编排逻辑，已注册的
-Agent 和工具仍在 Go 宿主中运行。每次子 Agent 调用都有隔离的对话上下文，同时仍属于
-当前运行。因此：
+Agent 和工具仍在 Go 宿主中运行。省略 `instance_id` 时，每次子 Agent 调用都会获得
+独立的会话分支；显式复用同一个 `instance_id` 的调用会共享对应子历史。所有子 Agent
+调用仍属于当前运行；按上例配置 `IsolatedRequest` 后，子 Agent 只看到自己的分支。
+如果基础 Agent 选择了更宽的历史模式，它也可能看到祖先上下文。因此：
 
 - 前端可以从同一个 event stream 看到子 Agent 输出和工具调用进度。
 - 配置的 Session Service 会持久化这些事件。
@@ -307,13 +396,67 @@ Agent 和工具仍在 Go 宿主中运行。每次子 Agent 调用都有隔离的
 event stream 遵循框架统一的流式消费约定：持续消费直到运行结束；如果提前停止，应取消
 本次运行的 context。
 
+workflow 执行不具备事务性。如果子 Agent 或代码可调用工具已经修改了外部状态，而后续
+步骤失败，这些副作用不会自动回滚。当根 Agent 或应用可能重试 workflow 时，应让有
+副作用的操作保持串行，并尽量具备幂等性。
+
 这也是 Dynamic Workflow 和“让模型写一个普通脚本自己跑完”的关键区别：临时
 workflow 具备代码的灵活性，但 Agent 执行、工具边界、事件流和 Session 持久化仍由
 Go 框架掌控。
 
-`dynamicworkflow.LocalRunner` 会启动本地 Python 进程。它不是安全 sandbox。
-生产环境应提供自己的 `dynamicworkflow.Runtime`，例如容器、microVM 或远端 sandbox，
-并在里面落实文件系统、网络、进程、依赖和资源限制。
+`dynamicworkflow.LocalRunner` 会通过共享的 local Python runtime 启动本地 Python
+进程。它不是安全 sandbox。它会为本地使用提供 defense-in-depth 防护，包括限制 Python 语法、限制 builtins、
+限制源码大小、限制捕获输出、使用最小进程环境、默认使用空的临时工作目录、将 bootstrap
+脚本放在私有目录、尽力终止 guest 进程（Unix-like 系统下会清理进程组），以及通过
+`dynamicworkflow.NewLocalRunner(dynamicworkflow.LocalRunnerConfig{Timeout: ...})`
+配置的可选全流程 timeout。
+默认 timeout 会刻意保持未设置，LocalRunner 只继承调用方 context，避免意外截断
+耗时较长的 Agent workflow。
+
+推荐直接编写以 `return` 结束的 workflow body。为了兼容模型常见输出，如果整段
+workflow 只有一个可选 docstring 和一个无参数的 `async def run()` 或
+`async def main()`，LocalRunner 也会自动调用它；其他未调用的 helper 仍会校验失败。
+
+相较之前的 LocalRunner，强化后的默认行为不再继承宿主环境，默认使用空的临时工作
+目录，会拒绝超过 64 KiB 的生成源码（除非显式调整限制），并执行文档声明的受限
+Python 子集。这些是有意的行为变化，但不会构成安全 sandbox 边界。
+
+需要本地 OS 隔离时，可以直接使用内置 sandbox runner：
+
+```go
+workflow, err := dynamicworkflow.NewTool(
+    dynamicworkflow.NewSandboxRunner(),
+    childAgents,
+)
+```
+
+使用上面不带 option 的构造方式时，每次 workflow 都会使用一次性 workspace 和
+clean process environment。该 runner 复用 `codeexecutor/sandbox`，默认限制网络；
+sandbox 初始化失败时会直接报错，不会 fallback 到本地执行。Linux 需要
+`bubblewrap`，macOS 使用 `/usr/bin/sandbox-exec`，Windows 尚未实现 managed
+backend。
+
+`SandboxRunner.Timeout` 会为完整 workflow 设置 deadline，并把取消信号传导给 guest、
+宿主 Tool 和子 Agent callback。Go context 采用协作式取消，call handler 必须在
+context 结束后及时返回。零值不会额外添加 deadline，而是依赖调用方 context；生产
+环境必须为调用方 context 设置 deadline，或者显式配置该 timeout。两者同时存在时，
+以更早到期者为准。CPU、内存和进程数配额仍应由外层容器、microVM 或远端 runtime
+提供。
+
+`SandboxRunner.Python` 为空时，sandbox 会从自己的 clean PATH 解析 `python3`。任何
+非空值（包括显式的 `"python3"`）都会先通过宿主 PATH 解析并转换成绝对路径。如果
+解释器不在 backend 默认开放的 runtime 路径中，还需要通过
+`sandbox.WorkspaceWriteProfile().WithReadPaths(...)` 扩展 managed permission
+profile，并将其传给 `sandbox.WithPermissionProfile(...)`。
+
+OS sandbox 仍然运行在宿主机上，并会开放启动 Python 所需的平台与 runtime 路径；
+具体只读可见范围因 backend 而异。它不等价于 microVM 级租户边界。如果 guest 不能
+看到任何宿主文件，或者需要更强的资源与租户隔离，应使用容器、microVM 或远端
+`Runtime`。
+
+可运行代码见
+[Sandbox Dynamic Workflow 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/sandbox)：
+生成的 workflow 在 managed sandbox 中运行，子 Agent 工具与事件仍留在 Go 框架内。
 
 生成的 workflow 代码应该调用宿主工具，而不是直接调用 HTTP API。认证、授权、
 重试、幂等、审计、限流和 API 版本适配仍应由业务工具在 Go 侧掌控。
@@ -329,7 +472,7 @@ Go 框架掌控。
 默认不要向同一个根 Agent 同时暴露 `execute_tool_code` 和 `run_workflow`。
 两者都是代码编排路径，同时暴露会增加模型选择难度。
 
-完整可运行代码见 [Dynamic Workflow Agent 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow)。
+完整可运行代码见 [Dynamic Workflow 基础示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/basic)。
 
 ## 后续计划：文件化 workflow
 

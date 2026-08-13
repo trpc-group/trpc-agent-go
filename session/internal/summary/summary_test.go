@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
@@ -400,9 +401,14 @@ func TestSummarizeSession_UsesPreviousBoundaryCutoff(t *testing.T) {
 func TestSelectUpdatedAt_Fallbacks(t *testing.T) {
 	prev := time.Date(2023, 1, 2, 9, 0, 0, 0, time.UTC)
 	latest := time.Date(2023, 1, 2, 10, 0, 0, 0, time.UTC)
+	selectUpdatedAt := func(tmp *session.Session, latestTs time.Time, hasDelta bool) time.Time {
+		prevBoundary := session.NewSummaryBoundary("", prev)
+		latestBoundary := session.NewSummaryBoundary("", latestTs)
+		return selectSummaryBoundary(tmp, "", prevBoundary, latestBoundary, hasDelta).CutoffTime()
+	}
 
 	t.Run("no delta keeps prev", func(t *testing.T) {
-		got := selectUpdatedAt(nil, prev, latest, false)
+		got := selectUpdatedAt(nil, latest, false)
 		assert.True(t, got.Equal(prev.UTC()))
 	})
 
@@ -410,17 +416,17 @@ func TestSelectUpdatedAt_Fallbacks(t *testing.T) {
 		tmp := &session.Session{State: session.StateMap{
 			session.SummaryLastIncludedTimestampStateKey: []byte("bad-ts"),
 		}}
-		got := selectUpdatedAt(tmp, prev, latest, true)
+		got := selectUpdatedAt(tmp, latest, true)
 		assert.True(t, got.Equal(latest.UTC()))
 	})
 
 	t.Run("nil session with delta falls back to latest", func(t *testing.T) {
-		got := selectUpdatedAt(nil, prev, latest, true)
+		got := selectUpdatedAt(nil, latest, true)
 		assert.True(t, got.Equal(latest.UTC()))
 	})
 
 	t.Run("zero latestTs with delta keeps prev", func(t *testing.T) {
-		got := selectUpdatedAt(nil, prev, time.Time{}, true)
+		got := selectUpdatedAt(nil, time.Time{}, true)
 		assert.True(t, got.Equal(prev.UTC()))
 	})
 }
@@ -570,6 +576,75 @@ func makeEvent(content string, ts time.Time, filterKey string) event.Event {
 		Timestamp: ts,
 		Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: content}}}},
 	}
+}
+
+type previousSummaryCaptureSummarizer struct {
+	previous string
+	present  bool
+	events   []event.Event
+}
+
+func (s *previousSummaryCaptureSummarizer) ShouldSummarize(*session.Session) bool {
+	return true
+}
+
+func (s *previousSummaryCaptureSummarizer) Summarize(
+	ctx context.Context,
+	sess *session.Session,
+) (string, error) {
+	s.previous, s.present = isummarycontext.PreviousSummary(ctx)
+	s.events = append([]event.Event(nil), sess.Events...)
+	return "updated summary", nil
+}
+
+func (s *previousSummaryCaptureSummarizer) SetPrompt(string)         {}
+func (s *previousSummaryCaptureSummarizer) SetModel(model.Model)     {}
+func (s *previousSummaryCaptureSummarizer) Metadata() map[string]any { return nil }
+
+func TestSummarizeSession_AttachesPreviousSummaryContext(t *testing.T) {
+	oldTimestamp := time.Now().Add(-time.Minute)
+	newTimestamp := time.Now()
+	base := &session.Session{
+		ID:      "previous-summary-context",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			makeEvent("old", oldTimestamp, "branch"),
+			makeEvent("new", newTimestamp, "branch"),
+		},
+		Summaries: map[string]*session.Summary{
+			"branch": {
+				Summary:   "previous summary",
+				UpdatedAt: oldTimestamp,
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"branch",
+					oldTimestamp,
+					"old",
+				),
+			},
+		},
+	}
+	capture := &previousSummaryCaptureSummarizer{}
+
+	updated, err := SummarizeSession(
+		context.Background(),
+		capture,
+		base,
+		"branch",
+		false,
+	)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.True(t, capture.present)
+	require.Equal(t, "previous summary", capture.previous)
+	require.Len(t, capture.events, 2)
+	require.Equal(t, authorSystem, capture.events[0].Author)
+	require.Equal(
+		t,
+		"previous summary",
+		capture.events[0].Response.Choices[0].Message.Content,
+	)
+	require.Equal(t, "new", capture.events[1].ID)
 }
 
 func TestSummarizeSession_FilteredKey_RespectsDeltaAndShould(t *testing.T) {
@@ -809,6 +884,57 @@ func TestSummarizeSession_CanceledWhileWaitingForSameKey(t *testing.T) {
 
 	close(s.release)
 	require.NoError(t, <-firstDone)
+}
+
+func TestSummarizeSession_CanceledDuringSummarizationDoesNotPersist(t *testing.T) {
+	now := time.Now()
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("e1", now.Add(-1*time.Minute), "b1"),
+	}
+	s := &blockingSummarizer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(s.release) })
+	}
+	defer release()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct {
+		updated bool
+		err     error
+	}, 1)
+
+	go func() {
+		updated, err := SummarizeSession(ctx, s, base, "b1", false)
+		done <- struct {
+			updated bool
+			err     error
+		}{updated: updated, err: err}
+	}()
+	select {
+	case <-s.started:
+	case <-time.After(time.Second):
+		t.Fatal("summarizer did not start")
+	}
+	cancel()
+	release()
+
+	var got struct {
+		updated bool
+		err     error
+	}
+	select {
+	case got = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled summary did not return")
+	}
+	require.ErrorIs(t, got.err, context.Canceled)
+	require.False(t, got.updated)
+	require.Empty(t, base.Summaries)
 }
 
 func TestSummarizeSession_EmptyDelta_WithForce(t *testing.T) {

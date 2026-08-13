@@ -10,30 +10,51 @@
 package chunking
 
 import (
+	"strings"
+
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 // FixedSizeChunking implements a chunking strategy that splits text into fixed-size chunks.
 type FixedSizeChunking struct {
-	chunkSize int
-	overlap   int
+	chunkSize      int
+	overlap        int
+	preserveLines  bool
+	trimWhitespace bool
 }
 
 // Option represents a functional option for configuring FixedSizeChunking.
 type Option func(*FixedSizeChunking)
 
-// WithChunkSize sets the maximum size of each chunk in characters.
+// WithChunkSize sets the maximum size of each chunk in Unicode runes.
 func WithChunkSize(size int) Option {
 	return func(fsc *FixedSizeChunking) {
 		fsc.chunkSize = size
 	}
 }
 
-// WithOverlap sets the number of characters to overlap between chunks.
+// WithOverlap sets the maximum number of Unicode runes to overlap between chunks.
 func WithOverlap(overlap int) Option {
 	return func(fsc *FixedSizeChunking) {
 		fsc.overlap = overlap
+	}
+}
+
+// WithPreserveLines keeps complete lines together whenever one line fits the
+// chunk budget. Oversized lines still use natural text and rune boundaries.
+func WithPreserveLines() Option {
+	return func(fsc *FixedSizeChunking) {
+		fsc.preserveLines = true
+	}
+}
+
+// WithWhitespaceTrimming enables the legacy behavior that trims leading and
+// trailing whitespace from the document, every line, and chunk boundaries.
+func WithWhitespaceTrimming() Option {
+	return func(fsc *FixedSizeChunking) {
+		fsc.trimWhitespace = true
 	}
 }
 
@@ -47,15 +68,14 @@ func NewFixedSizeChunking(opts ...Option) *FixedSizeChunking {
 	for _, opt := range opts {
 		opt(fsc)
 	}
-	// Validate parameters.
-	if fsc.overlap >= fsc.chunkSize {
-		fsc.overlap = min(defaultOverlap, fsc.chunkSize-1)
-	}
 	return fsc
 }
 
 // Chunk splits the document into fixed-size chunks with optional overlap.
 func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document, error) {
+	if err := validateChunkConfig(f.chunkSize, f.overlap); err != nil {
+		return nil, err
+	}
 	if doc == nil {
 		return nil, ErrNilDocument
 	}
@@ -64,7 +84,13 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 		return nil, ErrEmptyDocument
 	}
 
-	content := cleanText(doc.Content)
+	content := cleanTextWithWhitespaceTrimming(
+		doc.Content,
+		f.trimWhitespace,
+	)
+	if isBlankText(content) {
+		return nil, ErrEmptyDocument
+	}
 	contentLength := encoding.RuneCount(content)
 
 	// If content is smaller than chunk size, return as single chunk.
@@ -73,51 +99,344 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 		return []*document.Document{chunk}, nil
 	}
 
-	// Use UTF-8 safe splitting to ensure proper character boundaries.
-	textChunks := encoding.SafeSplitBySize(content, f.chunkSize)
-
-	var chunks []*document.Document
-	for i, chunkText := range textChunks {
-		chunk := createChunk(doc, chunkText, i+1)
-		chunks = append(chunks, chunk)
-	}
-
-	// Apply overlap if specified.
+	coreSize := f.chunkSize
 	if f.overlap > 0 {
-		chunks = f.applyOverlap(chunks)
+		coreSize = f.chunkSize - f.overlap
+	}
+	var textChunks []fixedTextChunk
+	split := func(content string, maxSize int) (string, string) {
+		return splitTextAtNaturalBoundaryWithWhitespaceTrimming(
+			content,
+			maxSize,
+			f.trimWhitespace,
+		)
+	}
+	if f.preserveLines {
+		textChunks = splitFixedLines(
+			content,
+			f.chunkSize,
+			coreSize,
+			split,
+			f.trimWhitespace,
+		)
+		if !f.trimWhitespace {
+			textChunks = coalesceFixedWhitespaceChunks(
+				textChunks,
+				f.chunkSize,
+				coreSize,
+			)
+		}
+	} else {
+		splitChunks := splitFixedText(
+			content,
+			f.chunkSize,
+			coreSize,
+			split,
+			true,
+			f.trimWhitespace,
+		)
+		if !f.trimWhitespace {
+			splitChunks = coalesceWhitespaceChunks(
+				splitChunks,
+				f.chunkSize,
+				coreSize,
+			)
+		}
+		textChunks = make([]fixedTextChunk, 0, len(splitChunks))
+		for _, chunk := range splitChunks {
+			textChunks = append(textChunks, fixedTextChunk{content: chunk})
+		}
+	}
+	semanticChunks := textChunks[:0]
+	for _, textChunk := range textChunks {
+		if !isBlankText(textChunk.content) {
+			semanticChunks = append(semanticChunks, textChunk)
+		}
+	}
+	textChunks = semanticChunks
+	chunks := make([]*document.Document, 0, len(textChunks))
+	rawContents := make([]string, len(textChunks))
+	for i, textChunk := range textChunks {
+		rawContents[i] = textChunk.content
+	}
+	separators := sourceChunkSeparators(
+		content,
+		rawContents,
+		" ",
+		f.trimWhitespace,
+	)
+	for i, textChunk := range textChunks {
+		finalContent := textChunk.content
+		actualOverlap := 0
+		if i > 0 {
+			separator := separators[i]
+			preserveSeparator := false
+			if f.preserveLines {
+				separator = ""
+				if textChunk.startsNewLine {
+					separator = "\n"
+					preserveSeparator = true
+				}
+			}
+			finalContent, actualOverlap = joinWithOverlapSeparatorMode(
+				chunks[i-1].Content,
+				textChunk.content,
+				f.overlap,
+				f.chunkSize,
+				separator,
+				preserveSeparator,
+				f.trimWhitespace,
+			)
+		}
+		chunk := createChunk(doc, textChunk.content, i+1)
+		chunk.Content = finalContent
+		if actualOverlap > 0 {
+			chunk.Metadata[source.MetaOverlappedContentSize] =
+				encoding.RuneCount(finalContent)
+		}
+		chunks = append(chunks, chunk)
 	}
 	return chunks, nil
 }
 
-// applyOverlap applies overlap between consecutive chunks while maintaining UTF-8 safety.
-func (f *FixedSizeChunking) applyOverlap(chunks []*document.Document) []*document.Document {
-	if len(chunks) <= 1 {
-		return chunks
+type fixedTextChunk struct {
+	content         string
+	startsNewLine   bool
+	separatorBefore string
+}
+
+func splitFixedLines(
+	content string,
+	firstChunkSize int,
+	nextChunkSize int,
+	split func(string, int) (string, string),
+	trimWhitespace bool,
+) []fixedTextChunk {
+	if nextChunkSize <= 0 {
+		nextChunkSize = firstChunkSize
+	}
+	var chunks []fixedTextChunk
+	var current string
+	var currentSeparator string
+	hasCurrent := false
+
+	chunkSize := func() int {
+		if len(chunks) == 0 {
+			return firstChunkSize
+		}
+		return nextChunkSize
+	}
+	flush := func() {
+		if !hasCurrent {
+			current = ""
+			currentSeparator = ""
+			hasCurrent = false
+			return
+		}
+		if trimWhitespace && strings.TrimSpace(current) == "" {
+			current = ""
+			currentSeparator = ""
+			hasCurrent = false
+			return
+		}
+		chunks = append(chunks, fixedTextChunk{
+			content:         current,
+			startsNewLine:   true,
+			separatorBefore: currentSeparator,
+		})
+		current = ""
+		currentSeparator = ""
+		hasCurrent = false
 	}
 
-	overlappedChunks := []*document.Document{chunks[0]}
-	for i := 1; i < len(chunks); i++ {
-		prevText := chunks[i-1].Content
-
-		// Get overlap text safely.
-		overlapText := encoding.SafeOverlap(prevText, f.overlap)
-
-		// Create new metadata for overlapped chunk.
-		metadata := make(map[string]any)
-		for k, v := range chunks[i].Metadata {
-			metadata[k] = v
+	for lineIndex, line := range strings.Split(content, "\n") {
+		lineSeparator := ""
+		if lineIndex > 0 {
+			lineSeparator = "\n"
+		}
+		if hasCurrent {
+			candidate := current + "\n" + line
+			if encoding.RuneCount(candidate) <= chunkSize() {
+				current = candidate
+				continue
+			}
+			flush()
 		}
 
-		overlappedContent := overlapText + chunks[i].Content
-		overlappedChunk := &document.Document{
-			ID:        chunks[i].ID,
-			Name:      chunks[i].Name,
-			Content:   overlappedContent,
-			Metadata:  metadata,
-			CreatedAt: chunks[i].CreatedAt,
-			UpdatedAt: chunks[i].UpdatedAt,
+		if encoding.RuneCount(line) <= chunkSize() {
+			current = line
+			currentSeparator = lineSeparator
+			hasCurrent = true
+			continue
 		}
-		overlappedChunks = append(overlappedChunks, overlappedChunk)
+
+		pieces := splitFixedText(
+			line,
+			chunkSize(),
+			nextChunkSize,
+			split,
+			true,
+			trimWhitespace,
+		)
+		for i, piece := range pieces {
+			separatorBefore := ""
+			if i == 0 {
+				separatorBefore = lineSeparator
+			}
+			chunks = append(chunks, fixedTextChunk{
+				content:         piece,
+				startsNewLine:   i == 0,
+				separatorBefore: separatorBefore,
+			})
+		}
 	}
-	return overlappedChunks
+	flush()
+	return chunks
+}
+
+func coalesceFixedWhitespaceChunks(
+	chunks []fixedTextChunk,
+	firstChunkSize int,
+	nextChunkSize int,
+) []fixedTextChunk {
+	if nextChunkSize <= 0 {
+		nextChunkSize = firstChunkSize
+	}
+	queue := append([]fixedTextChunk(nil), chunks...)
+	result := make([]fixedTextChunk, 0, len(chunks))
+	var pending strings.Builder
+	pendingActive := false
+
+	for len(queue) > 0 {
+		chunk := queue[0]
+		queue = queue[1:]
+		if isBlankText(chunk.content) {
+			pending.WriteString(chunk.separatorBefore)
+			pending.WriteString(chunk.content)
+			pendingActive = true
+			continue
+		}
+
+		chunkSize := nextChunkSize
+		if len(result) == 0 {
+			chunkSize = firstChunkSize
+		}
+		if encoding.RuneCount(chunk.content) > chunkSize {
+			pieces := encoding.SafeSplitBySize(chunk.content, chunkSize)
+			replacement := make([]fixedTextChunk, 0, len(pieces)+len(queue))
+			for i, piece := range pieces {
+				separatorBefore := ""
+				startsNewLine := false
+				if i == 0 {
+					separatorBefore = chunk.separatorBefore
+					startsNewLine = chunk.startsNewLine
+				}
+				replacement = append(replacement, fixedTextChunk{
+					content:         piece,
+					startsNewLine:   startsNewLine,
+					separatorBefore: separatorBefore,
+				})
+			}
+			queue = append(replacement, queue...)
+			continue
+		}
+
+		if pendingActive {
+			pending.WriteString(chunk.separatorBefore)
+			content := chunk.content
+			if len(result) > 0 {
+				previous := len(result) - 1
+				previousSize := nextChunkSize
+				if previous == 0 {
+					previousSize = firstChunkSize
+				}
+				updatedPrevious, remainingPending, remainingContent :=
+					preserveLeadingWhitespaceWithPrevious(
+						result[previous].content,
+						pending.String(),
+						content,
+						previousSize,
+						chunkSize,
+					)
+				result[previous].content = updatedPrevious
+				pending.Reset()
+				pending.WriteString(remainingPending)
+				content = remainingContent
+			}
+			attached, remaining := attachLeadingWhitespace(
+				pending.String(),
+				content,
+				chunkSize,
+			)
+			pending.Reset()
+			pendingActive = false
+			result = append(result, fixedTextChunk{
+				content:       attached,
+				startsNewLine: len(result) == 0 && chunk.startsNewLine,
+			})
+			if remaining != "" {
+				queue = append([]fixedTextChunk{{content: remaining}}, queue...)
+			}
+			continue
+		}
+		result = append(result, chunk)
+	}
+
+	if pendingActive && len(result) > 0 {
+		last := len(result) - 1
+		chunkSize := nextChunkSize
+		if last == 0 {
+			chunkSize = firstChunkSize
+		}
+		result[last].content = attachTrailingWhitespace(
+			result[last].content,
+			pending.String(),
+			chunkSize,
+		)
+	}
+	return result
+}
+
+func splitFixedText(
+	content string,
+	firstChunkSize int,
+	nextChunkSize int,
+	split func(string, int) (string, string),
+	balanceTail bool,
+	trimWhitespace bool,
+) []string {
+	if firstChunkSize <= 0 {
+		return []string{content}
+	}
+	if nextChunkSize <= 0 {
+		nextChunkSize = firstChunkSize
+	}
+
+	var chunks []string
+	remaining := content
+	for remaining != "" {
+		chunkSize := nextChunkSize
+		if len(chunks) == 0 {
+			chunkSize = firstChunkSize
+		}
+		chunk, rest := split(remaining, chunkSize)
+		if balanceTail {
+			chunk, rest = splitTextWithBalancedTailAndWhitespaceTrimming(
+				remaining,
+				chunkSize,
+				split,
+				trimWhitespace,
+			)
+		}
+		if chunk == "" {
+			// Keep a hard-split fallback to guarantee progress when a custom
+			// splitter returns an empty prefix.
+			hardChunks := encoding.SafeSplitBySize(remaining, chunkSize)
+			chunk = hardChunks[0]
+			rest = remaining[len(chunk):]
+		}
+		chunks = append(chunks, chunk)
+		remaining = rest
+	}
+	return chunks
 }

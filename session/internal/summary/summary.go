@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
@@ -206,6 +207,9 @@ func SummarizeSession(
 	if err != nil {
 		return false, fmt.Errorf("summarize session %s failed: %w", base.ID, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if text == "" {
 		return false, nil
 	}
@@ -327,6 +331,7 @@ func buildSummaryInput(
 		report = &summary.Report{}
 		reportCtx = summary.ContextWithReport(ctx, report)
 	}
+	reportCtx = isummarycontext.WithPreviousSummary(reportCtx, prev.text)
 	if !shouldGenerateSummary(
 		reportCtx,
 		m,
@@ -487,12 +492,6 @@ func writeSummary(
 	}
 }
 
-func selectUpdatedAt(tmp *session.Session, prevAt, latestTs time.Time, hasDelta bool) time.Time {
-	prev := session.NewSummaryBoundary("", prevAt)
-	latest := session.NewSummaryBoundary("", latestTs)
-	return selectSummaryBoundary(tmp, "", prev, latest, hasDelta).CutoffTime()
-}
-
 func selectSummaryBoundary(
 	tmp *session.Session,
 	filterKey string,
@@ -633,14 +632,6 @@ func skipBranchForkFullSessionCascadeFromContext(ctx context.Context) bool {
 	}
 	skip, _ := ctx.Value(skipBranchForkFullSessionCascadeContextKey{}).(bool)
 	return skip
-}
-
-func readLastIncludedTimestamp(tmp *session.Session) time.Time {
-	boundary := readLastIncludedBoundary(tmp, "")
-	if boundary == nil {
-		return time.Time{}
-	}
-	return boundary.CutoffTime()
 }
 
 func readLastIncludedBoundary(

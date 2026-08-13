@@ -20,6 +20,12 @@ import (
 
 // MemoryExtractor defines the interface for extracting memories from
 // conversations.
+//
+// A transparent decorator may expose its wrapped extractor by implementing
+// UnwrapMemoryExtractor() MemoryExtractor. Auto memory uses that optional,
+// composable method to discover built-in extractor capabilities. Returning nil
+// or creating an unwrap cycle makes capability discovery fall back to the
+// default behavior.
 type MemoryExtractor interface {
 	// Extract analyzes the conversation and returns memory operations.
 	// It does not modify the memory store directly.

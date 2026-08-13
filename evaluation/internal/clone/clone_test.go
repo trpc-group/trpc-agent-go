@@ -11,6 +11,7 @@ package clone
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -36,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	criterionxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -79,6 +81,19 @@ func TestCloneEvalMetric_NilInput(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+func TestCloneEvalMetric_AssignsExtensionAsIs(t *testing.T) {
+	extension := map[string]any{"weight": 0.7}
+	src := &metric.EvalMetric{
+		MetricName: "metric-1",
+		Extension:  extension,
+	}
+	dst, err := CloneEvalMetric(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	dst.Extension.(map[string]any)["weight"] = 0.3
+	assert.Equal(t, 0.3, src.Extension.(map[string]any)["weight"])
+}
+
 func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 	src := &metric.EvalMetric{
 		MetricName:    "metric-1",
@@ -86,8 +101,14 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 		Criterion: &criterion.Criterion{
 			LLMJudge: &criterionllm.LLMCriterion{
 				Template: &criterionllm.JudgeTemplateOptions{
-					Prompt:             "Question: {{question}}",
-					ResponseScorerName: "single_score",
+					Prompt:               "Question: {{question}}",
+					ResponseScorerName:   "single_score",
+					StructuredOutputName: "single_score_schema",
+					ResponseScorerOptions: &criterionllm.ResponseScorerOptions{
+						Categories: []*criterionllm.CategoryScore{
+							{Label: "correct", Score: 1},
+						},
+					},
 					VariableBindings: []*criterionllm.TemplateVariableBinding{
 						{
 							TemplateVariable: "question",
@@ -97,6 +118,7 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 								Selector: &criterionllm.TemplateVariableSelector{
 									NodeID: "ignored",
 								},
+								Path: "$.question",
 							},
 						},
 					},
@@ -111,14 +133,27 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 	require.NotNil(t, dst.Criterion)
 	require.NotNil(t, dst.Criterion.LLMJudge)
 	require.NotNil(t, dst.Criterion.LLMJudge.Template)
+	require.NotNil(t, dst.Criterion.LLMJudge.Template.ResponseScorerOptions)
+	require.Len(t, dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories, 1)
+	assert.Equal(t, "single_score_schema", dst.Criterion.LLMJudge.Template.StructuredOutputName)
+	assert.Equal(t, "correct", dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label)
+	assert.Equal(t, 1.0, dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Score)
 	dst.Criterion.LLMJudge.Template.Prompt = "changed"
 	assert.Equal(t, "Question: {{question}}", src.Criterion.LLMJudge.Template.Prompt)
+	dst.Criterion.LLMJudge.Template.StructuredOutputName = "changed"
+	assert.Equal(t, "single_score_schema", src.Criterion.LLMJudge.Template.StructuredOutputName)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable = "changed"
 	assert.Equal(t, "question", src.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope = criterionllm.TemplateVariableScopeExpected
 	assert.Equal(t, criterionllm.TemplateVariableScopeActual, src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID = "changed"
 	assert.Equal(t, "ignored", src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID)
+	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Path = "$.changed"
+	assert.Equal(t, "$.question", src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Path)
+	dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label = "changed"
+	assert.Equal(t, "correct", src.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label)
+	dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Score = 0
+	assert.Equal(t, 1.0, src.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Score)
 }
 
 func TestCloneTemplateVariableHelpersHandleNil(t *testing.T) {
@@ -174,6 +209,7 @@ func TestCloneEvalSetResult_NilInput(t *testing.T) {
 func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	srcText := "hello"
 	audioBytes := []byte{3, 2, 1}
+	videoBytes := []byte{4, 5, 6}
 	fileBytes := []byte{7, 8, 9}
 	src := &evalset.EvalCase{
 		EvalID: "case-1",
@@ -185,6 +221,7 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 					{Type: model.ContentTypeText, Text: &srcText},
 					{Type: model.ContentTypeImage, Image: &model.Image{Data: []byte{1, 2, 3}}},
 					{Type: model.ContentTypeAudio, Audio: &model.Audio{Data: audioBytes, Format: "wav"}},
+					{Type: model.ContentTypeVideo, Video: &model.Video{Data: videoBytes, Format: "mp4"}},
 					{Type: model.ContentTypeFile, File: &model.File{Name: "input.txt", Data: fileBytes, MimeType: "text/plain"}},
 				},
 				ToolCalls: []model.ToolCall{
@@ -291,6 +328,13 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 									ReasoningDuration: time.Second,
 								},
 							},
+							Tools: []agenttrace.Tool{{
+								ID:        "call-1",
+								Name:      "lookup",
+								Arguments: map[string]any{"city": "Paris"},
+								Result:    []any{"ok"},
+							}},
+							Skills: []agenttrace.Skill{{Name: "research"}},
 						},
 					},
 				},
@@ -339,8 +383,11 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	dst.ContextMessages[0].ContentParts[2].Audio.Data[0] = 0
 	assert.Equal(t, byte(3), src.ContextMessages[0].ContentParts[2].Audio.Data[0])
 
-	dst.ContextMessages[0].ContentParts[3].File.Data[0] = 0
-	assert.Equal(t, byte(7), src.ContextMessages[0].ContentParts[3].File.Data[0])
+	dst.ContextMessages[0].ContentParts[3].Video.Data[0] = 0
+	assert.Equal(t, byte(4), src.ContextMessages[0].ContentParts[3].Video.Data[0])
+
+	dst.ContextMessages[0].ContentParts[4].File.Data[0] = 0
+	assert.Equal(t, byte(7), src.ContextMessages[0].ContentParts[4].File.Data[0])
 
 	dst.ContextMessages[0].ToolCalls[0].Function.Arguments[0] = 'X'
 	assert.Equal(t, byte('{'), src.ContextMessages[0].ToolCalls[0].Function.Arguments[0])
@@ -384,6 +431,15 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	dst.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration = 2 * time.Second
 	assert.Equal(t, time.Second, src.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration)
 
+	dst.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"] = "changed"
+	assert.Equal(t, "Paris", src.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0] = "changed"
+	assert.Equal(t, "ok", src.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Skills[0].Name = "changed"
+	assert.Equal(t, "research", src.Conversation[0].ExecutionTrace.Steps[0].Skills[0].Name)
+
 	dst.Conversation[0].ExecutionTrace.Input.Text = "changed"
 	assert.Equal(t, "trace input", src.Conversation[0].ExecutionTrace.Input.Text)
 
@@ -401,6 +457,42 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.CreationTimestamp.Time = time.Unix(2, 0).UTC()
 	assert.Equal(t, time.Unix(1, 0).UTC(), src.CreationTimestamp.Time)
+}
+
+func TestCloneEvalCase_ErrorFromExecutionTraceToolArguments(t *testing.T) {
+	unsupported := func() {}
+	src := &evalset.EvalCase{
+		Conversation: []*evalset.Invocation{{
+			ExecutionTrace: &agenttrace.Trace{
+				Steps: []agenttrace.Step{{
+					Tools: []agenttrace.Tool{{
+						ID:        "call-1",
+						Name:      "bad",
+						Arguments: unsupported,
+					}},
+				}},
+			},
+		}},
+	}
+	got, err := CloneEvalCase(src)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "unsupported value type")
+}
+
+func TestCloneTraceToolsHandlesNilAndResultErrors(t *testing.T) {
+	got, err := cloneTraceTools(nil)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	unsupported := func() {}
+	got, err = cloneTraceTools([]agenttrace.Tool{{
+		ID:     "call-1",
+		Name:   "bad",
+		Result: unsupported,
+	}})
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "unsupported value type")
 }
 
 func TestCloneEvalSet_DeepCopy(t *testing.T) {
@@ -549,6 +641,7 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 						"x": []any{"y"},
 					},
 					NumberTolerance: float64Ptr(0.1),
+					Schema:          json.RawMessage(`{"type":"object"}`),
 				},
 				Rouge: &criterionrouge.RougeCriterion{
 					RougeType: "rouge1",
@@ -608,6 +701,9 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 	dst.Criterion.FinalResponse.JSON.IgnoreTree["a"].(map[string]any)["b"] = false
 	assert.Equal(t, true, src.Criterion.FinalResponse.JSON.IgnoreTree["a"].(map[string]any)["b"])
 
+	dst.Criterion.FinalResponse.JSON.Schema[2] = 'x'
+	assert.JSONEq(t, `{"type":"object"}`, string(src.Criterion.FinalResponse.JSON.Schema))
+
 	dst.Criterion.LLMJudge.Rubrics[0].Content.Text = "changed"
 	assert.Equal(t, "rubric", src.Criterion.LLMJudge.Rubrics[0].Content.Text)
 
@@ -663,6 +759,10 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 						Details: &evalresult.EvalMetricResultDetails{
 							Reason: "ok",
 							Score:  0.9,
+							Value: &score.Value{
+								Kind:    score.KindNumeric,
+								Numeric: float64Ptr(0.9),
+							},
 							RubricScores: []*evalresult.RubricScore{
 								{
 									ID:     "r1",
@@ -695,6 +795,12 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 								Score:      0.9,
 								EvalStatus: status.EvalStatusPassed,
 								Threshold:  0.5,
+								Details: &evalresult.EvalMetricResultDetails{
+									Value: &score.Value{
+										Kind:    score.KindBoolean,
+										Boolean: boolPtr(true),
+									},
+								},
 							},
 						},
 					},
@@ -729,6 +835,16 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 
 	dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.RubricScores[0].Reason = "changed"
 	assert.Equal(t, "good", src.EvalCaseResults[0].OverallEvalMetricResults[0].Details.RubricScores[0].Reason)
+
+	require.NotNil(t, dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value)
+	require.NotNil(t, dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric)
+	*dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric = 0.1
+	assert.Equal(t, 0.9, *src.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric)
+
+	require.NotNil(t, dst.EvalCaseResults[0].EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details.Value)
+	require.NotNil(t, dst.EvalCaseResults[0].EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details.Value.Boolean)
+	*dst.EvalCaseResults[0].EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details.Value.Boolean = false
+	assert.True(t, *src.EvalCaseResults[0].EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details.Value.Boolean)
 
 	dst.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation.Tools[0].Arguments.(map[string]any)["k"] = "changed"
 	assert.Equal(t, "v", src.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation.Tools[0].Arguments.(map[string]any)["k"])
@@ -944,6 +1060,7 @@ func TestCloneHelpers_NilInputs(t *testing.T) {
 	assert.Nil(t, cloneStringPtr(nil))
 	assert.Nil(t, cloneImage(nil))
 	assert.Nil(t, cloneAudio(nil))
+	assert.Nil(t, cloneVideo(nil))
 	assert.Nil(t, cloneFile(nil))
 }
 

@@ -262,6 +262,65 @@ Agent：你好张三！很高兴认识腾讯的朋友。今天有什么可以帮
 （后台：提取器分析对话并自动创建记忆，用户无感知）
 ```
 
+### 可选的自动更新策略
+
+内置提取器只有在显式配置策略时才启用新行为。未配置 option 的现有应用
+继续使用历史逻辑，不需要迁移：
+
+```go
+// 保持原有行为。
+memExtractor := extractor.NewExtractor(extractorModel)
+```
+
+需要尽量保留长期历史时，可以显式开启 update policy：
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithUpdatePolicy(extractor.UpdatePolicyPreserveHistory),
+)
+```
+
+Policy 是内置 extractor 的能力，Auto memory worker 在构造时读取并固定该配置。
+`Metadata()` 只提供描述信息，不参与运行时控制。透明 decorator 可以实现
+`UnwrapMemoryExtractor() extractor.MemoryExtractor`，让 worker 读取被包装的内置
+extractor 能力；支持多层合作式 decorator。自定义 extractor、不合作的 decorator、
+返回 nil 或形成循环的 unwrap 均安全回退到 Merge Similar。
+
+Update policy 只约束后台 Auto extraction 产生的操作。Agent 或应用显式调用
+`memory_update` 时，工具语义保持不变。
+
+| Update policy | Auto extraction 行为 |
+| --- | --- |
+| `UpdatePolicyMergeSimilar` | 使用现有的相似度 reconcile 逻辑；这是默认值。 |
+| `UpdatePolicyPreserveHistory` | 完全重复时不写入；只更新无冲突的增量信息；变化内容单独追加；extractor prompt 仅允许在用户明确请求时选择 delete/clear。 |
+| `UpdatePolicyAppendOnly` | 最终只产生非重复 add：update 转为 add，delete/clear 被过滤。 |
+
+Merge Similar 在检索 existing memories 时保持原有的 user-only query。
+Preserve History 和 Append Only 使用 user 与 assistant 的对话文本检索候选，
+但排除 tool protocol message；该 query 使用 UTF-8 安全的方式限制为 7 KiB。
+
+Preserve History 的候选 reconcile 只比较已经提供给 extractor 的 existing entries。
+精确重复检查还会考虑同一次 extraction 中已经接受的 operation，但不会合并不同的
+operation。检索分数只能用于候选排序，不能单独决定 update 或丢弃。事件身份、
+有意义的旧 token、数值、日期、否定关系、参与者和地点必须兼容；topics 只有在
+update 已通过检查后才合并。
+方向性 token coverage 的边界（旧记忆 `0.95`、候选记忆 `0.70`）是保守的实现
+启发式，并非通过 benchmark 调参得到。无法确认属于安全补充时，该策略会将候选
+保留为独立记忆。
+例如，同一次且同一日期的访问补充具体时刻可以更新；更换雇主或另一个日期的访问
+会追加为新条目。Preserve History 对 Delete 和 Clear 使用与 Merge Similar 相同的
+运行时处理：extractor 选中的 operation 会原样通过。策略专用 prompt 要求模型仅在
+用户明确提出有范围的遗忘请求时选择 Delete，并仅在用户明确要求遗忘全部存储信息时
+选择 Clear。worker 不再使用正则表达式重新解释自然语言中的删除意图。
+
+该 update policy 不会修改 `memory.Service`、`MemoryExtractor`、持久化 JSON、memory ID
+或数据库 schema，也不会重写存量记忆。所有 policy 都保持 Auto memory 原有的
+best-effort 持久化行为：单个写入失败会记录日志，后续 operation 继续执行；批次处理
+完成后推进 session extraction watermark。
+
+回退时删除该 option，或将其设置为 `UpdatePolicyMergeSimilar` 即可，不需要数据迁移。
+
 ### 两种模式配置对比
 
 | 步骤         | 工具驱动模式（Agentic）             | 自动提取模式（Auto）                   |
@@ -302,10 +361,13 @@ Memory 模块采用分层设计，由以下核心组件组成：
 │                   Storage Backends                           │
 │  • InMemory: 内存存储（开发/测试）                          │
 │  • SQLite: 本地文件数据库（单机持久化）                     │
+│  • SQLiteVec: SQLite + 向量检索（本地语义搜索）             │
 │  • Redis: 高性能缓存（生产环境）                            │
 │  • MySQL: 关系型数据库（ACID 保证）                        │
+│  • MySQLVec: MySQL + 向量检索（语义搜索）                  │
 │  • PostgreSQL: 关系型数据库（JSONB 支持）                  │
 │  • pgvector: PostgreSQL + 向量检索（语义搜索）              │
+│  • ChromaDB: REST 向量数据库（余弦与混合检索）             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -327,7 +389,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
 | **Memory ID**       | 记忆的唯一标识符                          | 基于内容、用户维度和规范化事件元数据的 SHA256 哈希；主题不参与身份 |
 | **Topics**          | 记忆的主题标签                            | 用于分类和检索，支持多个标签                       |
 | **Memory Tools**    | Agent 可调用的记忆操作工具                | 包括 add、update、delete、search、load、clear      |
-| **Storage Backend** | 存储后端实现                              | 支持 InMemory、SQLite、SQLiteVec、Redis、MySQL、PostgreSQL、pgvector |
+| **Storage Backend** | 存储后端实现                              | 支持 InMemory、SQLite、SQLiteVec、Redis、MySQL、MySQLVec、PostgreSQL、pgvector、ChromaDB |
 
 ### 关键流程
 
@@ -345,7 +407,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
        │
        ↓
 ┌──────────────┐
-│ 3. 存储记忆   │  Entry → Storage Backend（InMemory/SQLite/SQLiteVec/Redis/MySQL/PostgreSQL/pgvector）
+│ 3. 存储记忆   │  Entry → Storage Backend（InMemory/SQLite/SQLiteVec/Redis/MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB）
 └──────┬───────┘
        │
        ↓
@@ -447,7 +509,7 @@ appRunner := runner.NewRunner(
 
 ### 记忆服务 (Memory Service)
 
-记忆服务支持多种存储后端（InMemory、SQLite、SQLiteVec、Redis、MySQL、PostgreSQL、pgvector），可根据场景选择。
+记忆服务支持多种存储后端（InMemory、SQLite、SQLiteVec、Redis、MySQL、MySQLVec、PostgreSQL、pgvector、ChromaDB），可根据场景选择。
 
 #### 配置示例
 
@@ -496,13 +558,16 @@ if err != nil {
 
 **快速选择指南**：
 
-| 场景               | 推荐后端         | 原因                       |
-| ------------------ | ---------------- | -------------------------- |
-| 本地开发           | InMemory         | 零配置，快速启动           |
-| 高并发读写         | Redis            | 内存级性能，支持分布式     |
-| 需要复杂查询       | MySQL/PostgreSQL | 关系型数据库，SQL 支持     |
-| 需要 JSON 高级操作 | PostgreSQL       | JSONB 类型，高效 JSON 查询 |
-| 需要审计追踪       | MySQL/PostgreSQL | 支持软删除，可恢复数据     |
+| 场景                 | 推荐后端         | 原因                             |
+| -------------------- | ---------------- | -------------------------------- |
+| 本地开发             | InMemory         | 零配置，快速启动                 |
+| 高并发读写           | Redis            | 内存级性能，支持分布式           |
+| 需要复杂查询         | MySQL/PostgreSQL | 关系型数据库，SQL 支持           |
+| 需要 JSON 高级操作   | PostgreSQL       | JSONB 类型，高效 JSON 查询       |
+| 需要审计追踪         | MySQL/PostgreSQL | 支持软删除，可恢复数据           |
+| MySQL 向量检索       | MySQLVec         | MySQL 余弦与混合检索             |
+| PostgreSQL 向量检索  | pgvector         | PostgreSQL 余弦与混合检索        |
+| 独立向量数据库服务   | ChromaDB         | REST 余弦检索与客户端混合结果融合 |
 
 ### 记忆工具配置
 
@@ -563,8 +628,36 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ### 覆盖语义（ID 与重复）
 
-- 记忆 ID 基于「内容 + appName + userID + 规范化事件元数据」生成；主题不参与 ID。对同一用户重复添加相同内容与身份元数据是幂等的：会覆盖原有记录（非追加），并刷新 topics 与 UpdatedAt。
+- 记忆 ID 基于「内容 + appName + userID + 规范化事件元数据」生成；主题不参与 ID。对同一用户重复添加相同内容与身份元数据是幂等的：会覆盖原有记录（非追加），并刷新 topics 与 UpdatedAt。如果该规范 ID 对应软删除记录，`AddMemory` 会将其重新激活。
 - 如需“允许重复/只返回已存在/忽略重复”等策略，可通过自定义工具或扩展服务策略配置实现。
+
+### 更新语义与 ID 轮转
+
+`UpdateMemory` 会先应用新的内容、topics 和事件元数据，再重新计算规范 Memory
+ID。topics 不参与 ID 计算，因此只修改 topics 时 ID 保持不变。
+
+更新遵循以下状态机：
+
+| 应用更新后的状态 | 结果 |
+| ---------------- | ---- |
+| source 不存在或已软删除 | 返回 not-found 错误，且不修改 `UpdateResult` |
+| 规范 ID 不变 | 原地更新 active source |
+| newID 不存在 | 创建 target，再淘汰 source |
+| newID 是软删除记录 | 重新激活 target；硬删除模式会替换旧 tombstone |
+| newID 已是 active | 返回冲突错误，source 和 target 都不修改 |
+
+启用软删除时，成功的 ID 轮转会把旧 source 保留为 tombstone；硬删除模式则移除旧
+source。SQL 后端会原子地完成 target 准备和 source 淘汰。
+
+SQL 后端的时间戳语义保持一致：
+
+- 新插入的 target 继承 source 的 `CreatedAt`。
+- 重新激活的 target 保留自己的 `CreatedAt`。
+- 硬删除模式替换旧 target tombstone 时，replacement 继承 source 的 `CreatedAt`。
+- 每次成功更新都会刷新 `UpdatedAt`。
+
+成功时，`UpdateResult.MemoryID` 返回最终生效的规范 ID；失败时，调用方传入的
+result 保持不变。
 
 ### 自定义工具实现
 
@@ -1011,6 +1104,12 @@ redisService, err := memoryredis.NewService(
 
 **注意**：`WithRedisClientURL` 优先级高于 `WithRedisInstance`
 
+**Redis ACL 要求**：`UpdateMemory` 使用服务端 Lua 脚本，以原子方式校验并
+轮换记忆 ID。除脚本使用的 `HEXISTS`、`HSET`、`HDEL` 命令和对应记忆 key
+访问权限外，ACL 用户还必须具有 `EVALSHA` 和 `EVAL` 权限；脚本尚未缓存时
+需要 `EVAL`。Redis 重启或执行 `SCRIPT FLUSH` 后脚本缓存可能被清除，因此
+不能只在预热阶段临时授予 `EVAL`。
+
 **Key 前缀示例**：
 
 ```go
@@ -1274,19 +1373,87 @@ CREATE INDEX ON memories USING hnsw (embedding vector_cosine_ops);
 defer pgvectorService.Close()
 ```
 
+### ChromaDB 存储
+
+**适用场景**：自建 ChromaDB 或 Chroma Cloud，使用余弦语义检索和混合检索
+
+```go
+import (
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    memorychromadb "trpc.group/trpc-go/trpc-agent-go/memory/chromadb"
+)
+
+embedder := openaiembedder.New(
+    openaiembedder.WithModel("text-embedding-3-small"),
+)
+
+chromaService, err := memorychromadb.NewService(
+    memorychromadb.WithBaseURL("http://localhost:8000"),
+    memorychromadb.WithCollectionName("memories"),
+    memorychromadb.WithEmbedder(embedder),
+    memorychromadb.WithSoftDelete(true),
+)
+if err != nil {
+    // 处理错误
+}
+defer chromaService.Close()
+```
+
+这是 client-server 模式的 REST 适配器，不是嵌入式 Chroma 运行时。需要单独
+启动 Chroma 服务，或让 `WithBaseURL` 指向远程部署或 Chroma Cloud。Embedding
+由配置的 tRPC-Agent-Go `embedder.Embedder` 生成；适配器不会安装或调用 Chroma
+服务端 embedding function。
+
+使用 Chroma Cloud 时可配置 `WithAPIKey`，该值通过 `X-Chroma-Token` 发送；如果
+没有显式设置 tenant 和 database，服务会通过 identity 接口解析唯一作用域。
+Bearer 和自定义请求头认证分别使用 `WithBearerToken` 和 `WithHTTPHeaders`，
+主要面向代理或自定义网关。使用自定义认证请求头时，必须显式指定 tenant 和
+database。非 loopback 地址只要携带认证或任意自定义请求头，就必须使用 HTTPS。
+
+**配置选项**：
+
+- 连接：`WithBaseURL`、`WithAPIKey`、`WithBearerToken`、
+  `WithHTTPHeaders`、`WithTenant`、`WithDatabase`、`WithHTTPClient`、
+  `WithTimeout`
+- Collection：`WithCollectionName`、`WithAutoCreateCollection`、
+  `WithIndexDimension`、`WithEmbedder`
+- 检索：`WithMaxResults`、`WithSimilarityThreshold`、
+  `WithHybridCandidateLimit`
+- 保留策略：`WithMemoryLimit`、`WithSoftDelete`
+- Auto 模式和工具配置与其他 memory 后端一致。
+
+适配器直接使用 ChromaDB REST API v2，不依赖第三方 SDK。Collection 必须只启用
+一个 HNSW 或 SPANN 索引，且距离度量必须为 `cosine`。记录在同一个 collection
+内通过 schema、应用和用户 metadata 隔离。每用户容量限制只在单个 Service 实例
+内串行保证；多实例同时写同一用户时，应在上层使用分布式锁或 sticky routing。
+
+还需注意以下运行约束：
+
+- 更换 embedding 模型时，即使新旧模型维度相同，也必须使用新 collection，或
+  对全部记录重新生成 embedding。
+- `EventTime` 和检索时间边界必须能以有符号 64 位 Unix 纳秒表示，即位于 UTC
+  1677-09-21 至 2262-04-11 之间；超出范围的值会在请求 ChromaDB 前被拒绝。
+- `WithHybridCandidateLimit` 是本地关键词候选扫描的硬上限，与
+  `WithMemoryLimit` 无关。
+- Chroma 没有为本流程提供跨请求事务或分页 snapshot token，因此多 Service
+  实例下的容量检查、ID 轮换和分页读取都是 best-effort。
+- Chroma Cloud 当前说明的限制包括：collection 名称最多 128 字节、查询结果最多
+  300 条、单次写入最多 300 条、每个 collection 并发读写各 10。适配器只说明
+  这些服务限制，不会静默 clamp 用户配置。
+
 ### 后端对比与选择
 
-| 特性         | InMemory | SQLite     | SQLiteVec | Redis  | MySQL    | PostgreSQL | pgvector |
-| ------------ | -------- | ---------- | -------- | ------ | -------- | ---------- | -------- |
-| **持久化**   | ❌       | ✅         | ✅       | ✅     | ✅       | ✅         | ✅       |
-| **分布式**   | ❌       | ❌         | ❌       | ✅     | ✅       | ✅         | ✅       |
-| **事务**     | ❌       | ✅ ACID    | ✅ ACID  | 部分   | ✅ ACID  | ✅ ACID    | ✅ ACID  |
-| **查询**     | 简单     | SQL        | SQL+向量 | 中等   | SQL      | SQL        | SQL+向量 |
-| **JSON**     | ❌       | 基础       | 基础     | 基础   | JSON     | JSONB      | JSONB    |
-| **性能**     | 极高     | 中高       | 中高     | 高     | 中高     | 中高       | 中高     |
-| **配置**     | 零配置   | 简单       | 中等     | 简单   | 中等     | 中等       | 中等     |
-| **软删除**   | ❌       | ✅         | ✅       | ❌     | ✅       | ✅         | ✅       |
-| **适用场景** | 开发测试 | 本地持久化 | 本地向量 | 高并发 | 企业应用 | 高级特性   | 向量搜索 |
+| 特性         | InMemory | SQLite     | SQLiteVec | Redis  | MySQL    | MySQLVec  | PostgreSQL | pgvector | ChromaDB    |
+| ------------ | -------- | ---------- | --------- | ------ | -------- | --------- | ---------- | -------- | ----------- |
+| **持久化**   | ❌       | ✅         | ✅        | ✅     | ✅       | ✅        | ✅         | ✅       | ✅          |
+| **分布式**   | ❌       | ❌         | ❌        | ✅     | ✅       | ✅        | ✅         | ✅       | ✅          |
+| **事务**     | ❌       | ✅ ACID    | ✅ ACID   | 部分   | ✅ ACID  | ✅ ACID   | ✅ ACID    | ✅ ACID  | 尽力保证    |
+| **查询**     | 简单     | SQL        | SQL+向量  | 中等   | SQL      | SQL+向量  | SQL        | SQL+向量 | 向量+本地   |
+| **JSON**     | ❌       | 基础       | 基础      | 基础   | JSON     | JSON      | JSONB      | JSONB    | Metadata    |
+| **性能**     | 极高     | 中高       | 中高      | 高     | 中高     | 中高      | 中高       | 中高     | 高          |
+| **配置**     | 零配置   | 简单       | 中等      | 简单   | 中等     | 中等      | 中等       | 中等     | 中等        |
+| **软删除**   | ❌       | ✅         | ✅        | ❌     | ✅       | ✅        | ✅         | ✅       | ✅          |
+| **适用场景** | 开发测试 | 本地持久化 | 本地向量  | 高并发 | 企业应用 | MySQL 向量 | 高级特性   | 向量搜索 | 向量服务    |
 
 **选择建议**：
 
@@ -1297,8 +1464,10 @@ defer pgvectorService.Close()
 高并发读写 → Redis（内存级性能）
 需要 ACID → MySQL/PostgreSQL（事务保证）
 复杂 JSON → PostgreSQL（JSONB 索引和查询）
+MySQL 向量检索 → MySQLVec（MySQL 9.0+ 相似度检索）
 向量搜索 → pgvector（基于 embedding 的相似度搜索）
-审计追踪 → MySQL/PostgreSQL/pgvector/SQLite/SQLiteVec（软删除支持）
+向量服务 → ChromaDB（基于 REST 的余弦与混合检索）
+审计追踪 → MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB/SQLite/SQLiteVec（软删除支持）
 ```
 
 ## 常见问题
@@ -1355,6 +1524,7 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"兴趣"})
 
 - 对 `inmemory` / `redis` / `mysql` / `postgres`：`SearchMemories` 使用 **BM25 风格 lexical 关键词匹配**（不是语义搜索）。
 - 对 `pgvector` / `mysqlvec` / `sqlitevec`：`SearchMemories` 使用**向量相似度检索**，并且需要配置 Embedder。
+- 对 `chromadb`：`SearchMemories` 使用 ChromaDB 向量检索，并支持 kind 回退和混合检索。
 
 **Lexical 匹配细节**（非向量后端）：
 
@@ -1390,13 +1560,13 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"兴趣"})
 **建议**：
 
 - 使用明确关键词和主题标签提高命中率
-- 如需语义相似度检索，使用 pgvector、mysqlvec 或 sqlitevec 后端
+- 如需语义相似度检索，使用 pgvector、mysqlvec、sqlitevec 或 ChromaDB 后端
 
 ### 软删除的注意事项
 
 **支持情况**：
 
-- ✅ MySQL、PostgreSQL、pgvector、SQLite、SQLiteVec：支持软删除
+- ✅ MySQL、MySQLVec、PostgreSQL、pgvector、SQLite、SQLiteVec、ChromaDB：支持软删除
 - ❌ InMemory、Redis：不支持（只有硬删除）
 
 **软删除配置**：
@@ -1414,7 +1584,7 @@ mysqlService, err := memorymysql.NewService(
 | ---- | -------- | ------------------------------------ |
 | 删除 | 立即移除 | 设置 `deleted_at` 字段               |
 | 查询 | 不可见   | 自动过滤（WHERE deleted_at IS NULL） |
-| 恢复 | 无法恢复 | 可手动清除 `deleted_at`              |
+| 恢复 | 无法恢复 | 重新 Add，或将更新轮转到相同 ID      |
 | 存储 | 节省空间 | 占用空间                             |
 
 **迁移陷阱**：
@@ -1752,6 +1922,10 @@ defer r.Close()
 | `WithHost(url)` | 覆盖 mem0 API Host / Base URL。 | `https://api.mem0.ai` |
 | `WithSelfHostedOSS()` | 使用本地 Mem0 OSS REST API（`/memories`、`/search`、`X-API-Key`）。开启后如果没有设置 `WithHost`，host 默认 `http://localhost:8888`；OSS 模式会拒绝托管平台默认 host。 | 关闭 |
 | `WithSelfHostedOSSIncludeUnscopedMemories()` | 包含没有 `metadata.trpc_app_name` 的历史 OSS 记录；已标记为其他 app 的记录仍会隐藏。 | 关闭 |
+| `WithSelfHostedIngestPrompt(prompt)` | 为该 service 的所有本地 Mem0 写入设置提取 prompt。 | 服务端默认值 |
+| `WithSelfHostedIngestExpirationDateResolver(resolver)` | 为每次本地 Mem0 写入独立解析 `expiration_date`。 | 不发送 |
+| `WithIngestInference(bool)` | 控制 Mem0 是否从 transcript 中提取记忆；同时适用于托管和本地写入。 | `true` |
+| `WithSelfHostedProceduralMemory()` | 创建本地 procedural memory；必须提供 `agent_id`。 | 关闭 |
 | `WithOrgProject(orgID, projectID)` | 追加托管平台的 `org_id` / `project_id`；本地 OSS 不支持。 | 空 |
 | `WithAsyncMode(bool)` | 控制托管平台 ingest 请求里的 `async_mode`；本地 OSS 在 REST 层同步写入。 | `true` |
 | `WithVersion(v)` | 设置托管平台 mem0 ingest 请求里的版本字段。 | `v2` |
@@ -1760,6 +1934,105 @@ defer r.Close()
 | `WithAsyncMemoryNum(n)` | 后台 ingest worker 数量。 | `1` |
 | `WithMemoryQueueSize(n)` | 每个 worker 的队列长度。 | `10` |
 | `WithMemoryJobTimeout(d)` | 队列任务与同步 fallback ingest 的超时时间。 | `30s` |
+
+### 本地 OSS 请求字段
+
+标准 Runner 路径会把 session ID 作为 `run_id`、当前 Agent 名称作为
+`agent_id`。Mem0 专属行为在创建 service 时统一配置，因此
+`IngestSession` 仍是唯一的写入 API：
+
+| Mem0 OSS create 字段 | 来源 |
+| -------------------- | ---- |
+| `messages` | ingestor 从 session 中选出的非空增量。 |
+| `user_id` | `session.Session.UserID`。 |
+| `agent_id` | `session.WithIngestAgentID`；Runner 自动提供当前 Agent 名称。 |
+| `run_id` | `session.WithIngestRunID`；Runner 自动提供 session ID。 |
+| `metadata` | `session.WithIngestMetadata`，以及适配层内部追加的 tRPC app scope。 |
+| `prompt` | `WithSelfHostedIngestPrompt`。 |
+| `expiration_date` | `WithSelfHostedIngestExpirationDateResolver`。 |
+| `infer` | `WithIngestInference`，默认为 `true`。 |
+| `memory_type` | `WithSelfHostedProceduralMemory`；普通记忆不发送该字段。 |
+
+```go
+package example
+
+import (
+    "context"
+    "time"
+
+    memorymem0 "trpc.group/trpc-go/trpc-agent-go/memory/mem0"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+func newProceduralMemoryService() (*memorymem0.Service, error) {
+    expirationForSession := func(
+        _ context.Context,
+        sess *session.Session,
+    ) (time.Time, error) {
+        if sess.CreatedAt.IsZero() {
+            return time.Time{}, nil
+        }
+        return sess.CreatedAt.AddDate(0, 0, 30), nil
+    }
+
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithSelfHostedIngestPrompt("提取可复用的部署流程。"),
+        memorymem0.WithSelfHostedIngestExpirationDateResolver(
+            expirationForSession,
+        ),
+        memorymem0.WithSelfHostedProceduralMemory(),
+    )
+}
+
+func newRawMemoryService() (*memorymem0.Service, error) {
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithIngestInference(false),
+    )
+}
+```
+
+`newRawMemoryService` 跳过 LLM 提取，保存适配层规范化后的非 system 消息文本。
+它特意使用一个不包含自定义 prompt 和 procedural memory 的独立 service。
+Mem0 仍会调用 embedding 模型来持久化和检索这些原始记忆。
+
+- `session.WithIngestMetadata`、`session.WithIngestAgentID` 与
+  `session.WithIngestRunID` 仍用于设置单次 `IngestSession` 的通用字段；
+  Runner 会自动提供 agent ID 和 run ID。
+- `WithSelfHostedIngestPrompt` 在每次本地 create 请求中透传该 service 的提取
+  prompt；该选项要求开启 inference。
+- `WithSelfHostedIngestExpirationDateResolver` 会在每次有效且非空的 ingestion
+  中、推进 watermark 之前执行一次。回调接收请求 context 和 session，并返回
+  `time.Time`；适配层使用该值所在时区的日历日期，以 `YYYY-MM-DD` 发送。返回零值
+  时省略该字段；返回错误时不发送请求，也不推进 watermark。resolver 可能并发执行，
+  因此必须支持并发，并把传入的 session 视为只读。到期只会让普通读取隐藏该记忆，
+  不会删除底层记录。
+- `WithIngestInference` 控制 Mem0 的 `infer` 字段。默认值仍为 `true`；设为
+  `false` 时，适配层会把规范化后的非 system 消息发送给 Mem0 进行 direct import，
+  不经过 LLM 提取，并且不能再配置自定义提取 prompt 或 procedural memory。本地
+  OSS 会保存 user 和 assistant 两种角色；托管平台当前只保留 user 角色的 direct
+  import 消息。静态不兼容组合会在 `NewService` 阶段直接返回错误。
+- `WithSelfHostedProceduralMemory` 选择 Mem0 的 `procedural_memory` 模式。
+  未配置时，Mem0 的公开 create API 会自行提取普通记忆；procedural memory 必须
+  同时提供 `agent_id`，并且始终使用 inference。
+- prompt、expiration-date resolver 与 memory type 仅供本地 OSS 使用；托管模式会
+  明确报错，不会静默忽略。`infer` 在两种模式下都支持。
+- 当前锁定的 OSS REST create schema 不暴露 `timestamp`；底层 `Memory.add` 会把
+  非空 timestamp 视为仅供平台使用并拒绝该值，因此适配层不暴露这个字段。
+- 这些本地请求字段以 Mem0 OSS 2.0.11（`mem0ai/mem0@3b9aed8`）为兼容基线。
+  更早的 OSS 版本不在这些字段的支持范围内，并且可能静默忽略 REST schema
+  无法识别的请求属性。
+
+本地模式与托管模式共用 `ReadMemories` 和 `SearchMemories`。`MaxResults` 限制
+本地过滤后的最终结果数量。为了让 kind 和时间等框架侧过滤仍能填满该数量，适配层
+可能通过更大的 `top_k` 向服务端获取候选；在本地模式下，还会把非零
+`SimilarityThreshold` 作为 `threshold` 发送。返回值统一映射为
+`memory.Entry`，包括 ID、正文、score、时间戳，以及 metadata 中保存的 tRPC
+结构化记忆字段。对于 `memory.Entry` 无法表达的 provider 专属诊断信息，适配层
+不会额外引入第二套公共结果模型。
 
 如果使用官方本地 Mem0 OSS server，并且 LLM 与 embedding 使用不同 endpoint 或
 API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`：
@@ -1773,7 +2046,7 @@ API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`
 - 所有读取仍然基于当前 `<appName, userID>` 做隔离。
 - 本地 OSS 没有 top-level `app_id`，适配层使用 `metadata.trpc_app_name` 做 app 隔离。已有 OSS 记录如果缺少这个 metadata，默认会被隐藏，直到重新 ingest 或回填 metadata。迁移期确实需要读取这些历史记录时，可显式开启 `WithSelfHostedOSSIncludeUnscopedMemories()`。
 - 当前 OSS `GET /memories` API 最多返回 1000 条 user 级结果，不支持分页，也不能在服务端表达 `metadata.trpc_app_name` 过滤。因此 `ReadMemories` 要求传入大于 0 且不超过 1000 的 limit，并且只会在 OSS 返回的前 1000 条 user 级记录内尽力做本地 app 隔离。
-- Runner 会自动把 session 上下文带入 ingest；如果有需要，也可以通过 `session.WithIngestMetadata`、`session.WithIngestAgentID`、`session.WithIngestRunID` 追加信息。
+- Runner 会自动把 session 上下文带入 `IngestSession`。自定义调用方可通过 `session.WithIngestMetadata`、`session.WithIngestAgentID` 与 `session.WithIngestRunID` 设置单次调用的通用字段；Mem0 专属字段通过 service option 配置。
 - 当同一个 mem0 service 通过 `runner.WithSessionIngestor(mem0Svc)` 配置后，`WithPreloadMemory(N)` 可以使用 mem0 的只读能力；生产环境建议使用正数预算。
 - 当 mem0 返回结构化 metadata 时，检索结果仍可携带 `Topics`、`Kind`、`EventTime`、`Participants`、`Location` 等字段。
 - 使用完成后请调用 `Close()`，确保后台 worker 干净退出。
@@ -1850,10 +2123,10 @@ memSvc, err := memorytencentdb.NewService(
     // 跨 session/user 的读取属于 opt-in，仅在 gateway 可信/隔离时开启。
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
-    // 可选短期工具结果卸载；需要 gateway 支持 /offload/v1/hooks/*
-    // 和 /offload/v1/tools/*。
+    // 可选短期上下文卸载，通过 gateway v2 API 完成。
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
-    //     Enabled: true,
+    //     Enabled:   true,
+    //     ServiceID: os.Getenv("TDAI_SERVICE_ID"),
     // }),
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
@@ -1887,27 +2160,27 @@ defer r.Close()
 - 通过 `llmagent.WithTools(memSvc.Tools())` 注册 TencentDB 原生检索工具。
 - 通过 `runner.WithSessionIngestor(memSvc)` 把带时间戳的 session transcript 发送给 `/capture`。
 - 通过 `runner.WithPlugins(memSvc.Plugin())` 在模型调用前启用自动 `/recall`。
-- 只有在设置 `WithContextOffload(memorytencentdb.ContextOffloadConfig{Enabled: true})`
-  且需要短期工具结果卸载时，才额外注册
-  `runner.WithPlugins(memSvc.ContextOffloadPlugin())`。启用后，配套
-  `tdai_read_offload_ref`、`tdai_read_offload_node` 和
-  `tdai_search_offload_index` 工具会通过 `memSvc.Tools()` 暴露。
+- 只有在配置 `WithContextOffload(...)`（包括 `Enabled: true` 和
+  `ServiceID`）且需要短期工具结果卸载时，才额外注册
+  `runner.WithPlugins(memSvc.ContextOffloadPlugin())`。启用后，配套的
+  `tdai_read_offload_ref` 工具会通过 `memSvc.Tools()` 暴露。
 - 不要对该集成使用 `runner.WithMemoryService(...)`。
 
 ### 启用 Context Offload
 
-context offload 是独立、显式开启的短期大工具结果卸载路径。只有在
-TencentDB Agent Memory gateway 已经提供下方 notes 中列出的 offload routes
-时才应启用它。Go adapter 不提供本地存储、摘要模型，也不再暴露
-local/backend/collect 模式。
+context offload 是独立、显式开启的 TencentDB Agent Memory v2 能力。它会将
+工具结果交给 gateway 异步处理，在上下文占用达到阈值时请求 gateway 压缩
+model context，并提供一个工具用于有界恢复已归档的原始结果。
 
 最小接入方式：
 
 ```go
 memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithGatewayURL(gatewayURL),
+    memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
     memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
-        Enabled: true,
+        Enabled:   true,
+        ServiceID: os.Getenv("TDAI_SERVICE_ID"),
     }),
 )
 if err != nil {
@@ -1929,28 +2202,51 @@ r := runner.NewRunner(
 )
 ```
 
-如果 offload 流量需要使用与普通 capture/search/recall 不同的 gateway 或 key，
-可以在 `ContextOffloadConfig` 中单独设置 `GatewayURL` 和 `APIKey`：
+v2 API 要求同时提供 `Authorization: Bearer <key>` 和
+`X-TDAI-Service-Id`。上游 standalone gateway 约定使用 `local` 和 `default`；
+托管服务应使用对应 memory 实例分配的凭据。
+
+如果 offload 流量需要使用与普通 capture/search/recall 不同的 gateway 或
+API key，可以在 `ContextOffloadConfig` 中覆盖：
 
 ```go
 memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     Enabled:    true,
-    GatewayURL: "http://127.0.0.1:8420",
-    APIKey:     os.Getenv("TDAI_OFFLOAD_GATEWAY_API_KEY"),
+    GatewayURL: offloadGatewayURL,
+    APIKey:     os.Getenv("TDAI_OFFLOAD_API_KEY"),
+    ServiceID:  os.Getenv("TDAI_SERVICE_ID"),
 })
 ```
 
 运行时行为：
 
-- `ContextOffloadPlugin()` 会在工具执行后调用 gateway。gateway 可以把较大的
-  tool result message 替换成紧凑引用或摘要。
-- 下一次模型调用前，plugin 会询问 gateway 是否需要用已卸载上下文改写当前请求。
-- 启用 context offload 后，`memSvc.Tools()` 会暴露
-  `tdai_read_offload_ref`、`tdai_read_offload_node` 和
-  `tdai_search_offload_index`，模型可以通过这些工具继续下钻 gateway 托管的
-  offload 数据。
-- 不要在 Go adapter 中配置本地目录、本地模型或 L0-L3 策略；这些职责属于
-  TencentDB Agent Memory。
+- 工具执行后，`ContextOffloadPlugin()` 将真实的 tool call/result pair 发送到
+  `POST /v2/offload/ingest`，同时携带最新 user prompt 和有界的近期对话上下文；
+  不会立即改写本轮 tool result message。
+- 每次模型调用前，plugin 会发送一个不含 tool pair 的 ingest 触发 L1.5
+  任务判断；该请求仍会携带最新 user prompt 和有界的近期对话上下文。之后
+  plugin 会估算 message tokens，并在达到 `CompactionRatio` 后调用
+  `POST /v2/offload/compact`。失败时保留原始 model context。
+- `memSvc.Tools()` 只额外暴露 `tdai_read_offload_ref`，底层调用
+  `POST /v2/offload/read-ref`，支持全文、关键词附近或行范围读取，并受
+  `max_tokens` 限制。
+- adapter 将集成面严格限制在完成该生命周期所需的三个路由。存储、摘要、
+  任务图和 offload 策略仍由 gateway 负责。
+
+两种 ingest 最多都会发送过滤后的 10 条近期 user 或 assistant message，每条
+截断为 400 个 Unicode code point。最新 user prompt 会单独发送并截断为
+500 个 code point。tool message、带 tool call 的 assistant message、与当前
+prompt 重复的 message，以及可识别的内部控制消息不会进入
+`recent_messages`。
+
+compact 是否触发由 adapter 在本地判断。context window 按以下顺序解析：
+当前 run 的 `agent.WithModelContextWindow(...)`、model 的
+`Info().ContextWindow`（provider 通常可通过 `WithContextWindow(...)` 等
+option 设置）、通过 `model.RegisterModelContextWindow(...)` 为 model name
+注册的值，最后兜底为 128,000 tokens。`TokenCounter` 的逐 message 计数既用于
+本地 `CompactionRatio` 判断，也作为 compact request metadata；未配置时使用
+简单 token 估算器，自定义 counter 报错或返回负数时，本轮 model call 也会回退
+到简单估算器。
 
 ### 交互式示例
 
@@ -1997,9 +2293,12 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 
 | 字段 | 作用 | 默认值 |
 | ---- | ---- | ------ |
-| `Enabled` | 是否启用 context offload plugin 和配套工具。 | `false` |
-| `GatewayURL` | context offload hook/tool 调用的可选 gateway URL 覆盖。为空时复用 `WithGatewayURL`。 | 无 |
-| `APIKey` | context offload hook/tool 调用的可选 API key 覆盖。为空时复用 `WithAPIKey`。 | 无 |
+| `Enabled` | 是否启用 context offload plugin 和 result-reference 工具。 | `false` |
+| `GatewayURL` | v2 offload 调用的可选 gateway URL 覆盖。为空时复用 `WithGatewayURL`。 | 无 |
+| `APIKey` | v2 offload 调用的可选 Bearer key 覆盖。为空时复用 `WithAPIKey`。 | 无 |
+| `ServiceID` | 通过 `X-TDAI-Service-Id` 发送的 memory service ID；启用时必填。 | 无 |
+| `CompactionRatio` | 触发 `/v2/offload/compact` 的上下文窗口占用率，取值 `(0, 2]`。 | `0.5` |
+| `TokenCounter` | 同时用于本地 `CompactionRatio` 触发判断和 compact request metadata 的可选 `model.TokenCounter`；失败时回退到简单估算器。 | 简单估算器 |
 
 ### 注意事项
 
@@ -2007,16 +2306,14 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 - 当 gateway 设置了 `TDAI_GATEWAY_API_KEY` 时，请用 `WithAPIKey(...)` 让请求携带 `Authorization: Bearer <key>`，否则除 `/health` 外的路由都会返回 401（health 仍可通过）。
 - `tdai_memory_search` 检索已提取的长期记忆；提取是异步的，新捕获的信息可能需要短暂等待后才可检索。
 - `tdai_conversation_search` 检索对话历史，默认使用当前 gateway `session_key`。
-- context offload 是显式开启、由 gateway 承载的能力。它不调用 `/capture` 或
-  `/recall`；单独开启 recall 不会改写工具结果消息，也不会生成 Mermaid 任务图。
-- Go adapter 调用 gateway hook endpoints：
-  `/offload/v1/hooks/after-tool-messages` 和
-  `/offload/v1/hooks/before-model`。它不会创建 `.tdai-offload`、本地 refs、
-  JSONL 索引、Mermaid 文件或本地 state。
-- offload 工具调用 gateway drill-down endpoints：
-  `/offload/v1/tools/read-ref`、`/offload/v1/tools/read-node` 和
-  `/offload/v1/tools/search-index`。scope 校验、存储 ACL、返回字节限制和持久化
-  都由 gateway 负责。
+- context offload 是显式开启、由 gateway 承载的能力，只调用
+  `/v2/offload/ingest`、`/v2/offload/compact` 和
+  `/v2/offload/read-ref`，不调用 `/capture` 或 `/recall`。
+- gateway 可能将归档后的工具结果替换为“原始工具结果已存档，如需查看完整内容
+  请调用 Offload V2 result_ref 恢复接口”这类提示。请注册
+  `memSvc.Tools()`，让模型能够通过 `tdai_read_offload_ref` 完成恢复。
+- adapter 不会创建本地 refs、JSONL 索引、Mermaid 文件或本地 offload state。
+  scope 校验、存储 ACL、token 限制和持久化都由 gateway 负责。
 - 使用完成后请调用 `Close()`，确保后台 capture worker 干净退出。
 
 ## 参考链接
@@ -2026,6 +2323,6 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 - [自动提取模式示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto)
 - [mem0 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/mem0)
 - [TencentDB Agent Memory 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/tencentdb)
-- [TencentDB Agent Memory SDK](https://github.com/Tencent/TencentDB-Agent-Memory)
+- [TencentDB Agent Memory SDK](https://github.com/TencentCloud/TencentDB-Agent-Memory)
 - [生态建设文档](https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/zh/ecosystem.md)
 - [API 文档](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory)

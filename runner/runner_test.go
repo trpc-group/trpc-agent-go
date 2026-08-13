@@ -58,6 +58,49 @@ type mockAgent struct {
 	name string
 }
 
+type repositoryOnlyAgent struct {
+	*mockAgent
+}
+
+func (a *repositoryOnlyAgent) InvocationSkillRepository(
+	context.Context,
+	*agent.Invocation,
+) skill.Repository {
+	return nil
+}
+
+func TestRunnerRejectsSkillLoadsForUnsupportedAgent(t *testing.T) {
+	r := NewRunner("app", &mockAgent{name: "plain"})
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("hello"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+
+	require.Nil(t, events)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, agent.ErrSkillLoadingUnsupported))
+}
+
+func TestRunnerRejectsRepositoryProviderWithoutSkillLoadSupport(t *testing.T) {
+	ag := &repositoryOnlyAgent{mockAgent: &mockAgent{name: "repository-only"}}
+	r := NewRunner("app", ag)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("hello"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+
+	require.Nil(t, events)
+	require.ErrorIs(t, err, agent.ErrSkillLoadingUnsupported)
+}
+
 type staticSessionRouter struct {
 	sess *session.Session
 }
@@ -280,6 +323,7 @@ type realStructuredOutputMapPayload struct {
 type capturedModelRequest struct {
 	messages         []model.Message
 	structuredOutput *model.StructuredOutput
+	toolNames        []string
 }
 
 type sequentialModel struct {
@@ -381,6 +425,10 @@ func cloneCapturedModelRequest(req *model.Request) *capturedModelRequest {
 	cloned := &capturedModelRequest{
 		messages: append([]model.Message(nil), req.Messages...),
 	}
+	for name := range req.Tools {
+		cloned.toolNames = append(cloned.toolNames, name)
+	}
+	sort.Strings(cloned.toolNames)
 	if req.StructuredOutput != nil {
 		structuredOutput := *req.StructuredOutput
 		if req.StructuredOutput.JSONSchema != nil {
@@ -390,6 +438,398 @@ func cloneCapturedModelRequest(req *model.Request) *capturedModelRequest {
 		cloned.structuredOutput = &structuredOutput
 	}
 	return cloned
+}
+
+func TestRunnerRunWithSkillLoadsMaterializesFirstRequest(t *testing.T) {
+	repo := createRunnerDeclaredSkillRepository(t)
+	modelStub := &sequentialModel{
+		name: "declared-skill",
+		responses: []*model.Response{{
+			ID:   "declared-skill-response",
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("done"),
+			}},
+		}},
+	}
+	activatedTool := &callCountingTool{
+		name:   "review_inspect",
+		result: "ok",
+	}
+	activatedSet := &candidateToolSet{
+		name:  "review-tools",
+		tools: []tool.Tool{activatedTool},
+	}
+	agt := llmagent.New(
+		"reviewer",
+		llmagent.WithModel(modelStub),
+		llmagent.WithSkills(repo),
+		llmagent.WithActivatableToolSets([]tool.ToolSet{activatedSet}),
+		llmagent.WithToolActivationOnSkillLoad(
+			"review",
+			[]string{"review-tools"},
+		),
+	)
+	r := NewRunner("app", agt)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review this"),
+		agent.WithSkillLoads(skill.LoadRequest{
+			Name: "review",
+			Docs: []string{"guide.md"},
+		}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 1)
+	system := firstSystemMessageContent(requests[0].messages)
+	require.Contains(t, system, "REVIEW BODY")
+	require.Contains(t, system, "GUIDE BODY")
+	require.Contains(t, requests[0].toolNames, "review-tools_review_inspect")
+}
+
+func TestRunnerWrappersPreserveSkillLoads(t *testing.T) {
+	tests := []struct {
+		name      string
+		runnerOpt Option
+		response  string
+		requests  int
+	}{
+		{
+			name: "ralph loop",
+			runnerOpt: WithRalphLoop(RalphLoopConfig{
+				CompletionPromise: "DONE",
+			}),
+			response: "<promise>DONE</promise>",
+			requests: 1,
+		},
+		{
+			name: "candidate selector",
+			runnerOpt: WithCandidateSelector(
+				&fixedCandidateSelector{winner: 0},
+				WithCandidateAttempts(2),
+			),
+			response: "done",
+			requests: 2,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			responses := make([]*model.Response, test.requests)
+			for i := range responses {
+				responses[i] = &model.Response{
+					ID:   fmt.Sprintf("%s-%d", test.name, i),
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage(test.response),
+					}},
+				}
+			}
+			modelStub := &sequentialModel{
+				name:      test.name,
+				responses: responses,
+			}
+			agt := llmagent.New(
+				"reviewer",
+				llmagent.WithModel(modelStub),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			)
+			r := NewRunner("app", agt, test.runnerOpt)
+
+			events, err := r.Run(
+				context.Background(),
+				"user",
+				"session",
+				model.NewUserMessage("review"),
+				agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+			)
+			require.NoError(t, err)
+			for range events {
+			}
+
+			requests := modelStub.Requests()
+			require.Len(t, requests, test.requests)
+			for _, request := range requests {
+				require.Contains(
+					t,
+					firstSystemMessageContent(request.messages),
+					"REVIEW BODY",
+				)
+			}
+		})
+	}
+}
+
+func TestRunnerRalphLoopPreservesSkillLoadsAcrossIterations(t *testing.T) {
+	modelStub := &sequentialModel{
+		name: "ralph-multi-iteration",
+		responses: []*model.Response{
+			{
+				ID:   "ralph-working",
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("still working"),
+				}},
+			},
+			{
+				ID:   "ralph-done",
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(
+						"<promise>DONE</promise>",
+					),
+				}},
+			},
+		},
+	}
+	agt := llmagent.New(
+		"reviewer",
+		llmagent.WithModel(modelStub),
+		llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+	)
+	r := NewRunner(
+		"app",
+		agt,
+		WithRalphLoop(RalphLoopConfig{
+			MaxIterations:     2,
+			CompletionPromise: "DONE",
+		}),
+	)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 2)
+	for _, request := range requests {
+		require.Contains(
+			t,
+			firstSystemMessageContent(request.messages),
+			"REVIEW BODY",
+		)
+	}
+}
+
+func TestRunnerNestedCandidateAndRalphPreserveSkillLoads(t *testing.T) {
+	const attempts = 2
+	responses := make([]*model.Response, 0, attempts*2)
+	for i := 0; i < attempts; i++ {
+		responses = append(
+			responses,
+			&model.Response{
+				ID:   fmt.Sprintf("candidate-%d-working", i),
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("still working"),
+				}},
+			},
+			&model.Response{
+				ID:   fmt.Sprintf("candidate-%d-done", i),
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(
+						"<promise>DONE</promise>",
+					),
+				}},
+			},
+		)
+	}
+	modelStub := &sequentialModel{
+		name:      "candidate-ralph",
+		responses: responses,
+	}
+	agt := llmagent.New(
+		"reviewer",
+		llmagent.WithModel(modelStub),
+		llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+	)
+	r := NewRunner(
+		"app",
+		agt,
+		WithRalphLoop(RalphLoopConfig{
+			MaxIterations:     2,
+			CompletionPromise: "DONE",
+		}),
+		WithCandidateSelector(
+			&fixedCandidateSelector{winner: 0},
+			WithCandidateAttempts(attempts),
+		),
+	)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, attempts*2)
+	for _, request := range requests {
+		require.Contains(
+			t,
+			firstSystemMessageContent(request.messages),
+			"REVIEW BODY",
+		)
+	}
+}
+
+func TestRunnerWrappersRejectInvalidSkillBeforeModelRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		runnerOpt Option
+		errorType string
+	}{
+		{
+			name: "ralph loop",
+			runnerOpt: WithRalphLoop(RalphLoopConfig{
+				CompletionPromise: "DONE",
+			}),
+			errorType: agent.ErrorTypeStopAgentError,
+		},
+		{
+			name: "candidate selector",
+			runnerOpt: WithCandidateSelector(
+				&fixedCandidateSelector{winner: 0},
+				WithCandidateAttempts(2),
+			),
+			errorType: model.ErrorTypeRunError,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			modelStub := &sequentialModel{name: test.name}
+			agt := llmagent.New(
+				"reviewer",
+				llmagent.WithModel(modelStub),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			)
+			r := NewRunner("app", agt, test.runnerOpt)
+
+			events, err := r.Run(
+				context.Background(),
+				"user",
+				"session",
+				model.NewUserMessage("review"),
+				agent.WithSkillLoads(skill.LoadRequest{Name: "missing"}),
+			)
+			require.NoError(t, err)
+			var skillLoadError *model.ResponseError
+			for evt := range events {
+				if evt != nil && evt.Response != nil &&
+					evt.Response.Error != nil &&
+					strings.Contains(
+						evt.Response.Error.Message,
+						skill.ErrSkillUnavailable.Error(),
+					) {
+					skillLoadError = evt.Response.Error
+				}
+			}
+
+			require.NotNil(
+				t,
+				skillLoadError,
+				"wrapper must deliver the skill-load failure",
+			)
+			require.Equal(t, test.errorType, skillLoadError.Type)
+			require.Empty(t, modelStub.Requests())
+		})
+	}
+}
+
+func TestRunnerRejectsSkillLoadsForLazyRootBeforeFactoryRun(t *testing.T) {
+	factoryCalled := false
+	lazy := agent.NewLazyAgent(
+		agent.Info{Name: "lazy-root"},
+		func(
+			context.Context,
+			agent.RunOptions,
+		) (agent.Agent, error) {
+			factoryCalled = true
+			return llmagent.New(
+				"lazy-root",
+				llmagent.WithModel(&sequentialModel{name: "lazy-root"}),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			), nil
+		},
+	)
+	r := NewRunner("app", lazy)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+
+	require.Nil(t, events)
+	require.ErrorIs(t, err, agent.ErrSkillLoadingUnsupported)
+	require.False(t, factoryCalled)
+}
+
+func TestRunnerAgentFactorySupportsSkillLoads(t *testing.T) {
+	modelStub := &sequentialModel{
+		name: "factory-root",
+		responses: []*model.Response{{
+			ID:   "factory-root-response",
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("done"),
+			}},
+		}},
+	}
+	r := NewRunnerWithAgentFactory(
+		"app",
+		"factory-root",
+		func(
+			context.Context,
+			agent.RunOptions,
+		) (agent.Agent, error) {
+			return llmagent.New(
+				"factory-root",
+				llmagent.WithModel(modelStub),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			), nil
+		},
+	)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 1)
+	require.Contains(
+		t,
+		firstSystemMessageContent(requests[0].messages),
+		"REVIEW BODY",
+	)
 }
 
 func firstSystemMessageContent(messages []model.Message) string {
@@ -464,6 +904,19 @@ func TestEnqueueUserMessage_Errors(t *testing.T) {
 	)
 	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
 
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: " "},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
+
 	textPart := "hello from part"
 	err = EnqueueUserMessage(
 		r,
@@ -473,6 +926,45 @@ func TestEnqueueUserMessage_Errors(t *testing.T) {
 			ContentParts: []model.ContentPart{{
 				Type: model.ContentTypeText,
 				Text: &textPart,
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: "https://example.com/video.mp4"},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{Data: []byte("video")},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeAudio,
+				Audio: &model.Audio{URL: "https://example.com/audio.mp3"},
 			}},
 		},
 	)
@@ -4999,6 +5491,25 @@ func TestCloneResponseError(t *testing.T) {
 	})
 }
 
+func TestCloneContentPartsDeepCopiesVideo(t *testing.T) {
+	parts := []model.ContentPart{{
+		Type: model.ContentTypeVideo,
+		Video: &model.Video{
+			URL:    "https://example.com/video.mp4",
+			Data:   []byte("video"),
+			Format: "mp4",
+		},
+	}}
+
+	cloned := cloneContentParts(parts)
+
+	require.Len(t, cloned, 1)
+	require.NotSame(t, parts[0].Video, cloned[0].Video)
+	require.Equal(t, parts[0].Video, cloned[0].Video)
+	cloned[0].Video.Data[0] = 'V'
+	require.Equal(t, []byte("video"), parts[0].Video.Data)
+}
+
 func TestGraphCompletionNotPersistedAsMessage(t *testing.T) {
 	const (
 		appName   = "app"
@@ -9107,11 +9618,23 @@ func TestMergeCurrentTurnMessagesIntoSeed_ReplacesLastUserMessageWhenItMatchesOr
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("first"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
-		model.NewAssistantMessage("after"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
 	}, merged)
 }
 
@@ -9130,12 +9653,27 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOnlyOlderMessageMatchesOrig
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("current"),
-		model.NewAssistantMessage("after"),
-		model.NewUserMessage("latest"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("current"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewUserMessage("latest"),
+			seededHistory: true,
+		},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
 	}, merged)
 }
 
@@ -9153,11 +9691,23 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOriginalMissing(t *testing.
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("first"),
-		model.NewAssistantMessage("after"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
 	}, merged)
 }
 
@@ -9171,7 +9721,16 @@ func TestMergeCurrentTurnMessagesIntoSeed_PreservesSeedWhenCurrentTurnIsEmpty(t 
 		model.NewUserMessage("current"),
 		nil,
 	)
-	require.Equal(t, seed, merged)
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewUserMessage("current"),
+			seededHistory: true,
+		},
+	}, merged)
 }
 
 func TestFinalResponseIDFromStateDelta_Cases(t *testing.T) {
@@ -9701,19 +10260,19 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDeepNestedWorkflowPatches(
 		t,
 		snapshot,
 		"start",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	plannerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	workerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"worker",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var startPatch agent.SurfacePatch
 	startPatch.SetInstruction("start patched instruction")
@@ -9828,13 +10387,13 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectChainChildPatch(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	writerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"writer",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var plannerPatch agent.SurfacePatch
 	plannerPatch.SetInstruction("planner patched instruction")
@@ -9983,13 +10542,13 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectParallelBranchPatches(
 		t,
 		snapshot,
 		"researcher",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	reviewerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"reviewer",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var researcherPatch agent.SurfacePatch
 	researcherPatch.SetInstruction("researcher patched instruction")
@@ -10146,7 +10705,7 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectCycleChildPatch(
 		t,
 		snapshot,
 		"worker",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var workerPatch agent.SurfacePatch
 	workerPatch.SetInstruction("worker patched instruction")
@@ -10749,7 +11308,7 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesGraphCompositeChildPatch(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	require.Equal(t, "assistant/pipeline/planner", plannerNodeID)
 	var patch agent.SurfacePatch
@@ -10992,6 +11551,29 @@ func createNamedRunnerTestSkillRepository(
 			0o644,
 		),
 	)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	return repo
+}
+
+func createRunnerDeclaredSkillRepository(t *testing.T) skill.Repository {
+	t.Helper()
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "review")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, skill.SkillFile),
+		[]byte(
+			"---\nname: review\ndescription: review changes\n---\n"+
+				"REVIEW BODY\n",
+		),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, "guide.md"),
+		[]byte("GUIDE BODY\n"),
+		0o644,
+	))
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 	return repo

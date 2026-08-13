@@ -279,6 +279,78 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 (Background: Extractor analyzes conversation and creates memory automatically)
 ```
 
+### Opt-in Auto Update Policy
+
+The built-in extractor keeps its historical behavior unless a policy is
+explicitly configured. Existing applications therefore require no migration:
+
+```go
+// Merge Similar is the default and preserves the historical behavior.
+memExtractor := extractor.NewExtractor(extractorModel)
+```
+
+For applications that prefer preserving long-term history, enable the update
+policy explicitly:
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithUpdatePolicy(extractor.UpdatePolicyPreserveHistory),
+)
+```
+
+The policy is a built-in extractor capability captured when the Auto memory
+worker is constructed. `Metadata()` remains descriptive and does not control
+runtime behavior. A transparent decorator can preserve built-in capabilities
+by implementing `UnwrapMemoryExtractor() extractor.MemoryExtractor`; nested
+cooperating decorators are supported. A custom extractor or non-cooperating
+decorator uses Merge Similar. Nil unwrap results and unwrap cycles also fall
+back to Merge Similar.
+
+The update policies affect only operations produced by background Auto
+extraction. An agent or application explicitly calling `memory_update` keeps
+the existing tool semantics.
+
+| Update policy | Auto extraction behavior |
+| --- | --- |
+| `UpdatePolicyMergeSimilar` | Uses the existing similarity-based reconciliation. This is the default. |
+| `UpdatePolicyPreserveHistory` | Drops exact duplicates, updates only for non-conflicting enrichment, and keeps changes as separate entries. Its extractor prompt reserves delete/clear for explicit user requests. |
+| `UpdatePolicyAppendOnly` | Emits only non-duplicate adds: updates become adds, while delete and clear operations are filtered. |
+
+Merge Similar retains the historical user-only query when retrieving existing
+memories. Preserve History and Append Only use user and assistant conversation
+text, excluding tool protocol messages, to retrieve the entries evaluated by
+their policy rules. This query is bounded to 7 KiB with UTF-8-safe truncation.
+
+Preserve History candidate reconciliation compares only the existing entries
+already supplied to the extractor. Exact duplicate checks also consider earlier
+operations from the same extraction batch, but distinct operations are not
+merged. Retrieval scores rank candidates but cannot by themselves authorize an
+update or drop. Event identity, meaningful old tokens, numbers, dates, negation,
+participants, and locations must remain compatible. Topics are merged only
+after an update has passed these checks.
+The directional token-coverage bounds (`0.95` for the existing memory and
+`0.70` for the candidate) are conservative implementation heuristics, not
+values selected by benchmark tuning. When the checks cannot establish a safe
+enrichment, the policy keeps the candidate as a separate memory.
+For example, adding a time to the same dated visit may update that visit;
+changing an employer or describing a visit on another date creates a new
+entry. Preserve History uses the same runtime handling for Delete and Clear as
+Merge Similar: operations selected by the extractor pass through unchanged.
+The policy-specific extractor prompt instructs the model to use Delete only for
+an explicit scoped forget request and Clear only for an explicit request to
+forget all stored information. The worker does not attempt to reinterpret
+natural-language deletion intent with regular expressions.
+
+The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
+JSON representation, memory IDs, or database schemas. It does not rewrite
+existing entries. All policies retain Auto memory's historical best-effort
+persistence behavior: an individual write failure is logged, later operations
+continue, and the extraction watermark advances after the batch is processed.
+
+To roll back, remove the option or set it to `UpdatePolicyMergeSimilar`. No data
+migration is required.
+
 ### Configuration Comparison
 
 | Step                | Agentic Mode                        | Auto Mode                              |
@@ -344,9 +416,9 @@ appRunner := runner.NewRunner(
 
 ### Memory Service
 
-Configure the memory service in code. Five backends are supported: in-memory,
-Redis, MySQL, PostgreSQL, and pgvector. Two vector search backends are also
-available: sqlitevec and mysqlvec.
+Configure the memory service in code. Nine built-in backends are supported:
+in-memory, SQLite, SQLiteVec, Redis, MySQL, MySQL Vec, PostgreSQL, pgvector,
+and ChromaDB.
 
 #### Configuration Example
 
@@ -473,9 +545,40 @@ memoryService := memoryinmemory.NewMemoryService(
   episodic metadata. Topics are intentionally excluded, so changing tags does
   not create a new memory. Adding the same content and identity metadata for the
   same user is idempotent and overwrites the existing entry (not append).
-  UpdatedAt is refreshed.
+  UpdatedAt is refreshed. If that canonical ID belongs to a soft-deleted row,
+  `AddMemory` reactivates it.
 - If you need append semantics or different duplicate-handling strategies, you can
   implement custom tools or extend the service with policy options (e.g. allow/overwrite/ignore).
+
+### Update Semantics and ID Rotation
+
+`UpdateMemory` first applies the requested content, topics, and episodic
+metadata, then recalculates the canonical memory ID. Topics are not part of the
+ID, so a topics-only update stays on the same ID.
+
+The operation follows this state machine:
+
+| State after applying the update | Result |
+| ------------------------------- | ------ |
+| Source is missing or soft-deleted | Return a not-found error without changing `UpdateResult` |
+| Canonical ID is unchanged | Update the active source in place |
+| New ID does not exist | Create the target and retire the source |
+| New ID is soft-deleted | Reactivate the target; hard-delete mode replaces the stale tombstone |
+| New ID is already active | Return a conflict error without modifying either record |
+
+For backends with soft deletion enabled, a successful ID rotation preserves
+the old source as a tombstone. With hard deletion, the old source is removed.
+SQL backends perform target preparation and source retirement atomically.
+
+Timestamp behavior is also stable across SQL backends:
+
+- A newly inserted target inherits the source `CreatedAt`.
+- A reactivated target preserves its own `CreatedAt`.
+- A hard-delete replacement of a stale target inherits the source `CreatedAt`.
+- Every successful update refreshes `UpdatedAt`.
+
+On success, `UpdateResult.MemoryID` receives the effective canonical ID. On
+error, the caller-provided result remains unchanged.
 
 ### Custom Tool Implementation
 
@@ -922,6 +1025,13 @@ redisService, err := memoryredis.NewService(
 
 **Note**: `WithRedisClientURL` takes priority over `WithRedisInstance`
 
+**Redis ACL requirement**: `UpdateMemory` uses a server-side Lua script to
+atomically validate and rotate memory IDs. ACL users must be allowed to run
+`EVALSHA` and `EVAL` (`EVAL` is required when the script is not yet cached), in
+addition to the script's `HEXISTS`, `HSET`, and `HDEL` commands and access to
+the configured memory-key pattern. Do not remove `EVAL` after warm-up because
+the Redis script cache can be cleared by a restart or `SCRIPT FLUSH`.
+
 **Key prefix example**:
 
 ```go
@@ -1180,19 +1290,95 @@ CREATE INDEX ON memories USING hnsw (embedding vector_cosine_ops);
 defer pgvectorService.Close()
 ```
 
+### ChromaDB Storage
+
+**Use case**: Self-hosted ChromaDB or Chroma Cloud with cosine semantic and
+hybrid memory search
+
+```go
+import (
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    memorychromadb "trpc.group/trpc-go/trpc-agent-go/memory/chromadb"
+)
+
+embedder := openaiembedder.New(
+    openaiembedder.WithModel("text-embedding-3-small"),
+)
+
+chromaService, err := memorychromadb.NewService(
+    memorychromadb.WithBaseURL("http://localhost:8000"),
+    memorychromadb.WithCollectionName("memories"),
+    memorychromadb.WithEmbedder(embedder),
+    memorychromadb.WithSoftDelete(true),
+)
+if err != nil {
+    // handle error
+}
+defer chromaService.Close()
+```
+
+This is a client-server REST adapter, not an embedded Chroma runtime. Start a
+Chroma server separately, or point `WithBaseURL` at a remote deployment or
+Chroma Cloud. Embeddings are generated by the configured tRPC-Agent-Go
+`embedder.Embedder`; the adapter does not install or invoke a Chroma
+server-side embedding function.
+
+For Chroma Cloud, add `WithAPIKey`; it is sent as `X-Chroma-Token`. The service
+resolves the unique tenant and database from the identity endpoint unless they
+are set explicitly. Bearer and custom-header authentication are available
+through `WithBearerToken` and `WithHTTPHeaders`, primarily for proxies and
+custom gateways. Custom authentication headers require explicit tenant and
+database values. Any authenticated or custom-header connection to a
+non-loopback host must use HTTPS.
+
+**Configuration options**:
+
+- Connection: `WithBaseURL`, `WithAPIKey`, `WithBearerToken`,
+  `WithHTTPHeaders`, `WithTenant`, `WithDatabase`, `WithHTTPClient`,
+  `WithTimeout`
+- Collection: `WithCollectionName`, `WithAutoCreateCollection`,
+  `WithIndexDimension`, `WithEmbedder`
+- Retrieval: `WithMaxResults`, `WithSimilarityThreshold`,
+  `WithHybridCandidateLimit`
+- Retention: `WithMemoryLimit`, `WithSoftDelete`
+- Auto mode and tools use the same options as other memory backends.
+
+The adapter uses ChromaDB REST API v2 directly and requires an existing HNSW
+or SPANN index configured with `cosine`. Records are isolated by schema,
+application, and user metadata inside one collection. The per-user memory
+limit is serialized within one service instance; use a distributed lock or
+sticky routing if multiple instances write the same user concurrently.
+
+Keep these operational constraints in mind:
+
+- Changing the embedding model requires a new collection or re-embedding every
+  record, even when the old and new models have the same vector dimension.
+- `EventTime` values and search time bounds must fit in signed 64-bit Unix
+  nanoseconds, from 1677-09-21 through 2262-04-11 UTC. Values outside this
+  range are rejected before a ChromaDB request is made.
+- `WithHybridCandidateLimit` is the hard cap for the local keyword candidate
+  scan; it is independent of `WithMemoryLimit`.
+- Capacity checks, ID rotation, and paginated reads are best-effort across
+  multiple service instances because Chroma does not expose transactions or a
+  pagination snapshot token for this workflow.
+- Chroma Cloud currently documents a 128-byte collection-name limit, up to 300
+  query results, up to 300 records per write, and 10 concurrent reads and 10
+  concurrent writes per collection. The adapter documents but does not
+  silently clamp these service limits.
+
 ### Backend Comparison
 
-| Feature           | InMemory  | SQLite            | SQLiteVec        | Redis            | MySQL      | MySQL Vec         | PostgreSQL        | pgvector      |
-| ----------------- | --------- | ----------------- | ---------------- | ---------------- | ---------- | ----------------- | ----------------- | ------------- |
-| **Persistence**   | ❌        | ✅                | ✅               | ✅               | ✅         | ✅                | ✅                | ✅            |
-| **Distributed**   | ❌        | ❌                | ❌               | ✅               | ✅         | ✅                | ✅                | ✅            |
-| **Transactions**  | ❌        | ✅ ACID           | ✅ ACID          | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID           | ✅ ACID       |
-| **Queries**       | Simple    | SQL               | SQL + Vector     | Medium           | SQL        | SQL + Vector      | SQL               | SQL + Vector  |
-| **JSON**          | ❌        | Basic             | Basic            | Basic            | JSON       | JSON              | JSONB             | JSONB         |
-| **Performance**   | Very High | Med-High          | Med-High         | High             | Med-High   | Med-High          | Med-High          | Med-High      |
-| **Configuration** | Zero      | Simple            | Medium           | Simple           | Medium     | Medium            | Medium            | Medium        |
-| **Soft Delete**   | ❌        | ✅                | ✅               | ❌               | ✅         | ✅                | ✅                | ✅            |
-| **Use Case**      | Dev/Test  | Local Persistence | Local Vector     | High Concurrency | Enterprise | MySQL Vector Search | Advanced Features | Vector Search |
+| Feature           | InMemory  | SQLite            | SQLiteVec        | Redis            | MySQL      | MySQL Vec         | PostgreSQL        | pgvector      | ChromaDB       |
+| ----------------- | --------- | ----------------- | ---------------- | ---------------- | ---------- | ----------------- | ----------------- | ------------- | -------------- |
+| **Persistence**   | ❌        | ✅                | ✅               | ✅               | ✅         | ✅                | ✅                | ✅            | ✅             |
+| **Distributed**   | ❌        | ❌                | ❌               | ✅               | ✅         | ✅                | ✅                | ✅            | ✅             |
+| **Transactions**  | ❌        | ✅ ACID           | ✅ ACID          | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID           | ✅ ACID       | Best effort    |
+| **Queries**       | Simple    | SQL               | SQL + Vector     | Medium           | SQL        | SQL + Vector      | SQL               | SQL + Vector  | Vector + Local |
+| **JSON**          | ❌        | Basic             | Basic            | Basic            | JSON       | JSON              | JSONB             | JSONB         | Metadata       |
+| **Performance**   | Very High | Med-High          | Med-High         | High             | Med-High   | Med-High          | Med-High          | Med-High      | High           |
+| **Configuration** | Zero      | Simple            | Medium           | Simple           | Medium     | Medium            | Medium            | Medium        | Medium         |
+| **Soft Delete**   | ❌        | ✅                | ✅               | ❌               | ✅         | ✅                | ✅                | ✅            | ✅             |
+| **Use Case**      | Dev/Test  | Local Persistence | Local Vector     | High Concurrency | Enterprise | MySQL Vector Search | Advanced Features | Vector Search | Vector Service |
 
 **Selection guide**:
 
@@ -1205,7 +1391,8 @@ ACID Requirements → MySQL/PostgreSQL (transaction guarantees)
 Complex JSON → PostgreSQL (JSONB indexing and queries)
 MySQL Vector Search → mysqlvec (similarity search on MySQL 9.0+)
 Vector Search → pgvector (similarity search with embeddings)
-Audit Trail → MySQL/PostgreSQL/pgvector (soft delete support)
+Managed Vector Service → ChromaDB (REST-based cosine and hybrid search)
+Audit Trail → MySQL/MySQL Vec/PostgreSQL/pgvector/SQLite/SQLiteVec/ChromaDB (soft delete support)
 ```
 
 **Register PostgreSQL Instance (Optional):**
@@ -1229,17 +1416,17 @@ postgresService, err := memorypostgres.NewService(
 
 ### Storage Backend Comparison
 
-| Feature                  | In-Memory | SQLite     | SQLiteVec    | Redis      | MySQL          | PostgreSQL     | pgvector      |
-| ------------------------ | --------- | ---------- | ----------- | ---------- | -------------- | -------------- | ------------- |
-| Data Persistence         | ❌        | ✅         | ✅          | ✅         | ✅             | ✅             | ✅            |
-| Distributed Support      | ❌        | ❌         | ❌          | ✅         | ✅             | ✅             | ✅            |
-| Transaction Support      | ❌        | ✅ (ACID)  | ✅ (ACID)   | Partial    | ✅ (ACID)      | ✅ (ACID)      | ✅ (ACID)     |
-| Query Capability         | Simple    | SQL        | SQL + Vector | Medium     | Powerful (SQL) | Powerful (SQL) | SQL + Vectors |
-| JSON Support             | ❌        | Basic      | Basic       | Partial    | ✅ (JSON)      | ✅ (JSONB)     | ✅ (JSONB)    |
-| Performance              | Very High | Med-High   | Medium-High | High       | Medium-High    | Medium-High    | Medium-High   |
-| Configuration Complexity | Low       | Low        | Medium      | Medium     | Medium         | Medium         | Medium        |
-| Use Case                 | Dev/Test  | Local Dev  | Local Vector | Production | Production     | Production     | Vector Search |
-| Monitoring Tools         | None      | None       | None        | Rich       | Very Rich      | Very Rich      | Very Rich     |
+| Feature                  | In-Memory | SQLite     | SQLiteVec    | Redis      | MySQL          | MySQL Vec     | PostgreSQL     | pgvector      | ChromaDB       |
+| ------------------------ | --------- | ---------- | ------------ | ---------- | -------------- | ------------- | -------------- | ------------- | -------------- |
+| Data Persistence         | ❌        | ✅         | ✅           | ✅         | ✅             | ✅            | ✅             | ✅            | ✅             |
+| Distributed Support      | ❌        | ❌         | ❌           | ✅         | ✅             | ✅            | ✅             | ✅            | ✅             |
+| Transaction Support      | ❌        | ✅ (ACID)  | ✅ (ACID)    | Partial    | ✅ (ACID)      | ✅ (ACID)     | ✅ (ACID)      | ✅ (ACID)     | Best effort    |
+| Query Capability         | Simple    | SQL        | SQL + Vector | Medium     | Powerful (SQL) | SQL + Vector  | Powerful (SQL) | SQL + Vectors | Vector + Local |
+| JSON Support             | ❌        | Basic      | Basic        | Partial    | ✅ (JSON)      | ✅ (JSON)     | ✅ (JSONB)     | ✅ (JSONB)    | Metadata       |
+| Performance              | Very High | Med-High   | Medium-High  | High       | Medium-High    | Medium-High   | Medium-High    | Medium-High   | High           |
+| Configuration Complexity | Low       | Low        | Medium       | Medium     | Medium         | Medium        | Medium         | Medium        | Medium         |
+| Use Case                 | Dev/Test  | Local Dev  | Local Vector | Production | Production     | MySQL Vector  | Production     | Vector Search | Vector Service |
+| Monitoring Tools         | None      | None       | None         | Rich       | Very Rich      | Very Rich     | Very Rich      | Very Rich     | Chroma tooling |
 
 **Selection Guide:**
 
@@ -1248,8 +1435,10 @@ postgresService, err := memorypostgres.NewService(
 - **Local Development (Vector Search)**: Use SQLiteVec when you want semantic search in a single-file SQLite DB
 - **Production (High Performance)**: Use Redis storage for high concurrency scenarios
 - **Production (Data Integrity)**: Use MySQL storage when ACID guarantees and complex queries are needed
+- **Production (MySQL Vector Search)**: Use MySQL Vec for similarity search on MySQL 9.0+
 - **Production (PostgreSQL)**: Use PostgreSQL storage when JSONB support and advanced PostgreSQL features are needed
 - **Production (Vector Search)**: Use pgvector storage when similarity search with embeddings is needed
+- **Production (Vector Service)**: Use ChromaDB for REST-based cosine and hybrid memory search
 - **Hybrid Deployment**: Choose different storage backends based on different application scenarios
 
 ## FAQ
@@ -1308,6 +1497,7 @@ Search behavior depends on the backend:
 
 - For `inmemory` / `redis` / `mysql` / `postgres`: `SearchMemories` uses **BM25-style lexical matching** (not semantic search).
 - For `pgvector` / `mysqlvec` / `sqlitevec`: `SearchMemories` uses **vector similarity search** and requires an embedder.
+- For `chromadb`: `SearchMemories` uses ChromaDB vector search and supports kind fallback and hybrid search.
 
 **Lexical matching details** (non-vector backends):
 
@@ -1343,13 +1533,13 @@ Search: "写代码" ❌ No match (different words)
 **Recommendations**:
 
 - Use explicit keywords and topic tags to improve hit rate
-- If you need semantic similarity search, use the pgvector, mysqlvec, or sqlitevec backend
+- If you need semantic similarity search, use the pgvector, mysqlvec, sqlitevec, or ChromaDB backend
 
 ### Soft Delete Considerations
 
 **Support status**:
 
-- ✅ MySQL, PostgreSQL, pgvector: support soft delete
+- ✅ MySQL, MySQL Vec, PostgreSQL, pgvector, SQLite, SQLiteVec, ChromaDB: support soft delete
 - ❌ InMemory, Redis: not supported (hard delete only)
 
 **Soft delete configuration**:
@@ -1367,7 +1557,7 @@ mysqlService, err := memorymysql.NewService(
 | --------- | ----------------- | ---------------------------------------- |
 | Delete    | Immediate removal | Set `deleted_at` field                   |
 | Query     | Not visible       | Auto-filtered (WHERE deleted_at IS NULL) |
-| Recovery  | Cannot recover    | Can manually clear `deleted_at`          |
+| Recovery  | Cannot recover    | Re-add or rotate an update to the same ID |
 | Storage   | Saves space       | Occupies space                           |
 
 **Migration trap**:
@@ -1719,6 +1909,10 @@ In short, `MemoryService` means "the framework manages memories directly", while
 | `WithHost(url)` | Override the mem0 API host/base URL. | `https://api.mem0.ai` |
 | `WithSelfHostedOSS()` | Use the self-hosted Mem0 OSS REST API (`/memories`, `/search`, `X-API-Key`). When enabled without `WithHost`, the host defaults to `http://localhost:8888`; the hosted-platform default host is rejected in OSS mode. | disabled |
 | `WithSelfHostedOSSIncludeUnscopedMemories()` | Include legacy OSS records that do not carry `metadata.trpc_app_name`; records tagged for a different app remain hidden. | disabled |
+| `WithSelfHostedIngestPrompt(prompt)` | Set the extraction prompt for every self-hosted ingestion request from this service. | server default |
+| `WithSelfHostedIngestExpirationDateResolver(resolver)` | Resolve the `expiration_date` independently for each self-hosted ingestion request. | omitted |
+| `WithIngestInference(bool)` | Control whether Mem0 extracts memories from transcripts. This applies to hosted and self-hosted ingestion. | `true` |
+| `WithSelfHostedProceduralMemory()` | Create self-hosted procedural memories. An `agent_id` is required. | disabled |
 | `WithOrgProject(orgID, projectID)` | Add hosted-platform `org_id` / `project_id`; unsupported with self-hosted OSS. | empty |
 | `WithAsyncMode(bool)` | Controls hosted-platform `async_mode`; self-hosted OSS writes are synchronous at the REST layer. | `true` |
 | `WithVersion(v)` | Sets the hosted-platform ingestion API version field. | `v2` |
@@ -1727,6 +1921,118 @@ In short, `MemoryService` means "the framework manages memories directly", while
 | `WithAsyncMemoryNum(n)` | Number of background ingest workers. | `1` |
 | `WithMemoryQueueSize(n)` | Queue size per ingest worker. | `10` |
 | `WithMemoryJobTimeout(d)` | Timeout for queued jobs and synchronous fallback ingest. | `30s` |
+
+### Self-Hosted OSS Request Fields
+
+The standard Runner path supplies the session ID as `run_id` and the active
+agent name as `agent_id`. Mem0-specific behavior is configured once when the
+service is created, so `IngestSession` remains the only ingestion API:
+
+| Mem0 OSS create field | Source |
+| --------------------- | ------ |
+| `messages` | The non-empty session delta selected by the ingestor. |
+| `user_id` | `session.Session.UserID`. |
+| `agent_id` | `session.WithIngestAgentID`; Runner supplies the active agent name. |
+| `run_id` | `session.WithIngestRunID`; Runner supplies the session ID. |
+| `metadata` | `session.WithIngestMetadata`, plus the internal tRPC app scope. |
+| `prompt` | `WithSelfHostedIngestPrompt`. |
+| `expiration_date` | `WithSelfHostedIngestExpirationDateResolver`. |
+| `infer` | `WithIngestInference`; defaults to `true`. |
+| `memory_type` | `WithSelfHostedProceduralMemory`; omitted for ordinary memories. |
+
+```go
+package example
+
+import (
+    "context"
+    "time"
+
+    memorymem0 "trpc.group/trpc-go/trpc-agent-go/memory/mem0"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+func newProceduralMemoryService() (*memorymem0.Service, error) {
+    expirationForSession := func(
+        _ context.Context,
+        sess *session.Session,
+    ) (time.Time, error) {
+        if sess.CreatedAt.IsZero() {
+            return time.Time{}, nil
+        }
+        return sess.CreatedAt.AddDate(0, 0, 30), nil
+    }
+
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithSelfHostedIngestPrompt(
+            "Extract reusable deployment procedures.",
+        ),
+        memorymem0.WithSelfHostedIngestExpirationDateResolver(
+            expirationForSession,
+        ),
+        memorymem0.WithSelfHostedProceduralMemory(),
+    )
+}
+
+func newRawMemoryService() (*memorymem0.Service, error) {
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithIngestInference(false),
+    )
+}
+```
+
+`newRawMemoryService` stores adapter-normalized non-system message text
+without LLM extraction. It deliberately uses a separate service without a
+custom prompt or procedural memory. Mem0 still invokes its embedder to persist
+and search these raw memories.
+
+- `session.WithIngestMetadata`, `session.WithIngestAgentID`, and
+  `session.WithIngestRunID` continue to set common fields for an individual
+  `IngestSession` call. Runner supplies the agent and run IDs automatically.
+- `WithSelfHostedIngestPrompt` forwards the service's extraction prompt on
+  every self-hosted create request with inference enabled.
+- `WithSelfHostedIngestExpirationDateResolver` runs once for each valid,
+  non-empty ingestion before the watermark advances. The callback receives the
+  request context and session, and returns a `time.Time`; its calendar date in
+  that value's location is sent as `YYYY-MM-DD`. A zero value omits the field.
+  An error aborts ingestion without sending a request or advancing the
+  watermark. The callback may run concurrently and must treat the session as
+  read-only. Expiration hides a memory from normal reads after the date; it does
+  not delete the stored record.
+- `WithIngestInference` controls Mem0's `infer` field. Its default remains
+  `true`; `false` sends normalized non-system messages for direct import
+  without LLM extraction and cannot be combined with a custom extraction
+  prompt or procedural memory. Self-hosted OSS stores both user and assistant
+  direct-import messages; the hosted platform currently retains only user-role
+  direct-import messages. Static incompatible combinations are rejected by
+  `NewService`.
+- `WithSelfHostedProceduralMemory` selects Mem0's
+  `procedural_memory` mode. Mem0's public create API otherwise infers ordinary
+  memories; procedural memory requires an `agent_id` and always uses inference.
+- Prompt, expiration-date resolver, and memory type are OSS-only and are
+  rejected in hosted-platform mode rather than silently ignored. `infer` is
+  supported in both modes.
+- The pinned OSS REST create schema does not expose `timestamp`; the underlying
+  `Memory.add` implementation marks a non-empty timestamp as platform-only and
+  rejects it. This adapter therefore does not expose that field.
+- These self-hosted request fields are validated against Mem0 OSS 2.0.11 at
+  `mem0ai/mem0@3b9aed8`. Older OSS releases are not supported for these fields
+  and may silently ignore request properties that their REST schema does not
+  recognize.
+
+Self-hosted reads and searches use the same `ReadMemories` and
+`SearchMemories` methods as the hosted adapter. `MaxResults` caps the final
+locally filtered result set. The adapter may request a larger `top_k` candidate
+set so framework-side kind and time filters can still fill that result budget.
+In self-hosted mode, a non-zero `SimilarityThreshold` is also forwarded as
+`threshold`. Results are mapped to
+`memory.Entry`, including ID, text, score, timestamps, and the structured
+tRPC memory fields stored in metadata. Provider-only diagnostics that have no
+representation in `memory.Entry` are intentionally not exposed as a second
+public result model.
 
 For the official self-hosted OSS server, configure the server-side LLM and
 embedder independently when they use different endpoints or API keys. The OSS
@@ -1741,7 +2047,7 @@ access the OSS server's internal vector store directly.
 - All reads remain scoped to the current `<appName, userID>`.
 - Self-hosted OSS app isolation uses `metadata.trpc_app_name` because the OSS API has no top-level `app_id`. Existing OSS records without this metadata are hidden by default until reingested or backfilled. Use `WithSelfHostedOSSIncludeUnscopedMemories()` only for migrations that need those legacy records visible.
 - The current OSS `GET /memories` API is capped at 1000 user-level results, is not pageable, and cannot express `metadata.trpc_app_name` as a server-side filter. `ReadMemories` therefore requires a positive limit no larger than 1000 and applies app isolation as a best-effort local filter over the first 1000 OSS records returned for the user.
-- Runner automatically passes session context into ingest. Custom callers can also use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID` when needed.
+- Runner automatically passes session context into `IngestSession`. Custom callers can use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID` for per-call common fields; Mem0-specific fields are service options.
 - `WithPreloadMemory(N)` works with mem0 when the same service is configured via `runner.WithSessionIngestor(mem0Svc)`. Use a positive budget in production.
 - When mem0 metadata is available, search results can still carry structured fields such as `Topics`, `Kind`, `EventTime`, `Participants`, and `Location`.
 - Call `Close()` on the service so background workers shut down cleanly.
@@ -1826,10 +2132,10 @@ memSvc, err := memorytencentdb.NewService(
     // Opt-in cross-session/user reads; enable only for a trusted/isolated gateway.
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
-    // Optional short-term tool result offload; requires a gateway that supports
-    // /offload/v1/hooks/* and /offload/v1/tools/*.
+    // Optional short-term context offload through the gateway v2 API.
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
-    //     Enabled: true,
+    //     Enabled:   true,
+    //     ServiceID: os.Getenv("TDAI_SERVICE_ID"),
     // }),
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
@@ -1866,27 +2172,28 @@ defer r.Close()
 - Use `runner.WithPlugins(memSvc.Plugin())` to enable automatic `/recall`
   before model calls
 - Use `runner.WithPlugins(memSvc.ContextOffloadPlugin())` only when
-  `WithContextOffload(memorytencentdb.ContextOffloadConfig{Enabled: true})` is
-  set and you want short-term tool result offload. Companion tools
-  `tdai_read_offload_ref`,
-  `tdai_read_offload_node`, and `tdai_search_offload_index` are exposed
-  through `memSvc.Tools()` when enabled.
+  `WithContextOffload(...)` is enabled and you want short-term context
+  offload. The companion `tdai_read_offload_ref` tool is exposed through
+  `memSvc.Tools()` when enabled.
 - Do **not** use `runner.WithMemoryService(...)` with this integration
 
 ### Enable Context Offload
 
-Context offload is a separate, opt-in path for large tool results. Use it only
-with a TencentDB Agent Memory gateway build that exposes the offload routes
-listed in the notes below. The Go adapter does not provide local storage,
-summarization models, or local/backend/collect modes.
+Context offload is a separate, opt-in integration with TencentDB Agent Memory's
+v2 offload API. It sends tool results to the gateway for asynchronous
+processing, asks the gateway to compact model context when the configured
+utilization threshold is reached, and exposes one tool for bounded recovery of
+archived results.
 
 Minimal setup:
 
 ```go
 memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithGatewayURL(gatewayURL),
+    memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
     memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
-        Enabled: true,
+        Enabled:   true,
+        ServiceID: os.Getenv("TDAI_SERVICE_ID"),
     }),
 )
 if err != nil {
@@ -1908,29 +2215,57 @@ r := runner.NewRunner(
 )
 ```
 
-If offload traffic should use a different gateway or key from normal
-capture/search/recall traffic, set `GatewayURL` and `APIKey` on
-`ContextOffloadConfig`:
+The v2 API requires both `Authorization: Bearer <key>` and
+`X-TDAI-Service-Id`. For the standalone upstream gateway, use the conventional
+values `local` and `default`; for a managed service, use the credentials
+assigned to the memory instance.
+
+If offload traffic should use a different gateway or API key from normal
+capture/search/recall traffic, override them on `ContextOffloadConfig`:
 
 ```go
 memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     Enabled:    true,
-    GatewayURL: "http://127.0.0.1:8420",
-    APIKey:     os.Getenv("TDAI_OFFLOAD_GATEWAY_API_KEY"),
+    GatewayURL: offloadGatewayURL,
+    APIKey:     os.Getenv("TDAI_OFFLOAD_API_KEY"),
+    ServiceID:  os.Getenv("TDAI_SERVICE_ID"),
 })
 ```
 
 At runtime:
 
-- `ContextOffloadPlugin()` calls the gateway after tool execution. The gateway
-  may replace large tool result messages with compact references or summaries.
-- Before the next model call, the plugin asks the gateway whether the current
-  request should be rewritten with offloaded context.
-- `memSvc.Tools()` exposes `tdai_read_offload_ref`,
-  `tdai_read_offload_node`, and `tdai_search_offload_index` when context
-  offload is enabled, so the model can drill into gateway-owned offload data.
-- Do not configure local directories, local models, or L0-L3 policies in the Go
-  adapter; those concerns belong to TencentDB Agent Memory.
+- After tool execution, `ContextOffloadPlugin()` sends real tool call/result
+  pairs to `POST /v2/offload/ingest`, together with the latest user prompt and
+  bounded recent conversation context. This does not rewrite the current tool
+  result message.
+- Before each model call, the plugin sends an ingest with no tool pairs for
+  L1.5 task judgment. That request still includes the latest user prompt and
+  bounded recent conversation context. The plugin then estimates message
+  tokens and calls
+  `POST /v2/offload/compact` after `CompactionRatio` is reached. Failures are
+  best effort: the original model context is retained.
+- `memSvc.Tools()` exposes only `tdai_read_offload_ref`, backed by
+  `POST /v2/offload/read-ref`. It supports full, query-centered, or line-range
+  recovery, bounded by `max_tokens`.
+- The adapter deliberately limits its integration to the three routes needed
+  by this lifecycle. Storage, summaries, task maps, and offload policy remain
+  gateway responsibilities.
+
+Both ingest paths can send up to 10 recent user or assistant messages after
+filtering, truncated to 400 Unicode code points each. The latest user prompt is
+sent separately and truncated to 500 code points. Tool messages, assistant
+tool-call messages, the duplicated current prompt, and recognized internal
+control messages are omitted from `recent_messages`.
+
+The compaction trigger is evaluated locally. The context window is resolved in
+this order: `agent.WithModelContextWindow(...)` for the current run, the
+model's `Info().ContextWindow` (which providers can expose through options such
+as `WithContextWindow(...)`), a value registered for the model name through
+`model.RegisterModelContextWindow(...)`, and finally 128,000 tokens.
+`TokenCounter` supplies the per-message counts used for both the local
+`CompactionRatio` decision and compact request metadata. If it is nil, or if a
+custom counter fails or returns a negative value, the plugin uses the simple
+token estimator for that model call.
 
 ### Interactive Example
 
@@ -1981,9 +2316,12 @@ modes and does not write local offload state.
 
 | Field | Purpose | Default |
 | ----- | ------- | ------- |
-| `Enabled` | Enable context offload plugin and companion tools. | `false` |
-| `GatewayURL` | Optional gateway URL override for context offload hook/tool calls. Empty reuses `WithGatewayURL`. | none |
-| `APIKey` | Optional API key override for context offload hook/tool calls. Empty reuses `WithAPIKey`. | none |
+| `Enabled` | Enable the context offload plugin and result-reference tool. | `false` |
+| `GatewayURL` | Optional gateway URL override for v2 offload calls. Empty reuses `WithGatewayURL`. | none |
+| `APIKey` | Optional Bearer key override for v2 offload calls. Empty reuses `WithAPIKey`. | none |
+| `ServiceID` | Memory service ID sent as `X-TDAI-Service-Id`; required when enabled. | none |
+| `CompactionRatio` | Context-window utilization that triggers `/v2/offload/compact`; must be in `(0, 2]`. | `0.5` |
+| `TokenCounter` | Optional `model.TokenCounter` used for the local `CompactionRatio` trigger and compact request metadata; failures fall back to the simple estimator. | simple estimator |
 
 ### Notes
 
@@ -1999,17 +2337,16 @@ modes and does not write local offload state.
   searchable.
 - `tdai_conversation_search` searches conversation history and defaults to the
   current gateway `session_key`.
-- Context offload is opt-in and gateway-owned. It does not call `/capture` or
-  `/recall`, and enabling recall alone will not rewrite tool result messages or
-  create Mermaid task maps.
-- The Go adapter calls gateway hook endpoints
-  `/offload/v1/hooks/after-tool-messages` and
-  `/offload/v1/hooks/before-model`. It does not create `.tdai-offload`, local
-  refs, JSONL indexes, Mermaid files, or local state.
-- The offload tools call gateway drill-down endpoints
-  `/offload/v1/tools/read-ref`, `/offload/v1/tools/read-node`, and
-  `/offload/v1/tools/search-index`. Scope validation, storage ACLs, byte
-  limits, and persistence are gateway responsibilities.
+- Context offload is opt-in and gateway-owned. It uses only
+  `/v2/offload/ingest`, `/v2/offload/compact`, and `/v2/offload/read-ref`; it
+  does not call `/capture` or `/recall`.
+- The gateway may replace archived tool results with messages such as
+  "原始工具结果已存档，如需查看完整内容请调用 Offload V2 result_ref 恢复接口".
+  Register `memSvc.Tools()` so the model can satisfy that instruction through
+  `tdai_read_offload_ref`.
+- The adapter does not create local refs, JSONL indexes, Mermaid files, or
+  local offload state. Scope validation, storage ACLs, token limits, and
+  persistence are gateway responsibilities.
 - Call `Close()` on the service so background capture workers shut down cleanly.
 
 ## References
@@ -2019,6 +2356,6 @@ modes and does not write local offload state.
 - [Auto Mode Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto)
 - [mem0 Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/mem0)
 - [TencentDB Agent Memory Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/tencentdb)
-- [TencentDB Agent Memory SDK](https://github.com/Tencent/TencentDB-Agent-Memory)
+- [TencentDB Agent Memory SDK](https://github.com/TencentCloud/TencentDB-Agent-Memory)
 - [Ecosystem Guide](https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/ecosystem.md)
 - [API Documentation](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory)

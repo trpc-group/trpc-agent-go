@@ -127,6 +127,11 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  1000000,
 		},
 		{
+			name:      "exact match - Claude Opus 5",
+			modelName: "claude-opus-5",
+			expected:  1000000,
+		},
+		{
 			name:      "exact match - Claude Sonnet 5",
 			modelName: "claude-sonnet-5",
 			expected:  1000000,
@@ -610,6 +615,7 @@ func TestResolveMaxOutputTokens(t *testing.T) {
 		{name: "gpt-5.4 mini", modelName: "gpt-5.4-mini", expected: 128000},
 		{name: "claude fable 5", modelName: "claude-fable-5", expected: 128000},
 		{name: "claude mythos 5", modelName: "claude-mythos-5", expected: 128000},
+		{name: "claude opus 5", modelName: "claude-opus-5", expected: 128000},
 		{name: "claude sonnet 5", modelName: "claude-sonnet-5", expected: 128000},
 		{name: "claude opus 4.8", modelName: "claude-opus-4-8", expected: 128000},
 		{name: "claude sonnet 4.6", modelName: "claude-sonnet-4-6", expected: 128000},

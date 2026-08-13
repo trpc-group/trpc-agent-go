@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
+	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 type stubSkillStager struct{}
@@ -352,6 +353,13 @@ func TestWithWorkspaceExecSurfaceEnabled(t *testing.T) {
 	require.False(t, *b.option.workspaceExecSurfaceEnabled)
 }
 
+func TestWithWorkspaceExecOutputLimits(t *testing.T) {
+	limits := toolworkspaceexec.OutputLimits{MaxOutputBytes: 1234}
+	opts := &Options{}
+	WithWorkspaceExecOutputLimits(limits)(opts)
+	require.Equal(t, limits, opts.workspaceExecOutputLimits)
+}
+
 func TestWithSkillsCapabilityGuidance(t *testing.T) {
 	a := New("test-agent")
 	require.Nil(t, a.option.skillsCapabilityGuidance)
@@ -508,6 +516,8 @@ func TestWithMaxLimits_OnOptions(t *testing.T) {
 
 	WithMaxLLMCalls(3)(opts)
 	WithMaxToolIterations(4)(opts)
+	WithLLMCallLimitFinalization("")(opts)
+	WithToolIterationLimitFinalization("finish with available results")(opts)
 
 	if opts.MaxLLMCalls != 3 {
 		t.Fatalf("expected MaxLLMCalls=3, got %d", opts.MaxLLMCalls)
@@ -515,6 +525,14 @@ func TestWithMaxLimits_OnOptions(t *testing.T) {
 	if opts.MaxToolIterations != 4 {
 		t.Fatalf("expected MaxToolIterations=4, got %d", opts.MaxToolIterations)
 	}
+	require.NotNil(t, opts.llmCallLimitFinalizationInstruction)
+	require.Empty(t, *opts.llmCallLimitFinalizationInstruction)
+	require.NotNil(t, opts.toolIterationLimitFinalizationInstruction)
+	require.Equal(
+		t,
+		"finish with available results",
+		*opts.toolIterationLimitFinalizationInstruction,
+	)
 }
 
 func TestWithToolCallRetryPolicy_OnOptions(t *testing.T) {
@@ -895,4 +913,38 @@ func TestWithEnablePostToolPrompt(t *testing.T) {
 
 	require.NotNil(t, opts.postToolPromptEnabled)
 	require.True(t, *opts.postToolPromptEnabled)
+}
+
+func TestWithToolConcurrencyConfigCopiesGroups(t *testing.T) {
+	config := tool.ConcurrencyConfig{
+		MaxConcurrency: 4,
+		Groups: []tool.ConcurrencyGroup{{
+			ToolNames: []string{"search", "fetch"},
+			Limit:     1,
+		}},
+	}
+	option := WithToolConcurrencyConfig(config)
+	config.Groups[0].ToolNames[0] = "changed"
+
+	opts := &Options{}
+	option(opts)
+
+	require.Equal(t, 4, opts.ToolConcurrencyConfig.MaxConcurrency)
+	require.Equal(
+		t,
+		[]string{"search", "fetch"},
+		opts.ToolConcurrencyConfig.Groups[0].ToolNames,
+	)
+	require.Equal(t, 1, opts.ToolConcurrencyConfig.Groups[0].Limit)
+}
+
+func TestWithToolConcurrencyConfigRejectsDuplicateGroups(t *testing.T) {
+	require.Panics(t, func() {
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{
+				{ToolNames: []string{"search"}, Limit: 1},
+				{ToolNames: []string{"search"}, Limit: 2},
+			},
+		})
+	})
 }

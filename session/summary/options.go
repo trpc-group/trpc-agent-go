@@ -35,9 +35,11 @@ type SkipRecentFunc func(events []event.Event) int
 
 // WithPrompt sets the custom prompt for summarization.
 // The prompt must include the placeholder {conversation_text}, which will be
-// replaced with the extracted conversation when generating the summary. When
-// WithMaxSummaryWords is configured, {max_summary_words} must be included in
-// either this prompt or WithSystemPrompt.
+// replaced with the extracted conversation when generating the summary. It may
+// also include {previous_summary} to position the previous rolling summary
+// separately from newly uncovered conversation text. When WithMaxSummaryWords
+// is configured, {max_summary_words} must be included in either this prompt or
+// WithSystemPrompt.
 func WithPrompt(prompt string) Option {
 	return func(s *sessionSummarizer) {
 		if prompt != "" {
@@ -48,9 +50,10 @@ func WithPrompt(prompt string) Option {
 
 // WithSystemPrompt sets an additional system prompt for summarization.
 // The prompt is rendered into a dedicated system message before the user prompt.
-// It must not include the {conversation_text} placeholder; keep conversation
-// content in the user prompt instead. When WithMaxSummaryWords is configured,
-// {max_summary_words} may be included here instead of the user prompt.
+// It must not include the {conversation_text} or {previous_summary}
+// placeholders; keep conversation content in the user prompt instead. When
+// WithMaxSummaryWords is configured, {max_summary_words} may be included here
+// instead of the user prompt.
 func WithSystemPrompt(prompt string) Option {
 	return func(s *sessionSummarizer) {
 		if prompt != "" {
@@ -64,7 +67,9 @@ func WithSystemPrompt(prompt string) Option {
 // summarizer clones the parent request and appends a compacting user message
 // instead of sending a standalone summary prompt. If no parent request is
 // available, or the parent cannot fit the summary model's input budget,
-// summarization falls back to a bounded standalone prompt.
+// summarization falls back to a bounded standalone prompt. Framework-provided
+// model-request views restrict the fork to the same history prefix selected by
+// WithSkipRecent, excluding later responses appended after that request.
 //
 // This is disabled by default.
 func WithCacheSafeForking(enable bool) Option {
@@ -73,10 +78,13 @@ func WithCacheSafeForking(enable bool) Option {
 	}
 }
 
-// WithCacheSafeForkPrompt sets the user message appended to a parent request
-// when cache-safe forking is enabled. The prompt may include
-// {max_summary_words}, but it must not include {conversation_text}; the parent
-// request already contains the conversation prefix.
+// WithCacheSafeForkPrompt sets the final summary instruction used when
+// cache-safe forking is enabled. It is appended as a user message to a cloned
+// parent request. When cache-safe forking falls back to a standalone request,
+// it is appended after a source boundary in the standalone user message. The
+// prompt may include {max_summary_words}, but it must not include
+// {conversation_text} or {previous_summary}; the request already contains the
+// conversation prefix, including any injected summary.
 func WithCacheSafeForkPrompt(prompt string) Option {
 	return func(s *sessionSummarizer) {
 		if prompt != "" {
@@ -97,9 +105,11 @@ func WithMaxSummaryWords(maxWords int) Option {
 }
 
 // WithSkipRecent sets a custom function to determine how many of the most recent
-// events (from the tail) should be skipped during summarization. The function
-// receives all events and returns the count of tail events to skip. Return 0 to
-// skip none.
+// events (from the tail) should be skipped during summarization. In the normal
+// Runner LLM flow, the function receives the projected session history visible
+// to the model, after history filtering and request-side compaction. Standalone
+// summarization without a model-request view preserves the legacy raw-session
+// input. Return 0 to skip none.
 //
 // Example:
 //
@@ -127,7 +137,10 @@ func WithSkipRecent(skipFunc SkipRecentFunc) Option {
 	}
 }
 
-// WithTokenThreshold appends a token-based check.
+// WithTokenThreshold appends a token-based check. When the normal Runner LLM
+// flow provides a finalized model-request view, the check uses that request's
+// estimated token count, including the retained recent tail. Standalone
+// summarization preserves legacy event-text estimation.
 // Note: all checks in a summarizer are combined with global AND semantics.
 // If you call multiple threshold options (e.g. token + event), all must pass.
 func WithTokenThreshold(tokenCount int) Option {
@@ -209,7 +222,11 @@ func WithPreSummaryHook(h PreSummaryHook) Option {
 	}
 }
 
-// WithPostSummaryHook sets a post-summary hook to modify the summary before returning.
+// WithPostSummaryHook sets a post-summary hook to modify the summary before
+// returning. The hook observes the provisional boundary for the summarized
+// source. A successful or non-aborting hook keeps that exact boundary, replacing
+// any hook changes to the summary boundary state. An aborting or panicking hook
+// restores the boundary that existed before the summary attempt.
 func WithPostSummaryHook(h PostSummaryHook) Option {
 	return func(s *sessionSummarizer) {
 		s.postHook = h

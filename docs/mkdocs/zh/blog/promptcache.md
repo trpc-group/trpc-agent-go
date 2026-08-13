@@ -208,7 +208,7 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-如果需要自定义 fork 模式下追加的压缩指令，可以使用 `summary.WithCacheSafeForkPrompt(...)`。这条 prompt 可以包含 `{max_summary_words}`，但不应再包含 `{conversation_text}`，因为父请求本身已经包含完整的对话前缀。
+如果需要自定义 fork 模式下追加的压缩指令，可以使用 `summary.WithCacheSafeForkPrompt(...)`。这条 prompt 可以包含 `{max_summary_words}`，但不应再包含 `{conversation_text}` 或 `{previous_summary}`，因为父请求本身已经包含完整的对话前缀和已注入的摘要。
 
 ### Summary injection：避免改写 request prefix
 
@@ -277,7 +277,7 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-自定义 fork prompt 时使用 `summary.WithCacheSafeForkPrompt(...)`，不要再把 `{conversation_text}` 放进去。
+自定义 fork prompt 时使用 `summary.WithCacheSafeForkPrompt(...)`，不要再把 `{conversation_text}` 或 `{previous_summary}` 放进去。
 
 普通对话请求注入 summary 时，可以使用 user/history 模式避免改写首条 system：
 
@@ -399,6 +399,26 @@ Telemetry 层也会拆分 token 类型。`internal/telemetry` 包会记录：
 - `input_cache_read`
 - `input_cache_creation`
 - `output`
+
+#### 流式 Usage 排障
+
+在流式请求中，OpenAI-compatible 服务通常会在最后发送一个只包含 usage
+的 chunk。tRPC-Agent-Go 会消费该 chunk，并把累计结果放入最终
+`model.Response`。
+
+如果原始流中 `cached_tokens` 非零，但最终响应中变成零，应检查模型是否配置了
+`openai.WithAccumulateChunkTokenUsage`。该回调的返回值会整体替换累计后的
+`model.Usage`；如果只返回 `PromptTokens`、`CompletionTokens` 和
+`TotalTokens`，就会丢失 `PromptTokensDetails.CachedTokens`。
+
+大多数应用应使用默认聚合器。非标准服务方可能返回增量、累计总量或最后一次完整
+总量；自定义 accumulator 必须匹配对应行为，并返回完整 usage 状态。完整的
+回调执行顺序、`model.Usage` 字段说明和示例见
+[自定义流式 Usage 聚合](../model.md#usage)。
+
+当 `Stream` 为 true 时，OpenAI-compatible adapter 会自动请求 usage。
+仍可通过检查服务方请求和原始响应确认最终 usage chunk 是否到达客户端，但重复
+添加 `stream_options.include_usage` 无法恢复已经被自定义聚合器丢弃的明细。
 
 一个简单的统计口径是：
 

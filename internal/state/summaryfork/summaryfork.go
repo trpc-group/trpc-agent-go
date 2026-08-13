@@ -36,6 +36,15 @@ func Request(inv *agent.Invocation) (*model.Request, bool) {
 	return cloneRequest(req), true
 }
 
+// Invalidate removes the current cache-safe request snapshot. Summarization
+// falls back to its standalone session input until a later Attach.
+func Invalidate(inv *agent.Invocation) {
+	if inv == nil {
+		return
+	}
+	inv.DeleteState(stateKey)
+}
+
 // AppendResponse appends persisted response messages to the stored request
 // snapshot. It is a no-op when no snapshot is present.
 func AppendResponse(inv *agent.Invocation, rsp *model.Response) {
@@ -148,6 +157,11 @@ func cloneContentPart(part model.ContentPart) model.ContentPart {
 		audio := *part.Audio
 		audio.Data = append([]byte(nil), part.Audio.Data...)
 		cloned.Audio = &audio
+	}
+	if part.Video != nil {
+		video := *part.Video
+		video.Data = append([]byte(nil), part.Video.Data...)
+		cloned.Video = &video
 	}
 	if part.File != nil {
 		file := *part.File

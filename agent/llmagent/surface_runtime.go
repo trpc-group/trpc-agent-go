@@ -60,6 +60,9 @@ func (a *LLMAgent) skillRepositoryForInvocation(
 	ctx context.Context,
 	inv *agent.Invocation,
 ) skill.Repository {
+	if repo, ok := preparedSkillRepositoryForInvocation(inv); ok {
+		return repo
+	}
 	if patch, ok := a.rootSurfacePatch(inv); ok {
 		if repo, ok := patch.SkillRepository(); ok {
 			return repo
@@ -146,8 +149,18 @@ func (a *LLMAgent) InvocationSkillRepository(
 	if a == nil {
 		return nil
 	}
-	return a.skillRepositoryForInvocation(ctx, inv)
+	return repositoryWithoutPreparedSkills(
+		a.skillRepositoryForInvocation(ctx, inv),
+	)
 }
+
+// SupportsInvocationSkillLoads reports that LLMAgent consumes invocation
+// skill load declarations before its first model request.
+func (a *LLMAgent) SupportsInvocationSkillLoads() bool {
+	return a != nil
+}
+
+var _ agent.InvocationSkillLoadSupport = (*LLMAgent)(nil)
 
 // InvocationCodeExecutor returns the effective code executor for the
 // invocation, honoring a per-run override when present. It implements
