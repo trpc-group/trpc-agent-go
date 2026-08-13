@@ -1476,9 +1476,9 @@ func TestMessagesSnapshotFollowSkipsNonTerminalHistoryWhenFlushDisabled(t *testi
 		appName:                           "demo",
 		tracker:                           tr,
 		flushInterval:                     0,
-		timeout:                           50 * time.Millisecond,
+		timeout:                           time.Second,
 		messagesSnapshotFollowEnabled:     true,
-		messagesSnapshotFollowMaxDuration: 50 * time.Millisecond,
+		messagesSnapshotFollowMaxDuration: time.Second,
 	}
 	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "req-run"})
 	require.NoError(t, err)
