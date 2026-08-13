@@ -1308,6 +1308,7 @@ type eventLoopContext struct {
 	emittedAssistantChoiceSignatures   map[string]struct{}
 	visibleCompletionResponseIDs       map[string]struct{}
 	visibleCompletionChoiceSignatures  map[string]struct{}
+	persistedEvents                    eventPersistenceDeduper
 	sawTerminalError                   bool
 	streamFilter                       graph.StreamModeFilter
 	interruptedAssistants              map[string]*interruptedAssistantAccumulator
@@ -1325,6 +1326,80 @@ type eventLoopContext struct {
 	errorEventCount     int
 	emittedEventCount   int
 	detailSpanCount     int
+}
+
+// eventPersistenceDeduper coordinates event persistence within one runner
+// event loop. Successful IDs remain recorded for the loop lifetime, while a
+// failed append releases the ID so another delivery can retry it.
+type eventPersistenceDeduper struct {
+	mu sync.Mutex
+	// records tracks in-flight and completed persistence by event ID. A nil
+	// record marks an event that was persisted successfully.
+	records map[string]*eventPersistenceRecord
+}
+
+type eventPersistenceRecord struct {
+	done chan struct{}
+}
+
+func (d *eventPersistenceDeduper) start(
+	ctx context.Context,
+	eventID string,
+) (record *eventPersistenceRecord, proceed bool) {
+	if d == nil || eventID == "" {
+		return nil, true
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		d.mu.Lock()
+		if d.records == nil {
+			d.records = make(map[string]*eventPersistenceRecord)
+		}
+		record, ok := d.records[eventID]
+		if !ok {
+			record = &eventPersistenceRecord{}
+			d.records[eventID] = record
+			d.mu.Unlock()
+			return record, true
+		}
+		if record == nil {
+			d.mu.Unlock()
+			return nil, false
+		}
+		if record.done == nil {
+			record.done = make(chan struct{})
+		}
+		done := record.done
+		d.mu.Unlock()
+
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, false
+		}
+	}
+}
+
+func (d *eventPersistenceDeduper) finish(
+	eventID string,
+	record *eventPersistenceRecord,
+	persisted bool,
+) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.records[eventID] != record {
+		return
+	}
+	if persisted {
+		d.records[eventID] = nil
+	} else {
+		delete(d.records, eventID)
+	}
+	if record.done != nil {
+		close(record.done)
+	}
 }
 
 type interruptedAssistantAccumulator struct {
@@ -1551,12 +1626,13 @@ func (r *runner) processSingleAgentEvent(
 	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
-	persisted := r.handleEventPersistence(
+	persisted := r.handleEventPersistenceOnce(
 		ctx,
 		loop.invocation,
 		loop.sess,
 		persistSession,
 		agentEvent,
+		&loop.persistedEvents,
 	)
 	if !excludeRootCompletion {
 		r.recordPersistedAssistantEvent(
@@ -2357,12 +2433,13 @@ func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoo
 			) {
 			continue
 		}
-		if !r.handleEventPersistence(
+		if !r.handleEventPersistenceOnce(
 			persistCtx,
 			loop.invocation,
 			loop.sess,
 			persistSession,
 			interruptedEvent,
+			&loop.persistedEvents,
 		) {
 			continue
 		}
@@ -2572,6 +2649,39 @@ func (r *runner) handleFlushRequest(
 			return nil
 		}
 	}
+}
+
+// handleEventPersistenceOnce coordinates persistence by event ID. Successful
+// persistence is not repeated within the deduper's lifetime, while failed
+// attempts remain retryable.
+func (r *runner) handleEventPersistenceOnce(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	sess *session.Session,
+	persistSession *session.Session,
+	agentEvent *event.Event,
+	deduper *eventPersistenceDeduper,
+) (persisted bool) {
+	eventID := ""
+	if agentEvent != nil {
+		eventID = agentEvent.ID
+	}
+	record, proceed := deduper.start(ctx, eventID)
+	if !proceed {
+		return false
+	}
+	if record != nil {
+		defer func() {
+			deduper.finish(eventID, record, persisted)
+		}()
+	}
+	return r.handleEventPersistence(
+		ctx,
+		invocation,
+		sess,
+		persistSession,
+		agentEvent,
+	)
 }
 
 // handleEventPersistence appends qualifying events to the session and triggers
