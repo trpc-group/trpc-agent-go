@@ -349,11 +349,12 @@ assistant 返回至少两个 Markdown 或编号列表项时接受结构化请求
 顺序进入私有的单次请求 pair 数量和 source 体积预算；超出预算的候选会被忽略，因为
 assistant 结果提取采用 best-effort 语义。入选的 pair 会合并到一次第二阶段请求中，
 并且只暴露私有的 `memory_assistant_episode` 工具。该工具不会暴露给应用的 Agent。
-通过 `WithPrompt` 或 `SetPrompt` 配置的应用提取约束同样适用于第二阶段请求。当
-普通阶段产生 Delete 或 Clear operation 时，触发该 operation 的 user message 及其
-之前的 assistant pair 会被排除；之后独立出现的新 pair 仍可进入可选阶段。如果
-破坏性 operation 无法绑定到来源消息，提取器会保守地跳过本次可选阶段。该判断使用
-请求内的 operation 来源信息，不依赖针对特定语言的对话意图解析。
+通过 `WithPrompt` 或 `SetPrompt` 配置的应用提取约束同样适用于第二阶段请求。普通
+阶段产生 Clear operation 时，其请求内 `source_user_index` 对应位置及之前的候选 pair
+会被排除。Delete operation 只排除请求内 `affected_source_user_indexes` 明确列出的
+pair，不影响无关 pair。如果破坏性 operation 的请求内作用范围缺失或非法，提取器会
+保守地跳过本次可选阶段。该判断使用请求内的 operation 来源信息，不依赖针对特定
+语言的对话意图解析。
 
 Assistant 输出会被记录为“带归属的对话历史”，而不是已经验证的事实或用户偏好。
 框架将每个通过校验的调用固定转换为普通 `KindEpisode` add 操作，将 participants

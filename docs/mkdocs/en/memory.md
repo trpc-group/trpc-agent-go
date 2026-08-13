@@ -387,12 +387,13 @@ The selected pairs are combined into one second request that exposes only the
 private `memory_assistant_episode` tool. This tool is never visible to the
 application Agent. An application policy configured through `WithPrompt` or
 `SetPrompt` also constrains the second-stage request. When the ordinary stage
-produces a Delete or Clear operation, assistant pairs at or before the user
-message that caused that operation are excluded. A later, independent pair can
-still enter the optional stage. If the destructive operation cannot be bound
-to a source message, the extractor conservatively skips the optional stage for
-that call. This decision uses request-local operation provenance rather than a
-language-specific interpretation of the conversation.
+produces a Clear operation, candidate pairs at or before its request-local
+`source_user_index` are excluded. A Delete operation excludes only the pairs
+explicitly listed in its request-local `affected_source_user_indexes`;
+unrelated pairs remain eligible. If a destructive operation has missing or
+invalid request-local scope, the extractor conservatively skips the optional
+stage for that call. This decision uses request-local operation provenance
+rather than a language-specific interpretation of the conversation.
 
 Assistant output is stored as attributed conversation history rather than as a
 verified fact or user preference. The framework converts every accepted call
