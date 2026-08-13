@@ -43,7 +43,8 @@ report, err := runner.Run(ctx, replaytest.StandardReplayCases())
 - Track duration 保留原值，比较器默认使用 `1ms` 绝对误差容限，不做分桶。
 - 未声明的差异默认失败，并生成非空 `Explanation`。
 - `allowed_diff` 必须精确绑定 backend、case 和 path/capability；通配路径、重复规则和未消费规则均视为配置错误。
-- `MarshalReport` 使用 `baseline_missing` / `actual_missing` 明确表示字段不存在，缺失侧不输出 `baseline` / `actual` 值；显式 JSON `null` 仍写入 `baseline` / `actual`。
+- `MarshalReport` 使用 `baseline_missing` / `actual_missing` 明确表示字段不存在，缺失侧不输出 `baseline` / `actual` 值；显式 JSON `null` 仍写入 `baseline` / `actual`。报告 JSON 解码回 `Report` 后仍保留缺失标记，重新调用 `MarshalReport` 不会把 missing 退化为 `null`。
+- `Runner.Run` 会在创建任何 Fixture 前校验完整 case 配置，包括 Operation 负载、顶层依赖、并发依赖图和 Snapshot invariant 形状。
 - Operation 中的 JSON-like 负载会在进入 Fixture 前深拷贝。包含私有可变字段、无法安全隔离的自定义结构会在校验阶段被拒绝。
 
 ## 后端集成

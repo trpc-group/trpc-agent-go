@@ -302,6 +302,105 @@ func TestRunnerRejectsDuplicateNamesBeforeCreatingFixtures(t *testing.T) {
 	}
 }
 
+func TestRunnerRejectsInvalidCasesBeforeCreatingFixtures(t *testing.T) {
+	parallelCycle := Operation{Kind: OperationParallel, Parallel: []Operation{
+		namedOperation(appendEvent("event-1", "user", "one", 1), "one", "two"),
+		namedOperation(appendEvent("event-2", "assistant", "two", 2), "two", "one"),
+	}}
+	tests := []struct {
+		name  string
+		cases []ReplayCase
+		want  string
+	}{
+		{
+			name: "invalid operation",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationAppendEvent, SessionID: "session",
+			}}}},
+			want: "append event requires session id and event",
+		},
+		{
+			name: "top-level dependency",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{
+				namedOperation(appendEvent("event-1", "user", "content", 1), "write", "ready"),
+			}}},
+			want: "top-level dependencies",
+		},
+		{
+			name: "invalid invariant",
+			cases: []ReplayCase{{Name: "case", Invariants: []SnapshotInvariant{{
+				Name: "missing check",
+			}}}},
+			want: "snapshot invariant 0 is invalid",
+		},
+		{
+			name: "parallel unknown dependency",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					namedOperation(appendEvent("event-1", "user", "content", 1), "write", "ready"),
+				},
+			}}}},
+			want: `unknown dependency "ready"`,
+		},
+		{
+			name: "parallel duplicate dependency name",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					namedOperation(appendEvent("event-1", "user", "one", 1), "write"),
+					namedOperation(appendEvent("event-2", "assistant", "two", 2), "write"),
+				},
+			}}}},
+			want: `duplicate parallel operation name "write"`,
+		},
+		{
+			name: "parallel self dependency",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					namedOperation(appendEvent("event-1", "user", "content", 1), "write", "write"),
+				},
+			}}}},
+			want: `parallel operation "write" depends on itself`,
+		},
+		{
+			name:  "parallel cycle",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{parallelCycle}}},
+			want:  "dependency cycle",
+		},
+		{
+			name: "nested parallel invalid operation",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{{Kind: OperationParallel, Parallel: []Operation{{
+					Kind: OperationAppendEvent, SessionID: "session",
+				}}}},
+			}}}},
+			want: "append event requires session id and event",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			newCalls := 0
+			runner := Runner{Backends: []Backend{{
+				Name: "baseline",
+				New: func(context.Context, string) (Fixture, error) {
+					newCalls++
+					return &fakeFixture{name: "baseline", capabilities: allCapabilities()}, nil
+				},
+			}}}
+			_, err := runner.Run(context.Background(), test.cases)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Runner.Run() error = %v, want %q", err, test.want)
+			}
+			if newCalls != 0 {
+				t.Fatalf("backend.New() calls = %d, want 0", newCalls)
+			}
+		})
+	}
+}
+
 func TestRunnerContinuesAfterExpectedFailure(t *testing.T) {
 	const expectedAppliedOperations = 1
 	fixture := &fakeFixture{name: "inmemory", capabilities: allCapabilities()}

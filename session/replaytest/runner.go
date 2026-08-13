@@ -125,7 +125,52 @@ func validateRunnerInputs(backends []Backend, cases []ReplayCase) error {
 		if _, exists := caseNames[replayCase.Name]; exists {
 			return fmt.Errorf("run replay cases: case name %q is duplicated", replayCase.Name)
 		}
+		if err := validateReplayCase(replayCase); err != nil {
+			return fmt.Errorf("run replay case %q: %w", replayCase.Name, err)
+		}
 		caseNames[replayCase.Name] = struct{}{}
+	}
+	return nil
+}
+
+func validateReplayCase(replayCase ReplayCase) error {
+	for i, operation := range replayCase.Operations {
+		if len(operation.After) > 0 {
+			return fmt.Errorf("operation %d has top-level dependencies", i)
+		}
+		if err := validateOperationTree(operation); err != nil {
+			return fmt.Errorf("operation %d (%s): %w", i, operation.Kind, err)
+		}
+	}
+	if err := validateSnapshotInvariants(replayCase.Invariants); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateOperationTree(operation Operation) error {
+	if err := operation.Validate(); err != nil {
+		return fmt.Errorf("validate operation: %w", err)
+	}
+	if operation.Kind != OperationParallel {
+		return nil
+	}
+	if _, err := parallelDependencies(operation.Parallel); err != nil {
+		return err
+	}
+	for i, child := range operation.Parallel {
+		if err := validateOperationTree(child); err != nil {
+			return fmt.Errorf("parallel operation %d (%s): %w", i, child.Kind, err)
+		}
+	}
+	return nil
+}
+
+func validateSnapshotInvariants(invariants []SnapshotInvariant) error {
+	for i, invariant := range invariants {
+		if invariant.Name == "" || invariant.Check == nil {
+			return fmt.Errorf("snapshot invariant %d is invalid", i)
+		}
 	}
 	return nil
 }
@@ -282,10 +327,10 @@ func (runner Runner) runCase(
 }
 
 func validateSnapshot(replayCase ReplayCase, snapshot Snapshot) error {
-	for i, invariant := range replayCase.Invariants {
-		if invariant.Name == "" || invariant.Check == nil {
-			return fmt.Errorf("snapshot invariant %d is invalid", i)
-		}
+	if err := validateSnapshotInvariants(replayCase.Invariants); err != nil {
+		return err
+	}
+	for _, invariant := range replayCase.Invariants {
 		if err := invariant.Check(cloneSnapshot(snapshot)); err != nil {
 			return fmt.Errorf(
 				"snapshot invariant %q: %w", invariant.Name, err,

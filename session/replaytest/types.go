@@ -227,14 +227,18 @@ type Locator struct {
 // simple map keys. Empty keys and keys containing '.', '[', ']', or '*' use
 // bracket notation with JSON string escaping, for example ["a.b"].
 type Difference struct {
-	Case        string  `json:"case"`
-	Backend     string  `json:"backend"`
-	Path        string  `json:"path"`
-	Locator     Locator `json:"locator,omitempty"`
-	Baseline    any     `json:"baseline"`
-	Actual      any     `json:"actual"`
-	AllowedDiff bool    `json:"allowed_diff"`
-	Explanation string  `json:"explanation,omitempty"`
+	Case     string  `json:"case"`
+	Backend  string  `json:"backend"`
+	Path     string  `json:"path"`
+	Locator  Locator `json:"locator,omitempty"`
+	Baseline any     `json:"baseline"`
+	Actual   any     `json:"actual"`
+	// BaselineMissing reports that the baseline value is absent rather than JSON null.
+	BaselineMissing bool `json:"baseline_missing,omitempty"`
+	// ActualMissing reports that the actual value is absent rather than JSON null.
+	ActualMissing bool   `json:"actual_missing,omitempty"`
+	AllowedDiff   bool   `json:"allowed_diff"`
+	Explanation   string `json:"explanation,omitempty"`
 }
 
 // AllowedDiffRule permits one exact Difference.Path or a deliberately bounded

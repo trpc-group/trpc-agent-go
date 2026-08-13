@@ -150,6 +150,58 @@ func TestMarshalReportDistinguishesMissingFromLiteralMissingText(t *testing.T) {
 	}
 }
 
+func TestMarshalReportRoundTripsMissingDifferenceValues(t *testing.T) {
+	report := Report{Differences: []Difference{
+		{
+			Case: "case", Backend: "sqlite", Path: "$.baseline_null",
+			Baseline: missingValueMarker, Actual: nil,
+		},
+		{
+			Case: "case", Backend: "sqlite", Path: "$.actual_null",
+			Baseline: nil, Actual: missingValueMarker,
+		},
+		{
+			Case: "case", Backend: "sqlite", Path: "$.baseline_literal",
+			Baseline: missingValueMarker, Actual: missingValue,
+		},
+		{
+			Case: "case", Backend: "sqlite", Path: "$.actual_literal",
+			Baseline: missingValue, Actual: missingValueMarker,
+		},
+	}}
+	encoded, err := MarshalReport(report)
+	if err != nil {
+		t.Fatalf("MarshalReport() error = %v", err)
+	}
+	var decoded Report
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	byPath := make(map[string]Difference, len(decoded.Differences))
+	for _, difference := range decoded.Differences {
+		byPath[difference.Path] = difference
+	}
+	if !byPath["$.baseline_null"].BaselineMissing ||
+		byPath["$.baseline_null"].Actual != nil ||
+		byPath["$.actual_null"].Baseline != nil ||
+		!byPath["$.actual_null"].ActualMissing {
+		t.Fatalf("decoded missing/null differences = %#v", byPath)
+	}
+	if !byPath["$.baseline_literal"].BaselineMissing ||
+		byPath["$.baseline_literal"].Actual != missingValue ||
+		byPath["$.actual_literal"].Baseline != missingValue ||
+		!byPath["$.actual_literal"].ActualMissing {
+		t.Fatalf("decoded literal missing differences = %#v", byPath)
+	}
+	roundTrip, err := MarshalReport(decoded)
+	if err != nil {
+		t.Fatalf("MarshalReport(decoded) error = %v", err)
+	}
+	if !bytes.Equal(encoded, roundTrip) {
+		t.Fatalf("missing report round trip changed:\n%s\n%s", encoded, roundTrip)
+	}
+}
+
 func TestReportSortHelpersUseAllTieBreakers(t *testing.T) {
 	probes := cloneAndSortProbeResults([]CapabilityProbeResult{
 		{Probe: "probe", Backend: "z", Capability: CapabilityTTL},

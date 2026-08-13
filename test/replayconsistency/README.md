@@ -42,7 +42,7 @@ go test ./replayconsistency -run TestLightweightReplayMatrix -count=1
 
 未配置的后端会明确标记为 skipped，不影响默认 CI。每条 case 使用独立 fixture；测试结束后会删除 Session、清空测试 Memory 并关闭服务。
 
-Memory fixture 将逻辑 `(app_name, user_id)` 映射为稳定且隔离的物理 key。读取和检索结果在恢复逻辑 scope 前会先校验物理归属；`SearchOptions` 同时传入 Query、limit 和 similarity threshold，避免高级选项覆盖查询内容。
+Memory fixture 将逻辑 `(app_name, user_id)` 映射为稳定且隔离的物理 key。读取和检索结果在恢复逻辑 scope 前会先校验物理归属；`SearchOptions` 同时传入 Query、limit 和 similarity threshold，避免高级选项覆盖查询内容。写入 Memory 时仅支持可由适配器持久化并读回的 metadata key：`kind`、`event_time`、`participants` 和 `location`；其他 key 会直接报错，避免静默丢失后造成误判。
 
 ## 后端能力差异
 

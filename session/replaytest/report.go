@@ -96,8 +96,8 @@ func reportForWire(report Report) (reportWire, error) {
 		Differences: make([]differenceWire, len(report.Differences)),
 	}
 	for i, difference := range report.Differences {
-		baselineMissing := isMissingValue(difference.Baseline)
-		actualMissing := isMissingValue(difference.Actual)
+		baselineMissing := difference.BaselineMissing || isMissingValue(difference.Baseline)
+		actualMissing := difference.ActualMissing || isMissingValue(difference.Actual)
 		var baseline json.RawMessage
 		if !baselineMissing {
 			encoded, err := marshalReportValue(difference.Baseline)

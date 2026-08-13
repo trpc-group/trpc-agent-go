@@ -1048,6 +1048,18 @@ func cloneMemorySearchSnapshot(
 
 func toMemoryMetadata(values map[string]any) (*memory.Metadata, error) {
 	metadata := &memory.Metadata{}
+	unsupported := make([]string, 0)
+	for key := range values {
+		switch key {
+		case "kind", "event_time", "participants", "location":
+		default:
+			unsupported = append(unsupported, key)
+		}
+	}
+	if len(unsupported) > 0 {
+		sort.Strings(unsupported)
+		return nil, fmt.Errorf("memory metadata %q is unsupported", unsupported[0])
+	}
 	if value, ok := values["kind"]; ok {
 		kind, ok := value.(string)
 		if !ok {

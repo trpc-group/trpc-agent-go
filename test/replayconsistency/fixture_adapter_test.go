@@ -314,6 +314,30 @@ func TestReplayFixtureCapturesMemorySearchAtApplyTime(t *testing.T) {
 	}
 }
 
+func TestReplayFixtureRejectsUnsupportedMemoryMetadata(t *testing.T) {
+	fixture := newReplayFixture(replayFixtureConfig{
+		name:           "inmemory",
+		sessionService: sessioninmemory.NewSessionService(),
+		memoryService:  memoryinmemory.NewMemoryService(),
+		summarizer:     &replaySummarizer{},
+	})
+	t.Cleanup(func() {
+		if err := fixture.Close(); err != nil {
+			t.Errorf("close fixture: %v", err)
+		}
+	})
+	err := fixture.Apply(context.Background(), replaytest.Operation{
+		Kind: replaytest.OperationWriteMemory,
+		Memory: &replaytest.MemorySnapshot{
+			AppName: replayAppName, UserID: replayUserID, Content: "memory",
+			Metadata: map[string]any{"source": "import"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), `memory metadata "source" is unsupported`) {
+		t.Fatalf("fixture.Apply() error = %v", err)
+	}
+}
+
 func TestReplayFixtureSnapshotReadsAllMemories(t *testing.T) {
 	fixture := newReplayFixture(replayFixtureConfig{
 		name:           "inmemory",
@@ -718,5 +742,9 @@ func TestMemoryMetadataConversion(t *testing.T) {
 	}
 	if _, err := toMemoryMetadata(map[string]any{"participants": "user"}); err == nil {
 		t.Fatal("toMemoryMetadata() accepted invalid participants")
+	}
+	if _, err := toMemoryMetadata(map[string]any{"source": "import"}); err == nil ||
+		!strings.Contains(err.Error(), `memory metadata "source" is unsupported`) {
+		t.Fatalf("toMemoryMetadata() unsupported key error = %v", err)
 	}
 }
