@@ -57,6 +57,7 @@ func (m *mockOCRExtractor) Close() error {
 type recordingExtractor struct {
 	format string
 	err    error
+	calls  int
 }
 
 func (r *recordingExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
@@ -64,6 +65,7 @@ func (r *recordingExtractor) Extract(ctx context.Context, data []byte, opts ...e
 }
 
 func (r *recordingExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	r.calls++
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -863,5 +865,113 @@ func TestWithTransformers(t *testing.T) {
 	}
 	if len(docs) == 0 {
 		t.Fatal("expected at least one document")
+	}
+}
+
+func TestReadResourcesUsesRootRelativePaths(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "docs")
+	nested := filepath.Join(root, "guides")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("create nested dir: %v", err)
+	}
+	filePath := filepath.Join(nested, "config.txt")
+	content := strings.Repeat("configuration line\n", 20)
+	if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	resources, err := New([]string{root}, WithRecursive(true), WithChunkSize(64)).ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources failed: %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("resources = %d, want 1", len(resources))
+	}
+	resource := resources[0]
+	if resource.Path != "docs/guides/config.txt" {
+		t.Fatalf("resource path = %q, want docs/guides/config.txt", resource.Path)
+	}
+	if resource.Content != content {
+		t.Fatalf("resource content was not preserved: got %q", resource.Content)
+	}
+	if len(resource.Documents) < 2 {
+		t.Fatalf("documents = %d, want multiple chunks", len(resource.Documents))
+	}
+	for _, doc := range resource.Documents {
+		if doc.Metadata[source.MetaFilePath] != filePath {
+			t.Fatalf("file path metadata = %v, want %s", doc.Metadata[source.MetaFilePath], filePath)
+		}
+		if doc.Metadata[source.MetaResourcePath] != "docs/guides/config.txt" {
+			t.Fatalf("resource path metadata = %v, want docs/guides/config.txt", doc.Metadata[source.MetaResourcePath])
+		}
+	}
+}
+
+func TestReadResourcesRejectsDuplicateRootNames(t *testing.T) {
+	parent := t.TempDir()
+	firstRoot := filepath.Join(parent, "first", "docs")
+	secondRoot := filepath.Join(parent, "second", "docs")
+	if err := os.MkdirAll(firstRoot, 0o755); err != nil {
+		t.Fatalf("create first root: %v", err)
+	}
+	if err := os.MkdirAll(secondRoot, 0o755); err != nil {
+		t.Fatalf("create second root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(firstRoot, "first.txt"), []byte("first"), 0o600); err != nil {
+		t.Fatalf("write first file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(secondRoot, "second.txt"), []byte("second"), 0o600); err != nil {
+		t.Fatalf("write second file: %v", err)
+	}
+
+	_, err := New([]string{firstRoot, secondRoot}).ReadResources(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "duplicate resource root") {
+		t.Fatalf("ReadResources error = %v, want duplicate resource root", err)
+	}
+}
+
+func TestReadResourcesPreservesEmptyFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "docs")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "empty.txt"), nil, 0o600); err != nil {
+		t.Fatalf("write empty file: %v", err)
+	}
+	resources, err := New([]string{root}).ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if len(resources) != 1 || resources[0].Path != "docs/empty.txt" ||
+		resources[0].Content != "" || len(resources[0].Documents) != 0 {
+		t.Fatalf("empty resource = %+v", resources)
+	}
+}
+
+func TestReadResourcesRunsExtractorOncePerFile(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "docs")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	filePath := filepath.Join(root, "manual.pdf")
+	if err := os.WriteFile(filePath, []byte("raw pdf snapshot"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	recorder := &recordingExtractor{format: extractor.FormatMarkdown}
+
+	resources, err := New([]string{root}, WithExtractor(recorder)).ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources failed: %v", err)
+	}
+	if recorder.calls != 1 {
+		t.Fatalf("extractor calls = %d, want 1", recorder.calls)
+	}
+	if len(resources) != 1 || resources[0].Content != "# extracted" {
+		t.Fatalf("unexpected resources: %+v", resources)
+	}
+	if resources[0].Path != "docs/manual.pdf" {
+		t.Fatalf("resource path = %q, want docs/manual.pdf", resources[0].Path)
 	}
 }

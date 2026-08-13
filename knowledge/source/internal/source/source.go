@@ -40,10 +40,18 @@ type ReaderConfig struct {
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
 	transformers           []transform.Transformer
+	chunk                  *bool
 }
 
 // ReaderOption is a functional option for configuring readers.
 type ReaderOption func(*ReaderConfig)
+
+// WithChunk enables or disables reader chunking.
+func WithChunk(enabled bool) ReaderOption {
+	return func(c *ReaderConfig) {
+		c.chunk = &enabled
+	}
+}
 
 // WithChunkSize sets the chunk size for readers.
 func WithChunkSize(size int) ReaderOption {
@@ -115,6 +123,11 @@ func buildReaderOptions(config *ReaderConfig) []reader.Option {
 
 	if len(config.transformers) > 0 {
 		opts = append(opts, reader.WithTransformers(config.transformers...))
+	}
+	if config.chunk != nil {
+		// Apply the explicit switch last so WithChunk(false) can produce a full
+		// representation even when the caller also supplied chunk sizing options.
+		opts = append(opts, reader.WithChunk(*config.chunk))
 	}
 
 	return opts

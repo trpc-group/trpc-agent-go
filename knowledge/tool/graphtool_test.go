@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	ctool "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -437,6 +438,35 @@ func TestGraphToolNodesPreservesNodeMetadata(t *testing.T) {
 	require.Equal(t, "MyFunc", got[0].Name)
 	require.Empty(t, got[0].Content)
 	require.Equal(t, map[string]any{"type": "Function"}, got[0].Metadata)
+}
+
+func TestGraphToolResultsSanitizeInternalResourceMetadata(t *testing.T) {
+	metadata := map[string]any{
+		"kind":                       "function",
+		source.MetaSourceID:          "source-1",
+		source.MetaSourceName:        "docs",
+		source.MetaResourcePath:      "docs/config.md",
+		source.MetaURI:               "hdfs://private-cluster/secret/config.md",
+		source.MetaFilePath:          "/private/root/docs/config.md",
+		source.MetaResourceStartLine: 10,
+		source.MetaResourceEndLine:   20,
+	}
+	result := graphTraverseToolResult(&graph.TraverseResult{
+		Nodes: []*graph.Node{{ID: "node-1", Content: "body", Metadata: metadata}},
+		Edges: []*graph.Edge{{FromID: "node-1", ToID: "node-2", Type: "CALLS", Metadata: metadata}},
+	}, true)
+
+	require.Equal(t, "body", result.Nodes[0].Content)
+	for _, projected := range []map[string]any{result.Nodes[0].Metadata, result.Edges[0].Metadata} {
+		require.Equal(t, "function", projected["kind"])
+		require.Equal(t, "source-1", projected[source.MetaSourceID])
+		require.Equal(t, "docs/config.md", projected[source.MetaResourcePath])
+		require.Equal(t, 10, projected[source.MetaResourceStartLine])
+		require.Equal(t, 20, projected[source.MetaResourceEndLine])
+		require.NotContains(t, projected, source.MetaSourceName)
+		require.NotContains(t, projected, source.MetaURI)
+		require.NotContains(t, projected, source.MetaFilePath)
+	}
 }
 
 func TestGraphTraverseToolReturnsKBError(t *testing.T) {

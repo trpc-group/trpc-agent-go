@@ -13,9 +13,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -197,19 +199,19 @@ func NewGraphFindPathsTool(kb knowledge.GraphKnowledge, opts ...GraphToolOption)
 }
 
 func graphTraverseToolResult(result *graph.TraverseResult, includeContent bool) *graph.TraverseResult {
-	if result == nil || includeContent {
+	if result == nil {
 		return result
 	}
 	return &graph.TraverseResult{
 		Nodes:     graphToolNodes(result.Nodes, includeContent),
-		Edges:     result.Edges,
+		Edges:     graphToolEdges(result.Edges),
 		Truncated: result.Truncated,
 		Message:   result.Message,
 	}
 }
 
 func graphPathToolResult(result *graph.PathResult, includeContent bool) *graph.PathResult {
-	if result == nil || includeContent {
+	if result == nil {
 		return result
 	}
 	paths := make([]*graph.Path, 0, len(result.Paths))
@@ -220,7 +222,7 @@ func graphPathToolResult(result *graph.PathResult, includeContent bool) *graph.P
 		}
 		paths = append(paths, &graph.Path{
 			Nodes: graphToolNodes(path.Nodes, includeContent),
-			Edges: path.Edges,
+			Edges: graphToolEdges(path.Edges),
 		})
 	}
 	return &graph.PathResult{
@@ -231,9 +233,6 @@ func graphPathToolResult(result *graph.PathResult, includeContent bool) *graph.P
 }
 
 func graphToolNodes(nodes []*graph.Node, includeContent bool) []*graph.Node {
-	if includeContent {
-		return nodes
-	}
 	cloned := make([]*graph.Node, 0, len(nodes))
 	for _, node := range nodes {
 		if node == nil {
@@ -241,10 +240,44 @@ func graphToolNodes(nodes []*graph.Node, includeContent bool) []*graph.Node {
 			continue
 		}
 		next := *node
-		next.Content = ""
+		if !includeContent {
+			next.Content = ""
+		}
+		next.Metadata = graphToolMetadata(node.Metadata)
 		cloned = append(cloned, &next)
 	}
 	return cloned
+}
+
+func graphToolEdges(edges []*graph.Edge) []*graph.Edge {
+	cloned := make([]*graph.Edge, 0, len(edges))
+	for _, edge := range edges {
+		if edge == nil {
+			cloned = append(cloned, nil)
+			continue
+		}
+		next := *edge
+		next.Metadata = graphToolMetadata(edge.Metadata)
+		cloned = append(cloned, &next)
+	}
+	return cloned
+}
+
+func graphToolMetadata(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	filtered := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		if !strings.HasPrefix(key, source.MetaPrefix) {
+			filtered[key] = value
+		}
+	}
+	copyResourceMetadata(filtered, metadata, nil)
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
 }
 
 func buildGraphToolOptions(

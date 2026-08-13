@@ -14,6 +14,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
+	"strconv"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -591,7 +593,95 @@ func filterMetadata(metadata map[string]any, excludeKeys map[string]struct{}) ma
 			filtered[k] = v
 		}
 	}
+	copyResourceMetadata(filtered, metadata, excludeKeys)
 	return filtered
+}
+
+// copyResourceMetadata exposes only the source-relative fields an agent needs
+// for a follow-up read or grep. Other internal metadata remains hidden.
+func copyResourceMetadata(target, metadata map[string]any, excludeKeys map[string]struct{}) {
+	if _, excluded := excludeKeys[source.MetaSourceID]; excluded {
+		return
+	}
+	if _, excluded := excludeKeys[source.MetaResourcePath]; excluded {
+		return
+	}
+	sourceID, ok := metadata[source.MetaSourceID].(string)
+	if !ok || strings.TrimSpace(sourceID) == "" {
+		return
+	}
+	resourcePath, ok := metadata[source.MetaResourcePath].(string)
+	if !ok {
+		return
+	}
+	resourcePath, ok = cleanResourceMetadataPath(resourcePath)
+	if !ok {
+		return
+	}
+	target[source.MetaSourceID] = strings.TrimSpace(sourceID)
+	target[source.MetaResourcePath] = resourcePath
+	startLine, startOK := positiveResourceMetadataInt(metadata[source.MetaResourceStartLine])
+	endLine, endOK := positiveResourceMetadataInt(metadata[source.MetaResourceEndLine])
+	if startOK && endOK && endLine < startLine {
+		return
+	}
+	if _, excluded := excludeKeys[source.MetaResourceStartLine]; startOK && !excluded {
+		target[source.MetaResourceStartLine] = startLine
+	}
+	if _, excluded := excludeKeys[source.MetaResourceEndLine]; endOK && !excluded {
+		target[source.MetaResourceEndLine] = endLine
+	}
+}
+
+func positiveResourceMetadataInt(value any) (int, bool) {
+	converted, err := strconv.Atoi(fmt.Sprint(value))
+	return converted, err == nil && converted > 0
+}
+
+func cleanResourceMetadataPath(value string) (string, bool) {
+	value = strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	if value == "" || strings.HasPrefix(value, "/") || strings.ContainsRune(value, '\x00') {
+		return "", false
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == ".." {
+			return "", false
+		}
+	}
+	cleaned := path.Clean(value)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") ||
+		strings.HasPrefix(cleaned, "/") || isResourceMetadataWindowsPath(cleaned) ||
+		hasResourceMetadataScheme(cleaned) {
+		return "", false
+	}
+	return cleaned, true
+}
+
+func isResourceMetadataWindowsPath(value string) bool {
+	if len(value) < 3 || value[1] != ':' || value[2] != '/' {
+		return false
+	}
+	return (value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z')
+}
+
+func hasResourceMetadataScheme(value string) bool {
+	colon := strings.IndexByte(value, ':')
+	if colon <= 0 {
+		return false
+	}
+	if slash := strings.IndexByte(value, '/'); slash >= 0 && slash < colon {
+		return false
+	}
+	for index := 0; index < colon; index++ {
+		character := value[index]
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(index > 0 && ((character >= '0' && character <= '9') || character == '+' || character == '-' || character == '.')) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func generateAgenticFilterPrompt(agenticFilterInfo map[string][]any) string {

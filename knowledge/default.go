@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"runtime"
@@ -28,10 +29,12 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/loader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/topk"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/resourcestore"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/retriever"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -52,6 +55,8 @@ const (
 // BuiltinKnowledge implements the Knowledge interface with a built-in retriever.
 type BuiltinKnowledge struct {
 	vectorStore   vectorstore.VectorStore
+	graphStore    graphstore.Store
+	resourceStore resourcestore.Store
 	embedder      embedder.Embedder
 	retriever     retriever.Retriever
 	queryEnhancer query.Enhancer
@@ -67,6 +72,8 @@ type BuiltinKnowledge struct {
 	processingIDMu   sync.Mutex                       // mutex for make consistent of read and write processingDocIDs
 	enableSourceSync bool                             // enable source sync, if true, will keep document in vectorstore be synced with source
 	dataOperationMu  sync.RWMutex                     // mutex for make sequence of data operations
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 // BuiltinDocumentInfo stores the basic information of a document for incremental sync
@@ -119,7 +126,6 @@ func New(opts ...Option) *BuiltinKnowledge {
 		opt(dk)
 	}
 
-	// Create built-in retriever if not provided.
 	if dk.retriever == nil {
 		// Use defaults if not specified.
 		if dk.queryEnhancer == nil {
@@ -197,6 +203,9 @@ func (dk *BuiltinKnowledge) AddSource(ctx context.Context, src source.Source, op
 	if src == nil {
 		return fmt.Errorf("source cannot be nil")
 	}
+	if dk.vectorStore == nil {
+		return fmt.Errorf("vector store not configured")
+	}
 
 	// check if source already exists
 	for _, dkSrc := range dk.sources {
@@ -204,13 +213,16 @@ func (dk *BuiltinKnowledge) AddSource(ctx context.Context, src source.Source, op
 			return fmt.Errorf("source with name %s already exists", src.Name())
 		}
 	}
+	if err := dk.validateResourceSourceIDs(append(slices.Clone(dk.sources), src)); err != nil {
+		return fmt.Errorf("invalid resource source: %w", err)
+	}
 	if dk.enableSourceSync {
 		if err := dk.refreshSourceDocInfo(ctx, src.Name()); err != nil {
 			return fmt.Errorf("failed to update vector store metadata: %w", err)
 		}
 	}
 	config := dk.buildLoadConfig(1, opts...)
-	if err := dk.loadSourceInternal(ctx, []source.Source{src}, config); err != nil {
+	if _, err := dk.loadSourceInternal(ctx, []source.Source{src}, config); err != nil {
 		return fmt.Errorf("failed to load source: %w", err)
 	}
 	if dk.enableSourceSync {
@@ -230,21 +242,30 @@ func (dk *BuiltinKnowledge) ReloadSource(ctx context.Context, src source.Source,
 	if src == nil {
 		return fmt.Errorf("source cannot be nil")
 	}
+	if dk.vectorStore == nil {
+		return fmt.Errorf("vector store not configured")
+	}
 
 	// Find the source by name
 	sourceName := src.Name()
 	var oldSource source.Source
+	sourceIndex := -1
 
-	// find and remove old source from sources list
+	// Keep the old source registered until the replacement is fully loaded.
 	for i, existingSource := range dk.sources {
 		if existingSource.Name() == sourceName {
 			oldSource = existingSource
-			dk.sources = append(dk.sources[:i], dk.sources[i+1:]...)
+			sourceIndex = i
 			break
 		}
 	}
 	if oldSource == nil {
 		return fmt.Errorf("source with name %s not found", sourceName)
+	}
+	candidateSources := slices.Clone(dk.sources)
+	candidateSources[sourceIndex] = src
+	if err := dk.validateResourceSourceIDs(candidateSources); err != nil {
+		return fmt.Errorf("invalid resource source: %w", err)
 	}
 
 	config := dk.buildLoadConfig(1, opts...)
@@ -259,16 +280,22 @@ func (dk *BuiltinKnowledge) ReloadSource(ctx context.Context, src source.Source,
 			return err
 		}
 	}
+	_, oldHasResources := oldSource.(source.ResourceSource)
+	_, newHasResources := src.(source.ResourceSource)
+	if oldHasResources && !newHasResources {
+		if err := dk.deleteStoredResourceSource(ctx, sourceName); err != nil {
+			return fmt.Errorf("failed to delete replaced source resources: %w", err)
+		}
+	}
 
-	// Add the new source to the sources list
-	dk.sources = append(dk.sources, src)
+	dk.sources[sourceIndex] = src
 	return nil
 }
 
 // syncReloadSource reloads a source using incremental sync strategy
 func (dk *BuiltinKnowledge) syncReloadSource(
 	ctx context.Context,
-	oldSource source.Source,
+	targetSource source.Source,
 	sourceName string,
 	config *loadConfig,
 ) error {
@@ -282,14 +309,17 @@ func (dk *BuiltinKnowledge) syncReloadSource(
 	dk.markSourceUnprocessed(sourceName)
 
 	// Load source with incremental sync
-	if err := dk.loadSourceInternal(ctx, []source.Source{oldSource}, config); err != nil {
+	resourcePaths, err := dk.loadSourceInternal(ctx, []source.Source{targetSource}, config)
+	if err != nil {
 		return fmt.Errorf("failed to reload source %s: %w", sourceName, err)
 	}
 
 	// Cleanup orphan documents
 	if err := dk.cleanupOrphanDocuments(ctx); err != nil {
-		log.WarnfContext(ctx,
-			"Failed to cleanup orphan documents after reloading source %s: %v", sourceName, err)
+		return fmt.Errorf("failed to cleanup orphan documents after reloading source %s: %w", sourceName, err)
+	}
+	if err := dk.cleanupStaleResources(ctx, resourcePaths); err != nil {
+		return fmt.Errorf("failed to cleanup stale resources after reloading source %s: %w", sourceName, err)
 	}
 
 	// refresh DocumentInfo to load latest document info
@@ -319,8 +349,12 @@ func (dk *BuiltinKnowledge) reloadSource(
 	}
 
 	// Load source
-	if err := dk.loadSourceInternal(ctx, []source.Source{targetSource}, config); err != nil {
+	resourcePaths, err := dk.loadSourceInternal(ctx, []source.Source{targetSource}, config)
+	if err != nil {
 		return fmt.Errorf("failed to reload source %s: %w", sourceName, err)
+	}
+	if err := dk.cleanupStaleResources(ctx, resourcePaths); err != nil {
+		return fmt.Errorf("failed to cleanup stale resources after reloading source %s: %w", sourceName, err)
 	}
 
 	log.InfofContext(ctx, "Successfully reloaded source %s directly", sourceName)
@@ -328,7 +362,14 @@ func (dk *BuiltinKnowledge) reloadSource(
 }
 
 // loadSourceInternal loads sources with proper concurrency handling
-func (dk *BuiltinKnowledge) loadSourceInternal(ctx context.Context, sources []source.Source, config *loadConfig) error {
+func (dk *BuiltinKnowledge) loadSourceInternal(
+	ctx context.Context,
+	sources []source.Source,
+	config *loadConfig,
+) (map[string][]string, error) {
+	if err := dk.validateResourceSourceIDs(sources); err != nil {
+		return nil, err
+	}
 	dk.processingDocIDs = sync.Map{}
 	defer func() {
 		// reset processingDocIDs after loading sources
@@ -336,17 +377,18 @@ func (dk *BuiltinKnowledge) loadSourceInternal(ctx context.Context, sources []so
 	}()
 
 	if config.srcParallelism > 1 || config.docParallelism > 1 {
-		_, err := dk.loadConcurrent(ctx, config, sources)
-		return err
+		return dk.loadConcurrent(ctx, config, sources)
 	}
-	_, err := dk.loadSequential(ctx, config, sources)
-	return err
+	return dk.loadSequential(ctx, config, sources)
 }
 
 // RemoveSource removes a source from the knowledge base by name.
 func (dk *BuiltinKnowledge) RemoveSource(ctx context.Context, sourceName string) error {
 	dk.dataOperationMu.Lock()
 	defer dk.dataOperationMu.Unlock()
+	if dk.vectorStore == nil {
+		return fmt.Errorf("vector store not configured")
+	}
 
 	// Find and remove source from sources list
 	var targetSource source.Source
@@ -378,6 +420,11 @@ func (dk *BuiltinKnowledge) RemoveSource(ctx context.Context, sourceName string)
 			return fmt.Errorf("failed to update vector store metadata: %w", err)
 		}
 	}
+	if _, ok := targetSource.(source.ResourceSource); ok {
+		if err := dk.deleteStoredResourceSource(ctx, sourceName); err != nil {
+			return fmt.Errorf("failed to delete source resources: %w", err)
+		}
+	}
 	dk.sources = append(dk.sources[:sourceIndex], dk.sources[sourceIndex+1:]...)
 	return nil
 }
@@ -406,6 +453,9 @@ func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error 
 }
 
 func (dk *BuiltinKnowledge) loadWithRecreate(ctx context.Context, config *loadConfig) error {
+	if err := dk.validateResourceSourceIDs(dk.sources); err != nil {
+		return fmt.Errorf("failed to validate sources: %w", err)
+	}
 	// clear vector store data
 	count, err := dk.vectorStore.Count(ctx)
 	if err != nil {
@@ -421,8 +471,12 @@ func (dk *BuiltinKnowledge) loadWithRecreate(ctx context.Context, config *loadCo
 		dk.clearVectorStoreMetadata()
 	}
 
-	if err := dk.loadSourceInternal(ctx, dk.sources, config); err != nil {
+	resourcePaths, err := dk.loadSourceInternal(ctx, dk.sources, config)
+	if err != nil {
 		return fmt.Errorf("failed to load source: %w", err)
+	}
+	if err := dk.cleanupStaleResources(ctx, resourcePaths); err != nil {
+		return fmt.Errorf("failed to cleanup stale resources: %w", err)
 	}
 
 	if dk.enableSourceSync {
@@ -441,13 +495,17 @@ func (dk *BuiltinKnowledge) load(ctx context.Context, config *loadConfig) error 
 		}
 	}
 
-	if err := dk.loadSourceInternal(ctx, dk.sources, config); err != nil {
+	resourcePaths, err := dk.loadSourceInternal(ctx, dk.sources, config)
+	if err != nil {
 		return fmt.Errorf("failed to load source: %w", err)
 	}
 
 	if dk.enableSourceSync {
 		if err := dk.cleanupOrphanDocuments(ctx); err != nil {
 			return fmt.Errorf("failed to cleanup orphan documents: %w", err)
+		}
+		if err := dk.cleanupStaleResources(ctx, resourcePaths); err != nil {
+			return fmt.Errorf("failed to cleanup stale resources: %w", err)
 		}
 		if err := dk.refreshAllDocInfo(ctx); err != nil {
 			return fmt.Errorf("failed to update vector store metadata: %w", err)
@@ -460,7 +518,7 @@ func (dk *BuiltinKnowledge) load(ctx context.Context, config *loadConfig) error 
 func (dk *BuiltinKnowledge) loadSequential(
 	ctx context.Context,
 	config *loadConfig,
-	sources []source.Source) ([]string, error) {
+	sources []source.Source) (map[string][]string, error) {
 	// Timing variables.
 	startTime := time.Now()
 
@@ -475,7 +533,7 @@ func (dk *BuiltinKnowledge) loadSequential(
 		sourceNames = append(sourceNames, s.Name())
 	}
 
-	var allAddedIDs []string
+	resourcePaths := make(map[string][]string)
 	var processedDocs int
 	reporter := newLoadReporter(config, sourceNames, startTime, sizeBuckets, func() int { return processedDocs })
 	defer reporter.Close()
@@ -486,12 +544,15 @@ func (dk *BuiltinKnowledge) loadSequential(
 		log.InfofContext(ctx, "Loading source %d/%d: %s (type: %s)",
 			i+1, totalSources, sourceName, sourceType)
 
-		docs, err := src.ReadDocuments(ctx)
+		docs, paths, err := dk.readSourceDocuments(ctx, src)
 		if err != nil {
 			log.ErrorfContext(ctx, "Failed to read documents from source %s: %v",
 				sourceName, err)
 			reporter.Error(ctx, LoadProgressEvent{SourceName: sourceName}, err)
 			return nil, fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
+		}
+		if paths != nil {
+			resourcePaths[sourceName] = paths
 		}
 
 		log.InfofContext(ctx, "Fetched %d document(s) from source %s", len(docs), sourceName)
@@ -529,7 +590,6 @@ func (dk *BuiltinKnowledge) loadSequential(
 				return nil, fmt.Errorf("failed to add document from source %s: %w", sourceName, err)
 			}
 
-			allAddedIDs = append(allAddedIDs, doc.ID)
 			processedDocs++
 
 			srcProcessed := j + 1
@@ -552,14 +612,14 @@ func (dk *BuiltinKnowledge) loadSequential(
 		elapsedTotal, totalSources)
 
 	reporter.Done(ctx)
-	return allAddedIDs, nil
+	return resourcePaths, nil
 }
 
 // loadSourcesConcurrent loads sources concurrently
 func (dk *BuiltinKnowledge) loadConcurrent(
 	ctx context.Context,
 	config *loadConfig,
-	sources []source.Source) ([]string, error) {
+	sources []source.Source) (map[string][]string, error) {
 	// Create worker pool for source processing
 	srcPool, err := ants.NewPool(config.srcParallelism)
 	if err != nil {
@@ -575,7 +635,7 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 	defer docPool.Release()
 
 	var wg sync.WaitGroup
-	var allAddedIDs []string
+	resourcePaths := make(map[string][]string)
 	var mu sync.Mutex
 	errCh := make(chan error, len(sources))
 	var globalProcessed atomic.Int64
@@ -602,11 +662,16 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 			sourceType := source.Type()
 			log.InfofContext(ctx, "Loading source %d/%d: %s (type: %s)",
 				srcIdx+1, len(sources), sourceName, sourceType)
-			docs, err := source.ReadDocuments(ctx)
+			docs, paths, err := dk.readSourceDocuments(ctx, source)
 			if err != nil {
 				reporter.Error(ctx, LoadProgressEvent{SourceName: sourceName}, err)
 				errCh <- fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
 				return
+			}
+			if paths != nil {
+				mu.Lock()
+				resourcePaths[sourceName] = paths
+				mu.Unlock()
 			}
 			log.InfofContext(ctx, "Fetched %d document(s) from source %s", len(docs), sourceName)
 			processed, err := dk.processDocuments(ctx, docs, docPool, source, &globalProcessed, reporter)
@@ -621,12 +686,6 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 			}
 			log.InfofContext(ctx, "Successfully loaded source %s", sourceName)
 
-			// Collect document IDs
-			mu.Lock()
-			for _, doc := range docs {
-				allAddedIDs = append(allAddedIDs, doc.ID)
-			}
-			mu.Unlock()
 		})
 		if err != nil {
 			wg.Done()
@@ -646,7 +705,7 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 
 	reporter.Done(ctx)
 
-	return allAddedIDs, nil
+	return resourcePaths, nil
 }
 
 // processDocuments embeds and stores all documents from a single source using
@@ -889,8 +948,24 @@ func (dk *BuiltinKnowledge) resetDocumentID(doc *document.Document, src source.S
 	}
 
 	// generate document ID by source name, uri, content, chunk index and source metadata
-	// we cal hash with metadata that user set
-	doc.ID = generateDocumentID(src.Name(), uri, doc.Content, chunkIndexInt, src.GetMetadata())
+	identityMetadata := src.GetMetadata()
+	if resourcePath, ok := doc.Metadata[source.MetaResourcePath]; ok {
+		withResourceIdentity := make(map[string]any, len(identityMetadata)+3)
+		for key, value := range identityMetadata {
+			withResourceIdentity[key] = value
+		}
+		withResourceIdentity[source.MetaResourcePath] = resourcePath
+		if startLine, ok := doc.Metadata[source.MetaResourceStartLine]; ok {
+			withResourceIdentity[source.MetaResourceStartLine] = startLine
+		}
+		if endLine, ok := doc.Metadata[source.MetaResourceEndLine]; ok {
+			withResourceIdentity[source.MetaResourceEndLine] = endLine
+		}
+		identityMetadata = withResourceIdentity
+	}
+	// Hash user metadata and resource location so incremental sync refreshes
+	// stored line references when the source text shifts around an unchanged chunk.
+	doc.ID = generateDocumentID(src.Name(), uri, doc.Content, chunkIndexInt, identityMetadata)
 	return nil
 }
 
@@ -1134,21 +1209,34 @@ func hasSearchFilter(filter *SearchFilter) bool {
 
 // Close closes the knowledge base and releases resources.
 func (dk *BuiltinKnowledge) Close() error {
-	dk.dataOperationMu.Lock()
-	defer dk.dataOperationMu.Unlock()
+	dk.closeOnce.Do(func() {
+		dk.dataOperationMu.Lock()
+		defer dk.dataOperationMu.Unlock()
 
-	// Close components if they support closing.
-	if dk.retriever != nil {
-		if err := dk.retriever.Close(); err != nil {
-			return fmt.Errorf("failed to close retriever: %w", err)
+		var errs []error
+		if dk.retriever != nil {
+			if err := dk.retriever.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to close retriever: %w", err))
+			}
 		}
-	}
-	if dk.vectorStore != nil {
-		if err := dk.vectorStore.Close(); err != nil {
-			return fmt.Errorf("failed to close vector store: %w", err)
+		if dk.vectorStore != nil {
+			if err := dk.vectorStore.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to close vector store: %w", err))
+			}
 		}
-	}
-	return nil
+		if dk.graphStore != nil {
+			if err := dk.graphStore.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to close graph store: %w", err))
+			}
+		}
+		if dk.resourceStore != nil {
+			if err := dk.resourceStore.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to close resource store: %w", err))
+			}
+		}
+		dk.closeErr = errors.Join(errs...)
+	})
+	return dk.closeErr
 }
 
 // convertQueryFilter converts retriever.QueryFilter to vectorstore.SearchFilter.
