@@ -373,16 +373,16 @@ configuration when present, and extracts ordinary user facts and events from
 user messages. When collecting a session delta, the enabled option uses only
 the primary choice from each model response event; alternative choices are not
 treated as consecutive assistant replies. The extractor then considers
-eligible user/assistant pairs in the
-extraction delta in chronological order. The deterministic eligibility check
-accepts a structured request only when the assistant response contains at
-least two Markdown or numbered list items. It also accepts a quantitative
-question when the response introduces a numeric answer that is not already in
-the question. A single prose result, including a classification, translation,
-conversion, or summary, does not currently trigger the second stage unless it
-has the required list shape. Eligible pairs are considered in chronological
-order within a private per-request pair and source-size budget. Candidates past
-that budget are omitted because assistant-result extraction is best effort.
+eligible user/assistant pairs in the extraction delta in chronological order.
+The deterministic prefilter is language-neutral and examines response shape,
+not request keywords: it selects an assistant response containing at least two
+Markdown or numbered list items, or one that introduces a numeric token not
+already present in the user request. The second-stage prompt makes the final
+semantic decision about whether the result is durable and reusable. A prose
+result without a list or a newly introduced number does not currently trigger
+the second stage. Eligible pairs are considered in chronological order within
+a private per-request pair and source-size budget. Candidates past that budget
+are omitted because assistant-result extraction is best effort.
 The selected pairs are combined into one second request that exposes only the
 private `memory_assistant_episode` tool. This tool is never visible to the
 application Agent. An application policy configured through `WithPrompt` or

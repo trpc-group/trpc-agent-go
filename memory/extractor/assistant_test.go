@@ -1653,13 +1653,31 @@ func TestStrongAssistantEpisodeCandidate(t *testing.T) {
 	}{
 		{
 			name:      "structured list",
-			user:      "Recommend options.",
+			user:      "Which option should I use?",
 			assistant: "- Alpha\n- Beta",
 			want:      true,
 		},
 		{
+			name:      "non english structured list",
+			user:      "どの選択肢を使うべきですか？",
+			assistant: "• Alpha\n• Beta",
+			want:      true,
+		},
+		{
+			name:      "plus marker list",
+			user:      "Which option should I use?",
+			assistant: "+ Alpha\n+ Beta",
+			want:      true,
+		},
+		{
+			name:      "unicode numbered list",
+			user:      "ما الخيارات المتاحة؟",
+			assistant: "١. Alpha\n٢. Beta",
+			want:      true,
+		},
+		{
 			name:      "structured response without list",
-			user:      "Recommend options.",
+			user:      "Which option should I use?",
 			assistant: "Alpha is the best option.",
 			want:      false,
 		},
@@ -1667,6 +1685,12 @@ func TestStrongAssistantEpisodeCandidate(t *testing.T) {
 			name:      "quantity",
 			user:      "How many options are available?",
 			assistant: "There are 17 options.",
+			want:      true,
+		},
+		{
+			name:      "non english quantity",
+			user:      "كم عدد الخيارات المتاحة؟",
+			assistant: "هناك ١٧ خيارًا.",
 			want:      true,
 		},
 		{
@@ -1679,6 +1703,12 @@ func TestStrongAssistantEpisodeCandidate(t *testing.T) {
 			name:      "acknowledgment",
 			user:      "Thanks.",
 			assistant: "You're welcome.",
+			want:      false,
+		},
+		{
+			name:      "one list item",
+			user:      "Show the result.",
+			assistant: "1. Alpha",
 			want:      false,
 		},
 	}

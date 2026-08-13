@@ -341,12 +341,12 @@ memoryService := memoryinmemory.NewMemoryService(
 配置了 `WithUpdatePolicy` 或 enabled tools，也会应用对应的工具约束，并且仅从
 user message 提取普通用户事实和事件。收集 session delta 时，功能开启后只使用每个
 模型响应事件的 primary choice，不会把同一响应的备选 choice 当作连续的 assistant
-回复。随后，提取器会按时间顺序检查当前
-extraction delta 中符合条件的 user/assistant pair。确定性的 eligibility 检查仅在
-assistant 返回至少两个 Markdown 或编号列表项时接受结构化请求；对于数量问题，
-则要求回答引入一个未出现在问题中的数值答案。单段 prose 形式的分类、翻译、转换
-或总结目前不会触发第二阶段，除非回答同时满足上述列表形态。Eligible pair 按时间
-顺序进入私有的单次请求 pair 数量和 source 体积预算；超出预算的候选会被忽略，因为
+回复。随后，提取器会按时间顺序检查当前 extraction delta 中符合条件的
+user/assistant pair。确定性预筛选与语言无关，只检查响应形态而不匹配请求关键词：
+assistant 响应包含至少两个 Markdown 或编号列表项，或者引入了 user 请求中没有的
+数值 token 时，该 pair 会进入第二阶段。第二阶段 prompt 再对结果是否持久、可复用
+作最终语义判断。没有列表或新数值的单段 prose 结果目前不会触发第二阶段。
+Eligible pair 按时间顺序进入私有的单次请求 pair 数量和 source 体积预算；超出预算的候选会被忽略，因为
 assistant 结果提取采用 best-effort 语义。入选的 pair 会合并到一次第二阶段请求中，
 并且只暴露私有的 `memory_assistant_episode` 工具。该工具不会暴露给应用的 Agent。
 通过 `WithPrompt` 或 `SetPrompt` 配置的应用提取约束同样适用于第二阶段请求。普通

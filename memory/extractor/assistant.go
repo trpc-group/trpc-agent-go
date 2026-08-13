@@ -50,22 +50,6 @@ const (
 )
 
 var (
-	assistantEpisodeListItemPattern = regexp.MustCompile(
-		`(?m)^\s*(?:[-*•]\s+|\d{1,2}[.)]\s+)\S`,
-	)
-	assistantEpisodeStructuredRequestPattern = regexp.MustCompile(
-		`(?i)\b(?:recommend(?:ation)?s?|suggest(?:ion)?s?|examples?|list|` +
-			`options?|choices?|give\s+me|show\s+me|what\s+(?:are|were)|` +
-			`extract|identify|predict|classif(?:y|ication)|summari[sz]e|` +
-			`translate|convert)\b|` +
-			`推荐|建议|示例|例子|列出|清单|选项|有哪些|提取|识别|分类|总结|翻译|转换`,
-	)
-	assistantEpisodeQuantityRequestPattern = regexp.MustCompile(
-		`(?i)\b(?:how\s+(?:many|much|long|often)|` +
-			`what\s+(?:number|amount|duration|percentage|percent))\b|` +
-			`多少|几次|多久|多长|百分之`,
-	)
-	assistantEpisodeNumberPattern   = regexp.MustCompile(`\b\d+(?:[.,]\d+)*(?:%|\b)`)
 	assistantEpisodeQuantityPattern = regexp.MustCompile(
 		`(?i)([+\-−]?)(?:((?:` + assistantEpisodeCurrencyPattern + `))[ \t]*)?` +
 			`([+\-−]?)([0-9]+(?:[.,][0-9]+)*)` +
@@ -599,23 +583,110 @@ func trimSplitUTF8Start(text string, start int) int {
 }
 
 func strongAssistantEpisodeCandidate(userText, assistantText string) bool {
-	if assistantEpisodeStructuredRequestPattern.MatchString(userText) &&
-		len(assistantEpisodeListItemPattern.FindAllStringIndex(assistantText, 3)) >= 2 {
+	if assistantEpisodeListItemCount(assistantText, 2) >= 2 {
 		return true
 	}
-	if !assistantEpisodeQuantityRequestPattern.MatchString(userText) {
-		return false
-	}
-	userNumbers := make(map[string]struct{})
-	for _, value := range assistantEpisodeNumberPattern.FindAllString(userText, -1) {
-		userNumbers[value] = struct{}{}
-	}
-	for _, value := range assistantEpisodeNumberPattern.FindAllString(assistantText, -1) {
+	userNumbers := assistantEpisodeNumericTokens(userText)
+	for value := range assistantEpisodeNumericTokens(assistantText) {
 		if _, ok := userNumbers[value]; !ok {
 			return true
 		}
 	}
 	return false
+}
+
+func assistantEpisodeListItemCount(text string, limit int) int {
+	count := 0
+	for _, line := range strings.Split(text, "\n") {
+		if !assistantEpisodeListItem(line) {
+			continue
+		}
+		count++
+		if count >= limit {
+			return count
+		}
+	}
+	return count
+}
+
+func assistantEpisodeListItem(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+
+	runes := []rune(line)
+	markerEnd := 0
+	switch runes[0] {
+	case '-', '*', '+', '•':
+		markerEnd = 1
+	default:
+		for markerEnd < len(runes) && unicode.IsDigit(runes[markerEnd]) {
+			markerEnd++
+		}
+		if markerEnd == 0 || markerEnd > 2 || markerEnd >= len(runes) ||
+			(runes[markerEnd] != '.' && runes[markerEnd] != ')') {
+			return false
+		}
+		markerEnd++
+	}
+
+	if markerEnd >= len(runes) || !unicode.IsSpace(runes[markerEnd]) {
+		return false
+	}
+	return strings.TrimSpace(string(runes[markerEnd+1:])) != ""
+}
+
+func assistantEpisodeNumericTokens(text string) map[string]struct{} {
+	runes := []rune(text)
+	tokens := make(map[string]struct{})
+	for i := 0; i < len(runes); {
+		if !unicode.IsDigit(runes[i]) {
+			i++
+			continue
+		}
+		start := i
+		i++
+		for i < len(runes) {
+			if unicode.IsDigit(runes[i]) {
+				i++
+				continue
+			}
+			if assistantEpisodeNumberSeparator(runes[i]) && i+1 < len(runes) &&
+				unicode.IsDigit(runes[i+1]) {
+				i++
+				continue
+			}
+			break
+		}
+		if assistantEpisodeNumberedListMarker(runes, start, i) {
+			continue
+		}
+		if i < len(runes) && (runes[i] == '%' || runes[i] == '％') {
+			i++
+		}
+		tokens[string(runes[start:i])] = struct{}{}
+	}
+	return tokens
+}
+
+func assistantEpisodeNumberedListMarker(runes []rune, start, end int) bool {
+	for i := start - 1; i >= 0 && runes[i] != '\n'; i-- {
+		if !unicode.IsSpace(runes[i]) {
+			return false
+		}
+	}
+	return end+1 < len(runes) && (runes[end] == '.' || runes[end] == ')') &&
+		unicode.IsSpace(runes[end+1])
+}
+
+func assistantEpisodeNumberSeparator(value rune) bool {
+	switch value {
+	case '.', ',', '．', '，', '٫', '٬':
+		return true
+	default:
+		return false
+	}
 }
 
 func validateAssistantEpisodeQuantities(memoryText, source string) error {
