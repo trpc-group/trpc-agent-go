@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,6 +56,25 @@ func (m *scriptedModel) GenerateContent(
 
 func (m *scriptedModel) Info() model.Info { return model.Info{Name: "scripted"} }
 
+type signalingFailureModel struct {
+	calls     atomic.Int32
+	firstCall chan struct{}
+}
+
+func (m *signalingFailureModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	if m.calls.Add(1) == 1 {
+		close(m.firstCall)
+	}
+	return nil, errors.New("temporary model failure")
+}
+
+func (m *signalingFailureModel) Info() model.Info {
+	return model.Info{Name: "signaling-failure"}
+}
+
 func TestLiveGeneratorCountsRetriesAndUsage(t *testing.T) {
 	client := &scriptedModel{failures: 1}
 	gate := gateFileConfig{MaxCalls: 3, MaxTokens: 1000, MaxCostCNY: 1}
@@ -72,6 +92,75 @@ func TestLiveGeneratorCountsRetriesAndUsage(t *testing.T) {
 	assert.Equal(t, 10, result.Usage.InputTokens)
 	assert.Equal(t, 2, result.Usage.OutputTokens)
 	assert.Equal(t, 2, client.calls)
+}
+
+func TestRetryCancellationDoesNotCountUnsentCalls(t *testing.T) {
+	t.Run("evaluation", func(t *testing.T) {
+		client := &signalingFailureModel{firstCall: make(chan struct{})}
+		budget := newLiveBudget(
+			gateFileConfig{MaxCalls: 10, MaxTokens: 10000, MaxCostCNY: 10},
+			optimizerBudgetConfig{},
+		)
+		generator := &liveGenerator{
+			model: client,
+			cfg: liveConfig{
+				TimeoutSeconds: 1, MaxRetries: 2,
+				InputCNYPerMillion: 1, OutputCNYPerMillion: 2,
+			},
+			budget: budget,
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := generator.Generate(ctx, "prompt", "input")
+			done <- err
+		}()
+
+		<-client.firstCall
+		time.Sleep(25 * time.Millisecond)
+		cancel()
+		err := <-done
+
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, int32(1), client.calls.Load())
+		assert.Equal(t, 1, budget.snapshot(budgetStageEvaluation).Calls)
+		assert.Equal(t, 1, budget.snapshot("").Calls)
+	})
+
+	t.Run("optimizer", func(t *testing.T) {
+		client := &signalingFailureModel{firstCall: make(chan struct{})}
+		budget := newLiveBudget(
+			gateFileConfig{MaxCalls: 10, MaxTokens: 10000, MaxCostCNY: 10},
+			optimizerBudgetConfig{MaxCalls: 3, MaxTokens: 10000, MaxCostCNY: 1},
+		)
+		retrying := &budgetedRetryModel{
+			model: client, timeoutSeconds: 1, maxRetries: 2,
+			inputCNYPerMillion: 1, outputCNYPerMillion: 2,
+			budget: budget,
+		}
+		maxTokens := 32
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := retrying.GenerateContent(ctx, &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("optimize"),
+				},
+				GenerationConfig: model.GenerationConfig{MaxTokens: &maxTokens},
+			})
+			done <- err
+		}()
+
+		<-client.firstCall
+		time.Sleep(25 * time.Millisecond)
+		cancel()
+		err := <-done
+
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, int32(1), client.calls.Load())
+		assert.Equal(t, 1, budget.snapshot(budgetStageOptimizer).Calls)
+		assert.Equal(t, 1, budget.snapshot("").Calls)
+	})
 }
 
 func TestLiveGeneratorStopsAtCallBudget(t *testing.T) {

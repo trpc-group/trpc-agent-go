@@ -208,13 +208,30 @@ func runPipeline(ctx context.Context, configPath, mode string) error {
 			promptIterErr,
 			budgetUsage(budget).reportUsage(),
 		)
-		if writeErr := finalizeAndWriteReport(cfg, report); writeErr != nil {
+		if writeErr := finalizeAndWriteReport(
+			cfg,
+			report,
+			evaluationAPIKey,
+			optimizerAPIKey,
+		); writeErr != nil {
+			safePromptIterErr := sanitizeReportError(
+				promptIterErr,
+				evaluationAPIKey,
+				optimizerAPIKey,
+			)
 			return errors.Join(
-				fmt.Errorf("run PromptIter: %w", promptIterErr),
+				fmt.Errorf("run PromptIter: %w", safePromptIterErr),
 				writeErr,
 			)
 		}
-		return fmt.Errorf("run PromptIter: %w", promptIterErr)
+		return fmt.Errorf(
+			"run PromptIter: %w",
+			sanitizeReportError(
+				promptIterErr,
+				evaluationAPIKey,
+				optimizerAPIKey,
+			),
+		)
 	}
 
 	candidateStarted := time.Now()
@@ -314,7 +331,12 @@ func runPipeline(ctx context.Context, configPath, mode string) error {
 		},
 		SelectedPrompt: selectedPrompt,
 	}
-	return finalizeAndWriteReport(cfg, report)
+	return finalizeAndWriteReport(
+		cfg,
+		report,
+		evaluationAPIKey,
+		optimizerAPIKey,
+	)
 }
 
 func failedPromptIterAudit(
@@ -499,13 +521,18 @@ func summarizeAttributions(group []CaseEvaluation) map[FailureCategory]int {
 	return summary
 }
 
-func finalizeAndWriteReport(cfg *loadedConfig, report *optimizationReport) error {
+func finalizeAndWriteReport(
+	cfg *loadedConfig,
+	report *optimizationReport,
+	secrets ...string,
+) error {
 	if cfg == nil {
 		return errors.New("loaded config is nil")
 	}
 	if report == nil {
 		return errors.New("optimization report is nil")
 	}
+	sanitizeReportErrors(report, secrets...)
 	fingerprint, err := reportFingerprint(report)
 	if err != nil {
 		return err
@@ -513,6 +540,58 @@ func finalizeAndWriteReport(cfg *loadedConfig, report *optimizationReport) error
 	report.DeterministicFingerprint = fingerprint
 	outputDir := resolvePath(cfg.BaseDir, cfg.OutputDir)
 	return writeReports(outputDir, report)
+}
+
+func sanitizeReportErrors(report *optimizationReport, secrets ...string) {
+	if report == nil {
+		return
+	}
+	report.Error = sanitizeReportText(report.Error, secrets...)
+	report.Resources.BaselineEvaluation.Error = sanitizeReportText(
+		report.Resources.BaselineEvaluation.Error,
+		secrets...,
+	)
+	report.Resources.Optimizer.Error = sanitizeReportText(
+		report.Resources.Optimizer.Error,
+		secrets...,
+	)
+	report.Resources.CandidateEvaluation.Error = sanitizeReportText(
+		report.Resources.CandidateEvaluation.Error,
+		secrets...,
+	)
+	report.Resources.Total.Error = sanitizeReportText(
+		report.Resources.Total.Error,
+		secrets...,
+	)
+	report.PromptIter.Error = sanitizeReportText(
+		report.PromptIter.Error,
+		secrets...,
+	)
+	for i := range report.Gate.Checks {
+		report.Gate.Checks[i].Detail = sanitizeReportText(
+			report.Gate.Checks[i].Detail,
+			secrets...,
+		)
+	}
+}
+
+func sanitizeReportError(err error, secrets ...string) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New(sanitizeReportText(err.Error(), secrets...))
+}
+
+func sanitizeReportText(text string, secrets ...string) string {
+	sanitized := redactSensitiveDisclosures(text)
+	for _, secret := range secrets {
+		secret = strings.TrimSpace(secret)
+		if secret == "" {
+			continue
+		}
+		sanitized = strings.ReplaceAll(sanitized, secret, sensitiveRedaction)
+	}
+	return sanitized
 }
 
 func reportFingerprint(report *optimizationReport) (string, error) {

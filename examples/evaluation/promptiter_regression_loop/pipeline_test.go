@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -178,6 +179,93 @@ func TestRunPipelineLiveOptimizerFailsClosedWithAuditReport(t *testing.T) {
 	assert.Contains(t, report.Gate.FailedChecks, "optimizer_completed")
 	assert.Equal(t, 1, report.Resources.Optimizer.Usage.Calls)
 	assert.Greater(t, calls.Load(), int32(1))
+}
+
+func TestRunPipelineRedactsOptimizerCredentialFromErrorReports(t *testing.T) {
+	evaluationServer := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		_ *http.Request,
+	) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"evaluation-response",
+			"object":"chat.completion",
+			"created":1,
+			"model":"evaluation-test-model",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"safe response"},
+				"finish_reason":"stop"
+			}],
+			"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}
+		}`))
+	}))
+	defer evaluationServer.Close()
+
+	const optimizerSecret = "optimizer-secret-value-12345678"
+	var optimizerCalls atomic.Int32
+	optimizerServer := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		optimizerCalls.Add(1)
+		assert.Equal(t, "Bearer "+optimizerSecret, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(
+			w,
+			`{"error":{"message":"gateway echoed %s","type":"server_error"}}`,
+			optimizerSecret,
+		)
+	}))
+	defer optimizerServer.Close()
+
+	dataDir, err := filepath.Abs("data")
+	require.NoError(t, err)
+	configData, err := os.ReadFile(filepath.Join(dataDir, "config.json"))
+	require.NoError(t, err)
+	var cfg pipelineConfig
+	require.NoError(t, json.Unmarshal(configData, &cfg))
+	cfg.PromptFile = filepath.Join(dataDir, "prompts", "baseline_prompt.md")
+	cfg.TrainEvalSet = filepath.Join(dataDir, "train.evalset.json")
+	cfg.ValidationEvalSet = filepath.Join(dataDir, "validation.evalset.json")
+	cfg.MetricsFile = filepath.Join(dataDir, "metrics.json")
+	cfg.PromptIterFile = filepath.Join(dataDir, "promptiter.json")
+	cfg.OutputDir = filepath.Join(t.TempDir(), "output")
+	cfg.Live.Model = "evaluation-test-model"
+	cfg.Live.BaseURL = evaluationServer.URL
+	cfg.Live.APIKeyEnv = "PROMPTITER_EVALUATION_REDACTION_TEST_API_KEY"
+	cfg.Live.MaxRetries = 0
+	cfg.Live.Optimizer.Model = "optimizer-test-model"
+	cfg.Live.Optimizer.BaseURL = optimizerServer.URL
+	cfg.Live.Optimizer.APIKeyEnv = "PROMPTITER_OPTIMIZER_REDACTION_TEST_API_KEY"
+	cfg.Live.Optimizer.InputCNYPerMillion = 1
+	cfg.Live.Optimizer.OutputCNYPerMillion = 2
+	cfg.Live.Optimizer.MaxRetries = 0
+	configData, err = json.Marshal(cfg)
+	require.NoError(t, err)
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	require.NoError(t, os.WriteFile(configPath, configData, 0o600))
+	t.Setenv(cfg.Live.APIKeyEnv, "evaluation-secret-value-12345678")
+	t.Setenv(cfg.Live.Optimizer.APIKeyEnv, optimizerSecret)
+
+	runErr := runPipeline(context.Background(), configPath, modeLive)
+
+	require.Error(t, runErr)
+	assert.NotContains(t, runErr.Error(), optimizerSecret)
+	assert.Equal(t, int32(1), optimizerCalls.Load())
+	jsonReport := mustReadFile(
+		t,
+		filepath.Join(cfg.OutputDir, "optimization_report.json"),
+	)
+	markdownReport := mustReadFile(
+		t,
+		filepath.Join(cfg.OutputDir, "optimization_report.md"),
+	)
+	assert.NotContains(t, string(jsonReport), optimizerSecret)
+	assert.NotContains(t, string(markdownReport), optimizerSecret)
+	assert.Contains(t, string(jsonReport), sensitiveRedaction)
+	assert.Contains(t, string(markdownReport), sensitiveRedaction)
 }
 
 func TestRunPipelineValidatesAllLiveCredentialsBeforeRequests(t *testing.T) {

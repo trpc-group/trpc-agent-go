@@ -326,6 +326,9 @@ func (g *liveGenerator) Generate(
 		g.cfg.OutputCNYPerMillion,
 	)
 	for attempt := 0; attempt <= g.cfg.MaxRetries; attempt++ {
+		if err := waitForRetry(ctx, attempt); err != nil {
+			return generationResult{Usage: accumulated}, err
+		}
 		if err := g.budget.reserveCall(
 			budgetStageEvaluation,
 			estimatedTokens,
@@ -335,9 +338,6 @@ func (g *liveGenerator) Generate(
 			return generationResult{Usage: accumulated}, err
 		}
 		accumulated.Calls++
-		if err := waitForRetry(ctx, attempt); err != nil {
-			return generationResult{Usage: accumulated}, err
-		}
 		result, err := g.generateOnce(ctx, prompt, input)
 		accumulated.InputTokens += result.Usage.InputTokens
 		accumulated.OutputTokens += result.Usage.OutputTokens
@@ -487,14 +487,14 @@ func (m *budgetedRetryModel) GenerateContent(
 	)
 	var lastErr error
 	for attempt := 0; attempt <= m.maxRetries; attempt++ {
+		if err := waitForRetry(ctx, attempt); err != nil {
+			return nil, err
+		}
 		if err := m.budget.reserveCall(
 			budgetStageOptimizer,
 			estimatedTokens,
 			estimatedCost,
 		); err != nil {
-			return nil, err
-		}
-		if err := waitForRetry(ctx, attempt); err != nil {
 			return nil, err
 		}
 		responses, usage, err := m.generateOnce(ctx, request)
