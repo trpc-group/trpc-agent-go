@@ -519,7 +519,14 @@ func reportFingerprint(report *optimizationReport) (string, error) {
 	if report == nil {
 		return "", errors.New("report is nil")
 	}
-	stable := *report
+	reportData, err := json.Marshal(report)
+	if err != nil {
+		return "", fmt.Errorf("marshal report for fingerprint: %w", err)
+	}
+	var stable optimizationReport
+	if err := json.Unmarshal(reportData, &stable); err != nil {
+		return "", fmt.Errorf("copy report for fingerprint: %w", err)
+	}
 	stable.DurationMillis = 0
 	stable.DeterministicFingerprint = ""
 	stable.Resources.BaselineEvaluation.LatencyMillis = 0
@@ -527,10 +534,22 @@ func reportFingerprint(report *optimizationReport) (string, error) {
 	stable.Resources.CandidateEvaluation.LatencyMillis = 0
 	stable.Resources.Total.LatencyMillis = 0
 	stable.PromptIter.LatencyMillis = 0
+	normalizeEvaluationLatencies(stable.Train.Baseline)
+	normalizeEvaluationLatencies(stable.Train.Candidate)
+	normalizeEvaluationLatencies(stable.Validation.Baseline)
+	normalizeEvaluationLatencies(stable.Validation.Candidate)
 	data, err := json.Marshal(stable)
 	if err != nil {
 		return "", fmt.Errorf("marshal report fingerprint: %w", err)
 	}
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func normalizeEvaluationLatencies(evaluations []CaseEvaluation) {
+	for caseIndex := range evaluations {
+		for runIndex := range evaluations[caseIndex].Runs {
+			evaluations[caseIndex].Runs[runIndex].LatencyMillis = 0
+		}
+	}
 }

@@ -248,6 +248,38 @@ func TestRunPipelineRejectsUndersizedCallBudgetBeforeEvaluation(t *testing.T) {
 	assert.NoDirExists(t, cfg.OutputDir)
 }
 
+func TestReportFingerprintIgnoresNestedRunLatencyWithoutMutation(t *testing.T) {
+	report := optimizationReport{
+		DurationMillis: 99,
+		Train: evaluationPair{
+			Baseline:  []CaseEvaluation{{ID: "train", Runs: []CaseRun{{LatencyMillis: 11}}}},
+			Candidate: []CaseEvaluation{{ID: "train", Runs: []CaseRun{{LatencyMillis: 12}}}},
+		},
+		Validation: evaluationPair{
+			Baseline:  []CaseEvaluation{{ID: "validation", Runs: []CaseRun{{LatencyMillis: 13}}}},
+			Candidate: []CaseEvaluation{{ID: "validation", Runs: []CaseRun{{LatencyMillis: 14}}}},
+		},
+	}
+	other := report
+	other.Train = evaluationPair{
+		Baseline:  []CaseEvaluation{{ID: "train", Runs: []CaseRun{{LatencyMillis: 101}}}},
+		Candidate: []CaseEvaluation{{ID: "train", Runs: []CaseRun{{LatencyMillis: 102}}}},
+	}
+	other.Validation = evaluationPair{
+		Baseline:  []CaseEvaluation{{ID: "validation", Runs: []CaseRun{{LatencyMillis: 103}}}},
+		Candidate: []CaseEvaluation{{ID: "validation", Runs: []CaseRun{{LatencyMillis: 104}}}},
+	}
+
+	first, err := reportFingerprint(&report)
+	require.NoError(t, err)
+	second, err := reportFingerprint(&other)
+	require.NoError(t, err)
+
+	assert.Equal(t, first, second)
+	assert.Equal(t, int64(11), report.Train.Baseline[0].Runs[0].LatencyMillis)
+	assert.Equal(t, int64(14), report.Validation.Candidate[0].Runs[0].LatencyMillis)
+}
+
 func mustReadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)

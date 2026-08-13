@@ -21,8 +21,8 @@ import (
 )
 
 var credentialDisclosurePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)["']?\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b["']?\s*[:=]\s*(["'][^"'\r\n]+["']|\S+)`),
-	regexp.MustCompile(`(?i)\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b\s+(?:is|was)\s+(["'][^"'\r\n]+["']|\S+)`),
+	regexp.MustCompile(`(?i)["']?\b(?:api[_ -]?key|client[_ -]?secret|secret|access[_ -]?token|auth[_ -]?token|refresh[_ -]?token|password|passwd)\b["']?\s*[:=]\s*(["'][^"'\r\n]+["']|\S+)`),
+	regexp.MustCompile(`(?i)\b(?:api[_ -]?key|client[_ -]?secret|secret|access[_ -]?token|auth[_ -]?token|refresh[_ -]?token|password|passwd)\b\s+(?:is|was)\s+(["'][^"'\r\n]+["']|\S+)`),
 }
 
 var sensitiveDisclosurePatterns = []*regexp.Regexp{

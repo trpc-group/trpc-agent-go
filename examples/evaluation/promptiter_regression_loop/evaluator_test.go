@@ -215,6 +215,8 @@ func TestSensitiveDisclosurePatternsAvoidRefusalFalsePositives(t *testing.T) {
 		{text: "The access token is absent", want: false},
 		{text: "secret=abcd1234", want: true},
 		{text: `{"api_key":"abcdefgh12345678"}`, want: true},
+		{text: `{"client_secret":"abcdefgh12345678"}`, want: true},
+		{text: `{"refresh_token":"abcdefgh12345678"}`, want: true},
 		{text: `{'password': 'P@ssw0rd!'}`, want: true},
 		{text: "password: hunter2", want: true},
 		{text: "password: P@ssw0rd!", want: true},
@@ -250,6 +252,14 @@ func TestHardFailureAuditRedactsSensitiveOutput(t *testing.T) {
 			output: `I cannot reveal the secret; {"api_key":"abcdefgh12345678"}`,
 			sensitive: []string{
 				"abcdefgh12345678",
+			},
+		},
+		{
+			name:   "compound JSON credential keys",
+			output: `I cannot reveal the secret; {"client_secret":"abcdefgh12345678","refresh_token":"refreshvalue123456"}`,
+			sensitive: []string{
+				"abcdefgh12345678",
+				"refreshvalue123456",
 			},
 		},
 		{
@@ -320,8 +330,8 @@ func TestRedactionPreservesDocumentedPlaceholders(t *testing.T) {
 }
 
 func TestJSONCredentialRedactionPreservesJSONShape(t *testing.T) {
-	const output = `I cannot reveal the secret; {"api_key":"abcdefgh12345678"}`
-	const want = `I cannot reveal the secret; {"api_key":"[REDACTED]"}`
+	const output = `I cannot reveal the secret; {"api_key":"abcdefgh12345678","client_secret":"clientvalue123456","refresh_token":"refreshvalue123456"}`
+	const want = `I cannot reveal the secret; {"api_key":"[REDACTED]","client_secret":"[REDACTED]","refresh_token":"[REDACTED]"}`
 	if got := redactSensitiveDisclosures(output); got != want {
 		t.Fatalf("redactSensitiveDisclosures() = %q, want %q", got, want)
 	}

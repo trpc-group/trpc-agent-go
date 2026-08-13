@@ -317,6 +317,8 @@ func validateConfig(cfg pipelineConfig) error {
 		return errors.New("outputDir is required")
 	case cfg.Gate.PassK <= 0:
 		return errors.New("gate.passK must be greater than zero")
+	case cfg.Gate.BootstrapRounds <= 0:
+		return errors.New("gate.bootstrapRounds must be greater than zero")
 	case cfg.Gate.MinScoreGain < 0:
 		return errors.New("gate.minScoreGain must be non-negative")
 	case cfg.Gate.BootstrapSeed != cfg.Seed:

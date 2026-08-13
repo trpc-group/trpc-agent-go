@@ -23,9 +23,10 @@ import (
 )
 
 type scriptedModel struct {
-	failures int
-	calls    int
-	err      error
+	failures  int
+	calls     int
+	err       error
+	omitUsage bool
 }
 
 func (m *scriptedModel) GenerateContent(
@@ -40,11 +41,14 @@ func (m *scriptedModel) GenerateContent(
 		return nil, errors.New("temporary model failure")
 	}
 	responses := make(chan *model.Response, 1)
-	responses <- &model.Response{
+	response := &model.Response{
 		Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}},
-		Usage:   &model.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12},
 		Done:    true,
 	}
+	if !m.omitUsage {
+		response.Usage = &model.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12}
+	}
+	responses <- response
 	close(responses)
 	return responses, nil
 }
@@ -81,6 +85,28 @@ func TestLiveGeneratorStopsAtCallBudget(t *testing.T) {
 	require.NoError(t, err)
 	_, err = generator.Generate(context.Background(), "prompt", "input")
 	assert.ErrorContains(t, err, "call budget exhausted")
+}
+
+func TestLiveGeneratorFailsClosedWhenUsageIsMissing(t *testing.T) {
+	client := &scriptedModel{omitUsage: true}
+	budget := newLiveBudget(
+		gateFileConfig{MaxCalls: 10, MaxTokens: 1000, MaxCostCNY: 1},
+		optimizerBudgetConfig{},
+	)
+	generator := &liveGenerator{
+		model: client,
+		cfg: liveConfig{
+			TimeoutSeconds: 1, MaxRetries: 2,
+			InputCNYPerMillion: 1, OutputCNYPerMillion: 2,
+		},
+		budget: budget,
+	}
+
+	_, err := generator.Generate(context.Background(), "prompt", "input")
+
+	assert.ErrorIs(t, err, errMissingModelUsage)
+	assert.Equal(t, 1, client.calls, "missing usage must fail without retries")
+	assert.Equal(t, 1, budget.snapshot("").Calls)
 }
 
 func TestLiveGeneratorDoesNotRetryAuthenticationFailure(t *testing.T) {
@@ -206,6 +232,29 @@ func TestBudgetedOptimizerModelCountsRetriesInSharedBudget(t *testing.T) {
 	assert.Equal(t, 10, optimizerUsage.InputTokens)
 	assert.Equal(t, 2, optimizerUsage.OutputTokens)
 	assert.Equal(t, optimizerUsage, budget.snapshot(""))
+}
+
+func TestBudgetedOptimizerFailsClosedWhenUsageIsMissing(t *testing.T) {
+	client := &scriptedModel{omitUsage: true}
+	budget := newLiveBudget(
+		gateFileConfig{MaxCalls: 10, MaxTokens: 10000, MaxCostCNY: 10},
+		optimizerBudgetConfig{MaxCalls: 3, MaxTokens: 10000, MaxCostCNY: 1},
+	)
+	retrying := &budgetedRetryModel{
+		model: client, timeoutSeconds: 1, maxRetries: 2,
+		inputCNYPerMillion: 1, outputCNYPerMillion: 2,
+		budget: budget,
+	}
+	maxTokens := 32
+
+	_, err := retrying.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("optimize")},
+		GenerationConfig: model.GenerationConfig{MaxTokens: &maxTokens},
+	})
+
+	assert.ErrorIs(t, err, errMissingModelUsage)
+	assert.Equal(t, 1, client.calls, "missing usage must fail without retries")
+	assert.Equal(t, 1, budget.snapshot(budgetStageOptimizer).Calls)
 }
 
 func TestEvaluationAndOptimizerUseIndependentPrices(t *testing.T) {

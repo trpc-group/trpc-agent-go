@@ -114,6 +114,25 @@ func TestSetDefaultsUsesPipelineSeedForBootstrap(t *testing.T) {
 	setDefaults(&cfg)
 
 	assert.Equal(t, int64(7), cfg.Gate.BootstrapSeed)
+	assert.Equal(t, 5000, cfg.Gate.BootstrapRounds)
+}
+
+func TestLoadConfigRejectsNegativeBootstrapRoundsBeforeReadingInputs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{
+		"seed":7,
+		"promptFile":"must-not-be-read",
+		"trainEvalSet":"must-not-be-read",
+		"validationEvalSet":"must-not-be-read",
+		"metricsFile":"must-not-be-read",
+		"promptIterFile":"must-not-be-read",
+		"outputDir":"must-not-be-created",
+		"gate":{"bootstrapSeed":7,"bootstrapRounds":-1}
+	}`), 0o600))
+
+	_, err := loadConfig(path)
+
+	assert.ErrorContains(t, err, "gate.bootstrapRounds must be greater than zero")
 }
 
 func TestValidateDatasetIsolationRejectsLeakage(t *testing.T) {
@@ -344,7 +363,9 @@ func TestValidateConfigRejectsUnsafeLiveBudgetValues(t *testing.T) {
 		MetricsFile:       "metrics",
 		PromptIterFile:    "promptiter",
 		OutputDir:         "output",
-		Gate:              gateFileConfig{PassK: 3, MaxCostCNY: 20},
+		Gate: gateFileConfig{
+			PassK: 3, BootstrapRounds: 5000, MaxCostCNY: 20,
+		},
 		Live: liveConfig{
 			TimeoutSeconds:      1,
 			MaxRetries:          -1,

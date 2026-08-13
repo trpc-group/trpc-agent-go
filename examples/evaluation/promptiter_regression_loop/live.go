@@ -65,6 +65,8 @@ type generationResult struct {
 	Usage generationUsage
 }
 
+var errMissingModelUsage = errors.New("model response missing usable token usage")
+
 type textGenerator interface {
 	Generate(ctx context.Context, prompt, input string) (generationResult, error)
 }
@@ -365,6 +367,9 @@ func isRetryableModelError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, errMissingModelUsage) {
+		return false
+	}
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
@@ -456,6 +461,9 @@ func (g *liveGenerator) generateOnce(
 	if strings.TrimSpace(content.String()) == "" {
 		return generationResult{Usage: usage}, errors.New("model returned empty content")
 	}
+	if usage.tokens() <= 0 {
+		return generationResult{Usage: usage}, errMissingModelUsage
+	}
 	return generationResult{Text: strings.TrimSpace(content.String()), Usage: usage}, nil
 }
 
@@ -544,6 +552,9 @@ func (m *budgetedRetryModel) generateOnce(
 	)
 	if len(responses) == 0 {
 		return nil, usage, errors.New("model returned no responses")
+	}
+	if usage.tokens() <= 0 {
+		return responses, usage, errMissingModelUsage
 	}
 	return responses, usage, nil
 }
