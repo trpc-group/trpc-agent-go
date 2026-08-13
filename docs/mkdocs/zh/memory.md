@@ -321,6 +321,80 @@ best-effort 持久化行为：单个写入失败会记录日志，后续 operati
 
 回退时删除该 option，或将其设置为 `UpdatePolicyMergeSimilar` 即可，不需要数据迁移。
 
+### 可选的 Assistant Episode 提取
+
+Auto extraction 默认使用标准 fact 和 episode 工具。如果应用还需要在后续对话中
+召回 assistant 曾经提供的可复用信息，可以在构造 extractor 时显式开启 assistant
+episode 提取：
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithAssistantEpisodeExtraction(),
+)
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(memExtractor),
+)
+```
+
+该 option 使用两个彼此隔离的提取阶段。第一阶段继续使用标准 memory tools；如果
+配置了 `WithUpdatePolicy` 或 enabled tools，也会应用对应的工具约束，并且仅从
+user message 提取普通用户事实和事件。收集 session delta 时，功能开启后只使用每个
+模型响应事件的 primary choice，不会把同一响应的备选 choice 当作连续的 assistant
+回复。随后，提取器会按时间顺序检查当前
+extraction delta 中符合条件的 user/assistant pair。确定性的 eligibility 检查仅在
+assistant 返回至少两个 Markdown 或编号列表项时接受结构化请求；对于数量问题，
+则要求回答引入一个未出现在问题中的数值答案。单段 prose 形式的分类、翻译、转换
+或总结目前不会触发第二阶段，除非回答同时满足上述列表形态。Eligible pair 按时间
+顺序进入私有的单次请求 pair 数量和 source 体积预算；超出预算的候选会被忽略，因为
+assistant 结果提取采用 best-effort 语义。入选的 pair 会合并到一次第二阶段请求中，
+并且只暴露私有的 `memory_assistant_episode` 工具。该工具不会暴露给应用的 Agent。
+通过 `WithPrompt` 或 `SetPrompt` 配置的应用提取约束同样适用于第二阶段请求。当
+普通阶段产生 Delete 或 Clear operation 时，触发该 operation 的 user message 及其
+之前的 assistant pair 会被排除；之后独立出现的新 pair 仍可进入可选阶段。如果
+破坏性 operation 无法绑定到来源消息，提取器会保守地跳过本次可选阶段。该判断使用
+请求内的 operation 来源信息，不依赖针对特定语言的对话意图解析。
+
+Assistant 输出会被记录为“带归属的对话历史”，而不是已经验证的事实或用户偏好。
+框架将每个通过校验的调用固定转换为普通 `KindEpisode` add 操作，将 participants
+设置为 `User` 和 `Assistant`；如果 extraction context 带有 reference date，则将其
+作为 event time。下面的正文前缀只用于描述，不承载可信来源，也不会赋予特殊的
+reconcile 行为。例如：
+
+```json
+{
+  "memory": "Assistant-provided conversation episode: 当用户询问适合紧凑厨房的产品时，assistant 推荐了 Alpha 和 Beta。",
+  "kind": "episode",
+  "participants": ["User", "Assistant"]
+}
+```
+
+第二阶段模型只能提供 episode 正文和可选的检索 topics，不能覆盖 memory kind、
+participants、event time 或 location。正文为空、超过 4,096 bytes，或包含无法在
+当前 conversation pair 中找到依据的数量时，调用会被拒绝。数量校验会保留正负号、
+币种、百分号和已识别单位，同时允许 `$5` 与 `USD 5` 等等价写法。为了限制每条
+source message 对可选请求的体积贡献，每条消息都会被表示为确定性的 8,192-byte
+摘录，并保留首尾内容。
+
+Assistant 请求使用早于父 extraction deadline 结束的子 deadline，为第一阶段普通
+operation 的持久化预留时间。子 deadline 到期、可选请求失败或 callback 失败都只会
+记录日志，并保留第一阶段已经生成的普通 operation；只有父 context 真正取消时才会
+中止整个提取。工具参数非法、正文过长或数量缺少依据等确定性模型输出拒绝只跳过对应
+的 assistant episode；同一响应中某一 pair 的无效调用不会丢弃其他 pair 的有效调用。
+
+该功能与存储后端无关，不会新增 memory kind、字段、数据库列、数据表或迁移。同一
+delta 中入选的 pair 共用一次第二阶段模型请求，因此每个 delta 最多调用模型两次：
+一次普通提取和一次 assistant 提取。普通对话仍只有一次
+extraction 调用。该 option 在 extractor 生命周期内不可修改，并由 Auto memory
+worker 在构造时读取和固定；它不会改变 extractor 的描述性 `Metadata()`。需要关闭
+时，应重新构造未传入该 option 的 extractor 和 memory service。透明 decorator
+可以实现 `UnwrapMemoryExtractor() extractor.MemoryExtractor` 以保留此配置；自定义
+extractor 或不合作的 decorator 使用普通单阶段提取。返回 nil 或形成循环的 unwrap
+也会安全回退为关闭状态。此前已经
+保存的 assistant episode 仍是普通 episodic memory，会继续参与正常检索、提取上下文
+和 reconcile。可选阶段产生的 operation 与其他 memory operation 一样，经过所选
+update policy 和 reconcile 路径。
+
 ### 两种模式配置对比
 
 | 步骤         | 工具驱动模式（Agentic）             | 自动提取模式（Auto）                   |

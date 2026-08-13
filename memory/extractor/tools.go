@@ -9,8 +9,11 @@
 package extractor
 
 import (
+	"encoding/json"
+
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -40,6 +43,65 @@ func filterTools(
 		}
 	}
 	return filtered
+}
+
+// assistantEpisodeOrdinaryTools adds request-local source provenance to
+// destructive tools. The extra argument is visible only to the opt-in
+// extraction request and is ignored by normal operation parsing.
+func assistantEpisodeOrdinaryTools(
+	tools map[string]tool.Tool,
+	userCount int,
+) map[string]tool.Tool {
+	result := make(map[string]tool.Tool, len(tools))
+	for name, current := range tools {
+		result[name] = current
+	}
+	sourceIndexes := make([]any, userCount)
+	for i := range sourceIndexes {
+		sourceIndexes[i] = i + 1
+	}
+	for _, name := range []string{memory.DeleteToolName, memory.ClearToolName} {
+		current, ok := result[name]
+		if !ok || current.Declaration() == nil ||
+			current.Declaration().InputSchema == nil {
+			continue
+		}
+		declaration := *current.Declaration()
+		schema := *declaration.InputSchema
+		schema.Properties = make(map[string]*tool.Schema, len(schema.Properties)+1)
+		for propertyName, property := range declaration.InputSchema.Properties {
+			schema.Properties[propertyName] = property
+		}
+		schema.Properties[assistantEpisodeSourceIndexKey] = &tool.Schema{
+			Type: "integer",
+			Description: "The source_user_index label of the user message " +
+				"that requests this destructive operation.",
+			Enum: sourceIndexes,
+		}
+		schema.Required = append(
+			append([]string(nil), schema.Required...),
+			assistantEpisodeSourceIndexKey,
+		)
+		declaration.InputSchema = &schema
+		result[name] = &declarationOnlyTool{decl: &declaration}
+	}
+	return result
+}
+
+func assistantEpisodeOperationSourceIndex(
+	call model.ToolCall,
+	userCount int,
+) (int, bool) {
+	var args struct {
+		SourceUserIndex int `json:"source_user_index"`
+	}
+	if err := json.Unmarshal(call.Function.Arguments, &args); err != nil {
+		return 0, false
+	}
+	if args.SourceUserIndex <= 0 || args.SourceUserIndex > userCount {
+		return 0, false
+	}
+	return args.SourceUserIndex, true
 }
 
 // backgroundTools is the pre-built map of background tools for model request.
