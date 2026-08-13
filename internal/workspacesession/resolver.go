@@ -11,6 +11,7 @@ package workspacesession
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -92,8 +93,15 @@ func (r *Resolver) CreateWorkspaceHandle(
 ) (codeexecutor.WorkspaceHandle, error) {
 	reg := r.reg
 	if reg == nil {
-		reg = codeexecutor.NewWorkspaceRegistry()
-		r.reg = reg
+		// Resolver must be constructed via NewResolver, which
+		// guarantees r.reg != nil. A nil reg here means a zero-value
+		// Resolver was used. Fail closed rather than lazily allocating
+		// — lazy init is a data race when multiple goroutines call
+		// CreateWorkspaceHandle concurrently (each would create its
+		// own registry, and the loser's handles would be unreleaseable
+		// via the winner's registry).
+		return codeexecutor.WorkspaceHandle{}, errors.New(
+			"workspacesession: Resolver not initialized via NewResolver")
 	}
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 		ctx = withWorkspaceArtifactContext(ctx, inv)

@@ -117,6 +117,12 @@ func (r *workspaceRuntime) RunProgram(
 		Cwd:     "", // cwd is already handled by `cd` in the command
 		Timeout: int64(timeout / time.Millisecond),
 	}
+	// timeoutRequested: classify SIGKILL as timeout only when the
+	// caller explicitly set spec.Timeout (> 0). SIGKILL is not unique
+	// to timeouts (OOM killer, manual kills, sandbox teardowns produce
+	// the same signal). When spec.Timeout == 0 the executor applies a
+	// default timeout, but the SIGKILL may still be non-timeout
+	// infrastructure — classifying it as timeout would false-positive.
 	return r.executeRunCommand(ctx, sb, req, spec.Timeout > 0)
 }
 
@@ -293,6 +299,14 @@ func (r *workspaceRuntime) executeRunCommand(
 	if runErr != nil {
 		if isTimeoutErr(runErr) {
 			res.TimedOut = true
+			// HTTP-500 timeout path: SDK returns non-nil exec with
+			// nil Error and nil ExitCode (the 500 is returned before
+			// any SSE event is processed). The zero-value ExitCode=0
+			// would look like success to callers that check only
+			// ExitCode. Normalize to -1 to match the SSE SIGKILL path.
+			if res.ExitCode == 0 {
+				res.ExitCode = -1
+			}
 			return res, nil
 		}
 		return res, runErr

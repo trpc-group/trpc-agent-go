@@ -510,7 +510,14 @@ func (r *workspaceRuntime) StageDirectory(
 		if err != nil {
 			return err
 		}
-		script := "chmod -R a-w " + shellQuote(resolvedDest)
+		// Use find with -type f/-type d (Lstat semantics, no symlink
+		// following) instead of chmod -R, because chmod -R calls
+		// chmod(2) on symlinks it encounters, and chmod(2) follows
+		// symlinks on Linux — a TOCTOU adversary that implants a
+		// symlink inside dest between PutDirectory and this call
+		// could have its target's permissions modified.
+		script := "find " + shellQuote(resolvedDest) +
+			" \\( -type f -o -type d \\) -exec chmod a-w {} +"
 		if _, err := r.runBash(ctx, script, defaultStageTimeout); err != nil {
 			return err
 		}

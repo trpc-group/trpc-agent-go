@@ -1009,8 +1009,13 @@ func TestWorkspace_StageDirectory_ReadOnly(t *testing.T) {
 
 	err = exec.StageDirectory(context.Background(), ws, tmpDir, "staged", codeexecutor.StageOptions{ReadOnly: true})
 	require.NoError(t, err)
-	// The last command should be `chmod -R a-w <dest>`.
-	assert.Contains(t, m.lastCommand(), "chmod -R a-w")
+	// The last command should use find with -type f/-type d (not
+	// chmod -R, which follows symlinks via chmod(2)).
+	lastCmd := m.lastCommand()
+	assert.Contains(t, lastCmd, "find")
+	assert.Contains(t, lastCmd, "-type f")
+	assert.Contains(t, lastCmd, "chmod a-w")
+	assert.NotContains(t, lastCmd, "chmod -R")
 }
 
 func TestWorkspace_Collect(t *testing.T) {
@@ -1144,6 +1149,11 @@ func TestWorkspace_RunProgram_Timeout(t *testing.T) {
 	})
 	require.NoError(t, err, "timeout should be surfaced via RunResult, not error")
 	assert.True(t, res.TimedOut, "RunResult.TimedOut should be true on timeout")
+	// HTTP-500 timeout path: SDK returns non-nil exec with nil Error
+	// and nil ExitCode, so ExitCode defaults to 0. Normalize to -1
+	// so callers checking only ExitCode don't mistake it for success.
+	assert.Equal(t, -1, res.ExitCode,
+		"HTTP-500 timeout ExitCode must be -1, not 0 (would look like success)")
 }
 
 // TestRunProgram_ExecdSSETimeout_SetsTimedOut verifies that a server-side
