@@ -7,8 +7,8 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package tencentdb integrates with TencentDB Agent Memory through its
-// local gateway sidecar.
+// Package tencentdb integrates with TencentDB Agent Memory through its gateway
+// API.
 package tencentdb
 
 import (
@@ -92,16 +92,17 @@ type Options struct {
 	ToolPrefix                   string
 
 	ContextOffload ContextOffloadConfig
+
+	identity *serviceIdentity
 }
 
 // Option configures Service.
 type Option func(*Options)
 
 // defaultOptions returns conservative defaults. Cross-session/user reads are
-// opt-in: automatic recall and the long-term memory_search tool stay disabled
-// because the shared gateway sidecar does not currently enforce user/session
-// scoping on those paths. Only session-scoped surfaces (capture and
-// conversation search) are enabled by default.
+// opt-in so existing legacy gateways do not begin reading from a shared store
+// unexpectedly. Identity-scoped gateways enforce service/team/agent/user
+// isolation but retain the same opt-in defaults for compatibility.
 func defaultOptions() Options {
 	return Options{
 		GatewayURL:                   defaultGatewayURL,
@@ -183,6 +184,21 @@ func WithAPIKey(key string) Option {
 	}
 }
 
+// WithServiceIdentity configures the service, team, and agent identity used
+// by TencentDB Agent Memory's identity-scoped data plane. All three IDs and an
+// API key are required. Omitting this option preserves the legacy gateway API.
+// The same option applies to cloud and self-hosted deployments; use
+// WithGatewayURL and WithAPIKey to configure the deployment endpoint.
+func WithServiceIdentity(serviceID, teamID, agentID string) Option {
+	return func(o *Options) {
+		o.identity = &serviceIdentity{
+			serviceID: strings.TrimSpace(serviceID),
+			teamID:    strings.TrimSpace(teamID),
+			agentID:   strings.TrimSpace(agentID),
+		}
+	}
+}
+
 // WithIngestWorkers sets the number of async capture workers.
 func WithIngestWorkers(n int) Option {
 	return func(o *Options) {
@@ -221,10 +237,11 @@ func WithSessionKeyFunc(fn SessionKeyFunc) Option {
 
 // WithRecallEnabled controls whether Plugin performs automatic recall.
 //
-// It is off by default: the gateway currently recalls from a shared long-term
-// store without enforcing the request's user/session scope, so on a shared
-// sidecar automatic recall can surface another user's or session's memories.
-// Only enable it when the gateway guarantees per-tenant isolation.
+// It is off by default. Legacy gateways may recall from a shared long-term
+// store without enforcing the request's user/session scope. The
+// identity-scoped data plane selected by WithServiceIdentity enforces
+// service/team/agent/user isolation, but recall remains opt-in to preserve
+// existing defaults.
 func WithRecallEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.RecallEnabled = enabled

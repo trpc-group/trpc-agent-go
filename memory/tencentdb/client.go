@@ -20,7 +20,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const (
@@ -34,15 +37,20 @@ const (
 	httpMethodGet  = "GET"
 	httpMethodPost = "POST"
 
-	pathCapture             = "/capture"
-	pathRecall              = "/recall"
-	pathSearchMemories      = "/search/memories"
-	pathSearchConversations = "/search/conversations"
-	pathEndSession          = "/session/end"
-	pathHealth              = "/health"
-	pathOffloadIngest       = "/v2/offload/ingest"
-	pathOffloadCompact      = "/v2/offload/compact"
-	pathOffloadReadRef      = "/v2/offload/read-ref"
+	pathCapture              = "/capture"
+	pathRecall               = "/recall"
+	pathSearchMemories       = "/search/memories"
+	pathSearchConversations  = "/search/conversations"
+	pathEndSession           = "/session/end"
+	pathHealth               = "/health"
+	pathOffloadIngest        = "/v2/offload/ingest"
+	pathOffloadCompact       = "/v2/offload/compact"
+	pathOffloadReadRef       = "/v2/offload/read-ref"
+	pathV3ConversationAdd    = "/v3/conversation/add"
+	pathV3ConversationSearch = "/v3/conversation/search"
+	pathV3AtomicSearch       = "/v3/atomic/search"
+	pathV3ScenarioList       = "/v3/scenario/ls"
+	pathV3CoreRead           = "/v3/core/read"
 
 	maxErrorBodyPreview = 512
 )
@@ -63,6 +71,7 @@ type gatewayClient struct {
 	timeout      time.Duration
 	maxBodyBytes int64
 	apiKey       string
+	identity     *serviceIdentity
 }
 
 type offloadGatewayClient struct {
@@ -90,12 +99,17 @@ func newGatewayClient(opts Options) (*gatewayClient, error) {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = defaultMaxBodyBytes
 	}
+	apiKey := strings.TrimSpace(opts.APIKey)
+	if err := validateServiceIdentity(opts.identity, apiKey); err != nil {
+		return nil, err
+	}
 	return &gatewayClient{
 		baseURL:      baseURL,
 		hc:           hc,
 		timeout:      opts.Timeout,
 		maxBodyBytes: maxBodyBytes,
-		apiKey:       strings.TrimSpace(opts.APIKey),
+		apiKey:       apiKey,
+		identity:     opts.identity,
 	}, nil
 }
 
@@ -134,6 +148,9 @@ func validCompactionRatio(ratio float64) bool {
 }
 
 func (c *gatewayClient) capture(ctx context.Context, req captureRequest) (*captureResponse, error) {
+	if c.identity != nil {
+		return c.captureV3(ctx, req)
+	}
 	var rsp captureResponse
 	if err := c.doJSON(ctx, httpMethodPost, pathCapture, req, &rsp); err != nil {
 		return nil, err
@@ -142,6 +159,9 @@ func (c *gatewayClient) capture(ctx context.Context, req captureRequest) (*captu
 }
 
 func (c *gatewayClient) recall(ctx context.Context, req recallRequest) (*recallResponse, error) {
+	if c.identity != nil {
+		return c.recallV3(ctx, req)
+	}
 	var rsp recallResponse
 	if err := c.doJSON(ctx, httpMethodPost, pathRecall, req, &rsp); err != nil {
 		return nil, err
@@ -150,6 +170,9 @@ func (c *gatewayClient) recall(ctx context.Context, req recallRequest) (*recallR
 }
 
 func (c *gatewayClient) searchMemories(ctx context.Context, req searchMemoriesRequest) (*searchMemoriesResponse, error) {
+	if c.identity != nil {
+		return c.searchMemoriesV3(ctx, req)
+	}
 	var rsp searchMemoriesResponse
 	if err := c.doJSON(ctx, httpMethodPost, pathSearchMemories, req, &rsp); err != nil {
 		return nil, err
@@ -158,6 +181,9 @@ func (c *gatewayClient) searchMemories(ctx context.Context, req searchMemoriesRe
 }
 
 func (c *gatewayClient) searchConversations(ctx context.Context, req searchConversationsRequest) (*searchConversationsResponse, error) {
+	if c.identity != nil {
+		return c.searchConversationsV3(ctx, req)
+	}
 	var rsp searchConversationsResponse
 	if err := c.doJSON(ctx, httpMethodPost, pathSearchConversations, req, &rsp); err != nil {
 		return nil, err
@@ -166,6 +192,9 @@ func (c *gatewayClient) searchConversations(ctx context.Context, req searchConve
 }
 
 func (c *gatewayClient) endSession(ctx context.Context, req endSessionRequest) (*endSessionResponse, error) {
+	if c.identity != nil {
+		return &endSessionResponse{Flushed: true}, nil
+	}
 	var rsp endSessionResponse
 	if err := c.doJSON(ctx, httpMethodPost, pathEndSession, req, &rsp); err != nil {
 		return nil, err
@@ -331,4 +360,288 @@ func (c *gatewayClient) doJSONOnce(
 		return fmt.Errorf("tencentdb memory: unmarshal response failed: %w", err)
 	}
 	return nil
+}
+
+func validateServiceIdentity(identity *serviceIdentity, apiKey string) error {
+	if identity == nil {
+		return nil
+	}
+	if identity.serviceID == "" {
+		return errors.New("tencentdb memory: service identity service id is required")
+	}
+	if identity.teamID == "" {
+		return errors.New("tencentdb memory: service identity team id is required")
+	}
+	if identity.agentID == "" {
+		return errors.New("tencentdb memory: service identity agent id is required")
+	}
+	if apiKey == "" {
+		return errors.New("tencentdb memory: service identity api key is required")
+	}
+	return nil
+}
+
+func (c *gatewayClient) captureV3(
+	ctx context.Context,
+	req captureRequest,
+) (*captureResponse, error) {
+	messages := make([]v3Message, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		messages = append(messages, v3Message{
+			ID:        message.ID,
+			Role:      message.Role,
+			Content:   message.Content,
+			Timestamp: formatV3Timestamp(message.Timestamp),
+		})
+	}
+	data, err := doV3JSON[v3ConversationAddData](
+		ctx,
+		c,
+		pathV3ConversationAdd,
+		v3ConversationAddRequest{
+			v3Isolation: c.v3Isolation(req.UserID, req.SessionID),
+			Messages:    messages,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &captureResponse{
+		L0Recorded: len(data.AcceptedIDs),
+	}, nil
+}
+
+func (c *gatewayClient) recallV3(
+	ctx context.Context,
+	req recallRequest,
+) (*recallResponse, error) {
+	isolation := c.v3Isolation(req.UserID, "")
+	var (
+		atomicData   *v3AtomicSearchData
+		atomicErr    error
+		scenarioData *v3ScenarioListData
+		scenarioErr  error
+		coreData     *v3CoreFile
+		coreErr      error
+		wg           sync.WaitGroup
+	)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		atomicData, atomicErr = doV3JSON[v3AtomicSearchData](
+			ctx,
+			c,
+			pathV3AtomicSearch,
+			v3AtomicSearchRequest{
+				v3Isolation: isolation,
+				Query:       req.Query,
+				Limit:       defaultSearchLimit,
+			},
+		)
+	}()
+	go func() {
+		defer wg.Done()
+		scenarioData, scenarioErr = doV3JSON[v3ScenarioListData](
+			ctx,
+			c,
+			pathV3ScenarioList,
+			v3ScenarioListRequest{v3Isolation: isolation},
+		)
+	}()
+	go func() {
+		defer wg.Done()
+		coreData, coreErr = doV3JSON[v3CoreFile](
+			ctx,
+			c,
+			pathV3CoreRead,
+			v3CoreReadRequest{v3Isolation: isolation},
+		)
+	}()
+	wg.Wait()
+
+	errs := []error{atomicErr, scenarioErr, coreErr}
+	if atomicErr != nil && scenarioErr != nil && coreErr != nil {
+		return nil, fmt.Errorf("tencentdb memory: v3 recall failed: %w", errors.Join(errs...))
+	}
+	for _, err := range errs {
+		if err != nil {
+			log.Warnf("tencentdb memory: partial v3 recall failed: %v", err)
+		}
+	}
+	return buildV3RecallResponse(atomicData, scenarioData, coreData), nil
+}
+
+func (c *gatewayClient) searchMemoriesV3(
+	ctx context.Context,
+	req searchMemoriesRequest,
+) (*searchMemoriesResponse, error) {
+	if strings.TrimSpace(req.Scene) != "" {
+		return nil, errors.New("tencentdb memory: scene filtering is not supported by the identity-scoped API")
+	}
+	data, err := doV3JSON[v3AtomicSearchData](
+		ctx,
+		c,
+		pathV3AtomicSearch,
+		v3AtomicSearchRequest{
+			v3Isolation: c.v3Isolation(req.UserID, ""),
+			Query:       req.Query,
+			Limit:       req.Limit,
+			Type:        req.Type,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &searchMemoriesResponse{
+		Results:  formatV3AtomicItems(data.Items),
+		Total:    len(data.Items),
+		Strategy: "v3-atomic",
+	}, nil
+}
+
+func (c *gatewayClient) searchConversationsV3(
+	ctx context.Context,
+	req searchConversationsRequest,
+) (*searchConversationsResponse, error) {
+	data, err := doV3JSON[v3ConversationSearchData](
+		ctx,
+		c,
+		pathV3ConversationSearch,
+		v3ConversationSearchRequest{
+			v3Isolation: c.v3Isolation(req.UserID, req.SessionID),
+			Query:       req.Query,
+			Limit:       req.Limit,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &searchConversationsResponse{
+		Results: formatV3ConversationHits(data.Messages),
+		Total:   len(data.Messages),
+	}, nil
+}
+
+func (c *gatewayClient) v3Isolation(userID, sessionID string) v3Isolation {
+	return v3Isolation{
+		TeamID:    c.identity.teamID,
+		AgentID:   c.identity.agentID,
+		UserID:    strings.TrimSpace(userID),
+		SessionID: strings.TrimSpace(sessionID),
+	}
+}
+
+func doV3JSON[T any](
+	ctx context.Context,
+	client *gatewayClient,
+	path string,
+	req any,
+) (*T, error) {
+	var envelope v3ResponseEnvelope[T]
+	if err := client.doJSONWithHeaders(
+		ctx,
+		httpMethodPost,
+		path,
+		req,
+		&envelope,
+		map[string]string{httpHeaderServiceID: client.identity.serviceID},
+	); err != nil {
+		return nil, err
+	}
+	if envelope.Code != 0 {
+		return nil, fmt.Errorf(
+			"tencentdb memory: v3 request failed: path=%s code=%d message=%s request_id=%s",
+			path,
+			envelope.Code,
+			envelope.Message,
+			envelope.RequestID,
+		)
+	}
+	if envelope.Data == nil {
+		return nil, fmt.Errorf("tencentdb memory: v3 response data is missing: path=%s", path)
+	}
+	return envelope.Data, nil
+}
+
+func formatV3Timestamp(timestamp int64) string {
+	if timestamp <= 0 {
+		return ""
+	}
+	return time.UnixMilli(timestamp).UTC().Format(time.RFC3339Nano)
+}
+
+func buildV3RecallResponse(
+	atomicData *v3AtomicSearchData,
+	scenarioData *v3ScenarioListData,
+	coreData *v3CoreFile,
+) *recallResponse {
+	parts := make([]string, 0, 3)
+	memoryCount := 0
+	if atomicData != nil && len(atomicData.Items) > 0 {
+		parts = append(parts, "<relevant-memories>\n"+formatV3AtomicItems(atomicData.Items)+"\n</relevant-memories>")
+		memoryCount += len(atomicData.Items)
+	}
+	if coreData != nil && coreData.Content != nil {
+		if content := strings.TrimSpace(*coreData.Content); content != "" {
+			parts = append(parts, "<user-core>\n"+content+"\n</user-core>")
+			memoryCount++
+		}
+	}
+	if scenarioData != nil && len(scenarioData.Entries) > 0 {
+		parts = append(parts, "<scene-navigation>\n"+formatV3ScenarioEntries(scenarioData.Entries)+"\n</scene-navigation>")
+		memoryCount += len(scenarioData.Entries)
+	}
+	return &recallResponse{
+		AppendSystemContext: strings.Join(parts, "\n\n"),
+		Strategy:            "v3-identity-scoped",
+		MemoryCount:         memoryCount,
+	}
+}
+
+func formatV3AtomicItems(items []v3AtomicSearchHit) string {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		content := strings.TrimSpace(item.Content)
+		if content == "" {
+			continue
+		}
+		memoryType := strings.TrimSpace(item.Type)
+		if memoryType == "" {
+			memoryType = "memory"
+		}
+		lines = append(lines, fmt.Sprintf("- [%s] %s", memoryType, content))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatV3ConversationHits(items []v3ConversationSearchHit) string {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		content := strings.TrimSpace(item.Content)
+		if content == "" {
+			continue
+		}
+		role := strings.TrimSpace(item.Role)
+		if role == "" {
+			role = "message"
+		}
+		lines = append(lines, fmt.Sprintf("[%s] %s", role, content))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatV3ScenarioEntries(items []v3ScenarioEntry) string {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		path := strings.TrimSpace(item.Path)
+		if path == "" {
+			continue
+		}
+		if summary := strings.TrimSpace(item.Summary); summary != "" {
+			lines = append(lines, fmt.Sprintf("- %s: %s", path, summary))
+			continue
+		}
+		lines = append(lines, "- "+path)
+	}
+	return strings.Join(lines, "\n")
 }

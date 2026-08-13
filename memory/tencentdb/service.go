@@ -26,9 +26,9 @@ var _ session.Ingestor = (*Service)(nil)
 
 // Service is a TencentDB Agent Memory gateway adapter.
 //
-// The current TencentDB SDK gateway is best treated as a trusted sidecar. The
-// adapter forwards app/user/session identifiers, but hard multi-tenant isolation
-// depends on the gateway and SDK honoring those fields end-to-end.
+// Legacy gateway routes are best treated as a trusted sidecar. Callers can use
+// WithServiceIdentity to select the identity-scoped data plane, which sends
+// service/team/agent/user identity to gateways that implement the current API.
 type Service struct {
 	opts          Options
 	client        *gatewayClient

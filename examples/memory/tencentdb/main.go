@@ -64,11 +64,26 @@ var (
 	gatewayAPIKey = flag.String(
 		"gateway-api-key",
 		os.Getenv("TDAI_GATEWAY_API_KEY"),
-		"Gateway API key sent as Authorization: Bearer; context offload v2 requires a non-empty value",
+		"Gateway API key sent as Authorization: Bearer; identity-scoped APIs and context offload v2 require a non-empty value",
+	)
+	serviceID = flag.String(
+		"service-id",
+		os.Getenv("TDAI_SERVICE_ID"),
+		"TencentDB Agent Memory service ID used by the identity-scoped data plane",
+	)
+	teamID = flag.String(
+		"team-id",
+		os.Getenv("TDAI_TEAM_ID"),
+		"TencentDB Agent Memory team ID; setting this or -agent-id enables the identity-scoped data plane",
+	)
+	agentID = flag.String(
+		"agent-id",
+		os.Getenv("TDAI_AGENT_ID"),
+		"TencentDB Agent Memory agent ID; setting this or -team-id enables the identity-scoped data plane",
 	)
 	offloadServiceID = flag.String(
 		"offload-service-id",
-		os.Getenv("TDAI_SERVICE_ID"),
+		os.Getenv("TDAI_OFFLOAD_SERVICE_ID"),
 		"TencentDB Agent Memory service ID; enables context offload v2 when a gateway API key is also configured",
 	)
 	waitBeforeRecall = flag.Duration(
@@ -97,10 +112,17 @@ func main() {
 	if offloadEnabled && strings.TrimSpace(*gatewayAPIKey) == "" {
 		log.Fatal("-gateway-api-key is required when -offload-service-id enables context offload v2")
 	}
+	identityEnabled := strings.TrimSpace(*teamID) != "" || strings.TrimSpace(*agentID) != ""
+	if identityEnabled && (strings.TrimSpace(*serviceID) == "" ||
+		strings.TrimSpace(*teamID) == "" ||
+		strings.TrimSpace(*agentID) == "" ||
+		strings.TrimSpace(*gatewayAPIKey) == "") {
+		log.Fatal("-service-id, -team-id, -agent-id, and -gateway-api-key are all required for the identity-scoped data plane")
+	}
 
-	// Recall and the long-term memory_search tool are opt-in because the gateway
-	// does not enforce per-user/session scoping on those paths; enable them here
-	// for the demo, which runs a single trusted local sidecar.
+	// Recall and the long-term memory_search tool remain opt-in. The current
+	// identity-scoped data plane enforces service/team/agent/user isolation;
+	// legacy gateways should still be treated as trusted sidecars.
 	memoryOptions := []memorytencentdb.Option{
 		memorytencentdb.WithGatewayURL(*gatewayURL),
 		memorytencentdb.WithTimeout(*gatewayTimeout),
@@ -109,6 +131,12 @@ func main() {
 		memorytencentdb.WithAPIKey(*gatewayAPIKey),
 		memorytencentdb.WithRecallEnabled(true),
 		memorytencentdb.WithMemorySearchTool(true),
+	}
+	if identityEnabled {
+		memoryOptions = append(
+			memoryOptions,
+			memorytencentdb.WithServiceIdentity(*serviceID, *teamID, *agentID),
+		)
 	}
 	if offloadEnabled {
 		memoryOptions = append(
@@ -157,6 +185,9 @@ func main() {
 	fmt.Printf("Gateway: %s (status=%s version=%s)\n", *gatewayURL, health.Status, health.Version)
 	if offloadEnabled {
 		fmt.Printf("Context offload: enabled (service=%s)\n", *offloadServiceID)
+	}
+	if identityEnabled {
+		fmt.Printf("Identity-scoped data plane: enabled (service=%s team=%s agent=%s)\n", *serviceID, *teamID, *agentID)
 	}
 	fmt.Printf("App: %s\nUser: %s\nSession: %s\n", *appName, *userID, sid)
 	fmt.Println(strings.Repeat("=", 60))

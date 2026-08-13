@@ -23,12 +23,11 @@ The integration works in three parts:
    `/v2/offload/compact`; and the agent can recover archived details with
    `tdai_read_offload_ref`, backed by `/v2/offload/read-ref`.
 
-> **Multi-tenant note:** automatic recall and `tdai_memory_search` read from the
-> gateway's shared long-term store, which does not currently enforce
-> user/session scoping. They are therefore disabled by default. Only the
-> session-scoped capture and `tdai_conversation_search` surfaces are on by
-> default. This demo enables recall and memory search explicitly because it runs
-> a single trusted local sidecar.
+> **Multi-tenant note:** automatic recall and `tdai_memory_search` remain
+> disabled by default for compatibility with legacy gateways. New cloud and
+> self-hosted integrations should configure `WithServiceIdentity`; the current
+> data plane then scopes L0/L1 by service, team, agent, and user. L2/L3 are
+> intentionally shared at the team-and-agent level.
 
 ### Architecture
 
@@ -100,8 +99,11 @@ example at another gateway URL with `-gateway`.
 | `OPENAI_API_KEY`                 | Yes      | API key for the chat model          |                          |
 | `OPENAI_BASE_URL`                | No       | Base URL for the model API endpoint | `https://api.openai.com/v1` |
 | `TENCENTDB_AGENT_MEMORY_GATEWAY` | No       | TencentDB Agent Memory gateway URL  | `http://127.0.0.1:8420`  |
-| `TDAI_GATEWAY_API_KEY`           | For offload | Gateway API key sent as `Authorization: Bearer`; required by context offload v2 | |
-| `TDAI_SERVICE_ID`                | For offload | Service ID sent as `X-TDAI-Service-Id`; setting it together with the gateway API key enables context offload v2 | |
+| `TDAI_GATEWAY_API_KEY`           | For identity/offload | Gateway API key sent as `Authorization: Bearer` | |
+| `TDAI_SERVICE_ID`                | For identity/offload | Memory service ID sent as `X-TDAI-Service-Id` | |
+| `TDAI_TEAM_ID`                   | For identity | Team isolation ID | |
+| `TDAI_AGENT_ID`                  | For identity | Agent isolation ID | |
+| `TDAI_OFFLOAD_SERVICE_ID`        | For offload | Service ID for the optional context offload v2 integration | |
 
 ## Command Line Arguments
 
@@ -114,7 +116,10 @@ example at another gateway URL with `-gateway`.
 | `-gateway`           | TencentDB Agent Memory gateway URL               | env or `http://127.0.0.1:8420` |
 | `-gateway-timeout`   | Timeout for gateway calls, including session flush | `60s`                   |
 | `-gateway-api-key`   | Gateway API key sent as `Authorization: Bearer`  | env `TDAI_GATEWAY_API_KEY`  |
-| `-offload-service-id` | Service ID for context offload v2; requires `-gateway-api-key` | env `TDAI_SERVICE_ID` |
+| `-service-id`        | Service ID for the identity-scoped data plane     | env `TDAI_SERVICE_ID` |
+| `-team-id`           | Team ID; setting this or `-agent-id` enables the identity-scoped data plane | env `TDAI_TEAM_ID` |
+| `-agent-id`          | Agent ID; setting this or `-team-id` enables the identity-scoped data plane | env `TDAI_AGENT_ID` |
+| `-offload-service-id` | Service ID for context offload v2; requires `-gateway-api-key` | env `TDAI_OFFLOAD_SERVICE_ID` |
 | `-turn-wait`         | Delay after each turn for gateway capture/extraction | `0s`                   |
 | `-end-session`       | Call `/session/end` before exit                  | `false`                    |
 
@@ -125,6 +130,10 @@ example at another gateway URL with `-gateway`.
 ```bash
 export OPENAI_API_KEY="your-openai-api-key"
 export TENCENTDB_AGENT_MEMORY_GATEWAY="http://127.0.0.1:8420"
+export TDAI_GATEWAY_API_KEY="your-gateway-api-key"
+export TDAI_SERVICE_ID="your-memory-service-id"
+export TDAI_TEAM_ID="your-team-id"
+export TDAI_AGENT_ID="your-agent-id"
 
 cd examples/memory/tencentdb
 go run .
@@ -205,14 +214,17 @@ import (
 )
 
 // 1. Create the TencentDB Agent Memory service.
-//    Recall and the long-term memory_search tool are opt-in; enable them only
-//    when the gateway enforces per-user/session isolation (e.g. a trusted local
-//    sidecar). Pass WithAPIKey when the gateway sets TDAI_GATEWAY_API_KEY.
+//    New cloud and self-hosted integrations use the same identity-scoped API.
 memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithGatewayURL("http://127.0.0.1:8420"),
+    memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
+    memorytencentdb.WithServiceIdentity(
+        os.Getenv("TDAI_SERVICE_ID"),
+        os.Getenv("TDAI_TEAM_ID"),
+        os.Getenv("TDAI_AGENT_ID"),
+    ),
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
-    // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     //     Enabled:   true,
     //     ServiceID: os.Getenv("TDAI_SERVICE_ID"),
@@ -256,9 +268,10 @@ Key points:
 - `runner.WithPlugins(memSvc.ContextOffloadPlugin())` activates only when
   `ContextOffloadConfig.Enabled` is true. The companion
   `tdai_read_offload_ref` tool is then included in `memSvc.Tools()`.
-- The adapter forwards app/user/session identifiers, but hard multi-tenant
-  isolation depends on the gateway and SDK honoring those fields end-to-end, so
-  cross-session/user reads (recall and memory search) are opt-in.
+- `WithServiceIdentity` selects the current identity-scoped API. L0/L1 memory
+  is isolated by service, team, agent, and framework user; L2/L3 memory is
+  shared by users of the same team and agent. Omitting the option preserves the
+  legacy gateway routes.
 
 ## Configuration Options
 
@@ -271,6 +284,7 @@ Key points:
 | `WithIngestJobTimeout(d)`      | Timeout for queued capture jobs                     | `30s`                   |
 | `WithSessionKeyFunc(fn)`       | Custom framework session to gateway `session_key` mapping | base64url(app):base64url(user):base64url(session) |
 | `WithAPIKey(key)`              | Send `Authorization: Bearer <key>` (gateway `TDAI_GATEWAY_API_KEY`) | none      |
+| `WithServiceIdentity(serviceID, teamID, agentID)` | Use the identity-scoped data plane shared by cloud and self-hosted gateways | disabled; legacy routes remain active |
 | `WithRecallEnabled(bool)`      | Enable automatic recall plugin behavior (opt-in; shared-store reads) | `false`        |
 | `WithMemorySearchTool(bool)`   | Expose `tdai_memory_search` (opt-in; shared-store reads) | `false`              |
 | `WithConversationSearchTool(bool)` | Expose `tdai_conversation_search`               | `true`                  |

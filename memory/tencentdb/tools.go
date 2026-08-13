@@ -158,6 +158,7 @@ func (s *Service) newConversationSearchTool(name string) tool.CallableTool {
 			Query:      strings.TrimSpace(req.Query),
 			Limit:      limit,
 			SessionKey: sessionKey,
+			SessionID:  sess.ID,
 			UserID:     sess.UserID,
 		})
 		if err != nil {
@@ -173,7 +174,7 @@ func (s *Service) newConversationSearchTool(name string) tool.CallableTool {
 		fn,
 		function.WithName(name),
 		function.WithDescription("Search TencentDB Agent Memory conversation history. "+
-			"Defaults to the current session_key and is useful for recalling earlier raw exchanges."),
+			"Defaults to the current session and is useful for recalling earlier raw exchanges."),
 	)
 }
 

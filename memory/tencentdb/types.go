@@ -16,6 +16,12 @@ type tdaiMessage struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+type serviceIdentity struct {
+	serviceID string
+	teamID    string
+	agentID   string
+}
+
 type captureRequest struct {
 	UserContent      string        `json:"user_content"`
 	AssistantContent string        `json:"assistant_content"`
@@ -62,6 +68,7 @@ type searchConversationsRequest struct {
 	Query      string `json:"query"`
 	Limit      int    `json:"limit,omitempty"`
 	SessionKey string `json:"session_key,omitempty"`
+	SessionID  string `json:"-"`
 	UserID     string `json:"user_id,omitempty"`
 }
 
@@ -88,4 +95,101 @@ type HealthResponse struct {
 		VectorStore      bool `json:"vectorStore"`
 		EmbeddingService bool `json:"embeddingService"`
 	} `json:"stores"`
+}
+
+type v3ResponseEnvelope[T any] struct {
+	Code      int    `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
+	Data      *T     `json:"data,omitempty"`
+}
+
+type v3Isolation struct {
+	TeamID    string `json:"team_id"`
+	AgentID   string `json:"agent_id"`
+	UserID    string `json:"user_id"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+type v3Message struct {
+	ID        string `json:"id,omitempty"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+type v3ConversationAddRequest struct {
+	v3Isolation
+	Messages []v3Message `json:"messages"`
+}
+
+type v3ConversationAddData struct {
+	AcceptedIDs []string `json:"accepted_ids"`
+	TotalCount  int      `json:"total_count"`
+}
+
+type v3ConversationSearchRequest struct {
+	v3Isolation
+	Query string `json:"query"`
+	Limit int    `json:"limit,omitempty"`
+}
+
+type v3ConversationSearchData struct {
+	Messages []v3ConversationSearchHit `json:"messages"`
+}
+
+type v3ConversationSearchHit struct {
+	ID        string  `json:"id,omitempty"`
+	Role      string  `json:"role"`
+	Content   string  `json:"content"`
+	Timestamp string  `json:"timestamp,omitempty"`
+	Score     float64 `json:"score"`
+}
+
+type v3AtomicSearchRequest struct {
+	v3Isolation
+	Query string `json:"query"`
+	Limit int    `json:"limit,omitempty"`
+	Type  string `json:"type,omitempty"`
+}
+
+type v3AtomicSearchData struct {
+	Items []v3AtomicSearchHit `json:"items"`
+}
+
+type v3AtomicSearchHit struct {
+	ID         string  `json:"id"`
+	Type       string  `json:"type"`
+	Content    string  `json:"content"`
+	Background string  `json:"background,omitempty"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
+	Score      float64 `json:"score"`
+}
+
+type v3ScenarioListRequest struct {
+	v3Isolation
+	PathPrefix string `json:"path_prefix,omitempty"`
+}
+
+type v3ScenarioListData struct {
+	Entries []v3ScenarioEntry `json:"entries"`
+	Total   int               `json:"total"`
+}
+
+type v3ScenarioEntry struct {
+	Path      string `json:"path"`
+	Summary   string `json:"summary,omitempty"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type v3CoreReadRequest struct {
+	v3Isolation
+}
+
+type v3CoreFile struct {
+	Content   *string `json:"content"`
+	CreatedAt *string `json:"created_at"`
+	UpdatedAt *string `json:"updated_at"`
 }
