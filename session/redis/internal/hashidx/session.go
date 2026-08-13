@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -23,7 +24,10 @@ import (
 
 // Config holds configuration for HashIdx session storage client.
 type Config struct {
-	SessionTTL        time.Duration
+	SessionTTL time.Duration
+	// TrackEventTTL controls track event expiration. Nil falls back to
+	// SessionTTL, and non-positive values disable expiration.
+	TrackEventTTL     *time.Duration
 	AppStateTTL       time.Duration
 	UserStateTTL      time.Duration
 	SessionEventLimit int
@@ -39,6 +43,13 @@ type Config struct {
 	// cache is not reliably maintained (e.g. a Tendis cluster fronted by twemproxy),
 	// avoiding repeated NOSCRIPT round-trips and the resulting monitoring noise.
 	DisableScriptCache bool
+}
+
+func (cfg Config) effectiveTrackEventTTL() time.Duration {
+	if cfg.TrackEventTTL != nil {
+		return *cfg.TrackEventTTL
+	}
+	return cfg.SessionTTL
 }
 
 // Client implements HashIdx session storage logic.
@@ -74,12 +85,15 @@ func (c *Client) runScript(
 
 // sessionMeta is the session metadata structure for HashIdx.
 type sessionMeta struct {
-	ID        string           `json:"id"`
-	AppName   string           `json:"appName"`
-	UserID    string           `json:"userID"`
-	State     session.StateMap `json:"state"`
-	CreatedAt time.Time        `json:"createdAt"`
-	UpdatedAt time.Time        `json:"updatedAt"`
+	ID      string           `json:"id"`
+	AppName string           `json:"appName"`
+	UserID  string           `json:"userID"`
+	State   session.StateMap `json:"state"`
+	// Generation fences coordinated state initialization across session recreation.
+	// An empty value identifies a legacy record and is populated on first use.
+	Generation string    `json:"generation,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // CreateSession creates a new session using HashIdx logic.
@@ -99,12 +113,13 @@ func (c *Client) CreateSession(
 
 	now := time.Now()
 	meta := sessionMeta{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     copiedState,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:         key.SessionID,
+		AppName:    key.AppName,
+		UserID:     key.UserID,
+		State:      copiedState,
+		Generation: uuid.NewString(),
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 
 	metaJSON, err := json.Marshal(meta)
@@ -398,16 +413,18 @@ func boolToInt(b bool) int {
 }
 
 // DeleteSession deletes a session and all associated data in HashIdx storage,
-// including track keys discovered from session state.
+// including track keys discovered from session state and the track index.
 // When EnableUserSessionIndex is true, also removes the session index entry.
 func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 	keys := c.keys.SessionKeys(key)
-
-	tracks, _ := c.ListTracksForSession(ctx, key)
+	tracks, err := c.listTracksForDelete(ctx, key)
+	if err != nil {
+		return fmt.Errorf("delete session: list tracks: %w", err)
+	}
 	for _, t := range tracks {
 		keys = append(keys, c.keys.TrackKeys(key, t)...)
 	}
-
+	keys = append(keys, c.keys.TrackIndexKey(key))
 	if c.cfg.EnableUserSessionIndex {
 		if err := c.removeSessionFromUserIndex(ctx, keys, key); err != nil {
 			return err
@@ -418,6 +435,39 @@ func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 		}
 	}
 	return nil
+}
+
+func (c *Client) listTracksForDelete(ctx context.Context, key session.Key) ([]session.Track, error) {
+	tracks, _ := c.ListTracksForSession(ctx, key)
+	indexedTracks, err := c.client.SMembers(ctx, c.keys.TrackIndexKey(key)).Result()
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+	return mergeTrackNames(tracks, indexedTracks), nil
+}
+
+func mergeTrackNames(tracks []session.Track, indexedTracks []string) []session.Track {
+	if len(indexedTracks) == 0 {
+		return tracks
+	}
+	result := make([]session.Track, 0, len(tracks)+len(indexedTracks))
+	seen := make(map[session.Track]struct{}, len(tracks)+len(indexedTracks))
+	for _, track := range tracks {
+		if _, ok := seen[track]; ok {
+			continue
+		}
+		seen[track] = struct{}{}
+		result = append(result, track)
+	}
+	for _, indexedTrack := range indexedTracks {
+		track := session.Track(indexedTrack)
+		if _, ok := seen[track]; ok {
+			continue
+		}
+		seen[track] = struct{}{}
+		result = append(result, track)
+	}
+	return result
 }
 
 // TrimConversations trims the most recent N conversations from the session (HashIdx).

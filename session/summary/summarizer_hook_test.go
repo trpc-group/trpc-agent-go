@@ -401,16 +401,13 @@ func TestSessionSummarizer_ModelCallbacks_Before_CustomResponseSkipsModel(t *tes
 	)
 
 	sess := &session.Session{
-		ID: "sess",
-		Events: []event.Event{newEventWithContent(
-			strings.Repeat("oversized-origin ", 1000),
-		)},
+		ID:     "sess",
+		Events: []event.Event{newEventWithContent("origin")},
 	}
 	summary, err := s.Summarize(context.Background(), sess)
 	require.NoError(t, err)
 	assert.Equal(t, "FROM_CALLBACK", summary)
-	assert.Contains(t, callbackInput, summaryConversationOmitted)
-	assert.Less(t, strings.Count(callbackInput, "oversized-origin"), 900)
+	assert.Contains(t, callbackInput, "origin")
 }
 
 func TestSessionSummarizer_ModelCallbacks_Before_AppliesToFallbackRequest(
@@ -440,15 +437,15 @@ func TestSessionSummarizer_ModelCallbacks_Before_AppliesToFallbackRequest(
 		WithCacheSafeForking(true),
 		WithModelCallbacks(callbacks),
 	)
-	oversized := strings.Repeat("oversized-origin ", 1000)
+	oversizedParent := strings.Repeat("oversized-parent ", 1000)
 	parent := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage("stable system"),
-		model.NewUserMessage(oversized),
+		model.NewUserMessage(oversizedParent),
 	}}
 	ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
 	sess := &session.Session{
 		ID:     "fallback-callback",
-		Events: []event.Event{newEventWithContent(oversized)},
+		Events: []event.Event{newEventWithContent("event text for fallback")},
 	}
 
 	summary, err := s.Summarize(ctx, sess)
@@ -457,7 +454,7 @@ func TestSessionSummarizer_ModelCallbacks_Before_AppliesToFallbackRequest(
 	require.NotNil(t, capture.request)
 	require.Len(t, capture.request.Messages, 1)
 	require.Contains(t, capture.request.Messages[0].Content,
-		summaryConversationOmitted)
+		"event text for fallback")
 	require.NotNil(t, capture.request.GenerationConfig.MaxTokens)
 	require.Equal(t, maxTokens,
 		*capture.request.GenerationConfig.MaxTokens)

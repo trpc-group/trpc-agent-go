@@ -679,6 +679,94 @@ go run ./cmd/openclaw \
 
 默认情况下，`-model` 使用 `$OPENAI_MODEL`（如已设置），否则回退到 `gpt-5`。
 
+### 请求级模型选择
+
+OpenClaw runtime 可以通过稳定别名预注册多个模型：
+
+```yaml
+model:
+  default: balanced
+  models:
+    balanced:
+      mode: openai
+      name: deepseek-v4-pro
+      openai_variant: deepseek
+      base_url: "${DEEPSEEK_BASE_URL}"
+    fast:
+      mode: openai
+      name: deepseek-v4-flash
+      openai_variant: deepseek
+      base_url: "${DEEPSEEK_BASE_URL}"
+    strong:
+      mode: openai
+      name: gpt-5
+      openai_variant: openai
+      base_url: "${OPENAI_BASE_URL}"
+```
+
+请求级选择适用于默认的 `agent-type: llm`。`model.default` 必须指向
+`model.models` 中的一个条目。与 `default` 同级的
+`generation_config` 由所有条目共享。原有的单模型字段
+（`model.mode`、`model.name` 及相关 provider 字段）继续受支持，
+但不能与 `model.models` 混用。
+
+对于 OpenAI 兼容的 YAML 条目，OpenClaw 会优先使用已配置的
+variant 专属凭据（`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、
+`MINIMAX_API_KEY` 或 `MOONSHOT_API_KEY`），否则回退到
+`OPENAI_API_KEY`。
+
+Gateway 调用方可以通过顶层 `model` 字段为单次 run 选择一个已配置别名：
+
+```json
+{
+  "from": "user-1",
+  "session_id": "conversation-1",
+  "text": "分析这个问题",
+  "model": "strong"
+}
+```
+
+省略 `model` 时使用 `model.default`。未知别名会返回 HTTP 400，且
+`error.type = "invalid_model"`；OpenClaw Gateway 不会静默回退到默认
+模型。请求显式选择的优先级高于 runtime profile 的 `model_name`。
+该选择作用于当前主 agent run；session 摘要、自动 memory 处理、标题和
+独立托管的 subagent 继续使用各自配置的默认模型。
+
+嵌入式发行版可以提供已经构造好的模型实例：
+
+```go
+rt, err := app.NewRuntimeWithOptions(
+    ctx,
+    args,
+    app.WithModelCatalog(app.ModelCatalog{
+        Default: "balanced",
+        Models: map[string]model.Model{
+            "balanced": balancedModel,
+            "strong": strongModel,
+        },
+        Metadata: map[string]app.ModelMetadata{
+            "balanced": {
+                Mode:          "openai",
+                OpenAIVariant: "deepseek",
+                BaseURL:       "https://api.deepseek.com/v1",
+            },
+            "strong": {
+                Mode:          "openai",
+                OpenAIVariant: "openai",
+            },
+        },
+    }),
+)
+```
+
+`WithModelCatalog` 与 YAML `model.models` 互斥。请求只携带别名；
+模型 base URL、凭据、header 及其他 provider 配置继续保留在服务端。
+`Metadata` 是可选字段，默认继承原有顶层模型设置。嵌入式模型目录中的
+条目使用不同 provider 变体或 base URL 时，应提供对应元数据，以便
+OpenClaw 根据本次选择的别名应用 provider 专属的 Gateway 兼容处理和
+deadline finalization 行为。如需显式清空继承的 base URL，请将
+`BaseURLSet` 设为 `true`，并将 `BaseURL` 留空。
+
 你可以通过以下方式覆盖 OpenAI 兼容的 base URL：
 
 - `OPENAI_BASE_URL`（环境变量），或

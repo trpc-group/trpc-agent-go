@@ -207,6 +207,9 @@ func SummarizeSession(
 	if err != nil {
 		return false, fmt.Errorf("summarize session %s failed: %w", base.ID, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if text == "" {
 		return false, nil
 	}

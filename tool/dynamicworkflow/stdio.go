@@ -727,7 +727,7 @@ async def call_tool(name, **kwargs):
     return await _call("tool", name, kwargs)
 
 _AGENT_OPTION_NAMES = {
-    "template", "instance_id", "instruction", "tools", "skills",
+    "template", "instance_id", "instruction", "model", "tools", "skills",
     "structured_output", "schema",
 }
 

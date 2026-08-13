@@ -19,12 +19,13 @@ import (
 
 func TestRender(t *testing.T) {
 	tests := []struct {
-		name        string
-		template    string
-		state       map[string]any
-		expected    string
-		expectError bool
-		invState    map[string]any
+		name         string
+		template     string
+		state        map[string]any
+		expected     string
+		expectError  bool
+		invState     map[string]any
+		runtimeState map[string]any
 	}{
 		{
 			name:        "empty template",
@@ -145,6 +146,13 @@ func TestRender(t *testing.T) {
 			expected:    "Enabled: true, name: name-123",
 			expectError: false,
 		},
+		{
+			name:         "runtime values",
+			template:     "Document: {runtime:document}",
+			runtimeState: map[string]any{"document": "hello"},
+			expected:     "Document: hello",
+			expectError:  false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -168,6 +176,7 @@ func TestRender(t *testing.T) {
 					invocation.SetState(k, v)
 				}
 			}
+			invocation.RunOptions.RuntimeState = tt.runtimeState
 
 			result, err := Render(tt.template, invocation)
 
@@ -211,6 +220,7 @@ func TestIsValidStateName(t *testing.T) {
 		{"app:setting", true},
 		{"temp:value", true},
 		{"invocation:key", true},
+		{"runtime:key", true},
 		{"invalid-name", false},
 		{"invalid name", false},
 		{"123invalid", false},
@@ -233,6 +243,66 @@ func TestIsValidStateName(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestRender_RuntimePlaceholders(t *testing.T) {
+	inv := &agent.Invocation{
+		Session: &session.Session{State: session.StateMap{
+			"document":         []byte(`"session document"`),
+			"runtime:document": []byte(`"session fallback"`),
+		}},
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			"document": "runtime document",
+			"count":    42,
+			"enabled":  true,
+			"metadata": map[string]any{"version": 1},
+			"items":    []string{"a", "b"},
+			"raw":      []byte(`{"nested":true}`),
+		}},
+	}
+
+	const template = "D={runtime:document}; C={runtime:count}; E={runtime:enabled}; " +
+		"M={runtime:metadata}; I={runtime:items}; R={runtime:raw}; " +
+		"O={runtime:missing?}; X={runtime:missing}"
+	const want = `D=runtime document; C=42; E=true; M={"version":1}; ` +
+		`I=["a","b"]; R={"nested":true}; O=; X={runtime:missing}`
+
+	got, err := Render(template, inv)
+	if err != nil {
+		t.Fatalf("Render runtime placeholders: unexpected error: %v", err)
+	}
+	if got != want {
+		t.Fatalf("Render runtime placeholders: got %q, want %q", got, want)
+	}
+}
+
+func TestRender_RuntimePlaceholderDoesNotFallbackToSession(t *testing.T) {
+	inv := &agent.Invocation{
+		Session: &session.Session{State: session.StateMap{
+			"runtime:document": []byte(`"session fallback"`),
+		}},
+	}
+
+	got, err := Render("{runtime:document}", inv)
+	if err != nil {
+		t.Fatalf("Render runtime fallback: unexpected error: %v", err)
+	}
+	if got != "{runtime:document}" {
+		t.Fatalf("Render runtime fallback: got %q", got)
+	}
+}
+
+func TestRender_RuntimePlaceholderMarshalError(t *testing.T) {
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			"invalid": make(chan struct{}),
+		}},
+	}
+
+	_, err := Render("{runtime:invalid}", inv)
+	if err == nil {
+		t.Fatal("Render runtime marshal error: expected error")
 	}
 }
 

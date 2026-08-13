@@ -212,7 +212,7 @@ func (t *translator) concurrentReasoningEvents(rsp *model.Response) ([]aguievent
 	if rsp.ID == "" {
 		return nil, nil
 	}
-	reasoningID := rsp.ID
+	reasoningID := reasoningMessageID(rsp.ID)
 	wasStarted := t.reasoningStreams.hasStarted(reasoningID)
 	choice := rsp.Choices[0]
 	reasoningDelta := ""

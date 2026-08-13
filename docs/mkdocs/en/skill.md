@@ -41,6 +41,57 @@ Background references:
      `skill_select_docs`). Scripts are not inlined; they are executed
      inside a workspace, returning results and output files.
 
+### Caller-Declared Skill Loads
+
+Applications that already know which skill a request requires can load it
+without asking the model to choose or call `skill_load`:
+
+```go
+events, err := runner.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Review this change"),
+    agent.WithSkillLoads(skill.LoadRequest{
+        Name: "code-review",
+        Docs: []string{"references/security.md"},
+    }),
+)
+```
+
+The declarations are validated as one atomic batch against the invocation's
+effective repository, including context-aware visibility filters. The
+repository selected during preflight and the validated contents of declared
+skills are reused for tool construction and request processing throughout that
+invocation. `SKILL.md` is always loaded;
+`Docs` selects additional skill-relative documents, while `IncludeAllDocs`
+selects all supporting documents and cannot be combined with `Docs`. A
+non-empty `Docs` replaces the current document selection. When both fields are
+unset, the declaration itself leaves any current selection unchanged, matching
+`skill_load`. In the default `turn` mode, the turn reset and declaration are
+applied atomically; the reset removes the previous turn's selection, so it is
+not inherited. Modes without a turn reset, including `session`, preserve a
+selection that is still present. Equivalent declarations for the same skill
+are coalesced after normalization, including when separate `WithSkillLoads`
+options append them. Equivalence requires the same normalized `Docs` set and
+`IncludeAllDocs` value. Conflicting selections for one skill are invalid, and
+`MaxLoadedSkills` counts the coalesced skills. A failed declaration prevents
+the first model request and
+can be classified with `skill.ErrInvalidLoadRequest` or
+`skill.ErrSkillUnavailable` when the agent returns the setup error directly.
+Runner wrappers that execute inner agents asynchronously, such as candidate
+selection and Ralph Loop, retain their existing error-event delivery
+semantics while still preventing the model request.
+
+Declared loads use the same state, materialization, load-mode, workspace, and
+tool-activation behavior as `skill_load`, but do not fabricate a model tool
+call or tool result. They apply only to the selected entry invocation and are
+not inherited by cloned child-agent invocations. A selected agent that does
+not implement `agent.InvocationSkillLoadSupport` (or reports false) is rejected
+with `agent.ErrSkillLoadingUnsupported`. Custom agents that implement this
+interface commit to consuming the declarations atomically before their first
+model request.
+
 ### Token Cost
 
 If you inline a full skills repo (all `SKILL.md` bodies and docs) into

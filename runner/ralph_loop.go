@@ -174,6 +174,8 @@ type ralphLoopAgent struct {
 	cfg   RalphLoopConfig
 }
 
+var _ agent.InvocationSkillLoadSupport = (*ralphLoopAgent)(nil)
+
 func (a *ralphLoopAgent) Info() agent.Info {
 	if a == nil || a.inner == nil {
 		return agent.Info{}
@@ -206,6 +208,14 @@ func (a *ralphLoopAgent) FindSubAgent(name string) agent.Agent {
 		return nil
 	}
 	return a.inner.FindSubAgent(name)
+}
+
+func (a *ralphLoopAgent) SupportsInvocationSkillLoads() bool {
+	if a == nil || a.inner == nil {
+		return false
+	}
+	support, ok := a.inner.(agent.InvocationSkillLoadSupport)
+	return ok && support.SupportsInvocationSkillLoads()
 }
 
 func (a *ralphLoopAgent) Run(
@@ -299,6 +309,11 @@ func (a *ralphLoopAgent) newInnerInvocation(
 		invocationOpts = append(invocationOpts, agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors))
 	}
 	inner := base.Clone(invocationOpts...)
+	if len(base.RunOptions.SkillLoads) > 0 {
+		runOptions := inner.RunOptions
+		agent.WithSkillLoads(base.RunOptions.SkillLoads...)(&runOptions)
+		inner.RunOptions = runOptions
+	}
 
 	// Carry the run's steer queue across the iteration boundary so user
 	// messages enqueued onto the run (Runner.EnqueueUserMessage) reach the inner

@@ -20,8 +20,21 @@ Most examples accept:
 
 ## Examples
 
+### chunking/
+
+Offline text and interactive web viewers that show each Reader's default
+strategy, with advanced comparisons for FixedSizeChunking, RecursiveChunking,
+MarkdownChunking, and JSONChunking.
+
 ### basic/
 Basic example with file source and in-memory vector store.
+
+### contextual-retrieval/
+Opt-in index-time contextual retrieval using a custom source wrapper. It keeps
+the original chunk content unchanged, caches generated context locally, and
+supports paired `baseline` / `contextual` trials. This is an evaluation example,
+not a default recommendation; see its README for evidence, security, and cost
+boundaries.
 
 ### sources/
 Different data source types:

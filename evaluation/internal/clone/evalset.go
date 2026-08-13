@@ -141,13 +141,17 @@ func cloneInvocation(src *evalset.Invocation) (*evalset.Invocation, error) {
 		return nil, err
 	}
 	copied.ToolMock = toolMock
-	copied.ExecutionTrace = cloneExecutionTrace(src.ExecutionTrace)
+	executionTrace, err := cloneExecutionTrace(src.ExecutionTrace)
+	if err != nil {
+		return nil, err
+	}
+	copied.ExecutionTrace = executionTrace
 	return &copied, nil
 }
 
-func cloneExecutionTrace(src *trace.Trace) *trace.Trace {
+func cloneExecutionTrace(src *trace.Trace) (*trace.Trace, error) {
 	if src == nil {
-		return nil
+		return nil, nil
 	}
 	cloneSnapshot := func(src *trace.Snapshot) *trace.Snapshot {
 		if src == nil {
@@ -180,10 +184,37 @@ func cloneExecutionTrace(src *trace.Trace) *trace.Trace {
 			step.Input = cloneSnapshot(src.Steps[i].Input)
 			step.Output = cloneSnapshot(src.Steps[i].Output)
 			step.Usage = cloneUsage(src.Steps[i].Usage)
+			tools, err := cloneTraceTools(src.Steps[i].Tools)
+			if err != nil {
+				return nil, err
+			}
+			step.Tools = tools
+			step.Skills = append([]trace.Skill(nil), src.Steps[i].Skills...)
 			copied.Steps[i] = step
 		}
 	}
-	return &copied
+	return &copied, nil
+}
+
+func cloneTraceTools(src []trace.Tool) ([]trace.Tool, error) {
+	if src == nil {
+		return nil, nil
+	}
+	copied := make([]trace.Tool, len(src))
+	for i := range src {
+		copied[i] = src[i]
+		arguments, err := cloneAny(src[i].Arguments)
+		if err != nil {
+			return nil, err
+		}
+		copied[i].Arguments = arguments
+		result, err := cloneAny(src[i].Result)
+		if err != nil {
+			return nil, err
+		}
+		copied[i].Result = result
+	}
+	return copied, nil
 }
 
 func cloneToolMock(src *toolmock.ToolMock) (*toolmock.ToolMock, error) {

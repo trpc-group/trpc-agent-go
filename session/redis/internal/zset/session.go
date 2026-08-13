@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -28,7 +29,10 @@ import (
 
 // Config holds configuration for ZSet session storage client.
 type Config struct {
-	SessionTTL        time.Duration
+	SessionTTL time.Duration
+	// TrackEventTTL controls track event expiration. Nil falls back to
+	// SessionTTL, and non-positive values disable expiration.
+	TrackEventTTL     *time.Duration
 	AppStateTTL       time.Duration
 	UserStateTTL      time.Duration
 	SessionEventLimit int
@@ -37,6 +41,13 @@ type Config struct {
 	// Script.Run. Enable for proxy/cluster backends whose script cache is not
 	// reliably maintained (e.g. a Tendis cluster fronted by twemproxy).
 	DisableScriptCache bool
+}
+
+func (cfg Config) effectiveTrackEventTTL() time.Duration {
+	if cfg.TrackEventTTL != nil {
+		return *cfg.TrackEventTTL
+	}
+	return cfg.SessionTTL
 }
 
 // Client implements ZSet session storage logic.
@@ -70,10 +81,13 @@ func (c *Client) runScript(
 
 // SessionState is the state of a session (ZSet structure).
 type SessionState struct {
-	ID        string           `json:"id"`
-	State     session.StateMap `json:"state"`
-	CreatedAt time.Time        `json:"createdAt"`
-	UpdatedAt time.Time        `json:"updatedAt"`
+	ID    string           `json:"id"`
+	State session.StateMap `json:"state"`
+	// Generation fences coordinated state initialization across session recreation.
+	// An empty value identifies a legacy record and is populated on first use.
+	Generation string    `json:"generation,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 func buildListedSession(
@@ -112,10 +126,11 @@ func (c *Client) CreateSession(
 	}
 
 	sessState := &SessionState{
-		ID:        key.SessionID,
-		State:     make(session.StateMap),
-		UpdatedAt: time.Now(),
-		CreatedAt: time.Now(),
+		ID:         key.SessionID,
+		State:      make(session.StateMap),
+		Generation: uuid.NewString(),
+		UpdatedAt:  time.Now(),
+		CreatedAt:  time.Now(),
 	}
 	for k, v := range state {
 		if v == nil {
@@ -356,15 +371,14 @@ func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 	txPipe.HDel(ctx, c.sessionStateKey(key), key.SessionID)
 	txPipe.HDel(ctx, c.sessionSummaryKey(key), key.SessionID)
 	txPipe.Del(ctx, c.eventKey(key))
-
-	tracks, err := c.listTracksForSession(ctx, key)
+	tracks, err := c.listTracksForDelete(ctx, key)
 	if err != nil {
 		return fmt.Errorf("list tracks: %w", err)
 	}
 	for _, track := range tracks {
 		txPipe.Del(ctx, c.trackKey(key, track))
 	}
-
+	txPipe.Del(ctx, c.trackIndexKey(key))
 	if _, err := txPipe.Exec(ctx); err != nil && err != redis.Nil {
 		return fmt.Errorf("delete session state failed: %w", err)
 	}
@@ -397,12 +411,19 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		},
 		func(pipe redis.Pipeliner) {
 			trackKey := c.trackKey(key, trackEvent.Track)
+			trackIndexKey := c.trackIndexKey(key)
 			pipe.ZAdd(ctx, trackKey, redis.Z{
 				Score:  float64(trackEvent.Timestamp.UnixNano()),
 				Member: eventBytes,
 			})
-			if c.cfg.SessionTTL > 0 {
-				pipe.Expire(ctx, trackKey, c.cfg.SessionTTL)
+			pipe.SAdd(ctx, trackIndexKey, string(trackEvent.Track))
+			trackTTL := c.cfg.effectiveTrackEventTTL()
+			if trackTTL > 0 {
+				pipe.Expire(ctx, trackKey, trackTTL)
+				pipe.Expire(ctx, trackIndexKey, trackTTL)
+			} else if c.cfg.TrackEventTTL != nil {
+				pipe.Persist(ctx, trackKey)
+				pipe.Persist(ctx, trackIndexKey)
 			}
 		},
 	)
@@ -599,6 +620,42 @@ func (c *Client) listTracksForSession(ctx context.Context, key session.Key) ([]s
 	return session.TracksFromState(sessState.State)
 }
 
+func (c *Client) listTracksForDelete(ctx context.Context, key session.Key) ([]session.Track, error) {
+	tracks, err := c.listTracksForSession(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	indexedTracks, err := c.client.SMembers(ctx, c.trackIndexKey(key)).Result()
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+	return mergeTrackNames(tracks, indexedTracks), nil
+}
+
+func mergeTrackNames(tracks []session.Track, indexedTracks []string) []session.Track {
+	if len(indexedTracks) == 0 {
+		return tracks
+	}
+	result := make([]session.Track, 0, len(tracks)+len(indexedTracks))
+	seen := make(map[session.Track]struct{}, len(tracks)+len(indexedTracks))
+	for _, track := range tracks {
+		if _, ok := seen[track]; ok {
+			continue
+		}
+		seen[track] = struct{}{}
+		result = append(result, track)
+	}
+	for _, indexedTrack := range indexedTracks {
+		track := session.Track(indexedTrack)
+		if _, ok := seen[track]; ok {
+			continue
+		}
+		seen[track] = struct{}{}
+		result = append(result, track)
+	}
+	return result
+}
+
 func (c *Client) getTrackEvents(
 	ctx context.Context,
 	sessionKeys []session.Key,
@@ -613,12 +670,41 @@ func (c *Client) getTrackEvents(
 	if err != nil {
 		return nil, err
 	}
+	return c.getTrackEventsByTrackLists(ctx, sessionKeys, trackLists, limit, afterTime)
+}
 
+// GetTrackEvents retrieves persisted track events for the given session tracks.
+func (c *Client) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	tracks []session.Track,
+	limit int,
+	afterTime time.Time,
+) (map[session.Track][]session.TrackEvent, error) {
+	if len(tracks) == 0 {
+		return make(map[session.Track][]session.TrackEvent), nil
+	}
+	results, err := c.getTrackEventsByTrackLists(ctx, []session.Key{key}, [][]session.Track{tracks}, limit, afterTime)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return make(map[session.Track][]session.TrackEvent), nil
+	}
+	return results[0], nil
+}
+
+func (c *Client) getTrackEventsByTrackLists(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	trackLists [][]session.Track,
+	limit int,
+	afterTime time.Time,
+) ([]map[session.Track][]session.TrackEvent, error) {
 	queries := make([]*trackQuery, 0)
 	dataPipe := c.client.Pipeline()
 	minScore := fmt.Sprintf("%d", afterTime.UnixNano())
 	maxScore := fmt.Sprintf("%d", time.Now().UnixNano())
-
 	for i, key := range sessionKeys {
 		tracks := trackLists[i]
 		for _, track := range tracks {
@@ -678,6 +764,11 @@ func (c *Client) eventKey(key session.Key) string {
 // trackKey returns the Redis key for track events (with prefix).
 func (c *Client) trackKey(key session.Key, track session.Track) string {
 	return c.prefixedKey(fmt.Sprintf("track:{%s}:%s:%s:%s", key.AppName, key.UserID, key.SessionID, track))
+}
+
+// trackIndexKey returns the Redis key for session track names.
+func (c *Client) trackIndexKey(key session.Key) string {
+	return c.prefixedKey(fmt.Sprintf("trackidx:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID))
 }
 
 // sessionStateKey returns the Redis key for session state (with prefix).

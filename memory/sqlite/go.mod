@@ -6,7 +6,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../..
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.32
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
 )
 
@@ -21,5 +21,5 @@ require (
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb // indirect
 )

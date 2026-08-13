@@ -78,10 +78,10 @@ func New(inputs []string, opts ...Option) *Source {
 func (s *Source) initializeReaders() {
 	// Build reader options - pass all configurations to reader layer
 	var opts []reader.Option
-	if s.chunkSize > 0 {
+	if s.chunkSize != 0 {
 		opts = append(opts, reader.WithChunkSize(s.chunkSize))
 	}
-	if s.chunkOverlap > 0 {
+	if s.chunkOverlap != 0 {
 		opts = append(opts, reader.WithChunkOverlap(s.chunkOverlap))
 	}
 	if s.customChunkingStrategy != nil {
@@ -207,10 +207,10 @@ func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*docum
 		opts = append(opts, dirsource.WithCustomChunkingStrategy(s.customChunkingStrategy))
 	} else {
 		// Otherwise, pass chunk size/overlap
-		if s.chunkSize > 0 {
+		if s.chunkSize != 0 {
 			opts = append(opts, dirsource.WithChunkSize(s.chunkSize))
 		}
-		if s.chunkOverlap > 0 {
+		if s.chunkOverlap != 0 {
 			opts = append(opts, dirsource.WithChunkOverlap(s.chunkOverlap))
 		}
 	}
@@ -241,10 +241,10 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 		opts = append(opts, filesource.WithCustomChunkingStrategy(s.customChunkingStrategy))
 	} else {
 		// Otherwise, pass chunk size/overlap
-		if s.chunkSize > 0 {
+		if s.chunkSize != 0 {
 			opts = append(opts, filesource.WithChunkSize(s.chunkSize))
 		}
-		if s.chunkOverlap > 0 {
+		if s.chunkOverlap != 0 {
 			opts = append(opts, filesource.WithChunkOverlap(s.chunkOverlap))
 		}
 	}

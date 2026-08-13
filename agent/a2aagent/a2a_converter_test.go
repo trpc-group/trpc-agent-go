@@ -11,6 +11,7 @@ package a2aagent
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -3835,6 +3836,239 @@ func TestAppendFilePart_WithFileIDAndDefaultName(t *testing.T) {
 	}
 	if fileWithURI.URI != "file-id" {
 		t.Fatalf("unexpected file URI: %s", fileWithURI.URI)
+	}
+}
+
+func TestAppendFilePart_URLTakesPrecedenceOverFileID(t *testing.T) {
+	parts := appendFilePart(nil, model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			URL:    "https://example.com/file",
+			FileID: "provider-file-id",
+		},
+	})
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(parts))
+	}
+	filePart, ok := parts[0].(*protocol.FilePart)
+	if !ok {
+		t.Fatalf("expected *protocol.FilePart, got %T", parts[0])
+	}
+	fileWithURI, ok := filePart.File.(*protocol.FileWithURI)
+	if !ok {
+		t.Fatalf("expected *protocol.FileWithURI, got %T", filePart.File)
+	}
+	if fileWithURI.URI != "https://example.com/file" {
+		t.Fatalf("unexpected file URI: %s", fileWithURI.URI)
+	}
+}
+
+func TestConvertResponseFilePart(t *testing.T) {
+	imageBytes := protocol.NewFilePartWithBytes(
+		"image.png",
+		"image/png",
+		base64.StdEncoding.EncodeToString([]byte("image")),
+	)
+	got := convertResponseFilePart(&imageBytes)
+	if got == nil || got.Type != model.ContentTypeImage ||
+		got.Image == nil || string(got.Image.Data) != "image" ||
+		got.Image.Format != "image/png" {
+		t.Fatalf("converted image = %#v", got)
+	}
+
+	fileURI := protocol.NewFilePartWithURI(
+		"report.pdf",
+		"application/pdf",
+		"https://example.com/report.pdf",
+	)
+	got = convertResponseFilePart(&fileURI)
+	if got == nil || got.Type != model.ContentTypeFile ||
+		got.File == nil || got.File.Name != "report.pdf" ||
+		got.File.URL != "https://example.com/report.pdf" ||
+		got.File.MimeType != "application/pdf" {
+		t.Fatalf("converted file = %#v", got)
+	}
+
+	invalidBytes := imageBytes
+	invalidBytes.File = &protocol.FileWithBytes{Bytes: "not-base64"}
+	got = convertResponseFilePart(&invalidBytes)
+	if got == nil || got.File == nil || string(got.File.Data) != "not-base64" {
+		t.Fatalf("invalid base64 fallback = %#v", got)
+	}
+
+	audioBytes := protocol.NewFilePartWithBytes(
+		"speech.mp3",
+		"audio/mpeg",
+		base64.StdEncoding.EncodeToString([]byte("audio")),
+	)
+	got = convertResponseFilePart(audioBytes)
+	if got == nil || got.Type != model.ContentTypeAudio ||
+		got.Audio == nil || string(got.Audio.Data) != "audio" ||
+		got.Audio.Format != "audio/mpeg" {
+		t.Fatalf("converted audio = %#v", got)
+	}
+
+	imageURI := protocol.NewFilePartWithURI(
+		"remote-image",
+		"application/octet-stream",
+		"https://example.com/image",
+	)
+	imageURI.Metadata = map[string]any{
+		ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeImage,
+	}
+	got = convertResponseFilePart(&imageURI)
+	if got == nil || got.Type != model.ContentTypeImage ||
+		got.Image == nil || got.Image.URL != "https://example.com/image" ||
+		got.Image.Format != "application/octet-stream" {
+		t.Fatalf("converted image URI = %#v", got)
+	}
+
+	var (
+		nilFilePart *protocol.FilePart
+		nilBytes    *protocol.FileWithBytes
+		nilURI      *protocol.FileWithURI
+	)
+	nilCases := []struct {
+		name string
+		part protocol.Part
+	}{
+		{name: "typed nil file part", part: nilFilePart},
+		{name: "typed nil bytes", part: &protocol.FilePart{File: nilBytes}},
+		{name: "typed nil URI", part: &protocol.FilePart{File: nilURI}},
+		{name: "nil file", part: &protocol.FilePart{}},
+		{name: "non-file part", part: &protocol.TextPart{Text: "text"}},
+	}
+	for _, tt := range nilCases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := convertResponseFilePart(tt.part); got != nil {
+				t.Fatalf("convertResponseFilePart() = %#v, want nil", got)
+			}
+		})
+	}
+}
+
+func TestLegacyA2AFileIdentity(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileName    string
+		mimeType    string
+		metadata    map[string]any
+		wantContent string
+	}{
+		{
+			name:     "metadata takes precedence",
+			fileName: "image",
+			mimeType: "image/png",
+			metadata: map[string]any{
+				ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeAudio,
+			},
+			wantContent: ia2a.FilePartMetadataContentTypeAudio,
+		},
+		{
+			name:        "audio MIME type",
+			mimeType:    " AUDIO/MPEG ",
+			wantContent: ia2a.FilePartMetadataContentTypeAudio,
+		},
+		{
+			name:        "image format",
+			mimeType:    "png",
+			wantContent: ia2a.FilePartMetadataContentTypeImage,
+		},
+		{
+			name:        "audio format",
+			mimeType:    "mp3",
+			wantContent: ia2a.FilePartMetadataContentTypeAudio,
+		},
+		{
+			name:        "image name fallback",
+			fileName:    ia2a.FilePartMetadataContentTypeImage,
+			wantContent: ia2a.FilePartMetadataContentTypeImage,
+		},
+		{
+			name:        "audio name fallback",
+			fileName:    ia2a.FilePartMetadataContentTypeAudio,
+			wantContent: ia2a.FilePartMetadataContentTypeAudio,
+		},
+		{
+			name:        "generic file",
+			fileName:    "report.pdf",
+			mimeType:    "application/pdf",
+			wantContent: ia2a.FilePartMetadataContentTypeFile,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotName, gotMIMEType, gotContent := legacyA2AFileIdentity(
+				&protocol.FilePart{Metadata: tt.metadata},
+				&tt.fileName,
+				&tt.mimeType,
+			)
+			if gotName != tt.fileName {
+				t.Fatalf("name = %q, want %q", gotName, tt.fileName)
+			}
+			if gotMIMEType != tt.mimeType {
+				t.Fatalf("MIME type = %q, want %q", gotMIMEType, tt.mimeType)
+			}
+			if gotContent != tt.wantContent {
+				t.Fatalf("content type = %q, want %q", gotContent, tt.wantContent)
+			}
+		})
+	}
+}
+
+func TestDefaultA2AEventConverter_FileContentParts(t *testing.T) {
+	filePart := protocol.NewFilePartWithBytes(
+		"image.png",
+		"image/png",
+		base64.StdEncoding.EncodeToString([]byte("image")),
+	)
+	msg := &protocol.Message{
+		MessageID: "message-with-file",
+		Role:      protocol.MessageRoleAgent,
+		Parts: []protocol.Part{
+			&protocol.TextPart{Text: "before"},
+			&filePart,
+			&protocol.FilePart{},
+			&protocol.TextPart{Text: "after"},
+		},
+	}
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{InvocationID: "invocation"}
+
+	tests := []struct {
+		name      string
+		streaming bool
+	}{
+		{name: "unary"},
+		{name: "streaming", streaming: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evt := converter.buildRespEvent(
+				tt.streaming,
+				msg,
+				"remote-agent",
+				invocation,
+			)
+			if evt == nil || evt.Response == nil || len(evt.Response.Choices) != 1 {
+				t.Fatalf("event response = %#v, want one choice", evt)
+			}
+			message := evt.Response.Choices[0].Message
+			if tt.streaming {
+				message = evt.Response.Choices[0].Delta
+			}
+			if message.Content != "beforeafter" {
+				t.Fatalf("content = %q, want %q", message.Content, "beforeafter")
+			}
+			if len(message.ContentParts) != 1 {
+				t.Fatalf("content parts = %d, want 1", len(message.ContentParts))
+			}
+			part := message.ContentParts[0]
+			if part.Type != model.ContentTypeImage || part.Image == nil ||
+				string(part.Image.Data) != "image" {
+				t.Fatalf("content part = %#v, want decoded image", part)
+			}
+		})
 	}
 }
 
