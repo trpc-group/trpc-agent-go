@@ -30,11 +30,16 @@ nav:
       - Plugins: plugin.md
       - Memory:
           - Overview: memory/index.md
-          - Usage Guide: memory/usage.md
-          - Full Example: memory/example.md
-          - Storage Backends: memory/storage.md
-          - FAQ: memory/faq.md
-          - Advanced Configuration: memory/advanced.md
+          - Usage and Configuration: memory/usage.md
+          - In-Memory: memory/inmemory.md
+          - SQLite: memory/sqlite.md
+          - SQLiteVec: memory/sqlitevec.md
+          - Redis: memory/redis.md
+          - MySQL: memory/mysql.md
+          - MySQL Vector: memory/mysqlvec.md
+          - PostgreSQL: memory/postgres.md
+          - pgvector: memory/pgvector.md
+          - ChromaDB: memory/chromadb.md
           - mem0 Integration: memory/mem0.md
           - TencentDB Agent Memory: memory/tencentdb.md
       - Artifact: artifact.md
@@ -155,11 +160,16 @@ plugins:
                 - Plugins: plugin.md
                 - Memory:
                     - 概览: memory/index.md
-                    - 使用指南: memory/usage.md
-                    - 完整示例: memory/example.md
-                    - 存储后端: memory/storage.md
-                    - 常见问题: memory/faq.md
-                    - 高级配置: memory/advanced.md
+                    - 使用与配置: memory/usage.md
+                    - 内存存储: memory/inmemory.md
+                    - SQLite: memory/sqlite.md
+                    - SQLiteVec: memory/sqlitevec.md
+                    - Redis: memory/redis.md
+                    - MySQL: memory/mysql.md
+                    - MySQL Vector: memory/mysqlvec.md
+                    - PostgreSQL: memory/postgres.md
+                    - pgvector: memory/pgvector.md
+                    - ChromaDB: memory/chromadb.md
                     - mem0 集成: memory/mem0.md
                     - TencentDB Agent Memory: memory/tencentdb.md
                 - Artifact: artifact.md
