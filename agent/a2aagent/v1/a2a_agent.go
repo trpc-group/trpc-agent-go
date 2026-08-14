@@ -146,25 +146,12 @@ func New(opts ...Option) (*A2AAgent, error) {
 	if agent.description == "" {
 		agent.description = agent.agentCard.Description
 	}
-	resolvedURL := agent.agentCard.PrimaryURL()
-	if resolvedURL == "" {
-		resolvedURL = agentURL
-	}
-	resolvedURL = ia2a.NormalizeURL(resolvedURL)
+	resolvedURL, clientOptions := resolveClientConfig(
+		agent.agentCard,
+		agentURL,
+		agent.extraA2AOptions,
+	)
 	agent.agentCard.URL = resolvedURL
-	clientOptions := make([]client.Option, 0, len(agent.extraA2AOptions)+2)
-	if len(agent.agentCard.SupportedInterfaces) > 0 {
-		primary := agent.agentCard.SupportedInterfaces[0]
-		if primary.ProtocolBinding != "" {
-			clientOptions = append(clientOptions, client.WithProtocolBinding(primary.ProtocolBinding))
-		}
-		if primary.Tenant != "" {
-			clientOptions = append(clientOptions, client.WithTenant(primary.Tenant))
-		}
-	}
-	// Explicit client options take precedence over values discovered from the
-	// Agent Card.
-	clientOptions = append(clientOptions, agent.extraA2AOptions...)
 	a2aClient, err := client.NewA2AClient(resolvedURL, clientOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create A2A client for %s: %w", resolvedURL, err)
@@ -172,6 +159,48 @@ func New(opts ...Option) (*A2AAgent, error) {
 	agent.a2aClient = a2aClient
 
 	return agent, nil
+}
+
+func resolveClientConfig(
+	card *server.AgentCard,
+	fallbackURL string,
+	explicitOptions []client.Option,
+) (string, []client.Option) {
+	selectedInterface := firstSupportedInterface(card.SupportedInterfaces)
+	resolvedURL := card.PrimaryURL()
+	if selectedInterface != nil {
+		resolvedURL = selectedInterface.URL
+	} else if len(card.SupportedInterfaces) > 0 {
+		selectedInterface = &card.SupportedInterfaces[0]
+	}
+	if resolvedURL == "" {
+		resolvedURL = fallbackURL
+	}
+
+	clientOptions := make([]client.Option, 0, len(explicitOptions)+2)
+	if selectedInterface != nil {
+		if selectedInterface.ProtocolBinding != "" {
+			clientOptions = append(clientOptions, client.WithProtocolBinding(selectedInterface.ProtocolBinding))
+		}
+		if selectedInterface.Tenant != "" {
+			clientOptions = append(clientOptions, client.WithTenant(selectedInterface.Tenant))
+		}
+	}
+	// Explicit client options take precedence over values discovered from the
+	// Agent Card.
+	clientOptions = append(clientOptions, explicitOptions...)
+	return ia2a.NormalizeURL(resolvedURL), clientOptions
+}
+
+func firstSupportedInterface(interfaces []protocol.AgentInterface) *protocol.AgentInterface {
+	for i := range interfaces {
+		binding := interfaces[i].ProtocolBinding
+		if strings.EqualFold(binding, protocol.ProtocolBindingJSONRPC) ||
+			strings.EqualFold(binding, protocol.ProtocolBindingHTTPJSON) {
+			return &interfaces[i]
+		}
+	}
+	return nil
 }
 
 // sendErrorEvent sends an error event to the event channel.

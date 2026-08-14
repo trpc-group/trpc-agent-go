@@ -573,6 +573,85 @@ func TestServerRoutesPrimarySupportedInterface(t *testing.T) {
 	}
 }
 
+func TestServerDoesNotMutateInputAgentCardInterfaces(t *testing.T) {
+	card := a2aserver.AgentCard{
+		Name: "agent",
+		SupportedInterfaces: []a2aserver.AgentInterface{{
+			URL:             "http://example.com/agent",
+			ProtocolBinding: "JSONRPC",
+			ProtocolVersion: protocol.ProtocolVersionV1,
+		}},
+	}
+	if _, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(card),
+	); err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if got, want := card.SupportedInterfaces[0].URL, "http://example.com/agent"; got != want {
+		t.Fatalf("input card URL = %q, want unchanged %q", got, want)
+	}
+}
+
+func TestServerRejectsSignedAgentCardRequiringNormalization(t *testing.T) {
+	tests := map[string]a2aserver.AgentCard{
+		"interfaces": {
+			Name: "agent",
+			URL:  "http://example.com/agent/",
+			Signatures: []a2aserver.AgentCardSignature{{
+				Protected: "header",
+				Signature: "signature",
+			}},
+		},
+		"endpoint": {
+			Name: "agent",
+			SupportedInterfaces: []a2aserver.AgentInterface{{
+				URL:             "http://example.com/agent",
+				ProtocolBinding: "JSONRPC",
+				ProtocolVersion: protocol.ProtocolVersionV1,
+			}},
+			Signatures: []a2aserver.AgentCardSignature{{
+				Protected: "header",
+				Signature: "signature",
+			}},
+		},
+	}
+	for name, card := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := New(
+				WithRunner(&modeTestRunner{}),
+				WithAgentCard(card),
+			)
+			const want = "signed agent card requires normalization; provide a card signed with the final served URL"
+			if err == nil || err.Error() != want {
+				t.Fatalf("New error = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
+func TestServerAcceptsNormalizedSignedAgentCard(t *testing.T) {
+	card := a2aserver.AgentCard{
+		Name: "agent",
+		URL:  "http://example.com/agent/",
+		SupportedInterfaces: []a2aserver.AgentInterface{{
+			URL:             "http://example.com/agent/",
+			ProtocolBinding: "JSONRPC",
+			ProtocolVersion: protocol.ProtocolVersionV1,
+		}},
+		Signatures: []a2aserver.AgentCardSignature{{
+			Protected: "header",
+			Signature: "signature",
+		}},
+	}
+	if _, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(card),
+	); err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+}
+
 func TestNewAgentCardAdvertisesExactSubpathEndpoint(t *testing.T) {
 	httpServer := httptest.NewUnstartedServer(nil)
 	endpoint := "http://" + httpServer.Listener.Addr().String() + "/api/v1/agent"

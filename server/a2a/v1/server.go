@@ -136,6 +136,12 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	if agentCard.Name == "" {
 		return nil, errors.New("agent card name is required")
 	}
+	originalAgentCard := agentCard
+	if agentCard.SupportedInterfaces != nil {
+		interfaces := make([]protocol.AgentInterface, len(agentCard.SupportedInterfaces))
+		copy(interfaces, agentCard.SupportedInterfaces)
+		agentCard.SupportedInterfaces = interfaces
+	}
 	agentCard.NormalizeInterfaces()
 	if len(agentCard.SupportedInterfaces) > 0 &&
 		strings.EqualFold(agentCard.SupportedInterfaces[0].ProtocolBinding, "JSONRPC") {
@@ -145,6 +151,11 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		if agentCard.URL == primaryURL {
 			agentCard.URL = exactEndpoint
 		}
+	}
+	if len(agentCard.Signatures) > 0 && !reflect.DeepEqual(originalAgentCard, agentCard) {
+		return nil, errors.New(
+			"signed agent card requires normalization; provide a card signed with the final served URL",
+		)
 	}
 
 	builtInProcessor, err := buildProcessor(agentCard.Name, options)

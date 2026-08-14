@@ -167,6 +167,7 @@ func TestNormalizeJSONRPCEndpoint(t *testing.T) {
 		"http://example.com/api/v1":             "http://example.com/api/v1/",
 		"http://example.com/api/v1/":            "http://example.com/api/v1/",
 		"http://example.com/a%2Fb?access_key=1": "http://example.com/a%2Fb/?access_key=1",
+		"http://example.com/a%2F?access_key=1":  "http://example.com/a%2F/?access_key=1",
 	}
 	for input, want := range tests {
 		if got := normalizeJSONRPCEndpoint(input); got != want {

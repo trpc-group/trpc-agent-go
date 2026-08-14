@@ -111,11 +111,11 @@ func normalizeJSONRPCEndpoint(host string) string {
 	if err != nil {
 		return endpoint
 	}
-	if !strings.HasSuffix(parsed.Path, "/") {
+	if !strings.HasSuffix(parsed.EscapedPath(), "/") {
 		parsed.Path += "/"
-	}
-	if parsed.RawPath != "" && !strings.HasSuffix(parsed.RawPath, "/") {
-		parsed.RawPath += "/"
+		if parsed.RawPath != "" {
+			parsed.RawPath += "/"
+		}
 	}
 	return parsed.String()
 }

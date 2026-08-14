@@ -159,8 +159,10 @@ func TestNewDiscoversCardFromPathPrefixWithLegacyFallback(t *testing.T) {
 }
 
 func TestNewUsesPrimaryInterfaceBindingAndTenant(t *testing.T) {
-	var requestErr error
+	requestErrCh := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var requestErr error
+		defer func() { requestErrCh <- requestErr }()
 		if r.URL.EscapedPath() != "/tenant-a/message:send" {
 			requestErr = fmt.Errorf("path = %s", r.URL.EscapedPath())
 		}
@@ -197,8 +199,81 @@ func TestNewUsesPrimaryInterfaceBindingAndTenant(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
-	if requestErr != nil {
-		t.Fatal(requestErr)
+	if err := <-requestErrCh; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewSelectsFirstSupportedInterface(t *testing.T) {
+	requestErrCh := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var requestErr error
+		defer func() { requestErrCh <- requestErr }()
+		var request struct {
+			ID     any            `json:"id"`
+			Params map[string]any `json:"params"`
+		}
+		if r.URL.EscapedPath() != "/jsonrpc" {
+			requestErr = fmt.Errorf("path = %s", r.URL.EscapedPath())
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			requestErr = err
+			return
+		}
+		if request.Params["tenant"] != "json-tenant" {
+			requestErr = fmt.Errorf("tenant = %v", request.Params["tenant"])
+			return
+		}
+		message := protocol.NewMessage(
+			protocol.MessageRoleAgent,
+			[]*protocol.Part{protocol.NewTextPart("ok")},
+		)
+		result, err := json.Marshal(protocol.NewSendMessageResponseMessage(&message))
+		if err != nil {
+			requestErr = err
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result":  json.RawMessage(result),
+		})
+	}))
+	defer server.Close()
+
+	remote, err := New(WithAgentCard(&protocolserver.AgentCard{
+		Name: "remote",
+		SupportedInterfaces: []protocolserver.AgentInterface{
+			{
+				URL:             server.URL + "/grpc",
+				ProtocolBinding: "GRPC",
+				ProtocolVersion: protocol.ProtocolVersionV1,
+				Tenant:          "grpc-tenant",
+			},
+			{
+				URL:             server.URL + "/jsonrpc",
+				ProtocolBinding: protocol.ProtocolBindingJSONRPC,
+				ProtocolVersion: protocol.ProtocolVersionV1,
+				Tenant:          "json-tenant",
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	message := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]*protocol.Part{protocol.NewTextPart("hello")},
+	)
+	if _, err := remote.a2aClient.SendMessage(context.Background(), protocol.SendMessageParams{
+		Message: message,
+	}); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+	if err := <-requestErrCh; err != nil {
+		t.Fatal(err)
 	}
 }
 
