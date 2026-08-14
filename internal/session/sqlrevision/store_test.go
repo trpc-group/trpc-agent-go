@@ -358,6 +358,77 @@ INSERT INTO tracks (
 	assert.Equal(t, 1, storeTestRowCount(t, db, "summaries", "deleted_at IS NULL"))
 }
 
+func TestStoreRemoveTailRowsBatches(t *testing.T) {
+	tests := []struct {
+		name       string
+		dialect    Dialect
+		softDelete bool
+	}{
+		{name: "mysql hard delete", dialect: MySQL},
+		{name: "mysql soft delete", dialect: MySQL, softDelete: true},
+		{name: "postgres hard delete", dialect: PostgreSQL},
+		{name: "postgres soft delete", dialect: PostgreSQL, softDelete: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := testStore()
+			store.Dialect = tt.dialect
+			store.SoftDelete = tt.softDelete
+			key := session.Key{
+				AppName: "app", UserID: "user", SessionID: "session",
+			}
+			ids := make([]int64, tailDeleteBatchSize+1)
+			for i := range ids {
+				ids[i] = int64(i + 1)
+			}
+			exec := &recordingExecer{}
+			require.NoError(t, store.removeTailRows(
+				ctx, exec, store.Tables.Events, key, ids,
+			))
+			require.Len(t, exec.calls, 2)
+			offset := 0
+			if tt.softDelete {
+				offset = 1
+			}
+			for i, wantArgs := range []int{
+				tailDeleteBatchSize + 3 + offset,
+				1 + 3 + offset,
+			} {
+				call := exec.calls[i]
+				require.Len(t, call.args, wantArgs)
+				if tt.dialect == MySQL {
+					assert.Equal(t, wantArgs, strings.Count(call.statement, "?"))
+					continue
+				}
+				assert.Contains(t, call.statement, store.bind(wantArgs))
+				assert.NotContains(t, call.statement, store.bind(wantArgs+1))
+			}
+		})
+	}
+}
+
+type recordedExecCall struct {
+	statement string
+	args      []any
+}
+
+type recordingExecer struct {
+	calls []recordedExecCall
+}
+
+func (e *recordingExecer) ExecContext(
+	_ context.Context,
+	statement string,
+	args ...any,
+) (sql.Result, error) {
+	e.calls = append(e.calls, recordedExecCall{
+		statement: statement,
+		args:      append([]any(nil), args...),
+	})
+	return nil, nil
+}
+
 func TestStoreReplaceLatestTurn(t *testing.T) {
 	ctx := context.Background()
 	db := openStoreTestDB(t)

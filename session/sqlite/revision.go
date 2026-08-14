@@ -28,6 +28,12 @@ type revisionRowQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+type revisionExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+const revisionTailDeleteBatchSize = 500
+
 func (s *Service) readRevision(
 	ctx context.Context,
 	query revisionRowQuerier,
@@ -623,32 +629,9 @@ ORDER BY created_at ASC, id ASC`,
 	if len(ids) <= prefixLength {
 		return sessionrevision.ErrLatestTurnReplacementUnavailable
 	}
-	tail := ids[prefixLength:]
-	placeholders := make([]string, len(tail))
-	args := make([]any, 0, len(tail)+4)
-	for i, id := range tail {
-		placeholders[i] = "?"
-		args = append(args, id)
-	}
-	var statement string
-	if s.opts.softDelete {
-		statement = fmt.Sprintf(
-			`UPDATE %s SET deleted_at = ? WHERE id IN (%s)
-AND app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
-			s.tableSessionEvents,
-			strings.Join(placeholders, ", "),
-		)
-		args = append([]any{time.Now().UTC().UnixNano()}, args...)
-	} else {
-		statement = fmt.Sprintf(
-			`DELETE FROM %s WHERE id IN (%s)
-AND app_name = ? AND user_id = ? AND session_id = ?`,
-			s.tableSessionEvents,
-			strings.Join(placeholders, ", "),
-		)
-	}
-	args = append(args, key.AppName, key.UserID, key.SessionID)
-	if _, err := tx.ExecContext(ctx, statement, args...); err != nil {
+	if err := s.removeActiveTailRowsTx(
+		ctx, tx, s.tableSessionEvents, key, ids[prefixLength:],
+	); err != nil {
 		return fmt.Errorf("remove discarded event tail: %w", err)
 	}
 	return nil
@@ -749,31 +732,50 @@ AND deleted_at IS NULL ORDER BY created_at, id`,
 	if len(tail) == 0 {
 		return nil
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(tail)), ",")
-	args := make([]any, 0, len(tail)+4)
-	for _, id := range tail {
-		args = append(args, id)
-	}
-	var statement string
-	if s.opts.softDelete {
-		statement = fmt.Sprintf(
-			`UPDATE %s SET deleted_at = ? WHERE id IN (%s)
-AND app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
-			s.tableSessionTracks,
-			placeholders,
-		)
-		args = append([]any{time.Now().UTC().UnixNano()}, args...)
-	} else {
-		statement = fmt.Sprintf(
-			`DELETE FROM %s WHERE id IN (%s)
-AND app_name = ? AND user_id = ? AND session_id = ?`,
-			s.tableSessionTracks,
-			placeholders,
-		)
-	}
-	args = append(args, key.AppName, key.UserID, key.SessionID)
-	if _, err := tx.ExecContext(ctx, statement, args...); err != nil {
+	if err := s.removeActiveTailRowsTx(
+		ctx, tx, s.tableSessionTracks, key, tail,
+	); err != nil {
 		return fmt.Errorf("remove discarded track tail: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) removeActiveTailRowsTx(
+	ctx context.Context,
+	exec revisionExecer,
+	table string,
+	key session.Key,
+	ids []int64,
+) error {
+	for start := 0; start < len(ids); start += revisionTailDeleteBatchSize {
+		end := min(start+revisionTailDeleteBatchSize, len(ids))
+		batch := ids[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		args := make([]any, 0, len(batch)+4)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		var statement string
+		if s.opts.softDelete {
+			statement = fmt.Sprintf(
+				`UPDATE %s SET deleted_at = ? WHERE id IN (%s)
+AND app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+				table,
+				placeholders,
+			)
+			args = append([]any{time.Now().UTC().UnixNano()}, args...)
+		} else {
+			statement = fmt.Sprintf(
+				`DELETE FROM %s WHERE id IN (%s)
+AND app_name = ? AND user_id = ? AND session_id = ?`,
+				table,
+				placeholders,
+			)
+		}
+		args = append(args, key.AppName, key.UserID, key.SessionID)
+		if _, err := exec.ExecContext(ctx, statement, args...); err != nil {
+			return err
+		}
 	}
 	return nil
 }

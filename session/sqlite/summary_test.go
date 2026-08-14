@@ -138,6 +138,16 @@ AND filter_key = ? AND deleted_at IS NULL AND expires_at IS NULL`,
 	), key.AppName, key.UserID, key.SessionID,
 		session.SummaryFilterKeyAllContents).Scan(&count))
 	require.Equal(t, 1, count)
+
+	require.NoError(t, svc.DeleteSession(ctx, key))
+	require.NoError(t, svc.db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT COUNT(*) FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND filter_key = ? AND deleted_at IS NULL`,
+		svc.tableSessionSummaries,
+	), key.AppName, key.UserID, key.SessionID,
+		session.SummaryFilterKeyAllContents).Scan(&count))
+	require.Zero(t, count)
 }
 
 func TestSessionSQLite_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {

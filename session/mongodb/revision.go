@@ -127,7 +127,7 @@ func (s *Service) revisionIdentities(
 		ctx,
 		s.database,
 		s.collSessionStates,
-		activeFilterNoExpiry(bson.M{
+		activeFilter(time.Now(), bson.M{
 			"app_name":   userKey.AppName,
 			"user_id":    userKey.UserID,
 			"session_id": bson.M{"$in": ids},
@@ -161,15 +161,6 @@ func (s *Service) revisionIdentities(
 			generation: record.Generation,
 		}
 	}
-	for _, id := range ids {
-		if _, ok := identities[id]; !ok {
-			return nil, fmt.Errorf(
-				"read session revisions: missing session %q: %w",
-				id,
-				sessionrevision.ErrStaleProjection,
-			)
-		}
-	}
 	return identities, nil
 }
 
@@ -199,33 +190,36 @@ func (s *Service) stabilizeListedRevisionProjections(
 			generation: record.Generation,
 		}
 	}
-	for i, sess := range listed {
+	stabilized := make([]*session.Session, 0, len(listed))
+	for _, sess := range listed {
 		before, ok := initial[sess.ID]
 		if !ok {
 			return nil, sessionrevision.ErrStaleProjection
 		}
 		current, ok := identities[sess.ID]
 		if !ok {
-			return nil, sessionrevision.ErrStaleProjection
-		}
-		if current == before {
+			// The session was deleted or expired after the initial list query.
+			// Match ListSessions semantics by omitting it from the result.
 			continue
 		}
-		key := session.Key{
-			AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID,
-		}
-		stable, err := s.loadStableRevisionProjection(
-			ctx, key, eventNum, eventTime,
-		)
-		if err != nil || stable == nil {
-			if err == nil {
-				err = sessionrevision.ErrStaleProjection
+		if current != before {
+			key := session.Key{
+				AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID,
 			}
-			return nil, err
+			stable, err := s.loadStableRevisionProjection(
+				ctx, key, eventNum, eventTime,
+			)
+			if err != nil || stable == nil {
+				if err == nil {
+					err = sessionrevision.ErrStaleProjection
+				}
+				return nil, err
+			}
+			sess = stable
 		}
-		listed[i] = stable
+		stabilized = append(stabilized, sess)
 	}
-	return listed, nil
+	return stabilized, nil
 }
 
 func (s *Service) loadStableRevisionProjection(

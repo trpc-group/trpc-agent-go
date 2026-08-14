@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -940,6 +941,65 @@ func TestReplacementResultScopedStateFailures(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+func TestRemoveActiveTailRowsBatches(t *testing.T) {
+	for _, softDelete := range []bool{false, true} {
+		name := "hard delete"
+		if softDelete {
+			name = "soft delete"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			service := &Service{opts: defaultOptions}
+			service.opts.softDelete = softDelete
+			key := session.Key{
+				AppName: "app", UserID: "user", SessionID: "session",
+			}
+			ids := make([]int64, revisionTailDeleteBatchSize+1)
+			for i := range ids {
+				ids[i] = int64(i + 1)
+			}
+			exec := &sqliteRecordingExecer{}
+			require.NoError(t, service.removeActiveTailRowsTx(
+				ctx, exec, "session_events", key, ids,
+			))
+			require.Len(t, exec.calls, 2)
+			offset := 0
+			if softDelete {
+				offset = 1
+			}
+			for i, wantArgs := range []int{
+				revisionTailDeleteBatchSize + 3 + offset,
+				1 + 3 + offset,
+			} {
+				call := exec.calls[i]
+				require.Len(t, call.args, wantArgs)
+				assert.Equal(t, wantArgs, strings.Count(call.statement, "?"))
+			}
+		})
+	}
+}
+
+type sqliteExecCall struct {
+	statement string
+	args      []any
+}
+
+type sqliteRecordingExecer struct {
+	calls []sqliteExecCall
+}
+
+func (e *sqliteRecordingExecer) ExecContext(
+	_ context.Context,
+	statement string,
+	args ...any,
+) (sql.Result, error) {
+	e.calls = append(e.calls, sqliteExecCall{
+		statement: statement,
+		args:      append([]any(nil), args...),
+	})
+	return nil, nil
 }
 
 func TestReplaceActiveSessionWriteFailures(t *testing.T) {

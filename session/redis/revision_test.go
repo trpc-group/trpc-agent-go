@@ -262,6 +262,10 @@ func TestRollingProjectionSupportsSuccessiveTurns(t *testing.T) {
 			)
 			require.NoError(t, err)
 			assert.True(t, result.Applied)
+			require.Len(t, result.ActiveSession.Events, 2)
+			assert.Equal(t, "baseline", result.ActiveSession.Events[0].ID)
+			assert.Equal(t, "event-request-1", result.ActiveSession.Events[1].ID)
+			assert.Equal(t, "request-1", result.ActiveSession.Events[1].RequestID)
 			for _, evt := range result.ActiveSession.Events {
 				assert.NotEqual(t, "request-2", evt.RequestID)
 			}

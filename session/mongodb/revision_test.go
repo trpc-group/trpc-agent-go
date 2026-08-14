@@ -274,33 +274,43 @@ func TestStabilizeListedRevisionProjectionsReloadsOnlyChangedSession(t *testing.
 	assert.Equal(t, 3, findOneCalls)
 }
 
-func TestRevisionIdentitiesRejectsIncompleteBatch(t *testing.T) {
+func TestRevisionIdentitiesHandleIncompleteBatch(t *testing.T) {
 	userKey := session.UserKey{AppName: "app", UserID: "user"}
 	listed := []*session.Session{
 		session.NewSession(userKey.AppName, userKey.UserID, "s1"),
 		session.NewSession(userKey.AppName, userKey.UserID, "s2"),
 	}
-	for _, tc := range []struct {
-		name string
-		docs []any
-	}{
-		{name: "missing", docs: []any{sessionStateDoc{SessionID: "s1"}}},
-		{name: "duplicate", docs: []any{
-			sessionStateDoc{SessionID: "s1"},
-			sessionStateDoc{SessionID: "s1"},
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mc := &mockClient{findFn: func(any) (*mongo.Cursor, error) {
-				return docsCursor(tc.docs)
-			}}
-			s := newServiceForTest(t, mc)
-			_, err := s.revisionIdentities(
-				context.Background(), userKey, listed,
-			)
-			assert.ErrorIs(t, err, sessionrevision.ErrStaleProjection)
-		})
-	}
+	t.Run("missing", func(t *testing.T) {
+		mc := &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+			return docsCursor([]any{sessionStateDoc{SessionID: "s1"}})
+		}}
+		s := newServiceForTest(t, mc)
+		identities, err := s.revisionIdentities(
+			context.Background(), userKey, listed,
+		)
+		require.NoError(t, err)
+		assert.Contains(t, identities, "s1")
+		assert.NotContains(t, identities, "s2")
+		ops := mc.recorded()
+		require.Len(t, ops, 1)
+		filter, ok := ops[0].filter.(bson.M)
+		require.True(t, ok)
+		assert.Contains(t, filter, "$or")
+	})
+
+	t.Run("duplicate", func(t *testing.T) {
+		mc := &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+			return docsCursor([]any{
+				sessionStateDoc{SessionID: "s1"},
+				sessionStateDoc{SessionID: "s1"},
+			})
+		}}
+		s := newServiceForTest(t, mc)
+		_, err := s.revisionIdentities(
+			context.Background(), userKey, listed,
+		)
+		assert.ErrorIs(t, err, sessionrevision.ErrStaleProjection)
+	})
 }
 
 func TestPrepareRevisionEventMutation(t *testing.T) {
@@ -1596,6 +1606,17 @@ func TestListedRevisionStabilizationFailsClosed(t *testing.T) {
 		assert.ErrorContains(t, err, "read session revisions")
 	})
 
+	t.Run("deleted before identity read", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+			return emptyCursor()
+		}})
+		stabilized, err := s.stabilizeListedRevisionProjections(
+			ctx, userKey, listed, []sessionStateDoc{initial}, 0, time.Time{},
+		)
+		require.NoError(t, err)
+		assert.Empty(t, stabilized)
+	})
+
 	t.Run("duplicate initial identity", func(t *testing.T) {
 		s := newServiceForTest(t, &mockClient{findFn: func(any) (*mongo.Cursor, error) {
 			return docsCursor([]any{initial})
@@ -2253,6 +2274,8 @@ func TestRevisionDocumentDecodeAndRestoreFailures(t *testing.T) {
 			"trace": {Track: "trace", Events: []session.TrackEvent{prefix}},
 		}
 		require.NoError(t, s.trimRevisionTrackTails(ctx, key, projection))
-		assert.Equal(t, "UpdateMany", mc.recorded()[1].name)
+		ops := mc.recorded()
+		require.Len(t, ops, 2)
+		assert.Equal(t, "UpdateMany", ops[1].name)
 	})
 }

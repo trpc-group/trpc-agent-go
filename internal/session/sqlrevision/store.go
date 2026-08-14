@@ -34,6 +34,8 @@ const (
 	PostgreSQL Dialect = iota
 	// MySQL selects MySQL-compatible SQL.
 	MySQL
+
+	tailDeleteBatchSize = 500
 )
 
 // Tables identifies the active session projection tables.
@@ -940,14 +942,29 @@ AND deleted_at IS NULL ORDER BY created_at, id FOR UPDATE`,
 
 func (s Store) removeTailRows(
 	ctx context.Context,
-	tx *sql.Tx,
+	exec execer,
 	table string,
 	key session.Key,
 	ids []int64,
 ) error {
-	if len(ids) == 0 {
-		return nil
+	for start := 0; start < len(ids); start += tailDeleteBatchSize {
+		end := min(start+tailDeleteBatchSize, len(ids))
+		if err := s.removeTailRowBatch(
+			ctx, exec, table, key, ids[start:end],
+		); err != nil {
+			return err
+		}
 	}
+	return nil
+}
+
+func (s Store) removeTailRowBatch(
+	ctx context.Context,
+	exec execer,
+	table string,
+	key session.Key,
+	ids []int64,
+) error {
 	offset := 0
 	args := make([]any, 0, len(ids)+4)
 	// #nosec G202 -- table names are assembled from validated service prefixes.
@@ -973,7 +990,7 @@ func (s Store) removeTailRows(
 		statement += " AND deleted_at IS NULL"
 	}
 	args = append(args, key.AppName, key.UserID, key.SessionID)
-	_, err := tx.ExecContext(ctx, statement, args...)
+	_, err := exec.ExecContext(ctx, statement, args...)
 	return err
 }
 
