@@ -28,7 +28,20 @@ nav:
       - Prompt Template: prompt.md
       - Callbacks: callbacks.md
       - Plugins: plugin.md
-      - Memory: memory.md
+      - Memory:
+          - Overview: memory/index.md
+          - Usage and Configuration: memory/usage.md
+          - In-Memory: memory/inmemory.md
+          - SQLite: memory/sqlite.md
+          - SQLiteVec: memory/sqlitevec.md
+          - Redis: memory/redis.md
+          - MySQL: memory/mysql.md
+          - MySQL Vector: memory/mysqlvec.md
+          - PostgreSQL: memory/postgres.md
+          - pgvector: memory/pgvector.md
+          - ChromaDB: memory/chromadb.md
+          - mem0 Integration: memory/mem0.md
+          - TencentDB Agent Memory: memory/tencentdb.md
       - Artifact: artifact.md
       - Skill: skill.md
       - Evolution: evolution.md
@@ -145,7 +158,20 @@ plugins:
                 - Prompt Template: prompt.md
                 - Callbacks: callbacks.md
                 - Plugins: plugin.md
-                - Memory: memory.md
+                - Memory:
+                    - 概览: memory/index.md
+                    - 使用与配置: memory/usage.md
+                    - 内存存储: memory/inmemory.md
+                    - SQLite: memory/sqlite.md
+                    - SQLiteVec: memory/sqlitevec.md
+                    - Redis: memory/redis.md
+                    - MySQL: memory/mysql.md
+                    - MySQL Vector: memory/mysqlvec.md
+                    - PostgreSQL: memory/postgres.md
+                    - pgvector: memory/pgvector.md
+                    - ChromaDB: memory/chromadb.md
+                    - mem0 集成: memory/mem0.md
+                    - TencentDB Agent Memory: memory/tencentdb.md
                 - Artifact: artifact.md
                 - Skill: skill.md
                 - Evolution: evolution.md
