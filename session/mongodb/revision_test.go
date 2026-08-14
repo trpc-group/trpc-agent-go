@@ -1649,7 +1649,7 @@ func TestListedRevisionStabilizationFailsClosed(t *testing.T) {
 		assert.ErrorIs(t, err, sessionrevision.ErrStaleProjection)
 	})
 
-	t.Run("deleted during reload", func(t *testing.T) {
+	t.Run("expired during reload", func(t *testing.T) {
 		findOneCalls := 0
 		mc := &mockClient{
 			findFn: func(any) (*mongo.Cursor, error) {
@@ -1666,10 +1666,11 @@ func TestListedRevisionStabilizationFailsClosed(t *testing.T) {
 			},
 		}
 		s := newServiceForTest(t, mc)
-		_, err := s.stabilizeListedRevisionProjections(
+		stabilized, err := s.stabilizeListedRevisionProjections(
 			ctx, userKey, listed, []sessionStateDoc{initial}, 0, time.Time{},
 		)
-		assert.ErrorIs(t, err, sessionrevision.ErrStaleProjection)
+		require.NoError(t, err)
+		assert.Empty(t, stabilized)
 	})
 
 	t.Run("identity never stabilizes", func(t *testing.T) {

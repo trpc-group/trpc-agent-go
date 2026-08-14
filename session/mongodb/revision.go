@@ -209,11 +209,11 @@ func (s *Service) stabilizeListedRevisionProjections(
 			stable, err := s.loadStableRevisionProjection(
 				ctx, key, eventNum, eventTime,
 			)
-			if err != nil || stable == nil {
-				if err == nil {
-					err = sessionrevision.ErrStaleProjection
-				}
+			if err != nil {
 				return nil, err
+			}
+			if stable == nil {
+				continue
 			}
 			sess = stable
 		}
