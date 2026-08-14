@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package mysql
 
@@ -118,26 +119,42 @@ func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 		olderBytes := marshalSummaryIntegration(t, "older", olderUpdatedAt)
 		newerBytes := marshalSummaryIntegration(t, "newer", newerUpdatedAt)
 
-		olderPrepared := make(chan struct{})
-		releaseOlder := make(chan struct{})
+		// Publish the newer summary while holding the parent-session lock. The
+		// already-started older writer must wait, then observe and preserve it.
+		newerTx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = newerTx.Rollback() })
+		require.NoError(t, svc.lockActiveSessionForSummary(ctx, newerTx, key))
+
+		olderStarted := make(chan struct{})
 		olderErr := make(chan error, 1)
 		go func() {
-			close(olderPrepared)
-			<-releaseOlder
+			close(olderStarted)
 			olderErr <- svc.upsertSessionSummary(ctx, key, "", olderBytes, olderUpdatedAt)
 		}()
-		<-olderPrepared
-		newerErr := svc.upsertSessionSummary(ctx, key, "", newerBytes, newerUpdatedAt)
-		close(releaseOlder)
-		require.NoError(t, newerErr)
+		<-olderStarted
+		select {
+		case err := <-olderErr:
+			require.Failf(t, "older write was not blocked", "unexpected result: %v", err)
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		_, err = newerTx.ExecContext(ctx, fmt.Sprintf(
+			`UPDATE %s SET summary = ?, updated_at = ?
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
+			AND deleted_at IS NULL`, tableName,
+		), string(newerBytes), newerUpdatedAt,
+			key.AppName, key.UserID, key.SessionID, "")
+		require.NoError(t, err)
+		require.NoError(t, newerTx.Commit())
 		require.NoError(t, <-olderErr)
-		requireSummaryIntegrationRows(t, ctx, db, tableName, key, "newer", newerUpdatedAt)
+		requireSummaryIntegrationRows(t, ctx, db, tableName, key, "newer", newerUpdatedAt, 2)
 
 		regeneratedBytes := marshalSummaryIntegration(t, "regenerated", newerUpdatedAt)
 		require.NoError(t, svc.upsertSessionSummary(
 			ctx, key, "", regeneratedBytes, newerUpdatedAt,
 		))
-		requireSummaryIntegrationRows(t, ctx, db, tableName, key, "regenerated", newerUpdatedAt)
+		requireSummaryIntegrationRows(t, ctx, db, tableName, key, "regenerated", newerUpdatedAt, 2)
 	})
 }
 
@@ -275,6 +292,7 @@ func requireSummaryIntegrationRows(
 	key session.Key,
 	wantText string,
 	wantUpdatedAt time.Time,
+	wantRows int,
 ) {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(
@@ -297,5 +315,5 @@ func requireSummaryIntegrationRows(
 		count++
 	}
 	require.NoError(t, rows.Err())
-	require.Equal(t, 2, count)
+	require.Equal(t, wantRows, count)
 }
