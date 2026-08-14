@@ -607,4 +607,4 @@ defer memoryService.Close()
 ## See Also
 
 - [Manual Memory Example](../) - Traditional memory tools approach
-- [Memory Module Documentation](../../../docs/mkdocs/en/memory.md) - Complete memory guide
+- [Memory Module Documentation](../../../docs/mkdocs/en/memory/index.md) - Complete memory guide
