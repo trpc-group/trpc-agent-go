@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -428,12 +429,15 @@ func TestPreparedInputsAreDeepCopied(t *testing.T) {
 							Arguments: []byte(`{"value":"original"}`),
 						},
 						ExtraFields: map[string]any{
-							"nested":     []any{map[string]any{"value": "original"}},
-							"array":      [1]map[string]any{{"value": "original"}},
-							"structured": &extraFixture{Values: []string{"original"}},
-							"bytes":      []byte("bytes"),
-							"nil-map":    map[string]any(nil),
-							"nil-slice":  []any(nil),
+							"nested":      []any{map[string]any{"value": "original"}},
+							"array":       [1]map[string]any{{"value": "original"}},
+							"structured":  &extraFixture{Values: []string{"original"}},
+							"bytes":       []byte("bytes"),
+							"nil":         nil,
+							"nil-map":     map[string]any(nil),
+							"nil-slice":   []any(nil),
+							"empty-map":   map[string]any{},
+							"empty-slice": []any{},
 						},
 					}},
 				},
@@ -467,6 +471,7 @@ func TestPreparedInputsAreDeepCopied(t *testing.T) {
 		*prepared.Response.Error.Code = "changed"
 
 		originalChoice := &inputEvent.Response.Choices[0]
+		nilValue, hasNil := choice.Message.ToolCalls[0].ExtraFields["nil"]
 		if inputEvent.ParentMetadata.TriggerID != "original" ||
 			*originalChoice.FinishReason != "stop" ||
 			*originalChoice.Message.ContentParts[0].Text != "text" ||
@@ -480,8 +485,13 @@ func TestPreparedInputsAreDeepCopied(t *testing.T) {
 			originalChoice.Message.ToolCalls[0].ExtraFields["array"].([1]map[string]any)[0]["value"] != "original" ||
 			originalChoice.Message.ToolCalls[0].ExtraFields["structured"].(*extraFixture).Values[0] != "original" ||
 			string(originalChoice.Message.ToolCalls[0].ExtraFields["bytes"].([]byte)) != "bytes" ||
+			!hasNil || nilValue != nil ||
 			choice.Message.ToolCalls[0].ExtraFields["nil-map"].(map[string]any) != nil ||
 			choice.Message.ToolCalls[0].ExtraFields["nil-slice"].([]any) != nil ||
+			choice.Message.ToolCalls[0].ExtraFields["empty-map"].(map[string]any) == nil ||
+			len(choice.Message.ToolCalls[0].ExtraFields["empty-map"].(map[string]any)) != 0 ||
+			choice.Message.ToolCalls[0].ExtraFields["empty-slice"].([]any) == nil ||
+			len(choice.Message.ToolCalls[0].ExtraFields["empty-slice"].([]any)) != 0 ||
 			*inputEvent.Response.Error.Param != "parameter" ||
 			*inputEvent.Response.Error.Code != "code" {
 			t.Fatalf("prepareEvent() retained input ownership: %#v", inputEvent)
@@ -564,6 +574,146 @@ func TestRunnerIsolatesEventInputsBetweenBackends(t *testing.T) {
 	arguments := replayCase.Steps[1].Event.Event.Response.Choices[0].Message.ToolCalls[0].Function.Arguments
 	if string(arguments) != `{"value":"original"}` {
 		t.Fatalf("Run() mutated case input arguments = %q", arguments)
+	}
+}
+
+func TestRunnerIsolatesCustomJSONMarshalerStateBetweenBackends(t *testing.T) {
+	custom := &customJSONHiddenState{
+		Visible: "original",
+		hidden:  map[string]string{"value": "original"},
+	}
+	embedded := &embeddedCustomJSONState{
+		embeddedCustomJSONFields{Custom: custom},
+	}
+	sharedChannel := make(chan string, 1)
+	sharedChannel <- "original"
+	channelState := &customJSONChannelState{Channel: sharedChannel}
+	step := responseEvent("custom-json", 1, "assistant", model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ExtraFields: map[string]any{
+						"channel":  channelState,
+						"custom":   custom,
+						"embedded": embedded,
+					},
+				}},
+			},
+		}},
+	})
+	replayCase := Case{
+		Name:     "backend-custom-json-isolation",
+		Requires: []Capability{CapabilitySession},
+		Steps: []Step{
+			messageStep("user", "user", 0, "user", model.RoleUser, "run", ""),
+			step,
+		},
+	}
+
+	mutating := InMemoryBackend()
+	mutating.Name = "mutating"
+	open := mutating.Open
+	mutating.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err == nil {
+			services.Session = &mutatingCustomJSONSessionService{Service: services.Session}
+		}
+		return services, err
+	}
+	baseline := InMemoryBackend()
+	baseline.Name = "baseline"
+
+	report, err := (Runner{}).Run(context.Background(), []Case{replayCase}, []Backend{mutating, baseline})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.BlockingDiffs == 0 {
+		t.Fatalf("Run() report = %#v, want custom marshaler mutation to remain visible", report)
+	}
+	if custom.hidden["value"] != "original" {
+		t.Fatalf("Run() mutated custom marshaler input = %#v", custom.hidden)
+	}
+	if len(sharedChannel) != 1 {
+		t.Fatalf("Run() consumed custom marshaler channel, length = %d", len(sharedChannel))
+	}
+}
+
+func TestRunnerIsolatesCustomTextMarshalerStateBetweenBackends(t *testing.T) {
+	custom := &customTextHiddenState{hidden: map[string]string{"value": "original"}}
+	step := responseEvent("custom-text", 1, "assistant", model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ExtraFields: map[string]any{
+						"custom":     custom,
+						"custom-key": map[*customTextHiddenState]string{custom: "value"},
+					},
+				}},
+			},
+		}},
+	})
+	replayCase := Case{
+		Name:     "backend-custom-text-isolation",
+		Requires: []Capability{CapabilitySession},
+		Steps: []Step{
+			messageStep("user", "user", 0, "user", model.RoleUser, "run", ""),
+			step,
+		},
+	}
+
+	mutating := InMemoryBackend()
+	mutating.Name = "mutating"
+	open := mutating.Open
+	mutating.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err == nil {
+			services.Session = &mutatingCustomTextSessionService{Service: services.Session}
+		}
+		return services, err
+	}
+	baseline := InMemoryBackend()
+	baseline.Name = "baseline"
+
+	report, err := (Runner{}).Run(context.Background(), []Case{replayCase}, []Backend{mutating, baseline})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.BlockingDiffs == 0 {
+		t.Fatalf("Run() report = %#v, want text marshaler mutation to remain visible", report)
+	}
+	if custom.hidden["value"] != "original" {
+		t.Fatalf("Run() mutated custom text marshaler input = %#v", custom.hidden)
+	}
+}
+
+func TestCloneToolCallExtraFieldsPreservesSafeMarshalerTypes(t *testing.T) {
+	input := map[string]any{
+		"raw":      json.RawMessage(`{"value":"raw"}`),
+		"time":     time.Unix(123, 456).UTC(),
+		"json-key": map[jsonOnlyMapKey]string{1: "value"},
+		"text-key": map[textMapKey]string{"key": "value"},
+	}
+	cloned, err := cloneToolCallExtraFields(input)
+	if err != nil {
+		t.Fatalf("cloneToolCallExtraFields() error = %v", err)
+	}
+	if _, ok := cloned["raw"].(json.RawMessage); !ok {
+		t.Fatalf("raw message type = %T, want json.RawMessage", cloned["raw"])
+	}
+	if _, ok := cloned["time"].(time.Time); !ok {
+		t.Fatalf("time type = %T, want time.Time", cloned["time"])
+	}
+	if _, ok := cloned["json-key"].(map[jsonOnlyMapKey]string); !ok {
+		t.Fatalf("json map-key type = %T, want map[jsonOnlyMapKey]string", cloned["json-key"])
+	}
+	if _, ok := cloned["text-key"].(map[textMapKey]string); !ok {
+		t.Fatalf("text map-key type = %T, want map[textMapKey]string", cloned["text-key"])
 	}
 }
 
@@ -1621,6 +1771,62 @@ type mutatingAppendSessionService struct {
 	session.Service
 }
 
+type customJSONHiddenState struct {
+	Visible string `json:"visible"`
+	hidden  map[string]string
+}
+
+type embeddedCustomJSONFields struct {
+	Custom *customJSONHiddenState `json:"custom"`
+}
+
+type embeddedCustomJSONState struct {
+	embeddedCustomJSONFields
+}
+
+type customJSONChannelState struct {
+	Channel chan string
+}
+
+func (value *customJSONChannelState) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]int{"queued": len(value.Channel)})
+}
+
+type customTextHiddenState struct {
+	hidden map[string]string
+}
+
+func (value *customTextHiddenState) MarshalText() ([]byte, error) {
+	return []byte(value.hidden["value"]), nil
+}
+
+type jsonOnlyMapKey int
+
+func (jsonOnlyMapKey) MarshalJSON() ([]byte, error) {
+	return []byte(`"ignored"`), nil
+}
+
+type textMapKey string
+
+func (textMapKey) MarshalText() ([]byte, error) {
+	return []byte("text-key"), nil
+}
+
+func (value *customJSONHiddenState) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]string{
+		"hidden":  value.hidden["value"],
+		"visible": value.Visible,
+	})
+}
+
+type mutatingCustomJSONSessionService struct {
+	session.Service
+}
+
+type mutatingCustomTextSessionService struct {
+	session.Service
+}
+
 type cyclicJSONValue struct {
 	Next *cyclicJSONValue `json:"next"`
 }
@@ -1674,6 +1880,80 @@ func (s *mutatingAppendSessionService) AppendEvent(
 ) error {
 	if len(evt.Response.Choices[0].Message.ToolCalls) > 0 {
 		evt.Response.Choices[0].Message.ToolCalls[0].Function.Arguments = []byte(`{"value":"mutated"}`)
+	}
+	return s.Service.AppendEvent(ctx, sess, evt, options...)
+}
+
+func (s *mutatingCustomJSONSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	options ...session.Option,
+) error {
+	if evt.Response == nil || len(evt.Response.Choices) == 0 ||
+		len(evt.Response.Choices[0].Message.ToolCalls) == 0 {
+		return s.Service.AppendEvent(ctx, sess, evt, options...)
+	}
+	extraFields := evt.Response.Choices[0].Message.ToolCalls[0].ExtraFields
+	switch value := extraFields["channel"].(type) {
+	case *customJSONChannelState:
+		<-value.Channel
+	case map[string]any:
+		value["queued"] = json.Number("0")
+	default:
+		return fmt.Errorf("unexpected custom channel clone type %T", extraFields["channel"])
+	}
+	switch value := extraFields["custom"].(type) {
+	case *customJSONHiddenState:
+		value.hidden["value"] = "mutated"
+	case map[string]any:
+		value["hidden"] = "mutated"
+	default:
+		return fmt.Errorf("unexpected custom JSON clone type %T", extraFields["custom"])
+	}
+	switch value := extraFields["embedded"].(type) {
+	case *embeddedCustomJSONState:
+		value.Custom.hidden["value"] = "mutated"
+	case map[string]any:
+		custom, ok := value["custom"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("unexpected embedded custom clone value %T", value["custom"])
+		}
+		custom["hidden"] = "mutated"
+	default:
+		return fmt.Errorf("unexpected embedded custom clone type %T", extraFields["embedded"])
+	}
+	return s.Service.AppendEvent(ctx, sess, evt, options...)
+}
+
+func (s *mutatingCustomTextSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	options ...session.Option,
+) error {
+	if evt.Response == nil || len(evt.Response.Choices) == 0 ||
+		len(evt.Response.Choices[0].Message.ToolCalls) == 0 {
+		return s.Service.AppendEvent(ctx, sess, evt, options...)
+	}
+	extraFields := evt.Response.Choices[0].Message.ToolCalls[0].ExtraFields
+	switch value := extraFields["custom"].(type) {
+	case *customTextHiddenState:
+		value.hidden["value"] = "mutated"
+	case string:
+		extraFields["custom"] = "mutated"
+	default:
+		return fmt.Errorf("unexpected custom text clone type %T", extraFields["custom"])
+	}
+	switch value := extraFields["custom-key"].(type) {
+	case map[*customTextHiddenState]string:
+		for key := range value {
+			key.hidden["value"] = "mutated"
+		}
+	case map[string]any:
+		value["original"] = "mutated"
+	default:
+		return fmt.Errorf("unexpected custom text map-key clone type %T", extraFields["custom-key"])
 	}
 	return s.Service.AppendEvent(ctx, sess, evt, options...)
 }

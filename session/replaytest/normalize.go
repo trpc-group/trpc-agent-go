@@ -26,6 +26,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+const (
+	eventOrderGlobalLane           = "global"
+	eventOrderRootLane             = "root"
+	eventOrderFilterLanePrefix     = "filter:"
+	eventOrderConcurrentLanePrefix = "concurrent:"
+)
+
 const presentMarker = "<present>"
 
 type normalizedEvent struct {
@@ -222,18 +229,19 @@ func normalizedEventOrderKey(
 	plan *causalOrderPlan,
 ) string {
 	if mode != EventOrderCausal {
-		return "global"
+		return eventOrderGlobalLane
 	}
 	if plan != nil && plan.lanes[logicalID] != "" {
-		return "concurrent:" + plan.lanes[logicalID]
+		return eventOrderConcurrentLanePrefix + plan.lanes[logicalID]
 	}
-	if evt.FilterKey != "" {
-		return evt.FilterKey
+	filterKey := evt.FilterKey
+	if evt.Version != event.CurrentVersion {
+		filterKey = evt.Branch
 	}
-	if evt.Branch != "" {
-		return evt.Branch
+	if filterKey != "" {
+		return eventOrderFilterLanePrefix + filterKey
 	}
-	return "<root>"
+	return eventOrderRootLane
 }
 
 func normalizeEventValue(

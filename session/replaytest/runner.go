@@ -10,6 +10,7 @@ package replaytest
 
 import (
 	"context"
+	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -724,9 +725,37 @@ func cloneToolCallExtraFields(input map[string]any) (map[string]any, error) {
 	if err := validateJSONValue("tool call extra fields", input); err != nil {
 		return nil, err
 	}
-	cloned := cloneJSONValue(reflect.ValueOf(input))
-	return cloned.Interface().(map[string]any), nil
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		reflected := reflect.ValueOf(value)
+		if !reflected.IsValid() {
+			cloned[key] = nil
+			continue
+		}
+		// A custom encoder may read state that cannot be cloned through its
+		// concrete Go type. Rebuild that top-level field from the validated JSON
+		// representation; ordinary fields keep their concrete types below.
+		if containsCustomJSONState(reflected, make(map[jsonReference]struct{})) {
+			rebuilt, err := rebuildJSONValue(value)
+			if err != nil {
+				return nil, fmt.Errorf("tool call extra field %q: %w", key, err)
+			}
+			cloned[key] = rebuilt
+			continue
+		}
+		copy := cloneJSONValue(reflected)
+		if copy.IsValid() {
+			cloned[key] = copy.Interface()
+		}
+	}
+	return cloned, nil
 }
+
+var (
+	jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+	textMarshalerType = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
+	timeValueType     = reflect.TypeOf(time.Time{})
+)
 
 // cloneJSONValue preserves concrete JSON value types and nil containers. The
 // caller validates the graph first, so recursive JSON-visible values are acyclic.
@@ -795,6 +824,241 @@ func cloneJSONValue(input reflect.Value) reflect.Value {
 	default:
 		return input
 	}
+}
+
+func implementsMarshaler(value reflect.Value, marshalerType reflect.Type) bool {
+	if !value.IsValid() || !value.CanInterface() {
+		return false
+	}
+	if value.Kind() == reflect.Pointer && value.IsNil() {
+		return false
+	}
+	if value.Type().Implements(marshalerType) {
+		return true
+	}
+	return value.Kind() != reflect.Pointer && value.CanAddr() &&
+		reflect.PointerTo(value.Type()).Implements(marshalerType)
+}
+
+func isCustomJSONState(value reflect.Value, mapKey bool) bool {
+	if mapKey {
+		return implementsMarshaler(value, textMarshalerType) &&
+			hasOpaqueJSONState(value, make(map[jsonReference]struct{}))
+	}
+	return (implementsMarshaler(value, jsonMarshalerType) ||
+		implementsMarshaler(value, textMarshalerType)) &&
+		hasOpaqueJSONState(value, make(map[jsonReference]struct{}))
+}
+
+func hasOpaqueJSONState(
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) bool {
+	if !value.IsValid() || value.Type() == timeValueType {
+		return false
+	}
+	if reference, ok := jsonValueReference(value); ok {
+		if _, exists := visiting[reference]; exists {
+			return false
+		}
+		visiting[reference] = struct{}{}
+		defer delete(visiting, reference)
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		return !value.IsNil() && hasOpaqueJSONState(value.Elem(), visiting)
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		return !value.IsZero()
+	case reflect.Map:
+		return mapHasOpaqueJSONState(value, visiting)
+	case reflect.Slice, reflect.Array:
+		if value.Kind() == reflect.Slice && value.IsNil() {
+			return false
+		}
+		for index := 0; index < value.Len(); index++ {
+			if hasOpaqueJSONState(value.Index(index), visiting) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		return structHasOpaqueJSONState(value, visiting)
+	}
+	return false
+}
+
+func mapHasOpaqueJSONState(
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) bool {
+	if value.IsNil() {
+		return false
+	}
+	iterator := value.MapRange()
+	for iterator.Next() {
+		if hasOpaqueJSONState(iterator.Key(), visiting) ||
+			hasOpaqueJSONState(iterator.Value(), visiting) {
+			return true
+		}
+	}
+	return false
+}
+
+func structHasOpaqueJSONState(
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) bool {
+	for index := 0; index < value.NumField(); index++ {
+		field := value.Type().Field(index)
+		if field.PkgPath != "" || strings.Split(field.Tag.Get("json"), ",")[0] == "-" {
+			if hasSharedMutableState(value.Field(index), make(map[jsonReference]struct{})) {
+				return true
+			}
+			continue
+		}
+		if hasOpaqueJSONState(value.Field(index), visiting) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSharedMutableState(
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) bool {
+	if !value.IsValid() || value.Type() == timeValueType {
+		return false
+	}
+	if reference, ok := jsonValueReference(value); ok {
+		if _, exists := visiting[reference]; exists {
+			return false
+		}
+		visiting[reference] = struct{}{}
+		defer delete(visiting, reference)
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		return !value.IsNil() && hasSharedMutableState(value.Elem(), visiting)
+	case reflect.Pointer, reflect.Map, reflect.Slice:
+		return !value.IsNil()
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		return !value.IsZero()
+	case reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			if hasSharedMutableState(value.Index(index), visiting) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		for index := 0; index < value.NumField(); index++ {
+			if hasSharedMutableState(value.Field(index), visiting) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isUnexportedAnonymousStruct(field reflect.StructField) bool {
+	if field.PkgPath == "" || !field.Anonymous {
+		return false
+	}
+	fieldType := field.Type
+	if fieldType.Kind() == reflect.Pointer {
+		fieldType = fieldType.Elem()
+	}
+	return fieldType.Kind() == reflect.Struct
+}
+
+func containsCustomJSONState(
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) bool {
+	if !value.IsValid() {
+		return false
+	}
+	if isCustomJSONState(value, false) {
+		return true
+	}
+	if reference, ok := jsonValueReference(value); ok {
+		if _, exists := visiting[reference]; exists {
+			return false
+		}
+		visiting[reference] = struct{}{}
+		defer delete(visiting, reference)
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		return !value.IsNil() && containsCustomJSONState(value.Elem(), visiting)
+	case reflect.Map:
+		return mapContainsCustomJSONState(value, visiting)
+	case reflect.Slice, reflect.Array:
+		if value.Kind() == reflect.Slice && value.IsNil() {
+			return false
+		}
+		for index := 0; index < value.Len(); index++ {
+			if containsCustomJSONState(value.Index(index), visiting) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		return structContainsCustomJSONState(value, visiting)
+	}
+	return false
+}
+
+func mapContainsCustomJSONState(
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) bool {
+	if value.IsNil() {
+		return false
+	}
+	iterator := value.MapRange()
+	for iterator.Next() {
+		if isCustomJSONState(iterator.Key(), true) ||
+			containsCustomJSONState(iterator.Value(), visiting) {
+			return true
+		}
+	}
+	return false
+}
+
+func structContainsCustomJSONState(
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) bool {
+	for index := 0; index < value.NumField(); index++ {
+		field := value.Type().Field(index)
+		if strings.Split(field.Tag.Get("json"), ",")[0] == "-" {
+			continue
+		}
+		if field.PkgPath != "" {
+			if isUnexportedAnonymousStruct(field) && hasSharedMutableState(
+				value.Field(index),
+				make(map[jsonReference]struct{}),
+			) {
+				return true
+			}
+			continue
+		}
+		if containsCustomJSONState(value.Field(index), visiting) {
+			return true
+		}
+	}
+	return false
+}
+
+func rebuildJSONValue(input any) (any, error) {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("marshal custom JSON value: %w", err)
+	}
+	var decoded any
+	if err := decodeJSON(raw, &decoded); err != nil {
+		return nil, fmt.Errorf("decode custom JSON value: %w", err)
+	}
+	return decoded, nil
 }
 
 func (e *execution) updateState(ctx context.Context, input *StateInput) error {

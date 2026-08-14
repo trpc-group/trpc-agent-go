@@ -1082,6 +1082,107 @@ func TestConcurrentBranchesMayShareFilterKey(t *testing.T) {
 	}
 }
 
+func TestCausalEventNormalizationSeparatesLaneNamespaces(t *testing.T) {
+	root := causalEvent(t, "root", "", "root")
+	businessRoot := causalEvent(t, "business-root", "<root>", "business root")
+	businessConcurrent := causalEvent(t, "business-concurrent", "concurrent:1/0", "business concurrent")
+	_, order, _, err := normalizeEvents(
+		[]event.Event{root, businessRoot, businessConcurrent},
+		EventOrderCausal,
+		nil,
+		caseEpoch,
+	)
+	if err != nil {
+		t.Fatalf("normalizeEvents() error = %v", err)
+	}
+	if !reflect.DeepEqual(order["root"], []string{"root"}) {
+		t.Fatalf("root event order = %v, want root lane", order)
+	}
+	if !reflect.DeepEqual(order["filter:<root>"], []string{"business-root"}) {
+		t.Fatalf("business root event order = %v, want filter lane", order)
+	}
+	if !reflect.DeepEqual(order["filter:concurrent:1/0"], []string{"business-concurrent"}) {
+		t.Fatalf("business concurrent-key event order = %v, want filter lane", order)
+	}
+	if _, ok := order["<root>"]; ok {
+		t.Fatalf("event order retained untyped root lane: %v", order)
+	}
+}
+
+func TestCausalEventNormalizationSeparatesConcurrentLaneNamespace(t *testing.T) {
+	replayCase := Case{
+		Name:       "concurrent-lane-namespace",
+		Requires:   []Capability{CapabilitySession, CapabilityConcurrent},
+		EventOrder: EventOrderCausal,
+		Steps: []Step{
+			messageStep("anchor", "anchor", 1, "user", model.RoleUser, "anchor", "concurrent:1/0"),
+			{
+				Name: "parallel",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{messageStep("branch", "branch", 2, "assistant", model.RoleAssistant, "branch", "branch")},
+					{messageStep("other", "other", 3, "assistant", model.RoleAssistant, "other", "other")},
+				},
+			},
+		},
+	}
+	snapshot, err := Replay(context.Background(), replayCase, InMemoryBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	if !reflect.DeepEqual(snapshot.EventOrder["filter:concurrent:1/0"], []string{"anchor"}) {
+		t.Fatalf("business concurrent-key event order = %v", snapshot.EventOrder)
+	}
+	if !reflect.DeepEqual(snapshot.EventOrder["concurrent:1/0"], []string{"branch"}) {
+		t.Fatalf("internal concurrent event order = %v", snapshot.EventOrder)
+	}
+}
+
+func TestCausalEventNormalizationUsesLegacyBranch(t *testing.T) {
+	legacyEvent := func(id, filterKey string) event.Event {
+		evt := messageStep(id, id, 1, "assistant", model.RoleAssistant, id, "").Event.Event.Clone()
+		evt.ID = "physical-" + id
+		evt.Version = event.InitVersion
+		evt.Branch = "legacy-branch"
+		evt.FilterKey = filterKey
+		if err := event.SetExtension(evt, logicalEventIDExtension, id); err != nil {
+			t.Fatalf("SetExtension() error = %v", err)
+		}
+		return *evt
+	}
+	normalize := func(events []event.Event, backend string) Snapshot {
+		normalized, order, _, err := normalizeEvents(events, EventOrderCausal, nil, caseEpoch)
+		if err != nil {
+			t.Fatalf("normalizeEvents() error = %v", err)
+		}
+		return Snapshot{
+			Backend:    backend,
+			Case:       "legacy-branch-order",
+			Events:     normalized,
+			EventOrder: order,
+			State:      map[string]CanonicalMap{},
+			Summaries:  map[string]CanonicalMap{},
+			Tracks:     map[string][]CanonicalMap{},
+		}
+	}
+	baseline := normalize([]event.Event{
+		legacyEvent("first", "filter-a"),
+		legacyEvent("second", "filter-b"),
+	}, "baseline")
+	actual := normalize([]event.Event{
+		legacyEvent("second", "filter-b"),
+		legacyEvent("first", "filter-a"),
+	}, "actual")
+	diffs, err := Compare("legacy-branch-order", baseline, actual, nil)
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	blocking, _ := countDiffs(diffs)
+	if blocking == 0 {
+		t.Fatalf("Compare() reported no blocking diff for a causal reorder: %+v", diffs)
+	}
+}
+
 func TestReplayRejectsUncloneableConcurrentSession(t *testing.T) {
 	backend := InMemoryBackend()
 	open := backend.Open
@@ -1142,8 +1243,8 @@ func TestCausalPlanKeepsEventsBeforeUserAnchor(t *testing.T) {
 	if len(normalized) != 4 {
 		t.Fatalf("normalizeEvents() retained %d events, want 4", len(normalized))
 	}
-	if !reflect.DeepEqual(order["<root>"], []string{"assistant", "user"}) {
-		t.Fatalf("root event order = %v", order["<root>"])
+	if !reflect.DeepEqual(order["root"], []string{"assistant", "user"}) {
+		t.Fatalf("root event order = %v", order["root"])
 	}
 }
 
