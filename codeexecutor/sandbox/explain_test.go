@@ -222,6 +222,12 @@ func TestExplainDoesNotAcquireRunLock(t *testing.T) {
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(WorkspaceWriteProfile()),
 	)
+	// Prime the shared preflight cache so this assertion does not wait on a
+	// real backend probe (Linux probes can take up to 5s, with a retry).
+	rt.preflightOnce.Do(func() {
+		rt.bwrapPath = "/bin/true"
+		rt.seatbeltPath = "/usr/bin/sandbox-exec"
+	})
 	ws := codeexecutor.Workspace{ID: "explain-lock", Path: t.TempDir()}
 	unlock, err := rt.lockWorkspaceRunContext(context.Background(), ws)
 	if err != nil {

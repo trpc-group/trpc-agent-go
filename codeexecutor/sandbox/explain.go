@@ -62,8 +62,11 @@ const (
 // It is intentionally small: it reports backend selection, filesystem sandbox
 // type, network mode, and preflight readiness. It is not a full policy dump.
 type ExplainReport struct {
-	// RequestedBackend is the backend selected by the caller. An empty value
-	// means the caller did not set WithBackend and is treated as BackendAuto.
+	// RequestedBackend is the backend configured on the Runtime. NewRuntime
+	// defaults it to BackendAuto, including when WithBackend is omitted, so
+	// Explain never reports an empty value for a Runtime from NewRuntime.
+	// An empty value only appears on a zero ExplainReport; String() renders
+	// it as BackendAuto.
 	RequestedBackend BackendType
 	// ResolvedBackend is the backend the current platform would use for the
 	// requested value. It is BackendAuto when the platform has no managed
