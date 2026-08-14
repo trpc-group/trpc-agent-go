@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
@@ -32,12 +33,12 @@ func BuildMarkdown(result review.Result) string {
 	var b strings.Builder
 	b.WriteString("# Review Report\n\n")
 	if result.Summary != "" {
-		b.WriteString(result.Summary)
+		b.WriteString(markdownSafe(result.Summary))
 		b.WriteString("\n\n")
 	}
 	writeConclusion(&b, result.Conclusion)
 	fmt.Fprintf(&b, "Capabilities: mode=%s sandbox=requested:%t/executed:%t model=requested:%t/executed:%t\n\n",
-		result.Metrics.Mode, result.Metrics.SandboxRequested, result.Metrics.SandboxExecuted,
+		markdownSafe(result.Metrics.Mode), result.Metrics.SandboxRequested, result.Metrics.SandboxExecuted,
 		result.Metrics.ModelRequested, result.Metrics.ModelExecuted)
 	if result.Metrics.FindingCount > 0 || result.Metrics.TotalDurationMS > 0 {
 		fmt.Fprintf(&b, "Metrics: findings=%d total_ms=%d sandbox_ms=%d model_ms=%d tool_calls=%d model_calls=%d model_findings=%d model_exceptions=%d permission_blocks=%d redactions=%d\n\n",
@@ -55,26 +56,26 @@ func BuildMarkdown(result review.Result) string {
 	}
 	if result.Metrics.ModelProvider != "" || result.Metrics.ModelName != "" || result.Metrics.ModelBackend != "" {
 		fmt.Fprintf(&b, "Model: provider=%s name=%s backend=%s\n\n",
-			result.Metrics.ModelProvider,
-			result.Metrics.ModelName,
-			result.Metrics.ModelBackend,
+			markdownSafe(result.Metrics.ModelProvider),
+			markdownSafe(result.Metrics.ModelName),
+			markdownSafe(result.Metrics.ModelBackend),
 		)
 	}
 	if len(result.Metrics.SeverityCounts) > 0 {
 		b.WriteString("Severity Counts:\n")
 		for severity, count := range result.Metrics.SeverityCounts {
-			fmt.Fprintf(&b, "- %s: %d\n", severity, count)
+			fmt.Fprintf(&b, "- %s: %d\n", markdownSafe(severity), count)
 		}
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "Findings: %d\n\n", len(findings))
 	for _, f := range findings {
-		fmt.Fprintf(&b, "- [%s] %s:%d %s\n", strings.ToUpper(f.Severity), f.File, f.Line, f.Title)
+		fmt.Fprintf(&b, "- [%s] %s:%d %s\n", strings.ToUpper(markdownSafe(f.Severity)), markdownSafe(f.File), f.Line, markdownSafe(f.Title))
 		if f.Evidence != "" {
-			fmt.Fprintf(&b, "  - Evidence: %s\n", f.Evidence)
+			fmt.Fprintf(&b, "  - Evidence: %s\n", markdownSafe(f.Evidence))
 		}
 		if f.Recommendation != "" {
-			fmt.Fprintf(&b, "  - Recommendation: %s\n", f.Recommendation)
+			fmt.Fprintf(&b, "  - Recommendation: %s\n", markdownSafe(f.Recommendation))
 		}
 	}
 	writeHumanReview(&b, humanReviewItems(result))
@@ -90,12 +91,12 @@ func BuildMarkdownChinese(result review.Result) string {
 	var b strings.Builder
 	b.WriteString("# 代码审查报告\n\n")
 	if result.Summary != "" {
-		b.WriteString(result.Summary)
+		b.WriteString(markdownSafe(result.Summary))
 		b.WriteString("\n\n")
 	}
 	writeConclusionChinese(&b, result.Conclusion)
 	fmt.Fprintf(&b, "能力: mode=%s sandbox=requested:%t/executed:%t model=requested:%t/executed:%t\n\n",
-		result.Metrics.Mode, result.Metrics.SandboxRequested, result.Metrics.SandboxExecuted,
+		markdownSafe(result.Metrics.Mode), result.Metrics.SandboxRequested, result.Metrics.SandboxExecuted,
 		result.Metrics.ModelRequested, result.Metrics.ModelExecuted)
 	if result.Metrics.FindingCount > 0 || result.Metrics.TotalDurationMS > 0 {
 		fmt.Fprintf(&b, "指标: findings=%d total_ms=%d sandbox_ms=%d model_ms=%d tool_calls=%d model_calls=%d model_findings=%d model_exceptions=%d permission_blocks=%d redactions=%d\n\n",
@@ -113,28 +114,28 @@ func BuildMarkdownChinese(result review.Result) string {
 	}
 	if result.Metrics.ModelProvider != "" || result.Metrics.ModelName != "" || result.Metrics.ModelBackend != "" {
 		fmt.Fprintf(&b, "模型: provider=%s name=%s backend=%s\n\n",
-			result.Metrics.ModelProvider,
-			result.Metrics.ModelName,
-			result.Metrics.ModelBackend,
+			markdownSafe(result.Metrics.ModelProvider),
+			markdownSafe(result.Metrics.ModelName),
+			markdownSafe(result.Metrics.ModelBackend),
 		)
 	}
 	if len(result.Metrics.SeverityCounts) > 0 {
 		b.WriteString("严重级别统计:\n")
 		for severity, count := range result.Metrics.SeverityCounts {
-			fmt.Fprintf(&b, "- %s: %d\n", severity, count)
+			fmt.Fprintf(&b, "- %s: %d\n", markdownSafe(severity), count)
 		}
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "审查发现: %d\n\n", len(findings))
 	for _, f := range findings {
-		fmt.Fprintf(&b, "- [%s] %s:%d %s\n", strings.ToUpper(f.Severity), f.File, f.Line, f.Title)
+		fmt.Fprintf(&b, "- [%s] %s:%d %s\n", strings.ToUpper(markdownSafe(f.Severity)), markdownSafe(f.File), f.Line, markdownSafe(f.Title))
 		writeFindingMetadataChinese(&b, f)
 		writeLocalizedRuleTextChinese(&b, f)
 		if f.Evidence != "" {
-			fmt.Fprintf(&b, "  - 证据: %s\n", f.Evidence)
+			fmt.Fprintf(&b, "  - 证据: %s\n", markdownSafe(f.Evidence))
 		}
 		if f.Recommendation != "" {
-			fmt.Fprintf(&b, "  - 修复建议: %s\n", f.Recommendation)
+			fmt.Fprintf(&b, "  - 修复建议: %s\n", markdownSafe(f.Recommendation))
 		}
 	}
 	writeHumanReviewChinese(&b, humanReviewItems(result))
@@ -158,23 +159,44 @@ func humanReviewItems(result review.Result) []review.Finding {
 func writeFindingMetadataChinese(b *strings.Builder, f review.Finding) {
 	var parts []string
 	if f.Source != "" {
-		parts = append(parts, "来源: "+f.Source)
+		parts = append(parts, "来源: "+markdownSafe(f.Source))
 	}
 	if f.RuleID != "" {
-		parts = append(parts, "规则: "+f.RuleID)
+		parts = append(parts, "规则: "+markdownSafe(f.RuleID))
 	}
 	if f.Category != "" {
-		parts = append(parts, "类别: "+f.Category)
+		parts = append(parts, "类别: "+markdownSafe(f.Category))
 	}
 	if f.Confidence != "" {
-		parts = append(parts, "置信度: "+f.Confidence)
+		parts = append(parts, "置信度: "+markdownSafe(f.Confidence))
 	}
 	if f.Status != "" {
-		parts = append(parts, "状态: "+f.Status)
+		parts = append(parts, "状态: "+markdownSafe(f.Status))
 	}
 	if len(parts) > 0 {
 		fmt.Fprintf(b, "  - %s\n", strings.Join(parts, "；"))
 	}
+}
+
+func markdownSafe(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch r {
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if unicode.IsControl(r) {
+				fmt.Fprintf(&b, `\u%04X`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
 }
 
 // writeConclusion 渲染最终结论。
@@ -183,12 +205,12 @@ func writeConclusion(b *strings.Builder, conclusion review.Conclusion) {
 		return
 	}
 	b.WriteString("## Conclusion\n\n")
-	fmt.Fprintf(b, "- Status: %s\n", conclusion.Status)
+	fmt.Fprintf(b, "- Status: %s\n", markdownSafe(conclusion.Status))
 	if conclusion.Reason != "" {
-		fmt.Fprintf(b, "- Reason: %s\n", conclusion.Reason)
+		fmt.Fprintf(b, "- Reason: %s\n", markdownSafe(conclusion.Reason))
 	}
 	if conclusion.Summary != "" {
-		fmt.Fprintf(b, "- Summary: %s\n", conclusion.Summary)
+		fmt.Fprintf(b, "- Summary: %s\n", markdownSafe(conclusion.Summary))
 	}
 	b.WriteString("\n")
 }
@@ -199,12 +221,12 @@ func writeConclusionChinese(b *strings.Builder, conclusion review.Conclusion) {
 		return
 	}
 	b.WriteString("## 最终结论\n\n")
-	fmt.Fprintf(b, "- 状态: %s\n", conclusion.Status)
+	fmt.Fprintf(b, "- 状态: %s\n", markdownSafe(conclusion.Status))
 	if conclusion.Reason != "" {
-		fmt.Fprintf(b, "- 原因: %s\n", conclusion.Reason)
+		fmt.Fprintf(b, "- 原因: %s\n", markdownSafe(conclusion.Reason))
 	}
 	if conclusion.Summary != "" {
-		fmt.Fprintf(b, "- 摘要: %s\n", conclusion.Summary)
+		fmt.Fprintf(b, "- 摘要: %s\n", markdownSafe(conclusion.Summary))
 	}
 	b.WriteString("\n")
 }
@@ -216,9 +238,9 @@ func writeHumanReview(b *strings.Builder, items []review.Finding) {
 	}
 	b.WriteString("\n## Human Review\n\n")
 	for _, item := range items {
-		fmt.Fprintf(b, "- [%s] %s\n", strings.ToUpper(item.Severity), item.Title)
+		fmt.Fprintf(b, "- [%s] %s\n", strings.ToUpper(markdownSafe(item.Severity)), markdownSafe(item.Title))
 		if item.Recommendation != "" {
-			fmt.Fprintf(b, "  - Recommendation: %s\n", item.Recommendation)
+			fmt.Fprintf(b, "  - Recommendation: %s\n", markdownSafe(item.Recommendation))
 		}
 	}
 }
@@ -230,11 +252,11 @@ func writeHumanReviewChinese(b *strings.Builder, items []review.Finding) {
 	}
 	b.WriteString("\n## 人工复核\n\n")
 	for _, item := range items {
-		fmt.Fprintf(b, "- [%s] %s\n", strings.ToUpper(item.Severity), item.Title)
+		fmt.Fprintf(b, "- [%s] %s\n", strings.ToUpper(markdownSafe(item.Severity)), markdownSafe(item.Title))
 		writeFindingMetadataChinese(b, item)
 		writeLocalizedRuleTextChinese(b, item)
 		if item.Recommendation != "" {
-			fmt.Fprintf(b, "  - 修复建议: %s\n", item.Recommendation)
+			fmt.Fprintf(b, "  - 修复建议: %s\n", markdownSafe(item.Recommendation))
 		}
 	}
 }
@@ -249,16 +271,16 @@ func writeGovernance(b *strings.Builder, summary review.GovernanceSummary) {
 		fmt.Fprintf(b, "- Permission blocks: %d\n", summary.PermissionBlocks)
 	}
 	for _, decision := range summary.PermissionDecisions {
-		fmt.Fprintf(b, "- Permission %s: %s", decision.Action, decision.Command)
+		fmt.Fprintf(b, "- Permission %s: %s", markdownSafe(decision.Action), markdownSafe(decision.Command))
 		if decision.Reason != "" {
-			fmt.Fprintf(b, " (%s)", decision.Reason)
+			fmt.Fprintf(b, " (%s)", markdownSafe(decision.Reason))
 		}
 		b.WriteString("\n")
 	}
 	for _, decision := range summary.FilterDecisions {
-		fmt.Fprintf(b, "- Filter %s: %s", decision.Action, decision.Target)
+		fmt.Fprintf(b, "- Filter %s: %s", markdownSafe(decision.Action), markdownSafe(decision.Target))
 		if decision.Reason != "" {
-			fmt.Fprintf(b, " (%s)", decision.Reason)
+			fmt.Fprintf(b, " (%s)", markdownSafe(decision.Reason))
 		}
 		b.WriteString("\n")
 	}
@@ -274,16 +296,16 @@ func writeGovernanceChinese(b *strings.Builder, summary review.GovernanceSummary
 		fmt.Fprintf(b, "- Permission 拦截: %d\n", summary.PermissionBlocks)
 	}
 	for _, decision := range summary.PermissionDecisions {
-		fmt.Fprintf(b, "- Permission %s: %s", decision.Action, decision.Command)
+		fmt.Fprintf(b, "- Permission %s: %s", markdownSafe(decision.Action), markdownSafe(decision.Command))
 		if decision.Reason != "" {
-			fmt.Fprintf(b, " (%s)", decision.Reason)
+			fmt.Fprintf(b, " (%s)", markdownSafe(decision.Reason))
 		}
 		b.WriteString("\n")
 	}
 	for _, decision := range summary.FilterDecisions {
-		fmt.Fprintf(b, "- Filter %s: %s", decision.Action, decision.Target)
+		fmt.Fprintf(b, "- Filter %s: %s", markdownSafe(decision.Action), markdownSafe(decision.Target))
 		if decision.Reason != "" {
-			fmt.Fprintf(b, " (%s)", decision.Reason)
+			fmt.Fprintf(b, " (%s)", markdownSafe(decision.Reason))
 		}
 		b.WriteString("\n")
 	}
@@ -297,7 +319,7 @@ func writeSandbox(b *strings.Builder, summary review.SandboxSummary) {
 	b.WriteString("\n## Sandbox\n\n")
 	for _, run := range summary.Runs {
 		fmt.Fprintf(b, "- %s via %s: %s, timeout_ms=%d, output_limit_bytes=%d, duration_ms=%d\n",
-			run.Command, run.Runtime, run.Status, run.TimeoutMS, run.OutputLimitBytes, run.DurationMS)
+			markdownSafe(run.Command), markdownSafe(run.Runtime), markdownSafe(run.Status), run.TimeoutMS, run.OutputLimitBytes, run.DurationMS)
 	}
 }
 
@@ -309,7 +331,7 @@ func writeSandboxChinese(b *strings.Builder, summary review.SandboxSummary) {
 	b.WriteString("\n## 沙箱执行\n\n")
 	for _, run := range summary.Runs {
 		fmt.Fprintf(b, "- %s via %s: %s, timeout_ms=%d, output_limit_bytes=%d, duration_ms=%d\n",
-			run.Command, run.Runtime, run.Status, run.TimeoutMS, run.OutputLimitBytes, run.DurationMS)
+			markdownSafe(run.Command), markdownSafe(run.Runtime), markdownSafe(run.Status), run.TimeoutMS, run.OutputLimitBytes, run.DurationMS)
 	}
 }
 
@@ -320,9 +342,9 @@ func writeArtifacts(b *strings.Builder, artifacts []review.ArtifactSummary) {
 	}
 	b.WriteString("\n## Artifacts\n\n")
 	for _, artifact := range artifacts {
-		fmt.Fprintf(b, "- %s (%s)", artifact.Name, artifact.Kind)
+		fmt.Fprintf(b, "- %s (%s)", markdownSafe(artifact.Name), markdownSafe(artifact.Kind))
 		if artifact.Path != "" {
-			fmt.Fprintf(b, ": %s", artifact.Path)
+			fmt.Fprintf(b, ": %s", markdownSafe(artifact.Path))
 		}
 		b.WriteString("\n")
 	}
@@ -408,15 +430,15 @@ func writeLocalizedRuleTextChinese(b *strings.Builder, f review.Finding) {
 	if !ok {
 		return
 	}
-	fmt.Fprintf(b, "  - 中文标题: %s\n", localized.Title)
+	fmt.Fprintf(b, "  - 中文标题: %s\n", markdownSafe(localized.Title))
 	if f.Title != "" {
-		fmt.Fprintf(b, "  - 原始标题: %s\n", f.Title)
+		fmt.Fprintf(b, "  - 原始标题: %s\n", markdownSafe(f.Title))
 	}
 	if localized.Recommendation != "" {
-		fmt.Fprintf(b, "  - 中文建议: %s\n", localized.Recommendation)
+		fmt.Fprintf(b, "  - 中文建议: %s\n", markdownSafe(localized.Recommendation))
 	}
 	if f.Recommendation != "" {
-		fmt.Fprintf(b, "  - 原始建议: %s\n", f.Recommendation)
+		fmt.Fprintf(b, "  - 原始建议: %s\n", markdownSafe(f.Recommendation))
 	}
 }
 
@@ -436,9 +458,9 @@ func writeArtifactsChinese(b *strings.Builder, artifacts []review.ArtifactSummar
 	}
 	b.WriteString("\n## 产物\n\n")
 	for _, artifact := range artifacts {
-		fmt.Fprintf(b, "- %s (%s)", artifact.Name, artifact.Kind)
+		fmt.Fprintf(b, "- %s (%s)", markdownSafe(artifact.Name), markdownSafe(artifact.Kind))
 		if artifact.Path != "" {
-			fmt.Fprintf(b, ": %s", artifact.Path)
+			fmt.Fprintf(b, ": %s", markdownSafe(artifact.Path))
 		}
 		b.WriteString("\n")
 	}

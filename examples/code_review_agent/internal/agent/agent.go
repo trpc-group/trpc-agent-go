@@ -618,7 +618,7 @@ func normalizeConfig(cfg Config) Config {
 		cfg.MaxArtifactCount = defaultMaxArtifactCount
 	}
 	if cfg.OutputDir == "" {
-		cfg.OutputDir = "."
+		cfg.OutputDir = filepath.Join(".cr-agent", "reports")
 	}
 	if cfg.ArtifactService == nil {
 		cfg.ArtifactService = artifactinmemory.NewService()

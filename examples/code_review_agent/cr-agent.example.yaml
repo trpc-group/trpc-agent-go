@@ -1,10 +1,11 @@
-# CR Agent 会自动读取当前工作目录的 cr-agent.yaml。
-# 复制本文件为 cr-agent.yaml 后再填写本地配置；cr-agent.yaml 已被 .gitignore 忽略。
+# 通过 --config 显式加载本文件的副本；CR Agent 不会自动读取当前目录配置。
+# cr-agent.yaml 已被 .gitignore 忽略。
 
 mode: review
 runtime: container
 output_dir: .cr-agent/reports
-skills_root: skills
+# 必须指向随安装分发的受信任 Skill 目录，不能指向待审仓库。
+skills_root: /opt/cr-agent/skills
 fixtures_root: testdata/fixtures
 staticcheck: false
 

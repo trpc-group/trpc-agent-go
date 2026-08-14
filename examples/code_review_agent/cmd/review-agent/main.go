@@ -68,7 +68,7 @@ func parseOptions(args []string) (Options, error) {
 	fs.StringVar(&opts.SQLitePath, "sqlite", "", "sqlite database path")
 	fs.BoolVar(&opts.NoPersist, "no-persist", false, "disable the default SQLite audit database")
 	fs.StringVar(&opts.Runtime, "runtime", "", "executor runtime: container, local-fallback, or e2b")
-	fs.StringVar(&opts.SkillsRoot, "skills-root", "", "path to skills root")
+	fs.StringVar(&opts.SkillsRoot, "skills-root", "", "path to trusted skills root")
 	fs.StringVar(&opts.FixturesRoot, "fixtures-root", "", "path to fixture diffs")
 	fs.StringVar(&opts.ModelProvider, "model-provider", "", "model provider: fake, http, openai, openai-compatible, or deepseek")
 	fs.StringVar(&opts.ModelEndpoint, "model-endpoint", "", "HTTP model provider endpoint")

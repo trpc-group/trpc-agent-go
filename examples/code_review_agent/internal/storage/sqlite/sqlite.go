@@ -14,7 +14,12 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -25,7 +30,11 @@ import (
 
 // Store 持有 SQLite 连接。
 type Store struct {
-	db *sql.DB
+	db         *sql.DB
+	targetPath string
+	workDir    string
+	lockFile   *os.File
+	publishMu  sync.Mutex
 }
 
 // Compatibility aliases keep existing SQLite callers source-compatible while
@@ -41,18 +50,48 @@ type MetricsSummary = storage.MetricsRecord
 
 // Open 打开 SQLite 数据库。
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	lockFile, err := acquireDatabaseLock(path + ".lock")
+	if err != nil {
+		return nil, err
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_ = releaseDatabaseLock(lockFile)
+		}
+	}()
+	workDir, err := os.MkdirTemp(filepath.Dir(path), ".review-db-")
+	if err != nil {
+		return nil, fmt.Errorf("create secure sqlite work directory: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(workDir)
+		}
+	}()
+	workPath := filepath.Join(workDir, "review.db")
+	if err := copyDatabaseToWorkPath(path, workPath); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", workPath)
 	if err != nil {
 		return nil, err
 	}
 	// SQLite PRAGMA settings are connection-local. A single connection keeps
 	// foreign-key enforcement consistent for all Store operations.
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db}
+	s := &Store{db: db, targetPath: path, workDir: workDir, lockFile: lockFile}
 	if err := s.Init(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := s.publish(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	committed = true
+	locked = false
 	return s, nil
 }
 
@@ -216,7 +255,44 @@ func (s *Store) Close() error {
 	if s.db == nil {
 		return nil
 	}
-	return s.db.Close()
+	publishErr := s.publish()
+	closeErr := s.db.Close()
+	cleanupErr := os.RemoveAll(s.workDir)
+	lockErr := releaseDatabaseLock(s.lockFile)
+	s.db = nil
+	s.lockFile = nil
+	return errors.Join(publishErr, closeErr, cleanupErr, lockErr)
+}
+
+// publish snapshots the working database, then atomically replaces the public
+// destination. Rename replaces a symlink itself instead of following it.
+func (s *Store) publish() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+
+	snapshot, err := os.CreateTemp(s.workDir, ".publish-*.db")
+	if err != nil {
+		return fmt.Errorf("create sqlite snapshot: %w", err)
+	}
+	snapshotPath := snapshot.Name()
+	if err := snapshot.Close(); err != nil {
+		_ = os.Remove(snapshotPath)
+		return fmt.Errorf("close sqlite snapshot: %w", err)
+	}
+	if err := os.Remove(snapshotPath); err != nil {
+		return fmt.Errorf("prepare sqlite snapshot: %w", err)
+	}
+	if _, err := s.db.Exec(`VACUUM INTO '` + strings.ReplaceAll(snapshotPath, "'", "''") + `'`); err != nil {
+		return fmt.Errorf("snapshot sqlite database: %w", err)
+	}
+	if err := os.Rename(snapshotPath, s.targetPath); err != nil {
+		_ = os.Remove(snapshotPath)
+		return fmt.Errorf("publish sqlite database: %w", err)
+	}
+	return nil
 }
 
 // SaveTask 插入或更新任务。
@@ -237,7 +313,10 @@ finished_at=excluded.finished_at
 `,
 		task.ID, task.InputType, task.InputRef, task.InputDigest, task.RepoPath, task.Status, task.Mode,
 		task.CreatedAt.UTC().Format(time.RFC3339Nano), nullableTime(task.StartedAt), nullableTime(task.FinishedAt))
-	return err
+	if err != nil {
+		return err
+	}
+	return s.publish()
 }
 
 // SaveFinding 写入 finding。
@@ -248,7 +327,10 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
 		taskID+":"+finding.DedupeKey(), taskID, finding.Severity, finding.Category, finding.File, finding.Line, finding.Title,
 		finding.Evidence, finding.Recommendation, finding.Confidence, finding.Source, finding.RuleID, finding.DedupeKey(), finding.Status)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.publish()
 }
 
 // SaveReview 在一个事务中保存完整审查。任何子记录失败都会回滚任务及已写记录。
@@ -337,7 +419,10 @@ ON CONFLICT(task_id) DO UPDATE SET json_report=excluded.json_report, markdown_re
 		rec.Task.ID, rec.Report.JSON, rec.Report.Markdown, reportAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.publish()
 }
 
 // SaveReport 写入最终报告。
@@ -351,7 +436,10 @@ markdown_report=excluded.markdown_report,
 created_at=excluded.created_at
 `,
 		taskID, jsonReport, markdownReport, time.Now().UTC().Format(time.RFC3339Nano))
-	return err
+	if err != nil {
+		return err
+	}
+	return s.publish()
 }
 
 // TaskByID 查询任务。
@@ -415,7 +503,10 @@ func (s *Store) SaveDecision(ctx context.Context, rec DecisionRecord) error {
 INSERT INTO permission_decisions(task_id, command, action, reason, created_at)
 VALUES(?, ?, ?, ?, ?)
 `, rec.TaskID, rec.Command, rec.Action, rec.Reason, rec.At.UTC().Format(time.RFC3339Nano))
-	return err
+	if err != nil {
+		return err
+	}
+	return s.publish()
 }
 
 // SaveSandboxRun 写入沙箱记录。
@@ -424,7 +515,10 @@ func (s *Store) SaveSandboxRun(ctx context.Context, rec SandboxRunRecord) error 
 INSERT INTO sandbox_runs(task_id, command, runtime, status, timeout_ms, output_limit_bytes, env_whitelist, exit_code, stdout_digest, stderr_digest, duration_ms, output, created_at, finished_at, artifact_count)
 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `, rec.TaskID, rec.Command, rec.Runtime, rec.Status, rec.TimeoutMS, rec.OutputLimitBytes, rec.EnvWhitelist, rec.ExitCode, rec.StdoutDigest, rec.StderrDigest, rec.DurationMS, rec.Output, rec.At.UTC().Format(time.RFC3339Nano), nullableTime(rec.FinishedAt), rec.ArtifactCount)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.publish()
 }
 
 // SaveFilterDecision 写入过滤决策。
@@ -433,7 +527,10 @@ func (s *Store) SaveFilterDecision(ctx context.Context, rec FilterDecisionRecord
 INSERT INTO filter_decisions(task_id, target, action, reason, created_at)
 VALUES(?, ?, ?, ?, ?)
 `, rec.TaskID, rec.Target, rec.Action, rec.Reason, rec.At.UTC().Format(time.RFC3339Nano))
-	return err
+	if err != nil {
+		return err
+	}
+	return s.publish()
 }
 
 // SaveArtifact 写入产物记录。
@@ -442,7 +539,10 @@ func (s *Store) SaveArtifact(ctx context.Context, rec ArtifactRecord) error {
 INSERT INTO artifacts(task_id, name, kind, path, digest, size_bytes, created_at)
 VALUES(?, ?, ?, ?, ?, ?, ?)
 `, rec.TaskID, rec.Name, rec.Kind, rec.Path, rec.Digest, rec.Size, rec.At.UTC().Format(time.RFC3339Nano))
-	return err
+	if err != nil {
+		return err
+	}
+	return s.publish()
 }
 
 // DecisionsByTaskID 查询权限决策。
@@ -577,7 +677,10 @@ exception_counts_json=excluded.exception_counts_json,
 redaction_count=excluded.redaction_count,
 created_at=excluded.created_at
 `, rec.TaskID, rec.Mode, rec.SandboxRequested, rec.SandboxExecuted, rec.ModelRequested, rec.ModelExecuted, rec.TotalDurationMS, rec.SandboxDurationMS, rec.ModelDurationMS, rec.ToolCallCount, rec.ModelCallCount, rec.ModelProvider, rec.ModelName, rec.ModelBackend, rec.PermissionBlockCount, rec.FindingCount, rec.ModelFindingCount, rec.ModelExceptionCount, rec.SeverityCountsJSON, rec.ExceptionCountsJSON, rec.RedactionCount, rec.At.UTC().Format(time.RFC3339Nano))
-	return err
+	if err != nil {
+		return err
+	}
+	return s.publish()
 }
 
 // MetricsByTaskID 查询指标。

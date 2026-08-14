@@ -13,13 +13,125 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/storage"
 )
+
+func TestOpenRejectsSymlinkWithoutInitializingTarget(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "target.db")
+	db, err := sql.Open("sqlite", target)
+	if err != nil {
+		t.Fatalf("open target database: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE sentinel (value TEXT NOT NULL); INSERT INTO sentinel(value) VALUES('unchanged')`); err != nil {
+		_ = db.Close()
+		t.Fatalf("prepare target database: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close target database: %v", err)
+	}
+
+	link := filepath.Join(t.TempDir(), "review.db")
+	if err := os.Symlink(target, link); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			t.Skipf("symlink creation is unavailable: %v", err)
+		}
+		t.Fatalf("create database symlink: %v", err)
+	}
+	if _, err := Open(link); err == nil || !strings.Contains(err.Error(), "without following links") {
+		t.Fatalf("Open symlink error = %v, want no-follow rejection", err)
+	}
+
+	db, err = sql.Open("sqlite", target)
+	if err != nil {
+		t.Fatalf("reopen target database: %v", err)
+	}
+	defer db.Close()
+	var value string
+	if err := db.QueryRow(`SELECT value FROM sentinel`).Scan(&value); err != nil || value != "unchanged" {
+		t.Fatalf("target database changed after rejected link: value=%q err=%v", value, err)
+	}
+	var reviewTable string
+	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'review_tasks'`).Scan(&reviewTable)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("target database was initialized through symlink: table=%q err=%v", reviewTable, err)
+	}
+}
+
+func TestStorePublishesWithoutFollowingReplacementSymlink(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+
+	victim := filepath.Join(t.TempDir(), "victim.db")
+	db, err := sql.Open("sqlite", victim)
+	if err != nil {
+		t.Fatalf("open victim database: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE sentinel (value TEXT NOT NULL); INSERT INTO sentinel(value) VALUES('unchanged')`); err != nil {
+		_ = db.Close()
+		t.Fatalf("prepare victim database: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close victim database: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove published database: %v", err)
+	}
+	if err := os.Symlink(victim, path); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			t.Skipf("symlink creation is unavailable: %v", err)
+		}
+		t.Fatalf("replace database with symlink: %v", err)
+	}
+	if err := store.SaveTask(context.Background(), Task{
+		ID: "safe-publish", InputType: "diff", InputRef: "input.diff", InputDigest: "digest",
+		RepoPath: "/repo", Status: "done", Mode: "review", CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveTask returned error: %v", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("published database must replace the symlink: info=%v err=%v", info, err)
+	}
+
+	db, err = sql.Open("sqlite", victim)
+	if err != nil {
+		t.Fatalf("reopen victim database: %v", err)
+	}
+	defer db.Close()
+	var value string
+	if err := db.QueryRow(`SELECT value FROM sentinel`).Scan(&value); err != nil || value != "unchanged" {
+		t.Fatalf("victim database changed after replacement attempt: value=%q err=%v", value, err)
+	}
+	var reviewTable string
+	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'review_tasks'`).Scan(&reviewTable)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("victim database was initialized through replacement link: table=%q err=%v", reviewTable, err)
+	}
+}
+
+func TestOpenRejectsConcurrentStoreBeforePublishingStaleSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review.db")
+	first, err := Open(path)
+	if err != nil {
+		t.Fatalf("open first store: %v", err)
+	}
+	defer first.Close()
+	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "lock sqlite database") {
+		t.Fatalf("second Open error = %v, want an exclusive database lock error", err)
+	}
+}
 
 func TestSaveReviewRollsBackEveryRecordOnFailure(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "review.db"))

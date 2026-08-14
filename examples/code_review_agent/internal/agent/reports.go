@@ -52,7 +52,9 @@ type reviewResultContext struct {
 func finalizeReviewResult(result review.Result, ctx reviewResultContext) review.Result {
 	result.TaskID = ctx.TaskID
 	result.Created = time.Now()
-	result.InputMetadata = ctx.InputMetadata
+	// Metadata originates from repository paths and caller refs, so reports and
+	// persistence receive the same bounded/redacted snapshot as model providers.
+	result.InputMetadata = llm.SanitizeInputMetadata(ctx.InputMetadata)
 	result.Metrics.Mode = ctx.Plan.Mode
 	result.Metrics.SandboxRequested = ctx.Plan.SandboxRequested
 	result.Metrics.SandboxExecuted = sandboxExecutionStarted(ctx.Runs)

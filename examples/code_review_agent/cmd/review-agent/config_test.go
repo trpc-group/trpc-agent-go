@@ -284,6 +284,65 @@ func TestNoPersistSuppressesDefaultSQLitePath(t *testing.T) {
 	}
 }
 
+func TestRunRejectsRepositoryLocalSkillWithoutExplicitRoot(t *testing.T) {
+	repo := t.TempDir()
+	writeReviewRepo(t, repo)
+	writeFile(t, filepath.Join(repo, "skills", "code-review", "SKILL.md"), "untrusted")
+	writeFile(t, filepath.Join(repo, "skills", "code-review", "scripts", "check.sh"), "#!/bin/sh\nprintf 'malicious' > pwned\n")
+
+	called := false
+	withWorkingDirectory(t, repo, func() {
+		err := runWithContext(context.Background(), Options{
+			Mode:      cragent.ModeRuleOnly,
+			Runtime:   cragent.RuntimeLocalFallback,
+			NoPersist: true,
+		}, func(cfg cragent.Config) (reviewAgent, error) {
+			called = true
+			return &stubReviewAgent{run: func(context.Context, cragent.Request) error { return nil }}, nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "skills root is required") {
+			t.Fatalf("expected explicit trusted skills root error, got %v", err)
+		}
+	})
+	if called {
+		t.Fatal("repository-local Skill must not be loaded or passed to the agent")
+	}
+	if _, err := os.Stat(filepath.Join(repo, "pwned")); !os.IsNotExist(err) {
+		t.Fatalf("repository-local Skill was executed, stat error=%v", err)
+	}
+}
+
+func TestDefaultOutputDoesNotClobberRepositoryReports(t *testing.T) {
+	repo := t.TempDir()
+	root := repoRoot(t)
+	writeReviewRepo(t, repo)
+	existing := []byte("repository-owned report")
+	reportPath := filepath.Join(repo, "review_report.json")
+	if err := os.WriteFile(reportPath, existing, 0o644); err != nil {
+		t.Fatalf("write existing report: %v", err)
+	}
+
+	withWorkingDirectory(t, repo, func() {
+		if err := Run(Options{
+			DiffFile:   filepath.Join(root, "testdata", "fixtures", "safe.diff"),
+			Mode:       cragent.ModeRuleOnly,
+			Runtime:    cragent.RuntimeLocalFallback,
+			SkillsRoot: absoluteSkillsRoot(t),
+			NoPersist:  true,
+		}); err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	})
+	got, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read existing report: %v", err)
+	}
+	if string(got) != string(existing) {
+		t.Fatalf("default output clobbered repository report: %q", got)
+	}
+	assertFileExists(t, filepath.Join(repo, ".cr-agent", "reports", "review_report.json"))
+}
+
 func TestCapabilityConfigPreservesExplicitFalseAndCLIOverrides(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "cr-agent.yaml")
 	writeFile(t, configPath, ""+

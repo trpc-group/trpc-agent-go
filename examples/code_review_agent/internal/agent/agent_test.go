@@ -1963,6 +1963,95 @@ func TestAgentRunCarriesBaseHeadRefsToArtifactsAndSQLite(t *testing.T) {
 	}
 }
 
+func TestFinalizedReportsRedactInputMetadataBeforeArtifactsAndPersistence(t *testing.T) {
+	root := repoRoot(t)
+	outDir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "review.db")
+	ag, err := New(Config{
+		SkillsRoot: filepath.Join(root, "skills"),
+		Runtime:    RuntimeLocalFallback,
+		SQLitePath: dbPath,
+		OutputDir:  outDir,
+		Timeout:    testReviewTimeout,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	defer ag.Close()
+
+	const secret = "sk-quoted-metadata-1234567890abcdef"
+	result := finalizeReviewResult(review.Result{}, reviewResultContext{
+		TaskID: "metadata-redaction",
+		InputMetadata: review.InputMetadata{
+			ChangedGoFiles: []string{`"credentials-` + secret + `.go"`},
+			ModulePath:     "example.com/" + secret,
+			BaseRef:        "refs/heads/" + secret,
+			HeadRef:        "refs/tags/" + secret,
+		},
+		StartedAt: time.Now(),
+		Plan:      executionPlan{Mode: ModeReview},
+	})
+	if strings.Contains(fmt.Sprintf("%+v", result.InputMetadata), secret) {
+		t.Fatalf("final result retained raw metadata: %+v", result.InputMetadata)
+	}
+	bundle, err := buildReportBundle(result)
+	if err != nil {
+		t.Fatalf("buildReportBundle: %v", err)
+	}
+	if err := ag.writeReviewArtifacts(context.Background(), result.TaskID, result, bundle); err != nil {
+		t.Fatalf("writeReviewArtifacts: %v", err)
+	}
+	if err := ag.persist(context.Background(), storage.Task{
+		ID:          result.TaskID,
+		InputType:   "diff",
+		InputRef:    "metadata.diff",
+		InputDigest: "digest",
+		RepoPath:    "/repo",
+		Status:      "done",
+		Mode:        ModeReview,
+		CreatedAt:   time.Now(),
+	}, result, nil, nil, bundle.JSON, bundle.Markdown, bundle.MarkdownZH, bundle.Diagnostics); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+
+	for name, data := range map[string][]byte{
+		"json":        bundle.JSON,
+		"diagnostics": bundle.Diagnostics,
+	} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("%s report leaked raw metadata secret: %s", name, data)
+		}
+	}
+	for _, name := range []string{"review_report.json", "review_diagnostics.json"} {
+		data, err := os.ReadFile(filepath.Join(outDir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("artifact file %s leaked raw metadata secret: %s", name, data)
+		}
+		artifactData, err := ag.artifactService.LoadArtifact(context.Background(), artifactSessionInfo(result.TaskID), name, nil)
+		if err != nil {
+			t.Fatalf("load artifact %s: %v", name, err)
+		}
+		if strings.Contains(string(artifactData.Data), secret) {
+			t.Fatalf("artifact service payload %s leaked raw metadata secret: %s", name, artifactData.Data)
+		}
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open persisted database: %v", err)
+	}
+	defer db.Close()
+	var persistedJSON, persistedMarkdown []byte
+	if err := db.QueryRowContext(context.Background(), `SELECT json_report, markdown_report FROM reports WHERE task_id = ?`, result.TaskID).Scan(&persistedJSON, &persistedMarkdown); err != nil {
+		t.Fatalf("load persisted report: %v", err)
+	}
+	if strings.Contains(string(persistedJSON), secret) || strings.Contains(string(persistedMarkdown), secret) {
+		t.Fatalf("stored report leaked raw metadata secret: json=%s markdown=%s", persistedJSON, persistedMarkdown)
+	}
+}
+
 // TestModelProviderMergesFindingsByConfidenceAndDedupe 固定模型增量合并规则。
 func TestModelProviderMergesFindingsByConfidenceAndDedupe(t *testing.T) {
 

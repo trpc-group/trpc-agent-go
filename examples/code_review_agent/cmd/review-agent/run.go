@@ -131,8 +131,7 @@ func runWithContext(ctx context.Context, opts Options, newAgent reviewAgentFacto
 		return fmt.Errorf("unsupported model provider %q", opts.ModelProvider)
 	}
 	if cfg.SkillsRoot == "" {
-		// 默认使用仓库内置 Skill。
-		cfg.SkillsRoot = filepath.Join("skills")
+		return errors.New("trusted skills root is required; pass --skills-root or configure skills_root with --config")
 	}
 	if cfg.FixturesRoot == "" {
 		cfg.FixturesRoot = filepath.Join("testdata", "fixtures")

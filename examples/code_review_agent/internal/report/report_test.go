@@ -45,6 +45,52 @@ func TestJSONAndMarkdownReportsIncludeFindings(t *testing.T) {
 	}
 }
 
+func TestMarkdownReportsEscapeControlCharactersInFindingFields(t *testing.T) {
+	rep := review.Result{
+		Findings: []review.Finding{{
+			Severity:       "high",
+			File:           "quoted\n## injected finding.go",
+			Line:           10,
+			Title:          "Title\r\n## injected heading",
+			Evidence:       "evidence\tvalue\u0085next-line",
+			Recommendation: "recommendation\n- injected item",
+			Source:         "skill_run",
+			RuleID:         "secret-leak",
+			Status:         "finding",
+		}},
+		Warnings: []review.Finding{{
+			Severity:       "low",
+			Title:          "Human review\n## injected review heading",
+			Recommendation: "Review recommendation\n- injected review item",
+			Source:         "skill_run",
+			RuleID:         "secret-leak",
+			Status:         "needs_human_review",
+		}},
+	}
+
+	for name, output := range map[string]string{
+		"English": BuildMarkdown(rep),
+		"Chinese": BuildMarkdownChinese(rep),
+	} {
+		for _, injected := range []string{
+			"\n## injected finding.go",
+			"\n## injected heading",
+			"\n- injected item",
+			"\n## injected review heading",
+			"\n- injected review item",
+		} {
+			if strings.Contains(output, injected) {
+				t.Fatalf("%s report contains injected Markdown %q: %s", name, injected, output)
+			}
+		}
+		for _, escaped := range []string{`quoted\n## injected finding.go`, `Title\r\n## injected heading`, `Human review\n## injected review heading`, `evidence\tvalue\u0085next-line`} {
+			if !strings.Contains(output, escaped) {
+				t.Fatalf("%s report did not visibly escape %q: %s", name, escaped, output)
+			}
+		}
+	}
+}
+
 func TestReportsAlwaysExposeCanonicalCapabilityAudit(t *testing.T) {
 	rep := review.Result{Metrics: review.Metrics{
 		Mode:             "review",

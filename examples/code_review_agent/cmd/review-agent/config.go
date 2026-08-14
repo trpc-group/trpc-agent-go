@@ -193,7 +193,7 @@ func optionWasSetAny(cli Options, fallback bool, flagNames ...string) bool {
 
 func applyOptionDefaults(opts *Options) {
 	if strings.TrimSpace(opts.OutputDir) == "" {
-		opts.OutputDir = "."
+		opts.OutputDir = filepath.Join(".cr-agent", "reports")
 	}
 	if opts.NoPersist {
 		opts.SQLitePath = ""
@@ -205,9 +205,6 @@ func applyOptionDefaults(opts *Options) {
 	}
 	if strings.TrimSpace(opts.Runtime) == "" {
 		opts.Runtime = cragent.RuntimeContainer
-	}
-	if strings.TrimSpace(opts.SkillsRoot) == "" {
-		opts.SkillsRoot = "skills"
 	}
 	if strings.TrimSpace(opts.FixturesRoot) == "" {
 		opts.FixturesRoot = "testdata/fixtures"

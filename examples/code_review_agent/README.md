@@ -13,15 +13,22 @@ container 沙箱中执行 `go test`、`go vet`，并把 findings、权限决策�
 ```bash
 cd examples/code_review_agent
 go run ./cmd/review-agent --diff-file testdata/fixtures/secret.diff \
-  --runtime local-fallback --output-dir /tmp/cr-report
+  --runtime local-fallback --output-dir /tmp/cr-report \
+  --skills-root /opt/cr-agent/skills
 ```
 
 生产形态使用 container sandbox：
 
 ```bash
 go run ./cmd/review-agent --repo-path /path/to/go-repo \
-  --sandbox --runtime container --output-dir /tmp/cr-report
+  --sandbox --runtime container --output-dir /tmp/cr-report \
+  --skills-root /opt/cr-agent/skills
 ```
+
+`--skills-root` (or `skills_root` in an explicitly supplied `--config`) is
+required. It must point to the trusted installation's Skill directory, never
+to a directory provided by the repository being reviewed. Reports default to
+the ignored `.cr-agent/reports` directory.
 
 如果目标仓库依赖 Go modules，请先在仓库根目录准备 `vendor/modules.txt`
 （例如由 `go mod vendor` 或 `go work vendor` 生成），否则 container runtime
