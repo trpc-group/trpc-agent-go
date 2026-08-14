@@ -41,6 +41,12 @@ import (
 //	    return fmt.Errorf("received empty embedding from API")
 //	}
 //	// Process successful embedding...
+//
+// Concurrency:
+// Implementations must be safe for concurrent use by multiple goroutines. A
+// single embedder instance is shared across the texts of a load and is called
+// from several goroutines at once by default, so an implementation that reuses
+// request buffers or other mutable state must guard it.
 type Embedder interface {
 	// GetEmbedding generates an embedding vector for the given text.
 	//
@@ -63,4 +69,37 @@ type Embedder interface {
 	// GetDimensions returns the dimensionality of the embeddings produced by this embedder.
 	// Returns 0 if dimensions are not known or configurable.
 	GetDimensions() int
+}
+
+// BatchEmbedder is an optional capability implemented by embedders that can
+// encode multiple texts in one multi-input provider request. Callers discover
+// it with a type assertion on Embedder and fall back to per-text requests when
+// the assertion fails, so existing Embedder implementations need no changes.
+//
+// Implementations must return exactly one embedding per input text, with
+// embeddings[i] corresponding to texts[i]. When a provider response cannot be
+// mapped back to the input order with certainty, or when it carries fewer or
+// more vectors than requested, implementations must return an error rather
+// than a reordered, padded, or truncated result. This prevents callers from
+// silently attaching a vector to the wrong input.
+//
+// The concurrency requirement of Embedder applies to GetEmbeddings as well:
+// batches are embedded concurrently by default, so one instance can receive
+// several calls at the same time.
+type BatchEmbedder interface {
+	Embedder
+
+	// GetEmbeddings generates one embedding vector per input text, issuing one
+	// multi-input request per attempt. An implementation may retry the whole
+	// batch, so a call can reach the provider more than once.
+	//
+	// Returns:
+	// - A slice of embeddings where embeddings[i] corresponds to texts[i]
+	// - An error for system-level failures and for responses that cannot be
+	//   mapped back to the input order
+	//
+	// An empty texts slice is an error. Implementations never split the batch,
+	// neither to satisfy provider limits nor after a failed attempt, so callers
+	// choose a batch size that fits those limits.
+	GetEmbeddings(ctx context.Context, texts []string) ([][]float64, error)
 }
