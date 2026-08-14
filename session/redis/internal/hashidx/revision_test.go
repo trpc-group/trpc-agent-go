@@ -11,10 +11,12 @@ package hashidx
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -177,6 +179,142 @@ func TestRevisionMetadataFailures(t *testing.T) {
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	_, err = c.Revision(cancelled, key)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestPrepareProjectionWriteContracts(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "prepare"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	write, raw, prepared, err := c.prepareProjectionWrite(
+		ctx, key, sessionrevision.Write{}, nil,
+	)
+	require.NoError(t, err)
+	assert.True(t, write.HasExpectedHead)
+	assert.Zero(t, write.ExpectedHead)
+	assert.Empty(t, raw)
+	assert.False(t, prepared)
+
+	projection := initializedHashidxProjection(t, c, ctx, key)
+	record := sessionrevision.PersistedRecord{
+		Head:       7,
+		Projection: sessionrevision.CloneProjection(projection),
+	}
+	recordJSON, err := json.Marshal(record)
+	require.NoError(t, err)
+	require.NoError(t, rdb.Set(
+		ctx, c.keys.RevisionKey(key), recordJSON, 0,
+	).Err())
+
+	write, raw, prepared, err = c.prepareProjectionWrite(
+		ctx,
+		key,
+		sessionrevision.Write{Projection: projection},
+		func(record *sessionrevision.PersistedRecord) error {
+			return sessionrevision.AppendProjectionEvent(
+				record,
+				revisionEvent("next", "next", "next", false),
+			)
+		},
+	)
+	require.NoError(t, err)
+	assert.True(t, write.HasExpectedHead)
+	assert.Equal(t, uint64(7), write.ExpectedHead)
+	assert.True(t, prepared)
+	assert.NotEmpty(t, raw)
+
+	wantErr := errors.New("advance failed")
+	_, _, _, err = c.prepareProjectionWrite(
+		ctx,
+		key,
+		sessionrevision.Write{},
+		func(*sessionrevision.PersistedRecord) error { return wantErr },
+	)
+	assert.ErrorIs(t, err, wantErr)
+
+	require.NoError(t, rdb.Set(
+		ctx, c.keys.RevisionKey(key), "not-json", 0,
+	).Err())
+	_, _, _, err = c.prepareProjectionWrite(
+		ctx, key, sessionrevision.Write{}, nil,
+	)
+	assert.ErrorContains(t, err, "decode revision metadata")
+}
+
+func TestRevisionBoundaryBaseFailureContracts(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "boundary"}
+
+	base, intact, err := c.RevisionBoundaryBase(ctx, key, nil)
+	require.NoError(t, err)
+	assert.Nil(t, base)
+	assert.False(t, intact)
+
+	metaKey := c.keys.SessionMetaKey(key)
+	require.NoError(t, rdb.Set(ctx, metaKey, "not-json", 0).Err())
+	_, _, err = c.RevisionBoundaryBase(ctx, key, nil)
+	assert.ErrorContains(t, err, "decode revision boundary metadata")
+
+	metaJSON, err := json.Marshal(sessionMeta{
+		ID: key.SessionID, AppName: key.AppName, UserID: key.UserID,
+		State:     session.StateMap{"phase": []byte("ready")},
+		CreatedAt: time.Now().Add(-time.Hour), UpdatedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, rdb.Set(ctx, metaKey, metaJSON, 0).Err())
+	require.NoError(t, rdb.Set(ctx, c.keys.SummaryKey(key), "not-json", 0).Err())
+	_, _, err = c.RevisionBoundaryBase(ctx, key, nil)
+	assert.ErrorContains(t, err, "decode revision boundary summaries")
+
+	require.NoError(t, rdb.Del(ctx, c.keys.SummaryKey(key)).Err())
+	base, intact, err = c.RevisionBoundaryBase(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, base)
+	assert.True(t, intact)
+	assert.Equal(t, []byte("ready"), base.State["phase"])
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, _, err = c.RevisionBoundaryBase(cancelled, key, nil)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestRevisionProjectionHelperFailures(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "missing"}
+
+	_, err := c.requiredRevisionProjection(ctx, key)
+	assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
+
+	current := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	var remaining map[string]time.Duration
+	err = rdb.Watch(ctx, func(tx *redis.Tx) error {
+		var loadErr error
+		remaining, loadErr = c.activeProjectionTTLs(ctx, tx, key, current)
+		return loadErr
+	}, c.keys.SessionMetaKey(key))
+	require.NoError(t, err)
+	assert.Equal(t, time.Duration(-2), remaining[c.keys.SessionMetaKey(key)])
+
+	current.Events = append(
+		current.Events,
+		*revisionEvent("event", "request", "invocation", false),
+	)
+	projection := &sessionrevision.PersistedRecord{}
+	require.NoError(t, sessionrevision.InitializeProjection(projection, current))
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = c.revisionProjectionStorageIntact(
+		cancelled, key, projection.Projection,
+	)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 

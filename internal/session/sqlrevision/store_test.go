@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -286,6 +287,66 @@ INSERT INTO tracks (
 	require.NotNil(t, invalidated.Checkpoint)
 	assert.True(t, invalidated.Checkpoint.Hazard)
 
+	missing := session.Key{AppName: "missing", UserID: "user", SessionID: "session"}
+	tx, err = db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.InvalidateProjection(ctx, tx, missing))
+	require.NoError(t, tx.Commit())
+
+	cleanupKeys := []session.Key{
+		{AppName: "app-b", UserID: "user-a", SessionID: "session-a"},
+		{AppName: "app-a", UserID: "user-b", SessionID: "session-a"},
+		{AppName: "app-a", UserID: "user-a", SessionID: "session-b"},
+		{AppName: "app-a", UserID: "user-a", SessionID: "session-a"},
+	}
+	for _, cleanupKey := range cleanupKeys {
+		cleanupRecord := &sessionrevision.PersistedRecord{}
+		require.NoError(t, sessionrevision.InitializeProjection(
+			cleanupRecord,
+			session.NewSession(
+				cleanupKey.AppName, cleanupKey.UserID, cleanupKey.SessionID,
+			),
+		))
+		insertStoreTestState(t, db, cleanupKey, now, cleanupRecord)
+	}
+	tx, err = db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.InvalidateProjections(ctx, tx, []session.Key{
+		cleanupKeys[0], cleanupKeys[2], cleanupKeys[1], cleanupKeys[3], cleanupKeys[2],
+	}))
+	require.NoError(t, tx.Commit())
+	for _, cleanupKey := range cleanupKeys {
+		cleanupRecord, err := store.Read(ctx, db, cleanupKey, false)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1), cleanupRecord.Head)
+		assert.False(t, sessionrevision.ProjectionInitialized(cleanupRecord))
+	}
+
+	insertStoreTestTrack(t, db, cleanupKeys[2], &session.TrackEvent{
+		Track: "trace", Timestamp: now.Add(-time.Second),
+	})
+	insertStoreTestTrack(t, db, cleanupKeys[0], &session.TrackEvent{
+		Track: "trace", Timestamp: now.Add(-time.Second),
+	})
+	_, err = db.ExecContext(ctx, `UPDATE tracks SET expires_at = ?`, now.Add(-time.Second))
+	require.NoError(t, err)
+	tx, err = db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.InvalidateExpiredChildProjections(
+		ctx,
+		tx,
+		store.Tables.Tracks,
+		now,
+		&session.UserKey{AppName: cleanupKeys[2].AppName, UserID: cleanupKeys[2].UserID},
+	))
+	require.NoError(t, tx.Commit())
+	filtered, err := store.Read(ctx, db, cleanupKeys[2], false)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), filtered.Head)
+	unmatched, err := store.Read(ctx, db, cleanupKeys[0], false)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), unmatched.Head)
+
 	restored := session.NewSession(key.AppName, key.UserID, key.SessionID)
 	restored.Summaries = map[string]*session.Summary{
 		"restored": {Summary: "restored", UpdatedAt: now},
@@ -303,6 +364,7 @@ func TestStoreReplaceLatestTurn(t *testing.T) {
 	store := testStore()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "replace"}
 	baseTime := time.Now().UTC().Truncate(time.Second)
+	expiresAt := baseTime.Add(24 * time.Hour)
 	before := session.NewSession(
 		key.AppName,
 		key.UserID,
@@ -343,10 +405,11 @@ func TestStoreReplaceLatestTurn(t *testing.T) {
 	stateRaw, err := sessionrevision.EncodeState(currentState, record)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `
-INSERT INTO states (app_name, user_id, session_id, state, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)`,
+INSERT INTO states (
+  app_name, user_id, session_id, state, created_at, updated_at, expires_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		key.AppName, key.UserID, key.SessionID, stateRaw,
-		currentState.CreatedAt, currentState.UpdatedAt,
+		currentState.CreatedAt, currentState.UpdatedAt, expiresAt,
 	)
 	require.NoError(t, err)
 
@@ -418,6 +481,299 @@ VALUES (?, ?, ?, 'default', ?, ?)`,
 	assert.Equal(t, uint64(3), persisted.Generation)
 	assert.Nil(t, persisted.Checkpoint)
 	assert.True(t, sessionrevision.ProjectionInitialized(persisted))
+
+	tx, err = db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	replay, err := store.ReplaceLatestTurn(
+		ctx,
+		tx,
+		sessionrevision.LatestTurnReplacementRequest{
+			Key: key, ExpectedRequestID: "latest-request",
+			IdempotencyKey: "replacement-request",
+		},
+	)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	assert.False(t, replay.Applied)
+	replayGeneration, ok := sessionrevision.Generation(replay.ActiveSession)
+	require.True(t, ok)
+	assert.Equal(t, uint64(3), replayGeneration)
+	_, replayExpiresAt, err := store.LoadActive(ctx, db, key, false)
+	require.NoError(t, err)
+	require.NotNil(t, replayExpiresAt)
+	assert.Equal(t, expiresAt, *replayExpiresAt)
+
+	tx, err = db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = store.ReplaceLatestTurn(
+		ctx,
+		tx,
+		sessionrevision.LatestTurnReplacementRequest{
+			Key: key, ExpectedRequestID: "different-request",
+			IdempotencyKey: "replacement-request",
+		},
+	)
+	assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementConflict)
+	require.NoError(t, tx.Rollback())
+}
+
+func TestStoreLoadActiveRejectsCorruptProjectionRows(t *testing.T) {
+	ctx := context.Background()
+	db := openStoreTestDB(t)
+	store := testStore()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "corrupt"}
+
+	generation, err := store.Generation(ctx, db, key)
+	require.NoError(t, err)
+	assert.Zero(t, generation)
+	generations, err := store.Generations(ctx, db, nil)
+	require.NoError(t, err)
+	assert.Empty(t, generations)
+	_, _, err = store.LoadActive(ctx, db, key, false)
+	assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	_, err = db.ExecContext(ctx, `
+INSERT INTO states (app_name, user_id, session_id, state, created_at, updated_at)
+VALUES (?, ?, ?, '{', ?, ?)`, key.AppName, key.UserID, key.SessionID, now, now)
+	require.NoError(t, err)
+	_, err = store.Read(ctx, db, key, false)
+	require.Error(t, err)
+	_, _, err = store.LoadActive(ctx, db, key, false)
+	require.Error(t, err)
+
+	stateRaw, err := sessionrevision.EncodeState(stateEnvelope{
+		ID: key.SessionID, State: session.StateMap{},
+		CreatedAt: now, UpdatedAt: now,
+	}, &sessionrevision.PersistedRecord{})
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE states SET state = ? WHERE session_id = ?`,
+		stateRaw, key.SessionID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+INSERT INTO events (app_name, user_id, session_id, event, created_at)
+VALUES (?, ?, ?, 'not-json', ?)`, key.AppName, key.UserID, key.SessionID, now)
+	require.NoError(t, err)
+	_, _, err = store.LoadActive(ctx, db, key, false)
+	require.Error(t, err)
+
+	eventRaw, err := json.Marshal(storeTestEvent("event", "request", now))
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE events SET event = ?`, eventRaw)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+INSERT INTO tracks (app_name, user_id, session_id, track, event, created_at)
+VALUES (?, ?, ?, 'trace', 'not-json', ?)`, key.AppName, key.UserID, key.SessionID, now)
+	require.NoError(t, err)
+	_, _, err = store.LoadActive(ctx, db, key, false)
+	require.Error(t, err)
+
+	trackRaw, err := json.Marshal(&session.TrackEvent{
+		Track: "trace", RequestID: "request", Timestamp: now,
+	})
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE tracks SET event = ?`, trackRaw)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+INSERT INTO summaries (
+  app_name, user_id, session_id, filter_key, summary, updated_at
+) VALUES (?, ?, ?, 'default', 'not-json', ?)`,
+		key.AppName, key.UserID, key.SessionID, now)
+	require.NoError(t, err)
+	_, _, err = store.LoadActive(ctx, db, key, false)
+	require.Error(t, err)
+
+	summaryRaw, err := json.Marshal(&session.Summary{Summary: "valid", UpdatedAt: now})
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE summaries SET summary = ?`, summaryRaw)
+	require.NoError(t, err)
+	active, expiresAt, err := store.LoadActive(ctx, db, key, true)
+	require.NoError(t, err)
+	assert.Nil(t, expiresAt)
+	require.Len(t, active.Events, 1)
+	require.Len(t, active.Tracks["trace"].Events, 1)
+	assert.Equal(t, "valid", active.Summaries["default"].Summary)
+
+	withoutTracks := store
+	withoutTracks.Tables.Tracks = ""
+	active, _, err = withoutTracks.LoadActive(ctx, db, key, false)
+	require.NoError(t, err)
+	assert.Empty(t, active.Tracks)
+}
+
+func TestStoreReplacementGuards(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "guard"}
+
+	t.Run("generation exhausted", func(t *testing.T) {
+		db := openStoreTestDB(t)
+		store := testStore()
+		boundary, err := sessionrevision.NewBoundary(
+			session.NewSession(key.AppName, key.UserID, key.SessionID),
+		)
+		require.NoError(t, err)
+		insertStoreTestState(t, db, key, now, &sessionrevision.PersistedRecord{
+			Generation: math.MaxInt64,
+			Checkpoint: &sessionrevision.PersistedCheckpoint{
+				RequestID: "latest", Boundary: boundary,
+			},
+		})
+		insertStoreTestEvent(t, db, key, storeTestEvent("latest", "latest", now))
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		_, err = store.ReplaceLatestTurn(ctx, tx,
+			sessionrevision.LatestTurnReplacementRequest{
+				Key: key, ExpectedRequestID: "latest", IdempotencyKey: "replace",
+			})
+		assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
+		require.NoError(t, tx.Rollback())
+	})
+
+	t.Run("invalid boundary", func(t *testing.T) {
+		db := openStoreTestDB(t)
+		store := testStore()
+		insertStoreTestState(t, db, key, now, &sessionrevision.PersistedRecord{
+			Checkpoint: &sessionrevision.PersistedCheckpoint{
+				RequestID: "latest", Boundary: []byte("not-json"),
+			},
+		})
+		insertStoreTestEvent(t, db, key, storeTestEvent("latest", "latest", now))
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		_, err = store.ReplaceLatestTurn(ctx, tx,
+			sessionrevision.LatestTurnReplacementRequest{
+				Key: key, ExpectedRequestID: "latest", IdempotencyKey: "replace",
+			})
+		require.ErrorContains(t, err, "restore latest-turn boundary")
+		require.NoError(t, tx.Rollback())
+	})
+}
+
+func TestStoreTrimPrefixGuards(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "prefix"}
+
+	t.Run("event tail required", func(t *testing.T) {
+		db := openStoreTestDB(t)
+		store := testStore()
+		insertStoreTestEvent(t, db, key, storeTestEvent("event", "request", now))
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		err = store.trimEventTail(ctx, tx, key, 1)
+		assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
+		require.NoError(t, tx.Rollback())
+	})
+
+	for _, test := range []struct {
+		name     string
+		restored map[session.Track]*session.TrackEvents
+	}{
+		{
+			name: "prefix longer than active",
+			restored: map[session.Track]*session.TrackEvents{"trace": {
+				Track: "trace",
+				Events: []session.TrackEvent{
+					{Track: "trace", RequestID: "request", Timestamp: now},
+					{Track: "trace", RequestID: "other", Timestamp: now.Add(time.Second)},
+				},
+			}},
+		},
+		{
+			name: "prefix differs",
+			restored: map[session.Track]*session.TrackEvents{"trace": {
+				Track: "trace", Events: []session.TrackEvent{{
+					Track: "trace", RequestID: "different", Timestamp: now,
+				}},
+			}},
+		},
+		{
+			name: "prefix track missing",
+			restored: map[session.Track]*session.TrackEvents{"missing": {
+				Track: "missing", Events: []session.TrackEvent{{
+					Track: "missing", RequestID: "request", Timestamp: now,
+				}},
+			}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := openStoreTestDB(t)
+			store := testStore()
+			trackEvent := &session.TrackEvent{
+				Track: "trace", RequestID: "request", Timestamp: now,
+			}
+			insertStoreTestTrack(t, db, key, trackEvent)
+			restored := session.NewSession(key.AppName, key.UserID, key.SessionID)
+			restored.Tracks = test.restored
+			tx, err := db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			err = store.trimTrackTails(ctx, tx, key, restored)
+			assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
+			require.NoError(t, tx.Rollback())
+		})
+	}
+
+	db := openStoreTestDB(t)
+	store := testStore()
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.removeTailRows(ctx, tx, store.Tables.Events, key, nil))
+	require.NoError(t, tx.Rollback())
+}
+
+func insertStoreTestState(
+	t *testing.T,
+	db *sql.DB,
+	key session.Key,
+	timestamp time.Time,
+	record *sessionrevision.PersistedRecord,
+) {
+	t.Helper()
+	raw, err := sessionrevision.EncodeState(stateEnvelope{
+		ID: key.SessionID, State: session.StateMap{},
+		CreatedAt: timestamp, UpdatedAt: timestamp,
+	}, record)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+INSERT INTO states (app_name, user_id, session_id, state, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)`,
+		key.AppName, key.UserID, key.SessionID, raw, timestamp, timestamp,
+	)
+	require.NoError(t, err)
+}
+
+func insertStoreTestEvent(
+	t *testing.T,
+	db *sql.DB,
+	key session.Key,
+	evt *event.Event,
+) {
+	t.Helper()
+	raw, err := json.Marshal(evt)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+INSERT INTO events (app_name, user_id, session_id, event, created_at)
+VALUES (?, ?, ?, ?, ?)`, key.AppName, key.UserID, key.SessionID, raw, evt.Timestamp)
+	require.NoError(t, err)
+}
+
+func insertStoreTestTrack(
+	t *testing.T,
+	db *sql.DB,
+	key session.Key,
+	trackEvent *session.TrackEvent,
+) {
+	t.Helper()
+	raw, err := json.Marshal(trackEvent)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+INSERT INTO tracks (app_name, user_id, session_id, track, event, created_at)
+VALUES (?, ?, ?, ?, ?, ?)`,
+		key.AppName, key.UserID, key.SessionID,
+		trackEvent.Track, raw, trackEvent.Timestamp,
+	)
+	require.NoError(t, err)
 }
 
 func storeTestEvent(
