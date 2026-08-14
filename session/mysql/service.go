@@ -1172,8 +1172,9 @@ func (s *Service) softDeleteSummaries(
 	args []any,
 	now time.Time,
 ) error {
+	activeWhereClause := fmt.Sprintf("(%s) AND deleted_at IS NULL", whereClause)
 	_, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionSummaries, whereClause),
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionSummaries, activeWhereClause),
 		append([]any{now}, args...)...)
 	if err == nil {
 		return nil
@@ -1189,7 +1190,7 @@ func (s *Service) softDeleteSummaries(
 	log.WarnfContext(ctx, "soft deleting summaries hit duplicate legacy rows; "+
 		"deleting the affected active summaries instead: %v", err)
 	_, deleteErr := tx.ExecContext(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionSummaries, whereClause),
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionSummaries, activeWhereClause),
 		args...)
 	if deleteErr != nil {
 		return fmt.Errorf("delete active summaries after soft-delete conflict: %w", deleteErr)

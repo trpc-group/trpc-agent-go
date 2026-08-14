@@ -1344,7 +1344,7 @@ func (s *Service) getSummariesList(
 		AND user_id = ?
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL
-		ORDER BY updated_at ASC`,
+		ORDER BY updated_at ASC, id ASC`,
 		s.tableSessionSummaries, strings.Join(placeholders, ","))
 
 	// Build a map of session key to created_at for filtering

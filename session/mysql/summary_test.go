@@ -64,11 +64,11 @@ func expectSummaryWrite(
 		WithArgs(sess.AppName, sess.UserID, sess.ID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
 
-	summaryRows := sqlmock.NewRows([]string{"id"})
+	summaryRows := sqlmock.NewRows([]string{"updated_at"})
 	if active {
-		summaryRows.AddRow(int64(2)).AddRow(int64(3))
+		summaryRows.AddRow(time.Unix(0, 0).UTC())
 	}
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM session_summaries")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT updated_at FROM session_summaries")).
 		WithArgs(sess.AppName, sess.UserID, sess.ID, filterKey).
 		WillReturnRows(summaryRows)
 
@@ -102,6 +102,62 @@ func expectSummaryWrite(
 	}
 	write.WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
+}
+
+func TestUpsertSessionSummarySkipsOlderCutoff(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	incomingUpdatedAt := time.Date(2026, time.August, 14, 8, 0, 0, 0, time.UTC)
+	persistedUpdatedAt := incomingUpdatedAt.Add(time.Minute)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM session_states")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT updated_at FROM session_summaries")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, "").
+		WillReturnRows(sqlmock.NewRows([]string{"updated_at"}).AddRow(persistedUpdatedAt))
+	mock.ExpectCommit()
+
+	err = s.upsertSessionSummary(
+		context.Background(), key, "", []byte(`{"summary":"older"}`), incomingUpdatedAt,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpsertSessionSummaryEqualCutoffLastWriteWins(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	updatedAt := time.Date(2026, time.August, 14, 8, 0, 0, 0, time.UTC)
+	summaryBytes := []byte(`{"summary":"regenerated"}`)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM session_states")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT updated_at FROM session_summaries")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, "").
+		WillReturnRows(sqlmock.NewRows([]string{"updated_at"}).AddRow(updatedAt))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			string(summaryBytes), updatedAt,
+			key.AppName, key.UserID, key.SessionID, "",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err = s.upsertSessionSummary(context.Background(), key, "", summaryBytes, updatedAt)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestCreateSessionSummary_Success(t *testing.T) {
@@ -290,7 +346,7 @@ func TestGetSessionSummaryText_Success(t *testing.T) {
 	summaryBytes, _ := json.Marshal(summary)
 
 	// Mock: Query summary
-	mock.ExpectQuery(regexp.QuoteMeta("ORDER BY updated_at DESC LIMIT 1")).
+	mock.ExpectQuery(regexp.QuoteMeta("ORDER BY updated_at DESC, id DESC LIMIT 1")).
 		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnRows(sqlmock.NewRows([]string{"summary"}).
 			AddRow(summaryBytes))

@@ -83,11 +83,21 @@ func (s *Service) upsertSessionSummary(
 			return err
 		}
 
-		exists, err := s.activeSummaryExistsForUpdate(ctx, tx, key, filterKey)
+		persistedUpdatedAt, exists, err := s.latestActiveSummaryUpdatedAtForUpdate(
+			ctx, tx, key, filterKey,
+		)
 		if err != nil {
 			return err
 		}
 		if exists {
+			// A summary may be generated before waiting for this transaction's
+			// parent-session lock. Do not let an older cutoff overwrite a newer
+			// committed summary. Equal cutoffs remain last-write-wins so callers
+			// can force regeneration for the same summarized history.
+			if persistedUpdatedAt.After(updatedAt) {
+				return nil
+			}
+
 			// Update every active copy so reads remain consistent while legacy
 			// duplicate rows are being cleaned up online.
 			_, err = tx.ExecContext(ctx,
@@ -162,27 +172,28 @@ func (s *Service) lockActiveSessionForSummary(
 	return nil
 }
 
-func (s *Service) activeSummaryExistsForUpdate(
+func (s *Service) latestActiveSummaryUpdatedAtForUpdate(
 	ctx context.Context,
 	tx *sql.Tx,
 	key session.Key,
 	filterKey string,
-) (bool, error) {
-	var id int64
+) (time.Time, bool, error) {
+	var updatedAt time.Time
 	err := tx.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT id FROM %s
+		fmt.Sprintf(`SELECT updated_at FROM %s
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 			AND deleted_at IS NULL
+			ORDER BY updated_at DESC, id DESC
 			LIMIT 1
 			FOR UPDATE`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, filterKey).Scan(&id)
+		key.AppName, key.UserID, key.SessionID, filterKey).Scan(&updatedAt)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return time.Time{}, false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("lock active summaries failed: %w", err)
+		return time.Time{}, false, fmt.Errorf("lock active summaries failed: %w", err)
 	}
-	return true, nil
+	return updatedAt, true, nil
 }
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
@@ -263,7 +274,7 @@ func (s *Service) GetSessionSummaryText(
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND updated_at >= ?
 		AND deleted_at IS NULL
-		ORDER BY updated_at DESC
+		ORDER BY updated_at DESC, id DESC
 		LIMIT 1`, s.tableSessionSummaries),
 		key.AppName, key.UserID, key.SessionID, filterKey, time.Now(), sess.CreatedAt)
 
@@ -294,7 +305,7 @@ func (s *Service) GetSessionSummaryText(
 			AND (expires_at IS NULL OR expires_at > ?)
 			AND updated_at >= ?
 			AND deleted_at IS NULL
-			ORDER BY updated_at DESC
+			ORDER BY updated_at DESC, id DESC
 			LIMIT 1`, s.tableSessionSummaries),
 			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now(), sess.CreatedAt)
 

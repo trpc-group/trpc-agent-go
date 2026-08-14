@@ -1426,7 +1426,9 @@ func TestSoftDeleteSessionsFallsBackForLegacySummaryDuplicates(t *testing.T) {
 			Number:  sqldb.MySQLErrDuplicateEntry,
 			Message: "duplicate active summary",
 		})
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_summaries")).
+	mock.ExpectExec(regexp.QuoteMeta(
+		"DELETE FROM session_summaries WHERE (app_name = ?) AND deleted_at IS NULL",
+	)).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -1441,7 +1443,7 @@ func TestSoftDeleteSessionsFallsBackForLegacySummaryDuplicates(t *testing.T) {
 		tx,
 		"app_name = ? AND expires_at IS NOT NULL AND expires_at <= ?",
 		[]any{"app-1", time.Now()},
-		"app_name = ? AND deleted_at IS NULL",
+		"app_name = ?",
 		[]any{"app-1"},
 		time.Now(),
 	)
