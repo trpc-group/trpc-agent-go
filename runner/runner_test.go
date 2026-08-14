@@ -379,7 +379,7 @@ func TestRunnerLatestTurnReplacementReservesNewRequestBeforeMutation(t *testing.
 	}
 }
 
-func TestRunnerLatestTurnReplacementRewritesBeforeMutation(t *testing.T) {
+func TestRunnerLatestTurnReplacementValidatesBeforeMutation(t *testing.T) {
 	ctx := context.Background()
 	service := sessioninmemory.NewSessionService()
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
@@ -404,6 +404,12 @@ func TestRunnerLatestTurnReplacementRewritesBeforeMutation(t *testing.T) {
 	))
 
 	r := NewRunner("app", &mockAgent{name: "agent"}, WithSessionService(service))
+	assertOriginal := func() {
+		active, err := service.GetSession(ctx, key)
+		require.NoError(t, err)
+		require.Len(t, active.Events, 1)
+		assert.Equal(t, "request-original", active.Events[0].RequestID)
+	}
 	events, err := r.Run(
 		ctx,
 		"user",
@@ -419,10 +425,36 @@ func TestRunnerLatestTurnReplacementRewritesBeforeMutation(t *testing.T) {
 	)
 	require.Nil(t, events)
 	require.ErrorContains(t, err, "rewrite failed")
-	active, err := service.GetSession(ctx, key)
-	require.NoError(t, err)
-	require.Len(t, active.Events, 1)
-	assert.Equal(t, "request-original", active.Events[0].RequestID)
+	assertOriginal()
+
+	events, err = r.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("edited"),
+		agent.WithLatestTurnReplacement("request-original", "request-edited"),
+		agent.WithUserMessageRewriter(func(
+			context.Context,
+			*agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return []model.Message{{}}, nil
+		}),
+	)
+	require.Nil(t, events)
+	require.ErrorContains(t, err, "rewriter returned no payload messages")
+	assertOriginal()
+
+	events, err = r.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("edited"),
+		agent.WithLatestTurnReplacement("request-original", "request-edited"),
+		agent.WithAgentByName("missing"),
+	)
+	require.Nil(t, events)
+	require.ErrorContains(t, err, `agent "missing" not found`)
+	assertOriginal()
 }
 
 type interruptThenRespondAgent struct {

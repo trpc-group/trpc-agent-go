@@ -420,6 +420,9 @@ func (c *multiTurnChat) replaceLatestMessage(
 			pending.requestID,
 		),
 	)
+	if errors.Is(err, runner.ErrLatestTurnReplacementConflict) {
+		delete(c.requestIDs, c.sessionID)
+	}
 	if started || errors.Is(err, runner.ErrLatestTurnReplacementConflict) ||
 		errors.Is(err, runner.ErrLatestTurnReplacementUnsupported) {
 		delete(c.pendingEdits, c.sessionID)

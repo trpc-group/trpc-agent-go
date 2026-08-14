@@ -646,6 +646,10 @@ func (r *runner) Run(
 		execCancel()
 		return nil, err
 	}
+	if err := r.preflightLatestTurnReplacement(execCtx, ro); err != nil {
+		execCancel()
+		return nil, err
+	}
 
 	sessionCtx, sessionSpan, sessionStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
@@ -1331,6 +1335,17 @@ func (r *runner) selectAgentForRun(
 		)
 	}
 	return ag, nil
+}
+
+func (r *runner) preflightLatestTurnReplacement(
+	ctx context.Context,
+	ro agent.RunOptions,
+) error {
+	if ro.LatestTurnReplacement == nil {
+		return nil
+	}
+	_, err := r.selectAgentForRun(ctx, ro)
+	return err
 }
 
 // resolveAgent decides which agent to use for this run.
@@ -4221,7 +4236,13 @@ func (r *runner) resolveCurrentTurnMessages(
 	if err != nil {
 		return model.Message{}, nil, err
 	}
-	return currentTurnMessages[len(currentTurnMessages)-1], filterPayloadMessages(currentTurnMessages), nil
+	persisted := filterPayloadMessages(currentTurnMessages)
+	if ro.LatestTurnReplacement != nil && len(persisted) == 0 {
+		return model.Message{}, nil, fmt.Errorf(
+			"runner: latest-turn replacement rewriter returned no payload messages",
+		)
+	}
+	return currentTurnMessages[len(currentTurnMessages)-1], persisted, nil
 }
 
 func (r *runner) persistCurrentTurnMessages(
