@@ -19,7 +19,6 @@ import (
 	"os"
 	"reflect"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -942,7 +941,7 @@ func toSessionSnapshot(
 	snapshot.AppName = replayAppName
 	snapshot.UserID = replayUserID
 	for key, value := range rawState {
-		if key == "tracks" || strings.HasPrefix(key, "summary:") {
+		if isInternalSessionStateKey(key) {
 			continue
 		}
 		snapshot.State[key] = decodeStateValue(value)
@@ -1004,6 +1003,17 @@ func toSessionSnapshot(
 	}
 	sess.TracksMu.RUnlock()
 	return snapshot, nil
+}
+
+func isInternalSessionStateKey(key string) bool {
+	switch key {
+	case "tracks",
+		session.SummaryLastIncludedTimestampStateKey,
+		session.SummaryLastIncludedEventIDStateKey:
+		return true
+	default:
+		return false
+	}
 }
 
 func replayWindowStart(

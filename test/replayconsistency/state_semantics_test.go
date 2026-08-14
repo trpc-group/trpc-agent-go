@@ -91,6 +91,40 @@ func TestNormalizeDeletedStatePreservesStaleValue(t *testing.T) {
 	}
 }
 
+func TestSessionSnapshotPreservesUserSummaryStateKeys(t *testing.T) {
+	sess := session.NewSession(replayAppName, replayUserID, stateSemanticsSessionID)
+	rawState := session.StateMap{
+		"summary:profile": []byte(`{"name":"ada"}`),
+		session.SummaryLastIncludedTimestampStateKey: []byte(`"hidden-ts"`),
+		session.SummaryLastIncludedEventIDStateKey:   []byte(`"hidden-id"`),
+		"tracks": []byte(`["tools"]`),
+	}
+	snapshot, err := toSessionSnapshot(sess, rawState, "", false)
+	if err != nil {
+		t.Fatalf("session snapshot: %v", err)
+	}
+	got, exists := snapshot.State["summary:profile"]
+	if !exists {
+		t.Fatalf("summary:profile state was filtered: %#v", snapshot.State)
+	}
+	if got.Kind != replaytest.StateValueJSON {
+		t.Fatalf("summary:profile kind = %q, want %q", got.Kind, replaytest.StateValueJSON)
+	}
+	profile, ok := got.Value.(map[string]any)
+	if !ok || profile["name"] != "ada" {
+		t.Fatalf("summary:profile value = %#v", got.Value)
+	}
+	for _, key := range []string{
+		session.SummaryLastIncludedTimestampStateKey,
+		session.SummaryLastIncludedEventIDStateKey,
+		"tracks",
+	} {
+		if _, exists := snapshot.State[key]; exists {
+			t.Fatalf("internal state key %q remains: %#v", key, snapshot.State[key])
+		}
+	}
+}
+
 func TestReplayFixtureOrdersStateDeleteBookkeepingWithWrites(t *testing.T) {
 	sessionService := &delayedStateSessionService{
 		SessionService:  sessioninmemory.NewSessionService(),
