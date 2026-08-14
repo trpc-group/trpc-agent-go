@@ -1,5 +1,7 @@
 # tRPC-Agent-Go A2A Integration Guide
 
+> This guide covers the legacy `server/a2a` and `agent/a2aagent` packages for A2A v0.2.x. For new integrations and migration guidance, see [A2A v1.0 Integration and Migration Guide](a2a_v1.md).
+
 ## Overview
 
 tRPC-Agent-Go provides a complete A2A (Agent-to-Agent) solution with two core components:

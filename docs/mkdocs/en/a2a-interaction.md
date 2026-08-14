@@ -2,7 +2,7 @@
 
 > **Note**
 >
-> This document defines the extended implementation specification for the A2A protocol within the trpc-agent-go framework. Regular users do not need to read this document when using A2A Client/Server — the framework automatically handles all protocol conversion details. You only need to refer to this specification when developing a non-trpc-agent-go A2A Client/Server that interoperates with this framework.
+> This document defines the extended implementation specification shared by the legacy and v1 A2A packages in tRPC-Agent-Go. Regular users do not need to read it because the framework handles the conversions. Refer to it when implementing a non-tRPC-Agent-Go Client or Server that must interoperate with these extensions; version-specific carriers are identified below.
 
 ## Background
 
@@ -31,7 +31,22 @@ This document defines the **interaction specification** of trpc-agent-go on top 
 
 > For the complete A2A protocol specification, see: https://a2a-protocol.org/latest/specification/
 >
-> For the framework usage guide, see: [A2A Integration Guide](a2a.md)
+> For framework usage, see the [A2A v0.2.x Integration Guide](a2a.md) or [A2A v1.0 Integration and Migration Guide](a2a_v1.md).
+
+---
+
+## Protocol Version Scope
+
+The `trpc-a2a-version` extension, interaction version `0.1`, and shared metadata keys such as `interaction_spec_version`, `type`, `thought`, `object_type`, `llm_response_id`, and `state_delta` are used by both package generations. Their wire carriers differ:
+
+| Contract area | A2A v0.2.x packages | A2A v1.0 packages |
+|---|---|---|
+| Agent Card declaration | `AgentCard.capabilities.extensions` | `AgentCard.capabilities.extensions` |
+| Request version | Message metadata | Message metadata |
+| Extended event data | Legacy `TextPart`, `DataPart`, and streaming envelopes | Unified Part metadata plus Message, Artifact, and Task update event metadata |
+| Operation names | Lowercase slash-delimited methods such as `message/send` | v1 operations such as `SendMessage` and `SubscribeToTask` |
+
+Unless a section explicitly describes v1, the JSON shapes, concrete Part types, method names, and streaming envelopes in the remainder of this document are v0.2.x wire examples. The metadata key definitions remain the shared interoperability contract.
 
 ---
 
