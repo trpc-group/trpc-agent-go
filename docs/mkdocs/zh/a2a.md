@@ -1,5 +1,7 @@
 # tRPC-Agent-Go A2A 集成指南
 
+> 本文介绍面向 A2A v0.2.x 的旧版 `server/a2a` 与 `agent/a2aagent` 包。新接入和迁移说明请参考 [A2A v1.0 接入与迁移指南](a2a_v1.md)。
+
 ## 概述
 
 tRPC-Agent-Go 提供了完整的 A2A (Agent-to-Agent) 解决方案，包含两个核心组件：
