@@ -26,16 +26,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-type revisionArchiveDoc struct {
-	AppName    string     `bson:"app_name"`
-	UserID     string     `bson:"user_id"`
-	SessionID  string     `bson:"session_id"`
-	Generation uint64     `bson:"generation"`
-	Snapshot   []byte     `bson:"snapshot"`
-	CreatedAt  time.Time  `bson:"created_at"`
-	ExpiresAt  *time.Time `bson:"expires_at,omitempty"`
-}
-
 func decodeRevision(raw []byte) (*sessionrevision.PersistedRecord, error) {
 	if len(raw) == 0 {
 		return &sessionrevision.PersistedRecord{}, nil
@@ -68,14 +58,65 @@ func checkRevisionGeneration(
 func (s *Service) attachRevisionGeneration(
 	sess *session.Session,
 	doc sessionStateDoc,
-) {
-	if sess == nil || s.collRevisionArchives == "" {
-		return
+) error {
+	if sess == nil {
+		return nil
 	}
 	record, err := decodeRevision(doc.Revision)
-	if err == nil {
-		sessionrevision.SetGeneration(sess, record.Generation)
+	if err != nil {
+		return err
 	}
+	sessionrevision.SetGeneration(sess, record.Generation)
+	return nil
+}
+
+func (s *Service) revisionGeneration(
+	ctx context.Context,
+	key session.Key,
+) (uint64, error) {
+	var doc sessionStateDoc
+	err := s.client.FindOne(
+		ctx,
+		s.database,
+		s.collSessionStates,
+		activeFilterNoExpiry(sessionKeyFilter(key)),
+		options.FindOne().SetProjection(bson.M{"revision": 1}),
+	).Decode(&doc)
+	if err != nil {
+		return 0, fmt.Errorf("read session revision: %w", err)
+	}
+	record, err := decodeRevision(doc.Revision)
+	if err != nil {
+		return 0, err
+	}
+	return record.Generation, nil
+}
+
+func (s *Service) stabilizeRevisionProjection(
+	ctx context.Context,
+	listed *session.Session,
+	metadataOnly bool,
+	eventNum int,
+	eventTime time.Time,
+	eventPage *session.EventPage,
+) (*session.Session, error) {
+	if listed == nil {
+		return nil, nil
+	}
+	key := session.Key{
+		AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+	}
+	return sessionrevision.LoadStableListedProjection(
+		ctx,
+		listed,
+		metadataOnly,
+		func(ctx context.Context) (uint64, error) {
+			return s.revisionGeneration(ctx, key)
+		},
+		func(ctx context.Context) (*session.Session, error) {
+			return s.getSession(ctx, key, eventNum, eventTime, eventPage)
+		},
+	)
 }
 
 func (s *Service) flushRevisionPersistence(
@@ -111,9 +152,6 @@ func (s *Service) persistEventWithRevision(
 	e *event.Event,
 	write sessionrevision.Write,
 ) error {
-	if s.collRevisionArchives == "" {
-		return s.persistEventLegacy(ctx, key, e)
-	}
 	mutation, err := s.prepareRevisionEventMutation(key, e, time.Now())
 	if err != nil {
 		return err
@@ -263,9 +301,9 @@ func (s *Service) persistRevisionEvent(
 		if err != nil {
 			return err
 		}
-		write.Snapshot, err = sessionrevision.Snapshot(active)
+		write.Boundary, err = sessionrevision.NewBoundary(active)
 		if err != nil {
-			return fmt.Errorf("snapshot session before latest turn: %w", err)
+			return fmt.Errorf("capture session boundary before latest turn: %w", err)
 		}
 	}
 	sessionrevision.ApplyEventWrite(record, write, e, mutation.eventDoc != nil)
@@ -305,9 +343,6 @@ func (s *Service) persistTrackEventWithRevision(
 	trackEvent *session.TrackEvent,
 	write sessionrevision.Write,
 ) error {
-	if s.collRevisionArchives == "" {
-		return s.persistTrackEventLegacy(ctx, key, trackEvent)
-	}
 	if trackEvent == nil {
 		return fmt.Errorf("track event is nil")
 	}
@@ -469,9 +504,6 @@ func (s *Service) ReplaceLatestTurn(
 	if err := sessionrevision.ValidateLatestTurnReplacementRequest(req); err != nil {
 		return nil, err
 	}
-	if s.collRevisionArchives == "" {
-		return nil, sessionrevision.ErrLatestTurnReplacementUnsupported
-	}
 	if err := s.flushRevisionPersistence(ctx, req.Key); err != nil {
 		return nil, err
 	}
@@ -511,21 +543,9 @@ func (s *Service) ReplaceLatestTurn(
 		if record.Generation == math.MaxUint64 {
 			return sessionrevision.ErrLatestTurnReplacementUnavailable
 		}
-		restored, err := sessionrevision.DecodeSnapshot(checkpoint.Snapshot)
+		restored, err := sessionrevision.RestoreBoundary(current, checkpoint.Boundary)
 		if err != nil {
-			return fmt.Errorf("decode latest-turn checkpoint: %w", err)
-		}
-		archive, err := sessionrevision.Snapshot(current)
-		if err != nil {
-			return err
-		}
-		if _, err := s.client.InsertOne(sc, s.database, s.collRevisionArchives,
-			revisionArchiveDoc{
-				AppName: req.Key.AppName, UserID: req.Key.UserID,
-				SessionID: req.Key.SessionID, Generation: record.Generation,
-				Snapshot: archive, CreatedAt: time.Now(), ExpiresAt: doc.ExpiresAt,
-			}); err != nil {
-			return fmt.Errorf("archive discarded revision: %w", err)
+			return fmt.Errorf("restore latest-turn boundary: %w", err)
 		}
 		record.Generation++
 		record.Head++
@@ -659,12 +679,13 @@ func (s *Service) restoreRevisionProjection(
 ) error {
 	filter := sessionKeyFilter(key)
 	now := time.Now()
-	for _, coll := range []string{
-		s.collSessionEvents, s.collSessionSummaries,
-	} {
-		if err := s.discardRevisionDocuments(ctx, coll, filter, now); err != nil {
-			return fmt.Errorf("clear discarded session projection: %w", err)
-		}
+	if err := s.trimRevisionEventTail(ctx, key, len(restored.Events)); err != nil {
+		return err
+	}
+	if err := s.discardRevisionDocuments(
+		ctx, s.collSessionSummaries, filter, now,
+	); err != nil {
+		return fmt.Errorf("clear discarded session summaries: %w", err)
 	}
 	if err := s.trimRevisionTrackTails(ctx, key, restored); err != nil {
 		return err
@@ -686,25 +707,6 @@ func (s *Service) restoreRevisionProjection(
 	if res.MatchedCount == 0 {
 		return sessionrevision.ErrLatestTurnReplacementUnavailable
 	}
-	for i := range restored.Events {
-		evt := &restored.Events[i]
-		raw, err := json.Marshal(evt)
-		if err != nil {
-			return err
-		}
-		createdAt := evt.Timestamp
-		if createdAt.IsZero() {
-			createdAt = restored.CreatedAt
-		}
-		if _, err := s.client.InsertOne(ctx, s.database, s.collSessionEvents,
-			sessionEventDoc{
-				AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID,
-				EventID: evt.ID, Event: raw, CreatedAt: createdAt,
-				UpdatedAt: createdAt, ExpiresAt: doc.ExpiresAt,
-			}); err != nil {
-			return fmt.Errorf("restore event: %w", err)
-		}
-	}
 	for filterKey, summary := range restored.Summaries {
 		if summary == nil {
 			continue
@@ -721,6 +723,51 @@ func (s *Service) restoreRevisionProjection(
 			}); err != nil {
 			return fmt.Errorf("restore summary: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Service) trimRevisionEventTail(
+	ctx context.Context,
+	key session.Key,
+	prefixLength int,
+) error {
+	cursor, err := s.client.Find(
+		ctx,
+		s.database,
+		s.collSessionEvents,
+		activeFilterNoExpiry(sessionKeyFilter(key)),
+		options.Find().
+			SetProjection(bson.M{"_id": 1}).
+			SetSort(bson.D{
+				{Key: "created_at", Value: 1},
+				{Key: "_id", Value: 1},
+			}),
+	)
+	if err != nil {
+		return fmt.Errorf("lock active events: %w", err)
+	}
+	defer cursor.Close(ctx)
+	var ids []primitive.ObjectID
+	for cursor.Next(ctx) {
+		var doc sessionEventDoc
+		if err := cursor.Decode(&doc); err != nil {
+			return err
+		}
+		ids = append(ids, doc.ID)
+	}
+	if err := cursor.Err(); err != nil {
+		return err
+	}
+	if len(ids) <= prefixLength {
+		return sessionrevision.ErrLatestTurnReplacementUnavailable
+	}
+	filter := sessionKeyFilter(key)
+	filter["_id"] = bson.M{"$in": ids[prefixLength:]}
+	if err := s.discardRevisionDocuments(
+		ctx, s.collSessionEvents, filter, time.Now(),
+	); err != nil {
+		return fmt.Errorf("remove discarded event tail: %w", err)
 	}
 	return nil
 }

@@ -183,13 +183,12 @@ MySQL supports editing and resending the latest persisted turn through
 asynchronous event and Track writes, then restores events, session state,
 summaries, and Tracks in one database transaction.
 
-`NewService` creates the prefixed `session_revisions` and
-`session_revision_archives` tables automatically. Deployments using
-`WithSkipDBInit(true)` must provision both tables from
-[`session/mysql/schema.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema.sql).
-Revision rows retain the source Session's expiration time and are removed with
-the Session. See [Replacing the Latest Turn](index.md#replacing-the-latest-turn)
-for the Runner API and rollback boundaries.
+Revision metadata is a versioned private sidecar in the existing
+`session_states.state` JSON and is updated in the same transaction as the
+projection. No additional table or migration is required, including with
+`WithSkipDBInit(true)`. See
+[Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the Runner
+API, rollout requirements, and rollback boundaries.
 
 ## Storage Structure
 

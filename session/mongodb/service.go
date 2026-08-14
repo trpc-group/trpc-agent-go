@@ -12,7 +12,6 @@ package mongodb
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -71,7 +70,6 @@ type Service struct {
 	collSessionEvents    string
 	collSessionTracks    string
 	collSessionSummaries string
-	collRevisionArchives string
 	collAppStates        string
 	collUserStates       string
 }
@@ -144,7 +142,6 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		collSessionEvents:    sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameSessionEvents),
 		collSessionTracks:    sqldb.BuildTableName(opts.collectionPrefix, collectionNameSessionTracks),
 		collSessionSummaries: sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameSessionSummaries),
-		collRevisionArchives: sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameSessionRevisionArchives),
 		collAppStates:        sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameAppStates),
 		collUserStates:       sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameUserStates),
 	}
@@ -308,11 +305,6 @@ func (s *Service) replaceExpiredSession(ctx context.Context, key session.Key, do
 				return fmt.Errorf("delete expired session summaries: %w", err)
 			}
 		}
-		if s.collRevisionArchives != "" {
-			if _, err := s.client.DeleteMany(sc, s.database, s.collRevisionArchives, filter); err != nil {
-				return fmt.Errorf("delete expired session revision archives: %w", err)
-			}
-		}
 		if _, err := s.client.InsertOne(sc, s.database, s.collSessionStates, doc); err != nil {
 			return fmt.Errorf("insert session state: %w", err)
 		}
@@ -339,9 +331,20 @@ func (s *Service) GetSession(
 		Options: opt,
 	}
 	final := func(c *session.GetSessionContext, _ func() (*session.Session, error)) (*session.Session, error) {
-		sess, err := s.getSession(c.Context, c.Key, c.Options.EventNum, c.Options.EventTime, c.Options.EventPage)
+		listed, err := s.getSession(c.Context, c.Key, c.Options.EventNum, c.Options.EventTime, c.Options.EventPage)
 		if err != nil {
 			return nil, fmt.Errorf("mongodb session service get session state failed: %w", err)
+		}
+		sess, err := s.stabilizeRevisionProjection(
+			c.Context,
+			listed,
+			false,
+			c.Options.EventNum,
+			c.Options.EventTime,
+			c.Options.EventPage,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("mongodb session service get stable session state failed: %w", err)
 		}
 		return sess, nil
 	}
@@ -408,8 +411,22 @@ func (s *Service) ListSessions(
 				session.WithSessionCreatedAt(d.CreatedAt),
 				session.WithSessionUpdatedAt(d.UpdatedAt),
 			)
-			s.attachRevisionGeneration(sess, d)
-			sessions = append(sessions, mergeState(appState, userState, sess))
+			if err := s.attachRevisionGeneration(sess, d); err != nil {
+				return nil, err
+			}
+			listed := mergeState(appState, userState, sess)
+			stable, err := s.stabilizeRevisionProjection(
+				ctx,
+				listed,
+				true,
+				opt.EventNum,
+				opt.EventTime,
+				nil,
+			)
+			if err != nil {
+				return nil, err
+			}
+			sessions = append(sessions, stable)
 		}
 		return sessions, nil
 	}
@@ -453,9 +470,23 @@ func (s *Service) ListSessions(
 			session.WithSessionCreatedAt(d.CreatedAt),
 			session.WithSessionUpdatedAt(d.UpdatedAt),
 		)
-		s.attachRevisionGeneration(sess, d)
+		if err := s.attachRevisionGeneration(sess, d); err != nil {
+			return nil, err
+		}
 		attachTrackEvents(sess, trackEventsList[i])
-		sessions = append(sessions, mergeState(appState, userState, sess))
+		listed := mergeState(appState, userState, sess)
+		stable, err := s.stabilizeRevisionProjection(
+			ctx,
+			listed,
+			false,
+			opt.EventNum,
+			opt.EventTime,
+			nil,
+		)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, stable)
 	}
 	return sessions, nil
 }
@@ -492,12 +523,6 @@ func (s *Service) DeleteSession(
 				activeFilterNoExpiry(filter), update); err != nil {
 				return fmt.Errorf("delete session summaries: %w", err)
 			}
-			if s.collRevisionArchives != "" {
-				if _, err := s.client.DeleteMany(sc, s.database, s.collRevisionArchives,
-					filter); err != nil {
-					return fmt.Errorf("delete session revision archives: %w", err)
-				}
-			}
 			return nil
 		}
 		if _, err := s.client.DeleteOne(sc, s.database, s.collSessionStates,
@@ -512,11 +537,6 @@ func (s *Service) DeleteSession(
 		}
 		if _, err := s.client.DeleteMany(sc, s.database, s.collSessionSummaries, filter); err != nil {
 			return fmt.Errorf("delete session summaries: %w", err)
-		}
-		if s.collRevisionArchives != "" {
-			if _, err := s.client.DeleteMany(sc, s.database, s.collRevisionArchives, filter); err != nil {
-				return fmt.Errorf("delete session revision archives: %w", err)
-			}
 		}
 		return nil
 	}, nil)
@@ -714,34 +734,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 			return fmt.Errorf("mongodb session service update session state failed: %s is not allowed, use UpdateUserState instead", k)
 		}
 	}
-	if s.collRevisionArchives != "" {
-		return s.updateSessionStateWithRevision(ctx, key, state)
-	}
-
-	now := time.Now()
-	set := bson.M{"updated_at": now}
-	expiresAt := expiresAtPtr(now, s.opts.sessionTTL)
-	for k, v := range state {
-		// Copy the byte slice to detach from caller-owned memory; mirrors the
-		// session.SetState contract.
-		var copied []byte
-		if v != nil {
-			copied = make([]byte, len(v))
-			copy(copied, v)
-		}
-		set["state."+encodeKey(k)] = copied
-	}
-
-	res, err := s.client.UpdateOne(ctx, s.database, s.collSessionStates,
-		activeFilterNoExpiry(sessionKeyFilter(key)),
-		sessionStateUpdate(set, expiresAt))
-	if err != nil {
-		return fmt.Errorf("mongodb session service update session state failed: %w", err)
-	}
-	if res.MatchedCount == 0 {
-		return fmt.Errorf("mongodb session service update session state failed: session not found")
-	}
-	return nil
+	return s.updateSessionStateWithRevision(ctx, key, state)
 }
 
 func sessionStateUpdate(set bson.M, expiresAt *time.Time) bson.M {
@@ -965,92 +958,6 @@ func (s *Service) persistEvent(ctx context.Context, key session.Key, e *event.Ev
 	return s.persistEventWithRevision(ctx, key, e, sessionrevision.Write{})
 }
 
-func (s *Service) persistEventLegacy(ctx context.Context, key session.Key, e *event.Event) error {
-	now := time.Now()
-
-	// Build the $set update for session_states.
-	//
-	// We merge state per key via dot-notation (D4=B), so concurrent writes
-	// touching disjoint keys commute and same-key writes are last-writer-wins.
-	stateSet := bson.M{"updated_at": now}
-	appState := make(session.StateMap)
-	userState := make(session.StateMap)
-	expiresAt := expiresAtPtr(now, s.opts.sessionTTL)
-	if e != nil {
-		for k, v := range e.StateDelta {
-			copied := copyStateBytes(v)
-			switch {
-			case strings.HasPrefix(k, session.StateAppPrefix):
-				appState[strings.TrimPrefix(k, session.StateAppPrefix)] = copied
-			case strings.HasPrefix(k, session.StateUserPrefix):
-				userState[strings.TrimPrefix(k, session.StateUserPrefix)] = copied
-			default:
-				stateSet["state."+encodeKey(k)] = copied
-			}
-		}
-	}
-
-	// The event document is only persisted for non-partial events with a
-	// valid response, matching postgres' addEvent gate.
-	var eventDoc *sessionEventDoc
-	if e != nil && e.Response != nil && !e.IsPartial && e.IsValidContent() {
-		eventBytes, err := json.Marshal(e)
-		if err != nil {
-			return fmt.Errorf("marshal event: %w", err)
-		}
-		eventDoc = &sessionEventDoc{
-			AppName:   key.AppName,
-			UserID:    key.UserID,
-			SessionID: key.SessionID,
-			EventID:   e.ID,
-			Event:     eventBytes,
-			CreatedAt: now,
-			UpdatedAt: now,
-			ExpiresAt: expiresAt,
-		}
-	}
-
-	tx := func(sc mongo.SessionContext) error {
-		if err := s.updateScopedEventState(sc, key, appState, userState, now); err != nil {
-			return err
-		}
-		res, err := s.client.UpdateOne(sc, s.database, s.collSessionStates,
-			activeFilterNoExpiry(sessionKeyFilter(key)),
-			sessionStateUpdate(stateSet, expiresAt))
-		if err != nil {
-			return fmt.Errorf("update session state: %w", err)
-		}
-		if res.MatchedCount == 0 {
-			return errSessionNotFound
-		}
-		if eventDoc == nil {
-			return nil
-		}
-		if _, err := s.client.InsertOne(sc, s.database, s.collSessionEvents, eventDoc); err != nil {
-			return fmt.Errorf("insert event: %w", err)
-		}
-		return nil
-	}
-
-	// When there is no event document to insert the state update is the only
-	// write, so we can skip the transaction overhead. This keeps fast-path
-	// AppendEvent calls (partial events, status pings) cheap and avoids the
-	// replica-set requirement for those callers.
-	if eventDoc == nil && len(appState) == 0 && len(userState) == 0 {
-		res, err := s.client.UpdateOne(ctx, s.database, s.collSessionStates,
-			activeFilterNoExpiry(sessionKeyFilter(key)),
-			sessionStateUpdate(stateSet, expiresAt))
-		if err != nil {
-			return fmt.Errorf("update session state: %w", err)
-		}
-		if res.MatchedCount == 0 {
-			return errSessionNotFound
-		}
-		return nil
-	}
-	return s.client.Transaction(ctx, tx, nil)
-}
-
 // AppendTrackEvent appends a protocol-specific track event to a session.
 func (s *Service) AppendTrackEvent(
 	ctx context.Context,
@@ -1139,70 +1046,6 @@ func (s *Service) persistTrackEvent(ctx context.Context, key session.Key, trackE
 	)
 }
 
-func (s *Service) persistTrackEventLegacy(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
-	if trackEvent == nil {
-		return fmt.Errorf("track event is nil")
-	}
-	eventBytes, err := json.Marshal(trackEvent)
-	if err != nil {
-		return fmt.Errorf("marshal track event failed: %w", err)
-	}
-	now := time.Now()
-	sessionExpires := expiresAtPtr(now, s.opts.sessionTTL)
-	trackExpires := expiresAtPtr(now, s.opts.effectiveTrackEventTTL())
-
-	return s.client.Transaction(ctx, func(sc mongo.SessionContext) error {
-		var doc sessionStateDoc
-		err := s.client.FindOne(sc, s.database, s.collSessionStates,
-			activeFilterNoExpiry(sessionKeyFilter(key))).Decode(&doc)
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			return errSessionNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("get session state: %w", err)
-		}
-
-		state := bsonToStateMap(doc.State)
-		if state == nil {
-			state = make(session.StateMap)
-		}
-		tmp := session.NewSession(key.AppName, key.UserID, key.SessionID,
-			session.WithSessionState(state))
-		if err := tmp.AppendTrackEvent(trackEvent); err != nil {
-			return err
-		}
-		trackState := tmp.SnapshotState()["tracks"]
-		set := bson.M{
-			"updated_at":                   now,
-			"state." + encodeKey("tracks"): trackState,
-		}
-		res, err := s.client.UpdateOne(sc, s.database, s.collSessionStates,
-			activeFilterNoExpiry(sessionKeyFilter(key)),
-			sessionStateUpdate(set, sessionExpires))
-		if err != nil {
-			return fmt.Errorf("update session state: %w", err)
-		}
-		if res.MatchedCount == 0 {
-			return errSessionNotFound
-		}
-
-		trackDoc := sessionTrackDoc{
-			AppName:   key.AppName,
-			UserID:    key.UserID,
-			SessionID: key.SessionID,
-			Track:     trackEvent.Track,
-			Event:     eventBytes,
-			CreatedAt: trackEvent.Timestamp,
-			UpdatedAt: trackEvent.Timestamp,
-			ExpiresAt: trackExpires,
-		}
-		if _, err := s.client.InsertOne(sc, s.database, s.collSessionTracks, trackDoc); err != nil {
-			return fmt.Errorf("insert track event: %w", err)
-		}
-		return nil
-	}, nil)
-}
-
 // getSession is the no-events implementation backing GetSession. Splitting it
 // keeps the hook plumbing in GetSession itself and mirrors the postgres layout.
 func (s *Service) getSession(
@@ -1260,7 +1103,9 @@ func (s *Service) getSession(
 		return nil, fmt.Errorf("get track events: %w", err)
 	}
 	attachTrackEvents(sess, trackEventsList[0])
-	s.attachRevisionGeneration(sess, doc)
+	if err := s.attachRevisionGeneration(sess, doc); err != nil {
+		return nil, err
+	}
 	return mergeState(appState, userState, sess), nil
 }
 

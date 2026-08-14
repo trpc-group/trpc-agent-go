@@ -407,7 +407,7 @@ func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 		txPipe.Del(ctx, c.trackKey(key, track))
 	}
 	txPipe.Del(ctx, c.trackIndexKey(key))
-	txPipe.Del(ctx, c.revisionKey(key), c.revisionArchiveKey(key))
+	txPipe.Del(ctx, c.revisionKey(key))
 	if _, err := txPipe.Exec(ctx); err != nil && err != redis.Nil {
 		return fmt.Errorf("delete session state failed: %w", err)
 	}
@@ -499,7 +499,6 @@ func (c *Client) updateSessionStateCASWithRevision(
 ) error {
 	sessKey := c.sessionStateKey(key)
 	revisionKey := c.revisionKey(key)
-	revisionArchiveKey := c.revisionArchiveKey(key)
 	retryDelay := 5 * time.Millisecond
 	for {
 		if err := ctx.Err(); err != nil {
@@ -578,9 +577,6 @@ func (c *Client) updateSessionStateCASWithRevision(
 				}
 				if c.cfg.SessionTTL > 0 {
 					pipe.Expire(ctx, sessKey, c.cfg.SessionTTL)
-					pipe.Expire(ctx, revisionArchiveKey, c.cfg.SessionTTL)
-				} else {
-					pipe.Persist(ctx, revisionArchiveKey)
 				}
 				if extra != nil {
 					extra(pipe)
@@ -896,11 +892,6 @@ func (c *Client) revisionKey(key session.Key) string {
 	return c.prefixedKey(fmt.Sprintf("revision:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID))
 }
 
-// revisionArchiveKey returns the private discarded-revision archive hash.
-func (c *Client) revisionArchiveKey(key session.Key) string {
-	return c.prefixedKey(fmt.Sprintf("revision-archive:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID))
-}
-
 // UpdateAppState updates app-level state in ZSet.
 func (c *Client) UpdateAppState(ctx context.Context, appName string, state session.StateMap, ttl time.Duration) error {
 	pipe := c.client.TxPipeline()
@@ -1170,7 +1161,6 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 			eventKey,
 			sessKey,
 			c.revisionKey(key),
-			c.revisionArchiveKey(key),
 		},
 		trimArgs...,
 	).Result(); err != nil {
@@ -1185,7 +1175,6 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 	c.appendSessionTTL(ctx, pipe, key, sessKey, sumKey, appStateKey, userStateKey)
 	if c.cfg.SessionTTL > 0 {
 		pipe.Expire(ctx, c.revisionKey(key), c.cfg.SessionTTL)
-		pipe.Expire(ctx, c.revisionArchiveKey(key), c.cfg.SessionTTL)
 	}
 
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -1237,7 +1226,6 @@ func (c *Client) CreateSummaryWithRevision(
 			sumKey,
 			c.revisionKey(key),
 			c.sessionStateKey(key),
-			c.revisionArchiveKey(key),
 		},
 		hashField,
 		filterKey,

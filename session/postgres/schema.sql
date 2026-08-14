@@ -98,39 +98,6 @@ CREATE INDEX IF NOT EXISTS idx_session_summaries_expires
 ON session_summaries(expires_at)
 WHERE expires_at IS NOT NULL;
 
--- Session Revisions Table
--- Stores the active turn checkpoint and write generation
-CREATE TABLE IF NOT EXISTS session_revisions (
-  app_name VARCHAR(255) NOT NULL,
-  user_id VARCHAR(255) NOT NULL,
-  session_id VARCHAR(255) NOT NULL,
-  record JSONB NOT NULL,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  expires_at TIMESTAMP DEFAULT NULL,
-  PRIMARY KEY (app_name, user_id, session_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_session_revisions_expires
-ON session_revisions(expires_at)
-WHERE expires_at IS NOT NULL;
-
--- Session Revision Archives Table
--- Stores immutable snapshots retained for replacement replay
-CREATE TABLE IF NOT EXISTS session_revision_archives (
-  app_name VARCHAR(255) NOT NULL,
-  user_id VARCHAR(255) NOT NULL,
-  session_id VARCHAR(255) NOT NULL,
-  generation BIGINT NOT NULL,
-  snapshot JSONB NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  expires_at TIMESTAMP DEFAULT NULL,
-  PRIMARY KEY (app_name, user_id, session_id, generation)
-);
-
-CREATE INDEX IF NOT EXISTS idx_session_revision_archives_expires
-ON session_revision_archives(expires_at)
-WHERE expires_at IS NOT NULL;
-
 -- App States Table
 -- Stores application-level state
 CREATE TABLE IF NOT EXISTS app_states (
@@ -177,4 +144,3 @@ WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_user_states_expires
 ON user_states(expires_at)
 WHERE expires_at IS NOT NULL;
-

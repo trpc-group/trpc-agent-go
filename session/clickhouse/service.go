@@ -273,6 +273,7 @@ func (s *Service) CreateSession(
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
+
 	return mergeState(appState, userState, sess), nil
 }
 
@@ -511,7 +512,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 	// Get current session state using FINAL
 	var currentStateStr string
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT toJSONString(state) FROM %s FINAL WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
+		fmt.Sprintf(`SELECT state FROM %s FINAL WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID)
 
 	if err != nil {

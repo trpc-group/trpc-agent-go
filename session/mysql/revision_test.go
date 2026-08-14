@@ -23,55 +23,43 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-func TestRevisionStoreAndAttachGeneration(t *testing.T) {
+func TestRevisionStoreGenerations(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
 	s := createTestService(t, db)
-	s.tableSessionRevisions = "session_revisions"
-	s.tableRevisionArchives = "session_revision_archives"
 	s.opts.softDelete = true
 
 	store := s.revisionStore()
 	assert.Equal(t, "session_states", store.Tables.States)
-	assert.Equal(t, "session_revision_archives", store.Tables.Archives)
+	assert.Equal(t, "session_events", store.Tables.Events)
 	assert.True(t, store.SoftDelete)
 	s.opts.softDelete = false
 	assert.False(t, s.revisionStore().SoftDelete)
 
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
-	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	state7 := revisionState(t, key.SessionID, 7)
+	state8 := revisionState(t, key.SessionID, 8)
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT record FROM session_revisions").
+	mock.ExpectQuery("SELECT state FROM session_states").
 		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"record"}).AddRow(`{"generation":7,"head":1}`))
+		WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(string(state8)))
 	mock.ExpectCommit()
-	require.NoError(t, s.attachRevisionGeneration(context.Background(), key, sess))
-	generation, ok := sessionrevision.Generation(sess)
-	assert.True(t, ok)
-	assert.Equal(t, uint64(7), generation)
-	require.NoError(t, mock.ExpectationsWereMet())
-
-	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT record FROM session_revisions").
-		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"record"}).AddRow(`{"generation":8}`))
-	mock.ExpectCommit()
-	generation, err = s.revisionGeneration(context.Background(), key)
+	generation, err := s.revisionGeneration(context.Background(), key)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(8), generation)
 	require.NoError(t, mock.ExpectationsWereMet())
 
 	missing := session.Key{AppName: "app", UserID: "user", SessionID: "missing"}
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT app_name, user_id, session_id, record FROM session_revisions").
+	mock.ExpectQuery("SELECT app_name, user_id, session_id, state FROM session_states").
 		WithArgs(
 			key.AppName, key.UserID, key.SessionID,
 			missing.AppName, missing.UserID, missing.SessionID,
 		).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"app_name", "user_id", "session_id", "record"},
-		).AddRow(key.AppName, key.UserID, key.SessionID, `{"generation":7}`))
+			[]string{"app_name", "user_id", "session_id", "state"},
+		).AddRow(key.AppName, key.UserID, key.SessionID, string(state7)))
 	mock.ExpectCommit()
 	generations, err := s.revisionGenerations(
 		context.Background(), []session.Key{key, missing},
@@ -81,11 +69,19 @@ func TestRevisionStoreAndAttachGeneration(t *testing.T) {
 	assert.Zero(t, generations[missing])
 	require.NoError(t, mock.ExpectationsWereMet())
 
-	s.tableSessionRevisions = ""
-	require.NoError(t, s.attachRevisionGeneration(context.Background(), key, sess))
 	generations, err = s.revisionGenerations(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, generations)
+}
+
+func revisionState(t *testing.T, sessionID string, generation uint64) []byte {
+	t.Helper()
+	raw, err := sessionrevision.EncodeState(SessionState{
+		ID: sessionID, State: session.StateMap{},
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}, &sessionrevision.PersistedRecord{Generation: generation})
+	require.NoError(t, err)
+	return raw
 }
 
 func TestRevisionFlushBarriers(t *testing.T) {
@@ -198,7 +194,7 @@ func TestReplacementResultWithScopedState(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestReplaceLatestTurnValidationAndUnsupportedStore(t *testing.T) {
+func TestReplaceLatestTurnValidation(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -206,15 +202,6 @@ func TestReplaceLatestTurnValidationAndUnsupportedStore(t *testing.T) {
 
 	_, err = s.ReplaceLatestTurn(context.Background(), sessionrevision.LatestTurnReplacementRequest{})
 	assert.Error(t, err)
-
-	s.tableSessionRevisions = "session_revisions"
-	mock.ExpectBegin()
-	mock.ExpectRollback()
-	_, err = s.ReplaceLatestTurn(context.Background(), sessionrevision.LatestTurnReplacementRequest{
-		Key:               session.Key{AppName: "app", UserID: "user", SessionID: "session"},
-		ExpectedRequestID: "old-request", IdempotencyKey: "new-request",
-	})
-	assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnsupported)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -223,9 +210,8 @@ func TestCreateSessionSummaryWithRevision(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 	s := createTestService(t, db, WithSummarizer(&fakeSummarizer{allow: true, out: "summary"}))
-	s.tableSessionRevisions = "session_revisions"
-	s.tableRevisionArchives = "session_revision_archives"
 	sess := session.NewSession("app", "user", "session")
+	sessionrevision.SetGeneration(sess, 0)
 	stateRaw, err := json.Marshal(SessionState{
 		ID: sess.ID, State: session.StateMap{}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	})
@@ -235,11 +221,8 @@ func TestCreateSessionSummaryWithRevision(t *testing.T) {
 	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
 		WithArgs(sess.AppName, sess.UserID, sess.ID).
 		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).AddRow(string(stateRaw), nil))
-	mock.ExpectQuery("SELECT record FROM session_revisions").
-		WithArgs(sess.AppName, sess.UserID, sess.ID).
-		WillReturnRows(sqlmock.NewRows([]string{"record"}).AddRow(`{"generation":0,"head":0}`))
-	mock.ExpectExec("INSERT INTO session_revisions").
-		WithArgs(sess.AppName, sess.UserID, sess.ID, sqlmock.AnyArg(), sqlmock.AnyArg(), nil).
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sess.AppName, sess.UserID, sess.ID).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO session_summaries").
 		WithArgs(sess.AppName, sess.UserID, sess.ID, "all", sqlmock.AnyArg(), sqlmock.AnyArg(), nil).

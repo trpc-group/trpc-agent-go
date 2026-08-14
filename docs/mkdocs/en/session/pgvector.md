@@ -265,17 +265,15 @@ If you use `WithSkipDBInit(true)`, make sure the extension, tables, columns, and
 
 PGVector supports editing and resending the latest persisted turn through
 `Runner.Run` and `agent.WithLatestTurnReplacement`. It uses the same
-transactional revision tables as the PostgreSQL backend. Replacement removes
+transactional revision protocol as the PostgreSQL backend. Replacement removes
 only the discarded event tail, so the retained prefix keeps its existing
 `content_text`, role, embedding, and text-search index data.
 
-Automatic initialization creates `session_revisions` and
-`session_revision_archives`. Deployments using `WithSkipDBInit(true)` must
-provision both tables and their expiry indexes from
-[`session/pgvector/schema.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/pgvector/schema.sql),
-in addition to the normal PGVector schema. See
+Revision metadata is a versioned private sidecar in the existing
+`session_states.state` JSON. No additional table, index, or migration is
+required, including with `WithSkipDBInit(true)`. See
 [Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the Runner
-API and rollback boundaries.
+API, rollout requirements, and rollback boundaries.
 
 ## Storage Structure
 

@@ -64,7 +64,6 @@ func (c *Client) AppendTrackEventWithRevision(
 		c.keys.SessionMetaKey(key),
 		c.keys.TrackIndexKey(key),
 		c.keys.RevisionKey(key),
-		c.keys.RevisionArchiveKey(key),
 	}
 	args := []any{
 		string(eventJSON),

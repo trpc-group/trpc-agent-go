@@ -2515,8 +2515,6 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 	defer db.Close()
 
 	s := createTestService(t, db, WithSessionTTL(1*time.Hour))
-	s.tableSessionRevisions = "session_revisions"
-	s.tableRevisionArchives = "session_revision_archives"
 	ctx := context.Background()
 
 	key := session.Key{
@@ -2539,8 +2537,6 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 		"session_events",
 		"session_track_events",
 		"session_summaries",
-		"session_revision_archives",
-		"session_revisions",
 	} {
 		mock.ExpectExec("DELETE FROM "+table).
 			WithArgs(key.AppName, key.UserID, key.SessionID).

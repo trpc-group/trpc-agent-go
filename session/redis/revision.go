@@ -46,9 +46,9 @@ func (s *Service) prepareTurnStartWrite(
 	if active == nil {
 		return write, fmt.Errorf("session not found")
 	}
-	write.Snapshot, err = sessionrevision.Snapshot(active)
+	write.Boundary, err = sessionrevision.NewBoundary(active)
 	if err != nil {
-		return write, fmt.Errorf("snapshot session before latest turn: %w", err)
+		return write, fmt.Errorf("capture session boundary before latest turn: %w", err)
 	}
 	write.ExpectedHead = record.Head
 	write.HasExpectedHead = true

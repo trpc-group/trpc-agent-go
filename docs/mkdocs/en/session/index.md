@@ -277,10 +277,10 @@ outcome may also have been ambiguous.
 
 Before starting the new run, Runner atomically restores session-scoped events,
 state, summaries, and Track events to the complete checkpoint before the old
-request. Durable backends retain the discarded projection in backend-private
-revision storage; InMemory discards it after restoring the checkpoint. App
-state, user state, model/tool calls, artifact writes, and other external side
-effects are intentionally not rolled back.
+request. The backend verifies the checkpointed event and Track prefixes before
+discarding the latest tail; it does not retain a second copy of the discarded
+projection. App state, user state, model/tool calls, artifact writes, and other
+external side effects are intentionally not rolled back.
 
 Safety rules:
 
@@ -306,10 +306,10 @@ Safety rules:
   replacement because a single-session projection cannot restore it atomically.
 - Replacement preserves the source session's remaining TTL; it does not extend
   the session lifetime.
-- Each replacement on a durable backend retains one complete discarded
-  projection. There is no implicit revision-count or byte-size cap. Session
-  deletion and expiry remove private revisions. InMemory keeps no revision
-  archive and discards the replaced projection.
+- Checkpoints retain session-scoped state, summaries, timestamps, and compact
+  digests of the event and Track prefixes. They do not copy event or Track
+  payloads and no discarded-projection archive accumulates. If the verified
+  prefix is no longer available, replacement fails closed.
 - Backends retain the 64 most recent replacement idempotency identities for
   reuse detection. Retry an ambiguous transition promptly with its original
   ID pair.
@@ -322,12 +322,18 @@ HashIdx/ZSet, PostgreSQL, PGVector, MySQL/TDSQL, and MongoDB support
 replacement. The externalization wrapper forwards support from its wrapped
 service. ClickHouse, custom services, and Noop return unsupported.
 
-Durable backends create private revision storage during normal database
-initialization. PostgreSQL, PGVector, MySQL/TDSQL, and SQLite use
-`session_revisions` plus `session_revision_archives`; MongoDB stores the active
-revision in the session-state document and uses a revision-archive collection.
-Deployments that use `WithSkipDBInit(true)` must provision the definitions from
-the corresponding backend package before enabling replacement.
+The protocol requires no new relational tables or migration. PostgreSQL,
+PGVector, MySQL/TDSQL, and SQLite store a versioned private sidecar in the
+existing session-state JSON; it is outside the user-visible `Session.State`.
+MongoDB stores the same private revision metadata in the existing session
+document. Redis uses one expiring private revision key in the Session hash
+slot. No backend creates a revision-archive table or collection.
+
+Upgrade every instance that can write the same Session store before enabling
+replacement. Older writers ignore the private metadata and can overwrite it.
+Existing Sessions need no migration; after an upgraded Runner persists the
+start of a new turn, that turn becomes eligible for replacement. This also
+applies to deployments using `WithSkipDBInit(true)`.
 
 ## Core Concepts
 

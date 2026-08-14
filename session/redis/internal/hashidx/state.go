@@ -64,7 +64,6 @@ func (c *Client) UpdateSessionStateWithRevision(
 		[]string{
 			c.keys.SessionMetaKey(key),
 			c.keys.RevisionKey(key),
-			c.keys.RevisionArchiveKey(key),
 		},
 		string(statePatchJSON),
 		string(nilKeysJSON),

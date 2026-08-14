@@ -31,6 +31,28 @@ type activeSummarizer struct {
 	err  error
 }
 
+func expectSummaryRevisionBegin(
+	t *testing.T,
+	mock sqlmock.Sqlmock,
+	sess *session.Session,
+) {
+	t.Helper()
+	stateRaw, err := json.Marshal(SessionState{
+		ID: sess.ID, State: session.StateMap{},
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs(sess.AppName, sess.UserID, sess.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
+			AddRow(stateRaw, nil))
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sess.AppName, sess.UserID, sess.ID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
 func (a *activeSummarizer) ShouldSummarize(
 	_ *session.Session,
 ) bool {
@@ -372,9 +394,11 @@ func TestCreateSessionSummary_Success(t *testing.T) {
 		},
 	}
 
+	expectSummaryRevisionBegin(t, mock, sess)
 	// Expect the upsert query.
 	mock.ExpectExec("INSERT INTO .* ON CONFLICT").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.CreateSessionSummary(
 		context.Background(), sess, "", false,
@@ -408,8 +432,10 @@ func TestCreateSessionSummary_UpsertError(
 		},
 	}
 
+	expectSummaryRevisionBegin(t, mock, sess)
 	mock.ExpectExec("INSERT INTO .* ON CONFLICT").
 		WillReturnError(fmt.Errorf("db error"))
+	mock.ExpectRollback()
 
 	err := s.CreateSessionSummary(
 		context.Background(), sess, "", false,
@@ -475,8 +501,10 @@ func TestCreateSessionSummary_WithTTL(t *testing.T) {
 		},
 	}
 
+	expectSummaryRevisionBegin(t, mock, sess)
 	mock.ExpectExec("INSERT INTO .* ON CONFLICT").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.CreateSessionSummary(
 		context.Background(), sess, "", false,

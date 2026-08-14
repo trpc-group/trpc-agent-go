@@ -13,7 +13,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -78,21 +77,15 @@ AND deleted_at IS NULL`,
 		return fmt.Errorf("get session state: %w", err)
 	}
 	write := sessionrevision.NewWrite(ctx, nil)
-	record, revisionSupported, err := s.readRevisionForWrite(ctx, tx, key)
+	var sessState SessionState
+	record, err := sessionrevision.DecodeState(current, &sessState)
 	if err != nil {
 		return err
 	}
 	if err := checkRevisionGeneration(record, write); err != nil {
 		return err
 	}
-	revisionChanged := sessionrevision.ApplyWrite(record, write)
-
-	var sessState SessionState
-	if len(current) > 0 {
-		if err := json.Unmarshal(current, &sessState); err != nil {
-			return fmt.Errorf("unmarshal state: %w", err)
-		}
-	}
+	sessionrevision.ApplyWrite(record, write)
 	if sessState.State == nil {
 		sessState.State = make(session.StateMap)
 	}
@@ -108,9 +101,9 @@ AND deleted_at IS NULL`,
 
 	now := time.Now().UTC()
 	sessState.UpdatedAt = now
-	updatedBytes, err := json.Marshal(sessState)
+	updatedBytes, err := sessionrevision.EncodeState(&sessState, record)
 	if err != nil {
-		return fmt.Errorf("marshal state: %w", err)
+		return err
 	}
 
 	expiresAt := calculateExpiresAt(now, s.opts.sessionTTL)
@@ -133,11 +126,6 @@ AND deleted_at IS NULL`,
 	)
 	if err != nil {
 		return fmt.Errorf("update session state: %w", err)
-	}
-	if revisionSupported && (revisionChanged || write.HasExpectedGeneration) {
-		if err := s.writeRevisionTx(ctx, tx, key, record, expiresAt); err != nil {
-			return err
-		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit update session state: %w", err)

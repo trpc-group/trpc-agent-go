@@ -56,14 +56,14 @@ func (s *Service) getSession(
 					return err
 				}
 				sessState = &SessionState{}
-				if err := json.Unmarshal(
-					stateBytes, sessState,
-				); err != nil {
+				record, err := sessionrevision.DecodeState(stateBytes, sessState)
+				if err != nil {
 					return fmt.Errorf(
 						"unmarshal session state failed: %w",
 						err,
 					)
 				}
+				sessState.revision = record
 				sessState.CreatedAt = createdAt
 				sessState.UpdatedAt = updatedAt
 			}
@@ -123,6 +123,7 @@ func (s *Service) getSession(
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
+	sessionrevision.AttachRecord(sess, sessState.revision)
 
 	trackEventsList, err := s.getTrackEvents(
 		ctx, []session.Key{key},
@@ -199,14 +200,14 @@ func (s *Service) listSessions(
 					return err
 				}
 				var state SessionState
-				if err := json.Unmarshal(
-					stateBytes, &state,
-				); err != nil {
+				record, err := sessionrevision.DecodeState(stateBytes, &state)
+				if err != nil {
 					return fmt.Errorf(
 						"unmarshal session state "+
 							"failed: %w", err,
 					)
 				}
+				state.revision = record
 				state.ID = sessionID
 				state.CreatedAt = createdAt
 				state.UpdatedAt = updatedAt
@@ -231,6 +232,7 @@ func (s *Service) listSessions(
 				session.WithSessionCreatedAt(st.CreatedAt),
 				session.WithSessionUpdatedAt(st.UpdatedAt),
 			)
+			sessionrevision.AttachRecord(sess, st.revision)
 			sessions = append(sessions,
 				mergeState(appState, userState, sess),
 			)
@@ -305,6 +307,7 @@ func (s *Service) listSessions(
 			session.WithSessionCreatedAt(st.CreatedAt),
 			session.WithSessionUpdatedAt(st.UpdatedAt),
 		)
+		sessionrevision.AttachRecord(sess, st.revision)
 		if len(trackEvents[i]) > 0 {
 			sess.Tracks = make(
 				map[session.Track]*session.TrackEvents,
@@ -385,16 +388,15 @@ func (s *Service) addEventWithRevision(
 					"get session state failed: %w", err,
 				)
 			}
-			if err := json.Unmarshal(
-				stateBytes, &sessState,
-			); err != nil {
+			record, err := sessionrevision.DecodeState(stateBytes, &sessState)
+			if err != nil {
 				return fmt.Errorf(
 					"unmarshal session state failed: %w",
 					err,
 				)
 			}
 			if err := s.revisionStore().ApplyEventWrite(
-				ctx, tx, key, write, evt, persisted, expiresAt,
+				ctx, tx, key, record, write, evt, persisted,
 			); err != nil {
 				return err
 			}
@@ -414,8 +416,8 @@ func (s *Service) addEventWithRevision(
 			session.ApplyEventStateDeltaMap(
 				sessState.State, evt,
 			)
-			updatedStateBytes, err := json.Marshal(
-				&sessState,
+			updatedStateBytes, err := sessionrevision.EncodeState(
+				&sessState, record,
 			)
 			if err != nil {
 				return fmt.Errorf(
@@ -568,16 +570,15 @@ func (s *Service) addTrackEventWithRevision(
 					"get session state failed: %w", err,
 				)
 			}
-			if err := json.Unmarshal(
-				stateBytes, &sessState,
-			); err != nil {
+			record, err := sessionrevision.DecodeState(stateBytes, &sessState)
+			if err != nil {
 				return fmt.Errorf(
 					"unmarshal session state failed: %w",
 					err,
 				)
 			}
 			if err := s.revisionStore().ApplyTrackWrite(
-				ctx, tx, key, write, trackEvent, sessionExpires,
+				record, write, trackEvent,
 			); err != nil {
 				return err
 			}
@@ -603,8 +604,8 @@ func (s *Service) addTrackEventWithRevision(
 			}
 			sessState.State = sess.SnapshotState()
 			sessState.UpdatedAt = nowUTC
-			updatedStateBytes, err := json.Marshal(
-				&sessState,
+			updatedStateBytes, err := sessionrevision.EncodeState(
+				&sessState, record,
 			)
 			if err != nil {
 				return fmt.Errorf(
@@ -746,7 +747,7 @@ func (s *Service) deleteSessionState(
 					}
 				}
 			}
-			return s.revisionStore().Delete(ctx, tx, key)
+			return nil
 		},
 	)
 	if err != nil {

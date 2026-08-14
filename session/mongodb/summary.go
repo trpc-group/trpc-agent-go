@@ -18,7 +18,6 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 
 	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -96,14 +95,9 @@ func (s *Service) CreateSessionSummary(
 		},
 		"$unset": bson.M{"expires_at": ""},
 	}
-	if s.collRevisionArchives != "" {
-		err = s.persistSummaryWithRevision(
-			ctx, key, filter, update, sessionrevision.NewWrite(ctx, sess),
-		)
-	} else {
-		_, err = s.client.UpdateOne(ctx, s.database, s.collSessionSummaries, filter, update,
-			options.Update().SetUpsert(true))
-	}
+	err = s.persistSummaryWithRevision(
+		ctx, key, filter, update, sessionrevision.NewWrite(ctx, sess),
+	)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			return nil

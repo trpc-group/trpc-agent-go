@@ -69,11 +69,9 @@ Session 的所有读写路径天然携带 `user_id`，因此直接使用 `user_i
 ## 替换最新一轮
 
 TDSQL 模式支持与 MySQL 相同的 `Runner.Run` latest-turn replacement 能力。Revision
-metadata 与废弃投影使用分片的 `session_revisions` 和
-`session_revision_archives` 表，并继续以 `user_id` 作为 shardkey。使用
-`WithSkipDBInit(true)` 的部署必须先按
-[`session/mysql/schema_tdsql.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema_tdsql.sql)
-完成建表。API 与行为约定见[替换最新一轮](index.md#replace-latest-turn)。
+metadata 以带版本的私有 sidecar 保存在现有 `session_states.state` JSON 中，继续沿用
+`user_id` shard 路由；即使使用 `WithSkipDBInit(true)` 也不需要额外建表或迁移。API、
+滚动升级要求与行为约定见[替换最新一轮](index.md#replace-latest-turn)。
 
 ## 表结构
 

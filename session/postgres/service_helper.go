@@ -46,9 +46,11 @@ func (s *Service) getSession(
 				return err
 			}
 			sessState = &SessionState{}
-			if err := json.Unmarshal(stateBytes, sessState); err != nil {
+			record, err := sessionrevision.DecodeState(stateBytes, sessState)
+			if err != nil {
 				return fmt.Errorf("unmarshal session state failed: %w", err)
 			}
+			sessState.revision = record
 			sessState.CreatedAt = createdAt
 			sessState.UpdatedAt = updatedAt
 		}
@@ -108,6 +110,7 @@ func (s *Service) getSession(
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
+	sessionrevision.AttachRecord(sess, sessState.revision)
 	trackEventsList, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, limit, afterTime)
 	if err != nil {
 		return nil, fmt.Errorf("get track events failed: %w", err)
@@ -168,9 +171,11 @@ func (s *Service) listSessions(
 				return err
 			}
 			var state SessionState
-			if err := json.Unmarshal(stateBytes, &state); err != nil {
+			record, err := sessionrevision.DecodeState(stateBytes, &state)
+			if err != nil {
 				return fmt.Errorf("unmarshal session state failed: %w", err)
 			}
+			state.revision = record
 			state.ID = sessionID
 			state.CreatedAt = createdAt
 			state.UpdatedAt = updatedAt
@@ -192,6 +197,7 @@ func (s *Service) listSessions(
 				session.WithSessionCreatedAt(sessState.CreatedAt),
 				session.WithSessionUpdatedAt(sessState.UpdatedAt),
 			)
+			sessionrevision.AttachRecord(sess, sessState.revision)
 			sessions = append(sessions, mergeState(appState, userState, sess))
 		}
 		return sessions, nil
@@ -249,6 +255,7 @@ func (s *Service) listSessions(
 			session.WithSessionCreatedAt(sessState.CreatedAt),
 			session.WithSessionUpdatedAt(sessState.UpdatedAt),
 		)
+		sessionrevision.AttachRecord(sess, sessState.revision)
 		if len(trackEvents[i]) > 0 {
 			sess.Tracks = make(map[session.Track]*session.TrackEvents, len(trackEvents[i]))
 			for trackName, history := range trackEvents[i] {
@@ -283,7 +290,7 @@ func (s *Service) addEventWithRevision(
 
 	// Use transaction to update session state and insert event.
 	err = s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
-		sessState, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		sessState, record, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
 		if err != nil {
 			return err
 		}
@@ -307,11 +314,6 @@ func (s *Service) addEventWithRevision(
 		session.ApplyEventStateDeltaMap(sessState.State, event)
 		updatedAt = now
 
-		updatedStateBytes, err = json.Marshal(sessState)
-		if err != nil {
-			return fmt.Errorf("marshal session state failed: %w", err)
-		}
-
 		var expiresAt *time.Time
 		if s.opts.sessionTTL > 0 {
 			t := now.Add(s.opts.sessionTTL)
@@ -320,9 +322,13 @@ func (s *Service) addEventWithRevision(
 		persisted := event != nil && event.Response != nil &&
 			!event.IsPartial && event.IsValidContent()
 		if err := s.revisionStore().ApplyEventWrite(
-			ctx, tx, key, write, event, persisted, expiresAt,
+			ctx, tx, key, record, write, event, persisted,
 		); err != nil {
 			return err
+		}
+		updatedStateBytes, err = sessionrevision.EncodeState(sessState, record)
+		if err != nil {
+			return fmt.Errorf("marshal session state failed: %w", err)
 		}
 
 		// Update session state
@@ -373,7 +379,7 @@ func (s *Service) addTrackEventWithRevision(
 
 	// Use transaction to update session state and insert track event.
 	err = s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
-		sessState, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		sessState, record, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
 		if err != nil {
 			return err
 		}
@@ -406,11 +412,6 @@ func (s *Service) addTrackEventWithRevision(
 		sessState.UpdatedAt = now
 		updatedAt = now
 
-		updatedStateBytes, err = json.Marshal(sessState)
-		if err != nil {
-			return fmt.Errorf("marshal session state failed: %w", err)
-		}
-
 		var sessionExpires *time.Time
 		if s.opts.sessionTTL > 0 {
 			t := now.Add(s.opts.sessionTTL)
@@ -422,9 +423,13 @@ func (s *Service) addTrackEventWithRevision(
 			trackExpires = &t
 		}
 		if err := s.revisionStore().ApplyTrackWrite(
-			ctx, tx, key, write, trackEvent, sessionExpires,
+			record, write, trackEvent,
 		); err != nil {
 			return err
+		}
+		updatedStateBytes, err = sessionrevision.EncodeState(sessState, record)
+		if err != nil {
+			return fmt.Errorf("marshal session state failed: %w", err)
 		}
 
 		// Update session state.
@@ -459,7 +464,7 @@ func loadSessionStateForUpdate(
 	tx *sql.Tx,
 	tableSessionStates string,
 	key session.Key,
-) (*SessionState, *time.Time, error) {
+) (*SessionState, *sessionrevision.PersistedRecord, *time.Time, error) {
 	var stateBytes []byte
 	var currentExpiresAt *time.Time
 	err := tx.QueryRowContext(
@@ -471,19 +476,21 @@ func loadSessionStateForUpdate(
 		key.AppName, key.UserID, key.SessionID,
 	).Scan(&stateBytes, &currentExpiresAt)
 	if err == sql.ErrNoRows {
-		return nil, nil, errSessionNotFound
+		return nil, nil, nil, errSessionNotFound
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("get session state failed: %w", err)
+		return nil, nil, nil, fmt.Errorf("get session state failed: %w", err)
 	}
 
 	var sessState SessionState
 	if len(stateBytes) > 0 {
-		if err := json.Unmarshal(stateBytes, &sessState); err != nil {
-			return nil, nil, fmt.Errorf("unmarshal session state failed: %w", err)
+		record, err := sessionrevision.DecodeState(stateBytes, &sessState)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("unmarshal session state failed: %w", err)
 		}
+		return &sessState, record, currentExpiresAt, nil
 	}
-	return &sessState, currentExpiresAt, nil
+	return &sessState, &sessionrevision.PersistedRecord{}, currentExpiresAt, nil
 }
 
 func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error {
@@ -567,7 +574,7 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 			}
 		}
 
-		return s.revisionStore().Delete(ctx, tx, key)
+		return nil
 	})
 
 	if err != nil {

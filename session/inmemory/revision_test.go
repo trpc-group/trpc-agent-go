@@ -325,7 +325,7 @@ func TestLatestTurnRevisionBoundaryFailures(t *testing.T) {
 		service, _ := serviceWithRevisionCheckpoint(t, 0, []byte(`{`))
 		defer func() { require.NoError(t, service.Close()) }()
 		_, err := service.ReplaceLatestTurn(ctx, validRequest)
-		assert.ErrorContains(t, err, "decode latest-turn checkpoint")
+		assert.ErrorContains(t, err, "decode session boundary")
 	})
 
 	t.Run("snapshot failure", func(t *testing.T) {
@@ -367,7 +367,7 @@ func TestLatestTurnRevisionBoundaryFailures(t *testing.T) {
 func serviceWithRevisionCheckpoint(
 	t *testing.T,
 	generation uint64,
-	snapshot []byte,
+	boundary []byte,
 ) (*SessionService, *sessionWithTTL) {
 	t.Helper()
 	service := NewSessionService()
@@ -381,7 +381,7 @@ func serviceWithRevisionCheckpoint(
 		Generation: generation,
 		Checkpoint: &revision.PersistedCheckpoint{
 			RequestID: "request",
-			Snapshot:  snapshot,
+			Boundary:  boundary,
 			Terminal:  true,
 		},
 	}}

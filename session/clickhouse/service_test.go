@@ -12,163 +12,15 @@ package clickhouse
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 )
-
-func TestInitDBRetriesRequiredJSONTypeSetting(t *testing.T) {
-	for _, setting := range []string{
-		"allow_experimental_json_type",
-		"allow_experimental_object_type",
-	} {
-		t.Run(setting, func(t *testing.T) {
-			calls := 0
-			client := &mockClient{execFunc: func(
-				context.Context,
-				string,
-				...any,
-			) error {
-				calls++
-				if calls == 1 {
-					return fmt.Errorf("set setting %s = 1", setting)
-				}
-				return nil
-			}, queryRowFunc: summarySchemaQueryRow(
-				1,
-				"ReplacingMergeTree(version_at) ORDER BY tuple()",
-			)}
-			s := &Service{
-				chClient:              client,
-				tableSessionSummaries: "session_summaries",
-			}
-			require.NoError(t, s.initDB(context.Background()))
-			assert.Equal(t, len(tableDefs)+1, calls)
-		})
-	}
-}
-
-func TestInitDBDoesNotRetryUnrelatedFailure(t *testing.T) {
-	calls := 0
-	client := &mockClient{execFunc: func(
-		context.Context,
-		string,
-		...any,
-	) error {
-		calls++
-		return errors.New("permission denied")
-	}}
-	s := &Service{chClient: client}
-	err := s.initDB(context.Background())
-	require.ErrorContains(t, err, "permission denied")
-	assert.Equal(t, 1, calls)
-}
-
-func TestInitDBRejectsLegacySummarySchema(t *testing.T) {
-	client := &mockClient{
-		queryRowFunc: summarySchemaQueryRow(
-			0,
-			"ReplacingMergeTree(updated_at)",
-		),
-	}
-	s := &Service{
-		chClient:              client,
-		tableSessionSummaries: "session_summaries",
-	}
-	err := s.initDB(context.Background())
-	require.ErrorContains(t, err, "has incompatible schema")
-	require.ErrorContains(t, err, "ReplacingMergeTree(version_at)")
-}
-
-func TestValidateSessionSummariesTableRejectsLegacyEngine(t *testing.T) {
-	s := &Service{
-		chClient: &mockClient{queryRowFunc: summarySchemaQueryRow(
-			1,
-			"ReplacingMergeTree(updated_at)",
-		)},
-		tableSessionSummaries: "session_summaries",
-	}
-	require.ErrorContains(
-		t,
-		s.validateSessionSummariesTable(context.Background()),
-		"has incompatible schema",
-	)
-}
-
-func TestValidateSessionSummariesTableInspectionErrors(t *testing.T) {
-	tests := []struct {
-		name      string
-		queryRows func(context.Context, []any, string, ...any) error
-		want      string
-	}{
-		{
-			name: "columns",
-			queryRows: func(
-				context.Context, []any, string, ...any,
-			) error {
-				return assert.AnError
-			},
-			want: "inspect clickhouse session summaries columns failed",
-		},
-		{
-			name: "engine",
-			queryRows: func(
-				_ context.Context,
-				dest []any,
-				query string,
-				_ ...any,
-			) error {
-				if strings.Contains(query, "system.columns") {
-					*dest[0].(*uint64) = 1
-					return nil
-				}
-				return assert.AnError
-			},
-			want: "inspect clickhouse session summaries engine failed",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &Service{
-				chClient:              &mockClient{queryRowFunc: tt.queryRows},
-				tableSessionSummaries: "session_summaries",
-			}
-			require.ErrorContains(
-				t,
-				s.validateSessionSummariesTable(context.Background()),
-				tt.want,
-			)
-		})
-	}
-}
-
-func summarySchemaQueryRow(
-	versionAtColumns uint64,
-	engineFull string,
-) func(context.Context, []any, string, ...any) error {
-	return func(
-		_ context.Context,
-		dest []any,
-		query string,
-		_ ...any,
-	) error {
-		switch {
-		case strings.Contains(query, "system.columns"):
-			*dest[0].(*uint64) = versionAtColumns
-		case strings.Contains(query, "system.tables"):
-			*dest[0].(*string) = engineFull
-		}
-		return nil
-	}
-}
 
 func TestNewService(t *testing.T) {
 	// Register a mock instance
@@ -633,27 +485,12 @@ func TestService_DeleteSession(t *testing.T) {
 		return newMockRows([][]any{}), nil
 	}
 
-	var summaryDeleteQuery string
-	var summaryDeleteArgs []any
-	var eventDeleteQuery string
 	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
-		if strings.Contains(query, "INSERT INTO session_events") {
-			eventDeleteQuery = query
-		}
-		if strings.Contains(query, "INSERT INTO session_summaries") {
-			summaryDeleteQuery = query
-			summaryDeleteArgs = append([]any(nil), args...)
-		}
 		return nil
 	}
 
 	err := s.DeleteSession(ctx, key)
 	assert.NoError(t, err)
-	assert.NotContains(t, eventDeleteQuery, "AS deleted_at")
-	assert.Contains(t, summaryDeleteQuery, "version_at")
-	assert.Contains(t, summaryDeleteQuery, "now64(9)")
-	assert.NotContains(t, summaryDeleteQuery, "AS deleted_at")
-	assert.Equal(t, []any{key.AppName, key.UserID, key.SessionID}, summaryDeleteArgs)
 }
 
 func TestService_Options(t *testing.T) {

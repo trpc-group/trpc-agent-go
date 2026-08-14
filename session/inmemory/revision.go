@@ -77,11 +77,11 @@ func (s *sessionWithTTL) applyEventRevisionWrite(
 	}
 	rev := s.ensureRevision()
 	if write.Start != nil {
-		snapshot, err := sessionrevision.Snapshot(s.session)
+		boundary, err := sessionrevision.NewBoundary(s.session)
 		if err != nil {
-			return fmt.Errorf("snapshot session before latest turn: %w", err)
+			return fmt.Errorf("capture session boundary before latest turn: %w", err)
 		}
-		write.Snapshot = snapshot
+		write.Boundary = boundary
 	}
 	persisted := evt != nil && evt.Response != nil && !evt.IsPartial &&
 		evt.IsValidContent()
@@ -146,9 +146,12 @@ func (s *SessionService) ReplaceLatestTurn(
 	if rev.record.Generation == math.MaxUint64 {
 		return nil, fmt.Errorf("session revision generation exhausted: %w", sessionrevision.ErrLatestTurnReplacementUnavailable)
 	}
-	restored, err := sessionrevision.DecodeSnapshot(checkpoint.Snapshot)
+	restored, err := sessionrevision.RestoreBoundary(
+		stored.session,
+		checkpoint.Boundary,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("decode latest-turn checkpoint: %w", err)
+		return nil, fmt.Errorf("restore latest-turn boundary: %w", err)
 	}
 	rev.record.Generation++
 	rev.record.Head++

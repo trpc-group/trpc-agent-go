@@ -270,8 +270,8 @@ replacement 已成为 canonical，但 Runner 不会自动重复一次执行结�
 Agent 启动。
 
 新 Run 开始前，Runner 会把 Session 级 events、state、summaries 和 Track events
-原子恢复到旧 Request 之前的完整 checkpoint。持久化 backend 会把被丢弃的投影保存在
-私有 revision 存储中；InMemory 在恢复 checkpoint 后会丢弃该投影。app state、user
+原子恢复到旧 Request 之前的完整 checkpoint。Backend 会先验证 checkpoint 对应的
+event 与 Track 前缀，再丢弃最新尾部，不会另外保留一份废弃投影。app state、user
 state、模型/工具调用、artifact 写入和其他外部副作用不会被回滚。
 
 安全规则：
@@ -293,9 +293,9 @@ state、模型/工具调用、artifact 写入和其他外部副作用不会被�
 - 把 routed output 持久化到其他 Session 的 turn 无法通过单 Session 投影原子恢复，
   因此不可替换。
 - Replacement 保留源 Session 的剩余 TTL，不会延长 Session 生命周期。
-- 持久化 backend 的每次 replacement 会保留一份完整废弃投影，系统不会隐式限制
-  revision 数量或字节数；删除 Session 或 Session 到期时会一并清理。InMemory 不保留
-  revision archive，会直接丢弃被替换的投影。
+- Checkpoint 保存 Session 级 state、summary、时间戳，以及 event/Track 前缀的紧凑
+  摘要，不复制 event 或 Track payload，也不会累积废弃投影 archive。若已无法验证
+  checkpoint 对应的前缀，replacement 会 fail closed。
 - Backend 会保留最近 64 个 replacement 幂等身份用于检测复用。结果不确定时应及时使用
   原始 ID 组合重试。
 
@@ -306,11 +306,16 @@ HashIdx/ZSet、PostgreSQL、PGVector、MySQL/TDSQL 和 MongoDB 支持 replacemen
 Externalization wrapper 会透传底层能力；ClickHouse、自定义 service 与 Noop 返回
 unsupported。
 
-持久化后端会在正常数据库初始化时创建私有 revision 存储。PostgreSQL、PGVector、
-MySQL/TDSQL 和 SQLite 使用 `session_revisions` 与 `session_revision_archives`；MongoDB
-把当前 revision 保存在 session-state 文档中，并使用 revision archive collection。
-使用 `WithSkipDBInit(true)` 的部署必须先按对应 backend package 中的定义完成建表或建
-collection，再启用 replacement。
+该协议不需要新增关系型表或执行 schema migration。PostgreSQL、PGVector、
+MySQL/TDSQL 和 SQLite 会把带版本的私有 sidecar 写入现有 session-state JSON，且该
+字段不会出现在用户可见的 `Session.State` 中；MongoDB 把相同的私有 metadata 放在
+现有 Session 文档内；Redis 在 Session hash slot 中使用一个随 Session 过期的私有
+revision key。任何 backend 都不会创建 revision archive 表或 collection。
+
+启用 replacement 前，应先升级所有可能写入同一 Session 存储的实例。旧版本 writer
+不认识这份私有 metadata，可能在写回 state 时覆盖它。已有 Session 不需要迁移；升级
+后的 Runner 持久化新一轮开头后，该轮即可 replacement。使用
+`WithSkipDBInit(true)` 的部署同样无需额外建表。
 
 ## 核心概念
 

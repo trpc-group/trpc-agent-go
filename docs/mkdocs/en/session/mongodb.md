@@ -133,18 +133,13 @@ Dedicated cleanup indexes on `updated_at` support these cleanup scans.
 ## Latest-turn Replacement
 
 MongoDB supports editing and resending the latest persisted turn through
-`Runner.Run` and `agent.WithLatestTurnReplacement`. The active revision record
-is stored in the Session state document; discarded projections are stored in
-the prefixed `session_revision_archives` collection. Projection restore and
-revision metadata updates run in the same MongoDB transaction.
-
-Normal initialization creates the archive collection's unique
-`(app_name, user_id, session_id, generation)` index and TTL index. Deployments
-using `WithSkipDBInit(true)` must create equivalent indexes before enabling
-replacement. Revision archives inherit the Session expiration time and are
-also removed when the Session is deleted. See
+`Runner.Run` and `agent.WithLatestTurnReplacement`. A compact active revision
+record is stored in the existing Session state document. Projection restore
+and revision metadata updates run in the same MongoDB transaction; no archive
+collection or additional index is required, including with
+`WithSkipDBInit(true)`. See
 [Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the Runner
-API and rollback boundaries.
+API, rollout requirements, and rollback boundaries.
 
 ## Storage Structure
 
@@ -154,7 +149,6 @@ MongoDB uses these collections:
 - `session_events`
 - `session_tracks`
 - `session_summaries`
-- `session_revision_archives`
 - `app_states`
 - `user_states`
 

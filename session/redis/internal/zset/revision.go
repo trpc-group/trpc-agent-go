@@ -66,8 +66,8 @@ func boolToInt(value bool) int {
 	return 0
 }
 
-// ReplaceLatestTurn atomically archives the active projection and restores the
-// checkpoint immediately before the latest persisted turn.
+// ReplaceLatestTurn atomically restores the checkpoint immediately before the
+// latest persisted turn.
 func (c *Client) ReplaceLatestTurn(
 	ctx context.Context,
 	key session.Key,
@@ -119,17 +119,15 @@ func (c *Client) ReplaceLatestTurn(
 			if record.Generation == math.MaxUint64 {
 				return sessionrevision.ErrLatestTurnReplacementUnavailable
 			}
-			restored, err := sessionrevision.DecodeSnapshot(checkpoint.Snapshot)
-			if err != nil {
-				return fmt.Errorf("decode latest-turn checkpoint: %w", err)
-			}
 			current, err := c.requiredRevisionProjection(ctx, key)
 			if err != nil {
-				return fmt.Errorf("load active session for archive: %w", err)
+				return fmt.Errorf("load active session for replacement: %w", err)
 			}
-			archive, err := sessionrevision.Snapshot(current)
+			restored, err := sessionrevision.RestoreBoundary(
+				current, checkpoint.Boundary,
+			)
 			if err != nil {
-				return fmt.Errorf("encode discarded revision: %w", err)
+				return fmt.Errorf("restore latest-turn boundary: %w", err)
 			}
 			remainingTTLs, err := c.activeProjectionTTLs(ctx, tx, key, current)
 			if err != nil {
@@ -161,8 +159,6 @@ func (c *Client) ReplaceLatestTurn(
 				key,
 				current,
 				restored,
-				archive,
-				record.Generation-1,
 				recordJSON,
 				remainingTTLs,
 			); err != nil {
@@ -204,8 +200,6 @@ func (c *Client) replaceActiveSession(
 	key session.Key,
 	current *session.Session,
 	restored *session.Session,
-	archive []byte,
-	archiveGeneration uint64,
 	recordJSON []byte,
 	remainingTTLs map[string]time.Duration,
 ) error {
@@ -271,9 +265,6 @@ func (c *Client) replaceActiveSession(
 				})
 			}
 		}
-		archiveKey := c.revisionArchiveKey(key)
-		pipe.HSet(ctx, archiveKey, archiveGeneration, archive)
-		applyRemainingTTL(ctx, pipe, archiveKey, sourceTTL, sourceTTL)
 		revisionKey := c.revisionKey(key)
 		pipe.Set(ctx, revisionKey, recordJSON, 0)
 		applyRemainingTTL(ctx, pipe, revisionKey, sourceTTL, sourceTTL)
@@ -320,8 +311,6 @@ func (c *Client) activeProjectionTTLs(
 		c.eventKey(key),
 		c.sessionSummaryKey(key),
 		c.trackIndexKey(key),
-		c.revisionKey(key),
-		c.revisionArchiveKey(key),
 	}
 	for track := range current.Tracks {
 		keys = append(keys, c.trackKey(key, track))

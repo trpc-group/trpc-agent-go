@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -468,7 +469,7 @@ func TestLatestTurnReplacementReplay(t *testing.T) {
 func TestLatestTurnReplacementCheckpoint(t *testing.T) {
 	checkpoint := &PersistedCheckpoint{
 		RequestID: "request",
-		Snapshot:  []byte(`{"id":"session"}`),
+		Boundary:  []byte(`{"id":"session"}`),
 	}
 	got, err := LatestTurnReplacementCheckpoint(
 		&PersistedRecord{Checkpoint: checkpoint},
@@ -482,7 +483,7 @@ func TestLatestTurnReplacementCheckpoint(t *testing.T) {
 		{},
 		{Checkpoint: &PersistedCheckpoint{RequestID: "request"}},
 		{Checkpoint: &PersistedCheckpoint{
-			RequestID: "request", Snapshot: []byte(`{}`), Hazard: true,
+			RequestID: "request", Boundary: []byte(`{}`), Hazard: true,
 		}},
 	} {
 		_, err := LatestTurnReplacementCheckpoint(record, "request")
@@ -549,6 +550,26 @@ func TestRevisionContextAndGeneration(t *testing.T) {
 	assert.Equal(t, &start, write.Start)
 }
 
+func TestAttachRecord(t *testing.T) {
+	assert.False(t, RecordActive(nil))
+	AttachRecord(nil, &PersistedRecord{Generation: 1})
+	sess := session.NewSession("app", "user", "session")
+	AttachRecord(sess, nil)
+	assert.False(t, RecordActive(sess))
+
+	AttachRecord(sess, &PersistedRecord{})
+	generation, ok := Generation(sess)
+	assert.True(t, ok)
+	assert.Zero(t, generation)
+	assert.False(t, RecordActive(sess))
+
+	AttachRecord(sess, &PersistedRecord{Generation: 2, Head: 1})
+	generation, ok = Generation(sess)
+	assert.True(t, ok)
+	assert.Equal(t, uint64(2), generation)
+	assert.True(t, RecordActive(sess))
+}
+
 func TestRunPreparationSignal(t *testing.T) {
 	ctx, done := ContextWithRunPreparation(nil)
 	CompleteRunPreparation(ctx, nil)
@@ -560,31 +581,95 @@ func TestRunPreparationSignal(t *testing.T) {
 	})
 }
 
-func TestSnapshotRoundTrip(t *testing.T) {
-	_, err := Snapshot(nil)
+func TestBoundaryRestore(t *testing.T) {
+	_, err := NewBoundary(nil)
 	require.ErrorIs(t, err, session.ErrNilSession)
-	_, err = DecodeSnapshot(nil)
+	_, err = RestoreBoundary(nil, nil)
 	require.ErrorIs(t, err, session.ErrNilSession)
-	_, err = DecodeSnapshot([]byte("not-json"))
-	require.Error(t, err)
+	_, err = RestoreBoundary(
+		session.NewSession("app", "user", "session"),
+		nil,
+	)
+	require.ErrorIs(t, err, ErrLatestTurnReplacementUnavailable)
 
+	createdAt := time.Unix(100, 0).UTC()
+	updatedAt := time.Unix(200, 0).UTC()
 	sess := session.NewSession("app", "user", "session")
+	sess.CreatedAt = createdAt
+	sess.UpdatedAt = updatedAt
 	sess.State = session.StateMap{
-		"session:key":                   []byte("session"),
+		"session:key":                   []byte("before"),
 		session.StateAppPrefix + "key":  []byte("app"),
 		session.StateUserPrefix + "key": []byte("user"),
 	}
+	sess.Events = []event.Event{{InvocationID: "before"}}
+	sess.Tracks = map[session.Track]*session.TrackEvents{
+		"trace": {
+			Track: "trace",
+			Events: []session.TrackEvent{{
+				Track: "trace", RequestID: "before",
+			}},
+		},
+		"empty": {Track: "empty"},
+	}
 	SetGeneration(sess, 3)
-	raw, err := Snapshot(sess)
+	raw, err := NewBoundary(sess)
 	require.NoError(t, err)
-	restored, err := DecodeSnapshot(raw)
+
+	current := sess.Clone()
+	current.State["session:key"] = []byte("after")
+	current.Events = append(current.Events, event.Event{InvocationID: "after"})
+	current.Tracks["trace"].Events = append(
+		current.Tracks["trace"].Events,
+		session.TrackEvent{Track: "trace", RequestID: "after"},
+	)
+	delete(current.Tracks, "empty")
+	current.UpdatedAt = time.Unix(300, 0).UTC()
+	restored, err := RestoreBoundary(current, raw)
 	require.NoError(t, err)
 	assert.Equal(t, sess.ID, restored.ID)
 	assert.Equal(t, sess.Hash, restored.Hash)
-	assert.Equal(t, []byte("session"), restored.State["session:key"])
+	assert.Equal(t, []byte("before"), restored.State["session:key"])
 	assert.NotContains(t, restored.State, session.StateAppPrefix+"key")
 	assert.NotContains(t, restored.State, session.StateUserPrefix+"key")
+	assert.Len(t, restored.Events, 1)
+	assert.Len(t, restored.Tracks["trace"].Events, 1)
+	assert.Empty(t, restored.Tracks["empty"].Events)
+	assert.Equal(t, createdAt, restored.CreatedAt)
+	assert.Equal(t, updatedAt, restored.UpdatedAt)
 	assert.Empty(t, restored.ServiceMeta)
+
+	var corruptedBoundary persistedBoundary
+	require.NoError(t, json.Unmarshal(raw, &corruptedBoundary))
+	emptyPrefix := corruptedBoundary.Tracks["empty"]
+	emptyPrefix.Digest[0] ^= 0xff
+	corruptedBoundary.Tracks["empty"] = emptyPrefix
+	corruptedRaw, err := json.Marshal(corruptedBoundary)
+	require.NoError(t, err)
+	_, err = RestoreBoundary(current, corruptedRaw)
+	assert.ErrorIs(t, err, ErrLatestTurnReplacementUnavailable)
+
+	tampered := current.Clone()
+	tampered.Events[0].InvocationID = "tampered"
+	_, err = RestoreBoundary(tampered, raw)
+	assert.ErrorIs(t, err, ErrLatestTurnReplacementUnavailable)
+	_, err = RestoreBoundary(current, []byte("not-json"))
+	assert.Error(t, err)
+}
+
+func TestBoundaryDoesNotCopyEventPayloads(t *testing.T) {
+	sess := session.NewSession("app", "user", "session")
+	sess.Events = []event.Event{{
+		InvocationID: "before",
+		Response: &model.Response{
+			Choices: []model.Choice{{Message: model.Message{
+				Content: strings.Repeat("x", 1<<20),
+			}}},
+		},
+	}}
+	raw, err := NewBoundary(sess)
+	require.NoError(t, err)
+	assert.Less(t, len(raw), 1024)
 }
 
 func TestApplyEventWriteTracksCanonicalTurn(t *testing.T) {
@@ -595,7 +680,7 @@ func TestApplyEventWriteTracksCanonicalTurn(t *testing.T) {
 			RequestID:    "request",
 			InvocationID: "invocation",
 		},
-		Snapshot: []byte(`{"id":"session"}`),
+		Boundary: []byte(`{"id":"session"}`),
 	}
 	input := revisionTestEvent("request", "invocation", false)
 
@@ -630,7 +715,7 @@ func TestApplyEventWriteRejectsUnsafeBoundaries(t *testing.T) {
 						RequestID:    "request",
 						InvocationID: "invocation",
 					},
-					Snapshot: []byte(`{"id":"session"}`),
+					Boundary: []byte(`{"id":"session"}`),
 				}, test.event, test.persisted)
 				assert.Nil(t, record.Checkpoint)
 			})
@@ -841,7 +926,7 @@ func TestNewSerialTurnReplacesClosedHazard(t *testing.T) {
 		record,
 		Write{HasExpectedGeneration: true, Start: &TurnStart{
 			RequestID: "other", InvocationID: "other-invocation",
-		}, Snapshot: []byte(`{"id":"other"}`)},
+		}, Boundary: []byte(`{"id":"other"}`)},
 		revisionTestEvent("other", "other-invocation", false),
 		true,
 	)
@@ -858,7 +943,7 @@ func TestNewSerialTurnReplacesClosedHazard(t *testing.T) {
 		record,
 		Write{HasExpectedGeneration: true, Start: &TurnStart{
 			RequestID: "next", InvocationID: "next-invocation",
-		}, Snapshot: []byte(`{"id":"next"}`)},
+		}, Boundary: []byte(`{"id":"next"}`)},
 		revisionTestEvent("next", "next-invocation", false),
 		true,
 	)
@@ -876,7 +961,7 @@ func runningRevisionRecord(t *testing.T) *PersistedRecord {
 			RequestID:    "request",
 			InvocationID: "invocation",
 		},
-		Snapshot: []byte(`{"id":"session"}`),
+		Boundary: []byte(`{"id":"session"}`),
 	}, revisionTestEvent("request", "invocation", false), true)
 	return record
 }

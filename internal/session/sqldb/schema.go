@@ -25,12 +25,6 @@ const (
 	// TableNameSessionSummaries is the name of the session summaries table
 	TableNameSessionSummaries = "session_summaries"
 
-	// TableNameSessionRevisions stores the active private revision record.
-	TableNameSessionRevisions = "session_revisions"
-
-	// TableNameSessionRevisionArchives stores discarded session projections.
-	TableNameSessionRevisionArchives = "session_revision_archives"
-
 	// TableNameAppStates is the name of the app states table
 	TableNameAppStates = "app_states"
 

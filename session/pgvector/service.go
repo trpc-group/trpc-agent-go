@@ -45,6 +45,7 @@ type SessionState struct {
 	State     session.StateMap `json:"state"`
 	CreatedAt time.Time        `json:"createdAt"`
 	UpdatedAt time.Time        `json:"updatedAt"`
+	revision  *sessionrevision.PersistedRecord
 }
 
 // sessionEventPair holds a session key and event for
@@ -89,8 +90,6 @@ type Service struct {
 	tableSessionEvents    string
 	tableSessionTracks    string
 	tableSessionSummaries string
-	tableSessionRevisions string
-	tableRevisionArchives string
 	tableAppStates        string
 	tableUserStates       string
 }
@@ -209,14 +208,6 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		tableSessionSummaries: sqldb.BuildTableNameWithSchema(
 			opts.schema, opts.tablePrefix,
 			sqldb.TableNameSessionSummaries,
-		),
-		tableSessionRevisions: sqldb.BuildTableNameWithSchema(
-			opts.schema, opts.tablePrefix,
-			sqldb.TableNameSessionRevisions,
-		),
-		tableRevisionArchives: sqldb.BuildTableNameWithSchema(
-			opts.schema, opts.tablePrefix,
-			sqldb.TableNameSessionRevisionArchives,
 		),
 		tableAppStates: sqldb.BuildTableNameWithSchema(
 			opts.schema, opts.tablePrefix,
@@ -441,16 +432,11 @@ func (s *Service) GetSession(
 		c *session.GetSessionContext,
 		_ func() (*session.Session, error),
 	) (*session.Session, error) {
-		sess, err := sessionrevision.LoadStableProjection(
-			c.Context,
-			func(ctx context.Context) (uint64, error) {
-				return s.revisionGeneration(ctx, c.Key)
-			},
+		sess, err := s.loadStableProjection(
+			c.Context, c.Key,
 			func(ctx context.Context) (*session.Session, error) {
-				return s.getSession(
-					ctx, c.Key,
-					c.Options.EventNum, c.Options.EventTime,
-				)
+				return s.getSession(ctx, c.Key,
+					c.Options.EventNum, c.Options.EventTime)
 			},
 		)
 		if err != nil {
@@ -505,7 +491,7 @@ func (s *Service) ListSessions(
 	}
 	keys := make([]session.Key, 0, len(sessList))
 	for _, listed := range sessList {
-		if listed != nil {
+		if sessionrevision.RecordActive(listed) {
 			keys = append(keys, session.Key{
 				AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
 			})
@@ -522,11 +508,12 @@ func (s *Service) ListSessions(
 		key := session.Key{
 			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
 		}
-		stable, err := sessionrevision.LoadStableListedProjectionAtGeneration(
+		before, ok := sessionrevision.Generation(listed)
+		if !ok || !sessionrevision.RecordActive(listed) || before == generations[key] {
+			continue
+		}
+		stable, err := sessionrevision.LoadStableProjection(
 			ctx,
-			listed,
-			opt.ListSessionOnlyMeta,
-			generations[key],
 			func(ctx context.Context) (uint64, error) {
 				return s.revisionGeneration(ctx, key)
 			},
@@ -536,6 +523,11 @@ func (s *Service) ListSessions(
 		)
 		if err != nil {
 			return nil, err
+		}
+		if opt.ListSessionOnlyMeta && stable != nil {
+			stable.Events = nil
+			stable.Tracks = nil
+			stable.Summaries = nil
 		}
 		sessList[i] = stable
 	}
@@ -846,10 +838,6 @@ func (s *Service) UpdateSessionState(
 			)
 		}
 	}
-	if s.tableSessionRevisions == "" {
-		return s.updateSessionStateLegacy(ctx, key, state)
-	}
-
 	write := sessionrevision.NewWrite(ctx, nil)
 	err := s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
 		var (
@@ -867,10 +855,14 @@ func (s *Service) UpdateSessionState(
 			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("session not found")
 			}
-			return err
+			return fmt.Errorf("get session state: %w", err)
 		}
 		var sessState SessionState
-		if err := json.Unmarshal(currentStateBytes, &sessState); err != nil {
+		if len(currentStateBytes) == 0 {
+			currentStateBytes = []byte("{}")
+		}
+		record, err := sessionrevision.DecodeState(currentStateBytes, &sessState)
+		if err != nil {
 			return fmt.Errorf("unmarshal state: %w", err)
 		}
 		now := time.Now()
@@ -885,10 +877,6 @@ func (s *Service) UpdateSessionState(
 			sessState.State[k] = append([]byte(nil), v...)
 		}
 		sessState.UpdatedAt = now
-		updatedStateBytes, err := json.Marshal(sessState)
-		if err != nil {
-			return fmt.Errorf("marshal state: %w", err)
-		}
 		var expiresAt *time.Time
 		if s.opts.sessionTTL > 0 {
 			t := now.Add(s.opts.sessionTTL)
@@ -897,9 +885,13 @@ func (s *Service) UpdateSessionState(
 			expiresAt = currentExpiresAt
 		}
 		if err := s.revisionStore().ApplyMutation(
-			ctx, tx, key, write, expiresAt,
+			record, write,
 		); err != nil {
 			return err
+		}
+		updatedStateBytes, err := sessionrevision.EncodeState(sessState, record)
+		if err != nil {
+			return fmt.Errorf("marshal state: %w", err)
 		}
 		_, err = tx.ExecContext(ctx, fmt.Sprintf(
 			`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
@@ -914,83 +906,6 @@ func (s *Service) UpdateSessionState(
 		return fmt.Errorf(
 			"pgvector session service update session "+
 				"state failed: %w", err,
-		)
-	}
-	return nil
-}
-
-func (s *Service) updateSessionStateLegacy(
-	ctx context.Context,
-	key session.Key,
-	state session.StateMap,
-) error {
-	var currentStateBytes []byte
-	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
-		if rows.Next() {
-			return rows.Scan(&currentStateBytes)
-		}
-		return sql.ErrNoRows
-	}, fmt.Sprintf(
-		`SELECT state FROM %s
-		WHERE app_name = $1 AND user_id = $2
-		AND session_id = $3
-		AND deleted_at IS NULL`,
-		s.tableSessionStates,
-	), key.AppName, key.UserID, key.SessionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf(
-			"pgvector session service update session state failed: session not found",
-		)
-	}
-	if err != nil {
-		return fmt.Errorf(
-			"pgvector session service update session state failed: get session state: %w",
-			err,
-		)
-	}
-	var sessState SessionState
-	if len(currentStateBytes) > 0 {
-		if err := json.Unmarshal(currentStateBytes, &sessState); err != nil {
-			return fmt.Errorf(
-				"pgvector session service update session state failed: unmarshal state: %w",
-				err,
-			)
-		}
-	}
-	now := time.Now()
-	if sessState.State == nil {
-		sessState.State = make(session.StateMap)
-	}
-	for k, v := range state {
-		if v == nil {
-			sessState.State[k] = nil
-			continue
-		}
-		sessState.State[k] = append([]byte(nil), v...)
-	}
-	sessState.UpdatedAt = now
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf(
-			"pgvector session service update session state failed: marshal state: %w",
-			err,
-		)
-	}
-	var expiresAt *time.Time
-	if s.opts.sessionTTL > 0 {
-		t := now.Add(s.opts.sessionTTL)
-		expiresAt = &t
-	}
-	_, err = s.pgClient.ExecContext(ctx, fmt.Sprintf(
-		`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
-		WHERE app_name = $4 AND user_id = $5 AND session_id = $6
-		AND deleted_at IS NULL`,
-		s.tableSessionStates,
-	), updatedStateBytes, now, expiresAt,
-		key.AppName, key.UserID, key.SessionID)
-	if err != nil {
-		return fmt.Errorf(
-			"pgvector session service update session state failed: %w", err,
 		)
 	}
 	return nil
@@ -1504,13 +1419,6 @@ func (s *Service) cleanupExpiredData(
 						); err != nil {
 							return err
 						}
-					}
-				}
-				if s.opts.sessionTTL > 0 {
-					if err := s.revisionStore().CleanupExpired(
-						ctx, tx, now, userKey,
-					); err != nil {
-						return err
 					}
 				}
 				return nil

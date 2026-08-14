@@ -549,6 +549,9 @@ func TestGetEventsList_PageValidationAndErrors(t *testing.T) {
 
 func TestListSessions_AppliesPagination(t *testing.T) {
 	mc := &mockClient{
+		findOneFn: func(any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{}, nil, nil)
+		},
 		findFn: func(_ any) (*mongo.Cursor, error) {
 			return emptyCursor()
 		},
@@ -579,6 +582,9 @@ func TestListSessions_DecodesAndMergesEachSession(t *testing.T) {
 
 	calls := 0
 	mc := &mockClient{
+		findOneFn: func(any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{}, nil, nil)
+		},
 		findFn: func(_ any) (*mongo.Cursor, error) {
 			calls++
 			if calls == 1 {
@@ -605,6 +611,9 @@ func TestListSessions_OnlyMetaSkipsEventsAndSummaries(t *testing.T) {
 	}
 	calls := 0
 	mc := &mockClient{
+		findOneFn: func(any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{}, nil, nil)
+		},
 		findFn: func(_ any) (*mongo.Cursor, error) {
 			calls++
 			if calls == 1 {
@@ -640,6 +649,9 @@ func TestListSessions_NonMetaLoadsEventsAndSummaries(t *testing.T) {
 
 	findCalls := 0
 	mc := &mockClient{
+		findOneFn: func(any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{}, nil, nil)
+		},
 		findFn: func(_ any) (*mongo.Cursor, error) {
 			findCalls++
 			switch findCalls {
@@ -981,15 +993,19 @@ func TestDeleteUserState_HardDelete(t *testing.T) {
 
 func TestUpdateSessionState_DotNotationPerKey(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc)
+	s := newRevisionServiceForTest(t, mc)
 
 	require.NoError(t, s.UpdateSessionState(context.Background(),
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
 		session.StateMap{"foo": []byte("v"), "bar.baz": []byte("w")}))
 
-	ops := mc.recorded()
-	require.Len(t, ops, 1)
-	upd := ops[0].update.(bson.M)
+	var upd bson.M
+	for _, op := range mc.recorded() {
+		if op.name == "UpdateOne" && op.coll == "session_states" {
+			upd = op.update.(bson.M)
+		}
+	}
+	require.NotNil(t, upd)
 	set := upd["$set"].(bson.M)
 
 	// foo writes to "state.foo"; bar.baz encodes the dot, writes to "state.bar\db".
@@ -1021,13 +1037,19 @@ func TestUpdateSessionState_RejectsUserPrefix(t *testing.T) {
 
 func TestUpdateSessionState_TTLBumpsExpiresAt(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
+	s := newRevisionServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 
 	require.NoError(t, s.UpdateSessionState(context.Background(),
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
 		session.StateMap{"foo": []byte("v")}))
 
-	upd := mc.recorded()[0].update.(bson.M)
+	var upd bson.M
+	for _, op := range mc.recorded() {
+		if op.name == "UpdateOne" && op.coll == "session_states" {
+			upd = op.update.(bson.M)
+		}
+	}
+	require.NotNil(t, upd)
 	set := upd["$set"].(bson.M)
 	exp, ok := set["expires_at"].(*time.Time)
 	require.True(t, ok)
@@ -1036,13 +1058,19 @@ func TestUpdateSessionState_TTLBumpsExpiresAt(t *testing.T) {
 
 func TestUpdateSessionState_NoTTLUnsetsExpiresAt(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc)
+	s := newRevisionServiceForTest(t, mc)
 
 	require.NoError(t, s.UpdateSessionState(context.Background(),
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
 		session.StateMap{"foo": []byte("v")}))
 
-	upd := mc.recorded()[0].update.(bson.M)
+	var upd bson.M
+	for _, op := range mc.recorded() {
+		if op.name == "UpdateOne" && op.coll == "session_states" {
+			upd = op.update.(bson.M)
+		}
+	}
+	require.NotNil(t, upd)
 	set := upd["$set"].(bson.M)
 	assert.NotContains(t, set, "expires_at")
 	unset := upd["$unset"].(bson.M)
@@ -1055,7 +1083,7 @@ func TestUpdateSessionState_NoMatchReturnsSessionNotFound(t *testing.T) {
 			return &mongo.UpdateResult{}, nil // MatchedCount: 0
 		},
 	}
-	s := newServiceForTest(t, mc)
+	s := newRevisionServiceForTest(t, mc)
 
 	err := s.UpdateSessionState(context.Background(),
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
@@ -1087,7 +1115,7 @@ func TestAppendEvent_PersistableGoesThroughTransaction(t *testing.T) {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
-	s := newServiceForTest(t, mc)
+	s := newRevisionServiceForTest(t, mc)
 	sess := newSessionForTest("app", "u", "s")
 	evt := nonPartialResponseEvent(t)
 
@@ -1121,7 +1149,7 @@ func TestAppendEvent_PersistableGoesThroughTransaction(t *testing.T) {
 
 func TestAppendEvent_StateDeltaOnly_NoTransactionNoEventInsert(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc)
+	s := newRevisionServiceForTest(t, mc)
 
 	sess := newSessionForTest("app", "u", "s")
 	e := &event.Event{
@@ -1130,11 +1158,16 @@ func TestAppendEvent_StateDeltaOnly_NoTransactionNoEventInsert(t *testing.T) {
 	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
 	ops := mc.recorded()
-	// State-delta-only events: a single UpdateOne, no transaction, no event insert.
-	require.Len(t, ops, 1)
-	assert.Equal(t, "UpdateOne", ops[0].name)
-	assert.Equal(t, "session_states", ops[0].coll)
-	upd := ops[0].update.(bson.M)
+	// State-delta-only events keep the optimistic non-transactional path.
+	var upd bson.M
+	for _, op := range ops {
+		assert.NotEqual(t, "Transaction", op.name)
+		assert.False(t, op.name == "InsertOne" && op.coll == "session_events")
+		if op.name == "UpdateOne" && op.coll == "session_states" {
+			upd = op.update.(bson.M)
+		}
+	}
+	require.NotNil(t, upd)
 	unset := upd["$unset"].(bson.M)
 	assert.Contains(t, unset, "expires_at")
 
@@ -1150,7 +1183,7 @@ func TestAppendEvent_StateDeltaRoutesScopedState(t *testing.T) {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
-	s := newServiceForTest(t, mc)
+	s := newRevisionServiceForTest(t, mc)
 	sess := newSessionForTest("app", "u", "s")
 	evt := nonPartialResponseEvent(t)
 	evt.StateDelta = map[string][]byte{
@@ -1195,7 +1228,7 @@ func TestAppendEvent_ScopedStateHonorsTTL(t *testing.T) {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *serviceOpts) {
+	s := newRevisionServiceForTest(t, mc, func(o *serviceOpts) {
 		o.appStateTTL = time.Hour
 		o.userStateTTL = 2 * time.Hour
 	})
@@ -1241,7 +1274,7 @@ func TestAppendEvent_ScopedStateErrorAbortsTransaction(t *testing.T) {
 			return &mongo.UpdateResult{MatchedCount: 1}, nil
 		},
 	}
-	s := newServiceForTest(t, mc)
+	s := newRevisionServiceForTest(t, mc)
 	sess := newSessionForTest("app", "u", "s")
 	evt := nonPartialResponseEvent(t)
 	evt.StateDelta = map[string][]byte{session.StateAppPrefix + "ak": []byte("av")}
@@ -1256,7 +1289,7 @@ func TestAppendEvent_ScopedStateErrorAbortsTransaction(t *testing.T) {
 
 func TestAppendEvent_StateDeltaUsesDotNotation(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc)
+	s := newRevisionServiceForTest(t, mc)
 
 	sess := newSessionForTest("app", "u", "s")
 	e := &event.Event{
@@ -1267,7 +1300,13 @@ func TestAppendEvent_StateDeltaUsesDotNotation(t *testing.T) {
 	}
 	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
-	upd := mc.recorded()[0].update.(bson.M)
+	var upd bson.M
+	for _, op := range mc.recorded() {
+		if op.name == "UpdateOne" && op.coll == "session_states" {
+			upd = op.update.(bson.M)
+		}
+	}
+	require.NotNil(t, upd)
 	set := upd["$set"].(bson.M)
 	_, hasPlain := set["state.plain"]
 	_, hasEncoded := set[`state.with\ddot`]
@@ -1290,7 +1329,7 @@ func TestAppendEvent_NoMatchingSessionReturnsNotFound(t *testing.T) {
 			return &mongo.UpdateResult{}, nil // MatchedCount=0
 		},
 	}
-	s := newServiceForTest(t, mc)
+	s := newRevisionServiceForTest(t, mc)
 
 	sess := newSessionForTest("app", "u", "s")
 	err := s.AppendEvent(context.Background(), sess,
@@ -1306,7 +1345,7 @@ func TestAppendEvent_RunsHookChain(t *testing.T) {
 		return next()
 	})
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *serviceOpts) {
+	s := newRevisionServiceForTest(t, mc, func(o *serviceOpts) {
 		o.appendEventHooks = []session.AppendEventHook{hook}
 	})
 	sess := newSessionForTest("app", "u", "s")
@@ -1397,7 +1436,7 @@ func TestClose_DrainsAsyncWorker(t *testing.T) {
 			return &mongo.InsertOneResult{}, nil
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *serviceOpts) {
+	s := newRevisionServiceForTest(t, mc, func(o *serviceOpts) {
 		o.enableAsyncPersist = true
 		o.asyncPersisterNum = 2
 	})

@@ -338,8 +338,9 @@ AND deleted_at IS NULL`,
 	}
 
 	var sessState SessionState
-	if err := json.Unmarshal(stateBytes, &sessState); err != nil {
-		return fmt.Errorf("unmarshal session state: %w", err)
+	record, err := sessionrevision.DecodeState(stateBytes, &sessState)
+	if err != nil {
+		return err
 	}
 
 	if expiresAt.Valid && unixNanoToTime(expiresAt.Int64).Before(now) {
@@ -352,25 +353,21 @@ AND deleted_at IS NULL`,
 			key.SessionID,
 		)
 	}
-	record, revisionSupported, err := s.readRevisionForWrite(ctx, tx, key)
-	if err != nil {
-		return err
-	}
 	if err := checkRevisionGeneration(record, write); err != nil {
 		return err
 	}
-	if revisionSupported && write.Start != nil {
+	if write.Start != nil {
 		current, _, err := s.loadActiveSessionTx(ctx, tx, key)
 		if err != nil {
 			return fmt.Errorf("load authoritative pre-turn session: %w", err)
 		}
-		write.Snapshot, err = sessionrevision.Snapshot(current)
+		write.Boundary, err = sessionrevision.NewBoundary(current)
 		if err != nil {
-			return fmt.Errorf("snapshot session before latest turn: %w", err)
+			return fmt.Errorf("capture session boundary before latest turn: %w", err)
 		}
 	}
 	shouldStoreEvent := evt.Response != nil && !evt.IsPartial && evt.IsValidContent()
-	revisionChanged := sessionrevision.ApplyEventWrite(
+	sessionrevision.ApplyEventWrite(
 		record,
 		write,
 		evt,
@@ -383,9 +380,9 @@ AND deleted_at IS NULL`,
 	}
 	session.ApplyEventStateDeltaMap(sessState.State, evt)
 
-	updatedState, err := json.Marshal(sessState)
+	updatedState, err := sessionrevision.EncodeState(&sessState, record)
 	if err != nil {
-		return fmt.Errorf("marshal session state: %w", err)
+		return err
 	}
 
 	eventBytes, err := json.Marshal(evt)
@@ -435,12 +432,6 @@ AND deleted_at IS NULL`,
 			return fmt.Errorf("insert event: %w", err)
 		}
 	}
-	if revisionSupported && (revisionChanged || write.HasExpectedGeneration) {
-		if err := s.writeRevisionTx(ctx, tx, key, record, newExpires); err != nil {
-			return err
-		}
-	}
-
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}
@@ -487,8 +478,9 @@ AND deleted_at IS NULL`,
 	}
 
 	var sessState SessionState
-	if err := json.Unmarshal(stateBytes, &sessState); err != nil {
-		return fmt.Errorf("unmarshal session state: %w", err)
+	record, err := sessionrevision.DecodeState(stateBytes, &sessState)
+	if err != nil {
+		return err
 	}
 
 	if expiresAt.Valid && unixNanoToTime(expiresAt.Int64).Before(now) {
@@ -501,14 +493,10 @@ AND deleted_at IS NULL`,
 			key.SessionID,
 		)
 	}
-	record, revisionSupported, err := s.readRevisionForWrite(ctx, tx, key)
-	if err != nil {
-		return err
-	}
 	if err := checkRevisionGeneration(record, write); err != nil {
 		return err
 	}
-	revisionChanged := sessionrevision.ApplyTrackWrite(record, write, trackEvent)
+	sessionrevision.ApplyTrackWrite(record, write, trackEvent)
 
 	sess := &session.Session{
 		ID:      key.SessionID,
@@ -522,9 +510,9 @@ AND deleted_at IS NULL`,
 	sessState.State = sess.SnapshotState()
 	sessState.UpdatedAt = sess.UpdatedAt
 
-	updatedState, err := json.Marshal(sessState)
+	updatedState, err := sessionrevision.EncodeState(&sessState, record)
 	if err != nil {
-		return fmt.Errorf("marshal session state: %w", err)
+		return err
 	}
 
 	eventBytes, err := json.Marshal(trackEvent)
@@ -577,12 +565,6 @@ AND deleted_at IS NULL`,
 	if err != nil {
 		return fmt.Errorf("insert track event: %w", err)
 	}
-	if revisionSupported && (revisionChanged || write.HasExpectedGeneration) {
-		if err := s.writeRevisionTx(ctx, tx, key, record, sessionExpires); err != nil {
-			return err
-		}
-	}
-
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}
@@ -647,7 +629,7 @@ AND deleted_at IS NULL`,
 			return fmt.Errorf("soft delete from %s: %w", table, err)
 		}
 	}
-	return s.deleteRevisionMetadata(ctx, tx, key)
+	return nil
 }
 
 func (s *Service) hardDeleteSessionTx(
@@ -656,8 +638,6 @@ func (s *Service) hardDeleteSessionTx(
 	key session.Key,
 ) error {
 	tables := []string{
-		s.tableRevisionArchives,
-		s.tableSessionRevisions,
 		s.tableSessionEvents,
 		s.tableSessionTracks,
 		s.tableSessionSummaries,

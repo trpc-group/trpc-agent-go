@@ -96,29 +96,6 @@ CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
   expires_at INTEGER DEFAULT NULL,
   deleted_at INTEGER DEFAULT NULL
 );`
-
-	sqlCreateSessionRevisionsTable = `
-CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-  app_name TEXT NOT NULL,
-  user_id TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  record BLOB NOT NULL,
-  updated_at INTEGER NOT NULL,
-  expires_at INTEGER DEFAULT NULL,
-  PRIMARY KEY (app_name, user_id, session_id)
-);`
-
-	sqlCreateSessionRevisionArchivesTable = `
-CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-  app_name TEXT NOT NULL,
-  user_id TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  generation INTEGER NOT NULL,
-  snapshot BLOB NOT NULL,
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER DEFAULT NULL,
-  PRIMARY KEY (app_name, user_id, session_id, generation)
-);`
 )
 
 const (
@@ -178,11 +155,6 @@ WHERE deleted_at IS NULL;`
 CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
 ON {{TABLE_NAME}}(expires_at)
 WHERE expires_at IS NOT NULL;`
-
-	sqlCreateRevisionExpiresIndex = `
-CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
-ON {{TABLE_NAME}}(expires_at)
-WHERE expires_at IS NOT NULL;`
 )
 
 type tableDefinition struct {
@@ -204,8 +176,6 @@ func (s *Service) initDB(ctx context.Context) error {
 		{sqldb.TableNameSessionSummaries, sqlCreateSessionSummariesTable},
 		{sqldb.TableNameAppStates, sqlCreateAppStatesTable},
 		{sqldb.TableNameUserStates, sqlCreateUserStatesTable},
-		{tableNameSessionRevisions, sqlCreateSessionRevisionsTable},
-		{tableNameSessionRevisionArchives, sqlCreateSessionRevisionArchivesTable},
 	}
 
 	for _, t := range tables {
@@ -276,16 +246,6 @@ func (s *Service) initDB(ctx context.Context) error {
 			table:    sqldb.TableNameUserStates,
 			suffix:   sqldb.IndexSuffixExpires,
 			template: sqlCreateUserStatesExpiresIndex,
-		},
-		{
-			table:    tableNameSessionRevisions,
-			suffix:   sqldb.IndexSuffixExpires,
-			template: sqlCreateRevisionExpiresIndex,
-		},
-		{
-			table:    tableNameSessionRevisionArchives,
-			suffix:   sqldb.IndexSuffixExpires,
-			template: sqlCreateRevisionExpiresIndex,
 		},
 	}
 

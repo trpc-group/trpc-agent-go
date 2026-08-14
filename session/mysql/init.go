@@ -77,29 +77,6 @@ const (
 			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 
-	sqlCreateSessionRevisionsTable = `
-		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			app_name VARCHAR(255) NOT NULL,
-			user_id VARCHAR(255) NOT NULL,
-			session_id VARCHAR(255) NOT NULL,
-			record JSON NOT NULL,
-			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
-			PRIMARY KEY (app_name, user_id, session_id)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
-
-	sqlCreateSessionRevisionArchivesTable = `
-		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			app_name VARCHAR(255) NOT NULL,
-			user_id VARCHAR(255) NOT NULL,
-			session_id VARCHAR(255) NOT NULL,
-			generation BIGINT UNSIGNED NOT NULL,
-			snapshot JSON NOT NULL,
-			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
-			PRIMARY KEY (app_name, user_id, session_id, generation)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
-
 	sqlCreateAppStatesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -161,14 +138,6 @@ const (
 
 	// session_summaries: TTL index on (expires_at)
 	sqlCreateSessionSummariesExpiresIndex = `
-		CREATE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(expires_at)`
-
-	sqlCreateSessionRevisionsExpiresIndex = `
-		CREATE INDEX {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(expires_at)`
-
-	sqlCreateSessionRevisionArchivesExpiresIndex = `
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
@@ -327,33 +296,6 @@ var expectedSchema = map[string]tableSchema{
 			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
 		},
 	},
-	sqldb.TableNameSessionRevisions: {
-		columns: []tableColumn{
-			{"app_name", "varchar", false},
-			{"user_id", "varchar", false},
-			{"session_id", "varchar", false},
-			{"record", "json", false},
-			{"updated_at", "timestamp", false},
-			{"expires_at", "timestamp", true},
-		},
-		indexes: []tableIndex{
-			{sqldb.TableNameSessionRevisions, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
-		},
-	},
-	sqldb.TableNameSessionRevisionArchives: {
-		columns: []tableColumn{
-			{"app_name", "varchar", false},
-			{"user_id", "varchar", false},
-			{"session_id", "varchar", false},
-			{"generation", "bigint", false},
-			{"snapshot", "json", false},
-			{"created_at", "timestamp", false},
-			{"expires_at", "timestamp", true},
-		},
-		indexes: []tableIndex{
-			{sqldb.TableNameSessionRevisionArchives, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
-		},
-	},
 	sqldb.TableNameAppStates: {
 		columns: []tableColumn{
 			{"id", "bigint", false},
@@ -414,8 +356,6 @@ var tableDefs = []tableDefinition{
 	{sqldb.TableNameSessionEvents, sqlCreateSessionEventsTable},
 	{sqldb.TableNameSessionTrackEvents, sqlCreateSessionTrackEventsTable},
 	{sqldb.TableNameSessionSummaries, sqlCreateSessionSummariesTable},
-	{sqldb.TableNameSessionRevisions, sqlCreateSessionRevisionsTable},
-	{sqldb.TableNameSessionRevisionArchives, sqlCreateSessionRevisionArchivesTable},
 	{sqldb.TableNameAppStates, sqlCreateAppStatesTable},
 	{sqldb.TableNameUserStates, sqlCreateUserStatesTable},
 }
@@ -437,8 +377,6 @@ var indexDefs = []indexDefinition{
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
 	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, sqlCreateSessionTracksExpiresIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, sqlCreateSessionSummariesExpiresIndex},
-	{sqldb.TableNameSessionRevisions, sqldb.IndexSuffixExpires, sqlCreateSessionRevisionsExpiresIndex},
-	{sqldb.TableNameSessionRevisionArchives, sqldb.IndexSuffixExpires, sqlCreateSessionRevisionArchivesExpiresIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixExpires, sqlCreateAppStatesExpiresIndex},
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixExpires, sqlCreateUserStatesExpiresIndex},
 }
@@ -505,29 +443,6 @@ const (
 			PRIMARY KEY (id, user_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
 
-	tdsqlCreateSessionRevisionsTable = `
-		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			app_name VARCHAR(255) NOT NULL,
-			user_id VARCHAR(255) NOT NULL,
-			session_id VARCHAR(255) NOT NULL,
-			record JSON NOT NULL,
-			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
-			PRIMARY KEY (app_name, user_id, session_id)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
-
-	tdsqlCreateSessionRevisionArchivesTable = `
-		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			app_name VARCHAR(255) NOT NULL,
-			user_id VARCHAR(255) NOT NULL,
-			session_id VARCHAR(255) NOT NULL,
-			generation BIGINT UNSIGNED NOT NULL,
-			snapshot JSON NOT NULL,
-			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
-			PRIMARY KEY (app_name, user_id, session_id, generation)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
-
 	tdsqlCreateAppStatesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -570,8 +485,6 @@ var tdsqlTableDefs = []tableDefinition{
 	{sqldb.TableNameSessionEvents, tdsqlCreateSessionEventsTable},
 	{sqldb.TableNameSessionTrackEvents, tdsqlCreateSessionTrackEventsTable},
 	{sqldb.TableNameSessionSummaries, tdsqlCreateSessionSummariesTable},
-	{sqldb.TableNameSessionRevisions, tdsqlCreateSessionRevisionsTable},
-	{sqldb.TableNameSessionRevisionArchives, tdsqlCreateSessionRevisionArchivesTable},
 	{sqldb.TableNameAppStates, tdsqlCreateAppStatesTable},
 	{sqldb.TableNameUserStates, tdsqlCreateUserStatesTable},
 }
@@ -595,8 +508,6 @@ var tdsqlIndexDefs = []indexDefinition{
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
 	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, sqlCreateSessionTracksExpiresIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, sqlCreateSessionSummariesExpiresIndex},
-	{sqldb.TableNameSessionRevisions, sqldb.IndexSuffixExpires, sqlCreateSessionRevisionsExpiresIndex},
-	{sqldb.TableNameSessionRevisionArchives, sqldb.IndexSuffixExpires, sqlCreateSessionRevisionArchivesExpiresIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixExpires, sqlCreateAppStatesExpiresIndex},
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixExpires, sqlCreateUserStatesExpiresIndex},
 }

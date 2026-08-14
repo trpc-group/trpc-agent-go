@@ -61,14 +61,14 @@ func TestReplaceLatestTurnPreservesRemainingTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	start := revisionEvent("turn", "request", "invocation", false)
-	snapshot, err := sessionrevision.Snapshot(sess)
+	boundary, err := sessionrevision.NewBoundary(sess)
 	require.NoError(t, err)
 	require.NoError(t, c.AppendEventWithRevision(ctx, key, start, sessionrevision.Write{
 		HasExpectedGeneration: true,
 		Start: &sessionrevision.TurnStart{
 			RequestID: "request", InvocationID: "invocation",
 		},
-		Snapshot: snapshot,
+		Boundary: boundary,
 	}))
 	require.NoError(t, c.AppendEventWithRevision(
 		ctx,
@@ -85,7 +85,6 @@ func TestReplaceLatestTurnPreservesRemainingTTL(t *testing.T) {
 	assert.True(t, applied)
 	assert.Equal(t, before, mr.TTL(metaKey))
 	assert.Equal(t, before, mr.TTL(c.keys.RevisionKey(key)))
-	assert.Equal(t, before, mr.TTL(c.keys.RevisionArchiveKey(key)))
 	replayed, replayApplied, err := c.ReplaceLatestTurn(
 		ctx,
 		key,
@@ -134,7 +133,6 @@ func TestReplaceLatestTurnPreservesRemainingTTL(t *testing.T) {
 	))
 	assert.Equal(t, cfg.SessionTTL, mr.TTL(metaKey))
 	assert.Equal(t, mr.TTL(metaKey), mr.TTL(c.keys.RevisionKey(key)))
-	assert.Equal(t, mr.TTL(metaKey), mr.TTL(c.keys.RevisionArchiveKey(key)))
 }
 
 func TestApplyRemainingTTL(t *testing.T) {
@@ -206,7 +204,7 @@ func TestReplaceLatestTurnRejectsInvalidRevisionRecords(t *testing.T) {
 		{
 			name: "request mismatch",
 			record: sessionrevision.PersistedRecord{Checkpoint: &sessionrevision.PersistedCheckpoint{
-				RequestID: "other", Terminal: true, Snapshot: []byte(`{}`),
+				RequestID: "other", Terminal: true, Boundary: []byte(`{}`),
 			}},
 			is: sessionrevision.ErrLatestTurnReplacementConflict,
 		},
@@ -215,7 +213,7 @@ func TestReplaceLatestTurnRejectsInvalidRevisionRecords(t *testing.T) {
 			record: sessionrevision.PersistedRecord{
 				Generation: math.MaxUint64,
 				Checkpoint: &sessionrevision.PersistedCheckpoint{
-					RequestID: "request", Terminal: true, Snapshot: []byte(`{}`),
+					RequestID: "request", Terminal: true, Boundary: []byte(`{}`),
 				},
 			},
 			is: sessionrevision.ErrLatestTurnReplacementUnavailable,
@@ -223,7 +221,7 @@ func TestReplaceLatestTurnRejectsInvalidRevisionRecords(t *testing.T) {
 		{
 			name: "invalid checkpoint",
 			record: sessionrevision.PersistedRecord{Checkpoint: &sessionrevision.PersistedCheckpoint{
-				RequestID: "request", Terminal: true, Snapshot: []byte("not-json"),
+				RequestID: "request", Terminal: true, Boundary: []byte("not-json"),
 			}},
 		},
 		{
@@ -279,9 +277,6 @@ func TestTrackTTLDoesNotShortenRevisionLifetime(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
 	_, err := c.CreateSession(ctx, key, nil)
 	require.NoError(t, err)
-	archiveKey := c.keys.RevisionArchiveKey(key)
-	require.NoError(t, rdb.HSet(ctx, archiveKey, "0", `{}`).Err())
-	require.NoError(t, rdb.Expire(ctx, archiveKey, cfg.SessionTTL).Err())
 	mr.FastForward(10 * time.Minute)
 
 	require.NoError(t, c.AppendTrackEventWithRevision(
@@ -296,7 +291,6 @@ func TestTrackTTLDoesNotShortenRevisionLifetime(t *testing.T) {
 	metaTTL := mr.TTL(c.keys.SessionMetaKey(key))
 	assert.Equal(t, 50*time.Minute, metaTTL)
 	assert.Equal(t, metaTTL, mr.TTL(c.keys.RevisionKey(key)))
-	assert.Equal(t, metaTTL, mr.TTL(archiveKey))
 	assert.Equal(t, trackTTL, mr.TTL(c.keys.TrackDataKey(key, "ui")))
 }
 
@@ -307,7 +301,7 @@ func TestTurnStartRejectsChangedProjection(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
 	sess, err := c.CreateSession(ctx, key, nil)
 	require.NoError(t, err)
-	snapshot, err := sessionrevision.Snapshot(sess)
+	boundary, err := sessionrevision.NewBoundary(sess)
 	require.NoError(t, err)
 
 	require.NoError(t, c.AppendEventWithRevision(
@@ -327,7 +321,7 @@ func TestTurnStartRejectsChangedProjection(t *testing.T) {
 			Start: &sessionrevision.TurnStart{
 				RequestID: "request", InvocationID: "invocation",
 			},
-			Snapshot: snapshot,
+			Boundary: boundary,
 		},
 	)
 	assert.ErrorIs(t, err, sessionrevision.ErrStaleProjection)

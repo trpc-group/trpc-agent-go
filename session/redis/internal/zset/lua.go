@@ -24,7 +24,6 @@ var luaSummariesSetIfNewer = redis.NewScript(`
 local sumKey = KEYS[1]
 local revisionKey = KEYS[2]
 local sessionStateKey = KEYS[3]
-local revisionArchiveKey = KEYS[4]
 local hashField = ARGV[1]
 local fk = ARGV[2]
 local newSum = cjson.decode(ARGV[3])
@@ -51,13 +50,6 @@ local function touchRevision()
         redis.call('PEXPIRE', revisionKey, ttlMs)
     elseif ttlMs == -1 then
         redis.call('PERSIST', revisionKey)
-    end
-    if redis.call('EXISTS', revisionArchiveKey) == 1 then
-        if ttlMs >= 0 then
-            redis.call('PEXPIRE', revisionArchiveKey, ttlMs)
-        elseif ttlMs == -1 then
-            redis.call('PERSIST', revisionArchiveKey)
-        end
     end
 end
 
@@ -91,7 +83,6 @@ var luaTrimEventsWithRevision = redis.NewScript(`
 local eventKey = KEYS[1]
 local sessionStateKey = KEYS[2]
 local revisionKey = KEYS[3]
-local revisionArchiveKey = KEYS[4]
 local sessionID = ARGV[1]
 
 if #ARGV <= 1 then return 0 end
@@ -123,13 +114,6 @@ if ttlMs >= 0 then
     redis.call('PEXPIRE', revisionKey, ttlMs)
 elseif ttlMs == -1 then
     redis.call('PERSIST', revisionKey)
-end
-if redis.call('EXISTS', revisionArchiveKey) == 1 then
-    if ttlMs >= 0 then
-        redis.call('PEXPIRE', revisionArchiveKey, ttlMs)
-    elseif ttlMs == -1 then
-        redis.call('PERSIST', revisionArchiveKey)
-    end
 end
 return removed
 `)

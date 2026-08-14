@@ -33,10 +33,9 @@ import (
 var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
 
-const (
-	tableNameSessionRevisions        = "session_revisions"
-	tableNameSessionRevisionArchives = "session_revision_archives"
-)
+type sqlExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
 
 // SessionState is the state of a session.
 type SessionState struct {
@@ -71,8 +70,6 @@ type Service struct {
 	tableSessionSummaries string
 	tableAppStates        string
 	tableUserStates       string
-	tableSessionRevisions string
-	tableRevisionArchives string
 }
 
 type sessionEventPair struct {
@@ -139,14 +136,6 @@ func NewService(db *sql.DB, options ...ServiceOpt) (*Service, error) {
 		tableUserStates: sqldb.BuildTableName(
 			opts.tablePrefix,
 			sqldb.TableNameUserStates,
-		),
-		tableSessionRevisions: sqldb.BuildTableName(
-			opts.tablePrefix,
-			tableNameSessionRevisions,
-		),
-		tableRevisionArchives: sqldb.BuildTableName(
-			opts.tablePrefix,
-			tableNameSessionRevisionArchives,
 		),
 	}
 
@@ -232,10 +221,6 @@ func (s *Service) fullTableName(base string) string {
 		return s.tableAppStates
 	case sqldb.TableNameUserStates:
 		return s.tableUserStates
-	case tableNameSessionRevisions:
-		return s.tableSessionRevisions
-	case tableNameSessionRevisionArchives:
-		return s.tableRevisionArchives
 	default:
 		return sqldb.BuildTableName(s.opts.tablePrefix, base)
 	}
@@ -329,9 +314,6 @@ func (s *Service) CreateSession(
 		); err != nil {
 			return err
 		}
-		if err := s.deleteRevisionMetadata(ctx, tx, key); err != nil {
-			return err
-		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit create session: %w", err)
 		}
@@ -405,7 +387,7 @@ func isExpired(expiresAt sql.NullInt64, now time.Time) bool {
 
 func (s *Service) upsertSessionStateWith(
 	ctx context.Context,
-	exec revisionExecer,
+	exec sqlExecer,
 	key session.Key,
 	stateBytes []byte,
 	now time.Time,

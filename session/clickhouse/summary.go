@@ -44,6 +44,7 @@ func (s *Service) CreateSessionSummary(
 	).AllowsFilterKey(filterKey) {
 		return nil
 	}
+
 	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
@@ -87,6 +88,7 @@ func (s *Service) CreateSessionSummary(
 	if err != nil {
 		return fmt.Errorf("upsert summary failed: %w", err)
 	}
+
 	return nil
 }
 

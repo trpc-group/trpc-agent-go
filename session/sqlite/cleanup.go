@@ -71,7 +71,6 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 	now := time.Now().UTC()
 	if s.opts.sessionTTL > 0 {
 		s.cleanupExpiredSessions(ctx, now)
-		s.cleanupExpiredRevisionMetadata(ctx, now)
 	}
 	if s.opts.trackEventTTL != nil && s.opts.effectiveTrackEventTTL() > 0 {
 		s.cleanupExpiredTrackEvents(ctx, now)
@@ -81,28 +80,6 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 	}
 	if s.opts.userStateTTL > 0 {
 		s.cleanupExpiredUserStates(ctx, now)
-	}
-}
-
-func (s *Service) cleanupExpiredRevisionMetadata(
-	ctx context.Context,
-	now time.Time,
-) {
-	nowNs := now.UTC().UnixNano()
-	for _, table := range []string{
-		s.tableRevisionArchives,
-		s.tableSessionRevisions,
-	} {
-		if _, err := s.db.ExecContext(
-			ctx,
-			fmt.Sprintf(
-				`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`,
-				table,
-			),
-			nowNs,
-		); err != nil {
-			log.ErrorfContext(ctx, "cleanup revision metadata: %v", err)
-		}
 	}
 }
 

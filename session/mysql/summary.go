@@ -69,38 +69,28 @@ func (s *Service) CreateSessionSummary(
 
 	// Note: expires_at is set to NULL - summaries are bound to session
 	// lifecycle and will be deleted when session is deleted or expires.
-	if s.tableSessionRevisions == "" {
-		_, err = s.mysqlClient.Exec(ctx, fmt.Sprintf(
-			`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
-			ON DUPLICATE KEY UPDATE
-				summary = VALUES(summary),
-				updated_at = VALUES(updated_at),
-				expires_at = VALUES(expires_at),
-				deleted_at = NULL`,
-			s.tableSessionSummaries,
-		), key.AppName, key.UserID, key.SessionID, filterKey,
-			string(summaryBytes), sum.UpdatedAt, nil)
-		if err != nil {
-			return fmt.Errorf("upsert summary failed: %w", err)
-		}
-		return nil
-	}
 	write := sessionrevision.NewWrite(ctx, sess)
 	err = s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
-		_, currentExpiresAt, err := loadSessionStateForUpdate(
+		state, record, _, err := loadSessionStateForUpdate(
 			ctx, tx, s.tableSessionStates, key,
 		)
 		if err != nil {
 			return err
 		}
-		var expiresAt *time.Time
-		if currentExpiresAt.Valid {
-			expiresAt = &currentExpiresAt.Time
-		}
 		if err := s.revisionStore().ApplyMutation(
-			ctx, tx, key, write, expiresAt,
+			record, write,
 		); err != nil {
+			return err
+		}
+		stateRaw, err := sessionrevision.EncodeState(state, record)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, fmt.Sprintf(
+			`UPDATE %s SET state = ?, updated_at = ?
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+			s.tableSessionStates,
+		), string(stateRaw), state.UpdatedAt, key.AppName, key.UserID, key.SessionID); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, fmt.Sprintf(

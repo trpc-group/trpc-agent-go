@@ -53,20 +53,15 @@ defer sessionService.Close()
 - DDL/命名：`WithSkipDBInit`、`WithTablePrefix`
 - Hooks：`WithAppendEventHook`、`WithGetSessionHook`
 
-## 替换最新一轮所需表结构
+## 替换最新一轮的存储
 
-通过 `Runner.Run` 替换最新一轮时，除常规 Session 投影外还会使用两个 backend 私有表：
+通过 `Runner.Run` 替换最新一轮时，带版本的私有 revision sidecar 会写入现有
+`<prefix>session_states.state` JSON。该字段不会出现在用户可见的 `Session.State` 中，
+并与 events、state、summaries 和 Tracks 在同一事务内更新。即使使用
+`WithSkipDBInit(true)`，也不需要额外建表或迁移。
 
-- `<prefix>session_revisions`：保存当前 generation、checkpoint、写入 fence 和幂等元数据
-- `<prefix>session_revision_archives`：按 Session generation 保存被丢弃的投影
-
-`NewService` 默认会自动创建这两个表。使用 `WithSkipDBInit(true)` 的部署必须先应用
-`session/sqlite/init.go` 中对应的定义，再启用 latest-turn replacement。如果表不存在，
-原有 Session 操作仍保持兼容，但 replacement run 会返回
-`runner.ErrLatestTurnReplacementUnsupported`。
-
-Revision 与 archive 沿用源 Session 的过期时间，并由常规 cleanup loop 清理。
-Replacement 不会刷新这个时间，也不会延长 Session TTL。
+Replacement 沿用源 Session 的过期时间，不会刷新或延长 TTL。启用前应升级所有 writer；
+详见[替换最新一轮](index.md#replace-latest-turn)。
 
 ## 使用场景
 

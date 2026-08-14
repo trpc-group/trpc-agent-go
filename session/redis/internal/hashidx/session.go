@@ -390,7 +390,6 @@ func (c *Client) AppendEventWithRevision(
 		c.keys.EventDataKey(key),
 		c.keys.EventTimeIndexKey(key),
 		c.keys.RevisionKey(key),
-		c.keys.RevisionArchiveKey(key),
 	}
 	startRequestID := ""
 	startInvocationID := ""
@@ -408,7 +407,7 @@ func (c *Client) AppendEventWithRevision(
 		write.ExpectedGeneration,
 		startRequestID,
 		startInvocationID,
-		base64.StdEncoding.EncodeToString(write.Snapshot),
+		base64.StdEncoding.EncodeToString(write.Boundary),
 		boolToInt(evt != nil && evt.IsRunnerCompletion()),
 		boolToInt(write.HasExpectedHead),
 		write.ExpectedHead,
@@ -516,7 +515,6 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 		c.keys.EventTimeIndexKey(key),
 		c.keys.SessionMetaKey(key),
 		c.keys.RevisionKey(key),
-		c.keys.RevisionArchiveKey(key),
 	}
 
 	result, err := c.runScript(ctx, luaTrimConversations, keys, count).StringSlice()

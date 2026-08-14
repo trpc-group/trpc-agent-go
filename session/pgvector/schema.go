@@ -78,31 +78,6 @@ const (
 			deleted_at TIMESTAMP DEFAULT NULL
 		)`
 
-	sqlCreateSessionRevisionsTable = `
-		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			app_name VARCHAR(255) NOT NULL,
-			user_id VARCHAR(255) NOT NULL,
-			session_id VARCHAR(255) NOT NULL,
-			record JSONB NOT NULL,
-			updated_at TIMESTAMP NOT NULL
-				DEFAULT CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP DEFAULT NULL,
-			PRIMARY KEY (app_name, user_id, session_id)
-		)`
-
-	sqlCreateSessionRevisionArchivesTable = `
-		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			app_name VARCHAR(255) NOT NULL,
-			user_id VARCHAR(255) NOT NULL,
-			session_id VARCHAR(255) NOT NULL,
-			generation BIGINT NOT NULL,
-			snapshot JSONB NOT NULL,
-			created_at TIMESTAMP NOT NULL
-				DEFAULT CURRENT_TIMESTAMP,
-			expires_at TIMESTAMP DEFAULT NULL,
-			PRIMARY KEY (app_name, user_id, session_id, generation)
-		)`
-
 	sqlCreateAppStatesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGSERIAL PRIMARY KEY,
@@ -180,16 +155,6 @@ const (
 		ON {{TABLE_NAME}}(expires_at)
 		WHERE expires_at IS NOT NULL`
 
-	sqlCreateSessionRevisionsExpiresIndex = `
-		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(expires_at)
-		WHERE expires_at IS NOT NULL`
-
-	sqlCreateSessionRevisionArchivesExpiresIndex = `
-		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
-		ON {{TABLE_NAME}}(expires_at)
-		WHERE expires_at IS NOT NULL`
-
 	sqlCreateAppStatesUniqueIndex = `
 		CREATE UNIQUE INDEX IF NOT EXISTS {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(app_name, key)
@@ -235,10 +200,6 @@ var tableDefs = []tableDefinition{
 		sqlCreateSessionTrackEventsTable},
 	{sqldb.TableNameSessionSummaries,
 		sqlCreateSessionSummariesTable},
-	{sqldb.TableNameSessionRevisions,
-		sqlCreateSessionRevisionsTable},
-	{sqldb.TableNameSessionRevisionArchives,
-		sqlCreateSessionRevisionArchivesTable},
 	{sqldb.TableNameAppStates,
 		sqlCreateAppStatesTable},
 	{sqldb.TableNameUserStates,
@@ -277,12 +238,6 @@ var indexDefs = []indexDefinition{
 	{sqldb.TableNameSessionSummaries,
 		sqldb.IndexSuffixExpires,
 		sqlCreateSessionSummariesExpiresIndex},
-	{sqldb.TableNameSessionRevisions,
-		sqldb.IndexSuffixExpires,
-		sqlCreateSessionRevisionsExpiresIndex},
-	{sqldb.TableNameSessionRevisionArchives,
-		sqldb.IndexSuffixExpires,
-		sqlCreateSessionRevisionArchivesExpiresIndex},
 	{sqldb.TableNameAppStates,
 		sqldb.IndexSuffixExpires,
 		sqlCreateAppStatesExpiresIndex},

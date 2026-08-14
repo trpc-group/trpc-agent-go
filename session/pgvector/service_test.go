@@ -115,20 +115,13 @@ func (c *mockPostgresClient) Close() error {
 }
 
 type recordingPostgresClient struct {
-	mu         sync.Mutex
-	filterKeys []string
+	mu               sync.Mutex
+	transactionCalls int
 }
 
 func (c *recordingPostgresClient) ExecContext(
-	_ context.Context, _ string, args ...any,
+	_ context.Context, _ string, _ ...any,
 ) (sql.Result, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(args) > 3 {
-		if filterKey, ok := args[3].(string); ok {
-			c.filterKeys = append(c.filterKeys, filterKey)
-		}
-	}
 	return sqlmock.NewResult(0, 1), nil
 }
 
@@ -144,6 +137,9 @@ func (c *recordingPostgresClient) Transaction(
 	_ context.Context,
 	_ storage.TxFunc,
 ) error {
+	c.mu.Lock()
+	c.transactionCalls++
+	c.mu.Unlock()
 	return nil
 }
 
@@ -151,12 +147,10 @@ func (c *recordingPostgresClient) Close() error {
 	return nil
 }
 
-func (c *recordingPostgresClient) persistedFilterKeys() []string {
+func (c *recordingPostgresClient) transactionCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	keys := make([]string, len(c.filterKeys))
-	copy(keys, c.filterKeys)
-	return keys
+	return c.transactionCalls
 }
 
 // anyVectorArg matches pgvector.Vector arguments in
@@ -437,9 +431,7 @@ func TestNewService_AsyncSummaryWorkerHonorsDispatchPolicy(
 	)
 	require.NoError(t, err)
 	// This test isolates summary dispatch. Its recording client intentionally
-	// does not execute transaction callbacks.
-	svc.tableSessionRevisions = ""
-
+	// counts, but does not execute, transaction callbacks.
 	sess := session.NewSession("app", "user", "sess")
 	sess.Events = []event.Event{
 		{
@@ -463,9 +455,11 @@ func TestNewService_AsyncSummaryWorkerHonorsDispatchPolicy(
 	require.NoError(t, svc.EnqueueSummaryJob(
 		context.Background(), sess, "tool-usage", true,
 	))
+	require.Eventually(t, func() bool {
+		return recordingClient.transactionCount() == 1
+	}, time.Second, time.Millisecond)
 	require.NoError(t, svc.Close())
-	require.Equal(t, []string{"tool-usage"},
-		recordingClient.persistedFilterKeys())
+	require.Equal(t, 1, recordingClient.transactionCount())
 }
 
 func TestValidateEmbedderDimensions_UnknownDimension(t *testing.T) {
@@ -1961,10 +1955,12 @@ func TestUpdateSessionState_SessionNotFound(
 	}
 
 	// Return no rows => session not found.
-	mock.ExpectQuery("SELECT state FROM").
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(
-			sqlmock.NewRows([]string{"state"}),
+			sqlmock.NewRows([]string{"state", "expires_at"}),
 		)
+	mock.ExpectRollback()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -1988,13 +1984,15 @@ func TestUpdateSessionState_Success(t *testing.T) {
 	}
 	stateBytes, _ := json.Marshal(sessState)
 
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow(stateBytes)
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2012,8 +2010,10 @@ func TestUpdateSessionState_QueryError(t *testing.T) {
 		AppName: "app", UserID: "user", SessionID: "sess",
 	}
 
-	mock.ExpectQuery("SELECT state FROM").
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnError(fmt.Errorf("db error"))
+	mock.ExpectRollback()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2037,13 +2037,15 @@ func TestUpdateSessionState_UpdateError(t *testing.T) {
 	}
 	stateBytes, _ := json.Marshal(sessState)
 
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow(stateBytes)
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnError(fmt.Errorf("update fail"))
+	mock.ExpectRollback()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2060,10 +2062,12 @@ func TestUpdateSessionState_InvalidJSON(t *testing.T) {
 		AppName: "app", UserID: "user", SessionID: "sess",
 	}
 
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow([]byte(`{invalid json`))
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow([]byte(`{invalid json`), nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
+	mock.ExpectRollback()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2324,13 +2328,15 @@ func TestUpdateSessionState_WithTTL(t *testing.T) {
 	}
 	stateBytes, _ := json.Marshal(sessState)
 
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow(stateBytes)
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2434,13 +2440,15 @@ func TestUpdateSessionState_NilValueInState(
 	}
 	stateBytes, _ := json.Marshal(sessState)
 
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow(stateBytes)
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2506,13 +2514,15 @@ func TestUpdateSessionState_EmptyState(t *testing.T) {
 	}
 
 	// Return empty state bytes.
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow([]byte("{}"))
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow([]byte("{}"), nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -4899,13 +4909,15 @@ func TestUpdateSessionState_EmptyStateBytes(
 	}
 
 	// Return empty state bytes (not nil, not JSON).
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow([]byte{})
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow([]byte{}, nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,

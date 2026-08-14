@@ -82,7 +82,6 @@ func (c *Client) CreateSummaryWithRevision(
 			sumKey,
 			c.keys.RevisionKey(key),
 			c.keys.SessionMetaKey(key),
-			c.keys.RevisionArchiveKey(key),
 		},
 		filterKey,
 		string(payload),

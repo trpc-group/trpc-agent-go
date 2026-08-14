@@ -5,11 +5,6 @@
 -- Requirements:
 --   - ClickHouse 22.3+ (for JSON type support)
 --   - Database must be created before running these statements
---   - If the server keeps JSON behind an experimental setting, enable the
---     setting named by the server while executing this schema
---   - Existing session_summaries tables that use
---     ReplacingMergeTree(updated_at) must be rebuilt before upgrading; see the
---     ClickHouse session documentation for the data-preserving migration
 
 -- ============================================================================
 -- Table: session_states
@@ -66,10 +61,9 @@ CREATE TABLE IF NOT EXISTS session_summaries (
     summary     JSON COMMENT 'Summary data in JSON format',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
-    version_at  DateTime64(9),
     expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
     deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
-) ENGINE = ReplacingMergeTree(version_at)
+) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY (app_name, cityHash64(user_id) % 64)
 -- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
 ORDER BY (app_name, user_id, session_id, filter_key)

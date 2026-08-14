@@ -13,6 +13,8 @@ package revision
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,12 +22,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 const generationServiceMetaKey = "trpc-agent-go.session.revision-generation"
+const activeRevisionServiceMetaKey = "trpc-agent-go.session.revision-active"
 
 const stableProjectionReadAttempts = 3
 
@@ -295,16 +299,35 @@ type TurnStart struct {
 }
 
 // PersistedCheckpoint is the backend-private durable boundary for the latest
-// top-level turn. Snapshot contains the active session immediately before the
-// turn began. Terminal reports whether Runner persisted its completion marker;
-// a non-terminal checkpoint still identifies an unfinished turn that can be
+// top-level turn. Boundary compactly identifies the active projection and
+// captures the mutable session fields immediately before the turn began.
+// Terminal reports whether Runner persisted its completion marker; a
+// non-terminal checkpoint still identifies an unfinished turn that can be
 // replaced after its execution has stopped.
 type PersistedCheckpoint struct {
 	RequestID    string `json:"requestID"`
 	InvocationID string `json:"invocationID"`
-	Snapshot     []byte `json:"snapshot"`
+	Boundary     []byte `json:"boundary"`
 	Terminal     bool   `json:"terminal"`
 	Hazard       bool   `json:"hazard,omitempty"`
+}
+
+type persistedBoundary struct {
+	Version   int                               `json:"version"`
+	AppName   string                            `json:"appName"`
+	UserID    string                            `json:"userID"`
+	SessionID string                            `json:"sessionID"`
+	State     session.StateMap                  `json:"state"`
+	Summaries map[string]*session.Summary       `json:"summaries,omitempty"`
+	Events    persistedPrefix                   `json:"events"`
+	Tracks    map[session.Track]persistedPrefix `json:"tracks,omitempty"`
+	CreatedAt time.Time                         `json:"createdAt"`
+	UpdatedAt time.Time                         `json:"updatedAt"`
+}
+
+type persistedPrefix struct {
+	Count  uint64 `json:"count"`
+	Digest []byte `json:"digest"`
 }
 
 // PersistedReplay retains the result needed to answer an idempotent replacement
@@ -321,6 +344,30 @@ type PersistedRecord struct {
 	Head       uint64                     `json:"head"`
 	Checkpoint *PersistedCheckpoint       `json:"checkpoint,omitempty"`
 	Replays    map[string]PersistedReplay `json:"replays,omitempty"`
+}
+
+// AttachRecord attaches the persisted generation and whether revision
+// metadata is active to a loaded session projection.
+func AttachRecord(sess *session.Session, record *PersistedRecord) {
+	if sess == nil || record == nil {
+		return
+	}
+	SetGeneration(sess, record.Generation)
+	if record.Generation == 0 && record.Head == 0 &&
+		record.Checkpoint == nil && len(record.Replays) == 0 {
+		return
+	}
+	if sess.ServiceMeta == nil {
+		sess.ServiceMeta = make(map[string]string)
+	}
+	sess.ServiceMeta[activeRevisionServiceMetaKey] = "true"
+}
+
+// RecordActive reports whether a loaded session carries non-empty persisted
+// revision metadata.
+func RecordActive(sess *session.Session) bool {
+	return sess != nil && sess.ServiceMeta != nil &&
+		sess.ServiceMeta[activeRevisionServiceMetaKey] == "true"
 }
 
 // RecordLatestTurnReplacementReplay retains a bounded window of replacement
@@ -450,7 +497,7 @@ func LatestTurnReplacementCheckpoint(
 	expectedRequestID string,
 ) (*PersistedCheckpoint, error) {
 	if record == nil || record.Checkpoint == nil ||
-		record.Checkpoint.Hazard || len(record.Checkpoint.Snapshot) == 0 {
+		record.Checkpoint.Hazard || len(record.Checkpoint.Boundary) == 0 {
 		return nil, ErrLatestTurnReplacementUnavailable
 	}
 	if record.Checkpoint.RequestID != expectedRequestID {
@@ -468,7 +515,7 @@ type Write struct {
 	HasExpectedHead       bool
 	Hazard                bool
 	Start                 *TurnStart
-	Snapshot              []byte
+	Boundary              []byte
 }
 
 // ContextWithTurnStart marks a single persistence call as the start of a turn.
@@ -623,7 +670,7 @@ func applyTurnStart(
 	valid := write.Start != nil && persisted && evt != nil &&
 		write.Start.RequestID == evt.RequestID &&
 		write.Start.InvocationID == evt.InvocationID &&
-		len(write.Snapshot) > 0
+		len(write.Boundary) > 0
 	if !valid {
 		return false
 	}
@@ -632,7 +679,7 @@ func applyTurnStart(
 		record.Checkpoint = &PersistedCheckpoint{
 			RequestID:    write.Start.RequestID,
 			InvocationID: write.Start.InvocationID,
-			Snapshot:     append([]byte(nil), write.Snapshot...),
+			Boundary:     append([]byte(nil), write.Boundary...),
 		}
 		return true
 	}
@@ -675,14 +722,15 @@ func ApplyTrackWrite(
 	return true
 }
 
-// Snapshot returns a serialization-safe session snapshot without shared app
-// or user state and without service-local routing metadata.
-func Snapshot(sess *session.Session) ([]byte, error) {
+const persistedBoundaryVersion = 1
+
+// NewBoundary returns a compact, serialization-safe description of sess.
+// App- and user-scoped state and service-local metadata are excluded.
+func NewBoundary(sess *session.Session) ([]byte, error) {
 	if sess == nil {
 		return nil, session.ErrNilSession
 	}
 	cloned := sess.Clone()
-	cloned.ServiceMeta = nil
 	state := cloned.SnapshotState()
 	for key := range state {
 		if strings.HasPrefix(key, session.StateAppPrefix) ||
@@ -690,19 +738,206 @@ func Snapshot(sess *session.Session) ([]byte, error) {
 			delete(state, key)
 		}
 	}
-	cloned.State = state
-	return json.Marshal(cloned)
-}
-
-// DecodeSnapshot decodes a private session snapshot.
-func DecodeSnapshot(raw []byte) (*session.Session, error) {
-	if len(raw) == 0 {
-		return nil, session.ErrNilSession
-	}
-	var sess session.Session
-	if err := json.Unmarshal(raw, &sess); err != nil {
+	eventDigest, err := projectionDigest("events", cloned.Events)
+	if err != nil {
 		return nil, err
 	}
-	sess.Hash = session.NewSession(sess.AppName, sess.UserID, sess.ID).Hash
-	return &sess, nil
+	boundary := persistedBoundary{
+		Version:   persistedBoundaryVersion,
+		AppName:   cloned.AppName,
+		UserID:    cloned.UserID,
+		SessionID: cloned.ID,
+		State:     state,
+		Summaries: cloned.Summaries,
+		Events: persistedPrefix{
+			Count:  uint64(len(cloned.Events)),
+			Digest: eventDigest,
+		},
+		CreatedAt: cloned.CreatedAt,
+		UpdatedAt: cloned.UpdatedAt,
+	}
+	if len(cloned.Tracks) > 0 {
+		boundary.Tracks = make(
+			map[session.Track]persistedPrefix,
+			len(cloned.Tracks),
+		)
+		for track, history := range cloned.Tracks {
+			var events []session.TrackEvent
+			if history != nil {
+				events = history.Events
+			}
+			digest, err := projectionDigest("track:"+string(track), events)
+			if err != nil {
+				return nil, err
+			}
+			boundary.Tracks[track] = persistedPrefix{
+				Count:  uint64(len(events)),
+				Digest: digest,
+			}
+		}
+	}
+	raw, err := json.Marshal(boundary)
+	if err != nil {
+		return nil, fmt.Errorf("encode session boundary: %w", err)
+	}
+	return raw, nil
+}
+
+// RestoreBoundary verifies that current still contains the projection captured
+// by boundary, then returns the restored pre-turn session. Prefix mismatches
+// fail closed rather than reconstructing data which has expired or changed.
+func RestoreBoundary(
+	current *session.Session,
+	raw []byte,
+) (*session.Session, error) {
+	if current == nil {
+		return nil, session.ErrNilSession
+	}
+	if len(raw) == 0 {
+		return nil, ErrLatestTurnReplacementUnavailable
+	}
+	var boundary persistedBoundary
+	if err := json.Unmarshal(raw, &boundary); err != nil {
+		return nil, fmt.Errorf("decode session boundary: %w", err)
+	}
+	if boundary.Version != persistedBoundaryVersion ||
+		boundary.AppName != current.AppName ||
+		boundary.UserID != current.UserID ||
+		boundary.SessionID != current.ID {
+		return nil, ErrLatestTurnReplacementUnavailable
+	}
+	if boundary.Events.Count >= uint64(len(current.Events)) {
+		return nil, ErrLatestTurnReplacementUnavailable
+	}
+	if err := verifyProjectionPrefix(
+		"events", current.Events, boundary.Events,
+	); err != nil {
+		return nil, err
+	}
+	restored := current.Clone()
+	restored.Events = restored.Events[:boundary.Events.Count]
+	restored.Tracks = nil
+	if len(boundary.Tracks) > 0 {
+		restored.Tracks = make(
+			map[session.Track]*session.TrackEvents,
+			len(boundary.Tracks),
+		)
+		for track, prefix := range boundary.Tracks {
+			history := current.Tracks[track]
+			if history == nil {
+				if err := verifyProjectionPrefix(
+					"track:"+string(track), []session.TrackEvent(nil), prefix,
+				); err != nil {
+					return nil, ErrLatestTurnReplacementUnavailable
+				}
+				restored.Tracks[track] = &session.TrackEvents{Track: track}
+				continue
+			}
+			if prefix.Count > uint64(len(history.Events)) {
+				return nil, ErrLatestTurnReplacementUnavailable
+			}
+			if err := verifyProjectionPrefix(
+				"track:"+string(track), history.Events, prefix,
+			); err != nil {
+				return nil, err
+			}
+			events := append(
+				[]session.TrackEvent(nil),
+				history.Events[:prefix.Count]...,
+			)
+			restored.Tracks[track] = &session.TrackEvents{
+				Track:  track,
+				Events: events,
+			}
+		}
+	}
+	restored.State = cloneState(boundary.State)
+	restored.Summaries = cloneSummaries(boundary.Summaries)
+	restored.CreatedAt = boundary.CreatedAt
+	restored.UpdatedAt = boundary.UpdatedAt
+	restored.ServiceMeta = nil
+	return normalizeSession(restored)
+}
+
+func verifyProjectionPrefix[T any](
+	domain string,
+	values []T,
+	prefix persistedPrefix,
+) error {
+	if prefix.Count > uint64(len(values)) || len(prefix.Digest) != sha256.Size {
+		return ErrLatestTurnReplacementUnavailable
+	}
+	digest, err := projectionDigest(domain, values[:prefix.Count])
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(digest, prefix.Digest) {
+		return ErrLatestTurnReplacementUnavailable
+	}
+	return nil
+}
+
+func projectionDigest[T any](domain string, values []T) ([]byte, error) {
+	h := sha256.New()
+	if _, err := h.Write([]byte(domain)); err != nil {
+		return nil, err
+	}
+	var length [8]byte
+	for i := range values {
+		raw, err := json.Marshal(values[i])
+		if err != nil {
+			return nil, fmt.Errorf("encode projection prefix: %w", err)
+		}
+		binary.BigEndian.PutUint64(length[:], uint64(len(raw)))
+		if _, err := h.Write(length[:]); err != nil {
+			return nil, err
+		}
+		if _, err := h.Write(raw); err != nil {
+			return nil, err
+		}
+	}
+	return h.Sum(nil), nil
+}
+
+func cloneState(state session.StateMap) session.StateMap {
+	if state == nil {
+		return nil
+	}
+	cloned := make(session.StateMap, len(state))
+	for key, value := range state {
+		cloned[key] = append([]byte(nil), value...)
+	}
+	return cloned
+}
+
+func cloneSummaries(
+	summaries map[string]*session.Summary,
+) map[string]*session.Summary {
+	if summaries == nil {
+		return nil
+	}
+	cloned := make(map[string]*session.Summary, len(summaries))
+	for key, summary := range summaries {
+		if summary != nil {
+			cloned[key] = summary.Clone()
+		}
+	}
+	return cloned
+}
+
+func normalizeSession(sess *session.Session) (*session.Session, error) {
+	raw, err := json.Marshal(sess)
+	if err != nil {
+		return nil, err
+	}
+	var normalized session.Session
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		return nil, err
+	}
+	normalized.Hash = session.NewSession(
+		normalized.AppName,
+		normalized.UserID,
+		normalized.ID,
+	).Hash
+	return &normalized, nil
 }

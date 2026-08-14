@@ -12,6 +12,8 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -588,11 +590,25 @@ func TestSessionSQLite_CreateSessionSummaryRevisionFailures(t *testing.T) {
 	t.Run("corrupt revision metadata", func(t *testing.T) {
 		service := newService(t)
 		sess, key := newSession(t, service)
-		_, err := service.db.ExecContext(
+		var raw []byte
+		require.NoError(t, service.db.QueryRowContext(
 			context.Background(),
-			"UPDATE "+service.tableSessionRevisions+" SET record = ? "+
+			"SELECT state FROM "+service.tableSessionStates+" "+
 				"WHERE app_name = ? AND user_id = ? AND session_id = ?",
-			[]byte("not-json"),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).Scan(&raw))
+		var envelope map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &envelope))
+		envelope["_trpcAgent"] = json.RawMessage(`"invalid"`)
+		raw, err := json.Marshal(envelope)
+		require.NoError(t, err)
+		_, err = service.db.ExecContext(
+			context.Background(),
+			"UPDATE "+service.tableSessionStates+" SET state = ? "+
+				"WHERE app_name = ? AND user_id = ? AND session_id = ?",
+			raw,
 			key.AppName,
 			key.UserID,
 			key.SessionID,
@@ -604,7 +620,7 @@ func TestSessionSQLite_CreateSessionSummaryRevisionFailures(t *testing.T) {
 			session.SummaryFilterKeyAllContents,
 			true,
 		)
-		require.ErrorContains(t, err, "decode revision metadata")
+		require.ErrorContains(t, err, "decode session revision metadata")
 	})
 
 	t.Run("stale generation", func(t *testing.T) {
@@ -640,13 +656,13 @@ func TestSessionSQLite_CreateSessionSummaryRevisionFailures(t *testing.T) {
 		require.ErrorIs(t, err, sessionrevision.ErrStaleGeneration)
 	})
 
-	t.Run("missing revision archive", func(t *testing.T) {
+	t.Run("revision state update failure", func(t *testing.T) {
 		service := newService(t)
 		sess, _ := newSession(t, service)
-		_, err := service.db.ExecContext(
-			context.Background(),
-			"DROP TABLE "+service.tableRevisionArchives,
-		)
+		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
+			`CREATE TRIGGER fail_revision_state BEFORE UPDATE ON %s
+BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionStates,
+		))
 		require.NoError(t, err)
 		err = service.CreateSessionSummary(
 			context.Background(),
@@ -654,6 +670,6 @@ func TestSessionSQLite_CreateSessionSummaryRevisionFailures(t *testing.T) {
 			session.SummaryFilterKeyAllContents,
 			true,
 		)
-		require.ErrorContains(t, err, "refresh revision archive expiration")
+		require.ErrorContains(t, err, "update session revision for summary")
 	})
 }

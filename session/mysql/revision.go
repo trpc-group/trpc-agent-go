@@ -28,32 +28,14 @@ func (s *Service) revisionStore() sqlrevision.Store {
 			Events:    s.tableSessionEvents,
 			Tracks:    s.tableSessionTracks,
 			Summaries: s.tableSessionSummaries,
-			Revisions: s.tableSessionRevisions,
-			Archives:  s.tableRevisionArchives,
 		},
 	}
-}
-
-func (s *Service) attachRevisionGeneration(
-	ctx context.Context,
-	key session.Key,
-	sess *session.Session,
-) error {
-	if s.tableSessionRevisions == "" {
-		return nil
-	}
-	return s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
-		return s.revisionStore().AttachGeneration(ctx, tx, key, sess)
-	})
 }
 
 func (s *Service) revisionGeneration(
 	ctx context.Context,
 	key session.Key,
 ) (uint64, error) {
-	if s.tableSessionRevisions == "" {
-		return 0, nil
-	}
 	var generation uint64
 	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
 		var err error
@@ -67,7 +49,7 @@ func (s *Service) revisionGenerations(
 	ctx context.Context,
 	keys []session.Key,
 ) (map[session.Key]uint64, error) {
-	if s.tableSessionRevisions == "" || len(keys) == 0 {
+	if len(keys) == 0 {
 		return make(map[session.Key]uint64), nil
 	}
 	var generations map[session.Key]uint64
@@ -77,6 +59,35 @@ func (s *Service) revisionGenerations(
 		return err
 	})
 	return generations, err
+}
+
+func (s *Service) loadStableProjection(
+	ctx context.Context,
+	key session.Key,
+	readProjection func(context.Context) (*session.Session, error),
+) (*session.Session, error) {
+	projection, err := readProjection(ctx)
+	if err != nil || projection == nil {
+		return projection, err
+	}
+	before, ok := sessionrevision.Generation(projection)
+	if !ok || !sessionrevision.RecordActive(projection) {
+		return projection, nil
+	}
+	after, err := s.revisionGeneration(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if before == after {
+		return projection, nil
+	}
+	return sessionrevision.LoadStableProjection(
+		ctx,
+		func(ctx context.Context) (uint64, error) {
+			return s.revisionGeneration(ctx, key)
+		},
+		readProjection,
+	)
 }
 
 func (s *Service) flushRevisionPersistence(

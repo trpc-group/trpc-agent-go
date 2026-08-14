@@ -42,6 +42,7 @@ type SessionState struct {
 	State     session.StateMap `json:"state"`
 	CreatedAt time.Time        `json:"createdAt"`
 	UpdatedAt time.Time        `json:"updatedAt"`
+	revision  *sessionrevision.PersistedRecord
 }
 
 // Service is the postgres session service.
@@ -62,8 +63,6 @@ type Service struct {
 	tableSessionEvents    string
 	tableSessionTracks    string
 	tableSessionSummaries string
-	tableSessionRevisions string
-	tableRevisionArchives string
 	tableAppStates        string
 	tableUserStates       string
 }
@@ -168,8 +167,6 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		tableSessionEvents:    sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionEvents),
 		tableSessionTracks:    sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionTrackEvents),
 		tableSessionSummaries: sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionSummaries),
-		tableSessionRevisions: sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionRevisions),
-		tableRevisionArchives: sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameSessionRevisionArchives),
 		tableAppStates:        sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameAppStates),
 		tableUserStates:       sqldb.BuildTableNameWithSchema(opts.schema, opts.tablePrefix, sqldb.TableNameUserStates),
 	}
@@ -349,19 +346,11 @@ func (s *Service) GetSession(
 		c *session.GetSessionContext,
 		next func() (*session.Session, error),
 	) (*session.Session, error) {
-		sess, err := sessionrevision.LoadStableProjection(
-			c.Context,
-			func(ctx context.Context) (uint64, error) {
-				return s.revisionGeneration(ctx, c.Key)
-			},
+		sess, err := s.loadStableProjection(
+			c.Context, c.Key,
 			func(ctx context.Context) (*session.Session, error) {
-				return s.getSession(
-					ctx,
-					c.Key,
-					c.Options.EventNum,
-					c.Options.EventTime,
-					c.Options.EventPage,
-				)
+				return s.getSession(ctx, c.Key, c.Options.EventNum,
+					c.Options.EventTime, c.Options.EventPage)
 			},
 		)
 		if err != nil {
@@ -402,7 +391,7 @@ func (s *Service) ListSessions(
 	}
 	keys := make([]session.Key, 0, len(sessList))
 	for _, listed := range sessList {
-		if listed != nil {
+		if sessionrevision.RecordActive(listed) {
 			keys = append(keys, session.Key{
 				AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
 			})
@@ -419,11 +408,12 @@ func (s *Service) ListSessions(
 		key := session.Key{
 			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
 		}
-		stable, err := sessionrevision.LoadStableListedProjectionAtGeneration(
+		before, ok := sessionrevision.Generation(listed)
+		if !ok || !sessionrevision.RecordActive(listed) || before == generations[key] {
+			continue
+		}
+		stable, err := sessionrevision.LoadStableProjection(
 			ctx,
-			listed,
-			opt.ListSessionOnlyMeta,
-			generations[key],
 			func(ctx context.Context) (uint64, error) {
 				return s.revisionGeneration(ctx, key)
 			},
@@ -433,6 +423,11 @@ func (s *Service) ListSessions(
 		)
 		if err != nil {
 			return nil, err
+		}
+		if opt.ListSessionOnlyMeta && stable != nil {
+			stable.Events = nil
+			stable.Tracks = nil
+			stable.Summaries = nil
 		}
 		sessList[i] = stable
 	}
@@ -630,7 +625,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 
 	write := sessionrevision.NewWrite(ctx, nil)
 	err := s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
-		sessState, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		sessState, record, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
 		if err != nil {
 			if errors.Is(err, errSessionNotFound) {
 				return fmt.Errorf("postgres session service update session state failed: session not found")
@@ -653,11 +648,6 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		}
 		sessState.UpdatedAt = now
 
-		updatedStateBytes, err := json.Marshal(sessState)
-		if err != nil {
-			return fmt.Errorf("postgres session service update session state failed: marshal state: %w", err)
-		}
-
 		var expiresAt *time.Time
 		if s.opts.sessionTTL > 0 {
 			t := now.Add(s.opts.sessionTTL)
@@ -667,9 +657,13 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 			expiresAt = currentExpiresAt
 		}
 		if err := s.revisionStore().ApplyMutation(
-			ctx, tx, key, write, expiresAt,
+			record, write,
 		); err != nil {
 			return err
+		}
+		updatedStateBytes, err := sessionrevision.EncodeState(sessState, record)
+		if err != nil {
+			return fmt.Errorf("postgres session service update session state failed: marshal state: %w", err)
 		}
 
 		_, err = tx.ExecContext(ctx,
@@ -974,13 +968,6 @@ func (s *Service) cleanupExpiredData(ctx context.Context, userKey *session.UserK
 					if err := s.hardDeleteExpiredTableInTx(ctx, tx, task.tableName, now, userKey); err != nil {
 						return err
 					}
-				}
-			}
-			if s.opts.sessionTTL > 0 {
-				if err := s.revisionStore().CleanupExpired(
-					ctx, tx, now, userKey,
-				); err != nil {
-					return err
 				}
 			}
 			return nil

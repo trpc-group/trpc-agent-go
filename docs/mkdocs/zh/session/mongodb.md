@@ -122,15 +122,10 @@ Session events 和 track events 不使用 TTL 索引。默认情况下，它们�
 ## 替换最新一轮
 
 MongoDB 支持通过 `Runner.Run` 和 `agent.WithLatestTurnReplacement` 编辑并重发最新
-一个已持久化 turn。当前 revision record 保存在 Session state 文档中；废弃投影保存到
-带前缀的 `session_revision_archives` collection。投影恢复与 revision metadata 更新在
-同一个 MongoDB transaction 中完成。
-
-正常初始化会为 archive collection 创建
-`(app_name, user_id, session_id, generation)` 唯一索引与 TTL index。使用
-`WithSkipDBInit(true)` 的部署必须先创建等价索引。Revision archive 沿用 Session 的
-过期时间，并在删除 Session 时一并移除。Runner API 与回滚边界见
-[替换最新一轮](index.md#replace-latest-turn)。
+一个已持久化 turn。紧凑的当前 revision record 保存在现有 Session state 文档中；投影
+恢复与 revision metadata 更新在同一个 MongoDB transaction 中完成。即使使用
+`WithSkipDBInit(true)`，也不需要 archive collection 或额外索引。Runner API、滚动升级
+要求与回滚边界见[替换最新一轮](index.md#replace-latest-turn)。
 
 ## 存储结构
 
@@ -140,7 +135,6 @@ MongoDB 使用以下集合：
 - `session_events`
 - `session_tracks`
 - `session_summaries`
-- `session_revision_archives`
 - `app_states`
 - `user_states`
 

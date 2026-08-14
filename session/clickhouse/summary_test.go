@@ -173,6 +173,7 @@ func TestService_CreateSessionSummary_NoTTL(t *testing.T) {
 	s, err := NewService(WithSummarizer(mockSum), WithSkipDBInit(true), WithSessionTTL(0), WithClickHouseDSN("clickhouse://localhost:9000"))
 	assert.NoError(t, err)
 	s.chClient = mockCli
+
 	eventTime := time.Now().UTC().Add(-time.Minute)
 	sess := &session.Session{
 		ID:        "sess1",

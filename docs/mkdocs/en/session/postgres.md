@@ -212,17 +212,14 @@ sessionService, err := postgres.NewService(
 
 PostgreSQL supports editing and resending the latest persisted turn through
 `Runner.Run` and `agent.WithLatestTurnReplacement`. Events, session state,
-summaries, Tracks, the discarded projection archive, and the new write
-generation are updated in one database transaction after asynchronous writes
-for the target Session have drained.
+summaries, Tracks, and the new write generation are updated in one database
+transaction after asynchronous writes for the target Session have drained.
 
-Automatic initialization creates `session_revisions` and
-`session_revision_archives` in the configured schema and with the configured
-table prefix. Deployments using `WithSkipDBInit(true)` must provision both
-tables and their expiry indexes from
-[`session/postgres/schema.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/postgres/schema.sql).
-See [Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the
-Runner API, TTL behavior, and rollback boundaries.
+Revision metadata is a versioned private sidecar in the existing
+`session_states.state` JSON. No additional table, index, or migration is
+required, including with `WithSkipDBInit(true)`. See
+[Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the Runner
+API, rollout requirements, TTL behavior, and rollback boundaries.
 
 ## Storage Structure
 

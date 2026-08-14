@@ -93,11 +93,14 @@ ON CONFLICT(app_name, user_id, session_id, filter_key) DO UPDATE SET
 		return fmt.Errorf("begin upsert summary: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var expiresAt sql.NullInt64
+	var (
+		stateRaw  []byte
+		expiresAt sql.NullInt64
+	)
 	err = tx.QueryRowContext(
 		ctx,
 		fmt.Sprintf(
-			`SELECT expires_at FROM %s
+			`SELECT state, expires_at FROM %s
 WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND deleted_at IS NULL`,
 			s.tableSessionStates,
@@ -105,7 +108,7 @@ AND deleted_at IS NULL`,
 		key.AppName,
 		key.UserID,
 		key.SessionID,
-	).Scan(&expiresAt)
+	).Scan(&stateRaw, &expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("session not found")
 	}
@@ -113,14 +116,34 @@ AND deleted_at IS NULL`,
 		return fmt.Errorf("get session state for summary: %w", err)
 	}
 	write := sessionrevision.NewWrite(ctx, sess)
-	record, revisionSupported, err := s.readRevisionForWrite(ctx, tx, key)
+	var sessState SessionState
+	record, err := sessionrevision.DecodeState(stateRaw, &sessState)
 	if err != nil {
 		return err
 	}
 	if err := checkRevisionGeneration(record, write); err != nil {
 		return err
 	}
-	revisionChanged := sessionrevision.ApplyWrite(record, write)
+	sessionrevision.ApplyWrite(record, write)
+	updatedState, err := sessionrevision.EncodeState(&sessState, record)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		fmt.Sprintf(
+			`UPDATE %s SET state = ?
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND deleted_at IS NULL`,
+			s.tableSessionStates,
+		),
+		updatedState,
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	); err != nil {
+		return fmt.Errorf("update session revision for summary: %w", err)
+	}
 
 	_, err = tx.ExecContext(
 		ctx,
@@ -135,17 +158,6 @@ AND deleted_at IS NULL`,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert summary: %w", err)
-	}
-	if revisionSupported && (revisionChanged || write.HasExpectedGeneration) {
-		if err := s.writeRevisionTx(
-			ctx,
-			tx,
-			key,
-			record,
-			nullInt64Arg(expiresAt),
-		); err != nil {
-			return err
-		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit summary: %w", err)

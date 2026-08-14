@@ -69,13 +69,12 @@ Since all Session read/write paths naturally carry `user_id`, it is used directl
 ## Latest-turn Replacement
 
 TDSQL mode supports the same `Runner.Run` latest-turn replacement capability as
-MySQL. Revision metadata and discarded projections use the sharded
-`session_revisions` and `session_revision_archives` tables, with `user_id` as
-the shard key. Deployments using `WithSkipDBInit(true)` must provision the
-definitions from
-[`session/mysql/schema_tdsql.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema_tdsql.sql).
-See [Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the API
-and behavioral contract.
+MySQL. Revision metadata is a versioned private sidecar in the existing
+`session_states.state` JSON, so it keeps the existing `user_id` shard routing
+and requires no additional table or migration, including with
+`WithSkipDBInit(true)`. See
+[Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the API,
+rollout requirements, and behavioral contract.
 
 ## Table Schema
 

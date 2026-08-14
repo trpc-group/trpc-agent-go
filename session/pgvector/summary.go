@@ -76,41 +76,36 @@ func (s *Service) CreateSessionSummary(
 		)
 	}
 
-	if s.tableSessionRevisions == "" {
-		_, err = s.pgClient.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s
-			(app_name, user_id, session_id,
-			 filter_key, summary, updated_at,
-			 expires_at, deleted_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
-			ON CONFLICT (app_name, user_id,
-				session_id, filter_key)
-			WHERE deleted_at IS NULL
-			DO UPDATE SET
-			  summary = EXCLUDED.summary,
-			  updated_at = EXCLUDED.updated_at,
-			  expires_at = EXCLUDED.expires_at`,
-			s.tableSessionSummaries,
-		), sess.AppName, sess.UserID, sess.ID, filterKey,
-			summaryBytes, sum.UpdatedAt, nil)
-		if err != nil {
-			return fmt.Errorf("upsert summary failed: %w", err)
-		}
-		return nil
-	}
 	write := sessionrevision.NewWrite(ctx, sess)
 	err = s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+		var stateRaw []byte
 		var expiresAt *time.Time
 		if err := tx.QueryRowContext(ctx, fmt.Sprintf(
-			`SELECT expires_at FROM %s WHERE app_name = $1 AND user_id = $2
+			`SELECT state, expires_at FROM %s WHERE app_name = $1 AND user_id = $2
 			AND session_id = $3 AND deleted_at IS NULL FOR UPDATE`,
 			s.tableSessionStates,
-		), key.AppName, key.UserID, key.SessionID).Scan(&expiresAt); err != nil {
+		), key.AppName, key.UserID, key.SessionID).Scan(&stateRaw, &expiresAt); err != nil {
+			return err
+		}
+		var state SessionState
+		record, err := sessionrevision.DecodeState(stateRaw, &state)
+		if err != nil {
 			return err
 		}
 		if err := s.revisionStore().ApplyMutation(
-			ctx, tx, key, write, expiresAt,
+			record, write,
 		); err != nil {
+			return err
+		}
+		stateRaw, err = sessionrevision.EncodeState(state, record)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, fmt.Sprintf(
+			`UPDATE %s SET state = $1, updated_at = $2
+			WHERE app_name = $3 AND user_id = $4 AND session_id = $5 AND deleted_at IS NULL`,
+			s.tableSessionStates,
+		), stateRaw, state.UpdatedAt, key.AppName, key.UserID, key.SessionID); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, fmt.Sprintf(

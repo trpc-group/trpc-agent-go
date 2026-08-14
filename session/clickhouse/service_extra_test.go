@@ -249,6 +249,7 @@ func TestService_Hooks(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	s.chClient = mockCli
+
 	ctx := context.Background()
 	sess := session.NewSession("app", "user", "sess")
 	evt := &event.Event{ID: "evt1"}

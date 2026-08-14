@@ -28,10 +28,6 @@ type revisionRowQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-type revisionExecer interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
 func (s *Service) readRevision(
 	ctx context.Context,
 	query revisionRowQuerier,
@@ -41,9 +37,9 @@ func (s *Service) readRevision(
 	err := query.QueryRowContext(
 		ctx,
 		fmt.Sprintf(
-			`SELECT record FROM %s
-WHERE app_name = ? AND user_id = ? AND session_id = ?`,
-			s.tableSessionRevisions,
+			`SELECT state FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+			s.tableSessionStates,
 		),
 		key.AppName,
 		key.UserID,
@@ -53,70 +49,14 @@ WHERE app_name = ? AND user_id = ? AND session_id = ?`,
 		return &sessionrevision.PersistedRecord{}, nil
 	}
 	if err != nil {
-		if strings.Contains(err.Error(), "no such table") {
-			return nil, fmt.Errorf(
-				"%w: revision tables are not initialized",
-				sessionrevision.ErrLatestTurnReplacementUnsupported,
-			)
-		}
 		return nil, fmt.Errorf("get revision metadata: %w", err)
 	}
-	var record sessionrevision.PersistedRecord
-	if err := json.Unmarshal(raw, &record); err != nil {
-		return nil, fmt.Errorf("decode revision metadata: %w", err)
-	}
-	return &record, nil
-}
-
-func (s *Service) writeRevisionTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	key session.Key,
-	record *sessionrevision.PersistedRecord,
-	expiresAt any,
-) error {
-	raw, err := json.Marshal(record)
+	var state SessionState
+	record, err := sessionrevision.DecodeState(raw, &state)
 	if err != nil {
-		return fmt.Errorf("encode revision metadata: %w", err)
+		return nil, err
 	}
-	_, err = tx.ExecContext(
-		ctx,
-		fmt.Sprintf(
-			`INSERT INTO %s (
-  app_name, user_id, session_id, record, updated_at, expires_at
-) VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(app_name, user_id, session_id) DO UPDATE SET
-  record = excluded.record,
-  updated_at = excluded.updated_at,
-  expires_at = excluded.expires_at`,
-			s.tableSessionRevisions,
-		),
-		key.AppName,
-		key.UserID,
-		key.SessionID,
-		raw,
-		time.Now().UTC().UnixNano(),
-		expiresAt,
-	)
-	if err != nil {
-		return fmt.Errorf("store revision metadata: %w", err)
-	}
-	_, err = tx.ExecContext(
-		ctx,
-		fmt.Sprintf(
-			`UPDATE %s SET expires_at = ?
-WHERE app_name = ? AND user_id = ? AND session_id = ?`,
-			s.tableRevisionArchives,
-		),
-		expiresAt,
-		key.AppName,
-		key.UserID,
-		key.SessionID,
-	)
-	if err != nil {
-		return fmt.Errorf("refresh revision archive expiration: %w", err)
-	}
-	return nil
+	return record, nil
 }
 
 func checkRevisionGeneration(
@@ -130,78 +70,15 @@ func checkRevisionGeneration(
 	return nil
 }
 
-func (s *Service) attachRevisionGeneration(
-	ctx context.Context,
-	key session.Key,
-	sess *session.Session,
-) error {
-	if sess == nil {
-		return nil
-	}
-	record, err := s.readRevision(ctx, s.db, key)
-	if errors.Is(err, sessionrevision.ErrLatestTurnReplacementUnsupported) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	sessionrevision.SetGeneration(sess, record.Generation)
-	return nil
-}
-
 func (s *Service) revisionGeneration(
 	ctx context.Context,
 	key session.Key,
 ) (uint64, error) {
 	record, err := s.readRevision(ctx, s.db, key)
-	if errors.Is(err, sessionrevision.ErrLatestTurnReplacementUnsupported) {
-		return 0, nil
-	}
 	if err != nil {
 		return 0, err
 	}
 	return record.Generation, nil
-}
-
-func (s *Service) readRevisionForWrite(
-	ctx context.Context,
-	query revisionRowQuerier,
-	key session.Key,
-) (*sessionrevision.PersistedRecord, bool, error) {
-	record, err := s.readRevision(ctx, query, key)
-	if errors.Is(err, sessionrevision.ErrLatestTurnReplacementUnsupported) {
-		return &sessionrevision.PersistedRecord{}, false, nil
-	}
-	return record, true, err
-}
-
-func (s *Service) deleteRevisionMetadata(
-	ctx context.Context,
-	exec revisionExecer,
-	key session.Key,
-) error {
-	for _, table := range []string{
-		s.tableRevisionArchives,
-		s.tableSessionRevisions,
-	} {
-		if _, err := exec.ExecContext(
-			ctx,
-			fmt.Sprintf(
-				`DELETE FROM %s
-WHERE app_name = ? AND user_id = ? AND session_id = ?`,
-				table,
-			),
-			key.AppName,
-			key.UserID,
-			key.SessionID,
-		); err != nil {
-			if strings.Contains(err.Error(), "no such table") {
-				continue
-			}
-			return fmt.Errorf("delete revision metadata: %w", err)
-		}
-	}
-	return nil
 }
 
 func (s *Service) flushRevisionPersistence(
@@ -312,39 +189,16 @@ func (s *Service) ReplaceLatestTurn(
 	if record.Generation >= math.MaxInt64 {
 		return nil, sessionrevision.ErrLatestTurnReplacementUnavailable
 	}
-	restored, err := sessionrevision.DecodeSnapshot(checkpoint.Snapshot)
-	if err != nil {
-		return nil, fmt.Errorf("decode latest-turn checkpoint: %w", err)
-	}
 	current, expiresAt, err := s.loadActiveSessionTx(ctx, tx, req.Key)
 	if err != nil {
 		return nil, err
 	}
-	archive, err := sessionrevision.Snapshot(current)
-	if err != nil {
-		return nil, fmt.Errorf("encode discarded revision: %w", err)
-	}
-	_, err = tx.ExecContext(
-		ctx,
-		fmt.Sprintf(
-			`INSERT INTO %s (
-  app_name, user_id, session_id, generation, snapshot, created_at, expires_at
-) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			s.tableRevisionArchives,
-		),
-		req.Key.AppName,
-		req.Key.UserID,
-		req.Key.SessionID,
-		record.Generation,
-		archive,
-		time.Now().UTC().UnixNano(),
-		nullInt64Arg(expiresAt),
+	restored, err := sessionrevision.RestoreBoundary(
+		current,
+		checkpoint.Boundary,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("archive discarded revision: %w", err)
-	}
-	if err := s.replaceActiveSessionTx(ctx, tx, req.Key, restored, expiresAt); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("restore latest-turn boundary: %w", err)
 	}
 	record.Generation++
 	record.Head++
@@ -358,7 +212,14 @@ func (s *Service) ReplaceLatestTurn(
 			Head:       record.Head,
 		},
 	)
-	if err := s.writeRevisionTx(ctx, tx, req.Key, record, nullInt64Arg(expiresAt)); err != nil {
+	if err := s.replaceActiveSessionTx(
+		ctx,
+		tx,
+		req.Key,
+		restored,
+		record,
+		expiresAt,
+	); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -427,8 +288,8 @@ WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 		return nil, sql.NullInt64{}, fmt.Errorf("load active session state: %w", err)
 	}
 	var state SessionState
-	if err := json.Unmarshal(stateRaw, &state); err != nil {
-		return nil, sql.NullInt64{}, fmt.Errorf("decode active session state: %w", err)
+	if _, err := sessionrevision.DecodeState(stateRaw, &state); err != nil {
+		return nil, sql.NullInt64{}, err
 	}
 	active := session.NewSession(
 		key.AppName,
@@ -601,14 +462,15 @@ func (s *Service) replaceActiveSessionTx(
 	tx *sql.Tx,
 	key session.Key,
 	restored *session.Session,
+	record *sessionrevision.PersistedRecord,
 	expiresAt sql.NullInt64,
 ) error {
-	stateRaw, err := json.Marshal(&SessionState{
+	stateRaw, err := sessionrevision.EncodeState(&SessionState{
 		ID:        key.SessionID,
 		State:     restored.SnapshotState(),
 		CreatedAt: restored.CreatedAt,
 		UpdatedAt: restored.UpdatedAt,
-	})
+	}, record)
 	if err != nil {
 		return err
 	}
@@ -630,68 +492,25 @@ WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 	if err != nil {
 		return fmt.Errorf("restore session state: %w", err)
 	}
-	for _, table := range []string{s.tableSessionEvents, s.tableSessionSummaries} {
-		// Table names are derived from validated service configuration.
-		statement := fmt.Sprintf( //nolint:gosec
-			`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ?`,
-			table,
-		)
-		args := []any{key.AppName, key.UserID, key.SessionID}
-		if s.opts.softDelete {
-			// Summary rows have a key-wide unique index, so active rows must be
-			// replaced rather than retained as tombstones. Rows deleted by an
-			// earlier Session instance remain untouched.
-			statement += " AND deleted_at IS NULL"
-			if table == s.tableSessionEvents {
-				statement = fmt.Sprintf(
-					`UPDATE %s SET deleted_at = ?
-WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
-					table,
-				)
-				args = append([]any{time.Now().UTC().UnixNano()}, args...)
-			}
-		}
-		if _, err := tx.ExecContext(
-			ctx,
-			statement,
-			args...,
-		); err != nil {
-			return fmt.Errorf("clear active session projection: %w", err)
-		}
+	if err := s.trimActiveEventTailTx(ctx, tx, key, len(restored.Events)); err != nil {
+		return err
+	}
+	// Summary rows have a key-wide unique index, so the active map is replaced
+	// in full. Rows deleted by an earlier Session instance remain untouched.
+	summaryDelete := fmt.Sprintf(
+		`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ?`,
+		s.tableSessionSummaries,
+	)
+	if s.opts.softDelete {
+		summaryDelete += " AND deleted_at IS NULL"
+	}
+	if _, err := tx.ExecContext(
+		ctx, summaryDelete, key.AppName, key.UserID, key.SessionID,
+	); err != nil {
+		return fmt.Errorf("clear active session summaries: %w", err)
 	}
 	if err := s.trimActiveTrackTailsTx(ctx, tx, key, restored); err != nil {
 		return err
-	}
-	for i := range restored.Events {
-		evt := restored.Events[i]
-		raw, err := json.Marshal(&evt)
-		if err != nil {
-			return err
-		}
-		created := evt.Timestamp.UTC().UnixNano()
-		if evt.Timestamp.IsZero() {
-			created = restored.CreatedAt.UTC().UnixNano() + int64(i)
-		}
-		_, err = tx.ExecContext(
-			ctx,
-			fmt.Sprintf(
-				`INSERT INTO %s (
-  app_name, user_id, session_id, event, created_at, updated_at, expires_at,
-  deleted_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-				s.tableSessionEvents,
-			),
-			key.AppName,
-			key.UserID,
-			key.SessionID,
-			raw,
-			created,
-			created,
-			nullInt64Arg(expiresAt),
-		)
-		if err != nil {
-			return fmt.Errorf("restore active event: %w", err)
-		}
 	}
 	for filterKey, summary := range restored.Summaries {
 		if summary == nil {
@@ -721,6 +540,77 @@ WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 		if err != nil {
 			return fmt.Errorf("restore active summary: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Service) trimActiveEventTailTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	key session.Key,
+	prefixLength int,
+) error {
+	rows, err := tx.QueryContext(
+		ctx,
+		fmt.Sprintf(
+			`SELECT id FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL
+ORDER BY created_at ASC, id ASC`,
+			s.tableSessionEvents,
+		),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("load active event rows: %w", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate active event rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(ids) <= prefixLength {
+		return sessionrevision.ErrLatestTurnReplacementUnavailable
+	}
+	tail := ids[prefixLength:]
+	placeholders := make([]string, len(tail))
+	args := make([]any, 0, len(tail)+4)
+	for i, id := range tail {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	var statement string
+	if s.opts.softDelete {
+		statement = fmt.Sprintf(
+			`UPDATE %s SET deleted_at = ? WHERE id IN (%s)
+AND app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+			s.tableSessionEvents,
+			strings.Join(placeholders, ", "),
+		)
+		args = append([]any{time.Now().UTC().UnixNano()}, args...)
+	} else {
+		statement = fmt.Sprintf(
+			`DELETE FROM %s WHERE id IN (%s)
+AND app_name = ? AND user_id = ? AND session_id = ?`,
+			s.tableSessionEvents,
+			strings.Join(placeholders, ", "),
+		)
+	}
+	args = append(args, key.AppName, key.UserID, key.SessionID)
+	if _, err := tx.ExecContext(ctx, statement, args...); err != nil {
+		return fmt.Errorf("remove discarded event tail: %w", err)
 	}
 	return nil
 }

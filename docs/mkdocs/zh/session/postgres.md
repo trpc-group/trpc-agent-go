@@ -223,12 +223,11 @@ sessionService, err := postgres.NewService(
 
 PostgreSQL 支持通过 `Runner.Run` 和 `agent.WithLatestTurnReplacement` 编辑并重发最新
 一个已持久化 turn。目标 Session 的异步写入 drain 后，events、Session state、
-summaries、Tracks、废弃投影 archive 和新 write generation 会在同一个数据库事务中更新。
+summaries、Tracks 与新的 write generation 会在同一个数据库事务中更新。
 
-自动初始化会在配置的 schema 下，使用配置的表前缀创建 `session_revisions` 与
-`session_revision_archives`。使用 `WithSkipDBInit(true)` 的部署必须先按
-[`session/postgres/schema.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/postgres/schema.sql)
-创建这两个表及其过期索引。Runner API、TTL 行为与回滚边界见
+Revision metadata 以带版本的私有 sidecar 保存在现有
+`session_states.state` JSON 中；即使使用 `WithSkipDBInit(true)`，也不需要额外建表、
+索引或迁移。Runner API、滚动升级要求、TTL 行为与回滚边界见
 [替换最新一轮](index.md#replace-latest-turn)。
 
 ## 存储结构
