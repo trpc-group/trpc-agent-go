@@ -343,6 +343,26 @@ func TestSkillCheckScriptFallbackParityForDuplicateRuleLines(t *testing.T) {
 	}
 }
 
+func TestSkillCheckScriptPreservesRepositoryPathsStartingWithSidePrefixes(t *testing.T) {
+	t.Parallel()
+
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatalf("SkillRoot returned error: %v", err)
+	}
+	for _, path := range []string{"a/handler.go", "b/handler.go"} {
+		diff := "diff --git a/" + path + " b/" + path + "\n" +
+			"--- a/" + path + "\n+++ b/" + path + "\n" +
+			"@@ -0,0 +1 @@\n+// TODO(example): verify path normalization\n"
+		pythonPayload := runSkillCheck(t, skillRoot, diff, nil)
+		fallbackPayload := runSkillCheck(t, skillRoot, diff, fallbackScriptEnv(t))
+		assertSkillOutputParity(t, pythonPayload, fallbackPayload)
+		if len(pythonPayload.Findings) != 1 || pythonPayload.Findings[0].File != path {
+			t.Errorf("Skill finding path = %+v, want %q", pythonPayload.Findings, path)
+		}
+	}
+}
+
 func TestSkillCheckScriptFallbackParityForFollowingCleanup(t *testing.T) {
 	t.Parallel()
 
