@@ -384,9 +384,13 @@ func validateFilename(filename string) error {
 		path.Clean(filename) != filename ||
 		filename == "." ||
 		strings.Contains(filename, "\\") ||
-		strings.Contains(filename, "..") ||
 		strings.Contains(filename, "\x00") {
 		return ErrInvalidFilename
+	}
+	for _, segment := range strings.Split(filename, "/") {
+		if segment == ".." {
+			return ErrInvalidFilename
+		}
 	}
 
 	return nil

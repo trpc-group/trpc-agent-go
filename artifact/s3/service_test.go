@@ -193,6 +193,23 @@ func TestSaveArtifact(t *testing.T) {
 		assert.Equal(t, 0, version) // First version is 0 per interface contract
 	})
 
+	t.Run("save with double dots inside a path segment", func(t *testing.T) {
+		svc, _ := newTestService(t)
+		ctx := context.Background()
+		info := testSessionInfo()
+		filename := "out/v1..2/a.txt"
+		original := &artifact.Artifact{Data: []byte("data"), MimeType: "text/plain"}
+
+		version, err := svc.SaveArtifact(ctx, info, filename, original)
+		require.NoError(t, err)
+		assert.Equal(t, 0, version)
+
+		loaded, err := svc.LoadArtifact(ctx, info, filename, nil)
+		require.NoError(t, err)
+		require.NotNil(t, loaded)
+		assert.Equal(t, original.Data, loaded.Data)
+	})
+
 	t.Run("save with empty filename returns error", func(t *testing.T) {
 		svc, _ := newTestService(t)
 		ctx := context.Background()
@@ -685,6 +702,7 @@ func TestValidateFilename(t *testing.T) {
 			"report.2024.xlsx",
 			"out/site.html",
 			"out/assets/app.js",
+			"out/v1..2/a.txt",
 			"user:profile.json", // user namespace prefix is valid
 			"user:out/report.json",
 			"user:settings.yaml",
@@ -706,7 +724,9 @@ func TestValidateFilename(t *testing.T) {
 			"path/./file.txt",    // current directory segment
 			"path/to/file.txt/",  // trailing separator
 			"path\\to\\file.txt", // backslash
+			"..",                 // parent directory segment
 			"../parent.txt",      // path traversal
+			"path/..",            // trailing parent directory segment
 			"..\\parent.txt",     // path traversal with backslash
 			"file\x00name.txt",   // null byte
 			".",                  // current directory
