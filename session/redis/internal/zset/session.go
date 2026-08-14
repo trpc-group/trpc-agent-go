@@ -499,6 +499,12 @@ func (c *Client) updateSessionStateCASWithRevision(
 ) error {
 	sessKey := c.sessionStateKey(key)
 	revisionKey := c.revisionKey(key)
+	watchKeys := []string{sessKey, revisionKey}
+	if evt != nil {
+		watchKeys = append(watchKeys, c.eventKey(key))
+	} else if trackEvent != nil {
+		watchKeys = append(watchKeys, c.trackKey(key, trackEvent.Track))
+	}
 	retryDelay := 5 * time.Millisecond
 	for {
 		if err := ctx.Err(); err != nil {
@@ -532,6 +538,11 @@ func (c *Client) updateSessionStateCASWithRevision(
 			if write.HasExpectedHead && record.Head != write.ExpectedHead {
 				return sessionrevision.ErrStaleProjection
 			}
+			if write.Projection != nil {
+				record.Projection = sessionrevision.CloneProjection(
+					write.Projection,
+				)
+			}
 			var revisionChanged bool
 			switch {
 			case evt != nil:
@@ -543,12 +554,60 @@ func (c *Client) updateSessionStateCASWithRevision(
 					evt,
 					persisted,
 				)
+				if persisted && (record.Projection != nil || record.Checkpoint != nil) {
+					appendable, err := c.projectionAppendable(
+						ctx,
+						tx,
+						c.eventKey(key),
+						float64(evt.Timestamp.UnixNano()),
+						evt,
+					)
+					if err != nil {
+						return err
+					}
+					if appendable {
+						if err := sessionrevision.AppendProjectionEvent(
+							record, evt,
+						); err != nil {
+							return err
+						}
+					} else {
+						sessionrevision.InvalidateProjection(record)
+						if record.Checkpoint != nil {
+							record.Checkpoint.Hazard = true
+						}
+					}
+				}
 			case trackEvent != nil:
 				revisionChanged = sessionrevision.ApplyTrackWrite(
 					record,
 					write,
 					trackEvent,
 				)
+				if record.Projection != nil || record.Checkpoint != nil {
+					appendable, err := c.projectionAppendable(
+						ctx,
+						tx,
+						c.trackKey(key, trackEvent.Track),
+						float64(trackEvent.Timestamp.UnixNano()),
+						trackEvent,
+					)
+					if err != nil {
+						return err
+					}
+					if appendable {
+						if err := sessionrevision.AppendProjectionTrack(
+							record, trackEvent,
+						); err != nil {
+							return err
+						}
+					} else {
+						sessionrevision.InvalidateProjection(record)
+						if record.Checkpoint != nil {
+							record.Checkpoint.Hazard = true
+						}
+					}
+				}
 			default:
 				revisionChanged = sessionrevision.ApplyWrite(record, write)
 			}
@@ -584,7 +643,7 @@ func (c *Client) updateSessionStateCASWithRevision(
 				return nil
 			})
 			return err
-		}, sessKey, revisionKey)
+		}, watchKeys...)
 		if err == nil {
 			return nil
 		}
@@ -611,6 +670,29 @@ func (c *Client) updateSessionStateCASWithRevision(
 		}
 		return err
 	}
+}
+
+func (c *Client) projectionAppendable(
+	ctx context.Context,
+	tx *redis.Tx,
+	key string,
+	score float64,
+	value any,
+) (bool, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return false, fmt.Errorf("marshal revision projection value: %w", err)
+	}
+	if _, err := tx.ZScore(ctx, key, string(raw)).Result(); err == nil {
+		return false, nil
+	} else if err != redis.Nil {
+		return false, fmt.Errorf("check revision projection member: %w", err)
+	}
+	latest, err := tx.ZRevRangeWithScores(ctx, key, 0, 0).Result()
+	if err != nil && err != redis.Nil {
+		return false, fmt.Errorf("load revision projection tail: %w", err)
+	}
+	return len(latest) == 0 || score > latest[0].Score, nil
 }
 
 // Internal methods

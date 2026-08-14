@@ -131,7 +131,9 @@ return 1
 // ARGV[6] = has expected generation, ARGV[7] = expected generation,
 // ARGV[8] = turn-start request ID, ARGV[9] = turn-start invocation ID,
 // ARGV[10] = pre-turn projection boundary, ARGV[11] = runner completion,
-// ARGV[12] = has expected head, ARGV[13] = expected head.
+// ARGV[12] = has expected head, ARGV[13] = expected head,
+// ARGV[14] = has prepared projection, ARGV[15] = prepared projection JSON
+// (empty JSON clears the projection).
 // Returns: 1 on success, 0 if session not found, -1 for a stale generation,
 // -2 for a stale turn-start projection.
 var luaAppendEvent = redis.NewScript(`
@@ -153,6 +155,8 @@ local boundaryBase64 = ARGV[10]
 local runnerCompletion = tonumber(ARGV[11]) == 1
 local hasExpectedHead = tonumber(ARGV[12]) == 1
 local expectedHead = tonumber(ARGV[13])
+local hasPreparedProjection = tonumber(ARGV[14]) == 1
+local preparedProjectionJSON = ARGV[15]
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
@@ -180,6 +184,20 @@ end
 local head = tonumber(revision.head or 0)
 if hasExpectedHead and head ~= expectedHead then
     return -2
+end
+local projectionAppendable = not hasPreparedProjection or preparedProjectionJSON ~= ''
+if shouldStoreEvent and (hasPreparedProjection or revision.checkpoint) then
+    local latest = redis.call('ZREVRANGE', evtTimeKey, 0, 0, 'WITHSCORES')
+    projectionAppendable = projectionAppendable and
+        redis.call('HEXISTS', evtDataKey, eventID) == 0 and
+        (#latest == 0 or timestamp > tonumber(latest[2]))
+end
+if hasPreparedProjection then
+    if projectionAppendable then
+        revision.projection = cjson.decode(preparedProjectionJSON)
+    else
+        revision.projection = nil
+    end
 end
 local revisionChanged = false
 revision.head = head + 1
@@ -212,6 +230,9 @@ end
 
 local checkpoint = revision.checkpoint
 if checkpoint then
+    if not projectionAppendable then
+        checkpoint.hazard = true
+    end
     if not validStart and checkpoint.terminal then
         checkpoint.hazard = true
     end
@@ -562,18 +583,37 @@ end
 return cjson.encode(result)
 `)
 
-// luaDeleteEvent deletes an event and its indexes.
-// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key
+// luaDeleteEvent deletes an event and its indexes and invalidates the rolling
+// revision projection in the same script.
+// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key,
+// KEYS[3] = session metadata key, KEYS[4] = private revision metadata key
 // ARGV[1] = eventID
 var luaDeleteEvent = redis.NewScript(`
 local evtDataKey = KEYS[1]
 local evtTimeKey = KEYS[2]
+local sessionMetaKey = KEYS[3]
+local revisionKey = KEYS[4]
 local eventID = ARGV[1]
 
-redis.call('HDEL', evtDataKey, eventID)
-redis.call('ZREM', evtTimeKey, eventID)
+local removed = redis.call('HDEL', evtDataKey, eventID) +
+    redis.call('ZREM', evtTimeKey, eventID)
+if removed > 0 and redis.call('EXISTS', sessionMetaKey) == 1 then
+    local revisionJSON = redis.call('GET', revisionKey)
+    local revision = {generation = 0}
+    if revisionJSON then revision = cjson.decode(revisionJSON) end
+    revision.head = tonumber(revision.head or 0) + 1
+    if revision.checkpoint then revision.checkpoint.hazard = true end
+    revision.projection = nil
+    local ttlMs = redis.call('PTTL', sessionMetaKey)
+    redis.call('SET', revisionKey, cjson.encode(revision))
+    if ttlMs >= 0 then
+        redis.call('PEXPIRE', revisionKey, ttlMs)
+    elseif ttlMs == -1 then
+        redis.call('PERSIST', revisionKey)
+    end
+end
 
-return 1
+return removed
 `)
 
 // luaTrimConversations trims the most recent N conversations (by RequestID).
@@ -630,6 +670,7 @@ if #toDelete > 0 and redis.call('EXISTS', sessionMetaKey) == 1 then
     if revisionJSON then revision = cjson.decode(revisionJSON) end
     revision.head = tonumber(revision.head or 0) + 1
     if revision.checkpoint then revision.checkpoint.hazard = true end
+    revision.projection = nil
     local ttlMs = redis.call('PTTL', sessionMetaKey)
     redis.call('SET', revisionKey, cjson.encode(revision))
     if ttlMs >= 0 then
@@ -694,8 +735,12 @@ return 1
 // ARGV[4] = track TTL override set (1 or 0)
 // ARGV[5] = updated tracks value (base64-encoded JSON array, to set as state.tracks)
 // ARGV[6] = track name
-// ARGV[7] = has expected generation, ARGV[8] = expected generation
-// Returns: generated eventID on success, 0 if session not found, -1 if stale.
+// ARGV[7] = has expected generation, ARGV[8] = expected generation,
+// ARGV[9] = has expected head, ARGV[10] = expected head,
+// ARGV[11] = has prepared projection, ARGV[12] = prepared projection JSON
+// (empty JSON clears the projection).
+// Returns: generated eventID on success, 0 if session not found, -1 if stale
+// generation, -2 if stale projection.
 var luaAppendTrackEvent = redis.NewScript(`
 local dataKey = KEYS[1]
 local idxKey = KEYS[2]
@@ -711,6 +756,10 @@ local tracksVal = ARGV[5]
 local trackName = ARGV[6]
 local hasExpectedGeneration = tonumber(ARGV[7]) == 1
 local expectedGeneration = tonumber(ARGV[8])
+local hasExpectedHead = tonumber(ARGV[9]) == 1
+local expectedHead = tonumber(ARGV[10])
+local hasPreparedProjection = tonumber(ARGV[11]) == 1
+local preparedProjectionJSON = ARGV[12]
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
@@ -735,14 +784,31 @@ end
 if hasExpectedGeneration and tonumber(revision.generation or 0) ~= expectedGeneration then
     return -1
 end
-revision.head = tonumber(revision.head or 0) + 1
+local head = tonumber(revision.head or 0)
+if hasExpectedHead and head ~= expectedHead then
+    return -2
+end
+local projectionAppendable = not hasPreparedProjection or preparedProjectionJSON ~= ''
+if hasPreparedProjection or revision.checkpoint then
+    local latest = redis.call('ZREVRANGE', idxKey, 0, 0, 'WITHSCORES')
+    projectionAppendable = projectionAppendable and
+        (#latest == 0 or ts > tonumber(latest[2]))
+end
+if hasPreparedProjection then
+    if projectionAppendable then
+        revision.projection = cjson.decode(preparedProjectionJSON)
+    else
+        revision.projection = nil
+    end
+end
+revision.head = head + 1
 if not hasExpectedGeneration and revision.checkpoint then
     revision.checkpoint.hazard = true
 end
 local trackEvent = cjson.decode(payload)
 if revision.checkpoint then
     local trackRequestID = trackEvent.requestID or ''
-    if revision.checkpoint.terminal or trackRequestID == '' or
+    if not projectionAppendable or revision.checkpoint.terminal or trackRequestID == '' or
         trackRequestID ~= revision.checkpoint.requestID then
         revision.checkpoint.hazard = true
     end

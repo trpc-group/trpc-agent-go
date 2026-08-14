@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -215,16 +216,41 @@ func (s Store) ApplyEventWrite(
 		return err
 	}
 	if write.Start != nil {
-		current, _, err := s.LoadActive(ctx, tx, key, false)
+		var (
+			current *session.Session
+			err     error
+		)
+		if sessionrevision.ProjectionInitialized(record) {
+			current, err = s.loadBoundaryProjection(ctx, tx, key)
+		} else {
+			current, _, err = s.LoadActive(ctx, tx, key, false)
+			if err == nil {
+				err = sessionrevision.InitializeProjection(record, current)
+			}
+		}
 		if err != nil {
 			return fmt.Errorf("load authoritative pre-turn session: %w", err)
 		}
-		write.Boundary, err = sessionrevision.NewBoundary(current)
+		write.Boundary, err = sessionrevision.NewBoundaryFromProjection(
+			current, record.Projection,
+		)
 		if err != nil {
 			return fmt.Errorf("capture session boundary before latest turn: %w", err)
 		}
 	}
+	rollingProjection := sessionrevision.CloneProjection(record.Projection)
+	if persisted {
+		candidate := &sessionrevision.PersistedRecord{
+			Projection: rollingProjection,
+			Checkpoint: record.Checkpoint,
+		}
+		if err := sessionrevision.AppendProjectionEvent(candidate, evt); err != nil {
+			return fmt.Errorf("advance session revision projection: %w", err)
+		}
+		rollingProjection = candidate.Projection
+	}
 	sessionrevision.ApplyEventWrite(record, write, evt, persisted)
+	record.Projection = rollingProjection
 	return nil
 }
 
@@ -238,7 +264,18 @@ func (s Store) ApplyTrackWrite(
 	if err := checkGeneration(record, write); err != nil {
 		return err
 	}
+	rollingProjection := sessionrevision.CloneProjection(record.Projection)
+	candidate := &sessionrevision.PersistedRecord{
+		Projection: rollingProjection,
+		Checkpoint: record.Checkpoint,
+	}
+	if err := sessionrevision.AppendProjectionTrack(
+		candidate, trackEvent,
+	); err != nil {
+		return fmt.Errorf("advance session revision projection: %w", err)
+	}
 	sessionrevision.ApplyTrackWrite(record, write, trackEvent)
+	record.Projection = candidate.Projection
 	return nil
 }
 
@@ -256,6 +293,143 @@ func (s Store) ApplyMutation(
 	return nil
 }
 
+// InvalidateProjection makes the rolling child-row projection unavailable in
+// the same transaction that removes Session-owned child rows. The next canonical
+// turn bootstraps from the remaining authoritative rows. A missing or deleted
+// owning session needs no sidecar update.
+func (s Store) InvalidateProjection(
+	ctx context.Context,
+	tx *sql.Tx,
+	key session.Key,
+) error {
+	// #nosec G201 -- table names are assembled from validated service prefixes.
+	statement := fmt.Sprintf(
+		`SELECT state FROM %s WHERE app_name = %s AND user_id = %s AND session_id = %s AND deleted_at IS NULL FOR UPDATE`,
+		s.Tables.States,
+		s.bind(1),
+		s.bind(2),
+		s.bind(3),
+	)
+	var raw []byte
+	if err := tx.QueryRowContext(
+		ctx, statement, key.AppName, key.UserID, key.SessionID,
+	).Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("lock session revision for projection invalidation: %w", err)
+	}
+	var envelope stateEnvelope
+	record, err := sessionrevision.DecodeState(raw, &envelope)
+	if err != nil {
+		return err
+	}
+	sessionrevision.ApplyWrite(record, sessionrevision.Write{Hazard: true})
+	sessionrevision.InvalidateProjection(record)
+	raw, err = sessionrevision.EncodeState(envelope, record)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		fmt.Sprintf(
+			`UPDATE %s SET state = %s, updated_at = updated_at WHERE app_name = %s AND user_id = %s AND session_id = %s AND deleted_at IS NULL`,
+			s.Tables.States,
+			s.bind(1),
+			s.bind(2),
+			s.bind(3),
+			s.bind(4),
+		),
+		s.jsonArg(raw),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	); err != nil {
+		return fmt.Errorf("persist invalidated session revision projection: %w", err)
+	}
+	return nil
+}
+
+// InvalidateProjections invalidates each owning session once. It is intended
+// for child-row cleanup paths which already selected the affected keys.
+func (s Store) InvalidateProjections(
+	ctx context.Context,
+	tx *sql.Tx,
+	keys []session.Key,
+) error {
+	seen := make(map[session.Key]struct{}, len(keys))
+	unique := make([]session.Key, 0, len(keys))
+	for _, key := range keys {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, key)
+	}
+	sort.Slice(unique, func(i, j int) bool {
+		if unique[i].AppName != unique[j].AppName {
+			return unique[i].AppName < unique[j].AppName
+		}
+		if unique[i].UserID != unique[j].UserID {
+			return unique[i].UserID < unique[j].UserID
+		}
+		return unique[i].SessionID < unique[j].SessionID
+	})
+	for _, key := range unique {
+		if err := s.InvalidateProjection(ctx, tx, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// InvalidateExpiredChildProjections invalidates active sessions whose child
+// rows are about to be pruned by a TTL cleanup in tx.
+func (s Store) InvalidateExpiredChildProjections(
+	ctx context.Context,
+	tx *sql.Tx,
+	table string,
+	now time.Time,
+	userKey *session.UserKey,
+) error {
+	// #nosec G201 -- table names are assembled from validated service prefixes.
+	statement := fmt.Sprintf(
+		`SELECT DISTINCT app_name, user_id, session_id FROM %s WHERE expires_at IS NOT NULL AND expires_at <= %s AND deleted_at IS NULL`,
+		table,
+		s.bind(1),
+	)
+	args := []any{now}
+	if userKey != nil {
+		statement += fmt.Sprintf(
+			" AND app_name = %s AND user_id = %s",
+			s.bind(2),
+			s.bind(3),
+		)
+		args = append(args, userKey.AppName, userKey.UserID)
+	}
+	rows, err := tx.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return fmt.Errorf("list sessions with expired child projections: %w", err)
+	}
+	var keys []session.Key
+	for rows.Next() {
+		var key session.Key
+		if err := rows.Scan(&key.AppName, &key.UserID, &key.SessionID); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan session with expired child projection: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate sessions with expired child projections: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	return s.InvalidateProjections(ctx, tx, keys)
+}
+
 func checkGeneration(
 	record *sessionrevision.PersistedRecord,
 	write sessionrevision.Write,
@@ -271,6 +445,30 @@ func checkGeneration(
 func (s Store) LoadActive(
 	ctx context.Context,
 	query projectionDB,
+	key session.Key,
+	forUpdate bool,
+) (*session.Session, *time.Time, error) {
+	active, expiresAt, err := s.loadActiveState(ctx, query, key, forUpdate)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.loadEvents(ctx, query, key, active); err != nil {
+		return nil, nil, err
+	}
+	if s.Tables.Tracks != "" {
+		if err := s.loadTracks(ctx, query, key, active); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := s.loadSummaries(ctx, query, key, active); err != nil {
+		return nil, nil, err
+	}
+	return active, expiresAt, nil
+}
+
+func (s Store) loadActiveState(
+	ctx context.Context,
+	query rowQuerier,
 	key session.Key,
 	forUpdate bool,
 ) (*session.Session, *time.Time, error) {
@@ -315,21 +513,28 @@ WHERE app_name = %s AND user_id = %s AND session_id = %s AND deleted_at IS NULL`
 		session.WithSessionCreatedAt(created),
 		session.WithSessionUpdatedAt(updated),
 	)
-	if err := s.loadEvents(ctx, query, key, active); err != nil {
-		return nil, nil, err
-	}
-	if s.Tables.Tracks != "" {
-		if err := s.loadTracks(ctx, query, key, active); err != nil {
-			return nil, nil, err
-		}
-	}
-	if err := s.loadSummaries(ctx, query, key, active); err != nil {
-		return nil, nil, err
-	}
 	if expires.Valid {
 		return active, &expires.Time, nil
 	}
 	return active, nil, nil
+}
+
+// loadBoundaryProjection loads the mutable session fields captured by a turn
+// boundary without rereading the event and track histories represented by the
+// rolling projection in the revision sidecar.
+func (s Store) loadBoundaryProjection(
+	ctx context.Context,
+	query projectionDB,
+	key session.Key,
+) (*session.Session, error) {
+	active, _, err := s.loadActiveState(ctx, query, key, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.loadSummaries(ctx, query, key, active); err != nil {
+		return nil, err
+	}
+	return active, nil
 }
 
 func (s Store) loadEvents(
@@ -500,6 +705,11 @@ func (s Store) ReplaceLatestTurn(
 	if err != nil {
 		return nil, fmt.Errorf("restore latest-turn boundary: %w", err)
 	}
+	if err := sessionrevision.ResetProjectionFromBoundary(
+		record, checkpoint.Boundary,
+	); err != nil {
+		return nil, fmt.Errorf("restore session revision projection: %w", err)
+	}
 	record.Generation++
 	record.Head++
 	record.Checkpoint = nil
@@ -573,7 +783,7 @@ WHERE app_name = %s AND user_id = %s AND session_id = %s AND deleted_at IS NULL`
 			return err
 		}
 	}
-	return s.replaceSummaries(ctx, tx, key, restored, expiresAt)
+	return s.replaceSummaries(ctx, tx, key, restored)
 }
 
 func (s Store) trimEventTail(
@@ -618,25 +828,7 @@ func (s Store) trimEventTail(
 		return sessionrevision.ErrLatestTurnReplacementUnavailable
 	}
 	tail := ids[prefixLength:]
-	placeholders := make([]string, len(tail))
-	args := make([]any, len(tail))
-	for i, id := range tail {
-		placeholders[i] = s.bind(i + 1)
-		args[i] = id
-	}
-	if _, err := tx.ExecContext(
-		ctx,
-		fmt.Sprintf(
-			"DELETE FROM %s WHERE id IN (%s) "+
-				"AND app_name = %s AND user_id = %s AND session_id = %s",
-			s.Tables.Events,
-			strings.Join(placeholders, ", "),
-			s.bind(len(tail)+1),
-			s.bind(len(tail)+2),
-			s.bind(len(tail)+3),
-		),
-		append(args, key.AppName, key.UserID, key.SessionID)...,
-	); err != nil {
+	if err := s.removeTailRows(ctx, tx, s.Tables.Events, key, tail); err != nil {
 		return fmt.Errorf("remove discarded event tail: %w", err)
 	}
 	return nil
@@ -740,29 +932,49 @@ AND deleted_at IS NULL ORDER BY created_at, id FOR UPDATE`,
 	if len(tail) == 0 {
 		return nil
 	}
-	placeholders := make([]string, len(tail))
-	args := make([]any, len(tail), len(tail)+3)
-	for i, id := range tail {
-		placeholders[i] = s.bind(i + 1)
-		args[i] = id
-	}
-	args = append(args, key.AppName, key.UserID, key.SessionID)
-	if _, err := tx.ExecContext(
-		ctx,
-		fmt.Sprintf(
-			"DELETE FROM %s WHERE id IN (%s) "+
-				"AND app_name = %s AND user_id = %s AND session_id = %s",
-			s.Tables.Tracks,
-			strings.Join(placeholders, ", "),
-			s.bind(len(tail)+1),
-			s.bind(len(tail)+2),
-			s.bind(len(tail)+3),
-		),
-		args...,
-	); err != nil {
+	if err := s.removeTailRows(ctx, tx, s.Tables.Tracks, key, tail); err != nil {
 		return fmt.Errorf("remove discarded track tail: %w", err)
 	}
 	return nil
+}
+
+func (s Store) removeTailRows(
+	ctx context.Context,
+	tx *sql.Tx,
+	table string,
+	key session.Key,
+	ids []int64,
+) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	offset := 0
+	args := make([]any, 0, len(ids)+4)
+	// #nosec G202 -- table names are assembled from validated service prefixes.
+	statement := "DELETE FROM " + table
+	if s.SoftDelete {
+		statement = "UPDATE " + table + " SET deleted_at = " + s.bind(1)
+		args = append(args, time.Now().UTC())
+		offset = 1
+	}
+	placeholders := make([]string, len(ids))
+	for i, id := range ids {
+		placeholders[i] = s.bind(offset + i + 1)
+		args = append(args, id)
+	}
+	statement += fmt.Sprintf(
+		" WHERE id IN (%s) AND app_name = %s AND user_id = %s AND session_id = %s",
+		strings.Join(placeholders, ", "),
+		s.bind(offset+len(ids)+1),
+		s.bind(offset+len(ids)+2),
+		s.bind(offset+len(ids)+3),
+	)
+	if s.SoftDelete {
+		statement += " AND deleted_at IS NULL"
+	}
+	args = append(args, key.AppName, key.UserID, key.SessionID)
+	_, err := tx.ExecContext(ctx, statement, args...)
+	return err
 }
 
 func (s Store) replaceSummaries(
@@ -770,7 +982,6 @@ func (s Store) replaceSummaries(
 	tx *sql.Tx,
 	key session.Key,
 	restored *session.Session,
-	expiresAt *time.Time,
 ) error {
 	// #nosec G201 -- table names are assembled from validated service prefixes.
 	statement := fmt.Sprintf(
@@ -817,7 +1028,7 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, NULL)`,
 			filterKey,
 			s.jsonArg(raw),
 			summary.UpdatedAt,
-			expiresAt,
+			nil,
 		); err != nil {
 			return fmt.Errorf("restore active summary: %w", err)
 		}

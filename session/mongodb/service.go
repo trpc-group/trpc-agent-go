@@ -414,19 +414,7 @@ func (s *Service) ListSessions(
 			if err := s.attachRevisionGeneration(sess, d); err != nil {
 				return nil, err
 			}
-			listed := mergeState(appState, userState, sess)
-			stable, err := s.stabilizeRevisionProjection(
-				ctx,
-				listed,
-				true,
-				opt.EventNum,
-				opt.EventTime,
-				nil,
-			)
-			if err != nil {
-				return nil, err
-			}
-			sessions = append(sessions, stable)
+			sessions = append(sessions, mergeState(appState, userState, sess))
 		}
 		return sessions, nil
 	}
@@ -474,21 +462,11 @@ func (s *Service) ListSessions(
 			return nil, err
 		}
 		attachTrackEvents(sess, trackEventsList[i])
-		listed := mergeState(appState, userState, sess)
-		stable, err := s.stabilizeRevisionProjection(
-			ctx,
-			listed,
-			false,
-			opt.EventNum,
-			opt.EventTime,
-			nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		sessions = append(sessions, stable)
+		sessions = append(sessions, mergeState(appState, userState, sess))
 	}
-	return sessions, nil
+	return s.stabilizeListedRevisionProjections(
+		ctx, userKey, sessions, docs, opt.EventNum, opt.EventTime,
+	)
 }
 
 // DeleteSession deletes a session.
@@ -1191,19 +1169,11 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, t
 		if len(or) == 0 {
 			return nil
 		}
-		filter := bson.M{
-			"$or":        or,
-			"deleted_at": nil,
-		}
-		if s.opts.softDelete {
-			if _, err := s.client.UpdateMany(ctx, s.database, collection, filter,
-				bson.M{"$set": bson.M{"deleted_at": now}}); err != nil {
-				return fmt.Errorf("soft delete expired %s: %w", label, err)
-			}
-		} else {
-			if _, err := s.client.DeleteMany(ctx, s.database, collection, filter); err != nil {
-				return fmt.Errorf("hard delete expired %s: %w", label, err)
-			}
+		groups := append(bson.A(nil), or...)
+		if err := s.discardExpiredRevisionDocuments(
+			ctx, collection, label, groups, now,
+		); err != nil {
+			return err
 		}
 		or = or[:0]
 		return nil

@@ -43,10 +43,13 @@ func DecodeState(raw []byte, state any) (*PersistedRecord, error) {
 		return nil, fmt.Errorf("decode session revision metadata: %w", err)
 	}
 	if metadata.Version != stateMetadataVersion {
-		return nil, fmt.Errorf(
-			"decode session revision metadata: unsupported version %d",
-			metadata.Version,
-		)
+		// Preserve the base session read path across a rollback from a newer
+		// sidecar format. The hazardous checkpoint keeps replacement fail-closed
+		// until a supported writer establishes a new authoritative boundary.
+		return &PersistedRecord{
+			Checkpoint:          &PersistedCheckpoint{Hazard: true},
+			incompatibleVersion: metadata.Version,
+		}, nil
 	}
 	return &metadata.Revision, nil
 }
@@ -54,6 +57,12 @@ func DecodeState(raw []byte, state any) (*PersistedRecord, error) {
 // EncodeState encodes a session-state envelope with its private revision
 // sidecar. The sidecar is outside the user-visible StateMap.
 func EncodeState(state any, record *PersistedRecord) ([]byte, error) {
+	if record != nil && record.incompatibleVersion != 0 {
+		return nil, fmt.Errorf(
+			"encode session revision metadata: unsupported persisted version %d",
+			record.incompatibleVersion,
+		)
+	}
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return nil, fmt.Errorf("encode session state: %w", err)

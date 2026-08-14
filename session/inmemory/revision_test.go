@@ -30,6 +30,49 @@ func TestLatestTurnReplacementContract(t *testing.T) {
 	replacementtest.Run(t, service)
 }
 
+func TestEventLimitInvalidatesRollingProjection(t *testing.T) {
+	ctx := context.Background()
+	service := NewSessionService(WithSessionEventLimit(1))
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "limited"}
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	firstCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID: "first", InvocationID: "first-invocation",
+	})
+	require.NoError(t, service.AppendEvent(
+		firstCtx,
+		sess,
+		testMessageEvent(
+			"first", "first", "first-invocation", "first",
+		),
+	))
+	require.NoError(t, service.AppendEvent(
+		ctx, sess, testCompletionEvent("first", "first-invocation"),
+	))
+	secondCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID: "second", InvocationID: "second-invocation",
+	})
+	require.NoError(t, service.AppendEvent(
+		secondCtx,
+		sess,
+		testMessageEvent(
+			"second", "second", "second-invocation", "second",
+		),
+	))
+
+	app, ok := service.getAppSessions(key.AppName)
+	require.True(t, ok)
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	stored := app.sessions[key.UserID][key.SessionID]
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.revision)
+	assert.False(t, revision.ProjectionInitialized(&stored.revision.record))
+	require.NotNil(t, stored.revision.record.Checkpoint)
+	assert.True(t, stored.revision.record.Checkpoint.Hazard)
+}
+
 func TestReplaceLatestTurnRestoresCheckpointAndFencesOldProjection(t *testing.T) {
 	ctx := context.Background()
 	service := NewSessionService()

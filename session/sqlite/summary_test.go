@@ -108,6 +108,38 @@ func TestSessionSQLite_EnqueueSummaryJob_NoWorker_Sync(t *testing.T) {
 	require.Equal(t, "summary", text)
 }
 
+func TestSessionSQLite_SummaryExpirationFollowsSessionLifecycle(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithSessionTTL(time.Hour),
+		WithSummarizer(&fakeSummarizer{}),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, svc.AppendEvent(ctx, sess, newUserEvent("hello")))
+	require.NoError(t, svc.CreateSessionSummary(
+		ctx, sess, session.SummaryFilterKeyAllContents, true,
+	))
+
+	var count int
+	require.NoError(t, svc.db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT COUNT(*) FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND filter_key = ? AND deleted_at IS NULL AND expires_at IS NULL`,
+		svc.tableSessionSummaries,
+	), key.AppName, key.UserID, key.SessionID,
+		session.SummaryFilterKeyAllContents).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
 func TestSessionSQLite_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {
 	db, _, cleanup := openTempSQLiteDB(t)
 	defer cleanup()

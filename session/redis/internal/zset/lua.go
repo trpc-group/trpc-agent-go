@@ -107,6 +107,7 @@ local revision = {generation = 0}
 if revisionJSON then revision = cjson.decode(revisionJSON) end
 revision.head = tonumber(revision.head or 0) + 1
 if revision.checkpoint then revision.checkpoint.hazard = true end
+revision.projection = nil
 
 local ttlMs = redis.call('PTTL', sessionStateKey)
 redis.call('SET', revisionKey, cjson.encode(revision))

@@ -26,6 +26,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mongodb"
@@ -587,7 +588,7 @@ func TestListSessions_DecodesAndMergesEachSession(t *testing.T) {
 		},
 		findFn: func(_ any) (*mongo.Cursor, error) {
 			calls++
-			if calls == 1 {
+			if calls == 1 || calls == 6 {
 				return docsCursor(docs)
 			}
 			// Subsequent Find calls (app_states, user_states, events,
@@ -602,12 +603,28 @@ func TestListSessions_DecodesAndMergesEachSession(t *testing.T) {
 	require.Len(t, got, 2)
 	assert.Equal(t, "s1", got[0].ID)
 	assert.Equal(t, "s2", got[1].ID)
+	assert.Equal(t, 6, calls, "one batched revision read; no per-session reads")
+	var findOneCalls int
+	for _, op := range mc.recorded() {
+		if op.name == "FindOne" {
+			findOneCalls++
+		}
+	}
+	assert.Zero(t, findOneCalls)
 }
 
 func TestListSessions_OnlyMetaSkipsEventsAndSummaries(t *testing.T) {
 	now := time.Now()
+	revisionRaw, err := encodeRevision(
+		&sessionrevision.PersistedRecord{Generation: 4},
+	)
+	require.NoError(t, err)
 	docs := []any{
-		sessionStateDoc{AppName: "app", UserID: "u", SessionID: "s1", State: bson.M{}, CreatedAt: now, UpdatedAt: now},
+		sessionStateDoc{
+			AppName: "app", UserID: "u", SessionID: "s1",
+			State: bson.M{}, CreatedAt: now, UpdatedAt: now,
+			Revision: revisionRaw,
+		},
 	}
 	calls := 0
 	mc := &mockClient{
@@ -630,6 +647,9 @@ func TestListSessions_OnlyMetaSkipsEventsAndSummaries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Empty(t, got[0].Events)
+	generation, ok := sessionrevision.Generation(got[0])
+	require.True(t, ok)
+	assert.Equal(t, uint64(4), generation)
 	assert.Equal(t, 3, calls, "session/app/user state reads only; no event/summary reads")
 }
 
@@ -680,6 +700,10 @@ func TestListSessions_NonMetaLoadsEventsAndSummaries(t *testing.T) {
 				})
 			case 5: // session_summaries.
 				return emptyCursor()
+			case 6: // batched session revisions.
+				return docsCursor([]any{sessionStateDoc{
+					AppName: "app", UserID: "u", SessionID: "s",
+				}})
 			default:
 				return emptyCursor()
 			}
@@ -692,6 +716,7 @@ func TestListSessions_NonMetaLoadsEventsAndSummaries(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Len(t, got[0].Events, 1)
 	assert.Equal(t, "e1", got[0].Events[0].ID)
+	assert.Equal(t, 6, findCalls, "revision generations are batch-loaded")
 }
 
 // -- DeleteSession ----------------------------------------------------------
@@ -2160,17 +2185,23 @@ func TestCleanupExpiredTracks_UsesSessionGroupCleanup(t *testing.T) {
 				bson.M{"_id": bson.M{"app_name": "app", "user_id": "u", "session_id": "s"}},
 			})
 		},
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
 	}
 	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 
 	require.NoError(t, s.cleanupExpiredTracks(context.Background(), now))
 
 	ops := mc.recorded()
-	require.Len(t, ops, 2)
+	require.Len(t, ops, 4)
 	assert.Equal(t, "Aggregate", ops[0].name)
 	assert.Equal(t, "session_tracks", ops[0].coll)
-	assert.Equal(t, "UpdateMany", ops[1].name)
-	assert.Equal(t, "session_tracks", ops[1].coll)
+	assert.Equal(t, "Transaction", ops[1].name)
+	assert.Equal(t, "Find", ops[2].name)
+	assert.Equal(t, "session_states", ops[2].coll)
+	assert.Equal(t, "UpdateMany", ops[3].name)
+	assert.Equal(t, "session_tracks", ops[3].coll)
 }
 
 // -- WindowService ----------------------------------------------------------
@@ -2494,23 +2525,28 @@ func TestCleanupExpiredEvents_AggregationIntegrity(t *testing.T) {
 				bson.M{"_id": bson.M{"app_name": "app", "user_id": "u2", "session_id": "s2"}},
 			})
 		},
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
 	}
 	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 
 	require.NoError(t, s.cleanupExpiredEvents(context.Background(), now))
 
 	ops := mc.recorded()
-	require.Len(t, ops, 2)
+	require.Len(t, ops, 4)
 	assert.Equal(t, "Aggregate", ops[0].name)
-	assert.Equal(t, "UpdateMany", ops[1].name)
-	filter := ops[1].filter.(bson.M)
+	assert.Equal(t, "Transaction", ops[1].name)
+	assert.Equal(t, "Find", ops[2].name)
+	assert.Equal(t, "UpdateMany", ops[3].name)
+	filter := ops[3].filter.(bson.M)
 	or := filter["$or"].(bson.A)
 	require.Len(t, or, 2)
 	assert.Contains(t, or, bson.M{"app_name": "app", "user_id": "u1", "session_id": "s1"})
 	assert.Contains(t, or, bson.M{"app_name": "app", "user_id": "u2", "session_id": "s2"})
 	assert.Equal(t, nil, filter["deleted_at"])
 	assert.NotContains(t, filter, "updated_at")
-	upd := ops[1].update.(bson.M)
+	upd := ops[3].update.(bson.M)
 	set := upd["$set"].(bson.M)
 	assert.Equal(t, now, set["deleted_at"])
 }
@@ -2567,6 +2603,9 @@ func TestCleanupExpiredEvents_HardDeletePath(t *testing.T) {
 				bson.M{"_id": bson.M{"app_name": "app", "user_id": "u", "session_id": "s"}},
 			})
 		},
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
 	}
 	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.sessionTTL = time.Hour
@@ -2576,10 +2615,12 @@ func TestCleanupExpiredEvents_HardDeletePath(t *testing.T) {
 	require.NoError(t, s.cleanupExpiredEvents(context.Background(), time.Now()))
 
 	ops := mc.recorded()
-	require.Len(t, ops, 2)
+	require.Len(t, ops, 4)
 	assert.Equal(t, "Aggregate", ops[0].name)
-	assert.Equal(t, "DeleteMany", ops[1].name)
-	assert.Equal(t, "session_events", ops[1].coll)
+	assert.Equal(t, "Transaction", ops[1].name)
+	assert.Equal(t, "Find", ops[2].name)
+	assert.Equal(t, "DeleteMany", ops[3].name)
+	assert.Equal(t, "session_events", ops[3].coll)
 }
 
 func TestCleanupExpiredEvents_FlushesInBatches(t *testing.T) {
@@ -2603,6 +2644,9 @@ func TestCleanupExpiredEvents_FlushesInBatches(t *testing.T) {
 				assert.Len(t, or, 1)
 			}
 			return &mongo.UpdateResult{}, nil
+		},
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
 	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
@@ -2648,6 +2692,9 @@ func TestCleanupExpiredEvents_PropagatesFlushErrors(t *testing.T) {
 		},
 		updateManyFn: func(_, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
 			return nil, want
+		},
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
 	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })

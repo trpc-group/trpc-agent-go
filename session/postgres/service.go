@@ -960,6 +960,14 @@ func (s *Service) cleanupExpiredData(ctx context.Context, userKey *session.UserK
 	if len(validTasks) > 0 {
 		err := s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
 			for _, task := range validTasks {
+				if task.tableName == s.tableSessionTracks ||
+					task.tableName == s.tableSessionSummaries {
+					if err := s.revisionStore().InvalidateExpiredChildProjections(
+						ctx, tx, task.tableName, now, userKey,
+					); err != nil {
+						return err
+					}
+				}
 				if s.opts.softDelete {
 					if err := s.softDeleteExpiredTableInTx(ctx, tx, task.tableName, now, userKey); err != nil {
 						return err
@@ -1032,6 +1040,11 @@ func (s *Service) softDeleteExpiredTableInTx(
 			args = append(args, key.AppName, key.UserID, key.SessionID)
 		}
 		if len(args) > 0 {
+			if err := s.revisionStore().InvalidateProjections(
+				ctx, tx, sessionKeys,
+			); err != nil {
+				return fmt.Errorf("invalidate expired event projections: %w", err)
+			}
 			if _, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`UPDATE %s SET deleted_at = $1 WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
 					tableName, strings.Join(placeholders, ",")), append([]any{now}, args...)...); err != nil {
@@ -1111,6 +1124,11 @@ func (s *Service) hardDeleteExpiredTableInTx(
 			args = append(args, key.AppName, key.UserID, key.SessionID)
 		}
 		if len(args) > 0 {
+			if err := s.revisionStore().InvalidateProjections(
+				ctx, tx, sessionKeys,
+			); err != nil {
+				return fmt.Errorf("invalidate expired event projections: %w", err)
+			}
 			if _, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`DELETE FROM %s WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
 					tableName, strings.Join(placeholders, ",")), args...); err != nil {

@@ -11,6 +11,7 @@ package mysql
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -25,6 +26,41 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
+
+type summaryRevisionStateArg struct {
+	sessionID string
+}
+
+func (a summaryRevisionStateArg) Match(value driver.Value) bool {
+	var raw []byte
+	switch value := value.(type) {
+	case string:
+		raw = []byte(value)
+	case []byte:
+		raw = value
+	default:
+		return false
+	}
+	var envelope struct {
+		ID       string `json:"id"`
+		Metadata struct {
+			Version  int `json:"version"`
+			Revision struct {
+				Generation uint64          `json:"generation"`
+				Head       uint64          `json:"head"`
+				Checkpoint json.RawMessage `json:"checkpoint"`
+			} `json:"latestTurnRevision"`
+		} `json:"_trpcAgent"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return false
+	}
+	return envelope.ID == a.sessionID && envelope.Metadata.Version == 1 &&
+		envelope.Metadata.Revision.Generation == 0 &&
+		envelope.Metadata.Revision.Head == 1 &&
+		(len(envelope.Metadata.Revision.Checkpoint) == 0 ||
+			string(envelope.Metadata.Revision.Checkpoint) == "null")
+}
 
 // mockSummarizerImpl is a mock summarizer for testing
 type mockSummarizerImpl struct {
@@ -69,7 +105,7 @@ func expectSummaryRevisionBegin(
 		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
 			AddRow(string(stateRaw), nil))
 	mock.ExpectExec("UPDATE session_states SET state").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(),
+		WithArgs(summaryRevisionStateArg{sessionID: sess.ID},
 			sess.AppName, sess.UserID, sess.ID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 }

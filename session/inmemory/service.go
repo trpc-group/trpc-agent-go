@@ -837,7 +837,13 @@ func (s *SessionService) appendEvent(
 	sess.UpdateUserSession(evt, opts...)
 
 	// update stored session with the given event
-	s.updateStoredSession(storedSession, evt)
+	if s.updateStoredSession(storedSession, evt) {
+		record := &storedSessionWithTTL.ensureRevision().record
+		if record.Checkpoint != nil {
+			record.Checkpoint.Hazard = true
+		}
+		revision.InvalidateProjection(record)
+	}
 	// Update the session in the wrapper and refresh TTL.
 	storedSessionWithTTL.session = storedSession
 	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
@@ -1020,19 +1026,25 @@ func (s *SessionService) Close() error {
 }
 
 // updateStoredSession updates the stored session with the given event.
-func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Event) {
+func (s *SessionService) updateStoredSession(
+	sess *session.Session,
+	e *event.Event,
+) bool {
+	trimmed := false
 	if e.Response != nil && !e.IsPartial && e.IsValidContent() {
 		storedEvent := cloneStoredEvent(e)
 		sess.EventMu.Lock()
 		sess.Events = append(sess.Events, storedEvent)
 		if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
 			sess.ApplyEventFiltering(session.WithEventNum(s.opts.sessionEventLimit))
+			trimmed = true
 		}
 		sess.EventMu.Unlock()
 	}
 	sess.UpdatedAt = time.Now()
 	// Merge event state delta to session state.
 	sess.ApplyEventStateDelta(e)
+	return trimmed
 }
 
 func cloneStoredEvent(e *event.Event) event.Event {

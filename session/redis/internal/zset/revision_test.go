@@ -302,6 +302,152 @@ func TestRevisionProjectionIgnoresReadLimit(t *testing.T) {
 	require.Len(t, projection.Events, 2)
 }
 
+func TestOutOfOrderWritesInvalidateRollingProjection(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		equalScore bool
+	}{
+		{name: "older score"},
+		{name: "equal score", equalScore: true},
+	} {
+		t.Run("event "+tt.name, func(t *testing.T) {
+			_, rdb := setupMiniredis(t)
+			c := NewClient(rdb, defaultConfig())
+			ctx := context.Background()
+			key := session.Key{
+				AppName: "app", UserID: "user", SessionID: "event-" + tt.name,
+			}
+			_, err := c.CreateSession(ctx, key, nil)
+			require.NoError(t, err)
+			baseTime := time.Now().Add(-10 * time.Second)
+			initial := revisionEvent("initial", "initial", "initial", false)
+			initial.Timestamp = baseTime
+			require.NoError(t, c.AppendEventWithRevision(
+				ctx, key, initial, sessionrevision.Write{},
+			))
+			projection := initializedZsetProjection(t, c, ctx, key)
+			latest := revisionEvent("latest", "latest", "latest", false)
+			latest.Timestamp = baseTime.Add(2 * time.Second)
+			require.NoError(t, c.AppendEventWithRevision(
+				ctx,
+				key,
+				latest,
+				sessionrevision.Write{Projection: projection},
+			))
+
+			outOfOrder := revisionEvent("out-of-order", "older", "older", false)
+			outOfOrder.Timestamp = baseTime.Add(time.Second)
+			if tt.equalScore {
+				outOfOrder.Timestamp = latest.Timestamp
+			}
+			require.NoError(t, c.AppendEventWithRevision(
+				ctx, key, outOfOrder, sessionrevision.Write{},
+			))
+			record, err := c.Revision(ctx, key)
+			require.NoError(t, err)
+			assert.False(t, sessionrevision.ProjectionInitialized(record))
+		})
+
+		t.Run("track "+tt.name, func(t *testing.T) {
+			_, rdb := setupMiniredis(t)
+			c := NewClient(rdb, defaultConfig())
+			ctx := context.Background()
+			key := session.Key{
+				AppName: "app", UserID: "user", SessionID: "track-" + tt.name,
+			}
+			_, err := c.CreateSession(ctx, key, nil)
+			require.NoError(t, err)
+			baseTime := time.Now().Add(-10 * time.Second)
+			require.NoError(t, c.AppendTrackEventWithRevision(
+				ctx,
+				key,
+				&session.TrackEvent{
+					Track: "ui", Payload: []byte(`{"value":0}`), Timestamp: baseTime,
+				},
+				sessionrevision.Write{},
+			))
+			projection := initializedZsetProjection(t, c, ctx, key)
+			latest := &session.TrackEvent{
+				Track: "ui", Payload: []byte(`{"value":2}`),
+				Timestamp: baseTime.Add(2 * time.Second),
+			}
+			require.NoError(t, c.AppendTrackEventWithRevision(
+				ctx,
+				key,
+				latest,
+				sessionrevision.Write{Projection: projection},
+			))
+			outOfOrder := &session.TrackEvent{
+				Track: "ui", Payload: []byte(`{"value":1}`),
+				Timestamp: baseTime.Add(time.Second),
+			}
+			if tt.equalScore {
+				outOfOrder.Timestamp = latest.Timestamp
+			}
+			require.NoError(t, c.AppendTrackEventWithRevision(
+				ctx, key, outOfOrder, sessionrevision.Write{},
+			))
+			record, err := c.Revision(ctx, key)
+			require.NoError(t, err)
+			assert.False(t, sessionrevision.ProjectionInitialized(record))
+		})
+	}
+}
+
+func TestRevisionBoundaryBaseDetectsExpiredProjectionKeys(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	cfg := defaultConfig()
+	cfg.SessionTTL = time.Hour
+	c := NewClient(rdb, cfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "ttl-gap"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	emptyProjection := initializedZsetProjection(t, c, ctx, key)
+	_, intact, err := c.RevisionBoundaryBase(ctx, key, emptyProjection)
+	require.NoError(t, err)
+	assert.True(t, intact)
+	initial := revisionEvent("initial", "initial", "initial", false)
+	require.NoError(t, c.AppendEventWithRevision(
+		ctx, key, initial, sessionrevision.Write{},
+	))
+	projection := initializedZsetProjection(t, c, ctx, key)
+	require.NoError(t, c.AppendEventWithRevision(
+		ctx,
+		key,
+		revisionEvent("latest", "latest", "latest", false),
+		sessionrevision.Write{Projection: projection},
+	))
+	mr.FastForward(30 * time.Minute)
+	require.NoError(t, c.UpdateSessionStateWithRevision(
+		ctx,
+		key,
+		session.StateMap{"phase": []byte("active")},
+		sessionrevision.Write{},
+	))
+	mr.FastForward(31 * time.Minute)
+
+	base, intact, err := c.RevisionBoundaryBase(ctx, key, projection)
+	require.NoError(t, err)
+	require.NotNil(t, base)
+	assert.False(t, intact)
+	assert.False(t, mr.Exists(c.eventKey(key)))
+}
+
+func initializedZsetProjection(
+	t *testing.T,
+	c *Client,
+	ctx context.Context,
+	key session.Key,
+) *sessionrevision.PersistedProjection {
+	t.Helper()
+	active, err := c.RevisionProjection(ctx, key)
+	require.NoError(t, err)
+	record := &sessionrevision.PersistedRecord{}
+	require.NoError(t, sessionrevision.InitializeProjection(record, active))
+	return record.Projection
+}
+
 func revisionEvent(
 	id string,
 	requestID string,

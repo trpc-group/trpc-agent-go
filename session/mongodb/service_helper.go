@@ -110,15 +110,16 @@ func needsKeyEncoding(s string) bool {
 // `state` are encoded with encodeKey to escape characters that BSON disallows
 // ('.', '$', NUL); decoding is the inverse.
 type sessionStateDoc struct {
-	AppName   string     `bson:"app_name"`
-	UserID    string     `bson:"user_id"`
-	SessionID string     `bson:"session_id"`
-	State     bson.M     `bson:"state,omitempty"`
-	CreatedAt time.Time  `bson:"created_at"`
-	UpdatedAt time.Time  `bson:"updated_at"`
-	ExpiresAt *time.Time `bson:"expires_at,omitempty"`
-	DeletedAt *time.Time `bson:"deleted_at,omitempty"`
-	Revision  []byte     `bson:"revision,omitempty"`
+	DocumentID primitive.ObjectID `bson:"_id,omitempty"`
+	AppName    string             `bson:"app_name"`
+	UserID     string             `bson:"user_id"`
+	SessionID  string             `bson:"session_id"`
+	State      bson.M             `bson:"state,omitempty"`
+	CreatedAt  time.Time          `bson:"created_at"`
+	UpdatedAt  time.Time          `bson:"updated_at"`
+	ExpiresAt  *time.Time         `bson:"expires_at,omitempty"`
+	DeletedAt  *time.Time         `bson:"deleted_at,omitempty"`
+	Revision   []byte             `bson:"revision,omitempty"`
 }
 
 // stateKVDoc is the shared BSON shape of app_states and user_states. UserID is

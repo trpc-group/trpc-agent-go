@@ -200,6 +200,11 @@ func (s *Service) ReplaceLatestTurn(
 	if err != nil {
 		return nil, fmt.Errorf("restore latest-turn boundary: %w", err)
 	}
+	if err := sessionrevision.ResetProjectionFromBoundary(
+		record, checkpoint.Boundary,
+	); err != nil {
+		return nil, err
+	}
 	record.Generation++
 	record.Head++
 	record.Checkpoint = nil
@@ -227,6 +232,40 @@ func (s *Service) ReplaceLatestTurn(
 	}
 	sessionrevision.SetGeneration(restored, record.Generation)
 	return s.replacementResultWithScopedState(ctx, req.Key, restored, true)
+}
+
+func (s *Service) loadTurnBoundaryTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	key session.Key,
+	record *sessionrevision.PersistedRecord,
+	state *SessionState,
+) (*session.Session, error) {
+	if !sessionrevision.ProjectionInitialized(record) {
+		active, _, err := s.loadActiveSessionTx(ctx, tx, key)
+		if err != nil {
+			return nil, err
+		}
+		if err := sessionrevision.InitializeProjection(record, active); err != nil {
+			return nil, err
+		}
+		return active, nil
+	}
+	if state == nil {
+		return nil, session.ErrNilSession
+	}
+	active := session.NewSession(
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		session.WithSessionState(state.State),
+		session.WithSessionCreatedAt(state.CreatedAt),
+		session.WithSessionUpdatedAt(state.UpdatedAt),
+	)
+	if err := s.loadActiveSummariesTx(ctx, tx, key, active); err != nil {
+		return nil, err
+	}
+	return active, nil
 }
 
 func nullInt64Arg(value sql.NullInt64) any {
@@ -535,7 +574,7 @@ WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 			filterKey,
 			raw,
 			summary.UpdatedAt.UTC().UnixNano(),
-			nullInt64Arg(expiresAt),
+			nil,
 		)
 		if err != nil {
 			return fmt.Errorf("restore active summary: %w", err)
@@ -711,21 +750,29 @@ AND deleted_at IS NULL ORDER BY created_at, id`,
 		return nil
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(tail)), ",")
-	args := make([]any, len(tail), len(tail)+3)
-	for i, id := range tail {
-		args[i] = id
+	args := make([]any, 0, len(tail)+4)
+	for _, id := range tail {
+		args = append(args, id)
 	}
-	args = append(args, key.AppName, key.UserID, key.SessionID)
-	if _, err := tx.ExecContext(
-		ctx,
-		fmt.Sprintf(
+	var statement string
+	if s.opts.softDelete {
+		statement = fmt.Sprintf(
+			`UPDATE %s SET deleted_at = ? WHERE id IN (%s)
+AND app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+			s.tableSessionTracks,
+			placeholders,
+		)
+		args = append([]any{time.Now().UTC().UnixNano()}, args...)
+	} else {
+		statement = fmt.Sprintf(
 			`DELETE FROM %s WHERE id IN (%s)
 AND app_name = ? AND user_id = ? AND session_id = ?`,
 			s.tableSessionTracks,
 			placeholders,
-		),
-		args...,
-	); err != nil {
+		)
+	}
+	args = append(args, key.AppName, key.UserID, key.SessionID)
+	if _, err := tx.ExecContext(ctx, statement, args...); err != nil {
 		return fmt.Errorf("remove discarded track tail: %w", err)
 	}
 	return nil

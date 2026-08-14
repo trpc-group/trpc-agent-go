@@ -172,6 +172,137 @@ func TestGetSessionRereadsProjectionAfterFirstReplacement(t *testing.T) {
 	assert.GreaterOrEqual(t, findOneCalls, 5)
 }
 
+func TestStabilizeListedRevisionProjectionsBatchesUnchangedSessions(t *testing.T) {
+	userKey := session.UserKey{AppName: "app", UserID: "user"}
+	id1 := primitive.NewObjectID()
+	id2 := primitive.NewObjectID()
+	raw1, err := encodeRevision(
+		&sessionrevision.PersistedRecord{Generation: 3},
+	)
+	require.NoError(t, err)
+	raw2, err := encodeRevision(
+		&sessionrevision.PersistedRecord{Generation: 7},
+	)
+	require.NoError(t, err)
+	docs := []sessionStateDoc{
+		{DocumentID: id1, SessionID: "s1", Revision: raw1},
+		{DocumentID: id2, SessionID: "s2", Revision: raw2},
+	}
+	mc := &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+		return docsCursor([]any{docs[1], docs[0]})
+	}}
+	s := newServiceForTest(t, mc)
+	listed := []*session.Session{
+		session.NewSession(userKey.AppName, userKey.UserID, "s1"),
+		session.NewSession(userKey.AppName, userKey.UserID, "s2"),
+	}
+
+	got, err := s.stabilizeListedRevisionProjections(
+		context.Background(), userKey, listed, docs, 0, time.Time{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, listed, got)
+	assert.Len(t, mc.recorded(), 1)
+	assert.Equal(t, "Find", mc.recorded()[0].name)
+}
+
+func TestStabilizeListedRevisionProjectionsReloadsOnlyChangedSession(t *testing.T) {
+	userKey := session.UserKey{AppName: "app", UserID: "user"}
+	id1 := primitive.NewObjectID()
+	id2 := primitive.NewObjectID()
+	raw1, err := encodeRevision(
+		&sessionrevision.PersistedRecord{Generation: 3},
+	)
+	require.NoError(t, err)
+	rawBefore, err := encodeRevision(
+		&sessionrevision.PersistedRecord{Generation: 6},
+	)
+	require.NoError(t, err)
+	rawAfter, err := encodeRevision(
+		&sessionrevision.PersistedRecord{Generation: 7},
+	)
+	require.NoError(t, err)
+	initialDocs := []sessionStateDoc{
+		{DocumentID: id1, SessionID: "s1", Revision: raw1},
+		{DocumentID: id2, SessionID: "s2", Revision: rawBefore},
+	}
+	currentDocs := []any{
+		sessionStateDoc{DocumentID: id1, SessionID: "s1", Revision: raw1},
+		sessionStateDoc{DocumentID: id2, SessionID: "s2", Revision: rawAfter},
+	}
+	currentS2 := sessionStateDoc{
+		DocumentID: id2,
+		AppName:    userKey.AppName,
+		UserID:     userKey.UserID,
+		SessionID:  "s2",
+		State:      bson.M{"state": []byte("new")},
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		Revision:   rawAfter,
+	}
+	findCalls := 0
+	findOneCalls := 0
+	mc := &mockClient{
+		findFn: func(any) (*mongo.Cursor, error) {
+			findCalls++
+			if findCalls == 1 {
+				return docsCursor(currentDocs)
+			}
+			return emptyCursor()
+		},
+		findOneFn: func(any) *mongo.SingleResult {
+			findOneCalls++
+			return mongo.NewSingleResultFromDocument(currentS2, nil, nil)
+		},
+	}
+	s := newServiceForTest(t, mc)
+	listed := []*session.Session{
+		session.NewSession(userKey.AppName, userKey.UserID, "s1"),
+		session.NewSession(userKey.AppName, userKey.UserID, "s2"),
+	}
+
+	got, err := s.stabilizeListedRevisionProjections(
+		context.Background(), userKey, listed, initialDocs, 0, time.Time{},
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Same(t, listed[0], got[0])
+	assert.Equal(t, []byte("new"), got[1].State["state"])
+	generation, ok := sessionrevision.Generation(got[1])
+	require.True(t, ok)
+	assert.Equal(t, uint64(7), generation)
+	assert.Equal(t, 3, findOneCalls)
+}
+
+func TestRevisionIdentitiesRejectsIncompleteBatch(t *testing.T) {
+	userKey := session.UserKey{AppName: "app", UserID: "user"}
+	listed := []*session.Session{
+		session.NewSession(userKey.AppName, userKey.UserID, "s1"),
+		session.NewSession(userKey.AppName, userKey.UserID, "s2"),
+	}
+	for _, tc := range []struct {
+		name string
+		docs []any
+	}{
+		{name: "missing", docs: []any{sessionStateDoc{SessionID: "s1"}}},
+		{name: "duplicate", docs: []any{
+			sessionStateDoc{SessionID: "s1"},
+			sessionStateDoc{SessionID: "s1"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+				return docsCursor(tc.docs)
+			}}
+			s := newServiceForTest(t, mc)
+			_, err := s.revisionIdentities(
+				context.Background(), userKey, listed,
+			)
+			assert.ErrorIs(t, err, sessionrevision.ErrStaleProjection)
+		})
+	}
+}
+
 func TestPrepareRevisionEventMutation(t *testing.T) {
 	s := &Service{opts: defaultOptions}
 	evt := nonPartialResponseEvent(t)
@@ -252,6 +383,121 @@ func TestRevisionMutations(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, inserts, 2)
 	assert.GreaterOrEqual(t, updates, 5)
+}
+
+func TestTurnStartUsesRollingProjectionAfterBootstrap(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	for _, tc := range []struct {
+		name            string
+		initialize      bool
+		wantCollections []string
+	}{
+		{
+			name: "bootstrap",
+			wantCollections: []string{
+				"session_events", "session_tracks", "session_summaries",
+			},
+		},
+		{
+			name:            "steady state",
+			initialize:      true,
+			wantCollections: []string{"session_summaries"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := &sessionrevision.PersistedRecord{}
+			if tc.initialize {
+				require.NoError(t, sessionrevision.InitializeProjection(
+					record,
+					session.NewSession(key.AppName, key.UserID, key.SessionID),
+				))
+			}
+			revisionRaw, err := encodeRevision(record)
+			require.NoError(t, err)
+			doc := sessionStateDoc{
+				AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID,
+				State: bson.M{}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+				Revision: revisionRaw,
+			}
+			mc := &mockClient{
+				findOneFn: func(any) *mongo.SingleResult {
+					return mongo.NewSingleResultFromDocument(doc, nil, nil)
+				},
+				findFn: func(any) (*mongo.Cursor, error) { return emptyCursor() },
+				transactionFn: func(fn func(mongo.SessionContext) error) error {
+					return fn(mongo.NewSessionContext(context.Background(), nil))
+				},
+			}
+			s := newServiceForTest(t, mc)
+			evt := nonPartialResponseEvent(t)
+			evt.RequestID = "request"
+			require.NoError(t, s.persistEventWithRevision(
+				context.Background(), key, evt, sessionrevision.Write{
+					Start: &sessionrevision.TurnStart{
+						RequestID: "request", InvocationID: evt.InvocationID,
+					},
+				},
+			))
+
+			var gotCollections []string
+			var persistedRevision []byte
+			for _, op := range mc.recorded() {
+				if op.name == "Find" {
+					gotCollections = append(gotCollections, op.coll)
+				}
+				if op.name == "UpdateOne" && op.coll == s.collSessionStates {
+					set := op.update.(bson.M)["$set"].(bson.M)
+					persistedRevision, _ = set["revision"].([]byte)
+				}
+			}
+			assert.Equal(t, tc.wantCollections, gotCollections)
+			require.NotEmpty(t, persistedRevision)
+			persisted, err := decodeRevision(persistedRevision)
+			require.NoError(t, err)
+			assert.True(t, sessionrevision.ProjectionInitialized(persisted))
+			assert.Equal(t, uint64(1), persisted.Projection.Events.Count)
+			require.NotNil(t, persisted.Checkpoint)
+			assert.False(t, persisted.Checkpoint.Hazard)
+		})
+	}
+}
+
+func TestTrackWriteAdvancesInitializedProjection(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	record := &sessionrevision.PersistedRecord{}
+	require.NoError(t, sessionrevision.InitializeProjection(
+		record, session.NewSession(key.AppName, key.UserID, key.SessionID),
+	))
+	revisionRaw, err := encodeRevision(record)
+	require.NoError(t, err)
+	doc := sessionStateDoc{
+		AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID,
+		State: bson.M{}, Revision: revisionRaw,
+	}
+	var persistedRevision []byte
+	mc := &mockClient{
+		findOneFn: func(any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(doc, nil, nil)
+		},
+		updateOneFn: func(_, update any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			set := update.(bson.M)["$set"].(bson.M)
+			persistedRevision, _ = set["revision"].([]byte)
+			return &mongo.UpdateResult{MatchedCount: 1}, nil
+		},
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
+	}
+	s := newServiceForTest(t, mc)
+	require.NoError(t, s.persistTrackEventWithRevision(
+		context.Background(), key, &session.TrackEvent{
+			Track: "trace", RequestID: "request", Payload: json.RawMessage(`{}`),
+		}, sessionrevision.Write{},
+	))
+	require.NotEmpty(t, persistedRevision)
+	persisted, err := decodeRevision(persistedRevision)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), persisted.Projection.Tracks["trace"].Count)
 }
 
 func TestReplaceLatestTurnRestoresCompleteProjection(t *testing.T) {
@@ -349,12 +595,23 @@ func TestReplaceLatestTurnRestoresCompleteProjection(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, uint64(4), generation)
 	var eventInserts int
+	var persistedRevision []byte
 	for _, op := range mc.recorded() {
 		if op.name == "InsertOne" && op.coll == s.collSessionEvents {
 			eventInserts++
 		}
+		if op.name == "UpdateOne" && op.coll == s.collSessionStates {
+			set := op.update.(bson.M)["$set"].(bson.M)
+			persistedRevision, _ = set["revision"].([]byte)
+		}
 	}
 	assert.Zero(t, eventInserts, "the retained event prefix must not be rewritten")
+	require.NotEmpty(t, persistedRevision)
+	persisted, err := decodeRevision(persistedRevision)
+	require.NoError(t, err)
+	assert.True(t, sessionrevision.ProjectionInitialized(persisted))
+	assert.Equal(t, uint64(1), persisted.Projection.Events.Count)
+	assert.Equal(t, uint64(1), persisted.Projection.Tracks["trace"].Count)
 }
 
 func TestLoadActiveRevisionSessionWithCompleteProjection(t *testing.T) {
@@ -792,6 +1049,63 @@ func TestRestoreRevisionProjectionErrors(t *testing.T) {
 			context.Background(), key, withNilEntries, sessionStateDoc{}, record,
 		))
 	})
+}
+
+func TestExpiredHistoryInvalidatesProjectionInTransaction(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	active := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	active.Events = append(active.Events, *nonPartialResponseEvent(t))
+	record := &sessionrevision.PersistedRecord{
+		Head: 5,
+		Checkpoint: &sessionrevision.PersistedCheckpoint{
+			RequestID: "request", InvocationID: "invocation",
+		},
+	}
+	require.NoError(t, sessionrevision.InitializeProjection(record, active))
+	revisionRaw, err := encodeRevision(record)
+	require.NoError(t, err)
+	doc := sessionStateDoc{
+		DocumentID: primitive.NewObjectID(), Revision: revisionRaw,
+	}
+	var inTransaction bool
+	var persistedRevision []byte
+	mc := &mockClient{
+		findFn: func(any) (*mongo.Cursor, error) {
+			require.True(t, inTransaction)
+			return docsCursor([]any{doc})
+		},
+		updateOneFn: func(_, update any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			require.True(t, inTransaction)
+			set := update.(bson.M)["$set"].(bson.M)
+			persistedRevision, _ = set["revision"].([]byte)
+			return &mongo.UpdateResult{MatchedCount: 1}, nil
+		},
+		updateManyFn: func(_, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			require.True(t, inTransaction)
+			return &mongo.UpdateResult{MatchedCount: 1}, nil
+		},
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
+			inTransaction = true
+			defer func() { inTransaction = false }()
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
+	}
+	s := newServiceForTest(t, mc)
+	require.NoError(t, s.discardExpiredRevisionDocuments(
+		context.Background(), s.collSessionEvents, "events", bson.A{
+			bson.M{
+				"app_name": key.AppName, "user_id": key.UserID,
+				"session_id": key.SessionID,
+			},
+		}, time.Now(),
+	))
+	require.NotEmpty(t, persistedRevision)
+	persisted, err := decodeRevision(persistedRevision)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(6), persisted.Head)
+	require.NotNil(t, persisted.Checkpoint)
+	assert.True(t, persisted.Checkpoint.Hazard)
+	assert.False(t, sessionrevision.ProjectionInitialized(persisted))
 }
 
 func TestRevisionWriteFailurePaths(t *testing.T) {

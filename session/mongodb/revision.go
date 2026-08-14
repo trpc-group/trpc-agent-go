@@ -74,22 +74,189 @@ func (s *Service) revisionGeneration(
 	ctx context.Context,
 	key session.Key,
 ) (uint64, error) {
+	identity, err := s.revisionIdentity(ctx, key)
+	return identity.generation, err
+}
+
+type revisionIdentity struct {
+	documentID primitive.ObjectID
+	generation uint64
+}
+
+func (s *Service) revisionIdentity(
+	ctx context.Context,
+	key session.Key,
+) (revisionIdentity, error) {
 	var doc sessionStateDoc
 	err := s.client.FindOne(
 		ctx,
 		s.database,
 		s.collSessionStates,
 		activeFilterNoExpiry(sessionKeyFilter(key)),
-		options.FindOne().SetProjection(bson.M{"revision": 1}),
+		options.FindOne().SetProjection(bson.M{"_id": 1, "revision": 1}),
 	).Decode(&doc)
 	if err != nil {
-		return 0, fmt.Errorf("read session revision: %w", err)
+		return revisionIdentity{}, fmt.Errorf("read session revision: %w", err)
 	}
 	record, err := decodeRevision(doc.Revision)
 	if err != nil {
-		return 0, err
+		return revisionIdentity{}, err
 	}
-	return record.Generation, nil
+	return revisionIdentity{
+		documentID: doc.DocumentID,
+		generation: record.Generation,
+	}, nil
+}
+
+func (s *Service) revisionIdentities(
+	ctx context.Context,
+	userKey session.UserKey,
+	sessions []*session.Session,
+) (map[string]revisionIdentity, error) {
+	identities := make(map[string]revisionIdentity, len(sessions))
+	if len(sessions) == 0 {
+		return identities, nil
+	}
+	ids := make([]string, 0, len(sessions))
+	for _, sess := range sessions {
+		if sess != nil {
+			ids = append(ids, sess.ID)
+		}
+	}
+	cursor, err := s.client.Find(
+		ctx,
+		s.database,
+		s.collSessionStates,
+		activeFilterNoExpiry(bson.M{
+			"app_name":   userKey.AppName,
+			"user_id":    userKey.UserID,
+			"session_id": bson.M{"$in": ids},
+		}),
+		options.Find().SetProjection(bson.M{
+			"_id": 1, "session_id": 1, "revision": 1,
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read session revisions: %w", err)
+	}
+	defer cursor.Close(ctx)
+	var docs []sessionStateDoc
+	if err := cursor.All(ctx, &docs); err != nil {
+		return nil, fmt.Errorf("read session revisions: %w", err)
+	}
+	for _, doc := range docs {
+		if _, ok := identities[doc.SessionID]; ok {
+			return nil, fmt.Errorf(
+				"read session revisions: duplicate session %q: %w",
+				doc.SessionID,
+				sessionrevision.ErrStaleProjection,
+			)
+		}
+		record, err := decodeRevision(doc.Revision)
+		if err != nil {
+			return nil, err
+		}
+		identities[doc.SessionID] = revisionIdentity{
+			documentID: doc.DocumentID,
+			generation: record.Generation,
+		}
+	}
+	for _, id := range ids {
+		if _, ok := identities[id]; !ok {
+			return nil, fmt.Errorf(
+				"read session revisions: missing session %q: %w",
+				id,
+				sessionrevision.ErrStaleProjection,
+			)
+		}
+	}
+	return identities, nil
+}
+
+func (s *Service) stabilizeListedRevisionProjections(
+	ctx context.Context,
+	userKey session.UserKey,
+	listed []*session.Session,
+	docs []sessionStateDoc,
+	eventNum int,
+	eventTime time.Time,
+) ([]*session.Session, error) {
+	identities, err := s.revisionIdentities(ctx, userKey, listed)
+	if err != nil {
+		return nil, err
+	}
+	initial := make(map[string]revisionIdentity, len(docs))
+	for _, doc := range docs {
+		if _, ok := initial[doc.SessionID]; ok {
+			return nil, sessionrevision.ErrStaleProjection
+		}
+		record, err := decodeRevision(doc.Revision)
+		if err != nil {
+			return nil, err
+		}
+		initial[doc.SessionID] = revisionIdentity{
+			documentID: doc.DocumentID,
+			generation: record.Generation,
+		}
+	}
+	for i, sess := range listed {
+		before, ok := initial[sess.ID]
+		if !ok {
+			return nil, sessionrevision.ErrStaleProjection
+		}
+		current, ok := identities[sess.ID]
+		if !ok {
+			return nil, sessionrevision.ErrStaleProjection
+		}
+		if current == before {
+			continue
+		}
+		key := session.Key{
+			AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID,
+		}
+		stable, err := s.loadStableRevisionProjection(
+			ctx, key, eventNum, eventTime,
+		)
+		if err != nil || stable == nil {
+			if err == nil {
+				err = sessionrevision.ErrStaleProjection
+			}
+			return nil, err
+		}
+		listed[i] = stable
+	}
+	return listed, nil
+}
+
+func (s *Service) loadStableRevisionProjection(
+	ctx context.Context,
+	key session.Key,
+	eventNum int,
+	eventTime time.Time,
+) (*session.Session, error) {
+	const attempts = 3
+	for attempt := 0; attempt < attempts; attempt++ {
+		before, err := s.revisionIdentity(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		projection, err := s.getSession(ctx, key, eventNum, eventTime, nil)
+		if err != nil {
+			return nil, err
+		}
+		after, err := s.revisionIdentity(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		if before == after {
+			sessionrevision.SetGeneration(projection, before.generation)
+			return projection, nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"read stable session projection: %w",
+		sessionrevision.ErrStaleProjection,
+	)
 }
 
 func (s *Service) stabilizeRevisionProjection(
@@ -297,16 +464,31 @@ func (s *Service) persistRevisionEvent(
 		return err
 	}
 	if write.Start != nil {
-		active, err := s.loadActiveRevisionSession(sc, key, doc)
+		var active *session.Session
+		if sessionrevision.ProjectionInitialized(record) {
+			active, err = s.loadRevisionBoundarySession(sc, key, doc)
+		} else {
+			active, err = s.loadActiveRevisionSession(sc, key, doc)
+			if err == nil {
+				err = sessionrevision.InitializeProjection(record, active)
+			}
+		}
 		if err != nil {
 			return err
 		}
-		write.Boundary, err = sessionrevision.NewBoundary(active)
+		write.Boundary, err = sessionrevision.NewBoundaryFromProjection(
+			active, record.Projection,
+		)
 		if err != nil {
 			return fmt.Errorf("capture session boundary before latest turn: %w", err)
 		}
 	}
 	sessionrevision.ApplyEventWrite(record, write, e, mutation.eventDoc != nil)
+	if mutation.eventDoc != nil {
+		if err := sessionrevision.AppendProjectionEvent(record, e); err != nil {
+			return fmt.Errorf("advance session event projection: %w", err)
+		}
+	}
 	revisionRaw, err := encodeRevision(record)
 	if err != nil {
 		return err
@@ -370,6 +552,9 @@ func (s *Service) persistTrackEventWithRevision(
 			return err
 		}
 		sessionrevision.ApplyTrackWrite(record, write, trackEvent)
+		if err := sessionrevision.AppendProjectionTrack(record, trackEvent); err != nil {
+			return fmt.Errorf("advance session track projection: %w", err)
+		}
 		revisionRaw, err := encodeRevision(record)
 		if err != nil {
 			return err
@@ -550,6 +735,11 @@ func (s *Service) ReplaceLatestTurn(
 		record.Generation++
 		record.Head++
 		record.Checkpoint = nil
+		if err := sessionrevision.ResetProjectionFromBoundary(
+			record, checkpoint.Boundary,
+		); err != nil {
+			return err
+		}
 		sessionrevision.RecordLatestTurnReplacementReplay(
 			record,
 			req.IdempotencyKey,
@@ -645,6 +835,29 @@ func (s *Service) loadActiveRevisionSession(
 	if err := trackCursor.Err(); err != nil {
 		return nil, err
 	}
+	return s.loadActiveRevisionSummaries(ctx, key, active)
+}
+
+func (s *Service) loadRevisionBoundarySession(
+	ctx context.Context,
+	key session.Key,
+	doc sessionStateDoc,
+) (*session.Session, error) {
+	active := session.NewSession(
+		key.AppName, key.UserID, key.SessionID,
+		session.WithSessionState(bsonToStateMap(doc.State)),
+		session.WithSessionCreatedAt(doc.CreatedAt),
+		session.WithSessionUpdatedAt(doc.UpdatedAt),
+	)
+	return s.loadActiveRevisionSummaries(ctx, key, active)
+}
+
+func (s *Service) loadActiveRevisionSummaries(
+	ctx context.Context,
+	key session.Key,
+	active *session.Session,
+) (*session.Session, error) {
+	filter := activeFilterNoExpiry(sessionKeyFilter(key))
 	summaryCursor, err := s.client.Find(ctx, s.database, s.collSessionSummaries, filter)
 	if err != nil {
 		return nil, fmt.Errorf("load active summaries: %w", err)
@@ -719,7 +932,6 @@ func (s *Service) restoreRevisionProjection(
 			sessionSummaryDoc{
 				AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID,
 				FilterKey: filterKey, Summary: raw, UpdatedAt: summary.UpdatedAt,
-				ExpiresAt: doc.ExpiresAt,
 			}); err != nil {
 			return fmt.Errorf("restore summary: %w", err)
 		}
@@ -885,4 +1097,92 @@ func (s *Service) discardRevisionDocuments(
 	}
 	_, err := s.client.DeleteMany(ctx, s.database, collection, filter)
 	return err
+}
+
+func (s *Service) discardExpiredRevisionDocuments(
+	ctx context.Context,
+	collection string,
+	label string,
+	groups bson.A,
+	now time.Time,
+) error {
+	return s.client.Transaction(ctx, func(sc mongo.SessionContext) error {
+		if err := s.invalidateRevisionProjections(sc, groups); err != nil {
+			return fmt.Errorf("invalidate expired %s projections: %w", label, err)
+		}
+		filter := bson.M{"$or": groups, "deleted_at": nil}
+		if s.opts.softDelete {
+			if _, err := s.client.UpdateMany(
+				sc,
+				s.database,
+				collection,
+				filter,
+				bson.M{"$set": bson.M{"deleted_at": now}},
+			); err != nil {
+				return fmt.Errorf("soft delete expired %s: %w", label, err)
+			}
+			return nil
+		}
+		if _, err := s.client.DeleteMany(
+			sc, s.database, collection, filter,
+		); err != nil {
+			return fmt.Errorf("hard delete expired %s: %w", label, err)
+		}
+		return nil
+	}, nil)
+}
+
+func (s *Service) invalidateRevisionProjections(
+	ctx context.Context,
+	groups bson.A,
+) error {
+	if len(groups) == 0 {
+		return nil
+	}
+	cursor, err := s.client.Find(
+		ctx,
+		s.database,
+		s.collSessionStates,
+		activeFilterNoExpiry(bson.M{"$or": groups}),
+		options.Find().SetProjection(bson.M{"_id": 1, "revision": 1}),
+	)
+	if err != nil {
+		return fmt.Errorf("read session revisions: %w", err)
+	}
+	defer cursor.Close(ctx)
+	var docs []sessionStateDoc
+	if err := cursor.All(ctx, &docs); err != nil {
+		return fmt.Errorf("read session revisions: %w", err)
+	}
+	for _, doc := range docs {
+		record, err := decodeRevision(doc.Revision)
+		if err != nil {
+			return err
+		}
+		sessionrevision.ApplyWrite(
+			record, sessionrevision.Write{Hazard: true},
+		)
+		sessionrevision.InvalidateProjection(record)
+		revisionRaw, err := encodeRevision(record)
+		if err != nil {
+			return err
+		}
+		filter := bson.M{
+			"_id": doc.DocumentID, "deleted_at": nil, "revision": doc.Revision,
+		}
+		res, err := s.client.UpdateOne(
+			ctx,
+			s.database,
+			s.collSessionStates,
+			filter,
+			bson.M{"$set": bson.M{"revision": revisionRaw}},
+		)
+		if err != nil {
+			return fmt.Errorf("invalidate session revision: %w", err)
+		}
+		if res.MatchedCount == 0 {
+			return sessionrevision.ErrStaleProjection
+		}
+	}
+	return nil
 }

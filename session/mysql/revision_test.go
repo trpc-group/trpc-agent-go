@@ -10,6 +10,7 @@ package mysql
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -19,9 +20,30 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+type revisionRecordArg struct {
+	match func(*sessionrevision.PersistedRecord) bool
+}
+
+func (a revisionRecordArg) Match(value driver.Value) bool {
+	var raw []byte
+	switch value := value.(type) {
+	case string:
+		raw = []byte(value)
+	case []byte:
+		raw = value
+	default:
+		return false
+	}
+	var state SessionState
+	record, err := sessionrevision.DecodeState(raw, &state)
+	return err == nil && a.match != nil && a.match(record)
+}
 
 func TestRevisionStoreGenerations(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -222,7 +244,7 @@ func TestCreateSessionSummaryWithRevision(t *testing.T) {
 		WithArgs(sess.AppName, sess.UserID, sess.ID).
 		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).AddRow(string(stateRaw), nil))
 	mock.ExpectExec("UPDATE session_states SET state").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sess.AppName, sess.UserID, sess.ID).
+		WithArgs(sqlmock.AnyArg(), sess.AppName, sess.UserID, sess.ID).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO session_summaries").
 		WithArgs(sess.AppName, sess.UserID, sess.ID, "all", sqlmock.AnyArg(), sqlmock.AnyArg(), nil).
@@ -230,5 +252,197 @@ func TestCreateSessionSummaryWithRevision(t *testing.T) {
 	mock.ExpectCommit()
 
 	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "all", true))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTurnStartUsesRollingProjectionWithoutHistoryScan(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	createdAt := time.Now().Add(-time.Minute)
+	updatedAt := time.Now().Add(-time.Second)
+	active := session.NewSession(
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		session.WithSessionCreatedAt(createdAt),
+		session.WithSessionUpdatedAt(updatedAt),
+	)
+	record := &sessionrevision.PersistedRecord{}
+	require.NoError(t, sessionrevision.InitializeProjection(record, active))
+	stateRaw, err := sessionrevision.EncodeState(SessionState{
+		ID: key.SessionID, State: session.StateMap{},
+		CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}, record)
+	require.NoError(t, err)
+	evt := event.NewResponseEvent("invocation", "runner", &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: model.Message{Content: "hello"}}},
+	})
+	evt.RequestID = "request"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
+			AddRow(string(stateRaw), nil))
+	mock.ExpectQuery("SELECT state, created_at, updated_at, expires_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"state", "created_at", "updated_at", "expires_at"},
+		).AddRow(string(stateRaw), createdAt, updatedAt, nil))
+	mock.ExpectQuery("SELECT filter_key, summary FROM session_summaries").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"filter_key", "summary"}))
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(
+			revisionRecordArg{match: func(record *sessionrevision.PersistedRecord) bool {
+				return sessionrevision.ProjectionInitialized(record) &&
+					record.Head == 1 && record.Checkpoint != nil &&
+					record.Checkpoint.RequestID == evt.RequestID
+			}}, sqlmock.AnyArg(), nil,
+			key.AppName, key.UserID, key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO session_events").
+		WithArgs(
+			key.AppName, key.UserID, key.SessionID,
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err = s.addEventWithRevision(
+		context.Background(),
+		key,
+		evt,
+		sessionrevision.Write{Start: &sessionrevision.TurnStart{
+			RequestID: evt.RequestID, InvocationID: evt.InvocationID,
+		}},
+	)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTurnStartBootstrapsRollingProjection(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "legacy"}
+	createdAt := time.Now().Add(-time.Minute)
+	updatedAt := time.Now().Add(-time.Second)
+	stateRaw, err := sessionrevision.EncodeState(SessionState{
+		ID: key.SessionID, State: session.StateMap{},
+		CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}, &sessionrevision.PersistedRecord{})
+	require.NoError(t, err)
+	previous := event.NewResponseEvent("previous-invocation", "runner", &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: model.Message{Content: "previous"}}},
+	})
+	previousRaw, err := json.Marshal(previous)
+	require.NoError(t, err)
+	evt := event.NewResponseEvent("invocation", "runner", &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: model.Message{Content: "edited"}}},
+	})
+	evt.RequestID = "request"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
+			AddRow(string(stateRaw), nil))
+	mock.ExpectQuery("SELECT state, created_at, updated_at, expires_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"state", "created_at", "updated_at", "expires_at"},
+		).AddRow(string(stateRaw), createdAt, updatedAt, nil))
+	mock.ExpectQuery("SELECT event FROM session_events").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"event"}).AddRow(previousRaw))
+	mock.ExpectQuery("SELECT track, event FROM session_track_events").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"track", "event"}))
+	mock.ExpectQuery("SELECT filter_key, summary FROM session_summaries").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"filter_key", "summary"}))
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(
+			revisionRecordArg{match: func(record *sessionrevision.PersistedRecord) bool {
+				return sessionrevision.ProjectionInitialized(record) &&
+					record.Head == 1 && record.Checkpoint != nil
+			}}, sqlmock.AnyArg(), nil,
+			key.AppName, key.UserID, key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO session_events").
+		WithArgs(
+			key.AppName, key.UserID, key.SessionID,
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err = s.addEventWithRevision(
+		context.Background(),
+		key,
+		evt,
+		sessionrevision.Write{Start: &sessionrevision.TurnStart{
+			RequestID: evt.RequestID, InvocationID: evt.InvocationID,
+		}},
+	)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTrackCleanupInvalidatesRollingProjection(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	record := &sessionrevision.PersistedRecord{
+		Head: 4,
+		Checkpoint: &sessionrevision.PersistedCheckpoint{
+			RequestID: "request", Boundary: []byte("boundary"),
+		},
+	}
+	require.NoError(t, sessionrevision.InitializeProjection(
+		record, session.NewSession(key.AppName, key.UserID, key.SessionID),
+	))
+	stateRaw, err := sessionrevision.EncodeState(SessionState{
+		ID: key.SessionID, State: session.StateMap{},
+	}, record)
+	require.NoError(t, err)
+	now := time.Now()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT DISTINCT app_name, user_id, session_id FROM session_track_events").
+		WithArgs(now).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"app_name", "user_id", "session_id"},
+		).AddRow(key.AppName, key.UserID, key.SessionID))
+	mock.ExpectQuery("SELECT state FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(string(stateRaw)))
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(
+			revisionRecordArg{match: func(record *sessionrevision.PersistedRecord) bool {
+				return !sessionrevision.ProjectionInitialized(record) &&
+					record.Head == 5 && record.Checkpoint != nil &&
+					record.Checkpoint.Hazard
+			}}, key.AppName, key.UserID, key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE session_track_events SET deleted_at").
+		WithArgs(now, now).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	s.cleanupExpiredTrackEvents(context.Background(), now)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

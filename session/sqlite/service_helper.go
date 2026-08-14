@@ -357,22 +357,36 @@ AND deleted_at IS NULL`,
 		return err
 	}
 	if write.Start != nil {
-		current, _, err := s.loadActiveSessionTx(ctx, tx, key)
+		current, err := s.loadTurnBoundaryTx(
+			ctx, tx, key, record, &sessState,
+		)
 		if err != nil {
 			return fmt.Errorf("load authoritative pre-turn session: %w", err)
 		}
-		write.Boundary, err = sessionrevision.NewBoundary(current)
+		write.Boundary, err = sessionrevision.NewBoundaryFromProjection(
+			current, record.Projection,
+		)
 		if err != nil {
 			return fmt.Errorf("capture session boundary before latest turn: %w", err)
 		}
 	}
-	shouldStoreEvent := evt.Response != nil && !evt.IsPartial && evt.IsValidContent()
+	shouldStoreEvent := evt != nil && evt.Response != nil &&
+		!evt.IsPartial && evt.IsValidContent()
 	sessionrevision.ApplyEventWrite(
 		record,
 		write,
 		evt,
 		shouldStoreEvent,
 	)
+	if shouldStoreEvent {
+		if err := sessionrevision.AppendProjectionEvent(
+			record, evt,
+		); err != nil {
+			return fmt.Errorf(
+				"advance session revision projection: %w", err,
+			)
+		}
+	}
 
 	sessState.UpdatedAt = now
 	if sessState.State == nil {
@@ -497,6 +511,11 @@ AND deleted_at IS NULL`,
 		return err
 	}
 	sessionrevision.ApplyTrackWrite(record, write, trackEvent)
+	if err := sessionrevision.AppendProjectionTrack(
+		record, trackEvent,
+	); err != nil {
+		return fmt.Errorf("advance session revision projection: %w", err)
+	}
 
 	sess := &session.Session{
 		ID:      key.SessionID,

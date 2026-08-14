@@ -77,23 +77,23 @@ func (s *Service) CreateSessionSummary(
 			ctx, tx, s.tableSessionStates, key,
 		)
 		if err != nil {
-			return err
+			return fmt.Errorf("load session revision for summary: %w", err)
 		}
 		if err := s.revisionStore().ApplyMutation(
 			record, write,
 		); err != nil {
-			return err
+			return fmt.Errorf("apply session revision for summary: %w", err)
 		}
 		stateRaw, err := sessionrevision.EncodeState(state, record)
 		if err != nil {
-			return err
+			return fmt.Errorf("encode session revision for summary: %w", err)
 		}
 		if _, err = tx.ExecContext(ctx, fmt.Sprintf(
-			`UPDATE %s SET state = $1, updated_at = $2
-		 WHERE app_name = $3 AND user_id = $4 AND session_id = $5 AND deleted_at IS NULL`,
+			`UPDATE %s SET state = $1
+		 WHERE app_name = $2 AND user_id = $3 AND session_id = $4 AND deleted_at IS NULL`,
 			s.tableSessionStates,
-		), stateRaw, state.UpdatedAt, key.AppName, key.UserID, key.SessionID); err != nil {
-			return err
+		), stateRaw, key.AppName, key.UserID, key.SessionID); err != nil {
+			return fmt.Errorf("persist session revision for summary: %w", err)
 		}
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
@@ -104,11 +104,14 @@ func (s *Service) CreateSessionSummary(
 		   updated_at = EXCLUDED.updated_at,
 		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries),
 			sess.AppName, sess.UserID, sess.ID, filterKey, summaryBytes, sum.UpdatedAt, nil)
-		return err
+		if err != nil {
+			return fmt.Errorf("upsert summary failed: %w", err)
+		}
+		return nil
 	})
 
 	if err != nil {
-		return fmt.Errorf("upsert summary failed: %w", err)
+		return err
 	}
 
 	return nil

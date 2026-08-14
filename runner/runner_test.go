@@ -457,6 +457,62 @@ func TestRunnerLatestTurnReplacementValidatesBeforeMutation(t *testing.T) {
 	assertOriginal()
 }
 
+func TestRunnerLatestTurnReplacementReusesPreselectedFactoryAgent(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	seedRunner := NewRunner(
+		"app",
+		&mockAgent{name: "agent"},
+		WithSessionService(service),
+	)
+	events, err := seedRunner.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("original"),
+		agent.WithRequestID("request-original"),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	factoryCalls := 0
+	r := NewRunnerWithAgentFactory(
+		"app",
+		"agent",
+		func(context.Context, agent.RunOptions) (agent.Agent, error) {
+			factoryCalls++
+			if factoryCalls > 1 {
+				return nil, errors.New("factory called more than once")
+			}
+			return &mockAgent{name: "agent"}, nil
+		},
+		WithSessionService(service),
+	)
+	events, err = r.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("edited"),
+		agent.WithLatestTurnReplacement(
+			"request-original",
+			"request-edited",
+		),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	require.Equal(t, 1, factoryCalls)
+
+	active, err := service.GetSession(ctx, session.Key{
+		AppName: "app", UserID: "user", SessionID: "session",
+	})
+	require.NoError(t, err)
+	require.Len(t, active.Events, 2)
+	assert.Equal(t, "request-edited", active.Events[0].RequestID)
+}
+
 type interruptThenRespondAgent struct {
 	name string
 	mu   sync.Mutex

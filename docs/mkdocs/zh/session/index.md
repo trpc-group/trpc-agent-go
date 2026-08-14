@@ -296,6 +296,10 @@ state、模型/工具调用、artifact 写入和其他外部副作用不会被�
 - Checkpoint 保存 Session 级 state、summary、时间戳，以及 event/Track 前缀的紧凑
   摘要，不复制 event 或 Track payload，也不会累积废弃投影 archive。若已无法验证
   checkpoint 对应的前缀，replacement 会 fail closed。
+- Backend 会把前缀摘要与计数同 event、Track 写入原子推进。已有 Session 首次使用时只
+  做一次权威投影 bootstrap，后续 turn start 直接复用 rolling prefix，不再扫描完整
+  历史。裁剪或 Session 子记录的独立 TTL 清理会使 rolling prefix 失效，下一轮会安全地
+  重新 bootstrap。
 - Backend 会保留最近 64 个 replacement 幂等身份用于检测复用。结果不确定时应及时使用
   原始 ID 组合重试。
 

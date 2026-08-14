@@ -77,7 +77,18 @@ func (s *sessionWithTTL) applyEventRevisionWrite(
 	}
 	rev := s.ensureRevision()
 	if write.Start != nil {
-		boundary, err := sessionrevision.NewBoundary(s.session)
+		if !sessionrevision.ProjectionInitialized(&rev.record) {
+			if err := sessionrevision.InitializeProjection(
+				&rev.record, s.session,
+			); err != nil {
+				return fmt.Errorf(
+					"initialize session revision projection: %w", err,
+				)
+			}
+		}
+		boundary, err := sessionrevision.NewBoundaryFromProjection(
+			s.session, rev.record.Projection,
+		)
 		if err != nil {
 			return fmt.Errorf("capture session boundary before latest turn: %w", err)
 		}
@@ -85,7 +96,19 @@ func (s *sessionWithTTL) applyEventRevisionWrite(
 	}
 	persisted := evt != nil && evt.Response != nil && !evt.IsPartial &&
 		evt.IsValidContent()
+	rollingProjection := sessionrevision.CloneProjection(rev.record.Projection)
+	if persisted {
+		candidate := &sessionrevision.PersistedRecord{
+			Projection: rollingProjection,
+			Checkpoint: rev.record.Checkpoint,
+		}
+		if err := sessionrevision.AppendProjectionEvent(candidate, evt); err != nil {
+			return fmt.Errorf("advance session revision projection: %w", err)
+		}
+		rollingProjection = candidate.Projection
+	}
 	sessionrevision.ApplyEventWrite(&rev.record, write, evt, persisted)
+	rev.record.Projection = rollingProjection
 	return nil
 }
 
@@ -99,7 +122,18 @@ func (s *sessionWithTTL) applyTrackRevisionWrite(
 		return err
 	}
 	rev := s.ensureRevision()
+	rollingProjection := sessionrevision.CloneProjection(rev.record.Projection)
+	candidate := &sessionrevision.PersistedRecord{
+		Projection: rollingProjection,
+		Checkpoint: rev.record.Checkpoint,
+	}
+	if err := sessionrevision.AppendProjectionTrack(
+		candidate, trackEvent,
+	); err != nil {
+		return fmt.Errorf("advance session revision projection: %w", err)
+	}
 	sessionrevision.ApplyTrackWrite(&rev.record, write, trackEvent)
+	rev.record.Projection = candidate.Projection
 	return nil
 }
 
@@ -152,6 +186,11 @@ func (s *SessionService) ReplaceLatestTurn(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("restore latest-turn boundary: %w", err)
+	}
+	if err := sessionrevision.ResetProjectionFromBoundary(
+		&rev.record, checkpoint.Boundary,
+	); err != nil {
+		return nil, err
 	}
 	rev.record.Generation++
 	rev.record.Head++

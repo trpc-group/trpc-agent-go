@@ -49,8 +49,7 @@ func expectSummaryRevisionBegin(
 		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
 			AddRow(stateRaw, nil))
 	mock.ExpectExec("UPDATE session_states SET state").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sess.AppName, sess.UserID, sess.ID).
+		WithArgs(sqlmock.AnyArg(), sess.AppName, sess.UserID, sess.ID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
@@ -777,6 +776,8 @@ func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
 	s, mock, db := setupMockService(t, &TestServiceOpts{
 		summarizer: summarizer,
 	})
+	// The two cascade targets are persisted concurrently, so their transaction
+	// order is intentionally nondeterministic.
 	mock.MatchExpectationsInOrder(false)
 	defer db.Close()
 

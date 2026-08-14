@@ -1366,18 +1366,23 @@ func (s *Service) hardDeleteSessions(
 }
 
 func (s *Service) cleanupExpiredTrackEvents(ctx context.Context, now time.Time) {
-	if s.opts.softDelete {
-		_, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionTracks),
-			now, now)
-		if err != nil {
-			log.ErrorfContext(ctx, "cleanup expired track events failed: %v", err)
+	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		if err := s.revisionStore().InvalidateExpiredChildProjections(
+			ctx, tx, s.tableSessionTracks, now, nil,
+		); err != nil {
+			return err
 		}
-		return
-	}
-	_, err := s.mysqlClient.Exec(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionTracks),
-		now)
+		if s.opts.softDelete {
+			_, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionTracks),
+				now, now)
+			return err
+		}
+		_, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionTracks),
+			now)
+		return err
+	})
 	if err != nil {
 		log.ErrorfContext(ctx, "cleanup expired track events failed: %v", err)
 	}
@@ -1385,16 +1390,18 @@ func (s *Service) cleanupExpiredTrackEvents(ctx context.Context, now time.Time) 
 
 func (s *Service) tdsqlCleanupExpiredTrackEvents(ctx context.Context, now time.Time) {
 	type idPair struct {
-		id     int64
-		userID string
+		id  int64
+		key session.Key
 	}
-	query := fmt.Sprintf(`SELECT id, user_id FROM %s
+	query := fmt.Sprintf(`SELECT id, app_name, user_id, session_id FROM %s
 		WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL
 		LIMIT 1000`, s.tableSessionTracks)
 	var pairs []idPair
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		var p idPair
-		if err := rows.Scan(&p.id, &p.userID); err != nil {
+		if err := rows.Scan(
+			&p.id, &p.key.AppName, &p.key.UserID, &p.key.SessionID,
+		); err != nil {
 			return err
 		}
 		pairs = append(pairs, p)
@@ -1407,45 +1414,56 @@ func (s *Service) tdsqlCleanupExpiredTrackEvents(ctx context.Context, now time.T
 	if len(pairs) == 0 {
 		return
 	}
-	grouped := make(map[string][]int64)
+	grouped := make(map[string][]idPair)
 	for _, p := range pairs {
-		grouped[p.userID] = append(grouped[p.userID], p.id)
+		grouped[p.key.UserID] = append(grouped[p.key.UserID], p)
 	}
 	var total int64
-	for userID, ids := range grouped {
-		placeholders := make([]string, len(ids))
-		for i := range ids {
+	for userID, group := range grouped {
+		placeholders := make([]string, len(group))
+		for i := range group {
 			placeholders[i] = "?"
 		}
 		idClause := strings.Join(placeholders, ",")
-		var err error
-		if s.opts.softDelete {
-			args := make([]any, 0, len(ids)+3)
-			args = append(args, now)
-			for _, id := range ids {
-				args = append(args, id)
+		err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+			keys := make([]session.Key, 0, len(group))
+			for _, pair := range group {
+				keys = append(keys, pair.key)
+			}
+			if err := s.revisionStore().InvalidateProjections(
+				ctx, tx, keys,
+			); err != nil {
+				return err
+			}
+			if s.opts.softDelete {
+				args := make([]any, 0, len(group)+3)
+				args = append(args, now)
+				for _, pair := range group {
+					args = append(args, pair.id)
+				}
+				args = append(args, userID, now)
+				_, err := tx.ExecContext(ctx,
+					fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
+						s.tableSessionTracks, idClause),
+					args...)
+				return err
+			}
+			args := make([]any, 0, len(group)+2)
+			for _, pair := range group {
+				args = append(args, pair.id)
 			}
 			args = append(args, userID, now)
-			_, err = s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
-					s.tableSessionTracks, idClause),
-				args...)
-		} else {
-			args := make([]any, 0, len(ids)+2)
-			for _, id := range ids {
-				args = append(args, id)
-			}
-			args = append(args, userID, now)
-			_, err = s.mysqlClient.Exec(ctx,
+			_, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`DELETE FROM %s WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
 					s.tableSessionTracks, idClause),
 				args...)
-		}
+			return err
+		})
 		if err != nil {
 			log.ErrorfContext(ctx, "tdsql cleanup: delete track events failed: %v", err)
 			continue
 		}
-		total += int64(len(ids))
+		total += int64(len(group))
 	}
 	if total > 0 {
 		log.InfofContext(ctx, "tdsql cleanup: cleaned up %d expired track events", total)

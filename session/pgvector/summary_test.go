@@ -48,8 +48,7 @@ func expectSummaryRevisionBegin(
 		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
 			AddRow(stateRaw, nil))
 	mock.ExpectExec("UPDATE session_states SET state").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sess.AppName, sess.UserID, sess.ID).
+		WithArgs(sqlmock.AnyArg(), sess.AppName, sess.UserID, sess.ID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 }
 

@@ -1405,6 +1405,15 @@ func (s *Service) cleanupExpiredData(
 		err := s.pgClient.Transaction(ctx,
 			func(tx *sql.Tx) error {
 				for _, task := range validTasks {
+					if task.tableName == s.tableSessionEvents ||
+						task.tableName == s.tableSessionTracks ||
+						task.tableName == s.tableSessionSummaries {
+						if err := s.revisionStore().InvalidateExpiredChildProjections(
+							ctx, tx, task.tableName, now, userKey,
+						); err != nil {
+							return err
+						}
+					}
 					if s.opts.softDelete {
 						if err := s.softDeleteExpiredInTx(
 							ctx, tx, task.tableName,

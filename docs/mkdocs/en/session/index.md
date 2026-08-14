@@ -310,6 +310,11 @@ Safety rules:
   digests of the event and Track prefixes. They do not copy event or Track
   payloads and no discarded-projection archive accumulates. If the verified
   prefix is no longer available, replacement fails closed.
+- Backends advance the prefix digests and counts atomically with event and
+  Track writes. An existing Session performs one authoritative bootstrap read;
+  later turn starts reuse the rolling prefix instead of scanning its full
+  history. Trimming or independent TTL cleanup of Session-owned history
+  invalidates the rolling prefix, so the next turn safely bootstraps it again.
 - Backends retain the 64 most recent replacement idempotency identities for
   reuse detection. Retry an ambiguous transition promptly with its original
   ID pair.

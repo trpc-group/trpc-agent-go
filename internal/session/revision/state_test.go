@@ -64,11 +64,19 @@ func TestStateEnvelopeLegacyAndVersionChecks(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &envelope))
 	assert.NotContains(t, envelope, stateMetadataKey)
 
-	_, err = DecodeState(
+	var rolledBackState stateEnvelopeFixture
+	record, err = DecodeState(
 		[]byte(`{"id":"session","state":{},"_trpcAgent":{"version":2}}`),
-		&stateEnvelopeFixture{},
+		&rolledBackState,
 	)
-	assert.Error(t, err)
+	require.NoError(t, err)
+	assert.Equal(t, "session", rolledBackState.ID)
+	require.NotNil(t, record.Checkpoint)
+	assert.True(t, record.Checkpoint.Hazard)
+	_, err = LatestTurnReplacementCheckpoint(record, "request")
+	assert.ErrorIs(t, err, ErrLatestTurnReplacementUnavailable)
+	_, err = EncodeState(rolledBackState, record)
+	assert.ErrorContains(t, err, "unsupported persisted version 2")
 	_, err = DecodeState([]byte("not-json"), &stateEnvelopeFixture{})
 	assert.Error(t, err)
 }

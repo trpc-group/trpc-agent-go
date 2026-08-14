@@ -40,6 +40,78 @@ func (c *Client) RevisionProjection(
 	return c.GetSession(ctx, key, revisionProjectionLimit, time.Time{})
 }
 
+// RevisionBoundaryBase loads the mutable session fields needed for a turn
+// boundary without loading event or track histories. The returned boolean is
+// false when expiring projection keys are already missing and the caller must
+// rebuild the rolling projection from an authoritative full read.
+func (c *Client) RevisionBoundaryBase(
+	ctx context.Context,
+	key session.Key,
+	projection *sessionrevision.PersistedProjection,
+) (*session.Session, bool, error) {
+	pipe := c.client.Pipeline()
+	stateCmd := pipe.HGet(ctx, c.sessionStateKey(key), key.SessionID)
+	summaryCmd := pipe.HGet(ctx, c.sessionSummaryKey(key), key.SessionID)
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, false, fmt.Errorf("load revision boundary base: %w", err)
+	}
+	sessState, err := processSessionStateCmd(stateCmd)
+	if err != nil {
+		return nil, false, fmt.Errorf("decode revision boundary state: %w", err)
+	}
+	if sessState == nil {
+		return nil, false, nil
+	}
+	base := session.NewSession(
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
+	if summaryJSON, err := summaryCmd.Bytes(); err == nil {
+		if err := json.Unmarshal(summaryJSON, &base.Summaries); err != nil {
+			return nil, false, fmt.Errorf("decode revision boundary summaries: %w", err)
+		}
+	} else if err != redis.Nil {
+		return nil, false, fmt.Errorf("load revision boundary summaries: %w", err)
+	}
+	intact, err := c.revisionProjectionStorageIntact(ctx, key, projection)
+	if err != nil {
+		return nil, false, err
+	}
+	return base, intact, nil
+}
+
+func (c *Client) revisionProjectionStorageIntact(
+	ctx context.Context,
+	key session.Key,
+	projection *sessionrevision.PersistedProjection,
+) (bool, error) {
+	keys := make([]string, 0)
+	if c.cfg.SessionTTL > 0 && projection != nil &&
+		projection.Events.Count > 0 {
+		keys = append(keys, c.eventKey(key))
+	}
+	if c.cfg.effectiveTrackEventTTL() > 0 && projection != nil {
+		for track, prefix := range projection.Tracks {
+			if prefix.Count == 0 {
+				continue
+			}
+			keys = append(keys, c.trackKey(key, track))
+		}
+	}
+	if len(keys) == 0 {
+		return true, nil
+	}
+	existing, err := c.client.Exists(ctx, keys...).Result()
+	if err != nil {
+		return false, fmt.Errorf("validate revision projection storage: %w", err)
+	}
+	return existing == int64(len(keys)), nil
+}
+
 func readRevisionRecord(
 	ctx context.Context,
 	cmd redis.Cmdable,
@@ -140,6 +212,11 @@ func (c *Client) ReplaceLatestTurn(
 			record.Generation++
 			record.Head++
 			record.Checkpoint = nil
+			if err := sessionrevision.ResetProjectionFromBoundary(
+				record, checkpoint.Boundary,
+			); err != nil {
+				return err
+			}
 			sessionrevision.RecordLatestTurnReplacementReplay(
 				record,
 				idempotencyKey,

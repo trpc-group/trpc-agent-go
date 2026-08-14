@@ -646,7 +646,8 @@ func (r *runner) Run(
 		execCancel()
 		return nil, err
 	}
-	if err := r.preflightLatestTurnReplacement(execCtx, ro); err != nil {
+	preselectedAgent, err := r.preselectLatestTurnReplacementAgent(execCtx, ro)
+	if err != nil {
 		execCancel()
 		return nil, err
 	}
@@ -697,7 +698,12 @@ func (r *runner) Run(
 		ro,
 		runnerLatencySpanSelectAgent,
 	)
-	ag, err := r.selectAgentForRun(selectCtx, ro)
+	ag, err := r.selectAgentAfterAwaitUserReplyRoute(
+		selectCtx,
+		ro,
+		preselectedAgent,
+		awaitUserReplyLookupPath,
+	)
 	if selectStarted && ag != nil {
 		selectSpan.SetAttributes(attribute.String("runner.agent", ag.Info().Name))
 	}
@@ -1337,15 +1343,26 @@ func (r *runner) selectAgentForRun(
 	return ag, nil
 }
 
-func (r *runner) preflightLatestTurnReplacement(
+func (r *runner) preselectLatestTurnReplacementAgent(
 	ctx context.Context,
 	ro agent.RunOptions,
-) error {
+) (agent.Agent, error) {
 	if ro.LatestTurnReplacement == nil {
-		return nil
+		return nil, nil
 	}
-	_, err := r.selectAgentForRun(ctx, ro)
-	return err
+	return r.selectAgentForRun(ctx, ro)
+}
+
+func (r *runner) selectAgentAfterAwaitUserReplyRoute(
+	ctx context.Context,
+	ro agent.RunOptions,
+	preselected agent.Agent,
+	lookupPath string,
+) (agent.Agent, error) {
+	if preselected != nil && lookupPath == "" {
+		return preselected, nil
+	}
+	return r.selectAgentForRun(ctx, ro)
 }
 
 // resolveAgent decides which agent to use for this run.

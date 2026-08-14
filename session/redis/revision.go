@@ -25,31 +25,58 @@ func (s *Service) prepareTurnStartWrite(
 	write sessionrevision.Write,
 ) (sessionrevision.Write, error) {
 	var (
+		base   *session.Session
 		active *session.Session
 		record *sessionrevision.PersistedRecord
+		intact bool
 		err    error
 	)
 	if storageType == util.StorageTypeZset {
 		record, err = s.zsetClient.Revision(ctx, key)
 		if err == nil {
-			active, err = s.zsetClient.RevisionProjection(ctx, key)
+			base, intact, err = s.zsetClient.RevisionBoundaryBase(
+				ctx, key, record.Projection,
+			)
 		}
 	} else {
 		record, err = s.hashidxClient.Revision(ctx, key)
 		if err == nil {
-			active, err = s.hashidxClient.RevisionProjection(ctx, key)
+			base, intact, err = s.hashidxClient.RevisionBoundaryBase(
+				ctx, key, record.Projection,
+			)
 		}
 	}
 	if err != nil {
 		return write, fmt.Errorf("load authoritative pre-turn session: %w", err)
 	}
-	if active == nil {
+	if base == nil {
 		return write, fmt.Errorf("session not found")
 	}
-	write.Boundary, err = sessionrevision.NewBoundary(active)
+	projection := sessionrevision.CloneProjection(record.Projection)
+	if !sessionrevision.ProjectionInitialized(record) || !intact {
+		if storageType == util.StorageTypeZset {
+			active, err = s.zsetClient.RevisionProjection(ctx, key)
+		} else {
+			active, err = s.hashidxClient.RevisionProjection(ctx, key)
+		}
+		if err != nil {
+			return write, fmt.Errorf("load authoritative pre-turn projection: %w", err)
+		}
+		if active == nil {
+			return write, fmt.Errorf("session not found")
+		}
+		bootstrap := &sessionrevision.PersistedRecord{}
+		if err := sessionrevision.InitializeProjection(bootstrap, active); err != nil {
+			return write, fmt.Errorf("initialize session revision projection: %w", err)
+		}
+		projection = bootstrap.Projection
+		base = active
+	}
+	write.Boundary, err = sessionrevision.NewBoundaryFromProjection(base, projection)
 	if err != nil {
 		return write, fmt.Errorf("capture session boundary before latest turn: %w", err)
 	}
+	write.Projection = sessionrevision.CloneProjection(projection)
 	write.ExpectedHead = record.Head
 	write.HasExpectedHead = true
 	return write, nil

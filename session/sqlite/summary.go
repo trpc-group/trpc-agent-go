@@ -93,14 +93,11 @@ ON CONFLICT(app_name, user_id, session_id, filter_key) DO UPDATE SET
 		return fmt.Errorf("begin upsert summary: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var (
-		stateRaw  []byte
-		expiresAt sql.NullInt64
-	)
+	var stateRaw []byte
 	err = tx.QueryRowContext(
 		ctx,
 		fmt.Sprintf(
-			`SELECT state, expires_at FROM %s
+			`SELECT state FROM %s
 WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND deleted_at IS NULL`,
 			s.tableSessionStates,
@@ -108,7 +105,7 @@ AND deleted_at IS NULL`,
 		key.AppName,
 		key.UserID,
 		key.SessionID,
-	).Scan(&stateRaw, &expiresAt)
+	).Scan(&stateRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("session not found")
 	}
@@ -154,7 +151,7 @@ AND deleted_at IS NULL`,
 		filterKey,
 		summaryBytes,
 		sum.UpdatedAt.UTC().UnixNano(),
-		nullInt64Arg(expiresAt),
+		nil,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert summary: %w", err)

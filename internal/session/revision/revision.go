@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -326,8 +327,20 @@ type persistedBoundary struct {
 }
 
 type persistedPrefix struct {
-	Count  uint64 `json:"count"`
-	Digest []byte `json:"digest"`
+	Count        uint64     `json:"count"`
+	Digest       []byte     `json:"digest"`
+	MaxTimestamp *time.Time `json:"maxTimestamp,omitempty"`
+}
+
+const persistedProjectionVersion = 2
+
+// PersistedProjection is the rolling event and track prefix retained in a
+// backend-private revision record. A nil projection requires one authoritative
+// bootstrap read before another turn boundary can be captured.
+type PersistedProjection struct {
+	Version int                               `json:"version"`
+	Events  persistedPrefix                   `json:"events"`
+	Tracks  map[session.Track]persistedPrefix `json:"tracks,omitempty"`
 }
 
 // PersistedReplay retains the result needed to answer an idempotent replacement
@@ -344,6 +357,12 @@ type PersistedRecord struct {
 	Head       uint64                     `json:"head"`
 	Checkpoint *PersistedCheckpoint       `json:"checkpoint,omitempty"`
 	Replays    map[string]PersistedReplay `json:"replays,omitempty"`
+	Projection *PersistedProjection       `json:"projection,omitempty"`
+
+	// incompatibleVersion is set only while decoding a newer sidecar format.
+	// It keeps base reads available without allowing an older writer to replace
+	// metadata it cannot understand.
+	incompatibleVersion int
 }
 
 // AttachRecord attaches the persisted generation and whether revision
@@ -516,6 +535,7 @@ type Write struct {
 	Hazard                bool
 	Start                 *TurnStart
 	Boundary              []byte
+	Projection            *PersistedProjection
 }
 
 // ContextWithTurnStart marks a single persistence call as the start of a turn.
@@ -722,58 +742,203 @@ func ApplyTrackWrite(
 	return true
 }
 
-const persistedBoundaryVersion = 1
+const persistedBoundaryVersion = 2
+
+// ProjectionInitialized reports whether record carries a rolling projection
+// that this binary can extend.
+func ProjectionInitialized(record *PersistedRecord) bool {
+	return record != nil && validateProjection(record.Projection) == nil
+}
+
+// InitializeProjection bootstraps record's rolling projection from an
+// authoritative complete session projection.
+func InitializeProjection(
+	record *PersistedRecord,
+	sess *session.Session,
+) error {
+	if record == nil {
+		return fmt.Errorf("initialize nil session revision projection")
+	}
+	projection, err := projectionFromSession(sess)
+	if err != nil {
+		return err
+	}
+	record.Projection = projection
+	return nil
+}
+
+// CloneProjection returns a deep copy of projection.
+func CloneProjection(projection *PersistedProjection) *PersistedProjection {
+	if projection == nil {
+		return nil
+	}
+	cloned := &PersistedProjection{
+		Version: projection.Version,
+		Events:  clonePrefix(projection.Events),
+	}
+	if len(projection.Tracks) > 0 {
+		cloned.Tracks = make(
+			map[session.Track]persistedPrefix,
+			len(projection.Tracks),
+		)
+		for track, prefix := range projection.Tracks {
+			cloned.Tracks[track] = clonePrefix(prefix)
+		}
+	}
+	return cloned
+}
+
+// AppendProjectionEvent extends an initialized rolling event prefix. A nil
+// projection is left untouched so legacy records can bootstrap atomically at
+// the next turn start.
+func AppendProjectionEvent(
+	record *PersistedRecord,
+	evt *event.Event,
+) error {
+	if record == nil || record.Projection == nil {
+		return nil
+	}
+	if record.Projection.Version != persistedProjectionVersion {
+		return ErrLatestTurnReplacementUnavailable
+	}
+	if evt == nil {
+		return fmt.Errorf("append nil event revision projection")
+	}
+	return appendTimestampedProjectionValue(
+		record, "events", &record.Projection.Events, evt.Timestamp, evt,
+	)
+}
+
+// AppendProjectionTrack extends an initialized rolling track prefix. A nil
+// projection is left untouched so legacy records can bootstrap atomically at
+// the next turn start.
+func AppendProjectionTrack(
+	record *PersistedRecord,
+	trackEvent *session.TrackEvent,
+) error {
+	if record == nil || record.Projection == nil {
+		return nil
+	}
+	if record.Projection.Version != persistedProjectionVersion {
+		return ErrLatestTurnReplacementUnavailable
+	}
+	if trackEvent == nil {
+		return fmt.Errorf("append nil track revision projection")
+	}
+	if record.Projection.Tracks == nil {
+		record.Projection.Tracks = make(
+			map[session.Track]persistedPrefix,
+		)
+	}
+	prefix, ok := record.Projection.Tracks[trackEvent.Track]
+	if !ok {
+		prefix.Digest = projectionSeed(trackDomain(trackEvent.Track))
+	}
+	if err := appendTimestampedProjectionValue(
+		record,
+		trackDomain(trackEvent.Track),
+		&prefix,
+		trackEvent.Timestamp,
+		trackEvent,
+	); err != nil {
+		return err
+	}
+	if record.Projection == nil {
+		return nil
+	}
+	record.Projection.Tracks[trackEvent.Track] = prefix
+	return nil
+}
+
+// ResetProjectionFromBoundary restores the rolling projection described by a
+// successfully verified boundary.
+func ResetProjectionFromBoundary(
+	record *PersistedRecord,
+	raw []byte,
+) error {
+	if record == nil {
+		return fmt.Errorf("reset nil session revision projection")
+	}
+	var boundary persistedBoundary
+	if err := json.Unmarshal(raw, &boundary); err != nil {
+		return fmt.Errorf("decode session boundary projection: %w", err)
+	}
+	if boundary.Version != persistedBoundaryVersion {
+		record.Projection = nil
+		return nil
+	}
+	record.Projection = &PersistedProjection{
+		Version: persistedProjectionVersion,
+		Events:  clonePrefix(boundary.Events),
+	}
+	if len(boundary.Tracks) > 0 {
+		record.Projection.Tracks = make(
+			map[session.Track]persistedPrefix,
+			len(boundary.Tracks),
+		)
+		for track, prefix := range boundary.Tracks {
+			record.Projection.Tracks[track] = clonePrefix(prefix)
+		}
+	}
+	return validateProjection(record.Projection)
+}
+
+// InvalidateProjection requires the next turn start to bootstrap from the
+// authoritative projection. Callers must advance the record head and hazard
+// state in the same atomic mutation when invalidation accompanies data loss.
+func InvalidateProjection(record *PersistedRecord) {
+	if record != nil {
+		record.Projection = nil
+	}
+}
 
 // NewBoundary returns a compact, serialization-safe description of sess.
 // App- and user-scoped state and service-local metadata are excluded.
 func NewBoundary(sess *session.Session) ([]byte, error) {
+	projection, err := projectionFromSession(sess)
+	if err != nil {
+		return nil, err
+	}
+	return NewBoundaryFromProjection(sess, projection)
+}
+
+// NewBoundaryFromProjection captures mutable session fields while reusing an
+// initialized rolling event and track prefix.
+func NewBoundaryFromProjection(
+	sess *session.Session,
+	projection *PersistedProjection,
+) ([]byte, error) {
 	if sess == nil {
 		return nil, session.ErrNilSession
 	}
-	cloned := sess.Clone()
-	state := cloned.SnapshotState()
+	if err := validateProjection(projection); err != nil {
+		return nil, ErrLatestTurnReplacementUnavailable
+	}
+	state := sess.SnapshotState()
 	for key := range state {
 		if strings.HasPrefix(key, session.StateAppPrefix) ||
 			strings.HasPrefix(key, session.StateUserPrefix) {
 			delete(state, key)
 		}
 	}
-	eventDigest, err := projectionDigest("events", cloned.Events)
-	if err != nil {
-		return nil, err
-	}
 	boundary := persistedBoundary{
 		Version:   persistedBoundaryVersion,
-		AppName:   cloned.AppName,
-		UserID:    cloned.UserID,
-		SessionID: cloned.ID,
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
 		State:     state,
-		Summaries: cloned.Summaries,
-		Events: persistedPrefix{
-			Count:  uint64(len(cloned.Events)),
-			Digest: eventDigest,
-		},
-		CreatedAt: cloned.CreatedAt,
-		UpdatedAt: cloned.UpdatedAt,
+		Summaries: cloneSummaries(sess.Summaries),
+		Events:    clonePrefix(projection.Events),
+		CreatedAt: sess.CreatedAt,
+		UpdatedAt: sess.UpdatedAt,
 	}
-	if len(cloned.Tracks) > 0 {
+	if len(projection.Tracks) > 0 {
 		boundary.Tracks = make(
 			map[session.Track]persistedPrefix,
-			len(cloned.Tracks),
+			len(projection.Tracks),
 		)
-		for track, history := range cloned.Tracks {
-			var events []session.TrackEvent
-			if history != nil {
-				events = history.Events
-			}
-			digest, err := projectionDigest("track:"+string(track), events)
-			if err != nil {
-				return nil, err
-			}
-			boundary.Tracks[track] = persistedPrefix{
-				Count:  uint64(len(events)),
-				Digest: digest,
-			}
+		for track, prefix := range projection.Tracks {
+			boundary.Tracks[track] = clonePrefix(prefix)
 		}
 	}
 	raw, err := json.Marshal(boundary)
@@ -826,7 +991,7 @@ func RestoreBoundary(
 			history := current.Tracks[track]
 			if history == nil {
 				if err := verifyProjectionPrefix(
-					"track:"+string(track), []session.TrackEvent(nil), prefix,
+					trackDomain(track), []session.TrackEvent(nil), prefix,
 				); err != nil {
 					return nil, ErrLatestTurnReplacementUnavailable
 				}
@@ -837,7 +1002,7 @@ func RestoreBoundary(
 				return nil, ErrLatestTurnReplacementUnavailable
 			}
 			if err := verifyProjectionPrefix(
-				"track:"+string(track), history.Events, prefix,
+				trackDomain(track), history.Events, prefix,
 			); err != nil {
 				return nil, err
 			}
@@ -878,25 +1043,191 @@ func verifyProjectionPrefix[T any](
 }
 
 func projectionDigest[T any](domain string, values []T) ([]byte, error) {
-	h := sha256.New()
-	if _, err := h.Write([]byte(domain)); err != nil {
+	prefix := persistedPrefix{Digest: projectionSeed(domain)}
+	for i := range values {
+		if err := appendProjectionValue(domain, &prefix, values[i]); err != nil {
+			return nil, err
+		}
+	}
+	return prefix.Digest, nil
+}
+
+func appendTimestampedProjectionValue[T any](
+	record *PersistedRecord,
+	domain string,
+	prefix *persistedPrefix,
+	timestamp time.Time,
+	value T,
+) error {
+	if prefix.Count > 0 && prefix.MaxTimestamp != nil &&
+		timestamp.Before(*prefix.MaxTimestamp) {
+		// The authoritative projection is ordered by timestamp in at least one
+		// backend. A backdated row is not a suffix, so the rolling digest cannot
+		// be extended safely. Keep replacement fail-closed and let the next turn
+		// rebuild from the authoritative projection.
+		if record.Checkpoint != nil {
+			record.Checkpoint.Hazard = true
+		}
+		record.Projection = nil
+		return nil
+	}
+	if err := appendProjectionValue(domain, prefix, value); err != nil {
+		return err
+	}
+	if prefix.Count == 1 || prefix.MaxTimestamp == nil ||
+		timestamp.After(*prefix.MaxTimestamp) {
+		maxTimestamp := timestamp
+		prefix.MaxTimestamp = &maxTimestamp
+	}
+	return nil
+}
+
+func projectionFromSession(
+	sess *session.Session,
+) (*PersistedProjection, error) {
+	if sess == nil {
+		return nil, session.ErrNilSession
+	}
+	cloned := sess.Clone()
+	eventDigest, err := projectionDigest("events", cloned.Events)
+	if err != nil {
 		return nil, err
 	}
-	var length [8]byte
-	for i := range values {
-		raw, err := json.Marshal(values[i])
+	projection := &PersistedProjection{
+		Version: persistedProjectionVersion,
+		Events: persistedPrefix{
+			Count:        uint64(len(cloned.Events)),
+			Digest:       eventDigest,
+			MaxTimestamp: maxEventTimestamp(cloned.Events),
+		},
+	}
+	if len(cloned.Tracks) == 0 {
+		return projection, nil
+	}
+	projection.Tracks = make(
+		map[session.Track]persistedPrefix,
+		len(cloned.Tracks),
+	)
+	for track, history := range cloned.Tracks {
+		var events []session.TrackEvent
+		if history != nil {
+			events = history.Events
+		}
+		digest, err := projectionDigest(trackDomain(track), events)
 		if err != nil {
-			return nil, fmt.Errorf("encode projection prefix: %w", err)
-		}
-		binary.BigEndian.PutUint64(length[:], uint64(len(raw)))
-		if _, err := h.Write(length[:]); err != nil {
 			return nil, err
 		}
-		if _, err := h.Write(raw); err != nil {
-			return nil, err
+		projection.Tracks[track] = persistedPrefix{
+			Count:        uint64(len(events)),
+			Digest:       digest,
+			MaxTimestamp: maxTrackEventTimestamp(events),
 		}
 	}
-	return h.Sum(nil), nil
+	return projection, nil
+}
+
+func appendProjectionValue[T any](
+	domain string,
+	prefix *persistedPrefix,
+	value T,
+) error {
+	if prefix == nil || len(prefix.Digest) != sha256.Size {
+		return ErrLatestTurnReplacementUnavailable
+	}
+	if prefix.Count == math.MaxUint64 {
+		return ErrLatestTurnReplacementUnavailable
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("encode projection prefix: %w", err)
+	}
+	h := sha256.New()
+	if _, err := h.Write([]byte("trpc-agent-go:projection:item:v1")); err != nil {
+		return err
+	}
+	writeLengthPrefixed(h, []byte(domain))
+	if _, err := h.Write(prefix.Digest); err != nil {
+		return err
+	}
+	writeLengthPrefixed(h, raw)
+	prefix.Count++
+	prefix.Digest = h.Sum(nil)
+	return nil
+}
+
+func projectionSeed(domain string) []byte {
+	h := sha256.New()
+	_, _ = h.Write([]byte("trpc-agent-go:projection:seed:v1"))
+	writeLengthPrefixed(h, []byte(domain))
+	return h.Sum(nil)
+}
+
+func writeLengthPrefixed(h interface{ Write([]byte) (int, error) }, value []byte) {
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+	_, _ = h.Write(length[:])
+	_, _ = h.Write(value)
+}
+
+func trackDomain(track session.Track) string {
+	return "track:" + string(track)
+}
+
+func clonePrefix(prefix persistedPrefix) persistedPrefix {
+	return persistedPrefix{
+		Count:        prefix.Count,
+		Digest:       append([]byte(nil), prefix.Digest...),
+		MaxTimestamp: cloneTimestamp(prefix.MaxTimestamp),
+	}
+}
+
+func cloneTimestamp(timestamp *time.Time) *time.Time {
+	if timestamp == nil {
+		return nil
+	}
+	cloned := *timestamp
+	return &cloned
+}
+
+func maxEventTimestamp(events []event.Event) *time.Time {
+	if len(events) == 0 {
+		return nil
+	}
+	var max time.Time
+	for i := range events {
+		if i == 0 || events[i].Timestamp.After(max) {
+			max = events[i].Timestamp
+		}
+	}
+	return &max
+}
+
+func maxTrackEventTimestamp(events []session.TrackEvent) *time.Time {
+	if len(events) == 0 {
+		return nil
+	}
+	var max time.Time
+	for i := range events {
+		if i == 0 || events[i].Timestamp.After(max) {
+			max = events[i].Timestamp
+		}
+	}
+	return &max
+}
+
+func validateProjection(projection *PersistedProjection) error {
+	if projection == nil || projection.Version != persistedProjectionVersion ||
+		len(projection.Events.Digest) != sha256.Size ||
+		(projection.Events.Count > 0 && projection.Events.MaxTimestamp == nil) {
+		return ErrLatestTurnReplacementUnavailable
+	}
+	for _, prefix := range projection.Tracks {
+		if len(prefix.Digest) != sha256.Size ||
+			(prefix.Count > 0 && prefix.MaxTimestamp == nil) {
+			return ErrLatestTurnReplacementUnavailable
+		}
+	}
+	return nil
 }
 
 func cloneState(state session.StateMap) session.StateMap {

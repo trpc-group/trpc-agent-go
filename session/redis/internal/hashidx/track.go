@@ -65,28 +65,50 @@ func (c *Client) AppendTrackEventWithRevision(
 		c.keys.TrackIndexKey(key),
 		c.keys.RevisionKey(key),
 	}
-	args := []any{
-		string(eventJSON),
-		trackEvent.Timestamp.UnixNano(),
-		ttlSeconds,
-		boolToInt(c.cfg.TrackEventTTL != nil),
-		tracksVal,
-		string(track),
-		boolToInt(write.HasExpectedGeneration),
-		write.ExpectedGeneration,
-	}
+	callerExpectedHead := write.HasExpectedHead
+	for attempt := 0; attempt < revisionWriteAttempts; attempt++ {
+		preparedWrite, projectionJSON, projectionPrepared, err :=
+			c.prepareProjectionWrite(ctx, key, write,
+				func(record *sessionrevision.PersistedRecord) error {
+					return sessionrevision.AppendProjectionTrack(record, trackEvent)
+				})
+		if err != nil {
+			return fmt.Errorf("append track event: prepare revision projection: %w", err)
+		}
+		args := []any{
+			string(eventJSON),
+			trackEvent.Timestamp.UnixNano(),
+			ttlSeconds,
+			boolToInt(c.cfg.TrackEventTTL != nil),
+			tracksVal,
+			string(track),
+			boolToInt(preparedWrite.HasExpectedGeneration),
+			preparedWrite.ExpectedGeneration,
+			boolToInt(preparedWrite.HasExpectedHead),
+			preparedWrite.ExpectedHead,
+			boolToInt(projectionPrepared),
+			projectionJSON,
+		}
 
-	result, err := c.runScript(ctx, luaAppendTrackEvent, keys, args...).Int64()
-	if err != nil {
-		return fmt.Errorf("append track event: %w", err)
+		result, err := c.runScript(ctx, luaAppendTrackEvent, keys, args...).Int64()
+		if err != nil {
+			return fmt.Errorf("append track event: %w", err)
+		}
+		switch result {
+		case 0:
+			return fmt.Errorf("session not found")
+		case -1:
+			return sessionrevision.ErrStaleGeneration
+		case -2:
+			if callerExpectedHead {
+				return sessionrevision.ErrStaleProjection
+			}
+			continue
+		default:
+			return nil
+		}
 	}
-	if result == 0 {
-		return fmt.Errorf("session not found")
-	}
-	if result == -1 {
-		return sessionrevision.ErrStaleGeneration
-	}
-	return nil
+	return fmt.Errorf("append track event contention: %w", sessionrevision.ErrStaleProjection)
 }
 
 func ttlSecondsCeil(ttl time.Duration) int64 {

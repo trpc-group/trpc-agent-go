@@ -36,6 +36,69 @@ func TestLatestTurnReplacementContract(t *testing.T) {
 	replacementtest.Run(t, service)
 }
 
+func TestTurnStartReusesRollingProjection(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	t.Cleanup(cleanup)
+	service, err := NewService(db)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "rolling"}
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	firstCtx := sessionrevision.ContextWithTurnStart(
+		ctx,
+		sessionrevision.TurnStart{
+			RequestID: "first", InvocationID: "first-invocation",
+		},
+	)
+	require.NoError(t, service.AppendEvent(
+		firstCtx,
+		sess,
+		sqliteTestMessageEvent(
+			"first", "first", "first-invocation", "first",
+		),
+	))
+	require.NoError(t, service.AppendEvent(
+		ctx, sess, sqliteTestCompletionEvent("first", "first-invocation"),
+	))
+	record, err := service.readRevision(ctx, service.db, key)
+	require.NoError(t, err)
+	assert.True(t, sessionrevision.ProjectionInitialized(record))
+
+	// A steady-state turn start must not read or decode historical payloads.
+	// Replacement still performs a full authoritative verification and will
+	// fail closed if persisted history was externally corrupted.
+	_, err = service.db.ExecContext(
+		ctx,
+		fmt.Sprintf(
+			`UPDATE %s SET event = ? WHERE app_name = ? AND user_id = ?
+AND session_id = ?`,
+			service.tableSessionEvents,
+		),
+		[]byte("{"), key.AppName, key.UserID, key.SessionID,
+	)
+	require.NoError(t, err)
+	secondCtx := sessionrevision.ContextWithTurnStart(
+		ctx,
+		sessionrevision.TurnStart{
+			RequestID: "second", InvocationID: "second-invocation",
+		},
+	)
+	require.NoError(t, service.AppendEvent(
+		secondCtx,
+		sess,
+		sqliteTestMessageEvent(
+			"second", "second", "second-invocation", "second",
+		),
+	))
+	record, err = service.readRevision(ctx, service.db, key)
+	require.NoError(t, err)
+	require.NotNil(t, record.Checkpoint)
+	assert.Equal(t, "second", record.Checkpoint.RequestID)
+}
+
 func TestReplaceLatestTurnRestoresSQLiteProjection(t *testing.T) {
 	for _, async := range []bool{false, true} {
 		name := "sync"
@@ -47,6 +110,7 @@ func TestReplaceLatestTurnRestoresSQLiteProjection(t *testing.T) {
 			t.Cleanup(cleanup)
 			service, err := NewService(
 				db,
+				WithSessionTTL(time.Hour),
 				WithEnableAsyncPersist(async),
 				WithAsyncPersisterNum(1),
 			)
@@ -326,7 +390,7 @@ func TestReplacementPreservesAndLaterWritesRefreshSessionExpiration(t *testing.T
 		sqliteTestMessageEvent("after", "after", "after-invocation", "after"),
 	))
 	after := sessionExpiration(t, service, key)
-	assert.GreaterOrEqual(t, after, before)
+	assert.Greater(t, after, before)
 }
 
 func TestRevisionMetadataUsesExistingStateTable(t *testing.T) {
@@ -373,6 +437,64 @@ func TestRevisionMetadataUsesExistingStateTable(t *testing.T) {
 WHERE type = 'table' AND name IN ('session_revisions', 'session_revision_archives')`,
 	).Scan(&count))
 	assert.Zero(t, count)
+}
+
+func TestUnsupportedRevisionSidecarIsReadOnly(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	t.Cleanup(cleanup)
+	service, err := NewService(db)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	_, err = service.CreateSession(ctx, key, session.StateMap{"phase": []byte("before")})
+	require.NoError(t, err)
+	var raw []byte
+	require.NoError(t, service.db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT state FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+		service.tableSessionStates,
+	), key.AppName, key.UserID, key.SessionID).Scan(&raw))
+	var envelope map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &envelope))
+	envelope["_trpcAgent"] = json.RawMessage(`{"version":2,"opaque":"future"}`)
+	raw, err = json.Marshal(envelope)
+	require.NoError(t, err)
+	_, err = service.db.ExecContext(ctx, fmt.Sprintf(
+		`UPDATE %s SET state = ?
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+		service.tableSessionStates,
+	), raw, key.AppName, key.UserID, key.SessionID)
+	require.NoError(t, err)
+
+	got, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	phase, ok := got.GetState("phase")
+	require.True(t, ok)
+	assert.Equal(t, []byte("before"), phase)
+	listed, err := service.ListSessions(ctx, session.UserKey{
+		AppName: key.AppName, UserID: key.UserID,
+	})
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+
+	err = service.AppendEvent(ctx, got, sqliteTestMessageEvent(
+		"write", "request", "invocation", "write",
+	))
+	assert.ErrorContains(t, err, "unsupported persisted version 2")
+	var after []byte
+	require.NoError(t, service.db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT state FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+		service.tableSessionStates,
+	), key.AppName, key.UserID, key.SessionID).Scan(&after))
+	assert.JSONEq(t, string(raw), string(after))
+
+	_, err = service.ReplaceLatestTurn(ctx, sessionrevision.LatestTurnReplacementRequest{
+		Key: key, ExpectedRequestID: "request", IdempotencyKey: "replacement",
+	})
+	assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
 }
 
 func TestReplaceLatestTurnRejectsInvalidRevisionRecords(t *testing.T) {
@@ -919,7 +1041,7 @@ BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionEvents,
 			require.NoError(t, err)
 		}
 		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
-			`CREATE TRIGGER fail_track BEFORE DELETE ON %s
+			`CREATE TRIGGER fail_track BEFORE UPDATE OF deleted_at ON %s
 BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionTracks,
 		))
 		require.NoError(t, err)
@@ -1210,6 +1332,23 @@ func testSQLiteLatestTurnReplacement(t *testing.T, service *Service, async bool)
 	assert.JSONEq(t, `{"value":"before"}`, string(trackEvents.Events[0].Payload))
 	require.Contains(t, result.ActiveSession.Summaries, "")
 	assert.Equal(t, "before", result.ActiveSession.Summaries[""].Summary)
+	var summariesWithoutTTL int
+	require.NoError(t, service.db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT COUNT(*) FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND deleted_at IS NULL AND expires_at IS NULL`,
+		service.tableSessionSummaries,
+	), key.AppName, key.UserID, key.SessionID).Scan(&summariesWithoutTTL))
+	assert.Equal(t, 1, summariesWithoutTTL)
+	if service.opts.softDelete {
+		var tombstonedTracks int
+		require.NoError(t, service.db.QueryRowContext(ctx, fmt.Sprintf(
+			`SELECT COUNT(*) FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NOT NULL`,
+			service.tableSessionTracks,
+		), key.AppName, key.UserID, key.SessionID).Scan(&tombstonedTracks))
+		assert.Equal(t, 1, tombstonedTracks)
+	}
 
 	replayed, err := sessionrevision.ReplaceLatestTurn(ctx, service, sessionrevision.LatestTurnReplacementRequest{
 		Key:               key,

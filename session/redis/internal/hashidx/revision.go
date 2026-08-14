@@ -23,6 +23,8 @@ import (
 
 const revisionProjectionLimit = -1
 
+const revisionWriteAttempts = 8
+
 // Revision returns the private revision metadata for a session.
 func (c *Client) Revision(
 	ctx context.Context,
@@ -49,6 +51,119 @@ func (c *Client) RevisionProjection(
 	key session.Key,
 ) (*session.Session, error) {
 	return c.GetSession(ctx, key, revisionProjectionLimit, time.Time{})
+}
+
+func (c *Client) prepareProjectionWrite(
+	ctx context.Context,
+	key session.Key,
+	write sessionrevision.Write,
+	advance func(*sessionrevision.PersistedRecord) error,
+) (sessionrevision.Write, string, bool, error) {
+	record, err := c.Revision(ctx, key)
+	if err != nil {
+		return write, "", false, err
+	}
+	if !write.HasExpectedHead {
+		write.ExpectedHead = record.Head
+		write.HasExpectedHead = true
+	}
+	projectionPrepared := record.Projection != nil || write.Projection != nil
+	if write.Projection != nil {
+		record.Projection = sessionrevision.CloneProjection(write.Projection)
+	}
+	if advance != nil {
+		if err := advance(record); err != nil {
+			return write, "", false, err
+		}
+	}
+	if record.Projection == nil {
+		return write, "", projectionPrepared, nil
+	}
+	raw, err := json.Marshal(record.Projection)
+	if err != nil {
+		return write, "", false, fmt.Errorf(
+			"encode revision projection: %w", err,
+		)
+	}
+	return write, string(raw), true, nil
+}
+
+// RevisionBoundaryBase loads the mutable session fields needed for a turn
+// boundary without loading event or track histories. The returned boolean is
+// false when expiring projection keys are already missing and the caller must
+// rebuild the rolling projection from an authoritative full read.
+func (c *Client) RevisionBoundaryBase(
+	ctx context.Context,
+	key session.Key,
+	projection *sessionrevision.PersistedProjection,
+) (*session.Session, bool, error) {
+	pipe := c.client.Pipeline()
+	metaCmd := pipe.Get(ctx, c.keys.SessionMetaKey(key))
+	summaryCmd := pipe.Get(ctx, c.keys.SummaryKey(key))
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, false, fmt.Errorf("load revision boundary base: %w", err)
+	}
+	metaJSON, err := metaCmd.Bytes()
+	if err == redis.Nil {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("load revision boundary metadata: %w", err)
+	}
+	var meta sessionMeta
+	if err := json.Unmarshal(metaJSON, &meta); err != nil {
+		return nil, false, fmt.Errorf("decode revision boundary metadata: %w", err)
+	}
+	base := session.NewSession(meta.AppName, meta.UserID, meta.ID)
+	base.State = meta.State
+	base.CreatedAt = meta.CreatedAt
+	base.UpdatedAt = meta.UpdatedAt
+	if summaryJSON, err := summaryCmd.Bytes(); err == nil {
+		if err := json.Unmarshal(summaryJSON, &base.Summaries); err != nil {
+			return nil, false, fmt.Errorf("decode revision boundary summaries: %w", err)
+		}
+	} else if err != redis.Nil {
+		return nil, false, fmt.Errorf("load revision boundary summaries: %w", err)
+	}
+	intact, err := c.revisionProjectionStorageIntact(ctx, key, projection)
+	if err != nil {
+		return nil, false, err
+	}
+	return base, intact, nil
+}
+
+func (c *Client) revisionProjectionStorageIntact(
+	ctx context.Context,
+	key session.Key,
+	projection *sessionrevision.PersistedProjection,
+) (bool, error) {
+	keys := make([]string, 0)
+	if c.cfg.SessionTTL > 0 && projection != nil &&
+		projection.Events.Count > 0 {
+		keys = append(keys,
+			c.keys.EventDataKey(key),
+			c.keys.EventTimeIndexKey(key),
+		)
+	}
+	if c.cfg.effectiveTrackEventTTL() > 0 && projection != nil {
+		for track, prefix := range projection.Tracks {
+			if prefix.Count == 0 {
+				continue
+			}
+			keys = append(keys,
+				c.keys.TrackDataKey(key, track),
+				c.keys.TrackTimeIndexKey(key, track),
+			)
+		}
+	}
+	if len(keys) == 0 {
+		return true, nil
+	}
+	existing, err := c.client.Exists(ctx, keys...).Result()
+	if err != nil {
+		return false, fmt.Errorf("validate revision projection storage: %w", err)
+	}
+	return existing == int64(len(keys)), nil
 }
 
 // ReplaceLatestTurn atomically restores the checkpoint immediately before the
@@ -125,6 +240,11 @@ func (c *Client) ReplaceLatestTurn(
 			record.Generation++
 			record.Head++
 			record.Checkpoint = nil
+			if err := sessionrevision.ResetProjectionFromBoundary(
+				record, checkpoint.Boundary,
+			); err != nil {
+				return err
+			}
 			sessionrevision.RecordLatestTurnReplacementReplay(
 				record,
 				idempotencyKey,

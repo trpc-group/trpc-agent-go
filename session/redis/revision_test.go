@@ -143,6 +143,14 @@ func TestTrimConversationsMakesLatestTurnUnavailable(t *testing.T) {
 			deleted, err := service.TrimConversations(ctx, key, WithCount(1))
 			require.NoError(t, err)
 			require.NotEmpty(t, deleted)
+			var record *sessionrevision.PersistedRecord
+			if tt.name == "zset" {
+				record, err = service.zsetClient.Revision(ctx, key)
+			} else {
+				record, err = service.hashidxClient.Revision(ctx, key)
+			}
+			require.NoError(t, err)
+			assert.False(t, sessionrevision.ProjectionInitialized(record))
 
 			_, err = sessionrevision.ReplaceLatestTurn(
 				ctx,
@@ -152,6 +160,115 @@ func TestTrimConversationsMakesLatestTurnUnavailable(t *testing.T) {
 				},
 			)
 			assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
+		})
+	}
+}
+
+func TestRollingProjectionSupportsSuccessiveTurns(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		opts []ServiceOpt
+	}{
+		{name: "hashidx", opts: []ServiceOpt{WithCompatMode(CompatModeNone)}},
+		{name: "zset", opts: []ServiceOpt{WithCompatMode(CompatModeTransition)}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			t.Cleanup(cleanup)
+			opts := append([]ServiceOpt{WithRedisClientURL(redisURL)}, tt.opts...)
+			service, err := NewService(opts...)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, service.Close()) })
+
+			ctx := context.Background()
+			key := session.Key{
+				AppName: "app", UserID: "user", SessionID: "rolling-" + tt.name,
+			}
+			sess, err := service.CreateSession(ctx, key, nil)
+			require.NoError(t, err)
+			baseline := redisTestMessageEvent(
+				"baseline", "baseline", "baseline", "baseline",
+			)
+			baseline.Response.Choices[0].Message.Role = model.RoleUser
+			require.NoError(t, service.AppendEvent(ctx, sess, baseline))
+
+			for i, requestID := range []string{"request-1", "request-2"} {
+				invocationID := fmt.Sprintf("invocation-%d", i+1)
+				turnCtx := sessionrevision.ContextWithTurnStart(
+					ctx,
+					sessionrevision.TurnStart{
+						RequestID: requestID, InvocationID: invocationID,
+					},
+				)
+				require.NoError(t, service.AppendEvent(
+					turnCtx,
+					sess,
+					redisTestMessageEvent(
+						"event-"+requestID, requestID, invocationID, requestID,
+					),
+				))
+				require.NoError(t, service.AppendTrackEvent(
+					ctx,
+					sess,
+					&session.TrackEvent{
+						Track:     "ui",
+						RequestID: requestID,
+						Payload:   []byte(fmt.Sprintf(`{"turn":%d}`, i+1)),
+						Timestamp: time.Now().Add(
+							time.Duration(i-10) * time.Second,
+						),
+					},
+				))
+				require.NoError(t, service.AppendEvent(
+					ctx,
+					sess,
+					redisTestCompletionEvent(requestID, invocationID),
+				))
+			}
+
+			var (
+				record *sessionrevision.PersistedRecord
+				active *session.Session
+			)
+			if tt.name == "zset" {
+				record, err = service.zsetClient.Revision(ctx, key)
+				if err == nil {
+					active, err = service.zsetClient.RevisionProjection(ctx, key)
+				}
+			} else {
+				record, err = service.hashidxClient.Revision(ctx, key)
+				if err == nil {
+					active, err = service.hashidxClient.RevisionProjection(ctx, key)
+				}
+			}
+			require.NoError(t, err)
+			require.True(t, sessionrevision.ProjectionInitialized(record))
+			boundary, err := sessionrevision.NewBoundaryFromProjection(
+				active, record.Projection,
+			)
+			require.NoError(t, err)
+			fullBoundary, fullErr := sessionrevision.NewBoundary(active)
+			require.NoError(t, fullErr)
+			assert.JSONEq(t, string(fullBoundary), string(boundary))
+
+			result, err := sessionrevision.ReplaceLatestTurn(
+				ctx,
+				service,
+				sessionrevision.LatestTurnReplacementRequest{
+					Key:               key,
+					ExpectedRequestID: "request-2",
+					IdempotencyKey:    "replace-request-2",
+				},
+			)
+			require.NoError(t, err)
+			assert.True(t, result.Applied)
+			for _, evt := range result.ActiveSession.Events {
+				assert.NotEqual(t, "request-2", evt.RequestID)
+			}
+			trackEvents, err := result.ActiveSession.GetTrackEvents("ui")
+			require.NoError(t, err)
+			require.Len(t, trackEvents.Events, 1)
+			assert.Equal(t, "request-1", trackEvents.Events[0].RequestID)
 		})
 	}
 }
