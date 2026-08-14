@@ -548,16 +548,11 @@ func applyUserInvocationInput(
 }
 
 // isPlainResumeInput reports whether msg is the checkpoint resume sentinel.
-// Legacy Content == "resume" is always treated as the sentinel. When Content
-// is empty, ContentParts that resolve to text-only "resume" are also treated
-// as the sentinel; any non-text part makes the input meaningful.
+// The sentinel applies only to text-only input whose projected text is
+// "resume". Content == "resume" with no non-text ContentParts keeps the
+// legacy skip behavior. Any image, file, audio, or video part is meaningful
+// input even when Content or the joined text parts equal "resume".
 func isPlainResumeInput(msg model.Message) bool {
-	if msg.Content == "resume" {
-		return true
-	}
-	if msg.Content != "" {
-		return false
-	}
 	if utilmessage.TextContent(msg) != "resume" {
 		return false
 	}

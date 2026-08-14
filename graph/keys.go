@@ -124,6 +124,9 @@ func isInternalStateKey(key string) bool {
 		MetadataKeyState, MetadataKeyCompletion, MetadataKeyNodeCustom,
 		MetadataKeyNodeEmitter,
 		stateKeyCompletedToolMessages,
+		// Baseline is executor-owned. Exclude it from completion events and
+		// child RuntimeState. Checkpoints still persist it via safeClone
+		// until the executor consumes it with user_input.
 		userinputkey.Baseline:
 		return true
 	default:

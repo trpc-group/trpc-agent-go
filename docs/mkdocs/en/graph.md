@@ -3876,7 +3876,7 @@ sg.AddToolsConditionalEdges(nodeAsk, nodeExecTools, nodeFallback)
 
 GraphAgent stores the current `*session.Session` into state (`graph.StateKeySession`) and expands placeholders before the LLM call.
 
-Tip: GraphAgent seeds `graph.StateKeyMessages` from prior session events for multi‑turn continuity. When resuming from a checkpoint, a plain/text-only "resume" message (`Content == "resume"`, or ContentParts that are text-only and resolve to "resume") is not injected as `graph.StateKeyUserInput`, preserving the recovered state. A ContentParts message whose text is "resume" but that also includes non-text parts (image/file/audio/video/etc.) is treated as meaningful input.
+Tip: GraphAgent seeds `graph.StateKeyMessages` from prior session events for multi‑turn continuity. When resuming from a checkpoint, a plain/text-only "resume" message (`Content == "resume"` with no non-text ContentParts, or ContentParts that are text-only and resolve to "resume") is not injected as `graph.StateKeyUserInput`, preserving the recovered state. A message whose text is "resume" but that also includes non-text parts (image/file/audio/video/etc.) is treated as meaningful input.
 
 ### Concurrency and State Safety
 
@@ -4753,7 +4753,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 **Q6: Resume did not continue where expected**
 
 - Pass `agent.WithRuntimeState(map[string]any{ graph.CfgKeyLineageID: "...", graph.CfgKeyCheckpointID: "..." })`.
-- Provide `ResumeMap` for HITL continuation when needed. A plain/text-only "resume" message is not added to `graph.StateKeyUserInput`; multimodal "resume" text plus non-text parts is meaningful input.
+- Provide `ResumeMap` for HITL continuation when needed. A plain/text-only "resume" message is not added to `graph.StateKeyUserInput`. A "resume" text that also carries non-text parts, including `Content == "resume"` plus an image or file, is meaningful input.
 
 **Q7: State conflicts in parallel**
 

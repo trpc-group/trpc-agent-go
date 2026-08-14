@@ -3772,7 +3772,7 @@ sg.AddToolsConditionalEdges(nodeAsk, nodeExecTools, nodeFallback)
 
 GraphAgent 会把当前 `*session.Session` 放入状态（`graph.StateKeySession` 键），LLM 节点会在执行前对指令进行占位符展开。
 
-提示：GraphAgent 会从会话事件播种 `graph.StateKeyMessages` 以保证多轮连贯；从检查点恢复时，仅纯文本/text-only 的 "resume" 哨兵（`Content == "resume"`，或仅为文本且拼接结果为 "resume" 的 `ContentParts`）不会注入到 `graph.StateKeyUserInput`，以避免干扰已恢复的状态。若 `ContentParts` 文本为 "resume" 但还包含非文本部分（图片/文件/音频/视频等），则视为有意义的用户输入。
+提示：GraphAgent 会从会话事件播种 `graph.StateKeyMessages` 以保证多轮连贯；从检查点恢复时，仅纯文本/text-only 的 "resume" 哨兵（`Content == "resume"` 且没有非文本 ContentParts，或仅为文本且拼接结果为 "resume" 的 `ContentParts`）不会注入到 `graph.StateKeyUserInput`，以避免干扰已恢复的状态。若文本为 "resume" 但还包含非文本部分（图片/文件/音频/视频等），则视为有意义的用户输入。
 
 ### 并发执行和状态安全
 
@@ -4662,7 +4662,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 **Q6: 从检查点恢复未按预期继续**
 
 - 通过 `agent.WithRuntimeState(map[string]any{ graph.CfgKeyLineageID: "...", graph.CfgKeyCheckpointID: "..." })` 传入；
-- HITL 恢复时提供 `ResumeMap`；纯文本/text-only 的 "resume" 不会注入到 `graph.StateKeyUserInput`；多模态下 "resume" 文本叠加非文本部分视为有意义输入。
+- HITL 恢复时提供 `ResumeMap`；纯文本/text-only 的 "resume" 不会注入到 `graph.StateKeyUserInput`。文本为 "resume" 且同时带有非文本部分（包括 `Content == "resume"` 叠加图片或文件）视为有意义输入。
 
 **Q7: 并行下状态冲突**
 

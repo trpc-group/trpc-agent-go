@@ -1955,6 +1955,19 @@ func TestGraphAgent_CreateInitialStateUserInputFromContentParts(t *testing.T) {
 			wantMessages: 0,
 		},
 		{
+			name: "resume content with text-only parts is skipped",
+			message: model.Message{
+				Role:    model.RoleUser,
+				Content: "resume",
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &resume},
+				},
+			},
+			runtimeState: graph.State{graph.CfgKeyCheckpointID: "checkpoint-123"},
+			wantHasInput: false,
+			wantMessages: 0,
+		},
+		{
 			name: "resume text parts are skipped",
 			message: model.Message{
 				Role: model.RoleUser,
@@ -1965,6 +1978,20 @@ func TestGraphAgent_CreateInitialStateUserInputFromContentParts(t *testing.T) {
 			runtimeState: graph.State{graph.CfgKeyCheckpointID: "checkpoint-123"},
 			wantHasInput: false,
 			wantMessages: 0,
+		},
+		{
+			name: "resume content with non-text parts is not skipped",
+			message: model.Message{
+				Role:         model.RoleUser,
+				Content:      "resume",
+				ContentParts: []model.ContentPart{imagePart},
+			},
+			runtimeState:    graph.State{graph.CfgKeyCheckpointID: "checkpoint-123"},
+			wantUserInput:   "resume",
+			wantHasInput:    true,
+			wantMessages:    1,
+			wantLastParts:   1,
+			wantLastContent: "resume",
 		},
 		{
 			name: "resume text with non-text parts is not skipped",
@@ -2084,6 +2111,97 @@ func TestGraphAgent_CreateInitialStateUserInputFromContentParts(t *testing.T) {
 			if tt.wantLastParts > 0 {
 				require.Equal(t, tt.message.ContentParts, last.ContentParts)
 			}
+		})
+	}
+}
+
+func TestIsPlainResumeInput(t *testing.T) {
+	resume := "resume"
+	hello := "hello"
+	imagePart := model.ContentPart{
+		Type:  model.ContentTypeImage,
+		Image: &model.Image{URL: "https://example.com/a.png"},
+	}
+	filePart := model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{Name: "notes.txt", Data: []byte("x")},
+	}
+
+	tests := []struct {
+		name string
+		msg  model.Message
+		want bool
+	}{
+		{
+			name: "legacy content resume",
+			msg:  model.NewUserMessage("resume"),
+			want: true,
+		},
+		{
+			name: "content resume with text-only parts",
+			msg: model.Message{
+				Role:    model.RoleUser,
+				Content: "resume",
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &resume},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "text-only parts resume",
+			msg: model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &resume},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "content resume with image is meaningful",
+			msg: model.Message{
+				Role:         model.RoleUser,
+				Content:      "resume",
+				ContentParts: []model.ContentPart{imagePart},
+			},
+		},
+		{
+			name: "content resume with file is meaningful",
+			msg: model.Message{
+				Role:         model.RoleUser,
+				Content:      "resume",
+				ContentParts: []model.ContentPart{filePart},
+			},
+		},
+		{
+			name: "parts resume with image is meaningful",
+			msg: model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &resume},
+					imagePart,
+				},
+			},
+		},
+		{
+			name: "ordinary content",
+			msg:  model.NewUserMessage("hello"),
+		},
+		{
+			name: "ordinary parts",
+			msg: model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &hello},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isPlainResumeInput(tt.msg))
 		})
 	}
 }

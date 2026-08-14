@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
@@ -4255,10 +4256,34 @@ func (e *Executor) updateStateFromResult(execCtx *ExecutionContext, stateResult 
 	// Use schema-based reducers when available for proper merging.
 	if e.graph != nil && e.graph.Schema() != nil {
 		execCtx.State = e.graph.Schema().ApplyUpdate(execCtx.State, stateResult)
-		return
+	} else {
+		// Fallback to direct assignment if no schema available.
+		maps.Copy(execCtx.State, stateResult)
 	}
-	// Fallback to direct assignment if no schema available.
-	maps.Copy(execCtx.State, stateResult)
+	// Consume Baseline only after the reducer has actually cleared
+	// user_input. A custom schema may reject or transform an empty
+	// update, leaving the one-shot value in executor-owned state; the
+	// fingerprint must survive in that case so later rewrite decisions
+	// stay correct. Model errors return no State update, so Baseline
+	// also survives that path.
+	if defaultUserInputCleared(execCtx.State) {
+		delete(execCtx.State, userinputkey.Baseline)
+	}
+}
+
+// defaultUserInputCleared reports whether executor-owned state no longer
+// holds a pending default user_input value. Baseline is only meaningful
+// while that one-shot string is still pending for the LLM user-input stage.
+func defaultUserInputCleared(state State) bool {
+	if state == nil {
+		return true
+	}
+	v, ok := state[StateKeyUserInput]
+	if !ok || v == nil {
+		return true
+	}
+	s, ok := v.(string)
+	return ok && s == ""
 }
 
 // syncResumeState copies resume-related keys from a node-local state view into the shared executor state.

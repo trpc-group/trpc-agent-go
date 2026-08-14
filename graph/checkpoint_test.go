@@ -1535,6 +1535,217 @@ func TestCreateCheckpoint_KeepsUserInputBaseline(t *testing.T) {
 	require.NotContains(t, vals, StateKeyExecContext)
 }
 
+func TestExecutor_UserInputBaselineSurvivesUntilLLMConsumption(t *testing.T) {
+	fp := userinputkey.Fingerprint("hello")
+	var sawBeforeLLM bool
+	var afterRan bool
+	var sawBaselineAfterLLM bool
+	g, err := NewStateGraph(MessagesStateSchema()).
+		AddNode("prepare", func(_ context.Context, state State) (any, error) {
+			got, ok := state[userinputkey.Baseline].(string)
+			require.True(t, ok)
+			require.Equal(t, fp, got)
+			sawBeforeLLM = true
+			return State{"prepared": true}, nil
+		}).
+		AddLLMNode("ask", &dummyModel{}, "", nil).
+		AddNode("after", func(_ context.Context, state State) (any, error) {
+			afterRan = true
+			_, sawBaselineAfterLLM = state[userinputkey.Baseline]
+			require.Equal(t, "", state[StateKeyUserInput])
+			return nil, nil
+		}).
+		SetEntryPoint("prepare").
+		AddEdge("prepare", "ask").
+		AddEdge("ask", "after").
+		SetFinishPoint("after").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(context.Background(), State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: fp,
+		CfgKeyLineageID:       "ln-baseline-lifecycle",
+	}, &agent.Invocation{InvocationID: "ln-baseline-lifecycle"})
+	require.NoError(t, err)
+	for evt := range ch {
+		if evt != nil && evt.Done && evt.Object == ObjectTypeGraphExecution {
+			require.NotContains(t, evt.StateDelta, userinputkey.Baseline)
+		}
+	}
+	require.True(t, sawBeforeLLM)
+	require.True(t, afterRan)
+	require.False(t, sawBaselineAfterLLM)
+
+	var sawInputBaseline bool
+	var sawPreLLMLoopBaseline bool
+	var sawPostLLMCheckpoint bool
+	for _, tuple := range saver.byID {
+		if tuple == nil || tuple.Checkpoint == nil || tuple.Metadata == nil {
+			continue
+		}
+		vals := tuple.Checkpoint.ChannelValues
+		switch tuple.Metadata.Source {
+		case CheckpointSourceInput:
+			require.Equal(t, fp, vals[userinputkey.Baseline])
+			sawInputBaseline = true
+		case CheckpointSourceLoop:
+			if got, ok := vals[userinputkey.Baseline]; ok {
+				require.Equal(t, fp, got)
+				sawPreLLMLoopBaseline = true
+				continue
+			}
+			sawPostLLMCheckpoint = true
+		}
+	}
+	require.True(t, sawInputBaseline)
+	require.True(t, sawPreLLMLoopBaseline)
+	require.True(t, sawPostLLMCheckpoint)
+}
+
+func TestExecutor_UserInputBaselineKeptOnModelError(t *testing.T) {
+	fp := userinputkey.Fingerprint("hello")
+	g, err := NewStateGraph(MessagesStateSchema()).
+		AddLLMNode("ask", &errModel{}, "", nil).
+		SetEntryPoint("ask").
+		SetFinishPoint("ask").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(context.Background(), State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: fp,
+		CfgKeyLineageID:       "ln-baseline-error",
+	}, &agent.Invocation{InvocationID: "ln-baseline-error"})
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.NotEmpty(t, saver.byID)
+	for _, tuple := range saver.byID {
+		if tuple == nil || tuple.Checkpoint == nil {
+			continue
+		}
+		require.Equal(t, fp, tuple.Checkpoint.ChannelValues[userinputkey.Baseline])
+	}
+}
+
+func TestLLMRunner_ExecuteUserInputStage_ConsumedBaselineDoesNotSuppressLaterRewrite(t *testing.T) {
+	userText := "please summarize"
+	annotation := "Attached files (1): notes.txt (text/plain)\n"
+	filePart := model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			Name:     "notes.txt",
+			Data:     []byte("file-bytes"),
+			MimeType: "text/plain",
+		},
+	}
+	enriched := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &annotation},
+			{Type: model.ContentTypeText, Text: &userText},
+			filePart,
+		},
+	}
+
+	g, err := NewStateGraph(MessagesStateSchema()).
+		AddNode("noop", func(context.Context, State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("noop").
+		SetFinishPoint("noop").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+	execCtx := &ExecutionContext{State: State{
+		StateKeyMessages:      []model.Message{enriched},
+		StateKeyUserInput:     userText,
+		userinputkey.Baseline: userinputkey.Fingerprint(userText),
+	}}
+
+	capture := &requestCaptureModel{}
+	r := &llmRunner{llmModel: capture, instruction: "", tools: nil, nodeID: "node1"}
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(context.Background(), "s")
+
+	first, err := r.executeUserInputStage(
+		context.Background(),
+		execCtx.State,
+		StateKeyUserInput,
+		userText,
+		span,
+	)
+	require.NoError(t, err)
+	firstState, ok := first.(State)
+	require.True(t, ok)
+	exec.updateStateFromResult(execCtx, firstState)
+	require.NotContains(t, execCtx.State, userinputkey.Baseline)
+
+	laterUser := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &annotation},
+			filePart,
+		},
+	}
+	exec.updateStateFromResult(execCtx, State{StateKeyUserInput: userText})
+	require.NotContains(t, execCtx.State, userinputkey.Baseline)
+	execCtx.State[StateKeyMessages] = []model.Message{laterUser}
+
+	laterCapture := &requestCaptureModel{}
+	r.llmModel = laterCapture
+	_, err = r.executeUserInputStage(
+		context.Background(),
+		execCtx.State,
+		StateKeyUserInput,
+		userText,
+		span,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, laterCapture.lastReq)
+	got := laterCapture.lastReq.Messages[len(laterCapture.lastReq.Messages)-1]
+	require.Equal(t, model.RoleUser, got.Role)
+	require.Len(t, got.ContentParts, 2)
+	require.Equal(t, model.ContentTypeText, got.ContentParts[0].Type)
+	require.NotNil(t, got.ContentParts[0].Text)
+	require.Equal(t, userText, *got.ContentParts[0].Text)
+	require.Equal(t, filePart, got.ContentParts[1])
+}
+
+func TestLLMRunner_ExecuteUserInputStage_ModelErrorKeepsCallerBaseline(t *testing.T) {
+	fp := userinputkey.Fingerprint("hello")
+	state := State{
+		StateKeyMessages:      []model.Message{model.NewUserMessage("hello")},
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: fp,
+	}
+	r := &llmRunner{llmModel: &errModel{}, instruction: "", tools: nil, nodeID: "node1"}
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(context.Background(), "s")
+
+	_, err := r.executeUserInputStage(
+		context.Background(),
+		state,
+		StateKeyUserInput,
+		"hello",
+		span,
+	)
+	require.Error(t, err)
+	require.Equal(t, fp, state[userinputkey.Baseline])
+	require.Equal(t, "hello", state[StateKeyUserInput])
+}
+
 func TestLLMRunner_Execute_PureImageUsesHistoryWhenUserInputCleared(t *testing.T) {
 	imageMsg := model.Message{
 		Role: model.RoleUser,

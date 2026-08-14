@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	teletrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -1583,6 +1584,126 @@ func TestExecutor_UpdateStateFromResult_SkipsInternal(t *testing.T) {
 	// Internal key must be dropped; regular key must be applied.
 	require.NotContains(t, execCtx.State, StateKeyExecContext)
 	require.Equal(t, "bar", execCtx.State["foo"])
+}
+
+func TestExecutor_UpdateStateFromResult_ConsumesUserInputBaseline(t *testing.T) {
+	fp := userinputkey.Fingerprint("hello")
+	exec := &Executor{}
+	execCtx := &ExecutionContext{State: State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: fp,
+	}}
+
+	exec.updateStateFromResult(execCtx, State{"keep": true})
+	require.Equal(t, fp, execCtx.State[userinputkey.Baseline])
+	require.Equal(t, "hello", execCtx.State[StateKeyUserInput])
+
+	exec.updateStateFromResult(execCtx, State{StateKeyUserInput: "rewritten"})
+	require.Equal(t, fp, execCtx.State[userinputkey.Baseline])
+	require.Equal(t, "rewritten", execCtx.State[StateKeyUserInput])
+
+	exec.updateStateFromResult(execCtx, State{
+		StateKeyUserInput:     "",
+		userinputkey.Baseline: userinputkey.Fingerprint("injected"),
+	})
+	require.Equal(t, "", execCtx.State[StateKeyUserInput])
+	require.NotContains(t, execCtx.State, userinputkey.Baseline)
+}
+
+func TestExecutor_UpdateStateFromResult_CustomUserInputReducerKeepsBaseline(t *testing.T) {
+	tests := []struct {
+		name     string
+		reducer  StateReducer
+		wantKept string
+	}{
+		{
+			name: "rejects empty update",
+			reducer: func(existing, update any) any {
+				if s, ok := update.(string); ok && s == "" {
+					return existing
+				}
+				if update == nil {
+					return existing
+				}
+				return update
+			},
+			wantKept: "hello",
+		},
+		{
+			name: "transforms empty update",
+			reducer: func(existing, update any) any {
+				if s, ok := update.(string); ok && s == "" {
+					return "kept-by-reducer"
+				}
+				return update
+			},
+			wantKept: "kept-by-reducer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g, err := NewStateGraph(NewStateSchema().AddField(StateKeyUserInput, StateField{
+				Type:    reflect.TypeOf(""),
+				Reducer: tt.reducer,
+			})).
+				AddNode("n", func(context.Context, State) (any, error) {
+					return nil, nil
+				}).
+				SetEntryPoint("n").
+				SetFinishPoint("n").
+				Compile()
+			require.NoError(t, err)
+			exec, err := NewExecutor(g)
+			require.NoError(t, err)
+
+			fp := userinputkey.Fingerprint("hello")
+			execCtx := &ExecutionContext{State: State{
+				StateKeyUserInput:     "hello",
+				userinputkey.Baseline: fp,
+			}}
+			exec.updateStateFromResult(execCtx, State{StateKeyUserInput: ""})
+			require.Equal(t, tt.wantKept, execCtx.State[StateKeyUserInput])
+			require.Equal(t, fp, execCtx.State[userinputkey.Baseline])
+		})
+	}
+}
+
+func TestExecutor_UpdateStateFromResult_IgnoresBaselineWrite(t *testing.T) {
+	exec := &Executor{}
+	execCtx := &ExecutionContext{State: make(State)}
+
+	exec.updateStateFromResult(execCtx, State{
+		userinputkey.Baseline: userinputkey.Fingerprint("injected"),
+		"foo":                 "bar",
+	})
+
+	require.NotContains(t, execCtx.State, userinputkey.Baseline)
+	require.Equal(t, "bar", execCtx.State["foo"])
+}
+
+func TestExecutor_UpdateStateFromResult_BaselineClearRace(t *testing.T) {
+	exec := &Executor{}
+	execCtx := &ExecutionContext{State: State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: userinputkey.Fingerprint("hello"),
+	}}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				exec.updateStateFromResult(execCtx, State{"k": i})
+				return
+			}
+			exec.updateStateFromResult(execCtx, State{StateKeyUserInput: ""})
+		}(i)
+	}
+	wg.Wait()
+
+	require.NotContains(t, execCtx.State, userinputkey.Baseline)
 }
 
 // TestBasicCommandRouting tests routing using Command objects
