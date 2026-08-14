@@ -53,9 +53,9 @@ type Tool struct {
 
 	// dynamic enables the dynamic AgentTool mode created by NewDynamicTool.
 	// In this mode the tool runs a short-lived sub-agent whose
-	// capability surface (tools / skills / instruction) is selected per call
-	// within a code-defined safety boundary, rather than wrapping one
-	// pre-defined agent.
+	// capability surface (tools / skills / instruction and, when configured,
+	// a model profile) is selected per call within a code-defined safety
+	// boundary, rather than wrapping one pre-defined agent.
 	dynamic bool
 	// dynamicCfg holds the dynamic-mode configuration. It is only consulted
 	// when dynamic is true.
@@ -92,6 +92,7 @@ type dynamicOptions struct {
 	capabilitySkillProvider   CapabilitySkillsProvider
 	capabilityTools           []tool.Tool
 	capabilitySkills          skillRepository
+	modelProfiles             []agentModelProfile
 	capabilityToolsSet        bool
 	exposeToolSelection       bool
 	exposeSkillSelection      bool
