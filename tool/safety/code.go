@@ -1725,6 +1725,7 @@ func walkRawMap(policy Policy, values map[string]any, depth int) []Finding {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
+		findings = append(findings, scanSensitiveContent(key)...)
 		findings = append(findings, walkRawValue(policy, values[key], key, depth+1)...)
 	}
 	return findings
@@ -1746,22 +1747,23 @@ func walkRawString(policy Policy, value, parentKey string, depth int) []Finding 
 	if parentKey == "" || commandKey(parentKey) {
 		return scanExecution(policy, Request{Command: value})
 	}
+	findings := scanSensitiveContent(value)
 	if pathKey(parentKey) {
 		if finding, denied := deniedPathFinding(policy.DeniedPaths, value); denied {
-			return []Finding{finding}
+			findings = append(findings, finding)
 		}
-		return nil
+		return findings
 	}
 	if networkKey(parentKey) {
 		if isFileURL(value) {
 			if filePath, ok := fileURLPath(value); ok {
 				if finding, denied := deniedPathFinding(policy.DeniedPaths, filePath); denied {
-					return []Finding{finding}
+					findings = append(findings, finding)
 				}
 			}
-			return nil
+			return findings
 		}
-		findings := scanNetworkText(policy, value)
+		findings = append(findings, scanNetworkText(policy, value)...)
 		if _, ok := explicitHost(value); ok {
 			return findings
 		}
@@ -1773,7 +1775,7 @@ func walkRawString(policy Policy, value, parentKey string, depth int) []Finding 
 		}
 		return append(findings, dynamicNetworkFinding())
 	}
-	return nil
+	return findings
 }
 
 func requestFromRawMap(values map[string]any) (Request, bool) {

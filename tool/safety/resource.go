@@ -10,6 +10,7 @@
 package safety
 
 import (
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -102,6 +103,9 @@ func scanEnvironment(
 	sort.Strings(keys)
 	var findings []Finding
 	for _, key := range keys {
+		proxyFinding, hasProxyFinding := proxyEnvironmentFinding(
+			policy, key, environment[key],
+		)
 		switch executionEnvironmentClass(key, segmentsContainCommand(segments, "git")) {
 		case environmentExecutablePath:
 			findings = append(findings, newFinding(
@@ -126,6 +130,9 @@ func scanEnvironment(
 			continue
 		}
 		if stringAllowedFold(key, policy.EnvAllowlist) {
+			if hasProxyFinding {
+				findings = append(findings, proxyFinding)
+			}
 			continue
 		}
 		findings = append(findings, newFinding(
@@ -133,8 +140,51 @@ func scanEnvironment(
 			"environment variable is not allowlisted: "+key,
 			"remove the variable or add its name to env_allowlist",
 		))
+		if hasProxyFinding {
+			findings = append(findings, proxyFinding)
+		}
 	}
 	return findings
+}
+
+func proxyEnvironmentFinding(
+	policy Policy,
+	key string,
+	value string,
+) (Finding, bool) {
+	if !proxyEnvironmentVariable(key) || strings.TrimSpace(value) == "" {
+		return Finding{}, false
+	}
+	host, parsed := proxyDestinationHost(value)
+	if !parsed {
+		return newFinding(
+			DecisionNeedsHumanReview, RiskHigh, "network.destination_unparsed",
+			"proxy environment destination could not be parsed conservatively",
+			"use an explicit allowlisted proxy URL or remove the proxy variable",
+		), true
+	}
+	return networkDestinationFinding(policy, host)
+}
+
+func proxyDestinationHost(value string) (string, bool) {
+	candidate := strings.TrimSpace(strings.Trim(value, `"'`))
+	if strings.Contains(candidate, "://") {
+		return explicitHost(candidate)
+	}
+	parsed, err := url.Parse("//" + candidate)
+	if err != nil || !validKnownHost(parsed.Hostname()) {
+		return "", false
+	}
+	return normalizeHost(parsed.Hostname()), true
+}
+
+func proxyEnvironmentVariable(key string) bool {
+	switch strings.ToUpper(strings.TrimSpace(key)) {
+	case "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "FTPS_PROXY", "ALL_PROXY":
+		return true
+	default:
+		return false
+	}
 }
 
 type environmentClass uint8

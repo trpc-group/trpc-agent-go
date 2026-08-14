@@ -67,7 +67,7 @@ func scanExecutionMode(policy Policy, req Request, indirectionDepth int) []Findi
 	segments, findings := scanCommand(policy, req)
 	findings = append(findings, scanToolMetadata(req)...)
 	findings = append(findings, scanPaths(policy, req.Cwd, segments)...)
-	findings = append(findings, scanNetwork(policy, segments)...)
+	findings = append(findings, scanNetwork(policy, req.Env, segments)...)
 	findings = append(findings, scanResources(policy, req, segments)...)
 	findings = append(findings, scanInlineInterpreters(
 		policy, segments, indirectionDepth,
@@ -99,12 +99,16 @@ func scanToolMetadata(req Request) []Finding {
 
 func findingsContainSensitiveInput(findings []Finding) bool {
 	for _, finding := range findings {
-		if finding.RuleID == "sensitive.secret" ||
-			finding.RuleID == "sensitive.private_key" {
+		if findingContainsSensitiveInput(finding) {
 			return true
 		}
 	}
 	return false
+}
+
+func findingContainsSensitiveInput(finding Finding) bool {
+	return finding.RuleID == "sensitive.secret" ||
+		finding.RuleID == "sensitive.private_key"
 }
 
 func aggregateReport(req Request, findings []Finding) Report {

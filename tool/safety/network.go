@@ -31,7 +31,11 @@ var nonNetworkCommands = map[string]struct{}{
 	"ls": {}, "pwd": {}, "tail": {}, "test": {}, "true": {}, "wc": {},
 }
 
-func scanNetwork(policy Policy, segments [][]string) []Finding {
+func scanNetwork(
+	policy Policy,
+	environment map[string]string,
+	segments [][]string,
+) []Finding {
 	var findings []Finding
 	for _, argv := range segments {
 		if len(argv) == 0 {
@@ -62,7 +66,7 @@ func scanNetwork(policy Policy, segments [][]string) []Finding {
 		if commandBase(argv[0]) == "git" {
 			var rewriteFindings []Finding
 			rewriteFindings, rewritePrefixes = scanGitURLRewrites(
-				policy, argv, destinations,
+				policy, environment, argv, destinations,
 			)
 			findings = append(findings, rewriteFindings...)
 		}
@@ -362,7 +366,9 @@ func scpRemoteDestinations(args []string, valueOptions map[string]struct{}) []st
 }
 
 func gitNetworkDestinations(args []string) ([]string, bool) {
-	globalValues := map[string]struct{}{"-C": {}, "-c": {}, "--git-dir": {}, "--work-tree": {}}
+	globalValues := map[string]struct{}{
+		"-C": {}, "-c": {}, "--config-env": {}, "--git-dir": {}, "--work-tree": {},
+	}
 	subcommand, rest, ok := commandAndRest(args, globalValues)
 	if !ok {
 		return nil, false
@@ -407,46 +413,89 @@ func gitNetworkDestinations(args []string) ([]string, bool) {
 
 func scanGitURLRewrites(
 	policy Policy,
+	environment map[string]string,
 	argv []string,
 	destinations []string,
 ) ([]Finding, []string) {
 	var findings []Finding
 	var prefixes []string
 	for _, config := range gitConfigValues(argv[1:]) {
-		key, prefix, _ := strings.Cut(config, "=")
-		lowerKey := strings.ToLower(key)
-		if !strings.HasPrefix(lowerKey, "url.") || !strings.HasSuffix(lowerKey, ".insteadof") {
+		configFindings, prefix, matched := scanGitURLRewriteConfig(
+			policy, config, destinations,
+		)
+		if !matched {
 			continue
 		}
-		base := key[len("url.") : len(key)-len(".insteadOf")]
-		if prefix == "" || !destinationUsesRewriteList(destinations, prefix) {
+		findings = append(findings, configFindings...)
+		if prefix != "" {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	for _, config := range gitConfigEnvironmentValues(argv[1:]) {
+		key, envName, ok := strings.Cut(config, "=")
+		if !ok || !gitURLRewriteConfigKey(key) {
 			continue
 		}
-		prefixes = append(prefixes, prefix)
-		if base == "" || isFileURL(base) {
+		value, exists := environment[envName]
+		if !exists {
 			findings = append(findings, gitRewriteUnparsedFinding())
 			continue
 		}
-		host, parsed := knownDestinationHost(base)
-		if !parsed {
-			findings = append(findings, gitRewriteUnparsedFinding())
+		configFindings, prefix, matched := scanGitURLRewriteConfig(
+			policy, key+"="+value, destinations,
+		)
+		if !matched {
 			continue
 		}
-		if !networkHostAllowed(host, policy.NetworkAllowlist) {
-			findings = append(findings, newFinding(
-				DecisionDeny, RiskHigh, "network.destination_override",
-				"Git URL rewrite changes the effective destination to a non-allowlisted host",
-				"remove the rewrite or use an allowlisted remote directly",
-			))
-			continue
+		findings = append(findings, configFindings...)
+		if prefix != "" {
+			prefixes = append(prefixes, prefix)
 		}
-		findings = append(findings, newFinding(
-			DecisionNeedsHumanReview, RiskHigh, "network.destination_override",
-			"Git URL rewrite changes the effective destination",
-			"review the rewrite and use the allowlisted remote directly",
-		))
 	}
 	return findings, prefixes
+}
+
+func scanGitURLRewriteConfig(
+	policy Policy,
+	config string,
+	destinations []string,
+) ([]Finding, string, bool) {
+	key, prefix, ok := strings.Cut(config, "=")
+	if !ok || !gitURLRewriteConfigKey(key) {
+		return nil, "", false
+	}
+	key = strings.TrimSpace(key)
+	if prefix == "" {
+		return []Finding{gitRewriteUnparsedFinding()}, "", true
+	}
+	if !destinationUsesRewriteList(destinations, prefix) {
+		return nil, "", false
+	}
+	base := key[len("url.") : len(key)-len(".insteadOf")]
+	if base == "" || isFileURL(base) {
+		return []Finding{gitRewriteUnparsedFinding()}, prefix, true
+	}
+	host, parsed := knownDestinationHost(base)
+	if !parsed {
+		return []Finding{gitRewriteUnparsedFinding()}, prefix, true
+	}
+	if !networkHostAllowed(host, policy.NetworkAllowlist) {
+		return []Finding{newFinding(
+			DecisionDeny, RiskHigh, "network.destination_override",
+			"Git URL rewrite changes the effective destination to a non-allowlisted host",
+			"remove the rewrite or use an allowlisted remote directly",
+		)}, prefix, true
+	}
+	return []Finding{newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "network.destination_override",
+		"Git URL rewrite changes the effective destination",
+		"review the rewrite and use the allowlisted remote directly",
+	)}, prefix, true
+}
+
+func gitURLRewriteConfigKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	return strings.HasPrefix(key, "url.") && strings.HasSuffix(key, ".insteadof")
 }
 
 func destinationUsesRewriteList(destinations []string, prefix string) bool {

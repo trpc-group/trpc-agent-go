@@ -685,29 +685,33 @@ func scanDecodedPermissionRequest(
 			report = appendDecodedFinding(report, finding)
 		}
 	}
-	if !req.needsHumanReview {
-		return report
+	if req.needsHumanReview {
+		ruleID := req.reviewRuleID
+		if ruleID == "" {
+			ruleID = "session.interactive_input"
+		}
+		evidence := req.reviewEvidence
+		if evidence == "" {
+			evidence = "interactive session input can compose with prior process state"
+		}
+		finding := newFinding(
+			DecisionNeedsHumanReview,
+			RiskHigh,
+			ruleID,
+			evidence,
+			"review the complete session state before sending additional input",
+		)
+		report = appendDecodedFinding(report, finding)
 	}
-	ruleID := req.reviewRuleID
-	if ruleID == "" {
-		ruleID = "session.interactive_input"
-	}
-	evidence := req.reviewEvidence
-	if evidence == "" {
-		evidence = "interactive session input can compose with prior process state"
-	}
-	finding := newFinding(
-		DecisionNeedsHumanReview,
-		RiskHigh,
-		ruleID,
-		evidence,
-		"review the complete session state before sending additional input",
-	)
-	return appendDecodedFinding(report, finding)
+	redactReport(&report)
+	return report
 }
 
 func appendDecodedFinding(report Report, finding Finding) Report {
 	report.Findings = append(report.Findings, finding)
+	if findingContainsSensitiveInput(finding) {
+		report.Redacted = true
+	}
 	if findingRank(finding) <= decisionRank(report.Decision)*10+riskRank(report.RiskLevel) {
 		return report
 	}
