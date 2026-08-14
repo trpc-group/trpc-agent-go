@@ -152,8 +152,16 @@ func normalizeDiffPath(raw string) string {
 			path = unquoted
 		}
 	}
-	path = strings.TrimPrefix(path, "b/")
-	path = strings.TrimPrefix(path, "a/")
+	return NormalizeDiffPath(path)
+}
+
+// NormalizeDiffPath removes exactly one synthetic unified-diff side prefix.
+// A repository path may itself begin with a/ or b/, so these prefixes must not
+// be stripped sequentially.
+func NormalizeDiffPath(path string) string {
+	if strings.HasPrefix(path, "a/") || strings.HasPrefix(path, "b/") {
+		path = path[2:]
+	}
 	return filepath.ToSlash(path)
 }
 

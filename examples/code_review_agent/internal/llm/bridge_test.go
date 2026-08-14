@@ -391,6 +391,15 @@ func TestNormalizeFindingSanitizesAndBoundsProviderStrings(t *testing.T) {
 	}
 }
 
+func TestNormalizeFindingPreservesRepositoryPathsStartingWithSidePrefixes(t *testing.T) {
+	for _, path := range []string{"a/handler.go", "b/handler.go"} {
+		finding := NormalizeFinding(review.Finding{File: "b/" + path, Line: 1})
+		if finding.File != path {
+			t.Errorf("normalized file = %q, want %q", finding.File, path)
+		}
+	}
+}
+
 func TestSanitizeFindingRedactsEveryProviderControlledString(t *testing.T) {
 	const secret = "sk-provider-all-fields-1234567890"
 	finding := SanitizeFinding(review.Finding{

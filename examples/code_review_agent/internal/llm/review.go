@@ -348,10 +348,7 @@ func normalizeFindingEnum(value string, fallback string, allowed ...string) stri
 }
 
 func normalizeFindingFile(path string) string {
-	path = filepath.ToSlash(strings.TrimSpace(path))
-	path = strings.TrimPrefix(path, "a/")
-	path = strings.TrimPrefix(path, "b/")
-	return path
+	return review.NormalizeDiffPath(filepath.ToSlash(strings.TrimSpace(path)))
 }
 
 func boundString(value string, limit int) string {

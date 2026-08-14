@@ -411,6 +411,25 @@ func TestParseSkillFindingsDedupesAndRedactsSecretFindings(t *testing.T) {
 	}
 }
 
+func TestParseSkillFindingsSanitizesEveryRepositoryControlledField(t *testing.T) {
+	raw := "config.go?token=llm-live-1234567890abcdef"
+	stdout := `{"findings":[{"severity":"CRITICAL;secret=x","category":"security","file":"` + raw + `","line":7,"title":"title token=llm-live-1234567890abcdef","evidence":"evidence","recommendation":"recommendation","confidence":"high","source":"skill_run","rule_id":"rule token=llm-live-1234567890abcdef","status":"finding"}],"warnings":[]}`
+	result, err := parseSkillFindings(stdout)
+	if err != nil {
+		t.Fatalf("parseSkillFindings returned error: %v", err)
+	}
+	if len(result.Findings) != 1 {
+		t.Fatalf("findings = %+v, want one finding", result.Findings)
+	}
+	b, _ := json.Marshal(result)
+	if strings.Contains(string(b), raw) || strings.Contains(string(b), "llm-live-1234567890abcdef") {
+		t.Fatalf("raw Skill-controlled value leaked: %s", b)
+	}
+	if result.Findings[0].Severity != "low" {
+		t.Fatalf("severity = %q, want normalized fallback low", result.Findings[0].Severity)
+	}
+}
+
 // TestAgentRunPersistsWarningsForReplay 固定 warning 可回放。
 func TestAgentRunPersistsWarningsForReplay(t *testing.T) {
 

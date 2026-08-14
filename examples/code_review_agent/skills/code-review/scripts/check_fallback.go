@@ -472,8 +472,9 @@ func normalizeDiffPath(raw string) string {
 			path = unquoted
 		}
 	}
-	path = strings.TrimPrefix(path, "b/")
-	path = strings.TrimPrefix(path, "a/")
+	if strings.HasPrefix(path, "a/") || strings.HasPrefix(path, "b/") {
+		path = path[2:]
+	}
 	return path
 }
 

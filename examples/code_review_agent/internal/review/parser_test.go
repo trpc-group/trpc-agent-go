@@ -106,6 +106,21 @@ func TestParseUnifiedDiffDecodesQuotedPathsAndInfersLanguage(t *testing.T) {
 	}
 }
 
+func TestParseUnifiedDiffPreservesRepositoryPathsStartingWithSidePrefixes(t *testing.T) {
+	for _, path := range []string{"a/handler.go", "b/handler.go"} {
+		diff := "diff --git a/" + path + " b/" + path + "\n" +
+			"--- a/" + path + "\n+++ b/" + path + "\n" +
+			"@@ -1 +1 @@\n+package main\n"
+		parsed, err := ParseUnifiedDiff(diff)
+		if err != nil {
+			t.Fatalf("ParseUnifiedDiff(%q) returned error: %v", path, err)
+		}
+		if got := parsed.Files[0].Path; got != path {
+			t.Errorf("path = %q, want %q", got, path)
+		}
+	}
+}
+
 func TestParseUnifiedDiffRejectsHunksWithoutTargetFileHeader(t *testing.T) {
 	tests := []struct {
 		name string

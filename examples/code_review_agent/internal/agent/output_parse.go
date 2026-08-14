@@ -22,6 +22,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
 
+const (
+	maxSkillSeverityLen       = 32
+	maxSkillCategoryLen       = 128
+	maxSkillFileLen           = 512
+	maxSkillTitleLen          = 256
+	maxSkillEvidenceLen       = 2048
+	maxSkillRecommendationLen = 512
+	maxSkillConfidenceLen     = 32
+	maxSkillRuleIDLen         = 128
+	maxSkillStatusLen         = 64
+)
+
 // decodeSkillRunOutput 把 trpc-agent-go skill_run 输出转换成本地摘要。
 func decodeSkillRunOutput(raw any) (skillRunOutput, error) {
 	b, err := json.Marshal(raw)
@@ -65,11 +77,38 @@ func parseSkillFindings(stdout string) (review.Result, error) {
 }
 
 func sanitizeFinding(f review.Finding) review.Finding {
-	f.Evidence = review.RedactSecrets(f.Evidence)
-	if f.Status == "" {
-		f.Status = "finding"
-	}
+	f.Severity = normalizeSkillEnum(f.Severity, "low", maxSkillSeverityLen, "critical", "high", "medium", "low")
+	f.Category = sanitizeSkillString(f.Category, maxSkillCategoryLen)
+	f.File = review.NormalizeDiffPath(sanitizeSkillString(f.File, maxSkillFileLen))
+	f.Title = sanitizeSkillString(f.Title, maxSkillTitleLen)
+	f.Evidence = sanitizeSkillString(f.Evidence, maxSkillEvidenceLen)
+	f.Recommendation = sanitizeSkillString(f.Recommendation, maxSkillRecommendationLen)
+	f.Confidence = normalizeSkillEnum(f.Confidence, "low", maxSkillConfidenceLen, "high", "medium", "low")
+	f.Source = normalizeSkillEnum(f.Source, "skill_run", maxSkillStatusLen, "skill_run")
+	f.RuleID = sanitizeSkillString(f.RuleID, maxSkillRuleIDLen)
+	f.Status = normalizeSkillEnum(f.Status, "finding", maxSkillStatusLen, "finding", "warning", "needs_human_review")
 	return f
+}
+
+func sanitizeSkillString(value string, limit int) string {
+	value = strings.TrimSpace(review.RedactSecrets(value))
+	if limit > 0 && len(value) > limit {
+		value = value[:limit]
+		for !utf8.ValidString(value) {
+			value = value[:len(value)-1]
+		}
+	}
+	return value
+}
+
+func normalizeSkillEnum(value, fallback string, limit int, allowed ...string) string {
+	value = strings.ToLower(sanitizeSkillString(value, limit))
+	for _, candidate := range allowed {
+		if value == candidate {
+			return value
+		}
+	}
+	return fallback
 }
 
 func newTaskID(diff []byte) string {
