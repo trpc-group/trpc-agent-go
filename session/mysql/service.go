@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
@@ -1139,10 +1140,9 @@ func (s *Service) softDeleteSessions(
 		return fmt.Errorf("soft delete sessions: %w", err)
 	}
 
-	// Soft delete summaries
-	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionSummaries, childWhereClause),
-		append([]any{now}, childArgs...)...); err != nil {
+	// Soft delete summaries. Legacy schemas may contain duplicate active rows
+	// that collide when assigned the same deleted_at value.
+	if err := s.softDeleteSummaries(ctx, tx, childWhereClause, childArgs, now); err != nil {
 		return fmt.Errorf("soft delete summaries: %w", err)
 	}
 
@@ -1163,6 +1163,43 @@ func (s *Service) softDeleteSessions(
 	}
 
 	return nil
+}
+
+func (s *Service) softDeleteSummaries(
+	ctx context.Context,
+	tx *sql.Tx,
+	whereClause string,
+	args []any,
+	now time.Time,
+) error {
+	_, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionSummaries, whereClause),
+		append([]any{now}, args...)...)
+	if err == nil {
+		return nil
+	}
+	if !isDuplicateEntryError(err) {
+		return err
+	}
+
+	// MySQL rolls back the failed UPDATE statement without aborting the
+	// transaction. Removing only the active summary rows lets deletion proceed
+	// when a legacy nullable unique key contains duplicates, while preserving
+	// normal soft-delete behavior for healthy schemas.
+	log.WarnfContext(ctx, "soft deleting summaries hit duplicate legacy rows; "+
+		"deleting the affected active summaries instead: %v", err)
+	_, deleteErr := tx.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionSummaries, whereClause),
+		args...)
+	if deleteErr != nil {
+		return fmt.Errorf("delete active summaries after soft-delete conflict: %w", deleteErr)
+	}
+	return nil
+}
+
+func isDuplicateEntryError(err error) bool {
+	var mysqlErr *drivermysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == sqldb.MySQLErrDuplicateEntry
 }
 
 // hardDeleteSessions performs hard delete on session tables.

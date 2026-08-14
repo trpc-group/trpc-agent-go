@@ -218,6 +218,15 @@ type tableIndex struct {
 	unique  bool     // Whether this is a unique index
 }
 
+type summaryIndexLayout uint8
+
+const (
+	summaryIndexUnknown summaryIndexLayout = iota
+	summaryIndexCurrent
+	summaryIndexLegacyUnique
+	summaryIndexLegacyLookup
+)
+
 // tableSchema defines the expected schema for a table.
 type tableSchema struct {
 	columns []tableColumn
@@ -652,9 +661,9 @@ func (s *Service) verifySchema(ctx context.Context) error {
 			return fmt.Errorf("verify columns for table %s failed: %w", fullTableName, err)
 		}
 
-		// Verify indexes. A missing/incorrect UNIQUE index is fatal (uniqueness is
-		// no longer enforced); non-unique index drift is logged as a warning
-		// inside verifyIndexes and does not return an error.
+		// Verify indexes. Missing or incorrect UNIQUE indexes are fatal except
+		// for known historical summary layouts supported by serialized writes;
+		// non-unique index drift is logged as a warning inside verifyIndexes.
 		if err := s.verifyIndexes(ctx, fullTableName, schema.indexes); err != nil {
 			return fmt.Errorf("verify indexes for table %s failed: %w", fullTableName, err)
 		}
@@ -805,11 +814,26 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		return fmt.Errorf("query indexes failed: %w", err)
 	}
 
+	// Summary writes are serialized through their parent session row, so the
+	// service can safely start on the two historical index layouts while an
+	// operator performs an online migration. Index detection is intentionally
+	// used only for validation and diagnostics; the write path is identical for
+	// every supported layout.
+	summaryIndexName, summaryUniqueCompatible := s.compatibleSummaryIndex(
+		ctx, fullTableName, expectedIndexes, actualIndexes, actualNonUnique,
+	)
+	if summaryUniqueCompatible {
+		expectedIndexNames[summaryIndexName] = true
+	}
+
 	// Check each expected index. A missing/incorrect UNIQUE index is collected
-	// and returned as an error (fatal) because uniqueness is correctness-critical;
-	// non-unique index drift is only logged as a warning.
+	// and returned as an error unless a known historical summary layout was
+	// accepted above; non-unique index drift is only logged as a warning.
 	var invalidUnique []string
 	for _, expected := range expectedIndexes {
+		if summaryUniqueCompatible && isSummaryUniqueIndex(expected) {
+			continue
+		}
 		expectedIndexName := sqldb.BuildIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
 		actualColumns, exists := actualIndexes[expectedIndexName]
 		if !exists {
@@ -893,6 +917,87 @@ func stringSlicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func expectsSummaryUniqueIndex(indexes []tableIndex) bool {
+	for _, index := range indexes {
+		if isSummaryUniqueIndex(index) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) compatibleSummaryIndex(
+	ctx context.Context,
+	fullTableName string,
+	expectedIndexes []tableIndex,
+	actualIndexes map[string][]string,
+	actualNonUnique map[string]bool,
+) (string, bool) {
+	if fullTableName != s.tableSessionSummaries || !expectsSummaryUniqueIndex(expectedIndexes) {
+		return "", false
+	}
+
+	indexName, layout := classifySummaryIndexLayout(actualIndexes, actualNonUnique)
+	if layout == summaryIndexUnknown {
+		return "", false
+	}
+
+	canonicalName := sqldb.BuildIndexName(
+		s.opts.tablePrefix,
+		sqldb.TableNameSessionSummaries,
+		sqldb.IndexSuffixUniqueActive,
+	)
+	switch layout {
+	case summaryIndexCurrent:
+		if indexName != canonicalName {
+			log.InfofContext(ctx, "using equivalent summary UNIQUE index %s on table %s",
+				indexName, fullTableName)
+		}
+	case summaryIndexLegacyUnique:
+		log.WarnfContext(ctx, "legacy five-column summary UNIQUE index %s detected on table %s; "+
+			"enabling serialized writes for compatibility; duplicate active rows should be removed before adding a "+
+			"four-column UNIQUE index", indexName, fullTableName)
+	case summaryIndexLegacyLookup:
+		log.WarnfContext(ctx, "legacy summary lookup index %s detected on table %s without a "+
+			"business-key UNIQUE constraint; enabling serialized writes for compatibility, but an "+
+			"online migration to a four-column UNIQUE index is recommended", indexName, fullTableName)
+	}
+	return indexName, true
+}
+
+func isSummaryUniqueIndex(index tableIndex) bool {
+	return index.table == sqldb.TableNameSessionSummaries &&
+		index.suffix == sqldb.IndexSuffixUniqueActive && index.unique
+}
+
+func classifySummaryIndexLayout(
+	actualIndexes map[string][]string,
+	actualNonUnique map[string]bool,
+) (string, summaryIndexLayout) {
+	currentColumns := []string{"app_name", "user_id", "session_id", "filter_key"}
+	legacyUniqueColumns := []string{"app_name", "user_id", "session_id", "filter_key", "deleted_at"}
+	legacyLookupColumns := []string{"app_name", "user_id", "session_id", "deleted_at"}
+
+	// Prefer the current capability even when a legacy index remains during an
+	// online migration or the replacement index uses a temporary name.
+	for name, columns := range actualIndexes {
+		if !actualNonUnique[name] && stringSlicesEqual(columns, currentColumns) {
+			return name, summaryIndexCurrent
+		}
+	}
+	for name, columns := range actualIndexes {
+		if !actualNonUnique[name] && stringSlicesEqual(columns, legacyUniqueColumns) {
+			return name, summaryIndexLegacyUnique
+		}
+	}
+	for name, columns := range actualIndexes {
+		if actualNonUnique[name] && stringSlicesEqual(columns, legacyLookupColumns) {
+			return name, summaryIndexLegacyLookup
+		}
+	}
+	return "", summaryIndexUnknown
 }
 
 // buildIndexColumnsStr builds a comma-separated column list with appropriate

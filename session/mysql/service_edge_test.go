@@ -1018,7 +1018,7 @@ func TestGetSummariesList(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "filter_key", "summary", "updated_at"}).
 		AddRow("app1", "user1", "sess1", "filter1", []byte("invalid-json"), time.Now())
 
-	mock.ExpectQuery("SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM session_summaries").
+	mock.ExpectQuery("ORDER BY updated_at ASC").
 		WithArgs("app1", "user1", "sess1", "user1", sqlmock.AnyArg()).
 		WillReturnRows(rows)
 

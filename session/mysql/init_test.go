@@ -622,6 +622,108 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 	}
 }
 
+func TestVerifyIndexes_SummaryLayouts(t *testing.T) {
+	currentColumns := []string{"app_name", "user_id", "session_id", "filter_key"}
+	legacyUniqueColumns := []string{"app_name", "user_id", "session_id", "filter_key", "deleted_at"}
+	legacyLookupColumns := []string{"app_name", "user_id", "session_id", "deleted_at"}
+	canonicalName := "idx_session_summaries_unique_active"
+	expected := []tableIndex{{
+		table:   sqldb.TableNameSessionSummaries,
+		suffix:  sqldb.IndexSuffixUniqueActive,
+		columns: currentColumns,
+		unique:  true,
+	}}
+
+	tests := []struct {
+		name            string
+		actualIndexes   map[string][]string
+		actualNonUnique map[string]bool
+		wantError       bool
+	}{
+		{
+			name: "current canonical unique index",
+			actualIndexes: map[string][]string{
+				canonicalName: currentColumns,
+				"PRIMARY":     {"id"},
+			},
+		},
+		{
+			name: "current unique index with migration name",
+			actualIndexes: map[string][]string{
+				canonicalName:         legacyUniqueColumns,
+				canonicalName + "_v2": currentColumns,
+				"PRIMARY":             {"id"},
+			},
+		},
+		{
+			name: "legacy five-column unique index",
+			actualIndexes: map[string][]string{
+				canonicalName: legacyUniqueColumns,
+				"PRIMARY":     {"id"},
+			},
+		},
+		{
+			name: "legacy lookup index",
+			actualIndexes: map[string][]string{
+				"idx_session_summaries_lookup": legacyLookupColumns,
+				"PRIMARY":                      {"id"},
+			},
+			actualNonUnique: map[string]bool{
+				"idx_session_summaries_lookup": true,
+			},
+		},
+		{
+			name: "four-column non-unique index remains unsupported",
+			actualIndexes: map[string][]string{
+				canonicalName: currentColumns,
+				"PRIMARY":     {"id"},
+			},
+			actualNonUnique: map[string]bool{
+				canonicalName: true,
+			},
+			wantError: true,
+		},
+		{
+			name: "missing summary lookup remains unsupported",
+			actualIndexes: map[string][]string{
+				"PRIMARY": {"id"},
+			},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+
+			s := createTestService(t, db)
+			rows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
+			for indexName, columns := range tt.actualIndexes {
+				nonUnique := 0
+				if tt.actualNonUnique[indexName] {
+					nonUnique = 1
+				}
+				for _, column := range columns {
+					rows.AddRow(indexName, column, nonUnique)
+				}
+			}
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
+				WithArgs(s.tableSessionSummaries).
+				WillReturnRows(rows)
+
+			err = s.verifyIndexes(context.Background(), s.tableSessionSummaries, expected)
+			if tt.wantError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 func TestVerifyColumns_Scenarios(t *testing.T) {
 	tests := []struct {
 		name                 string
