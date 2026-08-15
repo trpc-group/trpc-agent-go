@@ -356,7 +356,7 @@ func TestPermissionPolicyValidatesAllowlistedProxyEnvironment(t *testing.T) {
 			want: tool.PermissionActionAllow,
 		},
 		{
-			name: "unparseable proxy",
+			name: "unparsable proxy",
 			arguments: `{"command":"curl https://api.github.com/data",` +
 				`"env":{"HTTPS_PROXY":"http://[::1"}}`,
 			want:     tool.PermissionActionAsk,
