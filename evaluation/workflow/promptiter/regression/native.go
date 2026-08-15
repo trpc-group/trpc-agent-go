@@ -336,6 +336,14 @@ func (e *ProfileEvaluator) loadAndVerifyInputs(
 				evalCase.EvalID,
 			)
 		}
+		if evalCase.ConversationScenario != nil &&
+			evalCase.ConversationScenario.Driver == evalset.ConversationScenarioDriverExpected {
+			return nil, nil, fmt.Errorf(
+				"eval set %q case %q uses an expected-runner conversation driver; prompt regression requires fixed held-out inputs",
+				dataset.EvalSetID,
+				evalCase.EvalID,
+			)
+		}
 		sourceCaseIDs = append(sourceCaseIDs, evalCase.EvalID)
 	}
 	if err := verifyInventory("case", dataset.CaseIDs, sourceCaseIDs); err != nil {

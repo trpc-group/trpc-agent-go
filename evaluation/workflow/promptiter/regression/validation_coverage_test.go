@@ -2133,6 +2133,15 @@ func TestNativeProfileEvaluatorCoversRequestInputCompileAndExecutionFailures(t *
 			},
 			match: "requires fixed expected outputs",
 		},
+		{
+			name: "expected conversation driver",
+			mutate: func(evalCase *evalset.EvalCase) {
+				evalCase.ConversationScenario = &evalset.ConversationScenario{
+					Driver: evalset.ConversationScenarioDriverExpected,
+				}
+			},
+			match: "requires fixed held-out inputs",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			native := &pipelineNativeResultEvaluator{}
@@ -2161,6 +2170,7 @@ func TestNativeProfileEvaluatorCoversRequestInputCompileAndExecutionFailures(t *
 			t.Cleanup(func() {
 				evalCase.EvalMode = evalset.EvalModeDefault
 				evalCase.ExpectedRunnerEnabled = false
+				evalCase.ConversationScenario = nil
 				require.NoError(t, evalSetManager.UpdateCase(
 					ctx,
 					"pipeline-native",
