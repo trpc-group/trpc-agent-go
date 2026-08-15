@@ -268,6 +268,87 @@ func TestRunPipelineRedactsOptimizerCredentialFromErrorReports(t *testing.T) {
 	assert.Contains(t, string(markdownReport), sensitiveRedaction)
 }
 
+func TestFinalizeReportRedactsLoadedSecretsFromEveryAuditField(t *testing.T) {
+	const evaluationSecret = "evaluation-secret-value-12345678"
+	const optimizerSecret = "optimizer-secret-value-87654321"
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		assert.Equal(t, "Bearer "+evaluationSecret, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(
+			w,
+			`{"error":{"message":"gateway echoed %s","type":"server_error"}}`,
+			evaluationSecret,
+		)
+	}))
+	defer server.Close()
+
+	cfg, err := loadConfig("data/config.json")
+	require.NoError(t, err)
+	cfg.OutputDir = t.TempDir()
+	generator, err := newLiveGenerator(liveConfig{
+		Model: "evaluation-test-model", BaseURL: server.URL,
+		APIKeyEnv: "EVALUATION_TEST_API_KEY", TimeoutSeconds: 2,
+		MaxRetries: 0, InputCNYPerMillion: 1, OutputCNYPerMillion: 2,
+	}, gateFileConfig{MaxCalls: 2, MaxTokens: 10_000, MaxCostCNY: 1}, evaluationSecret)
+	require.NoError(t, err)
+
+	run, runErr := generateCase(
+		context.Background(),
+		generator,
+		cfg.Prompt,
+		cfg.Train.EvalCases[0],
+	)
+	require.Error(t, runErr)
+	require.Contains(t, run.Error, evaluationSecret)
+	report := &optimizationReport{
+		SchemaVersion:   "1.1",
+		Status:          pipelineStatusFailed,
+		Error:           "top-level " + optimizerSecret,
+		Mode:            modeLive,
+		CandidateSource: candidateSourceLiveLLM,
+		PromptIter: promptIterAudit{
+			Error:           "optimizer error " + optimizerSecret,
+			CandidatePrompt: "candidate echoed " + optimizerSecret,
+			Rounds: []promptIterRound{{
+				CandidatePrompt: "round candidate " + evaluationSecret,
+				PatchReason:     "reason " + optimizerSecret,
+				Reason:          "acceptance " + evaluationSecret,
+			}},
+		},
+		Train: evaluationPair{
+			Baseline: []CaseEvaluation{{ID: "echoed-error", Runs: []CaseRun{run}}},
+		},
+		Gate: GateResult{Checks: []GateCheck{{
+			Name: "secret-check", Detail: "detail " + evaluationSecret,
+		}}},
+		SelectedPrompt: "selected " + optimizerSecret,
+	}
+
+	require.NoError(t, finalizeAndWriteReport(
+		cfg,
+		report,
+		evaluationSecret,
+		optimizerSecret,
+	))
+	jsonReport := mustReadFile(
+		t,
+		filepath.Join(cfg.OutputDir, "optimization_report.json"),
+	)
+	markdownReport := mustReadFile(
+		t,
+		filepath.Join(cfg.OutputDir, "optimization_report.md"),
+	)
+	for _, contents := range [][]byte{jsonReport, markdownReport} {
+		assert.NotContains(t, string(contents), evaluationSecret)
+		assert.NotContains(t, string(contents), optimizerSecret)
+		assert.Contains(t, string(contents), sensitiveRedaction)
+	}
+}
+
 func TestRunPipelineValidatesAllLiveCredentialsBeforeRequests(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(

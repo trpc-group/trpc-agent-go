@@ -77,7 +77,7 @@ func (m *signalingFailureModel) Info() model.Info {
 
 func TestLiveGeneratorCountsRetriesAndUsage(t *testing.T) {
 	client := &scriptedModel{failures: 1}
-	gate := gateFileConfig{MaxCalls: 3, MaxTokens: 1000, MaxCostCNY: 1}
+	gate := gateFileConfig{MaxCalls: 3, MaxTokens: 2000, MaxCostCNY: 1}
 	generator := &liveGenerator{
 		model: client,
 		cfg: liveConfig{
@@ -89,7 +89,8 @@ func TestLiveGeneratorCountsRetriesAndUsage(t *testing.T) {
 	result, err := generator.Generate(context.Background(), "prompt", "input")
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.Usage.Calls)
-	assert.Equal(t, 10, result.Usage.InputTokens)
+	estimatedTokens, _ := estimateTextRequest("prompt", "input", 512, 1, 2)
+	assert.Equal(t, estimatedTokens+10, result.Usage.InputTokens)
 	assert.Equal(t, 2, result.Usage.OutputTokens)
 	assert.Equal(t, 2, client.calls)
 }
@@ -257,11 +258,14 @@ func TestLiveGeneratorConservativePreflightRejectsNonASCII(t *testing.T) {
 func TestLiveGeneratorOwnsEveryHTTPRetry(t *testing.T) {
 	tests := []struct {
 		name       string
+		status     int
 		maxRetries int
 		wantCalls  int32
 	}{
-		{name: "zero retries", maxRetries: 0, wantCalls: 1},
-		{name: "two retries", maxRetries: 2, wantCalls: 3},
+		{name: "zero retries", status: http.StatusInternalServerError, maxRetries: 0, wantCalls: 1},
+		{name: "retry 500", status: http.StatusInternalServerError, maxRetries: 2, wantCalls: 3},
+		{name: "do not retry 404", status: http.StatusNotFound, maxRetries: 2, wantCalls: 1},
+		{name: "do not retry 422", status: http.StatusUnprocessableEntity, maxRetries: 2, wantCalls: 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -269,7 +273,7 @@ func TestLiveGeneratorOwnsEveryHTTPRetry(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				calls.Add(1)
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
+				w.WriteHeader(test.status)
 				_, _ = w.Write([]byte(`{"error":{"message":"temporary failure","type":"server_error"}}`))
 			}))
 			defer server.Close()
@@ -292,6 +296,87 @@ func TestLiveGeneratorOwnsEveryHTTPRetry(t *testing.T) {
 	}
 }
 
+func TestFailedEvaluationAttemptRetainsEstimatedBudget(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"temporary failure","type":"server_error"}}`))
+	}))
+	defer server.Close()
+
+	estimatedTokens, estimatedCost := estimateTextRequest("prompt", "input", 512, 1, 2)
+	budget := newLiveBudget(
+		gateFileConfig{
+			MaxCalls: 3, MaxTokens: estimatedTokens, MaxCostCNY: estimatedCost,
+		},
+		optimizerBudgetConfig{},
+	)
+	generator, err := newLiveGeneratorWithBudget(liveConfig{
+		Model: "test-model", BaseURL: server.URL, APIKeyEnv: "TEST_API_KEY",
+		TimeoutSeconds: 2, MaxRetries: 2,
+		InputCNYPerMillion: 1, OutputCNYPerMillion: 2,
+	}, budget, "test-key")
+	require.NoError(t, err)
+
+	_, err = generator.Generate(context.Background(), "prompt", "input")
+
+	assert.ErrorContains(t, err, "cannot reserve")
+	assert.Equal(t, int32(1), calls.Load())
+	usage := budget.snapshot(budgetStageEvaluation)
+	assert.Equal(t, 1, usage.Calls)
+	assert.Equal(t, estimatedTokens, usage.tokens())
+	assert.InDelta(t, estimatedCost, usage.CostCNY, 1e-12)
+}
+
+func TestFailedOptimizerAttemptRetainsEstimatedBudget(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"temporary failure","type":"server_error"}}`))
+	}))
+	defer server.Close()
+
+	client, err := newOpenAICompatibleModel(
+		"optimizer-model",
+		server.URL,
+		"OPTIMIZER_TEST_API_KEY",
+		"optimizer-test-key",
+	)
+	require.NoError(t, err)
+	maxTokens := 32
+	request := &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("optimize")},
+		GenerationConfig: model.GenerationConfig{MaxTokens: &maxTokens},
+	}
+	estimatedTokens, estimatedCost := estimateModelRequest(request, 1, 2)
+	budget := newLiveBudget(
+		gateFileConfig{
+			MaxCalls: 3, MaxTokens: estimatedTokens, MaxCostCNY: estimatedCost,
+		},
+		optimizerBudgetConfig{
+			MaxCalls: 3, MaxTokens: estimatedTokens, MaxCostCNY: estimatedCost,
+		},
+	)
+	retrying := &budgetedRetryModel{
+		model: client, timeoutSeconds: 2, maxRetries: 2,
+		inputCNYPerMillion: 1, outputCNYPerMillion: 2,
+		budget: budget,
+	}
+
+	_, err = retrying.GenerateContent(context.Background(), request)
+
+	assert.ErrorContains(t, err, "cannot reserve")
+	assert.Equal(t, int32(1), calls.Load())
+	usage := budget.snapshot(budgetStageOptimizer)
+	assert.Equal(t, 1, usage.Calls)
+	assert.Equal(t, estimatedTokens, usage.tokens())
+	assert.InDelta(t, estimatedCost, usage.CostCNY, 1e-12)
+}
+
 func TestBudgetedOptimizerModelCountsRetriesInSharedBudget(t *testing.T) {
 	client := &scriptedModel{failures: 1}
 	budget := newLiveBudget(
@@ -307,10 +392,11 @@ func TestBudgetedOptimizerModelCountsRetriesInSharedBudget(t *testing.T) {
 		budget:              budget,
 	}
 	maxTokens := 32
-	responses, err := retrying.GenerateContent(context.Background(), &model.Request{
+	request := &model.Request{
 		Messages:         []model.Message{model.NewUserMessage("optimize")},
 		GenerationConfig: model.GenerationConfig{MaxTokens: &maxTokens},
-	})
+	}
+	responses, err := retrying.GenerateContent(context.Background(), request)
 	require.NoError(t, err)
 	for range responses {
 	}
@@ -318,7 +404,8 @@ func TestBudgetedOptimizerModelCountsRetriesInSharedBudget(t *testing.T) {
 	optimizerUsage := budget.snapshot(budgetStageOptimizer)
 	assert.Equal(t, 2, client.calls)
 	assert.Equal(t, 2, optimizerUsage.Calls)
-	assert.Equal(t, 10, optimizerUsage.InputTokens)
+	estimatedTokens, _ := estimateModelRequest(request, 1, 2)
+	assert.Equal(t, estimatedTokens+10, optimizerUsage.InputTokens)
 	assert.Equal(t, 2, optimizerUsage.OutputTokens)
 	assert.Equal(t, optimizerUsage, budget.snapshot(""))
 }

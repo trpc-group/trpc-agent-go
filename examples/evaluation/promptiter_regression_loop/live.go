@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -125,39 +127,44 @@ func (b *liveBudget) reserveCall(
 	stage budgetStage,
 	estimatedTokens int,
 	estimatedCost float64,
-) error {
+) (generationUsage, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	reservation := generationUsage{
+		Calls:       1,
+		InputTokens: estimatedTokens,
+		CostCNY:     estimatedCost,
+	}
 	stageUsage := b.byStage[stage]
 	if err := checkBudget(
 		"live",
 		b.total,
-		generationUsage{Calls: 1, InputTokens: estimatedTokens, CostCNY: estimatedCost},
+		reservation,
 		b.gate.MaxCalls,
 		b.gate.MaxTokens,
 		b.gate.MaxCostCNY,
 	); err != nil {
-		return err
+		return generationUsage{}, err
 	}
 	if stage == budgetStageOptimizer {
 		if err := checkBudget(
 			"live optimizer",
 			stageUsage,
-			generationUsage{Calls: 1, InputTokens: estimatedTokens, CostCNY: estimatedCost},
+			reservation,
 			b.optimizer.MaxCalls,
 			b.optimizer.MaxTokens,
 			b.optimizer.MaxCostCNY,
 		); err != nil {
-			return err
+			return generationUsage{}, err
 		}
 		if err := b.checkEvaluationReserve(estimatedTokens, estimatedCost); err != nil {
-			return err
+			return generationUsage{}, err
 		}
 	}
-	b.total.Calls++
-	stageUsage.Calls++
+	b.total = b.total.add(reservation)
+	stageUsage = stageUsage.add(reservation)
 	b.byStage[stage] = stageUsage
-	return nil
+	return reservation, nil
 }
 
 func (b *liveBudget) checkEvaluationReserve(estimatedTokens int, estimatedCost float64) error {
@@ -189,16 +196,17 @@ func (b *liveBudget) checkEvaluationReserve(estimatedTokens int, estimatedCost f
 	return nil
 }
 
-func (b *liveBudget) recordUsage(stage budgetStage, usage generationUsage) error {
+func (b *liveBudget) recordUsage(
+	stage budgetStage,
+	reservation generationUsage,
+	usage generationUsage,
+) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.total.InputTokens += usage.InputTokens
-	b.total.OutputTokens += usage.OutputTokens
-	b.total.CostCNY += usage.CostCNY
+	accounted := accountedAttemptUsage(reservation, usage)
+	b.total = b.total.subtract(reservation).add(accounted)
 	stageUsage := b.byStage[stage]
-	stageUsage.InputTokens += usage.InputTokens
-	stageUsage.OutputTokens += usage.OutputTokens
-	stageUsage.CostCNY += usage.CostCNY
+	stageUsage = stageUsage.subtract(reservation).add(accounted)
 	b.byStage[stage] = stageUsage
 	if err := checkBudget(
 		"live",
@@ -221,6 +229,21 @@ func (b *liveBudget) recordUsage(stage budgetStage, usage generationUsage) error
 		)
 	}
 	return nil
+}
+
+// accountedAttemptUsage reconciles a conservative preflight reservation with
+// provider usage. Failed attempts commonly omit usage, so they retain the
+// reservation instead of making the same token and cost headroom reusable by a
+// retry.
+func accountedAttemptUsage(
+	reservation generationUsage,
+	usage generationUsage,
+) generationUsage {
+	if usage.tokens() <= 0 {
+		return reservation
+	}
+	usage.Calls = reservation.Calls
+	return usage
 }
 
 func checkBudget(
@@ -329,20 +352,22 @@ func (g *liveGenerator) Generate(
 		if err := waitForRetry(ctx, attempt); err != nil {
 			return generationResult{Usage: accumulated}, err
 		}
-		if err := g.budget.reserveCall(
+		reservation, err := g.budget.reserveCall(
 			budgetStageEvaluation,
 			estimatedTokens,
 			estimatedCost,
-		); err != nil {
-			accumulated.Calls = attempt
+		)
+		if err != nil {
 			return generationResult{Usage: accumulated}, err
 		}
-		accumulated.Calls++
 		result, err := g.generateOnce(ctx, prompt, input)
-		accumulated.InputTokens += result.Usage.InputTokens
-		accumulated.OutputTokens += result.Usage.OutputTokens
-		accumulated.CostCNY += result.Usage.CostCNY
-		if budgetErr := g.budget.recordUsage(budgetStageEvaluation, result.Usage); budgetErr != nil {
+		accounted := accountedAttemptUsage(reservation, result.Usage)
+		accumulated = accumulated.add(accounted)
+		if budgetErr := g.budget.recordUsage(
+			budgetStageEvaluation,
+			reservation,
+			result.Usage,
+		); budgetErr != nil {
 			return generationResult{Text: result.Text, Usage: accumulated}, budgetErr
 		}
 		if err == nil {
@@ -363,6 +388,17 @@ func (g *liveGenerator) Generate(
 	)
 }
 
+type transportModelError struct {
+	err error
+}
+
+func (e *transportModelError) Error() string { return e.err.Error() }
+func (e *transportModelError) Unwrap() error { return e.err }
+
+var httpStatusPattern = regexp.MustCompile(
+	`(?i)\b([1-5][0-9]{2})\s+(?:bad request|unauthorized|payment required|forbidden|not found|request timeout|conflict|unprocessable (?:content|entity)|too many requests|internal server error|not implemented|bad gateway|service unavailable|gateway timeout)\b`,
+)
+
 func isRetryableModelError(err error) bool {
 	if err == nil {
 		return false
@@ -373,16 +409,20 @@ func isRetryableModelError(err error) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	for _, marker := range []string{
-		"400 bad request", "401", "403", "unauthorized", "forbidden",
-		"authentication", "invalid api key", "invalid_request_error",
-	} {
-		if strings.Contains(message, marker) {
-			return false
-		}
+	if status, ok := modelHTTPStatus(err); ok {
+		return status == 408 || status == 409 || status == 429 || status >= 500
 	}
-	return true
+	var transportErr *transportModelError
+	return errors.As(err, &transportErr)
+}
+
+func modelHTTPStatus(err error) (int, bool) {
+	match := httpStatusPattern.FindStringSubmatch(err.Error())
+	if len(match) != 2 {
+		return 0, false
+	}
+	status, parseErr := strconv.Atoi(match[1])
+	return status, parseErr == nil
 }
 
 func waitForRetry(ctx context.Context, attempt int) error {
@@ -425,7 +465,7 @@ func (g *liveGenerator) generateOnce(
 	}
 	responses, err := g.model.GenerateContent(callCtx, request)
 	if err != nil {
-		return generationResult{}, err
+		return generationResult{}, &transportModelError{err: err}
 	}
 	var content strings.Builder
 	var usage generationUsage
@@ -490,15 +530,20 @@ func (m *budgetedRetryModel) GenerateContent(
 		if err := waitForRetry(ctx, attempt); err != nil {
 			return nil, err
 		}
-		if err := m.budget.reserveCall(
+		reservation, err := m.budget.reserveCall(
 			budgetStageOptimizer,
 			estimatedTokens,
 			estimatedCost,
-		); err != nil {
+		)
+		if err != nil {
 			return nil, err
 		}
 		responses, usage, err := m.generateOnce(ctx, request)
-		if budgetErr := m.budget.recordUsage(budgetStageOptimizer, usage); budgetErr != nil {
+		if budgetErr := m.budget.recordUsage(
+			budgetStageOptimizer,
+			reservation,
+			usage,
+		); budgetErr != nil {
 			return nil, budgetErr
 		}
 		if err == nil {
@@ -523,7 +568,7 @@ func (m *budgetedRetryModel) generateOnce(
 	defer cancel()
 	responseChannel, err := m.model.GenerateContent(callCtx, request)
 	if err != nil {
-		return nil, generationUsage{}, err
+		return nil, generationUsage{}, &transportModelError{err: err}
 	}
 	var responses []*model.Response
 	var usage generationUsage
