@@ -138,7 +138,7 @@ func SetStepNodeType(ctx context.Context, stepID string, nodeType string) {
 	if !ok || runtime.capture == nil || stepID == "" || nodeType == "" {
 		return
 	}
-	runtime.capture.setStepNodeType(stepID, nodeType)
+	runtime.capture.SetStepNodeType(stepID, nodeType)
 }
 
 // MergeInvocationStepAppliedSurfaceIDs merges applied surface IDs into the
@@ -149,6 +149,42 @@ func MergeInvocationStepAppliedSurfaceIDs(ctx context.Context, surfaceIDs []stri
 		return
 	}
 	capture.mergeStepAppliedSurfaceIDs(stepID, surfaceIDs)
+}
+
+// AddInvocationStepTools appends tool records to the current step.
+func AddInvocationStepTools(ctx context.Context, tools []atrace.Tool) {
+	capture, stepID := currentInvocationStep(ctx)
+	if capture == nil || stepID == "" {
+		return
+	}
+	capture.addStepTools(stepID, tools)
+}
+
+// AddStepTools appends tool records to a specific step.
+func AddStepTools(ctx context.Context, stepID string, tools []atrace.Tool) {
+	runtime, ok := invocationRuntimeFromContext(ctx)
+	if !ok || runtime.capture == nil || stepID == "" {
+		return
+	}
+	runtime.capture.addStepTools(stepID, tools)
+}
+
+// AddInvocationStepSkill appends a loaded skill record to the current step.
+func AddInvocationStepSkill(ctx context.Context, skill atrace.Skill) {
+	capture, stepID := currentInvocationStep(ctx)
+	if capture == nil || stepID == "" {
+		return
+	}
+	capture.addStepSkill(stepID, skill)
+}
+
+// AddStepSkill appends a loaded skill record to a specific step.
+func AddStepSkill(ctx context.Context, stepID string, skill atrace.Skill) {
+	runtime, ok := invocationRuntimeFromContext(ctx)
+	if !ok || runtime.capture == nil || stepID == "" {
+		return
+	}
+	runtime.capture.addStepSkill(stepID, skill)
 }
 
 // AddInvocationStepUsage accumulates model usage into the current step.

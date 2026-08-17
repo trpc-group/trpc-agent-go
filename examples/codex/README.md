@@ -12,6 +12,8 @@ The agent executes `codex exec --json` and parses JSONL output to emit:
 
 It also uses `codex exec resume --json <thread-id>` on later turns in the same framework session. If resume fails before emitting any transcript events, it starts a fresh `codex exec` run and stores the new thread id when one is reported. If resume has already emitted events, the agent surfaces the failure instead of starting a fresh run to avoid duplicating visible progress or tool side effects.
 
+For deployments that build prompts from centralized framework history, configure `codex.WithMessageBuilder` and usually pair it with `codex.WithResumeEnabled(false)` so the CLI does not also restore local thread context.
+
 The example can configure two integrations:
 
 - a temporary streamable HTTP MCP server from `-mcp-url`, injected with `-c mcp_servers...` at runtime

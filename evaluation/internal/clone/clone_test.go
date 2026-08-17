@@ -328,6 +328,13 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 									ReasoningDuration: time.Second,
 								},
 							},
+							Tools: []agenttrace.Tool{{
+								ID:        "call-1",
+								Name:      "lookup",
+								Arguments: map[string]any{"city": "Paris"},
+								Result:    []any{"ok"},
+							}},
+							Skills: []agenttrace.Skill{{Name: "research"}},
 						},
 					},
 				},
@@ -424,6 +431,15 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	dst.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration = 2 * time.Second
 	assert.Equal(t, time.Second, src.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration)
 
+	dst.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"] = "changed"
+	assert.Equal(t, "Paris", src.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0] = "changed"
+	assert.Equal(t, "ok", src.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Skills[0].Name = "changed"
+	assert.Equal(t, "research", src.Conversation[0].ExecutionTrace.Steps[0].Skills[0].Name)
+
 	dst.Conversation[0].ExecutionTrace.Input.Text = "changed"
 	assert.Equal(t, "trace input", src.Conversation[0].ExecutionTrace.Input.Text)
 
@@ -441,6 +457,42 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.CreationTimestamp.Time = time.Unix(2, 0).UTC()
 	assert.Equal(t, time.Unix(1, 0).UTC(), src.CreationTimestamp.Time)
+}
+
+func TestCloneEvalCase_ErrorFromExecutionTraceToolArguments(t *testing.T) {
+	unsupported := func() {}
+	src := &evalset.EvalCase{
+		Conversation: []*evalset.Invocation{{
+			ExecutionTrace: &agenttrace.Trace{
+				Steps: []agenttrace.Step{{
+					Tools: []agenttrace.Tool{{
+						ID:        "call-1",
+						Name:      "bad",
+						Arguments: unsupported,
+					}},
+				}},
+			},
+		}},
+	}
+	got, err := CloneEvalCase(src)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "unsupported value type")
+}
+
+func TestCloneTraceToolsHandlesNilAndResultErrors(t *testing.T) {
+	got, err := cloneTraceTools(nil)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	unsupported := func() {}
+	got, err = cloneTraceTools([]agenttrace.Tool{{
+		ID:     "call-1",
+		Name:   "bad",
+		Result: unsupported,
+	}})
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "unsupported value type")
 }
 
 func TestCloneEvalSet_DeepCopy(t *testing.T) {

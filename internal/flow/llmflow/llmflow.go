@@ -717,7 +717,7 @@ func (f *Flow) runOneStep(
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
-	observabilityInvocation := invocationViewForModel(invocation, callModel)
+	observabilityInvocation := observabilityInvocationForModel(invocation, callModel)
 	var span oteltrace.Span
 	var modelName string
 	if callModel != nil {
@@ -1071,10 +1071,7 @@ func (p *streamingResponseProcessor) updateMetricsState() {
 		return
 	}
 	p.tracker.SetInvocationState(
-		metricsInvocationForCurrent(
-			p.currentInvocation,
-			p.observabilityInvocation,
-		),
+		p.currentInvocation,
 		p.timingInfo,
 	)
 }
@@ -1343,24 +1340,18 @@ func invocationFromContextOrDefault(
 	return invocation
 }
 
-func invocationViewForModel(
+func observabilityInvocationForModel(
 	invocation *agent.Invocation,
 	callModel model.Model,
 ) *agent.Invocation {
 	if invocation == nil {
 		return nil
 	}
-	return invocation.View(agent.WithInvocationModel(callModel))
-}
-
-func metricsInvocationForCurrent(
-	current *agent.Invocation,
-	base *agent.Invocation,
-) *agent.Invocation {
-	if base == nil {
-		return current
-	}
-	return observabilityInvocationForCurrent(current, base)
+	return newObservabilityInvocation(
+		invocation,
+		invocation.Session,
+		callModel,
+	)
 }
 
 func observabilityInvocationForCurrent(
@@ -1370,13 +1361,27 @@ func observabilityInvocationForCurrent(
 	if base == nil {
 		return current
 	}
-	if current == nil || current.Session == nil {
+	if current == nil || current.Session == nil ||
+		current.Session == base.Session {
 		return base
 	}
-	return base.View(
-		agent.WithInvocationSession(current.Session),
-		agent.WithInvocationModel(base.Model),
-	)
+	return newObservabilityInvocation(base, current.Session, base.Model)
+}
+
+// newObservabilityInvocation intentionally excludes invocation state: metrics
+// and tracing consume only identity, session, and model metadata, while state
+// can contain large model-visible history snapshots.
+func newObservabilityInvocation(
+	base *agent.Invocation,
+	sess *session.Session,
+	callModel model.Model,
+) *agent.Invocation {
+	return &agent.Invocation{
+		AgentName:    base.AgentName,
+		InvocationID: base.InvocationID,
+		Session:      sess,
+		Model:        callModel,
+	}
 }
 
 func trackModelResponseTelemetry(

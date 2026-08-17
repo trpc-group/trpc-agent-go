@@ -212,6 +212,47 @@ func TestAppendResponseExtendsSnapshot(t *testing.T) {
 	require.Equal(t, "result", got.Messages[3].Content)
 }
 
+func TestInvocationViewAppendIsIsolated(t *testing.T) {
+	invocation := agent.NewInvocation()
+	Attach(invocation, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+	})
+
+	view := invocation.View()
+	AppendResponse(view, &model.Response{Choices: []model.Choice{{
+		Message: model.NewAssistantMessage("answer"),
+	}}})
+
+	viewRequest, ok := Request(view)
+	require.True(t, ok)
+	require.Len(t, viewRequest.Messages, 2)
+
+	originalRequest, ok := Request(invocation)
+	require.True(t, ok)
+	require.Len(t, originalRequest.Messages, 1)
+	require.Equal(t, "question", originalRequest.Messages[0].Content)
+}
+
+func TestInvocationViewRequestContentRefIsIsolated(t *testing.T) {
+	invocation := agent.NewInvocation()
+	Attach(invocation, &model.Request{Messages: []model.Message{{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			ContentRef: &model.ContentRef{ArtifactName: "original"},
+		}},
+	}}})
+
+	viewRequest, ok := Request(invocation.View())
+	require.True(t, ok)
+	viewRequest.Messages[0].ContentParts[0].ContentRef.ArtifactName = "mutated"
+
+	originalRequest, ok := Request(invocation)
+	require.True(t, ok)
+	require.Equal(t, "original",
+		originalRequest.Messages[0].ContentParts[0].ContentRef.ArtifactName,
+	)
+}
+
 func TestInvalidateClearsSnapshotUntilNextAttach(t *testing.T) {
 	inv := agent.NewInvocation()
 	req := &model.Request{
