@@ -82,17 +82,24 @@ func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 		svc := newSummaryIntegrationService(t, dsn, prefix)
 		t.Cleanup(func() { require.NoError(t, svc.Close()) })
 		key := createSummaryIntegrationSession(t, ctx, svc)
+		healthyKey := session.Key{
+			AppName: key.AppName, UserID: key.UserID, SessionID: "integration-healthy-session",
+		}
+		_, err := svc.CreateSession(ctx, healthyKey, nil)
+		require.NoError(t, err)
 
 		updatedAt := time.Date(2026, time.August, 14, 8, 0, 0, 0, time.UTC)
 		deletedAt := updatedAt.Add(-time.Hour)
+		softDeletedAt := updatedAt.Add(time.Hour)
 		insertSummaryIntegrationRow(t, ctx, db, tableName, key, "active-1", updatedAt, nil)
 		insertSummaryIntegrationRow(t, ctx, db, tableName, key, "active-2", updatedAt, nil)
 		insertSummaryIntegrationRow(t, ctx, db, tableName, key, "historical", updatedAt, deletedAt)
+		insertSummaryIntegrationRow(t, ctx, db, tableName, healthyKey, "healthy", updatedAt, nil)
 
 		tx, err := db.BeginTx(ctx, nil)
 		require.NoError(t, err)
 		require.NoError(t, svc.softDeleteSummaries(
-			ctx, tx, "app_name = ?", []any{key.AppName}, updatedAt.Add(time.Hour),
+			ctx, tx, "app_name = ?", []any{key.AppName}, softDeletedAt,
 		))
 		require.NoError(t, tx.Commit())
 
@@ -103,12 +110,16 @@ func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 		require.NoError(t, err)
 		require.Zero(t, activeCount)
 
-		var historicalDeletedAt time.Time
+		var duplicateRows int
 		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			"SELECT deleted_at FROM `%s` WHERE app_name = ? AND deleted_at IS NOT NULL", tableName,
-		), key.AppName).Scan(&historicalDeletedAt)
+			"SELECT COUNT(*) FROM `%s` WHERE app_name = ? AND user_id = ? AND session_id = ?", tableName,
+		), key.AppName, key.UserID, key.SessionID).Scan(&duplicateRows)
 		require.NoError(t, err)
-		require.Equal(t, deletedAt, historicalDeletedAt)
+		require.Equal(t, 2, duplicateRows)
+
+		requireSummaryIntegrationDeletedAtCount(t, ctx, db, tableName, key, deletedAt, 1)
+		requireSummaryIntegrationDeletedAtCount(t, ctx, db, tableName, key, softDeletedAt, 1)
+		requireSummaryIntegrationDeletedAtCount(t, ctx, db, tableName, healthyKey, softDeletedAt, 1)
 	})
 
 	t.Run("legacy lookup keeps deterministic newest summary", func(t *testing.T) {
@@ -305,6 +316,25 @@ func marshalSummaryIntegration(t *testing.T, text string, updatedAt time.Time) [
 	summaryBytes, err := json.Marshal(&session.Summary{Summary: text, UpdatedAt: updatedAt})
 	require.NoError(t, err)
 	return summaryBytes
+}
+
+func requireSummaryIntegrationDeletedAtCount(
+	t *testing.T,
+	ctx context.Context,
+	db *sql.DB,
+	tableName string,
+	key session.Key,
+	deletedAt time.Time,
+	want int,
+) {
+	t.Helper()
+	var count int
+	err := db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT COUNT(*) FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at = ?`, tableName,
+	), key.AppName, key.UserID, key.SessionID, deletedAt).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, want, count)
 }
 
 func requireSummaryIntegrationRows(

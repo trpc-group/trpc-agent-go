@@ -1184,16 +1184,69 @@ func (s *Service) softDeleteSummaries(
 	}
 
 	// MySQL rolls back the failed UPDATE statement without aborting the
-	// transaction. Removing only the active summary rows lets deletion proceed
-	// when a legacy nullable unique key contains duplicates, while preserving
-	// normal soft-delete behavior for healthy schemas.
+	// transaction. Retry each row so healthy summaries retain their soft-delete
+	// history and only a row that still conflicts is physically removed.
 	log.WarnfContext(ctx, "soft deleting summaries hit duplicate legacy rows; "+
-		"deleting the affected active summaries instead: %v", err)
-	_, deleteErr := tx.ExecContext(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionSummaries, activeWhereClause),
+		"retrying the affected active summaries individually: %v", err)
+	return s.softDeleteSummariesIndividually(ctx, tx, activeWhereClause, args, now)
+}
+
+func (s *Service) softDeleteSummariesIndividually(
+	ctx context.Context,
+	tx *sql.Tx,
+	activeWhereClause string,
+	args []any,
+	now time.Time,
+) error {
+	type summaryRowKey struct {
+		id     int64
+		userID string
+	}
+
+	rows, err := tx.QueryContext(ctx,
+		fmt.Sprintf(`SELECT id, user_id FROM %s WHERE %s ORDER BY id ASC FOR UPDATE`,
+			s.tableSessionSummaries, activeWhereClause),
 		args...)
-	if deleteErr != nil {
-		return fmt.Errorf("delete active summaries after soft-delete conflict: %w", deleteErr)
+	if err != nil {
+		return fmt.Errorf("query active summaries after soft-delete conflict: %w", err)
+	}
+	var keys []summaryRowKey
+	for rows.Next() {
+		var key summaryRowKey
+		if err := rows.Scan(&key.id, &key.userID); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan active summary after soft-delete conflict: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate active summaries after soft-delete conflict: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close active summaries after soft-delete conflict: %w", err)
+	}
+
+	for _, key := range keys {
+		_, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
+				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionSummaries),
+			now, key.id, key.userID)
+		if err == nil {
+			continue
+		}
+		if !isDuplicateEntryError(err) {
+			return fmt.Errorf("soft delete summary %d individually: %w", key.id, err)
+		}
+
+		log.WarnfContext(ctx, "soft deleting summary %d still hit a duplicate legacy row; "+
+			"deleting only that active row: %v", key.id, err)
+		if _, deleteErr := tx.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s
+				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionSummaries),
+			key.id, key.userID); deleteErr != nil {
+			return fmt.Errorf("delete duplicate active summary %d: %w", key.id, deleteErr)
+		}
 	}
 	return nil
 }
