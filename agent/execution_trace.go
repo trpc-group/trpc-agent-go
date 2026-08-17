@@ -188,6 +188,21 @@ func SetExecutionTraceStepAppliedSurfaceIDs(inv *Invocation, stepID string) {
 	capture.SetStepAppliedSurfaceIDs(stepID, reporter.ExecutionTraceAppliedSurfaceIDs(inv))
 }
 
+// SetExecutionTraceStepNodeType records the semantic node type for one execution trace step.
+// It has no error return and silently does nothing when inv is nil, tracing is disabled or
+// unavailable, inputs are empty, or stepID is unknown.
+func SetExecutionTraceStepNodeType(inv *Invocation, stepID string, nodeType string) {
+	if inv == nil || stepID == "" || nodeType == "" {
+		return
+	}
+	inv.initializeExecutionTrace()
+	capture := inv.executionTraceCapture()
+	if capture == nil {
+		return
+	}
+	capture.SetStepNodeType(stepID, nodeType)
+}
+
 // SetExecutionTraceStepUsage records token usage for one execution trace step.
 func SetExecutionTraceStepUsage(inv *Invocation, stepID string, usage *model.Usage) {
 	if inv == nil || stepID == "" || usage == nil {

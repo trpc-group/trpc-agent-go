@@ -1823,6 +1823,12 @@ func fullyPopulatedChildRunOptions() agent.RunOptions {
 		ModelSelector: func(context.Context, *agent.Invocation) (model.Model, error) {
 			return nil, nil
 		},
+		ModelContextWindow: 4096,
+		ModelRequestExtraFields: map[string]any{
+			"model":           "unapproved-provider-model",
+			"provider_option": "value",
+		},
+		ModelRequestHeaders: map[string]string{"X-Provider-Route": "parent"},
 		Instruction:         "inst",
 		GlobalInstruction:   "ginst",
 		CodeExecutor:        fakeDynCodeExecutor{},
@@ -1842,7 +1848,7 @@ func fullyPopulatedChildRunOptions() agent.RunOptions {
 func TestSanitizeChildRunOptions_TemplateBoundaryClearsAll(t *testing.T) {
 	at := NewDynamicTool()
 	runOpts := fullyPopulatedChildRunOptions()
-	at.sanitizeChildRunOptions(&runOpts, true)
+	at.sanitizeChildRunOptions(&runOpts, true, false)
 
 	// Tool surface: patch is the single source of truth.
 	require.Nil(t, runOpts.AdditionalTools)
@@ -1853,6 +1859,11 @@ func TestSanitizeChildRunOptions_TemplateBoundaryClearsAll(t *testing.T) {
 	require.Nil(t, runOpts.Model)
 	require.Empty(t, runOpts.ModelName)
 	require.Nil(t, runOpts.ModelSelector)
+	// Existing template-only behavior keeps run-wide provider request options.
+	// Profile selection below defines the stronger cross-model boundary.
+	require.Equal(t, 4096, runOpts.ModelContextWindow)
+	require.NotNil(t, runOpts.ModelRequestExtraFields)
+	require.NotNil(t, runOpts.ModelRequestHeaders)
 	require.Empty(t, runOpts.Instruction)
 	require.Empty(t, runOpts.GlobalInstruction)
 	// Execution boundary.
@@ -1867,7 +1878,7 @@ func TestSanitizeChildRunOptions_TemplateBoundaryClearsAll(t *testing.T) {
 func TestSanitizeChildRunOptions_NoTemplateKeepsBoundaryFields(t *testing.T) {
 	at := NewDynamicTool()
 	runOpts := fullyPopulatedChildRunOptions()
-	at.sanitizeChildRunOptions(&runOpts, false)
+	at.sanitizeChildRunOptions(&runOpts, false, false)
 
 	// Tool surface is always cleared (patch is authoritative; parent filter
 	// already applied while deriving the candidate surface).
@@ -1879,6 +1890,33 @@ func TestSanitizeChildRunOptions_NoTemplateKeepsBoundaryFields(t *testing.T) {
 	require.NotNil(t, runOpts.Model)
 	require.Equal(t, "mname", runOpts.ModelName)
 	require.NotNil(t, runOpts.ModelSelector)
+	require.Equal(t, 4096, runOpts.ModelContextWindow)
+	require.NotNil(t, runOpts.ModelRequestExtraFields)
+	require.NotNil(t, runOpts.ModelRequestHeaders)
+	require.Equal(t, "inst", runOpts.Instruction)
+	require.Equal(t, "ginst", runOpts.GlobalInstruction)
+	require.NotNil(t, runOpts.CodeExecutor)
+	require.NotNil(t, runOpts.ToolExecutionFilter)
+	require.NotNil(t, runOpts.ToolPermissionPolicy)
+}
+
+// TestSanitizeChildRunOptions_ProfileClearsProviderRequestOptions verifies that
+// selecting a host-authorized profile also removes parent model request
+// settings that could target or authenticate a different provider. Calls that
+// omit model retain the existing inheritance behavior above.
+func TestSanitizeChildRunOptions_ProfileClearsProviderRequestOptions(t *testing.T) {
+	at := NewDynamicTool()
+	runOpts := fullyPopulatedChildRunOptions()
+	at.sanitizeChildRunOptions(&runOpts, false, true)
+
+	require.Nil(t, runOpts.Model)
+	require.Empty(t, runOpts.ModelName)
+	require.Nil(t, runOpts.ModelSelector)
+	require.Zero(t, runOpts.ModelContextWindow)
+	require.Nil(t, runOpts.ModelRequestExtraFields)
+	require.Nil(t, runOpts.ModelRequestHeaders)
+
+	// With no template, non-model execution settings still inherit as before.
 	require.Equal(t, "inst", runOpts.Instruction)
 	require.Equal(t, "ginst", runOpts.GlobalInstruction)
 	require.NotNil(t, runOpts.CodeExecutor)

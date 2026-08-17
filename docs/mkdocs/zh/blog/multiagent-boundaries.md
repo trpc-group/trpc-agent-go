@@ -63,7 +63,7 @@ Multi-Agent 真正变成工程问题，通常是因为单 Agent 的某条边界�
 | --- | --- | --- | --- |
 | 单 LLMAgent | 一个 Agent 用自己的 instruction 和工具面推进 | 工具面可控、链路不复杂 | 工具面过大、上下文污染、权限、模型或环境不同 |
 | AgentTool | 固定子 Agent 作为同步 tool；默认隔离历史，结果以 tool result 回父 Agent | 查一下、审一下、分析一段内容 | 继承父历史、稳定子历史、裁剪结果、转发内部 stream、跳过外层总结 |
-| Dynamic AgentTool | 一个 `dynamic_agent` 入口；按次创建短生命周期子 Agent；默认隔离，不保留稳定子历史 | 子任务需要临时收窄 instruction、tools 或 skills | 固定能力上限、能力 provider、字段暴露、超时、结果模式 |
+| Dynamic AgentTool | 一个 `dynamic_agent` 入口；按次创建短生命周期子 Agent；默认隔离，不保留稳定子历史 | 子任务需要临时收窄 instruction、tools、skills 或宿主授权的模型 profile | 固定能力上限、能力 provider、模型 profile、字段暴露、超时、结果模式 |
 | `transfer_to_agent` | `WithSubAgents` 暴露 transfer；目标 Agent 接管当前 invocation；默认原 Agent 结束当前轮 | 当前轮应该由专家继续回答 | 默认交接消息、是否结束、消息投影、跨轮 owner |
 | Coordinator Team | 成员被包装成 member tools；结果回 coordinator | 协调者调用多个成员完成当前轮 | 成员历史、内部事件、成员正文展示、coordinator 是否总结 |
 | Swarm | entry member 开始；成员间 transfer 接力；默认下一轮仍从 entry 开始 | 当前轮内多专家接力 | 跨轮接管、独立成员历史、自定义 handoff 输入 |
@@ -101,9 +101,9 @@ AgentTool 适合“我需要一个专家结果，然后主 Agent 继续判断”
 
 ### 5.2 Dynamic AgentTool：按次装配能力
 
-Dynamic AgentTool 适合“每次子任务都要临时收窄 instruction、tools 或 skills”。它暴露一个默认名为 `dynamic_agent` 的入口，运行时按本次 tool call 创建短生命周期子 Agent。
+Dynamic AgentTool 适合“每次子任务都要临时收窄 instruction、tools、skills 或宿主授权的模型 profile”。它暴露一个默认名为 `dynamic_agent` 的入口，运行时按本次 tool call 创建短生命周期子 Agent。
 
-“动态”不是让模型任意创建 Agent。代码仍然定义能力上限：可以来自父 invocation 的有效能力面，也可以通过 `WithCapabilityTools`、`WithCapabilityProvider`、`WithCapabilitySurfaceProvider`、`WithCapabilitySkills` 等方式指定。模型只能在这个边界内选择子集，不能任意选择模型、executor 或远程目标。
+“动态”不是让模型任意创建 Agent。代码仍然定义能力上限：可以来自父 invocation 的有效能力面，也可以通过 `WithCapabilityTools`、`WithCapabilityProvider`、`WithCapabilitySurfaceProvider`、`WithCapabilitySkills` 等方式指定。模型只能在这个边界内选择子集，不能任意选择模型、executor 或远程目标；配置 `WithAgentModelProfile` 后，也只能为当前子调用选择宿主授权的别名。
 
 它解决的是能力面问题，不解决长期记忆问题。`NewDynamicTool` 设计上是短生命周期，`WithPersistentHistory*` 会被忽略。如果需求是“同一个子 Agent 下次继续改同一份产物”，优先考虑固定 AgentTool 的 persistent history，或者把产物状态外置成 artifact / 数据库对象。
 
