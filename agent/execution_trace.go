@@ -189,6 +189,8 @@ func SetExecutionTraceStepAppliedSurfaceIDs(inv *Invocation, stepID string) {
 }
 
 // SetExecutionTraceStepNodeType records the semantic node type for one execution trace step.
+// It has no error return and silently does nothing when inv is nil, tracing is disabled or
+// unavailable, inputs are empty, or stepID is unknown.
 func SetExecutionTraceStepNodeType(inv *Invocation, stepID string, nodeType string) {
 	if inv == nil || stepID == "" || nodeType == "" {
 		return

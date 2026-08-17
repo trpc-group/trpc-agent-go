@@ -186,6 +186,8 @@ func (c *Capture) setStepInput(stepID string, input *trace.Snapshot) {
 }
 
 // SetStepNodeType updates the semantic node type of one recorded step.
+// It has no error return and silently does nothing for nil receivers, empty inputs,
+// or unknown step IDs.
 func (c *Capture) SetStepNodeType(stepID string, nodeType string) {
 	if c == nil || stepID == "" || nodeType == "" {
 		return

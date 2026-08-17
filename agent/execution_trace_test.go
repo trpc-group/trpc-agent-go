@@ -299,6 +299,7 @@ func TestExecutionTraceHelpers_RecordStepNodeType(t *testing.T) {
 	)
 	require.NotEmpty(t, stepID)
 	SetExecutionTraceStepNodeType(inv, stepID, "agent")
+	SetExecutionTraceStepNodeType(inv, "missing-step", "tool")
 	FinishExecutionTraceStep(inv, stepID, &atrace.Snapshot{Text: "output"}, nil)
 	executionTrace := BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
 	require.NotNil(t, executionTrace)
