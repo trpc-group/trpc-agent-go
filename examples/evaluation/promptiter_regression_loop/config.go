@@ -192,6 +192,10 @@ func loadConfig(path string) (*loadedConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read baseline prompt: %w", err)
 	}
+	prompt := strings.TrimSpace(string(promptBytes))
+	if prompt == "" {
+		return nil, errors.New("baseline prompt is empty")
+	}
 	train, err := loadEvalSet(resolvePath(baseDir, cfg.TrainEvalSet))
 	if err != nil {
 		return nil, fmt.Errorf("load train eval set: %w", err)
@@ -215,7 +219,7 @@ func loadConfig(path string) (*loadedConfig, error) {
 	return &loadedConfig{
 		pipelineConfig: cfg,
 		BaseDir:        baseDir,
-		Prompt:         strings.TrimSpace(string(promptBytes)),
+		Prompt:         prompt,
 		PromptIter:     promptIter,
 		Metrics:        metrics,
 		Train:          train,

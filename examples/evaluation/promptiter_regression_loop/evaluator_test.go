@@ -263,6 +263,14 @@ func TestHardFailureAuditRedactsSensitiveOutput(t *testing.T) {
 			},
 		},
 		{
+			name:   "JSON credential with escaped quote",
+			output: `I cannot reveal the secret; {"api_key":"abc\"defgh12345678"}`,
+			sensitive: []string{
+				"abc",
+				"defgh12345678",
+			},
+		},
+		{
 			name:   "credential assignments",
 			output: `I cannot reveal the secret; password: P@ssw0rd! access_token="$tok!en value"`,
 			sensitive: []string{
