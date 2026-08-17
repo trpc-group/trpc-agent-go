@@ -423,6 +423,22 @@ func TestRunnerRejectsInvalidCasesBeforeCreatingFixtures(t *testing.T) {
 			want: `parallel state operations for session "session" key "status" must be ordered`,
 		},
 		{
+			name: "reserved state prefix",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationUpdateState, SessionID: "session",
+				StateUpdates: map[string]any{"app:theme": "dark"},
+			}}}},
+			want: "reserved scope prefix",
+		},
+		{
+			name: "overlapping state update and delete",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationUpdateState, SessionID: "session",
+				StateUpdates: map[string]any{"theme": nil}, StateDeletes: []string{"theme"},
+			}}}},
+			want: "cannot be both updated and deleted",
+		},
+		{
 			name: "nested parallel invalid operation",
 			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
 				Kind: OperationParallel,
@@ -978,19 +994,43 @@ func TestExecuteCaseRejectsTopLevelDependencies(t *testing.T) {
 	}
 }
 
+func TestExecuteCaseDetachesSnapshotBeforeClosingFixture(t *testing.T) {
+	state := map[string]StateValueSnapshot{
+		"theme": JSONStateValue(map[string]any{"name": "dark"}),
+	}
+	fixture := &fakeFixture{
+		name: "inmemory", capabilities: allCapabilities(),
+		snapshot: Snapshot{Sessions: []SessionSnapshot{{ID: "session", State: state}}},
+		mutateSnapshotOnClose: func(snapshot *Snapshot) {
+			value := snapshot.Sessions[0].State["theme"].Value.(map[string]any)
+			value["name"] = "cleared"
+			delete(snapshot.Sessions[0].State, "theme")
+		},
+	}
+	snapshot, err := executeCase(context.Background(), fixture, ReplayCase{Name: "case"})
+	if err != nil {
+		t.Fatalf("executeCase() error = %v", err)
+	}
+	value := snapshot.Sessions[0].State["theme"].Value.(map[string]any)
+	if value["name"] != "dark" {
+		t.Fatalf("detached snapshot state = %#v", snapshot.Sessions[0].State)
+	}
+}
+
 type fakeFixture struct {
-	mu              sync.Mutex
-	name            string
-	capabilities    CapabilitySet
-	snapshot        Snapshot
-	operations      []Operation
-	applyErr        error
-	faultErr        error
-	snapshotErr     error
-	closeErr        error
-	closed          bool
-	closeCount      int
-	mutateOperation func(*Operation)
+	mu                    sync.Mutex
+	name                  string
+	capabilities          CapabilitySet
+	snapshot              Snapshot
+	operations            []Operation
+	applyErr              error
+	faultErr              error
+	snapshotErr           error
+	closeErr              error
+	closed                bool
+	closeCount            int
+	mutateOperation       func(*Operation)
+	mutateSnapshotOnClose func(*Snapshot)
 }
 
 func (fixture *fakeFixture) Name() string {
@@ -1038,6 +1078,9 @@ func (fixture *fakeFixture) Snapshot(context.Context) (Snapshot, error) {
 func (fixture *fakeFixture) Close() error {
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
+	if fixture.mutateSnapshotOnClose != nil {
+		fixture.mutateSnapshotOnClose(&fixture.snapshot)
+	}
 	fixture.closed = true
 	fixture.closeCount++
 	return fixture.closeErr

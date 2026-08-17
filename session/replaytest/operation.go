@@ -12,6 +12,10 @@ package replaytest
 import (
 	"fmt"
 	"math"
+	"sort"
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // OperationKind identifies one replay action.
@@ -41,7 +45,8 @@ const (
 
 // Operation is a backend-neutral action in a replay case. Parallel children may
 // run concurrently; children that mutate the same session state key must declare
-// an ordering with Name and After.
+// an ordering with Name and After. Update-state operations reject app- and
+// user-scoped keys, and a key cannot be both updated and deleted.
 type Operation struct {
 	Kind                  OperationKind
 	Name                  string
@@ -167,6 +172,31 @@ func validateUpdateState(operation Operation) error {
 	if operation.SessionID == "" ||
 		(len(operation.StateUpdates) == 0 && len(operation.StateDeletes) == 0) {
 		return fmt.Errorf("update state requires session id and state changes")
+	}
+	deleteKeys := make(map[string]struct{}, len(operation.StateDeletes))
+	keys := make(map[string]struct{}, len(operation.StateUpdates)+len(operation.StateDeletes))
+	for key := range operation.StateUpdates {
+		keys[key] = struct{}{}
+	}
+	for _, key := range operation.StateDeletes {
+		deleteKeys[key] = struct{}{}
+		keys[key] = struct{}{}
+	}
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	for _, key := range ordered {
+		if strings.HasPrefix(key, session.StateAppPrefix) ||
+			strings.HasPrefix(key, session.StateUserPrefix) {
+			return fmt.Errorf("update state key %q uses a reserved scope prefix", key)
+		}
+		if _, updated := operation.StateUpdates[key]; updated {
+			if _, deleted := deleteKeys[key]; deleted {
+				return fmt.Errorf("update state key %q cannot be both updated and deleted", key)
+			}
+		}
 	}
 	return nil
 }

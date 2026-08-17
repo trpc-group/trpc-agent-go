@@ -10,8 +10,10 @@ package replayconsistency
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
@@ -96,10 +98,62 @@ func TestValidateBackendFactoriesRejectsDuplicateRegistration(t *testing.T) {
 	}
 }
 
+func TestServiceBackendHonorsConstructionCancellation(t *testing.T) {
+	started := make(chan context.Context, 1)
+	release := make(chan struct{})
+	sessionClosed := make(chan struct{}, 1)
+	memoryClosed := make(chan struct{}, 1)
+	backend := serviceBackend("blocked", func(ctx context.Context, summarizer *replaySummarizer) (
+		session.Service,
+		memory.Service,
+		error,
+	) {
+		started <- ctx
+		<-release
+		return &closeTrackingSessionService{
+				Service: sessioninmemory.NewSessionService(
+					sessioninmemory.WithSummarizer(summarizer),
+				),
+				closed: sessionClosed,
+			}, &closeTrackingMemoryService{
+				Service: memoryinmemory.NewMemoryService(), closed: memoryClosed,
+			}, nil
+	}, serviceBackendOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := backend.New(ctx, "case")
+		result <- err
+	}()
+	if received := <-started; received != ctx {
+		t.Fatal("service creator did not receive construction context")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Backend.New() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Backend.New() did not return after context cancellation")
+	}
+	close(release)
+	for name, closed := range map[string]<-chan struct{}{
+		"session": sessionClosed,
+		"memory":  memoryClosed,
+	} {
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Fatalf("late %s service was not closed", name)
+		}
+	}
+}
+
 func isolatedInMemoryServiceBackend(
 	unsupported ...replaytest.Capability,
 ) replaytest.Backend {
-	return serviceBackend("isolated", func(summarizer *replaySummarizer) (
+	return serviceBackend("isolated", func(_ context.Context, summarizer *replaySummarizer) (
 		session.Service,
 		memory.Service,
 		error,
@@ -108,4 +162,26 @@ func isolatedInMemoryServiceBackend(
 			sessioninmemory.WithSummarizer(summarizer),
 		), memoryinmemory.NewMemoryService(), nil
 	}, serviceBackendOptions{Unsupported: unsupported})
+}
+
+type closeTrackingSessionService struct {
+	session.Service
+	closed chan<- struct{}
+}
+
+func (service *closeTrackingSessionService) Close() error {
+	err := service.Service.Close()
+	service.closed <- struct{}{}
+	return err
+}
+
+type closeTrackingMemoryService struct {
+	memory.Service
+	closed chan<- struct{}
+}
+
+func (service *closeTrackingMemoryService) Close() error {
+	err := service.Service.Close()
+	service.closed <- struct{}{}
+	return err
 }

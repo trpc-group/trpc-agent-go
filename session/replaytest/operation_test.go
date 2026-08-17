@@ -145,6 +145,30 @@ func TestOperationValidateRejectsInvalidConfigurations(t *testing.T) {
 			want:      "update state requires session id and state changes",
 		},
 		{
+			name: "update state with app key",
+			operation: Operation{
+				Kind: OperationUpdateState, SessionID: "session",
+				StateUpdates: map[string]any{"app:theme": "dark"},
+			},
+			want: "reserved scope prefix",
+		},
+		{
+			name: "delete state with user key",
+			operation: Operation{
+				Kind: OperationUpdateState, SessionID: "session",
+				StateDeletes: []string{"user:theme"},
+			},
+			want: "reserved scope prefix",
+		},
+		{
+			name: "update and delete same state key",
+			operation: Operation{
+				Kind: OperationUpdateState, SessionID: "session",
+				StateUpdates: map[string]any{"theme": nil}, StateDeletes: []string{"theme"},
+			},
+			want: "cannot be both updated and deleted",
+		},
+		{
 			name:      "write memory without memory",
 			operation: Operation{Kind: OperationWriteMemory},
 			want:      "write memory requires memory",

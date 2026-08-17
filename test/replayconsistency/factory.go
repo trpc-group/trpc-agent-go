@@ -55,11 +55,78 @@ type BackendConfig struct {
 	SessionTTL time.Duration
 }
 
-type serviceCreator func(*replaySummarizer) (session.Service, memory.Service, error)
+type serviceCreator func(
+	context.Context,
+	*replaySummarizer,
+) (session.Service, memory.Service, error)
 
 type serviceBackendOptions struct {
 	Supported   []replaytest.Capability
 	Unsupported []replaytest.Capability
+}
+
+type serviceCreationResult struct {
+	sessionService session.Service
+	memoryService  memory.Service
+	err            error
+}
+
+func runServiceCreator(
+	ctx context.Context,
+	summarizer *replaySummarizer,
+	create serviceCreator,
+) (session.Service, memory.Service, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	result := make(chan serviceCreationResult)
+	abandoned := make(chan struct{})
+	go func() {
+		sessionService, memoryService, err := create(ctx, summarizer)
+		created := serviceCreationResult{
+			sessionService: sessionService,
+			memoryService:  memoryService,
+			err:            err,
+		}
+		select {
+		case result <- created:
+		case <-abandoned:
+			_ = closeCreatedServices(sessionService, memoryService)
+		}
+	}()
+	select {
+	case created := <-result:
+		if err := ctx.Err(); err != nil {
+			return nil, nil, errors.Join(
+				err,
+				closeCreatedServices(created.sessionService, created.memoryService),
+			)
+		}
+		if created.err != nil {
+			return nil, nil, errors.Join(
+				created.err,
+				closeCreatedServices(created.sessionService, created.memoryService),
+			)
+		}
+		return created.sessionService, created.memoryService, nil
+	case <-ctx.Done():
+		close(abandoned)
+		return nil, nil, ctx.Err()
+	}
+}
+
+func closeCreatedServices(
+	sessionService session.Service,
+	memoryService memory.Service,
+) error {
+	var errs []error
+	if sessionService != nil {
+		errs = append(errs, sessionService.Close())
+	}
+	if memoryService != nil {
+		errs = append(errs, memoryService.Close())
+	}
+	return errors.Join(errs...)
 }
 
 func externalBackendFactories() []backendFactory {
@@ -97,11 +164,16 @@ func serviceBackend(
 ) replaytest.Backend {
 	return replaytest.Backend{
 		Name: name,
-		New: func(context.Context, string) (replaytest.Fixture, error) {
+		New: func(ctx context.Context, _ string) (replaytest.Fixture, error) {
 			summarizer := &replaySummarizer{}
-			sessionService, memoryService, err := create(summarizer)
+			sessionService, memoryService, err := runServiceCreator(ctx, summarizer, create)
 			if err != nil {
 				return nil, err
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, errors.Join(
+					err, closeCreatedServices(sessionService, memoryService),
+				)
 			}
 			return newReplayFixture(replayFixtureConfig{
 				name: name, sessionService: sessionService, memoryService: memoryService,
@@ -215,11 +287,14 @@ func redisBackendFactory() backendFactory {
 }
 
 func newRedisBackend(config BackendConfig) replaytest.Backend {
-	return serviceBackend("redis", func(summarizer *replaySummarizer) (
+	return serviceBackend("redis", func(ctx context.Context, summarizer *replaySummarizer) (
 		session.Service,
 		memory.Service,
 		error,
 	) {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		options := []sessionredis.ServiceOpt{
 			sessionredis.WithRedisClientURL(config.Connection),
 			sessionredis.WithSummarizer(summarizer),
@@ -231,6 +306,9 @@ func newRedisBackend(config BackendConfig) replaytest.Backend {
 		sessionService, err := sessionredis.NewService(options...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create redis session service: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, nil, errors.Join(err, sessionService.Close())
 		}
 		memoryService, err := memoryredis.NewService(
 			memoryredis.WithRedisClientURL(config.Connection),
@@ -251,11 +329,14 @@ func postgresBackendFactory() backendFactory {
 }
 
 func newPostgresBackend(config BackendConfig) replaytest.Backend {
-	return serviceBackend("postgres", func(summarizer *replaySummarizer) (
+	return serviceBackend("postgres", func(ctx context.Context, summarizer *replaySummarizer) (
 		session.Service,
 		memory.Service,
 		error,
 	) {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		options := []sessionpostgres.ServiceOpt{
 			sessionpostgres.WithPostgresClientDSN(config.Connection),
 			sessionpostgres.WithSummarizer(summarizer),
@@ -267,6 +348,9 @@ func newPostgresBackend(config BackendConfig) replaytest.Backend {
 		sessionService, err := sessionpostgres.NewService(options...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create postgres session service: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, nil, errors.Join(err, sessionService.Close())
 		}
 		memoryService, err := memorypostgres.NewService(
 			memorypostgres.WithPostgresClientDSN(config.Connection),
@@ -289,11 +373,14 @@ func mySQLBackendFactory() backendFactory {
 }
 
 func newMySQLBackend(config BackendConfig) replaytest.Backend {
-	return serviceBackend("mysql", func(summarizer *replaySummarizer) (
+	return serviceBackend("mysql", func(ctx context.Context, summarizer *replaySummarizer) (
 		session.Service,
 		memory.Service,
 		error,
 	) {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		options := []sessionmysql.ServiceOpt{
 			sessionmysql.WithMySQLClientDSN(config.Connection),
 			sessionmysql.WithSummarizer(summarizer),
@@ -305,6 +392,9 @@ func newMySQLBackend(config BackendConfig) replaytest.Backend {
 		sessionService, err := sessionmysql.NewService(options...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create mysql session service: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, nil, errors.Join(err, sessionService.Close())
 		}
 		memoryService, err := memorymysql.NewService(
 			memorymysql.WithMySQLClientDSN(config.Connection),
@@ -327,11 +417,14 @@ func clickHouseBackendFactory() backendFactory {
 }
 
 func newClickHouseBackend(config BackendConfig) replaytest.Backend {
-	return serviceBackend("clickhouse", func(summarizer *replaySummarizer) (
+	return serviceBackend("clickhouse", func(ctx context.Context, summarizer *replaySummarizer) (
 		session.Service,
 		memory.Service,
 		error,
 	) {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		options := []sessionclickhouse.ServiceOpt{
 			sessionclickhouse.WithClickHouseDSN(config.Connection),
 			sessionclickhouse.WithSummarizer(summarizer),
@@ -343,6 +436,9 @@ func newClickHouseBackend(config BackendConfig) replaytest.Backend {
 		sessionService, err := sessionclickhouse.NewService(options...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create clickhouse session service: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, nil, errors.Join(err, sessionService.Close())
 		}
 		return sessionService, memoryinmemory.NewMemoryService(), nil
 	}, serviceBackendOptions{

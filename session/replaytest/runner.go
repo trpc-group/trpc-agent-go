@@ -364,7 +364,7 @@ func executeCase(ctx context.Context, fixture Fixture, replayCase ReplayCase) (
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("read snapshot: %w", err)
 	}
-	return snapshot, nil
+	return cloneSnapshot(snapshot), nil
 }
 
 func executeOperation(ctx context.Context, fixture Fixture, operation Operation) error {
