@@ -64,8 +64,8 @@ func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
 			WithArgs(fullTableName).
 			WillReturnRows(colRows)
 
-		// 3. verifyIndexes query (INDEX_NAME, COLUMN_NAME, NON_UNIQUE)
-		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
+		// 3. verifyIndexes query (INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SUB_PART)
+		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART"})
 		for _, idx := range schema.indexes {
 			idxName := sqldb.BuildIndexName(tablePrefix, idx.table, idx.suffix)
 			nonUnique := 1
@@ -73,10 +73,10 @@ func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
 				nonUnique = 0
 			}
 			for _, col := range idx.columns {
-				idxRows.AddRow(idxName, col, nonUnique)
+				idxRows.AddRow(idxName, col, nonUnique, nil)
 			}
 		}
-		idxRows.AddRow("PRIMARY", "id", 0)
+		idxRows.AddRow("PRIMARY", "id", 0, nil)
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
 			WithArgs(fullTableName).
 			WillReturnRows(idxRows)
@@ -386,7 +386,7 @@ func TestVerifySchema_Success(t *testing.T) {
 		WillReturnRows(rows)
 
 	// 3. verifyIndexes
-	idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
+	idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART"})
 	for _, idx := range expectedSchema[testTable].indexes {
 		idxName := sqldb.BuildIndexName(s.opts.tablePrefix, idx.table, idx.suffix)
 		nonUnique := 1
@@ -394,11 +394,11 @@ func TestVerifySchema_Success(t *testing.T) {
 			nonUnique = 0
 		}
 		for _, col := range idx.columns {
-			idxRows.AddRow(idxName, col, nonUnique)
+			idxRows.AddRow(idxName, col, nonUnique, nil)
 		}
 	}
 	// Add PRIMARY key (should be ignored by unexpected check)
-	idxRows.AddRow("PRIMARY", "id", 0)
+	idxRows.AddRow("PRIMARY", "id", 0, nil)
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
 		WithArgs(fullTableName).
@@ -443,17 +443,17 @@ func TestVerifySchema_MissingUniqueIndexFatal(t *testing.T) {
 		WithArgs(fullTableName).
 		WillReturnRows(colRows)
 	// Indexes: omit the unique_active index so verification fails fatally.
-	idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
+	idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART"})
 	for _, idx := range expectedSchema[testTable].indexes {
 		if idx.suffix == sqldb.IndexSuffixUniqueActive {
 			continue
 		}
 		idxName := sqldb.BuildIndexName(s.opts.tablePrefix, idx.table, idx.suffix)
 		for _, col := range idx.columns {
-			idxRows.AddRow(idxName, col, 1)
+			idxRows.AddRow(idxName, col, 1, nil)
 		}
 	}
-	idxRows.AddRow("PRIMARY", "id", 0)
+	idxRows.AddRow("PRIMARY", "id", 0, nil)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
 		WithArgs(fullTableName).
 		WillReturnRows(idxRows)
@@ -596,14 +596,14 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 			fullTableName := "session_states"
 
 			// Build mock rows from actualIndexes
-			idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
+			idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART"})
 			for idxName, cols := range tt.actualIndexes {
 				nonUnique := 0
 				if tt.actualNonUnique[idxName] {
 					nonUnique = 1
 				}
 				for _, col := range cols {
-					idxRows.AddRow(idxName, col, nonUnique)
+					idxRows.AddRow(idxName, col, nonUnique, nil)
 				}
 			}
 
@@ -614,6 +614,181 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 			err = s.verifyIndexes(ctx, fullTableName, tt.expectedIndexes)
 			if tt.wantError {
 				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestVerifyIndexes_SummaryLayouts(t *testing.T) {
+	currentColumns := []string{"app_name", "user_id", "session_id", "filter_key"}
+	legacyUniqueColumns := []string{"app_name", "user_id", "session_id", "filter_key", "deleted_at"}
+	legacyLookupColumns := []string{"app_name", "user_id", "session_id", "deleted_at"}
+	canonicalName := "idx_session_summaries_unique_active"
+	expected := []tableIndex{{
+		table:   sqldb.TableNameSessionSummaries,
+		suffix:  sqldb.IndexSuffixUniqueActive,
+		columns: currentColumns,
+		unique:  true,
+	}}
+
+	tests := []struct {
+		name            string
+		actualIndexes   map[string][]string
+		actualNonUnique map[string]bool
+		actualSubParts  map[string][]any
+		tdsqlSharding   bool
+		wantError       bool
+		wantErrContains string
+	}{
+		{
+			name: "current canonical unique index",
+			actualIndexes: map[string][]string{
+				canonicalName: currentColumns,
+				"PRIMARY":     {"id"},
+			},
+		},
+		{
+			name: "current unique index with migration name",
+			actualIndexes: map[string][]string{
+				canonicalName:         legacyUniqueColumns,
+				canonicalName + "_v2": currentColumns,
+				"PRIMARY":             {"id"},
+			},
+			actualSubParts: map[string][]any{
+				canonicalName + "_v2": {int64(191), int64(191), int64(192), int64(191)},
+			},
+		},
+		{
+			name: "current unique index with short canonical prefixes",
+			actualIndexes: map[string][]string{
+				canonicalName: currentColumns,
+				"PRIMARY":     {"id"},
+			},
+			actualSubParts: map[string][]any{
+				canonicalName: {int64(191), int64(191), int64(190), int64(191)},
+			},
+			wantError:       true,
+			wantErrContains: "unsupported prefix lengths",
+		},
+		{
+			name: "migration unique index with short prefixes",
+			actualIndexes: map[string][]string{
+				canonicalName:         legacyUniqueColumns,
+				canonicalName + "_v2": currentColumns,
+				"PRIMARY":             {"id"},
+			},
+			actualSubParts: map[string][]any{
+				canonicalName + "_v2": {int64(190), int64(190), int64(190), int64(190)},
+			},
+			wantError:       true,
+			wantErrContains: "unsupported prefix lengths",
+		},
+		{
+			name: "unsafe extra unique index is rejected",
+			actualIndexes: map[string][]string{
+				canonicalName:         currentColumns,
+				canonicalName + "_v2": currentColumns,
+				"PRIMARY":             {"id"},
+			},
+			actualSubParts: map[string][]any{
+				canonicalName:         {int64(191), int64(191), int64(191), int64(191)},
+				canonicalName + "_v2": {int64(190), int64(190), int64(190), int64(190)},
+			},
+			wantError:       true,
+			wantErrContains: "unsupported prefix lengths",
+		},
+		{
+			name: "tdsql current unique index with full columns",
+			actualIndexes: map[string][]string{
+				canonicalName: currentColumns,
+				"PRIMARY":     {"id"},
+			},
+			tdsqlSharding: true,
+		},
+		{
+			name: "tdsql current unique index with prefixes",
+			actualIndexes: map[string][]string{
+				canonicalName: currentColumns,
+				"PRIMARY":     {"id"},
+			},
+			actualSubParts: map[string][]any{
+				canonicalName: {int64(128), int64(128), int64(128), int64(128)},
+			},
+			tdsqlSharding:   true,
+			wantError:       true,
+			wantErrContains: "unsupported prefix lengths",
+		},
+		{
+			name: "legacy five-column unique index",
+			actualIndexes: map[string][]string{
+				canonicalName: legacyUniqueColumns,
+				"PRIMARY":     {"id"},
+			},
+		},
+		{
+			name: "legacy lookup index",
+			actualIndexes: map[string][]string{
+				"idx_session_summaries_lookup": legacyLookupColumns,
+				"PRIMARY":                      {"id"},
+			},
+			actualNonUnique: map[string]bool{
+				"idx_session_summaries_lookup": true,
+			},
+		},
+		{
+			name: "four-column non-unique index remains unsupported",
+			actualIndexes: map[string][]string{
+				canonicalName: currentColumns,
+				"PRIMARY":     {"id"},
+			},
+			actualNonUnique: map[string]bool{
+				canonicalName: true,
+			},
+			wantError: true,
+		},
+		{
+			name: "missing summary lookup remains unsupported",
+			actualIndexes: map[string][]string{
+				"PRIMARY": {"id"},
+			},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+
+			s := createTestService(t, db)
+			s.opts.tdsqlSharding = tt.tdsqlSharding
+			rows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART"})
+			for indexName, columns := range tt.actualIndexes {
+				nonUnique := 0
+				if tt.actualNonUnique[indexName] {
+					nonUnique = 1
+				}
+				subParts := tt.actualSubParts[indexName]
+				for i, column := range columns {
+					var subPart any
+					if i < len(subParts) {
+						subPart = subParts[i]
+					}
+					rows.AddRow(indexName, column, nonUnique, subPart)
+				}
+			}
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
+				WithArgs(s.tableSessionSummaries).
+				WillReturnRows(rows)
+
+			err = s.verifyIndexes(context.Background(), s.tableSessionSummaries, expected)
+			if tt.wantError {
+				require.Error(t, err)
+				assert.ErrorContains(t, err, tt.wantErrContains)
 			} else {
 				assert.NoError(t, err)
 			}
