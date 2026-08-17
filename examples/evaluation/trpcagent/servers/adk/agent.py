@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import uuid
 from typing import Any
 
@@ -23,6 +24,8 @@ INSTRUCTION = """You are a concise travel assistant.
 Use this scenario when answering: Shanghai is sunny at 26C, festival events will be held downtown with likely traffic disruptions, and museum tickets are available with 25 seats left.
 Answer the user's travel question with weather, alert, ticket availability, and practical advice."""
 SESSION_SERVICE = InMemorySessionService()
+SESSION_LOCK = threading.Lock()
+KNOWN_SESSIONS: set[tuple[str, str]] = set()
 TRAVEL_AGENT = Agent(
     name=ADK_AGENT_NAME,
     description="Travel agent used by the tRPC-Agent evaluation example.",
@@ -37,8 +40,8 @@ TRAVEL_AGENT = Agent(
 
 def run_agent(request: dict) -> tuple[str, dict | None]:
     user_id = (request.get("session") or {}).get("userId") or "trpcagent"
-    session_id = request_id_from(request)
-    asyncio.run(SESSION_SERVICE.create_session(app_name=APP_NAME, user_id=user_id, session_id=session_id))
+    session_id = session_id_from(request)
+    ensure_session(user_id, session_id)
     runner = Runner(agent=TRAVEL_AGENT, app_name=APP_NAME, session_service=SESSION_SERVICE)
     message = types.Content(role="user", parts=[types.Part(text=input_text(request))])
     final_text = ""
@@ -56,6 +59,20 @@ def run_agent(request: dict) -> tuple[str, dict | None]:
 def request_id_from(request: dict) -> str:
     run_options = request.get("runOptions") or {}
     return run_options.get("requestID") or run_options.get("requestId") or str(uuid.uuid4())
+
+
+def session_id_from(request: dict) -> str:
+    session = request.get("session") or {}
+    return session.get("sessionId") or request_id_from(request)
+
+
+def ensure_session(user_id: str, session_id: str) -> None:
+    key = (user_id, session_id)
+    with SESSION_LOCK:
+        if key in KNOWN_SESSIONS:
+            return
+        asyncio.run(SESSION_SERVICE.create_session(app_name=APP_NAME, user_id=user_id, session_id=session_id))
+        KNOWN_SESSIONS.add(key)
 
 
 def input_text(request: dict) -> str:

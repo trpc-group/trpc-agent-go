@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	addr      = flag.String("addr", ":8081", "Listen address for the tRPC-Agent service")
+	addr      = flag.String("addr", "127.0.0.1:8081", "Listen address for the tRPC-Agent service")
 	basePath  = flag.String("base-path", "/trpc-agent/v1/apps", "Base path exposed by the tRPC-Agent service")
 	modelName = flag.String("model", "gpt-5.2", "Model identifier used by the travel agent")
 	streaming = flag.Bool("streaming", false, "Stream model responses from the travel agent")

@@ -29,6 +29,7 @@ def structure_payload() -> dict:
 def run_response(request: dict) -> tuple[int, dict]:
     request_id = request_id_from(request)
     invocation_id = request_id
+    started_at = now()
     try:
         output, usage = run_agent(request)
     except Exception as exc:
@@ -36,12 +37,12 @@ def run_response(request: dict) -> tuple[int, dict]:
         events = [error_event(request_id, invocation_id, message), completion_event(request_id, invocation_id, message)]
         response = {"status": "failed", "events": events, "errorMessage": message}
         if trace_enabled(request):
-            response["executionTrace"] = trace_payload(request, invocation_id, "", "failed", message)
+            response["executionTrace"] = trace_payload(request, invocation_id, "", "failed", message, started_at=started_at)
         return 200, response
     events = [final_event(request_id, invocation_id, output), completion_event(request_id, invocation_id)]
     response = {"status": "completed", "events": events}
     if trace_enabled(request):
-        response["executionTrace"] = trace_payload(request, invocation_id, output, "completed", usage=usage)
+        response["executionTrace"] = trace_payload(request, invocation_id, output, "completed", usage=usage, started_at=started_at)
     return 200, response
 
 
@@ -66,8 +67,10 @@ def trace_payload(
     status: str,
     error: str = "",
     usage: dict | None = None,
+    started_at: str = "",
 ) -> dict:
-    timestamp = now()
+    ended_at = now()
+    started_at = started_at or ended_at
     user_input = ((request.get("input") or {}).get("content") or "").strip()
     session_id = (request.get("session") or {}).get("sessionId") or ""
     step = {
@@ -76,8 +79,8 @@ def trace_payload(
         "AgentName": APP_NAME,
         "NodeID": APP_NAME,
         "NodeType": "agent",
-        "StartedAt": timestamp,
-        "EndedAt": timestamp,
+        "StartedAt": started_at,
+        "EndedAt": ended_at,
         "AppliedSurfaceIDs": [SURFACE_ID, MODEL_SURFACE_ID],
         "Input": {"Text": user_input},
         "Output": {"Text": output},
@@ -87,8 +90,8 @@ def trace_payload(
         "RootAgentName": APP_NAME,
         "RootInvocationID": invocation_id,
         "SessionID": session_id,
-        "StartedAt": timestamp,
-        "EndedAt": timestamp,
+        "StartedAt": started_at,
+        "EndedAt": ended_at,
         "Status": status,
         "Input": {"Text": user_input},
         "Output": {"Text": output},
