@@ -502,6 +502,7 @@ func applyUserInvocationInput(
 		// Never trust caller-supplied invocation-input metadata.
 		delete(initialState, userinputkey.PatchKey)
 		delete(initialState, userinputkey.Baseline)
+		delete(initialState, userinputkey.Message)
 	}
 	if invocation == nil || initialState == nil {
 		return
@@ -523,6 +524,13 @@ func applyUserInvocationInput(
 	// Content-only input deliberately keeps the legacy behavior.
 	var patch userinputkey.Patch
 	hasInvocationInput := false
+	if len(msg.ContentParts) > 0 {
+		// Store the typed current-invocation message for AgentNode default
+		// handoff. Durable history may later hold a different last user
+		// message. Executor node copies and child handoff deep-copy it.
+		initialState[userinputkey.Message] = msg
+		hasInvocationInput = true
+	}
 	if invocation.Session != nil && msg.Content == "" &&
 		len(msg.ContentParts) > 0 && userInput != "" {
 		fp := userinputkey.Fingerprint(userInput)

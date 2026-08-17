@@ -455,7 +455,14 @@ func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializab
 		StateKeyCurrentNodeID:  "nid",
 		StateKeySession:        "sid",
 		userinputkey.Baseline:  userinputkey.Fingerprint("raw-user"),
-		userinputkey.PatchKey:  userinputkey.Patch{Baseline: "x"},
+		userinputkey.Message: model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeImage,
+				Image: &model.Image{URL: "https://example.com/a.png"},
+			}},
+		},
+		userinputkey.PatchKey: userinputkey.Patch{Baseline: "x"},
 		// Unserializable value; json.Marshal should fail and be ignored.
 		"bad": func() {},
 	}
@@ -482,6 +489,7 @@ func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializab
 	require.NotContains(t, e.StateDelta, StateKeyCurrentNodeID)
 	require.NotContains(t, e.StateDelta, StateKeySession)
 	require.NotContains(t, e.StateDelta, userinputkey.Baseline)
+	require.NotContains(t, e.StateDelta, userinputkey.Message)
 	require.NotContains(t, e.StateDelta, userinputkey.PatchKey)
 	require.NotContains(t, e.StateDelta, "bad")
 

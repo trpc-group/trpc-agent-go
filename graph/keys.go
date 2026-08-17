@@ -128,6 +128,10 @@ func isInternalStateKey(key string) bool {
 		// child RuntimeState. Checkpoints still persist it via safeClone
 		// until the executor consumes it with user_input.
 		userinputkey.Baseline,
+		// Message is executor-owned. Exclude it from completion events and
+		// child RuntimeState. Checkpoints still persist it via safeClone
+		// until an LLM or AgentNode input stage consumes it.
+		userinputkey.Message,
 		// Patch is ephemeral resume metadata. It must not appear in
 		// completion events, child RuntimeState, or node updates.
 		userinputkey.PatchKey:

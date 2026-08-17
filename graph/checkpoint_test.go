@@ -1516,12 +1516,24 @@ func TestLLMRunner_ExecuteUserInputStage_BaselineRewriteWhenUserInputChanges(t *
 }
 
 func TestCreateCheckpoint_KeepsUserInputBaseline(t *testing.T) {
+	hello := "hello"
+	typed := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &hello},
+			{
+				Type:  model.ContentTypeImage,
+				Image: &model.Image{URL: "https://example.com/a.png"},
+			},
+		},
+	}
 	saver := &capturingSaver{}
 	cm := NewCheckpointManager(saver)
 	cfg := CreateCheckpointConfig("ln-baseline", "", "")
 	st := State{
 		StateKeyUserInput:     "hello",
 		userinputkey.Baseline: userinputkey.Fingerprint("hello"),
+		userinputkey.Message:  typed,
 		StateKeyExecContext:   &ExecutionContext{InvocationID: "x"},
 	}
 	ck, err := cm.CreateCheckpoint(
@@ -1532,6 +1544,9 @@ func TestCreateCheckpoint_KeepsUserInputBaseline(t *testing.T) {
 	vals := saver.lastPut.Checkpoint.ChannelValues
 	require.NotNil(t, vals)
 	require.Equal(t, userinputkey.Fingerprint("hello"), vals[userinputkey.Baseline])
+	got, ok := decodeInvocationUserMessage(vals[userinputkey.Message])
+	require.True(t, ok)
+	require.True(t, model.MessagesEqual(typed, got))
 	require.NotContains(t, vals, StateKeyExecContext)
 }
 

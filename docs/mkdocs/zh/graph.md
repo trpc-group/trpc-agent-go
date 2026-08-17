@@ -1308,6 +1308,11 @@ Agent 节点不会自动把“上游输出”作为“下游输入”。边只�
 在节点之间显式传递。
 
 默认情况下，Agent 节点会从 `state[graph.StateKeyUserInput]` 构造子代理的输入消息。
+当本轮调用是多模态（文本加图片/文件/音频/视频，或纯媒体）时，默认交接会保留
+当前类型化用户 `Message`，包括每一个 `ContentPart` 和消息元数据。前置节点如果
+有意改写 `user_input`，子代理会收到改写后的文本并保留非文本部分。普通
+Content-only 输入仍会变成 `model.NewUserMessage(user_input)`。显式的
+`WithAgentNodeInputMapper` / `StateKeyAgentInputMessage` 仍然优先。
 如果希望该节点读取其他一次性输入 key，可在该节点上配置
 `graph.WithUserInputKey("...")`。
 
@@ -1316,6 +1321,10 @@ Agent 节点不会自动把“上游输出”作为“下游输入”。边只�
 请在 DSL 层或前置回调先完成渲染，再写入对应的输入 key。
 
 但 `user_input`（或你配置的输入 key）是**一次性**输入：LLM/Agent 节点成功执行后会清空它以避免重复消费。
+类型化的当前调用消息与该 `user_input` 一次性输入同生共死：任何清空 `user_input`
+的节点也会同时回收它，包括 mapper 和 `StateKeyAgentInputMessage` 路径，因此后续
+的默认 Agent 节点不会重复发送本轮的附件。配置了 `WithUserInputKey` 的节点清空的
+是它自己的 key，因此类型化消息仍然可供后续的默认 Agent 节点使用。
 因此当你写出 `A (agent) → B (agent)` 这种链路时，很容易出现“ A 有输出，但 B 看起来没拿到输入”的现象。
 
 要让下游 Agent 消费上游结果，需要在下游 Agent 节点执行前，把目标字段写回该节点的
@@ -1411,7 +1420,9 @@ Agent 节点支持节点级 RunOption 与多个映射器，用于控制父图与
 - `WithAgentNodeInputMapper`：父 State → 子 Agent 的输入消息。返回的 state 中如果包含
   `graph.StateKeyAgentInputMessage`，且值是 `model.Message` 或 `*model.Message`，
   Agent 节点会用它作为子 Agent 的输入消息。这适合传递 `role=tool` 这类工具消息，
-  而不是普通 user 文本。
+  而不是普通 user 文本。mapper 未返回该 key 时，节点会依次使用显式的
+  `StateKeyAgentInputMessage`、当前调用的类型化用户消息，最后才回退到
+  `user_input`。
 - `WithSubgraphOutputMapper`：子执行结果 → 父 State 更新。对于 `AddAgentNode`，
   无论子 Agent 是 GraphAgent 还是 LLMAgent，这里都会通过 `SubgraphResult`
   接收子 Agent 的执行结果。
@@ -3822,6 +3833,8 @@ stateGraph.
 
 - Agent 节点
   - 通过 `Invocation.RunOptions.RuntimeState` 接收 Graph 的 `State`
+  - 默认子输入：本轮为多模态时使用当前调用的类型化用户 `Message`，否则使用
+    `graph.StateKeyUserInput`
   - 输出：设置 `graph.StateKeyLastResponse` 与 `graph.StateKeyNodeResponses[<agent_node_id>]`；执行成功后会清空 `graph.StateKeyUserInput`
 
 实践建议：
@@ -3978,6 +3991,28 @@ _ = cm.DeleteLineage(ctx, lineageID)
 从检查点恢复可以做“时间旅行”（回到任意 checkpoint 继续跑）。在 HITL 和调试场景里，你通常还需要：在某个 checkpoint 上把 state 改掉，然后从这个点继续跑。
 
 关键点：恢复时，执行器会先用 checkpoint 的 state 还原。默认情况下，`runtime_state` 不会覆盖 checkpoint 里已有的 key，只会补齐缺失且非内部的 key。若只是想在某次恢复时覆盖少量已有 key，可以使用 `graph.WithCallOptions(graph.WithCallResumeStateOverrideKeys(...))`；如果要真正修改 checkpoint 里的 state，仍然应该写一个新的 checkpoint。
+
+恢复轮次的输入同样遵循这条规则。在没有授权恢复覆盖 key 时，checkpoint 中的值优先，
+包括被中断轮次携带的附件；也就是说，走默认输入路径的 Agent 节点收到的是 checkpoint
+里的输入，而不是本次恢复调用传入的消息。如果要替换当前调用的输入，需要同时授权
+`graph.StateKeyUserInput` 和 `graph.StateKeyMessages`：
+
+```go
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("换用这张图片"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
+        graph.CfgKeyCheckpointID: checkpointID,
+    }),
+    graph.WithCallOptions(graph.WithCallResumeStateOverrideKeys(
+        graph.StateKeyUserInput,
+        graph.StateKeyMessages,
+    )),
+)
+```
+
+这两个 key 需要成对授权。只授权 `graph.StateKeyUserInput` 会替换文本但保留 checkpoint
+中的历史，此时恢复轮次会丢弃新的附件，而不是把它们与过期的对话历史混在一起。
 
 使用 `graph.TimeTravel`：
 

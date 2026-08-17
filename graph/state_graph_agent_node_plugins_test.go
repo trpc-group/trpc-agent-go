@@ -320,7 +320,7 @@ func TestAgentNode_RunOptions_MergeRuntimeStateIntoChildRuntime(t *testing.T) {
 
 func TestAgentNode_RunOptions_MergeRuntimeStateStandalone(t *testing.T) {
 	sub := &recordingAgent{name: "child"}
-	inv := buildAgentInvocationWithStateScopeAndInputKey(
+	inv, _ := buildAgentInvocationWithStateScopeAndInputKey(
 		context.Background(),
 		State{StateKeyUserInput: "parent-input"},
 		State{StateKeyUserInput: "runtime-input"},
@@ -824,7 +824,7 @@ func TestAgentNode_Stage2_SubInvocation_InheritsPluginsFromParent(t *testing.T) 
 	)
 	ctx := agent.NewInvocationContext(context.Background(), parentInv)
 
-	childInv := buildAgentInvocationWithStateScopeAndInputKey(
+	childInv, _ := buildAgentInvocationWithStateScopeAndInputKey(
 		ctx, state, State{}, sub, "agentNode", "", "",
 		nil,
 		nil,

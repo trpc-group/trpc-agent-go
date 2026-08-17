@@ -1236,8 +1236,20 @@ An agent node does not automatically "pipe" its output into the next agent
 node. Edges only control execution order; data flows through graph state.
 
 By default, an agent node builds the child invocation message from
-`state[graph.StateKeyUserInput]`. But `user_input` is **one‑shot**:
-LLM/Agent nodes clear it after a successful run to avoid reusing the same input.
+`state[graph.StateKeyUserInput]`. When the current invocation is multimodal
+(text plus image/file/audio/video, or pure media), that default handoff
+preserves the typed user `Message`, including every `ContentPart` and
+message metadata. An intentional pre-node rewrite of `user_input` updates
+the child text while keeping non-text parts. Ordinary Content-only input
+still becomes `model.NewUserMessage(user_input)`. Explicit
+`WithAgentNodeInputMapper` / `StateKeyAgentInputMessage` still take
+precedence. `user_input` is still cleared after a successful AgentNode.
+The typed current-invocation message lives exactly as long as that
+`user_input` one-shot: any node that clears `user_input` also retires it,
+including the mapper and `StateKeyAgentInputMessage` paths, so a later
+default agent node never re-sends this turn's attachments. A node with
+`WithUserInputKey` clears its own key instead, which leaves the typed
+message available to a later default agent node.
 This is why a chain like `A (agent) → B (agent)` often looks like "A produced
 output, but B got an empty input".
 
@@ -1339,7 +1351,9 @@ run options, inputs, and outputs:
   message. If the returned state contains `graph.StateKeyAgentInputMessage`
   with a `model.Message` or `*model.Message` value, the Agent node uses that
   message as the child Agent input. This is useful for passing `role=tool`
-  tool messages instead of plain user text.
+  tool messages instead of plain user text. When the mapper omits that key,
+  the node uses an explicit `StateKeyAgentInputMessage`, then the current
+  invocation's typed user message, then `user_input`.
 - `WithSubgraphOutputMapper`: project child results → parent state updates.
   For `AddAgentNode`, this receives child results through `SubgraphResult`
   whether the child Agent is a GraphAgent or an LLMAgent.
@@ -3928,6 +3942,8 @@ Nodes communicate only via the shared `State`. Each node returns a state delta t
 
 - Agent nodes
   - Receive graph `State` via `Invocation.RunOptions.RuntimeState`
+  - Default child input: typed current-invocation user `Message` when the
+    turn is multimodal; otherwise `graph.StateKeyUserInput`
   - Output: set `graph.StateKeyLastResponse` and `graph.StateKeyNodeResponses[<agent_node_id>]`; `graph.StateKeyUserInput` is cleared after execution
 
 Good practice:
@@ -4089,6 +4105,31 @@ it only fills missing non-internal keys. If you need to override a small set of
 existing keys for one resume, use
 `graph.WithCallOptions(graph.WithCallResumeStateOverrideKeys(...))`. If you need to
 change the checkpointed state itself, write a new checkpoint.
+
+The same rule governs the input of a resumed turn. Without authorized resume
+override keys, the checkpoint's values win, including the attachments carried
+by the interrupted turn. An agent node that resumes into the default input
+path therefore receives the checkpointed input, not the message passed to the
+resume call. To replace the current invocation's input on resume, authorize
+both `graph.StateKeyUserInput` and `graph.StateKeyMessages`:
+
+```go
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("use this image instead"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
+        graph.CfgKeyCheckpointID: checkpointID,
+    }),
+    graph.WithCallOptions(graph.WithCallResumeStateOverrideKeys(
+        graph.StateKeyUserInput,
+        graph.StateKeyMessages,
+    )),
+)
+```
+
+Authorize both keys together. Authorizing only `graph.StateKeyUserInput`
+replaces the text but keeps the checkpointed history, so the resumed turn
+drops the new attachments instead of mixing them with a stale conversation.
 
 Use `graph.TimeTravel`:
 

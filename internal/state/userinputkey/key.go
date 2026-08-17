@@ -26,6 +26,20 @@ import (
 // is never exposed in completion events or child-agent RuntimeState.
 const Baseline = "__user_input_baseline_fingerprint__"
 
+// Message identifies the current invocation's typed user message.
+//
+// GraphAgent writes it when the invocation carries ContentParts.
+// AgentNode uses it for the default child handoff so multimodal parts and
+// message metadata survive the user_input text projection. Checkpoints
+// preserve it across interruptions that happen before a default
+// invocation-input stage consumes it. After a successful default
+// invocation-input stage the executor deletes it once default user_input
+// is actually cleared. Custom WithUserInputKey, input mappers, and
+// StateKeyAgentInputMessage do not consume it. It is never exposed in
+// completion events or child-agent RuntimeState, and it is not the
+// durable last history message.
+const Message = "__user_input_invocation_message__"
+
 // Fingerprint returns a stable, non-plaintext user-input fingerprint suitable
 // for checkpoints and telemetry snapshots.
 func Fingerprint(input string) string {

@@ -554,6 +554,13 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 	)
 	staleFP := userinputkey.Fingerprint("stale")
 	currentFP := userinputkey.Fingerprint("please summarize")
+	staleTyped := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			Type:  model.ContentTypeImage,
+			Image: &model.Image{URL: "https://example.com/stale.png"},
+		}},
+	}
 	imageMsg := model.Message{
 		Role: model.RoleUser,
 		ContentParts: []model.ContentPart{{
@@ -590,6 +597,8 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 		wantBaseline    any
 		wantHasBaseline bool
 		wantLastMsg     *model.Message
+		wantMsg         *model.Message
+		wantHasMsg      bool
 	}{
 		{
 			name: "both keys install current baseline",
@@ -598,8 +607,9 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 				StateKeyMessages,
 			},
 			initial: State{
-				StateKeyUserInput: "please summarize",
-				StateKeyMessages:  []model.Message{fileMsg},
+				StateKeyUserInput:    "please summarize",
+				StateKeyMessages:     []model.Message{fileMsg},
+				userinputkey.Message: fileMsg,
 				userinputkey.PatchKey: userinputkey.Patch{
 					Baseline: currentFP,
 				},
@@ -609,6 +619,8 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 			wantBaseline:    currentFP,
 			wantHasBaseline: true,
 			wantLastMsg:     &fileMsg,
+			wantMsg:         &fileMsg,
+			wantHasMsg:      true,
 		},
 		{
 			name: "both keys tombstone stale user_input",
@@ -617,7 +629,8 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 				StateKeyMessages,
 			},
 			initial: State{
-				StateKeyMessages: []model.Message{imageMsg},
+				StateKeyMessages:     []model.Message{imageMsg},
+				userinputkey.Message: imageMsg,
 				userinputkey.PatchKey: userinputkey.Patch{
 					ClearUserInput: true,
 				},
@@ -625,6 +638,8 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 			wantHasInput:    false,
 			wantHasBaseline: false,
 			wantLastMsg:     &imageMsg,
+			wantMsg:         &imageMsg,
+			wantHasMsg:      true,
 		},
 		{
 			name:         "no override keeps checkpoint values",
@@ -641,13 +656,16 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 			wantHasInput:    true,
 			wantBaseline:    staleFP,
 			wantHasBaseline: true,
+			wantMsg:         &staleTyped,
+			wantHasMsg:      true,
 		},
 		{
 			name:         "user_input only does not install current baseline",
 			overrideKeys: []string{StateKeyUserInput},
 			initial: State{
-				StateKeyUserInput: "please summarize",
-				StateKeyMessages:  []model.Message{fileMsg},
+				StateKeyUserInput:    "please summarize",
+				StateKeyMessages:     []model.Message{fileMsg},
+				userinputkey.Message: fileMsg,
 				userinputkey.PatchKey: userinputkey.Patch{
 					Baseline: currentFP,
 				},
@@ -660,8 +678,9 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 			name:         "messages only keeps restored baseline",
 			overrideKeys: []string{StateKeyMessages},
 			initial: State{
-				StateKeyUserInput: "please summarize",
-				StateKeyMessages:  []model.Message{fileMsg},
+				StateKeyUserInput:    "please summarize",
+				StateKeyMessages:     []model.Message{fileMsg},
+				userinputkey.Message: fileMsg,
 				userinputkey.PatchKey: userinputkey.Patch{
 					Baseline: currentFP,
 				},
@@ -671,12 +690,15 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 			wantBaseline:    staleFP,
 			wantHasBaseline: true,
 			wantLastMsg:     &fileMsg,
+			wantMsg:         &staleTyped,
+			wantHasMsg:      true,
 		},
 		{
 			name:         "user_input only applies tombstone without current baseline",
 			overrideKeys: []string{StateKeyUserInput},
 			initial: State{
-				StateKeyMessages: []model.Message{imageMsg},
+				StateKeyMessages:     []model.Message{imageMsg},
+				userinputkey.Message: imageMsg,
 				userinputkey.PatchKey: userinputkey.Patch{
 					Baseline:       currentFP,
 					ClearUserInput: true,
@@ -693,6 +715,7 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 			},
 			initial: State{
 				userinputkey.Baseline: currentFP,
+				userinputkey.Message:  fileMsg,
 				userinputkey.PatchKey: userinputkey.Patch{
 					Baseline:       currentFP,
 					ClearUserInput: true,
@@ -702,6 +725,8 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 			wantHasInput:    true,
 			wantBaseline:    staleFP,
 			wantHasBaseline: true,
+			wantMsg:         &staleTyped,
+			wantHasMsg:      true,
 		},
 	}
 
@@ -712,6 +737,7 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 				map[string]any{
 					StateKeyUserInput:     "stale",
 					userinputkey.Baseline: staleFP,
+					userinputkey.Message:  staleTyped,
 					StateKeyMessages: []model.Message{
 						model.NewUserMessage("stale"),
 					},
@@ -770,6 +796,11 @@ func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
 				require.NotEmpty(t, msgs)
 				require.True(t, model.MessagesEqual(msgs[len(msgs)-1], *tt.wantLastMsg))
 			}
+			gotMsg, hasMsg := decodeInvocationUserMessage(restored[userinputkey.Message])
+			require.Equal(t, tt.wantHasMsg, hasMsg)
+			if tt.wantHasMsg {
+				require.True(t, model.MessagesEqual(*tt.wantMsg, gotMsg))
+			}
 		})
 	}
 }
@@ -787,13 +818,22 @@ func TestExecutor_InitializeState_StripsInvocationInputPatch(t *testing.T) {
 	require.NoError(t, err)
 
 	fp := userinputkey.Fingerprint("hello")
+	typed := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			Type:  model.ContentTypeImage,
+			Image: &model.Image{URL: "https://example.com/a.png"},
+		}},
+	}
 	got := exec.initializeState(State{
 		StateKeyUserInput:     "hello",
 		userinputkey.Baseline: fp,
+		userinputkey.Message:  typed,
 		userinputkey.PatchKey: userinputkey.Patch{Baseline: fp},
 	})
 	require.Equal(t, "hello", got[StateKeyUserInput])
 	require.Equal(t, fp, got[userinputkey.Baseline])
+	require.Equal(t, typed, got[userinputkey.Message])
 	require.NotContains(t, got, userinputkey.PatchKey)
 }
 

@@ -31,6 +31,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -2091,6 +2092,14 @@ func TestGraphAgent_CreateInitialStateUserInputFromContentParts(t *testing.T) {
 			if tt.wantHasInput {
 				require.Equal(t, tt.wantUserInput, userInput)
 			}
+			_, isResuming := invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID]
+			wantTyped := len(tt.message.ContentParts) > 0 &&
+				!(isResuming && isPlainResumeInput(tt.message))
+			gotTyped, hasTyped := state[userinputkey.Message].(model.Message)
+			require.Equal(t, wantTyped, hasTyped)
+			if wantTyped {
+				require.True(t, model.MessagesEqual(tt.message, gotTyped))
+			}
 
 			messages, ok := graph.GetStateValue[[]model.Message](
 				state,
@@ -2230,6 +2239,9 @@ func TestGraphAgent_CreateInitialStateUserInputFromContentPartsWithSession(t *te
 	state := graphAgent.createInitialState(context.Background(), invocation)
 	require.Equal(t, "hello", state[graph.StateKeyUserInput])
 	require.Equal(t, userinputkey.Fingerprint("hello"), state[userinputkey.Baseline])
+	typed, ok := state[userinputkey.Message].(model.Message)
+	require.True(t, ok)
+	require.True(t, model.MessagesEqual(msg, typed))
 	patch, ok := state[userinputkey.PatchKey].(userinputkey.Patch)
 	require.True(t, ok)
 	require.Equal(t, userinputkey.Fingerprint("hello"), patch.Baseline)
@@ -2251,6 +2263,7 @@ func TestGraphAgent_CreateInitialStateUserInputFromContentPartsWithSession(t *te
 	contentState := graphAgent.createInitialState(context.Background(), contentInvocation)
 	require.Equal(t, "hello", contentState[graph.StateKeyUserInput])
 	require.NotContains(t, contentState, userinputkey.Baseline)
+	require.NotContains(t, contentState, userinputkey.Message)
 	contentPatch, ok := contentState[userinputkey.PatchKey].(userinputkey.Patch)
 	require.True(t, ok)
 	require.Empty(t, contentPatch.Baseline)
@@ -2293,6 +2306,10 @@ func TestGraphAgent_ApplyUserInvocationInputDoesNotAliasCallerMessages(t *testin
 	require.Equal(t, model.RoleUser, messages[1].Role)
 	require.Equal(t, msg.ContentParts, messages[1].ContentParts)
 	require.NotEqual(t, "injected", messages[1].Content)
+
+	typed, ok := state[userinputkey.Message].(model.Message)
+	require.True(t, ok)
+	require.True(t, model.MessagesEqual(msg, typed))
 }
 
 func TestGraphAgent_LLMNodePreservesContentParts(t *testing.T) {
@@ -2334,6 +2351,165 @@ func TestGraphAgent_LLMNodePreservesContentParts(t *testing.T) {
 	require.Equal(t, model.RoleUser, got.Role)
 	require.Empty(t, got.Content)
 	require.Equal(t, msg.ContentParts, got.ContentParts)
+}
+
+func TestGraphAgent_AgentNodePreservesContentParts(t *testing.T) {
+	hello := "hello"
+	imagePart := model.ContentPart{
+		Type:  model.ContentTypeImage,
+		Image: &model.Image{URL: "https://example.com/a.png"},
+	}
+	tests := []struct {
+		name    string
+		message model.Message
+	}{
+		{
+			name: "text and image",
+			message: model.Message{
+				Role:             model.RoleUser,
+				ReasoningContent: "keep-meta",
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &hello},
+					imagePart,
+				},
+			},
+		},
+		{
+			name: "pure image",
+			message: model.Message{
+				Role:         model.RoleUser,
+				ContentParts: []model.ContentPart{imagePart},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			capture := &requestCaptureGraphAgentModel{}
+			child := llmagent.New("child", llmagent.WithModel(capture))
+			g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+				AddAgentNode("child").
+				SetEntryPoint("child").
+				SetFinishPoint("child").
+				Compile()
+			require.NoError(t, err)
+			graphAgent, err := New("parent", g, WithSubAgents([]agent.Agent{child}))
+			require.NoError(t, err)
+
+			events, err := graphAgent.Run(
+				context.Background(),
+				agent.NewInvocation(
+					agent.WithInvocationID("inv-agent-parts"),
+					agent.WithInvocationMessage(tt.message),
+				),
+			)
+			require.NoError(t, err)
+			lastDurableUserMessage(t, events)
+
+			got := lastUserMessageFromRequest(t, capture.lastReq)
+			require.Equal(t, model.RoleUser, got.Role)
+			require.Empty(t, got.Content)
+			require.Equal(t, tt.message.ContentParts, got.ContentParts)
+			require.Equal(t, tt.message.ReasoningContent, got.ReasoningContent)
+		})
+	}
+}
+
+func TestGraphAgent_AgentNodePrepareRewritePreservesContentParts(t *testing.T) {
+	hello := "hello"
+	imagePart := model.ContentPart{
+		Type:  model.ContentTypeImage,
+		Image: &model.Image{URL: "https://example.com/a.png"},
+	}
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &hello},
+			imagePart,
+		},
+	}
+	var sawTypedBefore bool
+	capture := &requestCaptureGraphAgentModel{}
+	child := llmagent.New("child", llmagent.WithModel(capture))
+	g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddNode("prepare", func(_ context.Context, s graph.State) (any, error) {
+			_, sawTypedBefore = s[userinputkey.Message].(model.Message)
+			return graph.State{graph.StateKeyUserInput: "rewritten"}, nil
+		}).
+		AddAgentNode("child").
+		SetEntryPoint("prepare").
+		AddEdge("prepare", "child").
+		SetFinishPoint("child").
+		Compile()
+	require.NoError(t, err)
+	graphAgent, err := New("parent", g, WithSubAgents([]agent.Agent{child}))
+	require.NoError(t, err)
+
+	events, err := graphAgent.Run(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationID("inv-agent-rewrite"),
+			agent.WithInvocationMessage(msg),
+		),
+	)
+	require.NoError(t, err)
+	lastDurableUserMessage(t, events)
+
+	require.True(t, sawTypedBefore)
+	got := lastUserMessageFromRequest(t, capture.lastReq)
+	require.Equal(t, model.RoleUser, got.Role)
+	require.Empty(t, got.Content)
+	require.Len(t, got.ContentParts, 2)
+	require.Equal(t, model.ContentTypeText, got.ContentParts[0].Type)
+	require.NotNil(t, got.ContentParts[0].Text)
+	require.Equal(t, "rewritten", *got.ContentParts[0].Text)
+	require.Equal(t, imagePart, got.ContentParts[1])
+}
+
+func TestGraphAgent_AgentNodeOrdinaryContentCompatibility(t *testing.T) {
+	capture := &requestCaptureGraphAgentModel{}
+	child := llmagent.New("child", llmagent.WithModel(capture))
+	g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddAgentNode("child").
+		SetEntryPoint("child").
+		SetFinishPoint("child").
+		Compile()
+	require.NoError(t, err)
+	graphAgent, err := New("parent", g, WithSubAgents([]agent.Agent{child}))
+	require.NoError(t, err)
+
+	events, err := graphAgent.Run(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationID("inv-agent-content"),
+			agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		),
+	)
+	require.NoError(t, err)
+	var completion *event.Event
+	for evt := range events {
+		if evt != nil && evt.Done && evt.Object == graph.ObjectTypeGraphExecution {
+			completion = evt
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotContains(t, completion.StateDelta, userinputkey.Message)
+
+	got := lastUserMessageFromRequest(t, capture.lastReq)
+	require.Equal(t, model.NewUserMessage("hello"), got)
+}
+
+func lastUserMessageFromRequest(t *testing.T, req *model.Request) model.Message {
+	t.Helper()
+	require.NotNil(t, req)
+	require.NotEmpty(t, req.Messages)
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == model.RoleUser {
+			return req.Messages[i]
+		}
+	}
+	t.Fatal("request missing user message")
+	return model.Message{}
 }
 
 func TestGraphAgent_SessionFileInputPreservesProcessorEnrichment(t *testing.T) {
@@ -2432,6 +2608,9 @@ func TestGraphAgent_CreateInitialStateInvocationInputPatch(t *testing.T) {
 		graphAgent.setupInvocation(invocation)
 		state := graphAgent.createInitialState(context.Background(), invocation)
 		require.Equal(t, userinputkey.Fingerprint(hello), state[userinputkey.Baseline])
+		typed, ok := state[userinputkey.Message].(model.Message)
+		require.True(t, ok)
+		require.True(t, model.MessagesEqual(msg, typed))
 		patch, ok := state[userinputkey.PatchKey].(userinputkey.Patch)
 		require.True(t, ok)
 		require.Equal(t, userinputkey.Fingerprint(hello), patch.Baseline)
@@ -2454,6 +2633,7 @@ func TestGraphAgent_CreateInitialStateInvocationInputPatch(t *testing.T) {
 		state := graphAgent.createInitialState(context.Background(), invocation)
 		require.NotContains(t, state, userinputkey.Baseline)
 		require.NotContains(t, state, userinputkey.PatchKey)
+		require.NotContains(t, state, userinputkey.Message)
 		_, hasInput := state[graph.StateKeyUserInput]
 		require.False(t, hasInput)
 	})
@@ -2471,6 +2651,7 @@ func TestGraphAgent_CreateInitialStateInvocationInputPatch(t *testing.T) {
 		require.Equal(t, "stale", state[graph.StateKeyUserInput])
 		require.NotContains(t, state, userinputkey.PatchKey)
 		require.NotContains(t, state, userinputkey.Baseline)
+		require.NotContains(t, state, userinputkey.Message)
 	})
 
 	t.Run("pure image writes tombstone", func(t *testing.T) {
@@ -2490,6 +2671,9 @@ func TestGraphAgent_CreateInitialStateInvocationInputPatch(t *testing.T) {
 		_, hasInput := state[graph.StateKeyUserInput]
 		require.False(t, hasInput)
 		require.NotContains(t, state, userinputkey.Baseline)
+		typed, ok := state[userinputkey.Message].(model.Message)
+		require.True(t, ok)
+		require.True(t, model.MessagesEqual(msg, typed))
 		patch, ok := state[userinputkey.PatchKey].(userinputkey.Patch)
 		require.True(t, ok)
 		require.Empty(t, patch.Baseline)
@@ -2789,6 +2973,7 @@ func lastDurableUserMessage(t *testing.T, events <-chan *event.Event) model.Mess
 	require.NotNil(t, completion)
 	require.NotContains(t, completion.StateDelta, userinputkey.Baseline)
 	require.NotContains(t, completion.StateDelta, userinputkey.PatchKey)
+	require.NotContains(t, completion.StateDelta, userinputkey.Message)
 	raw, ok := completion.StateDelta[graph.StateKeyMessages]
 	require.True(t, ok)
 	var msgs []model.Message
