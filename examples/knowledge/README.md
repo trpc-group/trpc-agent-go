@@ -64,3 +64,4 @@ Advanced features:
 | agentic-filter/ | LLM automatically generates metadata filter based on user query |
 | metadata-filter/ | Programmatic metadata filtering with AND/OR/NOT operations |
 | management/ | Dynamic source management: AddSource, RemoveSource, ReloadSource |
+| batch-embedding/ | Group documents into multi-input embedding requests with WithEmbeddingBatchSize |

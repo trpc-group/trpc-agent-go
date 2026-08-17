@@ -5527,7 +5527,55 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 		chatReq, _ := m.buildChatRequest(req)
 		require.NotNil(t, chatReq.MaxCompletionTokens)
 		assert.Equal(t, int64(16384), chatReq.MaxCompletionTokens.Value)
+		assert.False(t, chatReq.MaxTokens.Valid())
+
+		raw, err := chatReq.MarshalJSON()
+		require.NoError(t, err)
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(raw, &body))
+		assert.Equal(t, float64(16384), body["max_completion_tokens"])
+		assert.NotContains(t, body, "max_tokens")
 	})
+
+	for _, tt := range []struct {
+		name string
+		opts []Option
+	}{
+		{
+			name: "official base URL",
+			opts: []Option{WithBaseURL(defaultDeepSeekBaseURL)},
+		},
+		{
+			name: "custom proxy with explicit variant",
+			opts: []Option{
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+		},
+	} {
+		t.Run("DeepSeek uses max_tokens with "+tt.name, func(t *testing.T) {
+			m := New("deepseek-v4-flash", tt.opts...)
+			maxTokens := 2048
+			req := &model.Request{
+				Messages: []model.Message{model.NewUserMessage("hi")},
+				GenerationConfig: model.GenerationConfig{
+					MaxTokens: &maxTokens,
+				},
+			}
+
+			chatReq, _ := m.buildChatRequest(req)
+			require.True(t, chatReq.MaxTokens.Valid())
+			assert.Equal(t, int64(maxTokens), chatReq.MaxTokens.Value)
+			assert.False(t, chatReq.MaxCompletionTokens.Valid())
+
+			raw, err := chatReq.MarshalJSON()
+			require.NoError(t, err)
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(raw, &body))
+			assert.Equal(t, float64(maxTokens), body["max_tokens"])
+			assert.NotContains(t, body, "max_completion_tokens")
+		})
+	}
 
 	t.Run("empty messages", func(t *testing.T) {
 		req := &model.Request{
@@ -5537,6 +5585,8 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 
 		chatReq, _ := m.buildChatRequest(req)
 		assert.Empty(t, chatReq.Messages, "expected empty messages")
+		assert.False(t, chatReq.MaxTokens.Valid())
+		assert.False(t, chatReq.MaxCompletionTokens.Valid())
 	})
 
 	t.Run("with all generation config options", func(t *testing.T) {
