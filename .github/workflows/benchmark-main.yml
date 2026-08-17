@@ -48,6 +48,7 @@ jobs:
             echo '```'
           } >>"${GITHUB_STEP_SUMMARY}"
       - name: Capture core profiles
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           .github/scripts/run-go-benchmarks.sh \
