@@ -19,21 +19,28 @@ import (
 
 const stateKey = "trpc_agent.summary.cache_safe_fork_request"
 
+// invocationState keeps an immutable snapshot opaque to Invocation.View's
+// generic state cloner. Mutations must replace the holder instead of changing
+// the stored request in place.
+type invocationState struct {
+	request *model.Request
+}
+
 // Attach stores a snapshot of the parent model request on the invocation.
 func Attach(inv *agent.Invocation, req *model.Request) {
 	if inv == nil || req == nil {
 		return
 	}
-	inv.SetState(stateKey, cloneRequest(req))
+	inv.SetState(stateKey, &invocationState{request: cloneRequest(req)})
 }
 
 // Request returns a snapshot of the parent model request, if one exists.
 func Request(inv *agent.Invocation) (*model.Request, bool) {
-	req, ok := agent.GetStateValue[*model.Request](inv, stateKey)
-	if !ok || req == nil {
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.request == nil {
 		return nil, false
 	}
-	return cloneRequest(req), true
+	return cloneRequest(state.request), true
 }
 
 // Invalidate removes the current cache-safe request snapshot. Summarization
@@ -48,8 +55,8 @@ func Invalidate(inv *agent.Invocation) {
 // AppendResponse appends persisted response messages to the stored request
 // snapshot. It is a no-op when no snapshot is present.
 func AppendResponse(inv *agent.Invocation, rsp *model.Response) {
-	req, ok := agent.GetStateValue[*model.Request](inv, stateKey)
-	if !ok || req == nil || rsp == nil {
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.request == nil || rsp == nil {
 		return
 	}
 	messages := responseMessages(rsp)
@@ -57,9 +64,9 @@ func AppendResponse(inv *agent.Invocation, rsp *model.Response) {
 		return
 	}
 
-	next := cloneRequest(req)
+	next := cloneRequest(state.request)
 	next.Messages = append(next.Messages, cloneMessages(messages)...)
-	inv.SetState(stateKey, next)
+	inv.SetState(stateKey, &invocationState{request: next})
 }
 
 func responseMessages(rsp *model.Response) []model.Message {

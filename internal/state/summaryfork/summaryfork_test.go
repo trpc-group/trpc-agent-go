@@ -212,6 +212,27 @@ func TestAppendResponseExtendsSnapshot(t *testing.T) {
 	require.Equal(t, "result", got.Messages[3].Content)
 }
 
+func TestInvocationViewAppendIsIsolated(t *testing.T) {
+	invocation := agent.NewInvocation()
+	Attach(invocation, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+	})
+
+	view := invocation.View()
+	AppendResponse(view, &model.Response{Choices: []model.Choice{{
+		Message: model.NewAssistantMessage("answer"),
+	}}})
+
+	viewRequest, ok := Request(view)
+	require.True(t, ok)
+	require.Len(t, viewRequest.Messages, 2)
+
+	originalRequest, ok := Request(invocation)
+	require.True(t, ok)
+	require.Len(t, originalRequest.Messages, 1)
+	require.Equal(t, "question", originalRequest.Messages[0].Content)
+}
+
 func TestInvalidateClearsSnapshotUntilNextAttach(t *testing.T) {
 	inv := agent.NewInvocation()
 	req := &model.Request{

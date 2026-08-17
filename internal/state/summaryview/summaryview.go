@@ -26,6 +26,13 @@ const stateKey = "trpc_agent.summary.model_visible_view"
 
 type contextKey struct{}
 
+// invocationState keeps an immutable snapshot opaque to Invocation.View's
+// generic state cloner. Mutations must replace the holder instead of changing
+// the stored view in place.
+type invocationState struct {
+	view *View
+}
+
 // Boundary identifies the latest stored event represented by an item.
 type Boundary struct {
 	EventID   string
@@ -65,7 +72,7 @@ func AttachProjection(inv *agent.Invocation, view *View) {
 	if inv == nil || view == nil {
 		return
 	}
-	inv.SetState(stateKey, cloneView(view))
+	inv.SetState(stateKey, &invocationState{view: cloneView(view)})
 }
 
 // Clear removes the current projection and finalized view.
@@ -84,23 +91,24 @@ func Finalize(inv *agent.Invocation, req *model.Request, requestTokens int) {
 	if inv == nil || req == nil {
 		return
 	}
-	view, ok := agent.GetStateValue[*View](inv, stateKey)
-	if !ok || view == nil {
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.view == nil {
 		return
 	}
+	view := state.view
 	next := cloneView(view)
 	next.RequestTokens = requestTokens
 	next.Bound = bindItems(next, req.Messages)
-	inv.SetState(stateKey, next)
+	inv.SetState(stateKey, &invocationState{view: next})
 }
 
 // Snapshot returns an isolated copy of the latest model-visible view.
 func Snapshot(inv *agent.Invocation) (*View, bool) {
-	view, ok := agent.GetStateValue[*View](inv, stateKey)
-	if !ok || view == nil {
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.view == nil {
 		return nil, false
 	}
-	return cloneView(view), true
+	return cloneView(state.view), true
 }
 
 // ContextWithView attaches an isolated model-visible view to ctx.

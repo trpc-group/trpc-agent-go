@@ -93,6 +93,32 @@ func TestSnapshotIsIsolated(t *testing.T) {
 	)
 }
 
+func TestInvocationViewFinalizationIsIsolated(t *testing.T) {
+	invocation := agent.NewInvocation()
+	AttachProjection(invocation, &View{
+		ContentRequestLength: 1,
+		Items: []Item{{
+			Message:      model.NewUserMessage("visible"),
+			RequestIndex: 0,
+		}},
+	})
+
+	view := invocation.View()
+	Finalize(view, &model.Request{Messages: []model.Message{
+		model.NewUserMessage("visible"),
+	}}, 42)
+
+	viewSnapshot, ok := Snapshot(view)
+	require.True(t, ok)
+	require.True(t, viewSnapshot.Bound)
+	require.Equal(t, 42, viewSnapshot.RequestTokens)
+
+	originalSnapshot, ok := Snapshot(invocation)
+	require.True(t, ok)
+	require.False(t, originalSnapshot.Bound)
+	require.Zero(t, originalSnapshot.RequestTokens)
+}
+
 func TestContextAndInvocationLifecycle(t *testing.T) {
 	invocation := agent.NewInvocation()
 	_, ok := Snapshot(invocation)
