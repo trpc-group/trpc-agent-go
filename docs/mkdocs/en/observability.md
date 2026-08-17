@@ -291,7 +291,7 @@ Large payload attributes are wired for `chat`, `invoke_agent`, `workflow`, and `
 import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 // Langfuse: keep *.otel (including multimodal parts). Drop deprecated legacy messages.
-// Do not Drop .otel, legacy messages, and llm_request/llm_response together, or Input/Output becomes "N/A".
+// On chat/generation spans, do not Drop .otel, legacy messages, and llm_request/llm_response together, or Input/Output may be empty.
 clean, err := atrace.Start(ctx,
     atrace.WithSpanAttributePolicy(
         atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrInputMessages, atrace.Drop()),
@@ -333,7 +333,7 @@ atrace.WithAttributeRule(atrace.OperationWorkflow, atrace.AttributeKey("gen_ai.w
 
 Drop/Omit/Truncate may prevent some backends from reconstructing structured full text from attributes. Opt in based on **the keys your backend actually reads** and your memory budget.
 
-- The Langfuse exporter reads `*.otel` first, then legacy `gen_ai.*.messages`, then `trpc.go.agent.llm_request` / `llm_response`. If all of these are missing, Input/Output is `"N/A"`.
+- On chat/generation spans, the Langfuse exporter reads `*.otel` first, then legacy `gen_ai.*.messages`, then `trpc.go.agent.llm_request` / `llm_response`. InvokeAgent only falls back from `*.otel` to legacy messages. If none of the applicable sources are present, Input/Output may be empty.
 - Jaeger / generic OTLP usually display raw keys. The official GenAI field is `gen_ai.input.messages`; `*.otel` is a framework extension.
 - When fanning out to Langfuse **and** Jaeger, do not Drop a family that either backend still needs.
 

@@ -293,7 +293,7 @@ Agent Request
 import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 // Langfuse：保留 *.otel（含 multimodal parts）。可 Drop 废弃的 legacy messages。
-// 不要把 .otel、legacy messages 和 llm_request/llm_response 全部 Drop，否则 Input/Output 会变成 "N/A"。
+// chat/generation span 上不要把 .otel、legacy messages 和 llm_request/llm_response 全部 Drop，否则 Input/Output 可能为空。
 clean, err := atrace.Start(ctx,
     atrace.WithSpanAttributePolicy(
         atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrInputMessages, atrace.Drop()),
@@ -335,7 +335,7 @@ atrace.WithAttributeRule(atrace.OperationWorkflow, atrace.AttributeKey("gen_ai.w
 
 启用 Drop/Omit/Truncate 后，部分监控后端可能无法从 attribute 还原结构化全文；请按**当前后端实际读取的 key** 与内存预算 opt-in 评估。
 
-- Langfuse exporter 读取顺序：`*.otel` → legacy `gen_ai.*.messages` → `trpc.go.agent.llm_request` / `llm_response`。缺这三类时 Input/Output 为 `"N/A"`。
+- chat/generation span 上，Langfuse exporter 读取顺序：`*.otel` → legacy `gen_ai.*.messages` → `trpc.go.agent.llm_request` / `llm_response`。InvokeAgent 只从 `*.otel` 回退到 legacy messages。适用来源都缺失时 Input/Output 可能为空。
 - Jaeger / 通用 OTLP 通常展示原始 key。官方 GenAI 字段是 `gen_ai.input.messages`；`*.otel` 是框架扩展。
 - 同时 fan-out 到 Langfuse 和 Jaeger 时，任何一端还要用的字段都不能 Drop。
 

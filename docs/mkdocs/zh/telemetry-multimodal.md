@@ -54,7 +54,7 @@ tRPC-Agent-Go 会上报两组消息属性：
 Langfuse exporter 把消息折叠进 `langfuse.observation.input` / `output`，读取顺序：
 
 1. `gen_ai.input.messages.otel` / `gen_ai.output.messages.otel`（GenAI `role` + `parts`，原样上报，由 Langfuse 转换）
-2. 若 `.otel` 缺失：legacy `gen_ai.input.messages` / `gen_ai.output.messages`（output 会拆成 `{role, content, tool_calls?}`）
-3. 再缺失：`trpc.go.agent.llm_request` / `llm_response`
+2. 若 `.otel` 缺失：legacy `gen_ai.input.messages` / `gen_ai.output.messages`（原样上报；output 更接近对话形态，优先于 `llm_response`）
+3. 仅 chat/generation span：`trpc.go.agent.llm_request` / `llm_response`
 
 Jaeger 等通用 OTLP 后端仍读取原始 span attribute，Drop 策略与 Langfuse 不同，见 [可观测性](observability.md) 中的 Span Attribute 策略。

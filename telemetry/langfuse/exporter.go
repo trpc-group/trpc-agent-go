@@ -294,12 +294,9 @@ func preferredObservationOutput(otelMessages, legacyMessages, llmResponse *strin
 	if otelMessages != nil && *otelMessages != "" {
 		return otelObservationOutput(otelMessages)
 	}
-	if unwrapped := unwrapLegacyOutputMessages(legacyMessages); unwrapped != "" {
-		value := truncateObservationLLMResponse(unwrapped)
-		return &value
-	}
-	if unwrapped := unwrapLLMResponseOutput(llmResponse); unwrapped != "" {
-		value := truncateObservationLLMResponse(unwrapped)
+	// Prefer conversation-shaped legacy output over the raw llm_response dump.
+	if legacyMessages != nil && *legacyMessages != "" {
+		value := truncateObservationLLMResponse(*legacyMessages)
 		return &value
 	}
 	if llmResponse != nil && *llmResponse != "" {
@@ -323,112 +320,6 @@ func otelObservationOutput(otelMessages *string) *string {
 		return &value
 	}
 	return nil
-}
-
-// langfuseChatMessage is the OpenAI-style assistant message Langfuse's Python SDK
-// writes as generation output: {role, content, tool_calls?}.
-type langfuseChatMessage struct {
-	Role       model.Role       `json:"role,omitempty"`
-	Content    string           `json:"content,omitempty"`
-	Name       string           `json:"name,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	ToolCalls  []model.ToolCall `json:"tool_calls,omitempty"`
-}
-
-type legacyOutputChoice struct {
-	Index        int                         `json:"index"`
-	Message      observationTelemetryMessage `json:"message"`
-	Delta        observationTelemetryMessage `json:"delta"`
-	FinishReason *string                     `json:"finish_reason,omitempty"`
-}
-
-func unwrapLegacyOutputMessages(raw *string) string {
-	if raw == nil || *raw == "" {
-		return ""
-	}
-	var choices []legacyOutputChoice
-	if err := json.Unmarshal([]byte(*raw), &choices); err != nil || len(choices) == 0 {
-		return ""
-	}
-	msgs := make([]langfuseChatMessage, 0, len(choices))
-	for _, choice := range choices {
-		msgs = append(msgs, pickLegacyChoiceMessage(choice))
-	}
-	return marshalLangfuseChatMessages(msgs)
-}
-
-func unwrapLLMResponseOutput(raw *string) string {
-	if raw == nil || *raw == "" {
-		return ""
-	}
-	var rsp model.Response
-	if err := json.Unmarshal([]byte(*raw), &rsp); err != nil || len(rsp.Choices) == 0 {
-		return ""
-	}
-	msgs := make([]langfuseChatMessage, 0, len(rsp.Choices))
-	for _, choice := range rsp.Choices {
-		msgs = append(msgs, pickModelChoiceMessage(choice))
-	}
-	return marshalLangfuseChatMessages(msgs)
-}
-
-func pickLegacyChoiceMessage(choice legacyOutputChoice) langfuseChatMessage {
-	msg := langfuseChatMessageFromTelemetry(choice.Message)
-	if langfuseChatMessageHasReply(msg) {
-		return msg
-	}
-	return langfuseChatMessageFromTelemetry(choice.Delta)
-}
-
-func pickModelChoiceMessage(choice model.Choice) langfuseChatMessage {
-	msg := langfuseChatMessageFromModel(choice.Message)
-	if langfuseChatMessageHasReply(msg) {
-		return msg
-	}
-	return langfuseChatMessageFromModel(choice.Delta)
-}
-
-func langfuseChatMessageFromTelemetry(msg observationTelemetryMessage) langfuseChatMessage {
-	return langfuseChatMessage{
-		Role:       msg.Role,
-		Content:    msg.Content,
-		Name:       msg.Name,
-		ToolCallID: msg.ToolCallID,
-		ToolCalls:  msg.ToolCalls,
-	}
-}
-
-func langfuseChatMessageFromModel(msg model.Message) langfuseChatMessage {
-	return langfuseChatMessage{
-		Role:       msg.Role,
-		Content:    msg.Content,
-		Name:       msg.ToolName,
-		ToolCallID: msg.ToolID,
-		ToolCalls:  msg.ToolCalls,
-	}
-}
-
-func langfuseChatMessageHasReply(msg langfuseChatMessage) bool {
-	return msg.Role != "" ||
-		msg.Content != "" ||
-		msg.Name != "" ||
-		msg.ToolCallID != "" ||
-		len(msg.ToolCalls) > 0
-}
-
-func marshalLangfuseChatMessages(msgs []langfuseChatMessage) string {
-	if len(msgs) == 0 {
-		return ""
-	}
-	var payload any = msgs
-	if len(msgs) == 1 {
-		payload = msgs[0]
-	}
-	bts, err := json.Marshal(payload)
-	if err != nil {
-		return ""
-	}
-	return string(bts)
 }
 
 // wrapWithToolsIfPresent returns messagesJSON as-is, or wraps it with tool

@@ -54,7 +54,7 @@ Supported part types include:
 The Langfuse exporter folds messages into `langfuse.observation.input` / `output` in this order:
 
 1. `gen_ai.input.messages.otel` / `gen_ai.output.messages.otel` (GenAI `role` + `parts`, passed through for Langfuse to convert)
-2. If `.otel` is missing: legacy `gen_ai.input.messages` / `gen_ai.output.messages` (output is unwrapped to `{role, content, tool_calls?}`)
-3. Then `trpc.go.agent.llm_request` / `llm_response`
+2. If `.otel` is missing: legacy `gen_ai.input.messages` / `gen_ai.output.messages` (passed through as-is; output is conversation-shaped and preferred over `llm_response`)
+3. On chat/generation spans only: `trpc.go.agent.llm_request` / `llm_response`
 
 Jaeger and other generic OTLP backends still read raw span attributes, so their Drop policy differs from Langfuse. See Span Attribute Policy in [Observability](observability.md).

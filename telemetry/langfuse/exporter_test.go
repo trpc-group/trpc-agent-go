@@ -321,7 +321,7 @@ func TestTransformInvokeAgent(t *testing.T) {
 	}
 }
 
-func TestTransformInvokeAgent_UsesOnlyOTelMessages(t *testing.T) {
+func TestTransformInvokeAgent_PrefersOTelMessagesWithLegacyFallback(t *testing.T) {
 	legacyInput := `[{"role":"user","content":"legacy input"}]`
 	legacyOutput := `[{"index":0,"message":{"role":"assistant","content":"legacy output"},"finish_reason":"stop"}]`
 	otelInput := `[{"role":"user","parts":[{"type":"text","content":"otel input"}]}]`
@@ -364,7 +364,7 @@ func TestTransformInvokeAgent_UsesOnlyOTelMessages(t *testing.T) {
 		require.NotEqual(t, semconvtrace.KeyGenAIOutputMessages, attr.Key)
 	}
 	require.JSONEq(t, legacyInput, attrMap[observationInput])
-	require.JSONEq(t, `{"role":"assistant","content":"legacy output"}`, attrMap[observationOutput])
+	require.JSONEq(t, legacyOutput, attrMap[observationOutput])
 }
 
 func TestTransformCallLLM(t *testing.T) {
@@ -479,7 +479,7 @@ func TestTransformCallLLM(t *testing.T) {
 	}
 }
 
-func TestTransformCallLLM_UsesOnlyOTelMessages(t *testing.T) {
+func TestTransformCallLLM_PrefersOTelMessagesWithLegacyFallback(t *testing.T) {
 	legacyInput := `[{"role":"user","content":"legacy input"}]`
 	legacyOutput := `[{"index":0,"message":{"role":"assistant","content":"legacy output"},"finish_reason":"stop"}]`
 	otelInput := `[{"role":"user","parts":[{"type":"text","content":"otel input"}]}]`
@@ -525,7 +525,7 @@ func TestTransformCallLLM_UsesOnlyOTelMessages(t *testing.T) {
 		require.NotEqual(t, semconvtrace.KeyGenAIOutputMessages, attr.Key)
 	}
 	require.JSONEq(t, legacyInput, attrMap[observationInput])
-	require.JSONEq(t, `{"role":"assistant","content":"legacy output"}`, attrMap[observationOutput])
+	require.JSONEq(t, legacyOutput, attrMap[observationOutput])
 }
 
 func TestTransformCallLLM_PromptWithTools(t *testing.T) {
@@ -1693,11 +1693,9 @@ func TestBuildLLMObservationInput_And_WrapWithToolsBranches(t *testing.T) {
 	require.JSONEq(t, messages, out)
 }
 
-func TestBuildLLMObservationOutput_UnwrapsLegacyAndLLMResponse(t *testing.T) {
+func TestBuildLLMObservationOutput_PrefersLegacyOverLLMResponse(t *testing.T) {
 	otelOutput := `[{"role":"assistant","parts":[{"type":"text","content":"otel output"}],"finish_reason":"stop"}]`
 	legacyOutput := `[{"index":0,"message":{"role":"assistant","content":"legacy output"},"finish_reason":"stop"}]`
-	legacyDelta := `[{"index":0,"message":{},"delta":{"role":"assistant","content":"from delta"}}]`
-	legacyMulti := `[{"index":0,"message":{"role":"assistant","content":"one"}},{"index":1,"message":{"role":"assistant","content":"two"}}]`
 	llmResponse := `{"choices":[{"index":0,"message":{"role":"assistant","content":"from response"}}]}`
 
 	require.JSONEq(t, otelOutput, buildLLMObservationOutput(llmSpanCollected{
@@ -1706,20 +1704,12 @@ func TestBuildLLMObservationOutput_UnwrapsLegacyAndLLMResponse(t *testing.T) {
 		llmResponse:        strPtr(llmResponse),
 	}))
 
-	require.JSONEq(t, `{"role":"assistant","content":"legacy output"}`, buildLLMObservationOutput(llmSpanCollected{
+	require.JSONEq(t, legacyOutput, buildLLMObservationOutput(llmSpanCollected{
 		outputMessages: strPtr(legacyOutput),
 		llmResponse:    strPtr(llmResponse),
 	}))
 
-	require.JSONEq(t, `{"role":"assistant","content":"from delta"}`, buildLLMObservationOutput(llmSpanCollected{
-		outputMessages: strPtr(legacyDelta),
-	}))
-
-	require.JSONEq(t, `[{"role":"assistant","content":"one"},{"role":"assistant","content":"two"}]`, buildLLMObservationOutput(llmSpanCollected{
-		outputMessages: strPtr(legacyMulti),
-	}))
-
-	require.JSONEq(t, `{"role":"assistant","content":"from response"}`, buildLLMObservationOutput(llmSpanCollected{
+	require.JSONEq(t, llmResponse, buildLLMObservationOutput(llmSpanCollected{
 		llmResponse: strPtr(llmResponse),
 	}))
 
