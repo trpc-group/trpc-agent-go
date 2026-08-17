@@ -10854,3 +10854,41 @@ func TestImageToURLOrBase64(t *testing.T) {
 		})
 	}
 }
+
+func TestModel_ListModels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/models") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"object": "list",
+			"data": [
+				{"id": "gpt-4o-mini", "object": "model", "created": 1699200000, "owned_by": "openai"},
+				{"id": "claude-sonnet-4-6", "object": "model", "created": 1699200000, "owned_by": "anthropic"}
+			]
+		}`)
+	}))
+	defer server.Close()
+
+	m := New("gpt-4o-mini", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	ids, err := m.ListModels(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-4o-mini", "claude-sonnet-4-6"}, ids)
+}
+
+func TestModel_ListModels_FallsBackToConfiguredModel(t *testing.T) {
+	// Discovery unavailable (404) -> fall back to the configured model name.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	m := New("gpt-4o-mini", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	ids, err := m.ListModels(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-4o-mini"}, ids)
+}

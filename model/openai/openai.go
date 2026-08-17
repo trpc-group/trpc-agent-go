@@ -601,6 +601,32 @@ func (m *Model) Info() model.Info {
 	}
 }
 
+// ListModels returns the model IDs advertised by the configured
+// OpenAI-compatible endpoint via GET /v1/models. This is primarily useful for
+// gateways such as a LiteLLM proxy, where the served models are defined by the
+// proxy's own config rather than known ahead of time. When discovery fails or
+// returns nothing, the configured model name is returned as a single-element
+// fallback so callers always have something usable.
+func (m *Model) ListModels(ctx context.Context) ([]string, error) {
+	page, err := m.client.Models.List(ctx)
+	if err != nil {
+		if m.name != "" {
+			return []string{m.name}, nil
+		}
+		return nil, fmt.Errorf("openai: list models: %w", err)
+	}
+	ids := make([]string, 0, len(page.Data))
+	for _, md := range page.Data {
+		if md.ID != "" {
+			ids = append(ids, md.ID)
+		}
+	}
+	if len(ids) == 0 && m.name != "" {
+		return []string{m.name}, nil
+	}
+	return ids, nil
+}
+
 func (m *Model) runChatRequestCallback(
 	ctx context.Context,
 	chatRequest *openai.ChatCompletionNewParams,
