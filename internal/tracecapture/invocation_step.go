@@ -138,7 +138,7 @@ func SetStepNodeType(ctx context.Context, stepID string, nodeType string) {
 	if !ok || runtime.capture == nil || stepID == "" || nodeType == "" {
 		return
 	}
-	runtime.capture.setStepNodeType(stepID, nodeType)
+	runtime.capture.SetStepNodeType(stepID, nodeType)
 }
 
 // MergeInvocationStepAppliedSurfaceIDs merges applied surface IDs into the

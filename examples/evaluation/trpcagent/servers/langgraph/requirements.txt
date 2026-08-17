@@ -1,0 +1,4 @@
+langchain>=1.0.0
+langchain-openai>=1.0.0
+langgraph>=1.0.0
+typing-extensions>=4.12.0
