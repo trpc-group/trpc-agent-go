@@ -33,7 +33,8 @@ const (
 			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
-			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+			state_initialization_active TINYINT NULL DEFAULT NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 
 	sqlCreateStateInitializationLeasesTable = `
@@ -127,6 +128,11 @@ const (
 	sqlCreateSessionStatesExpiresIndex = `
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
+
+	// session_states: enforce one active row while coordinated initialization is enabled.
+	sqlCreateSessionStatesStateInitializationActiveIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, user_id, session_id, state_initialization_active)`
 
 	// state_initialization_leases: unique index on (coordination_key, user_id)
 	sqlCreateStateInitializationLeasesUniqueIndex = `
@@ -259,9 +265,11 @@ var expectedSchema = map[string]tableSchema{
 			{"updated_at", "timestamp", false},
 			{"expires_at", "timestamp", true},
 			{"deleted_at", "timestamp", true},
+			{stateInitializationActiveColumn, "tinyint", true},
 		},
 		indexes: []tableIndex{
 			{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "deleted_at"}, true},
+			{sqldb.TableNameSessionStates, stateInitializationActiveIndex, []string{"app_name", "user_id", "session_id", stateInitializationActiveColumn}, true},
 			{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
 		},
 	},
@@ -403,6 +411,7 @@ var tableDefs = []tableDefinition{
 var indexDefs = []indexDefinition{
 	// Unique indexes
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, sqlCreateSessionStatesUniqueIndex},
+	{sqldb.TableNameSessionStates, stateInitializationActiveIndex, sqlCreateSessionStatesStateInitializationActiveIndex},
 	{tableNameStateInitializationLeases, stateInitializationLeaseIndexUniq, sqlCreateStateInitializationLeasesUniqueIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, sqlCreateSessionSummariesUniqueIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, sqlCreateAppStatesUniqueIndex},
@@ -435,6 +444,7 @@ const (
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
 			deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+			state_initialization_active TINYINT NULL DEFAULT NULL,
 			PRIMARY KEY (id, user_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
 
@@ -547,6 +557,7 @@ var tdsqlTableDefs = []tableDefinition{
 var tdsqlIndexDefs = []indexDefinition{
 	// Unique indexes (same as MySQL, shardkey already in UNIQUE KEYs)
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, sqlCreateSessionStatesUniqueIndex},
+	{sqldb.TableNameSessionStates, stateInitializationActiveIndex, sqlCreateSessionStatesStateInitializationActiveIndex},
 	{tableNameStateInitializationLeases, stateInitializationLeaseIndexUniq, sqlCreateStateInitializationLeasesUniqueIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, tdsqlCreateSessionSummariesUniqueIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, sqlCreateAppStatesUniqueIndex},
@@ -599,7 +610,7 @@ func (s *Service) initDB(ctx context.Context) error {
 	}
 	if !s.opts.stateInitializationEnabled {
 		tables = withoutStateInitializationLeaseTable(tables)
-		indexes = withoutStateInitializationLeaseIndexes(indexes)
+		indexes = withoutStateInitializationIndexes(indexes)
 	}
 
 	// Group index definitions by their table so a freshly created table can be
@@ -700,6 +711,10 @@ func (s *Service) verifySchema(ctx context.Context) error {
 		if !ok {
 			continue
 		}
+		if tableName == sqldb.TableNameSessionStates &&
+			!s.opts.stateInitializationEnabled {
+			schema = withoutStateInitializationSessionRequirements(schema)
+		}
 		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableName)
 
 		// Check if table exists
@@ -724,7 +739,30 @@ func (s *Service) verifySchema(ctx context.Context) error {
 		}
 	}
 
+	if s.opts.stateInitializationEnabled {
+		if err := s.verifyStateInitializationActiveRows(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func withoutStateInitializationSessionRequirements(schema tableSchema) tableSchema {
+	filtered := tableSchema{
+		columns: make([]tableColumn, 0, len(schema.columns)),
+		indexes: make([]tableIndex, 0, len(schema.indexes)),
+	}
+	for _, column := range schema.columns {
+		if column.name != stateInitializationActiveColumn {
+			filtered.columns = append(filtered.columns, column)
+		}
+	}
+	for _, index := range schema.indexes {
+		if index.suffix != stateInitializationActiveIndex {
+			filtered.indexes = append(filtered.indexes, index)
+		}
+	}
+	return filtered
 }
 
 func withoutStateInitializationLeaseTable(
@@ -739,12 +777,14 @@ func withoutStateInitializationLeaseTable(
 	return filtered
 }
 
-func withoutStateInitializationLeaseIndexes(
+func withoutStateInitializationIndexes(
 	indexes []indexDefinition,
 ) []indexDefinition {
 	filtered := make([]indexDefinition, 0, len(indexes))
 	for _, index := range indexes {
-		if index.table != tableNameStateInitializationLeases {
+		if index.table != tableNameStateInitializationLeases &&
+			!(index.table == sqldb.TableNameSessionStates &&
+				index.suffix == stateInitializationActiveIndex) {
 			filtered = append(filtered, index)
 		}
 	}
@@ -766,8 +806,19 @@ func (s *Service) verifyStateInitializationSchema(ctx context.Context) error {
 			table: s.tableSessionStates,
 			columns: []tableColumn{
 				{"created_at", "timestamp", false},
+				{stateInitializationActiveColumn, "tinyint", true},
 			},
-			indexes: nil,
+			indexes: []tableIndex{
+				{
+					table:  sqldb.TableNameSessionStates,
+					suffix: stateInitializationActiveIndex,
+					columns: []string{
+						"app_name", "user_id", "session_id",
+						stateInitializationActiveColumn,
+					},
+					unique: true,
+				},
+			},
 		},
 		{
 			table:   s.tableStateInitializationLeases,
@@ -811,6 +862,31 @@ func (s *Service) verifyStateInitializationSchema(ctx context.Context) error {
 				)
 			}
 		}
+	}
+	return s.verifyStateInitializationActiveRows(ctx)
+}
+
+func (s *Service) verifyStateInitializationActiveRows(ctx context.Context) error {
+	var inconsistent int64
+	err := s.mysqlClient.QueryRow(
+		ctx,
+		[]any{&inconsistent},
+		fmt.Sprintf(`SELECT COUNT(*) FROM %s
+			WHERE (deleted_at IS NULL AND
+				(state_initialization_active IS NULL OR state_initialization_active <> 1))
+			OR (deleted_at IS NOT NULL AND state_initialization_active IS NOT NULL)`,
+			s.tableSessionStates,
+		),
+	)
+	if err != nil {
+		return fmt.Errorf("verify state initialization active rows: %w", err)
+	}
+	if inconsistent != 0 {
+		return fmt.Errorf(
+			"state initialization requires a consistent active-row marker; found %d inconsistent rows in %s",
+			inconsistent,
+			s.tableSessionStates,
+		)
 	}
 	return nil
 }

@@ -42,6 +42,9 @@ func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
 		sqldb.TableNameAppStates,
 		sqldb.TableNameUserStates,
 	})
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM " +
+		sqldb.BuildTableName(tablePrefix, sqldb.TableNameSessionStates))).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 }
 
 func mockVerifySchemaQueriesForTables(
@@ -434,6 +437,8 @@ func TestVerifySchema_Success(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
 		WithArgs(fullTableName).
 		WillReturnRows(idxRows)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM session_states")).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
 	err = s.verifySchema(ctx)
 	assert.NoError(t, err)
@@ -866,7 +871,18 @@ func TestVerifyStateInitializationSchemaWithSkipDBInit(t *testing.T) {
 		WithArgs(s.tableSessionStates).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION",
-		}).AddRow("created_at", "timestamp", "NO", 6))
+		}).
+			AddRow("created_at", "timestamp", "NO", 6).
+			AddRow(stateInitializationActiveColumn, "tinyint", "YES", nil))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
+		WithArgs(s.tableSessionStates).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE",
+		}).
+			AddRow("idx_session_states_state_init_active", "app_name", 0).
+			AddRow("idx_session_states_state_init_active", "user_id", 0).
+			AddRow("idx_session_states_state_init_active", "session_id", 0).
+			AddRow("idx_session_states_state_init_active", stateInitializationActiveColumn, 0))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
 		WithArgs(s.tableStateInitializationLeases).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
@@ -905,8 +921,44 @@ func TestVerifyStateInitializationSchemaWithSkipDBInit(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
 		WithArgs(s.tableStateInitializationLeases).
 		WillReturnRows(indexRows)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM session_states")).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
 	require.NoError(t, s.verifyStateInitializationSchema(context.Background()))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVerifyStateInitializationSchemaRequiresActiveMarker(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs(s.tableSessionStates).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
+		WithArgs(s.tableSessionStates).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION",
+		}).AddRow("created_at", "timestamp", "NO", 6))
+
+	err = s.verifyStateInitializationSchema(context.Background())
+	require.ErrorContains(t, err, stateInitializationActiveColumn)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVerifyStateInitializationActiveRowsRejectsInconsistentMarkers(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM session_states")).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+
+	err = s.verifyStateInitializationActiveRows(context.Background())
+	require.ErrorContains(t, err, "found 2 inconsistent rows")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

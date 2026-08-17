@@ -1006,8 +1006,10 @@ that share the same backing store.
 MySQL and TDSQL enable the capability by default. Deployments using
 `WithSkipDBInit(true)` must provision the `state_initialization_leases` table
 and indexes from the current schema and migrate `session_states.created_at` to
-`TIMESTAMP(6)`. Startup performs a read-only prerequisite check even when DDL
-initialization is skipped.
+`TIMESTAMP(6)`. It must also provision and backfill
+`session_states.state_initialization_active` and its unique index so each
+logical session has at most one active row. Startup performs a read-only
+prerequisite check even when DDL initialization is skipped.
 
 During a staged schema migration, configure
 `mysql.WithStateInitialization(false)`. Lenient mode then keeps the previous

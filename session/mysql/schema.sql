@@ -17,8 +17,10 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_states` (
     `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
     `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `state_initialization_active` TINYINT NULL DEFAULT NULL,
     PRIMARY KEY (`id`),
     UNIQUE KEY `idx_{{PREFIX}}session_states_unique_active` (`app_name`,`user_id`,`session_id`,`deleted_at`),
+    UNIQUE KEY `idx_{{PREFIX}}session_states_state_init_active` (`app_name`,`user_id`,`session_id`,`state_initialization_active`),
     KEY `idx_{{PREFIX}}session_states_expires` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -166,6 +168,8 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}user_states` (
 --    - Note: MySQL UNIQUE constraint doesn't prevent duplicate NULL values
 --    - Multiple records with deleted_at=NULL can coexist (NULL != NULL in MySQL)
 --    - Application code handles uniqueness for active records (deleted_at IS NULL)
+--    - Coordinated state initialization additionally uses state_initialization_active=1
+--      plus a UNIQUE index to enforce one active session row across service instances
 --    - Exception: session_summaries uses unique index WITHOUT deleted_at to prevent
 --      duplicate active records, since summary data is regenerable and uses upsert pattern
 --

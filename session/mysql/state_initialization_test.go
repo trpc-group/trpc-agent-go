@@ -1119,6 +1119,8 @@ func TestStateInitializationHelpers(t *testing.T) {
 	require.Contains(t, sqlCreateStateInitializationLeasesTable, "COLLATE ascii_bin")
 	require.Equal(t, "uniq", stateInitializationLeaseIndexUniq)
 	require.Equal(t, "exp", stateInitializationLeaseIndexExp)
+	require.Equal(t, "state_initialization_active", stateInitializationActiveColumn)
+	require.Equal(t, "state_init_active", stateInitializationActiveIndex)
 	require.True(t, strings.Contains(
 		sqlCreateStateInitializationLeasesTable,
 		"session_created_at TIMESTAMP(6) NOT NULL",

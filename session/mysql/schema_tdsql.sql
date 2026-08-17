@@ -34,8 +34,10 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_states` (
     `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
     `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `state_initialization_active` TINYINT NULL DEFAULT NULL,
     PRIMARY KEY (`id`, `user_id`),
     UNIQUE KEY `idx_{{PREFIX}}session_states_unique_active` (`app_name`,`user_id`,`session_id`,`deleted_at`),
+    UNIQUE KEY `idx_{{PREFIX}}session_states_state_init_active` (`app_name`,`user_id`,`session_id`,`state_initialization_active`),
     KEY `idx_{{PREFIX}}session_states_list` (`app_name`,`user_id`,`updated_at`),
     KEY `idx_{{PREFIX}}session_states_expires` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id;

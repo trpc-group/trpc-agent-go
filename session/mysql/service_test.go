@@ -1145,7 +1145,7 @@ func TestDeleteSession_SoftDelete(t *testing.T) {
 
 	// Mock: Transaction for soft delete
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?, state_initialization_active = NULL")).
 		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
@@ -2538,7 +2538,7 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).AddRow(expiredTime))
 
 	// Mock: Update (overwrite) expired session
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL")).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL, state_initialization_active = 1 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL")).
 		WithArgs(
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
@@ -2564,6 +2564,52 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, sess)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSession_ExistingExpiredWithStateInitializationDisabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(
+		t,
+		db,
+		WithSessionTTL(time.Hour),
+		WithStateInitialization(false),
+	)
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).
+			AddRow(time.Now().Add(-time.Hour)))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
+		WithArgs(key.AppName, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
+		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	created, err := s.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, created)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestCreateSession_ExistingNotExpired(t *testing.T) {
@@ -2890,7 +2936,7 @@ func TestCleanupExpiredData(t *testing.T) {
 			AddRow("app-1", "user-1", "session-1"))
 
 	// 2. Soft delete session states
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?, state_initialization_active = NULL")).
 		WithArgs(sqlmock.AnyArg(), "app-1", "user-1", "session-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -3384,7 +3430,9 @@ func TestNewService_WithSkipDBInitRejectsTimestampZeroGeneration(t *testing.T) {
 		WithArgs("session_states").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION",
-		}).AddRow("created_at", "timestamp", "NO", 0))
+		}).
+			AddRow("created_at", "timestamp", "NO", 0).
+			AddRow(stateInitializationActiveColumn, "tinyint", "YES", nil))
 
 	service, err := NewService(
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
@@ -3836,6 +3884,9 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 			WithArgs(fullTableName).
 			WillReturnRows(idxRows)
 	}
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM " +
+		regexp.QuoteMeta(sqldb.BuildTableName(tablePrefix, sqldb.TableNameSessionStates))).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 }
 
 // TestUpdateUserState_InvalidKey tests update user state with invalid key

@@ -211,8 +211,10 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_states` (
     `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
     `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `state_initialization_active` TINYINT NULL DEFAULT NULL,
     PRIMARY KEY (`id`),
     UNIQUE KEY `idx_{{PREFIX}}session_states_unique_active` (`app_name`,`user_id`,`session_id`,`deleted_at`),
+    UNIQUE KEY `idx_{{PREFIX}}session_states_state_init_active` (`app_name`,`user_id`,`session_id`,`state_initialization_active`),
     KEY `idx_{{PREFIX}}session_states_expires` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
@@ -320,6 +322,44 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}user_states` (
 
 ## 版本升级
 
+### 协调式初始化迁移
+
+协调式 state initialization 要求每个 `(app_name, user_id, session_id)` 最多只有
+一条活跃的 `session_states` 记录。已有 MySQL 或 TDSQL 部署应先在所有实例上部署新
+service 版本，并保持 `WithStateInitialization(false)`；然后暂停创建 session，迁移
+活跃行标记和唯一索引，最后再重新开启该能力。
+
+执行 DDL 前请先备份表，并处理所有重复活跃行：
+
+```sql
+-- Step 1：查找重复活跃 session；必须先处理所有返回的分组。
+SELECT app_name, user_id, session_id, COUNT(*) AS active_count
+FROM session_states
+WHERE deleted_at IS NULL
+GROUP BY app_name, user_id, session_id
+HAVING active_count > 1;
+
+-- Step 2：增加并回填可空标记；软删除行继续保持 NULL。
+ALTER TABLE session_states
+    ADD COLUMN state_initialization_active TINYINT NULL DEFAULT NULL;
+UPDATE session_states
+SET state_initialization_active = 1
+WHERE deleted_at IS NULL;
+
+-- Step 3：保证最多一条活跃行。TDSQL 的唯一索引继续包含 user_id，
+-- 因而约束保持在单分片内。
+CREATE UNIQUE INDEX idx_session_states_state_init_active
+ON session_states(
+    app_name, user_id, session_id, state_initialization_active
+);
+```
+
+配置表前缀时，表名和索引名都需要加上对应前缀。如果列或索引缺失、索引不是唯一
+索引，或者活跃行的标记不是 `1`，服务启动会 fail closed。所有实例完成 schema
+迁移后再重新开启 state initialization。服务会为活跃行写入标记 `1`，并在软删除时
+将其清空。如果无法暂停写入，请在创建唯一索引前立即重新执行重复检查和 marker
+`UPDATE`；只有这些步骤全部成功后才能重新开启该能力。
+
 ### 旧版本数据迁移
 
 如果您的数据库是使用旧版本创建的，需要执行以下迁移步骤。
@@ -422,4 +462,4 @@ SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique
 4. **软删除**：默认启用软删除，查询时自动过滤已删除记录
 5. **MySQL 版本**：需要 MySQL 5.6.5+ 以支持多个 TIMESTAMP 列的 CURRENT_TIMESTAMP
 6. **唯一约束**：MySQL 的 UNIQUE 约束不会阻止多个 NULL 值，应用层处理活跃记录的唯一性
-7. **协调初始化迁移**：开启 state initialization 时，`WithSkipDBInit(true)` 仍会校验 `session_states.created_at` 是否为 `TIMESTAMP(6)`，以及 lease 表和必要索引是否存在。`WithStateInitialization(false)` 仅用于临时迁移；它会停用 lease 清理，并让匿名 A2A 协调等消费者按能力不可用路径处理。
+7. **协调初始化迁移**：开启 state initialization 时，`WithSkipDBInit(true)` 仍会校验 `session_states.created_at` 是否为 `TIMESTAMP(6)`、活跃行标记与唯一索引是否一致，以及 lease 表和必要索引是否存在。`WithStateInitialization(false)` 仅用于临时迁移；它会停用 lease 清理，并让匿名 A2A 协调等消费者按能力不可用路径处理。

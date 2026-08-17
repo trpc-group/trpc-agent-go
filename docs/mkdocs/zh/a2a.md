@@ -970,8 +970,9 @@ subAgent, _ := a2aagent.New(
 Redis、MySQL 和 TDSQL session service 可以在共享同一后端时跨 service 实例协调。
 MySQL 和 TDSQL 默认开启该能力。使用 `WithSkipDBInit(true)` 的部署必须先按当前
 schema 创建 `state_initialization_leases` 表及其索引，并将
-`session_states.created_at` 迁移为 `TIMESTAMP(6)`。即使跳过 DDL 初始化，服务启动时
-仍会执行只读的前置条件校验。
+`session_states.created_at` 迁移为 `TIMESTAMP(6)`；同时还必须创建并回填
+`session_states.state_initialization_active` 及其唯一索引，确保每个逻辑 session
+最多只有一条活跃记录。即使跳过 DDL 初始化，服务启动时仍会执行只读的前置条件校验。
 
 分阶段迁移 schema 时，可配置 `mysql.WithStateInitialization(false)`。此时 lenient
 模式会保留原有的单 agent 回退路径，并且不会访问 lease 表；strict 模式仍会因为

@@ -325,22 +325,40 @@ func (s *Service) CreateSession(
 	// Insert or update session state
 	// If expired session exists, overwrite it; events/summaries will be filtered by created_at when reading
 	if sessionExists {
-		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(
-				`UPDATE %s SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL
+		updateSQL := fmt.Sprintf(
+			`UPDATE %s SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+			s.tableSessionStates,
+		)
+		if s.opts.stateInitializationEnabled {
+			updateSQL = fmt.Sprintf(
+				`UPDATE %s SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL,
+				state_initialization_active = 1
 				WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 				s.tableSessionStates,
-			),
+			)
+		}
+		_, err = s.mysqlClient.Exec(ctx,
+			updateSQL,
 			string(sessBytes), sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID,
 		)
 	} else {
-		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(
-				`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		insertSQL := fmt.Sprintf(
+			`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			s.tableSessionStates,
+		)
+		if s.opts.stateInitializationEnabled {
+			insertSQL = fmt.Sprintf(
+				`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at,
+				state_initialization_active)
+				VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
 				s.tableSessionStates,
-			),
+			)
+		}
+		_, err = s.mysqlClient.Exec(ctx,
+			insertSQL,
 			key.AppName, key.UserID, key.SessionID, string(sessBytes),
 			sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
 		)
@@ -1275,8 +1293,12 @@ func (s *Service) softDeleteSessions(
 	now time.Time,
 ) error {
 	// Soft delete session states
+	stateSetClause := "deleted_at = ?"
+	if s.opts.stateInitializationEnabled {
+		stateSetClause += ", state_initialization_active = NULL"
+	}
 	_, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionStates, stateWhereClause),
+		fmt.Sprintf(`UPDATE %s SET %s WHERE %s`, s.tableSessionStates, stateSetClause, stateWhereClause),
 		append([]any{now}, stateArgs...)...)
 	if err != nil {
 		return fmt.Errorf("soft delete sessions: %w", err)

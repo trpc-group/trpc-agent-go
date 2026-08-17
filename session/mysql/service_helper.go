@@ -531,9 +531,14 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 			now := time.Now()
 
 			// Soft delete session state
+			stateSetClause := "deleted_at = ?"
+			if s.opts.stateInitializationEnabled {
+				stateSetClause += ", state_initialization_active = NULL"
+			}
 			_, err := tx.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-				 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
+				fmt.Sprintf(`UPDATE %s SET %s
+				 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+					s.tableSessionStates, stateSetClause),
 				now, key.AppName, key.UserID, key.SessionID)
 			if err != nil {
 				return err

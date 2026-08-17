@@ -131,6 +131,75 @@ func TestLoadOrInitializeSessionStateMySQLIntegration(t *testing.T) {
 	ownerService, waiterService, rawDB, cleanup := newStateInitializationIntegrationServices(t)
 	defer cleanup()
 
+	t.Run("concurrent creation preserves one generation", func(t *testing.T) {
+		key := newStateInitializationIntegrationKey()
+		const creators = 8
+		startCreate := make(chan struct{})
+		createResults := make(chan error, creators)
+		for i := 0; i < creators; i++ {
+			service := ownerService
+			if i%2 != 0 {
+				service = waiterService
+			}
+			go func() {
+				<-startCreate
+				_, err := service.CreateSession(context.Background(), key, nil)
+				createResults <- err
+			}()
+		}
+		close(startCreate)
+		var created int
+		for i := 0; i < creators; i++ {
+			if err := <-createResults; err == nil {
+				created++
+			}
+		}
+		require.Equal(t, 1, created)
+
+		var activeRows int
+		err := rawDB.QueryRowContext(
+			context.Background(),
+			fmt.Sprintf(`SELECT COUNT(*) FROM %s
+				WHERE app_name = ? AND user_id = ? AND session_id = ?
+				AND deleted_at IS NULL AND state_initialization_active = 1`,
+				ownerService.tableSessionStates,
+			),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).Scan(&activeRows)
+		require.NoError(t, err)
+		require.Equal(t, 1, activeRows)
+
+		startInitialize := make(chan struct{})
+		initializeResults := make(chan stateInitializationIntegrationResult, 2)
+		var callbackCalls atomic.Int32
+		for _, service := range []*Service{ownerService, waiterService} {
+			go func() {
+				<-startInitialize
+				value, initialized, err := service.LoadOrInitializeSessionState(
+					context.Background(),
+					key,
+					"principal",
+					func(value []byte) bool { return strings.HasPrefix(string(value), "principal-") },
+					func(context.Context) ([]byte, error) {
+						call := callbackCalls.Add(1)
+						return []byte(fmt.Sprintf("principal-%d", call)), nil
+					},
+				)
+				initializeResults <- stateInitializationIntegrationResult{value, initialized, err}
+			}()
+		}
+		close(startInitialize)
+		first := <-initializeResults
+		second := <-initializeResults
+		require.NoError(t, first.err)
+		require.NoError(t, second.err)
+		require.NotEqual(t, first.didInitialize, second.didInitialize)
+		require.Equal(t, string(first.value), string(second.value))
+		require.Equal(t, int32(1), callbackCalls.Load())
+	})
+
 	t.Run("cross instance convergence and renewal", func(t *testing.T) {
 		key := newStateInitializationIntegrationKey()
 		_, err := ownerService.CreateSession(context.Background(), key, session.StateMap{

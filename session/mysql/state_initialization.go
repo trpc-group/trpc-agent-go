@@ -31,6 +31,8 @@ const (
 	tableNameStateInitializationLeases = "state_initialization_leases"
 	stateInitializationLeaseIndexUniq  = "uniq"
 	stateInitializationLeaseIndexExp   = "exp"
+	stateInitializationActiveColumn    = "state_initialization_active"
+	stateInitializationActiveIndex     = "state_init_active"
 
 	defaultStateInitializationLeaseTTL      = 30 * time.Second
 	defaultStateInitializationRenewInterval = 10 * time.Second

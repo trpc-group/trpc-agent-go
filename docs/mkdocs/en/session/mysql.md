@@ -194,8 +194,10 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_states` (
     `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
     `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `state_initialization_active` TINYINT NULL DEFAULT NULL,
     PRIMARY KEY (`id`),
     UNIQUE KEY `idx_{{PREFIX}}session_states_unique_active` (`app_name`,`user_id`,`session_id`,`deleted_at`),
+    UNIQUE KEY `idx_{{PREFIX}}session_states_state_init_active` (`app_name`,`user_id`,`session_id`,`state_initialization_active`),
     KEY `idx_{{PREFIX}}session_states_expires` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
@@ -299,6 +301,47 @@ See [session/mysql/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/
 
 ## Version Upgrade
 
+### Coordinated Initialization Migration
+
+Coordinated state initialization requires exactly one active `session_states`
+row for each `(app_name, user_id, session_id)`. On an existing MySQL or TDSQL
+deployment, first deploy the new service version everywhere with
+`WithStateInitialization(false)`. Then quiesce session creation, migrate the
+active-row marker and unique index, and re-enable the capability.
+
+Back up the table and resolve duplicate active rows before running the DDL:
+
+```sql
+-- Step 1: find duplicate active sessions. Resolve every returned group first.
+SELECT app_name, user_id, session_id, COUNT(*) AS active_count
+FROM session_states
+WHERE deleted_at IS NULL
+GROUP BY app_name, user_id, session_id
+HAVING active_count > 1;
+
+-- Step 2: add and backfill the nullable marker. Soft-deleted rows stay NULL.
+ALTER TABLE session_states
+    ADD COLUMN state_initialization_active TINYINT NULL DEFAULT NULL;
+UPDATE session_states
+SET state_initialization_active = 1
+WHERE deleted_at IS NULL;
+
+-- Step 3: enforce one active row. For TDSQL, user_id remains in the UNIQUE
+-- index so the constraint is shard-local.
+CREATE UNIQUE INDEX idx_session_states_state_init_active
+ON session_states(
+    app_name, user_id, session_id, state_initialization_active
+);
+```
+
+If a table prefix is configured, apply it to both the table and index names.
+Startup fails closed while the column/index is missing, the index is not unique,
+or an active row does not have marker value `1`. After all instances use the
+migrated schema, re-enable state initialization. The service writes marker `1`
+for active rows and clears it on soft deletion. If writes could not be quiesced,
+repeat the duplicate check and marker `UPDATE` immediately before creating the
+unique index; do not re-enable the capability until they succeed.
+
 ### Legacy Data Migration
 
 If your database was created with an older version, follow these migration steps.
@@ -395,4 +438,4 @@ SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique
 4. **Soft delete**: Enabled by default; queries automatically filter deleted records
 5. **MySQL version**: Requires MySQL 5.6.5+ for multiple TIMESTAMP columns with CURRENT_TIMESTAMP
 6. **Unique constraint**: MySQL's UNIQUE constraint does not prevent multiple NULL values; the application layer handles active record uniqueness
-7. **Coordinated initialization migration**: With state initialization enabled, `WithSkipDBInit(true)` still verifies that `session_states.created_at` uses `TIMESTAMP(6)` and that the lease table and required indexes exist. Use `WithStateInitialization(false)` only as a temporary migration opt-out; it disables lease cleanup and causes consumers such as anonymous A2A coordination to use their unavailable-capability behavior.
+7. **Coordinated initialization migration**: With state initialization enabled, `WithSkipDBInit(true)` still verifies that `session_states.created_at` uses `TIMESTAMP(6)`, that the active-row marker and unique index are consistent, and that the lease table and required indexes exist. Use `WithStateInitialization(false)` only as a temporary migration opt-out; it disables lease cleanup and causes consumers such as anonymous A2A coordination to use their unavailable-capability behavior.
