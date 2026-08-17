@@ -252,6 +252,70 @@ Metric file example below:
 
 See [examples/evaluation/claudecode](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claudecode) for a runnable example.
 
+## Remote Agent Evaluation
+
+Remote Agent evaluation is useful when the evaluation platform and the candidate Agent are deployed separately. The evaluation process reads EvalSets and Metrics, calls the candidate Agent, runs judge scoring, and stores evaluation results; the remote Agent service is only responsible for real inference for each input. For the remote service side, see [tRPC-Agent API Server](../trpcagent.md). For creating the remote Runner, see [Remote tRPC-Agent Runner](../runner.md#remote-trpc-agent-runner). On the evaluation side, `runner/trpcagent` wraps the remote service as a normal `runner.Runner`.
+
+See [examples/evaluation/trpcagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trpcagent) for a complete example. It provides a Go `server/trpcagent` reference service, plus ADK and LangGraph services that implement the compatible tRPC-Agent protocol. The evaluation client uses `runner/trpcagent` to call the candidate service.
+
+On the business side, expose the candidate Agent with `server/trpcagent`:
+
+```go
+import (
+	"net/http"
+
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	servertrpcagent "trpc.group/trpc-go/trpc-agent-go/server/trpcagent"
+)
+
+agentRunner := runner.NewRunner(appName, candidateAgent)
+defer agentRunner.Close()
+
+server, err := servertrpcagent.New(
+	servertrpcagent.WithAppName(appName),
+	servertrpcagent.WithAgent(candidateAgent),
+	servertrpcagent.WithRunner(agentRunner),
+)
+if err != nil {
+	return err
+}
+if err := http.ListenAndServe(":8081", server.Handler()); err != nil {
+	return err
+}
+```
+
+On the evaluation side, create a remote Runner and pass it to `AgentEvaluator` as the candidate Runner:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	trpcagentrunner "trpc.group/trpc-go/trpc-agent-go/runner/trpcagent"
+)
+
+candidateRunner, err := trpcagentrunner.New(
+	appName,
+	trpcagentrunner.WithTarget(candidateTarget),
+)
+if err != nil {
+	return err
+}
+defer candidateRunner.Close()
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	candidateRunner,
+	evaluation.WithEvalSetManager(evalSetManager),
+	evaluation.WithMetricManager(metricManager),
+	evaluation.WithEvalResultManager(evalResultManager),
+	evaluation.WithRegistry(registry.New()),
+	evaluation.WithJudgeRunner(judgeRunner),
+)
+if err != nil {
+	return err
+}
+```
+
 ## pass@k and pass^k
 
 When evaluation repeats runs with `NumRuns`, each run can be viewed as an independent Bernoulli trial. Two derived metrics `pass@k` and `pass^k` provide measures closer to capability and stability. Let `n` be total runs, `c` be the number of passes, and `k` be the number of attempts of interest.
