@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageoriginkey"
 	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
@@ -1139,6 +1140,15 @@ type RunOptions struct {
 	// (e.g., room ID, user context) without modifying the agent's base initial state.
 	RuntimeState map[string]any
 
+	// SkillLoads declares skills that the selected agent must load before its
+	// first model request. The declarations are validated and applied
+	// atomically against the invocation's effective skill repository. Equivalent
+	// declarations for one skill are coalesced; conflicting document sets are
+	// invalid.
+	//
+	// Use WithSkillLoads to avoid retaining caller-owned slices.
+	SkillLoads []skill.LoadRequest
+
 	// EventFilterKey overrides the invocation's event filter key used for
 	// scoping session events (event.FilterKey) included in LLM context.
 	//
@@ -1550,13 +1560,15 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	if inv == nil {
 		return nil
 	}
+	childRunOptions := inv.RunOptions
+	childRunOptions.SkillLoads = nil
 	newInv := &Invocation{
 		InvocationID:    uuid.NewString(),
 		ParentMetadata:  inv.ParentMetadata,
 		Session:         inv.Session,
 		SessionService:  inv.SessionService,
 		Message:         inv.Message,
-		RunOptions:      inv.RunOptions,
+		RunOptions:      childRunOptions,
 		MemoryService:   inv.MemoryService,
 		MemoryReader:    inv.MemoryReader,
 		ArtifactService: inv.ArtifactService,
@@ -1743,6 +1755,7 @@ func isCloneStateKey(key string) bool {
 		appenderStateKey,
 		liveSessionStateKey,
 		streamHubStateKey,
+		messageoriginkey.Key,
 		surfaceRootNodeIDStateKey,
 		teamMemberTraceRootStateKey:
 		return true
@@ -2202,6 +2215,24 @@ func (inv *Invocation) IncLLMCallCount() error {
 		)
 	}
 	return nil
+}
+
+// ToolIterationCount reports the current MaxToolIterations enforcement
+// counter.
+//
+// This is not a general tool-usage metric. The count remains zero while
+// MaxToolIterations is non-positive because IncToolIteration is then a no-op.
+// A tool-call response that exceeds the configured limit is included even
+// though its tools are not executed. Clone starts a new counter at zero,
+// while View preserves the current value.
+//
+// The counter follows Invocation's execution ownership and is not synchronized
+// for concurrent reads and writes.
+func (inv *Invocation) ToolIterationCount() int {
+	if inv == nil {
+		return 0
+	}
+	return inv.toolIterationCount
 }
 
 // IncToolIteration increments the tool iteration counter and reports whether

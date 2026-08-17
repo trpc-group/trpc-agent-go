@@ -850,6 +850,7 @@ func TestSearchMemories_NilUser(t *testing.T) {
 
 // mockExtractor is a mock implementation of extractor.MemoryExtractor.
 type mockExtractor struct {
+	mu            sync.RWMutex
 	extractCalled bool
 }
 
@@ -858,8 +859,16 @@ func (m *mockExtractor) Extract(
 	messages []model.Message,
 	existing []*memory.Entry,
 ) ([]*extractor.Operation, error) {
+	m.mu.Lock()
 	m.extractCalled = true
+	m.mu.Unlock()
 	return nil, nil
+}
+
+func (m *mockExtractor) wasExtractCalled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.extractCalled
 }
 
 func (m *mockExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bool {
@@ -963,9 +972,13 @@ func TestEnqueueAutoMemoryJob_WithExtractor(t *testing.T) {
 	err := service.EnqueueAutoMemoryJob(ctx, sess)
 	assert.NoError(t, err)
 
-	// Wait for async processing.
-	time.Sleep(50 * time.Millisecond)
-	assert.True(t, ext.extractCalled)
+	require.Eventually(
+		t,
+		ext.wasExtractCalled,
+		time.Second,
+		time.Millisecond,
+		"extractor was not called",
+	)
 }
 
 func TestEnqueueAutoMemoryJob_DisableOnExternalContext(t *testing.T) {
@@ -991,7 +1004,7 @@ func TestEnqueueAutoMemoryJob_DisableOnExternalContext(t *testing.T) {
 	err := service.EnqueueAutoMemoryJob(ctx, sess)
 	require.NoError(t, err)
 
-	assert.False(t, ext.extractCalled)
+	assert.False(t, ext.wasExtractCalled())
 }
 
 func TestClose(t *testing.T) {

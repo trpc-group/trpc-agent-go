@@ -181,23 +181,38 @@ summarizer := summary.NewSummarizer(
 
 这样摘要请求和父请求拥有相同的前缀，支持 prompt cache 的模型服务就能复用更多
 已缓存输入。如果当前没有父请求，例如手动或外部调用摘要接口，摘要器会自动
-回退到独立摘要请求。
+回退到独立摘要请求。开启 cache-safe forking 后，这条独立请求的 user message 会先
+放入 `WithPrompt(...)` 的渲染结果，再追加固定的 source-data boundary 和
+`WithCacheSafeForkPrompt(...)` 渲染出的指令。boundary 会明确要求模型把前面的对话
+当作待总结的源数据，而不是需要继续执行的任务。其他 standalone fallback（包括
+bounded 请求和 retry 请求）也使用相同结构。
 
 无论最终使用哪种请求，发送前都会按摘要模型的有效输入预算做准入检查：如果模型
 能够提供 provider-specific input budget，框架会取它与“模型 context window 的
 70%”这层保守上限中的较小值。fork 请求超预算时，框架只修改 clone，不会污染父
-请求：先移除摘要调用不会使用的 tool schemas，再按完整 source round 从旧到新
-缩减并保护最新一轮，必要时替换较大的 tool arguments/results payload。如果仍然
-放不下，再重建为 bounded standalone 请求。standalone fallback 会对
-`{conversation_text}` 和 `{previous_summary}` 两块 payload 做首尾保留截断，
-固定的 system prompt 和 user prompt 模板不会被截坏。
+请求：先移除摘要调用不会使用的 tool schemas，必要时再用明确的省略标记替换较大
+的 tool arguments/results payload，但不会删除 source conversation turn。如果仍然
+放不下，再重建为 bounded standalone 请求。完整渲染后的 fork prompt（包括自定义
+内容）在 fork 和 standalone 两种请求中都会占用输入预算。当预算能够容纳全部尚未
+覆盖的新对话时，standalone 路径会完整保留这些内容；使用
+`{previous_summary}` 时，只允许压缩这块上一版滚动摘要。固定的 system prompt、
+user prompt 模板、source boundary 和 fork prompt 都会保持完整。
+
+如果尚未覆盖的新对话无法一次放进 standalone 请求，摘要器可以先处理较旧的完整
+前缀，其余 events 保持未覆盖，留待后续摘要。前缀只能结束在稳定的 event 边界，
+不能拆开同一 response 的 chunks，也不能拆开仍未闭合的 tool call/result round。
+只有模型生成与 post-summary 处理都完成后，summary boundary 才会推进到所选前缀。
+如果连最小的完整前缀都放不下，请求会在调用模型前失败，原 boundary 保持不变。
+配置 `WithPreSummaryHook(...)` 时不会启用部分前缀 fallback，因为 hook 重写后的文本
+无法安全映射回 event boundary。前缀摘要始终使用 standalone 请求，不会复用
+cache-safe fork。
 
 预算适配和 fork → standalone 的选择发生在 `BeforeModel` callback 之前，因此
 callback 看到并修改的就是最终准备送模的请求。callback 返回后框架会再次计数；
 如果 callback 自己把请求扩到超预算，会明确失败，而不是再次换请求并静默丢失
 callback 的修改。如果 provider 仍返回 context-length error，或者非 custom 的
 模型调用返回空 summary，摘要器会用第一次输入预算的一半再做一次 bounded
-standalone 重试。
+standalone 重试；这次重试也可以按相同的边界规则选择更小的完整前缀。
 
 这里有一个重要的 branch 摘要行为：开启 `WithCacheSafeForking(true)` 后，非空
 branch 触发摘要时，可以用当前父请求 fork 来生成 branch 摘要；但同一轮 summary
@@ -216,9 +231,12 @@ Prompt 规则：
   `WithSystemPrompt(...)` 其中之一。
 - `WithSystemPrompt(...)` 配置独立摘要请求里可选的 system message，不能包含
   `{conversation_text}` 或 `{previous_summary}`，可以包含 `{max_summary_words}`。
-- `WithCacheSafeForkPrompt(...)` 只配置 fork 模式下追加的 user message，不能
-  包含 `{conversation_text}` 或 `{previous_summary}`，因为克隆出来的父请求里已经有
-  对话内容和已注入的摘要；它可以包含 `{max_summary_words}`。
+- `WithCacheSafeForkPrompt(...)` 配置开启 cache-safe forking 后使用的最终摘要指令。
+  在 fork 模式下，它会作为 user message 追加到克隆的父请求；在 standalone
+  fallback 中，它会追加到同一条 standalone user message 的固定 source-data
+  boundary 之后。它不能包含 `{conversation_text}` 或 `{previous_summary}`，因为
+  两种请求结构都已在它前面放入源对话；它可以包含 `{max_summary_words}`，完整的
+  渲染结果会计入摘要模型的输入预算。
 
 即使开启了 cache-safe forking，也要保持独立摘要 prompt 有效，因为 fallback
 路径仍然会使用它。自定义 fork prompt 时，建议明确要求模型“总结上面的对话，
@@ -576,7 +594,7 @@ summary.WithChecksAny(
 | `WithPrompt(prompt string)` | 自定义摘要提示词，必须包含 `{conversation_text}`，可选包含 `{previous_summary}` |
 | `WithSystemPrompt(prompt string)` | 为摘要额外添加独立的 system message 指令；不能包含 `{conversation_text}` 或 `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | 在有父请求可用时，启用 cache-safe 摘要请求 forking。默认关闭 |
-| `WithCacheSafeForkPrompt(prompt string)` | 自定义 cache-safe fork 模式下追加的压缩 user message。可包含 `{max_summary_words}`，但不能包含 `{conversation_text}` 或 `{previous_summary}` |
+| `WithCacheSafeForkPrompt(prompt string)` | 自定义 cache-safe fork 请求的最终指令；standalone fallback 会在 source-data boundary 后追加同一指令，其渲染结果会计入输入预算。可包含 `{max_summary_words}`，但不能包含 `{conversation_text}` 或 `{previous_summary}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | 自定义函数跳过最近事件 |
 
 ### Hook 选项
@@ -907,6 +925,11 @@ type PostSummaryHookContext struct {
 
 type PostSummaryHook func(in *PostSummaryHookContext) error
 ```
+
+Hook 会看到本次 summary source 对应的临时 boundary。Hook 成功，或其错误被配置为
+不中断流程时，摘要器会在 Hook 返回后恢复该 source 的精确 boundary，因此 Hook 对
+summary boundary state 的写入不会保留。Hook 以错误中断或发生 panic 时，则恢复本次
+摘要尝试前的 boundary。
 
 ### 使用示例
 

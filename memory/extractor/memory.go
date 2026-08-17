@@ -19,6 +19,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantmemory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -44,11 +46,12 @@ const (
 
 // memoryExtractor implements the MemoryExtractor interface.
 type memoryExtractor struct {
-	model                   model.Model
-	prompt                  string
-	checkers                []Checker
-	updatePolicy            UpdatePolicy
-	extractAssistantResults bool
+	model                      model.Model
+	prompt                     string
+	checkers                   []Checker
+	updatePolicy               UpdatePolicy
+	extractAssistantResults    bool
+	assistantEpisodeExtraction bool
 
 	enabledTools map[string]struct{}
 
@@ -69,17 +72,11 @@ func WithPrompt(prompt string) Option {
 	}
 }
 
-// WithUpdatePolicy sets the built-in policy used to reconcile extracted
-// operations with stored memories. Unknown values use UpdatePolicyReconcile.
-func WithUpdatePolicy(policy UpdatePolicy) Option {
-	return func(e *memoryExtractor) {
-		e.updatePolicy = normalizeUpdatePolicy(policy)
-	}
-}
-
 // WithAssistantResultExtraction controls extraction of concrete results
 // produced by the assistant. It is disabled by default to preserve the
-// existing extractor behavior.
+// existing extractor behavior. When both assistant extraction options are
+// configured, this narrower result mode takes precedence over episode mode so
+// a response is never extracted twice.
 func WithAssistantResultExtraction(enabled bool) Option {
 	return func(e *memoryExtractor) {
 		e.extractAssistantResults = enabled
@@ -122,7 +119,7 @@ func NewExtractor(m model.Model, opts ...Option) MemoryExtractor {
 	e := &memoryExtractor{
 		model:        m,
 		prompt:       defaultPrompt,
-		updatePolicy: UpdatePolicyReconcile,
+		updatePolicy: UpdatePolicyMergeSimilar,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -136,9 +133,7 @@ func (e *memoryExtractor) Extract(
 	messages []model.Message,
 	existing []*memory.Entry,
 ) ([]*Operation, error) {
-	primary, assistantResults, err := e.ExtractOperationStages(
-		ctx, messages, existing,
-	)
+	primary, assistantResults, err := e.ExtractOperationStages(ctx, messages, existing)
 	if err != nil {
 		return primary, err
 	}
@@ -154,19 +149,74 @@ func (e *memoryExtractor) ExtractOperationStages(
 	messages []model.Message,
 	existing []*memory.Entry,
 ) ([]*Operation, []*Operation, error) {
-	if e.model == nil {
+	effective := e.effectiveWorkerConfiguration(ctx)
+	if effective.model == nil {
 		return nil, nil, errors.New("no model configured for memory extraction")
 	}
 	if len(messages) == 0 {
 		return nil, nil, nil
 	}
+	if !effective.extractAssistantResults {
+		ops, err := effective.extractConfiguredOperations(ctx, messages, existing)
+		return ops, nil, err
+	}
+	return effective.extractAssistantResultStages(ctx, messages, existing)
+}
 
+func (e *memoryExtractor) effectiveWorkerConfiguration(
+	ctx context.Context,
+) *memoryExtractor {
+	effective := e
+	copyIfNeeded := func() *memoryExtractor {
+		if effective == e {
+			copy := *e
+			effective = &copy
+		}
+		return effective
+	}
+	if policy, managed := updatepolicy.WorkerConfiguration(ctx); managed {
+		configured := normalizeUpdatePolicy(UpdatePolicy(policy))
+		if configured != e.configuredUpdatePolicy() {
+			copyIfNeeded().updatePolicy = configured
+		}
+	}
+	if enabled, managed := assistantmemory.WorkerConfiguration(ctx); managed &&
+		enabled != e.assistantEpisodeExtraction {
+		copyIfNeeded().assistantEpisodeExtraction = enabled
+	}
+	return effective
+}
+
+func (e *memoryExtractor) extractConfiguredOperations(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*Operation, error) {
+	if e.assistantEpisodeExtraction {
+		return e.extractWithAssistantEpisodes(ctx, messages, existing)
+	}
+	return e.extractOperations(ctx, messages, existing)
+}
+
+func (e *memoryExtractor) extractAssistantResultStages(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*Operation, []*Operation, error) {
 	includeAssistantResults := e.shouldExtractAssistantResult(messages)
 	primaryRequest := &model.Request{
 		Messages: e.buildMessages(ctx, messages, existing),
-		Tools:    e.extractionTools(includeAssistantResults),
+		Tools:    e.extractionToolsForRequest(includeAssistantResults),
 	}
-	ctx, ops, err := e.generateOperations(ctx, primaryRequest)
+	var ops []*Operation
+	nextCtx, err := e.runExtractionRequest(ctx, primaryRequest, func(
+		callCtx context.Context,
+		call model.ToolCall,
+	) {
+		if op := e.parseToolCall(callCtx, call); op != nil {
+			ops = append(ops, op)
+		}
+	})
 	primary, assistantResults := splitExtractionOperations(ops)
 	qualifyOperationsWithGroundedTopics(
 		conversationSourceText(messages), primary,
@@ -178,13 +228,13 @@ func (e *memoryExtractor) ExtractOperationStages(
 		hasStructuredAssistantResultCandidate(messages) {
 		recoveryCtx, recovered, recoveryErr :=
 			e.recoverStructuredAssistantResults(
-				ctx, messages,
+				nextCtx, messages,
 			)
 		if recoveryErr != nil {
 			if recoveryCtx.Err() != nil {
 				return primary, nil, recoveryErr
 			}
-			log.WarnfContext(ctx,
+			log.WarnfContext(nextCtx,
 				"extractor: structured assistant result recovery failed: %v",
 				recoveryErr,
 			)
@@ -193,7 +243,7 @@ func (e *memoryExtractor) ExtractOperationStages(
 		}
 	}
 	assistantResults = filterGroundedAssistantResultOperations(
-		ctx, messages, assistantResults,
+		nextCtx, messages, assistantResults,
 	)
 	qualifyOperationsWithGroundedTopics(
 		assistantResultSourceText(messages), assistantResults,
@@ -218,10 +268,10 @@ func splitExtractionOperations(
 	return primary, assistantResults
 }
 
-func (e *memoryExtractor) extractionTools(
+func (e *memoryExtractor) extractionToolsForRequest(
 	includeAssistantResults bool,
 ) map[string]tool.Tool {
-	primary := filterTools(backgroundTools, e.effectiveEnabledTools())
+	primary := e.extractionTools()
 	if !includeAssistantResults {
 		return primary
 	}
@@ -229,60 +279,80 @@ func (e *memoryExtractor) extractionTools(
 	for name, declaration := range primary {
 		combined[name] = declaration
 	}
-	combined[assistantResultAddToolName] = assistantResultAddTool
+	if e.actionEnabled(memory.AddToolName) {
+		combined[assistantResultAddToolName] = assistantResultAddTool
+	}
 	return combined
 }
 
-func (e *memoryExtractor) generateOperations(
+func (e *memoryExtractor) extractOperations(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*Operation, error) {
+	req := &model.Request{
+		Messages: e.buildMessages(ctx, messages, existing),
+		Tools:    e.extractionTools(),
+	}
+	var ops []*Operation
+	_, err := e.runExtractionRequest(ctx, req, func(
+		callCtx context.Context,
+		call model.ToolCall,
+	) {
+		if op := e.parseToolCall(callCtx, call); op != nil {
+			ops = append(ops, op)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ops, nil
+}
+
+func (e *memoryExtractor) runExtractionRequest(
 	ctx context.Context,
 	req *model.Request,
-) (context.Context, []*Operation, error) {
+	handleCall func(context.Context, model.ToolCall),
+) (context.Context, error) {
 	ctx, rspChan, err := e.runBeforeModelCallbacks(ctx, req)
 	if err != nil {
-		return ctx, nil, err
+		return ctx, err
 	}
 	if rspChan == nil {
 		rspChan, err = e.model.GenerateContent(ctx, req)
 		if err != nil {
 			log.WarnfContext(ctx, "extractor: model call failed: %v", err)
-			return ctx, nil, fmt.Errorf("model call failed: %w", err)
+			return ctx, fmt.Errorf("model call failed: %w", err)
 		}
 	}
 	if rspChan == nil {
-		return ctx, nil, errors.New("model returned nil response channel")
+		return ctx, errors.New("model returned nil response channel")
 	}
 
-	// Parse tool calls into operations.
-	var ops []*Operation
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx, nil, fmt.Errorf("memory extraction canceled: %w", ctx.Err())
+			return ctx, fmt.Errorf("memory extraction canceled: %w", ctx.Err())
 		case rsp, ok := <-rspChan:
 			if !ok {
-				return ctx, ops, nil
+				return ctx, nil
 			}
 			ctx, rsp, err = e.runAfterModelCallbacks(ctx, req, rsp)
 			if err != nil {
-				return ctx, nil, err
+				return ctx, err
 			}
 			if rsp == nil {
 				continue
 			}
 			if rsp.Error != nil {
-				return ctx, nil, fmt.Errorf("model error: %s", rsp.Error.Message)
+				return ctx, fmt.Errorf("model error: %s", rsp.Error.Message)
 			}
 			if len(rsp.Choices) == 0 {
 				continue
 			}
-			// Choices are alternative candidates rather than cumulative
-			// tool-call batches, so only the selected primary choice
-			// should be converted into operations.
+			// Choices are alternatives, so only the primary choice is used.
 			for _, call := range rsp.Choices[0].Message.ToolCalls {
-				op := e.parseToolCall(ctx, call)
-				if op != nil {
-					ops = append(ops, op)
-				}
+				handleCall(ctx, call)
 			}
 		}
 	}
@@ -338,7 +408,7 @@ func (e *memoryExtractor) Metadata() map[string]any {
 	return map[string]any{
 		metadataKeyModelName:        modelName,
 		metadataKeyModelAvailable:   modelAvailable,
-		metadataKeyUpdatePolicy:     string(e.updatePolicy),
+		metadataKeyUpdatePolicy:     string(e.configuredUpdatePolicy()),
 		metadataKeyAssistantResults: e.extractAssistantResults,
 	}
 }
@@ -514,23 +584,13 @@ func (e *memoryExtractor) buildSystemPromptForRequest(
 ) string {
 	var sb strings.Builder
 
-	dateStr := refDate.UTC().Format(time.DateOnly)
-	renderedPrompt, err := prompt.Text{Template: e.prompt}.Render(prompt.RenderEnv{
-		Vars: prompt.Vars{
-			"current_date": dateStr,
-		},
-	})
-	if err != nil {
-		renderedPrompt = e.prompt
-	}
-	sb.WriteString(renderedPrompt)
-	if policyPrompt := updatePolicyPrompt(e.updatePolicy); policyPrompt != "" {
-		sb.WriteString(policyPrompt)
+	sb.WriteString(e.renderPrompt(refDate))
+	if policyBlock := e.updatePolicyPromptBlock(); policyBlock != "" {
+		sb.WriteString(policyBlock)
 	}
 	if includeAssistantResults {
 		sb.WriteString(assistantResultExtractionPrompt)
 	}
-
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
 	sb.WriteString(e.availableActionsBlockForRequest(includeAssistantResults))
@@ -549,6 +609,18 @@ func (e *memoryExtractor) buildSystemPromptForRequest(
 	}
 
 	return sb.String()
+}
+
+func (e *memoryExtractor) renderPrompt(refDate time.Time) string {
+	rendered, err := prompt.Text{Template: e.prompt}.Render(prompt.RenderEnv{
+		Vars: prompt.Vars{
+			"current_date": refDate.UTC().Format(time.DateOnly),
+		},
+	})
+	if err != nil {
+		return e.prompt
+	}
+	return rendered
 }
 
 // toolActionDescriptions maps background tool names to their
@@ -587,14 +659,21 @@ func (e *memoryExtractor) availableActionsBlockForRequest(
 	includeAssistantResults bool,
 ) string {
 	var sb strings.Builder
+	policyTools := e.updatePolicyEnabledTools()
 	for _, name := range toolActionOrder {
 		if !e.actionEnabled(name) {
 			continue
+		}
+		if policyTools != nil {
+			if _, ok := policyTools[name]; !ok {
+				continue
+			}
 		}
 		desc, ok := toolActionDescriptions[name]
 		if !ok {
 			continue
 		}
+		desc = e.updatePolicyToolDescription(name, desc)
 		fmt.Fprintf(&sb, "- %s: %s\n", name, desc)
 	}
 	if includeAssistantResults {
@@ -608,65 +687,12 @@ func (e *memoryExtractor) availableActionsBlockForRequest(
 	return sb.String()
 }
 
-func (e *memoryExtractor) effectiveEnabledTools() map[string]struct{} {
-	if e.updatePolicy == UpdatePolicyReconcile {
-		return e.enabledTools
-	}
-	enabled := make(map[string]struct{}, len(backgroundTools))
-	for name := range backgroundTools {
-		if !e.policyAllowsAction(name) {
-			continue
-		}
-		if e.enabledTools != nil {
-			if _, ok := e.enabledTools[name]; !ok {
-				continue
-			}
-		}
-		enabled[name] = struct{}{}
-	}
-	return enabled
-}
-
 func (e *memoryExtractor) actionEnabled(name string) bool {
-	if !e.policyAllowsAction(name) {
-		return false
-	}
 	if e.enabledTools == nil {
 		return true
 	}
 	_, ok := e.enabledTools[name]
 	return ok
-}
-
-func (e *memoryExtractor) policyAllowsAction(name string) bool {
-	switch e.updatePolicy {
-	case UpdatePolicyHistoryPreserving:
-		return name == memory.AddToolName
-	case UpdatePolicyAddOnly:
-		return name == memory.AddToolName
-	default:
-		return true
-	}
-}
-
-func normalizeUpdatePolicy(policy UpdatePolicy) UpdatePolicy {
-	switch policy {
-	case UpdatePolicyHistoryPreserving, UpdatePolicyAddOnly:
-		return policy
-	default:
-		return UpdatePolicyReconcile
-	}
-}
-
-func updatePolicyPrompt(policy UpdatePolicy) string {
-	switch normalizeUpdatePolicy(policy) {
-	case UpdatePolicyHistoryPreserving:
-		return historyPreservingPrompt
-	case UpdatePolicyAddOnly:
-		return addOnlyPrompt
-	default:
-		return ""
-	}
 }
 
 const assistantResultExtractionPrompt = `
@@ -710,33 +736,6 @@ result the user requested and could refer to later.
 </assistant_result_extraction>
 `
 
-const addOnlyPrompt = `
-
-<update_policy name="add-only">
-- You may only add genuinely new memories. Skip exact duplicates.
-- Never update, delete, or clear a stored memory. Changed or corrected states
-  must be added separately so earlier history remains intact.
-</update_policy>
-`
-
-const historyPreservingPrompt = `
-
-<update_policy name="history-preserving">
-These rules override any earlier instruction to update, delete, or clear a
-stored memory.
-- Express every new, corrected, or changed state supported by the current
-  conversation with memory_add. The memory worker will remove only safe
-  duplicates after extraction.
-- Preserve the source action or relationship and its arguments. For example,
-  "stay in Kyoto" must remain a stay relationship, not merely a trip to Kyoto.
-  Asking for information, recommendations, or options about an entity does not
-  by itself establish a plan, choice, preference, visit, or other relationship
-  with that entity.
-- Keep earlier states as history. Never update, delete, or clear a stored
-  memory during automatic extraction.
-</update_policy>
-`
-
 // parseToolCall parses a tool call and returns a memory operation.
 func (e *memoryExtractor) parseToolCall(ctx context.Context, call model.ToolCall) *Operation {
 	var args map[string]any
@@ -744,7 +743,11 @@ func (e *memoryExtractor) parseToolCall(ctx context.Context, call model.ToolCall
 		log.WarnfContext(ctx, "extractor: failed to parse tool args: %v", err)
 		return nil
 	}
-	return parseToolCallArgs(call.Function.Name, args)
+	op := parseToolCallArgs(call.Function.Name, args)
+	if op == nil {
+		log.WarnfContext(ctx, "extractor: invalid %s arguments", call.Function.Name)
+	}
+	return op
 }
 
 func (e *memoryExtractor) runBeforeModelCallbacks(

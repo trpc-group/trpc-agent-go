@@ -499,6 +499,10 @@ func TestGetSummariesList_Success(t *testing.T) {
 	sumBytes, _ := json.Marshal(sum)
 
 	mock.ExpectQuery("SELECT session_id, filter_key").
+		WithArgs(
+			sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), timeArg{},
+		).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{
 				"session_id", "filter_key", "summary",
@@ -639,7 +643,7 @@ func TestGetSummariesList_QueryError(t *testing.T) {
 	mock.ExpectQuery("SELECT session_id, filter_key").
 		WithArgs(
 			sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			sqlmock.AnyArg(), timeArg{},
 		).
 		WillReturnError(fmt.Errorf("db error"))
 

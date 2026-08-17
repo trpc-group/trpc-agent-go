@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	legacya2aagent "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	a2aagent "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent/v1"
@@ -848,7 +847,7 @@ func newA2AE2EAgent(
 		)
 	case a2aProtocolV1:
 		return a2aagent.New(
-			a2aagent.WithAgentCardURL(serverURL+protocol.AgentCardPath),
+			a2aagent.WithAgentCardURL(serverURL),
 			a2aagent.WithEnableStreaming(streaming),
 			a2aagent.WithTransferStateKey("*"),
 		)

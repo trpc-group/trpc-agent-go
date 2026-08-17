@@ -189,12 +189,12 @@ func TestExtractor_UpdatePolicyOptions(t *testing.T) {
 		in   UpdatePolicy
 		want UpdatePolicy
 	}{
-		{name: "default", want: UpdatePolicyReconcile},
-		{name: "reconcile", in: UpdatePolicyReconcile, want: UpdatePolicyReconcile},
-		{name: "history preserving", in: UpdatePolicyHistoryPreserving, want: UpdatePolicyHistoryPreserving},
-		{name: "add only", in: UpdatePolicyAddOnly, want: UpdatePolicyAddOnly},
-		{name: "removed conservative", in: UpdatePolicy("conservative"), want: UpdatePolicyReconcile},
-		{name: "unknown", in: UpdatePolicy("custom"), want: UpdatePolicyReconcile},
+		{name: "default", want: UpdatePolicyMergeSimilar},
+		{name: "merge similar", in: UpdatePolicyMergeSimilar, want: UpdatePolicyMergeSimilar},
+		{name: "preserve history", in: UpdatePolicyPreserveHistory, want: UpdatePolicyPreserveHistory},
+		{name: "append only", in: UpdatePolicyAppendOnly, want: UpdatePolicyAppendOnly},
+		{name: "removed conservative", in: UpdatePolicy("conservative"), want: UpdatePolicyMergeSimilar},
+		{name: "unknown", in: UpdatePolicy("custom"), want: UpdatePolicyMergeSimilar},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -209,21 +209,21 @@ func TestExtractor_UpdatePolicyOptions(t *testing.T) {
 		})
 	}
 
-	addOnly := NewExtractor(m,
-		WithUpdatePolicy(UpdatePolicyAddOnly)).(*memoryExtractor)
+	appendOnly := NewExtractor(m,
+		WithUpdatePolicy(UpdatePolicyAppendOnly)).(*memoryExtractor)
 	assert.Contains(t,
-		addOnly.buildSystemPrompt(time.Now(), nil),
-		`<update_policy name="add-only">`,
+		appendOnly.buildSystemPrompt(time.Now(), nil),
+		"Use only memory_add for new information",
 	)
-	historyPreserving := NewExtractor(m,
-		WithUpdatePolicy(UpdatePolicyHistoryPreserving)).(*memoryExtractor)
-	historyPreservingPrompt := historyPreserving.buildSystemPrompt(
+	preserveHistory := NewExtractor(m,
+		WithUpdatePolicy(UpdatePolicyPreserveHistory)).(*memoryExtractor)
+	preserveHistoryPrompt := preserveHistory.buildSystemPrompt(
 		time.Now(), nil,
 	)
-	assert.Contains(t, historyPreservingPrompt,
-		`<update_policy name="history-preserving">`)
-	assert.Contains(t, historyPreservingPrompt,
-		`"stay in Kyoto" must remain a stay relationship`)
+	assert.Contains(t, preserveHistoryPrompt,
+		"Preserve long-term history")
+	assert.Contains(t, preserveHistoryPrompt,
+		"additional non-conflicting detail")
 }
 
 func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
@@ -257,6 +257,26 @@ func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
 	assert.Contains(t, prompt, assistantResultAddToolName)
 	assert.Contains(t, assistantResultAddTool.Declaration().Description,
 		"assistant's direct reply")
+}
+
+func TestExtractor_AssistantResultTakesPrecedenceOverEpisodes(t *testing.T) {
+	m := newMockModelWithToolCalls(nil)
+	e := NewExtractor(
+		m,
+		WithAssistantEpisodeExtraction(),
+		WithAssistantResultExtraction(true),
+	)
+
+	_, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Recommend an option."),
+		model.NewAssistantMessage("Use Alpha."),
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, m.called)
+	require.NotNil(t, m.lastRequest)
+	assert.Contains(t, m.lastRequest.Tools, assistantResultAddToolName)
+	assert.NotContains(t, m.lastRequest.Tools, assistantEpisodeToolName)
 }
 
 func TestExtractor_DefaultPromptGroundsCurrentTurnReferences(t *testing.T) {
@@ -1336,24 +1356,24 @@ func TestExtractor_AvailableActionsBlock(t *testing.T) {
 		ext.SetEnabledTools(nil)
 	})
 
-	t.Run("add-only policy exposes only add", func(t *testing.T) {
-		addOnly := NewExtractor(m,
-			WithUpdatePolicy(UpdatePolicyAddOnly)).(*memoryExtractor)
-		block := addOnly.availableActionsBlock()
+	t.Run("append-only policy exposes only add", func(t *testing.T) {
+		appendOnly := NewExtractor(m,
+			WithUpdatePolicy(UpdatePolicyAppendOnly)).(*memoryExtractor)
+		block := appendOnly.availableActionsBlock()
 		assert.Contains(t, block, memory.AddToolName)
 		assert.NotContains(t, block, memory.UpdateToolName)
 		assert.NotContains(t, block, memory.DeleteToolName)
 		assert.NotContains(t, block, memory.ClearToolName)
 	})
 
-	t.Run("history-preserving policy exposes only add", func(t *testing.T) {
-		historyPreserving := NewExtractor(m,
-			WithUpdatePolicy(UpdatePolicyHistoryPreserving)).(*memoryExtractor)
-		block := historyPreserving.availableActionsBlock()
+	t.Run("preserve-history policy keeps explicit operations", func(t *testing.T) {
+		preserveHistory := NewExtractor(m,
+			WithUpdatePolicy(UpdatePolicyPreserveHistory)).(*memoryExtractor)
+		block := preserveHistory.availableActionsBlock()
 		assert.Contains(t, block, memory.AddToolName)
-		assert.NotContains(t, block, memory.UpdateToolName)
-		assert.NotContains(t, block, memory.DeleteToolName)
-		assert.NotContains(t, block, memory.ClearToolName)
+		assert.Contains(t, block, memory.UpdateToolName)
+		assert.Contains(t, block, memory.DeleteToolName)
+		assert.Contains(t, block, memory.ClearToolName)
 	})
 
 	t.Run("tool in order but not in descriptions", func(t *testing.T) {
@@ -1409,9 +1429,9 @@ func TestExtractor_Extract_FilteredTools(t *testing.T) {
 	}
 }
 
-func TestExtractor_Extract_AddOnlyTools(t *testing.T) {
+func TestExtractor_Extract_AppendOnlyTools(t *testing.T) {
 	m := newMockModelWithToolCalls(nil)
-	e := NewExtractor(m, WithUpdatePolicy(UpdatePolicyAddOnly))
+	e := NewExtractor(m, WithUpdatePolicy(UpdatePolicyAppendOnly))
 
 	_, err := e.Extract(context.Background(), []model.Message{
 		model.NewUserMessage("I love coffee."),
@@ -1422,20 +1442,20 @@ func TestExtractor_Extract_AddOnlyTools(t *testing.T) {
 	assert.Contains(t, m.lastRequest.Tools, memory.AddToolName)
 }
 
-func TestExtractor_Extract_HistoryPreservingTools(t *testing.T) {
+func TestExtractor_Extract_PreserveHistoryTools(t *testing.T) {
 	m := newMockModelWithToolCalls(nil)
-	e := NewExtractor(m, WithUpdatePolicy(UpdatePolicyHistoryPreserving))
+	e := NewExtractor(m, WithUpdatePolicy(UpdatePolicyPreserveHistory))
 
 	_, err := e.Extract(context.Background(), []model.Message{
 		model.NewUserMessage("I am planning to stay on Oahu."),
 	}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, m.lastRequest)
-	assert.Len(t, m.lastRequest.Tools, 1)
+	assert.Len(t, m.lastRequest.Tools, 4)
 	assert.Contains(t, m.lastRequest.Tools, memory.AddToolName)
-	assert.NotContains(t, m.lastRequest.Tools, memory.UpdateToolName)
-	assert.NotContains(t, m.lastRequest.Tools, memory.DeleteToolName)
-	assert.NotContains(t, m.lastRequest.Tools, memory.ClearToolName)
+	assert.Contains(t, m.lastRequest.Tools, memory.UpdateToolName)
+	assert.Contains(t, m.lastRequest.Tools, memory.DeleteToolName)
+	assert.Contains(t, m.lastRequest.Tools, memory.ClearToolName)
 }
 
 func TestExtractor_EnabledToolsConfigurer(t *testing.T) {

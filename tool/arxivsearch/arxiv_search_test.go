@@ -637,6 +637,57 @@ func TestAppendArticleContentKeepsShortDocuments(t *testing.T) {
 	assert.Equal(t, 11, got.ReturnedContentRunes)
 }
 
+func TestNormalizePDFText(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{
+			name: "unchanged",
+			text: "Hello World",
+			want: "Hello World",
+		},
+		{
+			name: "line whitespace",
+			text: "  def f():  \n\treturn 1\t  ",
+			want: "def f():\nreturn 1",
+		},
+		{
+			name: "line endings",
+			text: "  first  \r\n\tsecond \r third  ",
+			want: "first\nsecond\nthird",
+		},
+		{
+			name: "blank",
+			text: " \n\t ",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, normalizePDFText(tt.text))
+		})
+	}
+}
+
+func TestAppendArticleContentNormalizesBeforeRuneBudget(t *testing.T) {
+	var got article
+	appendArticleContent(&got, []*document.Document{
+		{Content: " \n\t "},
+		{Content: "  αβγ  \r\n\tδε  "},
+	}, 3)
+
+	require.Len(t, got.Content, 1)
+	assert.Equal(t, 2, got.Content[0].Page)
+	assert.Equal(t, "αβγ", got.Content[0].Text)
+	assert.True(t, got.Content[0].Truncated)
+	assert.True(t, got.ContentTruncated)
+	assert.Equal(t, 6, got.ContentRunes)
+	assert.Equal(t, 3, got.ReturnedContentRunes)
+}
+
 // TestNewTool tests the NewToolSet function
 func TestNewTool(t *testing.T) {
 	tool, err := NewToolSet()

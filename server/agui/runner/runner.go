@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/eventstream"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
 	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
@@ -170,6 +171,7 @@ type runInput struct {
 	terminalEmitted bool
 	runAgentInput   *adapter.RunAgentInput
 	done            chan struct{}
+	consumerDone    <-chan struct{}
 }
 
 type runAgentResult struct {
@@ -355,6 +357,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if runAgentInput == nil {
 		return nil, errors.New("run input cannot be nil")
 	}
+	consumerDone := eventstream.ConsumerDone(ctx)
 	runAgentInput, err := r.applyRunAgentInputHook(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("run input hook: %w", err)
@@ -386,7 +389,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		return nil, fmt.Errorf("resolve state: %w", err)
 	}
 	if runtimeState != nil {
-		runOption = append(runOption, agent.WithRuntimeState(runtimeState))
+		runOption = append(runOption, agent.MergeRuntimeState(runtimeState))
 	}
 	if len(messages.toolMessages) > 0 {
 		runOption = append(runOption, withToolResultMessageRewriter(messages.toolMessages))
@@ -431,6 +434,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		resume:        parseResumeInfo(runOption),
 		runAgentInput: runAgentInput,
 		done:          make(chan struct{}),
+		consumerDone:  consumerDone,
 	}
 	events := make(chan aguievents.Event)
 	ctx, cancel := r.newExecutionContext(ctx, r.timeout)
@@ -1182,6 +1186,23 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 	select {
 	case events <- event:
 		if input != nil && isTerminal {
+			input.terminalEmitted = true
+		}
+		return true
+	case <-input.consumerDone:
+		if ctx.Err() != nil {
+			log.ErrorfContext(ctx, "agui emit event: context done, threadID: %s, runID: %s, err: %v",
+				input.threadID, input.runID, ctx.Err())
+			return false
+		}
+		// A proxy may close its outer stream without draining this one. Once
+		// the transport has finished that outer stream, delivery is no longer
+		// guaranteed; avoid blocking run cleanup on the abandoned reader.
+		select {
+		case events <- event:
+		default:
+		}
+		if isTerminal {
 			input.terminalEmitted = true
 		}
 		return true

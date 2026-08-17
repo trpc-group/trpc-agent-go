@@ -22,7 +22,7 @@ type RunAgentInput struct {
 	ThreadID       string          // Conversation thread ID. The framework uses it as SessionID.
 	RunID          string          // Run ID, used to correlate run lifecycle events.
 	ParentRunID    *string         // Parent run ID. Optional.
-	State          any             // Arbitrary state that can be written into RuntimeState through StateResolver.
+	State          any             // Arbitrary state; object-shaped values are merged into RuntimeState by default.
 	Messages       []Message       // Message list used to pass the current user input or external tool results.
 	Tools          []Tool          // Tool definitions. Protocol field. Optional.
 	Context        []Context       // Context list. Protocol field. Optional.
@@ -315,9 +315,13 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 ## Custom `StateResolver`
 
-`StateResolver` converts `RunAgentInput.State` into RuntimeState for the current run. The returned map is passed to Runner as `agent.WithRuntimeState(...)` and only affects the current run.
+By default, object-shaped `RunAgentInput.State` is merged into RuntimeState for the current run. Existing RuntimeState keys are preserved, while AG-UI state wins when the same key is present in both maps. Non-object state is not projected automatically.
 
-Returning `nil` means RuntimeState is not set. Returning an empty map sets an empty RuntimeState.
+`StateResolver` customizes this conversion when the state must be filtered, renamed, or converted. Its returned map is merged into RuntimeState with `agent.MergeRuntimeState(...)` and only affects the current run. AG-UI state is supplied by the client; filter security-sensitive values instead of treating them as trusted server context.
+
+An LLMAgent can read a resolved value in its `Instruction` or `SystemPrompt` with a `{runtime:key}` placeholder. Use `{runtime:key?}` when the value is optional.
+
+Returning `nil` means no state is merged. Returning an empty map does not add any values.
 
 ```go
 import (

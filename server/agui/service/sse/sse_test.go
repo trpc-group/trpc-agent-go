@@ -75,6 +75,22 @@ func TestHandleRunnerError(t *testing.T) {
 	assert.Equal(t, 1, runner.calls)
 }
 
+func TestHandleRunnerNilEventChannel(t *testing.T) {
+	runner := &stubRunner{}
+	srv := &sse{runner: runner, writer: aguisse.NewSSEWriter()}
+	payload := `{"threadId":"thread","runId":"run","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/agui", strings.NewReader(payload))
+	rr := httptest.NewRecorder()
+
+	srv.handle(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
+	assert.Contains(t, rr.Body.String(), "runner returned nil event channel")
+	assert.Equal(t, 1, runner.calls)
+}
+
 func TestHandleRunnerDuplicateKeyReturnsConflict(t *testing.T) {
 	runner := &stubRunner{
 		runFn: func(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
@@ -140,7 +156,7 @@ func TestHandleEventsHeartbeatDisabledByDefault(t *testing.T) {
 	}()
 	srv := &sse{writer: aguisse.NewSSEWriter()}
 	rr := httptest.NewRecorder()
-	err := srv.handleEvents(context.Background(), rr, eventsCh, false)
+	err := srv.handleEvents(context.Background(), rr, eventsCh, false, nil)
 	assert.NoError(t, err)
 	assert.Empty(t, rr.Body.String())
 }
@@ -153,7 +169,7 @@ func TestHandleEventsHeartbeatWritesCommentFrame(t *testing.T) {
 	}()
 	srv := &sse{writer: aguisse.NewSSEWriter(), heartbeatInterval: 5 * time.Millisecond}
 	rr := httptest.NewRecorder()
-	err := srv.handleEvents(context.Background(), rr, eventsCh, false)
+	err := srv.handleEvents(context.Background(), rr, eventsCh, false, nil)
 	assert.NoError(t, err)
 	body := rr.Body.String()
 	assert.Contains(t, body, ":\n\n")
@@ -164,7 +180,7 @@ func TestHandleEventsHeartbeatWriteError(t *testing.T) {
 	eventsCh := make(chan aguievents.Event)
 	srv := &sse{writer: aguisse.NewSSEWriter(), heartbeatInterval: 5 * time.Millisecond}
 	errWriter := newErrorResponseWriter(errors.New("write failure"))
-	err := srv.handleEvents(context.Background(), errWriter, eventsCh, false)
+	err := srv.handleEvents(context.Background(), errWriter, eventsCh, false, nil)
 	assert.ErrorContains(t, err, "write failure")
 }
 
@@ -279,6 +295,39 @@ func TestHandleClientDisconnectDoesNotBlockRunner(t *testing.T) {
 			return false
 		}
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestHandleEventsSignalsConsumerDoneAfterDrain(t *testing.T) {
+	eventsCh := make(chan aguievents.Event)
+	consumerDone := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := &sse{writer: aguisse.NewSSEWriter()}
+	handleDone := make(chan error, 1)
+	go func() {
+		handleDone <- srv.handleEvents(ctx, httptest.NewRecorder(), eventsCh, true, func() {
+			close(consumerDone)
+		})
+	}()
+
+	cancel()
+	select {
+	case err := <-handleDone:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for event handler")
+	}
+	select {
+	case <-consumerDone:
+		assert.FailNow(t, "consumer signaled done before the event stream was drained")
+	default:
+	}
+
+	close(eventsCh)
+	select {
+	case <-consumerDone:
+	case <-time.After(time.Second):
+		assert.FailNow(t, "timeout waiting for consumer done signal")
+	}
 }
 
 func TestHandleMethodNotAllowed(t *testing.T) {

@@ -1491,6 +1491,63 @@ func TestRunIgnoresRequestCancelButRespectsBackendTimeout(t *testing.T) {
 	assert.True(t, hasRunErrorEvent(evts))
 }
 
+func TestWriteEventAfterConsumerDone(t *testing.T) {
+	t.Run("active run does not block", func(t *testing.T) {
+		consumerDone := make(chan struct{})
+		close(consumerDone)
+		input := &runInput{
+			threadID:     "thread",
+			runID:        "run",
+			consumerDone: consumerDone,
+		}
+		events := make(chan aguievents.Event)
+		event := aguievents.NewRunFinishedEvent("thread", "run")
+
+		written := (&runner{}).writeEvent(context.Background(), events, event, input)
+
+		assert.True(t, written)
+		assert.True(t, input.terminalEmitted)
+	})
+
+	t.Run("canceled run still stops", func(t *testing.T) {
+		consumerDone := make(chan struct{})
+		close(consumerDone)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		input := &runInput{
+			threadID:     "thread",
+			runID:        "run",
+			consumerDone: consumerDone,
+		}
+		events := make(chan aguievents.Event)
+		event := aguievents.NewRunFinishedEvent("thread", "run")
+
+		written := (&runner{}).writeEvent(ctx, events, event, input)
+
+		assert.False(t, written)
+		assert.False(t, input.terminalEmitted)
+	})
+
+	t.Run("expired deadline still stops", func(t *testing.T) {
+		consumerDone := make(chan struct{})
+		close(consumerDone)
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		input := &runInput{
+			threadID:     "thread",
+			runID:        "run",
+			consumerDone: consumerDone,
+		}
+		events := make(chan aguievents.Event)
+		event := aguievents.NewRunFinishedEvent("thread", "run")
+
+		written := (&runner{}).writeEvent(ctx, events, event, input)
+
+		assert.False(t, written)
+		assert.False(t, input.terminalEmitted)
+	})
+}
+
 func TestRunCancelsOnRequestCancelWhenEnabled(t *testing.T) {
 	ctxCh := make(chan context.Context, 1)
 	underlying := &fakeRunner{
@@ -3116,7 +3173,13 @@ func TestRunLastMessageContentArray(t *testing.T) {
 		Messages: []types.Message{{
 			Role: types.RoleUser,
 			Content: []types.InputContent{
-				{Type: types.InputContentTypeBinary, MimeType: "image/jpeg", URL: "https://example.com/resource/download?id=1"},
+				{
+					Type: types.InputContentTypeImage,
+					Source: &types.InputContentSource{
+						Type:  types.InputContentSourceTypeURL,
+						Value: "https://example.com/resource/download?id=1",
+					},
+				},
 				{Type: types.InputContentTypeText, Text: "图中有哪些信息?"},
 			},
 		}},
@@ -3518,7 +3581,7 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 	assert.Equal(t, 1, underlying.calls)
 }
 
-func TestRunStateResolverOverridesRuntimeState(t *testing.T) {
+func TestRunStateResolverMergesRuntimeState(t *testing.T) {
 	var runOpts agent.RunOptions
 	underlying := &fakeRunner{
 		run: func(ctx context.Context,
@@ -3562,8 +3625,37 @@ func TestRunStateResolverOverridesRuntimeState(t *testing.T) {
 	require.NotNil(t, runOpts.RuntimeState)
 	assert.Equal(t, "v1", runOpts.RuntimeState["k1"])
 	assert.Equal(t, "from-state", runOpts.RuntimeState[graph.CfgKeyLineageID])
-	_, ok := runOpts.RuntimeState["k2"]
-	assert.False(t, ok)
+	assert.Equal(t, "v2", runOpts.RuntimeState["k2"])
+}
+
+func TestRunDefaultStateResolverForwardsObjectState(t *testing.T) {
+	var runOpts agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			for _, opt := range opts {
+				opt(&runOpts)
+			}
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(underlying)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		State:    map[string]any{"document": "hello"},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	_ = collectEvents(t, eventsCh)
+
+	require.NotNil(t, runOpts.RuntimeState)
+	assert.Equal(t, "hello", runOpts.RuntimeState["document"])
 }
 
 func TestRunStateResolverError(t *testing.T) {

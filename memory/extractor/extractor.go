@@ -20,6 +20,12 @@ import (
 
 // MemoryExtractor defines the interface for extracting memories from
 // conversations.
+//
+// A transparent decorator may expose its wrapped extractor by implementing
+// UnwrapMemoryExtractor() MemoryExtractor. Auto memory uses that optional,
+// composable method to discover built-in extractor capabilities. Returning nil
+// or creating an unwrap cycle makes capability discovery fall back to the
+// default behavior.
 type MemoryExtractor interface {
 	// Extract analyzes the conversation and returns memory operations.
 	// It does not modify the memory store directly.
@@ -49,22 +55,6 @@ type MemoryExtractor interface {
 	Metadata() map[string]any
 }
 
-// UpdatePolicy controls how automatic extraction reconciles new information
-// with existing memories. Unknown values fall back to UpdatePolicyReconcile.
-type UpdatePolicy string
-
-const (
-	// UpdatePolicyReconcile preserves the existing automatic reconciliation
-	// behavior, including merging moderately similar memories.
-	UpdatePolicyReconcile UpdatePolicy = "reconcile"
-	// UpdatePolicyHistoryPreserving accepts only extracted additions and lets
-	// the memory worker reintroduce only lossless reconciliation updates.
-	UpdatePolicyHistoryPreserving UpdatePolicy = "history-preserving"
-	// UpdatePolicyAddOnly permits automatic extraction to add memories or skip
-	// duplicates, but never to update, delete, or clear stored memories.
-	UpdatePolicyAddOnly UpdatePolicy = "add-only"
-)
-
 // Operation represents a memory operation to be executed.
 type Operation struct {
 	// Type is the type of operation (add, update, delete).
@@ -83,8 +73,8 @@ type Operation struct {
 	Location     string      // Where the event took place.
 
 	// assistantResult is set only by the built-in extractor's private result
-	// tool. It lets auto memory apply a different persistence policy without
-	// adding a public operation type or extension point.
+	// tool. It lets auto memory apply stricter reconciliation without adding a
+	// public operation type or extension point.
 	assistantResult bool
 }
 

@@ -15,25 +15,20 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const (
-	extractorMetadataUpdatePolicy = "update_policy"
-
-	assistantResultPolicyName = "assistant-result-preserving"
-	resultOldCoverage         = 0.95
-	resultNewCoverage         = 0.70
-
-	changeMarkerEnglishPattern = `\b(?:now|currently|no longer|instead|` +
-		`chang(?:e|ed)|used to|decide(?:d)?|booked|` +
-		`cho(?:ose|se|sen)|select(?:ed)?|start(?:ed)?|stop(?:ped)?|` +
-		`cancel(?:ed|led)?|complete(?:d)?|finish(?:ed)?)\b`
-	changeMarkerCJKPattern = `(?:现在|目前|不再|改为|变成|而是|曾经|` +
-		`决定|预订|选择|开始|停止|取消|完成)`
+	preserveHistoryOldCoverage = 0.95
+	preserveHistoryNewCoverage = 0.70
+	maxPolicySearchQueryBytes  = 7 * 1024
+	searchQueryOmissionMarker  = "\n...\n"
 )
 
 var (
@@ -41,8 +36,12 @@ var (
 		`(?i)\b[0-9]+(?:[.:/-][0-9]+)*\b|(?:\bnot\b|\bno\b|\bnever\b|\bwithout\b|n't|不再|不是|没有|从未|未|无)`,
 	)
 	changeMarkerPattern = regexp.MustCompile(
-		`(?i)(?:` + changeMarkerEnglishPattern + `|` +
-			changeMarkerCJKPattern + `)`,
+		`(?i)(?:\bnow\b|\bcurrently\b|\bno longer\b|\binstead\b|` +
+			`\bchanged?\b|\bused to\b|\bdecided?\b|\bbooked\b|` +
+			`\bcho(?:ose|se|sen)\b|\bselected?\b|\bstarted?\b|` +
+			`\bstopp?ed\b|\bcancell?ed\b|\bcompleted?\b|\bfinished?\b|` +
+			`现在|目前|不再|改为|变成|而是|曾经|决定|预订|选择|` +
+			`开始|停止|取消|完成)`,
 	)
 	negationPattern = regexp.MustCompile(
 		`(?i)(?:\bnot\b|\bno\b|\bnever\b|\bwithout\b|n't|不再|不是|没有|从未|未|无)`,
@@ -50,33 +49,21 @@ var (
 	capitalizedTokenPattern = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
 )
 
-type assistantResultCandidate struct {
+type preserveHistoryCandidate struct {
 	entry       *memory.Entry
 	duplicate   bool
 	oldCoverage float64
 	newCoverage float64
 }
 
-func updatePolicyFromMetadata(ext extractor.MemoryExtractor) extractor.UpdatePolicy {
-	if ext == nil {
-		return extractor.UpdatePolicyReconcile
-	}
-	raw, ok := ext.Metadata()[extractorMetadataUpdatePolicy]
-	if !ok {
-		return extractor.UpdatePolicyReconcile
-	}
-	var policy extractor.UpdatePolicy
-	switch value := raw.(type) {
-	case extractor.UpdatePolicy:
-		policy = value
-	case string:
-		policy = extractor.UpdatePolicy(value)
-	}
+func updatePolicyFor(ext extractor.MemoryExtractor) extractor.UpdatePolicy {
+	policy := extractor.UpdatePolicy(updatepolicy.From(ext))
 	switch policy {
-	case extractor.UpdatePolicyHistoryPreserving, extractor.UpdatePolicyAddOnly:
+	case extractor.UpdatePolicyPreserveHistory,
+		extractor.UpdatePolicyAppendOnly:
 		return policy
 	default:
-		return extractor.UpdatePolicyReconcile
+		return extractor.UpdatePolicyMergeSimilar
 	}
 }
 
@@ -87,82 +74,59 @@ func (w *AutoMemoryWorker) applyUpdatePolicy(
 	existing []*memory.Entry,
 ) []*extractor.Operation {
 	switch w.updatePolicy {
-	case extractor.UpdatePolicyHistoryPreserving:
-		return w.reconcileOps(
-			ctx,
-			userKey,
-			historyPreservingOperations(ctx, userKey, ops),
-		)
-	case extractor.UpdatePolicyAddOnly:
-		return w.applyAddOnlyPolicy(ctx, userKey, ops, existing)
+	case extractor.UpdatePolicyPreserveHistory:
+		return w.reconcilePreserveHistoryOps(ctx, userKey, ops, existing)
+	case extractor.UpdatePolicyAppendOnly:
+		return w.applyAppendOnlyPolicy(ctx, userKey, ops, existing)
 	default:
 		return w.reconcileOps(ctx, userKey, ops)
 	}
 }
 
-func (w *AutoMemoryWorker) applyAssistantResultPolicy(
+func (w *AutoMemoryWorker) applyAppendOnlyPolicy(
 	ctx context.Context,
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
 	existing []*memory.Entry,
-) []*extractor.Operation {
-	if len(ops) == 0 {
-		return nil
-	}
-	switch w.updatePolicy {
-	case extractor.UpdatePolicyHistoryPreserving:
-		ops = historyPreservingOperations(ctx, userKey, ops)
-		if len(ops) == 0 {
-			return nil
-		}
-	case extractor.UpdatePolicyAddOnly:
-		return w.applyAddOnlyPolicy(ctx, userKey, ops, existing)
-	}
-	return w.applyAssistantResultPreservingPolicy(
-		ctx, userKey, ops, existing,
-	)
-}
-
-func historyPreservingOperations(
-	ctx context.Context,
-	userKey memory.UserKey,
-	ops []*extractor.Operation,
 ) []*extractor.Operation {
 	out := make([]*extractor.Operation, 0, len(ops))
 	for _, op := range ops {
 		if op == nil {
 			continue
 		}
+		var add *extractor.Operation
 		switch op.Type {
 		case extractor.OperationAdd:
-			out = append(out, op)
+			add = op
 		case extractor.OperationUpdate:
-			out = append(out, asAddOperation(op))
-			logPolicyDecision(
-				ctx,
-				string(extractor.UpdatePolicyHistoryPreserving),
-				userKey,
-				op,
-				nil,
-				"add",
-				"history-preserving policy",
+			converted := *op
+			converted.Type = extractor.OperationAdd
+			converted.MemoryID = ""
+			add = &converted
+			log.DebugfContext(ctx,
+				"auto_memory: append_only policy; converting update to add for user %s/%s",
+				userKey.AppName, userKey.UserID,
 			)
 		default:
-			logPolicyDecision(
-				ctx,
-				string(extractor.UpdatePolicyHistoryPreserving),
-				userKey,
-				op,
-				nil,
-				"no-op",
-				"history-preserving policy",
+			log.DebugfContext(ctx,
+				"auto_memory: append_only policy; filtering %s operation for user %s/%s",
+				op.Type, userKey.AppName, userKey.UserID,
 			)
+			continue
 		}
+		if hasExactMemoryDuplicate(add, existing, out) {
+			log.DebugfContext(ctx,
+				"auto_memory: append_only policy; filtering exact duplicate for user %s/%s",
+				userKey.AppName, userKey.UserID,
+			)
+			continue
+		}
+		out = append(out, add)
 	}
 	return out
 }
 
-func (w *AutoMemoryWorker) applyAssistantResultPreservingPolicy(
+func (w *AutoMemoryWorker) reconcilePreserveHistoryOps(
 	ctx context.Context,
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
@@ -170,7 +134,7 @@ func (w *AutoMemoryWorker) applyAssistantResultPreservingPolicy(
 ) []*extractor.Operation {
 	byID := make(map[string]*memory.Entry, len(existing))
 	for _, entry := range existing {
-		if validMemoryEntry(entry) {
+		if entry != nil && entry.Memory != nil && entry.ID != "" {
 			byID[entry.ID] = entry
 		}
 	}
@@ -181,125 +145,123 @@ func (w *AutoMemoryWorker) applyAssistantResultPreservingPolicy(
 		}
 		switch op.Type {
 		case extractor.OperationAdd:
-			out = w.appendAssistantResultAdd(
-				ctx, userKey, out, op, existing,
-			)
+			out = appendPreserveHistoryAdd(ctx, w, userKey, out, op, existing)
 		case extractor.OperationUpdate:
-			out = w.appendAssistantResultUpdate(
-				ctx, userKey, out, op, byID[op.MemoryID],
-			)
+			out = appendPreserveHistoryUpdate(ctx, w, userKey, out, op, byID[op.MemoryID])
 		default:
+			// Preserve the established handling for Delete, Clear, and
+			// implementation-specific operations.
 			out = append(out, op)
 		}
 	}
 	return out
 }
 
-func (w *AutoMemoryWorker) appendAssistantResultAdd(
+func hasExactMemoryDuplicate(
+	op *extractor.Operation,
+	existing []*memory.Entry,
+	accepted []*extractor.Operation,
+) bool {
+	for _, entry := range existing {
+		if entry != nil && entry.Memory != nil && exactMemoryDuplicate(op, entry.Memory) {
+			return true
+		}
+	}
+	for _, candidate := range accepted {
+		if candidate != nil && exactMemoryDuplicate(op, operationMemory(candidate)) {
+			return true
+		}
+	}
+	return false
+}
+
+func operationMemory(op *extractor.Operation) *memory.Memory {
+	return &memory.Memory{
+		Memory:       op.Memory,
+		Topics:       op.Topics,
+		Kind:         operationKind(op),
+		EventTime:    op.EventTime,
+		Participants: op.Participants,
+		Location:     op.Location,
+	}
+}
+
+func appendPreserveHistoryAdd(
 	ctx context.Context,
+	w *AutoMemoryWorker,
 	userKey memory.UserKey,
 	out []*extractor.Operation,
 	op *extractor.Operation,
 	existing []*memory.Entry,
 ) []*extractor.Operation {
+	if hasExactMemoryDuplicate(op, existing, out) {
+		logPreserveHistoryDecision(ctx, userKey, op, nil, "no-op", "exact duplicate")
+		return out
+	}
 	if !w.isToolEnabled(memory.AddToolName) {
 		return append(out, op)
 	}
-	match := selectAssistantResultCandidate(op, existing)
+	match := selectPreserveHistoryCandidate(op, existing)
 	if match == nil {
-		logPolicyDecision(ctx, assistantResultPolicyName,
-			userKey, op, nil, "add", "no safe candidate")
+		logPreserveHistoryDecision(ctx, userKey, op, nil, "add", "no safe candidate")
 		return append(out, op)
 	}
 	if match.duplicate {
-		logPolicyDecision(ctx, assistantResultPolicyName,
-			userKey, op, match, "no-op", "exact duplicate")
+		logPreserveHistoryDecision(ctx, userKey, op, match, "no-op", "exact duplicate")
 		return out
 	}
 	if !w.isToolEnabled(memory.UpdateToolName) {
-		logPolicyDecision(ctx, assistantResultPolicyName,
-			userKey, op, match, "add", "update tool disabled")
+		logPreserveHistoryDecision(ctx, userKey, op, match, "add", "update tool disabled")
 		return append(out, op)
 	}
-	logPolicyDecision(ctx, assistantResultPolicyName,
-		userKey, op, match, "update", "strict enrichment")
-	return append(out, toUpdateOp(op, match.entry))
+	updated := toUpdateOp(op, match.entry)
+	logPreserveHistoryDecision(ctx, userKey, op, match, "update", "safe enrichment")
+	return append(out, updated)
 }
 
-func (w *AutoMemoryWorker) appendAssistantResultUpdate(
+func appendPreserveHistoryUpdate(
 	ctx context.Context,
+	w *AutoMemoryWorker,
 	userKey memory.UserKey,
 	out []*extractor.Operation,
 	op *extractor.Operation,
 	existing *memory.Entry,
 ) []*extractor.Operation {
-	match := classifyAssistantResultCandidate(op, existing)
+	match := classifyPreserveHistoryCandidate(op, existing)
 	if match != nil && match.duplicate {
-		logPolicyDecision(ctx, assistantResultPolicyName,
-			userKey, op, match, "no-op", "exact duplicate")
+		logPreserveHistoryDecision(ctx, userKey, op, match, "no-op", "exact duplicate")
 		return out
 	}
 	if match != nil && w.isToolEnabled(memory.UpdateToolName) {
-		logPolicyDecision(ctx, assistantResultPolicyName,
-			userKey, op, match, "update", "strict enrichment")
-		return append(out, toUpdateOp(op, existing))
+		updated := toUpdateOp(op, existing)
+		logPreserveHistoryDecision(ctx, userKey, op, match, "update", "safe enrichment")
+		return append(out, updated)
 	}
-	add := asAddOperation(op)
-	logPolicyDecision(ctx, assistantResultPolicyName,
-		userKey, op, match, "add", "unsafe or unknown update")
-	return append(out, add)
+	add := *op
+	add.Type = extractor.OperationAdd
+	add.MemoryID = ""
+	logPreserveHistoryDecision(ctx, userKey, op, match, "add", "unsafe or unknown update target")
+	return append(out, &add)
 }
 
-func (w *AutoMemoryWorker) applyAddOnlyPolicy(
-	ctx context.Context,
-	userKey memory.UserKey,
-	ops []*extractor.Operation,
-	existing []*memory.Entry,
-) []*extractor.Operation {
-	known := append([]*memory.Entry(nil), existing...)
-	out := make([]*extractor.Operation, 0, len(ops))
-	for _, op := range ops {
-		if op == nil {
-			continue
-		}
-		switch op.Type {
-		case extractor.OperationAdd, extractor.OperationUpdate:
-			add := asAddOperation(op)
-			if selectExactDuplicate(add, known) != nil {
-				logPolicyDecision(ctx, string(extractor.UpdatePolicyAddOnly),
-					userKey, op, nil, "no-op", "exact duplicate")
-				continue
-			}
-			out = append(out, add)
-			known = append(known, entryForOperation(add))
-		default:
-			logPolicyDecision(ctx, string(extractor.UpdatePolicyAddOnly),
-				userKey, op, nil, "no-op", "add-only policy")
-		}
-	}
-	return out
-}
-
-func selectAssistantResultCandidate(
+func selectPreserveHistoryCandidate(
 	op *extractor.Operation,
 	existing []*memory.Entry,
-) *assistantResultCandidate {
-	var best *assistantResultCandidate
+) *preserveHistoryCandidate {
+	var best *preserveHistoryCandidate
 	for _, entry := range existing {
-		candidate := classifyAssistantResultCandidate(op, entry)
+		candidate := classifyPreserveHistoryCandidate(op, entry)
 		if candidate == nil {
 			continue
 		}
-		if best == nil || assistantResultCandidateLess(best, candidate) {
+		if best == nil || preserveHistoryCandidateLess(best, candidate) {
 			best = candidate
 		}
 	}
 	return best
 }
 
-func assistantResultCandidateLess(
-	left, right *assistantResultCandidate,
-) bool {
+func preserveHistoryCandidateLess(left, right *preserveHistoryCandidate) bool {
 	if left.duplicate != right.duplicate {
 		return right.duplicate
 	}
@@ -312,15 +274,15 @@ func assistantResultCandidateLess(
 	return left.entry.Score < right.entry.Score
 }
 
-func classifyAssistantResultCandidate(
+func classifyPreserveHistoryCandidate(
 	op *extractor.Operation,
 	entry *memory.Entry,
-) *assistantResultCandidate {
-	if op == nil || !validMemoryEntry(entry) {
+) *preserveHistoryCandidate {
+	if op == nil || entry == nil || entry.Memory == nil || entry.ID == "" {
 		return nil
 	}
 	if exactMemoryDuplicate(op, entry.Memory) {
-		return &assistantResultCandidate{
+		return &preserveHistoryCandidate{
 			entry:       entry,
 			duplicate:   true,
 			oldCoverage: 1,
@@ -330,64 +292,64 @@ func classifyAssistantResultCandidate(
 	if !metadataIdentityCompatible(op, entry.Memory) {
 		return nil
 	}
-	oldCoverage, newCoverage := directionalTokenCoverage(
-		entry.Memory.Memory, op.Memory,
-	)
-	if oldCoverage < resultOldCoverage || newCoverage < resultNewCoverage {
+	oldCoverage, newCoverage := directionalTokenCoverage(entry.Memory.Memory, op.Memory)
+	if oldCoverage < preserveHistoryOldCoverage || newCoverage < preserveHistoryNewCoverage {
 		return nil
 	}
-	if !materialTokensPreserved(entry.Memory.Memory, op.Memory) ||
-		!memoryTokenOrderPreserved(entry.Memory.Memory, op.Memory) ||
-		!criticalValuesPreserved(entry.Memory.Memory, op.Memory) ||
-		negationSignature(entry.Memory.Memory) != negationSignature(op.Memory) {
+	if !materialTokensPreserved(entry.Memory.Memory, op.Memory) {
 		return nil
 	}
-	if changeMarkerPattern.MatchString(op.Memory) &&
-		!changeMarkerPattern.MatchString(entry.Memory.Memory) {
+	if !criticalValuesPreserved(entry.Memory.Memory, op.Memory) {
 		return nil
 	}
-	return &assistantResultCandidate{
+	if negationSignature(entry.Memory.Memory) != negationSignature(op.Memory) {
+		return nil
+	}
+	if changeMarkerPattern.MatchString(op.Memory) && !changeMarkerPattern.MatchString(entry.Memory.Memory) {
+		return nil
+	}
+	if !preservesMaterialTokenOrder(entry.Memory.Memory, op.Memory) {
+		return nil
+	}
+	return &preserveHistoryCandidate{
 		entry:       entry,
 		oldCoverage: oldCoverage,
 		newCoverage: newCoverage,
 	}
 }
 
-func selectExactDuplicate(
-	op *extractor.Operation,
-	entries []*memory.Entry,
-) *memory.Entry {
-	for _, entry := range entries {
-		if validMemoryEntry(entry) && exactMemoryDuplicate(op, entry.Memory) {
-			return entry
+func preservesMaterialTokenOrder(oldText, newText string) bool {
+	oldTokens := buildOrderedSearchTokens(oldText)
+	newTokens := buildOrderedSearchTokens(newText)
+	if len(oldTokens) == 0 || len(newTokens) == 0 {
+		return false
+	}
+	oldIndex := 0
+	for _, token := range newTokens {
+		if token != oldTokens[oldIndex] {
+			continue
+		}
+		oldIndex++
+		if oldIndex == len(oldTokens) {
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
-func validMemoryEntry(entry *memory.Entry) bool {
-	return entry != nil && entry.ID != "" && entry.Memory != nil
-}
-
-func asAddOperation(op *extractor.Operation) *extractor.Operation {
-	add := *op
-	add.Type = extractor.OperationAdd
-	add.MemoryID = ""
-	return &add
-}
-
-func entryForOperation(op *extractor.Operation) *memory.Entry {
-	return &memory.Entry{
-		ID: "pending",
-		Memory: &memory.Memory{
-			Memory:       op.Memory,
-			Topics:       op.Topics,
-			Kind:         operationKind(op),
-			EventTime:    op.EventTime,
-			Participants: op.Participants,
-			Location:     op.Location,
-		},
+func buildOrderedSearchTokens(text string) []string {
+	tokens := tokenizePrimarySearchText(text, tokenOptions{
+		deduplicate:       false,
+		keepSingleCJKRune: shouldKeepSingleCJKToken(text),
+	})
+	filtered := tokens[:0]
+	for _, token := range tokens {
+		if token == "user" || token == "assistant" {
+			continue
+		}
+		filtered = append(filtered, token)
 	}
+	return filtered
 }
 
 func materialTokensPreserved(oldText, newText string) bool {
@@ -407,73 +369,38 @@ func materialTokensPreserved(oldText, newText string) bool {
 	return true
 }
 
-func memoryTokenOrderPreserved(oldText, newText string) bool {
-	oldTokens := orderedMemoryTokens(oldText)
-	newTokens := orderedMemoryTokens(newText)
-	if len(oldTokens) == 0 || len(newTokens) == 0 {
+func exactMemoryDuplicate(op *extractor.Operation, stored *memory.Memory) bool {
+	if normalizeMemoryText(op.Memory) != normalizeMemoryText(stored.Memory) {
 		return false
 	}
-	next := 0
-	for _, token := range newTokens {
-		if token != oldTokens[next] {
-			continue
-		}
-		next++
-		if next == len(oldTokens) {
-			return true
-		}
+	if operationKind(op) != EffectiveKind(stored) {
+		return false
 	}
-	return false
-}
-
-func orderedMemoryTokens(text string) []string {
-	var tokens []string
-	var word strings.Builder
-	flushWord := func() {
-		if word.Len() == 0 {
-			return
-		}
-		token := strings.ToLower(word.String())
-		word.Reset()
-		if token == "user" || token == "assistant" {
-			return
-		}
-		tokens = append(tokens, token)
+	if !equalOptionalTime(op.EventTime, stored.EventTime) {
+		return false
 	}
-	for _, r := range text {
-		switch {
-		case isCJK(r):
-			flushWord()
-			tokens = append(tokens, string(r))
-		case unicode.IsLetter(r) || unicode.IsNumber(r):
-			word.WriteRune(unicode.ToLower(r))
-		default:
-			flushWord()
-		}
+	if !equalStringSet(op.Participants, stored.Participants) {
+		return false
 	}
-	flushWord()
-	return tokens
-}
-
-func exactMemoryDuplicate(op *extractor.Operation, stored *memory.Memory) bool {
-	return normalizeMemoryText(op.Memory) == normalizeMemoryText(stored.Memory) &&
-		operationKind(op) == EffectiveKind(stored) &&
-		equalOptionalTime(op.EventTime, stored.EventTime) &&
-		equalStringSet(op.Participants, stored.Participants) &&
-		strings.EqualFold(strings.TrimSpace(op.Location), strings.TrimSpace(stored.Location))
+	return strings.EqualFold(strings.TrimSpace(op.Location), strings.TrimSpace(stored.Location))
 }
 
 func metadataIdentityCompatible(op *extractor.Operation, stored *memory.Memory) bool {
-	if operationKind(op) != EffectiveKind(stored) ||
-		!eventTimeCompatible(stored.EventTime, op.EventTime) {
+	if operationKind(op) != EffectiveKind(stored) {
+		return false
+	}
+	if !eventTimeCompatible(stored.EventTime, op.EventTime) {
 		return false
 	}
 	if len(stored.Participants) > 0 && len(op.Participants) > 0 &&
 		!isStringSubset(stored.Participants, op.Participants) {
 		return false
 	}
-	return stored.Location == "" || op.Location == "" ||
-		strings.EqualFold(strings.TrimSpace(stored.Location), strings.TrimSpace(op.Location))
+	if stored.Location != "" && op.Location != "" &&
+		!strings.EqualFold(strings.TrimSpace(stored.Location), strings.TrimSpace(op.Location)) {
+		return false
+	}
+	return true
 }
 
 func operationKind(op *extractor.Operation) memory.Kind {
@@ -489,9 +416,11 @@ func eventTimeCompatible(stored, fresh *time.Time) bool {
 	}
 	storedUTC := stored.UTC()
 	freshUTC := fresh.UTC()
-	return storedUTC.Year() == freshUTC.Year() &&
-		storedUTC.YearDay() == freshUTC.YearDay() &&
-		isMidnight(storedUTC) && !isMidnight(freshUTC)
+	if storedUTC.Year() != freshUTC.Year() ||
+		storedUTC.YearDay() != freshUTC.YearDay() {
+		return false
+	}
+	return isMidnight(storedUTC) && !isMidnight(freshUTC)
 }
 
 func isMidnight(value time.Time) bool {
@@ -516,12 +445,8 @@ func directionalTokenCoverage(oldText, newText string) (float64, float64) {
 }
 
 func criticalValuesPreserved(oldText, newText string) bool {
-	newValues := stringSet(criticalValuePattern.FindAllString(
-		strings.ToLower(newText), -1,
-	))
-	for value := range stringSet(criticalValuePattern.FindAllString(
-		strings.ToLower(oldText), -1,
-	)) {
+	newValues := stringSet(criticalValuePattern.FindAllString(strings.ToLower(newText), -1))
+	for value := range stringSet(criticalValuePattern.FindAllString(strings.ToLower(oldText), -1)) {
 		if _, ok := newValues[value]; !ok {
 			return false
 		}
@@ -539,10 +464,12 @@ func negationSignature(text string) string {
 }
 
 func normalizeMemoryText(value string) string {
+	// Exact duplicate checks intentionally retain punctuation inside the text:
+	// symbols in identifiers such as C#, .NET, and email addresses are semantic.
 	var normalized strings.Builder
 	spacePending := false
 	for _, r := range value {
-		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+		if unicode.IsSpace(r) {
 			spacePending = normalized.Len() > 0
 			continue
 		}
@@ -552,7 +479,17 @@ func normalizeMemoryText(value string) string {
 		}
 		normalized.WriteRune(unicode.ToLower(r))
 	}
-	return normalized.String()
+	return strings.TrimSpace(strings.TrimRightFunc(
+		strings.TrimSpace(normalized.String()),
+		func(r rune) bool {
+			switch r {
+			case '.', '!', '?', '。', '！', '？':
+				return true
+			default:
+				return false
+			}
+		},
+	))
 }
 
 func equalOptionalTime(left, right *time.Time) bool {
@@ -597,27 +534,72 @@ func stringSet(values []string) map[string]struct{} {
 	return result
 }
 
-func logPolicyDecision(
+// buildPolicySearchQuery includes conversational user and assistant text while
+// excluding tool protocol messages. Preserve History and Append Only use this
+// broader context to retrieve candidates for their policy decisions.
+func buildPolicySearchQuery(messages []model.Message) string {
+	parts := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role != model.RoleUser && msg.Role != model.RoleAssistant {
+			continue
+		}
+		if msg.ToolID != "" || len(msg.ToolCalls) > 0 {
+			continue
+		}
+		text := messageSearchText(msg)
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return limitPolicySearchQuery(strings.Join(parts, " "))
+}
+
+func limitPolicySearchQuery(query string) string {
+	if len(query) <= maxPolicySearchQueryBytes {
+		return query
+	}
+	contentBudget := maxPolicySearchQueryBytes - len(searchQueryOmissionMarker)
+	prefixBudget := contentBudget / 2
+	suffixBudget := contentBudget - prefixBudget
+	prefixEnd := utf8PrefixBoundary(query, prefixBudget)
+	suffixStart := utf8SuffixBoundary(query, len(query)-suffixBudget)
+	return strings.TrimSpace(
+		query[:prefixEnd] + searchQueryOmissionMarker + query[suffixStart:],
+	)
+}
+
+func utf8PrefixBoundary(text string, limit int) int {
+	for limit > 0 && !utf8.RuneStart(text[limit]) {
+		limit--
+	}
+	return limit
+}
+
+func utf8SuffixBoundary(text string, start int) int {
+	for start < len(text) && !utf8.RuneStart(text[start]) {
+		start++
+	}
+	return start
+}
+
+func logPreserveHistoryDecision(
 	ctx context.Context,
-	policy string,
 	userKey memory.UserKey,
 	op *extractor.Operation,
-	match *assistantResultCandidate,
+	match *preserveHistoryCandidate,
 	action string,
 	reason string,
 ) {
 	if match == nil {
 		log.DebugfContext(ctx,
-			"auto_memory: policy=%s action=%s reason=%s user=%s/%s operation=%s",
-			policy, action, reason,
-			userKey.AppName, userKey.UserID, op.Type,
+			"auto_memory: preserve_history decision action=%s reason=%s user=%s/%s operation=%s",
+			action, reason, userKey.AppName, userKey.UserID, op.Type,
 		)
 		return
 	}
 	log.DebugfContext(ctx,
-		"auto_memory: policy=%s action=%s reason=%s user=%s/%s operation=%s candidate=%s old_coverage=%.3f new_coverage=%.3f",
-		policy, action, reason,
-		userKey.AppName, userKey.UserID, op.Type, match.entry.ID,
-		match.oldCoverage, match.newCoverage,
+		"auto_memory: preserve_history decision action=%s reason=%s user=%s/%s operation=%s candidate=%s old_coverage=%.3f new_coverage=%.3f",
+		action, reason, userKey.AppName, userKey.UserID, op.Type,
+		match.entry.ID, match.oldCoverage, match.newCoverage,
 	)
 }

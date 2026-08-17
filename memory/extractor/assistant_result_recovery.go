@@ -60,12 +60,20 @@ func (e *memoryExtractor) recoverStructuredAssistantResults(
 			assistantResultAddToolName: assistantResultAddTool,
 		},
 	}
-	ctx, operations, err := e.generateOperations(ctx, req)
+	var operations []*Operation
+	nextCtx, err := e.runExtractionRequest(ctx, req, func(
+		callCtx context.Context,
+		call model.ToolCall,
+	) {
+		if op := e.parseToolCall(callCtx, call); op != nil {
+			operations = append(operations, op)
+		}
+	})
 	if err != nil {
-		return ctx, nil, err
+		return nextCtx, nil, err
 	}
 	_, assistantResults := splitExtractionOperations(operations)
-	return ctx, assistantResults, nil
+	return nextCtx, assistantResults, nil
 }
 
 func (e *memoryExtractor) buildAssistantResultRecoveryMessages(

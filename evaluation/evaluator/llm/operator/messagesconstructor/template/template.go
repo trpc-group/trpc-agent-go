@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 
+	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/internal/content"
@@ -29,6 +30,18 @@ import (
 
 type templateMessagesConstructor struct {
 	operatorRegistry operatorregistry.Registry
+}
+
+type traceStepToolPromptValue struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments any    `json:"arguments,omitempty"`
+	Result    any    `json:"result,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type traceStepSkillPromptValue struct {
+	Name string `json:"name,omitempty"`
 }
 
 // Option configures the template messages constructor.
@@ -173,6 +186,10 @@ func resolveActualValue(actuals []*evalset.Invocation, source *metricllm.Templat
 		return resolveTraceStepSnapshot(actuals, source, true)
 	case metricllm.TemplateVariableFieldTraceStepOutput:
 		return resolveTraceStepSnapshot(actuals, source, false)
+	case metricllm.TemplateVariableFieldTraceStepTools:
+		return resolveTraceStepTools(actuals, source)
+	case metricllm.TemplateVariableFieldTraceStepSkills:
+		return resolveTraceStepSkills(actuals, source)
 	default:
 		return "", fmt.Errorf("unsupported source %s.%s",
 			metricllm.TemplateVariableScopeActual, source.Field)
@@ -242,30 +259,10 @@ func visibleRubrics(rubrics []*metricllm.Rubric) []*metricllm.Rubric {
 }
 
 func resolveTraceStepSnapshot(actuals []*evalset.Invocation, source *metricllm.TemplateVariableSource, input bool) (string, error) {
-	nodeID := ""
-	if source.Selector != nil {
-		nodeID = source.Selector.NodeID
+	step, index, nodeID, err := resolveTraceStep(actuals, source)
+	if err != nil {
+		return "", err
 	}
-	if nodeID == "" {
-		return "", fmt.Errorf("trace selector nodeID is required")
-	}
-	index := len(actuals) - 1
-	actual := actuals[index]
-	if actual.ExecutionTrace == nil {
-		return "", fmt.Errorf("executionTrace is empty for %s.%s at invocation index %d",
-			source.Scope, source.Field, index)
-	}
-	stepIndex := -1
-	for i := range actual.ExecutionTrace.Steps {
-		if actual.ExecutionTrace.Steps[i].NodeID == nodeID {
-			stepIndex = i
-		}
-	}
-	if stepIndex < 0 {
-		return "", fmt.Errorf("trace step not found for %s.%s nodeID %q at invocation index %d",
-			source.Scope, source.Field, nodeID, index)
-	}
-	step := actual.ExecutionTrace.Steps[stepIndex]
 	snapshot := step.Output
 	if input {
 		snapshot = step.Input
@@ -275,4 +272,86 @@ func resolveTraceStepSnapshot(actuals []*evalset.Invocation, source *metricllm.T
 			source.Scope, source.Field, nodeID, index)
 	}
 	return snapshot.Text, nil
+}
+
+func resolveTraceStepTools(actuals []*evalset.Invocation, source *metricllm.TemplateVariableSource) (string, error) {
+	step, _, _, err := resolveTraceStep(actuals, source)
+	if err != nil {
+		return "", err
+	}
+	raw, err := encodeJSONForPrompt(traceStepToolPromptValues(step.Tools))
+	if err != nil {
+		return "", fmt.Errorf("marshal trace step tools: %w", err)
+	}
+	return raw, nil
+}
+
+func resolveTraceStepSkills(actuals []*evalset.Invocation, source *metricllm.TemplateVariableSource) (string, error) {
+	step, _, _, err := resolveTraceStep(actuals, source)
+	if err != nil {
+		return "", err
+	}
+	raw, err := encodeJSONForPrompt(traceStepSkillPromptValues(step.Skills))
+	if err != nil {
+		return "", fmt.Errorf("marshal trace step skills: %w", err)
+	}
+	return raw, nil
+}
+
+func traceStepToolPromptValues(tools []agenttrace.Tool) []traceStepToolPromptValue {
+	if tools == nil {
+		return []traceStepToolPromptValue{}
+	}
+	values := make([]traceStepToolPromptValue, len(tools))
+	for i, tool := range tools {
+		values[i] = traceStepToolPromptValue{
+			ID:        tool.ID,
+			Name:      tool.Name,
+			Arguments: tool.Arguments,
+			Result:    tool.Result,
+			Error:     tool.Error,
+		}
+	}
+	return values
+}
+
+func traceStepSkillPromptValues(skills []agenttrace.Skill) []traceStepSkillPromptValue {
+	if skills == nil {
+		return []traceStepSkillPromptValue{}
+	}
+	values := make([]traceStepSkillPromptValue, len(skills))
+	for i, skill := range skills {
+		values[i] = traceStepSkillPromptValue{Name: skill.Name}
+	}
+	return values
+}
+
+func resolveTraceStep(
+	actuals []*evalset.Invocation,
+	source *metricllm.TemplateVariableSource,
+) (agenttrace.Step, int, string, error) {
+	nodeID := ""
+	if source.Selector != nil {
+		nodeID = source.Selector.NodeID
+	}
+	if nodeID == "" {
+		return agenttrace.Step{}, 0, "", fmt.Errorf("trace selector nodeID is required")
+	}
+	index := len(actuals) - 1
+	actual := actuals[index]
+	if actual.ExecutionTrace == nil {
+		return agenttrace.Step{}, index, nodeID, fmt.Errorf("executionTrace is empty for %s.%s at invocation index %d",
+			source.Scope, source.Field, index)
+	}
+	stepIndex := -1
+	for i := range actual.ExecutionTrace.Steps {
+		if actual.ExecutionTrace.Steps[i].NodeID == nodeID {
+			stepIndex = i
+		}
+	}
+	if stepIndex < 0 {
+		return agenttrace.Step{}, index, nodeID, fmt.Errorf("trace step not found for %s.%s nodeID %q at invocation index %d",
+			source.Scope, source.Field, nodeID, index)
+	}
+	return actual.ExecutionTrace.Steps[stepIndex], index, nodeID, nil
 }

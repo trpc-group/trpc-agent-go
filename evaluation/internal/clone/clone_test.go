@@ -209,6 +209,7 @@ func TestCloneEvalSetResult_NilInput(t *testing.T) {
 func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	srcText := "hello"
 	audioBytes := []byte{3, 2, 1}
+	videoBytes := []byte{4, 5, 6}
 	fileBytes := []byte{7, 8, 9}
 	src := &evalset.EvalCase{
 		EvalID: "case-1",
@@ -220,6 +221,7 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 					{Type: model.ContentTypeText, Text: &srcText},
 					{Type: model.ContentTypeImage, Image: &model.Image{Data: []byte{1, 2, 3}}},
 					{Type: model.ContentTypeAudio, Audio: &model.Audio{Data: audioBytes, Format: "wav"}},
+					{Type: model.ContentTypeVideo, Video: &model.Video{Data: videoBytes, Format: "mp4"}},
 					{Type: model.ContentTypeFile, File: &model.File{Name: "input.txt", Data: fileBytes, MimeType: "text/plain"}},
 				},
 				ToolCalls: []model.ToolCall{
@@ -326,6 +328,13 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 									ReasoningDuration: time.Second,
 								},
 							},
+							Tools: []agenttrace.Tool{{
+								ID:        "call-1",
+								Name:      "lookup",
+								Arguments: map[string]any{"city": "Paris"},
+								Result:    []any{"ok"},
+							}},
+							Skills: []agenttrace.Skill{{Name: "research"}},
 						},
 					},
 				},
@@ -374,8 +383,11 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	dst.ContextMessages[0].ContentParts[2].Audio.Data[0] = 0
 	assert.Equal(t, byte(3), src.ContextMessages[0].ContentParts[2].Audio.Data[0])
 
-	dst.ContextMessages[0].ContentParts[3].File.Data[0] = 0
-	assert.Equal(t, byte(7), src.ContextMessages[0].ContentParts[3].File.Data[0])
+	dst.ContextMessages[0].ContentParts[3].Video.Data[0] = 0
+	assert.Equal(t, byte(4), src.ContextMessages[0].ContentParts[3].Video.Data[0])
+
+	dst.ContextMessages[0].ContentParts[4].File.Data[0] = 0
+	assert.Equal(t, byte(7), src.ContextMessages[0].ContentParts[4].File.Data[0])
 
 	dst.ContextMessages[0].ToolCalls[0].Function.Arguments[0] = 'X'
 	assert.Equal(t, byte('{'), src.ContextMessages[0].ToolCalls[0].Function.Arguments[0])
@@ -419,6 +431,15 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	dst.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration = 2 * time.Second
 	assert.Equal(t, time.Second, src.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration)
 
+	dst.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"] = "changed"
+	assert.Equal(t, "Paris", src.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0] = "changed"
+	assert.Equal(t, "ok", src.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Skills[0].Name = "changed"
+	assert.Equal(t, "research", src.Conversation[0].ExecutionTrace.Steps[0].Skills[0].Name)
+
 	dst.Conversation[0].ExecutionTrace.Input.Text = "changed"
 	assert.Equal(t, "trace input", src.Conversation[0].ExecutionTrace.Input.Text)
 
@@ -436,6 +457,42 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.CreationTimestamp.Time = time.Unix(2, 0).UTC()
 	assert.Equal(t, time.Unix(1, 0).UTC(), src.CreationTimestamp.Time)
+}
+
+func TestCloneEvalCase_ErrorFromExecutionTraceToolArguments(t *testing.T) {
+	unsupported := func() {}
+	src := &evalset.EvalCase{
+		Conversation: []*evalset.Invocation{{
+			ExecutionTrace: &agenttrace.Trace{
+				Steps: []agenttrace.Step{{
+					Tools: []agenttrace.Tool{{
+						ID:        "call-1",
+						Name:      "bad",
+						Arguments: unsupported,
+					}},
+				}},
+			},
+		}},
+	}
+	got, err := CloneEvalCase(src)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "unsupported value type")
+}
+
+func TestCloneTraceToolsHandlesNilAndResultErrors(t *testing.T) {
+	got, err := cloneTraceTools(nil)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	unsupported := func() {}
+	got, err = cloneTraceTools([]agenttrace.Tool{{
+		ID:     "call-1",
+		Name:   "bad",
+		Result: unsupported,
+	}})
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "unsupported value type")
 }
 
 func TestCloneEvalSet_DeepCopy(t *testing.T) {
@@ -1003,6 +1060,7 @@ func TestCloneHelpers_NilInputs(t *testing.T) {
 	assert.Nil(t, cloneStringPtr(nil))
 	assert.Nil(t, cloneImage(nil))
 	assert.Nil(t, cloneAudio(nil))
+	assert.Nil(t, cloneVideo(nil))
 	assert.Nil(t, cloneFile(nil))
 }
 

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"maps"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantmemory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -31,6 +34,7 @@ const (
 	DefaultAsyncMemoryNum   = 1
 	DefaultMemoryQueueSize  = 10
 	DefaultMemoryJobTimeout = 30 * time.Second
+	maxExtractorUnwrapDepth = 64
 
 	memoryNotFoundErrSubstr = "memory with id"
 	memoryNotFoundErrMarker = "not found"
@@ -73,7 +77,6 @@ const (
 	// return per reconcile probe. Keeping this small bounds the extra
 	// cost while still surfacing the closest match reliably.
 	reconcileTopK = 3
-
 	// reconcileSkipScore: at or above this search Score the candidate
 	// is treated as an equivalent memory. The add is either dropped or
 	// rewritten into a topic-only update.
@@ -190,14 +193,78 @@ type postPolicyOperationObserver interface {
 	)
 }
 
-// ConfigureExtractorEnabledTools passes enabled tool flags to the
-// extractor if it implements EnabledToolsConfigurer.
+type memoryExtractorUnwrapper interface {
+	UnwrapMemoryExtractor() extractor.MemoryExtractor
+}
+
+// ConfigureExtractorEnabledTools passes enabled tool flags to the extractor
+// and to the built-in capability owner exposed by a cooperating decorator.
 func ConfigureExtractorEnabledTools(
 	ext extractor.MemoryExtractor,
 	enabledTools map[string]struct{},
 ) {
 	if c, ok := ext.(EnabledToolsConfigurer); ok {
 		c.SetEnabledTools(enabledTools)
+	}
+	capabilityExtractor := unwrapMemoryExtractor(ext)
+	if isNilMemoryExtractor(capabilityExtractor) ||
+		sameMemoryExtractor(ext, capabilityExtractor) {
+		return
+	}
+	if c, ok := capabilityExtractor.(EnabledToolsConfigurer); ok {
+		c.SetEnabledTools(enabledTools)
+	}
+}
+
+func sameMemoryExtractor(first, second extractor.MemoryExtractor) bool {
+	firstType := reflect.TypeOf(first)
+	if firstType == nil || firstType != reflect.TypeOf(second) ||
+		!firstType.Comparable() {
+		return false
+	}
+	return first == second
+}
+
+// unwrapMemoryExtractor follows cooperating decorators to the extractor that
+// owns built-in capabilities. Non-cooperating decorators remain opaque. A
+// bounded traversal and comparable-value tracking make malformed cycles fall
+// back safely without requiring every decorator value to be comparable.
+func unwrapMemoryExtractor(
+	ext extractor.MemoryExtractor,
+) extractor.MemoryExtractor {
+	seen := make(map[any]struct{})
+	current := ext
+	for depth := 0; depth < maxExtractorUnwrapDepth; depth++ {
+		if isNilMemoryExtractor(current) {
+			return nil
+		}
+		typeOfCurrent := reflect.TypeOf(current)
+		if typeOfCurrent.Comparable() {
+			if _, ok := seen[current]; ok {
+				return nil
+			}
+			seen[current] = struct{}{}
+		}
+		unwrapper, ok := current.(memoryExtractorUnwrapper)
+		if !ok {
+			return current
+		}
+		current = unwrapper.UnwrapMemoryExtractor()
+	}
+	return nil
+}
+
+func isNilMemoryExtractor(ext extractor.MemoryExtractor) bool {
+	if ext == nil {
+		return true
+	}
+	value := reflect.ValueOf(ext)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 
@@ -224,13 +291,14 @@ type MemoryOperator interface {
 
 // AutoMemoryWorker manages async memory extraction workers.
 type AutoMemoryWorker struct {
-	config       AutoMemoryConfig
-	operator     MemoryOperator
-	updatePolicy extractor.UpdatePolicy
-	jobChans     []chan *MemoryJob
-	wg           sync.WaitGroup
-	mu           sync.RWMutex
-	started      bool
+	config                     AutoMemoryConfig
+	operator                   MemoryOperator
+	updatePolicy               extractor.UpdatePolicy
+	assistantEpisodeExtraction bool
+	jobChans                   []chan *MemoryJob
+	wg                         sync.WaitGroup
+	mu                         sync.RWMutex
+	started                    bool
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
@@ -241,10 +309,12 @@ func NewAutoMemoryWorker(
 	operator MemoryOperator,
 ) *AutoMemoryWorker {
 	config.EnabledTools = maps.Clone(config.EnabledTools)
+	capabilityExtractor := unwrapMemoryExtractor(config.Extractor)
 	return &AutoMemoryWorker{
-		config:       config,
-		operator:     operator,
-		updatePolicy: updatePolicyFromMetadata(config.Extractor),
+		config:                     config,
+		operator:                   operator,
+		updatePolicy:               updatePolicyFor(capabilityExtractor),
+		assistantEpisodeExtraction: assistantmemory.Enabled(capabilityExtractor),
 	}
 }
 
@@ -318,7 +388,11 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 	}
 
 	since := readLastExtractAt(sess)
-	latestTs, messages := scanDeltaSince(sess, since)
+	latestTs, messages := scanDeltaSince(
+		sess,
+		since,
+		w.assistantEpisodeExtraction,
+	)
 	if len(messages) == 0 {
 		log.DebugfContext(ctx, "auto_memory: skipped due to no new messages for user %s/%s",
 			userKey.AppName, userKey.UserID)
@@ -458,8 +532,20 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	userKey memory.UserKey,
 	messages []model.Message,
 ) error {
+	ops, err := w.prepareAutoMemoryOperations(ctx, userKey, messages)
+	if err != nil {
+		return err
+	}
+	return w.executeAutoMemoryOperations(ctx, userKey, ops)
+}
+
+func (w *AutoMemoryWorker) prepareAutoMemoryOperations(
+	ctx context.Context,
+	userKey memory.UserKey,
+	messages []model.Message,
+) ([]*extractor.Operation, error) {
 	if w.config.Extractor == nil {
-		return nil
+		return nil, nil
 	}
 	ctx = WithRequestEmbeddingCache(ctx)
 
@@ -471,21 +557,29 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	if err != nil {
 		log.WarnfContext(ctx, "auto_memory: failed to prepare existing memories for user %s/%s: %v",
 			userKey.AppName, userKey.UserID, err)
-		return fmt.Errorf("auto_memory: prepare existing memories failed: %w", err)
+		return nil, fmt.Errorf("auto_memory: prepare existing memories failed: %w", err)
 	}
-
-	// Extract memory operations. The built-in extractor exposes assistant
-	// results as a separate stage so they can retain historical answers without
-	// changing reconciliation for ordinary user memories.
+	// Worker-owned context markers keep built-in extractor behavior aligned
+	// with the capabilities visible to this worker through decorators.
+	extractionCtx := updatepolicy.WithWorkerConfiguration(
+		ctx,
+		updatepolicy.Value(w.updatePolicy),
+	)
+	extractionCtx = assistantmemory.WithWorkerConfiguration(
+		extractionCtx,
+		w.assistantEpisodeExtraction,
+	)
+	// The built-in result extractor exposes its operations as a separate stage
+	// so concrete assistant answers can use stricter reconciliation. Decorators
+	// may forward this private capability without changing MemoryExtractor.
 	ops, assistantResults, err := extractOperationStages(
-		ctx, w.config.Extractor, messages, existing,
+		extractionCtx, w.config.Extractor, messages, existing,
 	)
 	if err != nil {
 		log.WarnfContext(ctx, "auto_memory: extraction failed for user %s/%s: %v",
 			userKey.AppName, userKey.UserID, err)
-		return fmt.Errorf("auto_memory: extract failed: %w", err)
+		return nil, fmt.Errorf("auto_memory: extract failed: %w", err)
 	}
-
 	// Reconcile Add operations against the store so that near-duplicate
 	// memories get merged into updates instead of accumulating as
 	// separate rows. Any failure inside reconcile is non-fatal: the
@@ -499,17 +593,7 @@ func (w *AutoMemoryWorker) createAutoMemory(
 		ctx, w.config.Extractor, ops, assistantResults,
 	)
 	ops = append(ops, assistantResults...)
-
-	// Execute operations.
-	var operationErrs []error
-	for i, op := range ops {
-		if err := w.executeOperation(ctx, userKey, op); err != nil {
-			operationErrs = append(operationErrs,
-				fmt.Errorf("operation %d: %w", i, err))
-		}
-	}
-
-	return errors.Join(operationErrs...)
+	return ops, nil
 }
 
 func extractOperationStages(
@@ -567,6 +651,25 @@ func cloneMemoryOperations(
 	return cloned
 }
 
+func (w *AutoMemoryWorker) executeAutoMemoryOperations(
+	ctx context.Context,
+	userKey memory.UserKey,
+	ops []*extractor.Operation,
+) error {
+	var operationErrs []error
+	for i, op := range ops {
+		if err := w.executeOperation(ctx, userKey, op); err != nil {
+			log.WarnfContext(ctx,
+				"auto_memory: operation failed for user %s/%s: %v",
+				userKey.AppName, userKey.UserID, err,
+			)
+			operationErrs = append(operationErrs,
+				fmt.Errorf("operation %d: %w", i, err))
+		}
+	}
+	return errors.Join(operationErrs...)
+}
+
 // searchRelevantMemories builds a query from the conversation messages
 // and searches for existing memories that are semantically related.
 // This avoids injecting the full memory set into the extractor prompt,
@@ -580,6 +683,9 @@ func (w *AutoMemoryWorker) searchRelevantMemories(
 	messages []model.Message,
 ) ([]*memory.Entry, error) {
 	query := buildSearchQuery(messages)
+	if w.updatePolicy != extractor.UpdatePolicyMergeSimilar {
+		query = buildPolicySearchQuery(messages)
+	}
 	if query == "" {
 		return nil, nil
 	}
@@ -698,11 +804,8 @@ func (w *AutoMemoryWorker) executeOperation(
 		if err := w.operator.AddMemory(ctx, userKey,
 			op.Memory, op.Topics,
 			memory.WithMetadata(ep)); err != nil {
-			log.WarnfContext(ctx,
-				"auto_memory: add memory failed "+
-					"for user %s/%s: %v",
+			return fmt.Errorf("auto_memory: add memory for user %s/%s: %w",
 				userKey.AppName, userKey.UserID, err)
-			return fmt.Errorf("add memory: %w", err)
 		}
 		return nil
 	case extractor.OperationUpdate:
@@ -712,44 +815,34 @@ func (w *AutoMemoryWorker) executeOperation(
 			MemoryID: op.MemoryID,
 		}
 		ep := opToMetadata(op)
-		err := w.operator.UpdateMemory(ctx, memKey,
+		if err := w.operator.UpdateMemory(ctx, memKey,
 			op.Memory, op.Topics,
-			memory.WithUpdateMetadata(ep))
-		if err == nil {
-			return nil
-		}
-		if isMemoryNotFoundError(err) {
-			if !w.isToolEnabled(memory.AddToolName) {
-				log.DebugfContext(ctx,
-					"auto_memory: update-not-found "+
-						"fallback skipped (add disabled)"+
-						" for user %s/%s, memory_id=%s",
-					userKey.AppName, userKey.UserID,
-					op.MemoryID)
+			memory.WithUpdateMetadata(ep)); err != nil {
+			if isMemoryNotFoundError(err) {
+				if !w.isToolEnabled(memory.AddToolName) {
+					log.DebugfContext(ctx,
+						"auto_memory: update-not-found "+
+							"fallback skipped (add disabled)"+
+							" for user %s/%s, memory_id=%s",
+						userKey.AppName, userKey.UserID,
+						op.MemoryID)
+					return nil
+				}
+				if addErr := w.operator.AddMemory(
+					ctx, userKey, op.Memory, op.Topics,
+					memory.WithMetadata(ep),
+				); addErr != nil {
+					return fmt.Errorf(
+						"auto_memory: replace missing update for user %s/%s, memory_id=%s: %w",
+						userKey.AppName, userKey.UserID, op.MemoryID, addErr,
+					)
+				}
 				return nil
 			}
-			if addErr := w.operator.AddMemory(
-				ctx, userKey, op.Memory, op.Topics,
-				memory.WithMetadata(ep),
-			); addErr != nil {
-				log.WarnfContext(ctx,
-					"auto_memory: update missing, "+
-						"add memory failed for user "+
-						"%s/%s, memory_id=%s: %v",
-					userKey.AppName, userKey.UserID,
-					op.MemoryID, addErr,
-				)
-				return fmt.Errorf("update missing memory %s: add fallback: %w",
-					op.MemoryID, addErr)
-			}
-			return nil
+			return fmt.Errorf("auto_memory: update memory for user %s/%s, memory_id=%s: %w",
+				userKey.AppName, userKey.UserID, op.MemoryID, err)
 		}
-		log.WarnfContext(ctx,
-			"auto_memory: update memory failed "+
-				"for user %s/%s, memory_id=%s: %v",
-			userKey.AppName, userKey.UserID,
-			op.MemoryID, err)
-		return fmt.Errorf("update memory %s: %w", op.MemoryID, err)
+		return nil
 	case extractor.OperationDelete:
 		memKey := memory.Key{
 			AppName:  userKey.AppName,
@@ -757,16 +850,21 @@ func (w *AutoMemoryWorker) executeOperation(
 			MemoryID: op.MemoryID,
 		}
 		if err := w.operator.DeleteMemory(ctx, memKey); err != nil {
-			log.WarnfContext(ctx, "auto_memory: delete memory failed for user %s/%s, memory_id=%s: %v",
+			if isMemoryNotFoundError(err) {
+				log.DebugfContext(ctx,
+					"auto_memory: delete target already absent for user %s/%s, memory_id=%s",
+					userKey.AppName, userKey.UserID, op.MemoryID,
+				)
+				return nil
+			}
+			return fmt.Errorf("auto_memory: delete memory for user %s/%s, memory_id=%s: %w",
 				userKey.AppName, userKey.UserID, op.MemoryID, err)
-			return fmt.Errorf("delete memory %s: %w", op.MemoryID, err)
 		}
 		return nil
 	case extractor.OperationClear:
 		if err := w.operator.ClearMemories(ctx, userKey); err != nil {
-			log.WarnfContext(ctx, "auto_memory: clear memories failed for user %s/%s: %v",
+			return fmt.Errorf("auto_memory: clear memories for user %s/%s: %w",
 				userKey.AppName, userKey.UserID, err)
-			return fmt.Errorf("clear memories: %w", err)
 		}
 		return nil
 	default:
@@ -845,6 +943,7 @@ func clearLastExtractError(sess *session.Session) {
 func scanDeltaSince(
 	sess *session.Session,
 	since time.Time,
+	primaryResponseOnly bool,
 ) (time.Time, []model.Message) {
 	var latestTs time.Time
 	var messages []model.Message
@@ -867,8 +966,18 @@ func scanDeltaSince(
 			continue
 		}
 
+		choices := e.Response.Choices
+		if primaryResponseOnly {
+			choices = nil
+			for index := range e.Response.Choices {
+				if e.Response.Choices[index].Index == 0 {
+					choices = e.Response.Choices[index : index+1]
+					break
+				}
+			}
+		}
 		// Extract messages from response choices, excluding tool-related messages.
-		for _, choice := range e.Response.Choices {
+		for _, choice := range choices {
 			msg := choice.Message
 			// Skip tool messages and messages with tool calls.
 			if msg.Role == model.RoleTool || msg.ToolID != "" {
@@ -1063,7 +1172,7 @@ func reconcileAddPreservesStoredMemory(
 		reconcileRetainedTokenCoverage {
 		return false
 	}
-	if !memoryTokenOrderPreserved(stored.Memory, op.Memory) ||
+	if !preservesMaterialTokenOrder(stored.Memory, op.Memory) ||
 		!criticalValuesPreserved(stored.Memory, op.Memory) ||
 		negationSignature(stored.Memory) != negationSignature(op.Memory) {
 		return false

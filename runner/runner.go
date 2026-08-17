@@ -37,9 +37,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -630,14 +632,14 @@ func (r *runner) Run(
 		ro,
 		runnerLatencySpanSelectAgent,
 	)
-	ag, err := r.selectAgent(selectCtx, ro)
+	ag, err := r.selectAgentForRun(selectCtx, ro)
 	if selectStarted && ag != nil {
 		selectSpan.SetAttributes(attribute.String("runner.agent", ag.Info().Name))
 	}
 	finishRunnerLatencySpan(selectSpan, selectStarted, err)
 	if err != nil {
 		execCancel()
-		return nil, fmt.Errorf("select agent: %w", err)
+		return nil, err
 	}
 	resolveCtx, resolveSpan, resolveStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
@@ -901,15 +903,32 @@ func (r *runner) seedSessionHistory(
 	sess *session.Session,
 	invocation *agent.Invocation,
 	ag agent.Agent,
+	message model.Message,
 	ro agent.RunOptions,
 ) (bool, error) {
 	if len(ro.Messages) == 0 || sess.GetEventCount() != 0 {
 		return false, nil
 	}
-	if err := r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, ro.Messages); err != nil {
+	messages := pendingSeedMessages(
+		ro.Messages,
+		coveredSeedUserMessageIndex(message, ro.Messages),
+	)
+	if err := r.appendMessagesAsSessionEvents(
+		ctx,
+		sess,
+		invocation,
+		ag,
+		messages,
+	); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+type pendingSessionMessage struct {
+	message       model.Message
+	seededHistory bool
+	currentTurn   bool
 }
 
 // appendSessionMessages persists messages into the session transcript in the
@@ -921,7 +940,14 @@ func (r *runner) appendSessionMessages(
 	ag agent.Agent,
 	messages []model.Message,
 ) error {
-	return r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, messages)
+	pending := make([]pendingSessionMessage, 0, len(messages))
+	for _, message := range messages {
+		pending = append(pending, pendingSessionMessage{
+			message:     message,
+			currentTurn: true,
+		})
+	}
+	return r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, pending)
 }
 
 // appendMessagesAsSessionEvents persists messages into session events in the
@@ -931,9 +957,10 @@ func (r *runner) appendMessagesAsSessionEvents(
 	sess *session.Session,
 	invocation *agent.Invocation,
 	ag agent.Agent,
-	messages []model.Message,
+	messages []pendingSessionMessage,
 ) error {
-	for _, msg := range messages {
+	for _, pending := range messages {
+		msg := pending.message
 		author := ag.Info().Name
 		if msg.Role == model.RoleUser {
 			author = authorUser
@@ -948,6 +975,12 @@ func (r *runner) appendMessagesAsSessionEvents(
 		evt = r.applyEventPlugins(ctx, invocation, evt)
 		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
 			return err
+		}
+		if pending.seededHistory {
+			messageorigin.MarkSeedHistory(invocation, evt.ID)
+		}
+		if pending.currentTurn {
+			messageorigin.MarkCurrentTurn(invocation, evt.ID)
 		}
 	}
 	return nil
@@ -1121,6 +1154,30 @@ func (r *runner) lookupCancel(requestID string) context.CancelFunc {
 	return handle.cancel
 }
 
+// selectAgentForRun resolves the selected agent and validates capabilities
+// that must be known before the invocation is constructed.
+func (r *runner) selectAgentForRun(
+	ctx context.Context,
+	ro agent.RunOptions,
+) (agent.Agent, error) {
+	ag, err := r.selectAgent(ctx, ro)
+	if err != nil {
+		return nil, fmt.Errorf("select agent: %w", err)
+	}
+	if len(ro.SkillLoads) == 0 {
+		return ag, nil
+	}
+	support, ok := ag.(agent.InvocationSkillLoadSupport)
+	if !ok || !support.SupportsInvocationSkillLoads() {
+		return ag, fmt.Errorf(
+			"%w: %s",
+			agent.ErrSkillLoadingUnsupported,
+			ag.Info().Name,
+		)
+	}
+	return ag, nil
+}
+
 // resolveAgent decides which agent to use for this run.
 func (r *runner) selectAgent(
 	ctx context.Context,
@@ -1251,6 +1308,7 @@ type eventLoopContext struct {
 	emittedAssistantChoiceSignatures   map[string]struct{}
 	visibleCompletionResponseIDs       map[string]struct{}
 	visibleCompletionChoiceSignatures  map[string]struct{}
+	persistedEvents                    eventPersistenceDeduper
 	sawTerminalError                   bool
 	streamFilter                       graph.StreamModeFilter
 	interruptedAssistants              map[string]*interruptedAssistantAccumulator
@@ -1268,6 +1326,80 @@ type eventLoopContext struct {
 	errorEventCount     int
 	emittedEventCount   int
 	detailSpanCount     int
+}
+
+// eventPersistenceDeduper coordinates event persistence within one runner
+// event loop. Successful IDs remain recorded for the loop lifetime, while a
+// failed append releases the ID so another delivery can retry it.
+type eventPersistenceDeduper struct {
+	mu sync.Mutex
+	// records tracks in-flight and completed persistence by event ID. A nil
+	// record marks an event that was persisted successfully.
+	records map[string]*eventPersistenceRecord
+}
+
+type eventPersistenceRecord struct {
+	done chan struct{}
+}
+
+func (d *eventPersistenceDeduper) start(
+	ctx context.Context,
+	eventID string,
+) (record *eventPersistenceRecord, proceed bool) {
+	if d == nil || eventID == "" {
+		return nil, true
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		d.mu.Lock()
+		if d.records == nil {
+			d.records = make(map[string]*eventPersistenceRecord)
+		}
+		record, ok := d.records[eventID]
+		if !ok {
+			record = &eventPersistenceRecord{}
+			d.records[eventID] = record
+			d.mu.Unlock()
+			return record, true
+		}
+		if record == nil {
+			d.mu.Unlock()
+			return nil, false
+		}
+		if record.done == nil {
+			record.done = make(chan struct{})
+		}
+		done := record.done
+		d.mu.Unlock()
+
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, false
+		}
+	}
+}
+
+func (d *eventPersistenceDeduper) finish(
+	eventID string,
+	record *eventPersistenceRecord,
+	persisted bool,
+) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.records[eventID] != record {
+		return
+	}
+	if persisted {
+		d.records[eventID] = nil
+	} else {
+		delete(d.records, eventID)
+	}
+	if record.done != nil {
+		close(record.done)
+	}
 }
 
 type interruptedAssistantAccumulator struct {
@@ -1494,12 +1626,13 @@ func (r *runner) processSingleAgentEvent(
 	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
-	persisted := r.handleEventPersistence(
+	persisted := r.handleEventPersistenceOnce(
 		ctx,
 		loop.invocation,
 		loop.sess,
 		persistSession,
 		agentEvent,
+		&loop.persistedEvents,
 	)
 	if !excludeRootCompletion {
 		r.recordPersistedAssistantEvent(
@@ -1785,7 +1918,7 @@ func (r *runner) applyEventPluginsNoSpan(
 	if updated == nil {
 		return e
 	}
-	copyEventInvocationFields(updated, e)
+	backfillEventMetadata(updated, e)
 	return updated
 }
 
@@ -1814,12 +1947,15 @@ func (r *runner) applyAfterRunPlugins(
 	}
 }
 
-func copyEventInvocationFields(dst *event.Event, src *event.Event) {
+func backfillEventMetadata(dst *event.Event, src *event.Event) {
 	if dst == nil || src == nil {
 		return
 	}
 	if dst.RequestID == "" {
 		dst.RequestID = src.RequestID
+	}
+	if dst.ID == "" {
+		dst.ID = src.ID
 	}
 	if dst.InvocationID == "" {
 		dst.InvocationID = src.InvocationID
@@ -2297,12 +2433,13 @@ func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoo
 			) {
 			continue
 		}
-		if !r.handleEventPersistence(
+		if !r.handleEventPersistenceOnce(
 			persistCtx,
 			loop.invocation,
 			loop.sess,
 			persistSession,
 			interruptedEvent,
+			&loop.persistedEvents,
 		) {
 			continue
 		}
@@ -2514,6 +2651,39 @@ func (r *runner) handleFlushRequest(
 	}
 }
 
+// handleEventPersistenceOnce coordinates persistence by event ID. Successful
+// persistence is not repeated within the deduper's lifetime, while failed
+// attempts remain retryable.
+func (r *runner) handleEventPersistenceOnce(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	sess *session.Session,
+	persistSession *session.Session,
+	agentEvent *event.Event,
+	deduper *eventPersistenceDeduper,
+) (persisted bool) {
+	eventID := ""
+	if agentEvent != nil {
+		eventID = agentEvent.ID
+	}
+	record, proceed := deduper.start(ctx, eventID)
+	if !proceed {
+		return false
+	}
+	if record != nil {
+		defer func() {
+			deduper.finish(eventID, record, persisted)
+		}()
+	}
+	return r.handleEventPersistence(
+		ctx,
+		invocation,
+		sess,
+		persistSession,
+		agentEvent,
+	)
+}
+
 // handleEventPersistence appends qualifying events to the session and triggers
 // asynchronous summarization.
 func (r *runner) handleEventPersistence(
@@ -2562,15 +2732,15 @@ func (r *runner) handleEventPersistence(
 		return false
 	}
 	finishRunnerLatencySpan(appendSpan, appendStarted, nil)
-
 	if shouldAppendSummaryForkResponse(agentEvent) {
 		summaryfork.AppendResponse(invocation, agentEvent.Response)
 	}
 
-	// Skip user messages, tool call events, and invalid content.
+	// Skip user messages, tool call events, error events, and invalid content.
 	// These should not trigger summarization.
 	if agentEvent.IsUserMessage() ||
 		agentEvent.IsToolCallResponse() ||
+		agentEvent.IsError() ||
 		!agentEvent.IsValidContent() {
 		return true
 	}
@@ -2613,6 +2783,9 @@ func (r *runner) handleEventPersistence(
 			summaryCtx,
 			parentRequest,
 		)
+	}
+	if view, ok := summaryview.Snapshot(invocation); ok {
+		summaryCtx = summaryview.ContextWithView(summaryCtx, view)
 	}
 	if err := r.sessionService.EnqueueSummaryJob(
 		summaryCtx, persistSession, agentEvent.FilterKey, false,
@@ -3388,6 +3561,11 @@ func cloneContentParts(parts []model.ContentPart) []model.ContentPart {
 			audio.Data = append([]byte(nil), part.Audio.Data...)
 			cloned[i].Audio = &audio
 		}
+		if part.Video != nil {
+			video := *part.Video
+			video.Data = append([]byte(nil), part.Video.Data...)
+			cloned[i].Video = &video
+		}
 		if part.File != nil {
 			file := *part.File
 			file.Data = append([]byte(nil), part.File.Data...)
@@ -3904,7 +4082,14 @@ func (r *runner) persistCurrentTurnMessages(
 	ro agent.RunOptions,
 ) error {
 	if ro.UserMessageRewriter == nil {
-		historySeeded, err := r.seedSessionHistory(ctx, sess, invocation, ag, ro)
+		historySeeded, err := r.seedSessionHistory(
+			ctx,
+			sess,
+			invocation,
+			ag,
+			message,
+			ro,
+		)
 		if err != nil {
 			return err
 		}
@@ -3916,7 +4101,13 @@ func (r *runner) persistCurrentTurnMessages(
 			message,
 			persistedCurrentTurnMessages,
 		)
-		return r.appendSessionMessages(ctx, sess, invocation, ag, initialMessages)
+		return r.appendMessagesAsSessionEvents(
+			ctx,
+			sess,
+			invocation,
+			ag,
+			initialMessages,
+		)
 	}
 	return r.appendSessionMessages(ctx, sess, invocation, ag, persistedCurrentTurnMessages)
 }
@@ -3924,11 +4115,15 @@ func (r *runner) persistCurrentTurnMessages(
 // shouldAppendUserMessage checks if the incoming user message should be
 // appended to the session.
 func shouldAppendUserMessage(message model.Message, seed []model.Message) bool {
-	if len(seed) == 0 {
-		return true
-	}
-	if message.Role != model.RoleUser {
-		return true
+	return coveredSeedUserMessageIndex(message, seed) == -1
+}
+
+func coveredSeedUserMessageIndex(
+	message model.Message,
+	seed []model.Message,
+) int {
+	if len(seed) == 0 || message.Role != model.RoleUser {
+		return -1
 	}
 	// Only a trailing seeded user turn can cover the incoming user message.
 	for i := len(seed) - 1; i >= 0; i-- {
@@ -3936,23 +4131,48 @@ func shouldAppendUserMessage(message model.Message, seed []model.Message) bool {
 			continue
 		}
 		if seed[i].Role != model.RoleUser {
-			return true
+			return -1
 		}
-		return !model.MessagesEqual(seed[i], message)
+		if model.MessagesEqual(seed[i], message) {
+			return i
+		}
+		return -1
 	}
-	return true
+	return -1
+}
+
+func pendingSeedMessages(
+	seed []model.Message,
+	currentTurnIndex int,
+) []pendingSessionMessage {
+	pending := make([]pendingSessionMessage, 0, len(seed))
+	for i, message := range seed {
+		pending = append(pending, pendingSessionMessage{
+			message:       message,
+			seededHistory: i != currentTurnIndex,
+			currentTurn:   i == currentTurnIndex,
+		})
+	}
+	return pending
 }
 
 func mergeCurrentTurnMessagesIntoSeed(
 	seed []model.Message,
 	original model.Message,
 	currentTurn []model.Message,
-) []model.Message {
+) []pendingSessionMessage {
+	pendingCurrent := make([]pendingSessionMessage, 0, len(currentTurn))
+	for _, message := range currentTurn {
+		pendingCurrent = append(pendingCurrent, pendingSessionMessage{
+			message:     message,
+			currentTurn: true,
+		})
+	}
 	if len(currentTurn) == 0 {
-		return append([]model.Message(nil), seed...)
+		return pendingSeedMessages(seed, -1)
 	}
 	if len(seed) == 0 {
-		return append([]model.Message(nil), currentTurn...)
+		return pendingCurrent
 	}
 	insertIndex := -1
 	for i := len(seed) - 1; i >= 0; i-- {
@@ -3965,15 +4185,14 @@ func mergeCurrentTurnMessagesIntoSeed(
 		break
 	}
 	if insertIndex == -1 {
-		merged := make([]model.Message, 0, len(seed)+len(currentTurn))
-		merged = append(merged, seed...)
-		merged = append(merged, currentTurn...)
+		merged := pendingSeedMessages(seed, -1)
+		merged = append(merged, pendingCurrent...)
 		return merged
 	}
-	merged := make([]model.Message, 0, len(seed)-1+len(currentTurn))
-	merged = append(merged, seed[:insertIndex]...)
-	merged = append(merged, currentTurn...)
-	merged = append(merged, seed[insertIndex+1:]...)
+	merged := make([]pendingSessionMessage, 0, len(seed)-1+len(currentTurn))
+	merged = append(merged, pendingSeedMessages(seed[:insertIndex], -1)...)
+	merged = append(merged, pendingCurrent...)
+	merged = append(merged, pendingSeedMessages(seed[insertIndex+1:], -1)...)
 	return merged
 }
 
@@ -4017,11 +4236,21 @@ func queuedUserMessageContentPartsSupported(parts []model.ContentPart) bool {
 			if part.Image == nil {
 				return false
 			}
-			if strings.TrimSpace(part.Image.URL) == "" && len(part.Image.Data) == 0 {
+			if !queuedUserMessageURLOrDataSupported(part.Image.URL, part.Image.Data) {
 				return false
 			}
 		case model.ContentTypeAudio:
-			if part.Audio == nil || len(part.Audio.Data) == 0 {
+			if part.Audio == nil {
+				return false
+			}
+			if !queuedUserMessageURLOrDataSupported(part.Audio.URL, part.Audio.Data) {
+				return false
+			}
+		case model.ContentTypeVideo:
+			if part.Video == nil {
+				return false
+			}
+			if !queuedUserMessageURLOrDataSupported(part.Video.URL, part.Video.Data) {
 				return false
 			}
 		case model.ContentTypeFile:
@@ -4038,6 +4267,10 @@ func queuedUserMessageContentPartsSupported(parts []model.ContentPart) bool {
 		}
 	}
 	return true
+}
+
+func queuedUserMessageURLOrDataSupported(url string, data []byte) bool {
+	return strings.TrimSpace(url) != "" || len(data) > 0
 }
 
 // ensureErrorEventContent ensures that error events have valid content.

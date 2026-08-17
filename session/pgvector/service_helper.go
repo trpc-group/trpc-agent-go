@@ -29,21 +29,19 @@ func (s *Service) getSession(
 	afterTime time.Time,
 ) (*session.Session, error) {
 	// Query session state.
-	// Use NOW() AT TIME ZONE 'localtime' to get the server's local
-	// time without timezone, matching the TIMESTAMP column type.
 	var sessState *SessionState
 	stateQuery := fmt.Sprintf(
 		`SELECT state, created_at, updated_at
 		FROM %s
 		WHERE app_name = $1 AND user_id = $2
 		AND session_id = $3
-		AND (expires_at IS NULL OR expires_at > NOW() AT TIME ZONE 'localtime')
+		AND (expires_at IS NULL OR expires_at > $4)
 		AND deleted_at IS NULL`,
 		s.tableSessionStates,
 	)
 	stateArgs := []any{
 		key.AppName, key.UserID,
-		key.SessionID,
+		key.SessionID, time.Now(),
 	}
 
 	err := s.pgClient.Query(ctx,
@@ -174,13 +172,13 @@ func (s *Service) listSessions(
 		created_at, updated_at
 		FROM %s
 		WHERE app_name = $1 AND user_id = $2
-		AND (expires_at IS NULL OR expires_at > NOW() AT TIME ZONE 'localtime')
+		AND (expires_at IS NULL OR expires_at > $3)
 		AND deleted_at IS NULL
 		ORDER BY updated_at DESC, session_id DESC`,
 		s.tableSessionStates,
 	)
 	listArgs := []any{
-		key.AppName, key.UserID,
+		key.AppName, key.UserID, time.Now(),
 	}
 	if page != nil && page.Limit > 0 {
 		listQuery += fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(listArgs)+1, len(listArgs)+2)
@@ -989,17 +987,17 @@ func (s *Service) getTrackEventsByTrackLists(
 					AND session_id = $3
 					AND track = $4
 					AND (expires_at IS NULL
-						OR expires_at > NOW() AT TIME ZONE 'localtime')
-					AND created_at > $5
+						OR expires_at > $5)
+					AND created_at > $6
 					AND deleted_at IS NULL
 					ORDER BY created_at DESC
-					LIMIT $6`,
+					LIMIT $7`,
 					s.tableSessionTracks,
 				)
 				args = []any{
 					key.AppName, key.UserID,
 					key.SessionID, track,
-					afterTime, limit,
+					time.Now(), afterTime, limit,
 				}
 			} else {
 				q = fmt.Sprintf(
@@ -1009,8 +1007,8 @@ func (s *Service) getTrackEventsByTrackLists(
 					AND session_id = $3
 					AND track = $4
 					AND (expires_at IS NULL
-						OR expires_at > NOW() AT TIME ZONE 'localtime')
-					AND created_at > $5
+						OR expires_at > $5)
+					AND created_at > $6
 					AND deleted_at IS NULL
 					ORDER BY created_at DESC`,
 					s.tableSessionTracks,
@@ -1018,7 +1016,7 @@ func (s *Service) getTrackEventsByTrackLists(
 				args = []any{
 					key.AppName, key.UserID,
 					key.SessionID, track,
-					afterTime,
+					time.Now(), afterTime,
 				}
 			}
 			queries = append(queries, &trackQuery{
@@ -1124,7 +1122,7 @@ func (s *Service) getSummariesList(
 		FROM %s
 		WHERE app_name = $1 AND user_id = $2
 		AND session_id = ANY($3::varchar[])
-		AND (expires_at IS NULL OR expires_at > NOW() AT TIME ZONE 'localtime')
+		AND (expires_at IS NULL OR expires_at > $4)
 		AND deleted_at IS NULL`,
 		summaryColumns,
 		s.tableSessionSummaries,
@@ -1182,6 +1180,7 @@ func (s *Service) getSummariesList(
 		sessionKeys[0].AppName,
 		sessionKeys[0].UserID,
 		sessionIDs,
+		time.Now(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

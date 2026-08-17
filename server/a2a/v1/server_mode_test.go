@@ -470,6 +470,7 @@ func TestResponseRewriterCanEmptyArtifactParts(t *testing.T) {
 			},
 		},
 	}}
+	rewriterCalled := false
 	processor, err := buildProcessor("agent", &options{
 		runner:       runner,
 		errorHandler: defaultErrorHandler,
@@ -478,6 +479,7 @@ func TestResponseRewriterCanEmptyArtifactParts(t *testing.T) {
 			result protocol.StreamEvent,
 		) protocol.StreamEvent {
 			if update, ok := result.(*protocol.TaskArtifactUpdateEvent); ok {
+				rewriterCalled = true
 				update.Artifact.Parts = nil
 			}
 			return result
@@ -506,6 +508,9 @@ func TestResponseRewriterCanEmptyArtifactParts(t *testing.T) {
 	}
 	if task.Status.State != protocol.TaskStateCompleted {
 		t.Fatalf("task state = %s, want completed", task.Status.State)
+	}
+	if !rewriterCalled {
+		t.Fatal("response rewriter did not receive an artifact update")
 	}
 }
 
