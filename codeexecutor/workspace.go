@@ -265,16 +265,16 @@ type Capabilities struct {
 	// PutFiles/Collect. true means the backend implements the full
 	// surface and no wrapper is installed.
 	//
-	// Use SupportsDeclarativeIOTrue() / SupportsDeclarativeIOFalse (or
-	// BoolPtr) rather than a bare bool so the zero value of
+	// Use SupportsDeclarativeIOTrue() / SupportsDeclarativeIOFalse()
+	// rather than a bare bool so the zero value of
 	// Capabilities preserves historical unknown behaviour for
 	// external NewEngineWithCapabilities callers.
 	SupportsDeclarativeIO *bool
 }
 
-// BoolPtr returns a pointer to a fresh copy of b. Convenience for
+// boolPtr returns a pointer to a fresh copy of b. Convenience for
 // capability fields. Each call allocates so callers do not share storage.
-func BoolPtr(b bool) *bool {
+func boolPtr(b bool) *bool {
 	v := b
 	return &v
 }
@@ -285,7 +285,7 @@ func BoolPtr(b bool) *bool {
 // INV-CAP: this is a function that allocates a fresh *bool on each call
 // so mutating the returned pointer (or Describe()'s copy) cannot change
 // other engines or later constructions.
-func SupportsDeclarativeIOTrue() *bool { return BoolPtr(true) }
+func SupportsDeclarativeIOTrue() *bool { return boolPtr(true) }
 
 // SupportsDeclarativeIOFalse returns an audited false value for
 // Capabilities.SupportsDeclarativeIO.
@@ -293,7 +293,7 @@ func SupportsDeclarativeIOTrue() *bool { return BoolPtr(true) }
 // INV-CAP: this is a function that allocates a fresh *bool on each call
 // so mutating the returned pointer (or Describe()'s copy) cannot change
 // other engines or later constructions.
-func SupportsDeclarativeIOFalse() *bool { return BoolPtr(false) }
+func SupportsDeclarativeIOFalse() *bool { return boolPtr(false) }
 
 // ErrDeclarativeIONotSupported is returned by the gatingFS wrapper
 // when a caller invokes StageInputs or CollectOutputs on an engine

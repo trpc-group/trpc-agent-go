@@ -75,9 +75,29 @@ func WithEntrypoint(entrypoint []string) Option {
 	}
 }
 
-// WithResourceLimits sets CPU/memory/GPU limits
-// (e.g. {"cpu": "500m", "memory": "256Mi"}).
-func WithResourceLimits(limits osb.ResourceLimits) Option {
+// ResourceLimits defines sandbox runtime resource constraints as
+// key-value pairs, mirroring the OpenSandbox server schema without
+// leaking the SDK type. Values are Kubernetes-style quantity strings:
+//
+//	"cpu":    CPU share, e.g. "500m" (0.5 vCPU) or "2" (2 vCPUs)
+//	"memory": byte limit with binary-SI suffix, e.g. "256Mi", "2Gi"
+//	"gpu":    GPU count, e.g. "1"
+//
+// The map is passed through to the OpenSandbox create-sandbox API; see
+// the OpenSandbox documentation for the full set of supported keys.
+// When nil or empty the server default applies (cpu "1", memory "2Gi").
+type ResourceLimits map[string]string
+
+// WithResourceLimits sets sandbox-level CPU/memory/GPU limits using
+// Kubernetes-style quantity strings, e.g.
+// ResourceLimits{"cpu": "500m", "memory": "256Mi"} — "cpu" is in
+// millicores ("500m" = 0.5 vCPU, "2" = 2 vCPUs), "memory" is a byte
+// quantity with binary-SI suffix ("256Mi", "2Gi"), and "gpu" is a
+// plain count ("1"). Limits only take effect when a new sandbox is
+// created; they are ignored when connecting via WithSandboxID. When
+// not supplied (or nil), the OpenSandbox server default applies
+// (cpu "1", memory "2Gi").
+func WithResourceLimits(limits ResourceLimits) Option {
 	return func(c *CodeExecutor) { c.resourceLimits = limits }
 }
 
@@ -101,8 +121,9 @@ func WithSandboxTimeout(t time.Duration) Option {
 // greater than requestTimeout - requestTimeoutBuffer, RunProgram
 // returns an error instead of silently shortening the timeout; raise
 // this option (or WithExecutionTimeout) to allow longer individual
-// runs. Set t to 0 to use the SDK default (osb.DefaultRequestTimeout),
-// which is then clamped like any other value.
+// runs. Set t to 0 to use the default (defaultRequestTimeout, sized to
+// cover the framework-standard 5-minute tool run timeout), which is
+// then clamped like any other value.
 func WithRequestTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.requestTimeout = t }
 }
@@ -303,10 +324,9 @@ func WithOutputPatterns(patterns []string) Option {
 // CodeExecutor executes code inside an OpenSandbox sandbox.
 //
 // Lifecycle: CodeExecutor is not safe for concurrent use across the
-// Close boundary. ExecuteCode / Sandbox / SandboxID may be called
-// concurrently with each other, but Close must not run concurrently
-// with any other method. This mirrors the e2b adapter's lifecycle
-// contract.
+// Close boundary. ExecuteCode / SandboxID may be called concurrently
+// with each other, but Close must not run concurrently with any other
+// method. This mirrors the e2b adapter's lifecycle contract.
 //
 // Concurrency with WorkspacePersistencePerSession: when the executor
 // is configured with PerSession persistence, calls sharing the same
@@ -325,7 +345,7 @@ type CodeExecutor struct {
 	protocol            string
 	image               string
 	entrypoint          []string
-	resourceLimits      osb.ResourceLimits
+	resourceLimits      ResourceLimits
 	sandboxTimeout      time.Duration
 	requestTimeout      time.Duration
 	envVars             map[string]string
@@ -364,6 +384,16 @@ type CodeExecutor struct {
 // call that finished just under the per-command execution timeout.
 const requestTimeoutBuffer = 10 * time.Second
 
+// defaultRequestTimeout is the default HTTP request timeout. It is
+// sized to cover the framework-standard 5-minute RunProgram timeout
+// used by tool/skill and tool/workspaceexec
+// (defaultSkillRunTimeout / defaultWorkspaceExecTimeout) plus the
+// streaming buffer, so those tools work against OpenSandbox without
+// extra configuration. Callers needing a different cap can set
+// WithRequestTimeout explicitly; note the value only bounds how long a
+// hung request may stall — fast requests are unaffected.
+const defaultRequestTimeout = 5*time.Minute + requestTimeoutBuffer
+
 // defaultOutputPatterns is the default set of glob patterns used to
 // collect output files after ExecuteCode completes.
 var defaultOutputPatterns = []string{
@@ -384,7 +414,7 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		image:            osb.CodeInterpreterImage,
 		entrypoint:       osb.CodeInterpreterEntrypoint,
 		sandboxTimeout:   time.Duration(osb.DefaultCodeInterpreterTimeoutSeconds) * time.Second,
-		requestTimeout:   osb.DefaultRequestTimeout,
+		requestTimeout:   defaultRequestTimeout,
 		executionTimeout: 30 * time.Second,
 		outputPatterns:   append([]string(nil), defaultOutputPatterns...),
 	}
@@ -418,12 +448,12 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		}
 	}
 
-	// WithRequestTimeout(0) means "keep the SDK default"; resolve it
+	// WithRequestTimeout(0) means "keep the default"; resolve it
 	// now so the clamp below and the RunProgram budget check both see
 	// the actual timeout value rather than a sentinel 0 that would
 	// silently bypass the budget check.
 	if c.requestTimeout == 0 {
-		c.requestTimeout = osb.DefaultRequestTimeout
+		c.requestTimeout = defaultRequestTimeout
 	}
 
 	// The OpenSandbox SDK applies ConnectionConfig.RequestTimeout to the
@@ -475,7 +505,7 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 	createOpts := osb.SandboxCreateOptions{
 		Image:          c.image,
 		Entrypoint:     c.entrypoint,
-		ResourceLimits: c.resourceLimits,
+		ResourceLimits: osb.ResourceLimits(c.resourceLimits),
 		Env:            c.envVars,
 		Metadata:       c.metadata,
 	}
@@ -521,9 +551,6 @@ func (c *CodeExecutor) SandboxID() string {
 	}
 	return c.sbx.ID()
 }
-
-// Sandbox exposes the underlying sandbox for advanced usage.
-func (c *CodeExecutor) Sandbox() *osb.Sandbox { return c.sbx }
 
 // CodeBlockDelimiter returns the fenced code delimiter.
 func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
@@ -1142,13 +1169,13 @@ func sessionIdentityOK(app, user, id string) bool {
 }
 
 // encodeSessionWorkspaceKey returns an injective encoding of the three
-// session identity fields for PerSession workspace hashing.
+// session identity fields for PerSession workspace hashing. The result is
+// codeexecutor.SessionWorkspaceKey: "sess-" followed by 32 lowercase hex
+// characters — a single filesystem-safe path segment (no separators, no
+// drive-letter colons, fixed length) that never aliases two sessions.
 // Caller must ensure sessionIdentityOK first when using as a durable key.
 func encodeSessionWorkspaceKey(app, user, id string) string {
-	// length-prefixed segments: always three fields, including empties.
-	// Parsing is: for each field, read decimal length, ':', then N bytes.
-	return fmt.Sprintf("%d:%s/%d:%s/%d:%s",
-		len(app), app, len(user), user, len(id), id)
+	return codeexecutor.SessionWorkspaceKey(app, user, id)
 }
 
 // namespaceExecutionID binds an untrusted execution label under a
@@ -1188,9 +1215,3 @@ func (c *CodeExecutor) Close() error {
 	c.sbx = nil
 	return nil
 }
-
-// errNotImplementedV1 is the package-private alias used by
-// StageInputs/CollectOutputs stubs. It equals
-// codeexecutor.ErrDeclarativeIONotSupported so external callers use one
-// errors.Is path. Do not re-export a V1-named public sentinel.
-var errNotImplementedV1 = codeexecutor.ErrDeclarativeIONotSupported

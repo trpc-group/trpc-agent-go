@@ -123,11 +123,16 @@ func (r *Runtime) CreateWorkspace(
 	execID string,
 	pol codeexecutor.WorkspacePolicy,
 ) (codeexecutor.Workspace, error) {
-	_ = ctx
 	if execID == "" {
 		execID = "default"
 	}
 	root, id := workspacePathForID(r.root, execID)
+	// Upgrade a pre-encoding-change PerSession workspace before creating
+	// the new directory; once root exists the legacy directory would be
+	// orphaned.
+	if err := r.migrateLegacyWorkspace(execID, legacyWorkspaceKeyFromContext(ctx)); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return codeexecutor.Workspace{}, err
 	}

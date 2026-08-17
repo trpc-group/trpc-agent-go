@@ -212,7 +212,7 @@ func (r *workspaceRuntime) StageInputs(
 	_ = ctx
 	_ = ws
 	_ = specs
-	return errNotImplementedV1
+	return codeexecutor.ErrDeclarativeIONotSupported
 }
 
 // CollectOutputs applies the declarative output spec in the sandbox.
@@ -226,7 +226,7 @@ func (r *workspaceRuntime) CollectOutputs(
 	_ = ctx
 	_ = ws
 	_ = spec
-	return codeexecutor.OutputManifest{}, errNotImplementedV1
+	return codeexecutor.OutputManifest{}, codeexecutor.ErrDeclarativeIONotSupported
 }
 
 // readFile reads up to limit bytes from a remote path via the SDK's

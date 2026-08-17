@@ -167,16 +167,21 @@ func workspaceKey(ctx context.Context, fallback string) string {
 
 // KeyFromInvocation derives the shared workspace key for an invocation.
 //
-// Encoding is injective over (AppName, UserID, ID) via length prefixes.
-// Session.ID is required; empty/whitespace ID returns "".
+// The key is codeexecutor.SessionWorkspaceKey over (AppName, UserID, ID):
+// "sess-" followed by 32 lowercase hex characters. It is a single
+// filesystem-safe path segment (no separators, no ':' illegal on Windows,
+// fixed length) and injective over the identity triple, so distinct
+// sessions never share a workspace. Session.ID is required; empty or
+// whitespace-only ID returns "".
 //
 // Breaking change: the encoding changed from "app/user/id" (or just "id"
-// when fields were missing) to a length-prefixed "len:app/len:user/len:id"
-// format to prevent separator-collision attacks. After an upgrade, existing
-// PerSession workspaces on disk are orphaned because the same session now
-// hashes to a different directory path. Callers that need to locate legacy
-// workspaces should use LegacyKeyFromInvocation for a one-time migration
-// (e.g. rename or symlink the old directory to the new key's path).
+// when fields were missing) to the hash format above. After an upgrade,
+// existing PerSession workspaces on disk are orphaned because the same
+// session now hashes to a different directory path. Callers that need to
+// locate legacy workspaces should use LegacyKeyFromInvocation (which
+// delegates to codeexecutor.LegacySessionWorkspaceKey) for a one-time
+// migration (e.g. rename or symlink the old directory to the new key's
+// path).
 func KeyFromInvocation(inv *agent.Invocation) string {
 	if inv == nil || inv.Session == nil {
 		return ""
@@ -184,11 +189,7 @@ func KeyFromInvocation(inv *agent.Invocation) string {
 	app := inv.Session.AppName
 	user := inv.Session.UserID
 	id := inv.Session.ID
-	if strings.TrimSpace(id) == "" {
-		return ""
-	}
-	return fmt.Sprintf("%d:%s/%d:%s/%d:%s",
-		len(app), app, len(user), user, len(id), id)
+	return codeexecutor.SessionWorkspaceKey(app, user, id)
 }
 
 // LegacyKeyFromInvocation reproduces the pre-migration workspace key format
@@ -199,16 +200,8 @@ func LegacyKeyFromInvocation(inv *agent.Invocation) string {
 	if inv == nil || inv.Session == nil {
 		return ""
 	}
-	app := inv.Session.AppName
-	user := inv.Session.UserID
-	id := inv.Session.ID
-	if strings.TrimSpace(id) == "" {
-		return ""
-	}
-	if app != "" && user != "" {
-		return app + "/" + user + "/" + id
-	}
-	return id
+	return codeexecutor.LegacySessionWorkspaceKey(
+		inv.Session.AppName, inv.Session.UserID, inv.Session.ID)
 }
 
 func withWorkspaceArtifactContext(

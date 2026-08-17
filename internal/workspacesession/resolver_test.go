@@ -172,7 +172,11 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	ws5, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
 	require.Equal(t, KeyFromInvocation(inv), ws5.ID)
-	require.Equal(t, []string{"workspace", "0:/0:/8:sess-123", KeyFromInvocation(inv)}, mgr.created)
+	require.Equal(t, []string{
+		"workspace",
+		codeexecutor.SessionWorkspaceKey("", "", "sess-123"),
+		KeyFromInvocation(inv),
+	}, mgr.created)
 }
 
 // artifactProbeManager asserts CreateWorkspace's context can resolve an artifact
@@ -295,9 +299,28 @@ func TestResolver_InvalidateWorkspaceHandle_UsesInvocationKey(t *testing.T) {
 }
 
 func TestKeyFromInvocation_Injective(t *testing.T) {
-	a := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a/b", UserID: "c", ID: "d"}})
-	b := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a", UserID: "b/c", ID: "d"}})
+	// Empty-field positions must not collide.
+	a := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a", ID: "b"}})
+	b := KeyFromInvocation(&agent.Invocation{Session: &session.Session{UserID: "a", ID: "b"}})
 	require.NotEqual(t, a, b)
+	// Embedded separators must not collide either.
+	c := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a/b", UserID: "c", ID: "d"}})
+	d := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a", UserID: "b/c", ID: "d"}})
+	require.NotEqual(t, c, d)
+	// Deterministic for the same identity.
+	require.Equal(t, c, KeyFromInvocation(&agent.Invocation{
+		Session: &session.Session{AppName: "a/b", UserID: "c", ID: "d"},
+	}))
+}
+
+func TestKeyFromInvocation_MatchesSessionWorkspaceKey(t *testing.T) {
+	inv := &agent.Invocation{Session: &session.Session{
+		AppName: "app", UserID: "user", ID: "sess",
+	}}
+	got := KeyFromInvocation(inv)
+	require.Equal(t, codeexecutor.SessionWorkspaceKey("app", "user", "sess"), got)
+	require.Regexp(t, `^sess-[0-9a-f]{32}$`, got)
+	require.Len(t, got, 37)
 }
 
 func TestKeyFromInvocation_RejectsEmptyID(t *testing.T) {

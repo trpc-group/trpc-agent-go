@@ -258,8 +258,8 @@ func TestCodeExecutionResponseProcessor_UsesSharedWorkspaceSessionKey(
 		{
 			name: "session id only",
 			sess: &session.Session{ID: "test-session"},
-			// KeyFromInvocation is length-prefixed: app="" / user="" / id="test-session"
-			want: "0:/0:/12:test-session",
+			// KeyFromInvocation is the session workspace hash: app="" / user="" / id="test-session"
+			want: codeexecutor.SessionWorkspaceKey("", "", "test-session"),
 		},
 		{
 			name: "full session key",
@@ -268,8 +268,8 @@ func TestCodeExecutionResponseProcessor_UsesSharedWorkspaceSessionKey(
 				UserID:  "test-user",
 				ID:      "test-session",
 			},
-			// Length-prefixed: 8:test-app / 9:test-user / 12:test-session
-			want: "8:test-app/9:test-user/12:test-session",
+			// Session workspace hash over the full identity triple.
+			want: codeexecutor.SessionWorkspaceKey("test-app", "test-user", "test-session"),
 		},
 	}
 

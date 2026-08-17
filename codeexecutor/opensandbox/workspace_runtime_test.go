@@ -836,12 +836,20 @@ func TestWorkspace_RunProgram(t *testing.T) {
 // TestWorkspace_RunProgram_TimeoutExceedsBudgetReturnsError verifies
 // that RunProgram returns an error when spec.Timeout exceeds
 // requestTimeout - requestTimeoutBuffer, instead of silently clamping.
-// Default executor has executionTimeout=30s, so NewWithContext clamps
-// requestTimeout to 40s; maxRun = 30s.
+// An explicit WithRequestTimeout(40s) with the default
+// executionTimeout (30s) yields maxRun = 30s.
 func TestWorkspace_RunProgram_TimeoutExceedsBudgetReturnsError(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
-	exec := newTestExecutor(t, m)
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithRequestTimeout(40*time.Second),
+	)
+	require.NoError(t, err)
 	defer exec.Close()
 
 	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
@@ -1074,7 +1082,7 @@ func TestWorkspace_StageInputs_NotImplemented(t *testing.T) {
 	require.NoError(t, err)
 
 	err = exec.StageInputs(context.Background(), ws, []codeexecutor.InputSpec{{From: "host:///x"}})
-	assert.ErrorIs(t, err, errNotImplementedV1)
+	assert.ErrorIs(t, err, codeexecutor.ErrDeclarativeIONotSupported)
 }
 
 func TestWorkspace_CollectOutputs_NotImplemented(t *testing.T) {
@@ -1087,12 +1095,12 @@ func TestWorkspace_CollectOutputs_NotImplemented(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = exec.CollectOutputs(context.Background(), ws, codeexecutor.OutputSpec{Globs: []string{"*.txt"}})
-	assert.ErrorIs(t, err, errNotImplementedV1)
+	assert.ErrorIs(t, err, codeexecutor.ErrDeclarativeIONotSupported)
 }
 
 // TestWorkspace_EngineFS_GatingDeclarativeIO verifies that
 // Engine().FS() returns ErrDeclarativeIONotSupported (from gatingFS)
-// rather than the package-private errNotImplementedV1, so
+// rather than a package-private sentinel, so
 // cross-package callers can detect the missing capability.
 func TestWorkspace_EngineFS_GatingDeclarativeIO(t *testing.T) {
 	m := newMockServer(t)
@@ -3080,13 +3088,13 @@ func TestListFilesByGlob_CountLimit(t *testing.T) {
 	assert.True(t, hasMarker, "file-count cap must set aggregate marker")
 }
 
-// --- L3: errNotImplementedV1 exported ---
+// --- L3: DeclarativeIO sentinel ---
 
-// TestErrNotImplementedV1_PackageSentinel verifies that the
-// package-private errNotImplementedV1 sentinel is detectable with
+// TestErrDeclarativeIONotSupported_PackageSentinel verifies that the
+// codeexecutor.ErrDeclarativeIONotSupported sentinel is detectable with
 // errors.Is, protecting the contract that StageInputs/CollectOutputs
 // return this sentinel for v1 protocol incompatibility.
-func TestErrNotImplementedV1_PackageSentinel(t *testing.T) {
+func TestErrDeclarativeIONotSupported_PackageSentinel(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
@@ -3095,15 +3103,15 @@ func TestErrNotImplementedV1_PackageSentinel(t *testing.T) {
 	ws, err := exec.CreateWorkspace(context.Background(), "exec-v1", codeexecutor.WorkspacePolicy{})
 	require.NoError(t, err)
 
-	// StageInputs returns errNotImplementedV1.
+	// StageInputs returns codeexecutor.ErrDeclarativeIONotSupported.
 	err = exec.StageInputs(context.Background(), ws, nil)
-	assert.ErrorIs(t, err, errNotImplementedV1,
-		"StageInputs must return errNotImplementedV1 detectable via errors.Is")
+	assert.ErrorIs(t, err, codeexecutor.ErrDeclarativeIONotSupported,
+		"StageInputs must return codeexecutor.ErrDeclarativeIONotSupported detectable via errors.Is")
 
-	// CollectOutputs returns errNotImplementedV1.
+	// CollectOutputs returns codeexecutor.ErrDeclarativeIONotSupported.
 	_, err = exec.CollectOutputs(context.Background(), ws, codeexecutor.OutputSpec{})
-	assert.ErrorIs(t, err, errNotImplementedV1,
-		"CollectOutputs must return errNotImplementedV1 detectable via errors.Is")
+	assert.ErrorIs(t, err, codeexecutor.ErrDeclarativeIONotSupported,
+		"CollectOutputs must return codeexecutor.ErrDeclarativeIONotSupported detectable via errors.Is")
 }
 
 // --- L4: Sub-millisecond timeout rejection ---

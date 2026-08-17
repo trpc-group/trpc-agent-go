@@ -6,12 +6,14 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container => ../../codeexecutor/container
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter => ../../codeexecutor/jupyter
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/opensandbox => ../../codeexecutor/opensandbox
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.5.0
+	trpc.group/trpc-go/trpc-agent-go v1.11.1
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v0.0.0-20260325093248-5d0ece08e197
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/opensandbox v1.11.1
 )
 
 require (

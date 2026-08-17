@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func TestOptions(t *testing.T) {
 	WithProtocol("https")(c)
 	WithImage("my-image:1")(c)
 	WithEntrypoint([]string{"sh", "-c", "sleep 1"})(c)
-	WithResourceLimits(osb.ResourceLimits{"cpu": "500m"})(c)
+	WithResourceLimits(ResourceLimits{"cpu": "500m"})(c)
 	WithSandboxTimeout(2 * time.Minute)(c)
 	WithRequestTimeout(15 * time.Second)(c)
 	WithExecutionTimeout(42 * time.Second)(c)
@@ -61,7 +62,7 @@ func TestOptions(t *testing.T) {
 	assert.Equal(t, "https", c.protocol)
 	assert.Equal(t, "my-image:1", c.image)
 	assert.Equal(t, []string{"sh", "-c", "sleep 1"}, c.entrypoint)
-	assert.Equal(t, osb.ResourceLimits{"cpu": "500m"}, c.resourceLimits)
+	assert.Equal(t, ResourceLimits{"cpu": "500m"}, c.resourceLimits)
 	assert.Equal(t, 2*time.Minute, c.sandboxTimeout)
 	assert.Equal(t, 15*time.Second, c.requestTimeout)
 	assert.Equal(t, 42*time.Second, c.executionTimeout)
@@ -87,7 +88,7 @@ func TestCodeBlockDelimiter(t *testing.T) {
 func TestSandboxIDWithoutSandbox(t *testing.T) {
 	c := &CodeExecutor{}
 	assert.Empty(t, c.SandboxID())
-	assert.Nil(t, c.Sandbox())
+	assert.Nil(t, c.sbx)
 }
 
 func TestDefaultOutputPatterns(t *testing.T) {
@@ -224,7 +225,7 @@ func TestNew_CreatePath_DefaultImage(t *testing.T) {
 	assert.Equal(t, osb.CodeInterpreterEntrypoint, exec.entrypoint)
 	assert.True(t, exec.owned, "New without WithSandboxID should own the sandbox")
 	assert.Equal(t, "sbx-mock", exec.SandboxID())
-	assert.NotNil(t, exec.Sandbox())
+	assert.NotNil(t, exec.sbx)
 }
 
 func TestNew_ConnectPath_WithSandboxID(t *testing.T) {
@@ -684,24 +685,28 @@ func TestNew_RequestTimeout_PreservedWhenLargeEnough(t *testing.T) {
 		"requestTimeout should be preserved when already >= executionTimeout + buffer")
 }
 
-// TestNew_RequestTimeout_DefaultClamped verifies that the default
-// requestTimeout (SDK DefaultRequestTimeout = 30s) gets clamped above
-// the default executionTimeout (30s) so streaming /command calls are
-// not killed by the HTTP client at the same 30s boundary.
-func TestNew_RequestTimeout_DefaultClamped(t *testing.T) {
+// TestNew_RequestTimeout_DefaultCoversToolBudget verifies that the
+// default requestTimeout already covers the framework-standard
+// 5-minute RunProgram timeout used by tool/skill and
+// tool/workspaceexec, so those tools work out of the box and the
+// default executionTimeout clamp never lowers it.
+func TestNew_RequestTimeout_DefaultCoversToolBudget(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
 	defer exec.Close()
 
-	want := 30*time.Second + requestTimeoutBuffer
-	assert.Equal(t, want, exec.requestTimeout,
-		"default requestTimeout should be clamped to default executionTimeout + buffer")
+	assert.Equal(t, defaultRequestTimeout, exec.requestTimeout,
+		"default requestTimeout should stay at defaultRequestTimeout (>= default executionTimeout + buffer)")
+	assert.GreaterOrEqual(t,
+		exec.requestTimeout-requestTimeoutBuffer, 5*time.Minute,
+		"default request timeout budget must cover the standard 5-minute tool run timeout")
 }
 
 // TestNew_RequestTimeout_ZeroResolvesToDefault verifies that
-// WithRequestTimeout(0) resolves to the SDK default and the clamp
-// logic fires, so the RunProgram budget check is not bypassed.
+// WithRequestTimeout(0) resolves to the package default (not the raw
+// SDK default) and the clamp logic fires, so the RunProgram budget
+// check is not bypassed.
 func TestNew_RequestTimeout_ZeroResolvesToDefault(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -717,11 +722,8 @@ func TestNew_RequestTimeout_ZeroResolvesToDefault(t *testing.T) {
 	require.NoError(t, err)
 	defer exec.Close()
 
-	// WithRequestTimeout(0) should resolve to osb.DefaultRequestTimeout,
-	// then be clamped up to executionTimeout + buffer (30s + 10s = 40s).
-	want := 30*time.Second + requestTimeoutBuffer
-	assert.Equal(t, want, exec.requestTimeout,
-		"WithRequestTimeout(0) should resolve to SDK default and be clamped")
+	assert.Equal(t, defaultRequestTimeout, exec.requestTimeout,
+		"WithRequestTimeout(0) should resolve to defaultRequestTimeout and be clamped")
 }
 
 // TestAppendStderr_EdgeCases verifies appendStderr handles empty and
@@ -785,9 +787,8 @@ func TestNew_ExecutionTimeoutZero_ClampsToDefault(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer exec.Close()
-	want := defaultRunTimeout + requestTimeoutBuffer
-	assert.Equal(t, want, exec.requestTimeout,
-		"requestTimeout must be clamped to defaultRunTimeout + buffer")
+	assert.Equal(t, defaultRequestTimeout, exec.requestTimeout,
+		"requestTimeout default already exceeds defaultRunTimeout + buffer and must be preserved")
 	assert.Equal(t, defaultRunTimeout, exec.executionTimeout,
 		"executionTimeout must be persisted as defaultRunTimeout so the timeout marker is correct")
 }
@@ -1199,7 +1200,8 @@ func TestExecuteCode_PerSession_DerivesExecIDFromSession(t *testing.T) {
 	m.mu.Unlock()
 
 	wantKey := executionIDFromContext(ctx)
-	require.Equal(t, encodeSessionWorkspaceKey("app-a", "user-1", "sess-1"), wantKey)
+	require.Equal(t, codeexecutor.SessionWorkspaceKey("app-a", "user-1", "sess-1"), wantKey)
+	require.Regexp(t, `^sess-[0-9a-f]{32}$`, wantKey)
 	h := stableWorkspaceHash(wantKey)
 	wsMarker := "ws_" + h
 
@@ -1279,6 +1281,7 @@ func TestEngine_DoesNotAdvertiseSupportsCleanEnv(t *testing.T) {
 }
 
 func TestEncodeSessionWorkspaceKey_Injective(t *testing.T) {
+	keyRe := regexp.MustCompile(`^sess-[0-9a-f]{32}$`)
 	// Empty-field collision that the old "/"-join scheme produced.
 	a := encodeSessionWorkspaceKey("a", "", "b")
 	b := encodeSessionWorkspaceKey("", "a", "b")
@@ -1292,6 +1295,15 @@ func TestEncodeSessionWorkspaceKey_Injective(t *testing.T) {
 		encodeSessionWorkspaceKey("app", "user", "sess"),
 		encodeSessionWorkspaceKey("app", "user", "sess"),
 	)
+	// Delegates to the shared canonical session workspace key.
+	require.Equal(t,
+		codeexecutor.SessionWorkspaceKey("app", "user", "sess"),
+		encodeSessionWorkspaceKey("app", "user", "sess"),
+	)
+	// Output is always the filesystem-safe hash format.
+	for _, k := range []string{a, b, c, d} {
+		require.Regexp(t, keyRe, k)
+	}
 }
 
 // --- INV-ISO / INV-LIFE falsifiers (multi-review-gate pack A) ---
