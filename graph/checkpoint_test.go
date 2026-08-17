@@ -1538,13 +1538,14 @@ func TestCreateCheckpoint_KeepsUserInputBaseline(t *testing.T) {
 func TestExecutor_UserInputBaselineSurvivesUntilLLMConsumption(t *testing.T) {
 	fp := userinputkey.Fingerprint("hello")
 	var sawBeforeLLM bool
+	var prepareBaseline string
+	var prepareBaselineOK bool
 	var afterRan bool
 	var sawBaselineAfterLLM bool
+	var afterUserInput any
 	g, err := NewStateGraph(MessagesStateSchema()).
 		AddNode("prepare", func(_ context.Context, state State) (any, error) {
-			got, ok := state[userinputkey.Baseline].(string)
-			require.True(t, ok)
-			require.Equal(t, fp, got)
+			prepareBaseline, prepareBaselineOK = state[userinputkey.Baseline].(string)
 			sawBeforeLLM = true
 			return State{"prepared": true}, nil
 		}).
@@ -1552,7 +1553,7 @@ func TestExecutor_UserInputBaselineSurvivesUntilLLMConsumption(t *testing.T) {
 		AddNode("after", func(_ context.Context, state State) (any, error) {
 			afterRan = true
 			_, sawBaselineAfterLLM = state[userinputkey.Baseline]
-			require.Equal(t, "", state[StateKeyUserInput])
+			afterUserInput = state[StateKeyUserInput]
 			return nil, nil
 		}).
 		SetEntryPoint("prepare").
@@ -1578,8 +1579,11 @@ func TestExecutor_UserInputBaselineSurvivesUntilLLMConsumption(t *testing.T) {
 		}
 	}
 	require.True(t, sawBeforeLLM)
+	require.True(t, prepareBaselineOK)
+	require.Equal(t, fp, prepareBaseline)
 	require.True(t, afterRan)
 	require.False(t, sawBaselineAfterLLM)
+	require.Equal(t, "", afterUserInput)
 
 	var sawInputBaseline bool
 	var sawPreLLMLoopBaseline bool
