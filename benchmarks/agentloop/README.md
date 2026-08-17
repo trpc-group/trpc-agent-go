@@ -3,7 +3,8 @@
 This directory defines the reproducible benchmark suites and allocation
 budgets for Agent Loop hot paths. The benchmarks cover request construction,
 summary projection and forks, context compaction, streaming, callbacks,
-parallel tool-call invocation views, telemetry, and event persistence.
+parallel tool-call invocation views (including session/state size crossed with
+fan-out), telemetry, and event persistence.
 
 ## Suites
 

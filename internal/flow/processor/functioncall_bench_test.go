@@ -88,6 +88,44 @@ func BenchmarkParallelInvocationViewBatch(b *testing.B) {
 	}
 }
 
+func BenchmarkParallelInvocationViewBatchWithSession(b *testing.B) {
+	for _, tc := range []struct {
+		historySize   int
+		sessionEvents int
+		stateBytes    int
+		fanout        int
+	}{
+		{historySize: 256, sessionEvents: 256, stateBytes: 1024, fanout: 4},
+		{historySize: 1024, sessionEvents: 1024, stateBytes: 64 * 1024, fanout: 4},
+		{historySize: 1024, sessionEvents: 1024, stateBytes: 64 * 1024, fanout: 16},
+	} {
+		name := fmt.Sprintf(
+			"history=%d/session_events=%d/state_bytes=%d/fanout=%d",
+			tc.historySize,
+			tc.sessionEvents,
+			tc.stateBytes,
+			tc.fanout,
+		)
+		b.Run(name, func(b *testing.B) {
+			invocation := parallelInvocationBenchmarkInputWithSession(
+				tc.historySize,
+				tc.sessionEvents,
+				tc.stateBytes,
+			)
+			views := make([]*agent.Invocation, tc.fanout)
+			b.ReportAllocs()
+			b.ReportMetric(float64(tc.fanout), "views/op")
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				for j := range views {
+					views[j] = newParallelInvocationView(invocation)
+				}
+				parallelInvocationBatchSink = views
+			}
+		})
+	}
+}
+
 func parallelInvocationBenchmarkInput(historySize int) *agent.Invocation {
 	invocation := agent.NewInvocation(agent.WithInvocationSession(&session.Session{}))
 	messages := make([]model.Message, historySize)
