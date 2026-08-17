@@ -51,6 +51,10 @@ Supported part types include:
 
 ## Langfuse Conversion
 
-The Langfuse exporter only converts `gen_ai.input.messages.otel` and `gen_ai.output.messages.otel` into the displayed input/output payload. Deprecated compatibility fields remain available on raw spans for other consumers, but Langfuse does not parse them.
+The Langfuse exporter folds messages into `langfuse.observation.input` / `output` in this order:
 
-This keeps existing raw attributes available while making the OTel payload the only Langfuse conversion path.
+1. `gen_ai.input.messages.otel` / `gen_ai.output.messages.otel` (GenAI `role` + `parts`, passed through for Langfuse to convert)
+2. If `.otel` is missing: legacy `gen_ai.input.messages` / `gen_ai.output.messages` (output is unwrapped to `{role, content, tool_calls?}`)
+3. Then `trpc.go.agent.llm_request` / `llm_response`
+
+Jaeger and other generic OTLP backends still read raw span attributes, so their Drop policy differs from Langfuse. See Span Attribute Policy in [Observability](observability.md).

@@ -279,7 +279,7 @@ Default (unset) behavior is unchanged.
 | `MaxBytes(n)` + `Omit()` | JSON: no; `[]byte`: yes | JSON paths marshal fully before comparing size; `[]byte` paths use `len` only |
 | `Truncate(n)` | No | Full marshal, then truncate on export |
 
-To reduce memory, prefer `Drop()` on attributes you do not need (for example redundant `*.otel`).
+To reduce memory, prefer `Drop()` on attributes **this backend will not read**. Do not copy another backend's sample blindly: Langfuse and Jaeger / generic OTLP consume different keys.
 
 ### Coverage
 
@@ -290,6 +290,20 @@ Large payload attributes are wired for `chat`, `invoke_agent`, `workflow`, and `
 ```go
 import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
+// Langfuse: keep *.otel (including multimodal parts). Drop deprecated legacy messages.
+// Do not Drop .otel, legacy messages, and llm_request/llm_response together, or Input/Output becomes "N/A".
+clean, err := atrace.Start(ctx,
+    atrace.WithSpanAttributePolicy(
+        atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrInputMessages, atrace.Drop()),
+        atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrOutputMessages, atrace.Drop()),
+        atrace.WithAttributeRule(atrace.OperationInvokeAgent, atrace.AttrInputMessages, atrace.Drop()),
+    ),
+)
+```
+
+Jaeger / Galileo / generic OTLP consume raw span attributes. If the UI only uses `gen_ai.input.messages` / `gen_ai.output.messages`, Drop `*.otel` to skip that marshal:
+
+```go
 clean, err := atrace.Start(ctx,
     atrace.WithSpanAttributePolicy(
         atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrInputMessagesOTel, atrace.Drop()),
@@ -317,7 +331,11 @@ atrace.WithAttributeRule(atrace.OperationWorkflow, atrace.AttributeKey("gen_ai.w
 
 ### Compatibility
 
-Drop/Omit/Truncate may prevent some backends from reconstructing structured full text from attributes. Opt in based on your backend and memory budget.
+Drop/Omit/Truncate may prevent some backends from reconstructing structured full text from attributes. Opt in based on **the keys your backend actually reads** and your memory budget.
+
+- The Langfuse exporter reads `*.otel` first, then legacy `gen_ai.*.messages`, then `trpc.go.agent.llm_request` / `llm_response`. If all of these are missing, Input/Output is `"N/A"`.
+- Jaeger / generic OTLP usually display raw keys. The official GenAI field is `gen_ai.input.messages`; `*.otel` is a framework extension.
+- When fanning out to Langfuse **and** Jaeger, do not Drop a family that either backend still needs.
 
 ## Advanced Features
 

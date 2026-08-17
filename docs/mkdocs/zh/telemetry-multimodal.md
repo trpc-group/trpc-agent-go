@@ -51,6 +51,10 @@ tRPC-Agent-Go 会上报两组消息属性：
 
 ## Langfuse 转换
 
-Langfuse exporter 只会把 `gen_ai.input.messages.otel` 和 `gen_ai.output.messages.otel` 转换为最终展示的 input/output 内容。废弃兼容字段仍保留在原始 span 上，供其他消费方读取，但 Langfuse 不再解析它们。
+Langfuse exporter 把消息折叠进 `langfuse.observation.input` / `output`，读取顺序：
 
-这样既保留了原始兼容属性，也让 OTel payload 成为 Langfuse 唯一的转换路径。
+1. `gen_ai.input.messages.otel` / `gen_ai.output.messages.otel`（GenAI `role` + `parts`，原样上报，由 Langfuse 转换）
+2. 若 `.otel` 缺失：legacy `gen_ai.input.messages` / `gen_ai.output.messages`（output 会拆成 `{role, content, tool_calls?}`）
+3. 再缺失：`trpc.go.agent.llm_request` / `llm_response`
+
+Jaeger 等通用 OTLP 后端仍读取原始 span attribute，Drop 策略与 Langfuse 不同，见 [可观测性](observability.md) 中的 Span Attribute 策略。

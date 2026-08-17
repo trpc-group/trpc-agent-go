@@ -281,7 +281,7 @@ Agent Request
 | `MaxBytes(n)` + `Omit()` | JSON：否；`[]byte`：是 | JSON 路径需完整 marshal 后再比阈值；`[]byte` 路径仅 `len` 判断 |
 | `Truncate(n)` | 否 | 完整序列化后截断导出 |
 
-想降内存，优先 `Drop()` 去掉不需要的 attribute（如冗余 `*.otel`）。
+想降内存，优先 `Drop()` 当前后端**不会读取**的 attribute。不要把某一套示例当成通用配置：Langfuse 与 Jaeger / 通用 OTLP 读的 key 不同。
 
 ### 覆盖范围
 
@@ -292,6 +292,20 @@ Agent Request
 ```go
 import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
+// Langfuse：保留 *.otel（含 multimodal parts）。可 Drop 废弃的 legacy messages。
+// 不要把 .otel、legacy messages 和 llm_request/llm_response 全部 Drop，否则 Input/Output 会变成 "N/A"。
+clean, err := atrace.Start(ctx,
+    atrace.WithSpanAttributePolicy(
+        atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrInputMessages, atrace.Drop()),
+        atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrOutputMessages, atrace.Drop()),
+        atrace.WithAttributeRule(atrace.OperationInvokeAgent, atrace.AttrInputMessages, atrace.Drop()),
+    ),
+)
+```
+
+Jaeger / Galileo / 通用 OTLP 消费的是原始 span attribute。若 UI 只认 `gen_ai.input.messages` / `gen_ai.output.messages`，可以 Drop `*.otel` 以降低 marshal 成本：
+
+```go
 clean, err := atrace.Start(ctx,
     atrace.WithSpanAttributePolicy(
         atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrInputMessagesOTel, atrace.Drop()),
@@ -319,7 +333,11 @@ atrace.WithAttributeRule(atrace.OperationWorkflow, atrace.AttributeKey("gen_ai.w
 
 ### 兼容性说明
 
-启用 Drop/Omit/Truncate 后，部分监控后端可能无法从 attribute 还原结构化全文；请按自身后端与内存预算 opt-in 评估。
+启用 Drop/Omit/Truncate 后，部分监控后端可能无法从 attribute 还原结构化全文；请按**当前后端实际读取的 key** 与内存预算 opt-in 评估。
+
+- Langfuse exporter 读取顺序：`*.otel` → legacy `gen_ai.*.messages` → `trpc.go.agent.llm_request` / `llm_response`。缺这三类时 Input/Output 为 `"N/A"`。
+- Jaeger / 通用 OTLP 通常展示原始 key。官方 GenAI 字段是 `gen_ai.input.messages`；`*.otel` 是框架扩展。
+- 同时 fan-out 到 Langfuse 和 Jaeger 时，任何一端还要用的字段都不能 Drop。
 
 ## 进阶功能
 

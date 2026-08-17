@@ -120,7 +120,7 @@ func transformSpan(span *tracepb.Span) {
 
 func transformInvokeAgent(span *tracepb.Span) {
 	var newAttributes []*commonpb.KeyValue
-	var inputMessagesOTel, outputMessagesOTel *string
+	var inputMessages, inputMessagesOTel, outputMessages, outputMessagesOTel *string
 
 	newAttributes = append(newAttributes, &commonpb.KeyValue{
 		Key: observationType,
@@ -132,9 +132,11 @@ func transformInvokeAgent(span *tracepb.Span) {
 	for _, attr := range span.Attributes {
 		switch attr.Key {
 		case semconvtrace.KeyGenAIInputMessages:
+			inputMessages = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIInputMessagesOTel:
 			inputMessagesOTel = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIOutputMessages:
+			outputMessages = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIOutputMessagesOTel:
 			outputMessagesOTel = getStringPtr(attr.Value)
 			// Skip token usage attributes for InvokeAgent observations.
@@ -151,10 +153,10 @@ func transformInvokeAgent(span *tracepb.Span) {
 			newAttributes = append(newAttributes, attr)
 		}
 	}
-	if input := otelObservationInput(inputMessagesOTel); input != nil {
+	if input := preferredObservationInput(inputMessagesOTel, inputMessages); input != nil {
 		newAttributes = append(newAttributes, stringKV(observationInput, *input))
 	}
-	if output := otelObservationOutput(outputMessagesOTel); output != nil {
+	if output := preferredObservationOutput(outputMessagesOTel, outputMessages, nil); output != nil {
 		newAttributes = append(newAttributes, stringKV(observationOutput, *output))
 	}
 	span.Attributes = newAttributes
@@ -166,7 +168,9 @@ type llmSpanCollected struct {
 	sessionID          *commonpb.AnyValue
 	llmRequest         *string
 	llmResponse        *string
+	inputMessages      *string
 	inputMessagesOTel  *string
+	outputMessages     *string
 	outputMessagesOTel *string
 	toolDefinitions    *string
 	usage              usageDetails
@@ -222,9 +226,11 @@ func collectLLMSpanAttributes(attrs []*commonpb.KeyValue) llmSpanCollected {
 		case semconvtrace.KeyLLMRequest:
 			c.llmRequest = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIInputMessages:
+			c.inputMessages = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIInputMessagesOTel:
 			c.inputMessagesOTel = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIOutputMessages:
+			c.outputMessages = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIOutputMessagesOTel:
 			c.outputMessagesOTel = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIRequestToolDefinitions:
@@ -254,6 +260,9 @@ func buildLLMObservationInput(c llmSpanCollected) string {
 	if c.inputMessagesOTel != nil && *c.inputMessagesOTel != "" {
 		return truncateObservationLLMInput(wrapWithToolsIfPresent(*c.inputMessagesOTel, c.toolDefinitions))
 	}
+	if c.inputMessages != nil && *c.inputMessages != "" {
+		return truncateObservationLLMInput(wrapWithToolsIfPresent(*c.inputMessages, c.toolDefinitions))
+	}
 	if c.llmRequest != nil && *c.llmRequest != "" {
 		if messagesJSON, ok := extractMessagesJSONFromRequestJSON(*c.llmRequest); ok && messagesJSON != "" {
 			return truncateObservationLLMInput(wrapWithToolsIfPresent(messagesJSON, c.toolDefinitions))
@@ -264,10 +273,40 @@ func buildLLMObservationInput(c llmSpanCollected) string {
 }
 
 func buildLLMObservationOutput(c llmSpanCollected) string {
-	if output := otelObservationOutput(c.outputMessagesOTel); output != nil {
+	if output := preferredObservationOutput(c.outputMessagesOTel, c.outputMessages, c.llmResponse); output != nil {
 		return *output
 	}
-	return truncateObservationLLMResponse(stringPtrValueOrNA(c.llmResponse))
+	return truncateObservationLLMResponse("N/A")
+}
+
+func preferredObservationInput(otelMessages, legacyMessages *string) *string {
+	if otelMessages != nil && *otelMessages != "" {
+		return otelObservationInput(otelMessages)
+	}
+	if legacyMessages != nil && *legacyMessages != "" {
+		value := truncateObservationLLMInput(*legacyMessages)
+		return &value
+	}
+	return nil
+}
+
+func preferredObservationOutput(otelMessages, legacyMessages, llmResponse *string) *string {
+	if otelMessages != nil && *otelMessages != "" {
+		return otelObservationOutput(otelMessages)
+	}
+	if unwrapped := unwrapLegacyOutputMessages(legacyMessages); unwrapped != "" {
+		value := truncateObservationLLMResponse(unwrapped)
+		return &value
+	}
+	if unwrapped := unwrapLLMResponseOutput(llmResponse); unwrapped != "" {
+		value := truncateObservationLLMResponse(unwrapped)
+		return &value
+	}
+	if llmResponse != nil && *llmResponse != "" {
+		value := truncateObservationLLMResponse(*llmResponse)
+		return &value
+	}
+	return nil
 }
 
 func otelObservationInput(otelMessages *string) *string {
@@ -284,6 +323,112 @@ func otelObservationOutput(otelMessages *string) *string {
 		return &value
 	}
 	return nil
+}
+
+// langfuseChatMessage is the OpenAI-style assistant message Langfuse's Python SDK
+// writes as generation output: {role, content, tool_calls?}.
+type langfuseChatMessage struct {
+	Role       model.Role       `json:"role,omitempty"`
+	Content    string           `json:"content,omitempty"`
+	Name       string           `json:"name,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls  []model.ToolCall `json:"tool_calls,omitempty"`
+}
+
+type legacyOutputChoice struct {
+	Index        int                         `json:"index"`
+	Message      observationTelemetryMessage `json:"message"`
+	Delta        observationTelemetryMessage `json:"delta"`
+	FinishReason *string                     `json:"finish_reason,omitempty"`
+}
+
+func unwrapLegacyOutputMessages(raw *string) string {
+	if raw == nil || *raw == "" {
+		return ""
+	}
+	var choices []legacyOutputChoice
+	if err := json.Unmarshal([]byte(*raw), &choices); err != nil || len(choices) == 0 {
+		return ""
+	}
+	msgs := make([]langfuseChatMessage, 0, len(choices))
+	for _, choice := range choices {
+		msgs = append(msgs, pickLegacyChoiceMessage(choice))
+	}
+	return marshalLangfuseChatMessages(msgs)
+}
+
+func unwrapLLMResponseOutput(raw *string) string {
+	if raw == nil || *raw == "" {
+		return ""
+	}
+	var rsp model.Response
+	if err := json.Unmarshal([]byte(*raw), &rsp); err != nil || len(rsp.Choices) == 0 {
+		return ""
+	}
+	msgs := make([]langfuseChatMessage, 0, len(rsp.Choices))
+	for _, choice := range rsp.Choices {
+		msgs = append(msgs, pickModelChoiceMessage(choice))
+	}
+	return marshalLangfuseChatMessages(msgs)
+}
+
+func pickLegacyChoiceMessage(choice legacyOutputChoice) langfuseChatMessage {
+	msg := langfuseChatMessageFromTelemetry(choice.Message)
+	if langfuseChatMessageHasReply(msg) {
+		return msg
+	}
+	return langfuseChatMessageFromTelemetry(choice.Delta)
+}
+
+func pickModelChoiceMessage(choice model.Choice) langfuseChatMessage {
+	msg := langfuseChatMessageFromModel(choice.Message)
+	if langfuseChatMessageHasReply(msg) {
+		return msg
+	}
+	return langfuseChatMessageFromModel(choice.Delta)
+}
+
+func langfuseChatMessageFromTelemetry(msg observationTelemetryMessage) langfuseChatMessage {
+	return langfuseChatMessage{
+		Role:       msg.Role,
+		Content:    msg.Content,
+		Name:       msg.Name,
+		ToolCallID: msg.ToolCallID,
+		ToolCalls:  msg.ToolCalls,
+	}
+}
+
+func langfuseChatMessageFromModel(msg model.Message) langfuseChatMessage {
+	return langfuseChatMessage{
+		Role:       msg.Role,
+		Content:    msg.Content,
+		Name:       msg.ToolName,
+		ToolCallID: msg.ToolID,
+		ToolCalls:  msg.ToolCalls,
+	}
+}
+
+func langfuseChatMessageHasReply(msg langfuseChatMessage) bool {
+	return msg.Role != "" ||
+		msg.Content != "" ||
+		msg.Name != "" ||
+		msg.ToolCallID != "" ||
+		len(msg.ToolCalls) > 0
+}
+
+func marshalLangfuseChatMessages(msgs []langfuseChatMessage) string {
+	if len(msgs) == 0 {
+		return ""
+	}
+	var payload any = msgs
+	if len(msgs) == 1 {
+		payload = msgs[0]
+	}
+	bts, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(bts)
 }
 
 // wrapWithToolsIfPresent returns messagesJSON as-is, or wraps it with tool
@@ -329,13 +474,6 @@ func getStringPtr(v *commonpb.AnyValue) *string {
 	}
 	s := v.GetStringValue()
 	return &s
-}
-
-func stringPtrValueOrNA(v *string) string {
-	if v == nil {
-		return "N/A"
-	}
-	return *v
 }
 
 func truncateObservationInputMessages(raw string) string {
