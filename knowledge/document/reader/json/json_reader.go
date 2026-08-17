@@ -42,6 +42,7 @@ func init() {
 type Reader struct {
 	chunk            bool
 	chunkingStrategy chunking.Strategy
+	chunkingErr      error
 	transformers     []transform.Transformer
 }
 
@@ -58,11 +59,16 @@ func New(opts ...reader.Option) reader.Reader {
 
 	// Build chunking strategy using the default builder for JSON
 	strategy := reader.BuildChunkingStrategy(config, buildDefaultChunkingStrategy)
+	var chunkingErr error
+	if config.CustomChunkingStrategy == nil && config.ChunkOverlap < 0 {
+		chunkingErr = chunking.ErrInvalidOverlap
+	}
 
 	// Create reader from config
 	return &Reader{
 		chunk:            config.Chunk,
 		chunkingStrategy: strategy,
+		chunkingErr:      chunkingErr,
 		transformers:     config.Transformers,
 	}
 }
@@ -71,7 +77,7 @@ func New(opts ...reader.Option) reader.Reader {
 // JSON uses JSONChunking with configurable chunk size.
 func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
 	var opts []chunking.JSONOption
-	if chunkSize > 0 {
+	if chunkSize != 0 {
 		opts = append(opts, chunking.WithJSONChunkSize(chunkSize))
 	}
 	// Note: JSONChunking doesn't support overlap parameter
@@ -203,6 +209,9 @@ func (r *Reader) jsonToText(jsonContent string) (string, error) {
 
 // chunkDocuments applies chunking to documents.
 func (r *Reader) chunkDocuments(docs []*document.Document) ([]*document.Document, error) {
+	if r.chunkingErr != nil {
+		return nil, r.chunkingErr
+	}
 	if r.chunkingStrategy == nil {
 		r.chunkingStrategy = chunking.NewJSONChunking()
 	}

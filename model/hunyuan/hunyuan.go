@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -201,6 +202,15 @@ func (m *Model) runChatRequestCallback(
 	m.chatRequestCallback(ctx, chatRequest)
 }
 
+func disableChatRequestTools(request *hunyuan.ChatCompletionNewParams) {
+	if request == nil {
+		return
+	}
+	request.Tools = nil
+	request.ToolChoice = ""
+	request.CustomTool = nil
+}
+
 func (m *Model) runChatResponseCallback(
 	ctx context.Context,
 	chatRequest *hunyuan.ChatCompletionNewParams,
@@ -258,6 +268,9 @@ func (m *Model) GenerateContent(
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
+	if imodelrequest.ToolsDisabled(ctx) {
+		disableChatRequestTools(chatRequest)
+	}
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
@@ -613,7 +626,16 @@ func convertMessage(msg model.Message) (*hunyuan.ChatCompletionMessageParam, err
 					contents = append(contents, &hunyuan.ChatCompletionMessageContentParam{
 						Type: "audio_url",
 						VideoUrl: &hunyuan.ChatCompletionContentVideoUrlParam{
-							Url: audioToBase64(part.Audio),
+							Url: audioToURLOrBase64(part.Audio),
+						},
+					})
+				}
+			case model.ContentTypeVideo:
+				if part.Video != nil {
+					contents = append(contents, &hunyuan.ChatCompletionMessageContentParam{
+						Type: "video_url",
+						VideoUrl: &hunyuan.ChatCompletionContentVideoUrlParam{
+							Url: videoToURLOrBase64(part.Video),
 						},
 					})
 				}
@@ -681,6 +703,24 @@ func imageToURLOrBase64(image *model.Image) string {
 	return "data:image/" + format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
-func audioToBase64(audio *model.Audio) string {
-	return "data:" + audio.Format + ";base64," + base64.StdEncoding.EncodeToString(audio.Data)
+func audioToURLOrBase64(audio *model.Audio) string {
+	if audio.URL != "" {
+		return audio.URL
+	}
+	return mediaToBase64("audio", audio.Format, audio.Data)
+}
+
+func videoToURLOrBase64(video *model.Video) string {
+	if video.URL != "" {
+		return video.URL
+	}
+	return mediaToBase64("video", video.Format, video.Data)
+}
+
+func mediaToBase64(mediaType, format string, data []byte) string {
+	mimeType := format
+	if !strings.HasPrefix(mimeType, mediaType+"/") {
+		mimeType = mediaType + "/" + mimeType
+	}
+	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
 }

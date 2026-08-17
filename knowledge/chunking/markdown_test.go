@@ -128,41 +128,48 @@ func TestMarkdownChunking_NoStructure(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(chunks), 1, "Long text should be split into multiple chunks")
 
-	// Overlap separator adds 4 characters: "\n\n" + "\n\n" (no visible marker)
-	const overlapSeparatorLen = 4
-
-	// Validate forced splitting
+	overlappedChunks := 0
 	for i, c := range chunks {
 		charCount := utf8.RuneCountInString(c.Content)
-		var maxSize int
-		if i == 0 {
-			// First chunk has no overlap separator
-			maxSize = size + overlap
-		} else {
-			// Subsequent chunks may have overlap separator
-			maxSize = size + overlap + overlapSeparatorLen
-		}
-		require.LessOrEqual(t, charCount, maxSize, "Chunk %d has %d chars, exceeds max=%d", i, charCount, maxSize)
-
-		// Verify UTF-8 validity
+		require.LessOrEqual(t, charCount, size, "Chunk %d exceeds size limit", i)
 		require.True(t, utf8.ValidString(c.Content), "Chunk %d contains invalid UTF-8", i)
-	}
-
-	// Verify overlap between chunks
-	for i := 1; i < len(chunks); i++ {
-		if overlap > 0 {
-			prev := chunks[i-1].Content
-			curr := chunks[i].Content
-
-			prevRunes := []rune(prev)
-			currRunes := []rune(curr)
-
-			if len(prevRunes) >= overlap && len(currRunes) >= overlap {
-				expectedOverlap := string(prevRunes[len(prevRunes)-overlap:])
-				actualOverlap := string(currRunes[:overlap])
-				require.Equal(t, expectedOverlap, actualOverlap, "Overlap mismatch between chunk %d and %d", i-1, i)
-			}
+		if overlappedSize, ok := c.Metadata[source.MetaOverlappedContentSize]; ok {
+			overlappedChunks++
+			require.Equal(t, charCount, overlappedSize)
 		}
+	}
+	require.Positive(t, overlappedChunks, "expected at least one chunk with overlap")
+}
+
+func TestMarkdownChunking_LargeOverlapWithinChunkSize(t *testing.T) {
+	doc := &document.Document{
+		ID: "large-overlap",
+		Content: "# Large overlap\n\n" +
+			strings.Repeat(
+				"Sentence-aware splitting should preserve the final size budget. ",
+				20,
+			),
+	}
+	const (
+		chunkSize = 120
+		overlap   = 100
+	)
+	mc := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownOverlap(overlap),
+	)
+
+	chunks, err := mc.Chunk(doc)
+	require.NoError(t, err)
+	require.Greater(t, len(chunks), 1)
+	for i, chunk := range chunks {
+		require.LessOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+			"chunk %d exceeds the final size budget",
+			i,
+		)
 	}
 }
 
@@ -202,6 +209,678 @@ func TestMarkdownChunking_LargeParagraph(t *testing.T) {
 	}
 
 	require.Greater(t, largeParaChunks, 1, "Large paragraph should appear in multiple chunks")
+}
+
+func TestMarkdownChunking_LargeParagraphPrefersSentenceBoundary(t *testing.T) {
+	const paragraph = "The next paragraph uses English punctuation. " +
+		"An agent receives a request, selects a tool, observes the result, " +
+		"and then decides whether another step is required. " +
+		"Sentence-aware splitting should prefer these punctuation boundaries " +
+		"instead of cutting through arbitrary words."
+	doc := &document.Document{
+		ID:      "sentence-boundary",
+		Content: "## Mixed content\n\n" + paragraph,
+	}
+	mc := NewMarkdownChunking(WithMarkdownChunkSize(240))
+
+	chunks, err := mc.Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Contains(t, chunks[0].Content, "another step is required.")
+	require.Equal(t,
+		" Sentence-aware splitting should prefer these punctuation boundaries "+
+			"instead of cutting through arbitrary words.",
+		chunks[1].Content,
+	)
+	for _, chunk := range chunks {
+		require.NotEmpty(t, strings.TrimSpace(chunk.Content))
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), 240)
+	}
+
+	legacyChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(240),
+		WithMarkdownWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, legacyChunks, 2)
+	require.Equal(t,
+		"Sentence-aware splitting should prefer these punctuation boundaries "+
+			"instead of cutting through arbitrary words.",
+		legacyChunks[1].Content,
+	)
+}
+
+func TestMarkdownChunking_DoesNotEmitStandaloneHeading(t *testing.T) {
+	const heading = "## 较长段落"
+	paragraph := strings.Repeat("这是一个完整的句子。", 23) + "结尾"
+	require.Equal(t, 232, utf8.RuneCountInString(paragraph))
+	doc := &document.Document{
+		ID:      "heading-budget",
+		Content: heading + "\n\n" + paragraph,
+	}
+	mc := NewMarkdownChunking(WithMarkdownChunkSize(240))
+
+	chunks, err := mc.Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.True(t, strings.HasPrefix(chunks[0].Content, heading+"\n\n"))
+	require.NotEqual(t, heading, chunks[0].Content)
+	for _, chunk := range chunks {
+		require.NotEqual(t, heading, strings.TrimSpace(chunk.Content))
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), 240)
+	}
+}
+
+func TestSplitMarkdownText_PrefersNaturalBoundary(t *testing.T) {
+	chunker := NewMarkdownChunking()
+	tests := []struct {
+		name          string
+		content       string
+		chunkSize     int
+		wantPrefix    string
+		wantRemaining string
+	}{
+		{
+			name:          "line boundary",
+			content:       "aaaaaa\nbbbbbb",
+			chunkSize:     10,
+			wantPrefix:    "aaaaaa\n",
+			wantRemaining: "bbbbbb",
+		},
+		{
+			name:          "sentence boundary",
+			content:       "First one. Second sentence",
+			chunkSize:     15,
+			wantPrefix:    "First one.",
+			wantRemaining: " Second sentence",
+		},
+		{
+			name:          "punctuation boundary",
+			content:       "alpha,betaGamma",
+			chunkSize:     10,
+			wantPrefix:    "alpha,",
+			wantRemaining: "betaGamma",
+		},
+		{
+			name:          "whitespace boundary",
+			content:       "alpha betaGamma",
+			chunkSize:     10,
+			wantPrefix:    "alpha",
+			wantRemaining: " betaGamma",
+		},
+		{
+			name:          "hard rune boundary",
+			content:       "甲乙丙丁戊己",
+			chunkSize:     4,
+			wantPrefix:    "甲乙丙丁",
+			wantRemaining: "戊己",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefix, remaining := chunker.splitMarkdownText(
+				tt.content,
+				tt.chunkSize,
+			)
+			require.Equal(t, tt.wantPrefix, prefix)
+			require.Equal(t, tt.wantRemaining, remaining)
+		})
+	}
+}
+
+func TestSplitMarkdownTextWithBalancedTail(t *testing.T) {
+	content := strings.Join([]string{
+		strings.Repeat("a", 75),
+		strings.Repeat("b", 75),
+		strings.Repeat("c", 70),
+		strings.Repeat("d", 55),
+	}, "\n")
+
+	prefix, remaining := NewMarkdownChunking().
+		splitMarkdownTextWithBalancedTail(content, 240)
+
+	require.Equal(t, strings.Join([]string{
+		strings.Repeat("a", 75),
+		strings.Repeat("b", 75),
+	}, "\n")+"\n", prefix)
+	require.Equal(t, strings.Join([]string{
+		strings.Repeat("c", 70),
+		strings.Repeat("d", 55),
+	}, "\n"), remaining)
+	require.GreaterOrEqual(t, utf8.RuneCountInString(prefix), 120)
+	require.GreaterOrEqual(t, utf8.RuneCountInString(remaining), 120)
+}
+
+func TestSplitMarkdownTextWithBalancedTailPrefersNearbyLineBoundary(t *testing.T) {
+	content := strings.Repeat("a", 128) + "|\n" + strings.Repeat("b", 118)
+
+	prefix, remaining := NewMarkdownChunking().
+		splitMarkdownTextWithBalancedTail(content, 240)
+
+	require.Equal(t, strings.Repeat("a", 128)+"|\n", prefix)
+	require.Equal(t, strings.Repeat("b", 118), remaining)
+}
+
+func TestMarkdownChunkingBalancesLongBlockAfterHeading(t *testing.T) {
+	tableLines := []string{
+		"| key | value |",
+		"| --- | --- |",
+	}
+	for i := 0; i < 5; i++ {
+		tableLines = append(
+			tableLines,
+			"| item-"+strconv.Itoa(i)+" | "+strings.Repeat("value", 6)+" |",
+		)
+	}
+	doc := &document.Document{
+		ID:      "catalog",
+		Content: "## Catalog\n\n" + strings.Join(tableLines, "\n"),
+	}
+
+	const chunkSize = 240
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(doc)
+
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	for _, chunk := range chunks {
+		require.GreaterOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize*2/5,
+		)
+		for _, line := range strings.Split(chunk.Content, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "|") {
+				require.True(t, strings.HasSuffix(line, "|"), line)
+			}
+		}
+	}
+}
+
+func TestSplitMarkdownParagraphsKeepsFencedCodeTogether(t *testing.T) {
+	content := "before\n\n```python\ndef f():\n\treturn 1\n\nsecond()\n```\n\nafter"
+
+	paragraphs := splitMarkdownParagraphsWithWhitespaceTrimming(
+		content,
+		false,
+	)
+
+	require.Equal(t, []string{
+		"before",
+		"```python\ndef f():\n\treturn 1\n\nsecond()\n```",
+		"after",
+	}, paragraphs)
+}
+
+func TestMarkdownChunking_WhitespaceModes(t *testing.T) {
+	content := "```python  \ndef f():\n\tif enabled:\n\t\treturn 1  \n```"
+	doc := &document.Document{ID: "python", Content: content}
+
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(128),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Equal(t, content, chunks[0].Content)
+
+	legacyChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(128),
+		WithMarkdownWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, legacyChunks, 1)
+	require.Equal(
+		t,
+		"```python\ndef f():\nif enabled:\nreturn 1\n```",
+		legacyChunks[0].Content,
+	)
+}
+
+func TestMarkdownChunking_WhitespaceModesWithOverlap(t *testing.T) {
+	const (
+		chunkSize = 30
+		overlap   = 10
+	)
+	content := "prefix line\n\treturn 1\n\n" + strings.Repeat("next ", 10)
+	doc := &document.Document{ID: "overlap-whitespace", Content: content}
+
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownOverlap(overlap),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(chunks), 2)
+	require.Contains(t, chunks[1].Content, "\treturn 1")
+	for _, chunk := range chunks {
+		require.LessOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+		)
+	}
+
+	legacyChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownOverlap(overlap),
+		WithMarkdownWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(legacyChunks), 2)
+	require.NotContains(t, legacyChunks[1].Content, "\treturn 1")
+	require.Contains(t, legacyChunks[1].Content, "return 1")
+	for _, chunk := range legacyChunks {
+		require.LessOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+		)
+	}
+}
+
+func TestMarkdownChunking_PreservesWhitespaceOnlyParagraphBoundary(t *testing.T) {
+	const chunkSize = 20
+	content := "first\n \t\nsecond\n\n" + strings.Repeat("x", 30)
+	doc := &document.Document{ID: "paragraph-boundary", Content: content}
+
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(chunks), 2)
+	require.Equal(t, "first\n \t\nsecond", chunks[0].Content)
+
+	legacyChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(legacyChunks), 2)
+	require.Equal(t, "first\n\nsecond", legacyChunks[0].Content)
+}
+
+func TestMarkdownChunking_PreservesSeparatorAtChunkBoundary(t *testing.T) {
+	const chunkSize = 5
+	content := "aaaa\n \t\nbbbb"
+	doc := &document.Document{ID: "separator-boundary", Content: content}
+
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(chunks), 2)
+	var rebuilt strings.Builder
+	for _, chunk := range chunks {
+		require.LessOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+		)
+		rebuilt.WriteString(chunk.Content)
+	}
+	require.Equal(t, content, rebuilt.String())
+
+	legacyChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	var legacyContent strings.Builder
+	for _, chunk := range legacyChunks {
+		legacyContent.WriteString(chunk.Content)
+	}
+	require.NotContains(t, legacyContent.String(), " \t")
+}
+
+func TestMarkdownChunking_CombineSectionPreservesWhitespace(t *testing.T) {
+	section := headerSection{
+		Header:    "# Title",
+		separator: "\n",
+		Content:   " \n\treturn 1  \n",
+	}
+
+	require.Equal(
+		t,
+		"# Title\n \n\treturn 1  \n",
+		NewMarkdownChunking().combineSectionContent(section),
+	)
+	require.Equal(
+		t,
+		"# Title\n\nreturn 1",
+		NewMarkdownChunking(
+			WithMarkdownWhitespaceTrimming(),
+		).combineSectionContent(section),
+	)
+}
+
+func TestMarkdownChunking_PreservesWhitespacePreambleBeforeHeader(t *testing.T) {
+	const chunkSize = 24
+	content := "  \n\t  \n# Header\n\n" + strings.Repeat("x", 80)
+	doc := &document.Document{ID: "whitespace-preamble", Content: content}
+
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(doc)
+	require.NoError(t, err)
+
+	var rebuilt strings.Builder
+	for _, chunk := range chunks {
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+		rebuilt.WriteString(chunk.Content)
+	}
+	require.Equal(t, content, rebuilt.String())
+
+	legacyChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.NotEmpty(t, legacyChunks)
+	require.True(t, strings.HasPrefix(legacyChunks[0].Content, "# Header"))
+}
+
+func TestMarkdownChunking_HeaderOnlyPreservesSourceTerminator(t *testing.T) {
+	const chunkSize = 16
+	header := "## " + strings.Repeat("H", 50)
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "without newline", content: header},
+		{name: "with newline", content: header + "\n"},
+		{name: "consecutive headings", content: "# One\n# Two\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := &document.Document{ID: tt.name, Content: tt.content}
+			chunks, err := NewMarkdownChunking(
+				WithMarkdownChunkSize(chunkSize),
+			).Chunk(doc)
+			require.NoError(t, err)
+
+			var rebuilt strings.Builder
+			for _, chunk := range chunks {
+				require.NotEmpty(t, chunk.Content)
+				require.LessOrEqual(
+					t,
+					utf8.RuneCountInString(chunk.Content),
+					chunkSize,
+				)
+				rebuilt.WriteString(chunk.Content)
+			}
+			require.Equal(t, tt.content, rebuilt.String())
+
+			legacyChunks, err := NewMarkdownChunking(
+				WithMarkdownChunkSize(chunkSize),
+				WithMarkdownWhitespaceTrimming(),
+			).Chunk(doc)
+			require.NoError(t, err)
+			require.NotEmpty(t, legacyChunks)
+			require.False(
+				t,
+				strings.HasSuffix(
+					legacyChunks[len(legacyChunks)-1].Content,
+					"\n",
+				),
+			)
+		})
+	}
+}
+
+func TestMarkdownChunking_WhitespaceOnlyDocument(t *testing.T) {
+	chunks, err := NewMarkdownChunking().Chunk(
+		&document.Document{Content: " \n\t "},
+	)
+	require.ErrorIs(t, err, ErrEmptyDocument)
+	require.Nil(t, chunks)
+}
+
+func TestMarkdownChunkingBalancesLongFencedCodeTail(t *testing.T) {
+	const chunkSize = 80
+	content := "```go\n" +
+		strings.Repeat("result = append(result, value)\n", 6) +
+		"\n" +
+		strings.Repeat("consume(result)\n", 5) +
+		"```"
+	mc := NewMarkdownChunking(WithMarkdownChunkSize(chunkSize))
+
+	chunks, err := mc.Chunk(&document.Document{
+		ID:      "long-code",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	require.Greater(t, len(chunks), 1)
+	for i, chunk := range chunks {
+		size := utf8.RuneCountInString(chunk.Content)
+		require.LessOrEqual(t, size, chunkSize, "chunk %d exceeds budget", i)
+		require.GreaterOrEqual(t, size, chunkSize/2, "chunk %d is a tiny tail", i)
+	}
+}
+
+func TestMarkdownChunking_HeaderPathUsesValidAncestor(t *testing.T) {
+	content := `# Root
+
+root context marker.
+
+## Section
+
+section context marker. ` + strings.Repeat("Section filler sentence. ", 30) + `
+
+### Child
+
+child context marker.
+
+## Sibling
+
+sibling context marker.`
+	doc := &document.Document{
+		ID:      "header-path",
+		Content: content,
+	}
+	expectedPaths := map[string]string{
+		"root context marker":    "Root",
+		"section context marker": "Root > Section",
+		"child context marker":   "Root > Section > Child",
+		"sibling context marker": "Root > Sibling",
+	}
+	for _, chunkSize := range []int{120, 500} {
+		t.Run(strconv.Itoa(chunkSize), func(t *testing.T) {
+			mc := NewMarkdownChunking(WithMarkdownChunkSize(chunkSize))
+			chunks, err := mc.Chunk(doc)
+			require.NoError(t, err)
+
+			for marker, expectedPath := range expectedPaths {
+				var matchingChunk *document.Document
+				for _, chunk := range chunks {
+					if strings.Contains(chunk.Content, marker) {
+						matchingChunk = chunk
+						break
+					}
+				}
+				require.NotNil(t, matchingChunk, "missing chunk containing %q", marker)
+				actualPath, _ := matchingChunk.Metadata[source.MetaMarkdownHeaderPath].(string)
+				require.True(
+					t,
+					actualPath == expectedPath ||
+						strings.HasPrefix(expectedPath, actualPath+" > "),
+					"unexpected header path %q for %q; expected %q or a common ancestor",
+					actualPath,
+					marker,
+					expectedPath,
+				)
+			}
+		})
+	}
+}
+
+func TestMarkdownChunkingMergesAdjacentSmallSections(t *testing.T) {
+	content := `# Root
+
+Root introduction.
+
+## First
+
+First section has enough text to represent one semantic unit.
+
+## Second
+
+Second section has enough text to represent another semantic unit.
+
+## Third
+
+Third section has enough text to represent the final semantic unit.`
+	const chunkSize = 180
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(&document.Document{
+		ID:      "small-sections",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	require.Less(t, len(chunks), 4)
+	require.Contains(t, chunks[0].Content, "## First")
+	for i, chunk := range chunks {
+		require.LessOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+			"chunk %d exceeds budget",
+			i,
+		)
+	}
+	require.Equal(
+		t,
+		"Root",
+		chunks[0].Metadata[source.MetaMarkdownHeaderPath],
+	)
+}
+
+func TestMarkdownChunkingMergesHeadingOnlySectionForward(t *testing.T) {
+	content := `# Root
+
+## Previous
+
+Previous section content is deliberately long enough that the empty heading
+could fit behind it, but the following section could not.
+
+## Heading Only One
+
+## Heading Only Two
+
+## Heading Only Three
+
+## Following
+
+Following section content should stay with all heading-only sections before it.`
+	const chunkSize = 170
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(&document.Document{
+		ID:      "heading-only",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	var headingChunk *document.Document
+	for _, chunk := range chunks {
+		if strings.Contains(chunk.Content, "## Heading Only One") {
+			headingChunk = chunk
+			break
+		}
+	}
+	require.NotNil(t, headingChunk)
+	require.Contains(t, headingChunk.Content, "## Heading Only Two")
+	require.Contains(t, headingChunk.Content, "## Heading Only Three")
+	require.Contains(t, headingChunk.Content, "## Following")
+	require.NotContains(t, headingChunk.Content, "Previous section content")
+	require.LessOrEqual(
+		t,
+		utf8.RuneCountInString(headingChunk.Content),
+		chunkSize,
+	)
+}
+
+func TestMarkdownChunkingPreservesFullPathWithinSection(t *testing.T) {
+	content := `# Root
+
+Root introduction.
+
+## Section
+
+Section introduction.
+
+### Child
+
+` + strings.Repeat("Child prefix filler sentence. ", 12) + `
+
+child exact marker.
+
+` + strings.Repeat("Child suffix filler sentence. ", 12)
+	const chunkSize = 120
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(&document.Document{
+		ID:      "exact-header-path",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	var markerChunk *document.Document
+	for _, chunk := range chunks {
+		if strings.Contains(chunk.Content, "child exact marker") {
+			markerChunk = chunk
+			break
+		}
+	}
+	require.NotNil(t, markerChunk)
+	require.Equal(
+		t,
+		"Root > Section > Child",
+		markerChunk.Metadata[source.MetaMarkdownHeaderPath],
+	)
+}
+
+func TestCommonMarkdownHeaderPathKeepsHeadingTextIntact(t *testing.T) {
+	require.Equal(t, []string{"Root"}, commonMarkdownHeaderPath(
+		[]string{"Root", "Alpha > One"},
+		[]string{"Root", "Alpha > Two"},
+	))
+	require.Nil(t, commonMarkdownHeaderPath(
+		[]string{"Alpha > One"},
+		[]string{"Alpha > Two"},
+	))
+}
+
+func TestMarkdownChunkingRebalancesSemanticTail(t *testing.T) {
+	const chunkSize = 1500
+	parts := []markdownChunk{
+		newMarkdownChunk(strings.Repeat("a", 600), []string{"Root"}),
+		newMarkdownChunk(strings.Repeat("b", 400), []string{"Root", "One"}),
+		newMarkdownChunk(strings.Repeat("c", 350), []string{"Root", "Two"}),
+		newMarkdownChunk(strings.Repeat("d", 250), []string{"Root", "Three"}),
+	}
+	var content strings.Builder
+	for i := range parts {
+		if i > 0 {
+			content.WriteString("\n\n")
+		}
+		content.WriteString(parts[i].content)
+	}
+
+	chunks := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).mergeAdjacentChunks(content.String(), parts)
+
+	require.Len(t, chunks, 2)
+	require.Equal(t, 1002, utf8.RuneCountInString(chunks[0].content))
+	require.Equal(t, 602, utf8.RuneCountInString(chunks[1].content))
+	require.Equal(t, []string{"Root"}, chunks[0].headerPath)
+	require.Equal(t, []string{"Root"}, chunks[1].headerPath)
 }
 
 // TestMarkdownChunking_MixedContent tests mixed English and Chinese content
@@ -469,7 +1148,10 @@ Content after consecutive empty level1 headings should still be retained.`,
 
 			var combined strings.Builder
 			for _, section := range sections {
-				require.NotEmpty(t, strings.TrimSpace(section.Content))
+				require.True(t,
+					section.Header != "" ||
+						strings.TrimSpace(section.Content) != "",
+				)
 				combined.WriteString(section.Header)
 				combined.WriteString("\n")
 				combined.WriteString(section.Content)
@@ -1059,27 +1741,42 @@ func TestMarkdownChunking_MixedParagraphSizes(t *testing.T) {
 	require.True(t, foundLarge, "Large paragraph content should be in chunks")
 }
 
-// TestMarkdownChunking_OverlapValidation tests overlap >= chunkSize boundary condition.
-func TestMarkdownChunking_OverlapValidation(t *testing.T) {
+func TestMarkdownChunking_ConfigValidation(t *testing.T) {
 	tests := []struct {
 		name      string
 		chunkSize int
 		overlap   int
+		wantErr   error
 	}{
 		{
-			name:      "overlap greater than chunkSize",
+			name:      "zero chunk size",
+			chunkSize: 0,
+			overlap:   0,
+			wantErr:   ErrInvalidChunkSize,
+		},
+		{
+			name:      "negative chunk size",
+			chunkSize: -1,
+			overlap:   0,
+			wantErr:   ErrInvalidChunkSize,
+		},
+		{
+			name:      "negative overlap",
+			chunkSize: 10,
+			overlap:   -1,
+			wantErr:   ErrInvalidOverlap,
+		},
+		{
+			name:      "overlap greater than chunk size",
 			chunkSize: 10,
 			overlap:   15,
+			wantErr:   ErrOverlapTooLarge,
 		},
 		{
-			name:      "overlap equal to chunkSize",
+			name:      "overlap equal to chunk size",
 			chunkSize: 20,
 			overlap:   20,
-		},
-		{
-			name:      "very large overlap",
-			chunkSize: 5,
-			overlap:   100,
+			wantErr:   ErrOverlapTooLarge,
 		},
 	}
 
@@ -1090,11 +1787,10 @@ func TestMarkdownChunking_OverlapValidation(t *testing.T) {
 				WithMarkdownOverlap(tt.overlap),
 			)
 
-			// Should still work despite invalid overlap
 			doc := &document.Document{ID: "test", Content: "# Header\n\nTest content for validation"}
 			chunks, err := mc.Chunk(doc)
-			require.NoError(t, err)
-			require.NotEmpty(t, chunks)
+			require.ErrorIs(t, err, tt.wantErr)
+			require.Nil(t, chunks)
 		})
 	}
 }
@@ -1287,14 +1983,8 @@ func TestMarkdownChunking_OnlyWhitespace(t *testing.T) {
 			mc := NewMarkdownChunking(WithMarkdownChunkSize(50), WithMarkdownOverlap(5))
 
 			chunks, err := mc.Chunk(doc)
-			// cleanText will trim all whitespace, making the document empty
-			// So this should either return ErrEmptyDocument or a single empty chunk
-			if err != nil {
-				require.ErrorIs(t, err, ErrEmptyDocument, "Whitespace-only document should be treated as empty")
-			} else {
-				// If no error, should return valid chunks (some implementations may handle this differently)
-				require.NotEmpty(t, chunks, "Should return at least one chunk")
-			}
+			require.ErrorIs(t, err, ErrEmptyDocument)
+			require.Empty(t, chunks)
 		})
 	}
 }
@@ -1711,5 +2401,67 @@ This section contains extensive technical documentation that will be split into 
 			sampleIDs[i] = chunks[i].ID
 		}
 		t.Logf("Sample chunk IDs: %v", sampleIDs)
+	}
+}
+
+func TestMarkdownChunking_PreservesTrailingHeaderOnlySection(t *testing.T) {
+	content := "# Kept\n\n" +
+		strings.Repeat("This body makes the document exceed the chunk budget. ", 4) +
+		"\n\n# Empty"
+	chunker := NewMarkdownChunking(WithMarkdownChunkSize(80))
+
+	chunks, err := chunker.Chunk(&document.Document{
+		ID:      "header-only",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, chunks)
+	var found bool
+	for _, chunk := range chunks {
+		if chunk.Content != "# Empty" {
+			continue
+		}
+		found = true
+		require.Equal(t, "Empty",
+			chunk.Metadata[source.MetaMarkdownHeaderPath])
+	}
+	require.True(t, found, "trailing header-only section was dropped")
+}
+
+func TestMarkdownChunking_ReservesBudgetForExplicitOverlap(t *testing.T) {
+	const (
+		chunkSize = 100
+		overlap   = 20
+	)
+	chunker := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownOverlap(overlap),
+	)
+
+	chunks, err := chunker.Chunk(&document.Document{
+		ID:      "overlap-budget",
+		Content: strings.Repeat("x", 300),
+	})
+
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(chunks), 4)
+	for i, chunk := range chunks {
+		require.LessOrEqual(t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+			"chunk %d exceeds the final budget",
+			i,
+		)
+		if i == 0 {
+			continue
+		}
+		require.True(t,
+			strings.HasPrefix(chunk.Content, strings.Repeat("x", overlap)),
+			"chunk %d lost the configured overlap",
+			i,
+		)
+		require.Contains(t, chunk.Metadata,
+			source.MetaOverlappedContentSize)
 	}
 }

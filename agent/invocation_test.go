@@ -1582,12 +1582,13 @@ func TestInvocation_IncToolIteration_NoLimitOrNil(t *testing.T) {
 	// nil invocation should be a no-op and report not exceeded.
 	var nilInv *Invocation
 	require.False(t, nilInv.IncToolIteration())
+	require.Zero(t, nilInv.ToolIterationCount())
 
 	// MaxToolIterations <= 0 should be treated as "no limit".
 	inv := &Invocation{}
 	exceeded := inv.IncToolIteration()
 	require.False(t, exceeded)
-	require.Equal(t, 0, inv.toolIterationCount, "counter should not increment when no limit is configured")
+	require.Zero(t, inv.ToolIterationCount(), "counter should not increment when no limit is configured")
 }
 
 func TestInvocation_IncToolIteration_WithLimitAndOverflow(t *testing.T) {
@@ -1598,17 +1599,26 @@ func TestInvocation_IncToolIteration_WithLimitAndOverflow(t *testing.T) {
 	// First iteration within limit.
 	exceeded := inv.IncToolIteration()
 	require.False(t, exceeded)
-	require.Equal(t, 1, inv.toolIterationCount)
+	require.Equal(t, 1, inv.ToolIterationCount())
 
 	// Second iteration still within limit.
 	exceeded = inv.IncToolIteration()
 	require.False(t, exceeded)
-	require.Equal(t, 2, inv.toolIterationCount)
+	require.Equal(t, 2, inv.ToolIterationCount())
 
 	// Third iteration exceeds limit and should report true.
 	exceeded = inv.IncToolIteration()
 	require.True(t, exceeded, "expected true when tool iteration limit is exceeded")
-	require.Equal(t, 3, inv.toolIterationCount)
+	require.Equal(t, 3, inv.ToolIterationCount())
+}
+
+func TestInvocation_ToolIterationCount_CloneAndView(t *testing.T) {
+	inv := NewInvocation()
+	inv.MaxToolIterations = 2
+	require.False(t, inv.IncToolIteration())
+
+	require.Equal(t, 1, inv.View().ToolIterationCount())
+	require.Zero(t, inv.Clone().ToolIterationCount())
 }
 
 func TestWithInjectedContextMessages(t *testing.T) {

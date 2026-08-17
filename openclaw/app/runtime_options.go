@@ -45,6 +45,7 @@ type GatewayRunOptionInput struct {
 	UserID     string
 	SessionID  string
 	RequestID  string
+	ModelName  string
 	Message    model.Message
 	Extensions map[string]json.RawMessage
 }
@@ -63,6 +64,53 @@ type runtimeOptions struct {
 	gatewayResolvers       []GatewayRunOptionResolver
 	postToolPromptEnabled  *bool
 	codeExecutorLoader     codeExecutorConfigLoader
+	modelCatalog           *ModelCatalog
+}
+
+// ModelCatalog is a set of pre-built models addressable by stable aliases.
+// Default must name one entry in Models. OpenClaw uses the default model for
+// auxiliary services and registers all entries on the main LLM agent for
+// request-scoped selection. Metadata keys, when present, must match Models
+// aliases.
+type ModelCatalog struct {
+	Default  string
+	Models   map[string]model.Model
+	Metadata map[string]ModelMetadata
+}
+
+// ModelMetadata describes provider behavior that OpenClaw must apply outside
+// the model client itself. Entries are optional; omitted fields fall back to
+// the legacy top-level model settings. OpenAIVariant accepts auto, openai,
+// deepseek, hunyuan, qwen, glm, minimax, or kimi when Mode is openai.
+type ModelMetadata struct {
+	Mode    string
+	BaseURL string
+	// BaseURLSet makes an empty BaseURL override, rather than inherit, the
+	// legacy top-level base URL.
+	BaseURLSet    bool
+	OpenAIVariant string
+}
+
+// WithModelCatalog injects a model catalog into an embedded OpenClaw runtime.
+// It is mutually exclusive with the model.models YAML configuration.
+func WithModelCatalog(catalog ModelCatalog) RuntimeOption {
+	return func(opts *runtimeOptions) {
+		cloned := ModelCatalog{
+			Default: catalog.Default,
+			Models:  make(map[string]model.Model, len(catalog.Models)),
+			Metadata: make(
+				map[string]ModelMetadata,
+				len(catalog.Metadata),
+			),
+		}
+		for name, mdl := range catalog.Models {
+			cloned.Models[name] = mdl
+		}
+		for name, metadata := range catalog.Metadata {
+			cloned.Metadata[name] = metadata
+		}
+		opts.modelCatalog = &cloned
+	}
 }
 
 // WithRuntimeProfileResolver injects per-request runtime profile resolution.
@@ -220,6 +268,7 @@ func gatewayRunOptionInput(
 		UserID:     input.UserID,
 		SessionID:  input.SessionID,
 		RequestID:  input.RequestID,
+		ModelName:  input.ModelName,
 		Message:    input.Message,
 		Extensions: cloneGatewayRunOptionExtensions(input.Extensions),
 	}

@@ -7,9 +7,9 @@
 //
 
 // Package main demonstrates how to use per-agent limits for LLM calls and
-// tool iterations. It intentionally sets very small limits so you can observe
-// how the framework terminates the flow when the limits are exceeded for a
-// single LLMAgent invocation.
+// tool iterations. It intentionally sets very small limits and enables
+// graceful finalization so you can observe a tool-free final response when a
+// limit is reached during one LLMAgent invocation.
 package main
 
 import (
@@ -31,9 +31,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// maxLimitsDemo shows how MaxLLMCalls and MaxToolIterations affect a single run.
-// You should see the agent start a tool call and then terminate with an error
-// once the tool iteration limit is exceeded.
+// main shows how MaxLLMCalls and MaxToolIterations affect a single run. You
+// should see two tool iterations followed by a tool-free final response.
 func main() {
 	ctx := context.Background()
 
@@ -88,10 +87,13 @@ func main() {
 		),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools([]tool.Tool{calculatorTool}),
-		// Configure small per-invocation limits so we can observe how the
-		// agent stops when the budgets are exhausted.
+		// Configure small per-invocation limits and opt in to graceful
+		// tool-free finalization. Empty strings select the framework default
+		// instruction for each limit.
 		llmagent.WithMaxLLMCalls(5),
 		llmagent.WithMaxToolIterations(2),
+		llmagent.WithLLMCallLimitFinalization(""),
+		llmagent.WithToolIterationLimitFinalization(""),
 	)
 
 	appName := "limits-demo-app"
@@ -120,6 +122,7 @@ func main() {
 	)
 
 	fmt.Println("Running demo with per-agent MaxLLMCalls=5 and MaxToolIterations=2 ...")
+	fmt.Println("Graceful finalization is enabled for both limits.")
 	fmt.Println()
 	fmt.Println("This demo automatically sends a fixed user message asking the agent to compute 2^8.")
 	fmt.Println("If you want to try other inputs, edit `main.go` and change the `message` to something like:")

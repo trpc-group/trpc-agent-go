@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -27,6 +28,69 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+func TestRunnerEnqueuesModelVisibleSummaryView(t *testing.T) {
+	service := &mockSessionService{}
+	r := NewRunner(
+		"test-app",
+		&mockAgent{name: "test-agent"},
+		WithSessionService(service),
+	).(*runner)
+	sess := &session.Session{ID: "session"}
+	invocation := agent.NewInvocation(agent.WithInvocationSession(sess))
+	summaryview.AttachProjection(invocation, &summaryview.View{
+		SessionID:     sess.ID,
+		RequestTokens: 13_310,
+	})
+	evt := &event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("answer"),
+			}},
+		},
+	}
+
+	require.True(t, r.handleEventPersistence(
+		context.Background(),
+		invocation,
+		sess,
+		sess,
+		evt,
+	))
+	require.Len(t, service.enqueueSummaryJobCalls, 1)
+	view, ok := summaryview.FromContext(service.enqueueSummaryJobCalls[0].ctx)
+	require.True(t, ok)
+	require.Equal(t, 13_310, view.RequestTokens)
+}
+
+func TestRunnerPersistsErrorEventWithoutEnqueuingSummary(t *testing.T) {
+	service := &mockSessionService{}
+	r := NewRunner(
+		"test-app",
+		&mockAgent{name: "test-agent"},
+		WithSessionService(service),
+	).(*runner)
+	sess := &session.Session{ID: "session"}
+	invocation := agent.NewInvocation(agent.WithInvocationSession(sess))
+	errorEvent := errorEventWithContent(event.NewErrorEvent(
+		invocation.InvocationID,
+		"test-agent",
+		agent.ErrorTypeStopAgentError,
+		"cancelled",
+	))
+
+	require.True(t, r.handleEventPersistence(
+		context.Background(),
+		invocation,
+		sess,
+		sess,
+		errorEvent,
+	))
+	require.Len(t, service.appendEventCalls, 1)
+	require.Empty(t, service.enqueueSummaryJobCalls)
+}
 
 func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 	t.Run("calls EnqueueSummaryJob for qualifying events", func(t *testing.T) {
@@ -740,6 +804,7 @@ type mockSessionService struct {
 }
 
 type enqueueSummaryJobCall struct {
+	ctx       context.Context
 	sess      *session.Session
 	filterKey string
 	force     bool
@@ -838,7 +903,12 @@ func (m *mockSessionService) CreateSessionSummary(ctx context.Context, sess *ses
 }
 
 func (m *mockSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	m.enqueueSummaryJobCalls = append(m.enqueueSummaryJobCalls, enqueueSummaryJobCall{sess, filterKey, force})
+	m.enqueueSummaryJobCalls = append(m.enqueueSummaryJobCalls, enqueueSummaryJobCall{
+		ctx:       ctx,
+		sess:      sess,
+		filterKey: filterKey,
+		force:     force,
+	})
 	return nil
 }
 

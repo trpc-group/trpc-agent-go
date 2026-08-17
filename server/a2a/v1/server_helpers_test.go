@@ -539,10 +539,12 @@ func TestNormalizeStreamingResultDropsTypedNil(t *testing.T) {
 	var message *protocol.Message
 	var artifact *protocol.TaskArtifactUpdateEvent
 	var status *protocol.TaskStatusUpdateEvent
+	var task *protocol.Task
 	for name, result := range map[string]protocol.StreamEvent{
 		"message":  message,
 		"artifact": artifact,
 		"status":   status,
+		"task":     task,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := normalizeStreamingResult(result); got != nil {

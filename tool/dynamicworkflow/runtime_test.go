@@ -204,6 +204,57 @@ return await agent("review", unsupported_option=True)
 	require.ErrorContains(t, err, "unsupported agent option(s): unsupported_option")
 }
 
+func TestLocalRunnerRoutesKeywordAgentModelOption(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	handler := callHandlerFunc(func(_ context.Context, call Call) (json.RawMessage, error) {
+		require.Equal(t, CallKindAgent, call.Kind)
+		require.JSONEq(t, `{
+			"input": "review it",
+			"options": {
+				"instruction": "Be strict.",
+				"model": "fast"
+			}
+		}`, string(call.Args))
+		return json.RawMessage(`{"text":"approved"}`), nil
+	})
+
+	result, err := Execute(context.Background(), LocalRunner{}, handler, `
+return await agent("review it", instruction="Be strict.", model="fast")
+`)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"text":"approved"}`, string(result.Value))
+}
+
+func TestLocalRunnerRoutesOptionsDictAgentModelOption(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	handler := callHandlerFunc(func(_ context.Context, call Call) (json.RawMessage, error) {
+		require.Equal(t, CallKindAgent, call.Kind)
+		require.JSONEq(t, `{
+			"input": {"answer": 42},
+			"options": {
+				"template": "reviewer",
+				"model": "deep",
+				"instruction": "Review carefully."
+			}
+		}`, string(call.Args))
+		return json.RawMessage(`{"text":"approved"}`), nil
+	})
+
+	result, err := Execute(context.Background(), LocalRunner{}, handler, `
+return await agent({"answer": 42}, {
+    "template": "reviewer",
+    "model": "deep",
+    "instruction": "Review carefully.",
+})
+`)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"text":"approved"}`, string(result.Value))
+}
+
 func TestLocalRunnerRunsConventionalWorkflowWrapper(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")

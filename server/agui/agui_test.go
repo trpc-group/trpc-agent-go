@@ -84,6 +84,128 @@ func TestEndToEndServerSendsSSEEvents(t *testing.T) {
 	assert.Equal(t, model.RoleUser, agent.lastInvocation.Message.Role)
 }
 
+func TestCustomRunnerDisconnectReleasesInnerSessionKey(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		cancelOnContextDone bool
+	}{
+		{name: "run continues"},
+		{name: "run is canceled", cancelOnContextDone: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCustomRunnerDisconnectReleasesInnerSessionKey(t, tc.cancelOnContextDone)
+		})
+	}
+}
+
+func testCustomRunnerDisconnectReleasesInnerSessionKey(t *testing.T, cancelOnContextDone bool) {
+	firstAgentRunContext := make(chan context.Context, 1)
+	releaseFirstAgentRun := make(chan struct{})
+	releaseFirst := func() {
+		select {
+		case <-releaseFirstAgentRun:
+		default:
+			close(releaseFirstAgentRun)
+		}
+	}
+
+	agt := &mockAgent{info: agent.Info{Name: "demo"}}
+	agt.run = func(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+		if agt.runCalls == 1 {
+			firstAgentRunContext <- ctx
+			<-releaseFirstAgentRun
+		}
+		events := make(chan *event.Event, 1)
+		events <- event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			&model.Response{
+				ID:     "completion",
+				Object: model.ObjectTypeRunnerCompletion,
+				Done:   true,
+			},
+		)
+		close(events)
+		return events, nil
+	}
+	baseRunner := runner.NewRunner(agt.Info().Name, agt)
+	t.Cleanup(func() {
+		releaseFirst()
+		assert.NoError(t, baseRunner.Close())
+	})
+	relayCompleted := make(chan struct{}, 2)
+	runnerFactory := func(
+		base runner.Runner,
+		opts ...aguirunner.Option,
+	) (aguirunner.Runner, error) {
+		return &requestCancelRelayRunner{
+			inner:     aguirunner.New(base, opts...),
+			completed: relayCompleted,
+		}, nil
+	}
+	serverOptions := []Option{
+		WithTimeout(0),
+		WithRunnerFactory(runnerFactory),
+	}
+	if cancelOnContextDone {
+		serverOptions = append(serverOptions, WithCancelOnContextDoneEnabled(true))
+	}
+	srv, err := New(baseRunner, serverOptions...)
+	if !assert.NoError(t, err) || !assert.NotNil(t, srv) {
+		return
+	}
+
+	firstPayload := `{"threadId":"thread","runId":"run-1","messages":[{"role":"user","content":"hi"}]}`
+	firstBaseReq := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(firstPayload))
+	firstRequestCtx, cancelFirstRequest := context.WithCancel(firstBaseReq.Context())
+	firstReq := firstBaseReq.WithContext(firstRequestCtx)
+	firstRecorder := httptest.NewRecorder()
+	firstHandlerDone := make(chan struct{})
+	go func() {
+		srv.Handler().ServeHTTP(firstRecorder, firstReq)
+		close(firstHandlerDone)
+	}()
+
+	var agentRunContext context.Context
+	select {
+	case agentRunContext = <-firstAgentRunContext:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for first agent run context")
+	}
+	cancelFirstRequest()
+	waitForAGUISignal(t, firstHandlerDone, "first HTTP handler return")
+	waitForAGUISignal(t, relayCompleted, "first relay completion")
+	if cancelOnContextDone {
+		assert.Eventually(t, func() bool {
+			return errors.Is(agentRunContext.Err(), context.Canceled)
+		}, time.Second, 10*time.Millisecond)
+	} else {
+		assert.NoError(t, agentRunContext.Err())
+	}
+	releaseFirst()
+
+	var secondRecorder *httptest.ResponseRecorder
+	ok := assert.Eventually(t, func() bool {
+		payload := `{"threadId":"thread","runId":"run-2","messages":[{"role":"user","content":"again"}]}`
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
+		ctx, cancel := context.WithTimeout(req.Context(), 500*time.Millisecond)
+		defer cancel()
+		req = req.WithContext(ctx)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			return false
+		}
+		secondRecorder = recorder
+		return true
+	}, 2*time.Second, 10*time.Millisecond)
+	if !ok {
+		return
+	}
+	assert.NotContains(t, secondRecorder.Body.String(), "run already exists")
+	assert.Contains(t, secondRecorder.Body.String(), `"type":"RUN_FINISHED"`)
+}
+
 func TestWithToolCallDeltaStreamingEnabledPropagatesToRunner(t *testing.T) {
 	agt := &mockAgent{info: agent.Info{Name: "demo"}}
 	agt.run = func(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
@@ -583,6 +705,53 @@ func (*testAGUIRunner) Run(context.Context, *adapter.RunAgentInput) (<-chan agui
 	events := make(chan aguievents.Event)
 	close(events)
 	return events, nil
+}
+
+type requestCancelRelayRunner struct {
+	inner     aguirunner.Runner
+	completed chan<- struct{}
+}
+
+func (r *requestCancelRelayRunner) Run(
+	ctx context.Context,
+	input *adapter.RunAgentInput,
+) (<-chan aguievents.Event, error) {
+	innerEvents, err := r.inner.Run(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	outerEvents := make(chan aguievents.Event)
+	go func() {
+		defer func() {
+			close(outerEvents)
+			r.completed <- struct{}{}
+		}()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-innerEvents:
+				if !ok {
+					return
+				}
+				select {
+				case outerEvents <- event:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return outerEvents, nil
+}
+
+func waitForAGUISignal(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatalf("timeout waiting for %s", name)
+	}
 }
 
 type fakeSessionService struct{}

@@ -169,12 +169,61 @@ review = await agent(
 The common options are:
 
 - `instruction`: the temporary role instruction for this child Agent call.
+- `model`: optional host-authorized model profile alias when the host registered
+  profiles with `WithAgentModelProfile`. Omit it to inherit the template model.
 - `tools` / `skills`: omitted means inherit from the base Agent; `[]` disables
   that capability for this call; a non-empty list narrows the base Agent's
   existing capabilities.
 - `structured_output` / `schema`: asks this child Agent to return structured
   JSON.
 - `instance_id`: reuses the same child Agent history within one workflow.
+
+### Host-authorized model profiles
+
+By default, each child call uses the template Agent's registered model. To let
+workflow code choose among a few host-owned models, register profile aliases:
+
+```go
+fast := openai.New("gpt-5-mini")
+deep := openai.New("gpt-5")
+
+workflow, err := dynamicworkflow.NewTool(
+    dynamicworkflow.LocalRunner{},
+    []agent.Agent{general},
+    dynamicworkflow.WithAgentModelProfile(
+        "fast",
+        "Low-latency drafting and simple extraction.",
+        fast,
+    ),
+    dynamicworkflow.WithAgentModelProfile(
+        "deep",
+        "Careful review and multi-step reasoning.",
+        deep,
+    ),
+)
+```
+
+A workflow may then select a profile for one child call:
+
+```python
+draft = await agent(
+    "Write a short draft.",
+    instruction="Draft quickly.",
+    model="fast",
+)
+review = await agent(
+    {"draft": draft["text"]},
+    instruction="Review carefully.",
+    model="deep",
+)
+```
+
+Profiles are an allowlist. The host owns each `model.Model` instance; workflow
+code cannot pass a provider model identifier or construct a model. Omitting
+`model` preserves the template model exactly. Choose an override only for a
+clear task-specific reason. Selected profiles apply to `LLMAgent` templates and
+to custom Agents that honor invocation surface patches; other Agents keep their
+configured model.
 
 When `instance_id` is omitted, each `agent(...)` call creates an independent
 child Agent history, which is the right default for parallel branches. For
@@ -189,8 +238,9 @@ The shared history contains child inputs and emitted events. A dynamic
 conversation message. Put facts that a later call must remember in `input`.
 
 These options affect only the current child Agent call. A workflow cannot use
-them to change the model, permission policy, or add host capabilities that the
-base Agent did not already have.
+them to change permission policy, invent model endpoints, or add host
+capabilities that the base Agent did not already have. Model selection is
+limited to aliases the host registered with `WithAgentModelProfile`.
 
 `agent(...)` returns an envelope containing `text`, optional `structured`
 output, and execution metadata. Pass `result["text"]` downstream for plain text
