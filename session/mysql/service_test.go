@@ -4034,9 +4034,8 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 			WithArgs(fullTableName).
 			WillReturnRows(idxRows)
 	}
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM " +
-		regexp.QuoteMeta(sqldb.BuildTableName(tablePrefix, sqldb.TableNameSessionStates))).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS")).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 }
 
 // TestUpdateUserState_InvalidKey tests update user state with invalid key

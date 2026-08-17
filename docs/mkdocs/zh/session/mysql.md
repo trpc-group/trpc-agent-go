@@ -327,7 +327,7 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}user_states` (
 协调式 state initialization 要求每个 `(app_name, user_id, session_id)` 最多只有
 一条活跃的 `session_states` 记录。已有 MySQL 或 TDSQL 部署应先在所有实例上部署新
 service 版本，并保持 `WithStateInitialization(false)`；然后暂停创建 session，迁移
-活跃行标记和唯一索引，最后再重新开启该能力。
+活跃行标记和唯一索引，创建 lease 表及其索引，最后再重新开启该能力。
 
 执行 DDL 前请先备份表，并处理所有重复活跃行：
 
@@ -354,11 +354,60 @@ ON session_states(
 );
 ```
 
-配置表前缀时，表名和索引名都需要加上对应前缀。如果列或索引缺失、索引不是唯一
-索引，或者活跃行的标记不是 `1`，服务启动会 fail closed。所有实例完成 schema
-迁移后再重新开启 state initialization。服务会为活跃行写入标记 `1`，并在软删除时
-将其清空。如果无法暂停写入，请在创建唯一索引前立即重新执行重复检查和 marker
-`UPDATE`；只有这些步骤全部成功后才能重新开启该能力。
+在重新开启 state initialization 前，还需要根据部署类型创建 lease schema。使用
+`WithSkipDBInit(true)` 时，服务不会自动创建该表及其索引，因此必须在迁移期间完成
+创建。将 `{{PREFIX}}` 替换为实际的表前缀；表名和索引名都需要带上对应前缀。
+
+MySQL：
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}state_initialization_leases` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `coordination_key` BINARY(32) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `owner_token` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `session_row_id` BIGINT NOT NULL,
+    `session_created_at` TIMESTAMP(6) NOT NULL,
+    `expires_at` TIMESTAMP(6) NOT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE UNIQUE INDEX `idx_{{PREFIX}}state_initialization_leases_uniq`
+    ON `{{PREFIX}}state_initialization_leases` (`coordination_key`, `user_id`);
+CREATE INDEX `idx_{{PREFIX}}state_initialization_leases_exp`
+    ON `{{PREFIX}}state_initialization_leases` (`expires_at`);
+```
+
+TDSQL：
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}state_initialization_leases` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `coordination_key` BINARY(32) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `owner_token` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `session_row_id` BIGINT NOT NULL,
+    `session_created_at` TIMESTAMP(6) NOT NULL,
+    `expires_at` TIMESTAMP(6) NOT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (`id`, `user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id;
+
+CREATE UNIQUE INDEX `idx_{{PREFIX}}state_initialization_leases_uniq`
+    ON `{{PREFIX}}state_initialization_leases` (`coordination_key`, `user_id`);
+CREATE INDEX `idx_{{PREFIX}}state_initialization_leases_exp`
+    ON `{{PREFIX}}state_initialization_leases` (`expires_at`);
+```
+
+如果列或索引缺失、索引不是唯一索引，或者活跃行的标记不是 `1`，服务启动会 fail
+closed。所有实例完成 schema 迁移后再重新开启 state initialization。服务会为活跃
+行写入标记 `1`，并在软删除时将其清空。如果无法暂停写入，请在创建唯一索引前立即
+重新执行重复检查和 marker `UPDATE`；只有这些步骤全部成功后才能重新开启该能力。
+服务启动还会检查这两个方向的不变量：`deleted_at IS NULL` 的行必须具有标记 `1`，
+软删除行的标记必须为 `NULL`。该检查使用 `EXISTS`，发现第一条不一致记录后即可
+停止；但现有索引都不是以这两个谓词列开头，因此数据正常时启动仍可能扫描整张表或
+完整索引一次。
 
 ### 旧版本数据迁移
 

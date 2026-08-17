@@ -307,7 +307,8 @@ Coordinated state initialization requires exactly one active `session_states`
 row for each `(app_name, user_id, session_id)`. On an existing MySQL or TDSQL
 deployment, first deploy the new service version everywhere with
 `WithStateInitialization(false)`. Then quiesce session creation, migrate the
-active-row marker and unique index, and re-enable the capability.
+active-row marker and unique index, provision the lease table and indexes, and
+re-enable the capability.
 
 Back up the table and resolve duplicate active rows before running the DDL:
 
@@ -334,13 +335,65 @@ ON session_states(
 );
 ```
 
-If a table prefix is configured, apply it to both the table and index names.
+Before re-enabling state initialization, provision the lease schema with the
+variant matching the deployment. When `WithSkipDBInit(true)` is set, the service
+does not create this table or its indexes, so they must be provisioned during
+the migration. Replace `{{PREFIX}}` with the configured table prefix; the prefix
+applies to both the table and index names.
+
+MySQL:
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}state_initialization_leases` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `coordination_key` BINARY(32) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `owner_token` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `session_row_id` BIGINT NOT NULL,
+    `session_created_at` TIMESTAMP(6) NOT NULL,
+    `expires_at` TIMESTAMP(6) NOT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE UNIQUE INDEX `idx_{{PREFIX}}state_initialization_leases_uniq`
+    ON `{{PREFIX}}state_initialization_leases` (`coordination_key`, `user_id`);
+CREATE INDEX `idx_{{PREFIX}}state_initialization_leases_exp`
+    ON `{{PREFIX}}state_initialization_leases` (`expires_at`);
+```
+
+TDSQL:
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}state_initialization_leases` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `coordination_key` BINARY(32) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `owner_token` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `session_row_id` BIGINT NOT NULL,
+    `session_created_at` TIMESTAMP(6) NOT NULL,
+    `expires_at` TIMESTAMP(6) NOT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (`id`, `user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id;
+
+CREATE UNIQUE INDEX `idx_{{PREFIX}}state_initialization_leases_uniq`
+    ON `{{PREFIX}}state_initialization_leases` (`coordination_key`, `user_id`);
+CREATE INDEX `idx_{{PREFIX}}state_initialization_leases_exp`
+    ON `{{PREFIX}}state_initialization_leases` (`expires_at`);
+```
+
 Startup fails closed while the column/index is missing, the index is not unique,
 or an active row does not have marker value `1`. After all instances use the
 migrated schema, re-enable state initialization. The service writes marker `1`
 for active rows and clears it on soft deletion. If writes could not be quiesced,
 repeat the duplicate check and marker `UPDATE` immediately before creating the
-unique index; do not re-enable the capability until they succeed.
+unique index; do not re-enable the capability until they succeed. Startup also
+checks both sides of the invariant: rows with `deleted_at IS NULL` must have
+marker `1`, while soft-deleted rows must have a `NULL` marker. The check uses an
+`EXISTS` probe and stops after the first inconsistent row, but the existing
+indexes do not lead with either predicate column, so a healthy deployment may
+still scan the full table or an entire index once during startup.
 
 ### Legacy Data Migration
 

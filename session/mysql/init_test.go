@@ -42,9 +42,8 @@ func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
 		sqldb.TableNameAppStates,
 		sqldb.TableNameUserStates,
 	})
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM " +
-		sqldb.BuildTableName(tablePrefix, sqldb.TableNameSessionStates))).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS")).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 }
 
 func mockVerifySchemaQueriesForTables(
@@ -437,8 +436,8 @@ func TestVerifySchema_Success(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
 		WithArgs(fullTableName).
 		WillReturnRows(idxRows)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM session_states")).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS")).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
 	err = s.verifySchema(ctx)
 	assert.NoError(t, err)
@@ -1096,8 +1095,8 @@ func TestVerifyStateInitializationSchemaWithSkipDBInit(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
 		WithArgs(s.tableStateInitializationLeases).
 		WillReturnRows(indexRows)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM session_states")).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS")).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
 	require.NoError(t, s.verifyStateInitializationSchema(context.Background()))
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -1124,17 +1123,28 @@ func TestVerifyStateInitializationSchemaRequiresActiveMarker(t *testing.T) {
 }
 
 func TestVerifyStateInitializationActiveRowsRejectsInconsistentMarkers(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-	s := createTestService(t, db)
+	for _, test := range []struct {
+		name string
+	}{
+		{name: "active row missing marker"},
+		{name: "deleted row retains marker"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			s := createTestService(t, db)
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM session_states")).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+			mock.ExpectQuery(`(?s)SELECT EXISTS.*deleted_at IS NULL.*`+
+				`state_initialization_active IS NULL.*state_initialization_active <> 1.*`+
+				`deleted_at IS NOT NULL.*state_initialization_active IS NOT NULL`).
+				WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
-	err = s.verifyStateInitializationActiveRows(context.Background())
-	require.ErrorContains(t, err, "found 2 inconsistent rows")
-	require.NoError(t, mock.ExpectationsWereMet())
+			err = s.verifyStateInitializationActiveRows(context.Background())
+			require.ErrorContains(t, err, "found inconsistent rows")
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestVerifySchema_TableExistsError(t *testing.T) {

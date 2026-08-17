@@ -877,24 +877,25 @@ func (s *Service) verifyStateInitializationSchema(ctx context.Context) error {
 }
 
 func (s *Service) verifyStateInitializationActiveRows(ctx context.Context) error {
-	var inconsistent int64
+	var inconsistent bool
 	err := s.mysqlClient.QueryRow(
 		ctx,
 		[]any{&inconsistent},
-		fmt.Sprintf(`SELECT COUNT(*) FROM %s
+		fmt.Sprintf(`SELECT EXISTS (
+			SELECT 1 FROM %s
 			WHERE (deleted_at IS NULL AND
 				(state_initialization_active IS NULL OR state_initialization_active <> 1))
-			OR (deleted_at IS NOT NULL AND state_initialization_active IS NOT NULL)`,
+			OR (deleted_at IS NOT NULL AND state_initialization_active IS NOT NULL)
+		)`,
 			s.tableSessionStates,
 		),
 	)
 	if err != nil {
 		return fmt.Errorf("verify state initialization active rows: %w", err)
 	}
-	if inconsistent != 0 {
+	if inconsistent {
 		return fmt.Errorf(
-			"state initialization requires a consistent active-row marker; found %d inconsistent rows in %s",
-			inconsistent,
+			"state initialization requires a consistent active-row marker; found inconsistent rows in %s",
 			s.tableSessionStates,
 		)
 	}
