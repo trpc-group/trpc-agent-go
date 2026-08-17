@@ -959,10 +959,16 @@ func (m *Model) buildChatRequestWithToolControl(
 		}
 	}
 
-	// MaxTokens is deprecated and not compatible with o-series models.
-	// Use MaxCompletionTokens instead.
 	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
-		chatRequest.MaxCompletionTokens = openai.Int(int64(*mt))
+		if m.variant == VariantDeepSeek {
+			// DeepSeek Chat Completions supports max_tokens rather than
+			// OpenAI's max_completion_tokens parameter.
+			chatRequest.MaxTokens = openai.Int(int64(*mt))
+		} else {
+			// max_tokens is deprecated and incompatible with OpenAI o-series
+			// models. Use max_completion_tokens for other variants.
+			chatRequest.MaxCompletionTokens = openai.Int(int64(*mt))
+		}
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = openai.Float(*request.Temperature)
