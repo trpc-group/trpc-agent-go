@@ -3985,11 +3985,11 @@
 <span class="normal"><a href="#__codelineno-0-3">3</a></span>
 <span class="normal"><a href="#__codelineno-0-4">4</a></span>
 <span class="normal"><a href="#__codelineno-0-5">5</a></span>
-<span class="normal"><a href="#__codelineno-0-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/mongodb&quot;</span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/session/mongodb"</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithMongoClientURI</span><span class="p">(</span><span class="s">&quot;mongodb://user:password@localhost:27017/?replicaSet=rs0&quot;</span><span class="p">),</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithDatabase</span><span class="p">(</span><span class="s">&quot;trpc_agent_go&quot;</span><span class="p">),</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithMongoClientURI</span><span class="p">(</span><span class="s">"mongodb://user:password@localhost:27017/?replicaSet=rs0"</span><span class="p">),</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithDatabase</span><span class="p">(</span><span class="s">"trpc_agent_go"</span><span class="p">),</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="_10">配置复用</h2>
@@ -4006,17 +4006,17 @@
 <span class="normal"><a href="#__codelineno-1-11">11</a></span>
 <span class="normal"><a href="#__codelineno-1-12">12</a></span>
 <span class="normal"><a href="#__codelineno-1-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="nx">storagemongodb</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/storage/mongodb&quot;</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">sessionmongodb</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/mongodb&quot;</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="nx">storagemongodb</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/storage/mongodb"</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">sessionmongodb</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/session/mongodb"</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="p">)</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="nx">storagemongodb</span><span class="p">.</span><span class="nx">RegisterMongoDBInstance</span><span class="p">(</span><span class="s">&quot;my-mongodb-instance&quot;</span><span class="p">,</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">    </span><span class="nx">storagemongodb</span><span class="p">.</span><span class="nx">WithClientBuilderDSN</span><span class="p">(</span><span class="s">&quot;mongodb://user:password@localhost:27017/?replicaSet=rs0&quot;</span><span class="p">),</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="nx">storagemongodb</span><span class="p">.</span><span class="nx">RegisterMongoDBInstance</span><span class="p">(</span><span class="s">"my-mongodb-instance"</span><span class="p">,</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">    </span><span class="nx">storagemongodb</span><span class="p">.</span><span class="nx">WithClientBuilderDSN</span><span class="p">(</span><span class="s">"mongodb://user:password@localhost:27017/?replicaSet=rs0"</span><span class="p">),</span>
 </span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="p">)</span>
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a>
 </span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionmongodb</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="nx">sessionmongodb</span><span class="p">.</span><span class="nx">WithMongoInstance</span><span class="p">(</span><span class="s">&quot;my-mongodb-instance&quot;</span><span class="p">),</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="w">    </span><span class="nx">sessionmongodb</span><span class="p">.</span><span class="nx">WithDatabase</span><span class="p">(</span><span class="s">&quot;trpc_agent_go&quot;</span><span class="p">),</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="nx">sessionmongodb</span><span class="p">.</span><span class="nx">WithMongoInstance</span><span class="p">(</span><span class="s">"my-mongodb-instance"</span><span class="p">),</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="w">    </span><span class="nx">sessionmongodb</span><span class="p">.</span><span class="nx">WithDatabase</span><span class="p">(</span><span class="s">"trpc_agent_go"</span><span class="p">),</span>
 </span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="_11">集合前缀</h2>
@@ -4025,8 +4025,8 @@
 <span class="normal"><a href="#__codelineno-2-2">2</a></span>
 <span class="normal"><a href="#__codelineno-2-3">3</a></span>
 <span class="normal"><a href="#__codelineno-2-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithMongoClientURI</span><span class="p">(</span><span class="s">&quot;mongodb://user:password@localhost:27017/?replicaSet=rs0&quot;</span><span class="p">),</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithCollectionPrefix</span><span class="p">(</span><span class="s">&quot;app1_&quot;</span><span class="p">),</span><span class="w"> </span><span class="c1">// app1_session_states</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithMongoClientURI</span><span class="p">(</span><span class="s">"mongodb://user:password@localhost:27017/?replicaSet=rs0"</span><span class="p">),</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithCollectionPrefix</span><span class="p">(</span><span class="s">"app1_"</span><span class="p">),</span><span class="w"> </span><span class="c1">// app1_session_states</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="_12">过期与清理</h2>
@@ -4045,7 +4045,7 @@
 <h2 id="_14">集成测试</h2>
 <p>集成测试要求 MongoDB 副本集或分片集群，并通过 <code>integration</code> build tag 和 <code>MONGODB_INTEGRATION_URI</code> 显式启用：</p>
 <div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
-<span class="normal"><a href="#__codelineno-3-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nv">MONGODB_INTEGRATION_URI</span><span class="o">=</span><span class="s1">&#39;mongodb://user:pass@host:27017/?replicaSet=rs0&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nv">MONGODB_INTEGRATION_URI</span><span class="o">=</span><span class="s1">'mongodb://user:pass@host:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-tags<span class="o">=</span>integration<span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>./...
 </span></code></pre></div></td></tr></table></div>
 

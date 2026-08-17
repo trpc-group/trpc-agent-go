@@ -3651,18 +3651,18 @@
 <span class="normal"><a href="#__codelineno-0-20">20</a></span>
 <span class="normal"><a href="#__codelineno-0-21">21</a></span>
 <span class="normal"><a href="#__codelineno-0-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch&quot;</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/knowledge"</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="p">)</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="c1">// 创建支持多版本 (v7, v8, v9) 的 Elasticsearch 向量存储</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="nx">esVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithAddresses</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;http://localhost:9200&quot;</span><span class="p">}),</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithUsername</span><span class="p">(</span><span class="s">&quot;your-username&quot;</span><span class="p">),</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;your-password&quot;</span><span class="p">),</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithIndexName</span><span class="p">(</span><span class="s">&quot;trpc_agent_documents&quot;</span><span class="p">),</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="c1">// 版本可选：&quot;v7&quot;、&quot;v8&quot;、&quot;v9&quot;（默认 &quot;v9&quot;）</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithVersion</span><span class="p">(</span><span class="s">&quot;v9&quot;</span><span class="p">),</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithAddresses</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">"http://localhost:9200"</span><span class="p">}),</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithUsername</span><span class="p">(</span><span class="s">"your-username"</span><span class="p">),</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">"your-password"</span><span class="p">),</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithIndexName</span><span class="p">(</span><span class="s">"trpc_agent_documents"</span><span class="p">),</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="c1">// 版本可选："v7"、"v8"、"v9"（默认 "v9"）</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">    </span><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithVersion</span><span class="p">(</span><span class="s">"v9"</span><span class="p">),</span>
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="p">)</span>
 </span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="c1">// 处理 error</span>
@@ -3869,13 +3869,13 @@
 <span class="normal"><a href="#__codelineno-1-6">6</a></span>
 <span class="normal"><a href="#__codelineno-1-7">7</a></span>
 <span class="normal"><a href="#__codelineno-1-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="c1">// Elasticsearch 7.x</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithVersion</span><span class="p">(</span><span class="s">&quot;v7&quot;</span><span class="p">)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithVersion</span><span class="p">(</span><span class="s">"v7"</span><span class="p">)</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="c1">// Elasticsearch 8.x</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithVersion</span><span class="p">(</span><span class="s">&quot;v8&quot;</span><span class="p">)</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithVersion</span><span class="p">(</span><span class="s">"v8"</span><span class="p">)</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a>
 </span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="c1">// Elasticsearch 9.x（默认）</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithVersion</span><span class="p">(</span><span class="s">&quot;v9&quot;</span><span class="p">)</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="nx">vectorelasticsearch</span><span class="p">.</span><span class="nx">WithVersion</span><span class="p">(</span><span class="s">"v9"</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 
 
