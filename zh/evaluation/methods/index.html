@@ -2589,6 +2589,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      远程 Agent 评估
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#passk-passk" class="md-nav__link">
     <span class="md-ellipsis">
       pass@k 与 pass^k
@@ -3488,6 +3497,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      远程 Agent 评估
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#passk-passk" class="md-nav__link">
     <span class="md-ellipsis">
       pass@k 与 pass^k
@@ -3976,39 +3994,54 @@
 </span><span id="__span-3-53"><a id="__codelineno-3-53" name="__codelineno-3-53"></a><span class="p">]</span>
 </span></code></pre></div></td></tr></table></div>
 <p>完整可运行示例参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claudecode">examples/evaluation/claudecode</a>。</p>
-<h2 id="passk-passk">pass@k 与 pass^k</h2>
-<p>当评估通过 <code>NumRuns</code> 对同一评估集重复运行时，可以将每次运行视为一次独立的伯努利试验，并在通过与失败的统计之上给出更贴近能力与稳定性的两个派生指标 <code>pass@k</code> 与 <code>pass^k</code>。设 <code>n</code> 表示采样到的总运行次数，<code>c</code> 表示其中通过的次数，<code>k</code> 表示关注的尝试次数。</p>
-<p><code>pass@k</code> 用于度量在允许最多 <code>k</code> 次独立尝试时至少出现一次通过的概率，基于 <code>n</code> 次观测的无偏估计为</p>
-<div class="arithmatex">\[
-\mathrm{pass}@k = 1 - \frac{\binom{n-c}{k}}{\binom{n}{k}}
-\]</div>
-<p>其含义是从 n 次运行中不放回随机抽取 k 次时至少包含一次通过的概率，该估计在 Codex 与 HumanEval 等基准中被广泛采用，可避免仅取前 k 次带来的顺序偏差，同时在 n 大于 k 时能够利用全部样本信息。</p>
-<p><code>pass^k</code> 用于度量系统连续 <code>k</code> 次运行均通过的概率，先通过 <span class="arithmatex">\(c / n\)</span> 估计单次运行通过率，再计算</p>
-<div class="arithmatex">\[
-\text{pass^k} = \left( \frac{c}{n} \right)^k
-\]</div>
-<p>该指标更强调稳定性与一致性，与 pass@k 所强调的至少一次通过形成互补。</p>
-<p>代码使用示例如下：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
-<span class="normal"><a href="#__codelineno-4-2">2</a></span>
-<span class="normal"><a href="#__codelineno-4-3">3</a></span>
-<span class="normal"><a href="#__codelineno-4-4">4</a></span>
-<span class="normal"><a href="#__codelineno-4-5">5</a></span>
-<span class="normal"><a href="#__codelineno-4-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/evaluation"</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agentEvaluator</span><span class="p">.</span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evalSetId</span><span class="p">)</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">ParsePassNC</span><span class="p">(</span><span class="nx">result</span><span class="p">)</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="nx">passAtK</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">PassAtK</span><span class="p">(</span><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">k</span><span class="p">)</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="nx">passHatK</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">PassHatK</span><span class="p">(</span><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">k</span><span class="p">)</span>
+<h2 id="agent">远程 Agent 评估</h2>
+<p>远程 Agent 评估适用于评估平台与待测 Agent 分开部署的场景。运行评估的进程负责读取评估集和指标、调用待测 Agent、执行裁判打分并保存评估结果；远端 Agent 服务只负责根据输入完成一次真实推理。接入时，远端服务接入见 <a href="../../trpcagent/">tRPC-Agent API 服务</a>，远程 Runner 创建见 <a href="../../runner/#远程-trpc-agent-runner">远程 tRPC-Agent Runner</a>；评估侧通过 <code>runner/trpcagent</code> 将远端服务包装成普通 <code>runner.Runner</code>。</p>
+<p>完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trpcagent">examples/evaluation/trpcagent</a>。该示例提供 Go <code>server/trpcagent</code> 参考服务，以及 ADK、LangGraph 两个兼容 tRPC-Agent 协议的服务；评估客户端统一使用 <code>runner/trpcagent</code> 调用候选服务。</p>
+<p>业务侧先用 <code>server/trpcagent</code> 暴露待测 Agent：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-4-10">10</a></span>
+<span class="normal"><a href="#__codelineno-4-11">11</a></span>
+<span class="normal"><a href="#__codelineno-4-12">12</a></span>
+<span class="normal"><a href="#__codelineno-4-13">13</a></span>
+<span class="normal"><a href="#__codelineno-4-14">14</a></span>
+<span class="normal"><a href="#__codelineno-4-15">15</a></span>
+<span class="normal"><a href="#__codelineno-4-16">16</a></span>
+<span class="normal"><a href="#__codelineno-4-17">17</a></span>
+<span class="normal"><a href="#__codelineno-4-18">18</a></span>
+<span class="normal"><a href="#__codelineno-4-19">19</a></span>
+<span class="normal"><a href="#__codelineno-4-20">20</a></span>
+<span class="normal"><a href="#__codelineno-4-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="s">"net/http"</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/runner"</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="nx">servertrpcagent</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/server/trpcagent"</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="p">)</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="nx">agentRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">appName</span><span class="p">,</span><span class="w"> </span><span class="nx">candidateAgent</span><span class="p">)</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="k">defer</span><span class="w"> </span><span class="nx">agentRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">servertrpcagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="w">    </span><span class="nx">servertrpcagent</span><span class="p">.</span><span class="nx">WithAppName</span><span class="p">(</span><span class="nx">appName</span><span class="p">),</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="w">    </span><span class="nx">servertrpcagent</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="w">    </span><span class="nx">servertrpcagent</span><span class="p">.</span><span class="nx">WithRunner</span><span class="p">(</span><span class="nx">agentRunner</span><span class="p">),</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a><span class="p">)</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a><span class="p">}</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">":8081"</span><span class="p">,</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">Handler</span><span class="p">());</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>pass@k 与 pass^k 的计算依赖运行之间的独立性与同分布假设，进行重复运行评估时需要确保每次运行均为独立采样并完成必要的状态重置，避免会话记忆、工具缓存或外部依赖复用导致指标被系统性高估。</p>
-<h2 id="llm-verifier">LLM Verifier</h2>
-<p><a href="https://llm-as-a-verifier.notion.site/">LLM Verifier</a> 是一种用裁判模型评估候选结果质量的方法，适用于同一请求下存在多份候选结果、并且需要从中选出质量最高结果的场景。</p>
-<p>普通 LLM Judge 往往让裁判模型直接输出一个离散分数，并用这个分数表示候选结果的质量。当两份复杂回答都被打到同一档时，排序会失去区分度；当裁判模型在相邻分档之间犹豫时，只取最终生成的分数也会丢掉不确定性。LLM Verifier 的核心做法是让裁判模型在一组有序质量标签上表达判断，并读取质量标签位置的 token logprobs，用概率分布计算期望质量分数。</p>
-<p>一次 LLM Verifier 判断通常包含用户请求、候选结果、评估标准和裁判模型四类输入。用户请求用于定义任务目标，候选结果是待比较的回答，评估标准说明哪些质量维度需要被考虑，裁判模型负责根据评估标准给候选结果打质量标签。</p>
-<p>质量标签是一组有严格顺序的离散等级。这里使用 A 到 T 共 20 档，A 表示最高质量，T 表示最低质量，越靠前的字母代表质量越高。A 表示明确且完整满足要求，B-D 表示只有轻微问题，E-G 表示大体正确但仍有问题，H-J 表示倾向成功但存在不确定性，K-M 表示倾向失败，N-P 表示仍有显著问题，Q-S 表示失败但有部分进展，T 表示明确失败。</p>
-<p>评分时，裁判模型会在质量标签位置生成一个标签 token，同时模型服务可以返回该位置的 logprobs。logprobs 表示模型在该位置分配给不同 token 的对数概率，可以理解为模型对各个候选 token 的相对倾向；数值越接近 0，表示该 token 的概率越高。<code>top_logprobs</code> 则表示该位置概率较高的若干个候选 token 及其 logprobs。例如 OpenAI 兼容接口在开启 <code>logprobs</code> 与 <code>top_logprobs</code> 后，质量标签 token 对应的返回片段可能如下：</p>
-<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
+<p>评估侧创建远程 Runner，并将其作为待测 Runner 传给 <code>AgentEvaluator</code>：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
@@ -4026,25 +4059,111 @@
 <span class="normal"><a href="#__codelineno-5-16">16</a></span>
 <span class="normal"><a href="#__codelineno-5-17">17</a></span>
 <span class="normal"><a href="#__codelineno-5-18">18</a></span>
-<span class="normal"><a href="#__codelineno-5-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="p">{</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">  </span><span class="nt">"choices"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">      </span><span class="nt">"logprobs"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">        </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="w">          </span><span class="p">{</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">            </span><span class="nt">"token"</span><span class="p">:</span><span class="w"> </span><span class="s2">"B"</span><span class="p">,</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">            </span><span class="nt">"logprob"</span><span class="p">:</span><span class="w"> </span><span class="mf">-0.20</span><span class="p">,</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">            </span><span class="nt">"top_logprobs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="w">              </span><span class="p">{</span><span class="w"> </span><span class="nt">"token"</span><span class="p">:</span><span class="w"> </span><span class="s2">"B"</span><span class="p">,</span><span class="w"> </span><span class="nt">"logprob"</span><span class="p">:</span><span class="w"> </span><span class="mf">-0.20</span><span class="w"> </span><span class="p">},</span>
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="w">              </span><span class="p">{</span><span class="w"> </span><span class="nt">"token"</span><span class="p">:</span><span class="w"> </span><span class="s2">"C"</span><span class="p">,</span><span class="w"> </span><span class="nt">"logprob"</span><span class="p">:</span><span class="w"> </span><span class="mf">-1.10</span><span class="w"> </span><span class="p">},</span>
-</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="w">              </span><span class="p">{</span><span class="w"> </span><span class="nt">"token"</span><span class="p">:</span><span class="w"> </span><span class="s2">"D"</span><span class="p">,</span><span class="w"> </span><span class="nt">"logprob"</span><span class="p">:</span><span class="w"> </span><span class="mf">-2.30</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a><span class="w">            </span><span class="p">]</span>
-</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="w">          </span><span class="p">}</span>
-</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15"></a><span class="w">        </span><span class="p">]</span>
-</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-5-19">19</a></span>
+<span class="normal"><a href="#__codelineno-5-20">20</a></span>
+<span class="normal"><a href="#__codelineno-5-21">21</a></span>
+<span class="normal"><a href="#__codelineno-5-22">22</a></span>
+<span class="normal"><a href="#__codelineno-5-23">23</a></span>
+<span class="normal"><a href="#__codelineno-5-24">24</a></span>
+<span class="normal"><a href="#__codelineno-5-25">25</a></span>
+<span class="normal"><a href="#__codelineno-5-26">26</a></span>
+<span class="normal"><a href="#__codelineno-5-27">27</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/evaluation"</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="nx">trpcagentrunner</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/runner/trpcagent"</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="p">)</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="nx">candidateRunner</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">trpcagentrunner</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">    </span><span class="nx">appName</span><span class="p">,</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">    </span><span class="nx">trpcagentrunner</span><span class="p">.</span><span class="nx">WithTarget</span><span class="p">(</span><span class="nx">candidateTarget</span><span class="p">),</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="p">)</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a><span class="p">}</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="k">defer</span><span class="w"> </span><span class="nx">candidateRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15"></a>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16"></a><span class="nx">agentEvaluator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17"></a><span class="w">    </span><span class="nx">appName</span><span class="p">,</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18"></a><span class="w">    </span><span class="nx">candidateRunner</span><span class="p">,</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalSetManager</span><span class="p">(</span><span class="nx">evalSetManager</span><span class="p">),</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithMetricManager</span><span class="p">(</span><span class="nx">metricManager</span><span class="p">),</span>
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalResultManager</span><span class="p">(</span><span class="nx">evalResultManager</span><span class="p">),</span>
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithRegistry</span><span class="p">(</span><span class="nx">registry</span><span class="p">.</span><span class="nx">New</span><span class="p">()),</span>
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24"></a><span class="p">)</span>
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="passk-passk">pass@k 与 pass^k</h2>
+<p>当评估通过 <code>NumRuns</code> 对同一评估集重复运行时，可以将每次运行视为一次独立的伯努利试验，并在通过与失败的统计之上给出更贴近能力与稳定性的两个派生指标 <code>pass@k</code> 与 <code>pass^k</code>。设 <code>n</code> 表示采样到的总运行次数，<code>c</code> 表示其中通过的次数，<code>k</code> 表示关注的尝试次数。</p>
+<p><code>pass@k</code> 用于度量在允许最多 <code>k</code> 次独立尝试时至少出现一次通过的概率，基于 <code>n</code> 次观测的无偏估计为</p>
+<div class="arithmatex">\[
+\mathrm{pass}@k = 1 - \frac{\binom{n-c}{k}}{\binom{n}{k}}
+\]</div>
+<p>其含义是从 n 次运行中不放回随机抽取 k 次时至少包含一次通过的概率，该估计在 Codex 与 HumanEval 等基准中被广泛采用，可避免仅取前 k 次带来的顺序偏差，同时在 n 大于 k 时能够利用全部样本信息。</p>
+<p><code>pass^k</code> 用于度量系统连续 <code>k</code> 次运行均通过的概率，先通过 <span class="arithmatex">\(c / n\)</span> 估计单次运行通过率，再计算</p>
+<div class="arithmatex">\[
+\text{pass^k} = \left( \frac{c}{n} \right)^k
+\]</div>
+<p>该指标更强调稳定性与一致性，与 pass@k 所强调的至少一次通过形成互补。</p>
+<p>代码使用示例如下：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span>
+<span class="normal"><a href="#__codelineno-6-2">2</a></span>
+<span class="normal"><a href="#__codelineno-6-3">3</a></span>
+<span class="normal"><a href="#__codelineno-6-4">4</a></span>
+<span class="normal"><a href="#__codelineno-6-5">5</a></span>
+<span class="normal"><a href="#__codelineno-6-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/evaluation"</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agentEvaluator</span><span class="p">.</span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evalSetId</span><span class="p">)</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">ParsePassNC</span><span class="p">(</span><span class="nx">result</span><span class="p">)</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="nx">passAtK</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">PassAtK</span><span class="p">(</span><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">k</span><span class="p">)</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="nx">passHatK</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">PassHatK</span><span class="p">(</span><span class="nx">n</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span><span class="w"> </span><span class="nx">k</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>pass@k 与 pass^k 的计算依赖运行之间的独立性与同分布假设，进行重复运行评估时需要确保每次运行均为独立采样并完成必要的状态重置，避免会话记忆、工具缓存或外部依赖复用导致指标被系统性高估。</p>
+<h2 id="llm-verifier">LLM Verifier</h2>
+<p><a href="https://llm-as-a-verifier.notion.site/">LLM Verifier</a> 是一种用裁判模型评估候选结果质量的方法，适用于同一请求下存在多份候选结果、并且需要从中选出质量最高结果的场景。</p>
+<p>普通 LLM Judge 往往让裁判模型直接输出一个离散分数，并用这个分数表示候选结果的质量。当两份复杂回答都被打到同一档时，排序会失去区分度；当裁判模型在相邻分档之间犹豫时，只取最终生成的分数也会丢掉不确定性。LLM Verifier 的核心做法是让裁判模型在一组有序质量标签上表达判断，并读取质量标签位置的 token logprobs，用概率分布计算期望质量分数。</p>
+<p>一次 LLM Verifier 判断通常包含用户请求、候选结果、评估标准和裁判模型四类输入。用户请求用于定义任务目标，候选结果是待比较的回答，评估标准说明哪些质量维度需要被考虑，裁判模型负责根据评估标准给候选结果打质量标签。</p>
+<p>质量标签是一组有严格顺序的离散等级。这里使用 A 到 T 共 20 档，A 表示最高质量，T 表示最低质量，越靠前的字母代表质量越高。A 表示明确且完整满足要求，B-D 表示只有轻微问题，E-G 表示大体正确但仍有问题，H-J 表示倾向成功但存在不确定性，K-M 表示倾向失败，N-P 表示仍有显著问题，Q-S 表示失败但有部分进展，T 表示明确失败。</p>
+<p>评分时，裁判模型会在质量标签位置生成一个标签 token，同时模型服务可以返回该位置的 logprobs。logprobs 表示模型在该位置分配给不同 token 的对数概率，可以理解为模型对各个候选 token 的相对倾向；数值越接近 0，表示该 token 的概率越高。<code>top_logprobs</code> 则表示该位置概率较高的若干个候选 token 及其 logprobs。例如 OpenAI 兼容接口在开启 <code>logprobs</code> 与 <code>top_logprobs</code> 后，质量标签 token 对应的返回片段可能如下：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-7-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-7-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-7-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-7-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-7-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-7-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-7-10">10</a></span>
+<span class="normal"><a href="#__codelineno-7-11">11</a></span>
+<span class="normal"><a href="#__codelineno-7-12">12</a></span>
+<span class="normal"><a href="#__codelineno-7-13">13</a></span>
+<span class="normal"><a href="#__codelineno-7-14">14</a></span>
+<span class="normal"><a href="#__codelineno-7-15">15</a></span>
+<span class="normal"><a href="#__codelineno-7-16">16</a></span>
+<span class="normal"><a href="#__codelineno-7-17">17</a></span>
+<span class="normal"><a href="#__codelineno-7-18">18</a></span>
+<span class="normal"><a href="#__codelineno-7-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="p">{</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">  </span><span class="nt">"choices"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">      </span><span class="nt">"logprobs"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">        </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">          </span><span class="p">{</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">            </span><span class="nt">"token"</span><span class="p">:</span><span class="w"> </span><span class="s2">"B"</span><span class="p">,</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">            </span><span class="nt">"logprob"</span><span class="p">:</span><span class="w"> </span><span class="mf">-0.20</span><span class="p">,</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">            </span><span class="nt">"top_logprobs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">              </span><span class="p">{</span><span class="w"> </span><span class="nt">"token"</span><span class="p">:</span><span class="w"> </span><span class="s2">"B"</span><span class="p">,</span><span class="w"> </span><span class="nt">"logprob"</span><span class="p">:</span><span class="w"> </span><span class="mf">-0.20</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">              </span><span class="p">{</span><span class="w"> </span><span class="nt">"token"</span><span class="p">:</span><span class="w"> </span><span class="s2">"C"</span><span class="p">,</span><span class="w"> </span><span class="nt">"logprob"</span><span class="p">:</span><span class="w"> </span><span class="mf">-1.10</span><span class="w"> </span><span class="p">},</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">              </span><span class="p">{</span><span class="w"> </span><span class="nt">"token"</span><span class="p">:</span><span class="w"> </span><span class="s2">"D"</span><span class="p">,</span><span class="w"> </span><span class="nt">"logprob"</span><span class="p">:</span><span class="w"> </span><span class="mf">-2.30</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">            </span><span class="p">]</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="w">          </span><span class="p">}</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="w">        </span><span class="p">]</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>上述片段表示裁判模型最终在质量标签位置生成了 B，但在同一个位置上也给 C、D 分配了一定概率。LLM Verifier 会把这些相邻标签一起纳入期望分计算，而不是只把 B 当成唯一结论。这样可以保留裁判模型在相邻质量档之间的不确定性，减少只取单个离散标签带来的并列结果。</p>
 <p>候选结果的质量分数可以表示为：</p>
@@ -4068,99 +4187,99 @@ R(t, \tau)
 </ol>
 <p><code>llm_verifier_pairwise</code> 通过固定的 <code>&lt;score_A&gt;</code> 与 <code>&lt;score_B&gt;</code> 标签定位裁判输出中的质量标签 token，并使用这些 token 的 logprobs 计算分数。因此裁判模型必须支持并返回 logprobs。通过 <code>criterion.llmJudge.judgeModel</code> 直连裁判模型时，需要在 <code>generationConfig</code> 中开启 <code>logprobs</code>，并建议设置 <code>top_logprobs</code> 为 20，以覆盖 A 到 T 的质量标签分布。通过 <code>evaluation.WithJudgeRunner(...)</code> 或 <code>bestofn.WithJudgeRunner(...)</code> 注入裁判 Runner 时，需要在裁判 Agent 的生成配置中开启同样的能力。</p>
 <p><a href="../../runner/#best-of-n">在线 Best-of-N 候选选择</a> 会让同一个 Agent 针对同一输入生成多份候选结果，再通过评估指标选出最终输出。接入时，可以通过 <code>WithEvalMetrics</code> 将 <code>llm_verifier_pairwise</code> 配置为候选选择评估指标，并使用 <code>SelectionModePairwise</code> 让多个候选两两比较，示例代码如下。</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-6-10">10</a></span>
-<span class="normal"><a href="#__codelineno-6-11">11</a></span>
-<span class="normal"><a href="#__codelineno-6-12">12</a></span>
-<span class="normal"><a href="#__codelineno-6-13">13</a></span>
-<span class="normal"><a href="#__codelineno-6-14">14</a></span>
-<span class="normal"><a href="#__codelineno-6-15">15</a></span>
-<span class="normal"><a href="#__codelineno-6-16">16</a></span>
-<span class="normal"><a href="#__codelineno-6-17">17</a></span>
-<span class="normal"><a href="#__codelineno-6-18">18</a></span>
-<span class="normal"><a href="#__codelineno-6-19">19</a></span>
-<span class="normal"><a href="#__codelineno-6-20">20</a></span>
-<span class="normal"><a href="#__codelineno-6-21">21</a></span>
-<span class="normal"><a href="#__codelineno-6-22">22</a></span>
-<span class="normal"><a href="#__codelineno-6-23">23</a></span>
-<span class="normal"><a href="#__codelineno-6-24">24</a></span>
-<span class="normal"><a href="#__codelineno-6-25">25</a></span>
-<span class="normal"><a href="#__codelineno-6-26">26</a></span>
-<span class="normal"><a href="#__codelineno-6-27">27</a></span>
-<span class="normal"><a href="#__codelineno-6-28">28</a></span>
-<span class="normal"><a href="#__codelineno-6-29">29</a></span>
-<span class="normal"><a href="#__codelineno-6-30">30</a></span>
-<span class="normal"><a href="#__codelineno-6-31">31</a></span>
-<span class="normal"><a href="#__codelineno-6-32">32</a></span>
-<span class="normal"><a href="#__codelineno-6-33">33</a></span>
-<span class="normal"><a href="#__codelineno-6-34">34</a></span>
-<span class="normal"><a href="#__codelineno-6-35">35</a></span>
-<span class="normal"><a href="#__codelineno-6-36">36</a></span>
-<span class="normal"><a href="#__codelineno-6-37">37</a></span>
-<span class="normal"><a href="#__codelineno-6-38">38</a></span>
-<span class="normal"><a href="#__codelineno-6-39">39</a></span>
-<span class="normal"><a href="#__codelineno-6-40">40</a></span>
-<span class="normal"><a href="#__codelineno-6-41">41</a></span>
-<span class="normal"><a href="#__codelineno-6-42">42</a></span>
-<span class="normal"><a href="#__codelineno-6-43">43</a></span>
-<span class="normal"><a href="#__codelineno-6-44">44</a></span>
-<span class="normal"><a href="#__codelineno-6-45">45</a></span>
-<span class="normal"><a href="#__codelineno-6-46">46</a></span>
-<span class="normal"><a href="#__codelineno-6-47">47</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="nx">qualityMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">{</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">    </span><span class="nx">MetricName</span><span class="p">:</span><span class="w"> </span><span class="s">"llm_verifier_pairwise"</span><span class="p">,</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="w">    </span><span class="nx">Threshold</span><span class="p">:</span><span class="w">  </span><span class="mf">0.5</span><span class="p">,</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">    </span><span class="nx">Criterion</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterion</span><span class="p">.</span><span class="nx">Criterion</span><span class="p">{</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">        </span><span class="nx">LLMJudge</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">LLMCriterion</span><span class="p">{</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">            </span><span class="nx">Rubrics</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">Rubric</span><span class="p">{</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">                </span><span class="p">{</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">                    </span><span class="nx">ID</span><span class="p">:</span><span class="w"> </span><span class="s">"quality"</span><span class="p">,</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="w">                    </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">RubricContent</span><span class="p">{</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">                        </span><span class="nx">Text</span><span class="p">:</span><span class="w"> </span><span class="s">"The final answer directly satisfies the user's request and does not introduce unsupported claims."</span><span class="p">,</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">                    </span><span class="p">},</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">                </span><span class="p">},</span>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="w">            </span><span class="p">},</span>
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16"></a><span class="p">}</span>
-</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17"></a>
-</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18"></a><span class="kd">func</span><span class="w"> </span><span class="nx">newJudgeAgent</span><span class="p">(</span><span class="nx">modelName</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="p">...</span><span class="nx">openai</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19"></a><span class="w">    </span><span class="nx">logprobs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20"></a><span class="w">    </span><span class="nx">topLogprobs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">20</span>
-</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22"></a><span class="w">        </span><span class="s">"judge-agent"</span><span class="p">,</span>
-</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">modelName</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="p">...)),</span>
-</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
-</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25"></a><span class="w">            </span><span class="nx">Logprobs</span><span class="p">:</span><span class="w">    </span><span class="o">&amp;</span><span class="nx">logprobs</span><span class="p">,</span>
-</span><span id="__span-6-26"><a id="__codelineno-6-26" name="__codelineno-6-26"></a><span class="w">            </span><span class="nx">TopLogprobs</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">topLogprobs</span><span class="p">,</span>
-</span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27"></a><span class="w">        </span><span class="p">}),</span>
-</span><span id="__span-6-28"><a id="__codelineno-6-28" name="__codelineno-6-28"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-6-29"><a id="__codelineno-6-29" name="__codelineno-6-29"></a><span class="p">}</span>
-</span><span id="__span-6-30"><a id="__codelineno-6-30" name="__codelineno-6-30"></a>
-</span><span id="__span-6-31"><a id="__codelineno-6-31" name="__codelineno-6-31"></a><span class="nx">judgeAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">newJudgeAgent</span><span class="p">(</span><span class="s">"deepseek-v4-flash"</span><span class="p">)</span>
-</span><span id="__span-6-32"><a id="__codelineno-6-32" name="__codelineno-6-32"></a><span class="nx">judgeRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">"my-app-judge"</span><span class="p">,</span><span class="w"> </span><span class="nx">judgeAgent</span><span class="p">)</span>
-</span><span id="__span-6-33"><a id="__codelineno-6-33" name="__codelineno-6-33"></a><span class="k">defer</span><span class="w"> </span><span class="nx">judgeRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-</span><span id="__span-6-34"><a id="__codelineno-6-34" name="__codelineno-6-34"></a>
-</span><span id="__span-6-35"><a id="__codelineno-6-35" name="__codelineno-6-35"></a><span class="nx">bestOfNOpt</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">NewRunnerOption</span><span class="p">(</span>
-</span><span id="__span-6-36"><a id="__codelineno-6-36" name="__codelineno-6-36"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithAttempts</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
-</span><span id="__span-6-37"><a id="__codelineno-6-37" name="__codelineno-6-37"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithSelectionMode</span><span class="p">(</span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">SelectionModePairwise</span><span class="p">),</span>
-</span><span id="__span-6-38"><a id="__codelineno-6-38" name="__codelineno-6-38"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithEvalMetrics</span><span class="p">(</span><span class="nx">qualityMetric</span><span class="p">),</span>
-</span><span id="__span-6-39"><a id="__codelineno-6-39" name="__codelineno-6-39"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
-</span><span id="__span-6-40"><a id="__codelineno-6-40" name="__codelineno-6-40"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithJudgeRunnerNumSamples</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
-</span><span id="__span-6-41"><a id="__codelineno-6-41" name="__codelineno-6-41"></a><span class="p">)</span>
-</span><span id="__span-6-42"><a id="__codelineno-6-42" name="__codelineno-6-42"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-43"><a id="__codelineno-6-43" name="__codelineno-6-43"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-6-44"><a id="__codelineno-6-44" name="__codelineno-6-44"></a><span class="p">}</span>
-</span><span id="__span-6-45"><a id="__codelineno-6-45" name="__codelineno-6-45"></a>
-</span><span id="__span-6-46"><a id="__codelineno-6-46" name="__codelineno-6-46"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">"my-app"</span><span class="p">,</span><span class="w"> </span><span class="nx">candidateAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">bestOfNOpt</span><span class="p">)</span>
-</span><span id="__span-6-47"><a id="__codelineno-6-47" name="__codelineno-6-47"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-8-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-8-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-8-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-8-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-8-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-8-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-8-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-8-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-8-10">10</a></span>
+<span class="normal"><a href="#__codelineno-8-11">11</a></span>
+<span class="normal"><a href="#__codelineno-8-12">12</a></span>
+<span class="normal"><a href="#__codelineno-8-13">13</a></span>
+<span class="normal"><a href="#__codelineno-8-14">14</a></span>
+<span class="normal"><a href="#__codelineno-8-15">15</a></span>
+<span class="normal"><a href="#__codelineno-8-16">16</a></span>
+<span class="normal"><a href="#__codelineno-8-17">17</a></span>
+<span class="normal"><a href="#__codelineno-8-18">18</a></span>
+<span class="normal"><a href="#__codelineno-8-19">19</a></span>
+<span class="normal"><a href="#__codelineno-8-20">20</a></span>
+<span class="normal"><a href="#__codelineno-8-21">21</a></span>
+<span class="normal"><a href="#__codelineno-8-22">22</a></span>
+<span class="normal"><a href="#__codelineno-8-23">23</a></span>
+<span class="normal"><a href="#__codelineno-8-24">24</a></span>
+<span class="normal"><a href="#__codelineno-8-25">25</a></span>
+<span class="normal"><a href="#__codelineno-8-26">26</a></span>
+<span class="normal"><a href="#__codelineno-8-27">27</a></span>
+<span class="normal"><a href="#__codelineno-8-28">28</a></span>
+<span class="normal"><a href="#__codelineno-8-29">29</a></span>
+<span class="normal"><a href="#__codelineno-8-30">30</a></span>
+<span class="normal"><a href="#__codelineno-8-31">31</a></span>
+<span class="normal"><a href="#__codelineno-8-32">32</a></span>
+<span class="normal"><a href="#__codelineno-8-33">33</a></span>
+<span class="normal"><a href="#__codelineno-8-34">34</a></span>
+<span class="normal"><a href="#__codelineno-8-35">35</a></span>
+<span class="normal"><a href="#__codelineno-8-36">36</a></span>
+<span class="normal"><a href="#__codelineno-8-37">37</a></span>
+<span class="normal"><a href="#__codelineno-8-38">38</a></span>
+<span class="normal"><a href="#__codelineno-8-39">39</a></span>
+<span class="normal"><a href="#__codelineno-8-40">40</a></span>
+<span class="normal"><a href="#__codelineno-8-41">41</a></span>
+<span class="normal"><a href="#__codelineno-8-42">42</a></span>
+<span class="normal"><a href="#__codelineno-8-43">43</a></span>
+<span class="normal"><a href="#__codelineno-8-44">44</a></span>
+<span class="normal"><a href="#__codelineno-8-45">45</a></span>
+<span class="normal"><a href="#__codelineno-8-46">46</a></span>
+<span class="normal"><a href="#__codelineno-8-47">47</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="nx">qualityMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">{</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="w">    </span><span class="nx">MetricName</span><span class="p">:</span><span class="w"> </span><span class="s">"llm_verifier_pairwise"</span><span class="p">,</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="nx">Threshold</span><span class="p">:</span><span class="w">  </span><span class="mf">0.5</span><span class="p">,</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="nx">Criterion</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterion</span><span class="p">.</span><span class="nx">Criterion</span><span class="p">{</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">        </span><span class="nx">LLMJudge</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">LLMCriterion</span><span class="p">{</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">            </span><span class="nx">Rubrics</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">Rubric</span><span class="p">{</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="w">                </span><span class="p">{</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">                    </span><span class="nx">ID</span><span class="p">:</span><span class="w"> </span><span class="s">"quality"</span><span class="p">,</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">                    </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">RubricContent</span><span class="p">{</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="w">                        </span><span class="nx">Text</span><span class="p">:</span><span class="w"> </span><span class="s">"The final answer directly satisfies the user's request and does not introduce unsupported claims."</span><span class="p">,</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="w">                    </span><span class="p">},</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="w">                </span><span class="p">},</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16"></a><span class="p">}</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17"></a>
+</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18"></a><span class="kd">func</span><span class="w"> </span><span class="nx">newJudgeAgent</span><span class="p">(</span><span class="nx">modelName</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="p">...</span><span class="nx">openai</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19"></a><span class="w">    </span><span class="nx">logprobs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20"></a><span class="w">    </span><span class="nx">topLogprobs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">20</span>
+</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-8-22"><a id="__codelineno-8-22" name="__codelineno-8-22"></a><span class="w">        </span><span class="s">"judge-agent"</span><span class="p">,</span>
+</span><span id="__span-8-23"><a id="__codelineno-8-23" name="__codelineno-8-23"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">modelName</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="p">...)),</span>
+</span><span id="__span-8-24"><a id="__codelineno-8-24" name="__codelineno-8-24"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
+</span><span id="__span-8-25"><a id="__codelineno-8-25" name="__codelineno-8-25"></a><span class="w">            </span><span class="nx">Logprobs</span><span class="p">:</span><span class="w">    </span><span class="o">&amp;</span><span class="nx">logprobs</span><span class="p">,</span>
+</span><span id="__span-8-26"><a id="__codelineno-8-26" name="__codelineno-8-26"></a><span class="w">            </span><span class="nx">TopLogprobs</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">topLogprobs</span><span class="p">,</span>
+</span><span id="__span-8-27"><a id="__codelineno-8-27" name="__codelineno-8-27"></a><span class="w">        </span><span class="p">}),</span>
+</span><span id="__span-8-28"><a id="__codelineno-8-28" name="__codelineno-8-28"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-8-29"><a id="__codelineno-8-29" name="__codelineno-8-29"></a><span class="p">}</span>
+</span><span id="__span-8-30"><a id="__codelineno-8-30" name="__codelineno-8-30"></a>
+</span><span id="__span-8-31"><a id="__codelineno-8-31" name="__codelineno-8-31"></a><span class="nx">judgeAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">newJudgeAgent</span><span class="p">(</span><span class="s">"deepseek-v4-flash"</span><span class="p">)</span>
+</span><span id="__span-8-32"><a id="__codelineno-8-32" name="__codelineno-8-32"></a><span class="nx">judgeRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">"my-app-judge"</span><span class="p">,</span><span class="w"> </span><span class="nx">judgeAgent</span><span class="p">)</span>
+</span><span id="__span-8-33"><a id="__codelineno-8-33" name="__codelineno-8-33"></a><span class="k">defer</span><span class="w"> </span><span class="nx">judgeRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-8-34"><a id="__codelineno-8-34" name="__codelineno-8-34"></a>
+</span><span id="__span-8-35"><a id="__codelineno-8-35" name="__codelineno-8-35"></a><span class="nx">bestOfNOpt</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">NewRunnerOption</span><span class="p">(</span>
+</span><span id="__span-8-36"><a id="__codelineno-8-36" name="__codelineno-8-36"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithAttempts</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-8-37"><a id="__codelineno-8-37" name="__codelineno-8-37"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithSelectionMode</span><span class="p">(</span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">SelectionModePairwise</span><span class="p">),</span>
+</span><span id="__span-8-38"><a id="__codelineno-8-38" name="__codelineno-8-38"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithEvalMetrics</span><span class="p">(</span><span class="nx">qualityMetric</span><span class="p">),</span>
+</span><span id="__span-8-39"><a id="__codelineno-8-39" name="__codelineno-8-39"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
+</span><span id="__span-8-40"><a id="__codelineno-8-40" name="__codelineno-8-40"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithJudgeRunnerNumSamples</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
+</span><span id="__span-8-41"><a id="__codelineno-8-41" name="__codelineno-8-41"></a><span class="p">)</span>
+</span><span id="__span-8-42"><a id="__codelineno-8-42" name="__codelineno-8-42"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-43"><a id="__codelineno-8-43" name="__codelineno-8-43"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-8-44"><a id="__codelineno-8-44" name="__codelineno-8-44"></a><span class="p">}</span>
+</span><span id="__span-8-45"><a id="__codelineno-8-45" name="__codelineno-8-45"></a>
+</span><span id="__span-8-46"><a id="__codelineno-8-46" name="__codelineno-8-46"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">"my-app"</span><span class="p">,</span><span class="w"> </span><span class="nx">candidateAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">bestOfNOpt</span><span class="p">)</span>
+</span><span id="__span-8-47"><a id="__codelineno-8-47" name="__codelineno-8-47"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
 <p>完整可运行示例参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llmverifier">examples/evaluation/llmverifier</a>。</p>
 
@@ -4185,7 +4304,7 @@ R(t, \tau)
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月13日 09:44:15 UTC">2026-08-13 09:44:15</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月17日 10:34:17 UTC">2026-08-17 10:34:17</span>
   </span>
 
     
