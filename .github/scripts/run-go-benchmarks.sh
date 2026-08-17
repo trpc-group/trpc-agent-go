@@ -190,7 +190,7 @@ discover_all_benchmarks() {
 }
 
 load_named_suite() {
-  local suite_file="${script_dir}/../../benchmarks/agentloop/suites.txt"
+  local suite_file="${script_dir}/../benchmarks/agentloop/suites.txt"
   if [[ ! -f "${suite_file}" ]]; then
     echo "benchmark suite manifest not found: ${suite_file}" >&2
     exit 1

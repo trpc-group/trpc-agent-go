@@ -55,7 +55,7 @@ Check the stable allocation budget:
   --output benchmark-core.txt
 go run ./.github/scripts/benchguard \
   -input benchmark-core.txt \
-  -budgets benchmarks/agentloop/budgets.json
+  -budgets .github/benchmarks/agentloop/budgets.json
 ```
 
 ## Adding a benchmark
