@@ -26,15 +26,16 @@ import (
 
 func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 	dsn := mysqlIntegrationDSN(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 
 	db, err := sql.Open("mysql", dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	require.NoError(t, db.PingContext(ctx))
+	pingCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	require.NoError(t, db.PingContext(pingCtx))
+	cancel()
 
 	t.Run("current index with migration name", func(t *testing.T) {
+		ctx := summaryIntegrationContext(t)
 		prefix := prepareSummaryIntegrationSchema(t, db, dsn)
 		tableName := sqldb.BuildTableName(prefix, sqldb.TableNameSessionSummaries)
 		canonicalName := sqldb.BuildIndexName(
@@ -52,6 +53,7 @@ func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 	})
 
 	t.Run("current index with short migration prefixes is rejected", func(t *testing.T) {
+		ctx := summaryIntegrationContext(t)
 		prefix := prepareSummaryIntegrationSchema(t, db, dsn)
 		tableName := sqldb.BuildTableName(prefix, sqldb.TableNameSessionSummaries)
 		canonicalName := sqldb.BuildIndexName(
@@ -75,6 +77,7 @@ func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 	})
 
 	t.Run("legacy unique soft delete preserves history", func(t *testing.T) {
+		ctx := summaryIntegrationContext(t)
 		prefix := prepareSummaryIntegrationSchema(t, db, dsn)
 		tableName := sqldb.BuildTableName(prefix, sqldb.TableNameSessionSummaries)
 		replaceSummaryIndexWithLegacyUnique(t, ctx, db, prefix)
@@ -123,6 +126,7 @@ func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 	})
 
 	t.Run("legacy lookup keeps deterministic newest summary", func(t *testing.T) {
+		ctx := summaryIntegrationContext(t)
 		prefix := prepareSummaryIntegrationSchema(t, db, dsn)
 		tableName := sqldb.BuildTableName(prefix, sqldb.TableNameSessionSummaries)
 		replaceSummaryIndexWithLegacyLookup(t, ctx, db, prefix)
@@ -157,12 +161,23 @@ func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 		// already-started older writer must wait, then observe and preserve it.
 		newerTx, err := db.BeginTx(ctx, nil)
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = newerTx.Rollback() })
 		require.NoError(t, svc.lockActiveSessionForSummary(ctx, newerTx, key))
 
 		olderStarted := make(chan struct{})
 		olderErr := make(chan error, 1)
+		olderDone := make(chan struct{})
+		t.Cleanup(func() {
+			select {
+			case <-olderDone:
+			case <-time.After(5 * time.Second):
+				t.Error("timed out waiting for older summary writer")
+			}
+		})
+		// Cleanups run in reverse order: release the lock before waiting for
+		// the writer, and wait for the writer before dropping its tables.
+		t.Cleanup(func() { _ = newerTx.Rollback() })
 		go func() {
+			defer close(olderDone)
 			close(olderStarted)
 			olderErr <- svc.upsertSessionSummary(ctx, key, "", olderBytes, olderUpdatedAt)
 		}()
@@ -190,6 +205,13 @@ func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 		))
 		requireSummaryIntegrationRows(t, ctx, db, tableName, key, "regenerated", newerUpdatedAt, 2)
 	})
+}
+
+func summaryIntegrationContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	return ctx
 }
 
 func mysqlIntegrationDSN(t *testing.T) string {
