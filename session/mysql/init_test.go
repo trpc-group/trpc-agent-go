@@ -1135,8 +1135,8 @@ func TestVerifyStateInitializationActiveRowsRejectsInconsistentMarkers(t *testin
 			defer db.Close()
 			s := createTestService(t, db)
 
-			mock.ExpectQuery(`(?s)SELECT EXISTS.*deleted_at IS NULL.*`+
-				`state_initialization_active IS NULL.*state_initialization_active <> 1.*`+
+			mock.ExpectQuery(`(?s)SELECT EXISTS.*deleted_at IS NULL.*` +
+				`state_initialization_active IS NULL.*state_initialization_active <> 1.*` +
 				`deleted_at IS NOT NULL.*state_initialization_active IS NOT NULL`).
 				WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
