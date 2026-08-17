@@ -14,12 +14,12 @@ parallel tool-call invocation views, telemetry, and event persistence.
   `B/op` and `allocs/op` values are checked against
   [`budgets.json`](budgets.json).
 - `agent-loop` includes the core suite plus broader path benchmarks. Pull
-  requests compare the base and head revisions with `benchstat`; scheduled
-  runs also collect profiles.
+  requests compare the base and head revisions with `benchstat`; main-branch
+  runs after changes land also collect profiles.
 
 The suites intentionally use selected short and typical scenarios rather than
 the Cartesian product of every dimension. Expensive stress cases belong in
-scheduled or manually dispatched workflows.
+post-merge or manually dispatched workflows.
 
 ## Running benchmarks
 
@@ -70,10 +70,10 @@ in base/head reports. Add a hard allocation budget only for deterministic,
 low-level paths whose allocation contract is understood and stable.
 
 Time measurements from shared CI runners are informational. Hard pull-request
-gates use allocation bytes and counts; scheduled profiles provide evidence for
-investigating CPU or memory trends.
+gates use allocation bytes and counts; post-merge profiles provide evidence
+for investigating CPU or memory trends.
 
 The base side of a pull-request comparison uses `--keep-going` because an older
 revision can contain a benchmark that no longer compiles or runs. Failures are
 kept in the artifact while remaining runnable benchmarks are still compared.
-Head, smoke, guard, and scheduled runs never use this option.
+Head, smoke, guard, and main-branch runs never use this option.
