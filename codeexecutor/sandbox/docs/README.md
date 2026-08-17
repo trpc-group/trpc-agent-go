@@ -77,6 +77,51 @@ behavior and does not advertise generic `CleanEnv` support. The new
 process starts without host environment variables; explicit policy settings,
 per-run variables, and sandbox-owned workspace variables are still applied.
 
+## Explain Status
+
+`Runtime.Explain` returns a compact operator-facing status summary:
+
+- requested backend and platform-resolved backend
+- filesystem sandbox type (`workspace-write`, `read-only`, `disabled`, or
+  `external`)
+- network mode (`restricted` or `enabled`)
+- managed backend preflight status (`ready`, `failed`, `not-required`, or
+  `unsupported`)
+
+Explain reuses the same normalized permission profile and the same
+platform-specific preflight probe used by execution. Restricted network does
+not run a separate namespace or seccomp probe. `PreflightReady` means the
+core backend probe succeeded; it does not prove that every reported
+boundary, such as `NetworkRestricted` isolation, can be established.
+Explain never runs a caller command, never acquires a workspace run lock,
+and never creates a workspace. On managed profiles it may run the same
+short backend probe used by execution (for example `/bin/true` under
+bubblewrap) and cache that result on the Runtime, which can change when the
+first execution probe happens.
+
+`workspace-write` includes workspace special-path writes and
+workspace-relative `WithWritePaths` grants. Host-absolute write grants alone
+keep the filesystem type `read-only`.
+
+When managed preflight fails, Explain still returns the configured status
+fields together with a short `PreflightError`. That summary includes the error
+kind, backend name, and a sanitized cause; probe stderr is omitted.
+
+Explain is intentionally not a full policy dump. It does not list read/write
+paths, no-access rules, environment inheritance, timeouts, output limits,
+resource quotas, bubblewrap argv, or Seatbelt profiles. Use it to answer "which
+sandbox mode is active and is the backend ready?", not to audit every grant.
+
+Example:
+
+```text
+Sandbox
+  backend:    auto -> linux-bubblewrap
+  filesystem: workspace-write
+  network:    restricted
+  preflight:  ready
+```
+
 ## Full-duplex Processes
 
 `Runtime.StartProcess` starts a program through the same permission checks and

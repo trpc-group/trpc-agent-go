@@ -172,6 +172,14 @@ func (r *Runtime) linuxSandboxSetup(
 	}, nil
 }
 
+func (r *Runtime) explainManagedPreflight(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, _, err := r.linuxPreflight()
+	return err
+}
+
 func (r *Runtime) linuxPreflight() (string, bool, error) {
 	r.preflightOnce.Do(func() {
 		if r.backend != BackendAuto && r.backend != BackendLinuxBubblewrap {

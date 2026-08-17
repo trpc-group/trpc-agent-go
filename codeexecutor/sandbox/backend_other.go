@@ -60,3 +60,18 @@ func (r *Runtime) osSandboxCommand(
 		errors.New("managed OS sandbox backend is not implemented for this platform"),
 	)
 }
+
+func (r *Runtime) explainManagedPreflight(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	backend := r.backend
+	if backend == "" {
+		backend = BackendAuto
+	}
+	return backendError(
+		ErrUnsupportedBackend,
+		string(backend),
+		errors.New("managed OS sandbox backend is not implemented for this platform ("+runtime.GOOS+")"),
+	)
+}

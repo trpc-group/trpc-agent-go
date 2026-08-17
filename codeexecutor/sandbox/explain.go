@@ -1,0 +1,294 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package sandbox
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"runtime"
+	"strings"
+)
+
+// PreflightStatus describes whether managed sandbox backend dependencies are
+// ready for execution.
+type PreflightStatus string
+
+const (
+	// PreflightReady means the managed backend core probe succeeded. It does
+	// not verify every reported policy boundary, such as network-namespace
+	// isolation for NetworkRestricted.
+	PreflightReady PreflightStatus = "ready"
+	// PreflightFailed means managed backend preflight ran and failed.
+	PreflightFailed PreflightStatus = "failed"
+	// PreflightNotRequired means the active profile does not need a managed
+	// OS sandbox backend.
+	PreflightNotRequired PreflightStatus = "not-required"
+	// PreflightUnsupported means a managed OS sandbox backend is not used.
+	// External profiles return this status with a nil error because an outside
+	// sandbox is expected to enforce policy. Unsupported platforms and
+	// incompatible backends return this status with a non-nil error.
+	PreflightUnsupported PreflightStatus = "unsupported"
+)
+
+// FileSystemSandboxType is the high-level filesystem sandbox mode reported by
+// Explain. It is a status label, not a complete grant list.
+type FileSystemSandboxType string
+
+const (
+	// FileSystemSandboxWorkspaceWrite means the managed profile grants write
+	// access inside the workspace, via special paths or workspace-relative
+	// path rules. Host-absolute write grants alone do not select this type.
+	FileSystemSandboxWorkspaceWrite FileSystemSandboxType = "workspace-write"
+	// FileSystemSandboxReadOnly means the managed profile does not grant
+	// workspace writes.
+	FileSystemSandboxReadOnly FileSystemSandboxType = "read-only"
+	// FileSystemSandboxDisabled means OS sandbox enforcement is off.
+	FileSystemSandboxDisabled FileSystemSandboxType = "disabled"
+	// FileSystemSandboxExternal means an external sandbox is expected to
+	// enforce filesystem policy.
+	FileSystemSandboxExternal FileSystemSandboxType = "external"
+)
+
+// ExplainReport is a high-level sandbox status summary for operators.
+// It is intentionally small: it reports backend selection, filesystem sandbox
+// type, network mode, and preflight readiness. It is not a full policy dump.
+type ExplainReport struct {
+	// RequestedBackend is the backend configured on the Runtime. NewRuntime
+	// defaults it to BackendAuto, including when WithBackend is omitted, so
+	// Explain never reports an empty value for a Runtime from NewRuntime.
+	// An empty value only appears on a zero ExplainReport; String() renders
+	// it as BackendAuto.
+	RequestedBackend BackendType
+	// ResolvedBackend is the backend the current platform would use for the
+	// requested value. It is BackendAuto when the platform has no managed
+	// backend.
+	ResolvedBackend BackendType
+	// FileSystemSandbox is the reported filesystem sandbox mode. An empty
+	// value is treated as FileSystemSandboxDisabled by String().
+	FileSystemSandbox FileSystemSandboxType
+	// NetworkMode is the effective network mode of the normalized profile. An
+	// empty value is treated as NetworkRestricted by String().
+	NetworkMode NetworkMode
+	// PreflightStatus is the managed backend readiness status. An empty value
+	// is treated as PreflightNotRequired by String().
+	PreflightStatus PreflightStatus
+	// PreflightError is a short operator-facing summary when PreflightStatus
+	// is failed or unsupported after a managed backend probe. It includes the
+	// error kind, backend name, and a sanitized cause. Probe stderr, host
+	// paths from probe output, and environment values are omitted. It must
+	// not be treated as a stable machine-readable protocol.
+	PreflightError string
+}
+
+// Explain reports high-level sandbox status for the runtime.
+//
+// It reuses the same normalized PermissionProfile and the same
+// platform-specific preflight probe used by execution. Explain never runs a
+// caller command, never acquires a workspace run lock, and never creates a
+// workspace. On managed profiles it may run that short backend probe (for
+// example /bin/true under bubblewrap) and cache the result on the Runtime.
+// PreflightReady means the core backend probe succeeded; it does not prove
+// that every reported boundary, such as NetworkRestricted isolation, can be
+// established.
+//
+// Context cancellation is checked before the managed probe starts. If the
+// caller cancels after the probe has started, Explain does not interrupt it
+// and may wait for the probe's bounded timeout before returning the probe
+// result.
+//
+// When managed preflight fails, Explain still returns a populated report so
+// callers can inspect the configured status, and also returns the preflight
+// error.
+func (r *Runtime) Explain(ctx context.Context) (ExplainReport, error) {
+	if r == nil {
+		return ExplainReport{}, errors.New("nil sandbox runtime")
+	}
+	if err := ctx.Err(); err != nil {
+		return ExplainReport{}, err
+	}
+
+	profile := normalizeProfile(r.profile)
+	report := ExplainReport{
+		RequestedBackend:  r.backend,
+		ResolvedBackend:   resolveExplainBackend(r.backend),
+		FileSystemSandbox: fileSystemSandboxType(profile),
+		NetworkMode:       profile.network.Mode,
+	}
+
+	switch profile.enforcement() {
+	case enforcementDisabled:
+		report.PreflightStatus = PreflightNotRequired
+		return report, nil
+	case enforcementExternal:
+		report.PreflightStatus = PreflightUnsupported
+		return report, nil
+	default:
+		err := r.explainManagedPreflight(ctx)
+		if err != nil {
+			report.PreflightStatus = preflightStatusFromError(err)
+			report.PreflightError = summarizePreflightError(err)
+			return report, err
+		}
+		report.PreflightStatus = PreflightReady
+		return report, nil
+	}
+}
+
+// String returns a concise human-readable status summary. The format is for
+// diagnostics only and is not a stable machine protocol.
+func (report ExplainReport) String() string {
+	backend := string(report.RequestedBackend)
+	if backend == "" {
+		backend = string(BackendAuto)
+	}
+	resolved := string(report.ResolvedBackend)
+	if resolved == "" {
+		resolved = backend
+	}
+	backendLine := backend
+	if resolved != backend {
+		backendLine = backend + " -> " + resolved
+	}
+
+	preflight := string(report.PreflightStatus)
+	if preflight == "" {
+		preflight = string(PreflightNotRequired)
+	}
+	if report.PreflightError != "" &&
+		(report.PreflightStatus == PreflightFailed ||
+			report.PreflightStatus == PreflightUnsupported) {
+		preflight = string(report.PreflightStatus) + ": " + report.PreflightError
+	}
+
+	fs := report.FileSystemSandbox
+	if fs == "" {
+		fs = FileSystemSandboxDisabled
+	}
+	network := string(report.NetworkMode)
+	if network == "" {
+		network = string(NetworkRestricted)
+	}
+
+	return fmt.Sprintf(
+		"Sandbox\n  backend:    %s\n  filesystem: %s\n  network:    %s\n  preflight:  %s",
+		backendLine,
+		fs,
+		network,
+		preflight,
+	)
+}
+
+func resolveExplainBackend(requested BackendType) BackendType {
+	if requested != "" && requested != BackendAuto {
+		return requested
+	}
+	switch runtime.GOOS {
+	case "linux":
+		return BackendLinuxBubblewrap
+	case "darwin":
+		return BackendMacOSSandboxExec
+	default:
+		return BackendAuto
+	}
+}
+
+func fileSystemSandboxType(profile PermissionProfile) FileSystemSandboxType {
+	switch profile.enforcement() {
+	case enforcementDisabled:
+		return FileSystemSandboxDisabled
+	case enforcementExternal:
+		return FileSystemSandboxExternal
+	default:
+		if hasWorkspaceWrite(profile) {
+			return FileSystemSandboxWorkspaceWrite
+		}
+		return FileSystemSandboxReadOnly
+	}
+}
+
+func hasWorkspaceWrite(profile PermissionProfile) bool {
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Access != accessWrite {
+			continue
+		}
+		switch rule.Kind {
+		case ruleSpecial:
+			switch rule.Special {
+			case specialWorkspace, specialWork, specialHome, specialTmp,
+				specialRuns, specialOut, specialSkills:
+				return true
+			}
+		case rulePath:
+			if rule.Path != "" && !filepath.IsAbs(rule.Path) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preflightStatusFromError(err error) PreflightStatus {
+	if err == nil {
+		return PreflightReady
+	}
+	if isKind(err, ErrUnsupportedBackend) {
+		return PreflightUnsupported
+	}
+	return PreflightFailed
+}
+
+func summarizePreflightError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var se *sandboxError
+	if errors.As(err, &se) && se != nil {
+		parts := []string{string(se.Kind)}
+		if se.Backend != "" {
+			parts = append(parts, "backend="+se.Backend)
+		}
+		if cause := sanitizedPreflightCause(se.Err); cause != "" {
+			parts = append(parts, cause)
+		}
+		return truncateExplainText(strings.Join(parts, " "))
+	}
+	return truncateExplainText(firstLine(err.Error()))
+}
+
+// sanitizedPreflightCause keeps a short operator-facing cause. Probe errors
+// wrap the exec failure and attach stderr; Unwrap drops that attached output
+// so host paths and mount details do not leak into Explain.
+func sanitizedPreflightCause(err error) string {
+	if err == nil {
+		return ""
+	}
+	if unwrapped := errors.Unwrap(err); unwrapped != nil {
+		err = unwrapped
+	}
+	return firstLine(err.Error())
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+func truncateExplainText(s string) string {
+	const maxLen = 200
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
