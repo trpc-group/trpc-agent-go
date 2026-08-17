@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -317,6 +318,19 @@ func cloneEvent(evt event.Event) event.Event {
 	cloned := evt
 	if evt.Response != nil {
 		cloned.Response = evt.Response.Clone()
+		for i := range cloned.Response.Choices {
+			choice := &cloned.Response.Choices[i]
+			choice.Message = cloneMessage(evt.Response.Choices[i].Message)
+			choice.Delta = cloneMessage(evt.Response.Choices[i].Delta)
+			if evt.Response.Choices[i].FinishReason != nil {
+				finishReason := *evt.Response.Choices[i].FinishReason
+				choice.FinishReason = &finishReason
+			}
+		}
+	}
+	if evt.ParentMetadata != nil {
+		parentMetadata := *evt.ParentMetadata
+		cloned.ParentMetadata = &parentMetadata
 	}
 	if evt.LongRunningToolIDs != nil {
 		cloned.LongRunningToolIDs = make(map[string]struct{}, len(evt.LongRunningToolIDs))
@@ -344,8 +358,74 @@ func cloneEvent(evt event.Event) event.Event {
 }
 
 func cloneMessage(message model.Message) model.Message {
-	response := (&model.Response{Choices: []model.Choice{{Message: message}}}).Clone()
-	return response.Choices[0].Message
+	cloned := message
+	cloned.ContentParts = cloneContentParts(message.ContentParts)
+	cloned.ToolCalls = cloneToolCalls(message.ToolCalls)
+	return cloned
+}
+
+func cloneContentParts(parts []model.ContentPart) []model.ContentPart {
+	if parts == nil {
+		return nil
+	}
+	cloned := make([]model.ContentPart, len(parts))
+	for i := range parts {
+		cloned[i] = cloneContentPart(parts[i])
+	}
+	return cloned
+}
+
+func cloneContentPart(part model.ContentPart) model.ContentPart {
+	cloned := part
+	if part.Text != nil {
+		text := *part.Text
+		cloned.Text = &text
+	}
+	if part.Image != nil {
+		image := *part.Image
+		image.Data = append([]byte(nil), part.Image.Data...)
+		cloned.Image = &image
+	}
+	if part.Audio != nil {
+		audio := *part.Audio
+		audio.Data = append([]byte(nil), part.Audio.Data...)
+		cloned.Audio = &audio
+	}
+	if part.Video != nil {
+		video := *part.Video
+		video.Data = append([]byte(nil), part.Video.Data...)
+		cloned.Video = &video
+	}
+	if part.File != nil {
+		file := *part.File
+		file.Data = append([]byte(nil), part.File.Data...)
+		cloned.File = &file
+	}
+	if part.ContentRef != nil {
+		contentRef := *part.ContentRef
+		cloned.ContentRef = &contentRef
+	}
+	return cloned
+}
+
+func cloneToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
+	if toolCalls == nil {
+		return nil
+	}
+	cloned := make([]model.ToolCall, len(toolCalls))
+	for i := range toolCalls {
+		cloned[i] = toolCalls[i]
+		cloned[i].Function.Arguments = append(
+			[]byte(nil),
+			toolCalls[i].Function.Arguments...,
+		)
+		if toolCalls[i].Index != nil {
+			index := *toolCalls[i].Index
+			cloned[i].Index = &index
+		}
+		cloned[i].ExtraFields = jsonmap.Clone(toolCalls[i].ExtraFields)
+	}
+	return cloned
 }
 
 func setEffectiveMessage(evt *event.Event, message model.Message) {

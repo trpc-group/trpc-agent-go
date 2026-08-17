@@ -175,6 +175,10 @@ func cloneContentPart(part model.ContentPart) model.ContentPart {
 		file.Data = append([]byte(nil), part.File.Data...)
 		cloned.File = &file
 	}
+	if part.ContentRef != nil {
+		contentRef := *part.ContentRef
+		cloned.ContentRef = &contentRef
+	}
 	return cloned
 }
 

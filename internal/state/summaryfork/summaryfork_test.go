@@ -233,6 +233,26 @@ func TestInvocationViewAppendIsIsolated(t *testing.T) {
 	require.Equal(t, "question", originalRequest.Messages[0].Content)
 }
 
+func TestInvocationViewRequestContentRefIsIsolated(t *testing.T) {
+	invocation := agent.NewInvocation()
+	Attach(invocation, &model.Request{Messages: []model.Message{{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			ContentRef: &model.ContentRef{ArtifactName: "original"},
+		}},
+	}}})
+
+	viewRequest, ok := Request(invocation.View())
+	require.True(t, ok)
+	viewRequest.Messages[0].ContentParts[0].ContentRef.ArtifactName = "mutated"
+
+	originalRequest, ok := Request(invocation)
+	require.True(t, ok)
+	require.Equal(t, "original",
+		originalRequest.Messages[0].ContentParts[0].ContentRef.ArtifactName,
+	)
+}
+
 func TestInvalidateClearsSnapshotUntilNextAttach(t *testing.T) {
 	inv := agent.NewInvocation()
 	req := &model.Request{
