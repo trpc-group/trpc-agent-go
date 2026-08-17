@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func TestLinuxBwrapWorkspaceWriteIntegration(t *testing.T) {
 		t.Skip("bubblewrap not available")
 	}
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	if _, _, err := rt.linuxPreflight(); err != nil {
+	if _, _, err := rt.linuxPreflight(context.Background()); err != nil {
 		t.Skipf("bubblewrap preflight unavailable: %v", err)
 	}
 	ws, err := rt.CreateWorkspace(context.Background(), "s1", codeexecutor.WorkspacePolicy{})
@@ -608,7 +609,7 @@ func TestLinuxPrepareProtectedMasksSkipsBlankDotAndCreatesMissing(t *testing.T) 
 
 func TestLinuxPreflightUnsupportedBackendAndProbeError(t *testing.T) {
 	rt := NewRuntime(WithBackend(BackendType("not-linux-bubblewrap")))
-	_, _, err := rt.linuxPreflight()
+	_, _, err := rt.linuxPreflight(context.Background())
 	if !isKind(err, ErrUnsupportedBackend) {
 		t.Fatalf("linuxPreflight error = %v, want ErrUnsupportedBackend", err)
 	}
@@ -663,7 +664,7 @@ func TestLinuxPreflightUnsupportedBackendAndProbeError(t *testing.T) {
 func TestLinuxPreflightMissingBwrap(t *testing.T) {
 	t.Setenv("PATH", "")
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	_, _, err := rt.linuxPreflight()
+	_, _, err := rt.linuxPreflight(context.Background())
 	if !isKind(err, ErrSetupFailed) {
 		t.Fatalf("linuxPreflight error = %v, want ErrSetupFailed", err)
 	}
@@ -686,7 +687,7 @@ exit 0
 	t.Setenv("PATH", binDir)
 
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	path, mountProc, err := rt.linuxPreflight()
+	path, mountProc, err := rt.linuxPreflight(context.Background())
 	if err != nil {
 		t.Fatalf("linuxPreflight error = %v, want fallback success", err)
 	}
@@ -707,7 +708,7 @@ exit 1
 	t.Setenv("PATH", binDir)
 
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	_, _, err := rt.linuxPreflight()
+	_, _, err := rt.linuxPreflight(context.Background())
 	if !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "generic failure") {
 		t.Fatalf("linuxPreflight error = %v, want probe setup failure", err)
 	}
@@ -757,7 +758,7 @@ func TestLinuxPreflightTransientFailureIsRetried(t *testing.T) {
 		linuxBasePreflightProbe = previousProbe
 	})
 	probeCalls := 0
-	linuxBasePreflightProbe = func(string, bool) (string, error) {
+	linuxBasePreflightProbe = func(context.Context, string, bool) (string, error) {
 		probeCalls++
 		if probeCalls == 1 {
 			return "", unix.EMFILE
@@ -766,10 +767,10 @@ func TestLinuxPreflightTransientFailureIsRetried(t *testing.T) {
 	}
 
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	if _, _, err := rt.linuxPreflight(); !errors.Is(err, unix.EMFILE) {
+	if _, _, err := rt.linuxPreflight(context.Background()); !errors.Is(err, unix.EMFILE) {
 		t.Fatalf("first linuxPreflight error = %v, want EMFILE", err)
 	}
-	path, mountProc, err := rt.linuxPreflight()
+	path, mountProc, err := rt.linuxPreflight(context.Background())
 	if err != nil {
 		t.Fatalf("second linuxPreflight error = %v, want retry success", err)
 	}
@@ -782,6 +783,204 @@ func TestLinuxPreflightTransientFailureIsRetried(t *testing.T) {
 			bwrap,
 		)
 	}
+}
+
+func TestLinuxPreflightCancellationAndTimeoutAreNotCached(t *testing.T) {
+	binDir := t.TempDir()
+	bwrap := filepath.Join(binDir, "bwrap")
+	if err := os.WriteFile(bwrap, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	previousProbe := linuxBasePreflightProbe
+	t.Cleanup(func() {
+		linuxBasePreflightProbe = previousProbe
+	})
+
+	t.Run("callerCancellation", func(t *testing.T) {
+		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+		ctx, cancel := context.WithCancel(context.Background())
+		calls := 0
+		linuxBasePreflightProbe = func(context.Context, string, bool) (string, error) {
+			calls++
+			if calls == 1 {
+				cancel()
+				return "", context.Canceled
+			}
+			return "", nil
+		}
+
+		if _, _, err := rt.linuxPreflight(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("first error = %v, want context.Canceled", err)
+		}
+		if _, _, err := rt.linuxPreflight(context.Background()); err != nil {
+			t.Fatalf("retry after cancellation: %v", err)
+		}
+		if calls != 2 {
+			t.Fatalf("probe calls = %d, want retry after cancellation", calls)
+		}
+	})
+
+	t.Run("probeDeadline", func(t *testing.T) {
+		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+		calls := 0
+		linuxBasePreflightProbe = func(context.Context, string, bool) (string, error) {
+			calls++
+			if calls == 1 {
+				return "", context.DeadlineExceeded
+			}
+			return "", nil
+		}
+
+		if _, _, err := rt.linuxPreflight(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("first error = %v, want deadline exceeded", err)
+		}
+		if _, _, err := rt.linuxPreflight(context.Background()); err != nil {
+			t.Fatalf("retry after probe timeout: %v", err)
+		}
+		if calls != 2 {
+			t.Fatalf("probe calls = %d, want retry after timeout", calls)
+		}
+	})
+}
+
+func TestOsSandboxCommandBasePreflightObservesCallerContext(t *testing.T) {
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "bwrap"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	previousProbe := linuxBasePreflightProbe
+	t.Cleanup(func() {
+		linuxBasePreflightProbe = previousProbe
+	})
+
+	enabled := WorkspaceWriteProfile().WithNetworkPolicy(NetworkPolicy{Mode: NetworkEnabled})
+	runCmd := func(ctx context.Context, rt *Runtime, ws codeexecutor.Workspace) error {
+		_, _, cleanup, err := rt.osSandboxCommand(
+			ctx,
+			enabled,
+			ws,
+			filepath.Join(ws.Path, "work"),
+			nil,
+			codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+			sandboxDenialRun{},
+		)
+		if cleanup != nil {
+			cleanup()
+		}
+		return err
+	}
+
+	t.Run("canceledRunDoesNotCacheFailure", func(t *testing.T) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var calls atomic.Int32
+		linuxBasePreflightProbe = func(ctx context.Context, _ string, _ bool) (string, error) {
+			if calls.Add(1) == 1 {
+				close(started)
+				select {
+				case <-ctx.Done():
+					return "", ctx.Err()
+				case <-release:
+					return "", nil
+				}
+			}
+			return "", nil
+		}
+
+		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+		ws, err := rt.CreateWorkspace(context.Background(), "linux/base-preflight-cancel", codeexecutor.WorkspacePolicy{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
+		go func() { errCh <- runCmd(ctx, rt, ws) }()
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("probe did not start")
+		}
+		cancel()
+		select {
+		case err := <-errCh:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("osSandboxCommand error = %v, want context.Canceled", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("osSandboxCommand did not observe cancellation")
+		}
+
+		if err := runCmd(context.Background(), rt, ws); err != nil {
+			t.Fatalf("retry after cancellation: %v", err)
+		}
+		if got := calls.Load(); got != 2 {
+			t.Fatalf("probe calls = %d, want retry after cancellation", got)
+		}
+	})
+
+	t.Run("concurrentWaiterCancellation", func(t *testing.T) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var calls atomic.Int32
+		linuxBasePreflightProbe = func(ctx context.Context, _ string, _ bool) (string, error) {
+			if calls.Add(1) != 1 {
+				return "", errors.New("unexpected extra probe")
+			}
+			close(started)
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-release:
+				return "", nil
+			}
+		}
+
+		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+		ws, err := rt.CreateWorkspace(context.Background(), "linux/base-preflight-waiter", codeexecutor.WorkspacePolicy{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		leaderErr := make(chan error, 1)
+		go func() { leaderErr <- runCmd(context.Background(), rt, ws) }()
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("leader probe did not start")
+		}
+
+		waiterCtx, waiterCancel := context.WithCancel(context.Background())
+		waiterErr := make(chan error, 1)
+		go func() { waiterErr <- runCmd(waiterCtx, rt, ws) }()
+		time.Sleep(50 * time.Millisecond)
+		waiterCancel()
+		select {
+		case err := <-waiterErr:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("waiter error = %v, want context.Canceled", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("waiter did not observe cancellation")
+		}
+
+		close(release)
+		select {
+		case err := <-leaderErr:
+			if err != nil {
+				t.Fatalf("leader osSandboxCommand: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("leader did not finish")
+		}
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("probe calls = %d, want single in-flight probe", got)
+		}
+	})
 }
 
 func setCachedLinuxRestrictedPreflight(rt *Runtime, err error) {

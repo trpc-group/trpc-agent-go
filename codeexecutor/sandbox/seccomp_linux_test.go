@@ -1185,7 +1185,7 @@ func newLinuxSeccompRuntime(t *testing.T, profile PermissionProfile) (*Runtime, 
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(profile),
 	)
-	if _, _, err := rt.linuxPreflight(); err != nil {
+	if _, _, err := rt.linuxPreflight(context.Background()); err != nil {
 		t.Skipf("bubblewrap preflight unavailable: %v", err)
 	}
 	if profile.network.Mode == NetworkRestricted {
@@ -1490,7 +1490,7 @@ func TestLinuxRestrictedPreflightIndependentFromEnabled(t *testing.T) {
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(WorkspaceWriteProfile().WithNetworkPolicy(NetworkPolicy{Mode: NetworkEnabled})),
 	)
-	bwrap, mountProc, err := rt.linuxPreflight()
+	bwrap, mountProc, err := rt.linuxPreflight(context.Background())
 	if err != nil {
 		t.Skipf("bwrap unavailable: %v", err)
 	}

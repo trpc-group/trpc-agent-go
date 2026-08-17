@@ -57,7 +57,7 @@ func (r *Runtime) osSandboxCommand(
 	diagnostics sandboxDenialRun,
 ) (*exec.Cmd, string, commandCleanup, error) {
 	_ = diagnostics
-	bwrap, mountProc, err := r.linuxPreflight()
+	bwrap, mountProc, err := r.linuxPreflight(ctx)
 	if err != nil {
 		return nil, string(BackendLinuxBubblewrap), nil, err
 	}
@@ -244,41 +244,54 @@ func (r *Runtime) linuxSandboxSetup(
 	}, nil
 }
 
-func (r *Runtime) linuxPreflight() (string, bool, error) {
+// linuxPreflight verifies that this Runtime can start a bubblewrap sandbox.
+// Durable capability results are cached for the Runtime lifetime. Caller
+// cancellation and probe deadlines are not cached, so one transient request
+// cannot permanently poison later sandbox runs.
+func (r *Runtime) linuxPreflight(ctx context.Context) (string, bool, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return "", false, err
+		}
+
 		r.preflightMu.Lock()
 		if r.preflightReady {
-			break
+			bwrap, mountProc, err := r.bwrapPath, r.bwrapMountProc, r.preflightErr
+			r.preflightMu.Unlock()
+			return bwrap, mountProc, err
 		}
 		if r.preflightWait != nil {
 			done := r.preflightWait
 			r.preflightMu.Unlock()
-			<-done
-			continue
+			select {
+			case <-ctx.Done():
+				return "", false, ctx.Err()
+			case <-done:
+				continue
+			}
 		}
 		done := make(chan struct{})
 		r.preflightWait = done
 		r.preflightMu.Unlock()
 
-		bwrap, mountProc, err := r.runLinuxPreflight()
+		bwrap, mountProc, err := r.runLinuxPreflight(ctx)
+		cache := !isTransientRestrictedPreflightError(err)
 
 		r.preflightMu.Lock()
-		r.bwrapPath = bwrap
-		r.bwrapMountProc = mountProc
-		r.preflightErr = err
-		if !isTransientRestrictedPreflightError(err) {
+		if cache {
 			r.preflightReady = true
+			r.bwrapPath = bwrap
+			r.bwrapMountProc = mountProc
+			r.preflightErr = err
 		}
 		close(done)
 		r.preflightWait = nil
-		break
+		r.preflightMu.Unlock()
+		return bwrap, mountProc, err
 	}
-	bwrap, mountProc, err := r.bwrapPath, r.bwrapMountProc, r.preflightErr
-	r.preflightMu.Unlock()
-	return bwrap, mountProc, err
 }
 
-func (r *Runtime) runLinuxPreflight() (string, bool, error) {
+func (r *Runtime) runLinuxPreflight(ctx context.Context) (string, bool, error) {
 	if r.backend != BackendAuto && r.backend != BackendLinuxBubblewrap {
 		return "", false, backendError(
 			ErrUnsupportedBackend,
@@ -294,13 +307,19 @@ func (r *Runtime) runLinuxPreflight() (string, bool, error) {
 			errors.New("bubblewrap executable not found in PATH"),
 		)
 	}
-	stderr, err := linuxBasePreflightProbe(bwrap, true)
+	stderr, err := linuxBasePreflightProbe(ctx, bwrap, true)
 	if err == nil {
 		return bwrap, true, nil
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", false, ctxErr
+	}
 	if isProcMountFailure(stderr) {
-		stderr, err = linuxBasePreflightProbe(bwrap, false)
+		stderr, err = linuxBasePreflightProbe(ctx, bwrap, false)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", false, ctxErr
+			}
 			return "", false, backendError(
 				ErrSetupFailed,
 				string(BackendLinuxBubblewrap),
@@ -457,6 +476,10 @@ func runBwrapSeccompPreflightProbe(
 // Tests may lower it to exercise the context-deadline fail-closed path.
 var bwrapSeccompPreflightTimeout = 5 * time.Second
 
+// bwrapBasePreflightTimeout bounds the bubblewrap capability probe used by
+// linuxPreflight. The caller context can cancel sooner.
+var bwrapBasePreflightTimeout = 5 * time.Second
+
 // runBwrapPreflightProbe runs a short-lived bubblewrap probe and captures stderr.
 //
 // Strategy:
@@ -467,8 +490,8 @@ var bwrapSeccompPreflightTimeout = 5 * time.Second
 //     without --proc while keeping PID isolation.
 //   - stderr is captured instead of streamed because this is a one-shot probe with
 //     a trivial command and a short timeout.
-func runBwrapPreflightProbe(bwrap string, mountProc bool) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func runBwrapPreflightProbe(ctx context.Context, bwrap string, mountProc bool) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, bwrapBasePreflightTimeout)
 	defer cancel()
 	args := buildBwrapPreflightArgs(mountProc)
 	var stderr bytes.Buffer
