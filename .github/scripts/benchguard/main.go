@@ -121,6 +121,13 @@ func loadConfig(path string) (config, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return config{}, err
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return config{}, fmt.Errorf("decode trailing budget config data: %w", err)
+		}
+		return config{}, errors.New("budget config must contain exactly one JSON value")
+	}
 	if cfg.Version != supportedConfigVersion {
 		return config{}, fmt.Errorf(
 			"unsupported config version %d, want %d",

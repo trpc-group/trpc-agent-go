@@ -26,7 +26,7 @@ Options:
   --benchtime VALUE   go test -benchtime value
   --output FILE       combined Go benchmark output
   --profile-dir DIR   output directory for profile mode
-  --keep-going        continue after a benchmark package fails
+  --keep-going        run all benchmark packages before reporting failure
 EOF
 }
 
@@ -315,6 +315,7 @@ if ! grep -q '^Benchmark' "${output_path}"; then
 fi
 if [[ "${failure_count}" -gt 0 ]]; then
   echo "Benchmark suite completed with ${failure_count} failed entries" >&2
+  exit 1
 fi
 
 echo "Benchmark output written to ${output_path}"

@@ -147,6 +147,21 @@ func TestRunRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsTrailingJSONValue(t *testing.T) {
+	budgetPath := writeTestFile(
+		t,
+		"budgets.json",
+		`{"version": 1}{"version": 1}`,
+	)
+	_, err := loadConfig(budgetPath)
+	if err == nil {
+		t.Fatal("loadConfig returned nil error")
+	}
+	if !strings.Contains(err.Error(), "exactly one JSON value") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func writeTestFile(t *testing.T, name string, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)

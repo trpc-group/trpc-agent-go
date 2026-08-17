@@ -75,5 +75,6 @@ for investigating CPU or memory trends.
 
 The base side of a pull-request comparison uses `--keep-going` because an older
 revision can contain a benchmark that no longer compiles or runs. Failures are
-kept in the artifact while remaining runnable benchmarks are still compared.
-Head, smoke, guard, and main-branch runs never use this option.
+kept in the artifact and reported by the tolerated base step while remaining
+runnable benchmarks are still compared. Head, smoke, guard, and main-branch
+runs never use this option.
