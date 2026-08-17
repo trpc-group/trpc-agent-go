@@ -28,7 +28,7 @@ go run ./cmd/review-agent --repo-path /path/to/go-repo \
 `--skills-root` (or `skills_root` in an explicitly supplied `--config`) is
 required. It must point to the trusted installation's Skill directory, never
 to a directory provided by the repository being reviewed. Reports default to
-the ignored `.cr-agent/reports` directory.
+the user-owned cache directory outside the reviewed checkout.
 
 如果目标仓库依赖 Go modules，请先在仓库根目录准备 `vendor/modules.txt`
 （例如由 `go mod vendor` 或 `go work vendor` 生成），否则 container runtime

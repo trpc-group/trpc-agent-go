@@ -193,7 +193,7 @@ func optionWasSetAny(cli Options, fallback bool, flagNames ...string) bool {
 
 func applyOptionDefaults(opts *Options) {
 	if strings.TrimSpace(opts.OutputDir) == "" {
-		opts.OutputDir = filepath.Join(".cr-agent", "reports")
+		opts.OutputDir = cragent.DefaultOutputDir()
 	}
 	if opts.NoPersist {
 		opts.SQLitePath = ""

@@ -3,14 +3,15 @@
 
 mode: review
 runtime: container
-output_dir: .cr-agent/reports
+# Leave empty to use the user-owned cache directory outside the checkout.
+output_dir: ""
 # 必须指向随安装分发的受信任 Skill 目录，不能指向待审仓库。
 skills_root: /opt/cr-agent/skills
 fixtures_root: testdata/fixtures
 staticcheck: false
 
 # 默认数据库位于 output_dir/review.db；也可以显式指定路径或用 no_persist 关闭。
-# sqlite: .cr-agent/review.db
+# sqlite: /trusted/path/review.db
 no_persist: false
 
 # 需要接入真实 LLM 时，启用 model 并取消下面 provider 配置注释。

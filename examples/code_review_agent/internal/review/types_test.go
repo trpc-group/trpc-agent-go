@@ -13,6 +13,7 @@ package review
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestFindingKeyDedupesSameFileLineRule(t *testing.T) {
@@ -96,5 +97,16 @@ func TestRedactSecretsMasksMultilinePEMBlocksBeforeGenericKeyPatterns(t *testing
 	}
 	if !strings.Contains(got, "retry=false") {
 		t.Fatalf("expected surrounding context to remain, got %s", got)
+	}
+}
+
+func TestSanitizeAuditStringRedactsAndBoundsPaths(t *testing.T) {
+	secret := "sk-auditpath-1234567890"
+	got := SanitizeAuditString(" /repo/" + secret + "/" + strings.Repeat("界", 600) + " ")
+	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("audit string was not redacted: %q", got)
+	}
+	if len(got) > maxAuditStringBytes || !utf8.ValidString(got) {
+		t.Fatalf("audit string is not safely bounded UTF-8: bytes=%d valid=%v", len(got), utf8.ValidString(got))
 	}
 }

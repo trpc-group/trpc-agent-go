@@ -303,7 +303,13 @@ func TestAgentRunRedactsCommonSecretShapesInReportsAndSQLite(t *testing.T) {
 	root := repoRoot(t)
 	outDir := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "review.db")
-	diffPath := filepath.Join(t.TempDir(), "secrets.diff")
+	pathSecret := "sk-pathsecret-1234567890"
+	repoPathSecret := "ghp_1234567890abcdef1234567890abcdef1234"
+	diffPath := filepath.Join(t.TempDir(), "input-"+pathSecret+".diff")
+	repoPath := filepath.Join(t.TempDir(), "repo-"+repoPathSecret)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatalf("create credential-shaped repo path: %v", err)
+	}
 	rawSecrets := []string{
 		"sk-1234567890abcdef",
 		"llm-live-1234567890abcdef",
@@ -315,6 +321,8 @@ func TestAgentRunRedactsCommonSecretShapesInReportsAndSQLite(t *testing.T) {
 		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature",
 		"-----BEGIN PRIVATE KEY-----",
 		"db-password-123",
+		pathSecret,
+		repoPathSecret,
 	}
 	diff := `diff --git a/leak.go b/leak.go
 --- /dev/null
@@ -353,6 +361,7 @@ func TestAgentRunRedactsCommonSecretShapesInReportsAndSQLite(t *testing.T) {
 
 	result, err := ag.Run(context.Background(), Request{
 		DiffFile: diffPath,
+		RepoPath: repoPath,
 		Mode:     ModeRuleOnly,
 	})
 	if err != nil {
@@ -382,6 +391,18 @@ func TestAgentRunRedactsCommonSecretShapesInReportsAndSQLite(t *testing.T) {
 		t.Fatalf("open sqlite directly: %v", err)
 	}
 	defer db.Close()
+	var persistedInputRef, persistedRepoPath string
+	if err := db.QueryRowContext(context.Background(), `SELECT input_ref, repo_path FROM review_tasks WHERE task_id=?`, result.TaskID).Scan(&persistedInputRef, &persistedRepoPath); err != nil {
+		t.Fatalf("query persisted task paths: %v", err)
+	}
+	for _, persisted := range []string{persistedInputRef, persistedRepoPath} {
+		if strings.Contains(persisted, pathSecret) || strings.Contains(persisted, repoPathSecret) {
+			t.Fatalf("review_tasks retained raw credential-shaped path: %q", persisted)
+		}
+		if !strings.Contains(persisted, "[REDACTED]") {
+			t.Fatalf("review_tasks path lacks redacted audit representation: %q", persisted)
+		}
+	}
 	leaks, err := scanSQLiteForRawSecrets(context.Background(), db, rawSecrets)
 	if err != nil {
 		t.Fatalf("scan sqlite: %v", err)

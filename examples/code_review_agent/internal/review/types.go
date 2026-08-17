@@ -20,7 +20,10 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
+
+const maxAuditStringBytes = 1024
 
 // Result 是审查输出。
 type Result struct {
@@ -237,6 +240,20 @@ func RedactSecrets(input string) string {
 		out = replacer.re.ReplaceAllString(out, replacer.with)
 	}
 	return out
+}
+
+// SanitizeAuditString returns a bounded, redacted representation for values
+// that may be controlled by the reviewed repository or its caller.
+func SanitizeAuditString(input string) string {
+	input = strings.TrimSpace(RedactSecrets(input))
+	if len(input) <= maxAuditStringBytes {
+		return input
+	}
+	input = input[:maxAuditStringBytes]
+	for !utf8.ValidString(input) {
+		input = input[:len(input)-1]
+	}
+	return input
 }
 
 // DedupeFindings 去重并稳定排序。

@@ -258,7 +258,7 @@ func TestCommittedDefaultConfigParses(t *testing.T) {
 	if opts.ModelProvider != "" {
 		t.Fatalf("expected committed config to avoid external model provider by default, got %q", opts.ModelProvider)
 	}
-	if opts.OutputDir != ".cr-agent/reports" || opts.SQLitePath != "" {
+	if opts.OutputDir != "" || opts.SQLitePath != "" {
 		t.Fatalf("unexpected committed config paths: output=%q sqlite=%q", opts.OutputDir, opts.SQLitePath)
 	}
 }
@@ -315,11 +315,22 @@ func TestRunRejectsRepositoryLocalSkillWithoutExplicitRoot(t *testing.T) {
 func TestDefaultOutputDoesNotClobberRepositoryReports(t *testing.T) {
 	repo := t.TempDir()
 	root := repoRoot(t)
+	trustedHome := t.TempDir()
+	t.Setenv("HOME", trustedHome)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(trustedHome, "cache"))
 	writeReviewRepo(t, repo)
 	existing := []byte("repository-owned report")
 	reportPath := filepath.Join(repo, "review_report.json")
 	if err := os.WriteFile(reportPath, existing, 0o644); err != nil {
 		t.Fatalf("write existing report: %v", err)
+	}
+	redirectTarget := t.TempDir()
+	sentinelPath := filepath.Join(redirectTarget, "review_report.json")
+	if err := os.WriteFile(sentinelPath, []byte("symlink target unchanged"), 0o600); err != nil {
+		t.Fatalf("write symlink target sentinel: %v", err)
+	}
+	if err := os.Symlink(redirectTarget, filepath.Join(repo, ".cr-agent")); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
 	}
 
 	withWorkingDirectory(t, repo, func() {
@@ -340,7 +351,14 @@ func TestDefaultOutputDoesNotClobberRepositoryReports(t *testing.T) {
 	if string(got) != string(existing) {
 		t.Fatalf("default output clobbered repository report: %q", got)
 	}
-	assertFileExists(t, filepath.Join(repo, ".cr-agent", "reports", "review_report.json"))
+	sentinel, err := os.ReadFile(sentinelPath)
+	if err != nil {
+		t.Fatalf("read symlink target sentinel: %v", err)
+	}
+	if string(sentinel) != "symlink target unchanged" {
+		t.Fatalf("default output followed checkout parent symlink: %q", sentinel)
+	}
+	assertFileExists(t, filepath.Join(cragent.DefaultOutputDir(), "review_report.json"))
 }
 
 func TestCapabilityConfigPreservesExplicitFalseAndCLIOverrides(t *testing.T) {

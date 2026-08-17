@@ -531,9 +531,9 @@ func (a *Agent) saveTaskStatus(ctx context.Context, taskID, inputRef, inputDiges
 	return a.store.SaveTask(ctx, storage.Task{
 		ID:          taskID,
 		InputType:   "diff",
-		InputRef:    inputRef,
+		InputRef:    review.SanitizeAuditString(inputRef),
 		InputDigest: inputDigest,
-		RepoPath:    repoPath,
+		RepoPath:    review.SanitizeAuditString(repoPath),
 		Status:      status,
 		Mode:        mode,
 		CreatedAt:   startedAt,
@@ -618,12 +618,21 @@ func normalizeConfig(cfg Config) Config {
 		cfg.MaxArtifactCount = defaultMaxArtifactCount
 	}
 	if cfg.OutputDir == "" {
-		cfg.OutputDir = filepath.Join(".cr-agent", "reports")
+		cfg.OutputDir = DefaultOutputDir()
 	}
 	if cfg.ArtifactService == nil {
 		cfg.ArtifactService = artifactinmemory.NewService()
 	}
 	return cfg
+}
+
+// DefaultOutputDir returns a user-owned location outside the reviewed checkout.
+func DefaultOutputDir() string {
+	base, err := os.UserCacheDir()
+	if err != nil || strings.TrimSpace(base) == "" {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "trpc-agent-go", "code-review-agent", "reports")
 }
 
 func (a *Agent) taskCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {

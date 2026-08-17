@@ -20,6 +20,8 @@ import (
 
 // persist 保存审计和报告数据。
 func (a *Agent) persist(ctx context.Context, task storage.Task, result review.Result, decisions []storage.DecisionRecord, runs []storage.SandboxRunRecord, jsonReport, markdownReport, markdownChineseReport, diagnosticsReport []byte) error {
+	task.InputRef = review.SanitizeAuditString(task.InputRef)
+	task.RepoPath = review.SanitizeAuditString(task.RepoPath)
 	now := time.Now()
 	mode := result.Metrics.Mode
 	sandboxRequested := result.Metrics.SandboxRequested

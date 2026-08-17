@@ -383,8 +383,8 @@ func TestNewDryRunDoesNotCreateContainerExecutor(t *testing.T) {
 
 func TestNormalizeConfigUsesIsolatedDefaultOutputDirectory(t *testing.T) {
 	cfg := normalizeConfig(Config{})
-	if cfg.OutputDir != filepath.Join(".cr-agent", "reports") {
-		t.Fatalf("default output directory = %q, want isolated reports directory", cfg.OutputDir)
+	if cfg.OutputDir != DefaultOutputDir() || !filepath.IsAbs(cfg.OutputDir) {
+		t.Fatalf("default output directory = %q, want absolute user-owned directory %q", cfg.OutputDir, DefaultOutputDir())
 	}
 }
 
