@@ -1,10 +1,10 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
+//
 //
 
 package main
@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -21,6 +22,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+const (
+	runWorkflowToolName     = "run_workflow"
+	omittedWorkflowCodeJSON = `"[omitted]"`
+	omittedWorkflowArgs     = "[workflow code omitted]"
+	toolResultMaxRunes      = 500
 )
 
 func (c *dynamicWorkflowChat) printStartup() {
@@ -133,8 +141,10 @@ func (t workflowCodePrintingTool) printWorkflowCode(raw []byte) {
 	fmt.Fprintln(os.Stderr)
 }
 
-func printEvents(events <-chan *event.Event) {
+func printEvents(events <-chan *event.Event) error {
+	var runErr error
 	for evt := range events {
+		runErr = updateRunOutcome(runErr, evt)
 		if evt == nil {
 			continue
 		}
@@ -168,6 +178,30 @@ func printEvents(events <-chan *event.Event) {
 			fmt.Printf("[%s] %s\n", eventLabel(evt), content)
 		}
 	}
+	return runErr
+}
+
+// updateRunOutcome mirrors Runner stream semantics for this example: the last
+// terminal error is retained, a later non-partial successful non-runner
+// response may recover, and a clean runner.completion must not erase an
+// already-streamed terminal error.
+func updateRunOutcome(runErr error, evt *event.Event) error {
+	if evt == nil || evt.Response == nil || evt.IsPartial {
+		return runErr
+	}
+	if evt.IsRunnerCompletion() {
+		if evt.IsTerminalError() {
+			return errors.New(evt.Response.Error.Message)
+		}
+		return runErr
+	}
+	if evt.IsTerminalError() {
+		return errors.New(evt.Response.Error.Message)
+	}
+	if evt.Response.Error == nil {
+		return nil
+	}
+	return runErr
 }
 
 func printToolEvent(evt *event.Event) bool {
@@ -182,7 +216,7 @@ func printToolEvent(evt *event.Event) bool {
 					"[%s] tool call: %s args: %s\n",
 					eventLabel(evt),
 					call.Function.Name,
-					string(call.Function.Arguments),
+					formatToolCallArgs(call.Function.Name, call.Function.Arguments),
 				)
 			}
 		}
@@ -199,10 +233,7 @@ func printToolEvent(evt *event.Event) bool {
 		if msg.ToolID == "" {
 			continue
 		}
-		content := strings.TrimSpace(msg.Content)
-		if len(content) > 500 {
-			content = content[:500] + "..."
-		}
+		content := truncateRunes(strings.TrimSpace(msg.Content), toolResultMaxRunes)
 		fmt.Printf(
 			"[%s] tool result: %s: %s\n",
 			eventLabel(evt),
@@ -211,6 +242,32 @@ func printToolEvent(evt *event.Event) bool {
 		)
 	}
 	return true
+}
+
+func formatToolCallArgs(name string, args []byte) string {
+	if name != runWorkflowToolName || *showWorkflowCode {
+		return string(args)
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(args, &obj); err != nil {
+		return omittedWorkflowArgs
+	}
+	if _, ok := obj["code"]; ok {
+		obj["code"] = json.RawMessage(omittedWorkflowCodeJSON)
+	}
+	redacted, err := json.Marshal(obj)
+	if err != nil {
+		return omittedWorkflowArgs
+	}
+	return string(redacted)
+}
+
+func truncateRunes(s string, max int) string {
+	runes := []rune(s)
+	if max < 0 || len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "..."
 }
 
 func eventLabel(evt *event.Event) string {

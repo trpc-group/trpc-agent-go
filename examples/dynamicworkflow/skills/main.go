@@ -1,10 +1,10 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
+//
 //
 
 // Package main demonstrates compiling a reusable Skill recipe into a
@@ -103,7 +103,7 @@ func main() {
 func run(ctx context.Context) error {
 	repo, err := skill.NewFSRepository(*skillsRoot)
 	if err != nil {
-		return fmt.Errorf("load Skills: %w", err)
+		return fmt.Errorf("load skills: %w", err)
 	}
 	modelInstance := openai.New(*modelName)
 
@@ -121,7 +121,7 @@ func run(ctx context.Context) error {
 		[]agent.Agent{child},
 	)
 	if err != nil {
-		return fmt.Errorf("create Dynamic Workflow tool: %w", err)
+		return fmt.Errorf("create dynamic workflow tool: %w", err)
 	}
 	if *showWorkflowCode {
 		workflowTool = workflowCodePrintingTool{inner: workflowTool}
@@ -221,10 +221,9 @@ func (c *dynamicWorkflowChat) processMessage(
 		model.NewUserMessage(userMessage),
 	)
 	if err != nil {
-		return fmt.Errorf("run Agent: %w", err)
+		return fmt.Errorf("run agent: %w", err)
 	}
-	printEvents(events)
-	return nil
+	return printEvents(events)
 }
 
 func defaultExamplePath(name string) string {
