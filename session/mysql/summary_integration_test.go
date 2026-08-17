@@ -51,6 +51,29 @@ func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 		require.NoError(t, svc.Close())
 	})
 
+	t.Run("current index with short migration prefixes is rejected", func(t *testing.T) {
+		prefix := prepareSummaryIntegrationSchema(t, db, dsn)
+		tableName := sqldb.BuildTableName(prefix, sqldb.TableNameSessionSummaries)
+		canonicalName := sqldb.BuildIndexName(
+			prefix, sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive,
+		)
+		migrationName := canonicalName + "_v2"
+		_, err := db.ExecContext(ctx, fmt.Sprintf(
+			"ALTER TABLE `%s` DROP INDEX `%s`, ADD UNIQUE INDEX `%s` "+
+				"(app_name(190), user_id(190), session_id(190), filter_key(190))",
+			tableName, canonicalName, migrationName,
+		))
+		require.NoError(t, err)
+
+		svc, err := NewService(
+			WithMySQLClientDSN(dsn),
+			WithTablePrefix(prefix),
+			WithSessionTTL(time.Hour),
+		)
+		require.ErrorContains(t, err, "unsupported prefix lengths")
+		require.Nil(t, svc)
+	})
+
 	t.Run("legacy unique soft delete preserves history", func(t *testing.T) {
 		prefix := prepareSummaryIntegrationSchema(t, db, dsn)
 		tableName := sqldb.BuildTableName(prefix, sqldb.TableNameSessionSummaries)

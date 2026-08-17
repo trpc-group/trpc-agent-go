@@ -3711,8 +3711,8 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 			WithArgs(fullTableName).
 			WillReturnRows(colRows)
 
-		// 3. verifyIndexes query (INDEX_NAME, COLUMN_NAME, NON_UNIQUE)
-		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
+		// 3. verifyIndexes query (INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SUB_PART)
+		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART"})
 		for _, idx := range schema.indexes {
 			idxName := sqldb.BuildIndexName(tablePrefix, idx.table, idx.suffix)
 			nonUnique := 1
@@ -3720,10 +3720,10 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 				nonUnique = 0
 			}
 			for _, col := range idx.columns {
-				idxRows.AddRow(idxName, col, nonUnique)
+				idxRows.AddRow(idxName, col, nonUnique, nil)
 			}
 		}
-		idxRows.AddRow("PRIMARY", "id", 0)
+		idxRows.AddRow("PRIMARY", "id", 0, nil)
 		mock.ExpectQuery("SELECT INDEX_NAME").
 			WithArgs(fullTableName).
 			WillReturnRows(idxRows)

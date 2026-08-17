@@ -223,6 +223,7 @@ type summaryIndexLayout uint8
 const (
 	summaryIndexUnknown summaryIndexLayout = iota
 	summaryIndexCurrent
+	summaryIndexIncompatibleCurrent
 	summaryIndexLegacyUnique
 	summaryIndexLegacyLookup
 )
@@ -791,20 +792,24 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		expectedIndexNames[expectedIndexName] = true
 	}
 
-	// Get actual indexes from database, including whether each is non-unique
-	// (NON_UNIQUE: 0 = unique, 1 = non-unique; same value on every column row).
+	// Get actual indexes, including uniqueness and per-column prefix lengths.
+	// NON_UNIQUE is repeated on every row for an index (0 means unique), while a
+	// NULL SUB_PART means the full column is indexed.
 	actualIndexes := make(map[string][]string)
 	actualNonUnique := make(map[string]bool)
+	actualSubParts := make(map[string][]sql.NullInt64)
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		var indexName, columnName string
 		var nonUnique int
-		if err := rows.Scan(&indexName, &columnName, &nonUnique); err != nil {
+		var subPart sql.NullInt64
+		if err := rows.Scan(&indexName, &columnName, &nonUnique, &subPart); err != nil {
 			return err
 		}
 		actualIndexes[indexName] = append(actualIndexes[indexName], columnName)
 		actualNonUnique[indexName] = nonUnique != 0
+		actualSubParts[indexName] = append(actualSubParts[indexName], subPart)
 		return nil
-	}, `SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE
+	}, `SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SUB_PART
 		FROM information_schema.statistics
 		WHERE table_schema = DATABASE()
 		AND table_name = ?
@@ -819,9 +824,12 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 	// operator performs an online migration. Index detection is intentionally
 	// used only for validation and diagnostics; the write path is identical for
 	// every supported layout.
-	summaryIndexName, summaryUniqueCompatible := s.compatibleSummaryIndex(
-		ctx, fullTableName, expectedIndexes, actualIndexes, actualNonUnique,
+	summaryIndexName, summaryUniqueCompatible, err := s.compatibleSummaryIndex(
+		ctx, fullTableName, expectedIndexes, actualIndexes, actualNonUnique, actualSubParts,
 	)
+	if err != nil {
+		return err
+	}
 	if summaryUniqueCompatible {
 		expectedIndexNames[summaryIndexName] = true
 	}
@@ -934,14 +942,17 @@ func (s *Service) compatibleSummaryIndex(
 	expectedIndexes []tableIndex,
 	actualIndexes map[string][]string,
 	actualNonUnique map[string]bool,
-) (string, bool) {
+	actualSubParts map[string][]sql.NullInt64,
+) (string, bool, error) {
 	if fullTableName != s.tableSessionSummaries || !expectsSummaryUniqueIndex(expectedIndexes) {
-		return "", false
+		return "", false, nil
 	}
 
-	indexName, layout := classifySummaryIndexLayout(actualIndexes, actualNonUnique)
+	indexName, layout := classifySummaryIndexLayout(
+		actualIndexes, actualNonUnique, actualSubParts, s.opts.tdsqlSharding,
+	)
 	if layout == summaryIndexUnknown {
-		return "", false
+		return "", false, nil
 	}
 
 	canonicalName := sqldb.BuildIndexName(
@@ -955,6 +966,16 @@ func (s *Service) compatibleSummaryIndex(
 			log.InfofContext(ctx, "using equivalent summary UNIQUE index %s on table %s",
 				indexName, fullTableName)
 		}
+	case summaryIndexIncompatibleCurrent:
+		expectedPrefix := fmt.Sprintf("full columns or prefixes of at least %d characters",
+			mysqlVarCharIndexPrefixLen)
+		if s.opts.tdsqlSharding {
+			expectedPrefix = "full columns"
+		}
+		log.ErrorfContext(ctx, "summary UNIQUE index %s on table %s has unsupported prefix lengths %s; "+
+			"expected %s", indexName, fullTableName,
+			formatIndexSubParts(actualSubParts[indexName]), expectedPrefix)
+		return "", false, fmt.Errorf("summary UNIQUE index %s has unsupported prefix lengths", indexName)
 	case summaryIndexLegacyUnique:
 		log.WarnfContext(ctx, "legacy five-column summary UNIQUE index %s detected on table %s; "+
 			"enabling serialized writes for compatibility; duplicate active rows should be removed before adding a "+
@@ -964,7 +985,7 @@ func (s *Service) compatibleSummaryIndex(
 			"business-key UNIQUE constraint; enabling serialized writes for compatibility, but an "+
 			"online migration to a four-column UNIQUE index is recommended", indexName, fullTableName)
 	}
-	return indexName, true
+	return indexName, true, nil
 }
 
 func isSummaryUniqueIndex(index tableIndex) bool {
@@ -975,10 +996,22 @@ func isSummaryUniqueIndex(index tableIndex) bool {
 func classifySummaryIndexLayout(
 	actualIndexes map[string][]string,
 	actualNonUnique map[string]bool,
+	actualSubParts map[string][]sql.NullInt64,
+	tdsqlSharding bool,
 ) (string, summaryIndexLayout) {
 	currentColumns := []string{"app_name", "user_id", "session_id", "filter_key"}
 	legacyUniqueColumns := []string{"app_name", "user_id", "session_id", "filter_key", "deleted_at"}
 	legacyLookupColumns := []string{"app_name", "user_id", "session_id", "deleted_at"}
+
+	// Every matching four-column UNIQUE index participates in writes, even when
+	// another valid or legacy index also exists. Reject any one whose shorter
+	// prefixes can report a duplicate for distinct full business keys.
+	for name, columns := range actualIndexes {
+		if !actualNonUnique[name] && stringSlicesEqual(columns, currentColumns) &&
+			!summaryIndexSubPartsCompatible(actualSubParts[name], tdsqlSharding) {
+			return name, summaryIndexIncompatibleCurrent
+		}
+	}
 
 	// Prefer the current capability even when a legacy index remains during an
 	// online migration or the replacement index uses a temporary name.
@@ -998,6 +1031,36 @@ func classifySummaryIndexLayout(
 		}
 	}
 	return "", summaryIndexUnknown
+}
+
+func summaryIndexSubPartsCompatible(subParts []sql.NullInt64, tdsqlSharding bool) bool {
+	if len(subParts) != 4 {
+		return false
+	}
+	for _, subPart := range subParts {
+		if tdsqlSharding {
+			if subPart.Valid {
+				return false
+			}
+			continue
+		}
+		if subPart.Valid && subPart.Int64 < mysqlVarCharIndexPrefixLen {
+			return false
+		}
+	}
+	return true
+}
+
+func formatIndexSubParts(subParts []sql.NullInt64) string {
+	formatted := make([]string, len(subParts))
+	for i, subPart := range subParts {
+		if subPart.Valid {
+			formatted[i] = fmt.Sprintf("%d", subPart.Int64)
+		} else {
+			formatted[i] = "full"
+		}
+	}
+	return "[" + strings.Join(formatted, ", ") + "]"
 }
 
 // buildIndexColumnsStr builds a comma-separated column list with appropriate
