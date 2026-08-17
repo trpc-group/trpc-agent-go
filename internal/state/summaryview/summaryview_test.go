@@ -93,6 +93,137 @@ func TestSnapshotIsIsolated(t *testing.T) {
 	)
 }
 
+func TestInvocationViewFinalizationIsIsolated(t *testing.T) {
+	invocation := agent.NewInvocation()
+	AttachProjection(invocation, &View{
+		ContentRequestLength: 1,
+		Items: []Item{{
+			Message:      model.NewUserMessage("visible"),
+			RequestIndex: 0,
+		}},
+	})
+
+	view := invocation.View()
+	Finalize(view, &model.Request{Messages: []model.Message{
+		model.NewUserMessage("visible"),
+	}}, 42)
+
+	viewSnapshot, ok := Snapshot(view)
+	require.True(t, ok)
+	require.True(t, viewSnapshot.Bound)
+	require.Equal(t, 42, viewSnapshot.RequestTokens)
+
+	originalSnapshot, ok := Snapshot(invocation)
+	require.True(t, ok)
+	require.False(t, originalSnapshot.Bound)
+	require.Zero(t, originalSnapshot.RequestTokens)
+}
+
+func TestInvocationViewSnapshotNestedStateIsIsolated(t *testing.T) {
+	finishReason := "stop"
+	errorParam := "param"
+	errorCode := "code"
+	text := "text"
+	toolCallIndex := 1
+	message := model.Message{
+		Role: model.RoleAssistant,
+		ContentParts: []model.ContentPart{
+			{Text: &text},
+			{
+				Image: &model.Image{Data: []byte("image")},
+				ContentRef: &model.ContentRef{
+					ArtifactName: "original",
+				},
+			},
+			{Audio: &model.Audio{Data: []byte("audio")}},
+			{Video: &model.Video{Data: []byte("video")}},
+			{File: &model.File{Data: []byte("file")}},
+		},
+		ToolCalls: []model.ToolCall{{
+			Index: &toolCallIndex,
+			Function: model.FunctionDefinitionParam{
+				Arguments: []byte("original"),
+			},
+			ExtraFields: map[string]any{
+				"nested": map[string]any{"value": "original"},
+			},
+		}},
+	}
+	invocation := agent.NewInvocation()
+	AttachProjection(invocation, &View{Items: []Item{{
+		Message: message,
+		EffectiveEvent: event.Event{Response: &model.Response{
+			Choices: []model.Choice{{
+				Message:      message,
+				Delta:        message,
+				FinishReason: &finishReason,
+			}},
+			Error: &model.ResponseError{
+				Param: &errorParam,
+				Code:  &errorCode,
+			},
+		}, ParentMetadata: &event.ParentInvocationMetadata{TriggerID: "original"}},
+	}}})
+
+	viewSnapshot, ok := Snapshot(invocation.View())
+	require.True(t, ok)
+	viewMessage := &viewSnapshot.Items[0].Message
+	viewMessage.ToolCalls[0].Function.Arguments[0] = 'X'
+	*viewMessage.ToolCalls[0].Index = 2
+	viewMessage.ToolCalls[0].ExtraFields["nested"].(map[string]any)["value"] = "mutated"
+	*viewMessage.ContentParts[0].Text = "mutated"
+	viewMessage.ContentParts[1].Image.Data[0] = 'X'
+	viewMessage.ContentParts[1].ContentRef.ArtifactName = "mutated"
+	viewMessage.ContentParts[2].Audio.Data[0] = 'X'
+	viewMessage.ContentParts[3].Video.Data[0] = 'X'
+	viewMessage.ContentParts[4].File.Data[0] = 'X'
+	choice := &viewSnapshot.Items[0].EffectiveEvent.Response.Choices[0]
+	choice.Message.ToolCalls[0].Function.Arguments[0] = 'X'
+	choice.Delta.ContentParts[1].Image.Data[0] = 'X'
+	*choice.FinishReason = "mutated"
+	*viewSnapshot.Items[0].EffectiveEvent.Response.Error.Param = "mutated"
+	*viewSnapshot.Items[0].EffectiveEvent.Response.Error.Code = "mutated"
+	viewSnapshot.Items[0].EffectiveEvent.ParentMetadata.TriggerID = "mutated"
+
+	originalSnapshot, ok := Snapshot(invocation)
+	require.True(t, ok)
+	originalMessage := originalSnapshot.Items[0].Message
+	require.Equal(t, "original", string(
+		originalMessage.ToolCalls[0].Function.Arguments,
+	))
+	require.Equal(t, 1, *originalMessage.ToolCalls[0].Index)
+	require.Equal(t, "original",
+		originalMessage.ToolCalls[0].ExtraFields["nested"].(map[string]any)["value"],
+	)
+	require.Equal(t, "text", *originalMessage.ContentParts[0].Text)
+	require.Equal(t, "image", string(
+		originalMessage.ContentParts[1].Image.Data,
+	))
+	require.Equal(t, "original",
+		originalMessage.ContentParts[1].ContentRef.ArtifactName,
+	)
+	require.Equal(t, "audio", string(originalMessage.ContentParts[2].Audio.Data))
+	require.Equal(t, "video", string(originalMessage.ContentParts[3].Video.Data))
+	require.Equal(t, "file", string(originalMessage.ContentParts[4].File.Data))
+	originalChoice := originalSnapshot.Items[0].EffectiveEvent.Response.Choices[0]
+	require.Equal(t, "original", string(
+		originalChoice.Message.ToolCalls[0].Function.Arguments,
+	))
+	require.Equal(t, "image", string(
+		originalChoice.Delta.ContentParts[1].Image.Data,
+	))
+	require.Equal(t, "stop", *originalChoice.FinishReason)
+	require.Equal(t, "param",
+		*originalSnapshot.Items[0].EffectiveEvent.Response.Error.Param,
+	)
+	require.Equal(t, "code",
+		*originalSnapshot.Items[0].EffectiveEvent.Response.Error.Code,
+	)
+	require.Equal(t, "original",
+		originalSnapshot.Items[0].EffectiveEvent.ParentMetadata.TriggerID,
+	)
+}
+
 func TestContextAndInvocationLifecycle(t *testing.T) {
 	invocation := agent.NewInvocation()
 	_, ok := Snapshot(invocation)
