@@ -1052,12 +1052,12 @@ func TestVerifyStateInitializationSchemaWithSkipDBInit(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
 		WithArgs(s.tableSessionStates).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE",
+			"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART",
 		}).
-			AddRow("idx_session_states_state_init_active", "app_name", 0).
-			AddRow("idx_session_states_state_init_active", "user_id", 0).
-			AddRow("idx_session_states_state_init_active", "session_id", 0).
-			AddRow("idx_session_states_state_init_active", stateInitializationActiveColumn, 0))
+			AddRow("idx_session_states_state_init_active", "app_name", 0, nil).
+			AddRow("idx_session_states_state_init_active", "user_id", 0, nil).
+			AddRow("idx_session_states_state_init_active", "session_id", 0, nil).
+			AddRow("idx_session_states_state_init_active", stateInitializationActiveColumn, 0, nil))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
 		WithArgs(s.tableStateInitializationLeases).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
@@ -1081,7 +1081,7 @@ func TestVerifyStateInitializationSchemaWithSkipDBInit(t *testing.T) {
 		WithArgs(s.tableStateInitializationLeases).
 		WillReturnRows(columnRows)
 	indexRows := sqlmock.NewRows([]string{
-		"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE",
+		"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART",
 	})
 	for _, index := range leaseSchema.indexes {
 		name := sqldb.BuildIndexName("", index.table, index.suffix)
@@ -1090,7 +1090,7 @@ func TestVerifyStateInitializationSchemaWithSkipDBInit(t *testing.T) {
 			nonUnique = 0
 		}
 		for _, column := range index.columns {
-			indexRows.AddRow(name, column, nonUnique)
+			indexRows.AddRow(name, column, nonUnique, nil)
 		}
 	}
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).

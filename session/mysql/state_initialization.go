@@ -21,9 +21,7 @@ import (
 	"sync"
 	"time"
 
-	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
-	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -1074,12 +1072,4 @@ func cloneStateInitializationValue(value []byte) []byte {
 	cloned := make([]byte, len(value))
 	copy(cloned, value)
 	return cloned
-}
-
-func isDuplicateEntryError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var mysqlErr *drivermysql.MySQLError
-	return errors.As(err, &mysqlErr) && mysqlErr.Number == sqldb.MySQLErrDuplicateEntry
 }

@@ -910,7 +910,7 @@ func (s *Service) startAsyncPersistWorker() {
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
 					log.ErrorfContext(
 						ctx,
-						"async persist event failed: %w",
+						"async persist event failed: %v",
 						err,
 					)
 				}
@@ -942,7 +942,7 @@ func (s *Service) startAsyncPersistWorker() {
 				if err := s.addTrackEvent(ctx, trackEventPair.key, trackEventPair.event); err != nil {
 					log.ErrorfContext(
 						ctx,
-						"async persist event failed: %w",
+						"async persist event failed: %v",
 						err,
 					)
 				}
