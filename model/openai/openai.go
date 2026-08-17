@@ -961,8 +961,8 @@ func (m *Model) buildChatRequestWithToolControl(
 
 	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
 		if m.variant == VariantDeepSeek {
-			// DeepSeek Chat Completions supports max_tokens rather than
-			// OpenAI's max_completion_tokens parameter.
+			// DeepSeek's Chat Completions API documents max_tokens as the
+			// output limit: https://api-docs.deepseek.com/api/create-chat-completion.
 			chatRequest.MaxTokens = openai.Int(int64(*mt))
 		} else {
 			// max_tokens is deprecated and incompatible with OpenAI o-series
