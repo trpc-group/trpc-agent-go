@@ -949,7 +949,9 @@ sg.AddJoinEdge([]string{"produce", "consume"}, "finish")
     到 `messages`，并自动清空 `user_input` 以避免重复追加。
   - 当持久化历史末尾的 user 消息是多模态，且其文本与 `user_input` 不一致时，
     LLM 节点会在模型请求与持久化状态中同步改写该消息的文本，并保留非文本
-    `ContentParts`（例如图片）。
+    `ContentParts`（例如图片）。若 `user_input` 仍等于本轮调用基线（例如会话
+    处理器添加的附件说明），则不会改写；仅在前置节点改写了 `user_input`，
+    或没有基线时才会改写。
   - 适用场景：普通对话式工作流，允许在前置节点动态调整用户输入。
   - 默认用户输入 key 为 `StateKeyUserInput`。如果需要从其他一次性 key
     读取输入，可在该节点上配置 `graph.WithUserInputKey(...)`。

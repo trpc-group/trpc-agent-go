@@ -35,6 +35,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	checkpointinmemory "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -2229,6 +2230,10 @@ func TestGraphAgent_CreateInitialStateUserInputFromContentPartsWithSession(t *te
 	state := graphAgent.createInitialState(context.Background(), invocation)
 	require.Equal(t, "hello", state[graph.StateKeyUserInput])
 	require.Equal(t, userinputkey.Fingerprint("hello"), state[userinputkey.Baseline])
+	patch, ok := state[userinputkey.PatchKey].(userinputkey.Patch)
+	require.True(t, ok)
+	require.Equal(t, userinputkey.Fingerprint("hello"), patch.Baseline)
+	require.False(t, patch.ClearUserInput)
 
 	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
 	require.True(t, ok)
@@ -2246,6 +2251,10 @@ func TestGraphAgent_CreateInitialStateUserInputFromContentPartsWithSession(t *te
 	contentState := graphAgent.createInitialState(context.Background(), contentInvocation)
 	require.Equal(t, "hello", contentState[graph.StateKeyUserInput])
 	require.NotContains(t, contentState, userinputkey.Baseline)
+	contentPatch, ok := contentState[userinputkey.PatchKey].(userinputkey.Patch)
+	require.True(t, ok)
+	require.Empty(t, contentPatch.Baseline)
+	require.False(t, contentPatch.ClearUserInput)
 }
 
 func TestGraphAgent_ApplyUserInvocationInputDoesNotAliasCallerMessages(t *testing.T) {
@@ -2346,10 +2355,15 @@ func TestGraphAgent_SessionFileInputPreservesProcessorEnrichment(t *testing.T) {
 	}
 
 	var gotUserInput string
+	var gotBaseline string
+	var hasBaseline bool
+	var hasPatch bool
 	capture := &requestCaptureGraphAgentModel{}
 	g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
 		AddNode("inspect", func(_ context.Context, s graph.State) (any, error) {
 			gotUserInput, _ = s[graph.StateKeyUserInput].(string)
+			gotBaseline, hasBaseline = s[userinputkey.Baseline].(string)
+			_, hasPatch = s[userinputkey.PatchKey]
 			return nil, nil
 		}).
 		AddLLMNode("ask", capture, "You are a helpful assistant.", nil).
@@ -2373,6 +2387,9 @@ func TestGraphAgent_SessionFileInputPreservesProcessorEnrichment(t *testing.T) {
 	durableUser := lastDurableUserMessage(t, events)
 
 	require.Equal(t, userText, gotUserInput)
+	require.True(t, hasBaseline)
+	require.Equal(t, userinputkey.Fingerprint(userText), gotBaseline)
+	require.False(t, hasPatch)
 	require.NotNil(t, capture.lastReq)
 	require.NotEmpty(t, capture.lastReq.Messages)
 	got := capture.lastReq.Messages[len(capture.lastReq.Messages)-1]
@@ -2383,6 +2400,289 @@ func TestGraphAgent_SessionFileInputPreservesProcessorEnrichment(t *testing.T) {
 	require.Contains(t, text, userText)
 	require.True(t, hasFilePartNamed(got, "notes.txt"))
 	require.True(t, model.MessagesEqual(got, durableUser))
+}
+
+func TestGraphAgent_CreateInitialStateInvocationInputPatch(t *testing.T) {
+	hello := "hello"
+	imagePart := model.ContentPart{
+		Type:  model.ContentTypeImage,
+		Image: &model.Image{URL: "https://example.com/a.png"},
+	}
+	graphAgent := newInitialStateGraphAgent(t)
+
+	t.Run("strips caller patch and baseline", func(t *testing.T) {
+		msg := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeText, Text: &hello},
+			},
+		}
+		invocation := agent.NewInvocation(
+			agent.WithInvocationID("inv-caller-patch"),
+			agent.WithInvocationSession(&session.Session{ID: "sid"}),
+			agent.WithInvocationMessage(msg),
+		)
+		invocation.RunOptions.RuntimeState = graph.State{
+			userinputkey.Baseline: "caller-baseline",
+			userinputkey.PatchKey: userinputkey.Patch{
+				Baseline:       "caller-patch",
+				ClearUserInput: true,
+			},
+		}
+		graphAgent.setupInvocation(invocation)
+		state := graphAgent.createInitialState(context.Background(), invocation)
+		require.Equal(t, userinputkey.Fingerprint(hello), state[userinputkey.Baseline])
+		patch, ok := state[userinputkey.PatchKey].(userinputkey.Patch)
+		require.True(t, ok)
+		require.Equal(t, userinputkey.Fingerprint(hello), patch.Baseline)
+		require.False(t, patch.ClearUserInput)
+	})
+
+	t.Run("resume sentinel writes no patch", func(t *testing.T) {
+		invocation := agent.NewInvocation(
+			agent.WithInvocationID("inv-resume-sentinel"),
+			agent.WithInvocationMessage(model.NewUserMessage("resume")),
+		)
+		invocation.RunOptions.RuntimeState = graph.State{
+			graph.CfgKeyCheckpointID: "checkpoint-123",
+			userinputkey.Baseline:    "caller-baseline",
+			userinputkey.PatchKey: userinputkey.Patch{
+				ClearUserInput: true,
+			},
+		}
+		graphAgent.setupInvocation(invocation)
+		state := graphAgent.createInitialState(context.Background(), invocation)
+		require.NotContains(t, state, userinputkey.Baseline)
+		require.NotContains(t, state, userinputkey.PatchKey)
+		_, hasInput := state[graph.StateKeyUserInput]
+		require.False(t, hasInput)
+	})
+
+	t.Run("empty message writes no patch", func(t *testing.T) {
+		invocation := agent.NewInvocation(
+			agent.WithInvocationID("inv-empty"),
+			agent.WithInvocationMessage(model.NewUserMessage("")),
+		)
+		invocation.RunOptions.RuntimeState = graph.State{
+			graph.StateKeyUserInput: "stale",
+		}
+		graphAgent.setupInvocation(invocation)
+		state := graphAgent.createInitialState(context.Background(), invocation)
+		require.Equal(t, "stale", state[graph.StateKeyUserInput])
+		require.NotContains(t, state, userinputkey.PatchKey)
+		require.NotContains(t, state, userinputkey.Baseline)
+	})
+
+	t.Run("pure image writes tombstone", func(t *testing.T) {
+		msg := model.Message{
+			Role:         model.RoleUser,
+			ContentParts: []model.ContentPart{imagePart},
+		}
+		invocation := agent.NewInvocation(
+			agent.WithInvocationID("inv-image"),
+			agent.WithInvocationMessage(msg),
+		)
+		invocation.RunOptions.RuntimeState = graph.State{
+			graph.StateKeyUserInput: "stale",
+		}
+		graphAgent.setupInvocation(invocation)
+		state := graphAgent.createInitialState(context.Background(), invocation)
+		_, hasInput := state[graph.StateKeyUserInput]
+		require.False(t, hasInput)
+		require.NotContains(t, state, userinputkey.Baseline)
+		patch, ok := state[userinputkey.PatchKey].(userinputkey.Patch)
+		require.True(t, ok)
+		require.Empty(t, patch.Baseline)
+		require.True(t, patch.ClearUserInput)
+	})
+}
+
+func TestGraphAgent_ResumeSessionFilePreservesProcessorEnrichment(t *testing.T) {
+	const (
+		agentName    = "resume-session-file-agent"
+		lineageID    = "ln-resume-session-file"
+		checkpointID = "ck-resume-session-file"
+	)
+	userText := "please summarize"
+	filePart := model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			Name:     "notes.txt",
+			Data:     []byte("file-bytes"),
+			MimeType: "text/plain",
+		},
+	}
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &userText},
+			filePart,
+		},
+	}
+
+	var gotUserInput string
+	var gotBaseline string
+	var hasBaseline bool
+	var hasPatch bool
+	capture := &requestCaptureGraphAgentModel{}
+	g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddNode("inspect", func(_ context.Context, s graph.State) (any, error) {
+			gotUserInput, _ = s[graph.StateKeyUserInput].(string)
+			gotBaseline, hasBaseline = s[userinputkey.Baseline].(string)
+			_, hasPatch = s[userinputkey.PatchKey]
+			return nil, nil
+		}).
+		AddLLMNode("ask", capture, "You are a helpful assistant.", nil).
+		SetEntryPoint("inspect").
+		AddEdge("inspect", "ask").
+		SetFinishPoint("ask").
+		Compile()
+	require.NoError(t, err)
+
+	saver := checkpointinmemory.NewSaver()
+	seedGraphAgentResumeCheckpoint(t, saver, lineageID, agentName, checkpointID, "inspect", graph.State{
+		graph.StateKeyUserInput: "stale-checkpoint-text",
+		userinputkey.Baseline:   userinputkey.Fingerprint("stale-checkpoint-text"),
+		graph.StateKeyMessages: []model.Message{
+			model.NewUserMessage("stale-checkpoint-text"),
+		},
+	})
+
+	graphAgent, err := New(agentName, g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-resume-session-file"),
+		agent.WithInvocationSession(&session.Session{ID: "sid"}),
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRuntimeState(graph.State{
+				graph.CfgKeyLineageID:    lineageID,
+				graph.CfgKeyCheckpointNS: agentName,
+				graph.CfgKeyCheckpointID: checkpointID,
+			}),
+			graph.WithCallOptions(graph.WithCallResumeStateOverrideKeys(
+				graph.StateKeyUserInput,
+				graph.StateKeyMessages,
+			)),
+		)),
+	)
+	events, err := graphAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	durableUser := lastDurableUserMessage(t, events)
+
+	require.Equal(t, userText, gotUserInput)
+	require.True(t, hasBaseline)
+	require.Equal(t, userinputkey.Fingerprint(userText), gotBaseline)
+	require.False(t, hasPatch)
+	require.NotNil(t, capture.lastReq)
+	require.NotEmpty(t, capture.lastReq.Messages)
+	got := capture.lastReq.Messages[len(capture.lastReq.Messages)-1]
+	require.Equal(t, model.RoleUser, got.Role)
+	text := utilmessage.TextContent(got)
+	require.Contains(t, text, "Attached files")
+	require.Contains(t, text, "notes.txt")
+	require.Contains(t, text, userText)
+	require.NotContains(t, text, "stale-checkpoint-text")
+	require.True(t, hasFilePartNamed(got, "notes.txt"))
+	require.True(t, model.MessagesEqual(got, durableUser))
+}
+
+func TestGraphAgent_ResumePureMediaClearsStaleUserInput(t *testing.T) {
+	const (
+		agentName    = "resume-pure-media-agent"
+		lineageID    = "ln-resume-pure-media"
+		checkpointID = "ck-resume-pure-media"
+	)
+	imagePart := model.ContentPart{
+		Type:  model.ContentTypeImage,
+		Image: &model.Image{URL: "https://example.com/a.png"},
+	}
+	msg := model.Message{
+		Role:         model.RoleUser,
+		ContentParts: []model.ContentPart{imagePart},
+	}
+
+	var gotUserInput string
+	var hasUserInput bool
+	var hasBaseline bool
+	var hasPatch bool
+	capture := &requestCaptureGraphAgentModel{}
+	g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddNode("inspect", func(_ context.Context, s graph.State) (any, error) {
+			gotUserInput, hasUserInput = s[graph.StateKeyUserInput].(string)
+			_, hasBaseline = s[userinputkey.Baseline]
+			_, hasPatch = s[userinputkey.PatchKey]
+			return nil, nil
+		}).
+		AddLLMNode("ask", capture, "You are a helpful assistant.", nil).
+		SetEntryPoint("inspect").
+		AddEdge("inspect", "ask").
+		SetFinishPoint("ask").
+		Compile()
+	require.NoError(t, err)
+
+	saver := checkpointinmemory.NewSaver()
+	seedGraphAgentResumeCheckpoint(t, saver, lineageID, agentName, checkpointID, "inspect", graph.State{
+		graph.StateKeyUserInput: "stale-checkpoint-text",
+		userinputkey.Baseline:   userinputkey.Fingerprint("stale-checkpoint-text"),
+		graph.StateKeyMessages: []model.Message{
+			model.NewUserMessage("stale-checkpoint-text"),
+		},
+	})
+
+	graphAgent, err := New(agentName, g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-resume-pure-media"),
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRuntimeState(graph.State{
+				graph.CfgKeyLineageID:    lineageID,
+				graph.CfgKeyCheckpointNS: agentName,
+				graph.CfgKeyCheckpointID: checkpointID,
+			}),
+			graph.WithCallOptions(graph.WithCallResumeStateOverrideKeys(
+				graph.StateKeyUserInput,
+				graph.StateKeyMessages,
+			)),
+		)),
+	)
+	events, err := graphAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	durableUser := lastDurableUserMessage(t, events)
+
+	require.False(t, hasUserInput)
+	require.Empty(t, gotUserInput)
+	require.False(t, hasBaseline)
+	require.False(t, hasPatch)
+	require.NotNil(t, capture.lastReq)
+	require.NotEmpty(t, capture.lastReq.Messages)
+	got := capture.lastReq.Messages[len(capture.lastReq.Messages)-1]
+	require.Equal(t, model.RoleUser, got.Role)
+	require.Empty(t, got.Content)
+	require.Equal(t, msg.ContentParts, got.ContentParts)
+	require.NotContains(t, utilmessage.TextContent(got), "stale-checkpoint-text")
+	require.True(t, model.MessagesEqual(got, durableUser))
+}
+
+func seedGraphAgentResumeCheckpoint(
+	t *testing.T,
+	saver graph.CheckpointSaver,
+	lineageID, namespace, checkpointID, entryNode string,
+	values graph.State,
+) {
+	t.Helper()
+	ck := graph.NewCheckpoint(map[string]any(values), nil, nil)
+	ck.ID = checkpointID
+	ck.NextNodes = []string{entryNode}
+	_, err := saver.PutFull(context.Background(), graph.PutFullRequest{
+		Config:     graph.CreateCheckpointConfig(lineageID, checkpointID, namespace),
+		Checkpoint: ck,
+		Metadata:   graph.NewCheckpointMetadata(graph.CheckpointSourceInput, -1),
+	})
+	require.NoError(t, err)
 }
 
 func TestGraphAgent_PrepareNodeRewritesUserInputPreservesContentParts(t *testing.T) {
@@ -2487,6 +2787,8 @@ func lastDurableUserMessage(t *testing.T, events <-chan *event.Event) model.Mess
 		}
 	}
 	require.NotNil(t, completion)
+	require.NotContains(t, completion.StateDelta, userinputkey.Baseline)
+	require.NotContains(t, completion.StateDelta, userinputkey.PatchKey)
 	raw, ok := completion.StateDelta[graph.StateKeyMessages]
 	require.True(t, ok)
 	var msgs []model.Message

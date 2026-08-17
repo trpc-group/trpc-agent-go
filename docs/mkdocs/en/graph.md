@@ -962,6 +962,10 @@ Notes
   - When the last durable user message is multimodal and its text differs from
     `user_input`, the LLM node rewrites that message's text for both the model
     request and durable state, while preserving non-text `ContentParts`.
+    The rewrite is skipped when `user_input` still matches the invocation
+    baseline, which is how session-processor enrichment such as attached-file
+    annotations is preserved. It runs when a pre-LLM node changes
+    `user_input`, or when no baseline exists.
   - Use case: conversational flows where pre-nodes may adjust user input.
   - By default, the user input key is `StateKeyUserInput`. To read one-shot
     input from a different key, use `graph.WithUserInputKey(...)` on that node.

@@ -1671,14 +1671,19 @@ func TestExecutor_UpdateStateFromResult_CustomUserInputReducerKeepsBaseline(t *t
 
 func TestExecutor_UpdateStateFromResult_IgnoresBaselineWrite(t *testing.T) {
 	exec := &Executor{}
-	execCtx := &ExecutionContext{State: make(State)}
+	kept := userinputkey.Fingerprint("hello")
+	execCtx := &ExecutionContext{State: State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: kept,
+	}}
 
 	exec.updateStateFromResult(execCtx, State{
 		userinputkey.Baseline: userinputkey.Fingerprint("injected"),
 		"foo":                 "bar",
 	})
 
-	require.NotContains(t, execCtx.State, userinputkey.Baseline)
+	require.Equal(t, kept, execCtx.State[userinputkey.Baseline])
+	require.Equal(t, "hello", execCtx.State[StateKeyUserInput])
 	require.Equal(t, "bar", execCtx.State["foo"])
 }
 

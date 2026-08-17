@@ -18,11 +18,12 @@ import (
 // Baseline identifies the fingerprint of the raw invocation user input
 // captured before session processors enrich the corresponding user message.
 //
-// GraphAgent writes it into initial execution state. Checkpoints preserve it
-// across interruptions that happen before the LLM consumes user_input. After
-// a successful user-input stage the executor deletes it so later rewrite
-// decisions and subsequent checkpoints cannot see a stale fingerprint. It is
-// never exposed in completion events or child-agent RuntimeState.
+// GraphAgent writes it into initial execution state and into Patch for
+// authorized checkpoint restore. Checkpoints preserve it across
+// interruptions that happen before the LLM consumes user_input. After a
+// successful user-input stage the executor deletes it so later rewrite
+// decisions and subsequent checkpoints cannot see a stale fingerprint. It
+// is never exposed in completion events or child-agent RuntimeState.
 const Baseline = "__user_input_baseline_fingerprint__"
 
 // Fingerprint returns a stable, non-plaintext user-input fingerprint suitable

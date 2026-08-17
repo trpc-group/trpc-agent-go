@@ -498,7 +498,12 @@ func applyUserInvocationInput(
 	invocation *agent.Invocation,
 	isResuming bool,
 ) {
-	if invocation == nil {
+	if initialState != nil {
+		// Never trust caller-supplied invocation-input metadata.
+		delete(initialState, userinputkey.PatchKey)
+		delete(initialState, userinputkey.Baseline)
+	}
+	if invocation == nil || initialState == nil {
 		return
 	}
 	msg := invocation.Message
@@ -516,16 +521,33 @@ func applyUserInvocationInput(
 	// Keep user_input raw for pre-LLM nodes, and record its private baseline so
 	// the LLM can distinguish processor enrichment from an intentional rewrite.
 	// Content-only input deliberately keeps the legacy behavior.
+	var patch userinputkey.Patch
+	hasInvocationInput := false
 	if invocation.Session != nil && msg.Content == "" &&
 		len(msg.ContentParts) > 0 && userInput != "" {
-		initialState[userinputkey.Baseline] = userinputkey.Fingerprint(userInput)
+		fp := userinputkey.Fingerprint(userInput)
+		initialState[userinputkey.Baseline] = fp
+		patch.Baseline = fp
+		hasInvocationInput = true
 	}
 	if userInput != "" {
 		initialState[graph.StateKeyUserInput] = userInput
+		hasInvocationInput = true
 	} else if model.HasPayload(msg) {
 		// Payload-only input must not keep inherited text user_input, or
 		// llmRunner takes the stale text path and drops ContentParts.
+		// Absence is not a resume deletion; the patch tombstone is.
 		delete(initialState, graph.StateKeyUserInput)
+		patch.ClearUserInput = true
+		hasInvocationInput = true
+	}
+	// Write the patch only for this invocation's input decision. A
+	// zero-value Baseline still matters on authorized restore: it drops a
+	// stale fingerprint when the current turn recorded none. Empty
+	// no-payload messages are not an input decision and must not tombstone
+	// restored Baseline.
+	if hasInvocationInput {
+		initialState[userinputkey.PatchKey] = patch
 	}
 	if invocation.Session != nil || len(msg.ContentParts) == 0 {
 		return

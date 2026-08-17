@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -544,6 +545,259 @@ func TestExecutor_Resume_RuntimeStateOverrideKeysOverrideCheckpoint(t *testing.T
 	require.Equal(t, "runtime", restored["override"])
 	require.Equal(t, "runtime", restored["added"])
 }
+
+func TestExecutor_Resume_InvocationInputPatchAuthorization(t *testing.T) {
+	const (
+		lineageID = "ln-invocation-patch"
+		namespace = "ns-invocation-patch"
+		checkID   = "ck-invocation-patch"
+	)
+	staleFP := userinputkey.Fingerprint("stale")
+	currentFP := userinputkey.Fingerprint("please summarize")
+	imageMsg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			Type:  model.ContentTypeImage,
+			Image: &model.Image{URL: "https://example.com/a.png"},
+		}},
+	}
+	fileMsg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: strPtr("please summarize\nAttached files (1): notes.txt")},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{Name: "notes.txt", Data: []byte("x")},
+			},
+		},
+	}
+
+	g, err := NewStateGraph(MessagesStateSchema()).
+		AddNode("noop", func(context.Context, State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("noop").
+		SetFinishPoint("noop").
+		Compile()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		overrideKeys    []string
+		initial         State
+		wantUserInput   any
+		wantHasInput    bool
+		wantBaseline    any
+		wantHasBaseline bool
+		wantLastMsg     *model.Message
+	}{
+		{
+			name: "both keys install current baseline",
+			overrideKeys: []string{
+				StateKeyUserInput,
+				StateKeyMessages,
+			},
+			initial: State{
+				StateKeyUserInput: "please summarize",
+				StateKeyMessages:  []model.Message{fileMsg},
+				userinputkey.PatchKey: userinputkey.Patch{
+					Baseline: currentFP,
+				},
+			},
+			wantUserInput:   "please summarize",
+			wantHasInput:    true,
+			wantBaseline:    currentFP,
+			wantHasBaseline: true,
+			wantLastMsg:     &fileMsg,
+		},
+		{
+			name: "both keys tombstone stale user_input",
+			overrideKeys: []string{
+				StateKeyUserInput,
+				StateKeyMessages,
+			},
+			initial: State{
+				StateKeyMessages: []model.Message{imageMsg},
+				userinputkey.PatchKey: userinputkey.Patch{
+					ClearUserInput: true,
+				},
+			},
+			wantHasInput:    false,
+			wantHasBaseline: false,
+			wantLastMsg:     &imageMsg,
+		},
+		{
+			name:         "no override keeps checkpoint values",
+			overrideKeys: nil,
+			initial: State{
+				StateKeyUserInput: "please summarize",
+				StateKeyMessages:  []model.Message{fileMsg},
+				userinputkey.PatchKey: userinputkey.Patch{
+					Baseline:       currentFP,
+					ClearUserInput: true,
+				},
+			},
+			wantUserInput:   "stale",
+			wantHasInput:    true,
+			wantBaseline:    staleFP,
+			wantHasBaseline: true,
+		},
+		{
+			name:         "user_input only does not install current baseline",
+			overrideKeys: []string{StateKeyUserInput},
+			initial: State{
+				StateKeyUserInput: "please summarize",
+				StateKeyMessages:  []model.Message{fileMsg},
+				userinputkey.PatchKey: userinputkey.Patch{
+					Baseline: currentFP,
+				},
+			},
+			wantUserInput:   "please summarize",
+			wantHasInput:    true,
+			wantHasBaseline: false,
+		},
+		{
+			name:         "messages only keeps restored baseline",
+			overrideKeys: []string{StateKeyMessages},
+			initial: State{
+				StateKeyUserInput: "please summarize",
+				StateKeyMessages:  []model.Message{fileMsg},
+				userinputkey.PatchKey: userinputkey.Patch{
+					Baseline: currentFP,
+				},
+			},
+			wantUserInput:   "stale",
+			wantHasInput:    true,
+			wantBaseline:    staleFP,
+			wantHasBaseline: true,
+			wantLastMsg:     &fileMsg,
+		},
+		{
+			name:         "user_input only applies tombstone without current baseline",
+			overrideKeys: []string{StateKeyUserInput},
+			initial: State{
+				StateKeyMessages: []model.Message{imageMsg},
+				userinputkey.PatchKey: userinputkey.Patch{
+					Baseline:       currentFP,
+					ClearUserInput: true,
+				},
+			},
+			wantHasInput:    false,
+			wantHasBaseline: false,
+		},
+		{
+			name: "internal override keys are not globally writable",
+			overrideKeys: []string{
+				userinputkey.Baseline,
+				userinputkey.PatchKey,
+			},
+			initial: State{
+				userinputkey.Baseline: currentFP,
+				userinputkey.PatchKey: userinputkey.Patch{
+					Baseline:       currentFP,
+					ClearUserInput: true,
+				},
+			},
+			wantUserInput:   "stale",
+			wantHasInput:    true,
+			wantBaseline:    staleFP,
+			wantHasBaseline: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			saver := newMockSaver()
+			ck := NewCheckpoint(
+				map[string]any{
+					StateKeyUserInput:     "stale",
+					userinputkey.Baseline: staleFP,
+					StateKeyMessages: []model.Message{
+						model.NewUserMessage("stale"),
+					},
+				},
+				map[string]int64{},
+				nil,
+			)
+			ck.ID = checkID
+			cfg := CreateCheckpointConfig(lineageID, checkID, namespace)
+			saver.byID[lineageID+":"+namespace+":"+checkID] = &CheckpointTuple{
+				Config:     cfg,
+				Checkpoint: ck,
+				Metadata:   NewCheckpointMetadata(CheckpointSourceInput, -1),
+			}
+
+			exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+			require.NoError(t, err)
+
+			inv := &agent.Invocation{InvocationID: "inv-invocation-patch"}
+			if len(tt.overrideKeys) > 0 {
+				WithCallOptions(WithCallResumeStateOverrideKeys(tt.overrideKeys...))(&inv.RunOptions)
+			}
+
+			initial := State{
+				CfgKeyLineageID:    lineageID,
+				CfgKeyCheckpointNS: namespace,
+				CfgKeyCheckpointID: checkID,
+			}
+			for k, v := range tt.initial {
+				initial[k] = v
+			}
+
+			restored, _, resumed, _, _, _, err := exec.resumeOrInitWithSaver(
+				context.Background(),
+				initial,
+				inv,
+			)
+			require.NoError(t, err)
+			require.True(t, resumed)
+			require.NotContains(t, restored, userinputkey.PatchKey)
+			require.Contains(t, initial, userinputkey.PatchKey)
+
+			gotInput, hasInput := restored[StateKeyUserInput]
+			require.Equal(t, tt.wantHasInput, hasInput)
+			if tt.wantHasInput {
+				require.Equal(t, tt.wantUserInput, gotInput)
+			}
+			gotBaseline, hasBaseline := restored[userinputkey.Baseline]
+			require.Equal(t, tt.wantHasBaseline, hasBaseline)
+			if tt.wantHasBaseline {
+				require.Equal(t, tt.wantBaseline, gotBaseline)
+			}
+			if tt.wantLastMsg != nil {
+				msgs, ok := restored[StateKeyMessages].([]model.Message)
+				require.True(t, ok)
+				require.NotEmpty(t, msgs)
+				require.True(t, model.MessagesEqual(msgs[len(msgs)-1], *tt.wantLastMsg))
+			}
+		})
+	}
+}
+
+func TestExecutor_InitializeState_StripsInvocationInputPatch(t *testing.T) {
+	g, err := NewStateGraph(MessagesStateSchema()).
+		AddNode("noop", func(context.Context, State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("noop").
+		SetFinishPoint("noop").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	fp := userinputkey.Fingerprint("hello")
+	got := exec.initializeState(State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: fp,
+		userinputkey.PatchKey: userinputkey.Patch{Baseline: fp},
+	})
+	require.Equal(t, "hello", got[StateKeyUserInput])
+	require.Equal(t, fp, got[userinputkey.Baseline])
+	require.NotContains(t, got, userinputkey.PatchKey)
+}
+
+func strPtr(s string) *string { return &s }
 
 // Interrupt test to cover handleInterrupt path
 func TestExecutor_HandleInterrupt(t *testing.T) {

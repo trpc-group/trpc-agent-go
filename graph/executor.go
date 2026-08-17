@@ -638,6 +638,7 @@ func (e *Executor) resumeOrInitWithSaver(
 		initialState,
 		resumeStateOverrideKeys,
 	)
+	e.applyInvocationInputPatch(restored, initialState, resumeStateOverrideKeys)
 
 	resumedStep := 0
 	if tuple.Metadata != nil {
@@ -726,6 +727,64 @@ func (e *Executor) mergeInitialStateNonInternal(
 		}
 	}
 	return restored
+}
+
+// applyInvocationInputPatch applies GraphAgent's current-invocation input
+// metadata after the public resume merge. Underscore-prefixed keys are not
+// globally writable on resume; this patch is executor-owned and is applied
+// only when the corresponding public override keys are authorized.
+//
+// Baseline is installed only when both messages and user_input are
+// authorized, so it stays aligned with the current durable last user
+// message. Authorizing only user_input drops a stale restored Baseline
+// without installing the current one. Authorizing only messages leaves
+// the restored Baseline paired with the restored user_input.
+func (e *Executor) applyInvocationInputPatch(
+	restored,
+	initial State,
+	resumeStateOverrideKeys map[string]struct{},
+) {
+	if restored == nil {
+		return
+	}
+	delete(restored, userinputkey.PatchKey)
+	if initial == nil {
+		return
+	}
+	patch, ok := initial[userinputkey.PatchKey].(userinputkey.Patch)
+	if !ok {
+		return
+	}
+	userInputAuthorized := resumeOverrideAuthorized(
+		resumeStateOverrideKeys,
+		StateKeyUserInput,
+	)
+	messagesAuthorized := resumeOverrideAuthorized(
+		resumeStateOverrideKeys,
+		StateKeyMessages,
+	)
+	if userInputAuthorized && patch.ClearUserInput {
+		delete(restored, StateKeyUserInput)
+	}
+	switch {
+	case userInputAuthorized && messagesAuthorized:
+		if patch.Baseline != "" {
+			restored[userinputkey.Baseline] = patch.Baseline
+		} else {
+			delete(restored, userinputkey.Baseline)
+		}
+	case userInputAuthorized:
+		// New user_input does not correspond to the restored last message.
+		delete(restored, userinputkey.Baseline)
+	}
+}
+
+func resumeOverrideAuthorized(keys map[string]struct{}, key string) bool {
+	if len(keys) == 0 || key == "" {
+		return false
+	}
+	_, ok := keys[key]
+	return ok
 }
 
 // applyExecutableNextNodes sets StateKeyNextNodes when suitable.
@@ -1914,6 +1973,9 @@ func (e *Executor) initializeState(initialState State) State {
 			}
 		}
 	}
+	// Patch is resume-only metadata. First-run Baseline is already on
+	// initial state; do not leak the patch into execution or checkpoints.
+	delete(execState, userinputkey.PatchKey)
 	return execState
 }
 
