@@ -13,7 +13,79 @@ import (
 	"net/url"
 	"path"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
+
+func outputGlobFinding(deniedPaths []string, value string) (Finding, bool) {
+	patterns := codeexecutor.NormalizeGlobs([]string{value})
+	if len(patterns) == 0 {
+		return Finding{}, false
+	}
+	normalized := patterns[0]
+	pattern := path.Clean(normalized)
+	if finding, denied := deniedPathFinding(deniedPaths, pattern); denied {
+		return finding, true
+	}
+	if pattern == "." || strings.Contains(normalized, "\\") {
+		return broadOutputGlobFinding()
+	}
+	meta := strings.IndexAny(pattern, "*?[{")
+	if meta < 0 {
+		return Finding{}, false
+	}
+	if strings.HasPrefix(pattern, codeexecutor.DirOut+"/") {
+		if finding, denied := deniedOutputGlobPrefixFinding(
+			deniedPaths, pattern[:meta],
+		); denied {
+			return finding, true
+		}
+		if !strings.ContainsAny(pattern, "{\\") {
+			return Finding{}, false
+		}
+	}
+	return broadOutputGlobFinding()
+}
+
+func broadOutputGlobFinding() (Finding, bool) {
+	return newFinding(
+		DecisionNeedsHumanReview,
+		RiskHigh,
+		"sensitive.output_glob",
+		"output glob can collect files outside the dedicated output directory",
+		"scope output collection to out/ or review every matched file",
+	), true
+}
+
+func deniedOutputGlobPrefixFinding(
+	deniedPaths []string,
+	literalPrefix string,
+) (Finding, bool) {
+	lastSlash := strings.LastIndex(literalPrefix, "/")
+	if lastSlash < 0 {
+		return Finding{}, false
+	}
+	directory := normalizePath(literalPrefix[:lastSlash])
+	for _, value := range deniedPaths {
+		denied := normalizePath(value)
+		if denied != codeexecutor.DirOut &&
+			!strings.HasPrefix(denied, codeexecutor.DirOut+"/") {
+			continue
+		}
+		if directory == denied ||
+			strings.HasPrefix(directory, denied+"/") ||
+			strings.HasPrefix(denied, directory+"/") {
+			return newFinding(
+				DecisionDeny,
+				RiskHigh,
+				"sensitive.path",
+				"output glob can match denied_paths: "+denied,
+				"narrow the output glob to exclude denied_paths",
+			), true
+		}
+	}
+	return Finding{}, false
+}
 
 func scanPaths(policy Policy, cwd string, segments [][]string) []Finding {
 	if finding, ok := deniedPathFinding(policy.DeniedPaths, cwd); ok {

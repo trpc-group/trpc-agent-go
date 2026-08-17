@@ -363,30 +363,37 @@ func parallelism(argv []string) int {
 		return 0
 	}
 	base := commandBase(argv[0])
+	if base == "xargs" {
+		return xargsParallelism(argv[1:])
+	}
 	goTest := isGoTestCommand(argv)
 	maximum := 0
 	for i, arg := range argv[1:] {
-		lower := strings.ToLower(arg)
-		if value, ok := attachedParallelism(base, goTest, lower); ok {
-			if value == 0 && (base == "make" || base == "ninja") {
+		if value, ok := attachedParallelism(base, goTest, arg); ok {
+			if value == 0 && zeroParallelismIsUnbounded(base) {
 				return 33
 			}
 			maximum = max(maximum, value)
 			continue
 		}
-		if value, ok := longParallelism(goTest, lower); ok {
-			if value == 0 && (base == "make" || base == "ninja") {
+		if value, ok := longParallelism(goTest, arg); ok {
+			if value == 0 && zeroParallelismIsUnbounded(base) {
 				return 33
 			}
 			maximum = max(maximum, value)
 			continue
 		}
-		if separateParallelismOption(base, goTest, lower) {
+		if separateParallelismOption(base, goTest, arg) {
 			if i+2 < len(argv) {
 				value, err := strconv.Atoi(argv[i+2])
-				if err == nil && value > 0 {
-					maximum = max(maximum, value)
-					continue
+				if err == nil {
+					if value == 0 && zeroParallelismIsUnbounded(base) {
+						return 33
+					}
+					if value > 0 {
+						maximum = max(maximum, value)
+						continue
+					}
 				}
 			}
 			if base == "make" || base == "ninja" {
@@ -397,9 +404,99 @@ func parallelism(argv []string) int {
 	return maximum
 }
 
+func xargsParallelism(args []string) int {
+	maximum := 0
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		value, separate, ok := xargsParallelismOption(arg)
+		if ok {
+			if separate {
+				if i+1 >= len(args) {
+					continue
+				}
+				i++
+				value = args[i]
+			}
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				continue
+			}
+			if parsed == 0 {
+				return 33
+			}
+			maximum = max(maximum, parsed)
+			continue
+		}
+		if xargsOptionConsumesNext(arg) && i+1 < len(args) {
+			i++
+		}
+	}
+	return maximum
+}
+
+func xargsParallelismOption(arg string) (string, bool, bool) {
+	if arg == "--max-procs" {
+		return "", true, true
+	}
+	if strings.HasPrefix(arg, "--max-procs=") {
+		return strings.TrimPrefix(arg, "--max-procs="), false, true
+	}
+	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		return "", false, false
+	}
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case 'P':
+			if i+1 == len(arg) {
+				return "", true, true
+			}
+			return arg[i+1:], false, true
+		case 'a', 'd', 'E', 'I', 'L', 'n', 's', 'e', 'i', 'l':
+			return "", false, false
+		case '0', 'o', 'p', 'r', 't', 'x':
+			continue
+		default:
+			return "", false, false
+		}
+	}
+	return "", false, false
+}
+
+func xargsOptionConsumesNext(arg string) bool {
+	switch arg {
+	case "--arg-file", "--delimiter", "--max-args", "--max-procs",
+		"--max-chars", "--process-slot-var":
+		return true
+	}
+	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		return false
+	}
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case 'a', 'd', 'E', 'I', 'L', 'n', 'P', 's':
+			return i+1 == len(arg)
+		case 'e', 'i', 'l':
+			return false
+		case '0', 'o', 'p', 'r', 't', 'x':
+			continue
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func zeroParallelismIsUnbounded(base string) bool {
+	return base == "make" || base == "ninja"
+}
+
 func attachedParallelism(base string, goTest bool, arg string) (int, bool) {
-	parallel := strings.HasPrefix(arg, "-p") && (base == "xargs" || goTest)
-	jobs := strings.HasPrefix(arg, "-j") && (base == "make" || base == "ninja")
+	lower := strings.ToLower(arg)
+	parallel := goTest && strings.HasPrefix(lower, "-p")
+	jobs := strings.HasPrefix(lower, "-j") && (base == "make" || base == "ninja")
 	if (!parallel && !jobs) || len(arg) <= 2 {
 		return 0, false
 	}
@@ -408,24 +505,26 @@ func attachedParallelism(base string, goTest bool, arg string) (int, bool) {
 }
 
 func longParallelism(goTest bool, arg string) (int, bool) {
-	long := strings.HasPrefix(arg, "--jobs=") || strings.HasPrefix(arg, "--parallel=")
-	goParallel := goTest && strings.HasPrefix(arg, "-parallel=")
+	lower := strings.ToLower(arg)
+	long := strings.HasPrefix(lower, "--jobs=") || strings.HasPrefix(lower, "--parallel=")
+	goParallel := goTest && strings.HasPrefix(lower, "-parallel=")
 	if !long && !goParallel {
 		return 0, false
 	}
-	value, _ := strconv.Atoi(strings.SplitN(arg, "=", 2)[1])
-	return value, true
+	value, err := strconv.Atoi(strings.SplitN(arg, "=", 2)[1])
+	return value, err == nil
 }
 
 func separateParallelismOption(base string, goTest bool, arg string) bool {
-	if arg == "-p" && (base == "xargs" || goTest) {
+	lower := strings.ToLower(arg)
+	if goTest && lower == "-p" {
 		return true
 	}
-	if arg == "-j" && (base == "make" || base == "ninja") {
+	if lower == "-j" && (base == "make" || base == "ninja") {
 		return true
 	}
-	return arg == "--jobs" || arg == "--parallel" ||
-		(arg == "-parallel" && goTest)
+	return lower == "--jobs" || lower == "--parallel" ||
+		(lower == "-parallel" && goTest)
 }
 
 func isGoTestCommand(argv []string) bool {

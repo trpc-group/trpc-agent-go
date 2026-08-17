@@ -39,6 +39,7 @@ type decodedPermissionRequest struct {
 	executableStdin  string
 	sensitiveContent []string
 	paths            []string
+	outputGlobs      []string
 	additionalArgs   json.RawMessage
 }
 
@@ -487,9 +488,9 @@ func decodeSkillExecution(
 			decoded.paths, skillInputPath(input.From), input.To,
 		)
 	}
-	decoded.paths = append(decoded.paths, in.OutputFiles...)
+	decoded.outputGlobs = append(decoded.outputGlobs, in.OutputFiles...)
 	if in.Outputs != nil {
-		decoded.paths = append(decoded.paths, in.Outputs.Globs...)
+		decoded.outputGlobs = append(decoded.outputGlobs, in.Outputs.Globs...)
 	}
 	return decoded, true, nil
 }
@@ -682,6 +683,13 @@ func scanDecodedPermissionRequest(
 		if finding, denied := deniedPathFinding(
 			guard.policy.DeniedPaths, candidate,
 		); denied {
+			report = appendDecodedFinding(report, finding)
+		}
+	}
+	for _, pattern := range req.outputGlobs {
+		if finding, unsafe := outputGlobFinding(
+			guard.policy.DeniedPaths, pattern,
+		); unsafe {
 			report = appendDecodedFinding(report, finding)
 		}
 	}

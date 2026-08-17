@@ -1242,6 +1242,59 @@ func TestGuardDetectsGoTestPackageParallelism(t *testing.T) {
 	}
 }
 
+func TestGuardDetectsUnboundedXargsParallelism(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, command := range []string{
+		"xargs -P0 echo",
+		"xargs -P 0 echo",
+		"xargs -rP0 echo",
+		"xargs -E -- -P0 echo",
+		"xargs -rE -- --max-procs=0 echo",
+		"xargs --max-procs=0 echo",
+		"xargs --max-procs 0 echo",
+	} {
+		report := guard.Scan(safety.Request{Command: command})
+		require.Equal(t, safety.DecisionDeny, report.Decision, command)
+		var concurrency *safety.Finding
+		for index := range report.Findings {
+			if report.Findings[index].RuleID == "resource.concurrency" {
+				concurrency = &report.Findings[index]
+				break
+			}
+		}
+		require.NotNil(t, concurrency, command)
+		require.Equal(t, safety.DecisionNeedsHumanReview, concurrency.Decision, command)
+		require.Equal(t, safety.RiskHigh, concurrency.RiskLevel, command)
+	}
+}
+
+func TestGuardDoesNotMisclassifyXargsArgumentsAsParallelism(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, command := range []string{
+		"xargs --max-procs=bogus echo",
+		"xargs --max-procs= echo",
+		"xargs --jobs=0 echo",
+		"xargs --parallel=0 echo",
+		"xargs -p0 echo",
+		"xargs -p 0 echo",
+		"xargs -p64 echo",
+		"xargs -p 64 echo",
+		"xargs --MAX-PROCS=64 echo",
+		"xargs --MAX-PROCS 64 echo",
+		"xargs -- echo -P0",
+		"xargs -- echo --max-procs=0",
+		"xargs -E -P0 echo",
+		"xargs -E-P0 echo",
+		"xargs -rp0 echo",
+	} {
+		report := guard.Scan(safety.Request{Command: command})
+		require.Equal(t, safety.DecisionDeny, report.Decision, command)
+		for _, finding := range report.Findings {
+			require.NotEqual(t, "resource.concurrency", finding.RuleID, command)
+		}
+	}
+}
+
 func TestGuardEnforcesResourcePolicy(t *testing.T) {
 	guard := mustGuard(t, safety.DefaultPolicy())
 	tests := []struct {

@@ -984,6 +984,190 @@ func TestPermissionPolicyScansPathBearingArguments(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyReviewsBroadSkillOutputGlob(t *testing.T) {
+	policy := NewPermissionPolicy(mustPermissionGuard(t, DefaultPolicy()))
+	runTool := skilltool.NewRunTool(nil, nil)
+
+	for _, tc := range []struct {
+		name      string
+		arguments string
+		want      tool.PermissionAction
+		wantRule  string
+	}{
+		{
+			name: "workspace-wide glob",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["**"],"save":true}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "legacy workspace-wide glob",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"output_files":["**"]}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "workspace root",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["."],"save":true}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "legacy workspace root",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"output_files":["."]}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "workspace directory variable",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["$WORKSPACE_DIR"],"save":true}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "dedicated output directory",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["$OUTPUT_DIR/**"],"save":true}}`,
+			want: tool.PermissionActionAllow,
+		},
+		{
+			name: "ambiguous output separator",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["out\\**"],"save":true}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "windows workspace-root traversal",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["out\\.."],"save":true}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "legacy windows workspace-root traversal",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"output_files":["out\\.."]}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "wildcard attached to output prefix",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["out*/**"],"save":true}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "alternation attached to output prefix",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["out{,side}/**"],"save":true}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "alternation traverses output prefix",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["out/{../,}**"],"save":true}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "adjacent alternations synthesize traversal",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["out/{.}{.}/**"],"save":true}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "backslash traversal under output prefix",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["out/\\../**"],"save":true}}`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "sensitive.output_glob",
+		},
+		{
+			name: "dots in output filename",
+			arguments: `{"skill":"demo","command":"go test",` +
+				`"outputs":{"globs":["out/report..*.json"],"save":true}}`,
+			want: tool.PermissionActionAllow,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{Tool: runTool, Arguments: []byte(tc.arguments)},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyAppliesDeniedPathsToSkillOutputGlob(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.DeniedPaths = []string{"out/private"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+	runTool := skilltool.NewRunTool(nil, nil)
+
+	for _, glob := range []string{
+		"$OUTPUT_DIR/**",
+		"out/{private,safe}/**",
+	} {
+		t.Run(glob, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					Tool: runTool,
+					Arguments: mustJSON(t, map[string]any{
+						"skill":   "demo",
+						"command": "go test",
+						"outputs": map[string]any{
+							"globs": []string{glob},
+							"save":  true,
+						},
+					}),
+				},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, "sensitive.path")
+		})
+	}
+
+	guardPolicy.DeniedPaths = []string{"."}
+	policy = NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+	for _, glob := range []string{".", "$WORKSPACE_DIR"} {
+		t.Run(glob, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					Tool: runTool,
+					Arguments: mustJSON(t, map[string]any{
+						"skill":   "demo",
+						"command": "go test",
+						"outputs": map[string]any{
+							"globs": []string{glob},
+							"save":  true,
+						},
+					}),
+				},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, "sensitive.path")
+		})
+	}
+}
+
 func TestPermissionPolicyAuditEventIsCompleteAndSecretMinimizing(t *testing.T) {
 	sink := &recordingAuditSink{}
 	policy := NewPermissionPolicy(mustPermissionGuard(t, DefaultPolicy()), WithAuditSink(sink))

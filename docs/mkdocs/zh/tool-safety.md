@@ -67,8 +67,10 @@ Guard 复用 `internal/shellsafe`，只解析一次命令结构，再对参数�
 所有变量、alias、source 文件或运行时生成的命令。
 
 Permission 扫描还会把解释器 stdin 和 `-f -` stdin 作为可执行内容处理，
-跨命令参数边界扫描凭据形态的值，检查路径类参数与 Skill 输出 glob，并复核
-会选择 alias、hook、helper 或外部程序的 Git 配置。AWK 内联程序中的进程桥接
+跨命令参数边界扫描凭据形态的值，并检查路径类参数与 Skill 输出 glob。显式命中
+禁止路径时会直接拦截；宽泛输出 glob 只有限定在专用 `out/` 目录下才会放行，
+否则需要人工复核。扫描器还会复核选择 alias、hook、helper 或外部程序的 Git
+配置。AWK 内联程序中的进程桥接
 以及 SSH 的 `LocalCommand`、`KnownHostsCommand` 都属于命令间接执行：字面量
 嵌套命令复用相同的命令策略扫描，动态或无法明确解析的形式进入人工复核。
 如果 Tool metadata 声明 destructive，即使 schema 中没有可识别的执行字段也

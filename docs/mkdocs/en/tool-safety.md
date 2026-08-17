@@ -80,8 +80,10 @@ all expansions, aliases, sourced files or runtime-generated commands.
 
 Permission scanning also treats interpreter and `-f -` stdin as executable
 content, scans credential-shaped values across command argument boundaries,
-checks path-bearing arguments and Skill output globs, and reviews Git
-configuration that selects aliases, hooks, helpers or external programs.
+and checks path-bearing arguments and Skill output globs. Explicit denied paths
+are blocked; broad output globs require review unless they are scoped beneath
+the dedicated `out/` directory. The scanner also reviews Git configuration
+that selects aliases, hooks, helpers or external programs.
 Inline AWK process bridges and SSH `LocalCommand` or `KnownHostsCommand`
 options are command indirection: literal nested commands are scanned by the
 same command policy, while dynamic or ambiguous forms require review. A tool
