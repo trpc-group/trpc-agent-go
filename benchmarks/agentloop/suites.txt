@@ -1,0 +1,15 @@
+# suite|module directory|package|benchmark regular expression
+agent-loop-core|.|./internal/flow/llmflow|^BenchmarkStreamingResponseProcessorUpdateMetricsState$
+agent-loop-core|.|./internal/flow/processor|^BenchmarkParallelInvocationView$
+
+agent-loop|.|./agent|^BenchmarkCallbacksRunBeforeAgent$
+agent-loop|.|./event|^BenchmarkEmitEventWithTimeout
+agent-loop|.|./internal/flow/llmflow|^BenchmarkGenerateContentSeq$
+agent-loop|.|./internal/flow/processor|^Benchmark(ContentRequestProcessorProcessRequest|ContextCompaction|ParallelInvocationViewBatch|ParallelInvocationViewWithSession)$
+agent-loop|.|./internal/state/summaryfork|^Benchmark(Attach|Request)$
+agent-loop|.|./internal/state/summaryview|^Benchmark(Finalize|Snapshot)$
+agent-loop|.|./internal/telemetry|^BenchmarkTraceChatStreamingRequestAttributes
+agent-loop|.|./model|^BenchmarkCallbacksRunBeforeModel$
+agent-loop|.|./runner|^BenchmarkRunnerAgentLoop$
+agent-loop|.|./session/inmemory|^BenchmarkAppendEvent$
+agent-loop|.|./tool|^BenchmarkCallbacksRunBeforeTool$

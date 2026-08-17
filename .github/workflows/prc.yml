@@ -452,3 +452,134 @@ jobs:
       - name: Validate go.mod version strings
         shell: bash
         run: bash .github/scripts/check-go-mod-version.sh
+  benchmark-smoke:
+    name: benchmark smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "${{ env.EXAMPLES_GO_VERSION }}"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            **/go.mod
+            **/go.sum
+      - name: Run all benchmarks once
+        shell: bash
+        run: |
+          .github/scripts/run-go-benchmarks.sh \
+            --suite all \
+            --mode smoke \
+            --output benchmark-smoke.txt
+      - name: Upload benchmark smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-smoke
+          path: benchmark-smoke.txt
+          if-no-files-found: warn
+  benchmark-allocation-guard:
+    name: benchmark allocation guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+      - name: Test allocation guard
+        run: go test ./.github/scripts/benchguard
+      - name: Measure stable Agent Loop allocations
+        shell: bash
+        run: |
+          .github/scripts/run-go-benchmarks.sh \
+            --suite agent-loop-core \
+            --mode measure \
+            --count 3 \
+            --benchtime 200ms \
+            --output benchmark-core.txt
+      - name: Enforce allocation budgets
+        run: |
+          go run ./.github/scripts/benchguard \
+            -input benchmark-core.txt \
+            -budgets benchmarks/agentloop/budgets.json
+      - name: Upload core benchmark output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-core
+          path: benchmark-core.txt
+          if-no-files-found: warn
+  benchmark-report:
+    name: benchmark report
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out base revision
+        uses: actions/checkout@v4
+        with:
+          repository: "${{ github.event.pull_request.base.repo.full_name }}"
+          ref: "${{ github.event.pull_request.base.sha }}"
+          path: base
+      - name: Check out head revision
+        uses: actions/checkout@v4
+        with:
+          repository: "${{ github.event.pull_request.head.repo.full_name }}"
+          ref: "${{ github.event.pull_request.head.sha }}"
+          path: head
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache-dependency-path: |
+            base/go.mod
+            base/go.sum
+            head/go.mod
+            head/go.sum
+      - name: Measure base revision
+        shell: bash
+        run: |
+          head/.github/scripts/run-go-benchmarks.sh \
+            --repo base \
+            --suite agent-loop \
+            --mode measure \
+            --count 6 \
+            --benchtime 200ms \
+            --output benchmark-base.txt \
+            --keep-going
+      - name: Measure head revision
+        shell: bash
+        run: |
+          head/.github/scripts/run-go-benchmarks.sh \
+            --repo head \
+            --suite agent-loop \
+            --mode measure \
+            --count 6 \
+            --benchtime 200ms \
+            --output benchmark-head.txt
+      - name: Compare revisions
+        shell: bash
+        run: |
+          go run golang.org/x/perf/cmd/benchstat@v0.0.0-20240510023725-bedb9135df6d \
+            benchmark-base.txt benchmark-head.txt | tee benchstat.txt
+          {
+            echo "## Agent Loop benchmark"
+            echo '```text'
+            cat benchstat.txt
+            echo '```'
+          } >>"${GITHUB_STEP_SUMMARY}"
+      - name: Upload benchmark comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: |
+            benchmark-base.txt
+            benchmark-head.txt
+            benchstat.txt
+          if-no-files-found: warn

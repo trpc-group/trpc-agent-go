@@ -1,0 +1,68 @@
+name: Agent Loop Benchmark
+
+on:
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ROOT_GO_VERSION: "1.21"
+  BENCHSTAT_VERSION: "v0.0.0-20240510023725-bedb9135df6d"
+
+jobs:
+  benchmark:
+    name: benchmark and profile
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+      - name: Measure Agent Loop suite
+        shell: bash
+        run: |
+          .github/scripts/run-go-benchmarks.sh \
+            --suite agent-loop \
+            --mode measure \
+            --count 10 \
+            --benchtime 1s \
+            --output benchmark-nightly.txt
+      - name: Summarize measurements
+        shell: bash
+        run: |
+          go run golang.org/x/perf/cmd/benchstat@"${BENCHSTAT_VERSION}" \
+            benchmark-nightly.txt | tee benchstat-nightly.txt
+          {
+            echo "## Agent Loop nightly benchmark"
+            echo '```text'
+            cat benchstat-nightly.txt
+            echo '```'
+          } >>"${GITHUB_STEP_SUMMARY}"
+      - name: Capture core profiles
+        shell: bash
+        run: |
+          .github/scripts/run-go-benchmarks.sh \
+            --suite agent-loop-core \
+            --mode profile \
+            --benchtime 5s \
+            --output benchmark-profile.txt \
+            --profile-dir benchmark-profiles
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-loop-benchmark-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            benchmark-nightly.txt
+            benchstat-nightly.txt
+            benchmark-profile.txt
+            benchmark-profiles/
+          if-no-files-found: warn
