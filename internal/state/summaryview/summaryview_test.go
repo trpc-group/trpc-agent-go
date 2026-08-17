@@ -121,6 +121,8 @@ func TestInvocationViewFinalizationIsIsolated(t *testing.T) {
 
 func TestInvocationViewSnapshotNestedStateIsIsolated(t *testing.T) {
 	finishReason := "stop"
+	errorParam := "param"
+	errorCode := "code"
 	text := "text"
 	toolCallIndex := 1
 	message := model.Message{
@@ -156,6 +158,10 @@ func TestInvocationViewSnapshotNestedStateIsIsolated(t *testing.T) {
 				Delta:        message,
 				FinishReason: &finishReason,
 			}},
+			Error: &model.ResponseError{
+				Param: &errorParam,
+				Code:  &errorCode,
+			},
 		}, ParentMetadata: &event.ParentInvocationMetadata{TriggerID: "original"}},
 	}}})
 
@@ -175,6 +181,8 @@ func TestInvocationViewSnapshotNestedStateIsIsolated(t *testing.T) {
 	choice.Message.ToolCalls[0].Function.Arguments[0] = 'X'
 	choice.Delta.ContentParts[1].Image.Data[0] = 'X'
 	*choice.FinishReason = "mutated"
+	*viewSnapshot.Items[0].EffectiveEvent.Response.Error.Param = "mutated"
+	*viewSnapshot.Items[0].EffectiveEvent.Response.Error.Code = "mutated"
 	viewSnapshot.Items[0].EffectiveEvent.ParentMetadata.TriggerID = "mutated"
 
 	originalSnapshot, ok := Snapshot(invocation)
@@ -205,6 +213,12 @@ func TestInvocationViewSnapshotNestedStateIsIsolated(t *testing.T) {
 		originalChoice.Delta.ContentParts[1].Image.Data,
 	))
 	require.Equal(t, "stop", *originalChoice.FinishReason)
+	require.Equal(t, "param",
+		*originalSnapshot.Items[0].EffectiveEvent.Response.Error.Param,
+	)
+	require.Equal(t, "code",
+		*originalSnapshot.Items[0].EffectiveEvent.Response.Error.Code,
+	)
 	require.Equal(t, "original",
 		originalSnapshot.Items[0].EffectiveEvent.ParentMetadata.TriggerID,
 	)
