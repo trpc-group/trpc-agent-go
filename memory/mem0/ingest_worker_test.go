@@ -157,13 +157,9 @@ func TestIngestWorker_Ingest_EmptyMessagesIsNoOp(t *testing.T) {
 
 func TestIngestWorker_Ingest_CreatesAndTerminalStatus(t *testing.T) {
 	var createCalls int32
-	var gotBody map[string]any
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/memories/" {
 			atomic.AddInt32(&createCalls, 1)
-			if !decodeTestJSONRequest(w, r, &gotBody) {
-				return
-			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`[{"id":"x","status":"SUCCEEDED"}]`))
 			return
@@ -176,20 +172,13 @@ func TestIngestWorker_Ingest_CreatesAndTerminalStatus(t *testing.T) {
 		nil,
 		[]model.Message{{Role: model.RoleUser, Content: "hi"}},
 		ingestOptions{
-			metadata: map[string]any{
-				"k":         "v",
-				"timestamp": "2024-01-02T03:04:05Z",
-			},
-			agentID: "agent",
-			runID:   "run",
+			metadata: map[string]any{"k": "v"},
+			agentID:  "agent",
+			runID:    "run",
 		},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&createCalls))
-	assert.Equal(t, float64(1704164645), gotBody["timestamp"])
-	meta, ok := gotBody["metadata"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "2024-01-02T03:04:05Z", meta["timestamp"])
 }
 
 func TestIngestWorker_IngestHostedForwardsInference(t *testing.T) {
@@ -232,13 +221,7 @@ func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 		memory.UserKey{AppName: "app", UserID: "u"},
 		nil,
 		[]model.Message{{Role: model.RoleUser, Content: "hi"}},
-		ingestOptions{
-			metadata: map[string]any{
-				"k":         "v",
-				"timestamp": "2024-01-02T03:04:05Z",
-			},
-			infer: true,
-		},
+		ingestOptions{metadata: map[string]any{"k": "v"}, infer: true},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "/memories", gotPath)
@@ -247,7 +230,6 @@ func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 	assert.NotContains(t, gotBody, "app_id")
 	assert.NotContains(t, gotBody, "async_mode")
 	assert.NotContains(t, gotBody, "version")
-	assert.NotContains(t, gotBody, "timestamp")
 	assert.NotContains(t, gotBody, "expiration_date")
 	assert.NotContains(t, gotBody, "memory_type")
 	assert.NotContains(t, gotBody, "prompt")
@@ -255,7 +237,6 @@ func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 	meta, ok := gotBody["metadata"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "v", meta["k"])
-	assert.Equal(t, "2024-01-02T03:04:05Z", meta["timestamp"])
 	assert.Equal(t, "app", meta[metadataKeyTRPCAppName])
 }
 

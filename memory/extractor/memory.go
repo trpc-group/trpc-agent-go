@@ -23,7 +23,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // referenceDate returns the reference date for the extraction.
@@ -38,19 +37,17 @@ func referenceDate(ctx context.Context) time.Time {
 
 // Common metadata field keys.
 const (
-	metadataKeyModelName        = "model_name"
-	metadataKeyModelAvailable   = "model_available"
-	metadataKeyUpdatePolicy     = "update_policy"
-	metadataKeyAssistantResults = "assistant_result_extraction"
+	metadataKeyModelName      = "model_name"
+	metadataKeyModelAvailable = "model_available"
 )
 
 // memoryExtractor implements the MemoryExtractor interface.
 type memoryExtractor struct {
-	model                      model.Model
-	prompt                     string
-	checkers                   []Checker
+	model    model.Model
+	prompt   string
+	checkers []Checker
+
 	updatePolicy               UpdatePolicy
-	extractAssistantResults    bool
 	assistantEpisodeExtraction bool
 
 	enabledTools map[string]struct{}
@@ -69,17 +66,6 @@ func WithPrompt(prompt string) Option {
 		if prompt != "" {
 			e.prompt = prompt
 		}
-	}
-}
-
-// WithAssistantResultExtraction controls extraction of concrete results
-// produced by the assistant. It is disabled by default to preserve the
-// existing extractor behavior. When both assistant extraction options are
-// configured, this narrower result mode takes precedence over episode mode so
-// a response is never extracted twice.
-func WithAssistantResultExtraction(enabled bool) Option {
-	return func(e *memoryExtractor) {
-		e.extractAssistantResults = enabled
 	}
 }
 
@@ -117,9 +103,8 @@ func WithCheckersAny(checks ...Checker) Option {
 // NewExtractor creates a new memory extractor.
 func NewExtractor(m model.Model, opts ...Option) MemoryExtractor {
 	e := &memoryExtractor{
-		model:        m,
-		prompt:       defaultPrompt,
-		updatePolicy: UpdatePolicyMergeSimilar,
+		model:  m,
+		prompt: defaultPrompt,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -133,156 +118,28 @@ func (e *memoryExtractor) Extract(
 	messages []model.Message,
 	existing []*memory.Entry,
 ) ([]*Operation, error) {
-	primary, assistantResults, err := e.ExtractOperationStages(ctx, messages, existing)
-	if err != nil {
-		return primary, err
-	}
-	return mergeExtractionOperations(primary, assistantResults), nil
-}
-
-// ExtractOperationStages keeps built-in assistant-result operations separate
-// so the auto-memory worker can reconcile them without weakening the policy
-// used for ordinary user memories. The concrete extractor is private; this is
-// an internal capability rather than an extension point for custom extractors.
-func (e *memoryExtractor) ExtractOperationStages(
-	ctx context.Context,
-	messages []model.Message,
-	existing []*memory.Entry,
-) ([]*Operation, []*Operation, error) {
-	effective := e.effectiveWorkerConfiguration(ctx)
-	if effective.model == nil {
-		return nil, nil, errors.New("no model configured for memory extraction")
+	if e.model == nil {
+		return nil, errors.New("no model configured for memory extraction")
 	}
 	if len(messages) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
-	if !effective.extractAssistantResults {
-		ops, err := effective.extractConfiguredOperations(ctx, messages, existing)
-		return ops, nil, err
-	}
-	return effective.extractAssistantResultStages(ctx, messages, existing)
-}
-
-func (e *memoryExtractor) effectiveWorkerConfiguration(
-	ctx context.Context,
-) *memoryExtractor {
 	effective := e
-	copyIfNeeded := func() *memoryExtractor {
-		if effective == e {
-			copy := *e
-			effective = &copy
-		}
-		return effective
-	}
 	if policy, managed := updatepolicy.WorkerConfiguration(ctx); managed {
 		configured := normalizeUpdatePolicy(UpdatePolicy(policy))
 		if configured != e.configuredUpdatePolicy() {
-			copyIfNeeded().updatePolicy = configured
+			copy := *e
+			copy.updatePolicy = configured
+			effective = &copy
 		}
 	}
-	if enabled, managed := assistantmemory.WorkerConfiguration(ctx); managed &&
-		enabled != e.assistantEpisodeExtraction {
-		copyIfNeeded().assistantEpisodeExtraction = enabled
-	}
-	return effective
-}
-
-func (e *memoryExtractor) extractConfiguredOperations(
-	ctx context.Context,
-	messages []model.Message,
-	existing []*memory.Entry,
-) ([]*Operation, error) {
-	if e.assistantEpisodeExtraction {
-		return e.extractWithAssistantEpisodes(ctx, messages, existing)
-	}
-	return e.extractOperations(ctx, messages, existing)
-}
-
-func (e *memoryExtractor) extractAssistantResultStages(
-	ctx context.Context,
-	messages []model.Message,
-	existing []*memory.Entry,
-) ([]*Operation, []*Operation, error) {
-	includeAssistantResults := e.shouldExtractAssistantResult(messages)
-	primaryRequest := &model.Request{
-		Messages: e.buildMessages(ctx, messages, existing),
-		Tools:    e.extractionToolsForRequest(includeAssistantResults),
-	}
-	var ops []*Operation
-	nextCtx, err := e.runExtractionRequest(ctx, primaryRequest, func(
-		callCtx context.Context,
-		call model.ToolCall,
-	) {
-		if op := e.parseToolCall(callCtx, call); op != nil {
-			ops = append(ops, op)
+	if effective.assistantEpisodeExtraction {
+		if enabled, managed := assistantmemory.WorkerConfiguration(ctx); managed && !enabled {
+			return effective.extractOperations(ctx, messages, existing)
 		}
-	})
-	primary, assistantResults := splitExtractionOperations(ops)
-	qualifyOperationsWithGroundedTopics(
-		conversationSourceText(messages), primary,
-	)
-	if err != nil || !includeAssistantResults {
-		return primary, assistantResults, err
+		return effective.extractWithAssistantEpisodes(ctx, messages, existing)
 	}
-	if len(assistantResults) == 0 &&
-		hasStructuredAssistantResultCandidate(messages) {
-		recoveryCtx, recovered, recoveryErr :=
-			e.recoverStructuredAssistantResults(
-				nextCtx, messages,
-			)
-		if recoveryErr != nil {
-			if recoveryCtx.Err() != nil {
-				return primary, nil, recoveryErr
-			}
-			log.WarnfContext(nextCtx,
-				"extractor: structured assistant result recovery failed: %v",
-				recoveryErr,
-			)
-		} else {
-			assistantResults = recovered
-		}
-	}
-	assistantResults = filterGroundedAssistantResultOperations(
-		nextCtx, messages, assistantResults,
-	)
-	qualifyOperationsWithGroundedTopics(
-		assistantResultSourceText(messages), assistantResults,
-	)
-	primary, assistantResults = routeAssistantResultOperations(
-		primary, assistantResults,
-	)
-	qualifyAssistantResultOperations(assistantResults)
-	return primary, assistantResults, nil
-}
-
-func splitExtractionOperations(
-	operations []*Operation,
-) (primary, assistantResults []*Operation) {
-	for _, operation := range operations {
-		if operation != nil && operation.assistantResult {
-			assistantResults = append(assistantResults, operation)
-			continue
-		}
-		primary = append(primary, operation)
-	}
-	return primary, assistantResults
-}
-
-func (e *memoryExtractor) extractionToolsForRequest(
-	includeAssistantResults bool,
-) map[string]tool.Tool {
-	primary := e.extractionTools()
-	if !includeAssistantResults {
-		return primary
-	}
-	combined := make(map[string]tool.Tool, len(primary)+1)
-	for name, declaration := range primary {
-		combined[name] = declaration
-	}
-	if e.actionEnabled(memory.AddToolName) {
-		combined[assistantResultAddToolName] = assistantResultAddTool
-	}
-	return combined
+	return effective.extractOperations(ctx, messages, existing)
 }
 
 func (e *memoryExtractor) extractOperations(
@@ -406,10 +263,8 @@ func (e *memoryExtractor) Metadata() map[string]any {
 		modelAvailable = true
 	}
 	return map[string]any{
-		metadataKeyModelName:        modelName,
-		metadataKeyModelAvailable:   modelAvailable,
-		metadataKeyUpdatePolicy:     string(e.configuredUpdatePolicy()),
-		metadataKeyAssistantResults: e.extractAssistantResults,
+		metadataKeyModelName:      modelName,
+		metadataKeyModelAvailable: modelAvailable,
 	}
 }
 
@@ -429,13 +284,10 @@ func (e *memoryExtractor) buildMessages(
 	result := make([]model.Message, 0, len(messages)+2)
 
 	refDate := referenceDate(ctx)
-	includeAssistantResults := e.shouldExtractAssistantResult(messages)
 
 	// Add system prompt with existing memories.
 	result = append(result, model.NewSystemMessage(
-		e.buildSystemPromptForRequest(
-			refDate, existing, includeAssistantResults,
-		),
+		e.buildSystemPrompt(refDate, existing),
 	))
 
 	// Add conversation messages.
@@ -458,110 +310,6 @@ func (e *memoryExtractor) buildMessages(
 	return result
 }
 
-func (e *memoryExtractor) shouldExtractAssistantResult(
-	messages []model.Message,
-) bool {
-	if !e.extractAssistantResults || !e.actionEnabled(memory.AddToolName) {
-		return false
-	}
-	var hasUser, hasAssistant bool
-	for _, message := range messages {
-		switch message.Role {
-		case model.RoleUser:
-			hasUser = hasUser || messageHasText(message)
-		case model.RoleAssistant:
-			hasAssistant = hasAssistant ||
-				(messageHasText(message) && len(message.ToolCalls) == 0)
-		}
-	}
-	return hasUser && hasAssistant
-}
-
-func messageHasText(message model.Message) bool {
-	if strings.TrimSpace(message.Content) != "" {
-		return true
-	}
-	for _, part := range message.ContentParts {
-		if part.Type == model.ContentTypeText && part.Text != nil &&
-			strings.TrimSpace(*part.Text) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-func mergeExtractionOperations(primary, result []*Operation) []*Operation {
-	return append(
-		append([]*Operation(nil), primary...),
-		uniqueExtractionOperations(primary, result)...,
-	)
-}
-
-func uniqueExtractionOperations(
-	existing, candidates []*Operation,
-) []*Operation {
-	unique := make([]*Operation, 0, len(candidates))
-	for _, candidate := range candidates {
-		if candidate == nil {
-			continue
-		}
-		duplicate := extractionOperationExists(existing, candidate) ||
-			extractionOperationExists(unique, candidate)
-		if !duplicate {
-			unique = append(unique, candidate)
-		}
-	}
-	return unique
-}
-
-func extractionOperationExists(
-	operations []*Operation,
-	candidate *Operation,
-) bool {
-	for _, operation := range operations {
-		if sameExtractionOperation(operation, candidate) {
-			return true
-		}
-	}
-	return false
-}
-
-func sameExtractionOperation(left, right *Operation) bool {
-	if left == nil || right == nil || left.Type != right.Type ||
-		left.MemoryID != right.MemoryID || left.MemoryKind != right.MemoryKind ||
-		!strings.EqualFold(strings.TrimSpace(left.Memory), strings.TrimSpace(right.Memory)) ||
-		!strings.EqualFold(strings.TrimSpace(left.Location), strings.TrimSpace(right.Location)) ||
-		!sameOptionalTime(left.EventTime, right.EventTime) {
-		return false
-	}
-	return equalFoldedStringSets(left.Participants, right.Participants)
-}
-
-func sameOptionalTime(left, right *time.Time) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return left.Equal(*right)
-}
-
-func equalFoldedStringSets(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	values := make(map[string]int, len(left))
-	for _, value := range left {
-		values[strings.ToLower(strings.TrimSpace(value))]++
-	}
-	for _, value := range right {
-		key := strings.ToLower(strings.TrimSpace(value))
-		if values[key] == 0 {
-			return false
-		}
-		values[key]--
-	}
-	return true
-}
-
 // buildSystemPrompt builds the system prompt with existing memories
 // and available actions based on enabled tools.
 // refDate is substituted into the prompt's {current_date} placeholder
@@ -570,30 +318,15 @@ func (e *memoryExtractor) buildSystemPrompt(
 	refDate time.Time,
 	existing []*memory.Entry,
 ) string {
-	return e.buildSystemPromptForRequest(
-		refDate,
-		existing,
-		e.extractAssistantResults && e.actionEnabled(memory.AddToolName),
-	)
-}
-
-func (e *memoryExtractor) buildSystemPromptForRequest(
-	refDate time.Time,
-	existing []*memory.Entry,
-	includeAssistantResults bool,
-) string {
 	var sb strings.Builder
 
 	sb.WriteString(e.renderPrompt(refDate))
 	if policyBlock := e.updatePolicyPromptBlock(); policyBlock != "" {
 		sb.WriteString(policyBlock)
 	}
-	if includeAssistantResults {
-		sb.WriteString(assistantResultExtractionPrompt)
-	}
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
-	sb.WriteString(e.availableActionsBlockForRequest(includeAssistantResults))
+	sb.WriteString(e.availableActionsBlock())
 	sb.WriteString("</available_actions>\n")
 
 	// Append existing memories with topics and episodic metadata so the
@@ -650,19 +383,14 @@ var toolActionOrder = []string{
 // availableActionsBlock returns the text lines describing which
 // memory tools the model is allowed to call.
 func (e *memoryExtractor) availableActionsBlock() string {
-	return e.availableActionsBlockForRequest(
-		e.extractAssistantResults && e.actionEnabled(memory.AddToolName),
-	)
-}
-
-func (e *memoryExtractor) availableActionsBlockForRequest(
-	includeAssistantResults bool,
-) string {
 	var sb strings.Builder
 	policyTools := e.updatePolicyEnabledTools()
 	for _, name := range toolActionOrder {
-		if !e.actionEnabled(name) {
-			continue
+		// Skip tools that are disabled.
+		if e.enabledTools != nil {
+			if _, ok := e.enabledTools[name]; !ok {
+				continue
+			}
 		}
 		if policyTools != nil {
 			if _, ok := policyTools[name]; !ok {
@@ -676,65 +404,11 @@ func (e *memoryExtractor) availableActionsBlockForRequest(
 		desc = e.updatePolicyToolDescription(name, desc)
 		fmt.Fprintf(&sb, "- %s: %s\n", name, desc)
 	}
-	if includeAssistantResults {
-		fmt.Fprintf(&sb, "- %s: %s\n", assistantResultAddToolName,
-			"Add a concrete result provided by the assistant in direct "+
-				"response to the user's request.")
-	}
 	if sb.Len() == 0 {
 		sb.WriteString("No actions available.\n")
 	}
 	return sb.String()
 }
-
-func (e *memoryExtractor) actionEnabled(name string) bool {
-	if e.enabledTools == nil {
-		return true
-	}
-	_, ok := e.enabledTools[name]
-	return ok
-}
-
-const assistantResultExtractionPrompt = `
-
-<assistant_result_extraction>
-Inspect the assistant's direct reply separately from normal user memories. Use
-memory_add_assistant_result, never memory_add or memory_update, for a concrete
-result the user requested and could refer to later.
-
-- SOURCE SEPARATION: this block overrides the general ALL SPEAKERS rule for
-  user-bound memories. Ordinary memory_add, memory_update, memory_delete, and
-  memory_clear operations may derive facts only from user messages. Assistant
-  text may resolve what a terse user reference means, but it must not supply a
-  missing user choice, plan, preference, action, relationship, or value.
-  Never combine a user goal with an assistant-introduced entity or treat the
-  object of a request as a confirmed choice. For example, "I am planning a trip
-  to Italy; recommend day trips near Milan" supports a trip to Italy and an
-  interest in Milan day trips, but not a plan to stay in or specifically visit
-  Milan.
-- DIRECT-RESULT CHECK: retain a requested named answer or example,
-  recommendation or shortlist, ordering, plan, decision, calculation, or
-  requested extraction, classification, or transformation. A concrete named
-  example that directly answers a general factual or analytical question is a
-  result, not background prose, even when it is public knowledge. Do not store
-  only the user's goal while dropping the result.
-- A rationale, disclaimer, opinion, analysis, educational framing, or
-  non-personal source does not disqualify an otherwise concrete selected result.
-- Do not store general definitions or tutorial/background prose that does not
-  contain a direct requested result. Also skip unselected brainstorming,
-  hidden reasoning, acknowledgments, repeated explanation, and filler.
-- Every assistant-result memory must begin with "Assistant result:". Keep one
-  cohesive concise memory when splitting would lose set membership, ordering,
-  or item-to-detail relationships.
-- Preserve exact names, quantities, negation, modality, and relationships.
-  Every claim must appear in the assistant's direct reply; never invent a
-  missing value, estimate, or relationship.
-- Example: "steel for strength, aluminum for weight, and wood for cost" is one
-  result preserving all item-to-property relationships. If analysis selects
-  Plan B for reliability and cost, store "Assistant result: Plan B best balances
-  reliability and cost."
-</assistant_result_extraction>
-`
 
 // parseToolCall parses a tool call and returns a memory operation.
 func (e *memoryExtractor) parseToolCall(ctx context.Context, call model.ToolCall) *Operation {
@@ -892,14 +566,6 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   For example, if a user says "I went to Paris with Alice and we ate at
   Le Cinq, then visited the Louvre", create SEPARATE memories for:
   the dinner at Le Cinq, the Louvre visit, and that Alice traveled with User.
-- **SELF-CONTAINED RELATIONS**: An atomic memory must still be a complete
-  proposition. Keep a relationship, its value, and every qualifier that scopes
-  that value in the same memory. Do not split a count, choice, status, or other
-  value from the named role, project, person, location, or time that makes it
-  true. Good: "As Product Owner, leads three UX researchers." Bad: separate
-  memories saying only "Is Product Owner" and "Leads three people" when the
-  team size is specific to that role. Separate independent claims, not the
-  arguments or qualifiers of one claim.
 - **DEDUPLICATION**: Before every memory_add, compare the candidate against
   the existing memories list. Do not add duplicates caused only by paraphrasing,
   wording changes, tense changes, repeated mentions, topic renaming, or
@@ -909,27 +575,6 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   supporting signals and do NOT mean two different-day episodes are the same
   memory. When it is a duplicate, emit no tool call. When it corrects or
   replaces an existing memory, use memory_update.
-- **CURRENT-TURN GROUNDING**: Resolve pronouns, ellipsis, and terse follow-up
-  answers from the nearest explicit question, label, or restatement in the
-  current conversation. A later assistant restatement may clarify what the
-  preceding user reply referred to. Existing memories are comparison context
-  for deduplication, not evidence for choosing an ambiguous referent. Never
-  attach one person's or object's new details to another existing memory merely
-  because that memory is semantically similar.
-- **SOURCE-FAITHFUL STATE**: Before writing a transition or lifecycle
-  relationship, identify source words that explicitly state that relationship.
-  If no such words exist, omit the relationship and write each supported claim
-  as a separate atomic memory. Different sizes, names, or identifiers denote
-  different subjects even when the objects share a category; acquiring or
-  setting up one does not update another. Words such as "old", "new",
-  "another", and "since" express age, identity, or sequence, not replacement
-  or loss of ownership.
-  Example: "I have an old laptop. I've since set up a new desktop." supports
-  "Has an old laptop" and "Set up a new desktop". It does NOT support
-  "The desktop replaced the laptop", "Moved on from the laptop", "Previously
-  had the laptop", or "No longer owns the laptop". By contrast, explicit
-  source wording such as "sold", "traded in", "replaced", "moved from", or
-  "no longer owns" does support the corresponding state transition.
 - **NO SUBJECT PREFIX**: Create memories as brief, concise statements that
   directly describe attributes or facts WITHOUT a subject prefix. Omit
   "User", "The user", or any equivalent pronoun/noun at the start, because
@@ -979,11 +624,9 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   in existing memories rather than inventing synonyms. For example, if
   existing memories use "work", do not use "job" or "career" for the
   same concept.
-- When a fact has explicitly and genuinely CHANGED (e.g., the user says they
-  left one job and started another), update the existing memory. A related new
-  fact does not prove that the old fact ended. Unless the conversation states
-  a transition for the same subject, create a NEW memory and do not merge it
-  into or use it to replace an existing one.
+- When a fact has genuinely CHANGED (e.g., user got a new job), update
+  the existing memory. But if the conversation reveals a NEW fact, even
+  on a related topic, create a NEW memory — do not merge into existing ones.
 - Use delete when the user explicitly asks to forget something, or when
   a memory should be removed entirely rather than corrected or replaced
   (for example, a mistaken extraction, a withdrawn fact, or stale detail
@@ -1021,15 +664,7 @@ For EPISODES (memory_kind="episode"):
   "on May 7, 2023"), preserve that original date in BOTH the memory text
   and event_time field.
 - When someone mentions a duration (e.g., "painting for 7 years"), subtract
-  the duration from today's date to derive the start date only when the main
-  assertion is when the activity or relationship began.
-- Anchor event_time to the main assertion, not automatically to the earliest
-  date in the sentence. For a current cumulative state observed in this
-  conversation (e.g., "has completed seven paintings since starting three
-  months ago"), event_time is today's date because that is when the count is
-  known to be seven. Preserve the derived start date in the memory text or as
-  a separate start-date memory. Never move a current count backward to its
-  "since" date.
+  the duration from today's date to derive the start date.
 - Capture WHO was involved in the participants field.
 - Capture WHERE it happened in the location field.
 - Each distinct event should be a SEPARATE episode memory.
@@ -1098,22 +733,12 @@ Example 3 – Episode with conversation detail:
      memory_kind="episode", event_time="2024-06-09",
      participants=["Bob"], topics=["Bob", "dinner", "startup", "AI tutoring"])
 
-Example 4 – Start-date derivation from a pure duration:
+Example 4 – Duration-based date derivation:
   User says: "I've been painting for about 7 years now."
   (today = 2023-05-08)
   → memory_add(memory="User has been painting since approximately 2016.",
      memory_kind="fact", event_time="2016-01-01",
      topics=["painting", "hobby", "art"])
-
-Example 4b – Current cumulative state with a start boundary:
-  User says: "I've been painting for three months and have completed seven
-  paintings since I started."
-  (today = 2023-05-30)
-  → memory_add(memory="User has completed seven paintings since starting
-     around late February 2023.", memory_kind="fact",
-     event_time="2023-05-30", topics=["painting", "art", "progress"])
-  The seven-painting count is observed today. 2023-02-28 describes when the
-  activity began and must not be used as the count's event_time.
 
 Example 5 – Extracting specific details from casual conversation:
   Speaker A (Jon): "I just got back from Rome, it was amazing! Also I started

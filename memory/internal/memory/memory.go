@@ -1507,19 +1507,6 @@ func MergeHybridResults(
 	k int,
 	maxResults int,
 ) []*memory.Entry {
-	return MergeRankedResults(
-		[][]*memory.Entry{primary, secondary}, k, maxResults,
-	)
-}
-
-// MergeRankedResults combines any number of ranked result lists using
-// equal-weight Reciprocal Rank Fusion. Scores are assigned using
-// 1 / (k + rank) and summed across result lists.
-func MergeRankedResults(
-	rankings [][]*memory.Entry,
-	k int,
-	maxResults int,
-) []*memory.Entry {
 	if k <= 0 {
 		k = DefaultHybridRRFK
 	}
@@ -1529,7 +1516,7 @@ func MergeRankedResults(
 		score float64
 	}
 
-	scores := make(map[string]*rrfEntry)
+	scores := make(map[string]*rrfEntry, len(primary)+len(secondary))
 	accumulate := func(results []*memory.Entry) {
 		for rank, entry := range results {
 			if entry == nil || entry.ID == "" {
@@ -1547,9 +1534,8 @@ func MergeRankedResults(
 			}
 		}
 	}
-	for _, ranking := range rankings {
-		accumulate(ranking)
-	}
+	accumulate(primary)
+	accumulate(secondary)
 
 	merged := make([]*memory.Entry, 0, len(scores))
 	for _, scored := range scores {
@@ -1687,18 +1673,7 @@ func memoryCriticalValueSignature(entry *memory.Entry) string {
 	if entry == nil || entry.Memory == nil {
 		return ""
 	}
-	values := retrievalCriticalValuePattern.FindAllString(
-		strings.ToLower(entry.Memory.Memory), -1,
-	)
-	if len(values) == 0 {
-		return ""
-	}
-	for index, value := range values {
-		values[index] = normalizeCriticalValue(value)
-	}
-	sort.Strings(values)
-	values = slices.Compact(values)
-	return strings.Join(values, "|")
+	return criticalValueSignature(entry.Memory.Memory)
 }
 
 func orderConflictingMemoryStates(

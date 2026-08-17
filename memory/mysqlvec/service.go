@@ -23,7 +23,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
-	iranking "trpc.group/trpc-go/trpc-agent-go/memory/internal/ranking"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -643,6 +642,10 @@ func (s *Service) ReadMemories(
 	return entries, nil
 }
 
+// minKindFallbackResults triggers a fallback unfiltered search when
+// a kind-filtered search returns fewer results than this.
+const minKindFallbackResults = 3
+
 // SearchMemories searches memories for a user using vector similarity.
 func (s *Service) SearchMemories(
 	ctx context.Context,
@@ -709,8 +712,7 @@ func (s *Service) applyKindFallback(
 	queryEmbedding []float64,
 	maxResults int,
 ) []*memory.Entry {
-	if opts.Kind == "" || !opts.KindFallback ||
-		len(results) >= imemory.MinKindFallbackResults {
+	if opts.Kind == "" || !opts.KindFallback || len(results) >= minKindFallbackResults {
 		return results
 	}
 	fallbackOpts := opts
@@ -735,12 +737,14 @@ func (s *Service) applyHybridSearch(
 		return results
 	}
 	keywordResults, kwErr := s.executeKeywordSearch(ctx, userKey, opts, maxResults)
-	if kwErr != nil {
-		keywordResults = nil
+	if kwErr != nil || len(keywordResults) == 0 {
+		return results
 	}
-	return iranking.MergeHybrid(
-		opts.Query, results, keywordResults, opts.HybridRRFK, maxResults,
-	)
+	rrfK := opts.HybridRRFK
+	if rrfK <= 0 {
+		rrfK = imemory.DefaultHybridRRFK
+	}
+	return imemory.MergeHybridResults(results, keywordResults, rrfK, maxResults)
 }
 
 // applyPostSearchFilters applies threshold, sorting, dedup, and limit.
@@ -775,7 +779,7 @@ func (s *Service) applyPostSearchFilters(
 	}
 
 	if opts.Deduplicate && len(results) > 1 {
-		results = imemory.DeduplicateResults(results)
+		results = imemory.DeduplicateResultsPreservingConflicts(results)
 	}
 	if maxResults > 0 && len(results) > maxResults {
 		results = results[:maxResults]

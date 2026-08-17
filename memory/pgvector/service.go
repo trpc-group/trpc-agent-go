@@ -23,7 +23,6 @@ import (
 	"github.com/pgvector/pgvector-go"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
-	iranking "trpc.group/trpc-go/trpc-agent-go/memory/internal/ranking"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -726,6 +725,10 @@ func (s *Service) ReadMemories(
 	return entries, nil
 }
 
+// minKindFallbackResults is the threshold below which a kind-filtered
+// search triggers a fallback unfiltered search when KindFallback is enabled.
+const minKindFallbackResults = 3
+
 // SearchMemories searches memories for a user using vector similarity.
 // Options may include WithSearchOptions for advanced filtering
 // (kind, time range, hybrid search, etc.).
@@ -761,6 +764,7 @@ func (s *Service) SearchMemories(
 	if opts.MaxResults > 0 {
 		maxResults = opts.MaxResults
 	}
+
 	results, err := s.executeVectorSearch(ctx, userKey, opts, vector, maxResults)
 	if err != nil {
 		return nil, err
@@ -768,8 +772,7 @@ func (s *Service) SearchMemories(
 
 	// Kind fallback: when kind filter was applied but returned too few
 	// results, retry without the kind filter and merge both result sets.
-	if opts.Kind != "" && opts.KindFallback &&
-		len(results) < imemory.MinKindFallbackResults {
+	if opts.Kind != "" && opts.KindFallback && len(results) < minKindFallbackResults {
 		fallbackOpts := opts
 		fallbackOpts.Kind = ""
 		fallbackOpts.KindFallback = false
@@ -777,21 +780,22 @@ func (s *Service) SearchMemories(
 			ctx, userKey, fallbackOpts, vector, maxResults,
 		)
 		if fallbackErr == nil && len(fallbackResults) > 0 {
-			results = imemory.MergeSearchResults(
-				results, fallbackResults, opts.Kind, maxResults,
-			)
+			results = mergeSearchResults(results, fallbackResults, opts.Kind, maxResults)
 		}
 	}
 
-	// Hybrid search fuses vector, keyword, and focused-passage rankings.
+	// Hybrid search: run keyword search and merge with vector results
+	// using Reciprocal Rank Fusion (RRF) to improve recall for exact
+	// entity names, book titles, etc.
 	if opts.HybridSearch {
 		keywordResults, kwErr := s.executeKeywordSearch(ctx, userKey, opts, maxResults)
-		if kwErr != nil {
-			keywordResults = nil
+		if kwErr == nil && len(keywordResults) > 0 {
+			rrfK := opts.HybridRRFK
+			if rrfK <= 0 {
+				rrfK = defaultRRFK
+			}
+			results = mergeHybridResults(results, keywordResults, rrfK, maxResults)
 		}
-		results = iranking.MergeHybrid(
-			query, results, keywordResults, opts.HybridRRFK, maxResults,
-		)
 	}
 
 	// Apply similarity threshold filtering.
@@ -901,6 +905,9 @@ func (s *Service) executeVectorSearch(
 	return results, nil
 }
 
+// defaultRRFK is the standard Reciprocal Rank Fusion constant.
+const defaultRRFK = imemory.DefaultHybridRRFK
+
 // executeKeywordSearch runs a full-text search using PostgreSQL
 // tsvector/tsquery alongside the vector search results.
 func (s *Service) executeKeywordSearch(
@@ -972,6 +979,61 @@ func (s *Service) executeKeywordSearch(
 		return []*memory.Entry{}, nil
 	}
 	return results, nil
+}
+
+// mergeHybridResults combines vector and keyword search results using
+// Reciprocal Rank Fusion (RRF). Each result gets score = 1/(k+rank)
+// from each search method. Combined scores determine final ranking.
+func mergeHybridResults(
+	vectorResults []*memory.Entry,
+	keywordResults []*memory.Entry,
+	k int,
+	maxResults int,
+) []*memory.Entry {
+	return imemory.MergeHybridResults(
+		vectorResults,
+		keywordResults,
+		k,
+		maxResults,
+	)
+}
+
+// mergeSearchResults merges kind-filtered results with fallback results.
+// Results matching the preferred kind are ranked higher. Duplicates are
+// removed by memory ID.
+func mergeSearchResults(
+	primary, fallback []*memory.Entry,
+	preferredKind memory.Kind,
+	maxResults int,
+) []*memory.Entry {
+	seen := make(map[string]bool, len(primary))
+	for _, e := range primary {
+		seen[e.ID] = true
+	}
+
+	// Split fallback into matching-kind and other-kind.
+	var kindMatch, kindOther []*memory.Entry
+	for _, e := range fallback {
+		if seen[e.ID] {
+			continue
+		}
+		if e.Memory != nil && e.Memory.Kind == preferredKind {
+			kindMatch = append(kindMatch, e)
+		} else {
+			kindOther = append(kindOther, e)
+		}
+	}
+
+	// Build merged list: primary (kind-filtered) → fallback matching kind → fallback other kind.
+	merged := make([]*memory.Entry, 0, len(primary)+len(kindMatch)+len(kindOther))
+	merged = append(merged, primary...)
+	merged = append(merged, kindMatch...)
+	merged = append(merged, kindOther...)
+
+	if len(merged) > maxResults {
+		merged = merged[:maxResults]
+	}
+	return merged
 }
 
 // Tools returns the list of available memory tools.

@@ -71,11 +71,6 @@ type Operation struct {
 	EventTime    *time.Time  // When the event occurred.
 	Participants []string    // People involved in the event.
 	Location     string      // Where the event took place.
-
-	// assistantResult is set only by the built-in extractor's private result
-	// tool. It lets auto memory apply stricter reconciliation without adding a
-	// public operation type or extension point.
-	assistantResult bool
 }
 
 // OperationType defines the type of memory operation.

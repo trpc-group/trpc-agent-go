@@ -851,19 +851,13 @@ func TestSearchResultDeduplicationHelpers(t *testing.T) {
 		older := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 		newer := older.Add(time.Hour)
 		four := &memory.Entry{
-			ID:        "four",
-			Score:     0.95,
-			CreatedAt: older,
-			UpdatedAt: older,
+			ID: "four", Score: 0.95, CreatedAt: older, UpdatedAt: older,
 			Memory: &memory.Memory{
 				Memory: "Has written four short stories since starting to write regularly",
 			},
 		}
 		seven := &memory.Entry{
-			ID:        "seven",
-			Score:     0.90,
-			CreatedAt: newer,
-			UpdatedAt: newer,
+			ID: "seven", Score: 0.90, CreatedAt: newer, UpdatedAt: newer,
 			Memory: &memory.Memory{
 				Memory: "Has written seven short stories since starting to write regularly",
 			},
@@ -900,6 +894,19 @@ func TestSearchResultDeduplicationHelpers(t *testing.T) {
 		assert.Equal(t, "21", normalizeCriticalValue("twenty-one"))
 		assert.Equal(t, "21", normalizeCriticalValue("twenty one"))
 		assert.Equal(t, "21", normalizeCriticalValue("21"))
+	})
+
+	t.Run("deduplicate preserves value relationships", func(t *testing.T) {
+		results := []*memory.Entry{
+			{ID: "original", Score: 0.9, Memory: &memory.Memory{
+				Memory: "Bus costs 10 dollars and taxi costs 20 dollars for the trip",
+			}},
+			{ID: "swapped", Score: 0.8, Memory: &memory.Memory{
+				Memory: "Bus costs 20 dollars and taxi costs 10 dollars for the trip",
+			}},
+		}
+
+		assert.Len(t, DeduplicateResultsPreservingConflicts(results), 2)
 	})
 }
 
@@ -1831,27 +1838,6 @@ func TestMergeHybridResults_UsesDefaultKAndSkipsInvalidEntries(t *testing.T) {
 	assert.Equal(t, "mem-1", results[0].ID)
 	assert.Equal(t, "mem-3", results[1].ID)
 	assert.Greater(t, results[0].Score, results[1].Score)
-}
-
-func TestMergeRankedResults_CombinesMultipleRankingsDeterministically(t *testing.T) {
-	base := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
-	entry := func(id string) *memory.Entry {
-		return newSearchTestEntry(id, id, nil, base, base)
-	}
-	rankings := [][]*memory.Entry{
-		{entry("shared"), entry("vector-only")},
-		{entry("keyword-only"), entry("shared")},
-		{entry("shared"), entry("kind-only")},
-	}
-
-	first := MergeRankedResults(rankings, 0, 3)
-	second := MergeRankedResults(rankings, 0, 3)
-
-	require.Len(t, first, 3)
-	assert.Equal(t, "shared", first[0].ID)
-	assert.Equal(t, []string{first[0].ID, first[1].ID, first[2].ID},
-		[]string{second[0].ID, second[1].ID, second[2].ID})
-	assert.Greater(t, first[0].Score, first[1].Score)
 }
 
 func TestIsPunctToken(t *testing.T) {

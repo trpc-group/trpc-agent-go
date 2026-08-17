@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	retrievalCriticalValuePattern = regexp.MustCompile(
+	criticalValuePattern = regexp.MustCompile(
 		`(?i)\b(?:[0-9]+(?:[.:/-][0-9]+)*|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[ -]+(?:one|two|three|four|five|six|seven|eight|nine))?|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\b|(?:\bnot\b|\bno\b|\bnever\b|\bwithout\b|n't|不再|不是|没有|从未|未|无)`,
 	)
 	retrievalNumberValues = map[string]int{
@@ -28,6 +28,18 @@ var (
 		"sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
 	}
 )
+
+func criticalValues(text string) []string {
+	values := criticalValuePattern.FindAllString(strings.ToLower(text), -1)
+	for index, value := range values {
+		values[index] = normalizeCriticalValue(value)
+	}
+	return values
+}
+
+func criticalValueSignature(text string) string {
+	return strings.Join(criticalValues(text), "|")
+}
 
 func normalizeCriticalValue(value string) string {
 	normalized := strings.ToLower(strings.TrimSpace(value))
