@@ -88,26 +88,141 @@ func (m *mockSummarizerImpl) Metadata() map[string]any {
 	return map[string]any{}
 }
 
-func expectSummaryRevisionBegin(
-	t *testing.T,
-	mock sqlmock.Sqlmock,
-	sess *session.Session,
-) {
-	t.Helper()
+func summaryStateRaw(sess *session.Session) string {
 	stateRaw, err := json.Marshal(SessionState{
 		ID: sess.ID, State: session.StateMap{},
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	})
-	require.NoError(t, err)
-	mock.ExpectBegin()
+	if err != nil {
+		panic(err)
+	}
+	return string(stateRaw)
+}
+
+func expectSummaryRevisionLock(
+	mock sqlmock.Sqlmock,
+	sess *session.Session,
+) {
 	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
 		WithArgs(sess.AppName, sess.UserID, sess.ID).
 		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
-			AddRow(string(stateRaw), nil))
+			AddRow(summaryStateRaw(sess), nil))
+}
+
+func expectSummaryRevisionWrite(
+	mock sqlmock.Sqlmock,
+	sess *session.Session,
+) {
 	mock.ExpectExec("UPDATE session_states SET state").
 		WithArgs(summaryRevisionStateArg{sessionID: sess.ID},
 			sess.AppName, sess.UserID, sess.ID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
+func expectSummaryWrite(
+	mock sqlmock.Sqlmock,
+	sess *session.Session,
+	filterKey any,
+	active bool,
+	writeErr error,
+) {
+	mock.ExpectBegin()
+	expectSummaryRevisionLock(mock, sess)
+
+	summaryRows := sqlmock.NewRows([]string{"updated_at"})
+	if active {
+		summaryRows.AddRow(time.Unix(0, 0).UTC())
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT updated_at FROM session_summaries")).
+		WithArgs(sess.AppName, sess.UserID, sess.ID, filterKey).
+		WillReturnRows(summaryRows)
+	expectSummaryRevisionWrite(mock, sess)
+
+	var write *sqlmock.ExpectedExec
+	if active {
+		write = mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+			WithArgs(
+				sqlmock.AnyArg(), // summary
+				sqlmock.AnyArg(), // updated_at
+				sess.AppName,
+				sess.UserID,
+				sess.ID,
+				filterKey,
+			)
+	} else {
+		write = mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
+			WithArgs(
+				sess.AppName,
+				sess.UserID,
+				sess.ID,
+				filterKey,
+				sqlmock.AnyArg(), // summary
+				sqlmock.AnyArg(), // updated_at
+				sqlmock.AnyArg(), // expires_at
+			)
+	}
+	if writeErr != nil {
+		write.WillReturnError(writeErr)
+		mock.ExpectRollback()
+		return
+	}
+	write.WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+}
+
+func TestUpsertSessionSummarySkipsOlderCutoff(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	incomingUpdatedAt := time.Date(2026, time.August, 14, 8, 0, 0, 0, time.UTC)
+	persistedUpdatedAt := incomingUpdatedAt.Add(time.Minute)
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+	mock.ExpectBegin()
+	expectSummaryRevisionLock(mock, sess)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT updated_at FROM session_summaries")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, "").
+		WillReturnRows(sqlmock.NewRows([]string{"updated_at"}).AddRow(persistedUpdatedAt))
+	mock.ExpectCommit()
+
+	err = s.upsertSessionSummary(
+		context.Background(), key, "", []byte(`{"summary":"older"}`), incomingUpdatedAt,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpsertSessionSummaryEqualCutoffLastWriteWins(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	updatedAt := time.Date(2026, time.August, 14, 8, 0, 0, 0, time.UTC)
+	summaryBytes := []byte(`{"summary":"regenerated"}`)
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+	mock.ExpectBegin()
+	expectSummaryRevisionLock(mock, sess)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT updated_at FROM session_summaries")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, "").
+		WillReturnRows(sqlmock.NewRows([]string{"updated_at"}).AddRow(updatedAt))
+	expectSummaryRevisionWrite(mock, sess)
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
+		WithArgs(
+			string(summaryBytes), updatedAt,
+			key.AppName, key.UserID, key.SessionID, "",
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err = s.upsertSessionSummary(context.Background(), key, "", summaryBytes, updatedAt)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestCreateSessionSummary_Success(t *testing.T) {
@@ -127,24 +242,34 @@ func TestCreateSessionSummary_Success(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
-	expectSummaryRevisionBegin(t, mock, sess)
-	// Mock: INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"",               // filter_key
-			sqlmock.AnyArg(), // summary
-			sqlmock.AnyArg(), // updated_at
-			sqlmock.AnyArg(), // expires_at
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	expectSummaryWrite(mock, sess, "", false, nil)
 
 	err = s.CreateSessionSummary(ctx, sess, "", true)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSessionSummary_MissingSession(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSummarizer(&fakeSummarizer{allow: true, out: "summary"}))
+	sess := &session.Session{
+		ID:      "session-123",
+		AppName: "test-app",
+		UserID:  "user-456",
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs(sess.AppName, sess.UserID, sess.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}))
+	mock.ExpectRollback()
+
+	err = s.CreateSessionSummary(context.Background(), sess, "", true)
+	require.ErrorIs(t, err, errSessionNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestCreateSessionSummary_AlreadyExists(t *testing.T) {
@@ -190,21 +315,8 @@ func TestCreateSessionSummary_Force(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
-	expectSummaryRevisionBegin(t, mock, sess)
 	// With force=true, skip checking existing summary.
-	// Mock: INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"",               // filter_key
-			sqlmock.AnyArg(), // summary
-			sqlmock.AnyArg(), // updated_at
-			sqlmock.AnyArg(), // expires_at
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	expectSummaryWrite(mock, sess, "", false, nil)
 
 	err = s.CreateSessionSummary(ctx, sess, "", true)
 	assert.NoError(t, err)
@@ -299,7 +411,7 @@ func TestGetSessionSummaryText_Success(t *testing.T) {
 	summaryBytes, _ := json.Marshal(summary)
 
 	// Mock: Query summary
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT summary FROM session_summaries")).
+	mock.ExpectQuery(regexp.QuoteMeta("ORDER BY updated_at DESC, id DESC LIMIT 1")).
 		WithArgs(sess.AppName, sess.UserID, sess.ID, "", sqlmock.AnyArg(), sess.CreatedAt).
 		WillReturnRows(sqlmock.NewRows([]string{"summary"}).
 			AddRow(summaryBytes))
@@ -597,20 +709,7 @@ func TestEnqueueSummaryJob_Success(t *testing.T) {
 		Events:    []event.Event{{Timestamp: time.Now()}}, // Add event to trigger summary.
 	}
 
-	expectSummaryRevisionBegin(t, mock, sess)
-	// Mock: INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"",               // filter_key
-			sqlmock.AnyArg(), // summary
-			sqlmock.AnyArg(), // updated_at
-			sqlmock.AnyArg(), // expires_at
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	expectSummaryWrite(mock, sess, "", false, nil)
 
 	err = s.EnqueueSummaryJob(ctx, sess, "", false)
 	assert.NoError(t, err)
@@ -667,18 +766,7 @@ func TestEnqueueSummaryJob_WithNotChan(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
-	// Mock: INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"",
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectSummaryWrite(mock, sess, "", false, nil)
 
 	err = s.EnqueueSummaryJob(ctx, sess, "", false)
 	assert.NoError(t, err)
@@ -744,21 +832,8 @@ func TestEnqueueSummaryJob_QueueFull(t *testing.T) {
 	// Add event to trigger summary.
 	sess.Events = []event.Event{{Timestamp: time.Now()}}
 
-	expectSummaryRevisionBegin(t, mock, sess)
 	// Mock sync fallback processing.
-	// INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"",               // filter_key
-			sqlmock.AnyArg(), // summary
-			sqlmock.AnyArg(), // updated_at
-			sqlmock.AnyArg(), // expires_at
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	expectSummaryWrite(mock, sess, "", false, nil)
 
 	// Try to enqueue when queue is full - should fallback to sync.
 	err = s.EnqueueSummaryJob(ctx, sess, "", false)
@@ -805,22 +880,9 @@ func TestEnqueueSummaryJob_QueueFull_FallbackToSyncWithCascade(t *testing.T) {
 	// Total expected: "blocking", "user-messages", and "" (possibly twice).
 
 	// Use AnyArg for filterKey to match any call.
-	// We expect 2-4 INSERT calls depending on timing.
-	// INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
+	// We expect 2-4 writes depending on timing.
 	for i := 0; i < 4; i++ {
-		expectSummaryRevisionBegin(t, mock, sess)
-		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-			WithArgs(
-				sess.AppName,
-				sess.UserID,
-				sess.ID,
-				sqlmock.AnyArg(),
-				sqlmock.AnyArg(),
-				sqlmock.AnyArg(),
-				sqlmock.AnyArg(),
-			).
-			WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectCommit()
+		expectSummaryWrite(mock, sess, sqlmock.AnyArg(), false, nil)
 	}
 
 	// Fill the queue by enqueueing a job first (queue size is 1).
@@ -874,37 +936,9 @@ func TestEnqueueSummaryJob_NoAsyncWorkers_FallbackToSyncWithCascade(t *testing.T
 	}}}
 	sess.Events = append(sess.Events, *e2)
 
-	expectSummaryRevisionBegin(t, mock, sess)
-	// Mock sync processing for branch summary.
-	// INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"tool-usage",
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-
-	// Mock sync processing for full-session summary (cascade).
-	expectSummaryRevisionBegin(t, mock, sess)
-	// INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"",
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	// Mock sync processing for branch and full-session summaries.
+	expectSummaryWrite(mock, sess, "tool-usage", false, nil)
+	expectSummaryWrite(mock, sess, "", false, nil)
 
 	// EnqueueSummaryJob should fall back to sync processing with cascade.
 	err = s.EnqueueSummaryJob(ctx, sess, "tool-usage", false)
@@ -951,38 +985,9 @@ func TestEnqueueSummaryJob_SingleFilterKey_PersistsBothKeys(t *testing.T) {
 	}}}
 	sess.Events = append(sess.Events, *e2)
 
-	expectSummaryRevisionBegin(t, mock, sess)
-	// Mock: First call persists filterKey="tool-usage" (LLM generates summary).
-	// INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"tool-usage",
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-
-	// Mock: Second call persists filter_key="" (full-session, copied summary).
-	expectSummaryRevisionBegin(t, mock, sess)
-	// This is the critical part - verifying that filter_key="" is also persisted!
-	// INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"", // filter_key="" must be persisted.
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	// Verify that both the filtered and full-session summaries are persisted.
+	expectSummaryWrite(mock, sess, "tool-usage", false, nil)
+	expectSummaryWrite(mock, sess, "", false, nil)
 
 	// EnqueueSummaryJob with filterKey should trigger single filterKey optimization
 	// and persist BOTH keys.
@@ -1012,21 +1017,8 @@ func TestEnqueueSummaryJob_FullSessionKey_NoCascade(t *testing.T) {
 	}}}
 	sess.Events = append(sess.Events, *e)
 
-	expectSummaryRevisionBegin(t, mock, sess)
 	// Mock sync processing for full-session summary only (no cascade needed).
-	// INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"",
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	expectSummaryWrite(mock, sess, "", false, nil)
 
 	// EnqueueSummaryJob with empty filterKey should not cascade.
 	err = s.EnqueueSummaryJob(ctx, sess, "", false)
@@ -1058,20 +1050,7 @@ func TestCreateSessionSummary_WithFilterKey(t *testing.T) {
 
 	filterKey := "custom-filter"
 
-	expectSummaryRevisionBegin(t, mock, sess)
-	// Mock: INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert) with custom filter key.
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			filterKey,
-			sqlmock.AnyArg(), // summary
-			sqlmock.AnyArg(), // updated_at
-			sqlmock.AnyArg(), // expires_at
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	expectSummaryWrite(mock, sess, filterKey, false, nil)
 
 	err = s.CreateSessionSummary(ctx, sess, filterKey, false)
 	assert.NoError(t, err)
@@ -1121,21 +1100,8 @@ func TestCreateSessionSummary_ExistingButStale(t *testing.T) {
 	}
 	sess.Summaries = map[string]*session.Summary{"": existingSummary}
 
-	expectSummaryRevisionBegin(t, mock, sess)
-	// Mock: INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	// ON DUPLICATE KEY UPDATE will update the existing record.
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"",               // filter_key
-			sqlmock.AnyArg(), // summary
-			sqlmock.AnyArg(), // updated_at
-			sqlmock.AnyArg(), // expires_at
-		).
-		WillReturnResult(sqlmock.NewResult(0, 2)) // 2 rows affected indicates update.
-	mock.ExpectCommit()
+	// The compatibility write updates every active copy of this summary.
+	expectSummaryWrite(mock, sess, "", true, nil)
 
 	err = s.CreateSessionSummary(ctx, sess, "", false)
 	assert.NoError(t, err)
@@ -1185,20 +1151,7 @@ func TestCreateSessionSummary_UpsertError(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
-	expectSummaryRevisionBegin(t, mock, sess)
-	// Mock: INSERT ... ON DUPLICATE KEY UPDATE fails.
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"",               // filter_key
-			sqlmock.AnyArg(), // summary
-			sqlmock.AnyArg(), // updated_at
-			sqlmock.AnyArg(), // expires_at
-		).
-		WillReturnError(fmt.Errorf("upsert error"))
-	mock.ExpectRollback()
+	expectSummaryWrite(mock, sess, "", false, fmt.Errorf("upsert error"))
 
 	// Use force=true to trigger upsert even with no events.
 	err = s.CreateSessionSummary(ctx, sess, "", true)
@@ -1425,18 +1378,7 @@ func TestEnqueueSummaryJob_AsyncProcessing(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
-	// Mock: INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert).
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
-		WithArgs(
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			"",
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectSummaryWrite(mock, sess, "", false, nil)
 
 	err = s.EnqueueSummaryJob(ctx, sess, "", false)
 	require.NoError(t, err)

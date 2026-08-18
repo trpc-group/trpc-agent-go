@@ -128,6 +128,8 @@ func TestTemplateVariableSourceJSONSupportsExpandedFields(t *testing.T) {
 func TestTemplateVariableSourceConstantsCoverTemplateEvaluatorSources(t *testing.T) {
 	assert.Equal(t, TemplateVariableField("traceStepInput"), TemplateVariableFieldTraceStepInput)
 	assert.Equal(t, TemplateVariableField("traceStepOutput"), TemplateVariableFieldTraceStepOutput)
+	assert.Equal(t, TemplateVariableField("traceStepTools"), TemplateVariableFieldTraceStepTools)
+	assert.Equal(t, TemplateVariableField("traceStepSkills"), TemplateVariableFieldTraceStepSkills)
 	assert.Equal(t, TemplateVariableScope("metric"), TemplateVariableScopeMetric)
 	assert.Equal(t, TemplateVariableField("rubrics"), TemplateVariableFieldRubrics)
 }

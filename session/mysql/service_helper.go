@@ -576,12 +576,15 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 				return err
 			}
 
-			// Soft delete session summaries
-			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-				 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionSummaries),
-				now, key.AppName, key.UserID, key.SessionID)
-			if err != nil {
+			// Soft delete session summaries. Legacy schemas may contain duplicate
+			// active rows that require the compatibility fallback.
+			if err = s.softDeleteSummaries(
+				ctx,
+				tx,
+				"app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL",
+				[]any{key.AppName, key.UserID, key.SessionID},
+				now,
+			); err != nil {
 				return err
 			}
 
@@ -1371,11 +1374,14 @@ func (s *Service) getSummariesList(
 	// add explicit user_id for shard routing. Harmless on MySQL.
 	args = append(args, sessionKeys[0].UserID, time.Now())
 
+	// Sort oldest-first so later map assignments deterministically retain the
+	// newest active copy when a legacy schema contains duplicates.
 	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
 		AND user_id = ?
 		AND (expires_at IS NULL OR expires_at > ?)
-		AND deleted_at IS NULL`,
+		AND deleted_at IS NULL
+		ORDER BY updated_at ASC, id ASC`,
 		s.tableSessionSummaries, strings.Join(placeholders, ","))
 
 	// Build a map of session key to created_at for filtering

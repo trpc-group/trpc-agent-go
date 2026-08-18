@@ -355,6 +355,9 @@ func TestCreateSessionSummaryWithRevision(t *testing.T) {
 	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
 		WithArgs(sess.AppName, sess.UserID, sess.ID).
 		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).AddRow(string(stateRaw), nil))
+	mock.ExpectQuery("SELECT updated_at FROM session_summaries").
+		WithArgs(sess.AppName, sess.UserID, sess.ID, "all").
+		WillReturnRows(sqlmock.NewRows([]string{"updated_at"}))
 	mock.ExpectExec("UPDATE session_states SET state").
 		WithArgs(sqlmock.AnyArg(), sess.AppName, sess.UserID, sess.ID).
 		WillReturnResult(sqlmock.NewResult(1, 1))

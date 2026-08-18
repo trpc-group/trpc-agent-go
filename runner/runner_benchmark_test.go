@@ -22,7 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func BenchmarkRunnerAgentLoop(b *testing.B) {
+func BenchmarkRunnerLatestTurnReplacementCapabilityAgentLoop(b *testing.B) {
 	services := []struct {
 		name    string
 		service session.Service

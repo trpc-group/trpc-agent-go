@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
@@ -194,7 +195,7 @@ func decodeAgentOptions(raw json.RawMessage) (AgentSpec, error) {
 
 func isSupportedAgentOption(name string) bool {
 	switch name {
-	case "template", "instance_id", "instruction", "tools", "skills", "structured_output", "schema":
+	case "template", "instance_id", "instruction", "model", "tools", "skills", "structured_output", "schema":
 		return true
 	default:
 		return false
@@ -290,13 +291,18 @@ func normalizeAgentSpec(spec *AgentSpec) error {
 	}
 	spec.InstanceID = cleanPathSegment(spec.InstanceID)
 	spec.Instruction = strings.TrimSpace(spec.Instruction)
+	spec.Model = strings.TrimSpace(spec.Model)
 	spec.Tools = normalizeSelection(spec.Tools)
 	spec.Skills = normalizeSelection(spec.Skills)
 	return normalizeStructuredOutputSpec(spec.Template, spec.StructuredOutput)
 }
 
 func agentSpecHasOverrides(spec AgentSpec) bool {
-	return spec.Instruction != "" || spec.Tools != nil || spec.Skills != nil || spec.StructuredOutput != nil
+	return spec.Instruction != "" ||
+		spec.Model != "" ||
+		spec.Tools != nil ||
+		spec.Skills != nil ||
+		spec.StructuredOutput != nil
 }
 
 func normalizeStructuredOutputSpec(template string, spec *StructuredOutputSpec) error {
@@ -507,6 +513,13 @@ func (g *workflowGateway) workflowChildPatch(
 	if spec.Instruction != "" {
 		patch.SetInstruction(spec.Instruction)
 	}
+	selectedModel, err := g.resolveAgentModelProfile(spec.Model)
+	if err != nil {
+		return patch, err
+	}
+	if selectedModel != nil {
+		patch.SetModel(selectedModel)
+	}
 	if spec.Skills != nil {
 		repo, err := g.selectAgentSkills(ctx, tmpl, spec.Skills)
 		if err != nil {
@@ -515,6 +528,32 @@ func (g *workflowGateway) workflowChildPatch(
 		patch.SetSkillRepository(repo)
 	}
 	return patch, nil
+}
+
+func (g *workflowGateway) resolveAgentModelProfile(alias string) (model.Model, error) {
+	if alias == "" {
+		return nil, nil
+	}
+	for _, profile := range g.modelProfiles {
+		if profile.name == alias {
+			return profile.model, nil
+		}
+	}
+	available := make([]string, 0, len(g.modelProfiles))
+	for _, profile := range g.modelProfiles {
+		available = append(available, profile.name)
+	}
+	if len(available) == 0 {
+		return nil, fmt.Errorf(
+			"dynamicworkflow: unknown agent model profile %q; available: (none)",
+			alias,
+		)
+	}
+	return nil, fmt.Errorf(
+		"dynamicworkflow: unknown agent model profile %q; available: %s",
+		alias,
+		strings.Join(available, ", "),
+	)
 }
 
 func (g *workflowGateway) selectAgentTools(

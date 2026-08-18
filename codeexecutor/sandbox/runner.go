@@ -28,6 +28,44 @@ func (r *Runtime) RunProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
+	result, err := r.runProgram(ctx, ws, spec)
+	return normalizeRunProgramResult(result, err)
+}
+
+func normalizeRunProgramResult(
+	result codeexecutor.RunResult,
+	err error,
+) (codeexecutor.RunResult, error) {
+	if err == nil {
+		return result, nil
+	}
+	var classified *sandboxError
+	if errors.As(err, &classified) {
+		return result, err
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return result, err
+	}
+	result.TimedOut = true
+	result.ExitCode = -1
+	return result, newSandboxError(ErrTimeout, "run", "", err)
+}
+
+func (r *Runtime) runProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	diagnosticsCh := diagnosticsChanFromContext(ctx)
+	runDiagnostics := Diagnostics{}
+	if diagnosticsCh != nil {
+		defer func() {
+			select {
+			case diagnosticsCh <- runDiagnostics:
+			default:
+			}
+		}()
+	}
 	prep, err := r.prepareRun(ctx, ws, spec)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
@@ -43,8 +81,23 @@ func (r *Runtime) RunProgram(
 	defer cancel()
 	start := time.Now()
 	env := r.buildEnvironment(ws, spec)
-	cmd, backendName, cleanup, err := r.commandForProfile(runCtx, prep.profile, ws, prep.cwd, env, spec)
+	diagnostics := sandboxDenialRun{}
+	if diagnosticsCh != nil && prep.profile.enforcement() == enforcementManaged {
+		_ = r.ensureDenialMonitor(runCtx)
+		if result, err, done := runContextResult(runCtx, start); done {
+			return result, err
+		}
+		if r.sandboxDenialCollectingReady() {
+			diagnostics = r.sandboxDenialRunForCollecting(prep.profile)
+		}
+	}
+	cmd, backendName, cleanup, err := r.commandForProfile(
+		runCtx, prep.profile, ws, prep.cwd, env, spec, diagnostics,
+	)
 	if err != nil {
+		if result, ctxErr, done := runContextResult(runCtx, start); done {
+			return result, ctxErr
+		}
 		return codeexecutor.RunResult{}, err
 	}
 	if cleanup != nil {
@@ -66,6 +119,9 @@ func (r *Runtime) RunProgram(
 	cmd.WaitDelay = 2 * time.Second
 	err = cmd.Start()
 	if err != nil {
+		if result, ctxErr, done := runContextResult(runCtx, start); done {
+			return result, ctxErr
+		}
 		return codeexecutor.RunResult{}, backendError(ErrSetupFailed, backendName, err)
 	}
 	waitErr := cmd.Wait()
@@ -85,6 +141,7 @@ func (r *Runtime) RunProgram(
 		Duration: duration,
 		TimedOut: timedOut,
 	}
+	runDiagnostics = r.collectRunDiagnostics(runCtx, diagnostics, spec.Cmd, timedOut)
 	if timedOut {
 		return result, &sandboxError{
 			Kind:    ErrTimeout,
@@ -94,6 +151,59 @@ func (r *Runtime) RunProgram(
 		}
 	}
 	return result, nil
+}
+
+// collectRunDiagnostics collects denial diagnostics for a finished run. A run
+// that hit its deadline leaves runCtx canceled, so collection then uses its own
+// bounded context to keep settle waits effective.
+func (r *Runtime) collectRunDiagnostics(
+	runCtx context.Context,
+	run sandboxDenialRun,
+	cmd string,
+	timedOut bool,
+) Diagnostics {
+	if !run.enabled {
+		return Diagnostics{}
+	}
+	collectCtx := runCtx
+	if timedOut {
+		var cancel context.CancelFunc
+		collectCtx, cancel = context.WithTimeout(
+			context.Background(),
+			sandboxDenialSettleTimeout,
+		)
+		defer cancel()
+	}
+	denials, truncated := r.collectSandboxDenials(
+		collectCtx,
+		run,
+		cmd,
+		sandboxDenialSettleTimeout,
+	)
+	return Diagnostics{Denials: denials, Truncated: truncated}
+}
+
+func runContextResult(
+	ctx context.Context,
+	start time.Time,
+) (codeexecutor.RunResult, error, bool) {
+	err := ctx.Err()
+	if err == nil {
+		return codeexecutor.RunResult{}, nil, false
+	}
+	result := codeexecutor.RunResult{
+		Duration: time.Since(start),
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		result.TimedOut = true
+		result.ExitCode = -1
+		return result, &sandboxError{
+			Kind: ErrTimeout,
+			Op:   "run",
+			Err:  context.DeadlineExceeded,
+		}, true
+	}
+	return result, err, true
 }
 
 type runPreparation struct {
@@ -183,6 +293,7 @@ func (r *Runtime) commandForProfile(
 	cwd string,
 	env []string,
 	spec codeexecutor.RunProgramSpec,
+	diagnostics sandboxDenialRun,
 ) (*exec.Cmd, string, commandCleanup, error) {
 	switch profile.enforcement() {
 	case enforcementDisabled:
@@ -199,7 +310,7 @@ func (r *Runtime) commandForProfile(
 			errors.New("external sandbox profile cannot be executed by local sandbox runtime"),
 		)
 	default:
-		return r.osSandboxCommand(ctx, profile, ws, cwd, env, spec)
+		return r.osSandboxCommand(ctx, profile, ws, cwd, env, spec, diagnostics)
 	}
 }
 

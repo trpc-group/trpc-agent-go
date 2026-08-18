@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
+	toolerrorplugin "trpc.group/trpc-go/trpc-agent-go/plugin/toolerror"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -34,6 +35,10 @@ import (
 type resultFormatTestResult struct {
 	ExitCode int    `json:"exit_code"`
 	Output   string `json:"output"`
+}
+
+type autoMemoryToolErrorInput struct {
+	Query string `json:"query" jsonschema:"required"`
 }
 
 func executeResultFormatToolCall(
@@ -290,6 +295,55 @@ func TestExecuteToolCall_ResultFormatterUsesAfterToolResult(t *testing.T) {
 	assert.Equal(t, "replacement", choices[0].Message.Content)
 	assert.Equal(t, replacement, formatted)
 	assert.Equal(t, 1, toolCalls)
+}
+
+func TestExecuteToolCall_AfterToolResultCanSkipResultFormatter(t *testing.T) {
+	var formatterCalls atomic.Int32
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: map[string]any{
+				"ok": false,
+				"error": map[string]any{
+					"code": "execution",
+				},
+			},
+			SkipResultFormatter: true,
+		}, nil
+	})
+	ft := function.NewFunctionTool(
+		func(context.Context, struct{}) (resultFormatTestResult, error) {
+			return resultFormatTestResult{Output: "original"}, nil
+		},
+		function.WithName("bash"),
+		function.WithResultFormatter(
+			resultformat.FormatterFunc[resultFormatTestResult](func(
+				context.Context,
+				resultFormatTestResult,
+			) (string, error) {
+				formatterCalls.Add(1)
+				return "unexpected", nil
+			}),
+		),
+	)
+
+	choices := requireResultFormatToolCall(
+		t,
+		NewFunctionCallResponseProcessor(false, callbacks),
+		"bash",
+		ft,
+	)
+
+	require.Len(t, choices, 1)
+	assert.JSONEq(
+		t,
+		`{"ok":false,"error":{"code":"execution"}}`,
+		choices[0].Message.Content,
+	)
+	assert.Zero(t, formatterCalls.Load())
 }
 
 func TestExecuteToolCall_ToolResultMessagesOverridesFormattedDefault(t *testing.T) {
@@ -976,6 +1030,90 @@ func (t *statefulFunctionTool[I, O]) StateDelta(
 	return map[string][]byte{"state": []byte("updated")}
 }
 
+func TestExecuteToolCall_CustomResultCanSkipStateDelta(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		configure func(*tool.Callbacks)
+		wantCalls int32
+	}{
+		{
+			name: "before tool",
+			configure: func(callbacks *tool.Callbacks) {
+				callbacks.RegisterBeforeTool(func(
+					context.Context,
+					*tool.BeforeToolArgs,
+				) (*tool.BeforeToolResult, error) {
+					return &tool.BeforeToolResult{
+						CustomResult:   map[string]bool{"ok": false},
+						SkipStateDelta: true,
+					}, nil
+				})
+			},
+		},
+		{
+			name: "after tool",
+			configure: func(callbacks *tool.Callbacks) {
+				callbacks.RegisterAfterTool(func(
+					context.Context,
+					*tool.AfterToolArgs,
+				) (*tool.AfterToolResult, error) {
+					return &tool.AfterToolResult{
+						CustomResult:   map[string]bool{"ok": false},
+						SkipStateDelta: true,
+					}, nil
+				})
+			},
+			wantCalls: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var toolCalls atomic.Int32
+			stateful := &statefulFunctionTool[struct{}, resultFormatTestResult]{
+				FunctionTool: function.NewFunctionTool(
+					func(context.Context, struct{}) (resultFormatTestResult, error) {
+						toolCalls.Add(1)
+						return resultFormatTestResult{Output: "result"}, nil
+					},
+					function.WithName("stateful"),
+				),
+			}
+			callbacks := tool.NewCallbacks()
+			test.configure(callbacks)
+
+			evt, err := NewFunctionCallResponseProcessor(
+				false,
+				callbacks,
+			).executeSingleToolCallSequential(
+				context.Background(),
+				&agent.Invocation{
+					AgentName: "agent",
+					Model:     &mockModel{},
+					Session:   &session.Session{},
+				},
+				&model.Response{},
+				map[string]tool.Tool{"stateful": stateful},
+				make(chan *event.Event, 32),
+				0,
+				model.ToolCall{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "stateful",
+						Arguments: []byte(`{}`),
+					},
+				},
+			)
+
+			require.NoError(t, err)
+			require.NotNil(t, evt)
+			require.Len(t, evt.Choices, 1)
+			assert.JSONEq(t, `{"ok":false}`, evt.Choices[0].Message.Content)
+			assert.Equal(t, test.wantCalls, toolCalls.Load())
+			assert.Zero(t, stateful.stateDeltaCalls)
+			assert.Empty(t, evt.StateDelta)
+		})
+	}
+}
+
 type mutableResult struct {
 	Output string `json:"output"`
 }
@@ -1515,6 +1653,162 @@ func TestHandleFunctionCalls_FormatterFailureDoesNotMarkAutoMemoryPolluted(
 			})
 		}
 	}
+}
+
+func TestHandleFunctionCalls_ToolErrorFailureDoesNotMarkAutoMemoryPolluted(
+	t *testing.T,
+) {
+	tests := []struct {
+		name          string
+		arguments     []byte
+		toolError     error
+		wantToolCalls int32
+	}{
+		{
+			name:      "validation failure",
+			arguments: []byte(`{}`),
+		},
+		{
+			name:          "execution failure",
+			arguments:     []byte(`{"query":"external"}`),
+			toolError:     errors.New("search unavailable"),
+			wantToolCalls: 1,
+		},
+	}
+	for _, parallel := range []bool{false, true} {
+		for _, test := range tests {
+			name := fmt.Sprintf("parallel=%t/%s", parallel, test.name)
+			t.Run(name, func(t *testing.T) {
+				var toolCalls atomic.Int32
+				searchTool := function.NewFunctionTool(
+					func(
+						context.Context,
+						autoMemoryToolErrorInput,
+					) (resultFormatTestResult, error) {
+						toolCalls.Add(1)
+						return resultFormatTestResult{}, test.toolError
+					},
+					function.WithName(knowledgeSearchToolName),
+				)
+				sibling := function.NewFunctionTool(
+					func(context.Context, struct{}) (string, error) {
+						return "ok", nil
+					},
+					function.WithName("sibling"),
+				)
+				llmResponse := &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{
+								ID: "call-1",
+								Function: model.FunctionDefinitionParam{
+									Name:      knowledgeSearchToolName,
+									Arguments: test.arguments,
+								},
+							},
+							{
+								ID: "call-2",
+								Function: model.FunctionDefinitionParam{
+									Name:      "sibling",
+									Arguments: []byte(`{}`),
+								},
+							},
+						},
+					},
+				}}}
+				inv := &agent.Invocation{
+					AgentName: "agent",
+					Model:     &mockModel{},
+					Session:   &session.Session{},
+					Plugins: plugin.MustNewManager(
+						toolerrorplugin.New(),
+					),
+				}
+
+				evt, err := NewFunctionCallResponseProcessor(
+					parallel,
+					nil,
+				).handleFunctionCalls(
+					context.Background(),
+					inv,
+					llmResponse,
+					map[string]tool.Tool{
+						knowledgeSearchToolName: searchTool,
+						"sibling":               sibling,
+					},
+					make(chan *event.Event, 32),
+				)
+
+				require.NoError(t, err)
+				require.NotNil(t, evt)
+				assert.Equal(t, test.wantToolCalls, toolCalls.Load())
+				assert.NotContains(
+					t,
+					evt.StateDelta,
+					memory.SessionStateKeyMemoryMode,
+				)
+				mode, marked := inv.Session.GetState(
+					memory.SessionStateKeyMemoryMode,
+				)
+				assert.False(t, marked)
+				assert.Empty(t, mode)
+			})
+		}
+	}
+}
+
+func TestAfterToolMessages_ToolErrorNormalizesUnknownToolWithNilTools(
+	t *testing.T,
+) {
+	toolCall := model.ToolCall{
+		ID: "call-missing",
+		Function: model.FunctionDefinitionParam{
+			Name:      "missing",
+			Arguments: []byte(`{}`),
+		},
+	}
+	llmResponse := &model.Response{Choices: []model.Choice{{
+		Message: model.Message{
+			Role:      model.RoleAssistant,
+			ToolCalls: []model.ToolCall{toolCall},
+		},
+	}}}
+	toolEvent := event.NewResponseEvent("inv-1", "agent", &model.Response{
+		Object: model.ObjectTypeToolResponse,
+		Choices: []model.Choice{{
+			Message: model.NewToolMessage(
+				toolCall.ID,
+				toolCall.Function.Name,
+				"executeToolCall: Error: tool not found: missing",
+			),
+		}},
+	})
+	inv := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "agent",
+		Plugins: plugin.MustNewManager(
+			toolerrorplugin.New(),
+		),
+	}
+
+	err := NewFunctionCallResponseProcessor(false, nil).
+		applyAfterToolMessagesHooks(
+			context.Background(),
+			inv,
+			&model.Request{Tools: nil},
+			llmResponse,
+			toolEvent,
+		)
+
+	require.NoError(t, err)
+	require.Len(t, toolEvent.Response.Choices, 1)
+	message := toolEvent.Response.Choices[0].Message
+	require.Equal(t, "missing", message.ToolName)
+	var failure toolerrorplugin.Failure
+	require.NoError(t, json.Unmarshal([]byte(message.Content), &failure))
+	require.Equal(t, toolerrorplugin.SourceModel, failure.Error.Source)
+	require.Equal(t, toolerrorplugin.KindToolNotFound, failure.Error.Kind)
 }
 
 func newMergedStreamResultFormatTool(

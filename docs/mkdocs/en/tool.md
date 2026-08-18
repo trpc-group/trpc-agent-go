@@ -1816,11 +1816,12 @@ including its model, tools, skills, permissions, and runtime policy, then expose
 that Agent as a tool to the parent.
 
 Use `agenttool.NewDynamicTool()` when the application cannot predefine every
-specialist role, and the parent Agent should choose a tool subset or per-call
-instruction for each task. It exposes a model-facing tool named `dynamic_agent`
-by default. Calling this tool does not create arbitrary Go objects and does not
-select one pre-registered Agent by name; it runs one short-lived child Agent
-invocation within a boundary defined by application code.
+specialist role, and the parent Agent should choose a tool subset, per-call
+instruction, or an explicitly registered model profile for each task. It
+exposes a model-facing tool named `dynamic_agent` by default. Calling this tool
+does not create arbitrary Go objects and does not select one pre-registered
+Agent by name; it runs one short-lived child Agent invocation within a boundary
+defined by application code.
 
 Typical setup:
 
@@ -1860,6 +1861,9 @@ The default model-facing arguments are:
   child invocation.
 - `tools`: Optional exact tool names allowed for this invocation. An empty array
   means the child receives no user tools.
+- `model`: Present only when the host registers model profiles. It selects one
+  allowlisted profile for this invocation; omission keeps the existing
+  base/template model behavior.
 
 If the default parent-derived boundary is not the right business boundary, set a
 template Agent or explicit maximum capability surface in code:
@@ -1872,8 +1876,8 @@ workerTemplate := llmagent.New(
 )
 
 dynamicAgent := agenttool.NewDynamicTool(
-    // Optional: define the child Agent execution boundary: model, executor,
-    // callbacks, permission policy, and similar runtime settings.
+    // Optional: define the child Agent execution boundary: default model,
+    // executor, callbacks, permission policy, and similar runtime settings.
     agenttool.WithTemplateAgent(workerTemplate),
     // Optional: restrict the maximum tool set the model can choose from.
     agenttool.WithCapabilityTools([]tool.Tool{readFileTool, searchCodeTool}),
@@ -1881,9 +1885,55 @@ dynamicAgent := agenttool.NewDynamicTool(
 ```
 
 `WithTemplateAgent` is a code-side boundary, not a model parameter. The model
-cannot use `dynamic_agent` to choose arbitrary Agents, models, or executors. It
-can only fill `request`, optionally set `instruction`, and optionally narrow the
-tools/skills subset inside the boundary configured by the developer.
+cannot use `dynamic_agent` to choose arbitrary Agents, provider model names, or
+executors. It can only fill `request`, optionally set `instruction`, optionally
+narrow the tools/skills subset, and select an explicitly registered model
+profile inside the boundary configured by the developer.
+
+To let the parent choose among host-approved model roles, register stable
+aliases with descriptions:
+
+```go
+dynamicAgent := agenttool.NewDynamicTool(
+    agenttool.WithTemplateAgent(workerTemplate),
+    agenttool.WithAgentModelProfile(
+        "fast",
+        "Low-latency model for extraction and first drafts.",
+        fastModel,
+    ),
+    agenttool.WithAgentModelProfile(
+        "deep",
+        "Higher-capability model for synthesis and strict review.",
+        deepModel,
+    ),
+)
+```
+
+The option adds an enum-backed `model` field to the tool schema. A call may use
+`"model": "fast"` or `"model": "deep"`; an unknown alias fails before the
+child runs. The selected model is attached through an invocation-scoped surface
+patch, so it does not mutate the shared template and concurrent calls may choose
+different profiles safely. Omission keeps the template default when a template
+is configured, or the parent's effective model selection when it is not.
+Profile names and descriptions are visible to the parent model; do not put
+credentials or private provider configuration in them.
+
+An explicit profile selection starts a new model request boundary. It does not
+inherit the parent's `ModelContextWindow`, `ModelRequestExtraFields`, or
+`ModelRequestHeaders`; configure provider-specific settings on the registered
+model instead. Calls that omit `model` retain the existing inheritance behavior.
+
+`llmagent.WithModels` remains useful for host-controlled model switching, but
+its registry is not automatically exposed through `dynamic_agent`. This is
+intentional: model-visible aliases need task-oriented descriptions and an
+explicit allowlist. A profile may point to a model already present in that
+registry, but the two configurations have different boundaries. With a template,
+the existing template boundary still prevents parent RunOptions model overrides
+from leaking into the child; set its default in host code or register profiles.
+Without a template, omitting `model` preserves the inherited RunOptions behavior.
+Profile selection is consumed by LLMAgent. Other Agent implementations retain
+their own model semantics, so use an LLMAgent base or template when model routing
+is required.
 
 Common options:
 
@@ -1891,8 +1941,12 @@ Common options:
   `NewDynamicTool`; regular `NewTool(agent)` always uses the wrapped Agent's
   `Info().Name`.
 - `WithTemplateAgent(agent)`: set the dynamic child Agent template, commonly used
-  to fix the model, executor, callbacks, permission policy, and other runtime
-  boundaries.
+  to fix the default model, executor, callbacks, permission policy, and other
+  runtime boundaries.
+- `WithAgentModelProfile(name, description, model)`: register one
+  host-authorized model alias that may override the model for one child call.
+  Repeat the option to add profiles. No `model` field is exposed when no profile
+  is registered.
 - `WithCapabilityTools(tools)`: set the maximum tool surface the model may choose
   from. When omitted, it is derived from the parent Agent's effective user tools
   for the current run. When set, the tool names are enumerated in the `tools`
@@ -1929,7 +1983,7 @@ Dynamic AgentTool has a different boundary from the other multi-Agent mechanisms
 | --- | --- | --- | --- |
 | `agenttool.NewTool(agent)` | one fixed tool entrypoint | per tool call | returns a tool result to the parent Agent |
 | `transfer_to_agent` | one registered sub-agent | target Agent continues the current turn | hands off control |
-| `agenttool.NewDynamicTool()` | `request`, `instruction`, and a tools/skills subset for this call | per tool call | returns a tool result to the parent Agent |
+| `agenttool.NewDynamicTool()` | `request`, `instruction`, a tools/skills subset, and optionally one registered model profile for this call | per tool call | returns a tool result to the parent Agent |
 
 If the same specialist Agent is exposed through both `WithSubAgents` and
 `agenttool.NewTool(agent)`, the parent model sees two different paths:

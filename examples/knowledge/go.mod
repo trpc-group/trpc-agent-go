@@ -24,10 +24,10 @@ replace (
 require (
 	github.com/getkin/kin-openapi v0.131.0
 	github.com/jackc/pgx/v5 v5.7.2
-	trpc.group/trpc-go/trpc-agent-go v1.10.1-0.20260605075142-de51b6b2b584
+	trpc.group/trpc-go/trpc-agent-go v1.11.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang v0.0.0-20260602121024-664ebd0ab56d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.5.0
-	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python v1.11.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age v0.0.0-20260602121024-664ebd0ab56d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-20251203120347-0b4d62cb115d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
