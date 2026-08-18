@@ -39,10 +39,14 @@ func SessionWorkspaceKey(app, user, id string) string {
 	return "sess-" + hex.EncodeToString(sum[:16])
 }
 
-// LegacySessionWorkspaceKey reproduces the pre-migration workspace key format
-// ("app/user/id" when both app and user are non-empty, otherwise just "id")
-// for the one-time upgrade path: callers use it to locate workspaces created
-// by older binaries and migrate them to the SessionWorkspaceKey layout.
+// LegacySessionWorkspaceKey reproduces the pre-encoding-change workspace key
+// format ("app/user/id" when both app and user are non-empty, otherwise just
+// "id"). The codeexecutor/sandbox runtime migrates its PerSession
+// workspaces from this key automatically at CreateWorkspace time; this
+// helper is intended for diagnostics and for WorkspaceManager
+// implementations outside the sandbox that persist by this key and predate
+// the encoding change. Callers on the sandbox runtime must not run a
+// concurrent migration with this key — the runtime already does it.
 // Returns "" when id is empty or whitespace-only.
 func LegacySessionWorkspaceKey(app, user, id string) string {
 	if strings.TrimSpace(id) == "" {

@@ -174,14 +174,15 @@ func workspaceKey(ctx context.Context, fallback string) string {
 // sessions never share a workspace. Session.ID is required; empty or
 // whitespace-only ID returns "".
 //
-// Breaking change: the encoding changed from "app/user/id" (or just "id"
-// when fields were missing) to the hash format above. After an upgrade,
-// existing PerSession workspaces on disk are orphaned because the same
-// session now hashes to a different directory path. Callers that need to
-// locate legacy workspaces should use LegacyKeyFromInvocation (which
-// delegates to codeexecutor.LegacySessionWorkspaceKey) for a one-time
-// migration (e.g. rename or symlink the old directory to the new key's
-// path).
+// The encoding changed from "app/user/id" (or just "id" when fields were
+// missing) to the hash format above. codeexecutor/sandbox migrates its
+// PerSession workspaces at runtime: when CreateWorkspace receives an
+// execID equal to this key for the invocation's session, it renames the
+// legacy directory automatically. Callers using the sandbox runtime must
+// NOT additionally migrate via LegacyKeyFromInvocation — doing so races
+// the runtime on the same directory. Other WorkspaceManager
+// implementations that persist by this key still need their own upgrade
+// strategy if they predate the encoding change.
 func KeyFromInvocation(inv *agent.Invocation) string {
 	if inv == nil || inv.Session == nil {
 		return ""
@@ -192,10 +193,12 @@ func KeyFromInvocation(inv *agent.Invocation) string {
 	return codeexecutor.SessionWorkspaceKey(app, user, id)
 }
 
-// LegacyKeyFromInvocation reproduces the pre-migration workspace key format
-// ("app/user/id" or just "id") for a one-time upgrade path. Callers should
-// check whether a workspace exists at the legacy key's derived path and
-// migrate it to the new KeyFromInvocation path if found.
+// LegacyKeyFromInvocation reproduces the pre-encoding-change workspace key
+// format ("app/user/id" or just "id"). It is intended for diagnostics and
+// one-time upgrade tooling around WorkspaceManager implementations that do
+// not migrate on their own. The codeexecutor/sandbox runtime already
+// migrates its PerSession directories automatically; callers on that
+// runtime must not run a concurrent migration with this key.
 func LegacyKeyFromInvocation(inv *agent.Invocation) string {
 	if inv == nil || inv.Session == nil {
 		return ""
