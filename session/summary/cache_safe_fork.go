@@ -126,6 +126,13 @@ func cloneContentPartForCacheSafeFork(part model.ContentPart) model.ContentPart 
 		}
 		cloned.Audio = &audio
 	}
+	if part.Video != nil {
+		video := *part.Video
+		if part.Video.Data != nil {
+			video.Data = append([]byte(nil), part.Video.Data...)
+		}
+		cloned.Video = &video
+	}
 	if part.File != nil {
 		file := *part.File
 		if part.File.Data != nil {

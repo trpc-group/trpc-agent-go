@@ -463,13 +463,14 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		if err != nil {
 			return fmt.Errorf("marshal session state failed: %w", err)
 		}
-		expiresAt := calculateExpiresAt(s.opts.sessionTTL)
+		sessionExpires := calculateExpiresAt(s.opts.sessionTTL)
+		trackExpires := calculateExpiresAt(s.opts.effectiveTrackEventTTL())
 
 		// Update session state.
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 			 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-			string(updatedStateBytes), updatedAt, expiresAt,
+			string(updatedStateBytes), updatedAt, sessionExpires,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -480,7 +481,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at, expires_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionTracks),
 			key.AppName, key.UserID, key.SessionID, trackEvent.Track, string(eventBytes),
-			trackEvent.Timestamp, trackEvent.Timestamp, expiresAt)
+			trackEvent.Timestamp, trackEvent.Timestamp, trackExpires)
 		if err != nil {
 			return fmt.Errorf("insert track event failed: %w", err)
 		}
@@ -538,12 +539,15 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 				return err
 			}
 
-			// Soft delete session summaries
-			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-				 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionSummaries),
-				now, key.AppName, key.UserID, key.SessionID)
-			if err != nil {
+			// Soft delete session summaries. Legacy schemas may contain duplicate
+			// active rows that require the compatibility fallback.
+			if err = s.softDeleteSummaries(
+				ctx,
+				tx,
+				"app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL",
+				[]any{key.AppName, key.UserID, key.SessionID},
+				now,
+			); err != nil {
 				return err
 			}
 
@@ -1218,21 +1222,34 @@ func (s *Service) getTrackEvents(
 	if len(sessionStates) != len(sessionKeys) {
 		return nil, fmt.Errorf("session states count mismatch: %d != %d", len(sessionStates), len(sessionKeys))
 	}
+	trackLists := make([][]session.Track, len(sessionKeys))
+	for i := range sessionKeys {
+		tracks, err := session.TracksFromState(sessionStates[i].State)
+		if err != nil {
+			return nil, fmt.Errorf("get track list failed: %w", err)
+		}
+		trackLists[i] = tracks
+	}
+	return s.getTrackEventsByTrackLists(ctx, sessionKeys, trackLists, limit, afterTime)
+}
 
+func (s *Service) getTrackEventsByTrackLists(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	trackLists [][]session.Track,
+	limit int,
+	afterTime time.Time,
+) ([]map[session.Track][]session.TrackEvent, error) {
 	type trackQuery struct {
 		sessionIdx int
 		track      session.Track
 		query      string
 		args       []any
 	}
-
 	queries := make([]*trackQuery, 0)
 	now := time.Now()
 	for i, key := range sessionKeys {
-		tracks, err := session.TracksFromState(sessionStates[i].State)
-		if err != nil {
-			return nil, fmt.Errorf("get track list failed: %w", err)
-		}
+		tracks := trackLists[i]
 		for _, track := range tracks {
 			query := fmt.Sprintf(`SELECT event FROM %s
 					WHERE app_name = ? AND user_id = ? AND session_id = ? AND track = ?
@@ -1262,7 +1279,6 @@ func (s *Service) getTrackEvents(
 			})
 		}
 	}
-
 	results := make([]map[session.Track][]session.TrackEvent, len(sessionKeys))
 	for _, q := range queries {
 		events := make([]session.TrackEvent, 0)
@@ -1281,7 +1297,6 @@ func (s *Service) getTrackEvents(
 		if err != nil {
 			return nil, fmt.Errorf("query track events failed: %w", err)
 		}
-
 		for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
 			events[i], events[j] = events[j], events[i]
 		}
@@ -1322,11 +1337,14 @@ func (s *Service) getSummariesList(
 	// add explicit user_id for shard routing. Harmless on MySQL.
 	args = append(args, sessionKeys[0].UserID, time.Now())
 
+	// Sort oldest-first so later map assignments deterministically retain the
+	// newest active copy when a legacy schema contains duplicates.
 	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
 		AND user_id = ?
 		AND (expires_at IS NULL OR expires_at > ?)
-		AND deleted_at IS NULL`,
+		AND deleted_at IS NULL
+		ORDER BY updated_at ASC, id ASC`,
 		s.tableSessionSummaries, strings.Join(placeholders, ","))
 
 	// Build a map of session key to created_at for filtering

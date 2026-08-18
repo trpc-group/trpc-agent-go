@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -24,9 +25,11 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -138,6 +141,40 @@ func TestWithToolSets_CopiesSlice(t *testing.T) {
 	}
 }
 
+func TestWithToolConcurrencyConfigCopiesGroups(t *testing.T) {
+	config := tool.ConcurrencyConfig{
+		MaxConcurrency: 4,
+		Groups: []tool.ConcurrencyGroup{{
+			ToolNames: []string{"search", "fetch"},
+			Limit:     1,
+		}},
+	}
+	option := WithToolConcurrencyConfig(config)
+	config.Groups[0].ToolNames[0] = "changed"
+
+	node := &Node{}
+	option(node)
+
+	require.Equal(t, 4, node.toolConcurrencyConfig.MaxConcurrency)
+	require.Equal(
+		t,
+		[]string{"search", "fetch"},
+		node.toolConcurrencyConfig.Groups[0].ToolNames,
+	)
+	require.Equal(t, 1, node.toolConcurrencyConfig.Groups[0].Limit)
+}
+
+func TestWithToolConcurrencyConfigRejectsDuplicateGroups(t *testing.T) {
+	require.Panics(t, func() {
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{
+				{ToolNames: []string{"search"}, Limit: 1},
+				{ToolNames: []string{"search"}, Limit: 2},
+			},
+		})
+	})
+}
+
 func TestMergeToolsWithToolSets_EmitsConflictWarning(t *testing.T) {
 	base := map[string]tool.Tool{
 		"simple_echo": &echoTool{name: "simple_echo"},
@@ -192,6 +229,244 @@ func (b *blockingTool) Call(ctx context.Context, _ []byte) (any, error) {
 		}
 	}
 	return b.result, nil
+}
+
+func TestExecuteSingleToolCall_RecordsExecutionTraceToolAndSkill(t *testing.T) {
+	inv, ctx, stepID := newGraphExecutionTraceInvocation(t)
+	ctx, span := trace.Tracer.Start(ctx, "tool")
+	defer span.End()
+	msg, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-skill",
+			Function: model.FunctionDefinitionParam{
+				Name:      "skill_load",
+				Arguments: []byte(`{"skill":"research"}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"skill_load": &blockingTool{name: "skill_load", result: "loaded: research"},
+		},
+		InvocationID: "inv-1",
+		Span:         span,
+		State:        State{currentTraceStepIDStateKey: stepID},
+	})
+	require.NoError(t, err)
+	require.Equal(t, model.RoleTool, msg.Role)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Equal(t, []atrace.Tool{{
+		ID:        "call-skill",
+		Name:      "skill_load",
+		Arguments: map[string]any{"skill": "research"},
+		Result:    "loaded: research",
+	}}, executionTrace.Steps[0].Tools)
+	require.Equal(t, []atrace.Skill{{Name: "research"}}, executionTrace.Steps[0].Skills)
+}
+
+func TestExecuteSingleToolCall_RecordsExecutionTraceToolError(t *testing.T) {
+	inv, ctx, stepID := newGraphExecutionTraceInvocation(t)
+	ctx, span := trace.Tracer.Start(ctx, "tool")
+	defer span.End()
+	_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-error",
+			Function: model.FunctionDefinitionParam{
+				Name:      "unstable",
+				Arguments: []byte(`{"attempt":1}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"unstable": &blockingTool{name: "unstable", returnErr: errors.New("boom")},
+		},
+		InvocationID: "inv-1",
+		Span:         span,
+		State:        State{currentTraceStepIDStateKey: stepID},
+	})
+	require.Error(t, err)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Len(t, executionTrace.Steps[0].Tools, 1)
+	recordedTool := executionTrace.Steps[0].Tools[0]
+	require.Equal(t, "call-error", recordedTool.ID)
+	require.Equal(t, "unstable", recordedTool.Name)
+	require.Equal(t, map[string]any{"attempt": float64(1)}, recordedTool.Arguments)
+	require.Empty(t, recordedTool.Result)
+	require.Contains(t, recordedTool.Error, "boom")
+	require.Empty(t, executionTrace.Steps[0].Skills)
+}
+
+func TestExecuteSingleToolCall_RecordsExecutionTraceToolMarshalError(t *testing.T) {
+	inv, ctx, stepID := newGraphExecutionTraceInvocation(t)
+	ctx, span := trace.Tracer.Start(ctx, "tool")
+	defer span.End()
+	_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-bad",
+			Function: model.FunctionDefinitionParam{
+				Name:      "bad",
+				Arguments: []byte(`{"attempt":1}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"bad": &blockingTool{name: "bad", result: map[string]any{"bad": make(chan int)}},
+		},
+		InvocationID: "inv-1",
+		Span:         span,
+		State:        State{currentTraceStepIDStateKey: stepID},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to marshal tool result")
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Len(t, executionTrace.Steps[0].Tools, 1)
+	recordedTool := executionTrace.Steps[0].Tools[0]
+	require.Equal(t, "call-bad", recordedTool.ID)
+	require.Equal(t, "bad", recordedTool.Name)
+	require.Equal(t, map[string]any{"attempt": float64(1)}, recordedTool.Arguments)
+	require.Nil(t, recordedTool.Result)
+	require.Contains(t, recordedTool.Error, "failed to marshal tool result")
+}
+
+func TestExecuteSingleToolCall_RecordsPreExecutionTraceToolErrors(t *testing.T) {
+	t.Run("missing tool", func(t *testing.T) {
+		inv, ctx, stepID := newGraphExecutionTraceInvocation(t)
+		ctx, span := trace.Tracer.Start(ctx, "tool")
+		defer span.End()
+		_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+			ToolCall: model.ToolCall{
+				ID: "call-missing",
+				Function: model.FunctionDefinitionParam{
+					Name:      "missing",
+					Arguments: []byte(`{"q":"docs"}`),
+				},
+			},
+			Tools:        map[string]tool.Tool{},
+			InvocationID: "inv-1",
+			Span:         span,
+			State:        State{currentTraceStepIDStateKey: stepID},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "tool missing not found")
+		executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+		require.NotNil(t, executionTrace)
+		require.Len(t, executionTrace.Steps, 1)
+		require.Len(t, executionTrace.Steps[0].Tools, 1)
+		recordedTool := executionTrace.Steps[0].Tools[0]
+		require.Equal(t, "call-missing", recordedTool.ID)
+		require.Equal(t, "missing", recordedTool.Name)
+		require.Equal(t, map[string]any{"q": "docs"}, recordedTool.Arguments)
+		require.Nil(t, recordedTool.Result)
+		require.Contains(t, recordedTool.Error, "tool missing not found")
+	})
+	t.Run("concurrency acquire", func(t *testing.T) {
+		inv, ctx, stepID := newGraphExecutionTraceInvocation(t)
+		limiter := toolcall.NewLimiter(tool.ConcurrencyConfig{MaxConcurrency: 1})
+		release, err := limiter.Acquire(context.Background(), "limited")
+		require.NoError(t, err)
+		defer release()
+		cancelCtx, cancel := context.WithCancel(ctx)
+		cancel()
+		cancelCtx, span := trace.Tracer.Start(cancelCtx, "tool")
+		defer span.End()
+		_, err = executeSingleToolCall(cancelCtx, singleToolCallConfig{
+			ToolCall: model.ToolCall{
+				ID: "call-limited",
+				Function: model.FunctionDefinitionParam{
+					Name:      "limited",
+					Arguments: []byte(`{"q":"docs"}`),
+				},
+			},
+			Tools: map[string]tool.Tool{
+				"limited": &blockingTool{name: "limited", result: "ok"},
+			},
+			InvocationID: "inv-1",
+			Span:         span,
+			State:        State{currentTraceStepIDStateKey: stepID},
+			Concurrency:  limiter,
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "wait for tool limited concurrency")
+		executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+		require.NotNil(t, executionTrace)
+		require.Len(t, executionTrace.Steps, 1)
+		require.Len(t, executionTrace.Steps[0].Tools, 1)
+		recordedTool := executionTrace.Steps[0].Tools[0]
+		require.Equal(t, "call-limited", recordedTool.ID)
+		require.Equal(t, "limited", recordedTool.Name)
+		require.Equal(t, map[string]any{"q": "docs"}, recordedTool.Arguments)
+		require.Nil(t, recordedTool.Result)
+		require.Contains(t, recordedTool.Error, "wait for tool limited concurrency")
+	})
+}
+
+func TestProcessToolCalls_RecordsParallelExecutionTraceToolsInCallOrder(t *testing.T) {
+	inv, ctx, stepID := newGraphExecutionTraceInvocation(t)
+	fastDone := make(chan struct{})
+	tools := map[string]tool.Tool{
+		"slow": &retryTool{
+			name: "slow",
+			callFn: func(ctx context.Context, _ []byte) (any, error) {
+				select {
+				case <-fastDone:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				return "slow result", nil
+			},
+		},
+		"fast": &retryTool{
+			name: "fast",
+			callFn: func(context.Context, []byte) (any, error) {
+				close(fastDone)
+				return "fast result", nil
+			},
+		},
+	}
+	msgs, err := processToolCalls(ctx, toolCallsConfig{
+		ToolCalls:      makeToolCalls("slow", "fast"),
+		Tools:          tools,
+		InvocationID:   "inv-1",
+		Span:           oteltrace.SpanFromContext(ctx),
+		State:          State{currentTraceStepIDStateKey: stepID},
+		EnableParallel: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Equal(t, []atrace.Tool{
+		{
+			ID:        "call_slow",
+			Name:      "slow",
+			Arguments: map[string]any{},
+			Result:    "slow result",
+		},
+		{
+			ID:        "call_fast",
+			Name:      "fast",
+			Arguments: map[string]any{},
+			Result:    "fast result",
+		},
+	}, executionTrace.Steps[0].Tools)
+}
+
+func newGraphExecutionTraceInvocation(t *testing.T) (*agent.Invocation, context.Context, string) {
+	t.Helper()
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+	stepID := agent.StartExecutionTraceStep(
+		inv,
+		"tools",
+		&atrace.Snapshot{Text: "input"},
+		nil,
+	)
+	require.NotEmpty(t, stepID)
+	return inv, agent.NewInvocationContext(context.Background(), inv), stepID
 }
 
 type resultWithErrorTool struct {
@@ -420,6 +695,135 @@ func TestProcessToolCalls_SerialVsParallel(t *testing.T) {
 			t.Fatalf("order not preserved: %s then %s", msgs[0].ToolName, msgs[1].ToolName)
 		}
 	})
+}
+
+func TestToolsNodeToolConcurrencyLimitsOneInvocation(t *testing.T) {
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	tools := map[string]tool.Tool{
+		"subagent": &blockingTool{
+			name:       "subagent",
+			startedCh:  started,
+			proceedCh:  release,
+			result:     map[string]string{"status": "done"},
+			respectCtx: true,
+		},
+	}
+	nodeFunc := NewToolsNodeFunc(
+		tools,
+		WithEnableParallelTools(true),
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{
+				ToolNames: []string{"subagent"},
+				Limit:     2,
+			}},
+		}),
+	)
+	toolCalls := make([]model.ToolCall, 4)
+	for i := range toolCalls {
+		toolCalls[i] = model.ToolCall{
+			ID: fmt.Sprintf("call-%d", i),
+			Function: model.FunctionDefinitionParam{
+				Name:      "subagent",
+				Arguments: []byte(`{}`),
+			},
+		}
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := nodeFunc(context.Background(), State{
+			StateKeyMessages: []model.Message{{
+				Role:      model.RoleAssistant,
+				ToolCalls: toolCalls,
+			}},
+		})
+		result <- err
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case name := <-started:
+			require.Equal(t, "subagent", name)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for limited tool call to start")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("more tool calls started than the invocation limit")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tool invocation to finish")
+	}
+}
+
+func TestToolsNodeToolConcurrencyIndependentAcrossInvocations(t *testing.T) {
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	tools := map[string]tool.Tool{
+		"subagent": &blockingTool{
+			name:       "subagent",
+			startedCh:  started,
+			proceedCh:  release,
+			result:     map[string]string{"status": "done"},
+			respectCtx: true,
+		},
+	}
+	nodeFunc := NewToolsNodeFunc(
+		tools,
+		WithEnableParallelTools(true),
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{
+				ToolNames: []string{"subagent"},
+				Limit:     2,
+			}},
+		}),
+	)
+
+	results := make(chan error, 4)
+	for i := 0; i < 4; i++ {
+		i := i
+		go func() {
+			_, err := nodeFunc(context.Background(), State{
+				StateKeyMessages: []model.Message{{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID: fmt.Sprintf("call-%d", i),
+						Function: model.FunctionDefinitionParam{
+							Name:      "subagent",
+							Arguments: []byte(`{}`),
+						},
+					}},
+				}},
+			})
+			results <- err
+		}()
+	}
+
+	for i := 0; i < 4; i++ {
+		select {
+		case name := <-started:
+			require.Equal(t, "subagent", name)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for independent tool call to start")
+		}
+	}
+
+	close(release)
+	for i := 0; i < 4; i++ {
+		select {
+		case err := <-results:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for limited tool call to finish")
+		}
+	}
 }
 
 func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
@@ -1331,6 +1735,44 @@ func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {
 	}
 }
 
+func TestProcessToolCalls_ParallelLimiterWaiterPreservesCausalError(
+	t *testing.T,
+) {
+	const blockedToolName = "blocked"
+	limiter := toolcall.NewLimiter(tool.ConcurrencyConfig{
+		Groups: []tool.ConcurrencyGroup{{
+			ToolNames: []string{blockedToolName},
+			Limit:     1,
+		}},
+	})
+	release, err := limiter.Acquire(context.Background(), blockedToolName)
+	require.NoError(t, err)
+	defer release()
+
+	causalErr := errors.New("causal tool failure")
+	tools := map[string]tool.Tool{
+		blockedToolName: &blockingTool{
+			name:   blockedToolName,
+			result: "unexpected",
+		},
+		"fail": &blockingTool{
+			name:      "fail",
+			returnErr: causalErr,
+		},
+	}
+	_, err = processToolCalls(context.Background(), toolCallsConfig{
+		ToolCalls:      makeToolCalls(blockedToolName, "fail"),
+		Tools:          tools,
+		InvocationID:   "inv",
+		Span:           oteltrace.SpanFromContext(context.Background()),
+		State:          State{},
+		EnableParallel: true,
+		Concurrency:    limiter,
+	})
+	require.ErrorIs(t, err, causalErr)
+	require.NotErrorIs(t, err, context.Canceled)
+}
+
 func TestProcessToolCalls_ParallelPrefersAgentToolGraphInterrupt(t *testing.T) {
 	const nodeID = "tools"
 	metadata := testAgentToolInterruptMetadata()
@@ -1395,11 +1837,14 @@ func TestProcessToolCalls_OrdinaryErrorClearsCompletedToolMessages(t *testing.T)
 
 func TestSelectToolCallError_PrefersAgentToolGraphInterrupt(t *testing.T) {
 	agentInterrupt := testAgentToolInterruptError(t, testAgentToolInterruptMetadata())
-	err := selectToolCallError([]error{
-		context.Canceled,
-		agentInterrupt,
-		assertAnError{},
-	})
+	err := selectToolCallError(
+		[]error{
+			context.Canceled,
+			agentInterrupt,
+			assertAnError{},
+		},
+		nil,
+	)
 	require.ErrorIs(t, err, agentInterrupt)
 }
 
@@ -1408,10 +1853,13 @@ func TestSelectToolCallError_RejectsMultipleAgentToolGraphInterrupts(t *testing.
 	secondMetadata := firstMetadata
 	secondMetadata.ToolCallID = "call_other"
 	secondMetadata.ToolCallKey = "2:interrupt:call_other"
-	err := selectToolCallError([]error{
-		testAgentToolInterruptError(t, firstMetadata),
-		testAgentToolInterruptError(t, secondMetadata),
-	})
+	err := selectToolCallError(
+		[]error{
+			testAgentToolInterruptError(t, firstMetadata),
+			testAgentToolInterruptError(t, secondMetadata),
+		},
+		nil,
+	)
 	require.ErrorContains(t, err, "multiple agent tool graph interrupts")
 }
 

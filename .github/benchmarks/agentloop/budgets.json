@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "benchmarks": [
+    {
+      "package": "trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow",
+      "name": "BenchmarkStreamingResponseProcessorUpdateMetricsState/SummaryItems/16",
+      "max_bytes_per_op": 0,
+      "max_allocs_per_op": 0
+    },
+    {
+      "package": "trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow",
+      "name": "BenchmarkStreamingResponseProcessorUpdateMetricsState/SummaryItems/256",
+      "max_bytes_per_op": 0,
+      "max_allocs_per_op": 0
+    },
+    {
+      "package": "trpc.group/trpc-go/trpc-agent-go/internal/flow/processor",
+      "name": "BenchmarkParallelInvocationView/history=256",
+      "max_bytes_per_op": 4096,
+      "max_allocs_per_op": 16
+    },
+    {
+      "package": "trpc.group/trpc-go/trpc-agent-go/internal/flow/processor",
+      "name": "BenchmarkParallelInvocationView/history=1024",
+      "max_bytes_per_op": 4096,
+      "max_allocs_per_op": 16
+    }
+  ],
+  "invariants": [
+    {
+      "name": "streaming metrics state is independent of summary history",
+      "package": "trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow",
+      "baseline": "BenchmarkStreamingResponseProcessorUpdateMetricsState/SummaryItems/16",
+      "candidate": "BenchmarkStreamingResponseProcessorUpdateMetricsState/SummaryItems/256",
+      "max_bytes_delta": 0,
+      "max_allocs_delta": 0
+    },
+    {
+      "name": "parallel invocation view is independent of summary history",
+      "package": "trpc.group/trpc-go/trpc-agent-go/internal/flow/processor",
+      "baseline": "BenchmarkParallelInvocationView/history=256",
+      "candidate": "BenchmarkParallelInvocationView/history=1024",
+      "max_bytes_delta": 256,
+      "max_allocs_delta": 1
+    }
+  ]
+}

@@ -20,7 +20,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -515,6 +517,123 @@ func TestMaybeCompactContextBeforeLLM_RebuildsRequestWithSummary(t *testing.T) {
 	require.True(t, *doneDiagnostic.Updated)
 }
 
+func TestMaybeCompactContextBeforeLLM_SummarizesSanitizedOrphanToolCall(
+	t *testing.T,
+) {
+	summaryModel := &mockModel{responses: []*model.Response{{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("compressed orphan history"),
+		}},
+	}}}
+	service := inmemory.NewSessionService(inmemory.WithSummarizer(
+		summary.NewSummarizer(
+			summaryModel,
+			summary.WithTokenThreshold(1),
+			summary.WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
+		),
+	))
+	t.Cleanup(func() {
+		require.NoError(t, service.Close())
+	})
+
+	ctx := context.Background()
+	sess, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "orphan-compaction",
+	}, nil)
+	require.NoError(t, err)
+	oldUser := event.New("inv-old", "user")
+	oldUser.RequestID = "req-old"
+	oldUser.Timestamp = time.Now().Add(-time.Hour)
+	oldUser.Response = &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewUserMessage(strings.Repeat("history ", 2000)),
+		}},
+	}
+	require.NoError(t, service.AppendEvent(ctx, sess, oldUser))
+	orphanCall := event.New("inv-old", "assistant")
+	orphanCall.RequestID = "req-old"
+	orphanCall.Timestamp = oldUser.Timestamp.Add(time.Second)
+	orphanCall.Response = &model.Response{
+		Done: true,
+		Choices: []model.Choice{{Message: model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:   "call_orphan",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "shell",
+					Arguments: []byte(`{"command":"pwd"}`),
+				},
+			}},
+		}}},
+	}
+	require.NoError(t, service.AppendEvent(ctx, sess, orphanCall))
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(service),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-current",
+		}),
+		agent.WithInvocationModel(&compactingModel{
+			name:   "orphan-compaction-model",
+			window: 10000,
+		}),
+	)
+	f := New(
+		[]flow.RequestProcessor{
+			processor.NewContentRequestProcessor(
+				processor.WithAddSessionSummary(true),
+			),
+		},
+		nil,
+		Options{
+			EnableContextCompaction:         true,
+			ContextCompactionThresholdRatio: 0.2,
+		},
+	)
+
+	req := &model.Request{}
+	rebuildPlan := f.preprocess(ctx, inv, req, nil)
+	view, ok := summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.True(t, view.Bound)
+	require.Len(t, req.Messages, 3)
+	require.Contains(t, req.Messages[1].Content, "orphan_tool_call")
+
+	rebuilt := f.maybeCompactContextBeforeLLM(
+		ctx,
+		inv,
+		nil,
+		req,
+		rebuildPlan,
+	)
+
+	require.NotSame(t, req, rebuilt)
+	require.Len(t, rebuilt.Messages, 2)
+	require.Contains(t, rebuilt.Messages[0].Content, "compressed orphan history")
+	require.Equal(t, "current", rebuilt.Messages[1].Content)
+	summaryRequest := summaryModel.LastRequest()
+	require.NotNil(t, summaryRequest)
+	require.Contains(t, summaryRequest.Messages[0].Content, "orphan_tool_call")
+	sess.SummariesMu.RLock()
+	storedSummary := sess.Summaries[""]
+	sess.SummariesMu.RUnlock()
+	require.NotNil(t, storedSummary)
+	boundary := storedSummary.CutoffBoundary()
+	require.NotNil(t, boundary)
+	require.Equal(
+		t,
+		orphanCall.ID,
+		boundary.LastEventID,
+	)
+}
+
 func TestMaybeCompactContextBeforeLLM_PassesParentRequestForCacheSafeFork(t *testing.T) {
 	modelName := "compact-retry-cache-safe-fork"
 	model.RegisterModelContextWindow(modelName, 10000)
@@ -576,6 +695,102 @@ func TestMaybeCompactContextBeforeLLM_PassesParentRequestForCacheSafeFork(t *tes
 	require.Equal(t, 1, service.Calls())
 	require.Same(t, req, service.ParentRequest())
 	require.NotSame(t, req, rebuilt)
+}
+
+func TestRunOneStep_CallLimitFinalizationParticipatesInContextBudget(
+	t *testing.T,
+) {
+	baseSvc := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, baseSvc.Close())
+	})
+
+	service := &contextCapturingSummaryService{Service: baseSvc}
+	oldContent := strings.Repeat("h", 1995)
+	sess := &session.Session{Events: []event.Event{{
+		RequestID: "req-old",
+		Timestamp: time.Now().Add(-time.Hour),
+		Response: &model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.NewUserMessage(oldContent),
+		}}},
+	}}}
+	modelStub := &mockModel{responses: []*model.Response{{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("final answer"),
+		}},
+	}}}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(service),
+		agent.WithInvocationMessage(model.NewUserMessage("q")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRequestID("req-current"),
+			agent.WithModelContextWindow(4000),
+		)),
+		agent.WithInvocationModel(modelStub),
+	)
+	inv.MaxLLMCalls = 1
+	instruction := strings.Repeat("f", 10)
+	calllimit.Configure(inv, &instruction, nil)
+	counter := model.NewSimpleTokenCounter(
+		model.WithApproxRunesPerToken(1),
+	)
+	f := New(
+		[]flow.RequestProcessor{
+			processor.NewContentRequestProcessor(
+				processor.WithAddSessionSummary(true),
+				processor.WithContextCompactionTokenCounter(counter),
+			),
+		},
+		nil,
+		Options{
+			EnableContextCompaction:         true,
+			ContextCompactionThresholdRatio: 0.5,
+		},
+	)
+
+	lastEvent, err := f.runOneStep(
+		context.Background(),
+		inv,
+		make(chan *event.Event, 8),
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Equal(t, 1, service.Calls())
+	parent := service.ParentRequest()
+	require.NotNil(t, parent)
+	require.Len(t, parent.Messages, 2)
+	require.Equal(t, oldContent, parent.Messages[0].Content)
+	require.Equal(t, "q", parent.Messages[1].Content)
+	baseTokens, err := counter.CountTokensRange(
+		context.Background(),
+		parent.Messages,
+		0,
+		len(parent.Messages),
+	)
+	require.NoError(t, err)
+	require.Less(t, baseTokens, 2000)
+	budgetMessages := append(
+		append([]model.Message(nil), parent.Messages...),
+		model.NewUserMessage(instruction),
+	)
+	budgetTokens, err := counter.CountTokensRange(
+		context.Background(),
+		budgetMessages,
+		0,
+		len(budgetMessages),
+	)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, budgetTokens, 2000)
+
+	providerRequest := modelStub.LastRequest()
+	require.NotNil(t, providerRequest)
+	require.Len(t, providerRequest.Messages, 3)
+	require.Contains(t, providerRequest.Messages[0].Content, "compressed with captured parent")
+	require.Equal(t, "q", providerRequest.Messages[1].Content)
+	require.Equal(t, instruction, providerRequest.Messages[2].Content)
 }
 
 func TestMaybeCompactContextBeforeLLM_SkipsWithoutSummaryAwareProcessor(t *testing.T) {
@@ -1474,6 +1689,16 @@ func TestNormalizeContextCompactionThresholdRatio(t *testing.T) {
 }
 
 func TestContextCompactionThreshold(t *testing.T) {
+	t.Run("reports minimum token clamp", func(t *testing.T) {
+		threshold, basis := contextCompactionThresholdForWindow(10000, 0.1)
+		require.Equal(t, 2000, threshold)
+		require.Equal(
+			t,
+			contextCompactionThresholdBasisMinimumTokens,
+			basis,
+		)
+	})
+
 	t.Run("caps to small model window", func(t *testing.T) {
 		const modelName = "compact-threshold-small-window"
 		model.RegisterModelContextWindow(modelName, 1024)
@@ -1482,6 +1707,12 @@ func TestContextCompactionThreshold(t *testing.T) {
 			agent.WithInvocationModel(&compactingModel{name: modelName}),
 		)
 		require.Equal(t, 1024, contextCompactionThreshold(inv, 0.1))
+		_, basis := contextCompactionThresholdForWindow(1024, 0.1)
+		require.Equal(
+			t,
+			contextCompactionThresholdBasisContextWindow,
+			basis,
+		)
 	})
 
 	t.Run("uses fallback window for unknown model", func(t *testing.T) {
@@ -1586,6 +1817,12 @@ func TestCloneRequestForContextCompaction_DeepCopiesMutableFields(t *testing.T) 
 					Format: "wav",
 				},
 			}, {
+				Type: model.ContentTypeVideo,
+				Video: &model.Video{
+					Data:   []byte{7, 8, 9},
+					Format: "mp4",
+				},
+			}, {
 				Type: model.ContentTypeFile,
 				File: &model.File{
 					Name: "test.txt",
@@ -1625,7 +1862,8 @@ func TestCloneRequestForContextCompaction_DeepCopiesMutableFields(t *testing.T) 
 	req.Messages[0].ContentParts[0].Text = nil
 	req.Messages[0].ContentParts[1].Image.Data[0] = 9
 	req.Messages[0].ContentParts[2].Audio.Data[0] = 8
-	req.Messages[0].ContentParts[3].File.Data[0] = 'z'
+	req.Messages[0].ContentParts[3].Video.Data[0] = 0
+	req.Messages[0].ContentParts[4].File.Data[0] = 'z'
 	req.Messages[0].ToolCalls[0].Function.Arguments[0] = '['
 	req.Messages[0].ToolCalls[0].ExtraFields["nested"] = map[string]any{"k": "changed"}
 	req.Messages[0].ToolCalls[0].Index = nil
@@ -1637,7 +1875,8 @@ func TestCloneRequestForContextCompaction_DeepCopiesMutableFields(t *testing.T) 
 	require.Equal(t, "hello", *cloned.Messages[0].ContentParts[0].Text)
 	require.Equal(t, []byte{1, 2, 3}, cloned.Messages[0].ContentParts[1].Image.Data)
 	require.Equal(t, []byte{4, 5, 6}, cloned.Messages[0].ContentParts[2].Audio.Data)
-	require.Equal(t, []byte("abc"), cloned.Messages[0].ContentParts[3].File.Data)
+	require.Equal(t, []byte{7, 8, 9}, cloned.Messages[0].ContentParts[3].Video.Data)
+	require.Equal(t, []byte("abc"), cloned.Messages[0].ContentParts[4].File.Data)
 	require.Equal(
 		t,
 		[]byte(`{"q":"go"}`),

@@ -80,19 +80,22 @@ llmAgent := llmagent.New(
 
 <a id="placeholder-variables-session-state-injection"></a>
 
-### 占位符变量（会话状态注入）
+### 占位符变量（状态注入）
 
-LLMAgent 会自动在 `Instruction` 和可选的 `SystemPrompt` 中注入会话状态。支持的占位符语法：
+LLMAgent 会自动在 `Instruction` 和可选的 `SystemPrompt` 中注入状态。支持的占位符语法：
 
 - `{key}`：替换为会话状态中键 `key` 对应的字符串值（可通过 `invocation.Session.SetState("key", ...)` 或 SessionService 写入）
 - `{key?}`：可选；如果不存在，替换为空字符串
 - `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`：访问用户/应用/临时命名空间（SessionService 会把 app/user 作用域的状态合并进 session，并带上前缀）
 - `{invocation:subkey}` ：替换为 fmt.Sprintf("%+v",`invocation.state["subkey"]`) 的值，（可以通过 invocation.SetState(k,v) 来设置）。
+- `{runtime:subkey}`：读取 `RunOptions.RuntimeState` 中的请求级状态（通过 `agent.WithRuntimeState` 或 `agent.MergeRuntimeState` 设置）
 
 注意：
 
 - 对于非可选的 `{key}`，若找不到则保留原样（便于 LLM 感知缺失上下文）
-- 值读取自会话状态（Runner + SessionService 会自动设置/合并）
+- 所有受支持的占位符都可以在右花括号前添加 `?` 表示可选，例如 `{runtime:document?}`
+- 无前缀及 app/user/temp 前缀读取会话状态；`invocation:` 和 `runtime:` 只读取各自的状态，不会回退到会话状态
+- RuntimeState 中的字符串按原文注入，基本类型使用 JSON 文本表示，对象和数组以 JSON 注入
 
 示例：
 
@@ -103,12 +106,16 @@ llm := llmagent.New(
   llmagent.WithInstruction(
     "You are a research assistant. Focus: {research_topics}. " +
     "User interests: {user:topics?}. App banner: {app:banner?}." +
-    "Invocation case: {invocation:case}",
+    "Invocation case: {invocation:case}. Draft: {runtime:document?}",
   ),
 )
 
 inv := agent.NewInvocation()
 inv.SetState("case", "case-1")
+
+runOptions := []agent.RunOption{
+  agent.WithRuntimeState(map[string]any{"document": "Current draft"}),
+}
 
 // 通过 SessionService 初始化状态（用户态/应用态 + 会话本地键）
 _ = sessionService.UpdateUserState(ctx, session.UserKey{AppName: app, UserID: user}, session.StateMap{
@@ -446,6 +453,8 @@ agent := llmagent.New(
 |--------|------|
 | `llmagent.WithMaxLLMCalls(n)` | 限制每次调用的 LLM 调用次数上限。当 `n > 0` 时生效，`n <= 0` 时不限制（默认）。 |
 | `llmagent.WithMaxToolIterations(n)` | 限制每次调用的工具迭代次数上限。当 `n > 0` 时生效，`n <= 0` 时不限制（默认）。 |
+| `llmagent.WithLLMCallLimitFinalization(instruction)` | 将 `WithMaxLLMCalls` 允许的最后一次调用用于不带工具的最终回复。 |
+| `llmagent.WithToolIterationLimitFinalization(instruction)` | 在 `WithMaxToolIterations` 允许的最后一轮完全由框架执行的工具调用之后请求一次不带工具的最终回复，前提是当前 invocation 和 LLM 调用预算仍允许下一次调用。 |
 
 **使用示例：**
 
@@ -458,15 +467,28 @@ agent := llmagent.New(
   llmagent.WithMaxLLMCalls(10),
   // 限制最多进行 5 轮工具调用迭代。
   llmagent.WithMaxToolIterations(5),
+  // 选择在两类上限处生成不带工具的收尾回复。
+  // 空字符串表示使用框架默认 instruction。
+  llmagent.WithLLMCallLimitFinalization(""),
+  llmagent.WithToolIterationLimitFinalization(""),
 )
 ```
 
 **行为说明：**
 
-- **`WithMaxLLMCalls`**：当 LLM 调用次数超过限制时，会返回 `StopError`，终止当前调用。
-- **`WithMaxToolIterations`**：当工具迭代次数超过限制时，会发送 `flow_error` 响应事件并结束调用，不会返回 `StopError`。
+- 未配置 finalization option 时，现有行为保持不变：
+  - **`WithMaxLLMCalls`**：调用次数超过限制时返回 `StopError`。
+  - **`WithMaxToolIterations`**：工具迭代次数超过限制时发送 `flow_error` 响应事件。
+- 两个 finalization option 相互独立，且都需要显式选择。传入 `""` 时使用框架默认的收尾 instruction；传入非空字符串时使用调用方提供的 instruction。
+- LLM 上限收尾会占用 `MaxLLMCalls` 内的最后一次调用；工具迭代上限收尾会在最后一轮允许的工具调用后使用下一次 LLM 调用。
+- 工具迭代上限收尾要求达到上限的这一轮中所有工具调用都由框架执行。如果其中任何调用是 external tool，或被 `WithToolExecutionFilter` 延后给调用方执行，该回复仍会计入 `MaxToolIterations`，但当前运行会沿用 caller-executed tool 的既有生命周期并直接结束，不再发起收尾调用。调用方后续继续执行时会创建新的 invocation，并使用独立的限制计数。
+- `MaxLLMCalls` 始终是严格的外层硬预算，收尾调用也计入其中。因此组合使用工具上限收尾和 `WithMaxLLMCalls` 时，需要预留一次 LLM 调用。
+- 最后一次模型请求会在消息尾部追加一条临时 user instruction，而不会修改已有 system prompt。`BeforeModel` callback 可以看到该消息，但它不会作为真实 user event 发送或持久化。
+- 收尾期间，框架会在 `BeforeModel` callback 前移除工具及强制工具选择字段，并在 callback 后再次清理。如果模型仍然返回工具调用，框架会拒绝该调用且不会执行工具。
+- 如果两个收尾策略在同一次 LLM 调用上同时满足条件，优先使用 LLM 上限对应的 instruction。
 - 两个限制相互独立，可以单独使用或组合使用。
 - 这些限制是每次调用级别的，不同的 `runner.Run()` 调用会各自独立计数。
+- `(*agent.Invocation).ToolIterationCount()` 提供工具迭代上限执行计数器的只读访问。`MaxToolIterations` 非正数时该值始终为 0；超过上限且未执行工具的那次 tool-call response 也会计入；`Clone()` 从 0 重新开始，`View()` 则保留当前值。它不是通用的工具使用量指标。
 
 **推荐用法：**
 
@@ -1501,7 +1523,7 @@ for evt := range events {
 每个步骤都会带上这些稳定字段：
 
 - `NodeID`：本次执行对应的静态节点路径
-- `NodeType`：节点的语义类型（`function`、`llm`、`tool` 或 `agent`），与静态结构中的节点类型一致
+- `NodeType`：节点的语义类型（`function`、`llm`、`tool` 或 `agent`），与静态结构中的节点类型一致；`agent` 表示 Agent 执行单元（包括 `LLMAgent`），`llm` 表示显式 LLM 操作节点
 - `PredecessorStepIDs`：这次运行里该步骤的直接前驱步骤
 - `Input` 和 `Output`：步骤输入输出的稳定文本快照
 - `Error`：步骤失败时记录的终态错误

@@ -23,6 +23,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
+	toolerrorplugin "trpc.group/trpc-go/trpc-agent-go/plugin/toolerror"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -576,6 +578,51 @@ func TestExecuteSingleToolCall_Interrupt_NoErrorInEvent(t *testing.T) {
 	if complete.Response != nil {
 		require.Nil(t, complete.Response.Error)
 	}
+}
+
+func TestExecuteSingleToolCall_ToolErrorPluginPreservesWrappedInterrupt(
+	t *testing.T,
+) {
+	ch := make(chan *event.Event, 4)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("test-tool-error-int")
+	baseCtx, span := tracer.Start(context.Background(), "span")
+	defer span.End()
+	invocation := agent.NewInvocation(
+		agent.WithInvocationPlugins(plugin.MustNewManager(
+			toolerrorplugin.New(),
+		)),
+	)
+	ctx := agent.NewInvocationContext(baseCtx, invocation)
+	interruptingTool := &resultWithErrorTool{
+		name: "interrupt",
+		err: fmt.Errorf(
+			"wrapped interrupt: %w",
+			NewInterruptError("ask?"),
+		),
+	}
+
+	_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "tid",
+			Function: model.FunctionDefinitionParam{
+				Name:      "interrupt",
+				Arguments: []byte(`{}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"interrupt": interruptingTool,
+		},
+		InvocationID: "inv-int-tool-error",
+		EventChan:    ch,
+		Span:         span,
+		State:        State{StateKeyCurrentNodeID: "nodeInt"},
+	})
+
+	require.Error(t, err)
+	require.True(t, IsInterruptError(err))
+	interrupt, ok := GetInterruptError(err)
+	require.True(t, ok)
+	require.Equal(t, "ask?", interrupt.Value)
 }
 
 // A tool that returns a normal error should produce an error payload in the

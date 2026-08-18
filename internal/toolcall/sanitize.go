@@ -34,26 +34,53 @@ const (
 
 var (
 	errArgumentsNotValidJSON = errors.New("arguments are not valid JSON")
+	errFunctionNameEmpty     = errors.New("function name is empty")
 )
 
 // SanitizeMessagesWithTools downgrades invalid tool calls and tool results into user messages.
 //
-// Some model providers require tool call arguments to be valid JSON, and often a JSON object.
-// When a model produces invalid tool call arguments (for example, malformed JSON or a JSON
-// value that does not match the tool input schema), the tool call can poison the conversation
-// history and cause future model requests to fail (e.g., HTTP 400 Bad Request). This function
-// removes such tool calls from assistant messages and emits equivalent user messages that
-// preserve the original payload for context.
+// Some model providers require tool call function names to be non-empty and arguments to be
+// valid JSON, often a JSON object. When a model produces an invalid tool call (for example, an
+// empty function name, malformed JSON, or a value that does not match the tool input schema),
+// the tool call can poison the conversation history and cause future model requests to fail
+// (e.g., HTTP 400 Bad Request). This function removes such tool calls from assistant messages
+// and emits equivalent user messages that preserve the original payload for context.
 //
 // This function also downgrades orphan tool calls that are not associated with a kept
 // tool result message, and orphan tool result messages that are not associated with a
 // kept tool call message, to avoid invalid tool message sequences in strict chat APIs.
 // The context is used to attach request-scoped metadata to downgrade warnings.
 func SanitizeMessagesWithTools(ctx context.Context, messages []model.Message, tools map[string]tool.Tool) []model.Message {
+	return SanitizeMessagesWithToolsResult(ctx, messages, tools).Messages
+}
+
+// SanitizeResult contains sanitized messages and their input provenance.
+// When non-nil, SourceIndexes has one entry per message and identifies the
+// corresponding index in the input message slice. A nil slice represents an
+// identity mapping: output message i came from input message i.
+type SanitizeResult struct {
+	Messages      []model.Message
+	SourceIndexes []int
+}
+
+// SanitizeMessagesWithToolsResult sanitizes messages and preserves the input
+// index from which every output message was derived.
+func SanitizeMessagesWithToolsResult(
+	ctx context.Context,
+	messages []model.Message,
+	tools map[string]tool.Tool,
+) SanitizeResult {
 	if len(messages) == 0 {
-		return messages
+		return SanitizeResult{Messages: messages}
 	}
-	out := make([]model.Message, 0, len(messages))
+	if !containsToolMessages(messages) {
+		out := make([]model.Message, len(messages))
+		copy(out, messages)
+		return SanitizeResult{Messages: out}
+	}
+	builder := sanitizeResultBuilder{
+		messages: make([]model.Message, 0, len(messages)),
+	}
 	for i := 0; i < len(messages); {
 		msg := messages[i]
 		if msg.Role == model.RoleAssistant && len(msg.ToolCalls) > 0 {
@@ -61,19 +88,75 @@ func SanitizeMessagesWithTools(ctx context.Context, messages []model.Message, to
 			for next < len(messages) && messages[next].Role == model.RoleTool {
 				next++
 			}
-			out = append(out, sanitizeToolRound(ctx, msg, messages[i+1:next], tools)...)
+			builder.appendAll(sanitizeToolRound(
+				ctx,
+				indexedMessage{message: msg, sourceIndex: i},
+				messages[i+1:next],
+				i+1,
+				tools,
+			))
 			i = next
 			continue
 		}
 		if msg.Role == model.RoleTool {
-			out = append(out, downgradeOrphanToolResult(ctx, msg))
+			builder.append(indexedMessage{
+				message:     downgradeOrphanToolResult(ctx, msg),
+				sourceIndex: i,
+			})
 			i++
 			continue
 		}
-		out = append(out, msg)
+		builder.append(indexedMessage{message: msg, sourceIndex: i})
 		i++
 	}
-	return out
+	return SanitizeResult{
+		Messages:      builder.messages,
+		SourceIndexes: builder.sourceIndexes,
+	}
+}
+
+func containsToolMessages(messages []model.Message) bool {
+	for i := range messages {
+		if messages[i].Role == model.RoleTool ||
+			(messages[i].Role == model.RoleAssistant &&
+				len(messages[i].ToolCalls) > 0) {
+			return true
+		}
+	}
+	return false
+}
+
+type indexedMessage struct {
+	message     model.Message
+	sourceIndex int
+}
+
+type sanitizeResultBuilder struct {
+	messages      []model.Message
+	sourceIndexes []int
+}
+
+func (b *sanitizeResultBuilder) append(message indexedMessage) {
+	outputIndex := len(b.messages)
+	b.messages = append(b.messages, message.message)
+	if b.sourceIndexes != nil {
+		b.sourceIndexes = append(b.sourceIndexes, message.sourceIndex)
+		return
+	}
+	if message.sourceIndex == outputIndex {
+		return
+	}
+	b.sourceIndexes = make([]int, outputIndex, cap(b.messages))
+	for i := range b.sourceIndexes {
+		b.sourceIndexes[i] = i
+	}
+	b.sourceIndexes = append(b.sourceIndexes, message.sourceIndex)
+}
+
+func (b *sanitizeResultBuilder) appendAll(messages []indexedMessage) {
+	for _, message := range messages {
+		b.append(message)
+	}
 }
 
 type toolCallValidation struct {
@@ -89,9 +172,9 @@ type invalidToolCall struct {
 }
 
 type toolResultSplit struct {
-	kept        []model.Message
-	invalidByID map[string][]model.Message
-	orphan      []model.Message
+	kept        []indexedMessage
+	invalidByID map[string][]indexedMessage
+	orphan      []indexedMessage
 }
 
 type toolCallSplit struct {
@@ -100,49 +183,79 @@ type toolCallSplit struct {
 }
 
 // sanitizeToolRound sanitizes a single assistant tool-call round with its following tool results.
-func sanitizeToolRound(ctx context.Context, assistant model.Message, toolResults []model.Message, tools map[string]tool.Tool) []model.Message {
-	validation := validateToolCalls(assistant.ToolCalls, tools)
-	split := splitToolResults(toolResults, validation.validIDs, validation.invalidIDs)
+func sanitizeToolRound(
+	ctx context.Context,
+	assistant indexedMessage,
+	toolResults []model.Message,
+	firstToolResultSourceIndex int,
+	tools map[string]tool.Tool,
+) []indexedMessage {
+	validation := validateToolCalls(assistant.message.ToolCalls, tools)
+	split := splitToolResults(
+		toolResults,
+		firstToolResultSourceIndex,
+		validation.validIDs,
+		validation.invalidIDs,
+	)
 	toolCallSplit := splitToolCalls(validation.validToolCalls, split.kept)
-	filteredAssistant := assistant
+	filteredAssistant := assistant.message
 	filteredAssistant.ToolCalls = toolCallSplit.kept
 	if len(filteredAssistant.ToolCalls) == 0 {
 		filteredAssistant.ToolCalls = nil
 	}
 	out := make(
-		[]model.Message,
+		[]indexedMessage,
 		0,
 		1+len(toolResults)+len(validation.invalidToolCalls)+len(toolCallSplit.orphan)+len(split.orphan),
 	)
 	if !message.IsEmptyAssistantMessage(filteredAssistant) {
-		out = append(out, filteredAssistant)
+		out = append(out, indexedMessage{
+			message:     filteredAssistant,
+			sourceIndex: assistant.sourceIndex,
+		})
 		out = append(out, split.kept...)
 	}
 	for _, orphanCall := range toolCallSplit.orphan {
-		out = append(out, downgradeOrphanToolCall(ctx, orphanCall))
+		out = append(out, indexedMessage{
+			message:     downgradeOrphanToolCall(ctx, orphanCall),
+			sourceIndex: assistant.sourceIndex,
+		})
 	}
 	for _, invalid := range validation.invalidToolCalls {
-		out = append(out, downgradeInvalidToolCall(ctx, invalid.call, invalid.reason))
+		out = append(out, indexedMessage{
+			message: downgradeInvalidToolCall(
+				ctx,
+				invalid.call,
+				invalid.reason,
+			),
+			sourceIndex: assistant.sourceIndex,
+		})
 		for _, tr := range split.invalidByID[invalid.call.ID] {
-			out = append(out, downgradeInvalidToolResult(ctx, tr))
+			out = append(out, indexedMessage{
+				message:     downgradeInvalidToolResult(ctx, tr.message),
+				sourceIndex: tr.sourceIndex,
+			})
 		}
 	}
 	for _, orphan := range split.orphan {
-		out = append(out, downgradeOrphanToolResult(ctx, orphan))
+		out = append(out, indexedMessage{
+			message:     downgradeOrphanToolResult(ctx, orphan.message),
+			sourceIndex: orphan.sourceIndex,
+		})
 	}
 	return out
 }
 
-func splitToolCalls(toolCalls []model.ToolCall, toolResults []model.Message) toolCallSplit {
+func splitToolCalls(toolCalls []model.ToolCall, toolResults []indexedMessage) toolCallSplit {
 	out := toolCallSplit{
 		kept: make([]model.ToolCall, 0, len(toolCalls)),
 	}
 	respondedIDs := make(map[string]struct{}, len(toolResults))
 	for _, tr := range toolResults {
-		if tr.ToolID == "" {
+		if tr.message.ToolID == "" {
 			continue
 		}
-		respondedIDs[tr.ToolID] = struct{}{}
+		respondedIDs[tr.message.ToolID] = struct{}{}
 	}
 	for _, tc := range toolCalls {
 		if tc.ID != "" {
@@ -178,6 +291,9 @@ func validateToolCalls(toolCalls []model.ToolCall, tools map[string]tool.Tool) t
 
 // validateToolCall validates and normalizes a single tool call.
 func validateToolCall(tc model.ToolCall, tools map[string]tool.Tool) (model.ToolCall, bool, string) {
+	if strings.TrimSpace(tc.Function.Name) == "" {
+		return tc, false, errFunctionNameEmpty.Error()
+	}
 	normalizedArgs, decoded, err := normalizeAndDecodeArguments(tc.Function.Arguments)
 	if err != nil {
 		return tc, false, err.Error()
@@ -404,28 +520,40 @@ func validateNumberValueAgainstSchema(value any, path string) (bool, string) {
 }
 
 // splitToolResults groups tool result messages by tool_call_id based on tool call validity.
-func splitToolResults(toolResults []model.Message, validIDs map[string]struct{}, invalidIDs map[string]struct{}) toolResultSplit {
+func splitToolResults(
+	toolResults []model.Message,
+	firstSourceIndex int,
+	validIDs map[string]struct{},
+	invalidIDs map[string]struct{},
+) toolResultSplit {
 	out := toolResultSplit{
-		kept:        make([]model.Message, 0, len(toolResults)),
-		invalidByID: make(map[string][]model.Message),
+		kept:        make([]indexedMessage, 0, len(toolResults)),
+		invalidByID: make(map[string][]indexedMessage),
 	}
 	respondedValidIDs := make(map[string]struct{}, len(validIDs))
-	for _, tr := range toolResults {
-		if tr.ToolID == "" {
+	for i, message := range toolResults {
+		tr := indexedMessage{
+			message:     message,
+			sourceIndex: firstSourceIndex + i,
+		}
+		if message.ToolID == "" {
 			out.orphan = append(out.orphan, tr)
 			continue
 		}
-		if _, ok := validIDs[tr.ToolID]; ok {
-			if _, responded := respondedValidIDs[tr.ToolID]; responded {
+		if _, ok := validIDs[message.ToolID]; ok {
+			if _, responded := respondedValidIDs[message.ToolID]; responded {
 				out.orphan = append(out.orphan, tr)
 				continue
 			}
-			respondedValidIDs[tr.ToolID] = struct{}{}
+			respondedValidIDs[message.ToolID] = struct{}{}
 			out.kept = append(out.kept, tr)
 			continue
 		}
-		if _, ok := invalidIDs[tr.ToolID]; ok {
-			out.invalidByID[tr.ToolID] = append(out.invalidByID[tr.ToolID], tr)
+		if _, ok := invalidIDs[message.ToolID]; ok {
+			out.invalidByID[message.ToolID] = append(
+				out.invalidByID[message.ToolID],
+				tr,
+			)
 			continue
 		}
 		out.orphan = append(out.orphan, tr)

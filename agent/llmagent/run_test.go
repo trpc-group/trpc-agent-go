@@ -11,6 +11,7 @@ package llmagent
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -22,10 +23,12 @@ import (
 	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // mockFlow implements flow.Flow returning predefined events.
@@ -39,6 +42,20 @@ func (m *mockFlow) Run(ctx context.Context, inv *agent.Invocation) (<-chan *even
 			ch <- event.New(inv.InvocationID, inv.AgentName)
 		}
 	}()
+	return ch, nil
+}
+
+type limiterCapturingFlow struct {
+	limiters chan<- *toolcall.Limiter
+}
+
+func (f *limiterCapturingFlow) Run(
+	ctx context.Context,
+	_ *agent.Invocation,
+) (<-chan *event.Event, error) {
+	f.limiters <- toolcall.LimiterFromContext(ctx)
+	ch := make(chan *event.Event)
+	close(ch)
 	return ch, nil
 }
 
@@ -139,7 +156,7 @@ func TestLLMAgent_Run_BeforeCallbackCust(t *testing.T) {
 	require.NotNil(t, executionTrace)
 	require.Len(t, executionTrace.Steps, 1)
 	require.False(t, executionTrace.Steps[0].EndedAt.IsZero())
-	require.Equal(t, "llm", executionTrace.Steps[0].NodeType)
+	require.Equal(t, "agent", executionTrace.Steps[0].NodeType)
 	require.Contains(t, executionTrace.Steps[0].Input.Text, "hello")
 	require.Contains(t, executionTrace.Steps[0].Output.Text, "before")
 }
@@ -227,8 +244,8 @@ func TestLLMAgent_Run_SameInvocationTwiceCreatesTwoSteps(t *testing.T) {
 	require.Len(t, executionTrace.Steps, 2)
 	require.NotEqual(t, executionTrace.Steps[0].StepID, executionTrace.Steps[1].StepID)
 	require.Equal(t, executionTrace.Steps[0].NodeID, executionTrace.Steps[1].NodeID)
-	require.Equal(t, "llm", executionTrace.Steps[0].NodeType)
-	require.Equal(t, "llm", executionTrace.Steps[1].NodeType)
+	require.Equal(t, "agent", executionTrace.Steps[0].NodeType)
+	require.Equal(t, "agent", executionTrace.Steps[1].NodeType)
 	require.False(t, executionTrace.Steps[0].EndedAt.IsZero())
 	require.False(t, executionTrace.Steps[1].EndedAt.IsZero())
 }
@@ -250,6 +267,62 @@ func TestLLMAgent_Run_FlowAndAfterCb(t *testing.T) {
 		objs = append(objs, e.Object)
 	}
 	require.Equal(t, []string{"", "after"}, objs) // First event has empty Object set by mockFlow
+}
+
+func TestLLMAgent_RunCreatesIndependentToolConcurrencyLimiters(
+	t *testing.T,
+) {
+	limiters := make(chan *toolcall.Limiter, 2)
+	a := New(
+		"agent",
+		WithEnableParallelTools(true),
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{
+				ToolNames: []string{"subagent"},
+				Limit:     1,
+			}},
+		}),
+	)
+	a.flow = &limiterCapturingFlow{limiters: limiters}
+
+	for i := 0; i < 2; i++ {
+		events, err := a.Run(context.Background(), &agent.Invocation{
+			InvocationID: fmt.Sprintf("inv-%d", i),
+			AgentName:    "agent",
+		})
+		require.NoError(t, err)
+		for range events {
+		}
+	}
+
+	first := <-limiters
+	second := <-limiters
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	require.NotSame(t, first, second)
+}
+
+func TestLLMAgent_RunDoesNotInheritParentToolConcurrencyLimiter(
+	t *testing.T,
+) {
+	parent := toolcall.NewLimiter(tool.ConcurrencyConfig{
+		MaxConcurrency: 1,
+	})
+	limiters := make(chan *toolcall.Limiter, 1)
+	a := New("child", WithEnableParallelTools(true))
+	a.flow = &limiterCapturingFlow{limiters: limiters}
+
+	events, err := a.Run(
+		toolcall.WithLimiter(context.Background(), parent),
+		&agent.Invocation{
+			InvocationID: "child-inv",
+			AgentName:    "child",
+		},
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	require.Nil(t, <-limiters)
 }
 
 // TestLLMAgent_CallbackContextPropagation tests that context values set in

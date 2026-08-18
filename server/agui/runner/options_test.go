@@ -89,6 +89,31 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.Equal(t, time.Second, opts.DistributedCancelPollInterval)
 }
 
+func TestDefaultStateResolver(t *testing.T) {
+	t.Run("object state", func(t *testing.T) {
+		state := map[string]any{"document": "hello"}
+		resolved, err := defaultStateResolver(context.Background(), &adapter.RunAgentInput{
+			State: state,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, state, resolved)
+	})
+
+	t.Run("non-object state", func(t *testing.T) {
+		resolved, err := defaultStateResolver(context.Background(), &adapter.RunAgentInput{
+			State: "hello",
+		})
+		require.NoError(t, err)
+		assert.Nil(t, resolved)
+	})
+
+	t.Run("nil input", func(t *testing.T) {
+		resolved, err := defaultStateResolver(context.Background(), nil)
+		require.NoError(t, err)
+		assert.Nil(t, resolved)
+	})
+}
+
 func TestWithUserIDResolver(t *testing.T) {
 	wantErr := errors.New("resolver error")
 	called := false

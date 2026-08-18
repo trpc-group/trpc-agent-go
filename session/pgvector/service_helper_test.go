@@ -499,6 +499,10 @@ func TestGetSummariesList_Success(t *testing.T) {
 	sumBytes, _ := json.Marshal(sum)
 
 	mock.ExpectQuery("SELECT session_id, filter_key").
+		WithArgs(
+			sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), timeArg{},
+		).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{
 				"session_id", "filter_key", "summary",
@@ -639,7 +643,7 @@ func TestGetSummariesList_QueryError(t *testing.T) {
 	mock.ExpectQuery("SELECT session_id, filter_key").
 		WithArgs(
 			sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			sqlmock.AnyArg(), timeArg{},
 		).
 		WillReturnError(fmt.Errorf("db error"))
 
@@ -679,6 +683,25 @@ func TestGetTrackEvents_MismatchedLengths(t *testing.T) {
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "count mismatch")
+}
+
+func TestGetTrackEventsByTrackLists_EmptyAndMismatch(t *testing.T) {
+	s, _, db := newTestService(t, nil)
+	defer db.Close()
+	got, err := s.getTrackEventsByTrackLists(
+		context.Background(), nil, nil, 0, time.Time{},
+	)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	_, err = s.getTrackEventsByTrackLists(
+		context.Background(),
+		[]session.Key{{AppName: "app", UserID: "user", SessionID: "s1"}},
+		nil,
+		0,
+		time.Time{},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "track lists count mismatch")
 }
 
 func TestGetTrackEvents_NoTracks(t *testing.T) {
