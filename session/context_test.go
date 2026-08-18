@@ -134,6 +134,31 @@ func TestUnmaskEvents(t *testing.T) {
 			t.Fatalf("expected 0 for empty ids, got %d", n)
 		}
 	})
+
+	t.Run("restores a complete tool round and invalidates summaries", func(t *testing.T) {
+		sess := NewSession("app", "user", "sess-unmask-tool-round")
+		sess.Events = []event.Event{
+			newToolCallEvent("call-1", "tc-1"),
+			newToolResultEvent("result-1", "tc-1", "answer"),
+		}
+		sess.Summaries = map[string]*Summary{"agent": {Summary: "masked summary"}}
+
+		if n := sess.MaskEvents("result-1"); n != 2 {
+			t.Fatalf("expected complete tool round masked, got %d", n)
+		}
+		sess.Summaries = map[string]*Summary{"agent": {Summary: "summary while masked"}}
+
+		if n := sess.UnmaskEvents("result-1"); n != 2 {
+			t.Fatalf("expected complete tool round unmasked, got %d", n)
+		}
+		visible := sess.GetVisibleEvents()
+		if len(visible) != 2 || visible[0].ID != "call-1" || visible[1].ID != "result-1" {
+			t.Fatalf("expected complete tool round visible, got %v", visible)
+		}
+		if sess.Summaries != nil {
+			t.Fatalf("expected summaries invalidated after unmasking, got %v", sess.Summaries)
+		}
+	})
 }
 
 func TestGetVisibleEvents(t *testing.T) {

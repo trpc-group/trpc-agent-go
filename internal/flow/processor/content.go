@@ -789,7 +789,8 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	}
 
 	req.Messages = append(req.Messages, messages...)
-	return len(messages) == 0
+	return len(messages) == 0 &&
+		!hasMaskedCurrentInvocationMessage(invocation)
 }
 
 func (p *ContentRequestProcessor) sessionSummaryForRequest(
@@ -1236,6 +1237,7 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 	}
 	filter := inv.GetEventFilterKey()
 	var includedInvocationMessage bool
+	maskedInvocationMessage := hasMaskedCurrentInvocationMessage(inv)
 
 	var events []event.Event
 	sessionEvents := sessionEventsSnapshot(inv.Session)
@@ -1292,7 +1294,9 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 	}
 
 	// insert invocation message
-	if !includedInvocationMessage && model.HasPayload(inv.Message) {
+	if !includedInvocationMessage &&
+		!maskedInvocationMessage &&
+		model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
@@ -2054,6 +2058,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 
 	events := p.collectCurrentInvocationEvents(inv)
 	if !containsInvocationMessage(events, inv.Message) &&
+		!hasMaskedCurrentInvocationMessage(inv) &&
 		model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
@@ -2112,6 +2117,31 @@ func containsInvocationMessage(
 			continue
 		}
 		if invocationMessageEqual(invocationMessage, evt.Choices[0].Message) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMaskedCurrentInvocationMessage(inv *agent.Invocation) bool {
+	if inv == nil || inv.Session == nil {
+		return false
+	}
+
+	inv.Session.EventMu.RLock()
+	events := append([]event.Event(nil), inv.Session.Events...)
+	inv.Session.EventMu.RUnlock()
+
+	for _, evt := range events {
+		if !inv.Session.IsEventMasked(evt.ID) {
+			continue
+		}
+		if isStrictInvocationMessage(evt, inv) {
+			return true
+		}
+		if evt.InvocationID == inv.InvocationID &&
+			len(evt.Choices) > 0 &&
+			invocationMessageEqual(inv.Message, evt.Choices[0].Message) {
 			return true
 		}
 	}

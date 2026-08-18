@@ -11,6 +11,7 @@ package context
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -559,6 +560,45 @@ func TestListContextTool(t *testing.T) {
 		}
 		if previews["result-delta"] != "tc-1" {
 			t.Fatalf("expected delta tool-id preview, got %q", previews["result-delta"])
+		}
+	})
+
+	t.Run("paginates large sessions with bounded discoverable pages", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "lc-pages")
+		for i := 0; i < 125; i++ {
+			sess.Events = append(sess.Events, newTestEvent(fmt.Sprintf("e-%03d", i)))
+		}
+		ctx := ctxWithSession(sess)
+		tool := NewListContextTool()
+		seen := make(map[string]bool)
+		offset := 0
+
+		for {
+			result, err := tool.Call(
+				ctx,
+				[]byte(fmt.Sprintf(`{"offset":%d,"limit":40}`, offset)),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := result.(ListContextOutput)
+			if len(out.Events) > 40 {
+				t.Fatalf("page exceeded requested limit: %d", len(out.Events))
+			}
+			for _, entry := range out.Events {
+				seen[entry.ID] = true
+			}
+			if !out.HasMore {
+				break
+			}
+			if out.NextOffset <= offset {
+				t.Fatalf("next offset did not advance: %d", out.NextOffset)
+			}
+			offset = out.NextOffset
+		}
+
+		if len(seen) != 125 {
+			t.Fatalf("expected all event IDs across pages, got %d", len(seen))
 		}
 	})
 }

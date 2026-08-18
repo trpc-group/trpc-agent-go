@@ -78,20 +78,25 @@ func (sess *Session) UnmaskEvents(ids ...string) int {
 	}
 
 	sess.EventMu.Lock()
-	defer sess.EventMu.Unlock()
-
 	sess.ensureMaskedEventsFromStateLocked()
 
 	if len(sess.maskedEventIDs) == 0 {
+		sess.EventMu.Unlock()
 		return 0
 	}
 
+	idsToUnmask := expandMaskIDsForToolRounds(sess.Events, ids)
 	unmasked := 0
-	for _, id := range ids {
+	for _, id := range idsToUnmask {
 		if sess.maskedEventIDs[id] {
 			delete(sess.maskedEventIDs, id)
 			unmasked++
 		}
+	}
+	sess.EventMu.Unlock()
+
+	if unmasked > 0 {
+		sess.invalidateSummaries()
 	}
 	return unmasked
 }

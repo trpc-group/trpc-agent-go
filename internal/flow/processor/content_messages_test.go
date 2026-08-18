@@ -2199,6 +2199,62 @@ func TestGetCurrentInvocationMessages_MaskedEventsExcluded(t *testing.T) {
 	require.Equal(t, "final answer", req.Messages[1].Content)
 }
 
+func TestProcessRequest_DoesNotSynthesizeMaskedCurrentInvocationMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		includeNone bool
+	}{
+		{name: "default history"},
+		{name: "include contents none", includeNone: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const (
+				invocationID = "inv-masked-current"
+				requestID    = "req-masked-current"
+			)
+			current := model.NewUserMessage("current secret")
+			sess := session.NewSession("app", "user", "masked-current")
+			sess.Events = []event.Event{{
+				ID:           "current-event",
+				InvocationID: invocationID,
+				RequestID:    requestID,
+				Author:       "user",
+				Response: &model.Response{
+					Done:    true,
+					Choices: []model.Choice{{Message: current}},
+				},
+			}}
+			sess.MaskEvents("current-event")
+
+			runtimeState := map[string]any{}
+			if tc.includeNone {
+				runtimeState["include_contents"] = "none"
+			}
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(sess),
+				agent.WithInvocationID(invocationID),
+				agent.WithInvocationMessage(current),
+				agent.WithInvocationRunOptions(agent.RunOptions{
+					RequestID:    requestID,
+					RuntimeState: runtimeState,
+				}),
+			)
+
+			req := &model.Request{}
+			NewContentRequestProcessor().ProcessRequest(
+				context.Background(),
+				inv,
+				req,
+				nil,
+			)
+
+			for _, msg := range req.Messages {
+				require.NotContains(t, msg.Content, "current secret")
+			}
+		})
+	}
+}
+
 func TestProcessRequest_SessionSummary_InvalidatedWhenEventsMasked(t *testing.T) {
 	sess := session.NewSession("app", "user", "mask-summary-test")
 	sess.Summaries = map[string]*session.Summary{

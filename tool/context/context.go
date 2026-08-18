@@ -98,8 +98,11 @@ func NewDeleteContextTool() tool.CallableTool {
 
 // --- list_context tool ---
 
-// ListContextInput is the input for the list_context tool (empty — no args).
-type ListContextInput struct{}
+// ListContextInput controls which page of visible context events is returned.
+type ListContextInput struct {
+	Offset int `json:"offset,omitempty" jsonschema:"description=Zero-based event offset; use next_offset from the previous response"`
+	Limit  int `json:"limit,omitempty" jsonschema:"description=Maximum events to return; defaults to 50 and is capped at 100"`
+}
 
 // ContextEventEntry summarises one LLM-visible session event.
 type ContextEventEntry struct {
@@ -111,25 +114,34 @@ type ContextEventEntry struct {
 
 // ListContextOutput is the output for the list_context tool.
 type ListContextOutput struct {
-	Events []ContextEventEntry `json:"events"`
-	Count  int                 `json:"count"`
+	Events     []ContextEventEntry `json:"events"`
+	Count      int                 `json:"count"`
+	Total      int                 `json:"total"`
+	NextOffset int                 `json:"next_offset,omitempty"`
+	HasMore    bool                `json:"has_more"`
 }
 
-const listContextPreviewMaxRunes = 120
+const (
+	listContextPreviewMaxRunes = 120
+	listContextDefaultLimit    = 50
+	listContextMaxLimit        = 100
+)
 
 // NewListContextTool creates a tool that lists visible session events with
 // stable IDs so the model can pass them to delete_context.
 func NewListContextTool() tool.CallableTool {
 	return function.NewFunctionTool(
-		func(ctx context.Context, _ ListContextInput) (ListContextOutput, error) {
+		func(ctx context.Context, input ListContextInput) (ListContextOutput, error) {
 			sess := sessionFromContext(ctx)
 			if sess == nil {
 				return ListContextOutput{Events: []ContextEventEntry{}}, nil
 			}
 
 			visible := sess.GetVisibleEvents()
-			entries := make([]ContextEventEntry, 0, len(visible))
-			for _, evt := range visible {
+			offset, limit := listContextPage(input, len(visible))
+			end := min(offset+limit, len(visible))
+			entries := make([]ContextEventEntry, 0, end-offset)
+			for _, evt := range visible[offset:end] {
 				entries = append(entries, ContextEventEntry{
 					ID:      evt.ID,
 					Author:  evt.Author,
@@ -138,18 +150,44 @@ func NewListContextTool() tool.CallableTool {
 				})
 			}
 
+			hasMore := end < len(visible)
+			nextOffset := 0
+			if hasMore {
+				nextOffset = end
+			}
 			return ListContextOutput{
-				Events: entries,
-				Count:  len(entries),
+				Events:     entries,
+				Count:      len(entries),
+				Total:      len(visible),
+				NextOffset: nextOffset,
+				HasMore:    hasMore,
 			}, nil
 		},
 		function.WithName("list_context"),
 		function.WithDescription(
-			"List visible session events with stable event IDs, authors, kinds, "+
-				"and short previews. Call this before delete_context so you can "+
-				"pass real event_ids instead of guessing.",
+			"List a bounded page of visible session events with stable event IDs, "+
+				"authors, kinds, and short previews. Call this before delete_context "+
+				"and follow next_offset while has_more is true to inspect later pages.",
 		),
 	)
+}
+
+func listContextPage(input ListContextInput, total int) (int, int) {
+	offset := input.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	limit := input.Limit
+	if limit <= 0 {
+		limit = listContextDefaultLimit
+	}
+	if limit > listContextMaxLimit {
+		limit = listContextMaxLimit
+	}
+	return offset, limit
 }
 
 func contextEventKind(evt event.Event) string {
