@@ -1,0 +1,4805 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/blog/evolution/">
+      
+      
+        <link rel="prev" href="../summary/">
+      
+      
+        <link rel="next" href="../observability/">
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
+    
+    
+      
+        <title>tRPC-Agent-Go Evolution：Agent 自进化的在线学习、离线优化与评测 - tRPC-Agent-Go</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.7e37652d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+  
+
+
+  
+  
+
+<script id="__analytics">function __md_analytics(){function e(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],e("js",new Date),e("config",""),document.addEventListener("DOMContentLoaded",(function(){document.forms.search&&document.forms.search.query.addEventListener("blur",(function(){this.value&&e("event","search",{search_term:this.value})}));document$.subscribe((function(){var t=document.forms.feedback;if(void 0!==t)for(var a of t.querySelectorAll("[type=submit]"))a.addEventListener("click",(function(a){a.preventDefault();var n=document.location.pathname,d=this.getAttribute("data-md-value");e("event","feedback",{page:n,data:d}),t.firstElementChild.disabled=!0;var r=t.querySelector(".md-feedback__note [data-md-value='"+d+"']");r&&(r.hidden=!1)})),t.hidden=!1})),location$.subscribe((function(t){e("config","",{page_path:t.pathname})}))}));var t=document.createElement("script");t.async=!0,t.src="https://www.googletagmanager.com/gtag/js?id=",document.getElementById("__analytics").insertAdjacentElement("afterEnd",t)}</script>
+  
+    <script>"undefined"!=typeof __md_analytics&&__md_analytics()</script>
+  
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#trpc-agent-go-evolutionagent" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../../assets/img/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            tRPC-Agent-Go
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              tRPC-Agent-Go Evolution：Agent 自进化的在线学习、离线优化与评测
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../blog/evolution/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  概览
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agent/" class="md-tabs__link">
+          
+  
+  
+  组件
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../gateway/" class="md-tabs__link">
+          
+  
+  
+  服务
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../observability/" class="md-tabs__link">
+          
+  
+  
+  可观测
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../ecosystem/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  生态
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../trpcagentgo/" class="md-tabs__link">
+          
+  
+  
+  博客
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../../assets/img/logo.png" alt="logo">
+
+    </a>
+    tRPC-Agent-Go
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    组件
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            组件
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            Agent
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../goal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Goal 扩展
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../multiagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dynamic-workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    动态工作流
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../taskrun/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Task Run 运行时
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Team
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    自定义 Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dify Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../claudecode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Claude Code Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codex/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Codex Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Runner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Code Executor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    CodeAct
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    错误处理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Model
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prompt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Prompt Template
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../callbacks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Callbacks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plugin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Plugins
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_10" id="__nav_2_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_10">
+            <span class="md-nav__icon md-icon"></span>
+            Memory
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    使用与配置
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    内存存储
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/sqlitevec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLiteVec
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/mysqlvec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Vector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pgvector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/chromadb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ChromaDB
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/mem0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    mem0 集成
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/tencentdb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TencentDB Agent Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Artifact
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Skill
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evolution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evolution
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tool
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Session
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_15">
+            <span class="md-nav__icon md-icon"></span>
+            Session
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/noop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Noop Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Session Summary
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/tdsql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TDSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ClickHouse Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mongodb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MongoDB Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16" id="__nav_2_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Knowledge
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16">
+            <span class="md-nav__icon md-icon"></span>
+            Knowledge
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/embedder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embedder
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/reranker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reranker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/query-enhancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query Enhancer
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    数据源
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/code-rag/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    代码知识库（Code RAG, Beta）
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    内容提取器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    过滤器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    知识库管理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/ocr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16_11" id="__nav_2_16_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    向量存储
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_16_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16_11">
+            <span class="md-nav__icon md-icon"></span>
+            向量存储
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/tcvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TcVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Elasticsearch
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/qdrant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qdrant
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/milvus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Milvus
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    故障排除
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../planner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Planner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../event/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Event
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_19" id="__nav_2_19_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Evaluation
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_19">
+            <span class="md-nav__icon md-icon"></span>
+            Evaluation
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/evalset/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估集
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/metric/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估指标
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/evaluator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/evalresult/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估结果
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/service/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估服务
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/agentevaluator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估入口
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/methods/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估方法
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    在线评估服务
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PromptIter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    服务
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            服务
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Gateway
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../trpcagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    tRPC-Agent API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    AG-UI
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            AG-UI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    总览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    实时对话路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    消息快照路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/cancel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    取消路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2a/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2UI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../openclaw-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    可观测
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            可观测
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry-multimodal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    多模态遥测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ecosystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    生态
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    博客
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            博客
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trpcagentgo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    构建智能 AI 应用的 Go 语言 Agent 框架
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    长任务 Agent 上下文管理的设计与评测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    tRPC-Agent-Go Evolution：Agent 自进化的在线学习、离线优化与评测
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    tRPC-Agent-Go Evolution：Agent 自进化的在线学习、离线优化与评测
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#hermes-agent-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      一、Hermes Agent：怎样把任务方法保存为 Skill
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#evolution-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      二、Evolution 创建和修改的是 Skill
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      三、在线学习：正常情况下先返回任务，后台再生成 Skill
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="三、在线学习：正常情况下先返回任务，后台再生成 Skill">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      队列有容量时，先返回当前任务，再检查执行记录
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reviewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      哪些执行记录值得交给 Reviewer
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      生产环境应先检查候选，再决定是否发布
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      四、离线优化：用重复实验验证一次成功能否复用
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="四、离线优化：用重复实验验证一次成功能否复用">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      三组数据分别用于改写、选择和最终评测
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gepa-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      GEPA 如何一步步改进 Skill
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      五、接入：从最小在线配置到离线优化
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="五、接入：从最小在线配置到离线优化">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置最小在线流程
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      后台学习仍然需要管理队列、超时和失败
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      保存候选版本并配置发布检查
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      有业务结果时，改为手动投递
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#evaluator" class="md-nav__link">
+    <span class="md-ellipsis">
+      离线优化从 Evaluator 开始
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      六、Benchmark：先看完整在线流程，再用三阶段验证离线候选
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="六、Benchmark：先看完整在线流程，再用三阶段验证离线候选">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      早期在线评测观察到了什么
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      离线评测怎样筛选候选
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      七、生产运行：监控候选、发布、加载和任务结果
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      八、写在最后：让后续任务复用经过验证的方法
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      参考资料
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptcache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    从对话到执行：tRPC-Agent-Go Code Executor 如何为 Agent 构建可控运行环境
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graphagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    GraphAgent 让 AI 工作流与 Agent 无缝融合
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    快速构建基于 AG-UI 的 Agent 服务
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Anthropic Agent Skills 规范的 Go 原生实现
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 自动化评估范式与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../llmverifier/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 高质量稳定性提升方法
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openclaw/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    打造企业级安全可控的 OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 提示词自动迭代与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multiagent-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    把工作放到合适边界：tRPC-Agent-Go Multi-Agent 设计与选型
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#hermes-agent-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      一、Hermes Agent：怎样把任务方法保存为 Skill
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#evolution-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      二、Evolution 创建和修改的是 Skill
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      三、在线学习：正常情况下先返回任务，后台再生成 Skill
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="三、在线学习：正常情况下先返回任务，后台再生成 Skill">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      队列有容量时，先返回当前任务，再检查执行记录
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reviewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      哪些执行记录值得交给 Reviewer
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      生产环境应先检查候选，再决定是否发布
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      四、离线优化：用重复实验验证一次成功能否复用
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="四、离线优化：用重复实验验证一次成功能否复用">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      三组数据分别用于改写、选择和最终评测
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gepa-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      GEPA 如何一步步改进 Skill
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      五、接入：从最小在线配置到离线优化
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="五、接入：从最小在线配置到离线优化">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置最小在线流程
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      后台学习仍然需要管理队列、超时和失败
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      保存候选版本并配置发布检查
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      有业务结果时，改为手动投递
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#evaluator" class="md-nav__link">
+    <span class="md-ellipsis">
+      离线优化从 Evaluator 开始
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      六、Benchmark：先看完整在线流程，再用三阶段验证离线候选
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="六、Benchmark：先看完整在线流程，再用三阶段验证离线候选">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      早期在线评测观察到了什么
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      离线评测怎样筛选候选
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      七、生产运行：监控候选、发布、加载和任务结果
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      八、写在最后：让后续任务复用经过验证的方法
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      参考资料
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/blog/evolution.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/blog/evolution.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="trpc-agent-go-evolutionagent">tRPC-Agent-Go Evolution：Agent 自进化的在线学习、离线优化与评测</h1>
+<p>当 Agent 从“把这一次做完”走向“下一次做得更好”，系统还需要保存做事的方法：工具怎样组合、失败怎样恢复、结果怎样验收。Evolution 把执行过程整理成 Skill，再通过评测、审批、发布和回滚，让后续任务可以复用这些方法。本文从 Hermes Agent 的程序性记忆出发，介绍 tRPC-Agent-Go 在线学习与离线优化的原理、接入方式，以及 SkillCraft Benchmark 如何判断一个候选应该被接受还是拒绝。</p>
+<blockquote>
+<p><a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go</a> 是面向 Go 语言的开源 Agent 框架，提供工具调用、会话与记忆管理、制品管理、多 Agent 协同、图编排、知识库与可观测等能力。欢迎在 GitHub 上 Star、试用并参与共建。</p>
+<p>版本要求：本文使用的 Evolution API 需要 tRPC-Agent-Go <strong>v1.11.0 及以上版本</strong>。</p>
+</blockquote>
+<p><img alt="Evolution 漫画：从一次执行到下一次复用" src="../../../assets/img/blog/evolution/comic_banner.png" /></p>
+<p>设想一个多城市天气报告任务。Agent 第一次接到它时，往往要先找城市经纬度，再调用天气接口，处理时区和空字段，遇到超时还要重试，最后检查每个城市是否都有结果。整个过程可能绕了几次路，但 Agent 最终交付了正确报告。</p>
+<p>问题出在第二次。用户只是换了几个城市，Agent 却可能再次查询接口说明，再次试错参数，再次犯已经修复过的错误。模型没有“失忆”，因为上一次对话也许仍然保存在 Session 里；系统缺少的是把对话和工具调用记录整理成“以后遇到这类任务应该怎么做”的操作方法。</p>
+<p>这正是 Agent 自进化要解决的问题：从一次执行中找出稳定、可复用的部分，整理成后续任务能够主动加载的 Skill。否则，Session 一旦结束，这次试错得到的方法就很难再被利用。这里被创建和修改的始终是 Skill，线上模型的权重不会随任务执行而改变。</p>
+<p>tRPC-Agent-Go Evolution 为此提供了两种方式。在线学习在真实任务结束后异步检查本次执行，找出用户纠错、错误恢复和多步工具调用中值得保存的方法；离线优化使用一组可重复执行的样本，反复改写并比较一份既定 Skill，最后再用预留样本独立评测。两种方式产生的候选都可以进入后续的自动检查、人工审批、发布和回滚流程。</p>
+<p>配套的 <a href="https://github.com/trpc-group/trpc-agent-go-benchmark">trpc-agent-go-benchmark</a> 分三步检查效果：产生了 Skill，后续任务是否真的更好？在开发数据上得分更高的候选，在未见样本上是否仍然有效？通过独立评测以后，放回完整 Evolution 运行流程，收益是否依然存在？</p>
+<p>全文先用 Hermes Agent 解释程序性记忆，再依次介绍 tRPC-Agent-Go 的在线学习、离线优化、接入方式和 SkillCraft Benchmark。核心结论是：</p>
+<blockquote>
+<p>Agent 自进化把执行过程中学到的方法写成 Skill，再根据检查和评测结果决定是否供后续任务使用。</p>
+</blockquote>
+<hr />
+<h2 id="hermes-agent-skill">一、Hermes Agent：怎样把任务方法保存为 Skill</h2>
+<p><a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a> 把自己称为 self-improving agent。这里的 self-improving 不指持续训练或在线修改模型权重。Hermes 会把值得复用的方法写成 Skill，在后续任务中按需加载，并在发现问题时继续修改。</p>
+<p>理解 Hermes，可以先区分“记住发生过什么”和“学会以后怎么做”。</p>
+<table>
+<thead>
+<tr>
+<th>资产</th>
+<th>保存的内容</th>
+<th>它回答的问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Memory</td>
+<td>用户偏好、项目状态、已经做出的决定</td>
+<td>“这个用户是谁？项目现在到哪一步？”</td>
+</tr>
+<tr>
+<td>Session Search</td>
+<td>过去对话和工具执行的原始证据</td>
+<td>“上次错误的原文是什么？”</td>
+</tr>
+<tr>
+<td>Skill</td>
+<td>一类任务的稳定流程、工具顺序和避坑方法</td>
+<td>“再遇到这类任务，应该怎样完成？”</td>
+</tr>
+</tbody>
+</table>
+<p>这里的 Session Search 指 Hermes 查询历史会话和工具调用记录的能力；本文后面讨论 tRPC-Agent-Go 时，重点放在 Memory 与 Skill 的区别。</p>
+<p>假如 Agent 把那次天气任务原样写进 Memory，未来找回来的只是一段故事：当时查了北京、上海和深圳，用了哪些参数，遇到了哪次超时。Skill 要做的事情更难一些。它要去掉城市名、临时路径和偶然数字，只留下可以迁移到其他任务的结构：先完成地理编码，再按统一时区取数；个别城市失败时局部重试，不要整批重跑；生成报告前检查城市集合是否完整。</p>
+<p>这种“知道怎样做”的记忆，在认知科学里常被称为 procedural memory，也就是程序性记忆。系统应该优先保证保存下来的方法准确、可复用，而不是不断增加原始对话记录。</p>
+<p>Hermes 的 Skill 还采用 progressive disclosure，也就是“渐进式披露”。模型一开始只看到 Skill 的索引和简介；判断某条 Skill 与当前任务有关后，再用 <code>skill_view(name)</code> 加载完整正文；正文如果引用了额外材料，再继续读取具体 reference。这样既不会把整个 Skill 库塞进每轮 prompt，也不会因为节省上下文而让 Agent 完全看不到已有经验。tRPC-Agent-Go 的 <code>skill_load</code> 采用的也是同一类思路：先让 Agent 知道有哪些能力，需要时再读正文。</p>
+<p>有了可读的 Skill，还要回答谁来写。Hermes 允许前台 Agent 在复杂任务完成后直接调用 <code>skill_manage</code>，保存刚刚走通的流程；如果实际加载的 Skill 过时或缺少关键步骤，也可以当场修改。这种方式能够利用完整的任务上下文，但写 Skill 会消耗当前任务的 token 和时间，而且前台 Agent 未必每次都会主动执行。</p>
+<p>因此 Hermes 又提供了后台复盘。主任务已经回复用户、并且满足复盘条件后，系统会复制一份会话快照，交给一个隔离的后台 Agent。这个 Agent 能回看任务，却只能读写记忆和 Skill，不能重新调用天气接口、代码执行器等业务工具。即使它复盘失败，用户已经拿到的结果也不受影响。源码把这个后台角色称为 Reviewer。这里的设计要求很明确：<strong>后台复盘可以慢一些，也可以单独失败，但不能延长当前请求的返回时间，更不能把已经成功的任务改判为失败。</strong></p>
+<p>Reviewer 会先检查本次已经加载的 Skill 是否需要修改；只有任务中出现了一类新的通用流程时，才创建新 Skill。随着 Skill 数量增加，Curator 负责统计哪些 Skill 经常被查看、使用和修改，合并内容重叠的条目，把长期不用的内容标记为待清理或归档，保护禁止自动整理的重要条目，并在修改前保留备份。自动整理出错时，可以用备份恢复。</p>
+<pre class="mermaid"><code>flowchart LR
+    A["完成复杂任务"] --&gt; B["前台直接写 Skill&lt;br/&gt;或后台检查任务记录"]
+    B --&gt; C["创建 / 修订 Skill"]
+    C --&gt; D["后续任务按需加载"]
+    D --&gt; E["使用中发现问题"]
+    E --&gt; C
+    C --&gt; F["Curator 去重、归档、回滚"]</code></pre>
+<p>Hermes 的做法可以概括为：Agent 完成任务后，把可复用的方法整理成程序性记忆。不过，Hermes 更偏个人或单机运行环境；把同样的做法放进服务端框架，还要处理更多问题。多个应用和用户是否共享 Skill？自动 Reviewer 能不能覆盖人工维护的 Skill？失败任务产生的候选是否允许发布？两个 Reviewer 同时创建近义 Skill 怎么办？谁负责批准、记录和回滚？</p>
+<p>tRPC-Agent-Go 在设计 Evolution 时，也重新思考过“程序性记忆应该存在哪里”。早期方案还没有独立的 Evolution Service；沿着经典记忆分类，这条链路曾尝试在语义记忆和情景记忆之外，把任务方法作为第三类 Memory 保存。概念上很顺：既然“用户偏好什么”和“过去发生过什么”可以成为数据库里的一条记忆，那么“这类任务应该怎样做”似乎也可以。</p>
+<p>接入应用以后，Memory 记录与 Skill 文档的差异显现出来。Memory 适合保存可以独立查询的数据库记录，方法却往往是一份有顺序、有适用条件、有结果检查和失败处理的完整说明；把它拆成若干记录，容易丢掉步骤之间的关系，整段保存又会变成一条过长的事实。Skill 更适合保存这种方法：它是一份可读、可编辑、可按需加载，也能引用补充材料的文档。因此，tRPC-Agent-Go 改为用 Skill 保存程序性记忆。Evolution Service 负责从执行记录生成 Skill，并完成评测、发布和回滚。</p>
+<p>tRPC-Agent-Go Evolution 明确定义了 Skill 的生成、检查、审批、发布和回滚流程，不再只靠 prompt 要求 Agent 自觉执行。</p>
+<hr />
+<h2 id="evolution-skill">二、Evolution 创建和修改的是 Skill</h2>
+<p>“自进化”这个词容易引起误解，所以先说明范围。<strong>tRPC-Agent-Go Evolution 管理模型之外的 Skill，不修改模型权重。</strong> Session 继续保存当前任务的上下文，Memory 继续保存跨会话事实，Summary 继续压缩长对话；Evolution 负责创建、优化、发布和回滚 Skill。</p>
+<table>
+<thead>
+<tr>
+<th>能力</th>
+<th>保存什么</th>
+<th>在什么时候发挥作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Summary</td>
+<td>当前 Session 的压缩状态</td>
+<td>长对话继续运行时减少上下文压力</td>
+</tr>
+<tr>
+<td>Memory</td>
+<td>跨会话的稳定事实与偏好</td>
+<td>新旧会话需要用户或项目背景时</td>
+</tr>
+<tr>
+<td>Skill</td>
+<td>可复用的操作流程和避坑规则</td>
+<td>相似任务需要“怎么做”时</td>
+</tr>
+<tr>
+<td>Fine-tuning</td>
+<td>经训练写入模型权重的知识、能力与行为倾向</td>
+<td>每次模型推理都会体现</td>
+</tr>
+<tr>
+<td>Evolution</td>
+<td>Skill 的生成、优化、发布和回滚过程</td>
+<td>在线任务结束后或离线实验中</td>
+</tr>
+</tbody>
+</table>
+<p>仍以天气任务为例。用户偏好“温度用摄氏度”适合进入 Memory；当前已经处理了三个城市、还剩两个城市属于 Session 状态；“地理编码之后如何稳定批量取天气并校验结果”适合写成 Skill；Evolution 负责从任务执行记录生成或修改这条 Skill，评测候选，并发布通过检查的版本。</p>
+<p>Evolution 最终把方法写入 <code>SKILL.md</code>。启用版本管理后，系统还会为每个候选保留一份不可修改的版本记录。</p>
+<p>两种方式的输入不同。<strong>在线会话学习从一段刚刚结束的真实任务出发</strong>：用户可能纠正过结果，Agent 也可能从错误中恢复，系统随后从这段 Session 里寻找值得复用的方法。它事先未必知道应该优化哪条 Skill，能够及时发现个性化需求和少见问题；但单次执行提供的证据较少，系统可能把偶然有效的做法误认为通用方法。</p>
+<p><strong>离线优化从一份已经明确要改进的 Skill 出发。</strong> 平台或能力提供方知道这条 Skill 应该解决什么问题，也能准备可重复执行的数据集、业务评分器和实验预算，于是在交付给更多用户之前生成多个候选、比较质量与成本，再用未见样本评测。离线实验不能完整还原真实用户的运行环境，但可以在相同条件下反复比较不同版本。</p>
+<p>看到这里，很自然会把在线学习理解为偏 2C，也就是直接服务最终用户；把离线优化理解为偏 2B，也就是平台先把 Skill 改好，再作为一项能力提供给用户。这确实是两种常见用法，但在线和离线本身只说明修改怎样发起、评测数据怎样产生：在线修改由一段新的任务记录触发，离线修改由能力提供方组织的实验触发。一份 Skill 最终服务单个用户还是整个应用，则由隔离配置决定。</p>
+<p>一份新 Skill 生效后会被谁看到，是服务端场景必须单独回答的问题。某位用户反复改进的个人工作流，可以只服务这个用户；一个应用从生产任务中总结出的通用流程，可以在应用内部共享；框架或平台提供的基础 Skill，则通常由维护者统一管理。在线学习既可以更新个人 Skill，也可以从应用流量中总结共享方法；拥有可重复任务和稳定评分的个人 Agent，也能做离线优化。Skill 的可见用户越多，一次错误修改影响的人就越多，因此发布前需要更充分的评测和审批。</p>
+<p>要守住这个范围，需要同时对齐三类边界：<strong>读取边界</strong>决定 Agent 能看到哪些 Skill，<strong>修改边界</strong>决定后台学习允许更新哪些 Skill，版本与审批记录则必须保存在同一个用户或应用分区。后台复盘可以读取授权范围内更多的 Skill 来检查重复，但只能修改系统明确允许自动维护的部分。例如，个人工作流不能因为一次复盘变成全应用规则，某个应用的内部约定也不能被另一个应用读取；人工维护的基础 Skill 即使对所有人可见，也可以禁止自动学习修改。</p>
+<p>在线学习产生的版本可以作为离线优化的初始版本，线上失败案例也可以加入离线数据集；离线候选准备发布时，则使用同一套用户隔离、审批、发布和回滚机制。两种方式操作的是同一种 Skill。</p>
+<hr />
+<h2 id="skill">三、在线学习：正常情况下先返回任务，后台再生成 Skill</h2>
+<p>在线 Evolution 把 <strong>“完成当前任务”和“从任务中总结方法”分开执行</strong>。后台队列有容量时，用户拿到天气报告后，系统再总结这次执行；后台学习即使失败，也不会把已经成功的任务改判为失败。如果队列已满，框架会改为同步处理，当前请求可能因此延后返回，具体行为放到第五章说明。</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant U as User
+    participant A as 前台 Agent
+    participant L as 后台学习
+    participant S as Skill 库
+
+    U-&gt;&gt;A: 发起任务
+    A-&gt;&gt;S: 按需读取已有方法
+    S--&gt;&gt;A: 返回 Skill
+    A--&gt;&gt;U: 交付任务结果
+    A-)L: 留下新增执行记录（可选任务结果）
+    L-&gt;&gt;L: 判断 → 整理方法 → 去重 → 检查
+    L-&gt;&gt;S: 发布通过已配置检查的新版本
+    Note over S,A: 新 Skill 从下一次任务开始生效</code></pre>
+<h3 id="_1">队列有容量时，先返回当前任务，再检查执行记录</h3>
+<p>仍以多城市天气报告为例。前台 Agent 先完成查询、处理错误、检查城市是否齐全，然后尽快把报告交给用户。本次任务结束后，后台学习读取新增的对话、工具调用记录，以及业务能够提供的成功、失败或评分。它不会继续替用户执行任务，只会判断本次执行中是否出现以后还会遇到的问题，以及是否有值得保存的方法。</p>
+<p>这种顺序把当前任务和后台学习的结果分开了。当前任务负责尽快返回正确结果；后台学习负责检查执行记录并尝试生成 Skill，可以更慢，也可以单独失败。新 Skill 只有发布后才会供后续任务使用；生产环境通常还会在发布前配置自动检查和人工审批。后台队列有容量时，额外的模型调用不会增加用户等待时间；队列已满时，当前请求可能等待同步处理。</p>
+<p>一段长会话可能连续完成多个任务，后台没有必要每次都重读全部历史。它会记录上一次处理到哪里，随后只读取新增的对话、工具结果和用户反馈。这样可以减少重复的模型调用，也能避免同一段记录被多次写成 Skill；读取位置何时更新、后续步骤失败怎样处理，留到接入章节说明。</p>
+<h3 id="reviewer">哪些执行记录值得交给 Reviewer</h3>
+<p><strong>触发策略先判断这段执行记录是否值得处理。</strong> 简单问答即使回答正确，也未必包含可复用的方法；多步工具流程、用户明确纠正过的任务，以及 Agent 曾经失败但最终恢复成功的任务，通常更值得检查。这一步只决定是否交给 Reviewer，不决定候选能否发布。</p>
+<p><strong>Reviewer 随后从执行记录中整理方法。</strong> 它会同时阅读新增的对话与工具调用、已有 Skill 的概要，以及可选的任务结果，然后提出结构化的修改建议：创建一种新方法、补充现有方法，或者删除过时方法。模型负责理解内容和提出建议，实际写入由后续代码执行。</p>
+<p>一条好的天气 Skill 会把“查询北京、上海、深圳”整理成“先批量地理编码；为每个地点保存坐标与时区；仅重试失败项；最终检查输出城市与输入城市一致”。它保留工具顺序、参数构造规则、完成条件和失败处理方式，删除账号、密钥、绝对路径以及只属于本次任务的数字。Reviewer 写下的是可用于其他城市的方法，而不是本次任务的逐步记录。</p>
+<p><strong>Reconciler 最后用确定性规则整理候选。</strong> 规范化名称相同，或者适用条件与有序步骤完全相同的批内重复项只保留一次；如果已有 “Weather - Multi-City”，新产生的 “Weather - 3 Cities” 也会被改写成对前者的更新。这一步依赖显式的名称和结构线索，不具备 Reviewer 那样的语义理解能力；领域缩写和中文隐含同义词仍需要业务侧观察与验证。</p>
+<p>在线复盘按这个顺序执行：触发策略判断是否需要处理，Reviewer 从记录中整理方法，Reconciler 去重，并把明显属于已有 Skill 的变体改写为更新。接下来，系统还要检查候选是否可以发布。</p>
+<h3 id="_2">生产环境应先检查候选，再决定是否发布</h3>
+<p>Reviewer 和 Reconciler 生成的内容仍然只是候选。生产环境通常会检查它的格式、安全性和任务效果，并判断是否需要人工审批；框架允许接入方根据风险选择其中一部分，最小配置也可以不启用这些检查。</p>
+<p>四类检查分别回答四个问题。第一，名称、适用条件和步骤是否完整，能否作为一份可执行的方法；第二，正文是否包含密钥、危险命令或路径穿越等风险内容；第三，产生候选的任务是否成功，业务评分是否达到要求；第四，即使自动检查通过，这类改动是否仍然需要人工确认。第三类检查依赖业务提供成功、失败或评分；如果没有这些结果，框架只能使用 Reviewer 的判断，无法证明候选确实改善了任务。实现中把这四类检查称为 Spec、Safety、Effectiveness 和 Human Gate。</p>
+<p><img alt="Evolution 的四道质量门禁" src="../../../assets/img/blog/evolution/quality_gates.png" /></p>
+<p><strong>Spec Gate 检查 Skill 的格式和必要字段。</strong> 候选需要有合规的名称、清楚的适用条件和足够的执行步骤；缺少必要字段、步骤不足，或者以新建方式提交重复 Skill 的候选，会在这里被拒绝。这项检查只判断结构是否合规，不评价内容质量和任务效果。</p>
+<p><strong>Safety Gate 检查常见的危险内容。</strong> 它会查找正文中的密钥、危险命令和路径穿越，防止任务里的临时环境信息被长期保存。这项检查不能代替完整的安全审计；工具能否读取敏感数据、修改真实业务数据，仍由应用的权限配置控制。</p>
+<p><strong>Effectiveness Gate 检查任务结果。</strong> 如果业务提供了成功、失败或评分，它会把来自失败任务或低分任务的候选设为待评测；如果业务没有提供结果，默认实现不会自动重跑任务，只能接受 Reviewer 的判断。因此，在没有业务结果的情况下，通过这项检查只表示系统没有发现失败证据，不表示候选已经证明有效。</p>
+<p><strong>Human Gate 决定是否等待人工审批。</strong> 为个人新增一条低风险方法，与删除整个应用共享的 Skill，通常需要不同的审批要求。接入方负责配置哪些操作必须审批，框架不会自动判断一项改动属于什么风险等级。</p>
+<p>四类 Gate 可以按业务需要组合。结构或安全检查失败时，候选通常会被拒绝；任务明确失败、Agent 异常或业务分数低于门槛时，候选会被保存为待评测，不会立即发布；需要人工确认时，候选会进入待审批。没有提供任务结果时，默认 Effectiveness Gate 会放行，而不是把候选设为待评测。创建、更新和删除可以配置不同的审批规则，具体默认行为留到接入章节说明。</p>
+<p>Gate 决定候选是否可以发布，版本记录用于在发布后出现问题时恢复旧版本。生产环境通常把每次创建、更新和删除保存成不可修改的版本，而不是直接覆盖原文件；另用一个指针记录当前生效的版本。新版本发布后，旧版本仍然保留；如果线上效果变差，可以把指针切回之前的版本。</p>
+<pre class="mermaid"><code>stateDiagram-v2
+    [*] --&gt; 候选
+    候选 --&gt; 拒绝: 结构或安全检查失败
+    候选 --&gt; 待评测: 任务失败、Agent 异常或分数低于门槛
+    待评测 --&gt; 候选: 补充评测结果并提交新候选
+    候选 --&gt; 待审批: 需要人工确认
+    候选 --&gt; 生效: 已配置检查通过
+    待审批 --&gt; 生效: 批准
+    待审批 --&gt; 拒绝: 驳回
+    生效 --&gt; 归档: 新版本取代
+    归档 --&gt; 生效: 回滚
+    note right of 待评测
+        需要补充评测，不会自动发布
+    end note</code></pre>
+<p>Gate、版本记录和当前生效版本必须使用同一个用户或应用分区，避免候选被发布到错误的用户范围。</p>
+<p>发布完成后，Agent 还必须能在下一次任务中读到新版本。如果文件已经写入，但运行中的 Agent 仍然使用旧缓存，这次更新就没有实际效果。下一章先介绍离线优化，第五章再说明后台队列、读取位置、Gate、版本存储和缓存刷新怎样接入 Go 代码。</p>
+<hr />
+<h2 id="_3">四、离线优化：用重复实验验证一次成功能否复用</h2>
+<p>在线学习能及时发现值得复用的方法，但一次执行只能说明“这次有效”。继续看多城市天气任务：旧 Skill 规定，只要一个城市请求失败，就把整批城市全部重跑。某次广州接口超时，Agent 临时只重试广州，最后按时返回了完整报告。由此可以提出一项修改：把“整批重跑”改成“只重试失败城市”。</p>
+<p>这次成功还不足以支持修改正式 Skill。接口可能恰好在第二次请求时恢复；换成多个城市同时失败，局部重试也可能遗漏必要状态。离线优化会在一组可重复执行的任务上测试这项修改，判断它在其他输入和故障条件下是否仍然有效。</p>
+<p>一场实验从三样东西开始：一份准备优化的初始 Skill、一批可重复执行的任务，以及业务提供的评分器（Evaluator）。仍以天气任务为例，评分器可以检查城市是否全部返回、字段是否正确、失败项是否得到重试、成功项是否被重复请求，并为每次执行给出分数和具体反馈。初始 Skill 与后续候选都遵守同一套任务和评分规则，版本之间才有可比性。</p>
+<h3 id="_4">三组数据分别用于改写、选择和最终评测</h3>
+<p>同一批任务如果既指导改写，又负责判断改写是否成功，候选很容易只解决已经见过的问题。因此，离线优化在开始前会把任务分成 Feedback、Validation 和 Holdout：<strong>Feedback 告诉反思模型“应该怎样改”，Validation 帮助 Optimizer“从多个版本中选哪一个”，Holdout 则在改写停止后判断最终候选能否超过初始 Skill。</strong></p>
+<p>优化首先从 Feedback 开始。框架用初始 Skill 执行其中一小批任务，把实际输出、分数、具体反馈和工具调用记录交给负责改写 Skill 的反思模型。假设评分器指出：“广州超时后，北京和上海被重复请求，报告虽然完整，却多调用了两次工具。”反思模型就可以修改失败处理步骤，把“整批重跑”改成“只重试失败城市”。Feedback 同时提供比较分数和修改 Skill 所需的执行信息。</p>
+<p>这次改写随后进入 Validation。它面对的是另一批城市组合和故障情形。Validation 的执行反馈不再用于修改当前版本；Optimizer 只使用这些分数比较已有版本、选择下一轮从哪一版继续修改，并在优化结束时选出整体验证分最高的一份。这样，Feedback 上解决了广州超时的版本，还要证明自己能够处理其他城市、其他超时位置以及完全正常的请求。</p>
+<p>Feedback 和 Validation 会在多轮优化中反复使用，Holdout 则是一组在优化期间始终不参与改写和选择的任务。只有 Validation 选出最终候选后，框架才在同一组 Holdout 任务上分别运行初始 Skill 和候选 Skill，并向 Evaluator 传入相同的随机种子，尽量让两次执行的差异来自 Skill 本身。默认情况下，候选的 Holdout 平均分不能低于初始 Skill；接入方也可以要求它至少提高一定幅度。</p>
+<p>平均分有一个明显的盲点：候选可能在多数普通任务上略有提升，却在少数不能出错的任务上明显退步。为此，业务可以把某条 Holdout 用例标记为 <code>Critical</code>。它不是第四组数据，也不是 Optimizer 自动计算出的风险等级，只表示“这条用例不允许退步”。例如，天气报告中“缺少任意一个城市都算失败”的用例就可以这样标记。即使候选的平均分达到要求，只要某条 <code>Critical</code> 用例的得分低于初始 Skill，框架也不会允许提交这个候选。</p>
+<p>Holdout 之所以能检验未见任务，是因为它此前没有参与任何修改。如果团队看过结果后继续针对这组任务调整 Skill，这些任务就已经进入开发过程；下一轮可以把它们移入 Validation，同时准备一组新的 Holdout。</p>
+<h3 id="gepa-skill">GEPA 如何一步步改进 Skill</h3>
+<p>tRPC-Agent-Go 的内置离线优化借鉴了 <a href="https://arxiv.org/abs/2507.19457">GEPA（Genetic-Pareto）</a> 的思路。可以把它理解成反复进行的小步试改：从已有版本中选一份作为本轮起点，只改其中一处，再用任务得分判断这次修改是否值得保留。实验开始时，系统先把初始 Skill 放进候选池；这里的候选池，就是目前保留下来、后续仍可能继续修改的版本集合。</p>
+<pre class="mermaid"><code>flowchart TB
+    P["从候选池选一份 Skill&lt;br/&gt;作为本轮起点"] --&gt; F["抽取一小批 Feedback 任务&lt;br/&gt;运行起点版本并收集输出、分数和反馈"]
+    F --&gt; R["反思模型只修改 Skill 的一个字段&lt;br/&gt;得到一个修改版本"]
+    R --&gt; C["用同一批任务和随机种子&lt;br/&gt;运行修改版本"]
+    C --&gt; G{"修改版本总分&lt;br/&gt;高于起点版本？"}
+    G --&gt;|否| X["丢弃本次修改"]
+    G --&gt;|是| V["在完整 Validation 上评测&lt;br/&gt;并加入候选池"]
+    X --&gt; Q{"是否达到迭代次数&lt;br/&gt;或评测次数上限？"}
+    V --&gt; Q
+    Q --&gt;|否| P
+    Q --&gt;|是| B["按 Validation 平均分&lt;br/&gt;从全部候选中选出最终版本"]
+    B --&gt; H["此时才使用 Holdout&lt;br/&gt;对比初始版与候选版"]
+    H --&gt; D{"候选不同于初始版、平均分达到要求&lt;br/&gt;且 Critical 用例没有退步？"}
+    D --&gt;|是| S["允许提交候选"]
+    D --&gt;|否| K["保留初始 Skill"]</code></pre>
+<p><strong>一轮只试一处修改。</strong> 系统先从候选池选一份 Skill 作为本轮起点，再从 Feedback 中抽取一小批任务运行它。反思模型会看到这份 Skill、实际输出、评分器给出的分数和具体反馈，然后只修改 <code>steps</code>、<code>pitfalls</code>、<code>when_to_use</code> 或 <code>description</code> 中的一个字段。仍以天气任务为例，如果这轮修改 <code>steps</code>，反思模型可以把“整批重跑”改成“记录失败城市并单独重试”，但不会同时重写适用条件和能力描述。这样，后面的分数变化更容易对应到这次具体修改。</p>
+<p><strong>先用少量任务快速比较，再用完整 Validation 扩大检查范围。</strong> 修改前后的两个版本会运行同一批 Feedback 任务，Evaluator 也会收到同一个随机种子。修改版本的总分必须严格高于本轮起点，否则这次修改直接丢弃。分数提高以后，它才会运行完整的 Validation，并连同每条用例的得分一起加入候选池。Feedback 负责尽早淘汰没有改善的改法，Validation 负责记录这个版本在更多任务上的表现。</p>
+<p><strong>候选池会同时保留不同的改进方向。</strong> 假设版本 A 处理普通天气请求最稳定，版本 B 更擅长处理多个城市同时超时。如果每一轮都只从平均分最高的版本继续修改，版本 B 解决复杂故障的方法可能再也没有机会被改进。GEPA 因此会逐条查看 Validation 用例，让在某些用例上表现最好的版本也有机会成为下一轮的起点。一个版本在越多用例上领先，被选中的机会通常越大；多个版本如果只是在同一批用例上并列领先，系统会减少重复选择。这个做法在源码中称为样本级 Pareto。</p>
+<p><strong>正常结束搜索后，再选出最终版本。</strong> 迭代次数或评测调用量达到上限时，系统停止生成新版本，转而比较候选池中所有版本的 Validation 平均分。初始 Skill 从未被移出候选池，所以所有修改都不够好时，最终结果仍然可以是初始版本。只要配置了 Holdout，框架随后就会进行最终评测；如果选出的仍是初始 Skill，实验会以“不提交修改”结束。运行时限与迭代次数、评测次数不同：如果搜索尚未结束便超时，本次实验会失败，不会继续选择或提交当时的候选。</p>
+<p>通过 Holdout 只表示候选可以被提交。如果准备上线，它还要经过版本保存、自动检查和人工审批，发布后 Agent 才会使用它。修改方向既可以来自线上失败，也可以来自能力维护者准备的离线样本。进入离线优化后，Feedback 用于生成候选，Validation 负责选择版本，Holdout 做最终评测；版本与审批流程再决定候选是否发布。下图汇总了在线学习、离线优化和后续加载的关系。</p>
+<p><img alt="一套 Skill 资产，两条进化路径" src="../../../assets/img/blog/evolution/evolution_paths.png" /></p>
+<hr />
+<h2 id="_5">五、接入：从最小在线配置到离线优化</h2>
+<p>前面讲清了 Evolution 为什么这样设计，这一章开始回答代码里怎样接入。可以分三步理解：先让 Runner 在任务结束后把执行记录交给 Evolution；再为后台处理补上队列、版本和审批；如果业务已经准备好成套测试数据，最后再接入 Evaluator，反复比较和改进指定的 Skill。</p>
+<h3 id="_6">配置最小在线流程</h3>
+<p>最小接入首先要让 Agent 与 Evolution 共享同一个 Skill Repository，也就是使用同一个 Skill 存储和缓存实例。Agent 从这里读取 Skill，Reviewer 用它查看已有 Skill；Publisher 写入文件后，Service 会刷新 Repository。下面的代码只展示对象创建和连接关系，省略模型凭据、Session 创建和实际任务调用，不能直接复制运行。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-0-10">10</a></span>
+<span class="normal"><a href="#__codelineno-0-11">11</a></span>
+<span class="normal"><a href="#__codelineno-0-12">12</a></span>
+<span class="normal"><a href="#__codelineno-0-13">13</a></span>
+<span class="normal"><a href="#__codelineno-0-14">14</a></span>
+<span class="normal"><a href="#__codelineno-0-15">15</a></span>
+<span class="normal"><a href="#__codelineno-0-16">16</a></span>
+<span class="normal"><a href="#__codelineno-0-17">17</a></span>
+<span class="normal"><a href="#__codelineno-0-18">18</a></span>
+<span class="normal"><a href="#__codelineno-0-19">19</a></span>
+<span class="normal"><a href="#__codelineno-0-20">20</a></span>
+<span class="normal"><a href="#__codelineno-0-21">21</a></span>
+<span class="normal"><a href="#__codelineno-0-22">22</a></span>
+<span class="normal"><a href="#__codelineno-0-23">23</a></span>
+<span class="normal"><a href="#__codelineno-0-24">24</a></span>
+<span class="normal"><a href="#__codelineno-0-25">25</a></span>
+<span class="normal"><a href="#__codelineno-0-26">26</a></span>
+<span class="normal"><a href="#__codelineno-0-27">27</a></span>
+<span class="normal"><a href="#__codelineno-0-28">28</a></span>
+<span class="normal"><a href="#__codelineno-0-29">29</a></span>
+<span class="normal"><a href="#__codelineno-0-30">30</a></span>
+<span class="normal"><a href="#__codelineno-0-31">31</a></span>
+<span class="normal"><a href="#__codelineno-0-32">32</a></span>
+<span class="normal"><a href="#__codelineno-0-33">33</a></span>
+<span class="normal"><a href="#__codelineno-0-34">34</a></span>
+<span class="normal"><a href="#__codelineno-0-35">35</a></span>
+<span class="normal"><a href="#__codelineno-0-36">36</a></span>
+<span class="normal"><a href="#__codelineno-0-37">37</a></span>
+<span class="normal"><a href="#__codelineno-0-38">38</a></span>
+<span class="normal"><a href="#__codelineno-0-39">39</a></span>
+<span class="normal"><a href="#__codelineno-0-40">40</a></span>
+<span class="normal"><a href="#__codelineno-0-41">41</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/evolution"</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/model/openai"</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/runner"</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/skill"</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="p">)</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="nx">agentModel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">"gpt-4o"</span><span class="p">)</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">    </span><span class="nx">reviewerModel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">"gpt-4o-mini"</span><span class="p">)</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nx">repo</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">skill</span><span class="p">.</span><span class="nx">NewFSRepository</span><span class="p">(</span><span class="s">"./skills"</span><span class="p">)</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="w">    </span><span class="nx">evoSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="w">        </span><span class="nx">reviewerModel</span><span class="p">,</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="w">        </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithManagedSkillsDir</span><span class="p">(</span><span class="s">"./skills"</span><span class="p">),</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="w">        </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSkillRepository</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a><span class="w">    </span><span class="k">defer</span><span class="w"> </span><span class="nx">evoSvc</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="w">    </span><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="w">        </span><span class="s">"my-agent"</span><span class="p">,</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">agentModel</span><span class="p">),</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="w">        </span><span class="s">"my-app"</span><span class="p">,</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="w">        </span><span class="nx">agent</span><span class="p">,</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a><span class="w">        </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithEvolutionService</span><span class="p">(</span><span class="nx">evoSvc</span><span class="p">),</span>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="w">    </span><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="w">    </span><span class="c1">// 后续照常执行任务；任务完成后，学习在后台发生。</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>runner.WithEvolutionService(evoSvc)</code> 会在任务完成后调用 Evolution Service。Runner 使用这个 Service，但不负责它的生命周期；调用方最终仍要显式 <code>Close()</code>，<code>Runner.Close()</code> 不会代替业务关闭 Service。任务结束后，Runner 自动投递一份只带 Session 的 <code>LearningJob</code>；队列有空位时，投递很快返回，后台随后处理这份任务。队列已满时的行为由下一节说明。</p>
+<p>这段最小配置会直接发布 Reviewer 生成的修改，适合在测试环境中确认任务结束后能够生成 Skill，并在下一次任务中加载。它不会保存完整的候选记录，也没有审批和版本回滚；生产环境通常还需要下一节的配置。</p>
+<h3 id="_7">后台学习仍然需要管理队列、超时和失败</h3>
+<p>正常情况下，Runner 把 <code>LearningJob</code> 放入队列后就可以结束任务流，Reviewer 由后台 worker 继续执行。为了避免原请求一结束，后台任务也随 context 被取消，Runner 会保留其中的调用链、租户等信息，但解除原请求的取消信号。</p>
+<p>Service 默认使用 1 个 worker，每个 worker 的队列容量为 10，每次处理最多运行 60 秒。配置多个 worker 后，相同 <code>AppName</code> 和 <code>UserID</code> 的任务会按固定哈希分给同一个 worker，尽量维持同一用户任务的处理顺序。</p>
+<p>如果对应队列已经满了，或者 worker 尚未启动，投递方会改为同步处理。Runner 自动接入又解除了原请求的取消信号，因此这次复盘可能让任务流最多多等 60 秒。“后台学习不延迟返回”成立的前提，是队列仍有容量。</p>
+<p>生产环境需要根据流量调整 worker 数量和队列容量，并监控队列深度、处理耗时、超时次数和同步处理次数。业务主动投递时，如果传入的 context 已经取消，Service 会直接跳过这次学习。</p>
+<p>为了避免同一段会话被反复复盘，Service 使用 <code>review cursor</code> 记录“上一次处理到哪条执行记录”。策略认为不需要复盘、Reviewer 主动跳过，或者前台已经通过文件或命令工具写入 <code>SKILL.md</code> 时，cursor 都会向后移动，下次只读取新产生的记录。</p>
+<p>如果目标分区（Scope）、Repository、触发策略或 Reviewer 在得出结论前失败，cursor 不会移动，后续投递还会重试这段记录。Reviewer 一旦返回合法的结构化结果，这段记录就会被标记为已读；此后即使候选保存、发布或缓存刷新失败，Service 也不会重新复盘原会话。接入方因此还要单独监控候选处理状态，对失败的保存或发布操作进行重试。</p>
+<p>前文的三个后台角色在源码里也有对应实现。<code>DefaultReviewPolicy</code> 默认在工具调用达到 4 次、用户发生纠错或 Agent 从错误中恢复时触发。<code>LLMReviewer</code> 把新增执行记录、已有 Skill 概览和可选 Outcome 转成结构化 <code>ReviewDecision</code>，不会直接写文件。随后 <code>Reconciler</code> 按候选名称以及 <code>when_to_use</code>、<code>steps</code> 的结构做确定性去重；例如已经存在 “Weather - Multi-City” 时，它会把 “Weather - 3 Cities” 改写为对前者的更新。领域缩写和中文隐含同义词未必能被默认规则识别，仍需要业务侧检查。</p>
+<h3 id="_8">保存候选版本并配置发布检查</h3>
+<p>测试环境可以直接覆盖 Skill，生产环境则需要同时保留“所有候选版本”和“当前生效版本”，否则很难审批和回滚。源码把每份不可修改的候选称为 revision：<code>CandidateStore</code> 保存候选内容、状态和检查报告，<code>ActivePointer</code> 记录当前生效的 revision，Publisher 再把生效内容写入 Agent 使用的 Skill 目录。</p>
+<p>Reviewer 提出 create、update 或 delete 后，Service 先建立 revision。create 和 update 依次经过已经配置的 Spec、Safety、Effectiveness 和 Human Gate；delete 会跳过 Spec 与 Safety。候选及其检查结果随后写入 <code>CandidateStore</code>，只有没有被 Gate 拒绝或暂停的版本才会发布，并更新 <code>ActivePointer</code>。<code>CandidateStore</code> 会保留已经写入的 revision；再配合 <code>ActivePointer</code> 和 Publisher，审批与回滚就可以切换版本，而不必覆盖历史快照。对应配置如下，同样省略外围应用代码。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-1-10">10</a></span>
+<span class="normal"><a href="#__codelineno-1-11">11</a></span>
+<span class="normal"><a href="#__codelineno-1-12">12</a></span>
+<span class="normal"><a href="#__codelineno-1-13">13</a></span>
+<span class="normal"><a href="#__codelineno-1-14">14</a></span>
+<span class="normal"><a href="#__codelineno-1-15">15</a></span>
+<span class="normal"><a href="#__codelineno-1-16">16</a></span>
+<span class="normal"><a href="#__codelineno-1-17">17</a></span>
+<span class="normal"><a href="#__codelineno-1-18">18</a></span>
+<span class="normal"><a href="#__codelineno-1-19">19</a></span>
+<span class="normal"><a href="#__codelineno-1-20">20</a></span>
+<span class="normal"><a href="#__codelineno-1-21">21</a></span>
+<span class="normal"><a href="#__codelineno-1-22">22</a></span>
+<span class="normal"><a href="#__codelineno-1-23">23</a></span>
+<span class="normal"><a href="#__codelineno-1-24">24</a></span>
+<span class="normal"><a href="#__codelineno-1-25">25</a></span>
+<span class="normal"><a href="#__codelineno-1-26">26</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nx">skillsDir</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">"./skills/evolution"</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="nx">revisionsDir</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">"./evolution/revisions"</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="nx">evoSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="w">    </span><span class="nx">reviewerModel</span><span class="p">,</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithManagedSkillsDir</span><span class="p">(</span><span class="nx">skillsDir</span><span class="p">),</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSkillRepository</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithCandidateStore</span><span class="p">(</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="w">        </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewFileCandidateStore</span><span class="p">(</span><span class="nx">revisionsDir</span><span class="p">),</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithActivePointer</span><span class="p">(</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a><span class="w">        </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewFileActivePointer</span><span class="p">(</span><span class="nx">revisionsDir</span><span class="p">),</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15"></a>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSpecGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewDefaultSpecGate</span><span class="p">()),</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSafetyGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewDefaultSafetyGate</span><span class="p">()),</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithEffectivenessGate</span><span class="p">(</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19"></a><span class="w">        </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewOutcomeBasedEffectivenessGate</span><span class="p">(),</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithHumanGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewCreateOnlyHoldGate</span><span class="p">()),</span>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22"></a>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithWorkerNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithQueueSize</span><span class="p">(</span><span class="mi">32</span><span class="p">),</span>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25"></a><span class="p">)</span>
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26"></a><span class="k">defer</span><span class="w"> </span><span class="nx">evoSvc</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+<p>只要配置 CandidateStore、ActivePointer 或任一 Gate，候选就会按上述流程处理；这些配置全部留空时，系统才会直接发布。生产环境通常同时配置 CandidateStore 和 ActivePointer，分别保存候选历史和当前版本；只配置某一道 Gate，只会增加这一项检查，不会自动获得完整的版本历史和回滚能力。</p>
+<p>默认的 <code>OutcomeBasedEffectivenessGate</code> 只检查 create 和 update。任务失败、Agent 异常，或者业务分数低于 0.8 时，候选就不会发布，并被标记为 <code>pending_eval</code>。只有同时配置 <code>CandidateStore</code>，这份候选及其状态才会被保存；框架不会稍后自动重新评测，业务需要在获得新证据后重新提交候选，或者自行实现后续处理流程。</p>
+<p>如果没有提供 Outcome，这道 Gate 会放行候选，因为它没有业务分数可供判断。这只能说明“没有发现拒绝依据”，不能说明候选已经验证有效。</p>
+<p>还要注意，示例中的 <code>NewCreateOnlyHoldGate()</code> 只暂停 create，内置 Effectiveness Gate 也不检查 delete。因此 update 通过自动检查后会直接发布；对于受管目录中确实存在的 Skill，delete 也可能不经人工审批便生效。如果创建、更新和删除都必须由人确认，应改用 <code>NewAlwaysHoldGate()</code>；等待审批的候选会停在 <code>pending_approval</code>，不会更新当前生效版本。</p>
+<p>上面的描述以默认的强制执行模式为准。对于在线 Reviewer 产生并由后台 worker 处理的 revision，<code>WithApprovalGateShadow(true)</code> 适合上线前观察：系统仍会执行并记录各项 Gate 的结论，但不会据此阻止 Publisher 更新线上 Skill。这个开关不影响 <code>RevisionSubmitter</code> 接收的外部候选；离线优化通过 <code>SubmitRevision</code> 提交时，自动 Gate 仍会强制执行。<code>pending_approval</code> 默认会一直等待人工处理；只有显式配置 <code>WithApprovalTimeout(d)</code> 后，超过时限仍未处理的候选才会自动生效。影子模式和超时发布会改变在线候选的实际约束力，生产接入时应把它们纳入审计和告警。</p>
+<p>版本能够发布之后，还要回答一个问题：<strong>这份 Skill 应该让谁看到？</strong> <code>WithManagedSkillsDir</code> 限定 Evolution 可以自动管理的目录；它可以读取更大的 Skill 库用于查重，却只能修改受管目录中的内容。<code>WithSkillScopeMode</code> 决定 Skill 的共享范围：<code>SkillScopeApp</code> 供同一应用的用户共享，<code>SkillScopeUser</code> 按 <code>AppName</code> 和 <code>UserID</code> 隔离，默认的 <code>SkillScopeNone</code> 不分区，适合本地工具或单租户应用。</p>
+<p>这个范围必须同时应用在写入侧和读取侧。Evolution 通过 <code>evolution.WithSkillRepositoryProvider</code> 找到目标 Repository，Agent 则通过 <code>llmagent.WithSkillRepositoryProvider</code> 读取它；两边需要使用相同的 mode、<code>AppName</code> 和 <code>UserID</code>。<code>CandidateStore</code>、<code>ActivePointer</code> 和受管目录也要采用同样的分区方式，否则就可能出现“候选写入用户 A，Agent 却从应用共享目录读取”的问题。</p>
+<p>最后还要处理缓存。Service 发布成功后，会对实现了 <code>skill.RefreshableRepository</code> 的共享 Repository 调用 <code>Refresh()</code>，示例中的 <code>FSRepository</code> 支持这一能力。如果 Agent 和 Evolution 分别创建各自的缓存实例，即使底层指向同一目录，Agent 也可能继续读取旧版本。</p>
+<h3 id="_9">有业务结果时，改为手动投递</h3>
+<p>Runner 自动投递发生在任务刚结束时，此时通常只有执行记录，还没有测试结果、规则评分或人工反馈。如果业务会在稍后得到这些结果，就不要配置 <code>runner.WithEvolutionService</code> 自动投递，而应在评分完成后主动调用 <code>EnqueueLearningJob</code>。同一段新增记录只应选择一种投递方式：自动投递先推进读取位置后，稍后的手动投递通常已经没有新内容可处理；两次投递发生竞态或前一次失败时，还可能造成重复复盘。</p>
+<p>手动投递时，可以把任务状态、分数和说明放进 <code>Outcome</code>。触发策略和 Reviewer 可以据此理解本次任务是否成功，Effectiveness Gate 与 Human Gate 也会用它决定候选是否继续处理。这里的 Outcome 描述的是一次线上任务的结果，与离线 Optimizer 使用的数据集和 Evaluator 不是同一套数据。手动投递的核心代码如下：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-2-10">10</a></span>
+<span class="normal"><a href="#__codelineno-2-11">11</a></span>
+<span class="normal"><a href="#__codelineno-2-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">score</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mf">0.95</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evoSvc</span><span class="p">.</span><span class="nx">EnqueueLearningJob</span><span class="p">(</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">LearningJob</span><span class="p">{</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">        </span><span class="nx">Session</span><span class="p">:</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="w">        </span><span class="nx">Outcome</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">Outcome</span><span class="p">{</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">            </span><span class="nx">Status</span><span class="p">:</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">OutcomeSuccess</span><span class="p">,</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">            </span><span class="nx">Score</span><span class="p">:</span><span class="w">  </span><span class="o">&amp;</span><span class="nx">score</span><span class="p">,</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">            </span><span class="nx">Notes</span><span class="p">:</span><span class="w">  </span><span class="s">"all assertions passed"</span><span class="p">,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>高风险业务应当通过手动投递提供 Outcome，并增加人工审批；发布前还可以在隔离环境中重新执行一组代表性任务。没有 Outcome 时，默认 Effectiveness Gate 放行候选，只表示缺少可用于拒绝它的业务结果，不能证明候选有效。</p>
+<p>在线接入有两种选择：没有业务评分时，由 Runner 在任务结束后自动投递；能够取得业务评分时，由应用在评分完成后手动投递。需要基于数据集反复改进某条 Skill 时，再接入离线优化。</p>
+<h3 id="evaluator">离线优化从 Evaluator 开始</h3>
+<p>Evaluator 解决的是“怎样测试一份 Skill”。业务实现这个接口时，要把候选放进隔离的 Repository，运行一组任务，再为每个任务返回一条分数；还可以附上实际输出、明确指出问题的反馈和执行记录，帮助反思模型定位问题。任务是否完成、质量如何以及成本是否可接受，都由业务在这里定义。下面两段代码只说明接口关系，变量和外围依赖需要由具体应用补齐，不能直接编译运行。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-3-10">10</a></span>
+<span class="normal"><a href="#__codelineno-3-11">11</a></span>
+<span class="normal"><a href="#__codelineno-3-12">12</a></span>
+<span class="normal"><a href="#__codelineno-3-13">13</a></span>
+<span class="normal"><a href="#__codelineno-3-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">benchmarkEvaluator</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">    </span><span class="c1">// Runner、sandbox、测试工具和计费依赖。</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="p">}</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="w"> </span><span class="o">*</span><span class="nx">benchmarkEvaluator</span><span class="p">)</span><span class="w"> </span><span class="nx">Evaluate</span><span class="p">(</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">candidate</span><span class="w"> </span><span class="o">*</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">SkillSpec</span><span class="p">,</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="w">    </span><span class="nx">cases</span><span class="w"> </span><span class="p">[]</span><span class="nx">optimization</span><span class="p">.</span><span class="nx">Case</span><span class="p">,</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="nx">seed</span><span class="w"> </span><span class="kt">int64</span><span class="p">,</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">optimization</span><span class="p">.</span><span class="nx">Evaluation</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="w">    </span><span class="c1">// 加载 candidate，按 seed 执行每个 case，</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a><span class="w">    </span><span class="c1">// 返回一一对应的归一化分数，以及能够明确指出 Skill 问题的反馈。</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">evaluations</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>optimization.Optimizer</code> 是统一的优化接口，内置实现由 <code>NewGEPA</code> 创建。Optimizer 会反复调用 Evaluator：根据 Feedback 暴露的问题生成修改，再用 Validation 比较版本；需要做最终评测或提交候选时，再提供 Holdout。业务至少要提供初始 <code>SkillSpec</code>、Feedback、Validation、反思模型和 Evaluator，并保证每条分数都是 <code>[0,1]</code> 范围内的有限数。</p>
+<p>下面的例子还演示了怎样把实验结果交给前面的版本管理流程，因此先从 Evolution Service 取得 <code>RevisionSubmitter</code>，并设置 <code>Submit: true</code>。如果只想观察实验结果，不准备提交候选，可以不配置 submitter，并把 <code>Submit</code> 设为 <code>false</code>。</p>
+<p>代码中的 <code>baselineSpec</code> 是实验开始时使用的 Skill，<code>currentScope</code> 指定候选属于哪个应用或用户，<code>activeRevisionID</code> 则记录实验开始时的线上版本。提交时如果线上版本已经变化，Service 会拒绝用这次实验结果覆盖较新的版本。使用 App/User 分区时，<code>currentScope</code> 必须与目标分区一致；不分区运行时可以传零值。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-4-10">10</a></span>
+<span class="normal"><a href="#__codelineno-4-11">11</a></span>
+<span class="normal"><a href="#__codelineno-4-12">12</a></span>
+<span class="normal"><a href="#__codelineno-4-13">13</a></span>
+<span class="normal"><a href="#__codelineno-4-14">14</a></span>
+<span class="normal"><a href="#__codelineno-4-15">15</a></span>
+<span class="normal"><a href="#__codelineno-4-16">16</a></span>
+<span class="normal"><a href="#__codelineno-4-17">17</a></span>
+<span class="normal"><a href="#__codelineno-4-18">18</a></span>
+<span class="normal"><a href="#__codelineno-4-19">19</a></span>
+<span class="normal"><a href="#__codelineno-4-20">20</a></span>
+<span class="normal"><a href="#__codelineno-4-21">21</a></span>
+<span class="normal"><a href="#__codelineno-4-22">22</a></span>
+<span class="normal"><a href="#__codelineno-4-23">23</a></span>
+<span class="normal"><a href="#__codelineno-4-24">24</a></span>
+<span class="normal"><a href="#__codelineno-4-25">25</a></span>
+<span class="normal"><a href="#__codelineno-4-26">26</a></span>
+<span class="normal"><a href="#__codelineno-4-27">27</a></span>
+<span class="normal"><a href="#__codelineno-4-28">28</a></span>
+<span class="normal"><a href="#__codelineno-4-29">29</a></span>
+<span class="normal"><a href="#__codelineno-4-30">30</a></span>
+<span class="normal"><a href="#__codelineno-4-31">31</a></span>
+<span class="normal"><a href="#__codelineno-4-32">32</a></span>
+<span class="normal"><a href="#__codelineno-4-33">33</a></span>
+<span class="normal"><a href="#__codelineno-4-34">34</a></span>
+<span class="normal"><a href="#__codelineno-4-35">35</a></span>
+<span class="normal"><a href="#__codelineno-4-36">36</a></span>
+<span class="normal"><a href="#__codelineno-4-37">37</a></span>
+<span class="normal"><a href="#__codelineno-4-38">38</a></span>
+<span class="normal"><a href="#__codelineno-4-39">39</a></span>
+<span class="normal"><a href="#__codelineno-4-40">40</a></span>
+<span class="normal"><a href="#__codelineno-4-41">41</a></span>
+<span class="normal"><a href="#__codelineno-4-42">42</a></span>
+<span class="normal"><a href="#__codelineno-4-43">43</a></span>
+<span class="normal"><a href="#__codelineno-4-44">44</a></span>
+<span class="normal"><a href="#__codelineno-4-45">45</a></span>
+<span class="normal"><a href="#__codelineno-4-46">46</a></span>
+<span class="normal"><a href="#__codelineno-4-47">47</a></span>
+<span class="normal"><a href="#__codelineno-4-48">48</a></span>
+<span class="normal"><a href="#__codelineno-4-49">49</a></span>
+<span class="normal"><a href="#__codelineno-4-50">50</a></span>
+<span class="normal"><a href="#__codelineno-4-51">51</a></span>
+<span class="normal"><a href="#__codelineno-4-52">52</a></span>
+<span class="normal"><a href="#__codelineno-4-53">53</a></span>
+<span class="normal"><a href="#__codelineno-4-54">54</a></span>
+<span class="normal"><a href="#__codelineno-4-55">55</a></span>
+<span class="normal"><a href="#__codelineno-4-56">56</a></span>
+<span class="normal"><a href="#__codelineno-4-57">57</a></span>
+<span class="normal"><a href="#__codelineno-4-58">58</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nx">revisionSubmitter</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evoSvc</span><span class="p">.(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">RevisionSubmitter</span><span class="p">)</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">        </span><span class="s">"evolution service does not support revision submission"</span><span class="p">,</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="p">}</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="nx">optimizer</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">NewGEPA</span><span class="p">(</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="w">    </span><span class="nx">reflectionModel</span><span class="p">,</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="w">    </span><span class="nx">evaluator</span><span class="p">,</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="w">    </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">WithMaxIterations</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="w">    </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">WithReflectionBatchSize</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="w">    </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">WithRandomSeed</span><span class="p">(</span><span class="mi">7</span><span class="p">),</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="w">    </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">WithStoreDir</span><span class="p">(</span><span class="s">"./evolution/experiments"</span><span class="p">),</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a><span class="w">    </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">WithRevisionSubmitter</span><span class="p">(</span><span class="nx">revisionSubmitter</span><span class="p">),</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="p">)</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="p">}</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">optimizer</span><span class="p">.</span><span class="nx">Optimize</span><span class="p">(</span>
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a><span class="w">    </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">Request</span><span class="p">{</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24"></a><span class="w">        </span><span class="nx">Seed</span><span class="p">:</span><span class="w">             </span><span class="nx">baselineSpec</span><span class="p">,</span>
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25"></a><span class="w">        </span><span class="nx">Scope</span><span class="p">:</span><span class="w">            </span><span class="nx">currentScope</span><span class="p">,</span>
+</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26"></a><span class="w">        </span><span class="nx">ParentRevisionID</span><span class="p">:</span><span class="w"> </span><span class="nx">activeRevisionID</span><span class="p">,</span>
+</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27"></a><span class="w">        </span><span class="nx">Submit</span><span class="p">:</span><span class="w">           </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28"></a><span class="w">        </span><span class="nx">Dataset</span><span class="p">:</span><span class="w"> </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">Dataset</span><span class="p">{</span>
+</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29"></a><span class="w">            </span><span class="nx">ID</span><span class="p">:</span><span class="w">         </span><span class="s">"managed-skill-regression"</span><span class="p">,</span>
+</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30"></a><span class="w">            </span><span class="nx">Version</span><span class="p">:</span><span class="w">    </span><span class="s">"v1"</span><span class="p">,</span>
+</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31"></a><span class="w">            </span><span class="nx">Feedback</span><span class="p">:</span><span class="w">   </span><span class="nx">feedbackCases</span><span class="p">,</span>
+</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32"></a><span class="w">            </span><span class="nx">Validation</span><span class="p">:</span><span class="w"> </span><span class="nx">validationCases</span><span class="p">,</span>
+</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33"></a><span class="w">            </span><span class="nx">Holdout</span><span class="p">:</span><span class="w">    </span><span class="nx">holdoutCases</span><span class="p">,</span>
+</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36"></a><span class="p">)</span>
+</span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-38"><a id="__codelineno-4-38" name="__codelineno-4-38"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">result</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-39"><a id="__codelineno-4-39" name="__codelineno-4-39"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span>
+</span><span id="__span-4-40"><a id="__codelineno-4-40" name="__codelineno-4-40"></a><span class="w">            </span><span class="s">"experiment=%s stop=%s promote=%s submit=%s err=%v"</span><span class="p">,</span>
+</span><span id="__span-4-41"><a id="__codelineno-4-41" name="__codelineno-4-41"></a><span class="w">            </span><span class="nx">result</span><span class="p">.</span><span class="nx">ExperimentID</span><span class="p">,</span>
+</span><span id="__span-4-42"><a id="__codelineno-4-42" name="__codelineno-4-42"></a><span class="w">            </span><span class="nx">result</span><span class="p">.</span><span class="nx">StopReason</span><span class="p">,</span>
+</span><span id="__span-4-43"><a id="__codelineno-4-43" name="__codelineno-4-43"></a><span class="w">            </span><span class="nx">result</span><span class="p">.</span><span class="nx">PromotionReason</span><span class="p">,</span>
+</span><span id="__span-4-44"><a id="__codelineno-4-44" name="__codelineno-4-44"></a><span class="w">            </span><span class="nx">result</span><span class="p">.</span><span class="nx">SubmissionReason</span><span class="p">,</span>
+</span><span id="__span-4-45"><a id="__codelineno-4-45" name="__codelineno-4-45"></a><span class="w">            </span><span class="nx">err</span><span class="p">,</span>
+</span><span id="__span-4-46"><a id="__codelineno-4-46" name="__codelineno-4-46"></a><span class="w">        </span><span class="p">)</span>
+</span><span id="__span-4-47"><a id="__codelineno-4-47" name="__codelineno-4-47"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-4-48"><a id="__codelineno-4-48" name="__codelineno-4-48"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-4-49"><a id="__codelineno-4-49" name="__codelineno-4-49"></a><span class="p">}</span>
+</span><span id="__span-4-50"><a id="__codelineno-4-50" name="__codelineno-4-50"></a>
+</span><span id="__span-4-51"><a id="__codelineno-4-51" name="__codelineno-4-51"></a><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span>
+</span><span id="__span-4-52"><a id="__codelineno-4-52" name="__codelineno-4-52"></a><span class="w">    </span><span class="s">"selected=%q validation=%.3f holdout=%.3f promote=%t reason=%s"</span><span class="p">,</span>
+</span><span id="__span-4-53"><a id="__codelineno-4-53" name="__codelineno-4-53"></a><span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Name</span><span class="p">,</span>
+</span><span id="__span-4-54"><a id="__codelineno-4-54" name="__codelineno-4-54"></a><span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">CandidateValidation</span><span class="p">.</span><span class="nx">Score</span><span class="p">,</span>
+</span><span id="__span-4-55"><a id="__codelineno-4-55" name="__codelineno-4-55"></a><span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">CandidateHoldout</span><span class="p">.</span><span class="nx">Score</span><span class="p">,</span>
+</span><span id="__span-4-56"><a id="__codelineno-4-56" name="__codelineno-4-56"></a><span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">PromotionEligible</span><span class="p">,</span>
+</span><span id="__span-4-57"><a id="__codelineno-4-57" name="__codelineno-4-57"></a><span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">PromotionReason</span><span class="p">,</span>
+</span><span id="__span-4-58"><a id="__codelineno-4-58" name="__codelineno-4-58"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>内置优化器受 GEPA 思路启发，但完全运行在 Go 进程内，不需要额外的 Python 服务。示例沿用默认配置：最多尝试 10 轮修改，每轮抽取 3 个 Feedback 样本；随机种子则从默认的 1 改成 7。整场实验默认最多进行 1000 次样本评测，同一个用例被不同版本重复执行时会重复计数。</p>
+<p>如果配置 <code>WithTimeLimit</code>，它会为整场优化设置 context deadline。搜索阶段超时后，<code>Optimize</code> 会返回错误，不会把当时的候选池当作正常完成的实验继续选择或提交；接入方应按失败处理。</p>
+<p>固定随机种子首先保证 Optimizer 每次抽取相同的 Feedback 样本。Optimizer 也会把这个种子传给 Evaluator，但新旧版本能否在相同条件下执行，还取决于 Evaluator 是否用它控制任务环境，以及远端模型和工具服务是否稳定。因此正式实验还应固定模型版本、temperature、工具预算、任务顺序和 Evaluator 版本，并使用多个独立随机种子重复验证。</p>
+<p>如果设置 <code>Submit: true</code>，Feedback、Validation 和 Holdout 每组至少需要 10 个样本。</p>
+<p>设置 <code>Submit: true</code> 不会直接发布候选。内置 GEPA 会把选出的版本作为一次 update 提交，因此目标 Skill 必须已经存在；配置受管目录后，目标也必须位于该目录内。Optimizer 先用 Holdout 判断它是否具备提交资格；随后 <code>RevisionSubmitter</code> 检查目标 Skill、线上版本是否仍与实验开始时记录的 <code>activeRevisionID</code> 一致，以及目标目录是否允许自动修改，并重新运行 Spec、Safety、Effectiveness 三类 Gate。全部通过后，外部候选进入 <code>pending_approval</code>，等待业务审批；任何一步失败，都不会替换当前生效版本。离线优化不能借这条提交路径创建一个全新的 Skill。</p>
+<p>Optimizer 使用 submitter 提交候选，但不负责关闭 Evolution Service。候选已经选出之后，Holdout、实验记录或提交步骤仍可能失败，因此函数可能同时返回非空的 <code>result</code> 和 <code>error</code>。接入方应先记录已经填充的阶段性字段，再处理错误：搜索正常结束后才有 <code>StopReason</code>，完成 Holdout 判定后才可依赖 <code>PromotionReason</code>，真正进入提交阶段后才会填写 <code>SubmissionReason</code>；更早失败时，后两项可能为空。</p>
+<p><code>WithStoreDir</code> 会把实验数据、截断后的输出、评测反馈和 Evaluator 返回的执行记录保存到当前节点，方便排查候选为什么被接受或拒绝。它只负责单机记录，不提供跨节点调度或集中存储。</p>
+<p>这些记录仍可能包含业务数据。内置脱敏只能识别常见凭据格式，初始 Skill、任务输入、预期结果和 Evaluator 输出仍需由业务自行清理。运行候选 Skill 的评测 Agent 也不应持有生产凭据，更不应获得能够修改真实业务数据的工具。</p>
+<p>建议分四步上线。先准备几条人工编写的初始 Skill，确认 Agent 会调用 <code>skill_load</code>；再启用候选版本存储并使用 <code>NewAlwaysHoldGate()</code>，让 Reviewer 生成候选和审计记录，但不更新线上 active 指针；随后只让经过审批的低风险修改对少量流量生效；最后再为重要 Skill 建立离线数据和 Evaluator。四步分别检查 Agent 能否使用 Skill、Reviewer 能否生成合格候选、候选是否改善任务，以及发布和回滚是否正常。</p>
+<hr />
+<h2 id="benchmark">六、Benchmark：先看完整在线流程，再用三阶段验证离线候选</h2>
+<p><a href="https://github.com/trpc-group/trpc-agent-go-benchmark">trpc-agent-go-benchmark</a> 使用 SkillCraft 评估 Evolution。它包含天气采集、食谱构建、经济快照、猫咪百科和宝可梦图鉴五类任务；每类又有 <code>e1/e2/e3/m1/m2/h1</code> 六个规模递增的测试，其中 <code>e</code>、<code>m</code>、<code>h</code> 分别表示简单、中等和困难。同类任务保持相似工作流，却不断更换实体、规模和难度，正适合观察 Agent 究竟学会了方法，还是只记住了某一道题。</p>
+<p>SkillCraft 在这里承担两类评测：早期报告观察启用 Evolution 后的完整在线流程，离线报告再通过搜索、固定候选评测和完整运行回放，逐步筛选指定 Skill 的修改。</p>
+<p><img alt="SkillCraft：先看总体结果，再检查变化是否由候选 Skill 引起" src="../../../assets/img/blog/evolution/benchmark_evidence.png" /></p>
+<h3 id="_10">早期在线评测观察到了什么</h3>
+<p>早期在线报告使用 <code>gpt-4o-mini</code>，比较关闭 Evolution 的基线组和打开 Evolution、允许后续任务加载 Skill 的实验组。实验覆盖 5 类任务，每类 6 个难度与规模，再独立重复 3 轮，因此每组都执行了 <code>5 × 6 × 3 = 90</code> 次任务。Evolution 组从 7 条初始 Skill 开始，覆盖天气、食谱和经济快照三类任务；这里评估的是“初始 Skill + 在线 Reviewer + 后续加载”的完整流程，无法单独测量 Reviewer 新生成 Skill 的贡献。</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th style="text-align: right;">Baseline</th>
+<th style="text-align: right;">Evolution</th>
+<th style="text-align: right;">变化</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pass rate</td>
+<td style="text-align: right;">84.44%</td>
+<td style="text-align: right;"><strong>87.78%</strong></td>
+<td style="text-align: right;"><strong>+3.33pp</strong></td>
+</tr>
+<tr>
+<td>端到端（E2E）tokens / task</td>
+<td style="text-align: right;">272,653</td>
+<td style="text-align: right;"><strong>183,435</strong></td>
+<td style="text-align: right;"><strong>-32.7%</strong></td>
+</tr>
+<tr>
+<td><code>skill_load</code> 调用率</td>
+<td style="text-align: right;">0%</td>
+<td style="text-align: right;">74.4%</td>
+<td style="text-align: right;">—</td>
+</tr>
+</tbody>
+</table>
+<p>Evolution 组的平均端到端 token 降低 32.7%，通过率从 84.44% 提升到 87.78%。逐案记录显示，token 均值很大程度上受到少数重复工具调用形成的百万 token 级异常循环影响，因此不能理解为每个普通任务都稳定节省 32.7%。表中的 <code>pp</code> 表示百分点，这里的通过率增加了 3.33 个百分点。三轮结果也不一致：第二轮的 Evolution 通过率比基线组低 3.3 个百分点，但 token 仍下降 32.9%。</p>
+<p>按任务类型拆开看，天气和经济快照在高通过率基础上分别节省约 7.0% 和 9.6% tokens，食谱任务的 tokens 则增加 7.3%，说明 Skill 的上下文和执行开销也可能超过收益。猫咪百科开始时没有预先配置匹配的 Skill，Evolution 组观察到通过率提升 16.7 个百分点、tokens 降低 53.5%。不过，该组的 <code>skill_load</code> 调用率为 0%，因此这里能够确认的是实验组之间存在差异，还不能把收益精确归因到某次 Skill 加载。</p>
+<h3 id="_11">离线评测怎样筛选候选</h3>
+<p>这轮离线评测按“先修改、再复核、最后放回完整系统”分三步，每一步回答的问题都不同。</p>
+<p>第一步是<strong>搜索</strong>（Search）。Optimizer 根据 Feedback 中暴露的问题改写 Skill，再用 Validation 比较新旧版本，寻找值得继续验证的修改。第二步是<strong>固定候选评测</strong>（Frozen confirmation）。版本一旦选定便停止修改，让它和初始 Skill 分别执行 Validation 以及此前从未参与优化的 Holdout，检查换一批任务后，效果能否保持。第三步是<strong>完整运行回放</strong>（Operational replay）。只有通过复核的版本，才会临时放进完整 Evolution 流程，和后台 Reviewer、连续任务顺序及共享 Skill 状态一起运行，确认它回到真实工作方式后是否仍然有效。</p>
+<p>第一步并不要求每类任务都产出新版。猫咪百科和宝可梦图鉴没有找到更好的版本，因此继续使用初始 Skill；天气修改在 Feedback 上一度更好，但换到 Validation 后优势消失，也回到初始 Skill。只有食谱和经济快照的修改继续接受下一阶段评测。也就是说，Optimizer 可以得出“这次不改更好”，不必为了完成流程强行留下一个新版本。</p>
+<p>食谱实验包含两种独立的修改。第一种针对在线 Reviewer 生成的食谱 Skill 修复具体问题，后来进入完整回放。第二种旨在减少通用食谱任务的 token 消耗：它在 Validation 上保持质量并节省 10.35% tokens，但在 Holdout 上把通过率从 100% 降到 87.5%，质量从 95.50% 降到 83.41%，因此没有进入下一阶段。Holdout 说明这项修改在 Validation 上的收益没有延续到未见样本；如果评测到 Validation 就结束，这次质量下降便不会暴露。</p>
+<p>定向食谱修复通过了 Holdout：通过率保持 100%，质量从 95.50% 提升到 98.35%，每个样本的 Agent tokens 降低 6.57%。评测一共准备了 8 组配对：初始 Skill 和候选 Skill 在相同条件下各执行一次同一个用例。候选在质量分上 4 次胜出、4 次打平、0 次落败，通过率也没有下降。经济快照候选同样在固定候选的 Holdout 评测中保持 100% 通过率，质量没有下降，同时减少了 8.52% tokens。两者因此进入完整运行回放，检查启用 Reviewer 和共享 Skill 状态后结果是否仍然成立。</p>
+<p>最终回放使用 GLM-5.2，并用 <code>701</code>、<code>702</code>、<code>703</code> 三个根随机种子各运行一轮。每轮都包含 Baseline、Evolution 和 Optimized Evolution 三组，每组执行 30 个任务，因此三轮共得到 270 条“实验组—任务”记录。</p>
+<p>同一轮的三个实验组使用相同的任务采样种子，便于比较；不同轮次还会交换实验组的执行顺序，减少固定顺序对结果的影响。远端模型仍然存在随机性，所以这种设计只能减少干扰，不能让每次执行完全一致。</p>
+<p>SkillCraft 会分别统计任务是否通过和 <code>[0,1]</code> 范围的质量分，表中的“官方质量”是质量分按百分制汇总后的结果，tokens 则单独衡量成本。通过率、质量和成本需要一起看，不能用其中一个指标代替另外两个。</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th style="text-align: right;">Baseline</th>
+<th style="text-align: right;">Evolution</th>
+<th style="text-align: right;">Optimized Evolution</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>通过率</td>
+<td style="text-align: right;">97.78%</td>
+<td style="text-align: right;">97.78%</td>
+<td style="text-align: right;"><strong>98.89%</strong></td>
+</tr>
+<tr>
+<td>官方质量</td>
+<td style="text-align: right;">95.98%</td>
+<td style="text-align: right;">95.96%</td>
+<td style="text-align: right;"><strong>97.21%</strong></td>
+</tr>
+<tr>
+<td>每任务 Agent tokens</td>
+<td style="text-align: right;"><strong>305,240</strong></td>
+<td style="text-align: right;">337,288</td>
+<td style="text-align: right;">346,978</td>
+</tr>
+<tr>
+<td>每任务 Reviewer tokens</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">15,683</td>
+<td style="text-align: right;">15,390</td>
+</tr>
+<tr>
+<td>每任务 E2E tokens</td>
+<td style="text-align: right;"><strong>305,240</strong></td>
+<td style="text-align: right;">352,971</td>
+<td style="text-align: right;">362,368</td>
+</tr>
+</tbody>
+</table>
+<p>只看总表，Optimized Evolution 相比普通 Evolution 的通过率提升 1.11 个百分点，质量提升 1.25 个百分点，端到端 tokens 却增加 2.66%。但这个结果还不能证明离线候选有效。主要质量差异出现在宝可梦任务，而两组在这类任务上使用的是同一份起始 Skill，并没有替换离线候选；这部分差异可能来自模型和工具运行中的偶然波动，不能算作候选带来的收益。</p>
+<p>因此，判断候选是否值得保留时，下面只比较真正替换了 Skill 的 Recipe 和 World Bank；表中变化均为 Optimized Evolution 相对普通 Evolution 的结果：</p>
+<table>
+<thead>
+<tr>
+<th>任务类型</th>
+<th style="text-align: right;">通过率变化</th>
+<th style="text-align: right;">质量变化</th>
+<th style="text-align: right;">端到端 token 变化</th>
+<th>决策</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>食谱（Recipe）</td>
+<td style="text-align: right;">0.00pp</td>
+<td style="text-align: right;"><strong>+0.32pp</strong></td>
+<td style="text-align: right;"><strong>-14.75%</strong></td>
+<td>接受候选</td>
+</tr>
+<tr>
+<td>经济快照（World Bank）</td>
+<td style="text-align: right;">0.00pp</td>
+<td style="text-align: right;">0.00pp</td>
+<td style="text-align: right;"><strong>+3.29%</strong></td>
+<td>拒绝</td>
+</tr>
+</tbody>
+</table>
+<p>食谱任务的 18 次执行全部通过，三个根随机种子的 token 都下降，质量略有提升，端到端 tokens 聚合降低 14.75%。因此，在这组模型、任务、随机种子和评分规则下，定向食谱修复被接受。</p>
+<p>为什么同一个经济快照候选在 Holdout 上省了 8.52% tokens，放回完整流程后反而多用了 3.29%？固定候选评测会让新旧 Skill 在相对隔离的条件下分别完成一组任务；完整回放则按真实顺序连续执行，前面的任务可能更新共享 Skill，后面的任务会读到这些变化，后台 Reviewer 也会参与并消耗 token。再加上模型和工具调用本身存在随机波动，隔离评测中的优势不一定能原样保留下来。这里即使扣除 Reviewer 的消耗，Agent 自身的 tokens 仍增加 3.27%，所以不能只把结果归咎于 Reviewer；共享 Skill 的变化、任务顺序和随机波动分别影响了多少，还需要额外实验才能确认。</p>
+<p>三阶段评测得到三个结果：定向食谱修复通过完整回放；通用食谱修改在 Holdout 上出现质量下降，被判为不应继续；经济快照候选在完整回放中增加 token，也被判为不应发布。后两次评测都保留了原有 Skill。</p>
+<p>早期在线报告和最新离线报告使用的模型、任务预算、初始 Skill 和实验方法不同，结论分别只适用于各自配置，不能合并成一个总体收益数字。前者使用 <code>gpt-4o-mini</code>；在后者使用 GLM-5.2 的对照实验中，普通 Evolution 与基线组都通过 88/90 个任务，质量变化为 -0.02 个百分点，端到端 tokens 增加 15.64%，没有复现早期整体收益。模型路由、temperature、工具预算、root seed、任务顺序或 Evaluator 版本发生变化后，需要重新评测，不能直接沿用本文的结果。</p>
+<hr />
+<h2 id="_12">七、生产运行：监控候选、发布、加载和任务结果</h2>
+<p>上线后可以沿着“产生候选—发布版本—加载 Skill—改善任务”这条链逐步检查。先看哪些任务触发了后台复盘、Reviewer 是否真的生成了候选；再看候选有没有通过检查和审批，成为可用版本；随后确认后续任务是否加载了这份 Skill；最后比较加载前后的任务成功率、质量、tokens 和延迟。</p>
+<p>某一步长期没有数据，就从它的上一步开始排查：没有候选时检查触发策略、后台队列和 Reviewer 判断；有候选却不发布时检查 Gate、审批和去重结果；已经发布却从不加载时检查 Repository 刷新、Skill 简介以及用户或应用分区。即使加载率很高，也只有任务结果确实改善，才能说明这份 Skill 有价值。</p>
+<p>Evaluator 也不能只看平均分。它首先要确认任务是否完成、产物是否存在、关键约束是否满足，再比较内容质量和 tokens、延迟、工具调用等成本。如果某些 Holdout 用例的分数不允许下降，可以把它们标记为 <code>Critical</code>。Optimizer 会逐例比较初始 Skill 和候选 Skill 的 <code>Evaluation.Score</code>；只要任一 <code>Critical</code> 用例降分，就不提交候选。这里检查的只是 Holdout 上的 <code>Score</code>，不会自动检查 Validation，也不会检查 <code>Objectives</code> 中另行记录的质量、成本等辅助指标。其他完成条件和成本要求，仍需通过 Evaluator 的评分规则或额外检查实现。</p>
+<p>固定候选评测会把新旧 Skill 放在相对隔离的条件下比较，无法覆盖连续任务中的执行顺序、共享 Skill 变化和后台 Reviewer 成本，因此通过 Holdout 的候选在完整运行流程中仍可能失效。在批准并放量前，业务可以从候选记录中取出该版本，放到与生产隔离的环境里重放历史任务或合成任务；这个“影子回放”不会修改当前生效版本。评测通过后，再批准候选，并先让它对单个租户或少量流量生效，指标稳定后逐步扩大。Evolution 没有内置影子回放开关，任务环境、流量复制和指标对比都需要接入方实现。</p>
+<pre class="mermaid"><code>flowchart LR
+    A["离线搜索"] --&gt; B["固定候选与 Holdout"]
+    B --&gt; C["等待审批 pending_approval"]
+    C --&gt; D["影子回放"]
+    D --&gt; E["批准候选"]
+    E --&gt; F["小流量 / 单租户"]
+    F --&gt; G["逐步扩大"]
+    G --&gt; H["持续监控与可回滚"]</code></pre>
+<p>影子回放先在隔离环境中检查连续任务和 Reviewer 成本；少量流量再确认真实 Agent 是否加载了正确版本，以及任务评分和成本是否符合预期；指标稳定后才逐步扩大范围。每次放量前，还要确认候选只写入目标用户或应用的受管目录，<code>ActivePointer</code> 已指向审批后的版本，Repository 刷新后 Agent 已经读到它。进入回放和审计系统的数据也应先完成脱敏。</p>
+<p>停止学习和版本回滚需要定期演练。团队应验证后台学习能够停止、发布能够暂停、待审批版本能够拒绝、上一版本能够恢复，并确认 Repository 刷新后 Agent 已经读到恢复版本。演练还能发现权限配置错误、操作步骤遗漏或告警没有通知到负责人。</p>
+<hr />
+<h2 id="_13">八、写在最后：让后续任务复用经过验证的方法</h2>
+<p>Hermes Agent 和 tRPC-Agent-Go 都尝试在任务结束后保存可复用的方法。Hermes 展示了个人 Agent 怎样积累程序性记忆；tRPC-Agent-Go 进一步处理服务端需要面对的问题，包括用户和应用隔离、候选评测、人工审批、版本发布和回滚。</p>
+<p>在线学习和离线优化解决不同问题，可以单独使用，也可以组合。在线学习从真实任务中发现个性化需求、少见错误和用户纠正，但单次执行不足以证明一种方法普遍有效；离线优化可以在相同任务和评分规则下反复比较版本，但无法完整复制生产中的任务顺序和运行时波动。接入方可以通过版本、Gate 和审批流程检查候选，并控制它何时可以供 Agent 使用。</p>
+<p>SkillCraft 的两轮实验给出了同一个提醒：写出一份看起来更好的 Skill，只是改进的开始。它还要在用于选优的 Validation、此前未见的 Holdout 和包含 Reviewer 与共享 Skill 状态的完整流程中，经受逐步接近真实运行的检验。食谱候选通过了这些检验，经济快照候选则在最后一步暴露出成本回退；保留旧版本，正是评测和发布流程存在的意义。</p>
+<blockquote>
+<p>在线学习负责从真实任务中发现值得记录的方法，离线优化负责用可重复实验比较新旧版本，检查和审批流程负责决定哪一版可以交给后续任务使用。</p>
+</blockquote>
+<p>只有生成、评测、审批、发布、监控和回滚都能正常运转，Agent 才能持续复用经过验证的方法，而不是不断积累未经检验的 Skill。</p>
+<h2 id="_14">参考资料</h2>
+<ul>
+<li>Hermes Agent：<a href="https://github.com/NousResearch/hermes-agent">github.com/NousResearch/hermes-agent</a></li>
+<li>Hermes Skills：<a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/skills">Skills — procedural memory</a></li>
+<li>Hermes Skill Curator：<a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/curator">Skill Curator</a></li>
+<li>tRPC-Agent-Go：<a href="https://github.com/trpc-group/trpc-agent-go">github.com/trpc-group/trpc-agent-go</a></li>
+<li>Evolution 源码：<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/evolution">trpc-agent-go/evolution</a></li>
+<li>Offline Optimizer 源码：<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/evolution/optimization">trpc-agent-go/evolution/optimization</a></li>
+<li>GEPA 论文：<a href="https://arxiv.org/abs/2507.19457">GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning</a></li>
+<li>Evolution 示例：<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evolution">trpc-agent-go/examples/evolution</a></li>
+<li>Evolution 使用文档：<a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/zh/evolution.md">Evolution（Agent 自学习）</a></li>
+<li>Benchmark 仓库：<a href="https://github.com/trpc-group/trpc-agent-go-benchmark">github.com/trpc-group/trpc-agent-go-benchmark</a></li>
+<li>在线 SkillCraft 报告：<a href="https://github.com/trpc-group/trpc-agent-go-benchmark/blob/main/skillcraft/results/REPORT.zh_CN.md">基于 SkillCraft 基准的 Agent 自进化评估</a></li>
+<li>离线优化报告：<a href="https://github.com/trpc-group/trpc-agent-go-benchmark/blob/main/skillcraft/results/gepa_reflective_optimization/REPORT.zh_CN.md">基于 SkillCraft 的反思式技能优化评估</a></li>
+</ul>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="最后更新">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月18日 08:51:16 UTC">2026-08-18 08:51:16</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="创建日期">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月18日 08:51:16 UTC">2026-08-18 08:51:16</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+  
+
+
+
+  <form class="md-feedback" name="feedback" hidden>
+    <fieldset>
+      <legend class="md-feedback__title">
+        Was this page helpful?
+      </legend>
+      <div class="md-feedback__inner">
+        <div class="md-feedback__list">
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page was helpful" data-md-value="1">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m7 0c0 .8-.7 1.5-1.5 1.5S14 10.3 14 9.5 14.7 8 15.5 8s1.5.7 1.5 1.5m-5 7.73c-1.75 0-3.29-.73-4.19-1.81L9.23 14c.45.72 1.52 1.23 2.77 1.23s2.32-.51 2.77-1.23l1.42 1.42c-.9 1.08-2.44 1.81-4.19 1.81"/></svg>
+            </button>
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page could be improved" data-md-value="0">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10m-6.5-4c.8 0 1.5.7 1.5 1.5s-.7 1.5-1.5 1.5-1.5-.7-1.5-1.5.7-1.5 1.5-1.5M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m2 4.5c1.75 0 3.29.72 4.19 1.81l-1.42 1.42C14.32 16.5 13.25 16 12 16s-2.32.5-2.77 1.23l-1.42-1.42C8.71 14.72 10.25 14 12 14"/></svg>
+            </button>
+          
+        </div>
+        <div class="md-feedback__note">
+          
+            <div data-md-value="1" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!
+            </div>
+          
+            <div data-md-value="0" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!<br>Please help us improve by opening an <a href="https://github.com/trpc-group/trpc-agent-go/issues/new" target="_blank" rel="noopener">issue</a>.
+            </div>
+          
+        </div>
+      </div>
+    </fieldset>
+  </form>
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../summary/" class="md-footer__link md-footer__link--prev" aria-label="上一页: 长任务 Agent 上下文管理的设计与评测">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                长任务 Agent 上下文管理的设计与评测
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../observability/" class="md-footer__link md-footer__link--next" aria-label="下一页: 看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+        <script src="../../../assets/javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
