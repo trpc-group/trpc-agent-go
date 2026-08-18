@@ -221,6 +221,74 @@ func TestCreateWorkspace_MigratesLegacySessionWorkspace(t *testing.T) {
 		t, filepath.Join(ws.Path, "out", "result.txt"), "legacy-out")
 }
 
+// migrateInvocationContext builds an invocation context for the shared test
+// session triple without attaching any sandbox-private context value — the
+// same shape the flow processor, workspacesession.Resolver, and openclaw
+// produce when they derive the workspace ID from the invocation.
+func migrateInvocationContext() context.Context {
+	return agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{
+			AppName: migrateApp,
+			UserID:  migrateUser,
+			ID:      migrateSession,
+		},
+	})
+}
+
+// TestCreateWorkspace_MigratesLegacySessionWorkspace_ByShape is the
+// framework-real regression: callers pass
+// workspacesession.KeyFromInvocation(invocation) — i.e.
+// codeexecutor.SessionWorkspaceKey(app, user, id) — as the workspace ID
+// with no private context value attached. CreateWorkspace must recognize
+// that shape, derive the legacy key from the invocation, and migrate.
+func TestCreateWorkspace_MigratesLegacySessionWorkspace_ByShape(t *testing.T) {
+	root := t.TempDir()
+	newKey, legacyKey := migrateKeyPair(t)
+	legacyPath := seedLegacyWorkspace(t, root, legacyKey)
+	rt := NewRuntime(WithWorkspaceRoot(root))
+
+	ws, err := rt.CreateWorkspace(
+		migrateInvocationContext(), newKey, codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatalf("CreateWorkspace error = %v", err)
+	}
+
+	wantPath, _ := workspacePathForID(root, newKey)
+	if ws.Path != wantPath {
+		t.Fatalf("workspace path = %q, want %q", ws.Path, wantPath)
+	}
+	assertPathMissing(t, legacyPath)
+	assertMigratedFileContent(
+		t, filepath.Join(ws.Path, "work", "source.txt"), "legacy-work")
+	assertMigratedFileContent(
+		t, filepath.Join(ws.Path, "out", "result.txt"), "legacy-out")
+}
+
+// TestCreateWorkspace_NoMigrationForForeignExecID verifies that a workspace
+// ID which is not the invocation's session key (caller-chosen explicit IDs,
+// ephemeral keys) never triggers migration: those IDs are identical on old
+// and new binaries, so no differently-named legacy directory exists.
+func TestCreateWorkspace_NoMigrationForForeignExecID(t *testing.T) {
+	root := t.TempDir()
+	_, legacyKey := migrateKeyPair(t)
+	legacyPath := seedLegacyWorkspace(t, root, legacyKey)
+	rt := NewRuntime(WithWorkspaceRoot(root))
+
+	ws, err := rt.CreateWorkspace(
+		migrateInvocationContext(), "custom-exec-id", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatalf("CreateWorkspace error = %v", err)
+	}
+
+	if ws.Path == legacyPath {
+		t.Fatalf("workspace unexpectedly reused legacy path %q", ws.Path)
+	}
+	// The legacy directory belongs to a different key and must stay put.
+	assertPathExists(t, legacyPath)
+	assertMigratedFileContent(
+		t, filepath.Join(legacyPath, "work", "source.txt"), "legacy-work")
+}
+
 func TestCreateWorkspace_PerTurnPolicySkipsMigration(t *testing.T) {
 	root := t.TempDir()
 	newKey, legacyKey := migrateKeyPair(t)
@@ -271,6 +339,40 @@ func TestExecuteCode_MigratesLegacySessionWorkspace(t *testing.T) {
 			{Language: "bash", Code: "echo upgraded"},
 		},
 	}); err != nil {
+		t.Fatalf("ExecuteCode error = %v", err)
+	}
+
+	newPath, _ := workspacePathForID(root, newKey)
+	assertPathExists(t, newPath)
+	assertPathMissing(t, legacyPath)
+	assertMigratedFileContent(
+		t, filepath.Join(newPath, "work", "source.txt"), "legacy-work")
+	assertMigratedFileContent(
+		t, filepath.Join(newPath, "out", "result.txt"), "legacy-out")
+}
+
+// TestExecuteCode_MigratesLegacySessionWorkspace_ExplicitKey is the
+// processor-shape regression: internal/flow/processor/codeexecution.go
+// always writes workspacesession.KeyFromInvocation(invocation) — i.e.
+// codeexecutor.SessionWorkspaceKey(app, user, id) — into ExecutionID.
+// Migration must trigger for that path too, not only for the empty-ID
+// fallback.
+func TestExecuteCode_MigratesLegacySessionWorkspace_ExplicitKey(t *testing.T) {
+	root := t.TempDir()
+	newKey, legacyKey := migrateKeyPair(t)
+	legacyPath := seedLegacyWorkspace(t, root, legacyKey)
+	e := New(
+		WithWorkspaceRoot(root),
+		WithPermissionProfile(DangerFullAccessProfile()),
+	)
+
+	if _, err := e.ExecuteCode(migrateInvocationContext(),
+		codeexecutor.CodeExecutionInput{
+			ExecutionID: newKey,
+			CodeBlocks: []codeexecutor.CodeBlock{
+				{Language: "bash", Code: "echo upgraded"},
+			},
+		}); err != nil {
 		t.Fatalf("ExecuteCode error = %v", err)
 	}
 

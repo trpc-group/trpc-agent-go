@@ -78,6 +78,25 @@ func TestOptions(t *testing.T) {
 	assert.Equal(t, hostRewrites, c.endpointHostRewrite, "WithEndpointHostRewrite should set endpointHostRewrite")
 }
 
+// TestWithResourceLimits_CopiesInput verifies the same defensive-contract as
+// WithEnvVars / WithHeaders / WithMetadata: post-construction (or
+// concurrent) mutation of the caller's map must not change executor state.
+func TestWithResourceLimits_CopiesInput(t *testing.T) {
+	c := &CodeExecutor{}
+	limits := ResourceLimits{"cpu": "500m", "memory": "256Mi"}
+	WithResourceLimits(limits)(c)
+
+	limits["cpu"] = "999"
+	delete(limits, "memory")
+	limits["gpu"] = "8"
+
+	assert.Equal(t, ResourceLimits{"cpu": "500m", "memory": "256Mi"}, c.resourceLimits,
+		"WithResourceLimits must copy the caller's map")
+
+	WithResourceLimits(nil)(c)
+	assert.Nil(t, c.resourceLimits, "WithResourceLimits(nil) should clear the limits")
+}
+
 func TestCodeBlockDelimiter(t *testing.T) {
 	c := &CodeExecutor{}
 	d := c.CodeBlockDelimiter()

@@ -13,6 +13,9 @@ package sandbox
 import (
 	"context"
 	"os"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
 type legacyWorkspaceKey struct{}
@@ -29,6 +32,37 @@ func withLegacyWorkspaceKey(ctx context.Context, legacyKey string) context.Conte
 func legacyWorkspaceKeyFromContext(ctx context.Context) string {
 	key, _ := ctx.Value(legacyWorkspaceKey{}).(string)
 	return key
+}
+
+// resolveLegacyWorkspaceKey decides which legacy key (if any) a
+// CreateWorkspace call with the given execID should migrate from.
+//
+// An explicitly attached context value (withLegacyWorkspaceKey) wins as an
+// override. Otherwise the key is derived by shape: framework callers do not
+// attach the private context value, they simply pass
+// workspacesession.KeyFromInvocation(invocation) — which equals
+// codeexecutor.SessionWorkspaceKey(app, user, id) — as the workspace ID.
+// When execID matches that value for the invocation's session, the legacy
+// form of the same session's key is returned so the runtime can migrate the
+// pre-encoding-change directory. Any other execID (explicit caller-chosen
+// IDs, ephemeral keys, "default") returns "" and skips migration: those IDs
+// are identical on old and new binaries, so no legacy directory exists
+// under a different name.
+func resolveLegacyWorkspaceKey(ctx context.Context, execID string) string {
+	if legacy := legacyWorkspaceKeyFromContext(ctx); legacy != "" {
+		return legacy
+	}
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.Session == nil {
+		return ""
+	}
+	sessKey := codeexecutor.SessionWorkspaceKey(
+		inv.Session.AppName, inv.Session.UserID, inv.Session.ID)
+	if sessKey == "" || execID != sessKey {
+		return ""
+	}
+	return codeexecutor.LegacySessionWorkspaceKey(
+		inv.Session.AppName, inv.Session.UserID, inv.Session.ID)
 }
 
 // migrateLegacyWorkspace upgrades a pre-encoding-change PerSession workspace

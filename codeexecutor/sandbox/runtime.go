@@ -130,7 +130,17 @@ func (r *Runtime) CreateWorkspace(
 	// Upgrade a pre-encoding-change PerSession workspace before creating
 	// the new directory; once root exists the legacy directory would be
 	// orphaned.
-	if err := r.migrateLegacyWorkspace(execID, legacyWorkspaceKeyFromContext(ctx)); err != nil {
+	//
+	// The primary trigger is shape-based so every framework caller is
+	// covered without importing this package's private context key: the
+	// flow processor, workspacesession.Resolver, and openclaw all pass
+	// workspacesession.KeyFromInvocation(invocation) — i.e.
+	// codeexecutor.SessionWorkspaceKey(app, user, id) — as the workspace
+	// ID. When execID equals that value for the invocation's session,
+	// derive the legacy key ("app/user/id" or "id") and migrate. The
+	// context value (withLegacyWorkspaceKey) remains as an explicit
+	// override; it must not be the only trigger.
+	if err := r.migrateLegacyWorkspace(execID, resolveLegacyWorkspaceKey(ctx, execID)); err != nil {
 		return codeexecutor.Workspace{}, err
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {

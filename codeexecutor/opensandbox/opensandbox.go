@@ -98,7 +98,17 @@ type ResourceLimits map[string]string
 // not supplied (or nil), the OpenSandbox server default applies
 // (cpu "1", memory "2Gi").
 func WithResourceLimits(limits ResourceLimits) Option {
-	return func(c *CodeExecutor) { c.resourceLimits = limits }
+	return func(c *CodeExecutor) {
+		if limits == nil {
+			c.resourceLimits = nil
+			return
+		}
+		copied := make(ResourceLimits, len(limits))
+		for k, v := range limits {
+			copied[k] = v
+		}
+		c.resourceLimits = copied
+	}
 }
 
 // WithSandboxTimeout sets the wall-clock lifetime of the sandbox.

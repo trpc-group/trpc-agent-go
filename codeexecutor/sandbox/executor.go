@@ -80,11 +80,6 @@ func (e *CodeExecutor) ExecuteCode(
 	execID := input.ExecutionID
 	if execID == "" {
 		execID = executionIDFromContext(ctx)
-		// Carry the legacy form of the same session key so the runtime
-		// can migrate pre-encoding-change PerSession workspaces to the
-		// new key layout. Callers that set ExecutionID explicitly use
-		// the same ID on old and new binaries, so no migration applies.
-		ctx = withLegacyWorkspaceKey(ctx, legacySessionWorkspaceKeyFromContext(ctx))
 	}
 	if execID == "" {
 		execID = fmt.Sprintf("exec-%d", time.Now().UnixNano())
@@ -147,20 +142,5 @@ func executionIDFromContext(ctx context.Context) string {
 	// SessionWorkspaceKey returns "" for placeholder sessions (empty or
 	// whitespace-only ID), so those never collapse onto one durable key.
 	return codeexecutor.SessionWorkspaceKey(
-		inv.Session.AppName, inv.Session.UserID, inv.Session.ID)
-}
-
-// legacySessionWorkspaceKeyFromContext reproduces the pre-encoding-change
-// workspace key ("app/user/id" or "id") for the invocation's session so the
-// runtime can locate and migrate workspaces created by older binaries. It
-// returns "" when ctx carries no session or the session has no stable ID
-// (LegacySessionWorkspaceKey is fail-closed like SessionWorkspaceKey), in
-// which case migration is skipped.
-func legacySessionWorkspaceKeyFromContext(ctx context.Context) string {
-	inv, ok := agent.InvocationFromContext(ctx)
-	if !ok || inv == nil || inv.Session == nil {
-		return ""
-	}
-	return codeexecutor.LegacySessionWorkspaceKey(
 		inv.Session.AppName, inv.Session.UserID, inv.Session.ID)
 }
