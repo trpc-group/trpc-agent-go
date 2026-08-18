@@ -296,6 +296,82 @@ func TestLiveGeneratorOwnsEveryHTTPRetry(t *testing.T) {
 	}
 }
 
+func TestPerAttemptDeadlineRetriesAndAccountsEveryRequest(t *testing.T) {
+	newDelayedServer := func(t *testing.T) (*httptest.Server, *atomic.Int32) {
+		t.Helper()
+		var calls atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter,
+			_ *http.Request,
+		) {
+			calls.Add(1)
+			time.Sleep(1500 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"error":{"message":"delayed response"}}`))
+		}))
+		return server, &calls
+	}
+
+	t.Run("evaluation", func(t *testing.T) {
+		server, calls := newDelayedServer(t)
+		defer server.Close()
+		budget := newLiveBudget(
+			gateFileConfig{MaxCalls: 2, MaxTokens: 10_000, MaxCostCNY: 1},
+			optimizerBudgetConfig{},
+		)
+		generator, err := newLiveGeneratorWithBudget(liveConfig{
+			Model: "evaluation-model", BaseURL: server.URL,
+			APIKeyEnv: "EVALUATION_TEST_API_KEY", TimeoutSeconds: 1,
+			MaxRetries: 1, InputCNYPerMillion: 1, OutputCNYPerMillion: 2,
+		}, budget, "evaluation-test-key")
+		require.NoError(t, err)
+
+		_, err = generator.Generate(context.Background(), "prompt", "input")
+
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Equal(t, int32(2), calls.Load())
+		usage := budget.snapshot(budgetStageEvaluation)
+		assert.Equal(t, 2, usage.Calls)
+		estimatedTokens, _ := estimateTextRequest("prompt", "input", 512, 1, 2)
+		assert.Equal(t, 2*estimatedTokens, usage.tokens())
+	})
+
+	t.Run("optimizer", func(t *testing.T) {
+		server, calls := newDelayedServer(t)
+		defer server.Close()
+		client, err := newOpenAICompatibleModel(
+			"optimizer-model",
+			server.URL,
+			"OPTIMIZER_TEST_API_KEY",
+			"optimizer-test-key",
+		)
+		require.NoError(t, err)
+		budget := newLiveBudget(
+			gateFileConfig{MaxCalls: 2, MaxTokens: 10_000, MaxCostCNY: 1},
+			optimizerBudgetConfig{MaxCalls: 2, MaxTokens: 10_000, MaxCostCNY: 1},
+		)
+		retrying := &budgetedRetryModel{
+			model: client, timeoutSeconds: 1, maxRetries: 1,
+			inputCNYPerMillion: 1, outputCNYPerMillion: 2,
+			budget: budget,
+		}
+		maxTokens := 32
+		request := &model.Request{
+			Messages:         []model.Message{model.NewUserMessage("optimize")},
+			GenerationConfig: model.GenerationConfig{MaxTokens: &maxTokens},
+		}
+
+		_, err = retrying.GenerateContent(context.Background(), request)
+
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Equal(t, int32(2), calls.Load())
+		usage := budget.snapshot(budgetStageOptimizer)
+		assert.Equal(t, 2, usage.Calls)
+		estimatedTokens, _ := estimateModelRequest(request, 1, 2)
+		assert.Equal(t, 2*estimatedTokens, usage.tokens())
+	})
+}
+
 func TestFailedEvaluationAttemptRetainsEstimatedBudget(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

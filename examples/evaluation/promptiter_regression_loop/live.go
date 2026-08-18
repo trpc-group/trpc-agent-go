@@ -499,6 +499,9 @@ func (g *liveGenerator) generateOnce(
 		g.cfg.OutputCNYPerMillion,
 	)
 	if strings.TrimSpace(content.String()) == "" {
+		if ctxErr := callCtx.Err(); ctxErr != nil {
+			return generationResult{Usage: usage}, &transportModelError{err: ctxErr}
+		}
 		return generationResult{Usage: usage}, errors.New("model returned empty content")
 	}
 	if usage.tokens() <= 0 {
@@ -596,6 +599,9 @@ func (m *budgetedRetryModel) generateOnce(
 		m.outputCNYPerMillion,
 	)
 	if len(responses) == 0 {
+		if ctxErr := callCtx.Err(); ctxErr != nil {
+			return nil, usage, &transportModelError{err: ctxErr}
+		}
 		return nil, usage, errors.New("model returned no responses")
 	}
 	if usage.tokens() <= 0 {

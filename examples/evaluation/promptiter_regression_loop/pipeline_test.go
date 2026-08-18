@@ -165,6 +165,92 @@ func TestRunPipelineRejectsBlankPromptBeforeLiveRequests(t *testing.T) {
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
+func TestRunPipelineRejectsInvalidLoadedInputsBeforeLiveRequests(t *testing.T) {
+	tests := []struct {
+		name      string
+		wantError string
+		mutate    func(*testing.T, *pipelineConfig, string)
+	}{
+		{
+			name:      "unsupported PromptIter target",
+			wantError: "PromptIter target",
+			mutate: func(t *testing.T, cfg *pipelineConfig, dataDir string) {
+				var promptIter promptIterConfig
+				data, err := os.ReadFile(filepath.Join(dataDir, "promptiter.json"))
+				require.NoError(t, err)
+				require.NoError(t, json.Unmarshal(data, &promptIter))
+				promptIter.Target = "regression-writer#instructions"
+				data, err = json.Marshal(promptIter)
+				require.NoError(t, err)
+				cfg.PromptIterFile = filepath.Join(t.TempDir(), "promptiter.json")
+				require.NoError(t, os.WriteFile(cfg.PromptIterFile, data, 0o600))
+			},
+		},
+		{
+			name:      "whitespace-equivalent validation IDs",
+			wantError: "duplicate eval case ID",
+			mutate: func(t *testing.T, cfg *pipelineConfig, dataDir string) {
+				var validation evalSetFile
+				data, err := os.ReadFile(filepath.Join(dataDir, "validation.evalset.json"))
+				require.NoError(t, err)
+				require.NoError(t, json.Unmarshal(data, &validation))
+				duplicate := validation.EvalCases[0]
+				duplicate.EvalID = " " + duplicate.EvalID + " "
+				validation.EvalCases = append(validation.EvalCases, duplicate)
+				data, err = json.Marshal(validation)
+				require.NoError(t, err)
+				cfg.ValidationEvalSet = filepath.Join(t.TempDir(), "validation.evalset.json")
+				require.NoError(t, os.WriteFile(cfg.ValidationEvalSet, data, 0o600))
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(
+				w http.ResponseWriter,
+				_ *http.Request,
+			) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"error":{"message":"must not be called"}}`))
+			}))
+			defer server.Close()
+
+			dataDir, err := filepath.Abs("data")
+			require.NoError(t, err)
+			configData, err := os.ReadFile(filepath.Join(dataDir, "config.json"))
+			require.NoError(t, err)
+			var cfg pipelineConfig
+			require.NoError(t, json.Unmarshal(configData, &cfg))
+			cfg.PromptFile = filepath.Join(dataDir, "prompts", "baseline_prompt.md")
+			cfg.TrainEvalSet = filepath.Join(dataDir, "train.evalset.json")
+			cfg.ValidationEvalSet = filepath.Join(dataDir, "validation.evalset.json")
+			cfg.MetricsFile = filepath.Join(dataDir, "metrics.json")
+			cfg.PromptIterFile = filepath.Join(dataDir, "promptiter.json")
+			cfg.OutputDir = filepath.Join(t.TempDir(), "must-not-be-created")
+			cfg.Live.BaseURL = server.URL
+			cfg.Live.APIKeyEnv = "INVALID_INPUT_EVALUATION_API_KEY"
+			cfg.Live.Optimizer.BaseURL = server.URL
+			cfg.Live.Optimizer.APIKeyEnv = "INVALID_INPUT_OPTIMIZER_API_KEY"
+			test.mutate(t, &cfg, dataDir)
+			configData, err = json.Marshal(cfg)
+			require.NoError(t, err)
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			require.NoError(t, os.WriteFile(configPath, configData, 0o600))
+			t.Setenv(cfg.Live.APIKeyEnv, "evaluation-test-key")
+			t.Setenv(cfg.Live.Optimizer.APIKeyEnv, "optimizer-test-key")
+
+			err = runPipeline(context.Background(), configPath, modeLive)
+
+			assert.ErrorContains(t, err, test.wantError)
+			assert.Zero(t, calls.Load())
+			_, statErr := os.Stat(cfg.OutputDir)
+			assert.ErrorIs(t, statErr, os.ErrNotExist)
+		})
+	}
+}
+
 func TestRunPipelineLiveOptimizerFailsClosedWithAuditReport(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -37,6 +37,13 @@ const (
 	candidateSourceLiveLLM       = "live_llm"
 )
 
+func exportedPromptIterSurfaceID() string {
+	return astructure.SurfaceID(
+		regressionNodeID,
+		astructure.SurfaceTypeInstruction,
+	)
+}
+
 var directiveInstructions = []struct {
 	name        string
 	instruction string
@@ -116,7 +123,7 @@ func runPromptIter(
 		audit.Error = "baseline prompt is empty"
 		return "", audit, errors.New(audit.Error)
 	}
-	surfaceID := astructure.SurfaceID(regressionNodeID, astructure.SurfaceTypeInstruction)
+	surfaceID := exportedPromptIterSurfaceID()
 	audit.SurfaceID = surfaceID
 	if cfg.PromptIter.Target != surfaceID {
 		err := fmt.Errorf(

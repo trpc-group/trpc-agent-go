@@ -413,6 +413,12 @@ func validateLoadedInputs(
 		return errors.New("PromptIter minScoreGain must be non-negative")
 	case strings.TrimSpace(promptIter.Target) == "":
 		return errors.New("PromptIter target is required")
+	case promptIter.Target != exportedPromptIterSurfaceID():
+		return fmt.Errorf(
+			"PromptIter target %q is unsupported; want %q",
+			promptIter.Target,
+			exportedPromptIterSurfaceID(),
+		)
 	case strings.TrimSpace(promptIter.Optimizer) != supportedPromptIterOptimizer:
 		return fmt.Errorf(
 			"PromptIter optimizer %q is unsupported; want %q",
@@ -542,8 +548,10 @@ func loadEvalSet(path string) (evalSetFile, error) {
 		return evalSetFile{}, errors.New("eval set must contain evalSetId and evalCases")
 	}
 	seen := make(map[string]struct{}, len(set.EvalCases))
-	for _, c := range set.EvalCases {
-		if strings.TrimSpace(c.EvalID) == "" || len(c.Conversation) != 1 {
+	for i := range set.EvalCases {
+		c := &set.EvalCases[i]
+		c.EvalID = strings.TrimSpace(c.EvalID)
+		if c.EvalID == "" || len(c.Conversation) != 1 {
 			return evalSetFile{}, fmt.Errorf("eval case must have an ID and exactly one invocation")
 		}
 		for _, phrase := range c.ForbiddenPhrases {
