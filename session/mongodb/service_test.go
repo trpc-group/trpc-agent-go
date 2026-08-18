@@ -633,7 +633,7 @@ func TestListSessions_OnlyMetaSkipsEventsAndSummaries(t *testing.T) {
 		},
 		findFn: func(_ any) (*mongo.Cursor, error) {
 			calls++
-			if calls == 1 {
+			if calls == 1 || calls == 4 {
 				return docsCursor(docs)
 			}
 			return emptyCursor()
@@ -650,7 +650,62 @@ func TestListSessions_OnlyMetaSkipsEventsAndSummaries(t *testing.T) {
 	generation, ok := sessionrevision.Generation(got[0])
 	require.True(t, ok)
 	assert.Equal(t, uint64(4), generation)
-	assert.Equal(t, 3, calls, "session/app/user state reads only; no event/summary reads")
+	assert.Equal(t, 4, calls, "includes one batched revision identity read")
+}
+
+func TestListSessionsOnlyMetaReloadsChangedRevision(t *testing.T) {
+	now := time.Now()
+	initial := sessionStateDoc{
+		DocumentID: primitive.NewObjectID(),
+		AppName:    "app",
+		UserID:     "u",
+		SessionID:  "s1",
+		State:      bson.M{"value": []byte("old")},
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	revisionRaw, err := encodeRevision(
+		&sessionrevision.PersistedRecord{Generation: 1},
+	)
+	require.NoError(t, err)
+	replaced := initial
+	replaced.DocumentID = primitive.NewObjectID()
+	replaced.State = bson.M{"value": []byte("new")}
+	replaced.Revision = revisionRaw
+
+	findCalls := 0
+	mc := &mockClient{
+		findFn: func(any) (*mongo.Cursor, error) {
+			findCalls++
+			switch findCalls {
+			case 1:
+				return docsCursor([]any{initial})
+			case 4:
+				return docsCursor([]any{replaced})
+			default:
+				return emptyCursor()
+			}
+		},
+		findOneFn: func(any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(replaced, nil, nil)
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	got, err := s.ListSessions(
+		context.Background(),
+		session.UserKey{AppName: "app", UserID: "u"},
+		session.WithListSessionOnlyMeta(),
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, []byte("new"), got[0].State["value"])
+	generation, ok := sessionrevision.Generation(got[0])
+	require.True(t, ok)
+	assert.Equal(t, uint64(1), generation)
+	assert.Empty(t, got[0].Events)
+	assert.Empty(t, got[0].Tracks)
+	assert.Empty(t, got[0].Summaries)
 }
 
 func TestListSessions_NonMetaLoadsEventsAndSummaries(t *testing.T) {

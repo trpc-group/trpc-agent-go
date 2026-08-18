@@ -416,7 +416,9 @@ func (s *Service) ListSessions(
 			}
 			sessions = append(sessions, mergeState(appState, userState, sess))
 		}
-		return sessions, nil
+		return s.stabilizeListedRevisionProjections(
+			ctx, userKey, sessions, docs, true, 0, time.Time{},
+		)
 	}
 
 	// Batch-load events and summaries for all sessions.
@@ -465,7 +467,7 @@ func (s *Service) ListSessions(
 		sessions = append(sessions, mergeState(appState, userState, sess))
 	}
 	return s.stabilizeListedRevisionProjections(
-		ctx, userKey, sessions, docs, opt.EventNum, opt.EventTime,
+		ctx, userKey, sessions, docs, false, opt.EventNum, opt.EventTime,
 	)
 }
 

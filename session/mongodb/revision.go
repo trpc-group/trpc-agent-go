@@ -169,6 +169,7 @@ func (s *Service) stabilizeListedRevisionProjections(
 	userKey session.UserKey,
 	listed []*session.Session,
 	docs []sessionStateDoc,
+	metadataOnly bool,
 	eventNum int,
 	eventTime time.Time,
 ) ([]*session.Session, error) {
@@ -214,6 +215,11 @@ func (s *Service) stabilizeListedRevisionProjections(
 			}
 			if stable == nil {
 				continue
+			}
+			if metadataOnly {
+				stable.Events = nil
+				stable.Tracks = nil
+				stable.Summaries = nil
 			}
 			sess = stable
 		}

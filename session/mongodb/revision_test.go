@@ -198,7 +198,7 @@ func TestStabilizeListedRevisionProjectionsBatchesUnchangedSessions(t *testing.T
 	}
 
 	got, err := s.stabilizeListedRevisionProjections(
-		context.Background(), userKey, listed, docs, 0, time.Time{},
+		context.Background(), userKey, listed, docs, false, 0, time.Time{},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, listed, got)
@@ -262,7 +262,7 @@ func TestStabilizeListedRevisionProjectionsReloadsOnlyChangedSession(t *testing.
 	}
 
 	got, err := s.stabilizeListedRevisionProjections(
-		context.Background(), userKey, listed, initialDocs, 0, time.Time{},
+		context.Background(), userKey, listed, initialDocs, false, 0, time.Time{},
 	)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
@@ -1601,7 +1601,7 @@ func TestListedRevisionStabilizationFailsClosed(t *testing.T) {
 			return nil, errors.New("identity failed")
 		}})
 		_, err := s.stabilizeListedRevisionProjections(
-			ctx, userKey, listed, []sessionStateDoc{initial}, 0, time.Time{},
+			ctx, userKey, listed, []sessionStateDoc{initial}, false, 0, time.Time{},
 		)
 		assert.ErrorContains(t, err, "read session revisions")
 	})
@@ -1611,7 +1611,7 @@ func TestListedRevisionStabilizationFailsClosed(t *testing.T) {
 			return emptyCursor()
 		}})
 		stabilized, err := s.stabilizeListedRevisionProjections(
-			ctx, userKey, listed, []sessionStateDoc{initial}, 0, time.Time{},
+			ctx, userKey, listed, []sessionStateDoc{initial}, false, 0, time.Time{},
 		)
 		require.NoError(t, err)
 		assert.Empty(t, stabilized)
@@ -1622,7 +1622,7 @@ func TestListedRevisionStabilizationFailsClosed(t *testing.T) {
 			return docsCursor([]any{initial})
 		}})
 		_, err := s.stabilizeListedRevisionProjections(
-			ctx, userKey, listed, []sessionStateDoc{initial, initial}, 0, time.Time{},
+			ctx, userKey, listed, []sessionStateDoc{initial, initial}, false, 0, time.Time{},
 		)
 		assert.ErrorIs(t, err, sessionrevision.ErrStaleProjection)
 	})
@@ -1634,7 +1634,7 @@ func TestListedRevisionStabilizationFailsClosed(t *testing.T) {
 		bad := initial
 		bad.Revision = []byte("{")
 		_, err := s.stabilizeListedRevisionProjections(
-			ctx, userKey, listed, []sessionStateDoc{bad}, 0, time.Time{},
+			ctx, userKey, listed, []sessionStateDoc{bad}, false, 0, time.Time{},
 		)
 		assert.ErrorContains(t, err, "decode session revision")
 	})
@@ -1644,7 +1644,7 @@ func TestListedRevisionStabilizationFailsClosed(t *testing.T) {
 			return docsCursor([]any{initial})
 		}})
 		_, err := s.stabilizeListedRevisionProjections(
-			ctx, userKey, listed, nil, 0, time.Time{},
+			ctx, userKey, listed, nil, false, 0, time.Time{},
 		)
 		assert.ErrorIs(t, err, sessionrevision.ErrStaleProjection)
 	})
@@ -1667,7 +1667,7 @@ func TestListedRevisionStabilizationFailsClosed(t *testing.T) {
 		}
 		s := newServiceForTest(t, mc)
 		stabilized, err := s.stabilizeListedRevisionProjections(
-			ctx, userKey, listed, []sessionStateDoc{initial}, 0, time.Time{},
+			ctx, userKey, listed, []sessionStateDoc{initial}, false, 0, time.Time{},
 		)
 		require.NoError(t, err)
 		assert.Empty(t, stabilized)
