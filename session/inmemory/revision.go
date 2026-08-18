@@ -87,7 +87,7 @@ func (s *sessionWithTTL) applyEventRevisionWrite(
 			}
 		}
 		boundary, err := sessionrevision.NewBoundaryFromProjection(
-			s.session, rev.record.Projection,
+			s.session, rev.record.Projection, write.Start.RestoreState,
 		)
 		if err != nil {
 			return fmt.Errorf("capture session boundary before latest turn: %w", err)
@@ -117,24 +117,42 @@ func (s *sessionWithTTL) applyTrackRevisionWrite(
 	projection *session.Session,
 	trackEvent *session.TrackEvent,
 ) error {
-	write, err := s.checkRevisionGeneration(ctx, projection)
+	candidate, err := s.prepareTrackRevisionWrite(ctx, projection, trackEvent)
 	if err != nil {
 		return err
 	}
-	rev := s.ensureRevision()
-	rollingProjection := sessionrevision.CloneProjection(rev.record.Projection)
-	candidate := &sessionrevision.PersistedRecord{
-		Projection: rollingProjection,
-		Checkpoint: rev.record.Checkpoint,
+	s.revision = candidate
+	return nil
+}
+
+func (s *sessionWithTTL) prepareTrackRevisionWrite(
+	ctx context.Context,
+	projection *session.Session,
+	trackEvent *session.TrackEvent,
+) (*latestTurnRevision, error) {
+	write, err := s.checkRevisionGeneration(ctx, projection)
+	if err != nil {
+		return nil, err
+	}
+	candidate := &latestTurnRevision{}
+	if s.revision != nil {
+		candidate.record = s.revision.record
+		candidate.record.Projection = sessionrevision.CloneProjection(
+			s.revision.record.Projection,
+		)
+		if checkpoint := s.revision.record.Checkpoint; checkpoint != nil {
+			cloned := *checkpoint
+			cloned.Boundary = append([]byte(nil), checkpoint.Boundary...)
+			candidate.record.Checkpoint = &cloned
+		}
 	}
 	if err := sessionrevision.AppendProjectionTrack(
-		candidate, trackEvent,
+		&candidate.record, trackEvent,
 	); err != nil {
-		return fmt.Errorf("advance session revision projection: %w", err)
+		return nil, fmt.Errorf("advance session revision projection: %w", err)
 	}
-	sessionrevision.ApplyTrackWrite(&rev.record, write, trackEvent)
-	rev.record.Projection = candidate.Projection
-	return nil
+	sessionrevision.ApplyTrackWrite(&candidate.record, write, trackEvent)
+	return candidate, nil
 }
 
 // ReplaceLatestTurn restores the active session projection to the checkpoint

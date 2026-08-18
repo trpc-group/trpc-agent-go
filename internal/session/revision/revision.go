@@ -297,6 +297,9 @@ func CompleteRunPreparation(ctx context.Context, err error) {
 type TurnStart struct {
 	RequestID    string
 	InvocationID string
+	// RestoreState overlays state consumed while routing the turn onto the
+	// pre-turn checkpoint without restoring it to the active projection.
+	RestoreState session.StateMap
 }
 
 // PersistedCheckpoint is the backend-private durable boundary for the latest
@@ -543,6 +546,7 @@ func ContextWithTurnStart(ctx context.Context, start TurnStart) context.Context 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	start.RestoreState = cloneState(start.RestoreState)
 	return context.WithValue(ctx, turnStartContextKey{}, start)
 }
 
@@ -899,7 +903,7 @@ func NewBoundary(sess *session.Session) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewBoundaryFromProjection(sess, projection)
+	return NewBoundaryFromProjection(sess, projection, nil)
 }
 
 // NewBoundaryFromProjection captures mutable session fields while reusing an
@@ -907,6 +911,7 @@ func NewBoundary(sess *session.Session) ([]byte, error) {
 func NewBoundaryFromProjection(
 	sess *session.Session,
 	projection *PersistedProjection,
+	restoreState session.StateMap,
 ) ([]byte, error) {
 	if sess == nil {
 		return nil, session.ErrNilSession
@@ -915,6 +920,13 @@ func NewBoundaryFromProjection(
 		return nil, ErrLatestTurnReplacementUnavailable
 	}
 	state := sess.SnapshotState()
+	for key, value := range restoreState {
+		if value == nil {
+			delete(state, key)
+			continue
+		}
+		state[key] = append([]byte(nil), value...)
+	}
 	for key := range state {
 		if strings.HasPrefix(key, session.StateAppPrefix) ||
 			strings.HasPrefix(key, session.StateUserPrefix) {

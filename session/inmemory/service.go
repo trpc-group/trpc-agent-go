@@ -897,27 +897,25 @@ func (s *SessionService) AppendTrackEvent(
 	if storedSession == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
-	if _, err := storedSessionWithTTL.checkRevisionGeneration(ctx, sess); err != nil {
-		return err
-	}
-
-	// Append track event to the session.
-	if err := storedSession.AppendTrackEvent(trackEvent, opts...); err != nil {
+	storedCandidate := storedSession.Clone()
+	if err := storedCandidate.AppendTrackEvent(trackEvent, opts...); err != nil {
 		return fmt.Errorf("append track event: %w", err)
 	}
-	if err := storedSessionWithTTL.applyTrackRevisionWrite(
+	revisionCandidate, err := storedSessionWithTTL.prepareTrackRevisionWrite(
 		ctx,
 		sess,
 		trackEvent,
-	); err != nil {
+	)
+	if err != nil {
 		return err
 	}
 	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
 		return fmt.Errorf("append track event: %w", err)
 	}
 
-	// Update the session in the wrapper and refresh TTL.
-	storedSessionWithTTL.session = storedSession
+	// Commit the authoritative projection and its revision together.
+	storedSessionWithTTL.session = storedCandidate
+	storedSessionWithTTL.revision = revisionCandidate
 	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 	return nil
 }

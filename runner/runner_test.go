@@ -513,6 +513,71 @@ func TestRunnerLatestTurnReplacementReusesPreselectedFactoryAgent(t *testing.T) 
 	assert.Equal(t, "request-edited", active.Events[0].RequestID)
 }
 
+func TestRunnerLatestTurnReplacementPreservesAwaitUserReplyRoute(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	state, err := (agent.AwaitUserReplyRoute{
+		AgentName:  "child",
+		LookupPath: "parent" + agent.BranchDelimiter + "child",
+	}).State()
+	require.NoError(t, err)
+	_, err = service.CreateSession(ctx, key, state)
+	require.NoError(t, err)
+
+	child := &awaitReplyTrackingAgent{name: "child"}
+	factoryCalls := 0
+	r := NewRunnerWithAgentFactory(
+		"app",
+		"parent",
+		func(context.Context, agent.RunOptions) (agent.Agent, error) {
+			factoryCalls++
+			return &awaitReplyTrackingAgent{
+				name:      "parent",
+				subAgents: []agent.Agent{child},
+			}, nil
+		},
+		WithSessionService(service),
+		WithAwaitUserReplyRouting(true),
+	)
+
+	events, err := r.Run(
+		ctx,
+		key.UserID,
+		key.SessionID,
+		model.NewUserMessage("original"),
+		agent.WithRequestID("request-original"),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	require.Equal(t, 1, child.calls)
+	require.Equal(t, 1, factoryCalls)
+
+	events, err = r.Run(
+		ctx,
+		key.UserID,
+		key.SessionID,
+		model.NewUserMessage("edited"),
+		agent.WithLatestTurnReplacement(
+			"request-original",
+			"request-edited",
+		),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	require.Equal(t, 2, child.calls)
+	require.Equal(t, 2, factoryCalls, "one factory call per run")
+
+	active, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	_, ok, err := agent.PendingAwaitUserReplyRoute(active)
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
 type interruptThenRespondAgent struct {
 	name string
 	mu   sync.Mutex

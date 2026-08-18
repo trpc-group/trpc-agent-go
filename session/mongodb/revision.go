@@ -477,7 +477,7 @@ func (s *Service) persistRevisionEvent(
 			return err
 		}
 		write.Boundary, err = sessionrevision.NewBoundaryFromProjection(
-			active, record.Projection,
+			active, record.Projection, write.Start.RestoreState,
 		)
 		if err != nil {
 			return fmt.Errorf("capture session boundary before latest turn: %w", err)

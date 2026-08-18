@@ -680,6 +680,11 @@ func (r *runner) Run(
 		ro,
 		runnerLatencySpanAwaitRoute,
 	)
+	awaitCtx = contextWithPreselectedAwaitUserReplyRoot(
+		awaitCtx,
+		r.selectedRootLookupName(ro, ""),
+		preselectedAgent,
+	)
 	ro, awaitUserReplyRootName, awaitUserReplyLookupPath, err := r.applyAwaitUserReplyRoute(
 		awaitCtx,
 		sessionKey,
@@ -712,6 +717,20 @@ func (r *runner) Run(
 		execCancel()
 		return nil, err
 	}
+	var turnRestoreState session.StateMap
+	if awaitUserReplyLookupPath != "" {
+		turnRestoreState, err = (agent.AwaitUserReplyRoute{
+			AgentName:  ag.Info().Name,
+			LookupPath: awaitUserReplyLookupPath,
+		}).State()
+		if err != nil {
+			execCancel()
+			return nil, fmt.Errorf(
+				"runner: preserve await_user_reply route: %w",
+				err,
+			)
+		}
+	}
 	invocation := r.newRunInvocation(
 		sess,
 		invocationMessage,
@@ -741,6 +760,7 @@ func (r *runner) Run(
 		runnerLatencySpanPersistTurn,
 		runnerSessionAttrs(sessionKey, currentTurnSession)...,
 	)
+	persistCtx = contextWithTurnRestoreState(persistCtx, turnRestoreState)
 	if err := r.persistCurrentTurnMessages(
 		persistCtx,
 		currentTurnSession,
@@ -1083,6 +1103,34 @@ type pendingSessionMessage struct {
 	currentTurn   bool
 }
 
+type turnRestoreStateContextKey struct{}
+
+func contextWithTurnRestoreState(
+	ctx context.Context,
+	state session.StateMap,
+) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(state) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, turnRestoreStateContextKey{}, state)
+}
+
+func turnStartForEvent(ctx context.Context, evt *event.Event) revision.TurnStart {
+	start := revision.TurnStart{
+		RequestID:    evt.RequestID,
+		InvocationID: evt.InvocationID,
+	}
+	if ctx != nil {
+		start.RestoreState, _ = ctx.Value(
+			turnRestoreStateContextKey{},
+		).(session.StateMap)
+	}
+	return start
+}
+
 // appendSessionMessages persists messages into the session transcript in the
 // provided order.
 func (r *runner) appendSessionMessages(
@@ -1128,10 +1176,9 @@ func (r *runner) appendMessagesAsSessionEvents(
 		evt = r.applyEventPlugins(ctx, invocation, evt)
 		appendCtx := ctx
 		if pending.currentTurn && !turnStarted {
-			appendCtx = revision.ContextWithTurnStart(ctx, revision.TurnStart{
-				RequestID:    evt.RequestID,
-				InvocationID: evt.InvocationID,
-			})
+			appendCtx = revision.ContextWithTurnStart(
+				ctx, turnStartForEvent(ctx, evt),
+			)
 			turnStarted = true
 		}
 		if err := r.sessionService.AppendEvent(appendCtx, sess, evt); err != nil {
@@ -1170,10 +1217,7 @@ func (r *runner) appendIncomingMessage(
 	)
 	agent.InjectIntoEvent(invocation, evt)
 	evt = r.applyEventPlugins(ctx, invocation, evt)
-	ctx = revision.ContextWithTurnStart(ctx, revision.TurnStart{
-		RequestID:    evt.RequestID,
-		InvocationID: evt.InvocationID,
-	})
+	ctx = revision.ContextWithTurnStart(ctx, turnStartForEvent(ctx, evt))
 	return r.sessionService.AppendEvent(ctx, sess, evt)
 }
 

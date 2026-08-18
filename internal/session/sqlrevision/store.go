@@ -234,7 +234,7 @@ func (s Store) ApplyEventWrite(
 			return fmt.Errorf("load authoritative pre-turn session: %w", err)
 		}
 		write.Boundary, err = sessionrevision.NewBoundaryFromProjection(
-			current, record.Projection,
+			current, record.Projection, write.Start.RestoreState,
 		)
 		if err != nil {
 			return fmt.Errorf("capture session boundary before latest turn: %w", err)

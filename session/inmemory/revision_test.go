@@ -73,6 +73,43 @@ func TestEventLimitInvalidatesRollingProjection(t *testing.T) {
 	assert.True(t, stored.revision.record.Checkpoint.Hazard)
 }
 
+func TestAppendTrackEventRevisionFailureIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	service := NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	turnCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID: "request", InvocationID: "invocation",
+	})
+	require.NoError(t, service.AppendEvent(
+		turnCtx,
+		sess,
+		testMessageEvent("event", "request", "invocation", "message"),
+	))
+
+	storedBefore, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	callerBefore := sess.Clone()
+	err = service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "trace",
+		RequestID: "request",
+		Payload:   []byte("{"),
+		Timestamp: time.Now(),
+	})
+	require.ErrorContains(t, err, "advance session revision projection")
+
+	storedAfter, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, storedBefore.State, storedAfter.State)
+	assert.Equal(t, storedBefore.Tracks, storedAfter.Tracks)
+	assert.Equal(t, storedBefore.UpdatedAt, storedAfter.UpdatedAt)
+	assert.Equal(t, callerBefore.State, sess.State)
+	assert.Equal(t, callerBefore.Tracks, sess.Tracks)
+	assert.Equal(t, callerBefore.UpdatedAt, sess.UpdatedAt)
+}
+
 func TestReplaceLatestTurnRestoresCheckpointAndFencesOldProjection(t *testing.T) {
 	ctx := context.Background()
 	service := NewSessionService()

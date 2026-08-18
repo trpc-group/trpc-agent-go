@@ -658,6 +658,40 @@ func TestBoundaryRestore(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestBoundaryRestoreStateOverlay(t *testing.T) {
+	sess := session.NewSession(
+		"app",
+		"user",
+		"session",
+		session.WithSessionState(session.StateMap{
+			"kept":    []byte("value"),
+			"removed": []byte("value"),
+		}),
+	)
+	record := &PersistedRecord{}
+	require.NoError(t, InitializeProjection(record, sess))
+
+	raw, err := NewBoundaryFromProjection(
+		sess,
+		record.Projection,
+		session.StateMap{
+			"route":   []byte("child"),
+			"removed": nil,
+		},
+	)
+	require.NoError(t, err)
+	assert.NotContains(t, sess.State, "route")
+	assert.Contains(t, sess.State, "removed")
+
+	current := sess.Clone()
+	current.Events = append(current.Events, event.Event{InvocationID: "after"})
+	restored, err := RestoreBoundary(current, raw)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value"), restored.State["kept"])
+	assert.Equal(t, []byte("child"), restored.State["route"])
+	assert.NotContains(t, restored.State, "removed")
+}
+
 func TestBoundaryDoesNotCopyEventPayloads(t *testing.T) {
 	sess := session.NewSession("app", "user", "session")
 	sess.Events = []event.Event{{
@@ -687,7 +721,7 @@ func TestRollingProjectionMatchesAuthoritativeBoundary(t *testing.T) {
 	assert.True(t, ProjectionInitialized(record))
 
 	rollingBoundary, err := NewBoundaryFromProjection(
-		before, record.Projection,
+		before, record.Projection, nil,
 	)
 	require.NoError(t, err)
 	authoritativeBoundary, err := NewBoundary(before)
@@ -704,7 +738,7 @@ func TestRollingProjectionMatchesAuthoritativeBoundary(t *testing.T) {
 	require.NoError(t, AppendProjectionEvent(record, &nextEvent))
 	require.NoError(t, AppendProjectionTrack(record, &nextTrack))
 
-	rollingBoundary, err = NewBoundaryFromProjection(after, record.Projection)
+	rollingBoundary, err = NewBoundaryFromProjection(after, record.Projection, nil)
 	require.NoError(t, err)
 	authoritativeBoundary, err = NewBoundary(after)
 	require.NoError(t, err)
@@ -755,7 +789,7 @@ func TestResetAndInvalidateProjection(t *testing.T) {
 	record := &PersistedRecord{}
 	require.NoError(t, ResetProjectionFromBoundary(record, raw))
 	assert.True(t, ProjectionInitialized(record))
-	rolling, err := NewBoundaryFromProjection(sess, record.Projection)
+	rolling, err := NewBoundaryFromProjection(sess, record.Projection, nil)
 	require.NoError(t, err)
 	assert.JSONEq(t, string(raw), string(rolling))
 
@@ -763,19 +797,19 @@ func TestResetAndInvalidateProjection(t *testing.T) {
 	assert.False(t, ProjectionInitialized(record))
 	assert.NoError(t, AppendProjectionEvent(record, &event.Event{}))
 	assert.NoError(t, AppendProjectionTrack(record, &session.TrackEvent{}))
-	_, err = NewBoundaryFromProjection(sess, record.Projection)
+	_, err = NewBoundaryFromProjection(sess, record.Projection, nil)
 	assert.ErrorIs(t, err, ErrLatestTurnReplacementUnavailable)
 }
 
 func TestRollingProjectionRejectsInvalidMetadata(t *testing.T) {
 	sess := session.NewSession("app", "user", "session")
 	assert.Error(t, InitializeProjection(nil, sess))
-	_, err := NewBoundaryFromProjection(nil, &PersistedProjection{})
+	_, err := NewBoundaryFromProjection(nil, &PersistedProjection{}, nil)
 	assert.ErrorIs(t, err, session.ErrNilSession)
 
 	invalid := &PersistedRecord{Projection: &PersistedProjection{Version: 99}}
 	assert.False(t, ProjectionInitialized(invalid))
-	_, err = NewBoundaryFromProjection(sess, invalid.Projection)
+	_, err = NewBoundaryFromProjection(sess, invalid.Projection, nil)
 	assert.ErrorIs(t, err, ErrLatestTurnReplacementUnavailable)
 	assert.ErrorIs(
 		t,
@@ -838,7 +872,7 @@ func BenchmarkBoundaryCapture(b *testing.B) {
 		b.Run(fmt.Sprintf("rolling/%d", eventCount), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				if _, err := NewBoundaryFromProjection(
-					sess, record.Projection,
+					sess, record.Projection, nil,
 				); err != nil {
 					b.Fatal(err)
 				}

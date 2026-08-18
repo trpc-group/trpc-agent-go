@@ -244,7 +244,7 @@ func TestRollingProjectionSupportsSuccessiveTurns(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, sessionrevision.ProjectionInitialized(record))
 			boundary, err := sessionrevision.NewBoundaryFromProjection(
-				active, record.Projection,
+				active, record.Projection, nil,
 			)
 			require.NoError(t, err)
 			fullBoundary, fullErr := sessionrevision.NewBoundary(active)

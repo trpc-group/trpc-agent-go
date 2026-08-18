@@ -72,7 +72,9 @@ func (s *Service) prepareTurnStartWrite(
 		projection = bootstrap.Projection
 		base = active
 	}
-	write.Boundary, err = sessionrevision.NewBoundaryFromProjection(base, projection)
+	write.Boundary, err = sessionrevision.NewBoundaryFromProjection(
+		base, projection, write.Start.RestoreState,
+	)
 	if err != nil {
 		return write, fmt.Errorf("capture session boundary before latest turn: %w", err)
 	}

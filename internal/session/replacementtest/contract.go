@@ -43,6 +43,9 @@ func Run(t *testing.T, service session.Service) {
 	t.Run("authoritative checkpoint", func(t *testing.T) {
 		testAuthoritativeCheckpoint(t, service)
 	})
+	t.Run("turn-start restore state", func(t *testing.T) {
+		testTurnStartRestoreState(t, service)
+	})
 	t.Run("listed projection fencing", func(t *testing.T) {
 		testListedProjectionFencing(t, service)
 	})
@@ -317,6 +320,56 @@ func testAuthoritativeCheckpoint(t *testing.T, service session.Service) {
 	if len(result.ActiveSession.Events) != 1 ||
 		result.ActiveSession.Events[0].ID != "concurrent" {
 		t.Fatalf("restored authoritative events = %#v", result.ActiveSession.Events)
+	}
+}
+
+func testTurnStartRestoreState(t *testing.T, service session.Service) {
+	ctx := context.Background()
+	key := contractKey(t, "turn-start-restore-state")
+	sess, err := service.CreateSession(ctx, key, nil)
+	requireNoError(t, err)
+	requireNoError(t, service.AppendEvent(
+		ctx,
+		sess,
+		messageEvent("before", "before", "before-invocation", model.RoleUser),
+	))
+
+	const restoredKey = "consumed-route"
+	turnCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID:    "latest",
+		InvocationID: "latest-invocation",
+		RestoreState: session.StateMap{restoredKey: []byte("parent.child")},
+	})
+	requireNoError(t, service.AppendEvent(
+		turnCtx,
+		sess,
+		messageEvent("latest", "latest", "latest-invocation", model.RoleUser),
+	))
+	requireNoError(t, service.AppendEvent(
+		ctx,
+		sess,
+		completionEvent("latest", "latest-invocation"),
+	))
+
+	active, err := service.GetSession(ctx, key)
+	requireNoError(t, err)
+	if _, ok := active.GetState(restoredKey); ok {
+		t.Fatalf("consumed state leaked into the active projection")
+	}
+
+	result, err := revision.ReplaceLatestTurn(
+		ctx,
+		service,
+		revision.LatestTurnReplacementRequest{
+			Key:               key,
+			ExpectedRequestID: "latest",
+			IdempotencyKey:    "replacement",
+		},
+	)
+	requireNoError(t, err)
+	restored, ok := result.ActiveSession.GetState(restoredKey)
+	if !ok || string(restored) != "parent.child" {
+		t.Fatalf("restored turn-start state = %q, %v", restored, ok)
 	}
 }
 
