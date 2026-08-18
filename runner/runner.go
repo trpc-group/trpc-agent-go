@@ -717,20 +717,6 @@ func (r *runner) Run(
 		execCancel()
 		return nil, err
 	}
-	var turnRestoreState session.StateMap
-	if awaitUserReplyLookupPath != "" {
-		turnRestoreState, err = (agent.AwaitUserReplyRoute{
-			AgentName:  ag.Info().Name,
-			LookupPath: awaitUserReplyLookupPath,
-		}).State()
-		if err != nil {
-			execCancel()
-			return nil, fmt.Errorf(
-				"runner: preserve await_user_reply route: %w",
-				err,
-			)
-		}
-	}
 	invocation := r.newRunInvocation(
 		sess,
 		invocationMessage,
@@ -760,12 +746,12 @@ func (r *runner) Run(
 		runnerLatencySpanPersistTurn,
 		runnerSessionAttrs(sessionKey, currentTurnSession)...,
 	)
-	persistCtx = contextWithTurnRestoreState(persistCtx, turnRestoreState)
 	if err := r.persistCurrentTurnMessages(
 		persistCtx,
 		currentTurnSession,
 		invocation,
 		ag,
+		awaitUserReplyLookupPath,
 		message,
 		persistedCurrentTurnMessages,
 		ro,
@@ -4421,10 +4407,24 @@ func (r *runner) persistCurrentTurnMessages(
 	sess *session.Session,
 	invocation *agent.Invocation,
 	ag agent.Agent,
+	awaitUserReplyLookupPath string,
 	message model.Message,
 	persistedCurrentTurnMessages []model.Message,
 	ro agent.RunOptions,
 ) error {
+	if awaitUserReplyLookupPath != "" {
+		restoreState, err := (agent.AwaitUserReplyRoute{
+			AgentName:  ag.Info().Name,
+			LookupPath: awaitUserReplyLookupPath,
+		}).State()
+		if err != nil {
+			return fmt.Errorf(
+				"runner: preserve await_user_reply route: %w",
+				err,
+			)
+		}
+		ctx = contextWithTurnRestoreState(ctx, restoreState)
+	}
 	if ro.UserMessageRewriter == nil {
 		historySeeded, err := r.seedSessionHistory(
 			ctx,
