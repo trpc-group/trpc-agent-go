@@ -384,3 +384,33 @@ func TestExecuteCode_MigratesLegacySessionWorkspace_ExplicitKey(t *testing.T) {
 	assertMigratedFileContent(
 		t, filepath.Join(newPath, "out", "result.txt"), "legacy-out")
 }
+
+// TestWorkspaceRegistryAcquire_MigratesLegacyWorkspace is the registry-path
+// regression: skill_run (via workspacesession.Resolver) and openclaw acquire
+// PerSession workspaces through WorkspaceRegistry.Acquire with the hashed
+// session key and no sandbox-private context value. The registry creates the
+// workspace on a context.WithoutCancel(ctx) goroutine; that context must
+// still carry the invocation so shape-based migration fires there too.
+func TestWorkspaceRegistryAcquire_MigratesLegacyWorkspace(t *testing.T) {
+	root := t.TempDir()
+	newKey, legacyKey := migrateKeyPair(t)
+	legacyPath := seedLegacyWorkspace(t, root, legacyKey)
+	rt := NewRuntime(WithWorkspaceRoot(root))
+
+	reg := codeexecutor.NewWorkspaceRegistry()
+	ws, err := reg.Acquire(migrateInvocationContext(), rt, newKey)
+	if err != nil {
+		t.Fatalf("Acquire error = %v", err)
+	}
+
+	newPath, _ := workspacePathForID(root, newKey)
+	if ws.Path != newPath {
+		t.Fatalf("workspace path = %q, want %q", ws.Path, newPath)
+	}
+	assertPathExists(t, newPath)
+	assertPathMissing(t, legacyPath)
+	assertMigratedFileContent(
+		t, filepath.Join(newPath, "work", "source.txt"), "legacy-work")
+	assertMigratedFileContent(
+		t, filepath.Join(newPath, "out", "result.txt"), "legacy-out")
+}
