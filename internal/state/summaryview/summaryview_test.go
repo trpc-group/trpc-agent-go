@@ -188,6 +188,57 @@ func TestRebaseAfterTransformAcceptsImplicitIdentitySources(t *testing.T) {
 	require.Equal(t, 1, view.Items[0].RequestIndex)
 }
 
+func TestRebaseAfterTransformRejectsInvalidatedBinding(t *testing.T) {
+	message := model.NewUserMessage("history")
+	messages := []model.Message{message}
+	invocation := agent.NewInvocation()
+	AttachProjection(invocation, &View{
+		ContentRequestLength: len(messages),
+		Items: []Item{{
+			Message:      message,
+			RequestIndex: 0,
+		}},
+	})
+	InvalidateBinding(invocation)
+
+	rebased := RebaseAfterTransform(
+		invocation,
+		messages,
+		messages,
+		nil,
+	)
+
+	require.False(t, rebased)
+	view, ok := Snapshot(invocation)
+	require.True(t, ok)
+	require.False(t, view.Bound)
+}
+
+func TestRebaseAfterTransformRejectsEmptyExplicitSources(t *testing.T) {
+	message := model.NewUserMessage("history")
+	messages := []model.Message{message}
+	invocation := agent.NewInvocation()
+	AttachProjection(invocation, &View{
+		ContentRequestLength: len(messages),
+		Items: []Item{{
+			Message:      message,
+			RequestIndex: 0,
+		}},
+	})
+
+	rebased := RebaseAfterTransform(
+		invocation,
+		messages,
+		messages,
+		[]int{},
+	)
+
+	require.False(t, rebased)
+	view, ok := Snapshot(invocation)
+	require.True(t, ok)
+	require.False(t, view.Bound)
+}
+
 func TestRebaseAfterTransformUsesOriginalProjectionLength(t *testing.T) {
 	duplicate := model.NewUserMessage("duplicate")
 	current := model.NewUserMessage("current")

@@ -126,6 +126,9 @@ func RebaseAfterTransform(
 	if !ok || state == nil || state.view == nil {
 		return false
 	}
+	if state.bindingInvalidated {
+		return false
+	}
 	boundItems, boundBefore := bindItemsForTransform(state.view, before)
 	boundBefore = boundBefore && sourceIndexesMatch(
 		sourceIndexes,
@@ -278,14 +281,14 @@ func sourceIndexesMatch(
 	outputCount int,
 	inputCount int,
 ) bool {
-	if len(sourceIndexes) == 0 {
+	if sourceIndexes == nil {
 		return outputCount == inputCount
 	}
 	return len(sourceIndexes) == outputCount
 }
 
 func sourceIndexForOutput(sourceIndexes []int, outputIndex int) int {
-	if len(sourceIndexes) == 0 {
+	if sourceIndexes == nil {
 		return outputIndex
 	}
 	return sourceIndexes[outputIndex]
