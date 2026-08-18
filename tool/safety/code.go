@@ -114,6 +114,12 @@ func scanInlineInterpreters(
 			)...)
 			continue
 		}
+		if base == "sed" {
+			findings = append(findings, scanSEDInlinePrograms(
+				policy, argv[1:], indirectionDepth,
+			)...)
+			continue
+		}
 		if isPythonInterpreter(base) {
 			if module, rest, ok := interpreterModule(argv[1:]); ok {
 				if module == "pip" {

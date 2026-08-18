@@ -148,23 +148,40 @@ func sshOptionConsumesNext(arg string) bool {
 }
 
 func sshExecutionCommand(option string) (string, string, bool) {
-	option = strings.TrimSpace(option)
-	if key, value, ok := strings.Cut(option, "="); ok {
-		name, matched := sshExecutionOptionName(key)
-		if !matched {
-			return "", "", false
-		}
-		return strings.TrimSpace(value), name, true
-	}
-	fields := strings.Fields(option)
-	if len(fields) == 0 {
+	key, value, ok := sshConfigurationOptionNameValue(option)
+	if !ok {
 		return "", "", false
 	}
-	name, matched := sshExecutionOptionName(fields[0])
+	name, matched := sshExecutionOptionName(key)
 	if !matched {
 		return "", "", false
 	}
-	return strings.Join(fields[1:], " "), name, true
+	return value, name, true
+}
+
+func sshConfigurationOptionNameValue(option string) (string, string, bool) {
+	option = strings.TrimSpace(option)
+	if option == "" {
+		return "", "", false
+	}
+	equals := strings.IndexByte(option, '=')
+	space := strings.IndexAny(option, " \t\r\n\v\f")
+	separator := equals
+	if separator < 0 || space >= 0 && space < separator {
+		separator = space
+	}
+	if separator < 0 {
+		return option, "", true
+	}
+	name := strings.TrimSpace(option[:separator])
+	if name == "" {
+		return "", "", false
+	}
+	valueStart := separator
+	if option[separator] == '=' {
+		valueStart++
+	}
+	return name, strings.TrimSpace(option[valueStart:]), true
 }
 
 func sshExecutionOptionName(value string) (string, bool) {
@@ -173,6 +190,8 @@ func sshExecutionOptionName(value string) (string, bool) {
 		return "LocalCommand", true
 	case strings.EqualFold(strings.TrimSpace(value), "KnownHostsCommand"):
 		return "KnownHostsCommand", true
+	case strings.EqualFold(strings.TrimSpace(value), "ProxyCommand"):
+		return "ProxyCommand", true
 	default:
 		return "", false
 	}

@@ -70,11 +70,13 @@ Permission 扫描还会把解释器 stdin 和 `-f -` stdin 作为可执行内容
 跨命令参数边界扫描凭据形态的值，并检查路径类参数与 Skill 输出 glob。显式命中
 禁止路径时会直接拦截；宽泛输出 glob 只有限定在专用 `out/` 目录下才会放行，
 否则需要人工复核。扫描器还会复核选择 alias、hook、helper 或外部程序的 Git
-配置。AWK 内联程序中的进程桥接
-以及 SSH 的 `LocalCommand`、`KnownHostsCommand` 都属于命令间接执行：字面量
-嵌套命令复用相同的命令策略扫描，动态或无法明确解析的形式进入人工复核。
-如果 Tool metadata 声明 destructive，即使 schema 中没有可识别的执行字段也
-至少需要人工复核；已有的更强 deny 结论仍然优先。
+配置。AWK 内联程序中的进程桥接、sed 的 `e` 与 `s///e`，以及 SSH 的
+`LocalCommand`、`KnownHostsCommand`、`ProxyCommand` 都属于命令间接执行：
+字面量嵌套命令复用相同的命令策略扫描，动态或无法明确解析的形式进入人工复核。
+SSH 配置值同时支持 `key=value` 和 `key value` 两种形式；`Hostname` 与
+`ProxyJump` 在两种形式下都会作为目的地覆盖处理。如果 Tool metadata 声明
+destructive，即使 schema 中没有可识别的执行字段也至少需要人工复核；已有的
+更强 deny 结论仍然优先。
 
 ## Filter 与 Permission 边界
 

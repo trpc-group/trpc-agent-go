@@ -749,7 +749,7 @@ func destinationOverrideFinding(argv []string) (Finding, bool) {
 	for i := 1; i < len(argv); i++ {
 		rawArg := argv[i]
 		arg := strings.ToLower(rawArg)
-		if sshClient && sshDestinationOverrideArgument(argv, i, arg) {
+		if sshClient && sshDestinationOverrideArgument(argv, i) {
 			return sshDestinationOverrideFinding(), true
 		}
 		if genericDestinationOverrideArgument(arg) {
@@ -765,17 +765,19 @@ func destinationOverrideFinding(argv []string) (Finding, bool) {
 	return Finding{}, false
 }
 
-func sshDestinationOverrideArgument(argv []string, index int, arg string) bool {
+func sshDestinationOverrideArgument(argv []string, index int) bool {
+	arg := strings.ToLower(argv[index])
 	if arg == "-j" || strings.HasPrefix(arg, "-j") {
 		return true
 	}
-	if arg == "-oproxycommand" || strings.HasPrefix(arg, "-oproxycommand=") ||
-		arg == "-oproxyjump" || strings.HasPrefix(arg, "-oproxyjump=") ||
-		arg == "-ohostname" || strings.HasPrefix(arg, "-ohostname=") {
-		return true
+	value, consumesNext, found := sshConfigurationOption(argv[index])
+	if !found {
+		return false
 	}
-	return arg == "-o" && index+1 < len(argv) &&
-		sshDestinationOverrideOption(argv[index+1])
+	if consumesNext {
+		return index+1 < len(argv) && sshDestinationOverrideOption(argv[index+1])
+	}
+	return sshDestinationOverrideOption(value)
 }
 
 func genericDestinationOverrideArgument(arg string) bool {
@@ -841,10 +843,13 @@ func curlProxyOption(arg string) bool {
 }
 
 func sshDestinationOverrideOption(value string) bool {
-	value = strings.ToLower(strings.TrimSpace(value))
-	return strings.HasPrefix(value, "proxycommand=") ||
-		strings.HasPrefix(value, "proxyjump=") ||
-		strings.HasPrefix(value, "hostname=")
+	name, _, ok := sshConfigurationOptionNameValue(value)
+	if !ok {
+		return false
+	}
+	return strings.EqualFold(name, "ProxyCommand") ||
+		strings.EqualFold(name, "ProxyJump") ||
+		strings.EqualFold(name, "Hostname")
 }
 
 func networkConfigFinding(argv []string) (Finding, bool) {

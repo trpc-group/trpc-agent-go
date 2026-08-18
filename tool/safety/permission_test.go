@@ -206,6 +206,45 @@ func TestPermissionPolicyScansExecutableStdin(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyBlocksInlineSedAndSSHOptionBypasses(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"sed", "ssh", "scp", "sftp"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+	for _, tc := range []struct {
+		name     string
+		args     string
+		wantRule string
+	}{
+		{
+			name:     "sed inline execution",
+			args:     `{"command":"sed -e '1e rm -rf .' input.txt"}`,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name: "SSH whitespace ProxyCommand",
+			args: `{"command":"ssh -o \"ProxyCommand sh -c 'rm -rf .'\" ` +
+				`api.github.com"}`,
+			wantRule: "network.destination_override",
+		},
+		{
+			name: "SSH whitespace Hostname",
+			args: `{"command":"ssh -o \"Hostname evil.example\" ` +
+				`api.github.com"}`,
+			wantRule: "network.destination_override",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(), workspacePermissionRequest(tc.args),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, tc.wantRule)
+		})
+	}
+}
+
 func TestPermissionPolicyClassifiesExecutionSensitiveEnvironment(t *testing.T) {
 	policy := NewPermissionPolicy(mustPermissionGuard(t, DefaultPolicy()))
 	for _, tc := range []struct {

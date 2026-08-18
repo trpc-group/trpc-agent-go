@@ -83,13 +83,15 @@ content, scans credential-shaped values across command argument boundaries,
 and checks path-bearing arguments and Skill output globs. Explicit denied paths
 are blocked; broad output globs require review unless they are scoped beneath
 the dedicated `out/` directory. The scanner also reviews Git configuration
-that selects aliases, hooks, helpers or external programs.
-Inline AWK process bridges and SSH `LocalCommand` or `KnownHostsCommand`
-options are command indirection: literal nested commands are scanned by the
-same command policy, while dynamic or ambiguous forms require review. A tool
-that publishes destructive metadata also requires review even when its schema
-does not expose recognizable execution fields; stronger deny findings still
-take precedence.
+that selects aliases, hooks, helpers or external programs. Inline AWK process
+bridges, sed `e` and `s///e` programs, and SSH `LocalCommand`,
+`KnownHostsCommand`, or `ProxyCommand` options are command indirection: literal
+nested commands are scanned by the same command policy, while dynamic or
+ambiguous forms require review. SSH configuration values accept both `key=value`
+and `key value`; `Hostname` and `ProxyJump` are treated as destination
+overrides in either form. A tool that publishes destructive metadata also
+requires review even when its schema does not expose recognizable execution
+fields; stronger deny findings still take precedence.
 
 ## Filter and permission boundaries
 

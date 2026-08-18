@@ -926,6 +926,97 @@ func TestGuardScansAWKInlinePrograms(t *testing.T) {
 	}
 }
 
+func TestGuardScansSedInlinePrograms(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = []string{"sed"}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			name:     "positional execution command",
+			command:  `sed '1e rm -rf .' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "separate expression option",
+			command:  `sed -e '1e rm -rf .' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "attached expression option",
+			command:  `sed -e'1e rm -rf .' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "long expression option",
+			command:  `sed --expression '1e rm -rf .' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "attached long expression option",
+			command:  `sed --expression='1e rm -rf .' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "expression after input operand",
+			command:  `sed -e 's/foo/bar/' input.txt -e '1e rm -rf .'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "substitution execution flag",
+			command:  `sed 's/.*/rm -rf ./e' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "dynamic substitution execution",
+			command:  `sed 's/.*/echo &/e' input.txt`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "missing expression value",
+			command:  `sed -e`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "ambiguous BSD in-place suffix",
+			command:  `sed -i p '1e rm -rf .' input.txt`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "benign substitution",
+			command:  `sed 's/foo/bar/' input.txt`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "benign print",
+			command:  `sed -n '1p' input.txt`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, tc.rule, report.RuleID)
+		})
+	}
+}
+
 func TestGuardScansSSHExecutionOptions(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.AllowedCommands = []string{"ssh", "scp", "sftp"}
@@ -988,6 +1079,42 @@ func TestGuardScansSSHExecutionOptions(t *testing.T) {
 			command:  `ssh -o 'LocalCommand rm -rf .' api.github.com`,
 			decision: safety.DecisionDeny,
 			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "space separated proxy command",
+			command:  `ssh -o "ProxyCommand sh -c 'rm -rf .'" api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "network.destination_override",
+		},
+		{
+			name:     "space separated direct proxy command",
+			command:  `ssh -o 'ProxyCommand rm -rf .' api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "space separated hostname",
+			command:  `ssh -o 'Hostname evil.example' api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "network.destination_override",
+		},
+		{
+			name:     "space separated proxy jump",
+			command:  `ssh -o 'ProxyJump relay.example' api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "network.destination_override",
+		},
+		{
+			name:     "scp space separated proxy command",
+			command:  `scp -o "ProxyCommand sh -c 'rm -rf .'" README.md api.github.com:/tmp/x`,
+			decision: safety.DecisionDeny,
+			rule:     "network.destination_override",
+		},
+		{
+			name:     "sftp space separated proxy command",
+			command:  `sftp -o "ProxyCommand sh -c 'rm -rf .'" api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "network.destination_override",
 		},
 		{
 			name:     "empty local command",
