@@ -11,6 +11,8 @@
 package review
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -103,6 +105,27 @@ func TestParseUnifiedDiffDecodesQuotedPathsAndInfersLanguage(t *testing.T) {
 	}
 	if len(parsed.Files) != 1 || parsed.Files[0].Path != "docs/汉\t.md" || parsed.Files[0].Language != "markdown" {
 		t.Fatalf("quoted path parsing = %+v, want decoded markdown file", parsed.Files)
+	}
+}
+
+func TestParseUnifiedDiffStripsTraditionalHeaderTimestamps(t *testing.T) {
+	diff, err := os.ReadFile(filepath.Join("..", "..", "testdata", "fixtures", "timestamped-unified.diff"))
+	if err != nil {
+		t.Fatalf("read timestamped unified diff fixture: %v", err)
+	}
+	parsed, err := ParseUnifiedDiff(string(diff))
+	if err != nil {
+		t.Fatalf("ParseUnifiedDiff returned error: %v", err)
+	}
+	if len(parsed.Files) != 1 {
+		t.Fatalf("files = %+v, want one file", parsed.Files)
+	}
+	file := parsed.Files[0]
+	if file.Path != "service.go" || file.Language != "go" {
+		t.Fatalf("timestamped file = %+v, want service.go detected as Go", file)
+	}
+	if len(file.Hunks) != 1 || len(file.Hunks[0].CandidateLines) != 1 || file.Hunks[0].CandidateLines[0] != 3 {
+		t.Fatalf("timestamped hunk = %+v, want candidate service.go:3", file.Hunks)
 	}
 }
 

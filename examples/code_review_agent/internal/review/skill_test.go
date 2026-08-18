@@ -309,6 +309,30 @@ func TestSkillRulesDecodeQuotedPathsAndSkipGoOnlyChecksForMarkdown(t *testing.T)
 	}
 }
 
+func TestSkillRulesParseTimestampedUnifiedDiffHeaders(t *testing.T) {
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoRoot := filepath.Dir(filepath.Dir(skillRoot))
+	diff, err := os.ReadFile(filepath.Join(repoRoot, "testdata", "fixtures", "timestamped-unified.diff"))
+	if err != nil {
+		t.Fatalf("read timestamped unified diff fixture: %v", err)
+	}
+
+	for _, env := range [][]string{nil, fallbackScriptEnv(t)} {
+		payload := runSkillCheck(t, skillRoot, string(diff), env)
+		if got := countSkillRule(payload.Findings, "panic-direct"); got != 1 {
+			t.Fatalf("expected Go rule for timestamped header, got %d: %+v", got, payload.Findings)
+		}
+		for _, finding := range payload.Findings {
+			if finding.RuleID == "panic-direct" && (finding.File != "service.go" || finding.Line != 3) {
+				t.Fatalf("timestamped finding anchor = %+v, want service.go:3", finding)
+			}
+		}
+	}
+}
+
 func TestSkillCheckScriptFallbackParityForDuplicateRuleLines(t *testing.T) {
 	t.Parallel()
 

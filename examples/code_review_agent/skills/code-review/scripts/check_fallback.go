@@ -471,6 +471,8 @@ func normalizeDiffPath(raw string) string {
 		if unquoted, err := strconv.Unquote(path); err == nil {
 			path = unquoted
 		}
+	} else if idx := strings.IndexByte(path, '\t'); idx >= 0 {
+		path = strings.TrimSpace(path[:idx])
 	}
 	if strings.HasPrefix(path, "a/") || strings.HasPrefix(path, "b/") {
 		path = path[2:]

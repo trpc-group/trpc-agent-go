@@ -107,6 +107,8 @@ def decode_git_path(raw: str) -> str:
             out.append(escapes.get(body[index], ord(body[index])))
             index += 1
         raw = out.decode("utf-8", errors="replace")
+    elif "\t" in raw:
+        raw = raw.split("\t", 1)[0].rstrip()
     if raw.startswith("a/") or raw.startswith("b/"):
         raw = raw[2:]
     return raw

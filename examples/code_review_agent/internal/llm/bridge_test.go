@@ -16,6 +16,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -214,6 +216,67 @@ func TestRunReviewAndFindingSanitizationRedactShortDeclarationSecrets(t *testing
 	finding := SanitizeFinding(review.Finding{Evidence: "apiKey := \"" + secret + "\""})
 	if strings.Contains(finding.Evidence, secret) {
 		t.Fatalf("report evidence leaked short-declaration secret: %s", finding.Evidence)
+	}
+}
+
+func TestRunReviewNeverSendsMultilineRawStringSecretsToProvider(t *testing.T) {
+	tests := []struct {
+		name       string
+		hunkHeader string
+		closing    string
+		preserved  string
+	}{
+		{
+			name:       "closed",
+			hunkHeader: "@@ -0,0 +1,4 @@\n",
+			closing:    "+`\n+const enabled = true\n",
+			preserved:  "const enabled = true",
+		},
+		{name: "unterminated", hunkHeader: "@@ -0,0 +1,2 @@\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const firstPayload = "first opaque credential payload line"
+			const secondPayload = "second opaque credential payload line"
+			diff := []byte("diff --git a/config.go b/config.go\n" +
+				"+++ b/config.go\n" +
+				tt.hunkHeader +
+				"+apiKey := `" + firstPayload + "\n" +
+				"+" + secondPayload + "\n" +
+				tt.closing)
+			called := false
+			provider := ProviderFunc(func(_ context.Context, input Input) (Output, error) {
+				called = true
+				for _, secret := range []string{firstPayload, secondPayload} {
+					if strings.Contains(input.DiffSummary, secret) {
+						t.Fatalf("provider input leaked %q: %s", secret, input.DiffSummary)
+					}
+				}
+				if !strings.Contains(input.DiffSummary, "apiKey=[REDACTED]") {
+					t.Fatalf("provider input missing raw-string redaction marker: %s", input.DiffSummary)
+				}
+				if tt.preserved != "" && !strings.Contains(input.DiffSummary, tt.preserved) {
+					t.Fatalf("provider input removed content after raw string: %s", input.DiffSummary)
+				}
+				return Output{}, nil
+			})
+
+			_, _ = RunReview(context.Background(), "task-raw-secret", provider, Audit{}, review.Result{}, diff, review.InputMetadata{})
+			if !called {
+				t.Fatal("expected model provider to receive a review request")
+			}
+		})
+	}
+}
+
+func TestValidateProviderFindingsAcceptsTimestampedUnifiedDiffAnchor(t *testing.T) {
+	diff, err := os.ReadFile(filepath.Join("..", "..", "testdata", "fixtures", "timestamped-unified.diff"))
+	if err != nil {
+		t.Fatalf("read timestamped unified diff fixture: %v", err)
+	}
+	finding := review.Finding{File: "service.go", Line: 3, Confidence: "high"}
+	if got := ValidateProviderFindings([]review.Finding{finding}, diff); len(got) != 1 {
+		t.Fatalf("validated findings = %+v, want timestamped service.go:3 anchor", got)
 	}
 }
 

@@ -20,4 +20,5 @@ These diff fixtures exercise the first-version deterministic review path.
 - `defer-in-loop.diff`: defer inside loop rule
 - `bare-return-err.diff`: unwrapped bare error return rule
 - `string-concat-loop.diff`: low-confidence string concatenation in loop warning
+- `timestamped-unified.diff`: traditional `diff -u` headers with modification timestamps
 - `realistic-service-risk.diff`: multi-file PR-shaped sample that combines secret, panic, goroutine, context, resource, database, TODO, and missing-test risks

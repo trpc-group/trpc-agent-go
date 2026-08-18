@@ -200,6 +200,10 @@ func RedactSecrets(input string) string {
 		with string
 	}{
 		{
+			re:   regexp.MustCompile("(?is)\\b(api[_-]?key|apikey|llm[_-]?key|openai[_-]?(api[_-]?)?key|client[_-]?secret|secret|token|bearer[_-]?token|password|passwd|pwd|github[_-]?token|private[_-]?key)\\b\\s*(?::=|[:=])\\s*`[^`]*(?:`|\\z)"),
+			with: `$1=[REDACTED]`,
+		},
+		{
 			re:   regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
 			with: `[REDACTED_PRIVATE_KEY]`,
 		},
