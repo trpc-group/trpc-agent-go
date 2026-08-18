@@ -159,6 +159,35 @@ func TestRebaseAfterTransformTracksSafeCompletedPrefix(t *testing.T) {
 	require.Equal(t, 100, view.RequestTokens)
 }
 
+func TestRebaseAfterTransformAcceptsImplicitIdentitySources(t *testing.T) {
+	message := model.NewUserMessage("history")
+	messages := []model.Message{
+		model.NewSystemMessage("fixed"),
+		message,
+	}
+	invocation := agent.NewInvocation()
+	AttachProjection(invocation, &View{
+		ContentRequestLength: len(messages),
+		Items: []Item{{
+			Message:      message,
+			RequestIndex: 1,
+		}},
+	})
+
+	rebased := RebaseAfterTransform(
+		invocation,
+		messages,
+		messages,
+		nil,
+	)
+
+	require.True(t, rebased)
+	view, ok := Snapshot(invocation)
+	require.True(t, ok)
+	require.True(t, view.Bound)
+	require.Equal(t, 1, view.Items[0].RequestIndex)
+}
+
 func TestRebaseAfterTransformUsesOriginalProjectionLength(t *testing.T) {
 	duplicate := model.NewUserMessage("duplicate")
 	current := model.NewUserMessage("current")
@@ -212,8 +241,11 @@ func TestRebaseAfterTransformFailsClosedWithoutCompleteProvenance(t *testing.T) 
 	require.False(t, RebaseAfterTransform(
 		invocation,
 		before,
-		[]model.Message{model.NewUserMessage("rewritten")},
-		[]int{},
+		[]model.Message{
+			model.NewUserMessage("rewritten one"),
+			model.NewUserMessage("rewritten two"),
+		},
+		nil,
 	))
 	Finalize(invocation, &model.Request{Messages: before}, 100)
 	view, ok := Snapshot(invocation)

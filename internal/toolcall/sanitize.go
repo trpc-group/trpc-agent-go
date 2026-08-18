@@ -55,8 +55,9 @@ func SanitizeMessagesWithTools(ctx context.Context, messages []model.Message, to
 }
 
 // SanitizeResult contains sanitized messages and their input provenance.
-// SourceIndexes has one entry per message and identifies the corresponding
-// index in the input message slice.
+// When non-nil, SourceIndexes has one entry per message and identifies the
+// corresponding index in the input message slice. A nil slice represents an
+// identity mapping: output message i came from input message i.
 type SanitizeResult struct {
 	Messages      []model.Message
 	SourceIndexes []int
@@ -72,7 +73,14 @@ func SanitizeMessagesWithToolsResult(
 	if len(messages) == 0 {
 		return SanitizeResult{Messages: messages}
 	}
-	out := make([]indexedMessage, 0, len(messages))
+	if !containsToolMessages(messages) {
+		out := make([]model.Message, len(messages))
+		copy(out, messages)
+		return SanitizeResult{Messages: out}
+	}
+	builder := sanitizeResultBuilder{
+		messages: make([]model.Message, 0, len(messages)),
+	}
 	for i := 0; i < len(messages); {
 		msg := messages[i]
 		if msg.Role == model.RoleAssistant && len(msg.ToolCalls) > 0 {
@@ -80,47 +88,75 @@ func SanitizeMessagesWithToolsResult(
 			for next < len(messages) && messages[next].Role == model.RoleTool {
 				next++
 			}
-			toolResults := make([]indexedMessage, 0, next-i-1)
-			for resultIndex := i + 1; resultIndex < next; resultIndex++ {
-				toolResults = append(toolResults, indexedMessage{
-					message:     messages[resultIndex],
-					sourceIndex: resultIndex,
-				})
-			}
-			out = append(out, sanitizeToolRound(
+			builder.appendAll(sanitizeToolRound(
 				ctx,
 				indexedMessage{message: msg, sourceIndex: i},
-				toolResults,
+				messages[i+1:next],
+				i+1,
 				tools,
-			)...)
+			))
 			i = next
 			continue
 		}
 		if msg.Role == model.RoleTool {
-			out = append(out, indexedMessage{
+			builder.append(indexedMessage{
 				message:     downgradeOrphanToolResult(ctx, msg),
 				sourceIndex: i,
 			})
 			i++
 			continue
 		}
-		out = append(out, indexedMessage{message: msg, sourceIndex: i})
+		builder.append(indexedMessage{message: msg, sourceIndex: i})
 		i++
 	}
-	result := SanitizeResult{
-		Messages:      make([]model.Message, len(out)),
-		SourceIndexes: make([]int, len(out)),
+	return SanitizeResult{
+		Messages:      builder.messages,
+		SourceIndexes: builder.sourceIndexes,
 	}
-	for i := range out {
-		result.Messages[i] = out[i].message
-		result.SourceIndexes[i] = out[i].sourceIndex
+}
+
+func containsToolMessages(messages []model.Message) bool {
+	for i := range messages {
+		if messages[i].Role == model.RoleTool ||
+			(messages[i].Role == model.RoleAssistant &&
+				len(messages[i].ToolCalls) > 0) {
+			return true
+		}
 	}
-	return result
+	return false
 }
 
 type indexedMessage struct {
 	message     model.Message
 	sourceIndex int
+}
+
+type sanitizeResultBuilder struct {
+	messages      []model.Message
+	sourceIndexes []int
+}
+
+func (b *sanitizeResultBuilder) append(message indexedMessage) {
+	outputIndex := len(b.messages)
+	b.messages = append(b.messages, message.message)
+	if b.sourceIndexes != nil {
+		b.sourceIndexes = append(b.sourceIndexes, message.sourceIndex)
+		return
+	}
+	if message.sourceIndex == outputIndex {
+		return
+	}
+	b.sourceIndexes = make([]int, outputIndex, cap(b.messages))
+	for i := range b.sourceIndexes {
+		b.sourceIndexes[i] = i
+	}
+	b.sourceIndexes = append(b.sourceIndexes, message.sourceIndex)
+}
+
+func (b *sanitizeResultBuilder) appendAll(messages []indexedMessage) {
+	for _, message := range messages {
+		b.append(message)
+	}
 }
 
 type toolCallValidation struct {
@@ -150,11 +186,17 @@ type toolCallSplit struct {
 func sanitizeToolRound(
 	ctx context.Context,
 	assistant indexedMessage,
-	toolResults []indexedMessage,
+	toolResults []model.Message,
+	firstToolResultSourceIndex int,
 	tools map[string]tool.Tool,
 ) []indexedMessage {
 	validation := validateToolCalls(assistant.message.ToolCalls, tools)
-	split := splitToolResults(toolResults, validation.validIDs, validation.invalidIDs)
+	split := splitToolResults(
+		toolResults,
+		firstToolResultSourceIndex,
+		validation.validIDs,
+		validation.invalidIDs,
+	)
 	toolCallSplit := splitToolCalls(validation.validToolCalls, split.kept)
 	filteredAssistant := assistant.message
 	filteredAssistant.ToolCalls = toolCallSplit.kept
@@ -479,7 +521,8 @@ func validateNumberValueAgainstSchema(value any, path string) (bool, string) {
 
 // splitToolResults groups tool result messages by tool_call_id based on tool call validity.
 func splitToolResults(
-	toolResults []indexedMessage,
+	toolResults []model.Message,
+	firstSourceIndex int,
 	validIDs map[string]struct{},
 	invalidIDs map[string]struct{},
 ) toolResultSplit {
@@ -488,23 +531,27 @@ func splitToolResults(
 		invalidByID: make(map[string][]indexedMessage),
 	}
 	respondedValidIDs := make(map[string]struct{}, len(validIDs))
-	for _, tr := range toolResults {
-		if tr.message.ToolID == "" {
+	for i, message := range toolResults {
+		tr := indexedMessage{
+			message:     message,
+			sourceIndex: firstSourceIndex + i,
+		}
+		if message.ToolID == "" {
 			out.orphan = append(out.orphan, tr)
 			continue
 		}
-		if _, ok := validIDs[tr.message.ToolID]; ok {
-			if _, responded := respondedValidIDs[tr.message.ToolID]; responded {
+		if _, ok := validIDs[message.ToolID]; ok {
+			if _, responded := respondedValidIDs[message.ToolID]; responded {
 				out.orphan = append(out.orphan, tr)
 				continue
 			}
-			respondedValidIDs[tr.message.ToolID] = struct{}{}
+			respondedValidIDs[message.ToolID] = struct{}{}
 			out.kept = append(out.kept, tr)
 			continue
 		}
-		if _, ok := invalidIDs[tr.message.ToolID]; ok {
-			out.invalidByID[tr.message.ToolID] = append(
-				out.invalidByID[tr.message.ToolID],
+		if _, ok := invalidIDs[message.ToolID]; ok {
+			out.invalidByID[message.ToolID] = append(
+				out.invalidByID[message.ToolID],
 				tr,
 			)
 			continue

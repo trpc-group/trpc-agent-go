@@ -368,6 +368,47 @@ func TestSanitizeMessagesWithToolsResult_TracksSplitRoundSources(t *testing.T) {
 	assert.Equal(t, []int{0, 1, 2, 1, 3}, result.SourceIndexes)
 }
 
+func TestSanitizeMessagesWithToolsResultOmitsIdentitySources(t *testing.T) {
+	in := []model.Message{
+		model.NewUserMessage("start"),
+		model.NewAssistantMessage("answer"),
+	}
+
+	result := SanitizeMessagesWithToolsResult(
+		context.Background(),
+		in,
+		nil,
+	)
+
+	assert.Equal(t, in, result.Messages)
+	assert.Nil(t, result.SourceIndexes)
+}
+
+func TestSanitizeMessagesWithToolsResultOmitsIdentityToolRoundSources(t *testing.T) {
+	in := []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "lookup",
+					Arguments: []byte(`{"query":"benchmark"}`),
+				},
+			}},
+		},
+		model.NewToolMessage("call_1", "lookup", "result"),
+	}
+
+	result := SanitizeMessagesWithToolsResult(
+		context.Background(),
+		in,
+		nil,
+	)
+
+	assert.Equal(t, in, result.Messages)
+	assert.Nil(t, result.SourceIndexes)
+}
+
 func TestSanitizeMessagesWithTools_DowngradesOrphanToolResult(t *testing.T) {
 	in := []model.Message{
 		{
@@ -960,17 +1001,19 @@ func TestValidateValueAgainstSchema_ArrayTypeMismatch(t *testing.T) {
 }
 
 func TestSplitToolResults_GroupsByIDs(t *testing.T) {
-	toolResults := []indexedMessage{
-		{message: model.Message{Role: model.RoleTool, ToolID: ""}},
-		{message: model.Message{Role: model.RoleTool, ToolID: "valid"}},
-		{message: model.Message{Role: model.RoleTool, ToolID: "invalid"}},
-		{message: model.Message{Role: model.RoleTool, ToolID: "unknown"}},
+	toolResults := []model.Message{
+		{Role: model.RoleTool, ToolID: ""},
+		{Role: model.RoleTool, ToolID: "valid"},
+		{Role: model.RoleTool, ToolID: "invalid"},
+		{Role: model.RoleTool, ToolID: "unknown"},
 	}
 	validIDs := map[string]struct{}{"valid": {}}
 	invalidIDs := map[string]struct{}{"invalid": {}}
-	split := splitToolResults(toolResults, validIDs, invalidIDs)
+	split := splitToolResults(toolResults, 10, validIDs, invalidIDs)
 	assert.Len(t, split.kept, 1)
+	assert.Equal(t, 11, split.kept[0].sourceIndex)
 	assert.Len(t, split.invalidByID["invalid"], 1)
+	assert.Equal(t, 12, split.invalidByID["invalid"][0].sourceIndex)
 	assert.Len(t, split.orphan, 2)
 }
 

@@ -109,7 +109,8 @@ func Finalize(inv *agent.Invocation, req *model.Request, requestTokens int) {
 }
 
 // RebaseAfterTransform maps a projected view through a message transform.
-// sourceIndexes must contain one input-message index for every output message.
+// When non-nil, sourceIndexes must contain one input-message index for every
+// output message. A nil slice means output message i came from input message i.
 // The view remains unbound when the provenance does not completely represent
 // every projected history item.
 func RebaseAfterTransform(
@@ -125,24 +126,63 @@ func RebaseAfterTransform(
 	if !ok || state == nil || state.view == nil {
 		return false
 	}
-	next := cloneView(state.view)
-	next.Bound = false
-	provenanceMatches := len(after) == len(sourceIndexes)
-	boundBefore := provenanceMatches && bindItems(next, before)
-	next.ContentRequestLength = len(after)
+	boundItems, boundBefore := bindItemsForTransform(state.view, before)
+	boundBefore = boundBefore && sourceIndexesMatch(
+		sourceIndexes,
+		len(after),
+		len(before),
+	)
 	if !boundBefore {
+		next := cloneView(state.view)
+		next.Bound = false
+		next.ContentRequestLength = len(after)
 		storeInvalidated(inv, next)
 		return false
 	}
-	transformed, ok := rebaseItems(next.Items, after, sourceIndexes, len(before))
+	transformed, ok := rebaseItems(
+		boundItems,
+		after,
+		sourceIndexes,
+		len(before),
+	)
 	if !ok {
+		next := cloneView(state.view)
+		next.Bound = false
+		next.ContentRequestLength = len(after)
 		storeInvalidated(inv, next)
 		return false
 	}
+	next := *state.view
 	next.Items = transformed
+	next.ContentRequestLength = len(after)
 	next.Bound = true
-	inv.SetState(stateKey, &invocationState{view: next})
+	inv.SetState(stateKey, &invocationState{view: &next})
 	return true
+}
+
+func bindItemsForTransform(view *View, messages []model.Message) ([]Item, bool) {
+	if view == nil || len(view.Items) == 0 || len(messages) == 0 {
+		return nil, false
+	}
+	items := make([]Item, len(view.Items))
+	shift := len(messages) - view.ContentRequestLength
+	previous := -1
+	for i := range view.Items {
+		index := findItem(
+			messages,
+			view.Items[i].Message,
+			view.Items[i].RequestIndex,
+			shift,
+			previous+1,
+		)
+		if index < 0 {
+			return nil, false
+		}
+		items[i] = view.Items[i]
+		items[i].RequestIndex = index
+		previous = index
+	}
+	return items, true
 }
 
 func rebaseItems(
@@ -157,6 +197,7 @@ func rebaseItems(
 	}
 	remaining, ok := countOutputsByItem(
 		sourceIndexes,
+		len(after),
 		beforeLength,
 		itemBySource,
 		len(items),
@@ -168,7 +209,8 @@ func rebaseItems(
 	transformed := make([]Item, 0, len(after))
 	completed := make([]bool, len(items))
 	frontier := 0
-	for outputIndex, sourceIndex := range sourceIndexes {
+	for outputIndex := range after {
+		sourceIndex := sourceIndexForOutput(sourceIndexes, outputIndex)
 		itemIndex, exists := itemBySource[sourceIndex]
 		if !exists {
 			continue
@@ -205,12 +247,17 @@ func indexItemsBySource(items []Item) (map[int]int, bool) {
 
 func countOutputsByItem(
 	sourceIndexes []int,
+	outputCount int,
 	beforeLength int,
 	itemBySource map[int]int,
 	itemCount int,
 ) ([]int, bool) {
+	if !sourceIndexesMatch(sourceIndexes, outputCount, beforeLength) {
+		return nil, false
+	}
 	remaining := make([]int, itemCount)
-	for _, sourceIndex := range sourceIndexes {
+	for outputIndex := 0; outputIndex < outputCount; outputIndex++ {
+		sourceIndex := sourceIndexForOutput(sourceIndexes, outputIndex)
 		if sourceIndex < 0 || sourceIndex >= beforeLength {
 			return nil, false
 		}
@@ -224,6 +271,24 @@ func countOutputsByItem(
 		}
 	}
 	return remaining, true
+}
+
+func sourceIndexesMatch(
+	sourceIndexes []int,
+	outputCount int,
+	inputCount int,
+) bool {
+	if len(sourceIndexes) == 0 {
+		return outputCount == inputCount
+	}
+	return len(sourceIndexes) == outputCount
+}
+
+func sourceIndexForOutput(sourceIndexes []int, outputIndex int) int {
+	if len(sourceIndexes) == 0 {
+		return outputIndex
+	}
+	return sourceIndexes[outputIndex]
 }
 
 func advanceCompletedFrontier(

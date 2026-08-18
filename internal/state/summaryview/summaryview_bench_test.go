@@ -21,6 +21,11 @@ import (
 
 var summaryViewBenchmarkSink *View
 
+var (
+	summaryViewItemsBenchmarkSink []Item
+	summaryViewBoolBenchmarkSink  bool
+)
+
 func BenchmarkSnapshot(b *testing.B) {
 	for _, historySize := range []int{16, 256, 1024} {
 		b.Run(fmt.Sprintf("history=%d/state_delta_bytes=1024", historySize), func(b *testing.B) {
@@ -49,6 +54,66 @@ func BenchmarkFinalize(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkRebaseAfterTransform(b *testing.B) {
+	for _, historySize := range []int{16, 256, 1024} {
+		b.Run(fmt.Sprintf("identity/history=%d/state_delta_bytes=1024", historySize), func(b *testing.B) {
+			invocation, request := summaryViewBenchmarkInput(historySize, 1024)
+			sourceIndexes := make([]int, len(request.Messages))
+			for i := range sourceIndexes {
+				sourceIndexes[i] = i
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				summaryViewBoolBenchmarkSink = RebaseAfterTransform(
+					invocation,
+					request.Messages,
+					request.Messages,
+					sourceIndexes,
+				)
+			}
+		})
+	}
+}
+
+func BenchmarkRebaseItems(b *testing.B) {
+	for _, historySize := range []int{16, 256, 1024} {
+		b.Run(fmt.Sprintf("split/history=%d/state_delta_bytes=1024", historySize), func(b *testing.B) {
+			invocation, request := summaryViewBenchmarkInput(historySize, 1024)
+			view, ok := Snapshot(invocation)
+			if !ok {
+				b.Fatal("summary view is missing")
+			}
+			after, sourceIndexes := summaryViewSplitBenchmarkMessages(request.Messages)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				summaryViewItemsBenchmarkSink, summaryViewBoolBenchmarkSink = rebaseItems(
+					view.Items,
+					after,
+					sourceIndexes,
+					len(request.Messages),
+				)
+			}
+		})
+	}
+}
+
+func summaryViewSplitBenchmarkMessages(messages []model.Message) ([]model.Message, []int) {
+	after := make([]model.Message, 0, len(messages)*2-1)
+	sourceIndexes := make([]int, 0, len(messages)*2-1)
+	for i := range messages {
+		after = append(after, messages[i])
+		sourceIndexes = append(sourceIndexes, i)
+		if i == 0 {
+			continue
+		}
+		after = append(after, messages[i])
+		sourceIndexes = append(sourceIndexes, i)
+	}
+	return after, sourceIndexes
 }
 
 func summaryViewBenchmarkInput(
