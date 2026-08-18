@@ -58,12 +58,8 @@ func BenchmarkFinalize(b *testing.B) {
 
 func BenchmarkRebaseAfterTransform(b *testing.B) {
 	for _, historySize := range []int{16, 256, 1024} {
-		b.Run(fmt.Sprintf("identity/history=%d/state_delta_bytes=1024", historySize), func(b *testing.B) {
+		b.Run(fmt.Sprintf("implicit_identity/history=%d/state_delta_bytes=1024", historySize), func(b *testing.B) {
 			invocation, request := summaryViewBenchmarkInput(historySize, 1024)
-			sourceIndexes := make([]int, len(request.Messages))
-			for i := range sourceIndexes {
-				sourceIndexes[i] = i
-			}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -71,7 +67,7 @@ func BenchmarkRebaseAfterTransform(b *testing.B) {
 					invocation,
 					request.Messages,
 					request.Messages,
-					sourceIndexes,
+					nil,
 				)
 			}
 		})
