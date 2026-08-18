@@ -363,8 +363,15 @@ func (s *Stager) linkWorkspaceDirs(
 	return runProgramExitError("link workspace dirs", res, err)
 }
 
-// RemoveWorkspacePath removes a workspace-relative path after first making
-// non-symlink files writable so cleanup can succeed on read-only staged trees.
+// RemoveWorkspacePath removes a workspace-relative path after first
+// attempting to make non-symlink entries writable so cleanup can succeed
+// on read-only staged trees.
+//
+// chmod is best-effort. POSIX chmod requires the file owner (or
+// privilege), but ProgramRunner may run as a session-isolated identity
+// that does not own the staged tree. Deletion only needs write permission
+// on parent directories, which those backends typically already grant.
+// rm -rf remains mandatory: a chmod failure must not skip the delete.
 func (s *Stager) RemoveWorkspacePath(
 	ctx context.Context,
 	eng codeexecutor.Engine,
@@ -383,7 +390,7 @@ func (s *Stager) RemoveWorkspacePath(
 	sb.WriteString(shellQuote(target))
 	sb.WriteString(" ]; then find ")
 	sb.WriteString(shellQuote(target))
-	sb.WriteString(" -type l -prune -o -exec chmod u+w {} +; fi")
+	sb.WriteString(" -type l -prune -o -exec chmod u+w {} + || true; fi")
 	sb.WriteString("; rm -rf ")
 	sb.WriteString(shellQuote(target))
 	res, err := eng.Runner().RunProgram(
