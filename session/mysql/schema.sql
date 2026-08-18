@@ -2,6 +2,10 @@
 -- This file provides reference SQL for manual database initialization.
 -- The service will automatically create these tables and indexes if skipDBInit is false.
 -- Note: Replace {{PREFIX}} with your actual table prefix (e.g., trpc_) in table and index names.
+-- The Go initializer keeps these prefixed index names while they fit MySQL's
+-- 64-character index-name limit. For an overlong prefixed name, use the
+-- corresponding table-scoped fallback (for example,
+-- idx_session_states_state_init_active or idx_state_initialization_leases_uniq).
 
 -- ============================================================================
 -- Table: session_states

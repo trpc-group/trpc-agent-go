@@ -356,7 +356,9 @@ ON session_states(
 
 在重新开启 state initialization 前，还需要根据部署类型创建 lease schema。使用
 `WithSkipDBInit(true)` 时，服务不会自动创建该表及其索引，因此必须在迁移期间完成
-创建。将 `{{PREFIX}}` 替换为实际的表前缀；表名和索引名都需要带上对应前缀。
+创建。将 `{{PREFIX}}` 替换为实际的表前缀；展开后的表名必须符合 MySQL 64 个字符的限制。
+Go 初始化逻辑会在索引名不超过 64 个字符时保留前缀；如果索引名过长，则使用确定性的表级短名称
+（例如 `idx_session_states_state_init_active` 或 `idx_state_initialization_leases_uniq`），不要直接截断前缀。
 
 MySQL：
 

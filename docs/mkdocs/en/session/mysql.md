@@ -338,8 +338,12 @@ ON session_states(
 Before re-enabling state initialization, provision the lease schema with the
 variant matching the deployment. When `WithSkipDBInit(true)` is set, the service
 does not create this table or its indexes, so they must be provisioned during
-the migration. Replace `{{PREFIX}}` with the configured table prefix; the prefix
-applies to both the table and index names.
+the migration. Replace `{{PREFIX}}` with the configured table prefix. The
+expanded table names must fit MySQL's 64-character table-name limit. The Go
+initializer uses prefixed index names when they fit the 64-character index-name
+limit; for an overlong index name, use the deterministic table-scoped fallback
+(for example, `idx_session_states_state_init_active` or
+`idx_state_initialization_leases_uniq`) instead of truncating the prefix.
 
 MySQL:
 

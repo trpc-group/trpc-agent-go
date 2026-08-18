@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -76,7 +77,7 @@ func mockVerifySchemaQueriesForTables(
 		// 3. verifyIndexes query (INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SUB_PART)
 		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART"})
 		for _, idx := range schema.indexes {
-			idxName := sqldb.BuildIndexName(tablePrefix, idx.table, idx.suffix)
+			idxName := buildMySQLIndexName(tablePrefix, idx.table, idx.suffix)
 			nonUnique := 1
 			if idx.unique {
 				nonUnique = 0
@@ -292,6 +293,46 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestInitDB_WithLongTablePrefixUsesBoundedIndexNames(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	tablePrefix := strings.Repeat("a", 28)
+	serviceOpts := defaultOptions
+	serviceOpts.tablePrefix = tablePrefix
+	s := &Service{
+		opts:                           serviceOpts,
+		mysqlClient:                    &mockMySQLClient{db: db},
+		tableSessionStates:             sqldb.BuildTableName(tablePrefix, sqldb.TableNameSessionStates),
+		tableSessionEvents:             sqldb.BuildTableName(tablePrefix, sqldb.TableNameSessionEvents),
+		tableSessionTracks:             sqldb.BuildTableName(tablePrefix, sqldb.TableNameSessionTrackEvents),
+		tableSessionSummaries:          sqldb.BuildTableName(tablePrefix, sqldb.TableNameSessionSummaries),
+		tableAppStates:                 sqldb.BuildTableName(tablePrefix, sqldb.TableNameAppStates),
+		tableUserStates:                sqldb.BuildTableName(tablePrefix, sqldb.TableNameUserStates),
+		tableStateInitializationLeases: sqldb.BuildTableName(tablePrefix, tableNameStateInitializationLeases),
+	}
+
+	for _, indexDef := range indexDefs {
+		indexName := buildMySQLIndexName(tablePrefix, indexDef.table, indexDef.suffix)
+		assert.LessOrEqual(t, len(indexName), mysqlMaxIdentifierLength)
+	}
+	assert.Equal(t,
+		"idx_session_states_state_init_active",
+		buildMySQLIndexName(tablePrefix, sqldb.TableNameSessionStates, stateInitializationActiveIndex),
+	)
+	assert.Equal(t,
+		"idx_state_initialization_leases_uniq",
+		buildMySQLIndexName(tablePrefix, tableNameStateInitializationLeases, stateInitializationLeaseIndexUniq),
+	)
+
+	mockCreateMissingTables(mock, tablePrefix)
+	mockVerifySchemaQueries(mock, tablePrefix)
+
+	require.NoError(t, s.initDB(context.Background()))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestInitDB_DuplicateIndexIgnored(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -421,7 +462,7 @@ func TestVerifySchema_Success(t *testing.T) {
 	// 3. verifyIndexes
 	idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART"})
 	for _, idx := range expectedSchema[testTable].indexes {
-		idxName := sqldb.BuildIndexName(s.opts.tablePrefix, idx.table, idx.suffix)
+		idxName := buildMySQLIndexName(s.opts.tablePrefix, idx.table, idx.suffix)
 		nonUnique := 1
 		if idx.unique {
 			nonUnique = 0
@@ -483,7 +524,7 @@ func TestVerifySchema_MissingUniqueIndexFatal(t *testing.T) {
 		if idx.suffix == sqldb.IndexSuffixUniqueActive {
 			continue
 		}
-		idxName := sqldb.BuildIndexName(s.opts.tablePrefix, idx.table, idx.suffix)
+		idxName := buildMySQLIndexName(s.opts.tablePrefix, idx.table, idx.suffix)
 		for _, col := range idx.columns {
 			idxRows.AddRow(idxName, col, 1, nil)
 		}
@@ -1083,7 +1124,7 @@ func TestVerifyStateInitializationSchemaWithSkipDBInit(t *testing.T) {
 		"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART",
 	})
 	for _, index := range leaseSchema.indexes {
-		name := sqldb.BuildIndexName("", index.table, index.suffix)
+		name := buildMySQLIndexName("", index.table, index.suffix)
 		nonUnique := 1
 		if index.unique {
 			nonUnique = 0
@@ -1221,6 +1262,55 @@ func TestVerifyIndexes_QueryError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "query indexes failed")
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBuildMySQLIndexName(t *testing.T) {
+	longPrefix := strings.Repeat("a", 28)
+	exactLimitPrefix := strings.Repeat("a", 27)
+	tests := []struct {
+		name   string
+		prefix string
+		table  string
+		suffix string
+		want   string
+	}{
+		{
+			name:   "short prefix keeps canonical name",
+			prefix: "trpc",
+			table:  sqldb.TableNameSessionStates,
+			suffix: stateInitializationActiveIndex,
+			want:   "idx_trpc_session_states_state_init_active",
+		},
+		{
+			name:   "exact limit keeps canonical name",
+			prefix: exactLimitPrefix,
+			table:  sqldb.TableNameSessionStates,
+			suffix: stateInitializationActiveIndex,
+			want:   sqldb.BuildIndexName(exactLimitPrefix, sqldb.TableNameSessionStates, stateInitializationActiveIndex),
+		},
+		{
+			name:   "overlong state index uses table scoped fallback",
+			prefix: longPrefix,
+			table:  sqldb.TableNameSessionStates,
+			suffix: stateInitializationActiveIndex,
+			want:   "idx_session_states_state_init_active",
+		},
+		{
+			name:   "overlong lease index uses table scoped fallback",
+			prefix: longPrefix,
+			table:  tableNameStateInitializationLeases,
+			suffix: stateInitializationLeaseIndexUniq,
+			want:   "idx_state_initialization_leases_uniq",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildMySQLIndexName(tt.prefix, tt.table, tt.suffix)
+			assert.Equal(t, tt.want, got)
+			assert.LessOrEqual(t, len(got), mysqlMaxIdentifierLength)
+		})
+	}
 }
 
 func TestBuildIndexColumnsStr(t *testing.T) {

@@ -200,6 +200,26 @@ const (
 //     boundary and may cause issues in some MySQL versions.
 const mysqlVarCharIndexPrefixLen = 191
 
+// mysqlMaxIdentifierLength is the maximum length of a MySQL index identifier.
+// Index names are scoped to their table, so an overlong prefixed name can be
+// replaced with the same short name derived from the base table without
+// colliding with indexes on another prefixed table.
+const mysqlMaxIdentifierLength = 64
+
+// buildMySQLIndexName preserves the canonical prefixed index name whenever it
+// fits MySQL's identifier limit. For longer prefixes, it falls back to a
+// deterministic table-scoped name instead of truncating or hashing the prefix.
+// The fallback keeps the table and suffix, so different indexes on the same
+// table remain distinct while indexes on different prefixed tables remain
+// isolated by MySQL's table-local index namespace.
+func buildMySQLIndexName(prefix, tableName, suffix string) string {
+	indexName := sqldb.BuildIndexName(prefix, tableName, suffix)
+	if len(indexName) <= mysqlMaxIdentifierLength {
+		return indexName
+	}
+	return sqldb.BuildIndexName("", tableName, suffix)
+}
+
 // session_summaries: unique index on (app_name, user_id, session_id, filter_key).
 // Note: This index does NOT include deleted_at because MySQL treats NULL != NULL,
 // which would allow duplicate active records. To ensure uniqueness, we exclude
@@ -260,6 +280,27 @@ const (
 type tableSchema struct {
 	columns []tableColumn
 	indexes []tableIndex
+}
+
+// validateMySQLTableNames checks the fully expanded table names before any
+// client is created or schema SQL is executed. The prefix itself may be valid
+// while a prefixed table exceeds MySQL's 64-character table-name limit.
+func validateMySQLTableNames(opts ServiceOpts) error {
+	tables := tableDefs
+	if opts.tdsqlSharding {
+		tables = tdsqlTableDefs
+	}
+	if !opts.stateInitializationEnabled {
+		tables = withoutStateInitializationLeaseTable(tables)
+	}
+
+	for _, tableDef := range tables {
+		fullTableName := sqldb.BuildTableName(opts.tablePrefix, tableDef.name)
+		if err := sqldb.ValidateTableName(fullTableName); err != nil {
+			return fmt.Errorf("invalid expanded table name %q: %w", fullTableName, err)
+		}
+	}
+	return nil
 }
 
 // expectedSchema defines the expected schema for each table.
@@ -680,7 +721,7 @@ func (s *Service) createTableWithIndexes(
 
 	// Create the table's indexes as part of the same first-time bootstrap.
 	for _, indexDef := range indexes {
-		indexName := sqldb.BuildIndexName(s.opts.tablePrefix, indexDef.table, indexDef.suffix)
+		indexName := buildMySQLIndexName(s.opts.tablePrefix, indexDef.table, indexDef.suffix)
 		indexSQL := strings.ReplaceAll(indexDef.template, "{{TABLE_NAME}}", fullTableName)
 		indexSQL = strings.ReplaceAll(indexSQL, "{{INDEX_NAME}}", indexName)
 
@@ -1032,7 +1073,7 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 	// Build map of expected index names
 	expectedIndexNames := make(map[string]bool)
 	for _, expected := range expectedIndexes {
-		expectedIndexName := sqldb.BuildIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
+		expectedIndexName := buildMySQLIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
 		expectedIndexNames[expectedIndexName] = true
 	}
 
@@ -1086,7 +1127,7 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		if summaryUniqueCompatible && isSummaryUniqueIndex(expected) {
 			continue
 		}
-		expectedIndexName := sqldb.BuildIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
+		expectedIndexName := buildMySQLIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
 		actualColumns, exists := actualIndexes[expectedIndexName]
 		if !exists {
 			// Build CREATE INDEX statement for user reference.
@@ -1199,7 +1240,7 @@ func (s *Service) compatibleSummaryIndex(
 		return "", false, nil
 	}
 
-	canonicalName := sqldb.BuildIndexName(
+	canonicalName := buildMySQLIndexName(
 		s.opts.tablePrefix,
 		sqldb.TableNameSessionSummaries,
 		sqldb.IndexSuffixUniqueActive,

@@ -308,6 +308,10 @@ func WithStateInitialization(enabled bool) ServiceOpt {
 //
 // Note: An underscore will be automatically added if not present.
 // "trpc" and "trpc_" both result in "trpc_" prefix.
+// The expanded table names must still fit MySQL's 64-character table-name
+// limit. Index names keep the prefixed form when possible and use deterministic
+// table-scoped names when the prefixed form would exceed MySQL's 64-character
+// index-name limit.
 //
 // Security: Uses internal/session/sqldb.ValidateTablePrefix to prevent SQL injection.
 func WithTablePrefix(prefix string) ServiceOpt {

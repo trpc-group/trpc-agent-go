@@ -95,6 +95,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	for _, option := range options {
 		option(&opts)
 	}
+	if err := validateMySQLTableNames(opts); err != nil {
+		return nil, err
+	}
 
 	// Create MySQL client
 	builderOpts := []storage.ClientBuilderOpt{

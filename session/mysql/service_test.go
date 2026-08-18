@@ -4020,7 +4020,7 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 		// 3. verifyIndexes query (INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SUB_PART)
 		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART"})
 		for _, idx := range schema.indexes {
-			idxName := sqldb.BuildIndexName(tablePrefix, idx.table, idx.suffix)
+			idxName := buildMySQLIndexName(tablePrefix, idx.table, idx.suffix)
 			nonUnique := 1
 			if idx.unique {
 				nonUnique = 0

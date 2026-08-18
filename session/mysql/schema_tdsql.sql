@@ -1,5 +1,9 @@
 -- TDSQL MySQL Session Service Schema
 -- Replace {{PREFIX}} with the configured table prefix.
+-- The Go initializer keeps prefixed index names up to MySQL's 64-character
+-- limit and uses deterministic table-scoped fallback names when a prefix would
+-- make an index name longer (for example,
+-- idx_session_states_state_init_active).
 --
 -- Sharding strategy:
 --   - 6 session/user scoped tables: shardkey = user_id
