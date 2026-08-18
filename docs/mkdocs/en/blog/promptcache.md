@@ -197,7 +197,7 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-When customizing the fork prompt with `summary.WithCacheSafeForkPrompt(...)`, do not include `{conversation_text}` again. The parent request already contains the conversation prefix.
+When customizing the fork prompt with `summary.WithCacheSafeForkPrompt(...)`, do not include `{conversation_text}` or `{previous_summary}` again. The parent request already contains the conversation prefix and any injected summary.
 
 ### Summary Injection: Avoid Rewriting the Prefix
 
@@ -378,6 +378,32 @@ Telemetry also splits token types:
 - `input_cache_read`
 - `input_cache_creation`
 - `output`
+
+#### Troubleshooting Streaming Usage
+
+For streaming requests, OpenAI-compatible providers commonly send usage in a
+final usage-only chunk. tRPC-Agent-Go consumes that chunk and attaches the
+accumulated usage to the final `model.Response`.
+
+If the raw stream contains a nonzero `cached_tokens` value but the final
+response reports zero, check whether the model was configured with
+`openai.WithAccumulateChunkTokenUsage`. The callback's return value replaces
+the complete accumulated `model.Usage`; returning only `PromptTokens`,
+`CompletionTokens`, and `TotalTokens` discards
+`PromptTokensDetails.CachedTokens`.
+
+Most applications should use the default accumulator. Nonstandard providers
+may report increments, cumulative totals, or a final total; the custom
+accumulator must match that behavior and return a complete usage state. See
+[Custom Streaming Usage Aggregation](../model.md#custom-streaming-usage-aggregation)
+for the callback execution order, every `model.Usage` field, and complete
+examples.
+
+When `Stream` is true, the OpenAI-compatible adapter requests usage
+automatically. Provider-specific request inspection can still be useful to
+confirm that the final usage chunk reaches the client, but adding another
+`stream_options.include_usage` field does not restore details discarded by a
+custom accumulator.
 
 A simple aggregate view is:
 

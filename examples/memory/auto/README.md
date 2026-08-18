@@ -223,6 +223,13 @@ memoryService := memoryinmemory.NewMemoryService(
 | `PGVECTOR_PASSWORD`       | pgvector PostgreSQL password             | ``                          |
 | `PGVECTOR_DATABASE`       | pgvector PostgreSQL database             | `trpc-agent-go-pgmemory`    |
 | `PGVECTOR_EMBEDDER_MODEL` | pgvector embedder model                  | `text-embedding-3-small`    |
+| `CHROMA_BASE_URL`         | ChromaDB REST base URL                   | `http://localhost:8000`     |
+| `CHROMA_API_KEY`          | ChromaDB API key                         | ``                          |
+| `CHROMA_BEARER_TOKEN`     | ChromaDB bearer token                    | ``                          |
+| `CHROMA_TENANT`           | ChromaDB tenant                          | `default_tenant`            |
+| `CHROMA_DATABASE`         | ChromaDB database                        | `default_database`          |
+| `CHROMA_COLLECTION`       | ChromaDB collection                      | `memories`                  |
+| `CHROMA_EMBEDDER_MODEL`   | ChromaDB embedder model                  | `text-embedding-3-small`    |
 | `MYSQL_HOST`              | MySQL host                               | `localhost`                 |
 | `MYSQL_PORT`              | MySQL port                               | `3306`                      |
 | `MYSQL_USER`              | MySQL user                               | `root`                      |
@@ -235,11 +242,13 @@ memoryService := memoryinmemory.NewMemoryService(
 | ------------ | ------------------------------------------------------------------------- | ---------------- |
 | `-model`     | Name of the model for chat responses                                      | `deepseek-v4-flash`  |
 | `-ext-model` | Name of the model for memory extraction                                   | Same as `-model` |
-| `-memory`    | Memory service type: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `postgres`, `pgvector`, `mysql`, `mysqlvec` | `inmemory` |
+| `-memory`    | Memory service type: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `postgres`, `pgvector`, `mysql`, `mysqlvec`, `chromadb` | `inmemory` |
 | `-streaming` | Enable streaming mode for responses                                       | `true`           |
 | `-debug`     | Enable debug mode to print messages sent to model                         | `false`          |
 | `-knowledge` | Enable a small local knowledge base with `knowledge_search`                | `false`          |
 | `-disable-auto-memory-on-external-context` | Stop future auto-memory extraction after `knowledge_search` is used | `false` |
+| `-update-policy` | Update policy: `merge_similar`, `preserve_history`, or `append_only` | `merge_similar` |
+| `-assistant-episode` | Extract reusable assistant results as episode memories | `false` |
 
 ## Usage
 
@@ -257,6 +266,35 @@ go run .
 # Use different models for chat and extraction.
 go run . -model gpt-4o -ext-model gpt-4o-mini
 ```
+
+Model names beginning with `glm` automatically use the OpenAI client's GLM
+compatibility variant.
+
+### Update Policies
+
+The default `merge_similar` policy preserves the existing auto-memory
+behavior. The other policies are opt-in:
+
+```bash
+# Preserve older facts and update only for safe, non-conflicting enrichment.
+go run . -update-policy preserve_history
+
+# Keep non-duplicate extracted memories as independent entries.
+go run . -update-policy append_only
+```
+
+Assistant episode extraction is also opt-in and can be combined with any
+update policy:
+
+```bash
+go run . \
+  -update-policy preserve_history \
+  -assistant-episode
+```
+
+When enabled, reusable assistant-produced results such as recommendations,
+plans, and structured comparisons can be stored as ordinary episode memories.
+The memory schema and storage tables do not change.
 
 ### Memory Backend Configuration
 
@@ -293,7 +331,17 @@ go run . -memory postgres
 export PGVECTOR_HOST=localhost
 export PGVECTOR_PASSWORD=password
 go run . -memory pgvector
+
+# ChromaDB memory service
+export CHROMA_BASE_URL=http://localhost:8000
+export CHROMA_COLLECTION=memories
+export CHROMA_EMBEDDER_MODEL=text-embedding-3-small
+go run . -memory chromadb
 ```
+
+ChromaDB runs as a separate server. `CHROMA_BASE_URL` may target localhost,
+a remote deployment, or Chroma Cloud; remote credentials require HTTPS.
+Changing the embedding model requires a new collection or a full re-embedding.
 
 ### Debug Mode
 
@@ -334,6 +382,8 @@ Output:
 
 ```
 Usage of ./auto:
+  -assistant-episode
+        Extract reusable assistant results as episode memories
   -debug
         Enable debug mode to print messages sent to model
   -disable-auto-memory-on-external-context
@@ -343,11 +393,13 @@ Usage of ./auto:
   -knowledge
         Enable a small local knowledge base with knowledge_search
   -memory string
-        Memory service type: inmemory, sqlite, sqlitevec, redis, postgres, pgvector, mysql, mysqlvec (default "inmemory")
+        Memory service type: inmemory, sqlite, sqlitevec, redis, postgres, pgvector, mysql, mysqlvec, chromadb (default "inmemory")
   -model string
         Model for chat responses (default "deepseek-v4-flash")
   -streaming
         Enable streaming mode for responses (default true)
+  -update-policy string
+        Memory update policy: merge_similar, preserve_history, or append_only (default "merge_similar")
 ```
 
 ## Chat Interface
@@ -362,6 +414,8 @@ Memory Service: inmemory
 Streaming: true
 Knowledge: false
 Disable Auto Memory On External Context: false
+Update Policy: merge_similar
+Assistant Episode Extraction: false
 ==================================================
 
 💡 Auto memory mode extracts user information automatically.
@@ -553,4 +607,4 @@ defer memoryService.Close()
 ## See Also
 
 - [Manual Memory Example](../) - Traditional memory tools approach
-- [Memory Module Documentation](../../../docs/mkdocs/en/memory.md) - Complete memory guide
+- [Memory Module Documentation](../../../docs/mkdocs/en/memory/index.md) - Complete memory guide

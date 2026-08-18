@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
+	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 const (
@@ -994,6 +995,39 @@ func TestLLMAgent_WorkspaceExec_DeniedCommands_Enforced(t *testing.T) {
 		strings.Contains(err.Error(), "curl"),
 		"expected error to mention curl, got: %v", err,
 	)
+}
+
+func TestLLMAgent_WorkspaceExec_OutputLimits_Configurable(t *testing.T) {
+	const maxBytes = 40
+	a := New(
+		"tester",
+		WithCodeExecutor(localexec.New()),
+		WithWorkspaceExecOutputLimits(toolworkspaceexec.OutputLimits{
+			MaxOutputBytes: maxBytes,
+		}),
+	)
+	tl := findTool(a.Tools(), "workspace_exec")
+	require.NotNil(t, tl)
+
+	original := "HEAD!" + strings.Repeat("x", 80) + "!TAIL"
+	args, err := json.Marshal(map[string]any{
+		"command": "printf '" + original + "'",
+		"timeout": 5,
+	})
+	require.NoError(t, err)
+	res, err := tl.(tool.CallableTool).Call(context.Background(), args)
+	require.NoError(t, err)
+
+	body, err := json.Marshal(res)
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(body, &got))
+	require.Equal(t, true, got["truncated"])
+	require.Equal(t, float64(len(original)), got["total_bytes"])
+	output, _ := got["output"].(string)
+	require.LessOrEqual(t, len(output), maxBytes)
+	require.True(t, strings.HasPrefix(output, "HEAD!"))
+	require.True(t, strings.HasSuffix(output, "!TAIL"))
 }
 
 // TestLLMAgent_WorkspaceExec_AllowedCommands_Enforced is the allow-

@@ -592,6 +592,135 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+##### Custom Streaming Usage Aggregation
+
+The OpenAI-compatible adapter requests streaming usage and accumulates the
+provider's usage chunks by default. Most applications should keep this
+behavior. Configure `WithAccumulateChunkTokenUsage` only when a compatible
+provider gives usage chunks nonstandard semantics. The option only affects
+streaming chunk aggregation; non-streaming usage is read directly from the
+complete response.
+
+###### How `WithAccumulateChunkTokenUsage` Processes Each Chunk
+
+When configured, the callback runs once for each streaming chunk, in order.
+Its signature is:
+
+```go
+func(current model.Usage, delta model.Usage) model.Usage
+```
+
+| Value | Meaning |
+| --- | --- |
+| `current` | The accumulated state before the current chunk |
+| `delta` | The `Usage` value carried by the current chunk |
+| return value | The complete state to use after the current chunk |
+
+For each chunk, the OpenAI-compatible adapter first lets the upstream SDK
+accumulate the chunk. When a custom callback is configured, the adapter then
+reconstructs the usage state from before that chunk, maps the current chunk's
+usage to `delta`, calls the callback, and replaces the SDK accumulator's usage
+with the returned value. The next chunk therefore sees that returned value as
+`current`, and the final model response receives the last returned value.
+
+`delta` is the API parameter name, but it does not guarantee that the provider
+sent a mathematical increment. Depending on the provider, it can be an
+increment, a cumulative total, a final total, or an empty value.
+
+The return value replaces the complete accumulated `model.Usage`. Fields
+omitted from it are not copied from `current` or `delta`.
+
+For a standard OpenAI-compatible stream, the raw content chunks contain
+`usage: null`. The adapter maps that absence to a zero-value `model.Usage`
+before invoking the callback. The final usage-only chunk contains the complete
+totals:
+
+```text
+raw content chunk:       usage = null
+callback for that chunk: delta = model.Usage{}
+raw final chunk:         usage = {prompt: 100, completion: 20, total: 120, cached: 80}
+callback for final chunk: delta = {prompt: 100, completion: 20, total: 120, cached: 80}
+```
+
+The default accumulator handles this shape. A custom accumulator is not needed.
+
+###### `model.Usage` Fields
+
+The accumulator state is a complete `model.Usage` value:
+
+| Field | Meaning |
+| --- | --- |
+| `PromptTokens` | Total input tokens reported for the request. Cached input tokens are normally included in this total, not added on top of it |
+| `CompletionTokens` | Total generated output tokens reported by the provider |
+| `TotalTokens` | Provider-reported total, normally prompt plus completion tokens |
+| `PromptTokensDetails.CachedTokens` | Prompt tokens served from an OpenAI-compatible prompt cache; normally a subset of `PromptTokens` |
+| `PromptTokensDetails.CacheCreationTokens` | Tokens used to create an explicit provider cache, primarily for Anthropic-style caching |
+| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache, primarily for Anthropic-style caching |
+| `CompletionTokensDetails.ReasoningTokens` | Reasoning tokens reported within the completion usage |
+| `TimingInfo` | Optional framework timing metadata, not billable token usage |
+| `TimingInfo.FirstTokenDuration` | Accumulated time from request start to the first meaningful reasoning, content, or tool-call chunk for each model call |
+| `TimingInfo.ReasoningDuration` | Accumulated duration of streaming reasoning phases; it remains zero for non-streaming requests because the interval cannot be measured precisely |
+
+These fields form a provider-agnostic structure.
+`WithAccumulateChunkTokenUsage` belongs to the OpenAI-compatible adapter, so
+its callback only receives fields that the upstream OpenAI-compatible response
+and adapter mapping support. Other provider-specific fields remain zero.
+
+`TimingInfo` contains `FirstTokenDuration` and `ReasoningDuration`. The
+framework attaches this timing metadata outside the OpenAI chunk-usage
+accumulator, so custom token accumulation normally does not need to create or
+merge it.
+
+Token accounting details remain provider-defined. For example, do not add
+`CachedTokens` to `PromptTokens`, and do not recompute `TotalTokens` unless the
+provider contract requires it.
+
+###### Choose the Strategy that Matches the Provider
+
+Start with the provider's response format:
+
+| Provider response format | Can direct summation count tokens more than once? | Recommended configuration |
+| --- | --- | --- |
+| A final usage-only chunk contains the complete totals | No; earlier chunks have no usage | Use the default accumulator |
+| Each usage chunk contains an independent increment | No | Use the default accumulator |
+| Usage chunks contain cumulative snapshots or repeat fields already reported | Yes | Use a latest-nonzero custom accumulator |
+
+For cumulative snapshots or repeated fields, keep the most recent nonzero
+usage value. Empty chunks must preserve `current`; otherwise an empty chunk
+after the last usage update can clear the result.
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+func latestNonZeroUsage(current, delta model.Usage) model.Usage {
+    if delta.PromptTokens == 0 &&
+        delta.CompletionTokens == 0 &&
+        delta.TotalTokens == 0 &&
+        delta.PromptTokensDetails.CachedTokens == 0 &&
+        delta.PromptTokensDetails.CacheCreationTokens == 0 &&
+        delta.PromptTokensDetails.CacheReadTokens == 0 &&
+        delta.CompletionTokensDetails.ReasoningTokens == 0 {
+        return current
+    }
+    return delta
+}
+
+llm := openai.New("your-model",
+    openai.WithAccumulateChunkTokenUsage(latestNonZeroUsage),
+)
+```
+
+Returning the complete `delta` preserves nested details such as
+`CachedTokens` and `ReasoningTokens`. Define "empty" from every field that the
+provider can report.
+
+Before choosing a custom strategy, inspect the provider's raw chunks across a
+complete stream. In particular, check whether usage is incremental or
+cumulative and whether a final usage-only chunk is present.
+
 ##### Dynamically Modifying Request Body via Callback
 
 `WithChatRequestCallback` receives a `*openai.ChatCompletionNewParams` pointer,
@@ -1815,6 +1944,7 @@ The framework currently supports the following Variants:
 - Default BaseURL：`https://api.deepseek.com`
 - API Key environment variable name：`DEEPSEEK_API_KEY`
 - DeepSeek-specific behavior is enabled when you explicitly set `WithVariant(openai.VariantDeepSeek)` or use the official DeepSeek API BaseURL
+- Serializes `GenerationConfig.MaxTokens` as `max_tokens`, the field documented by the [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion); other variants continue to use `max_completion_tokens`
 - Other behaviors are consistent with standard OpenAI
 
 **4. VariantQwen（Qwen）**
@@ -1829,6 +1959,25 @@ The framework currently supports the following Variants:
 - GLM OpenAI-compatible API adaptation
 - Serializes the thinking toggle using GLM's `thinking` object format
 - Falls back to exposing `reasoning_content` as visible content when some GLM gateways return an empty `content` field without tool calls
+
+**6. VariantKimi**
+
+- Kimi Open Platform adaptation
+- Default BaseURL: `https://api.moonshot.ai/v1`
+- API Key environment variable name: `MOONSHOT_API_KEY`
+- Automatically inferred for the official `api.moonshot.ai` and `api.moonshot.cn` hosts
+- Serializes the thinking toggle as `{"thinking": {"type": "enabled"}}`
+- Uses `file-extract` as the default file upload purpose
+
+**7. VariantMiniMax**
+
+- MiniMax OpenAI-compatible API adaptation
+- Default BaseURL: `https://api.minimax.io/v1`
+- API Key environment variable name: `MINIMAX_API_KEY`
+- Automatically inferred for the official `api.minimax.io` and `api.minimaxi.com` hosts
+- Serializes the thinking toggle as `{"thinking": {"type": "adaptive"}}` when enabled and `{"thinking": {"type": "disabled"}}` when disabled
+- Keeps MiniMax's native `<think>...</think>` content unchanged so interleaved thinking can be replayed across tool calls
+- Uses MiniMax's `/v1/files/upload` and `/v1/files/delete` endpoints, with `video_understanding` as the default purpose
 
 ##### 7.2. Usage
 
@@ -1849,6 +1998,16 @@ model := openai.New("deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
     openai.WithAPIKey("your-api-key"),
     openai.WithVariant(openai.VariantDeepSeek), // Specify the DeepSeek variant
+)
+
+// Use the Kimi Open Platform
+model = openai.New("kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi), // Reads MOONSHOT_API_KEY automatically
+)
+
+// Use the MiniMax OpenAI-compatible API
+model = openai.New("MiniMax-M3",
+    openai.WithVariant(openai.VariantMiniMax), // Reads MINIMAX_API_KEY automatically
 )
 ```
 
@@ -1881,6 +2040,12 @@ For certain Variants, the framework supports reading configuration from environm
 # DeepSeek
 export DEEPSEEK_API_KEY="your-api-key"
 # No need to call WithAPIKey explicitly; the framework reads it automatically
+
+# Kimi
+export MOONSHOT_API_KEY="your-api-key"
+
+# MiniMax
+export MINIMAX_API_KEY="your-api-key"
 ```
 
 ```go
@@ -1910,6 +2075,8 @@ The OpenAI-compatible variants serialize `ThinkingEnabled=true` as follows:
 | `VariantHunyuan` | `"thinking": {"type": "enabled"}` |
 | `VariantGLM` | `"thinking": {"type": "enabled"}` |
 | `VariantQwen` | `"enable_thinking": true` |
+| `VariantKimi` | `"thinking": {"type": "enabled"}` |
+| `VariantMiniMax` | `"thinking": {"type": "adaptive"}` |
 
 For example, to deterministically enable thinking through the official DeepSeek API:
 
@@ -1934,6 +2101,32 @@ request := &model.Request{
 ```
 
 `ThinkingEnabled` applies only to models that expose an explicit thinking toggle; use `ReasoningEffort` instead when a model exposes only a reasoning budget. For external services that implement one of the thinking-toggle formats above, explicitly setting the matching `Variant` and `ThinkingEnabled` is usually sufficient. If a gateway uses a different field or requires additional parameters, use `openai.WithExtraFields(...)` to add or override provider-specific fields.
+
+For Kimi models that require thinking to remain enabled, leave
+`ThinkingEnabled` unset. To preserve reasoning across Kimi K2.6 conversation
+turns, pass the complete provider extension explicitly:
+
+```go
+llm := openai.New(
+    "kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi),
+    openai.WithExtraFields(map[string]any{
+        "thinking": map[string]string{
+            "type": "enabled",
+            "keep": "all",
+        },
+    }),
+)
+```
+
+For MiniMax-M3, `ThinkingEnabled=false` sends `thinking.type=disabled`.
+MiniMax M2.x models accept that value but continue thinking. The adapter leaves
+`reasoning_split` unset intentionally: in MiniMax's native OpenAI format,
+reasoning remains inside the assistant `content` as `<think>...</think>`, and
+the framework preserves that content unchanged in tool-call history. Do not
+strip the tags from assistant history before returning tool results. See the
+[MiniMax OpenAI SDK documentation](https://platform.minimax.io/docs/api-reference/text-openai-api)
+for the provider's multi-turn requirements.
 
 #### 8. Streaming Tool Call Deltas: ShowToolCallDelta
 

@@ -41,6 +41,7 @@ All regular PostgreSQL session capabilities still apply here: TTL cleanup, soft 
 | --- | --- | --- | --- |
 | `WithSessionEventLimit(limit int)` | `int` | `1000` | Maximum events per session |
 | `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | Session TTL |
+| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | Inherits SessionTTL | Track event TTL. Non-positive values disable track event expiry |
 | `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | App state TTL |
 | `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | User state TTL |
 | `WithCleanupInterval(interval time.Duration)` | `time.Duration` | `0` (auto) | TTL cleanup interval; defaults to 5 minutes if any TTL is configured |

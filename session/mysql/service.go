@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
@@ -154,7 +155,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	// Start cleanup routine if any TTL is configured
-	if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 {
+	if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 ||
+		opts.effectiveTrackEventTTL() > 0 {
 		s.startCleanupRoutine()
 	}
 
@@ -801,6 +803,30 @@ func (s *Service) AppendTrackEvent(
 	return nil
 }
 
+// GetTrackEvents returns persisted track events for the given session track.
+func (s *Service) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	opt := applyOptions(opts...)
+	trackEvents, err := s.getTrackEventsByTrackLists(
+		ctx,
+		[]session.Key{key},
+		[][]session.Track{{track}},
+		opt.EventNum,
+		opt.EventTime,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("mysql session service get track events failed: %w", err)
+	}
+	return &session.TrackEvents{Track: track, Events: trackEvents[0][track]}, nil
+}
+
 // startAsyncPersistWorker starts worker goroutines for async event persistence.
 func (s *Service) startAsyncPersistWorker() {
 	persisterNum := s.opts.asyncPersisterNum
@@ -935,6 +961,13 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 			s.tdsqlCleanupExpiredSessions(ctx, now)
 		} else {
 			s.cleanupExpiredSessions(ctx, now)
+		}
+	}
+	if s.opts.trackEventTTL != nil && s.opts.effectiveTrackEventTTL() > 0 {
+		if s.opts.tdsqlSharding {
+			s.tdsqlCleanupExpiredTrackEvents(ctx, now)
+		} else {
+			s.cleanupExpiredTrackEvents(ctx, now)
 		}
 	}
 
@@ -1107,10 +1140,9 @@ func (s *Service) softDeleteSessions(
 		return fmt.Errorf("soft delete sessions: %w", err)
 	}
 
-	// Soft delete summaries
-	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionSummaries, childWhereClause),
-		append([]any{now}, childArgs...)...); err != nil {
+	// Soft delete summaries. Legacy schemas may contain duplicate active rows
+	// that collide when assigned the same deleted_at value.
+	if err := s.softDeleteSummaries(ctx, tx, childWhereClause, childArgs, now); err != nil {
 		return fmt.Errorf("soft delete summaries: %w", err)
 	}
 
@@ -1121,14 +1153,107 @@ func (s *Service) softDeleteSessions(
 		return fmt.Errorf("soft delete events: %w", err)
 	}
 
-	// Soft delete track events
-	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionTracks, childWhereClause),
-		append([]any{now}, childArgs...)...); err != nil {
-		return fmt.Errorf("soft delete track events: %w", err)
+	if s.opts.trackEventTTL == nil {
+		// Soft delete track events.
+		if _, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionTracks, childWhereClause),
+			append([]any{now}, childArgs...)...); err != nil {
+			return fmt.Errorf("soft delete track events: %w", err)
+		}
 	}
 
 	return nil
+}
+
+func (s *Service) softDeleteSummaries(
+	ctx context.Context,
+	tx *sql.Tx,
+	whereClause string,
+	args []any,
+	now time.Time,
+) error {
+	activeWhereClause := fmt.Sprintf("(%s) AND deleted_at IS NULL", whereClause)
+	_, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionSummaries, activeWhereClause),
+		append([]any{now}, args...)...)
+	if err == nil {
+		return nil
+	}
+	if !isDuplicateEntryError(err) {
+		return err
+	}
+
+	// MySQL rolls back the failed UPDATE statement without aborting the
+	// transaction. Retry each row so healthy summaries retain their soft-delete
+	// history and only a row that still conflicts is physically removed.
+	log.WarnfContext(ctx, "soft deleting summaries hit duplicate legacy rows; "+
+		"retrying the affected active summaries individually: %v", err)
+	return s.softDeleteSummariesIndividually(ctx, tx, activeWhereClause, args, now)
+}
+
+func (s *Service) softDeleteSummariesIndividually(
+	ctx context.Context,
+	tx *sql.Tx,
+	activeWhereClause string,
+	args []any,
+	now time.Time,
+) error {
+	type summaryRowKey struct {
+		id     int64
+		userID string
+	}
+
+	rows, err := tx.QueryContext(ctx,
+		fmt.Sprintf(`SELECT id, user_id FROM %s WHERE %s ORDER BY id ASC FOR UPDATE`,
+			s.tableSessionSummaries, activeWhereClause),
+		args...)
+	if err != nil {
+		return fmt.Errorf("query active summaries after soft-delete conflict: %w", err)
+	}
+	var keys []summaryRowKey
+	for rows.Next() {
+		var key summaryRowKey
+		if err := rows.Scan(&key.id, &key.userID); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan active summary after soft-delete conflict: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate active summaries after soft-delete conflict: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close active summaries after soft-delete conflict: %w", err)
+	}
+
+	for _, key := range keys {
+		_, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
+				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionSummaries),
+			now, key.id, key.userID)
+		if err == nil {
+			continue
+		}
+		if !isDuplicateEntryError(err) {
+			return fmt.Errorf("soft delete summary %d individually: %w", key.id, err)
+		}
+
+		log.WarnfContext(ctx, "soft deleting summary %d still hit a duplicate legacy row; "+
+			"deleting only that active row: %v", key.id, err)
+		if _, deleteErr := tx.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s
+				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionSummaries),
+			key.id, key.userID); deleteErr != nil {
+			return fmt.Errorf("delete duplicate active summary %d: %w", key.id, deleteErr)
+		}
+	}
+	return nil
+}
+
+func isDuplicateEntryError(err error) bool {
+	var mysqlErr *drivermysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == sqldb.MySQLErrDuplicateEntry
 }
 
 // hardDeleteSessions performs hard delete on session tables.
@@ -1162,14 +1287,103 @@ func (s *Service) hardDeleteSessions(
 		return fmt.Errorf("hard delete events: %w", err)
 	}
 
-	// Hard delete track events
-	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionTracks, childWhereClause),
-		childArgs...); err != nil {
-		return fmt.Errorf("hard delete track events: %w", err)
+	if s.opts.trackEventTTL == nil {
+		// Hard delete track events.
+		if _, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionTracks, childWhereClause),
+			childArgs...); err != nil {
+			return fmt.Errorf("hard delete track events: %w", err)
+		}
 	}
 
 	return nil
+}
+
+func (s *Service) cleanupExpiredTrackEvents(ctx context.Context, now time.Time) {
+	if s.opts.softDelete {
+		_, err := s.mysqlClient.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionTracks),
+			now, now)
+		if err != nil {
+			log.ErrorfContext(ctx, "cleanup expired track events failed: %v", err)
+		}
+		return
+	}
+	_, err := s.mysqlClient.Exec(ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionTracks),
+		now)
+	if err != nil {
+		log.ErrorfContext(ctx, "cleanup expired track events failed: %v", err)
+	}
+}
+
+func (s *Service) tdsqlCleanupExpiredTrackEvents(ctx context.Context, now time.Time) {
+	type idPair struct {
+		id     int64
+		userID string
+	}
+	query := fmt.Sprintf(`SELECT id, user_id FROM %s
+		WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL
+		LIMIT 1000`, s.tableSessionTracks)
+	var pairs []idPair
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var p idPair
+		if err := rows.Scan(&p.id, &p.userID); err != nil {
+			return err
+		}
+		pairs = append(pairs, p)
+		return nil
+	}, query, now)
+	if err != nil {
+		log.ErrorfContext(ctx, "tdsql cleanup: scan expired track events failed: %v", err)
+		return
+	}
+	if len(pairs) == 0 {
+		return
+	}
+	grouped := make(map[string][]int64)
+	for _, p := range pairs {
+		grouped[p.userID] = append(grouped[p.userID], p.id)
+	}
+	var total int64
+	for userID, ids := range grouped {
+		placeholders := make([]string, len(ids))
+		for i := range ids {
+			placeholders[i] = "?"
+		}
+		idClause := strings.Join(placeholders, ",")
+		var err error
+		if s.opts.softDelete {
+			args := make([]any, 0, len(ids)+3)
+			args = append(args, now)
+			for _, id := range ids {
+				args = append(args, id)
+			}
+			args = append(args, userID, now)
+			_, err = s.mysqlClient.Exec(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
+					s.tableSessionTracks, idClause),
+				args...)
+		} else {
+			args := make([]any, 0, len(ids)+2)
+			for _, id := range ids {
+				args = append(args, id)
+			}
+			args = append(args, userID, now)
+			_, err = s.mysqlClient.Exec(ctx,
+				fmt.Sprintf(`DELETE FROM %s WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
+					s.tableSessionTracks, idClause),
+				args...)
+		}
+		if err != nil {
+			log.ErrorfContext(ctx, "tdsql cleanup: delete track events failed: %v", err)
+			continue
+		}
+		total += int64(len(ids))
+	}
+	if total > 0 {
+		log.InfofContext(ctx, "tdsql cleanup: cleaned up %d expired track events", total)
+	}
 }
 
 // cleanupExpiredAppStates cleans up expired app states.

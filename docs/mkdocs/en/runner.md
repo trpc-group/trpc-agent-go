@@ -548,6 +548,52 @@ If you want the implementation-level mapping, this happens after one
 
 Runnable example: `examples/steer/`
 
+#### Receive a Result Event for Each Tool Call
+
+When one model response requests multiple tools, Runner normally waits for all
+of them to finish and emits one combined `tool.response` event. To emit one
+result event as each tool call completes instead, enable this option for the
+`Run` call:
+
+This option applies only to multi-tool rounds handled entirely by Runner with
+no long-running tools; all other rounds keep their existing execution and event
+behavior.
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithToolResultEventPerCallEnabled(true),
+)
+```
+
+With the option enabled:
+
+- `eventChan` receives one final `tool.response` event as each call completes.
+  Each event contains one call result; use the result message's `ToolID` to
+  match it to the original call.
+- No additional combined result event is emitted.
+- Each result event is saved separately in the Session.
+- Results from parallel tools arrive in completion order, which may differ
+  from the order in which the model requested the tools.
+- `StateDelta` and `Actions.SkipSummarization` describe the whole tool-call
+  round, not an individual result. Earlier result events do not carry them;
+  read them from the last result event, or from the terminal error event if
+  the round ends early.
+
+For example, if the model requests A and then B, but B finishes first:
+
+```text
+eventChan receives: result B -> result A
+results sent to model: result A -> result B
+```
+
+This option only changes when your application receives the results. Runner
+still waits for every tool call to finish before making the next model
+request, and sends the results to the model in the original tool-call order.
+
 #### Per-Request App Name Override (multi-tenant isolation)
 
 By default, Runner uses the `appName` supplied at construction for session keys
@@ -721,8 +767,8 @@ msgs := []model.Message{
 ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs, agent.WithRequestID("request-ID"))
 ```
 
-Example: `examples/runwithmessages` (uses `RunWithMessages`; runner auto-seeds and
-continues reusing the session)
+Example: `examples/runwithmessages` (uses `session/noop` and passes the
+caller-owned complete history to `RunWithMessages` on every request)
 
 Option B: Pass via RunOption explicitly (same philosophy as ADK Python)
 
@@ -737,6 +783,8 @@ option; it only derives messages from session events (or falls back to the
 single `invocation.Message` if the session has no events). `RunWithMessages`
 still sets `invocation.Message` to the latest user turn so graph/flow agents
 that inspect it continue to work.
+
+If the upstream application persists the complete history and Runner should not retain Sessions across requests, inject `session/noop` and pass the updated complete history through `RunWithMessages` on every request. Noop keeps the transient Session required by a single `Run`, but it does not restore data from a previous run. See [No Persistence (Noop)](./session/noop.md).
 
 ### User Message Rewriting
 
@@ -1788,11 +1836,11 @@ func checkRunner(r runner.Runner, ctx context.Context) error {
 
 ## Online Best-of-N Candidate Selection
 
-Best-of-N completes multiple generations, evaluation-based ranking, and best-result output within one `Runner.Run`. After Runner receives the same user message, it asks the same Agent to generate N candidate results based on the current session context, uses [EvalMetric](evaluation.md#evalmetric) to judge candidate quality, and finally returns only the highest-quality candidate as the output for this turn.
+Best-of-N completes multiple generations, evaluation-based ranking, and best-result output within one `Runner.Run`. After Runner receives the same user message, it asks the same Agent to generate N candidate results based on the current session context, uses [EvalMetric](evaluation/metric.md#evalmetric) to judge candidate quality, and finally returns only the highest-quality candidate as the output for this turn.
 
-`runner/bestofn` integrates with an existing Runner as a `runner.Option`. The business Agent generates candidates, [Evaluation](evaluation.md) evaluates candidate results, and Runner manages sessions, event streams, and final result submission. Candidate selection is driven by the [EvalMetric](evaluation.md#evalmetric) values injected through `WithEvalMetrics(...)`, which can be either static rule evaluators or LLM Judge evaluators.
+`runner/bestofn` integrates with an existing Runner as a `runner.Option`. The business Agent generates candidates, [Evaluation](evaluation/index.md) evaluates candidate results, and Runner manages sessions, event streams, and final result submission. Candidate selection is driven by the [EvalMetric](evaluation/metric.md#evalmetric) values injected through `WithEvalMetrics(...)`, which can be either static rule evaluators or LLM Judge evaluators.
 
-The example below uses [llm_rubric_response](evaluation.md#llm-rubric-response-evaluator) as the candidate selection metric. This metric evaluates each candidate final answer independently against rubrics.
+The example below uses [llm_rubric_response](evaluation/evaluator.md#llm-rubric-response-evaluator) as the candidate selection metric. This metric evaluates each candidate final answer independently against rubrics.
 
 ```go
 import (
@@ -1841,18 +1889,18 @@ defer r.Close()
 
 `WithAttempts(attempts)` sets how many candidates each `Runner.Run` generates. The default value is 2, and the value must be greater than or equal to 1. When set to 1, only one candidate is generated, and the underlying Runner follows the normal single-run flow without triggering candidate selection.
 
-`WithEvalMetrics(metrics...)` sets the [EvalMetric](evaluation.md#evalmetric) values used for candidate selection. At least one evaluation metric is required. Each metric produces a score and evaluation status, and Runner aggregates these results according to the candidate selection mode specified by `WithSelectionMode`. The default mode evaluates candidates independently, and it can also be switched to pairwise comparison.
+`WithEvalMetrics(metrics...)` sets the [EvalMetric](evaluation/metric.md#evalmetric) values used for candidate selection. At least one evaluation metric is required. Each metric produces a score and evaluation status, and Runner aggregates these results according to the candidate selection mode specified by `WithSelectionMode`. The default mode evaluates candidates independently, and it can also be switched to pairwise comparison.
 
-`WithContextMessages(messages...)` attaches [ContextMessages](evaluation.md#context-injection) to each candidate [EvalCase](evaluation.md#evalset). These messages enter the eval case and provide additional background for evaluators.
+`WithContextMessages(messages...)` attaches [ContextMessages](evaluation/evalset.md#context-injection) to each candidate [EvalCase](evaluation/evalset.md#evalset). These messages enter the eval case and provide additional background for evaluators.
 
 `WithJudgeRunner(r)` sets the judge Runner used by LLM Judge metrics. After it is configured, judge model calls for LLM Judge metrics go through this Runner.
 
 `WithJudgeRunnerNumSamples(n)` sets how many times an LLM Judge metric calls the judge Runner for the same evaluation input. The value must be greater than 0, `WithJudgeRunner` must be configured, and the metric must contain an LLM Judge criterion.
 
-`WithSelectionMode(mode)` sets how candidate results are passed to [EvalMetric](evaluation.md#evalmetric), and how metric results are aggregated into the final selected candidate. The default value is `SelectionModePointwise`.
+`WithSelectionMode(mode)` sets how candidate results are passed to [EvalMetric](evaluation/metric.md#evalmetric), and how metric results are aggregated into the final selected candidate. The default value is `SelectionModePointwise`.
 
-- `SelectionModePointwise` evaluates candidates independently. Each candidate generates an independent [EvalCase](evaluation.md#evalset), and metrics score that candidate. The candidate with the highest average score is selected. If scores are tied, candidates with passed evaluation status are preferred. If status is also tied, the candidate with the smaller index is preferred. This mode is suitable for [EvalMetric](evaluation.md#evalmetric) values that can directly evaluate the quality of a single response.
-- `SelectionModePairwise` compares candidates pairwise. Each two candidates form one comparison. The earlier candidate is used as actual, and the later candidate is used as expected. They are passed to [Evaluation](evaluation.md), where the corresponding [Evaluator](evaluation.md#evaluator) compares them according to the [EvalMetric](evaluation.md#evalmetric) configuration and outputs a comparison score. A score greater than 0.5 means the earlier candidate has higher quality, a score less than 0.5 means the later candidate has higher quality, and a score equal to 0.5 means their quality is comparable. After all comparisons finish, candidates with more wins are preferred. If win counts are tied, candidates whose comparison scores deviate more from 0.5 are preferred. If still tied, the candidate with the smaller index is preferred. This mode only requires the evaluator to output a comparison score and is not tied to a specific evaluator.
+- `SelectionModePointwise` evaluates candidates independently. Each candidate generates an independent [EvalCase](evaluation/evalset.md#evalset), and metrics score that candidate. The candidate with the highest average score is selected. If scores are tied, candidates with passed evaluation status are preferred. If status is also tied, the candidate with the smaller index is preferred. This mode is suitable for [EvalMetric](evaluation/metric.md#evalmetric) values that can directly evaluate the quality of a single response.
+- `SelectionModePairwise` compares candidates pairwise. Each two candidates form one comparison. The earlier candidate is used as actual, and the later candidate is used as expected. They are passed to [Evaluation](evaluation/index.md), where the corresponding [Evaluator](evaluation/evaluator.md#evaluator) compares them according to the [EvalMetric](evaluation/metric.md#evalmetric) configuration and outputs a comparison score. A score greater than 0.5 means the earlier candidate has higher quality, a score less than 0.5 means the later candidate has higher quality, and a score equal to 0.5 means their quality is comparable. After all comparisons finish, candidates with more wins are preferred. If win counts are tied, candidates whose comparison scores deviate more from 0.5 are preferred. If still tied, the candidate with the smaller index is preferred. This mode only requires the evaluator to output a comparison score and is not tied to a specific evaluator.
 
 `WithRequirePassingCandidate(enabled)` requires the selected candidate in `SelectionModePointwise` to pass the metric threshold. When enabled, candidates that do not reach passed status are not selected. If all candidates fail, the event stream emits a selection error. This option only supports `SelectionModePointwise`; using it together with `SelectionModePairwise` makes `NewRunnerOption` return a configuration error.
 
@@ -1875,13 +1923,13 @@ bestOfNOpt, err := bestofn.NewRunnerOption(
 )
 ```
 
-`WithEvalSetManager(manager)` sets the [EvalSet Manager](evaluation.md#evalset-manager) used during candidate evaluation. It manages [EvalSet](evaluation.md#evalset) and [EvalCase](evaluation.md#evalset), and defaults to an in-memory manager implementation.
+`WithEvalSetManager(manager)` sets the [EvalSet Manager](evaluation/evalset.md#evalset-manager) used during candidate evaluation. It manages [EvalSet](evaluation/evalset.md#evalset) and [EvalCase](evaluation/evalset.md#evalset), and defaults to an in-memory manager implementation.
 
-`WithRegistry(registry)` sets the [Evaluator Registry](evaluation.md#evaluator-registry) used by [Evaluation Service](evaluation.md#evaluation-service) to resolve [Evaluator](evaluation.md#evaluator) names. It is usually configured only when integrating custom evaluators.
+`WithRegistry(registry)` sets the [Evaluator Registry](evaluation/evaluator.md#evaluator-registry) used by [Evaluation Service](evaluation/service.md#evaluation-service) to resolve [Evaluator](evaluation/evaluator.md#evaluator) names. It is usually configured only when integrating custom evaluators.
 
-`WithMetricRegistry(registry)` sets the [MetricRegistry](evaluation.md#metricregistry-extensions) used by [Evaluation Service](evaluation.md#evaluation-service) to resolve [EvalMetric](evaluation.md#evalmetric) extensions. It is usually configured only when integrating custom metric extensions.
+`WithMetricRegistry(registry)` sets the [MetricRegistry](evaluation/metric.md#metricregistry-extensions) used by [Evaluation Service](evaluation/service.md#evaluation-service) to resolve [EvalMetric](evaluation/metric.md#evalmetric) extensions. It is usually configured only when integrating custom metric extensions.
 
-If you need to use [llm_verifier_pairwise](evaluation.md#llm-pairwise-comparison-evaluator) to compare candidate final responses pairwise, switch the selection mode to `SelectionModePairwise`. This mode forms pairwise comparison cases from candidates and aggregates selection results based on comparison scores. The judge Agent must enable `logprobs` and `top_logprobs`; see [LLM Verifier](evaluation.md#llm-verifier) for the full configuration.
+If you need to use [llm_verifier_pairwise](evaluation/evaluator.md#llm-pairwise-comparison-evaluator) to compare candidate final responses pairwise, switch the selection mode to `SelectionModePairwise`. This mode forms pairwise comparison cases from candidates and aggregates selection results based on comparison scores. The judge Agent must enable `logprobs` and `top_logprobs`; see [LLM Verifier](evaluation/methods.md#llm-verifier) for the full configuration.
 
 ```go
 verifierMetric := &metric.EvalMetric{
@@ -1909,9 +1957,9 @@ bestOfNOpt, err := bestofn.NewRunnerOption(
 )
 ```
 
-For a complete example that uses [llm_verifier_pairwise](evaluation.md#llm-pairwise-comparison-evaluator) as the candidate selection metric, see [examples/evaluation/llmverifier](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llmverifier).
+For a complete example that uses [llm_verifier_pairwise](evaluation/evaluator.md#llm-pairwise-comparison-evaluator) as the candidate selection metric, see [examples/evaluation/llmverifier](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llmverifier).
 
-At runtime, Runner creates multiple candidate runs based on the current user message and Session. Each candidate run calls the same Agent, and candidate traces are then converted into [EvalCase](evaluation.md#evalset) for evaluation. After selection completes, the outer Session commits only the selected candidate's run events. The caller receives the selected candidate events and the normal completion event. If the Agent enables streaming output, candidate events first enter an internal buffer, and the caller receives the selected candidate's streaming chunks after selection completes.
+At runtime, Runner creates multiple candidate runs based on the current user message and Session. Each candidate run calls the same Agent, and candidate traces are then converted into [EvalCase](evaluation/evalset.md#evalset) for evaluation. After selection completes, the outer Session commits only the selected candidate's run events. The caller receives the selected candidate events and the normal completion event. If the Agent enables streaming output, candidate events first enter an internal buffer, and the caller receives the selected candidate's streaming chunks after selection completes.
 
 Tools, plugins, Skills, MCP ToolSets, and callbacks execute during candidate runs. The framework isolates Session commits and intercepts writes to framework-managed Memory and Artifact through read-only services. External requests actively initiated by business code remain under business control.
 

@@ -45,16 +45,22 @@ type Result struct {
 //
 // Template names the registered agent template. InstanceID optionally gives
 // repeated calls within the same workflow a shared workflow-local history key.
-// Instruction overrides the child instruction for this run. When Tools or
-// Skills is omitted (or null in workflow JSON), the instance inherits the
-// template's eligible user tools or configured skills. An explicit empty list
-// disables that capability type; a non-empty list narrows it. Neither field
-// can add capabilities. StructuredOutput overrides the template's structured
-// output configuration for this workflow-local instance only.
+// Instruction overrides the child instruction for this run. Model optionally
+// selects a host-authorized model profile alias registered with
+// WithAgentModelProfile; omit it to keep the template's registered model.
+// Model selection applies to LLMAgent templates and to custom Agents that
+// honor invocation surface patches; other Agents keep their configured model.
+// When Tools or Skills is omitted (or null in workflow JSON), the instance
+// inherits the template's eligible user tools or configured skills. An
+// explicit empty list disables that capability type; a non-empty list narrows
+// it. Neither field can add capabilities. StructuredOutput overrides the
+// template's structured output configuration for this workflow-local instance
+// only.
 type AgentSpec struct {
 	Template         string                `json:"template"`
 	InstanceID       string                `json:"instance_id,omitempty"`
 	Instruction      string                `json:"instruction,omitempty"`
+	Model            string                `json:"model,omitempty"`
 	Tools            []string              `json:"tools,omitempty"`
 	Skills           []string              `json:"skills,omitempty"`
 	StructuredOutput *StructuredOutputSpec `json:"structured_output,omitempty"`
@@ -66,8 +72,9 @@ type AgentSpec struct {
 // returned result.Structured value.
 //
 // This is intentionally declarative data rather than a way for workflow code
-// to construct an arbitrary Go agent. The registered template still owns the
-// model, executor, callbacks, and all host capabilities.
+// to construct an arbitrary Go agent. StructuredOutputSpec configures only
+// this instance's structured output. The registered template still owns the
+// executor, callbacks, permissions, and all host capabilities.
 type StructuredOutputSpec struct {
 	Name        string          `json:"name,omitempty"`
 	Schema      json.RawMessage `json:"schema"`
@@ -85,7 +92,8 @@ type Call struct {
 
 // CallHandler is the host capability boundary. Runtimes must route every
 // sandbox-originated call through this handler rather than accessing host
-// services directly.
+// services directly. Handlers must honor context cancellation and return
+// promptly after the context is done.
 type CallHandler interface {
 	HandleWorkflowCall(context.Context, Call) (json.RawMessage, error)
 }

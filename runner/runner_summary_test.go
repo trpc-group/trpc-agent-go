@@ -20,11 +20,77 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+func TestRunnerEnqueuesModelVisibleSummaryView(t *testing.T) {
+	service := &mockSessionService{}
+	r := NewRunner(
+		"test-app",
+		&mockAgent{name: "test-agent"},
+		WithSessionService(service),
+	).(*runner)
+	sess := &session.Session{ID: "session"}
+	invocation := agent.NewInvocation(agent.WithInvocationSession(sess))
+	summaryview.AttachProjection(invocation, &summaryview.View{
+		SessionID:     sess.ID,
+		RequestTokens: 13_310,
+	})
+	evt := &event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("answer"),
+			}},
+		},
+	}
+
+	require.True(t, r.handleEventPersistence(
+		context.Background(),
+		invocation,
+		sess,
+		sess,
+		evt,
+	))
+	require.Len(t, service.enqueueSummaryJobCalls, 1)
+	view, ok := summaryview.FromContext(service.enqueueSummaryJobCalls[0].ctx)
+	require.True(t, ok)
+	require.Equal(t, 13_310, view.RequestTokens)
+}
+
+func TestRunnerPersistsErrorEventWithoutEnqueuingSummary(t *testing.T) {
+	service := &mockSessionService{}
+	r := NewRunner(
+		"test-app",
+		&mockAgent{name: "test-agent"},
+		WithSessionService(service),
+	).(*runner)
+	sess := &session.Session{ID: "session"}
+	invocation := agent.NewInvocation(agent.WithInvocationSession(sess))
+	errorEvent := errorEventWithContent(event.NewErrorEvent(
+		invocation.InvocationID,
+		"test-agent",
+		agent.ErrorTypeStopAgentError,
+		"cancelled",
+	))
+
+	require.True(t, r.handleEventPersistence(
+		context.Background(),
+		invocation,
+		sess,
+		sess,
+		errorEvent,
+	))
+	require.Len(t, service.appendEventCalls, 1)
+	require.Empty(t, service.enqueueSummaryJobCalls)
+}
 
 func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 	t.Run("calls EnqueueSummaryJob for qualifying events", func(t *testing.T) {
@@ -169,6 +235,7 @@ func TestRunner_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 	userID := "test-user"
 	sessionID := "test-session"
 
+	requestStartedLowerBound := time.Now().Add(-time.Second)
 	// Run the runner with qualifying event
 	_, err := RunWithMessages(ctx, runner, userID, sessionID, []model.Message{
 		{Role: model.RoleUser, Content: "Hello"},
@@ -185,6 +252,10 @@ func TestRunner_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 
 	// Verify the context value was preserved and passed to EnqueueSummaryJob
 	assert.Equal(t, "trace-12345", contextCapturingService.capturedTraceID, "Context value should be preserved and passed to EnqueueSummaryJob")
+	require.True(t, contextCapturingService.capturedRequestStartOK)
+	assert.NotEmpty(t, contextCapturingService.capturedRequestStart.RequestID)
+	assert.True(t, contextCapturingService.capturedRequestStart.StartedAt.After(requestStartedLowerBound))
+	assert.False(t, contextCapturingService.capturedRequestStart.StartedAt.After(time.Now()))
 }
 
 func TestRunner_EnqueueSummaryJob_AttachesCacheSafeForkRequest(t *testing.T) {
@@ -278,6 +349,46 @@ func TestRunner_EnqueueSummaryJob_CacheSafeForkIncludesToolResult(t *testing.T) 
 	require.Equal(t, `{"answer":"ok"}`, svc.capturedParent.Messages[3].Content)
 }
 
+func TestRunner_PerToolCallResultEventsFailedIntermediatePersistenceUsesStandaloneSummary(
+	t *testing.T,
+) {
+	parent := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable system"),
+		model.NewUserMessage("run both tools"),
+	}}
+	capture := &cacheSafeForkCapturingSessionService{
+		mockSessionService: &mockSessionService{},
+		done:               make(chan struct{}),
+	}
+	svc := &failEventAppendSessionService{
+		Service:     capture,
+		failEventID: "evt-fast-result",
+	}
+	r := NewRunner(
+		"test-app",
+		&cacheSafeForkPerToolCallResultEventsMockAgent{
+			name:   "fork-agent",
+			parent: parent,
+		},
+		WithSessionService(svc),
+	)
+
+	events, err := RunWithMessages(
+		context.Background(),
+		r,
+		"user1",
+		"sess1",
+		[]model.Message{{Role: model.RoleUser, Content: "hello"}},
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	require.Len(t, capture.enqueueSummaryJobCalls, 1)
+	require.False(t, capture.capturedOK)
+	require.Nil(t, capture.capturedParent)
+}
+
 func TestRunner_SummaryAwareSessionRestoreHint(t *testing.T) {
 	t.Run("passes event filter key", func(t *testing.T) {
 		svc := &mockSessionService{}
@@ -350,17 +461,38 @@ func (c *cacheSafeForkCapturingSessionService) EnqueueSummaryJob(
 // contextCapturingSessionService captures the context passed to EnqueueSummaryJob.
 type contextCapturingSessionService struct {
 	*mockSessionService
-	capturedTraceID any
-	done            chan struct{}
+	capturedTraceID        any
+	capturedRequestStart   summarytrigger.RequestStart
+	capturedRequestStartOK bool
+	done                   chan struct{}
 }
 
 func (c *contextCapturingSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
 	// Capture the trace ID from context
 	c.capturedTraceID = ctx.Value(traceIDKey)
+	c.capturedRequestStart, c.capturedRequestStartOK =
+		summarytrigger.RequestStartFromContext(ctx)
 	close(c.done)
 
 	// Call parent to record the call
 	return c.mockSessionService.EnqueueSummaryJob(ctx, sess, filterKey, force)
+}
+
+type failEventAppendSessionService struct {
+	session.Service
+	failEventID string
+}
+
+func (s *failEventAppendSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	opts ...session.Option,
+) error {
+	if evt != nil && evt.ID == s.failEventID {
+		return assert.AnError
+	}
+	return s.Service.AppendEvent(ctx, sess, evt, opts...)
 }
 
 // nonQualifyingMockAgent generates non-qualifying events (partial responses).
@@ -519,6 +651,83 @@ type cacheSafeForkToolResultMockAgent struct {
 	parent *model.Request
 }
 
+type cacheSafeForkPerToolCallResultEventsMockAgent struct {
+	name   string
+	parent *model.Request
+}
+
+func (m *cacheSafeForkPerToolCallResultEventsMockAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *cacheSafeForkPerToolCallResultEventsMockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *cacheSafeForkPerToolCallResultEventsMockAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+func (m *cacheSafeForkPerToolCallResultEventsMockAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *cacheSafeForkPerToolCallResultEventsMockAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	summaryfork.Attach(invocation, m.parent)
+
+	ch := make(chan *event.Event, 3)
+	ch <- &event.Event{
+		Response: &model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{ID: "call-slow"},
+					{ID: "call-fast"},
+				},
+			},
+		}}},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "evt-tool-call",
+		Timestamp:    time.Now(),
+	}
+	fastResult := &event.Event{
+		Response: &model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.NewToolMessage(
+				"call-fast",
+				"fast",
+				"fast result",
+			),
+		}}},
+		InvocationID: invocation.InvocationID,
+		Author:       "fast",
+		ID:           "evt-fast-result",
+		Timestamp:    time.Now(),
+	}
+	toolresultround.Mark(fastResult, true)
+	ch <- fastResult
+	slowResult := &event.Event{
+		Response: &model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.NewToolMessage(
+				"call-slow",
+				"slow",
+				"slow result",
+			),
+		}}},
+		InvocationID: invocation.InvocationID,
+		Author:       "slow",
+		ID:           "evt-slow-result",
+		Timestamp:    time.Now(),
+	}
+	toolresultround.Mark(slowResult, false)
+	ch <- slowResult
+	close(ch)
+	return ch, nil
+}
+
 func (m *cacheSafeForkToolResultMockAgent) Info() agent.Info {
 	return agent.Info{Name: m.name}
 }
@@ -595,6 +804,7 @@ type mockSessionService struct {
 }
 
 type enqueueSummaryJobCall struct {
+	ctx       context.Context
 	sess      *session.Session
 	filterKey string
 	force     bool
@@ -693,7 +903,12 @@ func (m *mockSessionService) CreateSessionSummary(ctx context.Context, sess *ses
 }
 
 func (m *mockSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	m.enqueueSummaryJobCalls = append(m.enqueueSummaryJobCalls, enqueueSummaryJobCall{sess, filterKey, force})
+	m.enqueueSummaryJobCalls = append(m.enqueueSummaryJobCalls, enqueueSummaryJobCall{
+		ctx:       ctx,
+		sess:      sess,
+		filterKey: filterKey,
+		force:     force,
+	})
 	return nil
 }
 

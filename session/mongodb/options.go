@@ -41,6 +41,7 @@ type serviceOpts struct {
 
 	sessionEventLimit int           // limit of events returned per session in context-window mode
 	sessionTTL        time.Duration // TTL for session state
+	trackEventTTL     *time.Duration
 	appStateTTL       time.Duration // TTL for app state
 	userStateTTL      time.Duration // TTL for user state
 
@@ -84,6 +85,13 @@ func (opts serviceOpts) shouldCascadeFullSessionSummary() bool {
 		return true
 	}
 	return *opts.cascadeFullSessionSummary
+}
+
+func (opts serviceOpts) effectiveTrackEventTTL() time.Duration {
+	if opts.trackEventTTL != nil {
+		return *opts.trackEventTTL
+	}
+	return opts.sessionTTL
 }
 
 // WithMongoClientURI sets the MongoDB connection URI directly (recommended).
@@ -135,6 +143,15 @@ func WithSessionEventLimit(limit int) ServiceOpt {
 func WithSessionTTL(ttl time.Duration) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.sessionTTL = ttl
+	}
+}
+
+// WithTrackEventTTL sets the TTL for track events.
+// If unset, track events use the session TTL. A non-positive TTL disables track
+// event expiration.
+func WithTrackEventTTL(ttl time.Duration) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.trackEventTTL = &ttl
 	}
 }
 

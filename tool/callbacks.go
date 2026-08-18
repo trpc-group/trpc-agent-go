@@ -76,6 +76,9 @@ type BeforeToolResult struct {
 	Context context.Context
 	// CustomResult if not nil, will skip tool execution and return this result.
 	CustomResult any
+	// SkipStateDelta requests skipping the tool's state-delta provider for
+	// CustomResult. It is ignored when CustomResult is nil.
+	SkipStateDelta bool
 	// ModifiedArguments if not nil, will use these modified arguments.
 	ModifiedArguments []byte
 }
@@ -85,6 +88,8 @@ type BeforeToolResult struct {
 // - result: contains optional custom result and context for subsequent operations.
 //   - CustomResult: if not nil, this result will be returned and tool execution will be skipped.
 //   - Context: if not nil, will be used by the framework for subsequent operations.
+//   - SkipStateDelta: if true and CustomResult is non-nil, the framework will
+//     not invoke the tool's state-delta provider for that result.
 //   - ModifiedArguments: if not nil, will use these modified arguments for tool execution.
 //
 // - error: if not nil, tool execution will be stopped with this error.
@@ -118,6 +123,13 @@ type AfterToolResult struct {
 	Context context.Context
 	// CustomResult if not nil, will replace the original result.
 	CustomResult any
+	// SkipResultFormatter requests default JSON serialization for CustomResult
+	// instead of applying the tool's configured result formatter. It is ignored
+	// when CustomResult is nil.
+	SkipResultFormatter bool
+	// SkipStateDelta requests skipping the tool's state-delta provider for
+	// CustomResult. It is ignored when CustomResult is nil.
+	SkipStateDelta bool
 	// SkipSummarization requests ending the turn after the tool response.
 	SkipSummarization bool
 }
@@ -127,6 +139,11 @@ type AfterToolResult struct {
 // - result: contains optional custom result and context for subsequent operations.
 //   - CustomResult: if not nil, this result will be used instead of the actual tool result.
 //   - Context: if not nil, will be used by the framework for subsequent operations.
+//   - SkipResultFormatter: if true and CustomResult is non-nil, the framework
+//     serializes CustomResult with its default JSON representation instead of
+//     applying the tool's configured result formatter.
+//   - SkipStateDelta: if true and CustomResult is non-nil, the framework will
+//     not invoke the tool's state-delta provider for that result.
 //   - SkipSummarization: if true, the framework will skip the extra
 //     post-tool LLM summarization step.
 //
@@ -483,7 +500,11 @@ func (c *Callbacks) processAfterToolResult(
 			merged.Context = (*lastResult).Context
 		}
 		if merged.CustomResult == nil {
+			// Result-handling preferences belong to the retained custom result.
 			merged.CustomResult = (*lastResult).CustomResult
+			merged.SkipResultFormatter =
+				(*lastResult).SkipResultFormatter
+			merged.SkipStateDelta = (*lastResult).SkipStateDelta
 		}
 		merged.SkipSummarization = merged.SkipSummarization ||
 			(*lastResult).SkipSummarization

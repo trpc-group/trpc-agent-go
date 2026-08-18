@@ -123,13 +123,24 @@ machine-readable fields preferred on the outer metadata, mirrored into
 
 ```go
 import (
+	"context"
+	"net/http"
+	"net/http/cookiejar"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
 func main() {
-	// Connect to A2A service
-	client, _ := client.NewA2AClient("http://localhost:8080/")
+	jar, _ := cookiejar.New(nil)
+	httpClient := &http.Client{Jar: jar}
+	// The helper persists the anonymous cookie and serializes this client's
+	// first concurrent requests until the principal is established.
+	a2aClient, _ := a2aagent.NewAnonymousA2AClient(
+		"http://localhost:8080/",
+		client.WithHTTPClient(httpClient),
+	)
 
 	// Send message to Agent
 	message := protocol.NewMessage(
@@ -138,10 +149,34 @@ func main() {
 	)
 
 	// Agent will automatically process and return results
-	response, _ := client.SendMessage(context.Background(),
+	response, _ := a2aClient.SendMessage(context.Background(),
 		protocol.SendMessageParams{Message: message})
 }
 ```
+
+For anonymous direct clients, reuse the same client and cookie jar for later
+requests. `NewAnonymousA2AClient` serializes the first requests made through
+that client while the server establishes the anonymous principal. The
+guarantee is per client instance; coordinate separate clients independently.
+The client honors anonymous `Set-Cookie` path, domain, expiry, and deletion
+directives in its cookie jar. It does not connect to `SessionService` or
+persist session state itself.
+Browser clients should complete one initial request before starting concurrent
+anonymous message sends, or provide a trusted user identity instead.
+
+#### Anonymous Principal Behavior
+
+When a request does not provide a non-empty UserID through the configured
+header (the default is `X-User-ID`), the built-in A2A server authentication
+generates a random principal with the `A2A_ANONYMOUS_` prefix. The server
+returns it in the HTTP-only `trpc_agent_a2a_anon` cookie and uses that cookie to
+keep subsequent requests on the same anonymous principal. The A2A `contextID`
+continues to identify the session; it is not used as the principal source.
+
+Clients that need continuity must reuse a Cookie Jar. A client or request that
+does not retain cookies can receive a new anonymous principal on each request.
+When a non-empty UserID header is supplied, the server uses that header
+identity instead of the anonymous cookie flow.
 
 ### Advanced Configuration
 
@@ -955,8 +990,65 @@ Through the combined use of A2A Server and A2AAgent, you can easily build distri
 | `WithErrorHandler(handler)` | Custom error handler |
 | `WithA2AToAgentConverter(conv)` | Custom A2A→Agent message converter |
 | `WithEventToA2AConverter(conv)` | Custom Event→A2A message converter |
-| `WithExtraA2AOptions(opts...)` | Pass-through options for underlying A2A Server |
+| `WithExtraA2AOptions(opts...)` | Pass-through options for underlying A2A Server; middleware observes the final authenticated user. Custom auth providers must return a non-empty UserID; empty identities are rejected. |
+| `WithPreAuthA2AMiddleware(middlewares...)` | Add request middleware that must run before anonymous-cookie authentication |
 | `WithDebugLogging(enabled)` | Enable debug logging |
+
+### A2AAgent Anonymous Identity Coordination
+
+For anonymous `A2AAgent` invocations that run with a persistent session, the
+agent automatically uses `session.StateInitializationService` when the
+configured `SessionService` provides it. The capability coordinates the first
+anonymous cookie across agent instances that share the same backing store.
+The in-memory session service coordinates callers sharing the same service
+instance; the Redis session service coordinates callers across service
+instances.
+
+When the capability is unavailable, the agent keeps the existing per-agent
+initialization lock and persistence behavior. Enable fail-closed behavior when
+cross-instance coordination is required:
+
+```go
+a2aAgent, err := a2aagent.New(
+    a2aagent.WithAgentCardURL("http://remote:8888"),
+    a2aagent.WithRequireAnonymousIdentityCoordination(true),
+)
+```
+
+The option defaults to `false`. When enabled, strict mode fails the invocation
+before contacting the remote agent if there is no stable persistent session key
+or the session service does not implement the coordination capability. This
+capability check cannot determine whether separate service instances actually
+share coordination state. Deployments requiring cross-process coordination
+must configure a shared backend such as Redis instead of separate in-memory
+services.
+
+The canonical `.record.v1` value and its legacy projection are committed
+together on the coordinated paths, so a new writer remains readable by a
+pre-change reader. This compatibility is intentionally one-way. Once a
+canonical record exists, a pre-change writer can update or delete only the
+legacy keys, while a new reader continues to treat the canonical record as
+authoritative. Mixed-version rolling deployment is therefore unsupported for a
+logical session that can be written by both versions; drain old writers and
+complete the upgrade before reusing those sessions.
+
+When Runner candidate selection is enabled, each speculative attempt uses an
+isolated attempt-scoped session state and does not expose
+`session.StateInitializationService`. On first anonymous-cookie use, lenient
+mode may initialize independently in each attempt and create multiple remote
+principals; strict mode fails each attempt before contacting the remote agent,
+even when the underlying backend supports coordination. Existing valid cookie
+state is unaffected. Do not combine candidate selection with first-use
+coordinated anonymous initialization unless the cookie has been prewarmed or a
+candidate-aware integration is provided by a follow-up.
+
+The cookie record remains private session state and is not emitted in event
+state deltas. Lease fencing prevents an expired owner from committing over a
+newer owner, but a remote principal can still be orphaned if a process dies
+after the remote response and before persistence.
+
+This session-backed path is separate from `NewAnonymousA2AClient`, which has no
+framework session service and remains scoped to its own client and cookie jar.
 
 ### A2AAgent Configuration Reference
 
@@ -970,3 +1062,4 @@ Through the combined use of A2A Server and A2AAgent, you can easily build distri
 | `WithUserIDHeader(header)` | Custom UserID HTTP Header |
 | `WithCustomA2AConverter(conv)` | Custom Invocation→A2A message converter |
 | `WithCustomEventConverter(conv)` | Custom A2A Response→Event converter |
+| `WithRequireAnonymousIdentityCoordination(enabled)` | Require coordinated anonymous identity initialization for persistent sessions |

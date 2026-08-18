@@ -113,7 +113,7 @@ type Node struct {
 	Name        string
 	Description string
 	Function    NodeFunc
-	Type        NodeType // Type of the node (function, llm, tool, etc.)
+	Type        NodeType // Type of the node (function, LLM operation, tool, etc.)
 
 	// userInputKey is the state key used as one-shot input for LLM and
 	// Agent nodes. When empty, StateKeyUserInput is used.
@@ -171,6 +171,8 @@ type Node struct {
 	// When true, multiple tool calls in a single assistant response are executed concurrently.
 	// Default is false (serial execution) for compatibility and safety.
 	enableParallelTools bool
+	// toolConcurrencyConfig limits active calls for parallel Tools nodes.
+	toolConcurrencyConfig tool.ConcurrencyConfig
 
 	// llmGenerationConfig stores per-node generation configuration for LLM nodes.
 	// If set, AddLLMNode forwards it to the underlying LLM runner.

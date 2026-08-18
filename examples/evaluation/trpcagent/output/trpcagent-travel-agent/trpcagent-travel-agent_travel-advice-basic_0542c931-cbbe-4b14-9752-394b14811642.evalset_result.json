@@ -1,0 +1,305 @@
+{
+  "evalSetResultId": "trpcagent-travel-agent_travel-advice-basic_0542c931-cbbe-4b14-9752-394b14811642",
+  "evalSetResultName": "trpcagent-travel-agent_travel-advice-basic_0542c931-cbbe-4b14-9752-394b14811642",
+  "evalSetId": "travel-advice-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "travel-advice-basic",
+      "evalId": "shanghai_travel_advice",
+      "runId": 1,
+      "score": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "llm_final_response",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.9,
+          "criterion": {
+            "llmJudge": {}
+          },
+          "details": {
+            "reason": "The agent response matches all key points in the reference: sunny at 26C, festival events downtown causing traffic disruptions, museum tickets available with 25 seats left, and advice to leave extra time/avoid downtown and reserve ASAP.",
+            "score": 1
+          }
+        },
+        {
+          "metricName": "trace_io_template",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "llmJudge": {
+              "template": {
+                "prompt": "You are grading whether the selected execution trace step output answers the selected execution trace step input. The trace snapshots may be plain text or JSON.\\n\\nTrace step input snapshot:\\n{{trace_input}}\\n\\nTrace step output snapshot:\\n{{trace_output}}\\n\\nReturn JSON with:\\n- score: 1 if the output answers the input.\\n- score: 0 otherwise.\\n- reason: one concise sentence.",
+                "responseScorerName": "single_score",
+                "variableBindings": [
+                  {
+                    "templateVariable": "trace_input",
+                    "source": {
+                      "scope": "actual",
+                      "field": "traceStepInput",
+                      "selector": {
+                        "nodeID": "trpcagent-travel-agent"
+                      }
+                    }
+                  },
+                  {
+                    "templateVariable": "trace_output",
+                    "source": {
+                      "scope": "actual",
+                      "field": "traceStepOutput",
+                      "selector": {
+                        "nodeID": "trpcagent-travel-agent"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "details": {
+            "reason": "It directly addresses today’s Shanghai weather (sunny 26°C), warns about downtown festival traffic disruptions, confirms museum ticket availability with 25 seats left, and gives practical travel advice.",
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "c57d5c79-9ffc-493b-b4bf-9cfbd229b020",
+            "userContent": {
+              "role": "user",
+              "content": "I am traveling to Shanghai today. What should I watch out for, and can I still get a museum ticket?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Shanghai today is sunny around **26°C**—comfortable, but bring **sunscreen** and **water**, and consider a light layer for indoor A/C.\n\n**Watch outs / alerts**\n- **Festival events downtown** are likely to cause **traffic disruptions** (road closures, slower taxis/rideshares, crowded metro stations).\n- If you need to cross downtown, **leave extra time** and prefer the **metro** over driving; plan alternate routes and avoid peak event hours if possible.\n\n**Museum tickets**\n- Yes—tickets are still available, with **about 25 seats left**. If you’re going today, **book ASAP** to lock in a time slot.\n\n**Practical tips**\n- Aim to arrive **15–30 minutes early** for security lines and crowds.\n- Keep a backup plan (another museum/attraction nearby) in case your preferred slot sells out."
+            },
+            "executionTrace": {
+              "RootAgentName": "trpcagent-travel-agent",
+              "RootInvocationID": "c57d5c79-9ffc-493b-b4bf-9cfbd229b020",
+              "SessionID": "9eb1d160-c8f0-45ac-8b67-f5e9e2c2ca3f",
+              "StartedAt": "2026-08-17T16:22:11.382277423+08:00",
+              "EndedAt": "2026-08-17T16:22:16.213014184+08:00",
+              "Status": "completed",
+              "Input": {
+                "Text": "{\"role\":\"user\",\"content\":\"I am traveling to Shanghai today. What should I watch out for, and can I still get a museum ticket?\"}"
+              },
+              "Output": {
+                "Text": "{\"role\":\"assistant\",\"content\":\"Shanghai today is sunny around **26°C**—comfortable, but bring **sunscreen** and **water**, and consider a light layer for indoor A/C.\\n\\n**Watch outs / alerts**\\n- **Festival events downtown** are likely to cause **traffic disruptions** (road closures, slower taxis/rideshares, crowded metro stations).\\n- If you need to cross downtown, **leave extra time** and prefer the **metro** over driving; plan alternate routes and avoid peak event hours if possible.\\n\\n**Museum tickets**\\n- Yes—tickets are still available, with **about 25 seats left**. If you’re going today, **book ASAP** to lock in a time slot.\\n\\n**Practical tips**\\n- Aim to arrive **15–30 minutes early** for security lines and crowds.\\n- Keep a backup plan (another museum/attraction nearby) in case your preferred slot sells out.\"}"
+              },
+              "Usage": {
+                "prompt_tokens": 104,
+                "completion_tokens": 185,
+                "total_tokens": 289,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "completion_tokens_details": {}
+              },
+              "Steps": [
+                {
+                  "StepID": "s1",
+                  "InvocationID": "c57d5c79-9ffc-493b-b4bf-9cfbd229b020",
+                  "ParentInvocationID": "",
+                  "AgentName": "trpcagent-travel-agent",
+                  "Branch": "trpcagent-travel-agent",
+                  "NodeID": "trpcagent-travel-agent",
+                  "NodeType": "agent",
+                  "StartedAt": "2026-08-17T16:22:11.382325759+08:00",
+                  "EndedAt": "2026-08-17T16:22:16.212913263+08:00",
+                  "PredecessorStepIDs": null,
+                  "AppliedSurfaceIDs": [
+                    "trpcagent-travel-agent#instruction",
+                    "trpcagent-travel-agent#model"
+                  ],
+                  "Input": {
+                    "Text": "[{\"role\":\"system\",\"content\":\"Travel agent used by the tRPC-Agent evaluation example.\\n\\nYou are a concise travel assistant.\\nUse this scenario when answering: Shanghai is sunny at 26C, festival events will be held downtown with likely traffic disruptions, and museum tickets are available with 25 seats left.\\nAnswer the user's travel question with weather, alert, ticket availability, and practical advice.\"},{\"role\":\"user\",\"content\":\"I am traveling to Shanghai today. What should I watch out for, and can I still get a museum ticket?\"}]"
+                  },
+                  "Output": {
+                    "Text": "{\"id\":\"chatcmpl-EDmtfNXQKCzyIM4JAhT92ctBLl7ch\",\"object\":\"chat.completion\",\"created\":1786954931,\"model\":\"gpt-5.2-2025-12-11\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Shanghai today is sunny around **26°C**—comfortable, but bring **sunscreen** and **water**, and consider a light layer for indoor A/C.\\n\\n**Watch outs / alerts**\\n- **Festival events downtown** are likely to cause **traffic disruptions** (road closures, slower taxis/rideshares, crowded metro stations).\\n- If you need to cross downtown, **leave extra time** and prefer the **metro** over driving; plan alternate routes and avoid peak event hours if possible.\\n\\n**Museum tickets**\\n- Yes—tickets are still available, with **about 25 seats left**. If you’re going today, **book ASAP** to lock in a time slot.\\n\\n**Practical tips**\\n- Aim to arrive **15–30 minutes early** for security lines and crowds.\\n- Keep a backup plan (another museum/attraction nearby) in case your preferred slot sells out.\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":104,\"completion_tokens\":185,\"total_tokens\":289,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":4830072175}},\"timestamp\":\"2026-08-17T16:22:16.212800365+08:00\",\"done\":true,\"is_partial\":false}"
+                  },
+                  "Usage": {
+                    "prompt_tokens": 104,
+                    "completion_tokens": 185,
+                    "total_tokens": 289,
+                    "prompt_tokens_details": {
+                      "cached_tokens": 0
+                    },
+                    "completion_tokens_details": {}
+                  },
+                  "Tools": null,
+                  "Skills": null,
+                  "Error": ""
+                }
+              ]
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "shanghai_travel_advice-1",
+            "userContent": {
+              "role": "user",
+              "content": "I am traveling to Shanghai today. What should I watch out for, and can I still get a museum ticket?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Shanghai is sunny at 26C. There are festival events downtown, so expect traffic disruptions. Museum tickets are still available with 25 seats left. Leave early, avoid the city center if possible, and reserve now."
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "llm_final_response",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.9,
+              "criterion": {
+                "llmJudge": {}
+              },
+              "details": {
+                "reason": "The agent response matches all key points in the reference: sunny at 26C, festival events downtown causing traffic disruptions, museum tickets available with 25 seats left, and advice to leave extra time/avoid downtown and reserve ASAP.",
+                "score": 1,
+                "value": {
+                  "kind": "numeric",
+                  "numeric": 1
+                }
+              }
+            },
+            {
+              "metricName": "trace_io_template",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "llmJudge": {
+                  "template": {
+                    "prompt": "You are grading whether the selected execution trace step output answers the selected execution trace step input. The trace snapshots may be plain text or JSON.\\n\\nTrace step input snapshot:\\n[{\"role\":\"system\",\"content\":\"Travel agent used by the tRPC-Agent evaluation example.\\n\\nYou are a concise travel assistant.\\nUse this scenario when answering: Shanghai is sunny at 26C, festival events will be held downtown with likely traffic disruptions, and museum tickets are available with 25 seats left.\\nAnswer the user's travel question with weather, alert, ticket availability, and practical advice.\"},{\"role\":\"user\",\"content\":\"I am traveling to Shanghai today. What should I watch out for, and can I still get a museum ticket?\"}]\\n\\nTrace step output snapshot:\\n{\"id\":\"chatcmpl-EDmtfNXQKCzyIM4JAhT92ctBLl7ch\",\"object\":\"chat.completion\",\"created\":1786954931,\"model\":\"gpt-5.2-2025-12-11\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Shanghai today is sunny around **26°C**—comfortable, but bring **sunscreen** and **water**, and consider a light layer for indoor A/C.\\n\\n**Watch outs / alerts**\\n- **Festival events downtown** are likely to cause **traffic disruptions** (road closures, slower taxis/rideshares, crowded metro stations).\\n- If you need to cross downtown, **leave extra time** and prefer the **metro** over driving; plan alternate routes and avoid peak event hours if possible.\\n\\n**Museum tickets**\\n- Yes—tickets are still available, with **about 25 seats left**. If you’re going today, **book ASAP** to lock in a time slot.\\n\\n**Practical tips**\\n- Aim to arrive **15–30 minutes early** for security lines and crowds.\\n- Keep a backup plan (another museum/attraction nearby) in case your preferred slot sells out.\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":104,\"completion_tokens\":185,\"total_tokens\":289,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":4830072175}},\"timestamp\":\"2026-08-17T16:22:16.212800365+08:00\",\"done\":true,\"is_partial\":false}\\n\\nReturn JSON with:\\n- score: 1 if the output answers the input.\\n- score: 0 otherwise.\\n- reason: one concise sentence.",
+                    "responseScorerName": "single_score",
+                    "variableBindings": [
+                      {
+                        "templateVariable": "trace_input",
+                        "source": {
+                          "scope": "actual",
+                          "field": "traceStepInput",
+                          "selector": {
+                            "nodeID": "trpcagent-travel-agent"
+                          }
+                        }
+                      },
+                      {
+                        "templateVariable": "trace_output",
+                        "source": {
+                          "scope": "actual",
+                          "field": "traceStepOutput",
+                          "selector": {
+                            "nodeID": "trpcagent-travel-agent"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "details": {
+                "reason": "It directly addresses today’s Shanghai weather (sunny 26°C), warns about downtown festival traffic disruptions, confirms museum ticket availability with 25 seats left, and gives practical travel advice.",
+                "score": 1,
+                "value": {
+                  "kind": "numeric",
+                  "numeric": 1
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "9eb1d160-c8f0-45ac-8b67-f5e9e2c2ca3f",
+      "userId": "demo-user"
+    }
+  ],
+  "summary": {
+    "overallStatus": "passed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "passed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "passed",
+        "caseStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "llm_final_response",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 0.9,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "trace_io_template",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ]
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "shanghai_travel_advice",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "llm_final_response",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 0.9,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "trace_io_template",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "llm_final_response",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 0.9
+              },
+              {
+                "metricName": "trace_io_template",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1786954943.3877184
+}

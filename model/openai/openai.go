@@ -28,10 +28,12 @@ import (
 
 	openai "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modeltelemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -54,6 +56,21 @@ const (
 	//nolint:gosec
 	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
 	defaultQwenBaseURL string = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+	//nolint:gosec
+	miniMaxAPIKeyName     string = "MINIMAX_API_KEY"
+	defaultMiniMaxBaseURL string = "https://api.minimax.io/v1"
+	miniMaxAPIHost        string = "api.minimax.io"
+	miniMaxCNAPIHost      string = "api.minimaxi.com"
+	miniMaxFileUploadPath string = "/v1/files/upload"
+	miniMaxFileDeletePath string = "/v1/files/delete"
+	miniMaxFilePurpose           = openai.FilePurpose("video_understanding")
+
+	//nolint:gosec
+	kimiAPIKeyName     string = "MOONSHOT_API_KEY"
+	defaultKimiBaseURL string = "https://api.moonshot.ai/v1"
+	kimiAPIHost        string = "api.moonshot.ai"
+	kimiCNAPIHost      string = "api.moonshot.cn"
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -74,6 +91,10 @@ const (
 	// VariantGLM is the GLM OpenAI-compatible variant. Some GLM gateways
 	// return the visible final answer in reasoning_content with empty content.
 	VariantGLM Variant = "glm"
+	// VariantMiniMax is the MiniMax OpenAI-compatible variant.
+	VariantMiniMax Variant = "minimax"
+	// VariantKimi is the Kimi OpenAI-compatible variant.
+	VariantKimi Variant = "kimi"
 )
 
 // thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
@@ -100,6 +121,19 @@ var thinkingTypeValueConvertor = func(enabled bool) any {
 	return map[string]string{"type": thinkingType}
 }
 
+// miniMaxThinkingValueConvertor converts to MiniMax's thinking-toggle format.
+var miniMaxThinkingValueConvertor = func(enabled bool) any {
+	const (
+		thinkingTypeAdaptive = "adaptive"
+		thinkingTypeDisabled = "disabled"
+	)
+	thinkingType := thinkingTypeDisabled
+	if enabled {
+		thinkingType = thinkingTypeAdaptive
+	}
+	return map[string]string{"type": thinkingType}
+}
+
 // variantConfig holds configuration for different variants.
 type variantConfig struct {
 	// Default file upload path for this variant.
@@ -110,7 +144,9 @@ type variantConfig struct {
 	// Default HTTP method for file deletion.
 	fileDeletionMethod         string
 	fileDeletionBodyConvertor  fileDeletionBodyConvertor
+	fileDeletionValidator      fileDeletionResponseValidator
 	fileUploadRequestConvertor fileUploadRequestConvertor
+	fileIDExtractor            fileIDExtractor
 	// Whether to skip file type in content parts for this variant.
 	skipFileTypeInContent bool
 	// Whether user message content must be reduced to text only.
@@ -135,14 +171,103 @@ type variantConfig struct {
 	// content only when content is empty and the response has no tool calls.
 	reasoningContentAsContentFallback bool
 }
-type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
+type fileDeletionBodyConvertor func(
+	body []byte,
+	fileID string,
+	purpose openai.FilePurpose,
+) []byte
 
 // defaultFileDeletionBodyConvertor is the default file deletion body converter.
-var defaultFileDeletionBodyConvertor = func(body []byte, fileID string) []byte {
+var defaultFileDeletionBodyConvertor = func(
+	body []byte,
+	_ string,
+	_ openai.FilePurpose,
+) []byte {
 	return body
 }
 
 type fileUploadRequestConvertor func(r *http.Request, file *os.File, fileOpts *FileOptions) (*http.Request, error)
+type fileIDExtractor func(file *openai.FileObject) (string, error)
+type fileDeletionResponseValidator func(file *openai.FileDeleted) error
+
+func miniMaxFileDeletionBodyConvertor(
+	body []byte,
+	fileID string,
+	purpose openai.FilePurpose,
+) []byte {
+	if body != nil {
+		return body
+	}
+	id := strings.TrimSpace(fileID)
+	parsedID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		id = strconv.Quote(id)
+	} else {
+		id = strconv.FormatInt(parsedID, 10)
+	}
+	return []byte(`{"file_id":` + id + `,"purpose":` +
+		strconv.Quote(string(purpose)) + `}`)
+}
+
+func miniMaxFileIDExtractor(file *openai.FileObject) (string, error) {
+	if file == nil {
+		return "", fmt.Errorf("minimax file upload returned an empty response")
+	}
+	if file.ID != "" {
+		return file.ID, nil
+	}
+	nested, ok := file.JSON.ExtraFields["file"]
+	if !ok {
+		return "", fmt.Errorf("minimax file upload response is missing file")
+	}
+	var payload struct {
+		FileID json.RawMessage `json:"file_id"`
+	}
+	if err := json.Unmarshal([]byte(nested.Raw()), &payload); err != nil {
+		return "", fmt.Errorf("decode minimax file upload response: %w", err)
+	}
+	rawID := strings.TrimSpace(string(payload.FileID))
+	if rawID == "" || rawID == "null" {
+		return "", fmt.Errorf("minimax file upload response is missing file_id")
+	}
+	if strings.HasPrefix(rawID, `"`) {
+		var id string
+		_ = json.Unmarshal(payload.FileID, &id)
+		if strings.TrimSpace(id) == "" {
+			return "", fmt.Errorf("minimax file upload response has an empty file_id")
+		}
+		return id, nil
+	}
+	if _, err := strconv.ParseInt(rawID, 10, 64); err != nil {
+		return "", fmt.Errorf("decode minimax file_id %q: %w", rawID, err)
+	}
+	return rawID, nil
+}
+
+func miniMaxFileDeletionResponseValidator(file *openai.FileDeleted) error {
+	if file == nil {
+		return fmt.Errorf("minimax file deletion returned an empty response")
+	}
+	nested, ok := file.JSON.ExtraFields["base_resp"]
+	if !ok {
+		return fmt.Errorf("minimax file deletion response is missing base_resp")
+	}
+	var response struct {
+		StatusCode int64  `json:"status_code"`
+		StatusMsg  string `json:"status_msg"`
+	}
+	if err := json.Unmarshal([]byte(nested.Raw()), &response); err != nil {
+		return fmt.Errorf("decode minimax file deletion response: %w", err)
+	}
+	if response.StatusCode != 0 {
+		return fmt.Errorf(
+			"minimax file deletion failed with status_code %d: %s",
+			response.StatusCode,
+			response.StatusMsg,
+		)
+	}
+	return nil
+}
 
 // variantConfigs maps variant names to their configurations.
 var variantConfigs = map[Variant]variantConfig{
@@ -177,7 +302,11 @@ var variantConfigs = map[Variant]variantConfig{
 		filePurpose:           openai.FilePurpose("file-extract"),
 		fileDeletionMethod:    http.MethodPost,
 		skipFileTypeInContent: true,
-		fileDeletionBodyConvertor: func(body []byte, fileID string) []byte {
+		fileDeletionBodyConvertor: func(
+			body []byte,
+			fileID string,
+			_ openai.FilePurpose,
+		) []byte {
 			if body != nil {
 				return body
 			}
@@ -243,6 +372,30 @@ var variantConfigs = map[Variant]variantConfig{
 		thinkingEnabledKey:                thinkingKey,
 		thinkingValueConvertor:            thinkingTypeValueConvertor,
 		reasoningContentAsContentFallback: true,
+	},
+	VariantMiniMax: {
+		fileUploadPath:            miniMaxFileUploadPath,
+		fileDeletionPath:          miniMaxFileDeletePath,
+		filePurpose:               miniMaxFilePurpose,
+		fileDeletionMethod:        http.MethodPost,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: miniMaxFileDeletionBodyConvertor,
+		fileDeletionValidator:     miniMaxFileDeletionResponseValidator,
+		fileIDExtractor:           miniMaxFileIDExtractor,
+		apiKeyName:                miniMaxAPIKeyName,
+		defaultBaseURL:            defaultMiniMaxBaseURL,
+		thinkingEnabledKey:        thinkingKey,
+		thinkingValueConvertor:    miniMaxThinkingValueConvertor,
+	},
+	VariantKimi: {
+		filePurpose:               openai.FilePurpose("file-extract"),
+		fileDeletionMethod:        http.MethodDelete,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		apiKeyName:                kimiAPIKeyName,
+		defaultBaseURL:            defaultKimiBaseURL,
+		thinkingEnabledKey:        thinkingKey,
+		thinkingValueConvertor:    thinkingTypeValueConvertor,
 	},
 }
 
@@ -377,10 +530,28 @@ func inferVariant(baseURL string) Variant {
 	if isDeepSeekBaseURL(baseURL) {
 		return VariantDeepSeek
 	}
+	if isMiniMaxBaseURL(baseURL) {
+		return VariantMiniMax
+	}
+	if isKimiBaseURL(baseURL) {
+		return VariantKimi
+	}
 	return VariantOpenAI
 }
 
 func isDeepSeekBaseURL(raw string) bool {
+	return baseURLMatchesHost(raw, deepSeekAPIHost)
+}
+
+func isMiniMaxBaseURL(raw string) bool {
+	return baseURLMatchesHost(raw, miniMaxAPIHost, miniMaxCNAPIHost)
+}
+
+func isKimiBaseURL(raw string) bool {
+	return baseURLMatchesHost(raw, kimiAPIHost, kimiCNAPIHost)
+}
+
+func baseURLMatchesHost(raw string, hosts ...string) bool {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return false
@@ -389,7 +560,12 @@ func isDeepSeekBaseURL(raw string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(parsed.Hostname(), deepSeekAPIHost)
+	for _, host := range hosts {
+		if strings.EqualFold(parsed.Hostname(), host) {
+			return true
+		}
+	}
+	return false
 }
 
 // Info implements the model.Model interface.
@@ -475,7 +651,10 @@ func (m *Model) prepareChatRequest(
 	}
 	// Apply token tailoring if configured.
 	m.applyTokenTailoring(ctx, request)
-	chatRequest, opts := m.buildChatRequest(request)
+	chatRequest, opts := m.buildChatRequestWithToolControl(
+		request,
+		imodelrequest.ToolsDisabled(ctx),
+	)
 	return chatRequest, opts, nil
 }
 
@@ -503,6 +682,9 @@ func (m *Model) GenerateContent(
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
+	if imodelrequest.ToolsDisabled(ctx) {
+		disableChatRequestTools(chatRequest)
+	}
 	m.runChatRequestJSONCallback(ctx, chatRequest)
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
@@ -539,6 +721,9 @@ func (m *Model) GenerateContentIter(
 		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
 		defer reporter.End()
 		m.runChatRequestCallback(ctx, chatRequest)
+		if imodelrequest.ToolsDisabled(ctx) {
+			disableChatRequestTools(chatRequest)
+		}
 		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {
@@ -589,62 +774,15 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	// Determine max input tokens using priority: user config > auto calculation > default.
-	maxInputTokens := m.maxInputTokens
-	outputReserveTokens := m.effectiveOutputReserveTokens(request)
-	contextWindow := m.contextWindow
-	if contextWindow <= 0 {
-		contextWindow = imodel.ResolveContextWindow(m.name)
-	}
-	autoBudget := maxInputTokens <= 0
-	if autoBudget {
-		// Auto-calculate based on model context window with custom or default parameters.
-		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
-			// Use custom parameters if any are set.
-			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
-				contextWindow,
-				m.protocolOverheadTokens,
-				outputReserveTokens,
-				m.inputTokensFloor,
-				m.safetyMarginRatio,
-				m.maxInputTokensRatio,
-			)
-		} else {
-			// Use default parameters.
-			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
-				contextWindow,
-				imodel.DefaultProtocolOverheadTokens,
-				outputReserveTokens,
-				imodel.DefaultInputTokensFloor,
-				imodel.DefaultSafetyMarginRatio,
-				imodel.DefaultMaxInputTokensRatio,
-			)
-		}
-	}
-
-	maxInputTokens = min(maxInputTokens, m.hardInputBudget(contextWindow, outputReserveTokens))
-	if autoBudget {
+	maxInputTokens := m.InputTokenBudget(ctx, request)
+	if m.maxInputTokens <= 0 {
 		log.DebugfContext(
 			ctx,
 			"auto-calculated max input tokens: model=%s, "+
-				"contextWindow=%d, reserveOutputTokens=%d, maxInputTokens=%d",
+				"maxInputTokens=%d",
 			m.name,
-			contextWindow,
-			outputReserveTokens,
 			maxInputTokens,
 		)
-		toolsTokens := m.estimateToolsTokens(ctx, request.Tools)
-		if toolsTokens > 0 {
-			maxInputTokens = max(maxInputTokens-toolsTokens, 0)
-			log.DebugfContext(
-				ctx,
-				"adjusted max input tokens after tools budget: model=%s, "+
-					"toolsTokens=%d, maxInputTokens=%d",
-				m.name,
-				toolsTokens,
-				maxInputTokens,
-			)
-		}
 	}
 
 	// Apply token tailoring.
@@ -668,6 +806,54 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	}
 
 	modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored)
+}
+
+// InputTokenBudget returns the same input budget used by token tailoring.
+func (m *Model) InputTokenBudget(ctx context.Context, request *model.Request) int {
+	maxInputTokens := m.maxInputTokens
+	outputReserveTokens := m.effectiveOutputReserveTokens(request)
+	contextWindow := m.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = imodel.ResolveContextWindow(m.name)
+	}
+	autoBudget := maxInputTokens <= 0
+	if autoBudget {
+		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
+			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
+				contextWindow,
+				m.protocolOverheadTokens,
+				outputReserveTokens,
+				m.inputTokensFloor,
+				m.safetyMarginRatio,
+				m.maxInputTokensRatio,
+			)
+		} else {
+			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
+				contextWindow,
+				imodel.DefaultProtocolOverheadTokens,
+				outputReserveTokens,
+				imodel.DefaultInputTokensFloor,
+				imodel.DefaultSafetyMarginRatio,
+				imodel.DefaultMaxInputTokensRatio,
+			)
+		}
+	}
+
+	maxInputTokens = min(
+		maxInputTokens,
+		m.hardInputBudget(contextWindow, outputReserveTokens),
+	)
+	if autoBudget {
+		var tools map[string]tool.Tool
+		if request != nil {
+			tools = request.Tools
+		}
+		maxInputTokens = max(
+			maxInputTokens-m.estimateToolsTokens(ctx, tools),
+			0,
+		)
+	}
+	return maxInputTokens
 }
 
 func (m *Model) effectiveOutputReserveTokens(request *model.Request) int {
@@ -731,6 +917,13 @@ func (m *Model) estimateToolsTokens(
 
 // buildChatRequest converts our Request to OpenAI request params and options.
 func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletionNewParams, []openaiopt.RequestOption) {
+	return m.buildChatRequestWithToolControl(request, false)
+}
+
+func (m *Model) buildChatRequestWithToolControl(
+	request *model.Request,
+	disableToolFields bool,
+) (*openai.ChatCompletionNewParams, []openaiopt.RequestOption) {
 	chatRequest := &openai.ChatCompletionNewParams{
 		Model:    shared.ChatModel(m.name),
 		Messages: m.convertMessages(request.Messages),
@@ -766,10 +959,16 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 		}
 	}
 
-	// MaxTokens is deprecated and not compatible with o-series models.
-	// Use MaxCompletionTokens instead.
 	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
-		chatRequest.MaxCompletionTokens = openai.Int(int64(*mt))
+		if m.variant == VariantDeepSeek {
+			// DeepSeek's Chat Completions API documents max_tokens as the
+			// output limit: https://api-docs.deepseek.com/api/create-chat-completion.
+			chatRequest.MaxTokens = openai.Int(int64(*mt))
+		} else {
+			// max_tokens is deprecated and incompatible with OpenAI o-series
+			// models. Use max_completion_tokens for other variants.
+			chatRequest.MaxCompletionTokens = openai.Int(int64(*mt))
+		}
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = openai.Float(*request.Temperature)
@@ -800,11 +999,17 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 	}
 	opts := m.buildThinkingOption(request)
 	// Add model-level extra fields to the request.
-	for key, value := range m.extraFields {
+	for key, value := range imodelrequest.FilterToolControlFields(
+		m.extraFields,
+		disableToolFields,
+	) {
 		opts = append(opts, openaiopt.WithJSONSet(key, value))
 	}
 	// Add request-level extra fields after model-level fields so they take precedence.
-	for key, value := range request.ExtraFields {
+	for key, value := range imodelrequest.FilterToolControlFields(
+		request.ExtraFields,
+		disableToolFields,
+	) {
 		opts = append(opts, openaiopt.WithJSONSet(key, value))
 	}
 	// Add request-level headers after model-level client options so they take precedence.
@@ -818,7 +1023,51 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 			IncludeUsage: openai.Bool(true),
 		}
 	}
-	return chatRequest, opts
+	return chatRequest, appendToolControlDeleteOptions(
+		opts,
+		disableToolFields,
+	)
+}
+
+func appendToolControlDeleteOptions(
+	opts []openaiopt.RequestOption,
+	enabled bool,
+) []openaiopt.RequestOption {
+	if !enabled {
+		return opts
+	}
+	for _, key := range []string{
+		"tools",
+		"tool_choice",
+		"parallel_tool_calls",
+		"function_call",
+		"functions",
+	} {
+		opts = append(opts, openaiopt.WithJSONDel(key))
+	}
+	return opts
+}
+
+func disableChatRequestTools(request *openai.ChatCompletionNewParams) {
+	if request == nil {
+		return
+	}
+	request.Tools = nil
+	request.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{}
+	request.ParallelToolCalls = param.Opt[bool]{}
+	request.FunctionCall = openai.ChatCompletionNewParamsFunctionCallUnion{}
+	request.Functions = nil
+	if override, ok := request.Overrides(); ok {
+		if filtered, ok := imodelrequest.FilterToolControlObject(override); ok {
+			request.SetExtraFields(filtered)
+		}
+		return
+	}
+	if fields := request.ExtraFields(); len(fields) > 0 {
+		request.SetExtraFields(
+			imodelrequest.FilterToolControlFields(fields, true),
+		)
+	}
 }
 
 // buildThinkingOption converts our Request to OpenAI request RequestOption.
@@ -1113,30 +1362,39 @@ func (m *Model) appendUserContentParts(
 }
 
 func (m *Model) omittedContentHint(parts []model.ContentPart) string {
-	if !m.variantConfig.textOnlyMessageContent {
-		return ""
-	}
-
-	var imageCount, audioCount, fileCount int
+	var imageCount, audioCount, videoCount, fileCount int
 	for _, part := range parts {
 		switch part.Type {
 		case model.ContentTypeImage:
-			imageCount++
+			if m.variantConfig.textOnlyMessageContent {
+				imageCount++
+			}
 		case model.ContentTypeAudio:
-			audioCount++
+			if m.variantConfig.textOnlyMessageContent ||
+				(part.Audio != nil && part.Audio.URL != "") {
+				audioCount++
+			}
+		case model.ContentTypeVideo:
+			if m.variantConfig.textOnlyMessageContent || part.Video != nil {
+				videoCount++
+			}
 		case model.ContentTypeFile:
+			if !m.variantConfig.textOnlyMessageContent {
+				continue
+			}
 			if fileURLFallbackText(part.File) != "" {
 				continue
 			}
 			fileCount++
 		}
 	}
-	return omittedAttachmentHint(imageCount, audioCount, fileCount)
+	return omittedAttachmentHint(imageCount, audioCount, videoCount, fileCount)
 }
 
 func omittedAttachmentHint(
 	imageCount int,
 	audioCount int,
+	videoCount int,
 	fileCount int,
 ) string {
 	const (
@@ -1146,11 +1404,13 @@ func omittedAttachmentHint(
 		omittedImagePlural = "%d images"
 		omittedAudioSingle = "1 audio clip"
 		omittedAudioPlural = "%d audio clips"
+		omittedVideoSingle = "1 video"
+		omittedVideoPlural = "%d videos"
 		omittedFileSingle  = "1 file"
 		omittedFilePlural  = "%d files"
 	)
 
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
 	if imageCount == 1 {
 		parts = append(parts, omittedImageSingle)
 	} else if imageCount > 1 {
@@ -1160,6 +1420,11 @@ func omittedAttachmentHint(
 		parts = append(parts, omittedAudioSingle)
 	} else if audioCount > 1 {
 		parts = append(parts, fmt.Sprintf(omittedAudioPlural, audioCount))
+	}
+	if videoCount == 1 {
+		parts = append(parts, omittedVideoSingle)
+	} else if videoCount > 1 {
+		parts = append(parts, fmt.Sprintf(omittedVideoPlural, videoCount))
 	}
 	if fileCount == 1 {
 		parts = append(parts, omittedFileSingle)
@@ -1302,7 +1567,7 @@ func (m *Model) convertContentPart(part model.ContentPart) *openai.ChatCompletio
 			}
 		}
 	case model.ContentTypeAudio:
-		if part.Audio != nil {
+		if part.Audio != nil && part.Audio.URL == "" && len(part.Audio.Data) > 0 {
 			return &openai.ChatCompletionContentPartUnionParam{
 				OfInputAudio: &openai.ChatCompletionContentPartInputAudioParam{
 					InputAudio: openai.ChatCompletionContentPartInputAudioInputAudioParam{
@@ -1312,6 +1577,9 @@ func (m *Model) convertContentPart(part model.ContentPart) *openai.ChatCompletio
 				},
 			}
 		}
+	case model.ContentTypeVideo:
+		// Chat Completions does not define a video input content part.
+		return nil
 	case model.ContentTypeFile:
 		if part.File != nil {
 			params, ok := fileToParamsOK(part.File)
@@ -2644,32 +2912,53 @@ func convertChatCompletionChoiceLogprobs(
 		Content: make([]model.TokenLogprob, len(logprobs.Content)),
 	}
 	for i, token := range logprobs.Content {
-		converted.Content[i] = model.TokenLogprob{
-			Token:       token.Token,
-			Logprob:     token.Logprob,
-			Bytes:       int64SliceToIntSlice(token.Bytes),
-			TopLogprobs: make([]model.TopLogprob, len(token.TopLogprobs)),
-		}
-		for j, top := range token.TopLogprobs {
-			converted.Content[i].TopLogprobs[j] = model.TopLogprob{
-				Token:   top.Token,
-				Logprob: top.Logprob,
-				Bytes:   int64SliceToIntSlice(top.Bytes),
-			}
-		}
+		converted.Content[i] = convertChatCompletionTokenLogprob(token)
 	}
 	return converted
 }
 
-func int64SliceToIntSlice(values []int64) []int {
-	if values == nil {
-		return nil
+func convertChatCompletionTokenLogprob(
+	token openai.ChatCompletionTokenLogprob,
+) model.TokenLogprob {
+	totalBytes := len(token.Bytes)
+	for _, top := range token.TopLogprobs {
+		totalBytes += len(top.Bytes)
 	}
-	converted := make([]int, len(values))
-	for i, value := range values {
-		converted[i] = int(value)
+	bytesArena := make([]int, totalBytes)
+	bytesOffset := 0
+
+	converted := model.TokenLogprob{
+		Token:       token.Token,
+		Logprob:     token.Logprob,
+		TopLogprobs: make([]model.TopLogprob, len(token.TopLogprobs)),
+	}
+	converted.Bytes, bytesOffset = copyLogprobBytes(bytesArena, bytesOffset, token.Bytes)
+	for i, top := range token.TopLogprobs {
+		converted.TopLogprobs[i] = model.TopLogprob{
+			Token:   top.Token,
+			Logprob: top.Logprob,
+		}
+		converted.TopLogprobs[i].Bytes, bytesOffset = copyLogprobBytes(
+			bytesArena,
+			bytesOffset,
+			top.Bytes,
+		)
 	}
 	return converted
+}
+
+func copyLogprobBytes(arena []int, offset int, values []int64) ([]int, int) {
+	if values == nil {
+		return nil, offset
+	}
+	start := offset
+	for i, value := range values {
+		arena[start+i] = int(value)
+	}
+	offset += len(values)
+	// Limit capacity so appending to one token's bytes cannot overwrite the
+	// adjacent bytes stored in the same arena.
+	return arena[start:offset:offset], offset
 }
 
 // FileOptions is the options for file operations.
@@ -2722,6 +3011,16 @@ func WithFileBaseURL(url string) FileOption {
 	return func(options *FileOptions) {
 		options.BaseURL = url
 	}
+}
+
+func (m *Model) uploadedFileID(file *openai.FileObject) (string, error) {
+	if m.variantConfig.fileIDExtractor != nil {
+		return m.variantConfig.fileIDExtractor(file)
+	}
+	if file == nil {
+		return "", fmt.Errorf("file upload returned an empty response")
+	}
+	return file.ID, nil
 }
 
 // UploadFile uploads a file to OpenAI and returns the file ID.
@@ -2781,13 +3080,13 @@ func (m *Model) UploadFile(ctx context.Context, filePath string, opts ...FileOpt
 		if err != nil {
 			return "", fmt.Errorf("failed to upload file: %w", err)
 		}
-		return fileObj.ID, nil
+		return m.uploadedFileID(fileObj)
 	}
 	fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file: %w", err)
 	}
-	return fileObj.ID, nil
+	return m.uploadedFileID(fileObj)
 }
 
 // UploadFileData uploads file data to OpenAI and returns the file ID.
@@ -2862,25 +3161,31 @@ func (m *Model) UploadFileData(
 		if err != nil {
 			return "", fmt.Errorf("failed to upload file data: %w", err)
 		}
-		return fileObj.ID, nil
+		return m.uploadedFileID(fileObj)
 	}
 	fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file data: %w", err)
 	}
-	return fileObj.ID, nil
+	return m.uploadedFileID(fileObj)
 }
 
 // DeleteFile deletes a file from OpenAI.
 func (m *Model) DeleteFile(ctx context.Context, fileID string, opts ...FileOption) error {
 	fileOpts := &FileOptions{
-		Path:   m.variantConfig.fileDeletionPath,
-		Method: m.variantConfig.fileDeletionMethod,
+		Path:    m.variantConfig.fileDeletionPath,
+		Purpose: m.variantConfig.filePurpose,
+		Method:  m.variantConfig.fileDeletionMethod,
 	}
 	for _, opt := range opts {
 		opt(fileOpts)
 	}
-	fileOpts.Body = m.variantConfig.fileDeletionBodyConvertor(fileOpts.Body, fileID)
+	bodyProvided := fileOpts.Body != nil
+	fileOpts.Body = m.variantConfig.fileDeletionBodyConvertor(
+		fileOpts.Body,
+		fileID,
+		fileOpts.Purpose,
+	)
 	// Create middleware to handle custom options.
 	middlewareOpt := openaiopt.WithMiddleware(
 		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
@@ -2895,13 +3200,21 @@ func (m *Model) DeleteFile(ctx context.Context, fileID string, opts ...FileOptio
 			if fileOpts.Body != nil {
 				r.Body = io.NopCloser(bytes.NewReader(fileOpts.Body))
 				r.ContentLength = int64(len(fileOpts.Body))
+				if !bodyProvided && r.Header.Get("Content-Type") == "" {
+					r.Header.Set("Content-Type", "application/json")
+				}
 			}
 			return next(r)
 		})
 
-	_, err := m.client.Files.Delete(ctx, fileID, middlewareOpt)
+	deleted, err := m.client.Files.Delete(ctx, fileID, middlewareOpt)
 	if err != nil {
 		return fmt.Errorf("failed to delete file: %w", err)
+	}
+	if validate := m.variantConfig.fileDeletionValidator; validate != nil {
+		if err := validate(deleted); err != nil {
+			return fmt.Errorf("failed to delete file: %w", err)
+		}
 	}
 	return nil
 }

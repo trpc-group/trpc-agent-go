@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+	scorepkg "trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -73,6 +74,7 @@ func (e *toolTrajectoryEvaluator) Evaluate(ctx context.Context, actuals, expecte
 			Details: &evaluator.PerInvocationDetails{
 				Reason: reason,
 				Score:  score,
+				Value:  &scorepkg.Value{Kind: scorepkg.KindNumeric, Numeric: &score},
 			},
 		})
 		totalScore += score

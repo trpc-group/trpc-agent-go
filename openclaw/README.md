@@ -137,10 +137,13 @@ By default, browser navigation blocks:
 - loopback hosts such as `localhost`
 - private-network IPs
 - `file://` URLs
+- search-engine result pages such as Google, Google Scholar,
+  DuckDuckGo, Brave Search, Bing, and Yahoo search pages
 
 You can relax or refine that policy with:
 `allowed_domains`, `blocked_domains`, `allow_loopback`,
-`allow_private_networks`, and `allow_file_urls`.
+`allow_private_networks`, `allow_file_urls`, and
+`allow_search_result_pages`.
 
 Example config:
 
@@ -830,6 +833,97 @@ go run ./cmd/openclaw \
 
 By default, `-model` uses `$OPENAI_MODEL` if set, otherwise it falls
 back to `gpt-5`.
+
+### Request-scoped model selection
+
+An OpenClaw runtime can pre-register multiple models under stable aliases:
+
+```yaml
+model:
+  default: balanced
+  models:
+    balanced:
+      mode: openai
+      name: deepseek-v4-pro
+      openai_variant: deepseek
+      base_url: "${DEEPSEEK_BASE_URL}"
+    fast:
+      mode: openai
+      name: deepseek-v4-flash
+      openai_variant: deepseek
+      base_url: "${DEEPSEEK_BASE_URL}"
+    strong:
+      mode: openai
+      name: gpt-5
+      openai_variant: openai
+      base_url: "${OPENAI_BASE_URL}"
+```
+
+Request-scoped selection is available for the default `agent-type: llm`.
+`model.default` must name an entry in `model.models`. A `generation_config`
+alongside `default` is shared by all entries. The legacy single-model fields
+(`model.mode`, `model.name`, and related provider fields) remain supported,
+but must not be mixed with `model.models`.
+
+For OpenAI-compatible YAML entries, OpenClaw uses the variant-specific
+credential when configured (`DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY`,
+`MINIMAX_API_KEY`, or `MOONSHOT_API_KEY`) and otherwise falls back to
+`OPENAI_API_KEY`.
+
+Gateway callers select one configured alias for a single run with the
+top-level `model` field:
+
+```json
+{
+  "from": "user-1",
+  "session_id": "conversation-1",
+  "text": "Analyze this issue",
+  "model": "strong"
+}
+```
+
+Omitting `model` uses `model.default`. An unknown alias is rejected with HTTP
+400 and `error.type = "invalid_model"`; the OpenClaw Gateway never silently
+falls back to the default model. Explicit request selection takes precedence
+over a runtime profile's `model_name`. The selection applies to the current
+main-agent run; session summaries, automatic memory processing, titles, and
+separately hosted subagents continue to use their configured defaults.
+
+Embedded distributions may supply already constructed model instances:
+
+```go
+rt, err := app.NewRuntimeWithOptions(
+    ctx,
+    args,
+    app.WithModelCatalog(app.ModelCatalog{
+        Default: "balanced",
+        Models: map[string]model.Model{
+            "balanced": balancedModel,
+            "strong": strongModel,
+        },
+        Metadata: map[string]app.ModelMetadata{
+            "balanced": {
+                Mode:          "openai",
+                OpenAIVariant: "deepseek",
+                BaseURL:       "https://api.deepseek.com/v1",
+            },
+            "strong": {
+                Mode:          "openai",
+                OpenAIVariant: "openai",
+            },
+        },
+    }),
+)
+```
+
+`WithModelCatalog` is mutually exclusive with YAML `model.models`. Requests
+only carry aliases; model base URLs, credentials, headers, and other provider
+configuration remain server-side. `Metadata` is optional and defaults to the
+legacy top-level model settings. Embedded catalogs should provide it when
+entries use different provider variants or base URLs so OpenClaw can apply
+provider-specific gateway compatibility and deadline-finalization behavior for
+the selected alias. To explicitly clear an inherited base URL, set
+`BaseURLSet: true` with an empty `BaseURL`.
 
 You can override the OpenAI-compatible base URL with:
 

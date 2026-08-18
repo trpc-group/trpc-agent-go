@@ -164,6 +164,93 @@ func TestMemoryService_UpdateMemory_RotatesIDAndReturnsResult(t *testing.T) {
 	assert.Equal(t, memory.KindFact, memories[0].Memory.Kind)
 }
 
+func TestMemoryService_UpdateMemory_SameIDUpdatesInPlace(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	require.NoError(t, service.AddMemory(ctx, userKey, "same content", []string{"old"}))
+	entries, err := service.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	oldID := entries[0].ID
+
+	result := &memory.UpdateResult{}
+	require.NoError(t, service.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: oldID,
+		},
+		"same content",
+		[]string{"new"},
+		memory.WithUpdateResult(result),
+	))
+	require.Equal(t, oldID, result.MemoryID)
+
+	entries, err = service.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, oldID, entries[0].ID)
+	require.Equal(t, []string{"new"}, entries[0].Memory.Topics)
+}
+
+func TestMemoryService_UpdateMemory_ActiveIDConflictPreservesEntries(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	require.NoError(t, service.AddMemory(ctx, userKey, "source", []string{"source"}))
+	require.NoError(t, service.AddMemory(ctx, userKey, "target", []string{"target"}))
+
+	entries, err := service.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	var sourceID string
+	for _, entry := range entries {
+		if entry.Memory.Memory == "source" {
+			sourceID = entry.ID
+		}
+	}
+	require.NotEmpty(t, sourceID)
+
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+	err = service.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: sourceID,
+		},
+		"target",
+		[]string{"target"},
+		memory.WithUpdateResult(result),
+	)
+	require.Error(t, err)
+	require.Equal(t, "unchanged", result.MemoryID)
+
+	entries, err = service.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	entriesByID := make(map[string]*memory.Entry, len(entries))
+	for _, entry := range entries {
+		entriesByID[entry.ID] = entry
+	}
+	require.Len(t, entriesByID, 2)
+	require.Contains(t, entriesByID, sourceID)
+	require.Equal(t, "source", entriesByID[sourceID].Memory.Memory)
+	require.Equal(t, []string{"source"}, entriesByID[sourceID].Memory.Topics)
+}
+
 func TestMemoryService_UpdateMemory_PreservesMetadataWhenNotProvided(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
@@ -763,6 +850,7 @@ func TestSearchMemories_NilUser(t *testing.T) {
 
 // mockExtractor is a mock implementation of extractor.MemoryExtractor.
 type mockExtractor struct {
+	mu            sync.RWMutex
 	extractCalled bool
 }
 
@@ -771,8 +859,16 @@ func (m *mockExtractor) Extract(
 	messages []model.Message,
 	existing []*memory.Entry,
 ) ([]*extractor.Operation, error) {
+	m.mu.Lock()
 	m.extractCalled = true
+	m.mu.Unlock()
 	return nil, nil
+}
+
+func (m *mockExtractor) wasExtractCalled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.extractCalled
 }
 
 func (m *mockExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bool {
@@ -876,9 +972,13 @@ func TestEnqueueAutoMemoryJob_WithExtractor(t *testing.T) {
 	err := service.EnqueueAutoMemoryJob(ctx, sess)
 	assert.NoError(t, err)
 
-	// Wait for async processing.
-	time.Sleep(50 * time.Millisecond)
-	assert.True(t, ext.extractCalled)
+	require.Eventually(
+		t,
+		ext.wasExtractCalled,
+		time.Second,
+		time.Millisecond,
+		"extractor was not called",
+	)
 }
 
 func TestEnqueueAutoMemoryJob_DisableOnExternalContext(t *testing.T) {
@@ -904,7 +1004,7 @@ func TestEnqueueAutoMemoryJob_DisableOnExternalContext(t *testing.T) {
 	err := service.EnqueueAutoMemoryJob(ctx, sess)
 	require.NoError(t, err)
 
-	assert.False(t, ext.extractCalled)
+	assert.False(t, ext.wasExtractCalled())
 }
 
 func TestClose(t *testing.T) {

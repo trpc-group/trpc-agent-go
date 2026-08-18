@@ -96,19 +96,22 @@ llmAgent := llmagent.New(
 )
 ```
 
-### Placeholder Variables (Session State Injection)
+### Placeholder Variables (State Injection)
 
-LLMAgent automatically injects session state into `Instruction` and the optional `SystemPrompt` via placeholder variables. Supported patterns:
+LLMAgent automatically injects state into `Instruction` and the optional `SystemPrompt` via placeholder variables. Supported patterns:
 
 - `{key}`: Replaced with the string value corresponding to the key `key` in the session state (write via `invocation.Session.SetState("key", ...)` or SessionService)
 - `{key?}`: Optional; if missing, replaced with an empty string
 - `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`: Use user/app/temp scoped keys (session services merge app/user state into session with these prefixes)
 - `{invocation:subkey}`: Replaces with the value of fmt.Sprintf("%+v", `invocation.state["subkey"]`). (The state can be set via invocation.SetState(k, v))
+- `{runtime:subkey}`: Reads request-scoped data from `RunOptions.RuntimeState` (set via `agent.WithRuntimeState` or `agent.MergeRuntimeState`)
 
 Notes:
 
 - If a non-optional key is not found, the original `{key}` is preserved (helps the LLM notice missing context)
-- Values are read from session state (Runner + SessionService set/merge this automatically)
+- Add `?` before the closing brace to make any supported placeholder optional, for example `{runtime:document?}`
+- Bare and app/user/temp-prefixed keys read session state; `invocation:` and `runtime:` read only their respective state stores and do not fall back to session state
+- Runtime strings are injected as plain text; primitive values use their JSON text representation, and objects and arrays are injected as JSON
 
 Example:
 
@@ -118,12 +121,17 @@ llm := llmagent.New(
   llmagent.WithModel(modelInstance),
   llmagent.WithInstruction(
     "You are a research assistant. Focus: {research_topics}. " +
-    "User interests: {user:topics?}. App banner: {app:banner?}.",
+    "User interests: {user:topics?}. App banner: {app:banner?}. " +
+    "Draft: {runtime:document?}.",
   ),
 )
 
-inv := agent.NewInvoction()
+inv := agent.NewInvocation()
 inv.SetState("case", "case-1")
+
+runOptions := []agent.RunOption{
+  agent.WithRuntimeState(map[string]any{"document": "Current draft"}),
+}
 
 // Initialize session state (Runner + SessionService)
 _ = sessionService.UpdateUserState(ctx, session.UserKey{AppName: app, UserID: user}, session.StateMap{
@@ -492,6 +500,8 @@ To prevent Agents from entering infinite loops or consuming excessive resources,
 |---------------|-------------|
 | `llmagent.WithMaxLLMCalls(n)` | Limits the maximum number of LLM calls per invocation. Takes effect when `n > 0`; no limit when `n <= 0` (default). |
 | `llmagent.WithMaxToolIterations(n)` | Limits the maximum number of tool-call iterations per invocation. Takes effect when `n > 0`; no limit when `n <= 0` (default). |
+| `llmagent.WithLLMCallLimitFinalization(instruction)` | Uses the last call allowed by `WithMaxLLMCalls` for a tool-free final response. |
+| `llmagent.WithToolIterationLimitFinalization(instruction)` | Requests a tool-free final response after the last fully framework-executed iteration allowed by `WithMaxToolIterations`, if the current invocation and LLM-call budget permit another call. |
 
 **Usage Example:**
 
@@ -504,15 +514,28 @@ agent := llmagent.New(
   llmagent.WithMaxLLMCalls(10),
   // Limit to at most 5 tool-call iterations.
   llmagent.WithMaxToolIterations(5),
+  // Opt in to graceful, tool-free final responses at both limits.
+  // An empty string selects the framework's default instruction.
+  llmagent.WithLLMCallLimitFinalization(""),
+  llmagent.WithToolIterationLimitFinalization(""),
 )
 ```
 
 **Behavior:**
 
-- **`WithMaxLLMCalls`**: When LLM call count exceeds the limit, a `StopError` is returned and the current invocation terminates.
-- **`WithMaxToolIterations`**: When tool iteration count exceeds the limit, a `flow_error` response event is emitted and the invocation ends. It does not return a `StopError`.
+- Without a finalization option, the existing behavior is unchanged:
+  - **`WithMaxLLMCalls`** returns a `StopError` when the count exceeds the limit.
+  - **`WithMaxToolIterations`** emits a `flow_error` response event when the count exceeds the limit.
+- Each finalization option is independent and opt-in. Pass `""` to use the framework's default finalization instruction, or pass a non-empty string to provide a custom instruction.
+- LLM-limit finalization uses the final call inside `MaxLLMCalls`. Tool-limit finalization uses the next LLM call after the final allowed tool iteration.
+- Tool-limit finalization requires every tool call in the limit-reaching iteration to be framework-executed. If any call is external or deferred by `WithToolExecutionFilter`, the response still counts toward `MaxToolIterations`, but the current run follows the existing caller-executed lifecycle and ends without a finalization call. A later caller continuation is a new invocation with independent limits.
+- `MaxLLMCalls` remains a strict outer budget. Finalization calls count toward it, so reserve an LLM call when combining tool-limit finalization with `WithMaxLLMCalls`.
+- For the final model request, the instruction is appended as a transient tail user message without changing the existing system prompt. It is visible to before-model callbacks but is not emitted or persisted as a user event.
+- During finalization, tools and forced tool-choice fields are removed before before-model callbacks and scrubbed again after callbacks. If a tool call is still produced, the framework rejects it without executing the tool.
+- If both finalization policies become eligible on the same LLM call, the LLM-limit instruction takes precedence.
 - Both limits are independent and can be used separately or together.
 - These limits are per-invocation; different `runner.Run()` calls maintain independent counts.
+- `(*agent.Invocation).ToolIterationCount()` provides read-only access to the tool-iteration limit enforcement counter. It remains zero when `MaxToolIterations` is not positive, includes the over-limit tool-call response that is rejected without execution, starts from zero in `Clone()`, and is preserved by `View()`. It is not a general tool-usage metric.
 
 **Recommended Usage:**
 
@@ -896,6 +919,31 @@ Structured output ensures that agent responses conform to a predefined format, m
 | **Schema Validation** | ✅ By LLM | ✅ By LLM | ✅ By LLM | ❌ None |
 | **Data Location** | Event.StructuredOutput | Event.StructuredOutput | Model response content | Session State |
 | **Primary Use Case** | Flexible schema with tools | Type-safe structured output | Simple structured responses | State storage & flow control |
+
+### Provider Compatibility
+
+The framework allows tools to be configured with
+`WithStructuredOutputJSONSchema` or `WithStructuredOutputJSON`, but the model
+service must also support combining tool calling with native structured output.
+Some OpenAI-compatible endpoints accept both `tools` and
+`response_format: json_schema` while applying the JSON constraint to the entire
+generation. In that case, constrained decoding can suppress the model-specific
+tool-call syntax and return schema-valid JSON without any tool call.
+
+An HTTP success response and valid JSON therefore do not prove that a required
+tool ran. When correctness depends on tool execution, verify the tool-call and
+tool-result events. If an endpoint does not reliably support the combination,
+split the operation into a tool-enabled call without native structured output,
+followed by a tool-disabled call that produces the structured final response.
+The second call must receive the first call's evidence by continuing the same
+session or message history, or by explicitly including its tool-call and
+tool-result messages.
+
+Related backend discussions include
+[vLLM #39929](https://github.com/vllm-project/vllm/issues/39929), which tracks
+`response_format` suppressing automatic tool calls, and
+[SGLang #21593](https://github.com/sgl-project/sglang/pull/21593), which fixes
+conflicts between constrained decoding and model-specific tool-call formats.
 
 ### WithStructuredOutputJSONSchema
 
@@ -1536,7 +1584,7 @@ Execution traces are attached to the runner completion event as an in-memory art
 Each recorded step carries stable fields such as:
 
 - `NodeID`: the static node path for the executed node
-- `NodeType`: the node's semantic type (`function`, `llm`, `tool`, or `agent`), matching the node kind in the static structure
+- `NodeType`: the node's semantic type (`function`, `llm`, `tool`, or `agent`), matching the node kind in the static structure; `agent` represents an agent execution unit, including `LLMAgent`, and `llm` represents an explicit LLM operation node
 - `PredecessorStepIDs`: the direct step dependencies in this run
 - `Input` and `Output`: stable text snapshots captured for the step
 - `Error`: the terminal step error, when the step fails

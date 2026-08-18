@@ -46,11 +46,28 @@ func TestEnsureLayout_LoadSaveMetadata(t *testing.T) {
 		Mode:      "copy",
 		Timestamp: time.Now(),
 	})
+	md.Prepared = map[string]PreparedRecord{
+		"bootstrap": {
+			Key:         "bootstrap",
+			Fingerprint: "v1",
+			Generation:  "process-and-instance-generation",
+		},
+	}
 	require.NoError(t, SaveMetadata(root, md))
 	md2, err := LoadMetadata(root)
 	require.NoError(t, err)
 	require.Equal(t, md.Version, md2.Version)
 	require.Equal(t, len(md.Inputs), len(md2.Inputs))
+	require.Equal(t, "process-and-instance-generation",
+		md2.Prepared["bootstrap"].Generation)
+}
+
+func TestPreparedRecord_LegacyJSONHasEmptyGeneration(t *testing.T) {
+	var record PreparedRecord
+	require.NoError(t, json.Unmarshal([]byte(
+		`{"key":"bootstrap","fingerprint":"v1"}`,
+	), &record))
+	require.Empty(t, record.Generation)
 }
 
 func TestLoadMetadata_MissingFileReturnsDefault(t *testing.T) {

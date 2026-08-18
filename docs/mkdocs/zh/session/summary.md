@@ -36,7 +36,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(                     // 任一条件满足即触发
         summary.CheckEventThreshold(20),       // 自上次摘要后新增 20 个事件后触发
         summary.CheckTokenThreshold(4000),     // 自上次摘要后新增 4000 个 token 后触发
-        summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；比较被检查 session 的最后一个事件（在增量摘要路径里通常就是最近一个待摘要事件）
+        summary.CheckTimeThreshold(5*time.Minute), // Runner 路径：下一请求到来前的空闲时间超过 5 分钟时触发
     ),
     summary.WithMaxSummaryWords(200),          // 限制摘要在 200 字以内
 )
@@ -153,7 +153,7 @@ conversation text；如果配置了 `WithPreSummaryHook(...)`，还会先执行�
 hook。随后摘要模型收到的请求由下面两部分组成：
 
 - 可选的 system message，来自 `WithSystemPrompt(...)`。
-- 一条 user message，来自 `WithPrompt(...)`；其中 `{conversation_text}` 会被替换为提取出的对话文本。
+- 一条 user message，来自 `WithPrompt(...)`；其中 `{conversation_text}` 会被替换为提取出的对话文本。自定义 prompt 还可以使用 `{previous_summary}`，把上一版滚动摘要与本次新增的对话事件分别放置。
 
 这条请求和主 agent 的请求相互独立，因此同步摘要、异步摘要、手动调用摘要接口
 都能使用。
@@ -181,7 +181,38 @@ summarizer := summary.NewSummarizer(
 
 这样摘要请求和父请求拥有相同的前缀，支持 prompt cache 的模型服务就能复用更多
 已缓存输入。如果当前没有父请求，例如手动或外部调用摘要接口，摘要器会自动
-回退到独立摘要请求。
+回退到独立摘要请求。开启 cache-safe forking 后，这条独立请求的 user message 会先
+放入 `WithPrompt(...)` 的渲染结果，再追加固定的 source-data boundary 和
+`WithCacheSafeForkPrompt(...)` 渲染出的指令。boundary 会明确要求模型把前面的对话
+当作待总结的源数据，而不是需要继续执行的任务。其他 standalone fallback（包括
+bounded 请求和 retry 请求）也使用相同结构。
+
+无论最终使用哪种请求，发送前都会按摘要模型的有效输入预算做准入检查：如果模型
+能够提供 provider-specific input budget，框架会取它与“模型 context window 的
+70%”这层保守上限中的较小值。fork 请求超预算时，框架只修改 clone，不会污染父
+请求：先移除摘要调用不会使用的 tool schemas，必要时再用明确的省略标记替换较大
+的 tool arguments/results payload，但不会删除 source conversation turn。如果仍然
+放不下，再重建为 bounded standalone 请求。完整渲染后的 fork prompt（包括自定义
+内容）在 fork 和 standalone 两种请求中都会占用输入预算。当预算能够容纳全部尚未
+覆盖的新对话时，standalone 路径会完整保留这些内容；使用
+`{previous_summary}` 时，只允许压缩这块上一版滚动摘要。固定的 system prompt、
+user prompt 模板、source boundary 和 fork prompt 都会保持完整。
+
+如果尚未覆盖的新对话无法一次放进 standalone 请求，摘要器可以先处理较旧的完整
+前缀，其余 events 保持未覆盖，留待后续摘要。前缀只能结束在稳定的 event 边界，
+不能拆开同一 response 的 chunks，也不能拆开仍未闭合的 tool call/result round。
+只有模型生成与 post-summary 处理都完成后，summary boundary 才会推进到所选前缀。
+如果连最小的完整前缀都放不下，请求会在调用模型前失败，原 boundary 保持不变。
+配置 `WithPreSummaryHook(...)` 时不会启用部分前缀 fallback，因为 hook 重写后的文本
+无法安全映射回 event boundary。前缀摘要始终使用 standalone 请求，不会复用
+cache-safe fork。
+
+预算适配和 fork → standalone 的选择发生在 `BeforeModel` callback 之前，因此
+callback 看到并修改的就是最终准备送模的请求。callback 返回后框架会再次计数；
+如果 callback 自己把请求扩到超预算，会明确失败，而不是再次换请求并静默丢失
+callback 的修改。如果 provider 仍返回 context-length error，或者非 custom 的
+模型调用返回空 summary，摘要器会用第一次输入预算的一半再做一次 bounded
+standalone 重试；这次重试也可以按相同的边界规则选择更小的完整前缀。
 
 这里有一个重要的 branch 摘要行为：开启 `WithCacheSafeForking(true)` 后，非空
 branch 触发摘要时，可以用当前父请求 fork 来生成 branch 摘要；但同一轮 summary
@@ -192,14 +223,20 @@ pass 不会再跑级联出来的全量会话摘要。框架会直接跳过这个
 Prompt 规则：
 
 - `WithPrompt(...)` 配置独立摘要请求的 user prompt，必须包含
-  `{conversation_text}`。如果配置了 `WithMaxSummaryWords(...)`，
+  `{conversation_text}`，并可选包含 `{previous_summary}`。使用该可选占位符时，
+  `{previous_summary}` 是上一版滚动摘要，`{conversation_text}` 只包含摘要边界后
+  新增的事件；不使用时，上一版摘要继续合并在 `{conversation_text}` 中以保持兼容。
+  如果配置了 `WithMaxSummaryWords(...)`，
   `{max_summary_words}` 必须出现在 `WithPrompt(...)` 或
   `WithSystemPrompt(...)` 其中之一。
 - `WithSystemPrompt(...)` 配置独立摘要请求里可选的 system message，不能包含
-  `{conversation_text}`，可以包含 `{max_summary_words}`。
-- `WithCacheSafeForkPrompt(...)` 只配置 fork 模式下追加的 user message，不能
-  包含 `{conversation_text}`，因为克隆出来的父请求里已经有对话内容；它可以包含
-  `{max_summary_words}`。
+  `{conversation_text}` 或 `{previous_summary}`，可以包含 `{max_summary_words}`。
+- `WithCacheSafeForkPrompt(...)` 配置开启 cache-safe forking 后使用的最终摘要指令。
+  在 fork 模式下，它会作为 user message 追加到克隆的父请求；在 standalone
+  fallback 中，它会追加到同一条 standalone user message 的固定 source-data
+  boundary 之后。它不能包含 `{conversation_text}` 或 `{previous_summary}`，因为
+  两种请求结构都已在它前面放入源对话；它可以包含 `{max_summary_words}`，完整的
+  渲染结果会计入摘要模型的输入预算。
 
 即使开启了 cache-safe forking，也要保持独立摘要 prompt 有效，因为 fallback
 路径仍然会使用它。自定义 fork prompt 时，建议明确要求模型“总结上面的对话，
@@ -208,9 +245,11 @@ Prompt 规则：
 和 tool-use 指令当作事实写进摘要。
 
 `WithPreSummaryHook(...)` 仍然会在摘要模型调用前执行。独立摘要模式下，hook
-修改后的文本会渲染进 `{conversation_text}`；如果 fork 模式拿到了父请求，则
-这段文本不会再被塞进摘要请求，因为对话内容已经在克隆的父请求里。此时 hook
-仍可用于更新 context、做副作用处理，以及服务 fallback 到独立摘要请求的场景。
+修改后的文本会渲染进 `{conversation_text}`。当 prompt 使用
+`{previous_summary}` 时，hook 的 `Events` 和 `Text` 是本次新增对话，
+`PreviousSummary` 则是可以单独修改的上一版摘要。如果 fork 模式拿到了父请求，
+这些 payload 修改不会再被塞进摘要请求，因为对话内容已经在克隆的父请求里。
+此时 hook 仍可用于更新 context、做副作用处理，以及服务 fallback 到独立摘要请求的场景。
 
 在 fork 模式下，`WithPreSummaryHook(...)` 对 text 或 events 的修改不会对克隆
 出来的父请求做脱敏、redaction 或 filtering。如果这个 hook 用于在摘要前做脱敏
@@ -421,7 +460,7 @@ resolver 返回 nil 会跳过自动摘要检查；如果直接调用 `Summarize`
 | `WithEventThreshold(eventCount int)` | 当自上次摘要后的事件数量超过阈值时触发 |
 | `WithTokenThreshold(tokenCount int)` | 当自上次摘要后的 token 数量超过阈值时触发 |
 | `WithContextThreshold(opts ...ContextThresholdOption)` | 当自上次摘要后的 token 数量超过当前模型 context window 的指定比例时触发 |
-| `WithTimeThreshold(interval time.Duration)` | 在执行摘要检查时，包装 `CheckTimeThreshold`；当被检查 session 的最后一个事件距离当前已超过该间隔时触发 |
+| `WithTimeThreshold(interval time.Duration)` | Runner 路径按当前顶层 request 到来前的空闲间隔判断；standalone 调用保留“最后事件距现在多久”的兼容行为 |
 
 如果你希望使用固定的业务阈值，例如“不管当前使用什么模型，只要新增
 4000 token 就摘要”，使用 `WithTokenThreshold`。这个阈值会固化在摘要器配置里，
@@ -552,10 +591,10 @@ summary.WithChecksAny(
 | 选项 | 说明 |
 | --- | --- |
 | `WithMaxSummaryWords(maxWords int)` | 限制摘要的最大字数，包含在提示词中指导模型生成 |
-| `WithPrompt(prompt string)` | 自定义摘要提示词，必须包含 `{conversation_text}` 占位符 |
-| `WithSystemPrompt(prompt string)` | 为摘要额外添加独立的 system message 指令；不能包含 `{conversation_text}` |
+| `WithPrompt(prompt string)` | 自定义摘要提示词，必须包含 `{conversation_text}`，可选包含 `{previous_summary}` |
+| `WithSystemPrompt(prompt string)` | 为摘要额外添加独立的 system message 指令；不能包含 `{conversation_text}` 或 `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | 在有父请求可用时，启用 cache-safe 摘要请求 forking。默认关闭 |
-| `WithCacheSafeForkPrompt(prompt string)` | 自定义 cache-safe fork 模式下追加的压缩 user message。可包含 `{max_summary_words}`，但不能包含 `{conversation_text}` |
+| `WithCacheSafeForkPrompt(prompt string)` | 自定义 cache-safe fork 请求的最终指令；standalone fallback 会在 source-data boundary 后追加同一指令，其渲染结果会计入输入预算。可包含 `{max_summary_words}`，但不能包含 `{conversation_text}` 或 `{previous_summary}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | 自定义函数跳过最近事件 |
 
 ### Hook 选项
@@ -657,7 +696,7 @@ type Checker func(sess *session.Session) bool
 | Checker | 说明 |
 | --- | --- |
 | `CheckEventThreshold(eventCount int)` | 当自上次摘要以来的增量事件数大于阈值时返回 true |
-| `CheckTimeThreshold(interval time.Duration)` | 当被检查 session 的最后一个事件距离当前已超过该间隔时返回 true |
+| `CheckTimeThreshold(interval time.Duration)` | Runner 摘要路径检查当前顶层 request 到来前的空闲间隔；没有 Runner observation 的直接调用保留 last-event-age 行为 |
 | `CheckTokenThreshold(tokenCount int)` | 当自上次摘要以来的增量事件提取的对话文本估算 token 数大于阈值时返回 true（通过 `TokenCounter` 估算，而非 `event.Response.Usage.TotalTokens`） |
 | `ChecksAll(checks []Checker)` | 组合多个 Checker，所有都返回 true 时才返回 true（AND） |
 | `ChecksAny(checks []Checker)` | 组合多个 Checker，任一返回 true 时返回 true（OR） |
@@ -683,10 +722,32 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-**必需占位符**：
+**Prompt 占位符**：
 
 - `{conversation_text}`：必须包含，会被对话内容替换
+- `{previous_summary}`：可选，用于把上一版滚动摘要与摘要边界后的新增事件分开；
+  第一次摘要时为空。不使用该占位符时，上一版摘要仍会合并进
+  `{conversation_text}`，保持原有行为
 - `{max_summary_words}`：当 `maxSummaryWords > 0` 时，必须包含在 `WithPrompt(...)` 或 `WithSystemPrompt(...)` 其中之一
+
+如果希望在增量摘要中单独放置上一版摘要，可以这样写：
+
+```go
+userPrompt := `请根据新增对话更新上一版摘要。
+
+<previous_summary>
+{previous_summary}
+</previous_summary>
+
+<new_conversation>
+{conversation_text}
+</new_conversation>
+
+更新后的摘要：`
+```
+
+`{previous_summary}` 适用于 standalone 请求和 cache-safe fallback 请求。
+cache-safe fork 成功时会直接使用克隆的父请求，摘要在父请求中的位置不会由该占位符改变。
 
 如果希望把摘要指令放到独立的 system message，可以组合使用
 `WithSystemPrompt` 和一个更轻量的 user prompt：
@@ -715,7 +776,8 @@ summarizer := summary.NewSummarizer(
 
 - `WithPrompt` 仍然渲染到 **user message**
 - `WithSystemPrompt` 会渲染到独立的 **system message**
-- `WithSystemPrompt` 不能包含 `{conversation_text}`；对话内容必须保留在 user prompt 中
+- `WithSystemPrompt` 不能包含 `{conversation_text}` 或
+  `{previous_summary}`；对话内容必须保留在 user prompt 中
 
 ## Token 计数器配置
 
@@ -864,6 +926,11 @@ type PostSummaryHookContext struct {
 type PostSummaryHook func(in *PostSummaryHookContext) error
 ```
 
+Hook 会看到本次 summary source 对应的临时 boundary。Hook 成功，或其错误被配置为
+不中断流程时，摘要器会在 Hook 返回后恢复该 source 的精确 boundary，因此 Hook 对
+summary boundary state 的写入不会保留。Hook 以错误中断或发生 panic 时，则恢复本次
+摘要尝试前的 boundary。
+
 ### 使用示例
 
 ```go
@@ -894,10 +961,10 @@ Runner 在每次对话完成后自动检查触发条件，满足条件时在后�
 - 事件数量超过阈值（`WithEventThreshold`）
 - Token 数量超过阈值（`WithTokenThreshold`）
 - Token 数量超过当前模型 context window 的指定比例（`WithContextThreshold`）
-- 在一次摘要检查中，被检查 session 的最后一个事件已超过指定时间；在默认增量摘要路径里，这通常就是最近一个待摘要事件（`WithTimeThreshold`）
+- 当前顶层 request 到来前的空闲间隔超过阈值（Runner 路径中的 `WithTimeThreshold`）
 - 满足自定义组合条件（`WithChecksAny` / `WithChecksAll`）
 
-`WithTimeThreshold` 不是后台定时器。系统不会在“静默满 5 分钟”的瞬间主动生成摘要；只有在执行摘要检查时才会评估，通常发生在一轮对话结束后，或你手动调用摘要 API 时。它判断的是被检查 session 的最后一个事件；在默认增量摘要路径里，这个 session 只包含待摘要增量，所以 `5*time.Minute` 通常等价于：“到下一次摘要检查时，如果最近一个待摘要事件已经超过 5 分钟，就立即生成摘要。”
+`WithTimeThreshold` 不是后台定时器。Runner 自动路径会在顶层 request 到达时固定记录时间，并将它与同一摘要 scope 中的上一条相关事件比较。例如，`5*time.Minute` 表示：“下一次顶层 request 在该 scope 静默超过 5 分钟后到达时，由这次 request 引发的摘要检查可以触发。”模型响应耗时和异步 worker 排队时间不会计入 gap。没有 Runner request observation 的直接 checker 或摘要 API 调用保留原有的 last-event-age 行为。
 
 ### 同轮同步摘要（长 ReAct loop）
 
@@ -1034,8 +1101,8 @@ llmagent.WithAddSessionSummary(true)
 
 - 会话摘要**合并到已有的系统消息中**（如果存在），否则作为新的系统消息插入到开头
 - 这确保了与要求单条系统消息位于开头的模型兼容（如 Qwen3.5 系列）
-- 包含摘要时间点之后的**所有增量事件**（不截断）
-- 保证完整上下文：浓缩历史 + 完整新对话
+- 包含摘要时间点之后的**所有增量事件**。如果同步 intra-run summary 在当前 invocation 内推进了 boundary，重建请求时还会保留当前 user message，以及 cutoff 前最新一个完整 tool round 作为有界 resume tail
+- 通过浓缩历史、cutoff 后事件和当前 invocation 的有界 resume tail 保持语义连续；更早且已被覆盖的 tool rounds 只由 summary 表达
 - **`WithMaxHistoryRuns` 参数被忽略**
 
 #### 摘要注入模式
@@ -1159,6 +1226,23 @@ LLM 摘要，也不会像 token tailoring 那样直接丢弃完整消息轮次�
 
 几类压缩的定位不同：Pass 0 是显式工具名策略；Pass 1 低阈值、全量替换，激进清理旧历史；Pass 2 高阈值、只在极端情况触发，也可能作用于当前 request。
 
+同步 intra-run summary 还有一条专门的请求投影规则。如果新 summary boundary
+覆盖到了当前 invocation 的 events，那么普通已覆盖历史以 boundary 为硬边界，
+但重建后的主 agent 请求仍会保留：
+
+1. 当前 invocation 的 user message。
+2. cutoff 前最新一个完整 tool round；并行 tool calls 及其匹配 results 会整批保留。
+3. cutoff 后的全部增量 events。
+
+框架只恢复这一个最新的完整 tool round；更早的已覆盖 tool rounds 只由 summary
+表达。这个小型 resume tail 能避免主模型把已完成的工具步骤误判为“尚未执行”，
+进而重复有副作用的调用。开启 context compaction 后，恢复出来的每个 tool-call
+arguments payload，以及每个未被 keep 规则保护的 tool result，都会分别与
+`ContextCompactionToolResultMaxTokens` 比较；只替换单项超限的内容，并保留
+tool ID、名称和 call/result 配对。关闭 context compaction 时，框架不会改写这些
+payload。如果 cutoff 正好落在 tool call 和 result 中间，原有的配对修复仍会补齐
+协议结构，但不会带回无关的已覆盖历史。
+
 Pass 2 默认是关闭的（`0`），需要满足两个条件才会生效：(1) `WithEnableContextCompaction(true)` 总开关已打开；(2) `ContextCompactionOversizedToolResultMaxTokens > 0`（推荐显式传入 `8192`，可读取常量 `processor.DefaultContextCompactionOversizedToolResultMaxTokens`）。这样 `EnableContextCompaction=false` 在语义上始终等于"框架不会修改任何 tool result"。
 
 如果需要按工具名控制行为，可以使用 `WithToolResultCompactionConfig(...)`：
@@ -1225,11 +1309,14 @@ request，用来检查历史大 `tool result` 是否按预期被替换为占位�
 │ System Prompt                           │
 │ (merged with Session Summary)           │ ← 系统提示 + 浓缩历史
 ├─────────────────────────────────────────┤
+│ User: current invocation message        │ ← intra-run cutoff 后仍保留
+├─────────────────────────────────────────┤
+│ Latest complete pre-cutoff tool round   │ ← 最多一轮；超大 payload 可替换为占位符
+├─────────────────────────────────────────┤
 │ Event 1 (after summary)                 │ ┐
-│ Event 2                                 │ │
-│ Event 3                                 │ │ 摘要后的新事件
-│ ...                                     │ │ (完整保留)
-│ Event N (current message)               │ ┘
+│ Event 2                                 │ │ 摘要后的增量 events
+│ ...                                     │ │ （受已配置 compaction/tailoring 约束）
+│ Event N                                 │ ┘
 └─────────────────────────────────────────┘
 ```
 
@@ -1507,7 +1594,7 @@ func main() {
         summary.WithChecksAny(
             summary.CheckEventThreshold(20),
             summary.CheckTokenThreshold(4000),
-            summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；比较被检查 session 的最后一个事件（在增量摘要路径里通常就是最近一个待摘要事件）
+            summary.CheckTimeThreshold(5*time.Minute), // Runner 路径：下一请求到来前的空闲时间超过 5 分钟时触发
         ),
     )
 

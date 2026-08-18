@@ -29,6 +29,7 @@ import (
 	openai "github.com/openai/openai-go"
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
+	openaiparam "github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/packages/ssestream"
 	"go.opentelemetry.io/otel/attribute"
@@ -36,6 +37,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -57,6 +59,8 @@ func TestMain(m *testing.M) {
 func TestNew(t *testing.T) {
 	var testKey = "test-key"
 	t.Setenv(deepSeekAPIKeyName, testKey)
+	t.Setenv(miniMaxAPIKeyName, testKey)
+	t.Setenv(kimiAPIKeyName, testKey)
 	tests := []struct {
 		name       string
 		modelName  string
@@ -94,6 +98,92 @@ func TestNew(t *testing.T) {
 			expectOpts: []Option{
 				WithAPIKey(testKey),
 				WithBaseURL(defaultDeepSeekBaseURL),
+			},
+		},
+		{
+			name:      "variant minimax",
+			modelName: "MiniMax-M3",
+			opts: []Option{
+				WithVariant(VariantMiniMax),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultMiniMaxBaseURL),
+			},
+		},
+		{
+			name:      "does not infer minimax from official model name",
+			modelName: "MiniMax-M3",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "variant kimi",
+			modelName: "kimi-k2.6",
+			opts: []Option{
+				WithVariant(VariantKimi),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultKimiBaseURL),
+			},
+		},
+		{
+			name:      "does not infer kimi from official model name",
+			modelName: "kimi-k2.6",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "infers minimax from international api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.minimax.io/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.minimax.io/v1"),
+				WithVariant(VariantMiniMax),
+			},
+		},
+		{
+			name:      "infers minimax from china api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.minimaxi.com/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.minimaxi.com/v1"),
+				WithVariant(VariantMiniMax),
+			},
+		},
+		{
+			name:      "infers kimi from international api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.moonshot.ai/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.moonshot.ai/v1"),
+				WithVariant(VariantKimi),
+			},
+		},
+		{
+			name:      "infers kimi from china api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.moonshot.cn/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.moonshot.cn/v1"),
+				WithVariant(VariantKimi),
 			},
 		},
 		{
@@ -232,11 +322,92 @@ func TestIsDeepSeekBaseURL(t *testing.T) {
 	}
 }
 
+func TestIsMiniMaxBaseURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "matches international api host",
+			rawURL: "https://api.minimax.io/v1",
+			want:   true,
+		},
+		{
+			name:   "matches china api host after trim and lowercase",
+			rawURL: " HTTPS://API.MINIMAXI.COM/V1 ",
+			want:   true,
+		},
+		{
+			name:   "does not match platform host",
+			rawURL: "https://platform.minimax.io/v1",
+			want:   false,
+		},
+		{
+			name:   "does not match custom proxy host",
+			rawURL: "https://minimax-proxy.internal/v1",
+			want:   false,
+		},
+		{
+			name:   "parse error does not fall back to substring match",
+			rawURL: "https://api.minimax.io/%zz",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isMiniMaxBaseURL(tt.rawURL))
+		})
+	}
+}
+
+func TestIsKimiBaseURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "matches international api host",
+			rawURL: "https://api.moonshot.ai/v1",
+			want:   true,
+		},
+		{
+			name:   "matches china api host after trim and lowercase",
+			rawURL: " HTTPS://API.MOONSHOT.CN/V1 ",
+			want:   true,
+		},
+		{
+			name:   "does not match platform host",
+			rawURL: "https://platform.moonshot.ai/v1",
+			want:   false,
+		},
+		{
+			name:   "does not match custom proxy host",
+			rawURL: "https://moonshot-proxy.internal/v1",
+			want:   false,
+		},
+		{
+			name:   "parse error does not fall back to substring match",
+			rawURL: "https://api.moonshot.ai/%zz",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isKimiBaseURL(tt.rawURL))
+		})
+	}
+}
+
 func TestOmittedAttachmentHint(t *testing.T) {
 	tests := []struct {
 		name       string
 		imageCount int
 		audioCount int
+		videoCount int
 		fileCount  int
 		want       string
 	}{
@@ -254,9 +425,10 @@ func TestOmittedAttachmentHint(t *testing.T) {
 			name:       "plural attachments",
 			imageCount: 2,
 			audioCount: 2,
+			videoCount: 2,
 			fileCount:  2,
 			want: "Omitted non-text attachments for this provider: " +
-				"2 images, 2 audio clips, 2 files.",
+				"2 images, 2 audio clips, 2 videos, 2 files.",
 		},
 	}
 
@@ -268,6 +440,7 @@ func TestOmittedAttachmentHint(t *testing.T) {
 				omittedAttachmentHint(
 					tt.imageCount,
 					tt.audioCount,
+					tt.videoCount,
 					tt.fileCount,
 				),
 			)
@@ -481,6 +654,80 @@ func TestModel_GenerateContentIter_Streaming(t *testing.T) {
 	require.True(t, sawHello)
 }
 
+func TestModel_GenerateContentIter_ToolsDisabledAfterCallback(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"iter-tools-disabled",
+			"object":"chat.completion",
+			"created":123,
+			"model":"gpt-3.5-turbo",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`))
+	}))
+	defer server.Close()
+
+	m := New(
+		"gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithOpenAIOptions(
+			openaiopt.WithJSONSet("tools", []any{}),
+			openaiopt.WithJSONSet("tool_choice", "required"),
+			openaiopt.WithJSONSet("parallel_tool_calls", true),
+			openaiopt.WithJSONSet("function_call", "auto"),
+			openaiopt.WithJSONSet("functions", []any{}),
+			openaiopt.WithJSONSet("client_option_field", "preserved"),
+		),
+		WithChatRequestCallback(func(
+			_ context.Context,
+			request *openaigo.ChatCompletionNewParams,
+		) {
+			request.Tools = []openaigo.ChatCompletionToolParam{{}}
+			request.ToolChoice =
+				openaigo.ChatCompletionToolChoiceOptionUnionParam{
+					OfAuto: openaigo.String("required"),
+				}
+			request.ParallelToolCalls = openaigo.Bool(true)
+			request.Functions = []openaigo.ChatCompletionNewParamsFunction{{
+				Name: "callback_function",
+			}}
+			request.SetExtraFields(map[string]any{
+				"tools":               []any{},
+				"tool_choice":         "required",
+				"parallel_tool_calls": true,
+				"function_call":       "auto",
+				"functions":           []any{},
+				"callback_field":      "preserved",
+			})
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+	}
+	ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+	seq, err := m.GenerateContentIter(ctx, req)
+	require.NoError(t, err)
+	seq(func(*model.Response) bool {
+		return true
+	})
+
+	require.NotNil(t, captured)
+	require.NotContains(t, captured, "tool_choice")
+	require.NotContains(t, captured, "parallel_tool_calls")
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "function_call")
+	require.NotContains(t, captured, "functions")
+	require.Equal(t, "preserved", captured["callback_field"])
+	require.Equal(t, "preserved", captured["client_option_field"])
+}
+
 func TestModel_ChatTelemetry_DefaultDisabledAndExplicitFalse(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -540,6 +787,7 @@ func TestModel_ChatTelemetry_OptInNonStreamingTraceAndMetrics(t *testing.T) {
 	require.Equal(t, "telemetry-non-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
 	require.Equal(t, int64(3), attrs[semconvtrace.KeyGenAIUsageInputTokens].AsInt64())
 	require.Equal(t, int64(2), attrs[semconvtrace.KeyGenAIUsageOutputTokens].AsInt64())
+	require.Equal(t, int64(5), attrs[semconvtrace.KeyGenAIUsageTotalTokens].AsInt64())
 
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(context.Background(), &rm))
@@ -3127,6 +3375,37 @@ func TestConvertUserMessageContentWithAudio(t *testing.T) {
 	assert.NotNilf(t, contentPart.OfInputAudio, "Expected audio content part to be set")
 }
 
+func TestConvertUserMessageContentAddsUnsupportedMediaHint(t *testing.T) {
+	text := "Describe the attachments"
+	message := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &text},
+			{
+				Type:  model.ContentTypeAudio,
+				Audio: &model.Audio{URL: "https://example.com/audio.mp3"},
+			},
+			{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: "https://example.com/video.mp4"},
+			},
+		},
+	}
+
+	m := &Model{}
+	content, extraFields := m.convertUserMessageContent(message)
+
+	assert.Empty(t, extraFields)
+	require.Len(t, content.OfArrayOfContentParts, 2)
+	require.NotNil(t, content.OfArrayOfContentParts[0].OfText)
+	assert.Equal(t,
+		"Omitted non-text attachments for this provider: 1 audio clip, 1 video.",
+		content.OfArrayOfContentParts[0].OfText.Text,
+	)
+	require.NotNil(t, content.OfArrayOfContentParts[1].OfText)
+	assert.Equal(t, text, content.OfArrayOfContentParts[1].OfText.Text)
+}
+
 func TestConvertUserMessageContentWithFile(t *testing.T) {
 	// Test converting user message with file content parts
 	filePart := model.ContentPart{
@@ -3227,6 +3506,19 @@ func TestConvertContentPart(t *testing.T) {
 	assert.NotNilf(t, contentPart, "Expected image content part to be converted")
 
 	assert.NotNilf(t, contentPart.OfImageURL, "Expected image content part to be set")
+
+	// Chat Completions does not support URL-based audio or video inputs.
+	audioURLPart := model.ContentPart{
+		Type:  model.ContentTypeAudio,
+		Audio: &model.Audio{URL: "https://example.com/audio.mp3"},
+	}
+	assert.Nil(t, m.convertContentPart(audioURLPart))
+
+	videoPart := model.ContentPart{
+		Type:  model.ContentTypeVideo,
+		Video: &model.Video{URL: "https://example.com/video.mp4"},
+	}
+	assert.Nil(t, m.convertContentPart(videoPart))
 
 	// Test unknown content part type
 	unknownPart := model.ContentPart{
@@ -3735,6 +4027,174 @@ func TestModel_GenerateContent_HunyuanThinkingPayload(t *testing.T) {
 	}
 }
 
+func TestModel_GenerateContent_MiniMaxThinkingPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{
+			name:    "enabled uses adaptive",
+			enabled: true,
+			want:    "adaptive",
+		},
+		{
+			name:    "disabled",
+			enabled: false,
+			want:    "disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const nativeContent = "<think>reasoning</think>answer"
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+						http.Error(w, "not found", http.StatusNotFound)
+						return
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprintf(w, `{
+						"id": "test",
+						"object": "chat.completion",
+						"created": 1699200000,
+						"model": "MiniMax-M3",
+						"choices": [{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": %q
+							},
+							"finish_reason": "stop"
+						}]
+					}`, nativeContent)
+				},
+			))
+			defer server.Close()
+
+			m := New(
+				"MiniMax-M3",
+				WithVariant(VariantMiniMax),
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &tt.enabled,
+				},
+			}
+			ch, err := m.GenerateContent(context.Background(), req)
+			require.NoError(t, err)
+			var finalContent string
+			for resp := range ch {
+				require.Nil(t, resp.Error)
+				if len(resp.Choices) > 0 {
+					finalContent = resp.Choices[0].Message.Content
+				}
+			}
+
+			thinking, ok := captured[thinkingKey].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.want, thinking["type"])
+			require.NotContains(t, captured, model.ThinkingEnabledKey)
+			require.NotContains(t, captured, "reasoning_split")
+			require.Equal(t, nativeContent, finalContent)
+
+			replayed := m.convertMessages([]model.Message{{
+				Role:    model.RoleAssistant,
+				Content: finalContent,
+			}})
+			require.Len(t, replayed, 1)
+			replayedJSON, err := json.Marshal(replayed[0])
+			require.NoError(t, err)
+			var replayedBody map[string]any
+			require.NoError(t, json.Unmarshal(replayedJSON, &replayedBody))
+			require.Equal(t, nativeContent, replayedBody["content"])
+		})
+	}
+}
+
+func TestModel_GenerateContent_KimiThinkingPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{
+			name:    "enabled",
+			enabled: true,
+			want:    "enabled",
+		},
+		{
+			name:    "disabled",
+			enabled: false,
+			want:    "disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+						http.Error(w, "not found", http.StatusNotFound)
+						return
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprint(w, `{
+						"id": "test",
+						"object": "chat.completion",
+						"created": 1699200000,
+						"model": "kimi-k2.6",
+						"choices": [{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": "ok"
+							},
+							"finish_reason": "stop"
+						}]
+					}`)
+				},
+			))
+			defer server.Close()
+
+			m := New(
+				"kimi-k2.6",
+				WithVariant(VariantKimi),
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &tt.enabled,
+				},
+			}
+			ch, err := m.GenerateContent(context.Background(), req)
+			require.NoError(t, err)
+			for resp := range ch {
+				require.Nil(t, resp.Error)
+			}
+
+			thinking, ok := captured[thinkingKey].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.want, thinking["type"])
+			require.NotContains(t, captured, model.ThinkingEnabledKey)
+		})
+	}
+}
+
 // TestModel_GenerateContent_NonStreaming_ToolCallNoID_Synthesized verifies that
 // when the provider omits tool_call.id in a non-streaming response, we synthesize
 // a stable ID (auto_call_<index>). This covers the non-streaming code path in
@@ -3958,6 +4418,233 @@ func TestUploadFileData_Success(t *testing.T) {
 	assert.Equalf(t, "file_test_1", id, "expected id=file_test_1, got %s", id)
 }
 
+func TestUploadFileData_MiniMaxDefaults(t *testing.T) {
+	const fileID = "9223372036854775807"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, miniMaxFileUploadPath, r.URL.Path)
+		require.NoError(t, r.ParseMultipartForm(10<<20))
+		require.Equal(
+			t,
+			string(miniMaxFilePurpose),
+			r.MultipartForm.Value["purpose"][0],
+		)
+		files := r.MultipartForm.File["file"]
+		require.Len(t, files, 1)
+		require.Equal(t, "clip.mp4", files[0].Filename)
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+			"file": {
+				"file_id": %s,
+				"bytes": 5,
+				"created_at": 123,
+				"filename": "clip.mp4",
+				"purpose": "video_understanding"
+			},
+			"base_resp": {"status_code": 0, "status_msg": "success"}
+		}`, fileID)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	id, err := m.UploadFileData(
+		context.Background(),
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, fileID, id)
+}
+
+func TestMiniMaxFileIDExtractor(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		nilFile bool
+		want    string
+		wantErr string
+	}{
+		{name: "nil response", nilFile: true, wantErr: "empty response"},
+		{name: "openai id", raw: `{"id":"file_1"}`, want: "file_1"},
+		{name: "missing file", raw: `{}`, wantErr: "missing file"},
+		{name: "invalid file", raw: `{"file":"bad"}`, wantErr: "decode minimax file upload response"},
+		{name: "missing file id", raw: `{"file":{}}`, wantErr: "missing file_id"},
+		{name: "empty string file id", raw: `{"file":{"file_id":""}}`, wantErr: "empty file_id"},
+		{name: "string file id", raw: `{"file":{"file_id":"123"}}`, want: "123"},
+		{name: "invalid file id", raw: `{"file":{"file_id":true}}`, wantErr: "decode minimax file_id"},
+		{name: "numeric file id", raw: `{"file":{"file_id":123}}`, want: "123"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var file *openai.FileObject
+			if !tt.nilFile {
+				file = &openai.FileObject{}
+				require.NoError(t, json.Unmarshal([]byte(tt.raw), file))
+			}
+			got, err := miniMaxFileIDExtractor(file)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestMiniMaxFileDeletionResponseValidator(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		nilFile bool
+		wantErr string
+	}{
+		{name: "nil response", nilFile: true, wantErr: "empty response"},
+		{name: "missing base response", raw: `{}`, wantErr: "missing base_resp"},
+		{
+			name:    "invalid base response",
+			raw:     `{"base_resp":"invalid"}`,
+			wantErr: "decode minimax file deletion response",
+		},
+		{
+			name: "success",
+			raw:  `{"base_resp":{"status_code":0,"status_msg":"success"}}`,
+		},
+		{
+			name:    "business error",
+			raw:     `{"base_resp":{"status_code":1004,"status_msg":"permission denied"}}`,
+			wantErr: "status_code 1004: permission denied",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var file *openai.FileDeleted
+			if !tt.nilFile {
+				file = &openai.FileDeleted{}
+				require.NoError(t, json.Unmarshal([]byte(tt.raw), file))
+			}
+			err := miniMaxFileDeletionResponseValidator(file)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestUploadedFileID(t *testing.T) {
+	m := &Model{}
+	id, err := m.uploadedFileID(&openai.FileObject{ID: "file_1"})
+	require.NoError(t, err)
+	require.Equal(t, "file_1", id)
+
+	_, err = m.uploadedFileID(nil)
+	require.ErrorContains(t, err, "empty response")
+}
+
+func TestMiniMaxFileDeletionBodyConvertor(t *testing.T) {
+	custom := []byte(`{"custom":true}`)
+	require.Equal(
+		t,
+		custom,
+		miniMaxFileDeletionBodyConvertor(
+			custom,
+			"123",
+			miniMaxFilePurpose,
+		),
+	)
+	require.JSONEq(
+		t,
+		`{"file_id":123,"purpose":"video_understanding"}`,
+		string(miniMaxFileDeletionBodyConvertor(
+			nil,
+			"123",
+			miniMaxFilePurpose,
+		)),
+	)
+	require.JSONEq(
+		t,
+		`{"file_id":"file_123","purpose":"video_understanding"}`,
+		string(miniMaxFileDeletionBodyConvertor(
+			nil,
+			"file_123",
+			miniMaxFilePurpose,
+		)),
+	)
+
+	for _, tt := range []struct {
+		name   string
+		fileID string
+		want   json.Number
+	}{
+		{name: "leading plus", fileID: "+123", want: "123"},
+		{name: "leading zeros", fileID: "00123", want: "123"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := miniMaxFileDeletionBodyConvertor(
+				nil,
+				tt.fileID,
+				miniMaxFilePurpose,
+			)
+			decoder := json.NewDecoder(bytes.NewReader(body))
+			decoder.UseNumber()
+			var payload map[string]any
+			require.NoError(t, decoder.Decode(&payload))
+			require.Equal(t, tt.want, payload["file_id"])
+		})
+	}
+}
+
+func TestUploadFileData_KimiDefaults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/v1/files", r.URL.Path)
+		require.NoError(t, r.ParseMultipartForm(10<<20))
+		require.Equal(
+			t,
+			"file-extract",
+			r.MultipartForm.Value["purpose"][0],
+		)
+		files := r.MultipartForm.File["file"]
+		require.Len(t, files, 1)
+		require.Equal(t, "notes.txt", files[0].Filename)
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id":"file_kimi_1",
+			"object":"file",
+			"bytes":5,
+			"created_at":123,
+			"filename":"notes.txt",
+			"purpose":"file-extract"
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"kimi-k2.6",
+		WithVariant(VariantKimi),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	id, err := m.UploadFileData(
+		context.Background(),
+		"notes.txt",
+		[]byte("hello"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "file_kimi_1", id)
+}
+
 // TestUploadFile_Success tests UploadFile with a temp file and mock server.
 func TestUploadFile_Success(t *testing.T) {
 	tmp, err := os.CreateTemp(t.TempDir(), "batch_input_*.jsonl")
@@ -4116,6 +4803,86 @@ func TestDeleteFile_Success(t *testing.T) {
 	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
 	err := m.DeleteFile(context.Background(), "file_z")
 	require.NoErrorf(t, err, "DeleteFile failed: %v", err)
+}
+
+func TestDeleteFile_MiniMaxDefaults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, miniMaxFileDeletePath, r.URL.Path)
+		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		decoder := json.NewDecoder(r.Body)
+		decoder.UseNumber()
+		var body map[string]any
+		require.NoError(t, decoder.Decode(&body))
+		require.Equal(t, json.Number("123"), body["file_id"])
+		require.Equal(t, string(miniMaxFilePurpose), body["purpose"])
+
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"file_id": 123,
+			"base_resp": {"status_code": 0, "status_msg": "success"}
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	require.NoError(t, m.DeleteFile(context.Background(), "123"))
+}
+
+func TestDeleteFile_MiniMaxBusinessError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"file_id": 123,
+			"base_resp": {"status_code": 1004, "status_msg": "permission denied"}
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	err := m.DeleteFile(context.Background(), "123")
+	require.ErrorContains(t, err, "status_code 1004")
+	require.ErrorContains(t, err, "permission denied")
+}
+
+func TestDeleteFile_CustomBodyDoesNotForceJSONContentType(t *testing.T) {
+	const body = "file_id=123"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.NotEqual(t, "application/json", r.Header.Get("Content-Type"))
+		got, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.Equal(t, body, string(got))
+
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"file_id": 123,
+			"base_resp": {"status_code": 0, "status_msg": "success"}
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	require.NoError(t, m.DeleteFile(
+		context.Background(),
+		"123",
+		WithBody([]byte(body)),
+	))
 }
 
 // TestModel_GenerateContent_Streaming_FinalReasoningAggregated
@@ -4555,6 +5322,22 @@ func TestWithVariant(t *testing.T) {
 		assert.True(t, opts.variantSet, "expected variantSet to be true")
 	})
 
+	t.Run("minimax variant", func(t *testing.T) {
+		opts := &options{}
+		WithVariant(VariantMiniMax)(opts)
+
+		assert.Equal(t, VariantMiniMax, opts.Variant, "expected variant to be VariantMiniMax")
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
+	})
+
+	t.Run("kimi variant", func(t *testing.T) {
+		opts := &options{}
+		WithVariant(VariantKimi)(opts)
+
+		assert.Equal(t, VariantKimi, opts.Variant, "expected variant to be VariantKimi")
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
+	})
+
 	t.Run("variant in model creation", func(t *testing.T) {
 		m := New("test-model", WithAPIKey("test-key"), WithVariant(VariantHunyuan))
 		require.NotNil(t, m, "expected model to be created")
@@ -4719,7 +5502,55 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 		chatReq, _ := m.buildChatRequest(req)
 		require.NotNil(t, chatReq.MaxCompletionTokens)
 		assert.Equal(t, int64(16384), chatReq.MaxCompletionTokens.Value)
+		assert.False(t, chatReq.MaxTokens.Valid())
+
+		raw, err := chatReq.MarshalJSON()
+		require.NoError(t, err)
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(raw, &body))
+		assert.Equal(t, float64(16384), body["max_completion_tokens"])
+		assert.NotContains(t, body, "max_tokens")
 	})
+
+	for _, tt := range []struct {
+		name string
+		opts []Option
+	}{
+		{
+			name: "official base URL",
+			opts: []Option{WithBaseURL(defaultDeepSeekBaseURL)},
+		},
+		{
+			name: "custom proxy with explicit variant",
+			opts: []Option{
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+		},
+	} {
+		t.Run("DeepSeek uses max_tokens with "+tt.name, func(t *testing.T) {
+			m := New("deepseek-v4-flash", tt.opts...)
+			maxTokens := 2048
+			req := &model.Request{
+				Messages: []model.Message{model.NewUserMessage("hi")},
+				GenerationConfig: model.GenerationConfig{
+					MaxTokens: &maxTokens,
+				},
+			}
+
+			chatReq, _ := m.buildChatRequest(req)
+			require.True(t, chatReq.MaxTokens.Valid())
+			assert.Equal(t, int64(maxTokens), chatReq.MaxTokens.Value)
+			assert.False(t, chatReq.MaxCompletionTokens.Valid())
+
+			raw, err := chatReq.MarshalJSON()
+			require.NoError(t, err)
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(raw, &body))
+			assert.Equal(t, float64(maxTokens), body["max_tokens"])
+			assert.NotContains(t, body, "max_completion_tokens")
+		})
+	}
 
 	t.Run("empty messages", func(t *testing.T) {
 		req := &model.Request{
@@ -4729,6 +5560,8 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 
 		chatReq, _ := m.buildChatRequest(req)
 		assert.Empty(t, chatReq.Messages, "expected empty messages")
+		assert.False(t, chatReq.MaxTokens.Valid())
+		assert.False(t, chatReq.MaxCompletionTokens.Valid())
 	})
 
 	t.Run("with all generation config options", func(t *testing.T) {
@@ -4904,6 +5737,7 @@ func TestConvertChatCompletionChoiceLogprobs(t *testing.T) {
 				Bytes:   []int64{65},
 				TopLogprobs: []openaigo.ChatCompletionTokenLogprobTopLogprob{
 					{Token: "B", Logprob: -0.2, Bytes: []int64{66}},
+					{Token: "C", Logprob: -0.3, Bytes: []int64{67, 68}},
 				},
 			},
 		},
@@ -4913,10 +5747,25 @@ func TestConvertChatCompletionChoiceLogprobs(t *testing.T) {
 	assert.Equal(t, "A", got.Content[0].Token)
 	assert.Equal(t, -0.1, got.Content[0].Logprob)
 	assert.Equal(t, []int{65}, got.Content[0].Bytes)
-	require.Len(t, got.Content[0].TopLogprobs, 1)
+	require.Len(t, got.Content[0].TopLogprobs, 2)
 	assert.Equal(t, "B", got.Content[0].TopLogprobs[0].Token)
 	assert.Equal(t, []int{66}, got.Content[0].TopLogprobs[0].Bytes)
-	assert.Nil(t, int64SliceToIntSlice(nil))
+	assert.Equal(t, []int{67, 68}, got.Content[0].TopLogprobs[1].Bytes)
+
+	// Each view has capped capacity, so appending cannot overwrite the
+	// neighboring bytes stored in the shared per-token arena.
+	got.Content[0].Bytes = append(got.Content[0].Bytes, 99)
+	assert.Equal(t, []int{66}, got.Content[0].TopLogprobs[0].Bytes)
+	assert.Equal(t, []int{67, 68}, got.Content[0].TopLogprobs[1].Bytes)
+	got.Content[0].TopLogprobs[0].Bytes = append(
+		got.Content[0].TopLogprobs[0].Bytes,
+		100,
+	)
+	assert.Equal(t, []int{67, 68}, got.Content[0].TopLogprobs[1].Bytes)
+
+	assert.Nil(t, convertChatCompletionChoiceLogprobs(
+		openaigo.ChatCompletionChoiceLogprobs{},
+	))
 }
 
 // TestConvertUserMessageContent_WithImage tests image content conversion.
@@ -5425,6 +6274,117 @@ func TestModel_GenerateContent_RequestExtraFieldsOverrideModelExtraFields(t *tes
 	require.NotNil(t, captured)
 	assert.Equal(t, "model_value", captured["model_field"])
 	assert.Equal(t, "request-cache", captured["prompt_cache_key"])
+}
+
+func TestModel_GenerateContent_ToolsDisabledFiltersExtraFields(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"gpt-3.5-turbo",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`))
+	}))
+	defer server.Close()
+
+	m := New(
+		"gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithOpenAIOptions(
+			openaiopt.WithJSONSet("tools", []any{}),
+			openaiopt.WithJSONSet("tool_choice", "required"),
+			openaiopt.WithJSONSet("parallel_tool_calls", true),
+			openaiopt.WithJSONSet("function_call", "auto"),
+			openaiopt.WithJSONSet("functions", []any{}),
+			openaiopt.WithJSONSet("client_option_field", "preserved"),
+		),
+		WithExtraFields(map[string]any{
+			"tool_choice":         "required",
+			"parallel_tool_calls": true,
+			"functions":           []any{},
+			"model_field":         "model-value",
+		}),
+		WithChatRequestCallback(func(
+			_ context.Context,
+			request *openaigo.ChatCompletionNewParams,
+		) {
+			request.ParallelToolCalls = openaigo.Bool(true)
+			request.Functions = []openaigo.ChatCompletionNewParamsFunction{{
+				Name: "callback_function",
+			}}
+			request.SetExtraFields(map[string]any{
+				"tools":               []any{},
+				"tool_choice":         "required",
+				"parallel_tool_calls": true,
+				"function_call":       "auto",
+				"functions":           []any{},
+				"callback_field":      "preserved",
+			})
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		Tools: map[string]tool.Tool{
+			"echo": stubTool{decl: &tool.Declaration{Name: "echo"}},
+		},
+		ExtraFields: map[string]any{
+			"tools":         []any{},
+			"function_call": "auto",
+			"request_field": "request-value",
+		},
+	}
+	ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+	responseChan, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+	for range responseChan {
+	}
+
+	require.NotNil(t, captured)
+	require.NotContains(t, captured, "tool_choice")
+	require.NotContains(t, captured, "parallel_tool_calls")
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "function_call")
+	require.NotContains(t, captured, "functions")
+	require.Equal(t, "model-value", captured["model_field"])
+	require.Equal(t, "request-value", captured["request_field"])
+	require.Equal(t, "preserved", captured["callback_field"])
+	require.Equal(t, "preserved", captured["client_option_field"])
+}
+
+func TestDisableChatRequestTools_WholeObjectOverride(t *testing.T) {
+	request := openaiparam.Override[openaigo.ChatCompletionNewParams](
+		map[string]any{
+			"model": "gpt-3.5-turbo",
+			"messages": []any{
+				map[string]any{"role": "user", "content": "test"},
+			},
+			"tools":               []any{},
+			"tool_choice":         "required",
+			"parallel_tool_calls": true,
+			"function_call":       "auto",
+			"functions":           []any{},
+			"custom":              "preserved",
+		},
+	)
+
+	disableChatRequestTools(&request)
+
+	data, err := json.Marshal(request)
+	require.NoError(t, err)
+	var captured map[string]any
+	require.NoError(t, json.Unmarshal(data, &captured))
+	require.NotContains(t, captured, "tool_choice")
+	require.NotContains(t, captured, "parallel_tool_calls")
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "function_call")
+	require.NotContains(t, captured, "functions")
+	require.Equal(t, "preserved", captured["custom"])
 }
 
 func TestModel_GenerateContent_RequestHeadersOverrideModelHeaders(t *testing.T) {
@@ -7500,6 +8460,20 @@ func TestBuildThinkingOption(t *testing.T) {
 		{
 			name:            "Hunyuan variant with thinking enabled",
 			variant:         VariantHunyuan,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{thinkingKey},
+			wantValues:      []any{map[string]string{"type": "enabled"}},
+		},
+		{
+			name:            "MiniMax variant with thinking enabled",
+			variant:         VariantMiniMax,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{thinkingKey},
+			wantValues:      []any{map[string]string{"type": "adaptive"}},
+		},
+		{
+			name:            "Kimi variant with thinking enabled",
+			variant:         VariantKimi,
 			thinkingEnabled: &trueVal,
 			wantKeys:        []string{thinkingKey},
 			wantValues:      []any{map[string]string{"type": "enabled"}},

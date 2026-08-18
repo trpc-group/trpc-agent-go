@@ -22,6 +22,7 @@ import (
 	"os"
 	"strings"
 
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -312,7 +313,7 @@ func (m *Model) handleStreamingRequest(
 // makeRequest makes a non-streaming HTTP request to the HuggingFace API.
 func (m *Model) makeRequest(ctx context.Context, hfRequest *ChatCompletionRequest) (*ChatCompletionResponse, error) {
 	// Marshal request to JSON.
-	requestBody, err := m.marshalRequest(hfRequest)
+	requestBody, err := m.marshalRequestForContext(ctx, hfRequest)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -362,7 +363,7 @@ func (m *Model) makeRequest(ctx context.Context, hfRequest *ChatCompletionReques
 // makeStreamingRequest makes a streaming HTTP request to the HuggingFace API.
 func (m *Model) makeStreamingRequest(ctx context.Context, hfRequest *ChatCompletionRequest) (*http.Response, error) {
 	// Marshal request to JSON.
-	requestBody, err := m.marshalRequest(hfRequest)
+	requestBody, err := m.marshalRequestForContext(ctx, hfRequest)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -411,8 +412,32 @@ func (m *Model) setHeaders(req *http.Request) {
 
 // marshalRequest marshals the request to JSON, including extra fields.
 func (m *Model) marshalRequest(hfRequest *ChatCompletionRequest) ([]byte, error) {
+	return m.marshalRequestWithToolControl(hfRequest, false)
+}
+
+func (m *Model) marshalRequestForContext(
+	ctx context.Context,
+	hfRequest *ChatCompletionRequest,
+) ([]byte, error) {
+	return m.marshalRequestWithToolControl(
+		hfRequest,
+		imodelrequest.ToolsDisabled(ctx),
+	)
+}
+
+func (m *Model) marshalRequestWithToolControl(
+	hfRequest *ChatCompletionRequest,
+	disableToolFields bool,
+) ([]byte, error) {
+	request := hfRequest
+	if disableToolFields && hfRequest != nil {
+		filtered := *hfRequest
+		filtered.Tools = nil
+		filtered.ToolChoice = nil
+		request = &filtered
+	}
 	// Marshal the base request.
-	baseJSON, err := json.Marshal(hfRequest)
+	baseJSON, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}
@@ -429,12 +454,18 @@ func (m *Model) marshalRequest(hfRequest *ChatCompletionRequest) ([]byte, error)
 	}
 
 	// Merge model-level extra fields.
-	for k, v := range m.extraFields {
+	for k, v := range imodelrequest.FilterToolControlFields(
+		m.extraFields,
+		disableToolFields,
+	) {
 		requestMap[k] = v
 	}
 
 	// Merge request-level extra fields (takes precedence).
-	for k, v := range hfRequest.ExtraFields {
+	for k, v := range imodelrequest.FilterToolControlFields(
+		hfRequest.ExtraFields,
+		disableToolFields,
+	) {
 		requestMap[k] = v
 	}
 
@@ -450,32 +481,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	// Determine max input tokens using priority: user config > auto calculation > default.
-	maxInputTokens := m.maxInputTokens
-	if maxInputTokens <= 0 {
-		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := m.contextWindow
-		if contextWindow <= 0 {
-			contextWindow = imodel.ResolveContextWindow(m.name)
-		}
-		if m.tokenTailoringConfig != nil &&
-			(m.tokenTailoringConfig.ProtocolOverheadTokens > 0 ||
-				m.tokenTailoringConfig.ReserveOutputTokens > 0) {
-			// Use custom parameters if any are set.
-			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
-				contextWindow,
-				m.tokenTailoringConfig.ProtocolOverheadTokens,
-				m.tokenTailoringConfig.ReserveOutputTokens,
-				m.tokenTailoringConfig.InputTokensFloor,
-				m.tokenTailoringConfig.SafetyMarginRatio,
-				m.tokenTailoringConfig.MaxInputTokensRatio,
-			)
-		} else {
-			// Use default parameters.
-			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
-		}
-		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d",
-			m.name, contextWindow, maxInputTokens)
+	maxInputTokens := m.InputTokenBudget(ctx, request)
+	if m.maxInputTokens <= 0 {
+		log.DebugfContext(ctx, "auto-calculated max input tokens: model=%s, maxInputTokens=%d",
+			m.name, maxInputTokens)
 	}
 
 	// Apply token tailoring.
@@ -491,4 +500,28 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	}
 
 	modeltailoring.ApplyResult(ctx, "huggingface.Model", request, tailored)
+}
+
+// InputTokenBudget returns the same input budget used by token tailoring.
+func (m *Model) InputTokenBudget(_ context.Context, _ *model.Request) int {
+	if m.maxInputTokens > 0 {
+		return m.maxInputTokens
+	}
+	contextWindow := m.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = imodel.ResolveContextWindow(m.name)
+	}
+	if m.tokenTailoringConfig != nil &&
+		(m.tokenTailoringConfig.ProtocolOverheadTokens > 0 ||
+			m.tokenTailoringConfig.ReserveOutputTokens > 0) {
+		return imodel.CalculateMaxInputTokensWithParams(
+			contextWindow,
+			m.tokenTailoringConfig.ProtocolOverheadTokens,
+			m.tokenTailoringConfig.ReserveOutputTokens,
+			m.tokenTailoringConfig.InputTokensFloor,
+			m.tokenTailoringConfig.SafetyMarginRatio,
+			m.tokenTailoringConfig.MaxInputTokensRatio,
+		)
+	}
+	return imodel.CalculateMaxInputTokens(contextWindow)
 }

@@ -12,9 +12,11 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	coreagent "trpc.group/trpc-go/trpc-agent-go/agent"
@@ -22,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -122,6 +125,181 @@ func (a *constantReplyAgent) Info() coreagent.Info {
 func (a *constantReplyAgent) SubAgents() []coreagent.Agent        { return nil }
 func (a *constantReplyAgent) FindSubAgent(string) coreagent.Agent { return nil }
 
+// persistentHistoryStreamingAgent emits a completion barrier followed by one
+// assistant response. The barrier makes the test exercise the Runner-owned
+// completion path used by AgentTool streaming calls.
+type persistentHistoryStreamingAgent struct {
+	name string
+
+	mu       sync.Mutex
+	calls    int
+	requests [][]model.Message
+}
+
+func (a *persistentHistoryStreamingAgent) Run(
+	ctx context.Context,
+	inv *coreagent.Invocation,
+) (<-chan *event.Event, error) {
+	var request []model.Message
+	if inv != nil {
+		if inv.Session != nil {
+			filterKey := inv.GetEventFilterKey()
+			inv.Session.EventMu.RLock()
+			for _, evt := range inv.Session.Events {
+				if evt.FilterKey != filterKey ||
+					evt.Response == nil ||
+					len(evt.Response.Choices) == 0 {
+					continue
+				}
+				msg := evt.Response.Choices[0].Message
+				if msg.Role == model.RoleUser || msg.Role == model.RoleAssistant {
+					request = append(request, msg)
+				}
+			}
+			inv.Session.EventMu.RUnlock()
+		}
+		// Invocation.Message is supplied directly to the current child model
+		// request, before the stream's persisted user event is appended.
+		request = append(request, inv.Message)
+	}
+
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.requests = append(a.requests, append([]model.Message(nil), request...))
+	a.mu.Unlock()
+
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		if inv == nil {
+			return
+		}
+		barrier := event.New(inv.InvocationID, a.name)
+		barrier.RequiresCompletion = true
+		completionID := coreagent.GetAppendEventNoticeKey(barrier.ID)
+		inv.AddNoticeChannel(ctx, completionID)
+		ch <- barrier
+		if err := inv.AddNoticeChannelAndWait(ctx, completionID, time.Second); err != nil {
+			ch <- event.NewErrorEvent(
+				inv.InvocationID,
+				a.name,
+				model.ErrorTypeFlowError,
+				err.Error(),
+			)
+			return
+		}
+		ch <- event.NewResponseEvent(
+			inv.InvocationID,
+			a.name,
+			&model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(fmt.Sprintf("A%d", call)),
+				}},
+			},
+		)
+	}()
+	return ch, nil
+}
+
+func (a *persistentHistoryStreamingAgent) Tools() []tool.Tool { return nil }
+func (a *persistentHistoryStreamingAgent) Info() coreagent.Info {
+	return coreagent.Info{Name: a.name, Description: "persistent-history-streaming-test"}
+}
+func (a *persistentHistoryStreamingAgent) SubAgents() []coreagent.Agent        { return nil }
+func (a *persistentHistoryStreamingAgent) FindSubAgent(string) coreagent.Agent { return nil }
+
+func (a *persistentHistoryStreamingAgent) requestHistory() [][]model.Message {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	requests := make([][]model.Message, len(a.requests))
+	for i := range a.requests {
+		requests[i] = append([]model.Message(nil), a.requests[i]...)
+	}
+	return requests
+}
+
+// persistentHistoryRunnerAgent runs the AgentTool through a real Runner event
+// loop. It forwards the child stream events unchanged so Runner owns their
+// persistence and completion notification, just like the function-call path.
+type persistentHistoryRunnerAgent struct {
+	name  string
+	child *Tool
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (a *persistentHistoryRunnerAgent) Run(
+	ctx context.Context,
+	inv *coreagent.Invocation,
+) (<-chan *event.Event, error) {
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.mu.Unlock()
+
+	toolCtx := context.WithValue(
+		ctx,
+		tool.ContextKeyToolCallID{},
+		fmt.Sprintf("call-%d", call),
+	)
+	reader, err := a.child.StreamableCall(
+		tool.WithFinalResultChunks(toolCtx),
+		[]byte(fmt.Sprintf(`{"request":"U%d"}`, call)),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(chan *event.Event, 8)
+	go func() {
+		defer close(out)
+		defer reader.Close()
+		for {
+			chunk, recvErr := reader.Recv()
+			if recvErr == io.EOF {
+				break
+			}
+			if recvErr != nil {
+				out <- event.NewErrorEvent(
+					inv.InvocationID,
+					a.name,
+					model.ErrorTypeFlowError,
+					recvErr.Error(),
+				)
+				return
+			}
+			evt, ok := chunk.Content.(*event.Event)
+			if ok && evt != nil {
+				out <- evt
+			}
+		}
+
+		final := event.NewResponseEvent(
+			inv.InvocationID,
+			a.name,
+			&model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(fmt.Sprintf("root-%d", call)),
+				}},
+			},
+		)
+		coreagent.InjectIntoEvent(inv, final)
+		out <- final
+	}()
+	return out, nil
+}
+
+func (a *persistentHistoryRunnerAgent) Tools() []tool.Tool { return nil }
+func (a *persistentHistoryRunnerAgent) Info() coreagent.Info {
+	return coreagent.Info{Name: a.name, Description: "persistent-history-runner-test"}
+}
+func (a *persistentHistoryRunnerAgent) SubAgents() []coreagent.Agent        { return nil }
+func (a *persistentHistoryRunnerAgent) FindSubAgent(string) coreagent.Agent { return nil }
+
 type prevCountAgent struct {
 	name string
 
@@ -209,6 +387,43 @@ func TestTool_PersistentHistory_DefaultKey_ReusedAcrossCalls(t *testing.T) {
 	require.Len(t, keys, 2)
 	require.Equal(t, "agenttool:child:default", keys[0])
 	require.Equal(t, keys[0], keys[1])
+}
+
+func TestTool_PersistentHistory_StreamableCall_MultiRoundRunnerHistory(t *testing.T) {
+	child := &persistentHistoryStreamingAgent{name: "stream-child"}
+	childTool := NewTool(child, WithStreamInner(true), WithPersistentHistory())
+	root := &persistentHistoryRunnerAgent{name: "stream-root", child: childTool}
+	r := runner.NewRunner("persistent-history-stream-test", root)
+	t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+	for i := 1; i <= 4; i++ {
+		events, err := r.Run(
+			context.Background(),
+			"user",
+			"session",
+			model.NewUserMessage(fmt.Sprintf("turn-%d", i)),
+			coreagent.WithStream(true),
+		)
+		require.NoError(t, err)
+		for evt := range events {
+			require.NotNil(t, evt)
+			require.Nil(t, evt.Error)
+		}
+	}
+
+	requests := child.requestHistory()
+	require.Len(t, requests, 4)
+	for i, request := range requests {
+		var want []model.Message
+		for previous := 1; previous <= i; previous++ {
+			want = append(want,
+				model.NewUserMessage(fmt.Sprintf(`{"request":"U%d"}`, previous)),
+				model.NewAssistantMessage(fmt.Sprintf("A%d", previous)),
+			)
+		}
+		want = append(want, model.NewUserMessage(fmt.Sprintf(`{"request":"U%d"}`, i+1)))
+		require.Equal(t, want, request, "child request history on round %d", i+1)
+	}
 }
 
 func TestTool_PersistentHistory_CustomKey_Used(t *testing.T) {

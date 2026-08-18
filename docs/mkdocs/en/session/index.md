@@ -17,10 +17,10 @@ Within the same conversation, it enables natural continuity between turns, preve
 - **Event Limit**: Controls the maximum number of events stored per session to prevent memory overflow
 - **Event Pagination**: PostgreSQL/MySQL support paged history reads for `GetSession`
 - **TTL Management**: Supports automatic expiration and cleanup of session data
-- **Multiple Storage Backends**: Supports Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, and ClickHouse
+- **Flexible Persistence**: Supports no persistence through Noop, plus Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, and MongoDB
 - **Concurrency Safe**: Built-in read-write locks ensure safe concurrent access
 - **Automatic Management**: Automatically handles session creation, loading, and updates when integrated with Runner
-- **Soft Delete Support**: SQLite/PostgreSQL/PGVector/MySQL/ClickHouse support soft delete for data recovery
+- **Soft Delete Support**: SQLite/PostgreSQL/PGVector/MySQL/ClickHouse/MongoDB support soft delete for data recovery
 - **Multimodal Externalization**: Optionally externalizes inline image/audio/file payloads in session events to Artifact storage
 
 ## Quick Start
@@ -29,9 +29,11 @@ Within the same conversation, it enables natural continuity between turns, preve
 
 Session management in tRPC-Agent-Go is integrated into the Runner via `runner.WithSessionService`. The Runner automatically handles session creation, loading, updating, and persistence.
 
-**Supported Storage Backends:** Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse
+**Supported Persistence Modes:** [Noop](noop.md) (no persistence), Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, MongoDB
 
 **Default Behavior:** If `runner.WithSessionService` is not configured, the Runner defaults to in-memory storage, and data will be lost after process restart.
+
+If the upstream application owns the complete conversation history and Runner should not retain sessions across requests, explicitly use [Noop](noop.md).
 
 ### Basic Example
 
@@ -61,7 +63,7 @@ func main() {
         summary.WithChecksAny(
             summary.CheckEventThreshold(20),
             summary.CheckTokenThreshold(4000),
-            summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; triggers if the latest unsummarized event is older than 5 minutes
+            summary.CheckTimeThreshold(5*time.Minute), // Runner path: trigger when the idle gap before the next request exceeds 5 minutes
         ),
         summary.WithMaxSummaryWords(200),
     )
@@ -356,6 +358,9 @@ Supports setting Time To Live for session data with automatic cleanup of expired
 **Supported TTL types:**
 
 - **SessionTTL**: Expiration time for session state and events
+- **TrackEventTTL**: Expiration time for track events where supported. Defaults
+  to SessionTTL unless configured; setting it to a non-positive value disables
+  track event expiry
 - **AppStateTTL**: Expiration time for app-level state
 - **UserStateTTL**: Expiration time for user-level state
 
@@ -384,13 +389,15 @@ TTL is only refreshed on **write operations** (e.g., CreateSession, AppendEvent,
 | PGVector | Periodic scan (soft/hard delete) | Yes |
 | MySQL | Periodic scan (soft/hard delete) | Yes |
 | ClickHouse | Application-level cleanup + Native TTL | Yes |
+| MongoDB | TTL indexes + periodic event/track cleanup | Yes |
 
 ## Storage Backend Comparison
 
-tRPC-Agent-Go provides seven session storage backends for different scenarios:
+tRPC-Agent-Go provides a no-persistence mode and eight session storage backends for different scenarios:
 
 | Storage Type | Use Case | Persistence | Distributed | Complex Queries |
 | --- | --- | --- | --- | --- |
+| [Noop](noop.md) | Application-managed history, no cross-request persistence | ❌ | ❌ | ❌ |
 | [Memory](inmemory.md) | Dev/Test, small scale | ❌ | ❌ | ❌ |
 | [SQLite](sqlite.md) | Local persistence, single-node | ✅ | ❌ | ✅ |
 | [Redis](redis.md) | Production, distributed | ✅ | ✅ | ❌ |
@@ -398,6 +405,7 @@ tRPC-Agent-Go provides seven session storage backends for different scenarios:
 | [PGVector](pgvector.md) | Production, semantic recall | ✅ | ✅ | ✅ |
 | [MySQL](mysql.md) | Production, complex queries | ✅ | ✅ | ✅ |
 | [ClickHouse](clickhouse.md) | Production, massive data | ✅ | ✅ | ✅ |
+| [MongoDB](mongodb.md) | Production, document storage | ✅ | ✅ | ✅ |
 
 ## Hook Capabilities
 
@@ -455,7 +463,7 @@ sessionService := inmemory.NewSessionService(
 
 **Chain of Responsibility**: Hooks form a chain via `next()`. You can return early to short-circuit subsequent logic, and errors propagate upward.
 
-**Cross-Backend Consistency**: All storage backends (Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.
+**Cross-Backend Consistency**: All storage backends (Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, MongoDB) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.
 
 ## Advanced Usage
 
@@ -682,7 +690,9 @@ Track events are a trajectory storage mechanism in Session that is independent o
 
 **Interface**:
 
-The Track event API is defined on the `session.TrackService` interface, which is separate from `session.Service`:
+Track event writes are exposed through the optional `session.TrackService`
+interface. Storage backends that support track history persist these events with
+the session data.
 
 ```go
 type TrackService interface {
@@ -690,7 +700,7 @@ type TrackService interface {
 }
 ```
 
-Not all storage backends implement `TrackService`. A type assertion is required:
+Not all storage backends implement track event writes. A type assertion is required:
 
 | Storage Backend | Implements TrackService |
 | --- | --- |
@@ -700,6 +710,7 @@ Not all storage backends implement `TrackService`. A type assertion is required:
 | PostgreSQL | ✅ |
 | PGVector | ✅ |
 | MySQL | ✅ |
+| MongoDB | ✅ |
 | ClickHouse | ❌ |
 
 **Basic usage**:
@@ -719,9 +730,14 @@ err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
     Timestamp: time.Now(),
 })
 
-// Retrieve track events from session
+// Read track events from this in-memory session snapshot
 trackEvents, err := sess.GetTrackEvents("ui-events")
 ```
+
+`Session.GetTrackEvents` reads only the track events already loaded into a
+session object. Reload the session before treating it as a history snapshot.
+AG-UI history uses persisted track history internally when the configured
+session service supports it, and falls back to the session snapshot otherwise.
 
 ## Semantic Recall (PGVector Only)
 
@@ -753,6 +769,7 @@ See [PGVector Session](pgvector.md) for configuration details, indexing behavior
 ## Related Documentation
 
 - [Session Summary](summary.md) - Automatic compression of long conversation history
+- [Noop](noop.md) - Application-managed history without cross-request persistence
 - [Memory Storage](inmemory.md) - Development and testing environment
 - [SQLite Storage](sqlite.md) - Local persistence, single-node
 - [Redis Storage](redis.md) - Production distributed storage
@@ -760,9 +777,11 @@ See [PGVector Session](pgvector.md) for configuration details, indexing behavior
 - [PGVector Session](pgvector.md) - PostgreSQL session storage with semantic recall
 - [MySQL Storage](mysql.md) - Relational database storage
 - [ClickHouse Storage](clickhouse.md) - Massive data storage
+- [MongoDB Storage](mongodb.md) - Distributed document database storage
 
 ## References
 
 - [Session Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
+- [Noop + RunWithMessages Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages)
 - [Summary Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary)
 - [Hook Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)

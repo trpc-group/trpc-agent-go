@@ -335,6 +335,12 @@ func validateEvalSetInputs(role string, inputs []engine.EvalSetInput) error {
 	if len(inputs) == 0 {
 		return fmt.Errorf("%sevaluation sets are empty", prefix)
 	}
+	type lossTargetInputKey struct {
+		evalSetID  string
+		metricName string
+	}
+	seenLossTargets := make(map[lossTargetInputKey]struct{})
+	validateLossTargets := role == "train"
 	for _, input := range inputs {
 		if input.EvalSetID == "" {
 			return fmt.Errorf("%sevaluation set id is empty", prefix)
@@ -386,6 +392,36 @@ func validateEvalSetInputs(role string, inputs []engine.EvalSetInput) error {
 					)
 				}
 			}
+		}
+		if !validateLossTargets {
+			if role == "validation" && len(input.LossTargets) > 0 {
+				return fmt.Errorf("%sloss targets for eval set %q are not supported", prefix, input.EvalSetID)
+			}
+			continue
+		}
+		for _, target := range input.LossTargets {
+			metricName := strings.TrimSpace(target.MetricName)
+			switch {
+			case metricName == "":
+				return fmt.Errorf("%sloss target metric name for eval set %q is empty", prefix, input.EvalSetID)
+			case strings.TrimSpace(target.NodeID) == "":
+				return fmt.Errorf(
+					"%sloss target node id for eval set %q metric %q is empty",
+					prefix,
+					input.EvalSetID,
+					target.MetricName,
+				)
+			}
+			key := lossTargetInputKey{evalSetID: input.EvalSetID, metricName: metricName}
+			if _, ok := seenLossTargets[key]; ok {
+				return fmt.Errorf(
+					"%sloss target metric %q for eval set %q is duplicated",
+					prefix,
+					target.MetricName,
+					input.EvalSetID,
+				)
+			}
+			seenLossTargets[key] = struct{}{}
 		}
 	}
 	return nil

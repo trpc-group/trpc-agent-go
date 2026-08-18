@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
@@ -161,6 +162,22 @@ func TestReadDocuments(t *testing.T) {
 			if sz > chunkSize {
 				t.Fatalf("chunk size %d exceeds expected max %d", sz, chunkSize)
 			}
+		}
+	})
+
+	t.Run("invalid-chunk-size", func(t *testing.T) {
+		src := New([]string{filePath}, WithChunkSize(-1))
+		_, err := src.ReadDocuments(ctx)
+		if !errors.Is(err, chunking.ErrInvalidChunkSize) {
+			t.Fatalf("ReadDocuments() error = %v, want %v", err, chunking.ErrInvalidChunkSize)
+		}
+	})
+
+	t.Run("invalid-overlap", func(t *testing.T) {
+		src := New([]string{filePath}, WithChunkOverlap(-1))
+		_, err := src.ReadDocuments(ctx)
+		if !errors.Is(err, chunking.ErrInvalidOverlap) {
+			t.Fatalf("ReadDocuments() error = %v, want %v", err, chunking.ErrInvalidOverlap)
 		}
 	})
 }

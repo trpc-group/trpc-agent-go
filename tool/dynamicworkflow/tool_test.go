@@ -51,7 +51,19 @@ func TestWorkflowToolOnlyExposesCallToolWhenConfigured(t *testing.T) {
 	withoutCodeCallableTools, err := NewTool(scriptedRuntime{}, []agent.Agent{reviewer})
 	require.NoError(t, err)
 	require.NotContains(t, withoutCodeCallableTools.Declaration().Description, "call_tool")
-	require.NotContains(t, withoutCodeCallableTools.Declaration().InputSchema.Properties["code"].Description, "call_tool")
+	codeDescription := withoutCodeCallableTools.Declaration().InputSchema.Properties["code"].Description
+	require.NotContains(t, codeDescription, "call_tool")
+	require.Contains(t, codeDescription, "import modules")
+	require.Contains(t, codeDescription, "class/with/try/global/nonlocal")
+	require.Contains(t, codeDescription, "orchestration glue")
+	require.Contains(t, codeDescription, `result["text"]`)
+	require.Contains(t, codeDescription, "previous, (previous, original)")
+	require.Contains(t, codeDescription, "unstructured tool-grounded text")
+	require.Contains(
+		t,
+		withoutCodeCallableTools.Declaration().Description,
+		"not transactional",
+	)
 
 	lookup := &testTool{name: "lookup", call: func(context.Context, []byte) (any, error) {
 		return map[string]any{"ok": true}, nil
@@ -677,6 +689,236 @@ func TestWorkflowStreamableCallEmitsStructuredError(t *testing.T) {
 	require.ErrorContains(t, errorsFromResponse(errEvent.Response.Error), "workflow failed")
 	_, err = reader.Recv()
 	require.ErrorIs(t, err, io.EOF)
+}
+
+func TestWorkflowStreamableCallCondensesGuestTracebackForModel(t *testing.T) {
+	traceback := `Traceback (most recent call last):
+  File "/tmp/guest.py", line 380, in _main
+    _validate_workflow_ast(parsed)
+RuntimeError: workflow code uses unsupported Python syntax: Import`
+	workflow, err := NewTool(
+		scriptedRuntime{run: func(
+			context.Context,
+			CallHandler,
+		) (Result, error) {
+			return Result{}, errors.New(traceback)
+		}},
+		[]agent.Agent{&testAgent{name: "reviewer"}},
+	)
+	require.NoError(t, err)
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{
+			ID: "session-1", AppName: "app", UserID: "user",
+		}),
+	)
+	reader, err := workflow.(tool.StreamableTool).StreamableCall(
+		agent.NewInvocationContext(context.Background(), parent),
+		[]byte(`{"code":"return None"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	chunk, err := reader.Recv()
+	require.NoError(t, err)
+	errEvent, ok := chunk.Content.(*event.Event)
+	require.True(t, ok)
+	require.NotNil(t, errEvent.Response)
+	message := errEvent.Response.Error.Message
+	require.Contains(t, message, "unsupported Python syntax: Import")
+	require.Contains(t, message, "remove imports")
+	require.NotContains(t, message, "Traceback")
+	require.NotContains(t, message, "/tmp")
+}
+
+func TestWorkflowStreamableCallPreservesGeneratedSyntaxError(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	workflow, err := NewTool(
+		LocalRunner{},
+		[]agent.Agent{&testAgent{name: "reviewer"}},
+	)
+	require.NoError(t, err)
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{
+			ID: "session-1", AppName: "app", UserID: "user",
+		}),
+	)
+	raw, err := json.Marshal(map[string]string{"code": `return {"approved":`})
+	require.NoError(t, err)
+	reader, err := workflow.(tool.StreamableTool).StreamableCall(
+		agent.NewInvocationContext(context.Background(), parent),
+		raw,
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	message := receiveWorkflowStreamError(t, reader)
+	require.Contains(t, message, `File "<dynamic-workflow>"`)
+	require.Contains(t, message, `return {"approved":`)
+	require.Contains(t, message, "^")
+	require.Contains(t, message, "SyntaxError:")
+	require.NotContains(t, message, "Traceback")
+}
+
+func TestWorkflowStreamableCallPreservesMultilineAgentError(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	reviewer := &testAgent{name: "reviewer"}
+	reviewer.runFn = func(
+		context.Context,
+		*agent.Invocation,
+	) (<-chan *event.Event, error) {
+		return nil, errors.New(
+			"validation failed:\nfield A required\nfield B invalid",
+		)
+	}
+	workflow, err := NewTool(LocalRunner{}, []agent.Agent{reviewer})
+	require.NoError(t, err)
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{
+			ID: "session-1", AppName: "app", UserID: "user",
+		}),
+	)
+	raw, err := json.Marshal(map[string]string{
+		"code": `return await agent("review", template="reviewer", instruction="Review.", tools=[])`,
+	})
+	require.NoError(t, err)
+	reader, err := workflow.(tool.StreamableTool).StreamableCall(
+		agent.NewInvocationContext(context.Background(), parent),
+		raw,
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	message := receiveWorkflowStreamError(t, reader)
+	require.Contains(t, message, "validation failed:")
+	require.Contains(t, message, "field A required")
+	require.Contains(t, message, "field B invalid")
+	require.NotContains(t, message, "Traceback")
+}
+
+func receiveWorkflowStreamError(
+	t *testing.T,
+	reader *tool.StreamReader,
+) string {
+	t.Helper()
+	for {
+		chunk, err := reader.Recv()
+		require.NoError(t, err)
+		evt, ok := chunk.Content.(*event.Event)
+		if !ok || evt.Response == nil || evt.Response.Error == nil {
+			continue
+		}
+		return evt.Response.Error.Message
+	}
+}
+
+func TestModelVisibleWorkflowError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "nil", want: ""},
+		{
+			name: "ordinary error",
+			err:  errors.New("workflow failed"),
+			want: "workflow failed",
+		},
+		{
+			name: "custom runtime traceback remains intact",
+			err: errors.New(`Traceback (most recent call last):
+  File "/runtime/worker.py", line 3
+KeyError: missing`),
+			want: `Traceback (most recent call last):
+  File "/runtime/worker.py", line 3
+KeyError: missing`,
+		},
+		{
+			name: "generated workflow traceback",
+			err: errors.New(`Traceback (most recent call last):
+  File "<dynamic-workflow>", line 3
+KeyError: missing`),
+			want: "KeyError: missing",
+		},
+		{
+			name: "multiline workflow error",
+			err: errors.New(`Traceback (most recent call last):
+  File "<dynamic-workflow>", line 3, in __workflow__
+RuntimeError: agent error: validation failed:
+field A required
+field B invalid`),
+			want: `RuntimeError: agent error: validation failed:
+field A required
+field B invalid`,
+		},
+		{
+			name: "syntax error keeps source location",
+			err: errors.New(`Traceback (most recent call last):
+  File "/runtime/ast.py", line 50, in parse
+    return compile(source, filename, mode, flags)
+  File "<dynamic-workflow>", line 3
+    return {"approved":
+                       ^
+SyntaxError: '{' was never closed`),
+			want: `File "<dynamic-workflow>", line 3
+    return {"approved":
+                       ^
+SyntaxError: '{' was never closed`,
+		},
+		{
+			name: "missing return hint",
+			err: errors.New(`Traceback (most recent call last):
+RuntimeError: workflow code must contain a return statement outside nested functions or classes`),
+			want: "RuntimeError: workflow code must contain a return statement " +
+				"outside nested functions or classes; return a JSON-compatible " +
+				"value from the workflow body",
+		},
+		{
+			name: "f-string hint",
+			err: errors.New(`Traceback (most recent call last):
+  File "<dynamic-workflow>", line 3
+ValueError: Invalid format specifier 'false'`),
+			want: "ValueError: Invalid format specifier 'false'; escape literal " +
+				"braces in f-strings or pass a schema as a Python dict instead " +
+				"of embedding JSON text",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, modelVisibleWorkflowError(test.err))
+		})
+	}
+}
+
+func TestGeneratedWorkflowExceptionSummaryFallback(t *testing.T) {
+	require.Equal(
+		t,
+		"plain failure",
+		generatedWorkflowExceptionSummary(
+			"Traceback (most recent call last):\n\nplain failure\n",
+		),
+	)
+	require.Equal(
+		t,
+		"Traceback (most recent call last):",
+		generatedWorkflowExceptionSummary(
+			"Traceback (most recent call last):",
+		),
+	)
+}
+
+func TestWorkflowExceptionLine(t *testing.T) {
+	require.False(t, workflowExceptionLine(""))
+	require.False(t, workflowExceptionLine("RuntimeError"))
+	require.False(t, workflowExceptionLine("not an Error: value"))
+	require.True(t, workflowExceptionLine("RuntimeError: failed"))
+	require.True(t, workflowExceptionLine("BridgeException: failed"))
 }
 
 func TestWorkflowStreamableCallValidatesBeforeStarting(t *testing.T) {

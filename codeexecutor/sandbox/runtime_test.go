@@ -166,6 +166,7 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(DangerFullAccessProfile()),
 		WithDefaultTimeout(25*time.Millisecond),
+		WithSessionPolicy(SessionPolicy{RunConcurrency: SessionRunConcurrencyParallel}),
 	)
 	ws, err := rt.CreateWorkspace(context.Background(), "run/errors", codeexecutor.WorkspacePolicy{})
 	if err != nil {
@@ -178,6 +179,21 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 		Cmd: "definitely-not-a-real-sandbox-test-command",
 	}); !isKind(err, ErrSetupFailed) {
 		t.Fatalf("start error = %v, want ErrSetupFailed", err)
+	}
+
+	expiredCtx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(-time.Second),
+	)
+	defer cancel()
+	expiredRes, expiredErr := rt.RunProgram(expiredCtx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "bash",
+	})
+	if !isKind(expiredErr, ErrTimeout) {
+		t.Fatalf("expired context error = %v, want ErrTimeout", expiredErr)
+	}
+	if !expiredRes.TimedOut || expiredRes.ExitCode != -1 {
+		t.Fatalf("expired context result = %#v, want timed out exit -1", expiredRes)
 	}
 
 	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
@@ -228,6 +244,101 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 	}
 	if err := rt.ensureRunCwd(DangerFullAccessProfile(), ws, "work/file-cwd", fileCwd); err == nil {
 		t.Fatalf("file cwd unexpectedly succeeded")
+	}
+}
+
+func TestRunProgramExpiredDeadlineWhileWaitingForSerialLock(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(DangerFullAccessProfile()),
+		WithSessionPolicy(SessionPolicy{RunConcurrency: SessionRunConcurrencySerial}),
+	)
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"run/serial-expired-deadline",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(-time.Second),
+	)
+	defer cancel()
+	result, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "bash",
+	})
+	if !isKind(err, ErrTimeout) {
+		t.Fatalf("expired context error = %v, want ErrTimeout", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired context error = %v, want deadline cause", err)
+	}
+	if !result.TimedOut || result.ExitCode != -1 {
+		t.Fatalf("result = %#v, want timed out exit -1", result)
+	}
+	if len(rt.runLocks) != 0 {
+		t.Fatalf("run locks retained after expired wait: %#v", rt.runLocks)
+	}
+}
+
+func TestNormalizeRunProgramResultErrorPrecedence(t *testing.T) {
+	baseResult := codeexecutor.RunResult{
+		Stdout:   "preserved",
+		ExitCode: 23,
+		Duration: time.Second,
+	}
+	for name, cause := range map[string]error{
+		"raw deadline":     context.DeadlineExceeded,
+		"wrapped deadline": errors.Join(errors.New("wrapped"), context.DeadlineExceeded),
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := normalizeRunProgramResult(baseResult, cause)
+			if !isKind(err, ErrTimeout) {
+				t.Fatalf("error = %v, want ErrTimeout", err)
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error = %v, want deadline cause", err)
+			}
+			if !result.TimedOut || result.ExitCode != -1 {
+				t.Fatalf("result = %#v, want timed out exit -1", result)
+			}
+			if result.Stdout != baseResult.Stdout || result.Duration != baseResult.Duration {
+				t.Fatalf("result = %#v, want existing fields preserved", result)
+			}
+		})
+	}
+
+	classifiedSetup := newSandboxError(
+		ErrSetupFailed, "run", "", context.DeadlineExceeded,
+	)
+	classifiedPolicy := deniedf(
+		ErrPolicyViolation, "run", "", "invalid request",
+	)
+	classifiedTimeout := newSandboxError(
+		ErrTimeout, "run", "", context.DeadlineExceeded,
+	)
+	for name, wantErr := range map[string]error{
+		"canceled":           context.Canceled,
+		"classified setup":   classifiedSetup,
+		"classified policy":  classifiedPolicy,
+		"classified timeout": classifiedTimeout,
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := normalizeRunProgramResult(baseResult, wantErr)
+			if err != wantErr {
+				t.Fatalf("error = %v, want original %v", err, wantErr)
+			}
+			if result != baseResult {
+				t.Fatalf("result = %#v, want unchanged %#v", result, baseResult)
+			}
+		})
+	}
+
+	result, err := normalizeRunProgramResult(baseResult, nil)
+	if err != nil || result != baseResult {
+		t.Fatalf("success = (%#v, %v), want unchanged result and nil error", result, err)
 	}
 }
 
@@ -456,10 +567,24 @@ func TestRuntimeDefaultsDescribeAndHelpers(t *testing.T) {
 	if sameOrChild(filepath.Join(string(os.PathSeparator), "tmp", "a"), filepath.Join(string(os.PathSeparator), "tmp", "ab")) {
 		t.Fatalf("sibling path matched as child")
 	}
-	firstLock := rt.runLock(codeexecutor.Workspace{ID: "lock"})
-	secondLock := rt.runLock(codeexecutor.Workspace{ID: "lock"})
+	lockWorkspace := codeexecutor.Workspace{ID: "lock"}
+	firstKey, firstLock := rt.retainWorkspaceRunLock(lockWorkspace)
+	secondKey, secondLock := rt.retainWorkspaceRunLock(lockWorkspace)
 	if firstLock != secondLock {
 		t.Fatalf("runLock did not reuse lock")
+	}
+	if firstKey != secondKey || firstLock.refs != 2 {
+		t.Fatalf(
+			"retained run lock = (%q, %d refs), want (%q, 2 refs)",
+			secondKey,
+			firstLock.refs,
+			firstKey,
+		)
+	}
+	rt.releaseWorkspaceRunLock(secondKey, secondLock)
+	rt.releaseWorkspaceRunLock(firstKey, firstLock)
+	if len(rt.runLocks) != 0 {
+		t.Fatalf("released run lock remained registered: %#v", rt.runLocks)
 	}
 	missingRoot := filepath.Join(t.TempDir(), "missing-root")
 	if err := ensureNoSymlinkEscape(missingRoot, filepath.Join(missingRoot, "child")); err != nil {

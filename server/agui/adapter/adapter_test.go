@@ -15,6 +15,7 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 )
 
@@ -46,6 +47,42 @@ func TestRunAgentInputJSONUnmarshal(t *testing.T) {
 	metadata, ok := forwardedProps["metadata"].(map[string]any)
 	assert.True(t, ok)
 	assert.Equal(t, "trace-01", metadata["traceId"])
+}
+
+func TestRunAgentInputJSONUnmarshalTypedImage(t *testing.T) {
+	raw := `{
+		"threadId": "thread-123",
+		"runId": "run-456",
+		"messages": [{
+			"role": "user",
+			"content": [
+				{
+					"type": "image",
+					"source": {
+						"type": "data",
+						"value": "AQID",
+						"mimeType": "image/png"
+					},
+					"metadata": {"filename": "demo.png"}
+				},
+				{"type": "text", "text": "describe this image"}
+			]
+		}]
+	}`
+
+	var input adapter.RunAgentInput
+	require.NoError(t, json.Unmarshal([]byte(raw), &input))
+	require.Len(t, input.Messages, 1)
+	contents, ok := input.Messages[0].ContentInputContents()
+	require.True(t, ok)
+	require.Len(t, contents, 2)
+	assert.Equal(t, types.InputContentTypeImage, contents[0].Type)
+	require.NotNil(t, contents[0].Source)
+	assert.Equal(t, types.InputContentSourceTypeData, contents[0].Source.Type)
+	assert.Equal(t, "AQID", contents[0].Source.Value)
+	assert.Equal(t, "image/png", contents[0].Source.MimeType)
+	assert.Equal(t, types.InputContentTypeText, contents[1].Type)
+	assert.Equal(t, "describe this image", contents[1].Text)
 }
 
 func TestRunAgentInputJSONMarshal(t *testing.T) {

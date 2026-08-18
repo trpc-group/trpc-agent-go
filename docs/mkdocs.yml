@@ -28,13 +28,27 @@ nav:
       - Prompt Template: prompt.md
       - Callbacks: callbacks.md
       - Plugins: plugin.md
-      - Memory: memory.md
+      - Memory:
+          - Overview: memory/index.md
+          - Usage and Configuration: memory/usage.md
+          - In-Memory: memory/inmemory.md
+          - SQLite: memory/sqlite.md
+          - SQLiteVec: memory/sqlitevec.md
+          - Redis: memory/redis.md
+          - MySQL: memory/mysql.md
+          - MySQL Vector: memory/mysqlvec.md
+          - PostgreSQL: memory/postgres.md
+          - pgvector: memory/pgvector.md
+          - ChromaDB: memory/chromadb.md
+          - mem0 Integration: memory/mem0.md
+          - TencentDB Agent Memory: memory/tencentdb.md
       - Artifact: artifact.md
       - Skill: skill.md
       - Evolution: evolution.md
       - Tool: tool.md
       - Session:
           - Overview: session/index.md
+          - Noop Session: session/noop.md
           - Session Summary: session/summary.md
           - Memory Session: session/inmemory.md
           - SQLite Session: session/sqlite.md
@@ -67,7 +81,16 @@ nav:
           - Troubleshooting: knowledge/troubleshooting.md
       - Planner: planner.md
       - Event: event.md
-      - Evaluation: evaluation.md
+      - Evaluation:
+          - Overview: evaluation/index.md
+          - EvalSet: evaluation/evalset.md
+          - EvalMetric: evaluation/metric.md
+          - Evaluator: evaluation/evaluator.md
+          - EvalResult: evaluation/evalresult.md
+          - Evaluation Service: evaluation/service.md
+          - Evaluation Entry Point: evaluation/agentevaluator.md
+          - Evaluation Methods: evaluation/methods.md
+          - Online Evaluation Service: evaluation/server.md
       - PromptIter: promptiter.md
   - Server:
     - Gateway: gateway.md
@@ -135,13 +158,27 @@ plugins:
                 - Prompt Template: prompt.md
                 - Callbacks: callbacks.md
                 - Plugins: plugin.md
-                - Memory: memory.md
+                - Memory:
+                    - 概览: memory/index.md
+                    - 使用与配置: memory/usage.md
+                    - 内存存储: memory/inmemory.md
+                    - SQLite: memory/sqlite.md
+                    - SQLiteVec: memory/sqlitevec.md
+                    - Redis: memory/redis.md
+                    - MySQL: memory/mysql.md
+                    - MySQL Vector: memory/mysqlvec.md
+                    - PostgreSQL: memory/postgres.md
+                    - pgvector: memory/pgvector.md
+                    - ChromaDB: memory/chromadb.md
+                    - mem0 集成: memory/mem0.md
+                    - TencentDB Agent Memory: memory/tencentdb.md
                 - Artifact: artifact.md
                 - Skill: skill.md
                 - Evolution: evolution.md
                 - Tool: tool.md
                 - Session:
                     - Overview: session/index.md
+                    - Noop Session: session/noop.md
                     - Session Summary: session/summary.md
                     - Memory Session: session/inmemory.md
                     - SQLite Session: session/sqlite.md
@@ -174,7 +211,16 @@ plugins:
                     - 故障排除: knowledge/troubleshooting.md
                 - Planner: planner.md
                 - Event: event.md
-                - Evaluation: evaluation.md
+                - Evaluation:
+                    - 概览: evaluation/index.md
+                    - 评估集: evaluation/evalset.md
+                    - 评估指标: evaluation/metric.md
+                    - 评估器: evaluation/evaluator.md
+                    - 评估结果: evaluation/evalresult.md
+                    - 评估服务: evaluation/service.md
+                    - 评估入口: evaluation/agentevaluator.md
+                    - 评估方法: evaluation/methods.md
+                    - 在线评估服务: evaluation/server.md
                 - PromptIter: promptiter.md
             - 服务:
               - Gateway: gateway.md

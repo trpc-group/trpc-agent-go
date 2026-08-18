@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -51,6 +52,24 @@ func (m *mockSummarizer) SetPrompt(prompt string) {}
 func (m *mockSummarizer) SetModel(mdl model.Model) {}
 
 func (m *mockSummarizer) Metadata() map[string]any { return nil }
+
+func TestDetachContext_PreservesRequestStart(t *testing.T) {
+	startedAt := time.Now().UTC()
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = summarytrigger.ContextWithRequestStart(ctx, summarytrigger.RequestStart{
+		RequestID: "request-1",
+		StartedAt: startedAt,
+	})
+
+	detached := DetachContext(ctx)
+	cancel()
+
+	assert.NoError(t, detached.Err())
+	requestStart, ok := summarytrigger.RequestStartFromContext(detached)
+	require.True(t, ok)
+	assert.Equal(t, "request-1", requestStart.RequestID)
+	assert.Equal(t, startedAt, requestStart.StartedAt)
+}
 
 func TestNewAsyncSummaryWorker(t *testing.T) {
 	summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
@@ -438,7 +457,7 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 		require.NoError(t, err) // Should fallback to sync, not error
 	})
 
-	t.Run("fallback strips parent cancel and deadline", func(t *testing.T) {
+	t.Run("fallback detaches parent cancel and applies job timeout", func(t *testing.T) {
 		type traceKey string
 		const key traceKey = "trace-marker"
 
@@ -480,9 +499,30 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 		err := worker.EnqueueJob(parentCtx, sess, "", false)
 		require.NoError(t, err)
 		assert.Equal(t, "trace-value", captured)
-		assert.False(t, deadlineSet)
-		assert.True(t, doneNil)
+		assert.True(t, deadlineSet)
+		assert.False(t, doneNil)
 		assert.NoError(t, ctxErr)
+	})
+
+	t.Run("synchronous fallback honors summary job timeout", func(t *testing.T) {
+		summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
+		config := AsyncSummaryConfig{
+			Summarizer:        summarizer,
+			SummaryJobTimeout: 10 * time.Millisecond,
+			CreateSummaryFunc: func(ctx context.Context, _ *session.Session, _ string, _ bool) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}
+		worker := NewAsyncSummaryWorker(config)
+		sess := &session.Session{
+			ID:      "test-session",
+			AppName: "test-app",
+			UserID:  "test-user",
+		}
+
+		err := worker.EnqueueJob(context.Background(), sess, "", false)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 
 	t.Run("enqueue with filter key", func(t *testing.T) {
@@ -724,6 +764,28 @@ func TestAsyncSummaryWorker_ProcessJob(t *testing.T) {
 		mu.Lock()
 		assert.True(t, createSummaryCalled)
 		mu.Unlock()
+	})
+
+	t.Run("process failed job with nil context", func(t *testing.T) {
+		var createSummaryCalled bool
+		worker := NewAsyncSummaryWorker(AsyncSummaryConfig{
+			Summarizer: &mockSummarizer{shouldSummarize: true},
+			CreateSummaryFunc: func(context.Context, *session.Session, string, bool) error {
+				createSummaryCalled = true
+				return errors.New("create summary failed")
+			},
+		})
+
+		worker.processJob(&summaryJob{
+			ctx: nil,
+			session: &session.Session{
+				ID:      "test-session",
+				AppName: "test-app",
+				UserID:  "test-user",
+			},
+		})
+
+		assert.True(t, createSummaryCalled)
 	})
 }
 
