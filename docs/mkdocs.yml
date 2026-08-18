@@ -110,6 +110,7 @@ nav:
   - Blog:
       - "A Go Agent Framework for Building Intelligent AI Applications": blog/trpcagentgo.md
       - "Context Management Design and Evaluation for Long-Running Agents": blog/summary.md
+      - "tRPC-Agent-Go Evolution: Online Learning, Offline Optimization, and Evaluation for Self-Improving Agents": blog/evolution.md
       - "Seeing the Agent Runtime: Observability Design in tRPC-Agent-Go": blog/observability.md
       - "Reducing Agent Token Cost: Prompt Cache Engineering in tRPC-Agent-Go": blog/promptcache.md
       - "From Conversation to Execution: How tRPC-Agent-Go Code Executor Builds a Controlled Runtime for Agents": blog/codeexecutor.md
@@ -240,6 +241,7 @@ plugins:
             - 博客:
                 - "构建智能 AI 应用的 Go 语言 Agent 框架": blog/trpcagentgo.md
                 - "长任务 Agent 上下文管理的设计与评测": blog/summary.md
+                - "tRPC-Agent-Go Evolution：Agent 自进化的在线学习、离线优化与评测": blog/evolution.md
                 - "看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍": blog/observability.md
                 - "降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践": blog/promptcache.md
                 - "从对话到执行：tRPC-Agent-Go Code Executor 如何为 Agent 构建可控运行环境": blog/codeexecutor.md
