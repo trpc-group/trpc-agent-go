@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -46,7 +47,9 @@ const (
 // Operation is a backend-neutral action in a replay case. Parallel children may
 // run concurrently; children that mutate the same session state key must declare
 // an ordering with Name and After. Update-state operations reject app- and
-// user-scoped keys, and a key cannot be both updated and deleted.
+// user-scoped keys, and a key cannot be both updated and deleted. For append-event
+// tool responses, ToolResponse owns content and implies the tool role; non-empty
+// Event Role and Content fields must agree with those values.
 type Operation struct {
 	Kind                  OperationKind
 	Name                  string
@@ -164,6 +167,16 @@ func validateCreateSession(operation Operation) error {
 func validateAppendEvent(operation Operation) error {
 	if operation.SessionID == "" || operation.Event == nil {
 		return fmt.Errorf("append event requires session id and event")
+	}
+	response := operation.Event.ToolResponse
+	if response == nil {
+		return nil
+	}
+	if role := operation.Event.Role; role != "" && role != string(model.RoleTool) {
+		return fmt.Errorf("append event tool response conflicts with event role %q", role)
+	}
+	if content := operation.Event.Content; content != "" && content != response.Content {
+		return fmt.Errorf("append event tool response conflicts with event content")
 	}
 	return nil
 }

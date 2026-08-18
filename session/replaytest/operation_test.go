@@ -140,6 +140,27 @@ func TestOperationValidateRejectsInvalidConfigurations(t *testing.T) {
 			want:      "create session requires session id",
 		},
 		{
+			name: "tool response with conflicting role",
+			operation: Operation{
+				Kind: OperationAppendEvent, SessionID: "session",
+				Event: &EventSnapshot{
+					Role: "assistant", ToolResponse: &ToolResponse{Content: "result"},
+				},
+			},
+			want: "tool response conflicts with event role",
+		},
+		{
+			name: "tool response with conflicting content",
+			operation: Operation{
+				Kind: OperationAppendEvent, SessionID: "session",
+				Event: &EventSnapshot{
+					Role: "tool", Content: "outer",
+					ToolResponse: &ToolResponse{Content: "nested"},
+				},
+			},
+			want: "tool response conflicts with event content",
+		},
+		{
 			name:      "update state without changes",
 			operation: Operation{Kind: OperationUpdateState, SessionID: "session"},
 			want:      "update state requires session id and state changes",
@@ -300,6 +321,37 @@ func TestOperationValidateRejectsInvalidConfigurations(t *testing.T) {
 			err := test.operation.Validate()
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Operation.Validate() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestOperationValidateAcceptsConsistentToolResponseFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		event EventSnapshot
+	}{
+		{
+			name: "nested fields only",
+			event: EventSnapshot{
+				ToolResponse: &ToolResponse{Content: "result"},
+			},
+		},
+		{
+			name: "matching outer fields",
+			event: EventSnapshot{
+				Role: "tool", Content: "result",
+				ToolResponse: &ToolResponse{Content: "result"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			operation := Operation{
+				Kind: OperationAppendEvent, SessionID: "session", Event: &test.event,
+			}
+			if err := operation.Validate(); err != nil {
+				t.Fatalf("Operation.Validate() error = %v", err)
 			}
 		})
 	}

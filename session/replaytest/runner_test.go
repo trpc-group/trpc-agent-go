@@ -439,6 +439,17 @@ func TestRunnerRejectsInvalidCasesBeforeCreatingFixtures(t *testing.T) {
 			want: "cannot be both updated and deleted",
 		},
 		{
+			name: "conflicting tool response fields",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationAppendEvent, SessionID: "session",
+				Event: &EventSnapshot{
+					Role: "assistant", Content: "outer",
+					ToolResponse: &ToolResponse{Content: "nested"},
+				},
+			}}}},
+			want: "tool response conflicts with event role",
+		},
+		{
 			name: "nested parallel invalid operation",
 			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
 				Kind: OperationParallel,
