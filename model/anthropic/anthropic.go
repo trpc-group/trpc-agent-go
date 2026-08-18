@@ -288,7 +288,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in anthropic.Model",
 				err,
 			)
-			modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "anthropic.Model", request, tailored, maxInputTokens,
+			)
 			return
 		}
 		log.WarnContext(
@@ -299,7 +301,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "anthropic.Model", request, tailored, maxInputTokens,
+	)
 }
 
 // InputTokenBudget returns the same input budget used by token tailoring.

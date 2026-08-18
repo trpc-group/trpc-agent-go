@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -514,6 +515,120 @@ func TestMaybeCompactContextBeforeLLM_RebuildsRequestWithSummary(t *testing.T) {
 	require.Equal(t, "completed", doneDiagnostic.Status)
 	require.NotNil(t, doneDiagnostic.Updated)
 	require.True(t, *doneDiagnostic.Updated)
+}
+
+func TestMaybeCompactContextBeforeLLM_SummarizesSanitizedOrphanToolCall(
+	t *testing.T,
+) {
+	summaryModel := &mockModel{responses: []*model.Response{{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("compressed orphan history"),
+		}},
+	}}}
+	service := inmemory.NewSessionService(inmemory.WithSummarizer(
+		summary.NewSummarizer(
+			summaryModel,
+			summary.WithTokenThreshold(1),
+			summary.WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
+		),
+	))
+	t.Cleanup(func() {
+		require.NoError(t, service.Close())
+	})
+
+	ctx := context.Background()
+	sess, err := service.CreateSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "orphan-compaction",
+	}, nil)
+	require.NoError(t, err)
+	oldUser := event.New("inv-old", "user")
+	oldUser.RequestID = "req-old"
+	oldUser.Timestamp = time.Now().Add(-time.Hour)
+	oldUser.Response = &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewUserMessage(strings.Repeat("history ", 2000)),
+		}},
+	}
+	require.NoError(t, service.AppendEvent(ctx, sess, oldUser))
+	orphanCall := event.New("inv-old", "assistant")
+	orphanCall.RequestID = "req-old"
+	orphanCall.Timestamp = oldUser.Timestamp.Add(time.Second)
+	orphanCall.Response = &model.Response{
+		Done: true,
+		Choices: []model.Choice{{Message: model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:   "call_orphan",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "shell",
+					Arguments: []byte(`{"command":"pwd"}`),
+				},
+			}},
+		}}},
+	}
+	require.NoError(t, service.AppendEvent(ctx, sess, orphanCall))
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(service),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-current",
+		}),
+		agent.WithInvocationModel(&compactingModel{
+			name:   "orphan-compaction-model",
+			window: 10000,
+		}),
+	)
+	f := New(
+		[]flow.RequestProcessor{
+			processor.NewContentRequestProcessor(
+				processor.WithAddSessionSummary(true),
+			),
+		},
+		nil,
+		Options{
+			EnableContextCompaction:         true,
+			ContextCompactionThresholdRatio: 0.2,
+		},
+	)
+
+	req := &model.Request{}
+	rebuildPlan := f.preprocess(ctx, inv, req, nil)
+	view, ok := summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.True(t, view.Bound)
+	require.Contains(t, req.Messages[1].Content, "orphan_tool_call")
+
+	rebuilt := f.maybeCompactContextBeforeLLM(
+		ctx,
+		inv,
+		nil,
+		req,
+		rebuildPlan,
+	)
+
+	require.NotSame(t, req, rebuilt)
+	require.Len(t, rebuilt.Messages, 2)
+	require.Contains(t, rebuilt.Messages[0].Content, "compressed orphan history")
+	require.Equal(t, "current", rebuilt.Messages[1].Content)
+	summaryRequest := summaryModel.LastRequest()
+	require.NotNil(t, summaryRequest)
+	require.Contains(t, summaryRequest.Messages[0].Content, "orphan_tool_call")
+	sess.SummariesMu.RLock()
+	storedSummary := sess.Summaries[""]
+	sess.SummariesMu.RUnlock()
+	require.NotNil(t, storedSummary)
+	require.Equal(
+		t,
+		orphanCall.ID,
+		storedSummary.CutoffBoundary().LastEventID,
+	)
 }
 
 func TestMaybeCompactContextBeforeLLM_PassesParentRequestForCacheSafeFork(t *testing.T) {

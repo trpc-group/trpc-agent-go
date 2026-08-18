@@ -12,7 +12,9 @@ package modeltailoring
 
 import (
 	"context"
+	"reflect"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -25,6 +27,7 @@ func ApplyResult(
 	provider string,
 	request *model.Request,
 	tailored []model.Message,
+	maxInputTokens int,
 ) bool {
 	if request == nil {
 		return false
@@ -37,6 +40,19 @@ func ApplyResult(
 		)
 		return false
 	}
+	changed := !reflect.DeepEqual(request.Messages, tailored)
+	beforeMessages := len(request.Messages)
 	request.Messages = tailored
+	if changed {
+		modelrequest.RecordTokenTailoring(
+			ctx,
+			modelrequest.TokenTailoringRecord{
+				Provider:       provider,
+				MaxInputTokens: maxInputTokens,
+				BeforeMessages: beforeMessages,
+				AfterMessages:  len(tailored),
+			},
+		)
+	}
 	return true
 }

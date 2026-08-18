@@ -34,6 +34,7 @@ import (
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -338,6 +339,27 @@ func TestEmitLatencyDiagnosticEventAndContextAttrs(t *testing.T) {
 		t,
 		flowHasAttr(attrs, "llmflow.context_compaction.context_window", 16),
 	)
+	require.True(t, flowHasAttr(
+		attrs,
+		"llmflow.context_compaction.threshold_basis",
+		"context_window",
+	))
+	tailoringAttrs := tokenTailoringAttrs([]imodelrequest.TokenTailoringRecord{{
+		Provider:       "test.Model",
+		MaxInputTokens: 100,
+		BeforeMessages: 10,
+		AfterMessages:  4,
+	}})
+	require.True(t, flowHasAttr(
+		tailoringAttrs,
+		"llmflow.token_tailoring.applied",
+		true,
+	))
+	require.True(t, flowHasAttr(
+		tailoringAttrs,
+		"llmflow.token_tailoring.after_messages",
+		4,
+	))
 }
 
 func TestPreprocess_AddsAgentToolsWhenPresent(t *testing.T) {
@@ -1005,6 +1027,39 @@ func TestRunOneStep_AttachesCacheSafeSummaryForkRequest(t *testing.T) {
 		},
 		parent.Messages,
 	)
+}
+
+func TestCallLLM_TokenTailoringInvalidatesSummarySnapshots(t *testing.T) {
+	callModel := &tailoringModel{}
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(callModel))
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		model.NewUserMessage("history"),
+	}}
+	summaryview.AttachProjection(inv, &summaryview.View{
+		ContentRequestLength: len(req.Messages),
+		Items: []summaryview.Item{{
+			Message:      req.Messages[1],
+			RequestIndex: 1,
+		}},
+	})
+
+	_, seq, modelCalled, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		callModel,
+	)
+
+	require.NoError(t, err)
+	require.True(t, modelCalled)
+	require.NotNil(t, seq)
+	view, ok := summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.False(t, view.Bound)
+	_, ok = summaryfork.Request(inv)
+	require.False(t, ok)
 }
 
 func TestRunOneStep_LeavesExecutionTraceFinalizationToOwnerWhenModelFails(t *testing.T) {
@@ -2336,6 +2391,38 @@ type mockModel struct {
 	currentIdx  int
 	mu          sync.Mutex
 	requests    []*model.Request
+}
+
+type tailoringModel struct{}
+
+func (m *tailoringModel) Info() model.Info {
+	return model.Info{Name: "tailoring-model"}
+}
+
+func (m *tailoringModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	beforeMessages := len(req.Messages)
+	req.Messages = req.Messages[:1]
+	imodelrequest.RecordTokenTailoring(
+		ctx,
+		imodelrequest.TokenTailoringRecord{
+			Provider:       "tailoringModel",
+			MaxInputTokens: 100,
+			BeforeMessages: beforeMessages,
+			AfterMessages:  len(req.Messages),
+		},
+	)
+	respChan := make(chan *model.Response, 1)
+	respChan <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	}
+	close(respChan)
+	return respChan, nil
 }
 
 type namedFlowModel struct {

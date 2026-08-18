@@ -65,6 +65,124 @@ func TestFinalizeBindsModelVisiblePrefix(t *testing.T) {
 
 }
 
+func TestRebaseAfterTransformTracksSafeCompletedPrefix(t *testing.T) {
+	now := time.Now()
+	assistant := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{ID: "call_keep"},
+			{ID: "call_orphan"},
+		},
+	}
+	toolResult := model.NewToolMessage("call_keep", "lookup", "ok")
+	before := []model.Message{
+		model.NewSystemMessage("fixed"),
+		assistant,
+		toolResult,
+	}
+	filteredAssistant := assistant
+	filteredAssistant.ToolCalls = filteredAssistant.ToolCalls[:1]
+	after := []model.Message{
+		before[0],
+		filteredAssistant,
+		toolResult,
+		model.NewUserMessage("downgraded orphan call"),
+	}
+	invocation := agent.NewInvocation()
+	AttachProjection(invocation, &View{
+		ContentRequestLength: len(before),
+		Items: []Item{
+			{
+				Message: assistant,
+				EffectiveEvent: event.Event{
+					ID: "event-1",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: assistant,
+					}}},
+				},
+				Boundary:     Boundary{EventID: "event-1", Timestamp: now},
+				RequestIndex: 1,
+			},
+			{
+				Message: toolResult,
+				EffectiveEvent: event.Event{
+					ID: "event-2",
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: toolResult,
+					}}},
+				},
+				Boundary: Boundary{
+					EventID:   "event-2",
+					Timestamp: now.Add(time.Second),
+				},
+				RequestIndex: 2,
+			},
+		},
+	})
+
+	rebased := RebaseAfterTransform(
+		invocation,
+		before,
+		after,
+		[]int{0, 1, 2, 1},
+	)
+
+	require.True(t, rebased)
+	view, ok := Snapshot(invocation)
+	require.True(t, ok)
+	require.True(t, view.Bound)
+	require.Equal(t, len(after), view.ContentRequestLength)
+	require.Len(t, view.Items, 3)
+	require.Equal(t, []int{1, 2, 3}, []int{
+		view.Items[0].RequestIndex,
+		view.Items[1].RequestIndex,
+		view.Items[2].RequestIndex,
+	})
+	require.True(t, view.Items[0].Boundary.IsZero())
+	require.True(t, view.Items[1].Boundary.IsZero())
+	require.Equal(t, "event-2", view.Items[2].Boundary.EventID)
+	require.Equal(
+		t,
+		"downgraded orphan call",
+		view.Items[2].EffectiveEvent.Response.Choices[0].Message.Content,
+	)
+	_, ok = view.PrefixBoundary(2)
+	require.False(t, ok)
+	boundary, ok := view.PrefixBoundary(3)
+	require.True(t, ok)
+	require.Equal(t, "event-2", boundary.EventID)
+
+	Finalize(invocation, &model.Request{Messages: after}, 100)
+	view, ok = Snapshot(invocation)
+	require.True(t, ok)
+	require.True(t, view.Bound)
+	require.Equal(t, 100, view.RequestTokens)
+}
+
+func TestRebaseAfterTransformFailsClosedWithoutCompleteProvenance(t *testing.T) {
+	invocation := agent.NewInvocation()
+	before := []model.Message{model.NewUserMessage("visible")}
+	AttachProjection(invocation, &View{
+		ContentRequestLength: len(before),
+		Items: []Item{{
+			Message:      before[0],
+			RequestIndex: 0,
+		}},
+	})
+
+	require.False(t, RebaseAfterTransform(
+		invocation,
+		before,
+		[]model.Message{model.NewUserMessage("rewritten")},
+		[]int{},
+	))
+	Finalize(invocation, &model.Request{Messages: before}, 100)
+	view, ok := Snapshot(invocation)
+	require.True(t, ok)
+	require.False(t, view.Bound)
+	require.Equal(t, 100, view.RequestTokens)
+}
+
 func TestSnapshotIsIsolated(t *testing.T) {
 	invocation := agent.NewInvocation()
 	AttachProjection(invocation, &View{

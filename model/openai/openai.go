@@ -794,7 +794,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in openai.Model",
 				err,
 			)
-			modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "openai.Model", request, tailored, maxInputTokens,
+			)
 			return
 		}
 		log.WarnContext(
@@ -805,7 +807,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "openai.Model", request, tailored, maxInputTokens,
+	)
 }
 
 // InputTokenBudget returns the same input budget used by token tailoring.

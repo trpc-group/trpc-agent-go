@@ -1573,8 +1573,31 @@ func (f *Flow) preprocess(
 		finishLatencySpan(stageSpan, stageStarted, nil)
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
-	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(ctx, llmRequest.Messages, llmRequest.Tools)
+	sanitizeRequestMessages(ctx, invocation, llmRequest)
 	return rebuildPlan
+}
+
+func sanitizeRequestMessages(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) {
+	if req == nil {
+		return
+	}
+	before := req.Messages
+	result := toolcall.SanitizeMessagesWithToolsResult(
+		ctx,
+		before,
+		req.Tools,
+	)
+	req.Messages = result.Messages
+	summaryview.RebaseAfterTransform(
+		invocation,
+		before,
+		result.Messages,
+		result.SourceIndexes,
+	)
 }
 
 func normalizeContextCompactionThresholdRatio(ratio float64) float64 {
@@ -1826,11 +1849,7 @@ func (f *Flow) rebuildRequestForContextCompaction(
 			rebuilt,
 		)
 	}
-	rebuilt.Messages = toolcall.SanitizeMessagesWithTools(
-		ctx,
-		rebuilt.Messages,
-		rebuilt.Tools,
-	)
+	sanitizeRequestMessages(ctx, invocation, rebuilt)
 	return rebuilt
 }
 
@@ -2473,7 +2492,26 @@ func (f *Flow) callLLM(
 			finalizationMessage,
 		),
 	)
+	ctx, tailoringObserver := imodelrequest.ObserveTokenTailoring(
+		ctx,
+		func(record imodelrequest.TokenTailoringRecord) {
+			summaryview.InvalidateBinding(invocation)
+			summaryfork.Invalidate(invocation)
+			log.DebugfContext(
+				ctx,
+				"Model request token tailoring applied: provider=%s, "+
+					"max_input_tokens=%d, messages=%d->%d",
+				record.Provider,
+				record.MaxInputTokens,
+				record.BeforeMessages,
+				record.AfterMessages,
+			)
+		},
+	)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
+	if started {
+		span.SetAttributes(tokenTailoringAttrs(tailoringObserver.Snapshot())...)
+	}
 	if err != nil {
 		return ctx, nil, true, err
 	}

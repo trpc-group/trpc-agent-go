@@ -286,7 +286,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in ollama.Model",
 				err,
 			)
-			modeltailoring.ApplyResult(ctx, "ollama.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "ollama.Model", request, tailored, maxInputTokens,
+			)
 			return
 		}
 		log.WarnContext(
@@ -297,7 +299,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "ollama.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "ollama.Model", request, tailored, maxInputTokens,
+	)
 }
 
 // InputTokenBudget returns the same input budget used by token tailoring.

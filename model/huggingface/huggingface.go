@@ -492,14 +492,18 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	if err != nil {
 		if len(tailored) > 0 {
 			log.WarnContext(ctx, "token tailoring returned best-effort messages in huggingface.Model", err)
-			modeltailoring.ApplyResult(ctx, "huggingface.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "huggingface.Model", request, tailored, maxInputTokens,
+			)
 			return
 		}
 		log.Warn("token tailoring failed in huggingface.Model", err)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "huggingface.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "huggingface.Model", request, tailored, maxInputTokens,
+	)
 }
 
 // InputTokenBudget returns the same input budget used by token tailoring.
