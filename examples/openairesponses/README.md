@@ -21,7 +21,7 @@ go run ./tools -streaming=true   # try: calculate 123 * 456
 
 Flags: `-model`, `-api-key`, `-base-url`, `-streaming`.
 
-The constructor is the scheme-5 diff:
+Construct the model with `openairesponses.New`:
 
 ```go
 modelInstance := openairesponses.New(

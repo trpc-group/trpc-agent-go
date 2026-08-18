@@ -10,6 +10,7 @@
 package responses
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -63,6 +64,9 @@ func validateRequest(request *model.Request) error {
 	if request.FrequencyPenalty != nil {
 		return fmt.Errorf("openai/responses: frequency_penalty is not supported by the official Responses API")
 	}
+	if request.Logprobs != nil || request.TopLogprobs != nil {
+		return fmt.Errorf("openai/responses: logprobs is not supported by the official Responses API")
+	}
 	if request.ReasoningEffort != nil && strings.TrimSpace(*request.ReasoningEffort) != "" {
 		if _, ok := officialReasoningEfforts[*request.ReasoningEffort]; !ok {
 			return fmt.Errorf(
@@ -75,11 +79,15 @@ func validateRequest(request *model.Request) error {
 }
 
 func (m *Model) buildParams(request *model.Request) (responses.ResponseNewParams, error) {
+	items, err := convertMessages(request.Messages)
+	if err != nil {
+		return responses.ResponseNewParams{}, err
+	}
 	params := responses.ResponseNewParams{
 		Model: m.name,
 		Store: openai.Bool(m.store),
 		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: convertMessages(request.Messages),
+			OfInputItemList: items,
 		},
 	}
 	if request.MaxTokens != nil {
@@ -134,15 +142,19 @@ func applyToolChoice(params *responses.ResponseNewParams, extra map[string]any) 
 	}
 }
 
-func convertMessages(messages []model.Message) responses.ResponseInputParam {
+func convertMessages(messages []model.Message) (responses.ResponseInputParam, error) {
 	items := make(responses.ResponseInputParam, 0, len(messages)*2)
 	reasoningIndex := 0
 	for _, msg := range messages {
 		switch msg.Role {
 		case model.RoleTool:
+			text, err := messageText(msg)
+			if err != nil {
+				return nil, err
+			}
 			items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
 				msg.ToolID,
-				messageText(msg),
+				text,
 			))
 		case model.RoleAssistant:
 			if strings.TrimSpace(msg.ReasoningContent) != "" {
@@ -165,20 +177,22 @@ func convertMessages(messages []model.Message) responses.ResponseInputParam {
 					tc.Function.Name,
 				))
 			}
-			if text := messageText(msg); text != "" || len(msg.ToolCalls) == 0 {
-				items = append(items, responses.ResponseInputItemParamOfMessage(
-					text,
-					responses.EasyInputMessageRoleAssistant,
-				))
+			item, hasContent, err := messageInputItem(msg, responses.EasyInputMessageRoleAssistant)
+			if err != nil {
+				return nil, err
+			}
+			if hasContent || len(msg.ToolCalls) == 0 {
+				items = append(items, item)
 			}
 		default:
-			items = append(items, responses.ResponseInputItemParamOfMessage(
-				messageText(msg),
-				roleToEasyInput(msg.Role),
-			))
+			item, _, err := messageInputItem(msg, roleToEasyInput(msg.Role))
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
 		}
 	}
-	return items
+	return items, nil
 }
 
 func roleToEasyInput(role model.Role) responses.EasyInputMessageRole {
@@ -192,17 +206,165 @@ func roleToEasyInput(role model.Role) responses.EasyInputMessageRole {
 	}
 }
 
-func messageText(msg model.Message) string {
+func messageInputItem(
+	msg model.Message,
+	role responses.EasyInputMessageRole,
+) (responses.ResponseInputItemUnionParam, bool, error) {
+	if len(msg.ContentParts) == 0 {
+		return responses.ResponseInputItemParamOfMessage(msg.Content, role), msg.Content != "", nil
+	}
+	parts, err := convertContentParts(msg)
+	if err != nil {
+		return responses.ResponseInputItemUnionParam{}, false, err
+	}
+	return responses.ResponseInputItemParamOfMessage(parts, role), len(parts) > 0, nil
+}
+
+func convertContentParts(msg model.Message) (responses.ResponseInputMessageContentListParam, error) {
+	parts := make(responses.ResponseInputMessageContentListParam, 0, len(msg.ContentParts)+1)
 	if msg.Content != "" {
-		return msg.Content
+		parts = append(parts, responses.ResponseInputContentParamOfInputText(msg.Content))
+	}
+	for _, part := range msg.ContentParts {
+		converted, err := convertContentPart(part)
+		if err != nil {
+			return nil, err
+		}
+		if converted != nil {
+			parts = append(parts, *converted)
+		}
+	}
+	return parts, nil
+}
+
+func convertContentPart(part model.ContentPart) (*responses.ResponseInputContentUnionParam, error) {
+	switch part.Type {
+	case model.ContentTypeText:
+		if part.Text == nil {
+			return nil, nil
+		}
+		p := responses.ResponseInputContentParamOfInputText(*part.Text)
+		return &p, nil
+	case model.ContentTypeImage:
+		p, err := convertImagePart(part.Image)
+		if err != nil {
+			return nil, err
+		}
+		return &p, nil
+	case model.ContentTypeFile:
+		p, err := convertFilePart(part.File)
+		if err != nil {
+			return nil, err
+		}
+		return &p, nil
+	case model.ContentTypeAudio, model.ContentTypeVideo:
+		return nil, fmt.Errorf("openai/responses: %s content parts are not supported", part.Type)
+	default:
+		if part.Type == "" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("openai/responses: unsupported content part type %q", part.Type)
+	}
+}
+
+func convertImagePart(image *model.Image) (responses.ResponseInputContentUnionParam, error) {
+	if image == nil {
+		return responses.ResponseInputContentUnionParam{}, fmt.Errorf("openai/responses: image content part is empty")
+	}
+	url := imageToURLOrBase64(image)
+	if url == "" {
+		return responses.ResponseInputContentUnionParam{}, fmt.Errorf("openai/responses: image content part has no url or data")
+	}
+	detail := responses.ResponseInputImageDetailAuto
+	switch strings.ToLower(strings.TrimSpace(image.Detail)) {
+	case "low":
+		detail = responses.ResponseInputImageDetailLow
+	case "high":
+		detail = responses.ResponseInputImageDetailHigh
+	case "original":
+		detail = responses.ResponseInputImageDetailOriginal
+	}
+	p := responses.ResponseInputContentParamOfInputImage(detail)
+	p.OfInputImage.ImageURL = openai.String(url)
+	return p, nil
+}
+
+func convertFilePart(file *model.File) (responses.ResponseInputContentUnionParam, error) {
+	if file == nil {
+		return responses.ResponseInputContentUnionParam{}, fmt.Errorf("openai/responses: file content part is empty")
+	}
+	p := responses.ResponseInputFileParam{}
+	if strings.TrimSpace(file.FileID) != "" {
+		p.FileID = openai.String(file.FileID)
+	}
+	if strings.TrimSpace(file.URL) != "" {
+		p.FileURL = openai.String(file.URL)
+	}
+	if strings.TrimSpace(file.Name) != "" {
+		p.Filename = openai.String(file.Name)
+	}
+	if len(file.Data) > 0 {
+		mime := strings.TrimSpace(file.MimeType)
+		if mime == "" {
+			mime = "application/octet-stream"
+		}
+		p.FileData = openai.String("data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(file.Data))
+	}
+	if strings.TrimSpace(file.FileID) == "" && strings.TrimSpace(file.URL) == "" && len(file.Data) == 0 {
+		return responses.ResponseInputContentUnionParam{}, fmt.Errorf("openai/responses: file content part has no file_id, url, or data")
+	}
+	return responses.ResponseInputContentUnionParam{OfInputFile: &p}, nil
+}
+
+func imageToURLOrBase64(image *model.Image) string {
+	if image == nil {
+		return ""
+	}
+	if strings.TrimSpace(image.URL) != "" {
+		return image.URL
+	}
+	if len(image.Data) == 0 {
+		return ""
+	}
+	format := strings.TrimSpace(image.Format)
+	if format == "" {
+		format = "png"
+	}
+	if strings.HasPrefix(format, "image/") {
+		return "data:" + format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
+	}
+	return "data:image/" + format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
+}
+
+func messageText(msg model.Message) (string, error) {
+	if msg.Content != "" {
+		if err := rejectNonTextParts(msg.ContentParts); err != nil {
+			return "", err
+		}
+		return msg.Content, nil
 	}
 	var b strings.Builder
 	for _, part := range msg.ContentParts {
-		if part.Type == model.ContentTypeText && part.Text != nil {
-			b.WriteString(*part.Text)
+		switch part.Type {
+		case model.ContentTypeText:
+			if part.Text != nil {
+				b.WriteString(*part.Text)
+			}
+		case "":
+		default:
+			return "", fmt.Errorf("openai/responses: tool messages only support text content, got %s", part.Type)
 		}
 	}
-	return b.String()
+	return b.String(), nil
+}
+
+func rejectNonTextParts(parts []model.ContentPart) error {
+	for _, part := range parts {
+		if part.Type != model.ContentTypeText && part.Type != "" {
+			return fmt.Errorf("openai/responses: tool messages only support text content, got %s", part.Type)
+		}
+	}
+	return nil
 }
 
 func convertTools(tools map[string]tool.Tool) []responses.ToolUnionParam {

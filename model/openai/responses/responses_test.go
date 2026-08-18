@@ -25,9 +25,10 @@ import (
 
 func TestGenerateContent_NonStreamTextAndUsage(t *testing.T) {
 	var gotBody map[string]any
+	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.True(t, strings.HasSuffix(r.URL.Path, "/responses"))
-		gotBody = readJSONBody(t, r)
+		gotPath = r.URL.Path
+		gotBody = mustReadJSONBody(w, r)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{
 			"id":"resp_text",
@@ -47,6 +48,7 @@ func TestGenerateContent_NonStreamTextAndUsage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	resps := collect(t, ch)
+	require.True(t, strings.HasSuffix(gotPath, "/responses"))
 	require.Len(t, resps, 1)
 	require.Nil(t, resps[0].Error)
 	require.True(t, resps[0].Done)
@@ -128,7 +130,7 @@ func TestGenerateContent_StreamFunctionCallArguments(t *testing.T) {
 func TestGenerateContent_StructuredOutputJSONSchema(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = readJSONBody(t, r)
+		gotBody = mustReadJSONBody(w, r)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{
 			"id":"resp_so",
@@ -157,6 +159,10 @@ func TestGenerateContent_StructuredOutputJSONSchema(t *testing.T) {
 	format := gotBody["text"].(map[string]any)["format"].(map[string]any)
 	require.Equal(t, "json_schema", format["type"])
 	require.Equal(t, "person", format["name"])
+	require.Equal(t, false, format["strict"])
+	schema, ok := format["schema"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "object", schema["type"])
 }
 
 func TestGenerateContent_OutputNullDoesNotPanic(t *testing.T) {
@@ -216,6 +222,22 @@ func TestGenerateContent_FailFastUnsupportedParams(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "reasoning_effort")
+
+	logprobs := true
+	top := 5
+	_, err = m.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{Logprobs: &logprobs},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "logprobs")
+
+	_, err = m.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{TopLogprobs: &top},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "logprobs")
 }
 
 func TestGenerateContent_IncompleteMapsToLength(t *testing.T) {
@@ -241,7 +263,7 @@ func TestGenerateContent_IncompleteMapsToLength(t *testing.T) {
 }
 
 func TestConvertMessages_ToolCallAndReasoningReplay(t *testing.T) {
-	items := convertMessages([]model.Message{
+	items, err := convertMessages([]model.Message{
 		model.NewUserMessage("calc"),
 		{
 			Role:             model.RoleAssistant,
@@ -257,6 +279,7 @@ func TestConvertMessages_ToolCallAndReasoningReplay(t *testing.T) {
 		},
 		model.NewToolMessage("call_1", "calculator", "2"),
 	})
+	require.NoError(t, err)
 	raw, err := json.Marshal(items)
 	require.NoError(t, err)
 	var decoded []map[string]any
@@ -274,7 +297,7 @@ func TestConvertMessages_ToolCallAndReasoningReplay(t *testing.T) {
 func TestGenerateContent_ExtraFieldsAndOfficialEffort(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = readJSONBody(t, r)
+		gotBody = mustReadJSONBody(w, r)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"resp_x","object":"response","status":"completed","output":[]}`)
 	}))
@@ -304,7 +327,7 @@ func TestGenerateContent_ExtraFieldsAndOfficialEffort(t *testing.T) {
 func TestGenerateContent_ToolChoiceFunction(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = readJSONBody(t, r)
+		gotBody = mustReadJSONBody(w, r)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"resp_x","object":"response","status":"completed","output":[]}`)
 	}))
@@ -333,6 +356,115 @@ func TestInfo(t *testing.T) {
 	require.Equal(t, "gpt-5", m.Info().Name)
 }
 
+func TestConvertMessages_MultimodalContentParts(t *testing.T) {
+	text := "caption"
+	items, err := convertMessages([]model.Message{{
+		Role:    model.RoleUser,
+		Content: "look",
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &text},
+			{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.com/a.png", Detail: "low"}},
+			{Type: model.ContentTypeFile, File: &model.File{FileID: "file_1", Name: "notes.txt"}},
+		},
+	}})
+	require.NoError(t, err)
+	raw, err := json.Marshal(items)
+	require.NoError(t, err)
+	var decoded []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	content := decoded[0]["content"].([]any)
+	require.Len(t, content, 4)
+	require.Equal(t, "input_text", content[0].(map[string]any)["type"])
+	require.Equal(t, "look", content[0].(map[string]any)["text"])
+	require.Equal(t, "input_text", content[1].(map[string]any)["type"])
+	require.Equal(t, "caption", content[1].(map[string]any)["text"])
+	require.Equal(t, "input_image", content[2].(map[string]any)["type"])
+	require.Equal(t, "https://example.com/a.png", content[2].(map[string]any)["image_url"])
+	require.Equal(t, "low", content[2].(map[string]any)["detail"])
+	require.Equal(t, "input_file", content[3].(map[string]any)["type"])
+	require.Equal(t, "file_1", content[3].(map[string]any)["file_id"])
+
+	_, err = convertMessages([]model.Message{{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			Type:  model.ContentTypeImage,
+			Image: &model.Image{Data: []byte("png"), Format: "png"},
+		}},
+	}})
+	require.NoError(t, err)
+
+	_, err = convertMessages([]model.Message{{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			Type: model.ContentTypeFile,
+			File: &model.File{Data: []byte("hi"), Name: "a.txt", MimeType: "text/plain"},
+		}},
+	}})
+	require.NoError(t, err)
+
+	_, err = convertMessages([]model.Message{{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			Type:  model.ContentTypeAudio,
+			Audio: &model.Audio{Data: []byte("wav"), Format: "wav"},
+		}},
+	}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "audio")
+
+	_, err = convertMessages([]model.Message{{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			Type:  model.ContentTypeVideo,
+			Video: &model.Video{URL: "https://example.com/v.mp4"},
+		}},
+	}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "video")
+}
+
+func TestGenerateContent_StreamFallbackTerminalAndPendingToolArgs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeSSE(w,
+			`{"type":"response.created","response":{"id":"resp_eof","object":"response","status":"in_progress","created_at":1700000002}}`,
+			`{"type":"response.output_text.delta","delta":"hi"}`,
+		)
+	}))
+	defer srv.Close()
+
+	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	require.NoError(t, err)
+	resps := collect(t, ch)
+	require.True(t, resps[len(resps)-1].Done)
+	require.Equal(t, "hi", resps[len(resps)-1].Choices[0].Message.Content)
+
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeSSE(w,
+			`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"a\":1}"}`,
+			`{"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"calculator","arguments":""}}`,
+			`{"type":"response.completed","response":{"id":"resp_pending","status":"completed","output":[]}}`,
+		)
+	}))
+	defer srv2.Close()
+	m2 := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv2.URL))
+	ch2, err := m2.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("calc")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+		Tools:            map[string]tool.Tool{"calculator": stubTool{name: "calculator"}},
+	})
+	require.NoError(t, err)
+	final := collect(t, ch2)
+	tc := final[len(final)-1].Choices[0].Message.ToolCalls
+	require.Len(t, tc, 1)
+	require.Equal(t, "call_abc", tc[0].ID)
+	require.Equal(t, "calculator", tc[0].Function.Name)
+	require.JSONEq(t, `{"a":1}`, string(tc[0].Function.Arguments))
+}
+
 type stubTool struct{ name string }
 
 func (s stubTool) Declaration() *tool.Declaration {
@@ -348,11 +480,13 @@ func collect(t *testing.T, ch <-chan *model.Response) []*model.Response {
 	return out
 }
 
-func readJSONBody(t *testing.T, r *http.Request) map[string]any {
-	t.Helper()
+func mustReadJSONBody(w http.ResponseWriter, r *http.Request) map[string]any {
 	defer r.Body.Close()
 	var body map[string]any
-	require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return nil
+	}
 	return body
 }
 

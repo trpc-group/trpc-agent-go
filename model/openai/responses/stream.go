@@ -13,6 +13,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -89,24 +91,30 @@ func (m *Model) handleStreaming(
 			emittedTerminal = true
 		}
 	}
-	if decoder.Err() != nil && !emittedTerminal && ctx.Err() == nil {
-		emit(apiErrorResponse(decoder.Err()))
+	if ctx.Err() != nil {
+		return
+	}
+	if err := decoder.Err(); err != nil && !errors.Is(err, io.EOF) {
+		if !emittedTerminal {
+			emit(apiErrorResponse(err))
+		}
+		return
+	}
+	if !emittedTerminal {
+		emit(projectAccumulator(m.name, acc, "completed", nil))
 	}
 }
 
-var errNilStreamBody = errString("openai/responses: empty stream body")
-
-type errString string
-
-func (e errString) Error() string { return string(e) }
+var errNilStreamBody = errors.New("openai/responses: empty stream body")
 
 type streamAccumulator struct {
-	id        string
-	created   int64
-	text      strings.Builder
-	reasoning strings.Builder
-	calls     []model.ToolCall
-	callByID  map[string]int
+	id          string
+	created     int64
+	text        strings.Builder
+	reasoning   strings.Builder
+	calls       []model.ToolCall
+	callByID    map[string]int
+	pendingArgs map[string][]byte
 }
 
 func handleStreamEvent(
@@ -159,7 +167,7 @@ func handleStreamEvent(
 		if msg == "" {
 			msg = "responses stream failed"
 		}
-		return emit(apiErrorResponse(errString(msg)))
+		return emit(apiErrorResponse(errors.New(msg)))
 	default:
 		return true
 	}
@@ -238,48 +246,63 @@ func projectAccumulator(modelName string, acc *streamAccumulator, status string,
 }
 
 func (acc *streamAccumulator) addFunctionCall(call responses.ResponseFunctionToolCall) {
+	itemID := strings.TrimSpace(call.ID)
+	callID := strings.TrimSpace(call.CallID)
+	name := strings.TrimSpace(call.Name)
+	if callID == "" || name == "" {
+		return
+	}
 	if acc.callByID == nil {
 		acc.callByID = make(map[string]int)
 	}
 	idx := len(acc.calls)
-	key := call.ID
-	if key == "" {
-		key = call.CallID
+	if itemID != "" {
+		acc.callByID[itemID] = idx
 	}
-	acc.callByID[key] = idx
-	if call.CallID != "" {
-		acc.callByID[call.CallID] = idx
+	if callID != "" {
+		acc.callByID[callID] = idx
+	}
+	args := []byte(call.Arguments)
+	if itemID != "" && len(acc.pendingArgs[itemID]) > 0 {
+		args = acc.pendingArgs[itemID]
+		delete(acc.pendingArgs, itemID)
 	}
 	acc.calls = append(acc.calls, model.ToolCall{
 		Type:  functionToolType,
-		ID:    call.CallID,
+		ID:    callID,
 		Index: intPtr(idx),
 		Function: model.FunctionDefinitionParam{
-			Name:      call.Name,
-			Arguments: []byte(call.Arguments),
+			Name:      name,
+			Arguments: args,
 		},
 	})
 }
 
 func (acc *streamAccumulator) appendArguments(itemID, delta string) {
-	if delta == "" {
+	if delta == "" || strings.TrimSpace(itemID) == "" {
 		return
 	}
 	idx, ok := acc.lookupCall(itemID)
 	if !ok {
-		acc.addFunctionCall(responses.ResponseFunctionToolCall{ID: itemID})
-		idx = len(acc.calls) - 1
+		if acc.pendingArgs == nil {
+			acc.pendingArgs = make(map[string][]byte)
+		}
+		acc.pendingArgs[itemID] = append(acc.pendingArgs[itemID], delta...)
+		return
 	}
 	acc.calls[idx].Function.Arguments = append(acc.calls[idx].Function.Arguments, delta...)
 }
 
 func (acc *streamAccumulator) setArguments(itemID, arguments string) {
-	if arguments == "" {
+	if arguments == "" || strings.TrimSpace(itemID) == "" {
 		return
 	}
 	idx, ok := acc.lookupCall(itemID)
 	if !ok {
-		acc.addFunctionCall(responses.ResponseFunctionToolCall{ID: itemID, Arguments: arguments})
+		if acc.pendingArgs == nil {
+			acc.pendingArgs = make(map[string][]byte)
+		}
+		acc.pendingArgs[itemID] = []byte(arguments)
 		return
 	}
 	acc.calls[idx].Function.Arguments = []byte(arguments)

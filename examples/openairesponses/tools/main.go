@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2026 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package main
 
 import (
@@ -6,7 +15,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"strings"
 	"time"
@@ -119,11 +127,12 @@ func calculatorTool() tool.Tool {
 		case "multiply", "*":
 			out = in.A * in.B
 		case "divide", "/":
-			if in.B != 0 {
-				out = in.A / in.B
+			if in.B == 0 {
+				return result{}, fmt.Errorf("division by zero")
 			}
+			out = in.A / in.B
 		default:
-			out = math.NaN()
+			return result{}, fmt.Errorf("unsupported operation %q", in.Operation)
 		}
 		return result{Result: out}, nil
 	}, function.WithName("calculator"), function.WithDescription("Perform basic mathematical calculations"))
