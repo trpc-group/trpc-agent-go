@@ -63,7 +63,7 @@ The table below is a boundary index, not an API reference. It shows where the re
 | --- | --- | --- | --- |
 | Single LLMAgent | One Agent advances with its own instruction and tool surface | Controlled tools and simple flow | Tool surface, context, permission, model, or runtime boundary grows |
 | AgentTool | A fixed child Agent runs as a synchronous tool; history is isolated by default; result returns as tool result | Search, review, analysis, small specialist work | Parent history, persistent child history, result trimming, inner stream forwarding, skip outer summarization |
-| Dynamic AgentTool | One `dynamic_agent` entrypoint creates a short-lived child Agent per call; isolated by default; no stable child history | Per-task narrowing of instruction, tools, or skills | Capability bounds, providers, exposed fields, timeout, response mode |
+| Dynamic AgentTool | One `dynamic_agent` entrypoint creates a short-lived child Agent per call; isolated by default; no stable child history | Per-task narrowing of instruction, tools, skills, or a host-authorized model profile | Capability bounds, providers, model profiles, exposed fields, timeout, response mode |
 | `transfer_to_agent` | `WithSubAgents` exposes transfer; the target Agent takes over the current invocation; the source Agent ends the turn by default | The specialist should continue answering the current turn | Default handoff message, whether to end, message projection, cross-turn owner |
 | Coordinator Team | Members are wrapped as tools; results return to the coordinator | A coordinator calls multiple members in one turn | Member history, inner events, member text visibility, coordinator summarization |
 | Swarm | Entry member starts; members hand off via transfer; the next user turn starts from entry by default | Handoff chains inside the current turn | Cross-request transfer, independent member history, custom handoff input |
@@ -101,9 +101,9 @@ Read common options by output path:
 
 ### 5.2 Dynamic AgentTool: Per-Call Capability Assembly
 
-Dynamic AgentTool is for tasks where each call needs a narrower instruction, tool set, or skill set. It exposes a default entrypoint named `dynamic_agent` and creates one short-lived child Agent for the current tool call.
+Dynamic AgentTool is for tasks where each call needs a narrower instruction, tool set, skill set, or host-authorized model profile. It exposes a default entrypoint named `dynamic_agent` and creates one short-lived child Agent for the current tool call.
 
-"Dynamic" does not mean the model can create arbitrary Agents. Code still defines the maximum boundary. The boundary can come from the parent invocation's effective capability surface, or from explicit options such as `WithCapabilityTools`, `WithCapabilityProvider`, `WithCapabilitySurfaceProvider`, and `WithCapabilitySkills`. The model can only select a subset within that boundary. It cannot choose arbitrary models, executors, or remote targets.
+"Dynamic" does not mean the model can create arbitrary Agents. Code still defines the maximum boundary. The boundary can come from the parent invocation's effective capability surface, or from explicit options such as `WithCapabilityTools`, `WithCapabilityProvider`, `WithCapabilitySurfaceProvider`, and `WithCapabilitySkills`. The model can only select a subset within that boundary. It cannot choose arbitrary models, executors, or remote targets; when `WithAgentModelProfile` is configured, it may select only one of those host-authorized aliases for the current child call.
 
 This solves capability-surface narrowing, not long-term memory. `NewDynamicTool` is short-lived, and `WithPersistentHistory*` is ignored. If the requirement is "the same child should keep editing the same artifact next time," prefer a fixed AgentTool with persistent history, or put artifact state in an external object.
 

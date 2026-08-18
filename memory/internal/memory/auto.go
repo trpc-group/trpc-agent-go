@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantmemory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -73,7 +74,6 @@ const (
 	// return per reconcile probe. Keeping this small bounds the extra
 	// cost while still surfacing the closest match reliably.
 	reconcileTopK = 3
-
 	// reconcileSkipScore: at or above this search Score the candidate
 	// is treated as an equivalent memory. The add is either dropped or
 	// rewritten into a topic-only update.
@@ -166,8 +166,8 @@ type memoryExtractorUnwrapper interface {
 	UnwrapMemoryExtractor() extractor.MemoryExtractor
 }
 
-// ConfigureExtractorEnabledTools passes enabled tool flags to the
-// extractor if it implements EnabledToolsConfigurer.
+// ConfigureExtractorEnabledTools passes enabled tool flags to the extractor
+// and to the built-in capability owner exposed by a cooperating decorator.
 func ConfigureExtractorEnabledTools(
 	ext extractor.MemoryExtractor,
 	enabledTools map[string]struct{},
@@ -175,6 +175,23 @@ func ConfigureExtractorEnabledTools(
 	if c, ok := ext.(EnabledToolsConfigurer); ok {
 		c.SetEnabledTools(enabledTools)
 	}
+	capabilityExtractor := unwrapMemoryExtractor(ext)
+	if isNilMemoryExtractor(capabilityExtractor) ||
+		sameMemoryExtractor(ext, capabilityExtractor) {
+		return
+	}
+	if c, ok := capabilityExtractor.(EnabledToolsConfigurer); ok {
+		c.SetEnabledTools(enabledTools)
+	}
+}
+
+func sameMemoryExtractor(first, second extractor.MemoryExtractor) bool {
+	firstType := reflect.TypeOf(first)
+	if firstType == nil || firstType != reflect.TypeOf(second) ||
+		!firstType.Comparable() {
+		return false
+	}
+	return first == second
 }
 
 // unwrapMemoryExtractor follows cooperating decorators to the extractor that
@@ -243,13 +260,14 @@ type MemoryOperator interface {
 
 // AutoMemoryWorker manages async memory extraction workers.
 type AutoMemoryWorker struct {
-	config       AutoMemoryConfig
-	operator     MemoryOperator
-	updatePolicy extractor.UpdatePolicy
-	jobChans     []chan *MemoryJob
-	wg           sync.WaitGroup
-	mu           sync.RWMutex
-	started      bool
+	config                     AutoMemoryConfig
+	operator                   MemoryOperator
+	updatePolicy               extractor.UpdatePolicy
+	assistantEpisodeExtraction bool
+	jobChans                   []chan *MemoryJob
+	wg                         sync.WaitGroup
+	mu                         sync.RWMutex
+	started                    bool
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
@@ -260,10 +278,12 @@ func NewAutoMemoryWorker(
 	operator MemoryOperator,
 ) *AutoMemoryWorker {
 	config.EnabledTools = maps.Clone(config.EnabledTools)
+	capabilityExtractor := unwrapMemoryExtractor(config.Extractor)
 	return &AutoMemoryWorker{
-		config:       config,
-		operator:     operator,
-		updatePolicy: updatePolicyFor(unwrapMemoryExtractor(config.Extractor)),
+		config:                     config,
+		operator:                   operator,
+		updatePolicy:               updatePolicyFor(capabilityExtractor),
+		assistantEpisodeExtraction: assistantmemory.Enabled(capabilityExtractor),
 	}
 }
 
@@ -337,7 +357,11 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 	}
 
 	since := readLastExtractAt(sess)
-	latestTs, messages := scanDeltaSince(sess, since)
+	latestTs, messages := scanDeltaSince(
+		sess,
+		since,
+		w.assistantEpisodeExtraction,
+	)
 	if len(messages) == 0 {
 		log.DebugfContext(ctx, "auto_memory: skipped due to no new messages for user %s/%s",
 			userKey.AppName, userKey.UserID)
@@ -493,10 +517,15 @@ func (w *AutoMemoryWorker) prepareAutoMemoryOperations(
 		return nil, fmt.Errorf("auto_memory: prepare existing memories failed: %w", err)
 	}
 
-	// Extract memory operations.
+	// Worker-owned context markers keep built-in extractor behavior aligned
+	// with the capabilities visible to this worker through decorators.
 	extractionCtx := updatepolicy.WithWorkerConfiguration(
 		ctx,
 		updatepolicy.Value(w.updatePolicy),
+	)
+	extractionCtx = assistantmemory.WithWorkerConfiguration(
+		extractionCtx,
+		w.assistantEpisodeExtraction,
 	)
 	ops, err := w.config.Extractor.Extract(extractionCtx, messages, existing)
 	if err != nil {
@@ -773,6 +802,7 @@ func writeLastExtractAt(sess *session.Session, ts time.Time) {
 func scanDeltaSince(
 	sess *session.Session,
 	since time.Time,
+	primaryResponseOnly bool,
 ) (time.Time, []model.Message) {
 	var latestTs time.Time
 	var messages []model.Message
@@ -795,8 +825,18 @@ func scanDeltaSince(
 			continue
 		}
 
+		choices := e.Response.Choices
+		if primaryResponseOnly {
+			choices = nil
+			for index := range e.Response.Choices {
+				if e.Response.Choices[index].Index == 0 {
+					choices = e.Response.Choices[index : index+1]
+					break
+				}
+			}
+		}
 		// Extract messages from response choices, excluding tool-related messages.
-		for _, choice := range e.Response.Choices {
+		for _, choice := range choices {
 			msg := choice.Message
 			// Skip tool messages and messages with tool calls.
 			if msg.Role == model.RoleTool || msg.ToolID != "" {
@@ -910,10 +950,12 @@ func (w *AutoMemoryWorker) decideAddOp(
 	var best *memory.Entry
 	bestJaccard := 0.0
 	bestTier := -1
+	eligibleCount := 0
 	for _, c := range candidates {
 		if c == nil || c.Memory == nil {
 			continue
 		}
+		eligibleCount++
 		j := tokenJaccard(op.Memory, c.Memory.Memory)
 		tier := reconcileDecisionTier(c.Score, j)
 		if best == nil ||
@@ -924,6 +966,9 @@ func (w *AutoMemoryWorker) decideAddOp(
 			best = c
 			bestJaccard = j
 			bestTier = tier
+		}
+		if eligibleCount == reconcileTopK {
+			break
 		}
 	}
 	if best == nil || best.Memory == nil || best.ID == "" {

@@ -81,10 +81,24 @@ var (
 		false,
 		"Stop future auto-memory extraction after knowledge_search is used",
 	)
+	updatePolicyFlag = flag.String(
+		"update-policy",
+		string(extractor.UpdatePolicyMergeSimilar),
+		"Memory update policy: merge_similar, preserve_history, or append_only",
+	)
+	assistantEpisode = flag.Bool(
+		"assistant-episode",
+		false,
+		"Extract reusable assistant results as episode memories",
+	)
 )
 
 func main() {
 	flag.Parse()
+	policy, err := parseUpdatePolicy(*updatePolicyFlag)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	fmt.Println("🧠 Auto Memory Demo")
 	fmt.Printf("Chat Model: %s\n", *modelName)
@@ -98,6 +112,8 @@ func main() {
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Knowledge: %t\n", *enableKnowledge)
 	fmt.Printf("Disable Auto Memory On External Context: %t\n", *disableAutoMemoryOnExternalContext)
+	fmt.Printf("Update Policy: %s\n", policy)
+	fmt.Printf("Assistant Episode Extraction: %t\n", *assistantEpisode)
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Println()
 	fmt.Println("💡 Auto memory mode extracts user information automatically.")
@@ -114,6 +130,8 @@ func main() {
 		debug:                              *debug,
 		enableKnowledge:                    *enableKnowledge,
 		disableAutoMemoryOnExternalContext: *disableAutoMemoryOnExternalContext,
+		updatePolicy:                       policy,
+		assistantEpisode:                   *assistantEpisode,
 	}
 
 	if err := chat.run(); err != nil {
@@ -131,11 +149,33 @@ type autoMemoryChat struct {
 	debug                              bool
 	enableKnowledge                    bool
 	disableAutoMemoryOnExternalContext bool
+	updatePolicy                       extractor.UpdatePolicy
+	assistantEpisode                   bool
 	runner                             runner.Runner
 	memoryService                      memory.Service
 	sessionService                     session.Service
 	userID                             string
 	sessionID                          string
+}
+
+func parseUpdatePolicy(value string) (extractor.UpdatePolicy, error) {
+	policy := extractor.UpdatePolicy(value)
+	switch policy {
+	case extractor.UpdatePolicyMergeSimilar,
+		extractor.UpdatePolicyPreserveHistory,
+		extractor.UpdatePolicyAppendOnly:
+		return policy, nil
+	default:
+		return "", fmt.Errorf("unsupported update policy %q", value)
+	}
+}
+
+func newOpenAIModel(name string) *openai.Model {
+	options := []openai.Option{}
+	if strings.HasPrefix(strings.ToLower(name), "glm") {
+		options = append(options, openai.WithVariant(openai.VariantGLM))
+	}
+	return openai.New(name, options...)
 }
 
 // run starts the interactive chat session.
@@ -249,28 +289,21 @@ func deterministicEmbedding(text string) []float64 {
 // setup creates the runner with LLM agent and auto memory extraction.
 func (c *autoMemoryChat) setup(ctx context.Context) error {
 	// Create models.
-	chatModel := openai.New(c.modelName)
-	extractModel := openai.New(c.extractorModel)
+	chatModel := newOpenAIModel(c.modelName)
+	extractModel := newOpenAIModel(c.extractorModel)
 
-	// Create memory extractor with optional extraction checkers.
-	// The extractor uses LLM to analyze conversations and extract memories.
-	// Checkers control when extraction should be triggered.
-	memExtractor := extractor.NewExtractor(
-		extractModel,
-		// Optional: configure extraction checkers.
-		// By default, extraction happens on every turn.
-		// Use checkers to control extraction frequency:
-		//
-		// Example 1: Extract when messages > 5 OR every 3 minutes (OR logic).
-		// extractor.WithCheckersAny(
-		//     extractor.CheckMessageThreshold(5),
-		//     extractor.CheckTimeInterval(3*time.Minute),
-		// ),
-		//
-		// Example 2: Extract when messages > 10 AND every 5 minutes (AND logic).
-		// extractor.WithChecker(extractor.CheckMessageThreshold(10)),
-		// extractor.WithChecker(extractor.CheckTimeInterval(5*time.Minute)),
-	)
+	// Create the extractor with the selected opt-in behavior. Extraction
+	// checkers can be appended here to control extraction frequency.
+	extractorOptions := []extractor.Option{
+		extractor.WithUpdatePolicy(c.updatePolicy),
+	}
+	if c.assistantEpisode {
+		extractorOptions = append(
+			extractorOptions,
+			extractor.WithAssistantEpisodeExtraction(),
+		)
+	}
+	memExtractor := extractor.NewExtractor(extractModel, extractorOptions...)
 
 	// Create memory service with auto extraction enabled.
 	// When extractor is set, write tools (add/update/delete) are hidden, but

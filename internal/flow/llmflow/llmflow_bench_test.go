@@ -92,7 +92,9 @@ func BenchmarkGenerateContentSeq(b *testing.B) {
 	ctx := context.Background()
 	f := new(Flow)
 	invocation := &agent.Invocation{AgentName: "bench"}
-	request := &model.Request{}
+	request := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("benchmark request")},
+	}
 
 	for _, n := range []int{1, 16, 256, 1024} {
 		b.Run(fmt.Sprintf("Channel/n=%d", n), func(b *testing.B) {

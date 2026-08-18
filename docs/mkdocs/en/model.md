@@ -1944,6 +1944,7 @@ The framework currently supports the following Variants:
 - Default BaseURL：`https://api.deepseek.com`
 - API Key environment variable name：`DEEPSEEK_API_KEY`
 - DeepSeek-specific behavior is enabled when you explicitly set `WithVariant(openai.VariantDeepSeek)` or use the official DeepSeek API BaseURL
+- Serializes `GenerationConfig.MaxTokens` as `max_tokens`, the field documented by the [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion); other variants continue to use `max_completion_tokens`
 - Other behaviors are consistent with standard OpenAI
 
 **4. VariantQwen（Qwen）**
