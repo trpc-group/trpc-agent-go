@@ -64,8 +64,8 @@ func TestGenerateContent_StreamTextOrderAndSingleTerminal(t *testing.T) {
 		writeSSE(w,
 			`{"type":"response.created","sequence_number":0,"response":{"id":"resp_s","object":"response","status":"in_progress","output":null,"created_at":1700000001}}`,
 			`{"type":"keepalive"}`,
-			`{"type":"response.output_text.delta","delta":"hel","sequence_number":1}`,
-			`{"type":"response.output_text.delta","delta":"lo","sequence_number":2}`,
+			`{"type":"response.output_text.delta","delta":"he","sequence_number":1}`,
+			`{"type":"response.output_text.delta","delta":"llo","sequence_number":2}`,
 			`{"type":"response.completed","sequence_number":3,"response":{"id":"resp_s","object":"response","status":"completed","created_at":1700000001,"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		)
 	}))
@@ -92,7 +92,7 @@ func TestGenerateContent_StreamTextOrderAndSingleTerminal(t *testing.T) {
 			deltas = append(deltas, resp.Choices[0].Delta.Content)
 		}
 	}
-	require.Equal(t, []string{"hel", "lo"}, deltas)
+	require.Equal(t, []string{"he", "llo"}, deltas)
 	require.Equal(t, 1, terminals)
 	require.Equal(t, "hello", final)
 	require.Equal(t, "hello", strings.Join(deltas, ""))
