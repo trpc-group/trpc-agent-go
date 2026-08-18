@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -2429,13 +2430,19 @@ func (f *Flow) callLLM(
 		latencyRequestAttrs(llmRequest)...,
 	)
 	var err error
-	defer func() {
+	finishSpanOnReturn := true
+	finishCallSpan := func(finishErr error) {
 		if started && callModel != nil {
 			span.SetAttributes(
 				attribute.String("llmflow.model", callModel.Info().Name),
 			)
 		}
-		finishLatencySpan(span, started, err)
+		finishLatencySpan(span, started, finishErr)
+	}
+	defer func() {
+		if finishSpanOnReturn {
+			finishCallSpan(err)
+		}
 	}()
 	if callModel == nil {
 		err = errors.New("no model available for LLM call")
@@ -2523,13 +2530,30 @@ func (f *Flow) callLLM(
 		},
 	)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
-	if started {
-		span.SetAttributes(tokenTailoringAttrs(tailoringObserver.Snapshot())...)
-	}
 	if err != nil {
 		return ctx, nil, true, err
 	}
+	if started {
+		finishSpanOnReturn = false
+		seq = withResponseSeqFinalizer(seq, func() {
+			span.SetAttributes(
+				tokenTailoringAttrs(tailoringObserver.Snapshot())...,
+			)
+			finishCallSpan(nil)
+		})
+	}
 	return ctx, seq, true, nil
+}
+
+func withResponseSeqFinalizer(
+	seq model.Seq[*model.Response],
+	finalize func(),
+) model.Seq[*model.Response] {
+	var once sync.Once
+	return func(yield func(*model.Response) bool) {
+		defer once.Do(finalize)
+		seq(yield)
+	}
 }
 
 type callLimitFinalizationMessage struct {

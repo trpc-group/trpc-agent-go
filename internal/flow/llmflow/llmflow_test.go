@@ -1086,6 +1086,80 @@ func TestCallLLM_TokenTailoringInvalidatesSummarySnapshots(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestCallLLM_LazyTokenTailoringFinalizesDiagnosticsAfterIteration(
+	t *testing.T,
+) {
+	recorder := useSpanRecorder(t)
+	callModel := &lazyTailoringModel{}
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(
+		agent.WithInvocationModel(callModel),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			LatencyDiagnosticsEnabled: true,
+		}),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		model.NewUserMessage("history"),
+	}}
+	summaryview.AttachProjection(inv, &summaryview.View{
+		ContentRequestLength: len(req.Messages),
+		Items: []summaryview.Item{{
+			Message:      req.Messages[1],
+			RequestIndex: 1,
+		}},
+	})
+
+	_, seq, modelCalled, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		callModel,
+	)
+	require.NoError(t, err)
+	require.True(t, modelCalled)
+	require.NotNil(t, seq)
+	for _, ended := range recorder.Ended() {
+		require.NotEqual(t, latencySpanCallLLM, ended.Name())
+	}
+	view, ok := summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.True(t, view.Bound)
+	_, ok = summaryfork.Request(inv)
+	require.True(t, ok)
+
+	var responses int
+	seq(func(*model.Response) bool {
+		responses++
+		return true
+	})
+	require.Equal(t, 1, responses)
+	view, ok = summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.False(t, view.Bound)
+	_, ok = summaryfork.Request(inv)
+	require.False(t, ok)
+
+	var callAttrs []attribute.KeyValue
+	for _, ended := range recorder.Ended() {
+		if ended.Name() == latencySpanCallLLM {
+			callAttrs = ended.Attributes()
+			break
+		}
+	}
+	require.NotNil(t, callAttrs)
+	require.True(t, flowHasAttr(
+		callAttrs,
+		"llmflow.token_tailoring.applied",
+		true,
+	))
+	require.True(t, flowHasAttr(
+		callAttrs,
+		"llmflow.token_tailoring.apply_count",
+		1,
+	))
+}
+
 func TestRunOneStep_LeavesExecutionTraceFinalizationToOwnerWhenModelFails(t *testing.T) {
 	f := New(
 		[]flow.RequestProcessor{
@@ -2447,6 +2521,44 @@ func (m *tailoringModel) GenerateContent(
 	}
 	close(respChan)
 	return respChan, nil
+}
+
+type lazyTailoringModel struct{}
+
+func (m *lazyTailoringModel) Info() model.Info {
+	return model.Info{Name: "lazy-tailoring-model"}
+}
+
+func (m *lazyTailoringModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	return nil, errors.New("unexpected GenerateContent call")
+}
+
+func (m *lazyTailoringModel) GenerateContentIter(
+	ctx context.Context,
+	req *model.Request,
+) (model.Seq[*model.Response], error) {
+	return func(yield func(*model.Response) bool) {
+		beforeMessages := len(req.Messages)
+		req.Messages = req.Messages[:1]
+		imodelrequest.RecordTokenTailoring(
+			ctx,
+			imodelrequest.TokenTailoringRecord{
+				Provider:       "lazyTailoringModel",
+				MaxInputTokens: 100,
+				BeforeMessages: beforeMessages,
+				AfterMessages:  len(req.Messages),
+			},
+		)
+		yield(&model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("ok"),
+			}},
+		})
+	}, nil
 }
 
 type namedFlowModel struct {
