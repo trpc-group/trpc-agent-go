@@ -325,6 +325,23 @@ func TestReduceReasoningMessageLifecycleWithStartEndEvents(t *testing.T) {
 	assert.Equal(t, "summary", content)
 }
 
+func TestReduceReasoningMessageStartContinuesEndedMessage(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewReasoningMessageStartEvent("reasoning-msg-1", "reasoning"),
+		aguievents.NewReasoningMessageContentEvent("reasoning-msg-1", "a"),
+		aguievents.NewReasoningMessageEndEvent("reasoning-msg-1"),
+		aguievents.NewReasoningMessageStartEvent("reasoning-msg-1", "reasoning"),
+		aguievents.NewReasoningMessageContentEvent("reasoning-msg-1", "b"),
+		aguievents.NewReasoningMessageEndEvent("reasoning-msg-1"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	content, ok := msgs[0].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "ab", content)
+}
+
 func TestReduceReasoningMessageStartDefaultsRole(t *testing.T) {
 	events := trackEventsFrom(
 		aguievents.NewReasoningMessageStartEvent("reasoning-msg-1", ""),
@@ -448,7 +465,7 @@ func TestReduceReasoningMessageChunkUsesPreviousID(t *testing.T) {
 	assert.Equal(t, "ab", content)
 }
 
-func TestReduceReasoningMessageChunkEmptyDeltaClosesMessage(t *testing.T) {
+func TestReduceReasoningMessageChunkContinuesAfterEmptyDelta(t *testing.T) {
 	messageID := "reasoning-msg-1"
 	first := "a"
 	end := ""
@@ -459,12 +476,21 @@ func TestReduceReasoningMessageChunkEmptyDeltaClosesMessage(t *testing.T) {
 	next := aguievents.NewReasoningMessageChunkEvent(&messageID, &after)
 
 	msgs, err := Reduce(testAppName, testUserID, trackEventsFrom(start, close, next))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "reasoning message chunk after end: reasoning-msg-1")
+	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	content, ok := msgs[0].ContentString()
 	require.True(t, ok)
-	assert.Equal(t, "a", content)
+	assert.Equal(t, "ab", content)
+}
+
+func TestReduceReasoningMessageChunkRejectsDuplicateEnd(t *testing.T) {
+	messageID := "reasoning-msg-1"
+	first := "a"
+	end := ""
+	start := aguievents.NewReasoningMessageChunkEvent(&messageID, &first)
+	close := aguievents.NewReasoningMessageChunkEvent(&messageID, &end)
+	duplicateClose := aguievents.NewReasoningMessageChunkEvent(&messageID, &end)
+	assertReduceError(t, trackEventsFrom(start, close, duplicateClose), "duplicate reasoning message end: reasoning-msg-1")
 }
 
 func TestReduceReasoningMessageChunkRequiresIDInitially(t *testing.T) {
@@ -640,7 +666,7 @@ func TestHandleTextChunkErrors(t *testing.T) {
 	t.Run("duplicate id", func(t *testing.T) {
 		chunk := aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr(""))
 		r := new(testAppName, testUserID, options{})
-		require.NoError(t, r.handleTextChunk(chunk))
+		require.NoError(t, r.handleTextStart(aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant"))))
 		err := r.handleTextChunk(chunk)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate text message chunk: msg-1")
@@ -696,6 +722,44 @@ func TestReduceInterleavedTextMessageEvents(t *testing.T) {
 	contentB, ok := msgs[1].ContentString()
 	require.True(t, ok)
 	assert.Equal(t, "b1b2", contentB)
+}
+
+func TestReduceTextMessageStartContinuesEndedMessage(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("msg-a", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("msg-a", "a1"),
+		aguievents.NewTextMessageEndEvent("msg-a"),
+		aguievents.NewTextMessageStartEvent("msg-b", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("msg-b", "b1"),
+		aguievents.NewTextMessageEndEvent("msg-b"),
+		aguievents.NewTextMessageStartEvent("msg-a", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("msg-a", "a2"),
+		aguievents.NewTextMessageEndEvent("msg-a"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "msg-a", msgs[0].ID)
+	contentA, ok := msgs[0].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "a1a2", contentA)
+	assert.Equal(t, "msg-b", msgs[1].ID)
+	contentB, ok := msgs[1].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "b1", contentB)
+}
+
+func TestReduceTextMessageChunkContinuesEndedMessage(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr("a")),
+		aguievents.NewTextMessageChunkEvent(stringPtr("msg-1"), stringPtr("assistant"), stringPtr("b")),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	content, ok := msgs[0].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "ab", content)
 }
 
 func TestAssistantOnlyToolCall(t *testing.T) {
@@ -754,6 +818,65 @@ func TestAssistantInterleavesTextAfterToolEnd(t *testing.T) {
 	assert.Equal(t, "done", content)
 	require.NotNil(t, tool.ToolCallID)
 	assert.Equal(t, "tool-call-1", tool.ToolCallID)
+}
+
+func TestReduceToolStartParentCanReceiveLaterTextStart(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewToolCallStartEvent("tool-call-1", "search", aguievents.WithParentMessageID("assistant-1")),
+		aguievents.NewToolCallArgsEvent("tool-call-1", "{\"q\":\"hi\"}"),
+		aguievents.NewToolCallEndEvent("tool-call-1"),
+		aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("assistant-1", "checking"),
+		aguievents.NewTextMessageEndEvent("assistant-1"),
+		aguievents.NewToolCallResultEvent("tool-msg-1", "tool-call-1", "done"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assistant := msgs[0]
+	assert.Equal(t, "assistant-1", assistant.ID)
+	content, ok := assistant.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "checking", content)
+	require.Len(t, assistant.ToolCalls, 1)
+	assert.Equal(t, "search", assistant.ToolCalls[0].Function.Name)
+	assert.Equal(t, "{\"q\":\"hi\"}", assistant.ToolCalls[0].Function.Arguments)
+	tool := msgs[1]
+	assert.Equal(t, types.RoleTool, tool.Role)
+	assert.Equal(t, "tool-call-1", tool.ToolCallID)
+}
+
+func TestReduceToolStartParentRequiresTextStartBeforeContent(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewToolCallStartEvent("tool-call-1", "search", aguievents.WithParentMessageID("assistant-1")),
+		aguievents.NewTextMessageContentEvent("assistant-1", "late"),
+	)
+	assertReduceError(t, events, "text message content without start: assistant-1")
+}
+
+func TestReduceToolResultInsertedAfterOwnerAssistant(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant")),
+		aguievents.NewToolCallStartEvent("tool-call-1", "search", aguievents.WithParentMessageID("assistant-1")),
+		aguievents.NewToolCallArgsEvent("tool-call-1", "{\"q\":\"hi\"}"),
+		aguievents.NewToolCallEndEvent("tool-call-1"),
+		aguievents.NewTextMessageEndEvent("assistant-1"),
+		aguievents.NewTextMessageStartEvent("assistant-2", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("assistant-2", "next"),
+		aguievents.NewToolCallResultEvent("tool-msg-1", "tool-call-1", "done"),
+		aguievents.NewTextMessageEndEvent("assistant-2"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "assistant-1", msgs[0].ID)
+	assert.Equal(t, "tool-msg-1", msgs[1].ID)
+	assert.Equal(t, types.RoleTool, msgs[1].Role)
+	assert.Equal(t, "tool-call-1", msgs[1].ToolCallID)
+	assert.Equal(t, "assistant-2", msgs[2].ID)
+	content, ok := msgs[2].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "next", content)
 }
 
 func TestAssistantMultipleToolCalls(t *testing.T) {
@@ -817,6 +940,15 @@ func TestReduceTextStartErrors(t *testing.T) {
 				aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")),
 			),
 			want: "duplicate text message start: msg-1",
+		},
+		{
+			name: "identity mismatch after end",
+			events: trackEventsFrom(
+				aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("user")),
+				aguievents.NewTextMessageEndEvent("msg-1"),
+				aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")),
+			),
+			want: "text message identity mismatch: msg-1",
 		},
 		{
 			name:   "unsupported role",

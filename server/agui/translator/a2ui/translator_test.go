@@ -95,7 +95,7 @@ func TestNewFactory(t *testing.T) {
 	}, translator.WithGraphNodeLifecycleActivityEnabled(true))
 	assert.NoError(t, err)
 	assert.NotNil(t, translated)
-	assert.Len(t, receivedOpts, 1)
+	assert.Len(t, receivedOpts, 2)
 }
 
 func TestNewFactoryNilInnerFactory(t *testing.T) {

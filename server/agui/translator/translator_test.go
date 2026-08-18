@@ -750,8 +750,8 @@ func TestTranslateErrorObservationClosesOnTerminalError(t *testing.T) {
 	assert.Equal(t, "final failure", runErr.Message)
 }
 
-func TestTranslateAssistantToolAssistantClosesTextBoundary(t *testing.T) {
-	translator := newTranslatorForTest(t)
+func TestTranslateAssistantToolAssistantClosesTextBoundaryWhenConcurrentDisabled(t *testing.T) {
+	translator := newTranslatorForTest(t, WithConcurrentMessageStreamsEnabled(false))
 	if translator == nil {
 		return
 	}
@@ -1269,6 +1269,41 @@ func TestTextMessageEventInterleavedStreamsEndOnOwnFinishReason(t *testing.T) {
 	endB, ok := allEvents[7].(*aguievents.TextMessageEndEvent)
 	require.True(t, ok)
 	assert.Equal(t, "msg-b", endB.MessageID)
+}
+
+func TestTranslateInterleavedTextStreamsDefaultKeepsPreviousMessageOpen(t *testing.T) {
+	translator := newTranslatorImplForTest(t)
+	if translator == nil {
+		return
+	}
+	first := &model.Response{
+		ID:     "msg-a",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "a1"},
+		}},
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: first})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	next := &model.Response{
+		ID:     "msg-b",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "b1"},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: next})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	start, ok := events[0].(*aguievents.TextMessageStartEvent)
+	require.True(t, ok)
+	assert.Equal(t, "msg-b", start.MessageID)
+	content, ok := events[1].(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	assert.Equal(t, "msg-b", content.MessageID)
+	assert.True(t, translator.textStreams.isOpen("msg-a"))
+	assert.True(t, translator.textStreams.isOpen("msg-b"))
 }
 
 func TestTextMessageEventConcurrentModeSkipsEmptyResponseID(t *testing.T) {
@@ -2767,6 +2802,36 @@ func TestTranslateToolResultResponse(t *testing.T) {
 		},
 	})
 	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	result, ok := events[0].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "evt-tool-1", result.MessageID)
+	assert.Equal(t, "tool-1", result.ToolCallID)
+	assert.Equal(t, "done", result.Content)
+}
+
+func TestTranslateToolResultResponseClosesOpenTextStreamWhenConcurrentDisabled(t *testing.T) {
+	translator := newTranslatorForTest(t, WithConcurrentMessageStreamsEnabled(false))
+	if translator == nil {
+		return
+	}
+	_, err := translator.Translate(context.Background(), &agentevent.Event{Response: &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "partial"},
+		}},
+	}})
+	assert.NoError(t, err)
+	events, err := translator.Translate(context.Background(), &agentevent.Event{
+		ID: "evt-tool-1",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{ToolID: "tool-1", Content: "done"},
+			}},
+		},
+	})
+	assert.NoError(t, err)
 	assert.Len(t, events, 2)
 	endText, ok := events[0].(*aguievents.TextMessageEndEvent)
 	assert.True(t, ok)
@@ -3063,8 +3128,11 @@ func TestTranslateReasoningStreamingDoesNotDuplicateOnFinalCompletion(t *testing
 	assert.Empty(t, events)
 }
 
-func TestTranslateReasoningStreamEndsOnToolCall(t *testing.T) {
-	tr := newTranslatorImplForTest(t, WithReasoningContentEnabled(true))
+func TestTranslateReasoningStreamEndsOnToolCallWhenConcurrentDisabled(t *testing.T) {
+	tr := newTranslatorImplForTest(t,
+		WithReasoningContentEnabled(true),
+		WithConcurrentMessageStreamsEnabled(false),
+	)
 	if tr == nil {
 		return
 	}
@@ -3085,7 +3153,7 @@ func TestTranslateReasoningStreamEndsOnToolCall(t *testing.T) {
 		ID:     "msg-1",
 		Object: model.ObjectTypeChatCompletionChunk,
 		Choices: []model.Choice{{
-			Delta: model.Message{
+			Message: model.Message{
 				Role: model.RoleAssistant,
 				ToolCalls: []model.ToolCall{{
 					ID:   "tool-1",
@@ -3105,6 +3173,53 @@ func TestTranslateReasoningStreamEndsOnToolCall(t *testing.T) {
 	assert.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), events[0])
 	assert.IsType(t, (*aguievents.ReasoningEndEvent)(nil), events[1])
 	assert.False(t, tr.receivingReasoning)
+}
+
+func TestTranslateReasoningStreamStaysOpenOnToolCallByDefault(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithReasoningContentEnabled(true))
+	if tr == nil {
+		return
+	}
+	first := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, ReasoningContent: "think"},
+		}},
+		IsPartial: true,
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{Response: first})
+	assert.NoError(t, err)
+	assert.Len(t, events, 3)
+	assert.True(t, tr.receivingReasoning)
+	reasoningID := reasoningMessageID(first.ID)
+	assert.True(t, tr.reasoningStreams.isOpen(reasoningID))
+	toolCallRsp := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   "tool-1",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "tool",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+		IsPartial: true,
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{Response: toolCallRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 3)
+	assert.IsType(t, (*aguievents.ToolCallStartEvent)(nil), events[0])
+	assert.IsType(t, (*aguievents.ToolCallArgsEvent)(nil), events[1])
+	assert.IsType(t, (*aguievents.ToolCallEndEvent)(nil), events[2])
+	assert.True(t, tr.receivingReasoning)
+	assert.True(t, tr.reasoningStreams.isOpen(reasoningID))
 }
 
 func TestTranslateReasoningStreamEndsOnFinishReason(t *testing.T) {
@@ -3143,7 +3258,10 @@ func TestTranslateReasoningStreamEndsOnFinishReason(t *testing.T) {
 }
 
 func TestTranslateReasoningStreamClosesOnIDChange(t *testing.T) {
-	tr := newTranslatorImplForTest(t, WithReasoningContentEnabled(true))
+	tr := newTranslatorImplForTest(t,
+		WithReasoningContentEnabled(true),
+		WithConcurrentMessageStreamsEnabled(false),
+	)
 	if tr == nil {
 		return
 	}
@@ -4582,7 +4700,7 @@ func TestGraphNodeCustomEvents_TextCategory_NotReceivingMessage(t *testing.T) {
 }
 
 func TestGraphNodeCustomEvents_TextCategory_WhileReceivingMessage(t *testing.T) {
-	translator := newTranslatorImplForTest(t)
+	translator := newTranslatorImplForTest(t, WithConcurrentMessageStreamsEnabled(false))
 	if translator == nil {
 		return
 	}
