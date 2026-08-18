@@ -486,6 +486,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		log.DebugfContext(ctx, "auto-calculated max input tokens: model=%s, maxInputTokens=%d",
 			m.name, maxInputTokens)
 	}
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "huggingface.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
@@ -493,7 +497,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		if len(tailored) > 0 {
 			log.WarnContext(ctx, "token tailoring returned best-effort messages in huggingface.Model", err)
 			modeltailoring.ApplyResult(
-				ctx, "huggingface.Model", request, tailored, maxInputTokens,
+				ctx, "huggingface.Model", request, tailored,
 			)
 			return
 		}
@@ -502,7 +506,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	}
 
 	modeltailoring.ApplyResult(
-		ctx, "huggingface.Model", request, tailored, maxInputTokens,
+		ctx, "huggingface.Model", request, tailored,
 	)
 }
 

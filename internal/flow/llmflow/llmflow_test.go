@@ -316,10 +316,11 @@ func TestEmitLatencyDiagnosticEventAndContextAttrs(t *testing.T) {
 	}
 	attrs := contextCompactionAttrs(
 		contextCompactionDecision{
-			shouldCompact: true,
-			tokenCount:    10,
-			threshold:     8,
-			contextWindow: 16,
+			shouldCompact:  true,
+			tokenCount:     10,
+			threshold:      8,
+			contextWindow:  16,
+			thresholdBasis: contextCompactionThresholdBasisContextWindow,
 		},
 		req,
 	)
@@ -359,6 +360,29 @@ func TestEmitLatencyDiagnosticEventAndContextAttrs(t *testing.T) {
 		tailoringAttrs,
 		"llmflow.token_tailoring.after_messages",
 		4,
+	))
+	emptyTailoringAttrs := tokenTailoringAttrs(nil)
+	require.Len(t, emptyTailoringAttrs, 2)
+	require.True(t, flowHasAttr(
+		emptyTailoringAttrs,
+		"llmflow.token_tailoring.applied",
+		false,
+	))
+	require.True(t, flowHasAttr(
+		emptyTailoringAttrs,
+		"llmflow.token_tailoring.apply_count",
+		0,
+	))
+	minimumAttrs := contextCompactionAttrs(
+		contextCompactionDecision{
+			thresholdBasis: contextCompactionThresholdBasisMinimumTokens,
+		},
+		req,
+	)
+	require.True(t, flowHasAttr(
+		minimumAttrs,
+		"llmflow.context_compaction.threshold_basis",
+		"minimum_tokens",
 	))
 }
 

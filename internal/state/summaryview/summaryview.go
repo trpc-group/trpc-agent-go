@@ -126,9 +126,11 @@ func RebaseAfterTransform(
 		return false
 	}
 	next := cloneView(state.view)
-	next.ContentRequestLength = len(after)
 	next.Bound = false
-	if len(after) != len(sourceIndexes) || !bindItems(next, before) {
+	provenanceMatches := len(after) == len(sourceIndexes)
+	boundBefore := provenanceMatches && bindItems(next, before)
+	next.ContentRequestLength = len(after)
+	if !boundBefore {
 		storeInvalidated(inv, next)
 		return false
 	}

@@ -24,7 +24,6 @@ func TestApplyResult_NilRequest(t *testing.T) {
 		"test.Model",
 		nil,
 		[]model.Message{model.NewUserMessage("q")},
-		100,
 	)
 
 	require.False(t, updated)
@@ -48,7 +47,7 @@ func TestApplyResult_PreservesOriginalOnEmptyResult(t *testing.T) {
 			req := &model.Request{Messages: append([]model.Message(nil), original...)}
 
 			updated := ApplyResult(
-				context.Background(), "test.Model", req, tt.tailored, 100,
+				context.Background(), "test.Model", req, tt.tailored,
 			)
 
 			require.False(t, updated)
@@ -65,7 +64,7 @@ func TestApplyResult_AppliesTailoredMessages(t *testing.T) {
 	}}
 
 	updated := ApplyResult(
-		context.Background(), "test.Model", req, tailored, 100,
+		context.Background(), "test.Model", req, tailored,
 	)
 
 	require.True(t, updated)
@@ -77,40 +76,34 @@ func TestApplyResult_AllowsEmptyResultForEmptyOriginal(t *testing.T) {
 	tailored := []model.Message{}
 
 	updated := ApplyResult(
-		context.Background(), "test.Model", req, tailored, 100,
+		context.Background(), "test.Model", req, tailored,
 	)
 
 	require.True(t, updated)
 	require.Equal(t, tailored, req.Messages)
 }
 
-func TestApplyResultReportsChangedRequest(t *testing.T) {
+func TestObserveChangesReportsMutatingStrategy(t *testing.T) {
 	ctx, observer := modelrequest.ObserveTokenTailoring(
 		context.Background(),
 		nil,
 	)
 	req := &model.Request{Messages: []model.Message{
-		model.NewSystemMessage("sys"),
 		model.NewUserMessage("question"),
 	}}
-
-	require.True(t, ApplyResult(
-		ctx,
-		"test.Model",
-		req,
-		[]model.Message{req.Messages[0]},
-		100,
-	))
+	finishObservation := ObserveChanges(ctx, "test.Model", req, 100)
+	req.Messages[0].Content = "mutated in place"
+	finishObservation()
 
 	require.Equal(t, []modelrequest.TokenTailoringRecord{{
 		Provider:       "test.Model",
 		MaxInputTokens: 100,
-		BeforeMessages: 2,
+		BeforeMessages: 1,
 		AfterMessages:  1,
 	}}, observer.Snapshot())
 }
 
-func TestApplyResultDoesNotReportUnchangedRequest(t *testing.T) {
+func TestObserveChangesDoesNotReportUnchangedRequest(t *testing.T) {
 	ctx, observer := modelrequest.ObserveTokenTailoring(
 		context.Background(),
 		nil,
@@ -118,6 +111,7 @@ func TestApplyResultDoesNotReportUnchangedRequest(t *testing.T) {
 	messages := []model.Message{model.NewUserMessage("question")}
 	req := &model.Request{Messages: messages}
 
-	require.True(t, ApplyResult(ctx, "test.Model", req, messages, 100))
+	finishObservation := ObserveChanges(ctx, "test.Model", req, 100)
+	finishObservation()
 	require.Empty(t, observer.Snapshot())
 }

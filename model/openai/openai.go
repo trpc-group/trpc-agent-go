@@ -784,6 +784,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			maxInputTokens,
 		)
 	}
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "openai.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
@@ -795,7 +799,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				err,
 			)
 			modeltailoring.ApplyResult(
-				ctx, "openai.Model", request, tailored, maxInputTokens,
+				ctx, "openai.Model", request, tailored,
 			)
 			return
 		}
@@ -808,7 +812,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	}
 
 	modeltailoring.ApplyResult(
-		ctx, "openai.Model", request, tailored, maxInputTokens,
+		ctx, "openai.Model", request, tailored,
 	)
 }
 

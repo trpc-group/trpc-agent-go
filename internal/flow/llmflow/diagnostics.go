@@ -192,12 +192,18 @@ func emitLatencyDiagnosticEvent(
 }
 
 type contextCompactionDecision struct {
-	shouldCompact bool
-	tokenCount    int
-	threshold     int
-	contextWindow int
-	err           error
+	shouldCompact  bool
+	tokenCount     int
+	threshold      int
+	contextWindow  int
+	thresholdBasis string
+	err            error
 }
+
+const (
+	contextCompactionThresholdBasisContextWindow = "context_window"
+	contextCompactionThresholdBasisMinimumTokens = "minimum_tokens"
+)
 
 func contextCompactionAttrs(
 	decision contextCompactionDecision,
@@ -224,7 +230,7 @@ func contextCompactionAttrs(
 		),
 		attribute.String(
 			"llmflow.context_compaction.threshold_basis",
-			"context_window",
+			decision.thresholdBasis,
 		),
 	)
 	return attrs

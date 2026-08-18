@@ -159,6 +159,45 @@ func TestRebaseAfterTransformTracksSafeCompletedPrefix(t *testing.T) {
 	require.Equal(t, 100, view.RequestTokens)
 }
 
+func TestRebaseAfterTransformUsesOriginalProjectionLength(t *testing.T) {
+	duplicate := model.NewUserMessage("duplicate")
+	current := model.NewUserMessage("current")
+	before := []model.Message{duplicate, duplicate, current}
+	after := []model.Message{
+		before[0],
+		model.NewUserMessage("split one"),
+		model.NewUserMessage("split two"),
+		current,
+	}
+	invocation := agent.NewInvocation()
+	AttachProjection(invocation, &View{
+		ContentRequestLength: 2,
+		Items: []Item{{
+			Message: duplicate,
+			Boundary: Boundary{
+				EventID:   "event-1",
+				Timestamp: time.Now(),
+			},
+			RequestIndex: 0,
+		}},
+	})
+
+	require.True(t, RebaseAfterTransform(
+		invocation,
+		before,
+		after,
+		[]int{0, 1, 1, 2},
+	))
+	view, ok := Snapshot(invocation)
+	require.True(t, ok)
+	require.True(t, view.Bound)
+	require.Len(t, view.Items, 2)
+	require.Equal(t, 1, view.Items[0].RequestIndex)
+	require.Equal(t, 2, view.Items[1].RequestIndex)
+	require.True(t, view.Items[0].Boundary.IsZero())
+	require.Equal(t, "event-1", view.Items[1].Boundary.EventID)
+}
+
 func TestRebaseAfterTransformFailsClosedWithoutCompleteProvenance(t *testing.T) {
 	invocation := agent.NewInvocation()
 	before := []model.Message{model.NewUserMessage("visible")}

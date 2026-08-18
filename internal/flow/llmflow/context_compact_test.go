@@ -603,6 +603,7 @@ func TestMaybeCompactContextBeforeLLM_SummarizesSanitizedOrphanToolCall(
 	view, ok := summaryview.Snapshot(inv)
 	require.True(t, ok)
 	require.True(t, view.Bound)
+	require.Len(t, req.Messages, 3)
 	require.Contains(t, req.Messages[1].Content, "orphan_tool_call")
 
 	rebuilt := f.maybeCompactContextBeforeLLM(
@@ -624,10 +625,12 @@ func TestMaybeCompactContextBeforeLLM_SummarizesSanitizedOrphanToolCall(
 	storedSummary := sess.Summaries[""]
 	sess.SummariesMu.RUnlock()
 	require.NotNil(t, storedSummary)
+	boundary := storedSummary.CutoffBoundary()
+	require.NotNil(t, boundary)
 	require.Equal(
 		t,
 		orphanCall.ID,
-		storedSummary.CutoffBoundary().LastEventID,
+		boundary.LastEventID,
 	)
 }
 
@@ -1686,6 +1689,16 @@ func TestNormalizeContextCompactionThresholdRatio(t *testing.T) {
 }
 
 func TestContextCompactionThreshold(t *testing.T) {
+	t.Run("reports minimum token clamp", func(t *testing.T) {
+		threshold, basis := contextCompactionThresholdForWindow(10000, 0.1)
+		require.Equal(t, 2000, threshold)
+		require.Equal(
+			t,
+			contextCompactionThresholdBasisMinimumTokens,
+			basis,
+		)
+	})
+
 	t.Run("caps to small model window", func(t *testing.T) {
 		const modelName = "compact-threshold-small-window"
 		model.RegisterModelContextWindow(modelName, 1024)
@@ -1694,6 +1707,12 @@ func TestContextCompactionThreshold(t *testing.T) {
 			agent.WithInvocationModel(&compactingModel{name: modelName}),
 		)
 		require.Equal(t, 1024, contextCompactionThreshold(inv, 0.1))
+		_, basis := contextCompactionThresholdForWindow(1024, 0.1)
+		require.Equal(
+			t,
+			contextCompactionThresholdBasisContextWindow,
+			basis,
+		)
 	})
 
 	t.Run("uses fallback window for unknown model", func(t *testing.T) {

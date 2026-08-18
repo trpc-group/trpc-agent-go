@@ -2114,8 +2114,11 @@ func syncCompactContextDecision(
 		return decision
 	}
 
-	decision.threshold = contextCompactionThreshold(inv, ratio)
 	decision.contextWindow = contextCompactionWindow(inv)
+	decision.threshold, decision.thresholdBasis = contextCompactionThresholdForWindow(
+		decision.contextWindow,
+		ratio,
+	)
 	if counter == nil {
 		counter = model.NewSimpleTokenCounter()
 	}
@@ -2152,14 +2155,25 @@ func contextCompactionWindow(inv *agent.Invocation) int {
 
 func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
 	contextWindow := contextCompactionWindow(inv)
+	threshold, _ := contextCompactionThresholdForWindow(contextWindow, ratio)
+	return threshold
+}
+
+func contextCompactionThresholdForWindow(
+	contextWindow int,
+	ratio float64,
+) (int, string) {
 	threshold := int(float64(contextWindow) * normalizeContextCompactionThresholdRatio(ratio))
+	basis := contextCompactionThresholdBasisContextWindow
 	if threshold < contextCompactionMinTokens {
 		threshold = contextCompactionMinTokens
+		basis = contextCompactionThresholdBasisMinimumTokens
 	}
 	if threshold > contextWindow {
 		threshold = contextWindow
+		basis = contextCompactionThresholdBasisContextWindow
 	}
-	return threshold
+	return threshold, basis
 }
 
 // getFilteredTools returns the list of tools for this invocation after applying the filter.
