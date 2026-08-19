@@ -45,10 +45,12 @@ func WithRequestEmbeddingCache(ctx context.Context) context.Context {
 		})
 }
 
-// GetOrComputeRequestEmbedding reuses an exact embedding within one
-// auto-memory request. Scope must be a comparable service identity; invalid
-// scopes bypass the cache. Failed computations are never cached. The returned
-// embedding is shared and must be treated as read-only.
+// GetOrComputeRequestEmbedding reuses an embedding for the exact (scope, text)
+// key over the lifetime of the request cache in ctx. A nil or non-comparable
+// scope bypasses the cache. Concurrent misses for the same key share one
+// computation; a waiting caller may cancel independently through ctx. Failed
+// computations are removed so a later call can retry. The returned embedding
+// is shared and must be treated as read-only.
 func GetOrComputeRequestEmbedding(
 	ctx context.Context,
 	scope any,
