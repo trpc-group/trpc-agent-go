@@ -22,7 +22,17 @@ import (
 
 const (
 	defaultCurrentDateFormat = "2006-01-02"
+
+	// TimePromptPlacementSystem keeps the historical behavior of adding clock
+	// context to the last system message.
+	TimePromptPlacementSystem TimePromptPlacement = "system"
+	// TimePromptPlacementUser adds clock context to the latest user turn so the
+	// stable system prefix remains eligible for provider prompt caching.
+	TimePromptPlacementUser TimePromptPlacement = "user"
 )
+
+// TimePromptPlacement controls which message receives request-time clock data.
+type TimePromptPlacement string
 
 // TimeRequestProcessor implements time processing logic.
 type TimeRequestProcessor struct {
@@ -32,6 +42,9 @@ type TimeRequestProcessor struct {
 	Timezone string
 	// TimeFormat specifies the format for time display.
 	TimeFormat string
+	// PromptPlacement controls whether clock context mutates system or user
+	// content. The zero value preserves system placement.
+	PromptPlacement TimePromptPlacement
 	// CurrentTimeToolName is the exact-time tool the model should call when it
 	// needs clock-level precision.
 	CurrentTimeToolName string
@@ -64,6 +77,13 @@ func WithTimeFormat(format string) TimeOption {
 	}
 }
 
+// WithTimePromptPlacement selects the message role that receives clock context.
+func WithTimePromptPlacement(placement TimePromptPlacement) TimeOption {
+	return func(p *TimeRequestProcessor) {
+		p.PromptPlacement = placement
+	}
+}
+
 // WithCurrentTimeTool configures the exact-time tool guidance.
 func WithCurrentTimeTool(name string, available bool) TimeOption {
 	return func(p *TimeRequestProcessor) {
@@ -78,6 +98,7 @@ func NewTimeRequestProcessor(opts ...TimeOption) *TimeRequestProcessor {
 		AddCurrentTime:           false,
 		Timezone:                 "",
 		TimeFormat:               defaultCurrentDateFormat,
+		PromptPlacement:          TimePromptPlacementSystem,
 		CurrentTimeToolName:      "",
 		CurrentTimeToolAvailable: false,
 	}
@@ -121,7 +142,10 @@ func (p *TimeRequestProcessor) ProcessRequest(
 	currentTime := p.getCurrentTime()
 	timeContent := p.formatTimePrompt(currentTime)
 
-	// Add time information to the system message.
+	if p.PromptPlacement == TimePromptPlacementUser {
+		p.addTimeToUserMessage(req, timeContent)
+		return
+	}
 	p.addTimeToSystemMessage(req, timeContent)
 }
 
@@ -219,6 +243,19 @@ func (p *TimeRequestProcessor) addTimeToSystemMessage(req *model.Request, timeCo
 		timeMsg := model.NewSystemMessage(timeContent)
 		req.Messages = append([]model.Message{timeMsg}, req.Messages...)
 	}
+}
+
+func (p *TimeRequestProcessor) addTimeToUserMessage(req *model.Request, timeContent string) {
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role != model.RoleUser {
+			continue
+		}
+		if !containsTimeInfo(req.Messages[i].Content, timeContent) {
+			req.Messages[i].Content += "\n\n" + timeContent
+		}
+		return
+	}
+	req.Messages = append(req.Messages, model.NewUserMessage(timeContent))
 }
 
 // containsTimeInfo checks if the given content already contains the time information.
