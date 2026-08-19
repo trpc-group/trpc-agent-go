@@ -187,6 +187,17 @@ func (r *Registry) AfterToolMessages(cb AfterToolMessagesCallback) {
 	)
 }
 
+// AfterToolRound registers a callback that observes one tool execution round.
+func (r *Registry) AfterToolRound(cb AfterToolRoundCallback) {
+	if r == nil || r.mgr == nil || cb == nil {
+		return
+	}
+	r.mgr.afterToolRoundHooks = append(
+		r.mgr.afterToolRoundHooks,
+		namedAfterToolRoundHook{name: r.name, hook: cb},
+	)
+}
+
 // OnEvent registers an event hook.
 func (r *Registry) OnEvent(hook EventHook) {
 	if r == nil || r.mgr == nil || hook == nil {
@@ -220,6 +231,7 @@ type Manager struct {
 	eventHooks             []namedEventHook
 	afterRunHooks          []namedAfterRunHook
 	afterToolMessagesHooks []namedAfterToolMessagesHook
+	afterToolRoundHooks    []namedAfterToolRoundHook
 }
 
 type namedEventHook struct {
@@ -235,6 +247,11 @@ type namedAfterRunHook struct {
 type namedAfterToolMessagesHook struct {
 	name string
 	hook AfterToolMessagesCallback
+}
+
+type namedAfterToolRoundHook struct {
+	name string
+	hook AfterToolRoundCallback
 }
 
 // NewManager builds a Manager and registers all plugin hooks.
@@ -403,6 +420,23 @@ func (m *Manager) AfterToolMessages(
 		}
 	}
 	return last, nil
+}
+
+// AfterToolRound runs registered after-tool-round hooks in plugin order.
+func (m *Manager) AfterToolRound(
+	ctx context.Context,
+	args *AfterToolRoundArgs,
+) error {
+	if m == nil || args == nil {
+		return nil
+	}
+	var errs []error
+	for _, h := range m.afterToolRoundHooks {
+		if err := h.hook(ctx, args); err != nil {
+			errs = append(errs, fmt.Errorf("plugin %q: %w", h.name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func normalizeToolResultReplacements(
