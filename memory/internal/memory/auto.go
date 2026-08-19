@@ -489,6 +489,7 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	userKey memory.UserKey,
 	messages []model.Message,
 ) error {
+	ctx = WithRequestEmbeddingCache(ctx)
 	ops, err := w.prepareAutoMemoryOperations(ctx, userKey, messages)
 	if err != nil {
 		return err

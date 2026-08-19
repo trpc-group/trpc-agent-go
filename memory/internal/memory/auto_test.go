@@ -112,6 +112,47 @@ type mockOperator struct {
 	searchResults []*memory.Entry
 }
 
+type embeddingCacheProbeOperator struct {
+	*mockOperator
+	scope          *int
+	embeddingCalls int
+}
+
+func (o *embeddingCacheProbeOperator) getEmbedding(
+	ctx context.Context,
+	text string,
+) error {
+	_, err := GetOrComputeRequestEmbedding(
+		ctx, o.scope, text, func() ([]float64, error) {
+			o.embeddingCalls++
+			return []float64{1}, nil
+		},
+	)
+	return err
+}
+
+func (o *embeddingCacheProbeOperator) SearchMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	query string,
+	opts ...memory.SearchOption,
+) ([]*memory.Entry, error) {
+	if err := o.getEmbedding(ctx, query); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func (o *embeddingCacheProbeOperator) AddMemory(
+	ctx context.Context,
+	userKey memory.UserKey,
+	memoryStr string,
+	topics []string,
+	opts ...memory.AddOption,
+) error {
+	return o.getEmbedding(ctx, memoryStr)
+}
+
 func newMockOperator() *mockOperator {
 	return &mockOperator{
 		memories: make(map[string]*memory.Entry),
@@ -667,6 +708,26 @@ func TestAutoMemoryWorker_CreateAutoMemory_ExistingMemoryLookupError(t *testing.
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "prepare existing memories failed")
 	assert.Equal(t, 0, op.addCalls)
+}
+
+func TestAutoMemoryWorker_CreateAutoMemorySharesEmbeddingCache(t *testing.T) {
+	ext := &mockExtractor{ops: []*extractor.Operation{
+		{Type: extractor.OperationAdd, Memory: "same text"},
+	}}
+	op := &embeddingCacheProbeOperator{
+		mockOperator: newMockOperator(),
+		scope:        new(int),
+	}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
+
+	err := worker.createAutoMemory(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "user-1"},
+		[]model.Message{model.NewUserMessage("same text")},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, op.embeddingCalls)
 }
 
 func TestAutoMemoryWorker_ExecuteOperation_Add(t *testing.T) {
