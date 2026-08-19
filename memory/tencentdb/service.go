@@ -133,8 +133,9 @@ func (s *Service) IngestSession(
 	}
 }
 
-// EndSession flushes short-term session state managed by the sidecar, if
-// supported by the gateway.
+// EndSession waits for queued capture work and asks legacy gateways to flush
+// their short-term session state. The V3 data plane has no remote session-end
+// operation, so V3 calls return after the local capture barrier completes.
 func (s *Service) EndSession(ctx context.Context, sess *session.Session) error {
 	if s == nil {
 		return errors.New("tencentdb memory: nil service")
@@ -153,6 +154,10 @@ func (s *Service) EndSession(ctx context.Context, sess *session.Session) error {
 	if err := s.waitForPreviousCapture(ctx, barrier); err != nil {
 		s.finishSerialBarrier(sessionKey, barrier, err)
 		return err
+	}
+	if s.client.identity != nil {
+		s.finishSerialBarrier(sessionKey, barrier, nil)
+		return nil
 	}
 	_, err := s.client.endSession(ctx, endSessionRequest{
 		SessionKey: sessionKey,
@@ -280,12 +285,16 @@ func (s *Service) reserveIngestJob(sess *session.Session, sessionKey string) (in
 	if current, ok := s.inFlight[sessionKey]; !ok || scan.Latest.After(current) {
 		s.inFlight[sessionKey] = scan.Latest
 	}
-	messages, latestSynthetic := normalizeGatewayMessageTimestampsAfter(
-		scan.Messages,
-		time.Now(),
-		readBestEffortSyntheticTimestamp(sess),
-	)
-	writeBestEffortSyntheticTimestamp(sess, latestSynthetic)
+	messages := scan.Messages
+	if s.client.identity == nil {
+		var latestSynthetic int64
+		messages, latestSynthetic = normalizeGatewayMessageTimestampsAfter(
+			scan.Messages,
+			time.Now(),
+			readBestEffortSyntheticTimestamp(sess),
+		)
+		writeBestEffortSyntheticTimestamp(sess, latestSynthetic)
+	}
 	previous := s.serialTail[sessionKey]
 	serial := &captureSerialState{
 		sessionKey: sessionKey,

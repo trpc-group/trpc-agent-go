@@ -12,6 +12,7 @@ package tencentdb
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -191,13 +192,6 @@ func TestWithServiceIdentityValidation(t *testing.T) {
 			apiKey:    "key",
 			wantError: "agent id is required",
 		},
-		{
-			name:      "missing API key",
-			serviceID: "service-1",
-			teamID:    "team-1",
-			agentID:   "agent-1",
-			wantError: "api key is required",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -211,6 +205,14 @@ func TestWithServiceIdentityValidation(t *testing.T) {
 	}
 
 	svc, err := NewService(
+		WithGatewayURL("http://127.0.0.1:8420"),
+		WithServiceIdentity("service-1", "team-1", "agent-1"),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, svc.client.apiKey)
+	require.NoError(t, svc.Close())
+
+	svc, err = NewService(
 		WithGatewayURL("http://127.0.0.1:8420"),
 		WithAPIKey(" key "),
 		WithServiceIdentity(" service-1 ", " team-1 ", " agent-1 "),
@@ -235,6 +237,70 @@ func TestWithServiceIdentityValidation(t *testing.T) {
 	require.NoError(t, svc.Close())
 }
 
+func TestV3VersionUnmarshal(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		want      v3Version
+		wantError bool
+	}{
+		{name: "string", input: `{"version":"v2"}`, want: "v2"},
+		{name: "number", input: `{"version":2}`, want: "2"},
+		{name: "null", input: `{"version":null}`, want: ""},
+		{name: "fraction", input: `{"version":2.5}`, wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got struct {
+				Version v3Version `json:"version"`
+			}
+			err := json.Unmarshal([]byte(tt.input), &got)
+			if tt.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.Version)
+		})
+	}
+}
+
+func TestGatewayClientV3WithoutAPIKey(t *testing.T) {
+	var authorization string
+	var serviceID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get(httpHeaderAuthorization)
+		serviceID = r.Header.Get(httpHeaderServiceID)
+		writeV3TestEnvelope(w, v3ConversationAddData{
+			AcceptedIDs:      []string{"message-1"},
+			AcceptedVersions: []string{"v1"},
+			TotalCount:       1,
+		})
+	}))
+	defer server.Close()
+
+	client, err := newGatewayClient(Options{
+		GatewayURL: server.URL,
+		identity: &serviceIdentity{
+			serviceID: "service-1",
+			teamID:    "team-1",
+			agentID:   "agent-1",
+		},
+	})
+	require.NoError(t, err)
+	_, err = client.capture(context.Background(), captureRequest{
+		UserID:    "user-1",
+		SessionID: "session-1",
+		Messages: []tdaiMessage{{
+			Role:    "user",
+			Content: "remember this",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, authorization)
+	assert.Equal(t, "service-1", serviceID)
+}
+
 func TestGatewayClientV3DataPlane(t *testing.T) {
 	var (
 		mu       sync.Mutex
@@ -243,6 +309,9 @@ func TestGatewayClientV3DataPlane(t *testing.T) {
 		searches []v3Isolation
 	)
 	coreContent := "prefers concise code reviews"
+	scenarioContent := "Always include a transaction-boundary check."
+	scenarioCreatedAt := "2026-08-01T00:00:00Z"
+	scenarioUpdatedAt := "2026-08-13T00:00:00Z"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get(httpHeaderAuthorization); got != "Bearer test-key" {
 			t.Errorf("Authorization = %q, want Bearer test-key", got)
@@ -256,15 +325,32 @@ func TestGatewayClientV3DataPlane(t *testing.T) {
 		switch r.URL.Path {
 		case pathV3ConversationAdd:
 			mu.Lock()
-			if err := json.NewDecoder(r.Body).Decode(&addReq); err != nil {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
 				mu.Unlock()
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+			if err := json.Unmarshal(body, &addReq); err != nil {
+				mu.Unlock()
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			var rawAddReq struct {
+				Messages []map[string]any `json:"messages"`
+			}
+			if err := json.Unmarshal(body, &rawAddReq); err != nil {
+				mu.Unlock()
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			require.Len(t, rawAddReq.Messages, 1)
+			assert.NotContains(t, rawAddReq.Messages[0], "id")
 			mu.Unlock()
 			writeV3TestEnvelope(w, v3ConversationAddData{
-				AcceptedIDs: []string{"m1", "m2"},
-				TotalCount:  2,
+				AcceptedIDs:      []string{"m1"},
+				AcceptedVersions: []string{"v1"},
+				TotalCount:       1,
 			})
 		case pathV3AtomicSearch:
 			var req v3AtomicSearchRequest
@@ -297,12 +383,38 @@ func TestGatewayClientV3DataPlane(t *testing.T) {
 				Score:   0.8,
 			}}})
 		case pathV3ScenarioList:
-			writeV3TestEnvelope(w, v3ScenarioListData{
-				Entries: []v3ScenarioEntry{{Path: "reviews.md", Summary: "review conventions"}},
-				Total:   1,
+			writeV3TestEnvelope(w, map[string]any{
+				"entries": []map[string]any{{
+					"path":       "reviews.md",
+					"version":    1,
+					"created_at": scenarioCreatedAt,
+					"updated_at": scenarioUpdatedAt,
+				}},
+				"total": 1,
+			})
+		case pathV3ScenarioRead:
+			var req v3ScenarioReadRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			searches = append(searches, req.v3Isolation)
+			mu.Unlock()
+			writeV3TestEnvelope(w, map[string]any{
+				"path":       req.Path,
+				"version":    2,
+				"content":    scenarioContent,
+				"created_at": scenarioCreatedAt,
+				"updated_at": scenarioUpdatedAt,
 			})
 		case pathV3CoreRead:
-			writeV3TestEnvelope(w, v3CoreFile{Content: &coreContent})
+			writeV3TestEnvelope(w, map[string]any{
+				"version":    3,
+				"content":    coreContent,
+				"created_at": scenarioCreatedAt,
+				"updated_at": scenarioUpdatedAt,
+			})
 		default:
 			http.Error(w, "unexpected path", http.StatusNotFound)
 		}
@@ -333,7 +445,7 @@ func TestGatewayClientV3DataPlane(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 2, captured.L0Recorded)
+	assert.Equal(t, 1, captured.L0Recorded)
 	assert.False(t, captured.SchedulerNotified)
 	mu.Lock()
 	assert.Equal(t, "team-1", addReq.TeamID)
@@ -372,18 +484,29 @@ func TestGatewayClientV3DataPlane(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v3-identity-scoped", recalled.Strategy)
 	assert.Equal(t, 3, recalled.MemoryCount)
-	assert.Contains(t, recalled.AppendSystemContext, "PostgreSQL")
+	assert.Contains(t, recalled.PrependContext, "PostgreSQL")
+	assert.NotContains(t, recalled.AppendSystemContext, "PostgreSQL")
 	assert.Contains(t, recalled.AppendSystemContext, coreContent)
+	assert.Contains(t, recalled.AppendSystemContext, "<agent-core>")
+	assert.NotContains(t, recalled.AppendSystemContext, "<user-core>")
 	assert.Contains(t, recalled.AppendSystemContext, "reviews.md")
 
-	ended, err := client.endSession(context.Background(), endSessionRequest{})
+	scenario, err := client.readScenarioV3(
+		context.Background(),
+		"user-1",
+		" reviews.md ",
+	)
 	require.NoError(t, err)
-	assert.True(t, ended.Flushed)
+	assert.Equal(t, "reviews.md", scenario.Path)
+	assert.Equal(t, v3Version("2"), scenario.Version)
+	assert.Equal(t, scenarioContent, scenario.Content)
+	assert.Equal(t, scenarioCreatedAt, scenario.CreatedAt)
+	assert.Equal(t, scenarioUpdatedAt, scenario.UpdatedAt)
 
 	mu.Lock()
 	defer mu.Unlock()
 	assert.NotContains(t, paths, pathEndSession)
-	require.GreaterOrEqual(t, len(searches), 3)
+	require.GreaterOrEqual(t, len(searches), 4)
 	for _, isolation := range searches {
 		assert.Equal(t, "team-1", isolation.TeamID)
 		assert.Equal(t, "agent-1", isolation.AgentID)
@@ -427,6 +550,8 @@ func TestGatewayClientV3Errors(t *testing.T) {
 
 func TestServiceV3IngestAndEndSession(t *testing.T) {
 	requests := make(chan v3ConversationAddRequest, 1)
+	releaseCapture := make(chan struct{})
+	var releaseOnce sync.Once
 	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
@@ -440,6 +565,7 @@ func TestServiceV3IngestAndEndSession(t *testing.T) {
 			return
 		}
 		requests <- req
+		<-releaseCapture
 		writeV3TestEnvelope(w, v3ConversationAddData{
 			AcceptedIDs: []string{"m1", "m2"},
 			TotalCount:  2,
@@ -454,20 +580,45 @@ func TestServiceV3IngestAndEndSession(t *testing.T) {
 		WithIngestJobTimeout(time.Second),
 	)
 	require.NoError(t, err)
-	defer svc.Close()
+	defer func() {
+		releaseOnce.Do(func() { close(releaseCapture) })
+		require.NoError(t, svc.Close())
+	}()
 	sess := captureReadySession()
 	require.NoError(t, svc.IngestSession(context.Background(), sess))
-	require.NoError(t, svc.EndSession(context.Background(), sess))
-
 	select {
 	case req := <-requests:
 		assert.Equal(t, sess.ID, req.SessionID)
 		assert.Equal(t, sess.UserID, req.UserID)
 		require.Len(t, req.Messages, 2)
+		events := sess.GetEvents()
+		require.Len(t, events, 2)
+		assert.Equal(t, formatV3Timestamp(events[0].Timestamp.UnixMilli()), req.Messages[0].Timestamp)
+		assert.Equal(t, formatV3Timestamp(events[1].Timestamp.UnixMilli()), req.Messages[1].Timestamp)
 	case <-time.After(time.Second):
 		t.Fatal("v3 capture request was not received")
 	}
+	assert.Zero(t, readBestEffortSyntheticTimestamp(sess))
+
+	endDone := make(chan error, 1)
+	go func() {
+		endDone <- svc.EndSession(context.Background(), sess)
+	}()
+	select {
+	case err := <-endDone:
+		t.Fatalf("EndSession completed before V3 capture: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(releaseCapture) })
+	select {
+	case err := <-endDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("EndSession did not complete after V3 capture")
+	}
+
 	assert.Equal(t, int32(1), requestCount.Load(), "EndSession must not invent a remote v3 endpoint")
+	assert.Zero(t, readBestEffortSyntheticTimestamp(sess))
 }
 
 func writeV3TestEnvelope[T any](w http.ResponseWriter, data T) {
@@ -489,10 +640,16 @@ func TestV3FormattingSkipsEmptyValues(t *testing.T) {
 		{Content: ""},
 		{Content: "useful"},
 	}))
-	assert.Equal(t, "- path.md", formatV3ScenarioEntries([]v3ScenarioEntry{
+	scenarios, scenarioCount := formatV3ScenarioEntries([]v3ScenarioEntry{
 		{Path: " "},
 		{Path: "path.md"},
-	}))
+		{Path: "folder/"},
+		{Path: "a.md"},
+		{Path: "b.md"},
+		{Path: "c.md"},
+	})
+	assert.Equal(t, "- path.md\n- folder/\n- a.md\n- b.md\n- c.md", scenarios)
+	assert.Equal(t, 5, scenarioCount)
 	assert.Empty(t, formatV3Timestamp(0))
 	assert.True(t, strings.Contains(formatV3Timestamp(1), "1970-01-01"))
 }

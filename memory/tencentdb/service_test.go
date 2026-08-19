@@ -167,6 +167,7 @@ func TestSafeDefaultsDisableCrossTenantReads(t *testing.T) {
 		enabledNames[tl.Declaration().Name] = true
 	}
 	assert.True(t, enabledNames["tdai_memory_search"], "memory search should be exposed when enabled; tools=%#v", enabledNames)
+	assert.False(t, enabledNames["tdai_read_scenario"], "scenario read is V3-only; tools=%#v", enabledNames)
 }
 
 func TestEndSessionAndHealth(t *testing.T) {

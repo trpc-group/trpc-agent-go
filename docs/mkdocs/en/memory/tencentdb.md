@@ -1,48 +1,54 @@
 # TencentDB Agent Memory Integration (`memory/tencentdb`)
 
 `memory/tencentdb` integrates
-[TencentDB Agent Memory](https://github.com/Tencent/TencentDB-Agent-Memory)
-through its standalone gateway sidecar. It is suitable when you want the
-TencentDB Agent Memory SDK to own the L0-L3 memory pipeline while
-tRPC-Agent-Go keeps the Runner, session, plugin, and tool lifecycle in Go.
+[TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory)
+through its gateway. It is suitable when you want the TencentDB Agent Memory
+SDK to own the L0-L3 memory pipeline while tRPC-Agent-Go keeps the Runner,
+session, plugin, and tool lifecycle in Go.
 
 The boundary is intentionally different from built-in backends:
 
 - The TencentDB Agent Memory gateway performs capture, extraction, storage,
   recall, and search.
 - The Go adapter sends completed session turns through `session.Ingestor`.
-- A Runner plugin calls `/recall` before each model request and injects the
-  returned context (opt-in via `WithRecallEnabled(true)`).
+- A Runner plugin performs recall before each model request and injects the
+  returned context (opt-in via `WithRecallEnabled(true)`). Legacy mode calls
+  `/recall`; V3 composes L1 atomic search, L2 scene navigation, and L3 core
+  reads.
 - Native tools expose read-oriented search through `tdai_conversation_search`
   (session-scoped, on by default) and `tdai_memory_search` (opt-in via
-  `WithMemorySearchTool(true)`).
+  `WithMemorySearchTool(true)`). V3 integrations also expose
+  `tdai_read_scenario` to read an L2 path returned by scene navigation.
 - An optional short-term context offload plugin delegates tool-result
   externalization, L1/L1.5/L2/L3 processing, drill-down, and persistence to
   TencentDB Agent Memory gateway hook APIs. The Go adapter does not write local
   offload files. It is separate from recall and is off by default.
 
-> **Multi-tenant note:** automatic recall and `tdai_memory_search` read from the
-> gateway's shared long-term store, which does not currently enforce
-> user/session scoping. They are therefore disabled by default; enable them only
-> when the gateway guarantees per-tenant isolation. Only session-scoped capture
-> and `tdai_conversation_search` are on by default.
+> **Multi-tenant note:** Legacy automatic recall and `tdai_memory_search` can
+> read a shared long-term store without user/session scoping. V3 scopes L0/L1
+> by service, team, agent, and user, while L2/L3 remain shared across users and
+> sessions of the same service, team, and agent. Recall and memory search remain
+> disabled by default to preserve existing behavior. `AppName` and
+> `WithSessionKeyFunc` are not V3 isolation fields; deployments that must keep
+> applications separate should assign distinct service, team, or agent
+> identities.
 
 Even when the SDK uses local SQLite storage, the gateway is still required
 because it hosts the memory engine. Direct VectorDB or SQLite access only talks
 to storage and does not run the SDK's extraction and recall pipeline.
 
-**Use case**: Sidecar memory engine, local or self-managed storage, automatic
+**Use case**: Gateway memory engine, cloud or self-managed storage, automatic
 recall before model calls, and external SDK-owned memory extraction.
 
 ## Start the TencentDB Agent Memory Gateway
 
-The [upstream package](https://github.com/Tencent/TencentDB-Agent-Memory/blob/main/package.json)
+The [upstream package](https://github.com/TencentCloud/TencentDB-Agent-Memory/blob/feat/server_team/MemoryCore/package.json)
 requires Node.js 22.16.0 or later. Clone the SDK repository and start the
 standalone gateway:
 
 ```bash
-git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
-cd TencentDB-Agent-Memory
+git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
+cd TencentDB-Agent-Memory/MemoryCore
 npm install
 
 export TDAI_LLM_API_KEY="your-openai-compatible-api-key"
@@ -76,15 +82,23 @@ if gatewayURL == "" {
 
 memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithGatewayURL(gatewayURL),
-    // Opt-in cross-session/user reads; enable only for a trusted/isolated gateway.
+    // Recommended for new cloud and self-hosted integrations. This selects the
+    // identity-scoped data plane; all IDs are required. The API key is required
+    // only when the gateway enables Bearer authentication.
+    // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
+    // memorytencentdb.WithServiceIdentity(
+    //     os.Getenv("TDAI_SERVICE_ID"),
+    //     os.Getenv("TDAI_TEAM_ID"),
+    //     os.Getenv("TDAI_AGENT_ID"),
+    // ),
+    // Recall/search remain opt-in; Legacy mode requires a trusted gateway.
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
     // Optional short-term context offload through the gateway v2 API.
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     //     Enabled:   true,
-    //     ServiceID: os.Getenv("TDAI_SERVICE_ID"),
+    //     ServiceID: os.Getenv("TDAI_OFFLOAD_SERVICE_ID"),
     // }),
-    // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
 if err != nil {
     panic(err)
@@ -114,10 +128,11 @@ defer r.Close()
 **Integration points**:
 
 - Register TencentDB-native search tools with `llmagent.WithTools(memSvc.Tools())`
-- Use `runner.WithSessionIngestor(memSvc)` to send timestamped session
-  transcripts to `/capture`
-- Use `runner.WithPlugins(memSvc.Plugin())` to enable automatic `/recall`
-  before model calls
+- Use `runner.WithSessionIngestor(memSvc)` to send session transcripts to
+  Legacy `/capture` or V3 `/v3/conversation/add`; V3 preserves event
+  timestamps and sends the documented conversation-add request directly.
+- Use `runner.WithPlugins(memSvc.Plugin())` to enable automatic recall before
+  model calls; Legacy calls `/recall`, while V3 composes L1/L2/L3 reads
 - Use `runner.WithPlugins(memSvc.ContextOffloadPlugin())` only when
   `WithContextOffload(...)` is enabled and you want short-term context
   offload. The companion `tdai_read_offload_ref` tool is exposed through
@@ -140,7 +155,7 @@ memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
     memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
         Enabled:   true,
-        ServiceID: os.Getenv("TDAI_SERVICE_ID"),
+        ServiceID: os.Getenv("TDAI_OFFLOAD_SERVICE_ID"),
     }),
 )
 if err != nil {
@@ -175,7 +190,7 @@ memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     Enabled:    true,
     GatewayURL: offloadGatewayURL,
     APIKey:     os.Getenv("TDAI_OFFLOAD_API_KEY"),
-    ServiceID:  os.Getenv("TDAI_SERVICE_ID"),
+    ServiceID:  os.Getenv("TDAI_OFFLOAD_SERVICE_ID"),
 })
 ```
 
@@ -226,7 +241,8 @@ export TENCENTDB_AGENT_MEMORY_GATEWAY="http://127.0.0.1:8420"
 go run .
 ```
 
-Then send facts, flush into a new session, and ask related questions:
+Then send facts, end the current session, and ask related questions in a new
+session:
 
 ```text
 You: Remember this profile: my project code name is Apollo Lake, my deployment window is Friday night, and I prefer concise answers.
@@ -235,9 +251,10 @@ You: What is my project code name, deployment window, and answer preference?
 ```
 
 The first messages are captured by the gateway. The example's `/new` command
-flushes the current gateway session before switching to a fresh session, so the
-same user can recall extracted memories through the plugin and native search
-tools even after conversation history is reset.
+waits for pending capture before switching to a fresh session. Legacy gateways
+also receive `/session/end`; V3 has no remote session-end endpoint. The same
+user can recall extracted memories through the plugin and native search tools
+even after conversation history is reset.
 
 ## Configuration Options
 
@@ -250,12 +267,28 @@ tools even after conversation history is reset.
 | `WithIngestJobTimeout(d)` | Timeout for queued capture jobs. | `30s` |
 | `WithSessionKeyFunc(fn)` | Customize session to gateway `session_key` mapping. | `base64url(app):base64url(user):base64url(session)` |
 | `WithAPIKey(key)` | Send `Authorization: Bearer <key>` (gateway `TDAI_GATEWAY_API_KEY`). | none |
-| `WithRecallEnabled(bool)` | Enable automatic recall plugin behavior (opt-in; reads shared store). | `false` |
-| `WithMemorySearchTool(bool)` | Expose `tdai_memory_search` (opt-in; reads shared store). | `false` |
+| `WithServiceIdentity(serviceID, teamID, agentID)` | Use the V3 data plane shared by cloud and self-hosted deployments. Requires all three IDs; add `WithAPIKey` when the gateway enables Bearer authentication. | disabled; Legacy gateway API remains active |
+| `WithRecallEnabled(bool)` | Enable automatic recall. Legacy may read a shared store; V3 scopes L1 by user and L2/L3 by team/agent. | `false` |
+| `WithMemorySearchTool(bool)` | Expose `tdai_memory_search`. Legacy may read a shared store; V3 scopes L1 by user. | `false` |
 | `WithConversationSearchTool(bool)` | Expose `tdai_conversation_search`. | `true` |
 | `WithStandardAliases(bool)` | Also expose standard `memory_search` alias (requires memory search enabled). | `false` |
 | `WithToolPrefix(prefix)` | Change native tool prefix. | `tdai` |
 | `WithContextOffload(ContextOffloadConfig)` | Configure explicit short-term context offload for large tool results. | disabled |
+
+`WithServiceIdentity` is the recommended entry point for new integrations. It
+sends `service_id` as `X-TDAI-Service-Id`, derives `user_id` and `session_id`
+from the current framework session, and uses the identity-scoped V3 data-plane
+routes. Omitting it preserves the Legacy `/capture`, `/recall`, and `/search/*`
+behavior. The option describes API semantics rather than deployment type, so
+cloud and self-hosted gateways use the same configuration surface. L0/L1 are
+scoped by service, team, agent, and user; L2/L3 are shared by users and sessions
+of the same service, team, and agent. The optional TencentDB `task_id` is not
+sent by this adapter. Self-hosted gateways that keep authentication disabled can
+omit `WithAPIKey`; authenticated self-hosted gateways and managed services must
+provide it.
+
+When V3 is selected, `memSvc.Tools()` includes `tdai_read_scenario` so the
+agent can read an L2 file selected from scene navigation.
 
 `ContextOffloadConfig` only controls the Go adapter's gateway integration.
 Offload layers, state, storage, TTL, and isolation are owned by the TencentDB
@@ -273,18 +306,18 @@ modes and does not write local offload state.
 
 ## Notes
 
-- The adapter forwards app, user, and session identifiers to the gateway, but
-  hard multi-tenant isolation depends on the gateway and SDK honoring those
-  fields end-to-end. Because of this, automatic recall and `tdai_memory_search`
-  are opt-in and disabled by default.
+- Legacy mode encodes app, user, and session into `session_key`; this is not a
+  hard tenant boundary. V3 sends the configured service/team/agent plus the
+  framework user/session IDs. Automatic recall and `tdai_memory_search` remain
+  opt-in to preserve existing behavior.
 - When the gateway is started with `TDAI_GATEWAY_API_KEY`, set `WithAPIKey(...)`
   so requests carry `Authorization: Bearer <key>`; otherwise every non-health
   route returns 401 while the health check still passes.
 - `tdai_memory_search` searches extracted long-term memory; extraction is
   asynchronous, so newly captured facts may take a short time to become
   searchable.
-- `tdai_conversation_search` searches conversation history and defaults to the
-  current gateway `session_key`.
+- `tdai_conversation_search` searches conversation history in the current
+  Legacy `session_key` or V3 `session_id`.
 - Context offload is opt-in and gateway-owned. It uses only
   `/v2/offload/ingest`, `/v2/offload/compact`, and `/v2/offload/read-ref`; it
   does not call `/capture` or `/recall`.

@@ -50,6 +50,7 @@ const (
 	pathV3ConversationSearch = "/v3/conversation/search"
 	pathV3AtomicSearch       = "/v3/atomic/search"
 	pathV3ScenarioList       = "/v3/scenario/ls"
+	pathV3ScenarioRead       = "/v3/scenario/read"
 	pathV3CoreRead           = "/v3/core/read"
 
 	maxErrorBodyPreview = 512
@@ -100,7 +101,7 @@ func newGatewayClient(opts Options) (*gatewayClient, error) {
 		maxBodyBytes = defaultMaxBodyBytes
 	}
 	apiKey := strings.TrimSpace(opts.APIKey)
-	if err := validateServiceIdentity(opts.identity, apiKey); err != nil {
+	if err := validateServiceIdentity(opts.identity); err != nil {
 		return nil, err
 	}
 	return &gatewayClient{
@@ -192,9 +193,6 @@ func (c *gatewayClient) searchConversations(ctx context.Context, req searchConve
 }
 
 func (c *gatewayClient) endSession(ctx context.Context, req endSessionRequest) (*endSessionResponse, error) {
-	if c.identity != nil {
-		return &endSessionResponse{Flushed: true}, nil
-	}
 	var rsp endSessionResponse
 	if err := c.doJSON(ctx, httpMethodPost, pathEndSession, req, &rsp); err != nil {
 		return nil, err
@@ -362,7 +360,7 @@ func (c *gatewayClient) doJSONOnce(
 	return nil
 }
 
-func validateServiceIdentity(identity *serviceIdentity, apiKey string) error {
+func validateServiceIdentity(identity *serviceIdentity) error {
 	if identity == nil {
 		return nil
 	}
@@ -375,9 +373,6 @@ func validateServiceIdentity(identity *serviceIdentity, apiKey string) error {
 	if identity.agentID == "" {
 		return errors.New("tencentdb memory: service identity agent id is required")
 	}
-	if apiKey == "" {
-		return errors.New("tencentdb memory: service identity api key is required")
-	}
 	return nil
 }
 
@@ -388,7 +383,6 @@ func (c *gatewayClient) captureV3(
 	messages := make([]v3Message, 0, len(req.Messages))
 	for _, message := range req.Messages {
 		messages = append(messages, v3Message{
-			ID:        message.ID,
 			Role:      message.Role,
 			Content:   message.Content,
 			Timestamp: formatV3Timestamp(message.Timestamp),
@@ -522,6 +516,27 @@ func (c *gatewayClient) searchConversationsV3(
 	}, nil
 }
 
+func (c *gatewayClient) readScenarioV3(
+	ctx context.Context,
+	userID string,
+	path string,
+) (*v3ScenarioFile, error) {
+	if c == nil || c.identity == nil {
+		return nil, errors.New(
+			"tencentdb memory: scenario read requires service identity",
+		)
+	}
+	return doV3JSON[v3ScenarioFile](
+		ctx,
+		c,
+		pathV3ScenarioRead,
+		v3ScenarioReadRequest{
+			v3Isolation: c.v3Isolation(userID, ""),
+			Path:        strings.TrimSpace(path),
+		},
+	)
+}
+
 func (c *gatewayClient) v3Isolation(userID, sessionID string) v3Isolation {
 	return v3Isolation{
 		TeamID:    c.identity.teamID,
@@ -575,24 +590,40 @@ func buildV3RecallResponse(
 	scenarioData *v3ScenarioListData,
 	coreData *v3CoreFile,
 ) *recallResponse {
-	parts := make([]string, 0, 3)
+	systemParts := make([]string, 0, 2)
+	var prependContext string
 	memoryCount := 0
 	if atomicData != nil && len(atomicData.Items) > 0 {
-		parts = append(parts, "<relevant-memories>\n"+formatV3AtomicItems(atomicData.Items)+"\n</relevant-memories>")
+		prependContext = "<relevant-memories>\n" +
+			formatV3AtomicItems(atomicData.Items) +
+			"\n</relevant-memories>"
 		memoryCount += len(atomicData.Items)
 	}
-	if coreData != nil && coreData.Content != nil {
-		if content := strings.TrimSpace(*coreData.Content); content != "" {
-			parts = append(parts, "<user-core>\n"+content+"\n</user-core>")
+	if coreData != nil {
+		if content := strings.TrimSpace(coreData.Content); content != "" {
+			// L3 core is shared by the service/team/agent, not a per-user profile.
+			systemParts = append(
+				systemParts,
+				"<agent-core>\n"+content+"\n</agent-core>",
+			)
 			memoryCount++
 		}
 	}
 	if scenarioData != nil && len(scenarioData.Entries) > 0 {
-		parts = append(parts, "<scene-navigation>\n"+formatV3ScenarioEntries(scenarioData.Entries)+"\n</scene-navigation>")
-		memoryCount += len(scenarioData.Entries)
+		context, count := formatV3ScenarioEntries(scenarioData.Entries)
+		if context != "" {
+			systemParts = append(
+				systemParts,
+				"<scene-navigation>\n"+
+					context+
+					"\n</scene-navigation>",
+			)
+			memoryCount += count
+		}
 	}
 	return &recallResponse{
-		AppendSystemContext: strings.Join(parts, "\n\n"),
+		AppendSystemContext: strings.Join(systemParts, "\n\n"),
+		PrependContext:      prependContext,
 		Strategy:            "v3-identity-scoped",
 		MemoryCount:         memoryCount,
 	}
@@ -630,18 +661,14 @@ func formatV3ConversationHits(items []v3ConversationSearchHit) string {
 	return strings.Join(lines, "\n")
 }
 
-func formatV3ScenarioEntries(items []v3ScenarioEntry) string {
+func formatV3ScenarioEntries(items []v3ScenarioEntry) (string, int) {
 	lines := make([]string, 0, len(items))
 	for _, item := range items {
 		path := strings.TrimSpace(item.Path)
 		if path == "" {
 			continue
 		}
-		if summary := strings.TrimSpace(item.Summary); summary != "" {
-			lines = append(lines, fmt.Sprintf("- %s: %s", path, summary))
-			continue
-		}
 		lines = append(lines, "- "+path)
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), len(lines)
 }

@@ -184,9 +184,13 @@ func WithAPIKey(key string) Option {
 	}
 }
 
-// WithServiceIdentity configures the service, team, and agent identity used
-// by TencentDB Agent Memory's identity-scoped data plane. All three IDs and an
-// API key are required. Omitting this option preserves the legacy gateway API.
+// WithServiceIdentity configures the service, team, and agent identity used by
+// TencentDB Agent Memory's V3 API. All three IDs are required. Use WithAPIKey
+// when the gateway requires Bearer authentication; self-hosted gateways that
+// keep authentication disabled can omit it. Omitting this option preserves the
+// legacy gateway API.
+// User and session IDs come from the framework session. The optional TencentDB
+// task ID is not sent by this adapter.
 // The same option applies to cloud and self-hosted deployments; use
 // WithGatewayURL and WithAPIKey to configure the deployment endpoint.
 func WithServiceIdentity(serviceID, teamID, agentID string) Option {
@@ -226,7 +230,9 @@ func WithIngestJobTimeout(timeout time.Duration) Option {
 	}
 }
 
-// WithSessionKeyFunc overrides the session_key mapping.
+// WithSessionKeyFunc overrides the Legacy session_key mapping and the local
+// key used to serialize capture jobs. V3 still sends Session.ID as session_id;
+// this option does not add an application isolation field to the V3 protocol.
 func WithSessionKeyFunc(fn SessionKeyFunc) Option {
 	return func(o *Options) {
 		if fn != nil {
@@ -239,9 +245,9 @@ func WithSessionKeyFunc(fn SessionKeyFunc) Option {
 //
 // It is off by default. Legacy gateways may recall from a shared long-term
 // store without enforcing the request's user/session scope. The
-// identity-scoped data plane selected by WithServiceIdentity enforces
-// service/team/agent/user isolation, but recall remains opt-in to preserve
-// existing defaults.
+// identity-scoped data plane selected by WithServiceIdentity scopes L0/L1 by
+// service/team/agent/user and L2/L3 by service/team/agent. Recall remains
+// opt-in to preserve existing defaults.
 func WithRecallEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.RecallEnabled = enabled
@@ -251,10 +257,10 @@ func WithRecallEnabled(enabled bool) Option {
 // WithMemorySearchTool controls whether the long-term memory_search tool
 // (tdai_memory_search, plus the standard alias when enabled) is exposed.
 //
-// It is off by default for the same reason as recall: the gateway memory search
-// does not enforce user/session scoping, so the tool can read a shared
-// long-term store. Only enable it when the gateway guarantees per-tenant
-// isolation. The session-scoped conversation search tool stays available.
+// It is off by default to preserve existing behavior. Legacy gateway memory
+// search can read a shared long-term store without user/session scoping; the V3
+// data plane scopes L1 search by service/team/agent/user. The session-scoped
+// conversation search tool stays available.
 func WithMemorySearchTool(enabled bool) Option {
 	return func(o *Options) {
 		o.EnableMemorySearchTool = enabled
@@ -280,7 +286,7 @@ func WithStandardAliases(enabled bool) Option {
 }
 
 // WithToolPrefix changes the native tool name prefix. The default prefix "tdai"
-// yields tdai_memory_search and tdai_conversation_search.
+// yields names such as tdai_memory_search and tdai_conversation_search.
 func WithToolPrefix(prefix string) Option {
 	return func(o *Options) {
 		if prefix != "" {

@@ -1,7 +1,7 @@
 # TencentDB Agent Memory 集成（`memory/tencentdb`）
 
-`memory/tencentdb` 通过独立 gateway sidecar 接入
-[TencentDB Agent Memory](https://github.com/Tencent/TencentDB-Agent-Memory)。
+`memory/tencentdb` 通过 gateway 接入
+[TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory)。
 它适合把 L0-L3 记忆流水线交给 TencentDB Agent Memory SDK，而
 tRPC-Agent-Go 侧继续负责 Runner、Session、Plugin 和 Tool 生命周期的场景。
 
@@ -9,31 +9,37 @@ tRPC-Agent-Go 侧继续负责 Runner、Session、Plugin 和 Tool 生命周期的
 
 - TencentDB Agent Memory gateway 负责 capture、提取、存储、recall 和 search。
 - Go adapter 通过 `session.Ingestor` 把每轮完成后的会话内容发送给 gateway。
-- Runner plugin 在每次模型调用前请求 `/recall`，并把返回的上下文注入模型请求（需通过 `WithRecallEnabled(true)` 显式开启）。
-- 通过 `tdai_conversation_search`（按 session 作用域，默认开启）和 `tdai_memory_search`（需 `WithMemorySearchTool(true)` 显式开启）暴露只读检索工具。
+- Runner plugin 在每次模型调用前执行 recall，并把返回的上下文注入模型请求（需
+  通过 `WithRecallEnabled(true)` 显式开启）。Legacy 模式请求 `/recall`；
+  V3 会组合 L1 atomic search、L2 scene navigation 和 L3 core read。
+- 通过 `tdai_conversation_search`（按 session 作用域，默认开启）和
+  `tdai_memory_search`（需 `WithMemorySearchTool(true)` 显式开启）暴露只读检索工具。
+  V3 接入还会提供 `tdai_read_scenario`，按 scene navigation 返回的路径读取 L2 全文。
 - 可选的短期上下文卸载 plugin 会把工具结果外置化、L1/L1.5/L2/L3、
   drill-down 和持久化委托给 TencentDB Agent Memory gateway hook API。
   Go adapter 不写本地 offload 文件。它与 recall 相互独立，默认关闭。
 
-> **多租户提示**：自动 recall 和 `tdai_memory_search` 会读取 gateway 的共享长期
-> 存储，而当前 gateway 并不会在这些路径上强制按 user/session 隔离，因此它们默认
-> 关闭，只有在 gateway 能保证按租户隔离时才应开启。默认只开启按 session 作用域的
-> capture 和 `tdai_conversation_search`。
+> **多租户提示**：Legacy 自动 recall 和 `tdai_memory_search` 可能读取未按
+> user/session 隔离的共享长期存储。V3 的 L0/L1 按 Service、Team、Agent、User
+> 隔离，L2/L3 则在相同 Service、Team、Agent 下跨 User 和 Session 共享。Recall
+> 和 memory search 仍默认关闭，以保持现有默认行为。`AppName` 和
+> `WithSessionKeyFunc` 不是 V3 隔离字段；需要隔离不同应用时，应为其分配不同的
+> Service、Team 或 Agent identity。
 
 即使 SDK 配置为本地 SQLite 存储，gateway 仍然是必需的，因为记忆引擎运行在
 gateway/SDK 侧。直接访问 VectorDB 或 SQLite 只能访问存储层，不会执行 SDK 的
 提取与召回流水线。
 
-**适用场景**：sidecar 记忆引擎、本地或自托管存储、模型调用前自动召回，以及由外部 SDK 托管的记忆提取。
+**适用场景**：gateway 记忆引擎、云端或自托管存储、模型调用前自动召回，以及由外部 SDK 托管的记忆提取。
 
 ## 启动 TencentDB Agent Memory Gateway
 
-[上游 package](https://github.com/Tencent/TencentDB-Agent-Memory/blob/main/package.json)
+[上游 package](https://github.com/TencentCloud/TencentDB-Agent-Memory/blob/feat/server_team/MemoryCore/package.json)
 要求 Node.js 22.16.0 或更高版本。先克隆 SDK 仓库并启动 standalone gateway：
 
 ```bash
-git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
-cd TencentDB-Agent-Memory
+git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
+cd TencentDB-Agent-Memory/MemoryCore
 npm install
 
 export TDAI_LLM_API_KEY="your-openai-compatible-api-key"
@@ -67,15 +73,22 @@ if gatewayURL == "" {
 
 memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithGatewayURL(gatewayURL),
-    // 跨 session/user 的读取属于 opt-in，仅在 gateway 可信/隔离时开启。
+    // 新接入的云端版和自建版都推荐启用身份隔离数据面；三个 ID 必填。
+    // 只有 gateway 启用 Bearer 鉴权时才需要 API key。
+    // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
+    // memorytencentdb.WithServiceIdentity(
+    //     os.Getenv("TDAI_SERVICE_ID"),
+    //     os.Getenv("TDAI_TEAM_ID"),
+    //     os.Getenv("TDAI_AGENT_ID"),
+    // ),
+    // Recall/search 保持 opt-in；Legacy 模式需要可信 gateway。
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
     // 可选短期上下文卸载，通过 gateway v2 API 完成。
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     //     Enabled:   true,
-    //     ServiceID: os.Getenv("TDAI_SERVICE_ID"),
+    //     ServiceID: os.Getenv("TDAI_OFFLOAD_SERVICE_ID"),
     // }),
-    // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
 if err != nil {
     panic(err)
@@ -105,8 +118,11 @@ defer r.Close()
 **接入要点**：
 
 - 通过 `llmagent.WithTools(memSvc.Tools())` 注册 TencentDB 原生检索工具。
-- 通过 `runner.WithSessionIngestor(memSvc)` 把带时间戳的 session transcript 发送给 `/capture`。
-- 通过 `runner.WithPlugins(memSvc.Plugin())` 在模型调用前启用自动 `/recall`。
+- 通过 `runner.WithSessionIngestor(memSvc)` 把 session transcript 发送给
+  Legacy `/capture` 或 V3 `/v3/conversation/add`；V3 会保留事件时间戳，并按
+  文档定义直接发送 conversation-add 请求。
+- 通过 `runner.WithPlugins(memSvc.Plugin())` 在模型调用前启用自动 recall；
+  Legacy 请求 `/recall`，V3 组合读取 L1/L2/L3。
 - 只有在配置 `WithContextOffload(...)`（包括 `Enabled: true` 和
   `ServiceID`）且需要短期工具结果卸载时，才额外注册
   `runner.WithPlugins(memSvc.ContextOffloadPlugin())`。启用后，配套的
@@ -127,7 +143,7 @@ memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
     memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
         Enabled:   true,
-        ServiceID: os.Getenv("TDAI_SERVICE_ID"),
+        ServiceID: os.Getenv("TDAI_OFFLOAD_SERVICE_ID"),
     }),
 )
 if err != nil {
@@ -161,7 +177,7 @@ memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     Enabled:    true,
     GatewayURL: offloadGatewayURL,
     APIKey:     os.Getenv("TDAI_OFFLOAD_API_KEY"),
-    ServiceID:  os.Getenv("TDAI_SERVICE_ID"),
+    ServiceID:  os.Getenv("TDAI_OFFLOAD_SERVICE_ID"),
 })
 ```
 
@@ -206,7 +222,7 @@ export TENCENTDB_AGENT_MEMORY_GATEWAY="http://127.0.0.1:8420"
 go run .
 ```
 
-然后发送事实、flush 后新建会话，再提相关问题：
+然后发送事实、结束当前会话并新建会话，再提相关问题：
 
 ```text
 You: 请记住以下信息：我的项目代号是 Apollo Lake，部署窗口是周五晚上，回答偏好是简洁。
@@ -214,7 +230,10 @@ You: /new
 You: 我的项目代号、部署窗口和回答偏好是什么？
 ```
 
-前两条消息会被 gateway capture。示例里的 `/new` 命令会先 flush 当前 gateway session，再切换到新 session；对话历史会重置，但同一个用户仍然可以通过 plugin 和原生检索工具召回已经提取的长期记忆。
+前两条消息会被 gateway capture。示例里的 `/new` 命令会先等待待处理的
+capture，再切换到新 session；Legacy gateway 还会收到 `/session/end`，V3
+没有对应的远端结束接口。对话历史会重置，但同一个用户仍然可以通过 plugin 和
+原生检索工具召回已经提取的长期记忆。
 
 ## 配置选项
 
@@ -227,12 +246,26 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 | `WithIngestJobTimeout(d)` | 队列中 capture 任务的超时时间。 | `30s` |
 | `WithSessionKeyFunc(fn)` | 自定义 framework session 到 gateway `session_key` 的映射。 | `base64url(app):base64url(user):base64url(session)` |
 | `WithAPIKey(key)` | 发送 `Authorization: Bearer <key>`（对应 gateway 的 `TDAI_GATEWAY_API_KEY`）。 | 无 |
-| `WithRecallEnabled(bool)` | 是否启用自动 recall plugin（opt-in；读取共享存储）。 | `false` |
-| `WithMemorySearchTool(bool)` | 是否暴露 `tdai_memory_search`（opt-in；读取共享存储）。 | `false` |
+| `WithServiceIdentity(serviceID, teamID, agentID)` | 使用云端版和自建版共用的 V3 数据面；三个 ID 必填，gateway 启用 Bearer 鉴权时再配置 `WithAPIKey`。 | 关闭，继续使用 Legacy Gateway API |
+| `WithRecallEnabled(bool)` | 是否启用自动 recall；Legacy 可能读取共享存储，V3 的 L1 按 User、L2/L3 按 Team/Agent。 | `false` |
+| `WithMemorySearchTool(bool)` | 是否暴露 `tdai_memory_search`；Legacy 可能读取共享存储，V3 的 L1 按 User。 | `false` |
 | `WithConversationSearchTool(bool)` | 是否暴露 `tdai_conversation_search`。 | `true` |
 | `WithStandardAliases(bool)` | 是否额外暴露标准 `memory_search` 别名（需先启用 memory search）。 | `false` |
 | `WithToolPrefix(prefix)` | 修改原生工具名前缀。 | `tdai` |
 | `WithContextOffload(ContextOffloadConfig)` | 配置较大工具结果的显式短期上下文卸载。 | 关闭 |
+
+新接入推荐使用 `WithServiceIdentity`。它把 `service_id` 放入
+`X-TDAI-Service-Id`，并从当前 framework session 派生 `user_id` 和
+`session_id`，随后调用身份隔离的 V3 数据面接口。不配置时继续沿用
+Legacy `/capture`、`/recall` 和 `/search/*`，现有用户行为不变。这个 Option
+描述的是接口语义，云端版和自建版使用相同的接入方式。L0/L1 按
+Service、Team、Agent、User 隔离；L2/L3 在相同 Service、Team、Agent
+下跨 User 和 Session 共享。adapter 暂不发送可选的 TencentDB `task_id`。
+自建 gateway 未开启鉴权时可以省略 `WithAPIKey`；开启鉴权的自建 gateway
+和云端服务仍需提供 API key。
+
+启用 V3 后，`memSvc.Tools()` 会包含 `tdai_read_scenario`，用于读取 scene
+navigation 选中的 L2 文件。
 
 `ContextOffloadConfig` 只控制 Go adapter 的 gateway 对接。offload 层级、
 状态、存储、TTL 和隔离由 TencentDB Agent Memory gateway 负责。Go adapter
@@ -249,10 +282,13 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 
 ## 注意事项
 
-- adapter 会把 app、user、session 标识传给 gateway，但强多租户隔离依赖 gateway 和 SDK 端完整遵守这些字段；正因如此，自动 recall 和 `tdai_memory_search` 默认关闭，需显式 opt-in。
+- Legacy 模式会把 app、user、session 编码进 `session_key`，但这不是强租户边界；
+  V3 会发送配置的 Service、Team、Agent 以及 framework User、Session ID。自动
+  recall 和 `tdai_memory_search` 仍保持 opt-in，以维持现有默认行为。
 - 当 gateway 设置了 `TDAI_GATEWAY_API_KEY` 时，请用 `WithAPIKey(...)` 让请求携带 `Authorization: Bearer <key>`，否则除 `/health` 外的路由都会返回 401（health 仍可通过）。
 - `tdai_memory_search` 检索已提取的长期记忆；提取是异步的，新捕获的信息可能需要短暂等待后才可检索。
-- `tdai_conversation_search` 检索对话历史，默认使用当前 gateway `session_key`。
+- `tdai_conversation_search` 检索当前 Legacy `session_key` 或 V3 `session_id`
+  范围内的对话历史。
 - context offload 是显式开启、由 gateway 承载的能力，只调用
   `/v2/offload/ingest`、`/v2/offload/compact` 和
   `/v2/offload/read-ref`，不调用 `/capture` 或 `/recall`。

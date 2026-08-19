@@ -9,6 +9,11 @@
 
 package tencentdb
 
+import (
+	"bytes"
+	"encoding/json"
+)
+
 type tdaiMessage struct {
 	ID        string `json:"id,omitempty"`
 	Role      string `json:"role"`
@@ -20,6 +25,33 @@ type serviceIdentity struct {
 	serviceID string
 	teamID    string
 	agentID   string
+}
+
+type v3Version string
+
+func (v *v3Version) UnmarshalJSON(data []byte) error {
+	raw := bytes.TrimSpace(data)
+	if bytes.Equal(raw, []byte("null")) {
+		*v = ""
+		return nil
+	}
+	if len(raw) > 0 && raw[0] == '"' {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return err
+		}
+		*v = v3Version(value)
+		return nil
+	}
+	var value json.Number
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	if _, err := value.Int64(); err != nil {
+		return err
+	}
+	*v = v3Version(value.String())
+	return nil
 }
 
 type captureRequest struct {
@@ -112,7 +144,6 @@ type v3Isolation struct {
 }
 
 type v3Message struct {
-	ID        string `json:"id,omitempty"`
 	Role      string `json:"role"`
 	Content   string `json:"content"`
 	Timestamp string `json:"timestamp,omitempty"`
@@ -124,8 +155,9 @@ type v3ConversationAddRequest struct {
 }
 
 type v3ConversationAddData struct {
-	AcceptedIDs []string `json:"accepted_ids"`
-	TotalCount  int      `json:"total_count"`
+	AcceptedIDs      []string `json:"accepted_ids"`
+	AcceptedVersions []string `json:"accepted_versions"`
+	TotalCount       int      `json:"total_count"`
 }
 
 type v3ConversationSearchRequest struct {
@@ -177,11 +209,24 @@ type v3ScenarioListData struct {
 	Total   int               `json:"total"`
 }
 
+type v3ScenarioReadRequest struct {
+	v3Isolation
+	Path string `json:"path"`
+}
+
+type v3ScenarioFile struct {
+	Path      string    `json:"path"`
+	Version   v3Version `json:"version"`
+	Content   string    `json:"content"`
+	CreatedAt string    `json:"created_at"`
+	UpdatedAt string    `json:"updated_at"`
+}
+
 type v3ScenarioEntry struct {
-	Path      string `json:"path"`
-	Summary   string `json:"summary,omitempty"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	Path      string    `json:"path"`
+	Version   v3Version `json:"version"`
+	CreatedAt string    `json:"created_at"`
+	UpdatedAt string    `json:"updated_at"`
 }
 
 type v3CoreReadRequest struct {
@@ -189,7 +234,8 @@ type v3CoreReadRequest struct {
 }
 
 type v3CoreFile struct {
-	Content   *string `json:"content"`
-	CreatedAt *string `json:"created_at"`
-	UpdatedAt *string `json:"updated_at"`
+	Version   v3Version `json:"version"`
+	Content   string    `json:"content"`
+	CreatedAt string    `json:"created_at"`
+	UpdatedAt string    `json:"updated_at"`
 }
