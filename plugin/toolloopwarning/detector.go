@@ -139,7 +139,7 @@ func (p *pendingRound) addResults(messages []model.Message) bool {
 		}
 		p.results[message.ToolID] = message
 	}
-	return len(p.results) <= len(p.toolCalls)
+	return true
 }
 
 func toolRoundIdentity(toolCalls []model.ToolCall) (string, bool) {
@@ -235,6 +235,10 @@ func canonicalArguments(arguments []byte) string {
 
 func boundedResultMessage(message model.Message) model.Message {
 	message.ToolID = ""
+	// Tool calls belong to assistant messages and do not participate in a
+	// tool-result fingerprint. Clearing them also keeps unexpected payloads
+	// bounded.
+	message.ToolCalls = nil
 	message.Content = digestText(message.Content)
 	message.ReasoningContent = digestText(message.ReasoningContent)
 	message.ReasoningSignature = digestText(message.ReasoningSignature)

@@ -183,16 +183,25 @@ func TestFingerprintRoundBoundsMultimodalPayloads(t *testing.T) {
 	require.Len(t, digestBytes([]byte{}), sha256Size)
 }
 
-func TestFingerprintRoundRejectsUnencodableResult(t *testing.T) {
-	result := model.NewToolMessage("call-1", "search", "same")
-	result.ToolCalls = []model.ToolCall{{
+func TestFingerprintRoundIgnoresUnexpectedResultToolCalls(t *testing.T) {
+	toolCalls := []model.ToolCall{newToolCall("call-1", "search", `{}`)}
+	base := model.NewToolMessage("call-1", "search", "same")
+	baseFingerprint, ok := fingerprintRound(toolCalls, []model.Message{base})
+	require.True(t, ok)
+
+	withToolCalls := base
+	withToolCalls.ToolCalls = []model.ToolCall{{
+		Function: model.FunctionDefinitionParam{
+			Arguments: bytes.Repeat([]byte("argument"), 1<<16),
+		},
 		ExtraFields: map[string]any{"unsupported": make(chan int)},
 	}}
-	_, ok := fingerprintRound(
-		[]model.ToolCall{newToolCall("call-1", "search", `{}`)},
-		[]model.Message{result},
+	fingerprint, ok := fingerprintRound(
+		toolCalls,
+		[]model.Message{withToolCalls},
 	)
-	require.False(t, ok)
+	require.True(t, ok)
+	require.Equal(t, baseFingerprint, fingerprint)
 }
 
 const sha256Size = 32

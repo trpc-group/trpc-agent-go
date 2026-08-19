@@ -10,11 +10,13 @@ package toolloopwarning
 
 import (
 	"context"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 )
@@ -26,7 +28,9 @@ const (
 	warning       = "The same tool-call loop has repeated. Please change your approach or stop calling the same tools with the same inputs."
 )
 
-type toolLoopWarningPlugin struct{}
+type toolLoopWarningPlugin struct {
+	stateInitMu sync.Mutex
+}
 
 // New returns an opt-in plugin that persists a synthetic user-role instruction
 // when two consecutive complete tool rounds are identical. The detector resets
@@ -61,26 +65,34 @@ func (p *toolLoopWarningPlugin) beforeAgent(
 	if p == nil || args == nil || args.Invocation == nil {
 		return nil, nil
 	}
+	p.stateInitMu.Lock()
+	defer p.stateInitMu.Unlock()
 	args.Invocation.SetState(stateKey, &detectorState{})
 	return nil, nil
 }
 
 func (p *toolLoopWarningPlugin) afterToolMessages(
-	_ context.Context,
+	ctx context.Context,
 	args *plugin.AfterToolMessagesArgs,
 ) (*plugin.AfterToolMessagesResult, error) {
 	if p == nil || args == nil || args.Invocation == nil {
 		return nil, nil
 	}
-	state := detectorStateFor(args.Invocation)
+	state := p.detectorStateFor(args.Invocation)
 	if !state.observeToolMessages(args.ToolCalls, args.ToolResultMessages) {
 		return nil, nil
 	}
-	steer.EnqueueWithSource(
+	if !steer.EnqueueWithSource(
 		args.Invocation,
 		model.NewUserMessage(warning),
 		warningSource,
-	)
+	) {
+		log.DebugfContext(
+			ctx,
+			"[%s] skip warning because no open user-message queue is attached",
+			pluginName,
+		)
+	}
 	return nil, nil
 }
 
@@ -95,13 +107,21 @@ func (p *toolLoopWarningPlugin) onEvent(
 	if toolresultround.HasMarker(ev) &&
 		(ev.Response == nil ||
 			ev.Response.Object != model.ObjectTypeToolResponse) {
-		detectorStateFor(invocation).reset()
+		p.detectorStateFor(invocation).reset()
 	}
 	return ev, nil
 }
 
-func detectorStateFor(invocation *agent.Invocation) *detectorState {
+func (p *toolLoopWarningPlugin) detectorStateFor(
+	invocation *agent.Invocation,
+) *detectorState {
 	state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
+	if ok && state != nil {
+		return state
+	}
+	p.stateInitMu.Lock()
+	defer p.stateInitMu.Unlock()
+	state, ok = agent.GetStateValue[*detectorState](invocation, stateKey)
 	if ok && state != nil {
 		return state
 	}
@@ -117,6 +137,8 @@ func (p *toolLoopWarningPlugin) afterAgent(
 	if p == nil || args == nil || args.Invocation == nil {
 		return nil, nil
 	}
+	p.stateInitMu.Lock()
+	defer p.stateInitMu.Unlock()
 	args.Invocation.DeleteState(stateKey)
 	return nil, nil
 }

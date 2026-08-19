@@ -8,4 +8,17 @@
 
 // Package toolloopwarning provides an opt-in, session-recorded warning for
 // identical consecutive tool rounds.
+//
+// Register the plugin with runner.WithPlugins(toolloopwarning.New()). The
+// plugin is inactive unless registered.
+//
+// Two adjacent complete tool rounds match when their tool names, canonical
+// JSON arguments, and final model-visible results are identical. On a match,
+// the plugin queues one synthetic user-role message for the next model turn
+// and records it in session history with the queued-message source
+// "plugin/toolloopwarning". The detector resets after each match, so four
+// identical rounds produce warnings after the second and fourth rounds.
+//
+// The plugin makes no additional model or tool calls. It does not stop or
+// retry the invocation.
 package toolloopwarning

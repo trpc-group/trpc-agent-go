@@ -113,6 +113,12 @@ func TestEnqueueWithSourceAndDrainQueued(t *testing.T) {
 		model.Message{Role: model.RoleUser},
 		"plugin/example",
 	))
+	Close(invocation)
+	require.False(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("synthetic"),
+		"plugin/example",
+	))
 }
 
 func TestClose_RejectsFutureEnqueueAndPreservesQueuedMessages(t *testing.T) {

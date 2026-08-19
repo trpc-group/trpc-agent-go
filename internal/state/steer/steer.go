@@ -173,7 +173,7 @@ func IsAttached(inv *agent.Invocation) bool {
 // EnqueueWithSource queues a synthetic user-role message and records its
 // framework source on the event emitted when the message is consumed. It
 // returns false when the source is empty, the message is not a non-empty user
-// message, or the invocation has no open queue.
+// message, or the invocation queue is missing or already closed.
 func EnqueueWithSource(
 	inv *agent.Invocation,
 	message model.Message,

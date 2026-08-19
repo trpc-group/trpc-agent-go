@@ -57,6 +57,19 @@ func TestPluginWarnsOnEachRepeatedPair(t *testing.T) {
 	require.Equal(t, []bool{false, true, false, true}, warnings)
 }
 
+func TestPluginDropsWarningWhenInvocationQueueIsClosed(t *testing.T) {
+	manager, err := pluginbase.NewManager(New())
+	require.NoError(t, err)
+	invocation := newPluginInvocation(t, manager)
+	steer.Close(invocation)
+
+	require.False(t, observeOneCallRound(t, manager, invocation,
+		"call-1", "search", `{}`, "same"))
+	require.False(t, observeOneCallRound(t, manager, invocation,
+		"call-2", "search", `{}`, "same"))
+	require.Empty(t, steer.DrainQueued(invocation))
+}
+
 func TestPluginChangedOrMalformedRoundResetsDetection(t *testing.T) {
 	manager, err := pluginbase.NewManager(New())
 	require.NoError(t, err)
@@ -256,6 +269,91 @@ func TestPluginKeepsConcurrentInvocationsIndependent(t *testing.T) {
 	for err := range errors {
 		require.NoError(t, err)
 	}
+}
+
+func TestPluginSerializesSharedInvocationStateInitialization(t *testing.T) {
+	plugin := &toolLoopWarningPlugin{}
+	invocation := agent.NewInvocation()
+	steer.Attach(invocation, steer.NewQueue())
+
+	const callbackCount = 64
+	var wg sync.WaitGroup
+	errors := make(chan error, callbackCount)
+	for i := 0; i < callbackCount; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			if index%2 == 0 {
+				toolCall := newToolCall(
+					fmt.Sprintf("call-%d", index),
+					"search",
+					`{"query":"same"}`,
+				)
+				_, err := plugin.afterToolMessages(
+					context.Background(),
+					&pluginbase.AfterToolMessagesArgs{
+						Invocation: invocation,
+						ToolCalls:  []model.ToolCall{toolCall},
+						ToolResultMessages: []model.Message{
+							model.NewToolMessage(
+								toolCall.ID, "search", "same",
+							),
+						},
+					},
+				)
+				if err != nil {
+					errors <- err
+				}
+				return
+			}
+			errorEvent := event.NewErrorEvent(
+				invocation.InvocationID,
+				"assistant",
+				model.ErrorTypeFlowError,
+				"tool round interrupted",
+			)
+			toolresultround.Mark(errorEvent, true)
+			_, err := plugin.onEvent(
+				context.Background(), invocation, errorEvent,
+			)
+			if err != nil {
+				errors <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		require.NoError(t, err)
+	}
+
+	state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
+	require.True(t, ok)
+	require.NotNil(t, state)
+	state.reset()
+	steer.DrainQueued(invocation)
+
+	for round := 0; round < 2; round++ {
+		toolCall := newToolCall(
+			fmt.Sprintf("final-call-%d", round),
+			"search",
+			`{"query":"same"}`,
+		)
+		_, err := plugin.afterToolMessages(
+			context.Background(),
+			&pluginbase.AfterToolMessagesArgs{
+				Invocation: invocation,
+				ToolCalls:  []model.ToolCall{toolCall},
+				ToolResultMessages: []model.Message{
+					model.NewToolMessage(toolCall.ID, "search", "same"),
+				},
+			},
+		)
+		require.NoError(t, err)
+	}
+	queued := steer.DrainQueued(invocation)
+	require.Len(t, queued, 1)
+	require.Equal(t, warningSource, queued[0].Source)
 }
 
 func TestPluginRunnerIntegrationUsesFinalOrderedToolResults(t *testing.T) {
@@ -496,6 +594,9 @@ func runRepeatedRound(
 	slowTool := function.NewFunctionTool(
 		func(ctx context.Context, _ parallelInput) (string, error) {
 			index := int(slowCalls.Add(1) - 1)
+			if index >= len(fastDone) {
+				return "", fmt.Errorf("unexpected slow tool call %d", index+1)
+			}
 			select {
 			case <-fastDone[index]:
 				return fmt.Sprintf("slow-raw-%d", index+1), nil
@@ -509,6 +610,9 @@ func runRepeatedRound(
 	fastTool := function.NewFunctionTool(
 		func(_ context.Context, _ parallelInput) (string, error) {
 			index := int(fastCalls.Add(1) - 1)
+			if index >= len(fastDone) {
+				return "", fmt.Errorf("unexpected fast tool call %d", index+1)
+			}
 			close(fastDone[index])
 			return fmt.Sprintf("fast-raw-%d", index+1), nil
 		},
