@@ -101,12 +101,19 @@ func scanEnvironment(
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	gitInvocation := segmentsContainCommand(segments, "git")
+	goInvocation := segmentsContainCommand(segments, "go")
 	var findings []Finding
 	for _, key := range keys {
 		proxyFinding, hasProxyFinding := proxyEnvironmentFinding(
 			policy, key, environment[key],
 		)
-		switch executionEnvironmentClass(key, segmentsContainCommand(segments, "git")) {
+		if finding, ok := goFlagsEnvironmentFinding(
+			key, environment[key], goInvocation,
+		); ok {
+			findings = append(findings, finding)
+		}
+		switch executionEnvironmentClass(key, gitInvocation) {
 		case environmentExecutablePath:
 			findings = append(findings, newFinding(
 				DecisionDeny, RiskCritical, "environment.executable_path",
@@ -145,6 +152,88 @@ func scanEnvironment(
 		}
 	}
 	return findings
+}
+
+func goFlagsEnvironmentFinding(
+	key string,
+	value string,
+	goInvocation bool,
+) (Finding, bool) {
+	if !goInvocation || !strings.EqualFold(strings.TrimSpace(key), "GOFLAGS") {
+		return Finding{}, false
+	}
+	flags, ok := splitGoFlags(value)
+	if !ok {
+		return newFinding(
+			DecisionNeedsHumanReview, RiskHigh, "environment.execution_context",
+			"GOFLAGS cannot be parsed conservatively",
+			"use standalone, well-formed Go flags and review their execution effects",
+		), true
+	}
+	for _, flag := range flags {
+		name, valid := goFlagName(flag)
+		if !valid {
+			return newFinding(
+				DecisionNeedsHumanReview, RiskHigh, "environment.execution_context",
+				"GOFLAGS contains a value that is not a standalone flag",
+				"use standalone, well-formed Go flags and review their execution effects",
+			), true
+		}
+		switch name {
+		case "toolexec", "exec", "vettool":
+			return newFinding(
+				DecisionDeny, RiskCritical, "environment.code_injection",
+				"GOFLAGS selects an external program through -"+name,
+				"remove the external program selector from GOFLAGS",
+			), true
+		}
+	}
+	return Finding{}, false
+}
+
+// splitGoFlags follows cmd/go's space and outer-quote boundaries without
+// applying shell expansion or unescaping inside a quoted flag.
+func splitGoFlags(value string) ([]string, bool) {
+	var flags []string
+	for len(value) > 0 {
+		value = strings.TrimLeft(value, " \t\n\r")
+		if value == "" {
+			break
+		}
+		if value[0] == '\'' || value[0] == '"' {
+			quote := value[0]
+			value = value[1:]
+			end := strings.IndexByte(value, quote)
+			if end < 0 {
+				return nil, false
+			}
+			flags = append(flags, value[:end])
+			value = value[end+1:]
+			continue
+		}
+		end := strings.IndexAny(value, " \t\n\r")
+		if end < 0 {
+			flags = append(flags, value)
+			break
+		}
+		flags = append(flags, value[:end])
+		value = value[end:]
+	}
+	return flags, true
+}
+
+func goFlagName(flag string) (string, bool) {
+	if !strings.HasPrefix(flag, "-") || flag == "-" || flag == "--" ||
+		strings.HasPrefix(flag, "---") || strings.HasPrefix(flag, "-=") ||
+		strings.HasPrefix(flag, "--=") {
+		return "", false
+	}
+	name := strings.TrimPrefix(flag, "-")
+	name = strings.TrimPrefix(name, "-")
+	if before, _, ok := strings.Cut(name, "="); ok {
+		name = before
+	}
+	return name, name != ""
 }
 
 func proxyEnvironmentFinding(

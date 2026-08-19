@@ -55,6 +55,11 @@ review. Defaults also deny common privilege/system commands and sensitive
 paths, review common installers, allow a small environment-name set, cap
 timeout at 300 seconds and output at 4 MiB.
 
+Basename-only `denied_paths` entries are matched case-insensitively in every
+path component so case variants such as `.ENV` or `.SSH` cannot bypass
+credential-path rules. Multi-component policy entries remain case-sensitive
+to preserve their exact filesystem meaning.
+
 The environment allowlist does not override execution-sensitive semantics.
 Per-request `PATH` and `PATHEXT` overrides are denied because they can replace
 an allowlisted executable. `HOME` requires human review because it changes
@@ -62,6 +67,10 @@ shell profiles and global tool configuration. Process-startup injection
 variables such as `BASH_ENV` and `LD_PRELOAD` are denied even if listed.
 Git and SSH executable selectors, including `GIT_SSH_COMMAND`, editor, pager,
 diff, askpass and executable-path variables, are handled the same way.
+For a scanned Go invocation, allowlisting `GOFLAGS` does not allow
+`-toolexec`, `-exec` or `-vettool` to select an external program. Those
+selectors are denied, malformed `GOFLAGS` requires review, and ordinary flags
+such as `-race` remain allowed.
 
 `Guard.Scan` returns `allow`, `deny`, `ask` or `needs_human_review` with a risk
 level, rule ID, evidence, recommendation, tool, backend and blocked flag.
@@ -89,9 +98,12 @@ bridges, sed `e` and `s///e` programs, and SSH `LocalCommand`,
 nested commands are scanned by the same command policy, while dynamic or
 ambiguous forms require review. SSH configuration values accept both `key=value`
 and `key value`; `Hostname` and `ProxyJump` are treated as destination
-overrides in either form. A tool that publishes destructive metadata also
-requires review even when its schema does not expose recognizable execution
-fields; stronger deny findings still take precedence.
+overrides in either form. Unknown executables receiving an explicit URL or a
+syntactically valid numeric `host:port` operand are treated as potential
+network clients and require review; colon-delimited non-port data and dotted
+filenames are not network signals. A tool that publishes destructive metadata
+also requires review even when its schema does not expose recognizable
+execution fields; stronger deny findings still take precedence.
 
 ## Filter and permission boundaries
 

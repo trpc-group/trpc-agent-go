@@ -47,12 +47,18 @@ pipeline_action: needs_human_review
 常见提权/系统命令和敏感路径，复核常见依赖安装命令，将超时限制为 300 秒，
 将输出限制为 4 MiB。
 
+只有 basename 的 `denied_paths` 条目会对每一级路径组件进行大小写不敏感匹配，
+避免 `.ENV`、`.SSH` 等大小写变体绕过凭据路径规则；包含多级目录的策略条目仍
+保持大小写敏感，以保留其精确文件系统语义。
+
 环境变量白名单不能覆盖与执行相关的安全语义。请求级 `PATH` 和 `PATHEXT`
 会改变白名单命令对应的实际可执行文件，因此始终拒绝；`HOME` 会改变 Shell
 启动文件和工具全局配置，因此需要人工复核；`BASH_ENV`、`LD_PRELOAD` 等
 进程启动注入变量即使写入白名单也会拒绝。Git 与 SSH 的可执行程序选择变量
 也按相同方式处理，包括 `GIT_SSH_COMMAND`、editor、pager、diff、askpass 和
-可执行路径变量。
+可执行路径变量。扫描到 Go 命令时，即使 `GOFLAGS` 已加入白名单，
+`-toolexec`、`-exec` 和 `-vettool` 等外部程序选择器仍会被拒绝；无法保守解析
+的 `GOFLAGS` 进入人工复核，`-race` 等普通参数保持允许。
 
 `Guard.Scan` 返回 `allow`、`deny`、`ask` 或 `needs_human_review`，报告包含
 风险等级、rule ID、evidence、recommendation、Tool、backend 和 blocked。
@@ -75,8 +81,10 @@ Permission 扫描还会把解释器 stdin 和 `-f -` stdin 作为可执行内容
 字面量嵌套命令复用相同的命令策略扫描，动态或无法明确解析的形式进入人工复核。
 SSH 配置值同时支持 `key=value` 和 `key value` 两种形式；`Hostname` 与
 `ProxyJump` 在两种形式下都会作为目的地覆盖处理。如果 Tool metadata 声明
-destructive，即使 schema 中没有可识别的执行字段也至少需要人工复核；已有的
-更强 deny 结论仍然优先。
+destructive，即使 schema 中没有可识别的执行字段也至少需要人工复核。未知
+可执行文件收到显式 URL 或语法有效、端口为数字的 `host:port` 参数时，也会
+被视为潜在网络客户端并进入人工复核；冒号分隔的非端口数据与带点文件名不会
+被当成网络信号。已有的更强 deny 结论仍然优先。
 
 ## Filter 与 Permission 边界
 

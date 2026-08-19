@@ -191,6 +191,13 @@ func TestGuardClassifiesNetworkClientsWithoutURLFalsePositives(t *testing.T) {
 		{"known non-network URL argument", "echo https://evil.example", safety.DecisionAllow, "safety.no_findings"},
 		{"known non-network proxy flag", "echo --proxy evil.example", safety.DecisionAllow, "safety.no_findings"},
 		{"unknown executable URL", "mystery-tool https://evil.example", safety.DecisionNeedsHumanReview, "network.unknown_client"},
+		{"unknown executable host and port", "openssl s_client evil.example:443", safety.DecisionNeedsHumanReview, "network.unknown_client"},
+		{"unknown executable connect option", "openssl s_client -connect evil.example:443", safety.DecisionNeedsHumanReview, "network.unknown_client"},
+		{"unknown executable attached connect option", "openssl s_client -connect=evil.example:443", safety.DecisionNeedsHumanReview, "network.unknown_client"},
+		{"unknown executable IPv6 host and port", "openssl s_client '[2001:db8::1]:443'", safety.DecisionNeedsHumanReview, "network.unknown_client"},
+		{"unknown executable zero port", "openssl s_client evil.example:0", safety.DecisionNeedsHumanReview, "network.unknown_client"},
+		{"unknown executable colon data", "mystery-tool release:latest", safety.DecisionAllow, "safety.no_findings"},
+		{"unknown executable dotted file", "mystery-tool artifact.tar.gz", safety.DecisionAllow, "safety.no_findings"},
 		{"known client URL", "curl https://evil.example", safety.DecisionDeny, "network.destination"},
 	}
 	for _, tc := range tests {
@@ -513,6 +520,46 @@ func TestGuardRejectsAllowlistedEnvironmentCodeInjection(t *testing.T) {
 	}
 }
 
+func TestGuardInspectsAllowlistedGoFlags(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.EnvAllowlist = append(policy.EnvAllowlist, "GOFLAGS")
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		command  string
+		value    string
+		decision safety.Decision
+		rule     string
+	}{
+		{"tool wrapper", "go test ./...", "-toolexec=./work/runner", safety.DecisionDeny, "environment.code_injection"},
+		{"double dash tool wrapper", "go test ./...", "--toolexec=./work/runner", safety.DecisionDeny, "environment.code_injection"},
+		{"quoted tool wrapper", "go test ./...", `"-toolexec=./work/runner --mode fast"`, safety.DecisionDeny, "environment.code_injection"},
+		{"test binary wrapper", "go test ./...", "-exec=./work/runner", safety.DecisionDeny, "environment.code_injection"},
+		{"vet tool", "go vet ./...", "-vettool=./work/analyzer", safety.DecisionDeny, "environment.code_injection"},
+		{"malformed quoting", "go test ./...", `"-race`, safety.DecisionNeedsHumanReview, "environment.execution_context"},
+		{"ordinary build flag", "go test ./...", "-race -trimpath", safety.DecisionAllow, "safety.no_findings"},
+		{"non go command", "echo ok", "-toolexec=./work/runner", safety.DecisionAllow, "safety.no_findings"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{
+				Command: tc.command,
+				Env:     map[string]string{"GOFLAGS": tc.value},
+			})
+			require.Equal(t, tc.decision, report.Decision, "%+v", report)
+			require.Equal(t, tc.rule, report.RuleID)
+		})
+	}
+}
+
+func TestGuardPreservesGoFlagsEnvironmentAllowlist(t *testing.T) {
+	report := mustGuard(t, safety.DefaultPolicy()).Scan(safety.Request{
+		Command: "go test ./...",
+		Env:     map[string]string{"GOFLAGS": `"-race`},
+	})
+	require.Equal(t, safety.DecisionDeny, report.Decision)
+	require.Equal(t, "environment.variable", report.RuleID)
+}
+
 func TestGuardScopesGitFallbackExecutionEnvironment(t *testing.T) {
 	for _, key := range []string{"EDITOR", "VISUAL", "PAGER"} {
 		policy := safety.DefaultPolicy()
@@ -621,6 +668,39 @@ func TestGuardScansFileURLsAndPathValuedOptions(t *testing.T) {
 		require.Equal(t, safety.DecisionDeny, report.Decision, command)
 		require.Equal(t, "sensitive.path", report.RuleID, command)
 	}
+}
+
+func TestGuardMatchesDeniedBasenamesCaseInsensitively(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, command := range []string{
+		"cat .ENV",
+		"cat home/user/.SSH/config",
+		"cat CREDENTIALS",
+		"cat ID_RSA",
+	} {
+		t.Run(command, func(t *testing.T) {
+			report := guard.Scan(safety.Request{
+				Backend: safety.BackendWorkspaceExec,
+				Command: command,
+			})
+			require.Equal(t, safety.DecisionDeny, report.Decision, "%+v", report)
+			require.Equal(t, "sensitive.path", report.RuleID)
+		})
+	}
+}
+
+func TestGuardKeepsPathfulDeniedEntriesCaseSensitive(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.DeniedPaths = []string{"out/Private"}
+	guard := mustGuard(t, policy)
+
+	exact := guard.Scan(safety.Request{Command: "cat out/Private/file"})
+	require.Equal(t, safety.DecisionDeny, exact.Decision)
+	require.Equal(t, "sensitive.path", exact.RuleID)
+
+	caseVariant := guard.Scan(safety.Request{Command: "cat out/private/file"})
+	require.Equal(t, safety.DecisionAllow, caseVariant.Decision)
+	require.Equal(t, "safety.no_findings", caseVariant.RuleID)
 }
 
 func TestGuardScansCommandPathOptionsWithoutDataFalsePositives(t *testing.T) {

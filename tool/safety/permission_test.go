@@ -245,6 +245,39 @@ func TestPermissionPolicyBlocksInlineSedAndSSHOptionBypasses(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyReviewsUnknownClientHostPort(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"openssl"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	decision, err := policy.CheckToolPermission(
+		context.Background(),
+		workspacePermissionRequest(
+			`{"command":"openssl s_client evil.example:443"}`,
+		),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Contains(t, decision.Reason, "network.unknown_client")
+}
+
+func TestPermissionPolicyRejectsCaseVariantSensitivePath(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"cat"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	decision, err := policy.CheckToolPermission(
+		context.Background(),
+		workspacePermissionRequest(`{"command":"cat .ENV"}`),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "sensitive.path")
+}
+
 func TestPermissionPolicyClassifiesExecutionSensitiveEnvironment(t *testing.T) {
 	policy := NewPermissionPolicy(mustPermissionGuard(t, DefaultPolicy()))
 	for _, tc := range []struct {
@@ -300,6 +333,45 @@ func TestPermissionPolicyRejectsAllowlistedGitExecutionEnvironment(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
 	require.Contains(t, decision.Reason, "environment.code_injection")
+}
+
+func TestPermissionPolicyInspectsAllowlistedGoFlags(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"go"}
+	guardPolicy.EnvAllowlist = append(guardPolicy.EnvAllowlist, "GOFLAGS")
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	for _, tc := range []struct {
+		name      string
+		arguments string
+		want      tool.PermissionAction
+		wantRule  string
+	}{
+		{
+			name: "tool wrapper",
+			arguments: `{"command":"go test ./...",` +
+				`"env":{"GOFLAGS":"-toolexec=./work/runner"}}`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "environment.code_injection",
+		},
+		{
+			name: "ordinary build flag",
+			arguments: `{"command":"go test ./...",` +
+				`"env":{"GOFLAGS":"-race"}}`,
+			want: tool.PermissionActionAllow,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(), workspacePermissionRequest(tc.arguments),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
 }
 
 func TestPermissionPolicyScansGitConfigEnvURLRewrites(t *testing.T) {

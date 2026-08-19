@@ -422,19 +422,19 @@ func normalizePath(value string) string {
 }
 
 func matchesDeniedPath(candidate, denied string) bool {
+	if !strings.Contains(denied, "/") {
+		for _, component := range strings.Split(candidate, "/") {
+			if strings.EqualFold(component, denied) {
+				return true
+			}
+		}
+		return false
+	}
 	if candidate == denied {
 		return true
 	}
-	if strings.Contains(denied, "/") {
-		if denied == "/" {
-			return strings.HasPrefix(candidate, "/")
-		}
-		return strings.HasPrefix(candidate, denied+"/")
+	if denied == "/" {
+		return strings.HasPrefix(candidate, "/")
 	}
-	for _, component := range strings.Split(candidate, "/") {
-		if component == denied {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(candidate, denied+"/")
 }

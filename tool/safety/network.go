@@ -717,7 +717,7 @@ func classifyNetworkCommand(command string) networkCommandClassification {
 
 func unknownNetworkSignal(argv []string) bool {
 	for _, arg := range argv[1:] {
-		if _, ok := explicitHost(arg); ok {
+		if _, ok := explicitHost(arg); ok || unknownHostPortSignal(arg) {
 			return true
 		}
 		name := strings.ToLower(strings.SplitN(arg, "=", 2)[0])
@@ -728,6 +728,22 @@ func unknownNetworkSignal(argv []string) bool {
 		}
 	}
 	return false
+}
+
+func unknownHostPortSignal(arg string) bool {
+	candidate := strings.TrimSpace(strings.Trim(arg, `"'`))
+	if name, value, ok := strings.Cut(candidate, "="); ok {
+		if !strings.EqualFold(strings.TrimLeft(name, "-"), "connect") {
+			return false
+		}
+		candidate = value
+	}
+	host, port, err := net.SplitHostPort(candidate)
+	if err != nil || !validKnownHost(host) {
+		return false
+	}
+	_, err = strconv.ParseUint(port, 10, 16)
+	return err == nil
 }
 
 func scanNetworkText(policy Policy, text string) []Finding {
