@@ -97,6 +97,20 @@ func TestServiceOptionsAndLifecycleEdges(t *testing.T) {
 	require.Error(t, closed.IngestSession(context.Background(), captureReadySession()), "expected closed service error")
 }
 
+func TestOptionsKeyedLiteralAndCustomOptionRemainSupported(t *testing.T) {
+	options := Options{
+		GatewayURL: "http://127.0.0.1:8420",
+		Timeout:    time.Second,
+	}
+	customOption := Option(func(got *Options) {
+		got.GatewayURL = options.GatewayURL
+		got.Timeout = options.Timeout
+	})
+	svc, err := NewService(customOption)
+	require.NoError(t, err)
+	require.NoError(t, svc.Close())
+}
+
 func TestDefaultSessionKeyAvoidsDelimiterCollisions(t *testing.T) {
 	left := &session.Session{AppName: "app", UserID: "user:session", ID: "id"}
 	right := &session.Session{AppName: "app:user", UserID: "session", ID: "id"}
