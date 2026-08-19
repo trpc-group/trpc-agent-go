@@ -1746,6 +1746,24 @@ func TestService_ReusesRequestEmbeddingForSearchAndAdd(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestService_DoesNotCacheInvalidRequestEmbedding(t *testing.T) {
+	emb := newMockEmbedder(0)
+	opts := defaultOptions.clone()
+	opts.embedder = emb
+	svc := &Service{opts: opts}
+	ctx := imemory.WithRequestEmbeddingCache(context.Background())
+
+	_, err := svc.getEmbedding(ctx, "same memory")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "embedding dimension mismatch")
+
+	emb.dimension = opts.indexDimension
+	got, err := svc.getEmbedding(ctx, "same memory")
+	require.NoError(t, err)
+	assert.Len(t, got, opts.indexDimension)
+	assert.Equal(t, 2, emb.calls)
+}
+
 func TestService_SearchMemories_EmptyQuery(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
@@ -2538,7 +2556,7 @@ func TestService_SearchMemories_DimensionMismatch(t *testing.T) {
 
 	_, err := svc.SearchMemories(ctx, userKey, "test query")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "query embedding dimension mismatch")
+	assert.Contains(t, err.Error(), "embedding dimension mismatch")
 }
 
 func TestService_SearchMemories_SQLError(t *testing.T) {

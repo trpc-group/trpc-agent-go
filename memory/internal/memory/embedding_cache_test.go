@@ -11,10 +11,8 @@ package memory
 import (
 	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -111,33 +109,52 @@ func TestGetOrComputeRequestEmbeddingDoesNotCacheErrors(t *testing.T) {
 }
 
 func TestGetOrComputeRequestEmbeddingCoalescesConcurrentMisses(t *testing.T) {
-	const goroutines = 16
 	ctx := WithRequestEmbeddingCache(context.Background())
 	scope := new(int)
-	start := make(chan struct{})
+	computeStarted := make(chan struct{})
+	releaseCompute := make(chan struct{})
 	var calls atomic.Int32
-	compute := func() ([]float64, error) {
-		calls.Add(1)
-		time.Sleep(20 * time.Millisecond)
-		return []float64{1, 2, 3}, nil
+	type result struct {
+		embedding []float64
+		err       error
 	}
+	firstResult := make(chan result, 1)
+	go func() {
+		embedding, err := GetOrComputeRequestEmbedding(
+			ctx, scope, "same text", func() ([]float64, error) {
+				calls.Add(1)
+				close(computeStarted)
+				<-releaseCompute
+				return []float64{1, 2, 3}, nil
+			},
+		)
+		firstResult <- result{embedding: embedding, err: err}
+	}()
+	<-computeStarted
 
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
-		go func() {
-			defer wg.Done()
-			<-start
-			got, err := GetOrComputeRequestEmbedding(
-				ctx, scope, "same text", compute,
-			)
-			assert.NoError(t, err)
-			assert.Equal(t, []float64{1, 2, 3}, got)
-		}()
-	}
-	close(start)
-	wg.Wait()
+	waiterCtx, cancelWaiter := context.WithCancel(ctx)
+	waiterStarted := make(chan struct{})
+	waiterResult := make(chan error, 1)
+	go func() {
+		close(waiterStarted)
+		_, err := GetOrComputeRequestEmbedding(
+			waiterCtx, scope, "same text", func() ([]float64, error) {
+				calls.Add(1)
+				return nil, errors.New("duplicate computation")
+			},
+		)
+		waiterResult <- err
+	}()
+	<-waiterStarted
+	cancelWaiter()
 
+	require.ErrorIs(t, <-waiterResult, context.Canceled)
+	assert.Equal(t, int32(1), calls.Load())
+
+	close(releaseCompute)
+	got := <-firstResult
+	require.NoError(t, got.err)
+	assert.Equal(t, []float64{1, 2, 3}, got.embedding)
 	assert.Equal(t, int32(1), calls.Load())
 }
 

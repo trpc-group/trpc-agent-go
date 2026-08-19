@@ -180,7 +180,17 @@ func (s *Service) getEmbedding(
 ) ([]float64, error) {
 	return imemory.GetOrComputeRequestEmbedding(
 		ctx, s, text, func() ([]float64, error) {
-			return s.opts.embedder.GetEmbedding(ctx, text)
+			embedding, err := s.opts.embedder.GetEmbedding(ctx, text)
+			if err != nil {
+				return nil, err
+			}
+			if len(embedding) != s.opts.indexDimension {
+				return nil, fmt.Errorf(
+					"embedding dimension mismatch: expected %d, got %d",
+					s.opts.indexDimension, len(embedding),
+				)
+			}
+			return embedding, nil
 		},
 	)
 }
@@ -204,11 +214,6 @@ func (s *Service) AddMemory(
 	if err != nil {
 		return fmt.Errorf("generate embedding failed: %w", err)
 	}
-	if len(embedding) != s.opts.indexDimension {
-		return fmt.Errorf("embedding dimension mismatch: expected %d, got %d",
-			s.opts.indexDimension, len(embedding))
-	}
-
 	now := time.Now()
 	mem := &memory.Memory{
 		Memory:      memoryStr,
@@ -375,11 +380,6 @@ func (s *Service) UpdateMemory(
 	if err != nil {
 		return fmt.Errorf("generate embedding failed: %w", err)
 	}
-	if len(embedding) != s.opts.indexDimension {
-		return fmt.Errorf("embedding dimension mismatch: expected %d, got %d",
-			s.opts.indexDimension, len(embedding))
-	}
-
 	now := time.Now()
 	vector := pgvector.NewVector(convertToFloat32(embedding))
 	newID := imemory.ApplyMemoryUpdate(
@@ -753,11 +753,6 @@ func (s *Service) SearchMemories(
 	if err != nil {
 		return nil, fmt.Errorf("generate query embedding failed: %w", err)
 	}
-	if len(queryEmbedding) != s.opts.indexDimension {
-		return nil, fmt.Errorf("query embedding dimension mismatch: expected %d, got %d",
-			s.opts.indexDimension, len(queryEmbedding))
-	}
-
 	vector := pgvector.NewVector(convertToFloat32(queryEmbedding))
 
 	maxResults := s.opts.maxResults
