@@ -315,22 +315,22 @@ Back up the table and resolve duplicate active rows before running the DDL:
 ```sql
 -- Step 1: find duplicate active sessions. Resolve every returned group first.
 SELECT app_name, user_id, session_id, COUNT(*) AS active_count
-FROM session_states
+FROM `{{PREFIX}}session_states`
 WHERE deleted_at IS NULL
 GROUP BY app_name, user_id, session_id
 HAVING active_count > 1;
 
 -- Step 2: add and backfill the nullable marker. Soft-deleted rows stay NULL.
-ALTER TABLE session_states
+ALTER TABLE `{{PREFIX}}session_states`
     ADD COLUMN state_initialization_active TINYINT NULL DEFAULT NULL;
-UPDATE session_states
+UPDATE `{{PREFIX}}session_states`
 SET state_initialization_active = 1
 WHERE deleted_at IS NULL;
 
 -- Step 3: enforce one active row. For TDSQL, user_id remains in the UNIQUE
 -- index so the constraint is shard-local.
-CREATE UNIQUE INDEX idx_session_states_state_init_active
-ON session_states(
+CREATE UNIQUE INDEX `idx_{{PREFIX}}session_states_state_init_active`
+ON `{{PREFIX}}session_states`(
     app_name, user_id, session_id, state_initialization_active
 );
 ```
@@ -340,10 +340,11 @@ variant matching the deployment. When `WithSkipDBInit(true)` is set, the service
 does not create this table or its indexes, so they must be provisioned during
 the migration. Replace `{{PREFIX}}` with the configured table prefix. The
 expanded table names must fit MySQL's 64-character table-name limit. The Go
-initializer uses prefixed index names when they fit the 64-character index-name
-limit; for an overlong index name, use the deterministic table-scoped fallback
-(for example, `idx_session_states_state_init_active` or
-`idx_state_initialization_leases_uniq`) instead of truncating the prefix.
+initializer uses prefixed index names for the active-row index in Step 3 and the
+lease indexes below when they fit the 64-character index-name limit; for an
+overlong index name, use the deterministic table-scoped fallback (for example,
+`idx_session_states_state_init_active` or `idx_state_initialization_leases_uniq`)
+instead of truncating the prefix.
 
 MySQL:
 

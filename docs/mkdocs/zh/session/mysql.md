@@ -334,22 +334,22 @@ service 版本，并保持 `WithStateInitialization(false)`；然后暂停创建
 ```sql
 -- Step 1：查找重复活跃 session；必须先处理所有返回的分组。
 SELECT app_name, user_id, session_id, COUNT(*) AS active_count
-FROM session_states
+FROM `{{PREFIX}}session_states`
 WHERE deleted_at IS NULL
 GROUP BY app_name, user_id, session_id
 HAVING active_count > 1;
 
 -- Step 2：增加并回填可空标记；软删除行继续保持 NULL。
-ALTER TABLE session_states
+ALTER TABLE `{{PREFIX}}session_states`
     ADD COLUMN state_initialization_active TINYINT NULL DEFAULT NULL;
-UPDATE session_states
+UPDATE `{{PREFIX}}session_states`
 SET state_initialization_active = 1
 WHERE deleted_at IS NULL;
 
 -- Step 3：保证最多一条活跃行。TDSQL 的唯一索引继续包含 user_id，
 -- 因而约束保持在单分片内。
-CREATE UNIQUE INDEX idx_session_states_state_init_active
-ON session_states(
+CREATE UNIQUE INDEX `idx_{{PREFIX}}session_states_state_init_active`
+ON `{{PREFIX}}session_states`(
     app_name, user_id, session_id, state_initialization_active
 );
 ```
@@ -357,8 +357,9 @@ ON session_states(
 在重新开启 state initialization 前，还需要根据部署类型创建 lease schema。使用
 `WithSkipDBInit(true)` 时，服务不会自动创建该表及其索引，因此必须在迁移期间完成
 创建。将 `{{PREFIX}}` 替换为实际的表前缀；展开后的表名必须符合 MySQL 64 个字符的限制。
-Go 初始化逻辑会在索引名不超过 64 个字符时保留前缀；如果索引名过长，则使用确定性的表级短名称
-（例如 `idx_session_states_state_init_active` 或 `idx_state_initialization_leases_uniq`），不要直接截断前缀。
+Go 初始化逻辑会在第 3 步的活跃行索引和下面的 lease 索引名不超过 64 个字符时保留前缀；
+如果索引名过长，则使用确定性的表级短名称（例如 `idx_session_states_state_init_active`
+或 `idx_state_initialization_leases_uniq`），不要直接截断前缀。
 
 MySQL：
 
