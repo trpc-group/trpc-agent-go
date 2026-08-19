@@ -1951,9 +1951,9 @@ type mockDirEntry struct {
 	info os.FileInfo
 }
 
-func (m mockDirEntry) Name() string       { return m.info.Name() }
-func (m mockDirEntry) IsDir() bool        { return m.info.IsDir() }
-func (m mockDirEntry) Type() fs.FileMode  { return m.info.Mode().Type() }
+func (m mockDirEntry) Name() string               { return m.info.Name() }
+func (m mockDirEntry) IsDir() bool                { return m.info.IsDir() }
+func (m mockDirEntry) Type() fs.FileMode          { return m.info.Mode().Type() }
 func (m mockDirEntry) Info() (os.FileInfo, error) { return m.info, nil }
 
 // TestWorkspace_WalkAndUpload_SwapToSymlinkRejected is the TOCTOU regression
