@@ -3963,13 +3963,7 @@
 <p>Readable Skills still leave one question: who writes them? Hermes allows the foreground agent to call <code>skill_manage</code> after completing a complex task and save the procedure it just validated. If a loaded Skill turns out to be obsolete or incomplete, the agent can revise it immediately. This approach uses the full task context, but writing the Skill consumes tokens and time in the current request, and the foreground agent may not remember to do it consistently.</p>
 <p>Hermes therefore also provides background review. After the main task has replied to the user and meets the review conditions, the system copies a snapshot of the conversation into an isolated background agent. This agent can inspect the task, but it may only read and write Memory and Skills. It cannot call business tools such as the weather API or code executor again. If the review fails, the user's result remains unaffected. The source code calls this background role the Reviewer. The design goal is explicit: <strong>background review may take longer or fail independently, but it must not extend the current request's response time or turn a successful task into a failure.</strong></p>
 <p>The Reviewer first checks whether any Skill used in the task needs to be revised. It creates a new Skill only when the task reveals a genuinely new, reusable procedure. As the library grows, a Curator tracks which Skills are frequently viewed, used, and modified; merges overlapping entries; marks long-unused content for cleanup or archival; protects important entries from automated reorganization; and preserves a backup before making changes. If automated curation goes wrong, the backup supports recovery.</p>
-<pre class="mermaid"><code>flowchart LR
-    A["Complete a complex task"] --&gt; B["Write a Skill in the foreground&lt;br/&gt;or review the task in the background"]
-    B --&gt; C["Create or revise a Skill"]
-    C --&gt; D["Load it on demand in later tasks"]
-    D --&gt; E["Discover a problem during use"]
-    E --&gt; C
-    C --&gt; F["Curator: deduplicate, archive, and roll back"]</code></pre>
+<p><img alt="Hermes Skill learning and curation cycle" src="../../assets/img/blog/evolution/en/diagram_skill_cycle_en.png" /></p>
 <p>Hermes' approach can be summarized as follows: after completing a task, the agent turns reusable methods into procedural memory. Hermes, however, primarily targets personal or single-machine environments. A server-side framework has additional questions to answer. Do multiple applications and users share Skills? May an automated Reviewer overwrite a manually maintained Skill? Can a candidate produced by a failed task be published? What happens when two Reviewers create nearly identical Skills at the same time? Who approves, records, and rolls back a change?</p>
 <p>While designing Evolution, tRPC-Agent-Go also reconsidered where procedural memory belongs. Its early design predated a standalone Evolution Service. Following the classic categories of memory, this path first tried to store task methods as a third kind of Memory alongside semantic and episodic memory. The idea sounded natural: if “what the user prefers” and “what happened before” can each become a database record, perhaps “how to perform this kind of task” can as well.</p>
 <p>Application experience exposed the difference between a Memory record and a Skill document. Memory works well for independently retrievable database items. A method, however, is usually a complete instruction with ordered steps, applicability conditions, result checks, and failure handling. Splitting it into separate records breaks the relationships between steps, while storing the entire method as one record creates an oversized fact. A Skill is a better fit: it is a readable, editable document that can be loaded on demand and can link to supporting material. tRPC-Agent-Go therefore moved procedural memory into Skills. The Evolution Service generates Skills from execution traces and manages their evaluation, publication, and rollback.</p>
@@ -4024,20 +4018,7 @@
 <hr />
 <h2 id="3-online-learning-return-the-task-result-first-then-generate-skills-in-the-background">3. Online Learning: Return the Task Result First, Then Generate Skills in the Background</h2>
 <p>Online Evolution separates <strong>completing the current task</strong> from <strong>extracting a method from that task</strong>. When the background queue has capacity, the user receives the weather report before the system summarizes the execution. A failure in background learning does not turn the completed task into a failure. If the queue is full, the framework falls back to synchronous processing, which may delay the current response; Section 5 explains this behavior in detail.</p>
-<pre class="mermaid"><code>sequenceDiagram
-    participant U as User
-    participant A as Foreground agent
-    participant L as Background learning
-    participant S as Skill repository
-
-    U-&gt;&gt;A: Start a task
-    A-&gt;&gt;S: Load an existing method on demand
-    S--&gt;&gt;A: Return the Skill
-    A--&gt;&gt;U: Deliver the task result
-    A-)L: Submit new traces and an optional outcome
-    L-&gt;&gt;L: Decide → extract → reconcile → check
-    L-&gt;&gt;S: Publish a new version that passes configured checks
-    Note over S,A: The new Skill takes effect from the next task</code></pre>
+<p><img alt="Online Evolution returns the task result before background learning" src="../../assets/img/blog/evolution/en/diagram_online_learning_en.png" /></p>
 <h3 id="when-the-queue-has-capacity-return-the-current-result-before-reviewing-the-trace">When the Queue Has Capacity, Return the Current Result Before Reviewing the Trace</h3>
 <p>In the multi-city weather task, the foreground agent fetches the data, handles errors, verifies that all cities are present, and returns the report as soon as possible. After the task ends, background learning reads the new conversation and tool traces together with any success, failure, or score supplied by the application. It does not continue executing the user's task. It only asks whether the trace contains a recurring problem and a method worth retaining.</p>
 <p>This order separates the current task from the outcome of learning. The current task is responsible for returning the correct result promptly. Background learning reviews the trace and attempts to generate a Skill; it may take longer or fail independently. A new Skill becomes available only after publication, and production deployments will normally configure automated checks and human approval before that point. When the queue has capacity, the extra model call does not add to user wait time. When the queue is full, the current request may wait for synchronous processing.</p>
@@ -4058,20 +4039,7 @@
 <p><strong>The Human Gate decides whether to wait for human approval.</strong> Adding a low-risk method for one user and deleting a Skill shared by an entire application normally warrant different approval policies. The application configures which operations require approval; the framework does not infer business risk on its own.</p>
 <p>The four Gates can be combined according to business needs. A structural or safety failure normally rejects a candidate. A task failure, agent error, or score below the application threshold saves it as <code>pending_eval</code> instead of publishing it immediately. When no task outcome is supplied, the default Effectiveness Gate passes the candidate rather than marking it for evaluation. A candidate that requires human confirmation enters <code>pending_approval</code>. Create, update, and delete operations can use different approval policies; Section 5 covers the defaults.</p>
 <p>Gates decide whether a candidate may be published. Revision history makes it possible to recover after publication. Production deployments typically save each create, update, or delete as an immutable revision rather than overwriting the file, and maintain a separate pointer to the active revision. Publishing a new version leaves the previous one intact; if online performance deteriorates, the pointer can be moved back to an earlier revision.</p>
-<pre class="mermaid"><code>stateDiagram-v2
-    [*] --&gt; Candidate
-    Candidate --&gt; Rejected: Structure or safety check fails
-    Candidate --&gt; PendingEvaluation: Task failed, agent errored, or score is below threshold
-    PendingEvaluation --&gt; Candidate: Add evaluation evidence and submit a new candidate
-    Candidate --&gt; PendingApproval: Human approval is required
-    Candidate --&gt; Active: Configured checks pass
-    PendingApproval --&gt; Active: Approve
-    PendingApproval --&gt; Rejected: Reject
-    Active --&gt; Archived: Replaced by a new revision
-    Archived --&gt; Active: Roll back
-    note right of PendingEvaluation
-        Requires more evaluation and is not published automatically
-    end note</code></pre>
+<p><img alt="Evolution candidate and revision lifecycle" src="../../assets/img/blog/evolution/en/diagram_revision_lifecycle_en.png" /></p>
 <p>The Gates, revision history, and active revision must use the same user or application partition so that a candidate cannot be published into the wrong scope.</p>
 <p>After publication, the agent must also be able to read the new version on its next task. If the file has changed but a running agent still uses an old cache, the update has no practical effect. The next section introduces offline optimization; Section 5 then explains how to integrate the background queue, review cursor, Gates, revision storage, and cache refresh in Go.</p>
 <hr />
@@ -4088,21 +4056,7 @@
 <p>Holdout measures unseen tasks only because it has not influenced any previous revision. If the team inspects Holdout results and then adjusts the Skill specifically for those cases, the cases have become part of development. In the next round they should move into Validation, and a fresh Holdout set should be prepared.</p>
 <h3 id="how-gepa-improves-a-skill-step-by-step">How GEPA Improves a Skill Step by Step</h3>
 <p>The built-in offline optimizer in tRPC-Agent-Go draws on <a href="https://arxiv.org/abs/2507.19457">GEPA (Genetic-Pareto)</a>. A practical way to understand it is as a sequence of small experiments: choose one retained version as the starting point for a round, change one part, then use task scores to decide whether the change is worth keeping. At the beginning, the initial Skill is the first member of the candidate pool—the set of retained versions that may be revised in later rounds.</p>
-<pre class="mermaid"><code>flowchart TB
-    P["Choose a Skill from the candidate pool&lt;br/&gt;as this round's starting point"] --&gt; F["Sample a small Feedback batch&lt;br/&gt;and collect outputs, scores, and feedback"]
-    F --&gt; R["The reflection model changes one Skill field&lt;br/&gt;to produce a revised version"]
-    R --&gt; C["Run the revised version on the same batch&lt;br/&gt;with the same random seed"]
-    C --&gt; G{"Is the revised version's total score&lt;br/&gt;higher than the starting version's?"}
-    G --&gt;|No| X["Discard this revision"]
-    G --&gt;|Yes| V["Evaluate on the full Validation set&lt;br/&gt;and add it to the candidate pool"]
-    X --&gt; Q{"Reached the iteration&lt;br/&gt;or evaluation limit?"}
-    V --&gt; Q
-    Q --&gt;|No| P
-    Q --&gt;|Yes| B["Choose the final version from all candidates&lt;br/&gt;by Validation average score"]
-    B --&gt; H["Only now use Holdout&lt;br/&gt;to compare the initial and candidate versions"]
-    H --&gt; D{"Candidate differs from the initial version,&lt;br/&gt;meets the average requirement, and has&lt;br/&gt;no regression on Critical cases?"}
-    D --&gt;|Yes| S["Candidate is eligible for submission"]
-    D --&gt;|No| K["Keep the initial Skill"]</code></pre>
+<p><img alt="GEPA generates, compares, retains, and confirms Skill revisions" src="../../assets/img/blog/evolution/en/diagram_gepa_optimization_en.png" /></p>
 <p><strong>Each round attempts one change.</strong> The system chooses a Skill from the candidate pool as the starting point, then runs it on a small Feedback batch. The reflection model sees the Skill, actual outputs, scores, and evaluator feedback and edits exactly one of <code>steps</code>, <code>pitfalls</code>, <code>when_to_use</code>, or <code>description</code>. In the weather example, a round that edits <code>steps</code> may replace “rerun the whole batch” with “record and retry failed cities,” but it will not rewrite the applicability conditions and capability description at the same time. The resulting score change is therefore easier to relate to a concrete edit.</p>
 <p><strong>A small batch provides a quick comparison before full Validation broadens the test.</strong> The starting and revised versions run on the same Feedback cases, and the Evaluator receives the same random seed for both. The revised version's total score must be strictly higher than its starting point; otherwise, the change is discarded. Only an improved version proceeds to the full Validation set and joins the candidate pool with its per-case scores. Feedback eliminates unhelpful edits early, while Validation records how a version performs across a broader set of tasks.</p>
 <p><strong>The candidate pool preserves different improvement directions.</strong> Suppose version A is the most stable on ordinary weather requests, while version B handles simultaneous timeouts in several cities better. If every round continued only from the version with the highest average score, B's approach to complex failures might never be refined. GEPA therefore examines Validation cases individually and allows versions that lead on particular cases to become starting points for later rounds. A version that leads on more cases is generally more likely to be selected. When several versions lead on exactly the same cases, the system reduces redundant selections. The source calls this mechanism sample-level Pareto selection.</p>
@@ -4587,14 +4541,7 @@
 <p>If one stage consistently has no data, work backward from it. When there are no candidates, inspect the review policy, background queue, and Reviewer decisions. When candidates exist but are not published, inspect Gates, approvals, and reconciliation results. When an active revision is never loaded, inspect Repository refresh, the Skill description, and the user or application partition. A high loading rate proves nothing by itself; the Skill is valuable only when task outcomes improve.</p>
 <p>An Evaluator should not rely solely on an average score. It should first verify task completion, required artifacts, and essential constraints, then compare quality, tokens, latency, and tool-call cost. Holdout cases whose score must never decline may be marked <code>Critical</code>. The Optimizer compares the initial and candidate <code>Evaluation.Score</code> on each such case and refuses to submit when any <code>Critical</code> case regresses. This mechanism checks only Holdout <code>Score</code>. It does not inspect Validation or auxiliary quality and cost values stored in <code>Objectives</code>. Other completion and cost requirements must be encoded in the Evaluator's score or implemented as additional checks.</p>
 <p>Frozen confirmation compares old and new Skills in relatively isolated conditions. It cannot cover ordering across continuous tasks, changes to shared Skills, or background Reviewer cost. A candidate that passes Holdout can therefore fail in the complete runtime. Before approval and rollout, the application can retrieve the candidate revision and replay historical or synthetic tasks in an environment isolated from production. This “shadow replay” does not change the active revision. If evaluation passes, approve the candidate and expose it first to one tenant or a small traffic slice, then expand gradually once metrics stabilize. Evolution does not provide a built-in shadow-replay switch; the application must implement task isolation, traffic replay, and metric comparison.</p>
-<pre class="mermaid"><code>flowchart LR
-    A["Offline search"] --&gt; B["Frozen candidate and Holdout"]
-    B --&gt; C["Await approval: pending_approval"]
-    C --&gt; D["Shadow replay"]
-    D --&gt; E["Approve candidate"]
-    E --&gt; F["Small traffic slice or one tenant"]
-    F --&gt; G["Gradually expand"]
-    G --&gt; H["Continue monitoring with rollback ready"]</code></pre>
+<p><img alt="Evolution production rollout from offline candidate to monitored traffic" src="../../assets/img/blog/evolution/en/diagram_production_rollout_en.png" /></p>
 <p>Shadow replay tests sequential tasks and Reviewer cost in an isolated environment. Limited traffic then confirms that the real agent loads the correct revision and that task scores and cost remain acceptable. Only after metrics stabilize should traffic expand. Before each expansion, verify that the candidate writes only to the intended user's or application's managed directory, <code>ActivePointer</code> identifies the approved revision, and the agent reads it after Repository refresh. Data entering replay and audit systems should be sanitized first.</p>
 <p>Practice stopping learning and rolling back revisions regularly. The team should verify that background learning can stop, publication can pause, pending revisions can be rejected, the previous revision can be restored, and the agent reads the restored version after Repository refresh. Drills can reveal incorrect permissions, missing operational steps, and alerts that fail to reach the responsible team.</p>
 <hr />
@@ -4643,7 +4590,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 18, 2026 08:51:16 UTC">2026-08-18 08:51:16</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 19, 2026 03:32:02 UTC">2026-08-19 03:32:02</span>
   </span>
 
     
