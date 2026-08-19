@@ -1147,3 +1147,111 @@ func normalizationFixture(
 		}},
 	}
 }
+
+func memoryTimestampSwapFixture() (baseline, actual Snapshot) {
+	base := time.Unix(100, 0).UTC()
+	baseline = Snapshot{Memories: []MemorySnapshot{
+		{
+			AppName: "app", UserID: "user", Content: "first",
+			CreatedAt: base, UpdatedAt: base.Add(time.Second),
+		},
+		{
+			AppName: "app", UserID: "user", Content: "second",
+			CreatedAt: base.Add(2 * time.Second), UpdatedAt: base.Add(3 * time.Second),
+		},
+	}}
+	actual = Snapshot{Memories: []MemorySnapshot{
+		{
+			AppName: "app", UserID: "user", Content: "first",
+			CreatedAt: base.Add(2 * time.Second), UpdatedAt: base.Add(3 * time.Second),
+		},
+		{
+			AppName: "app", UserID: "user", Content: "second",
+			CreatedAt: base, UpdatedAt: base.Add(time.Second),
+		},
+	}}
+	return baseline, actual
+}
+
+func TestNormalizeMemoryTimesPreservesCrossEntryChronology(t *testing.T) {
+	baseline, actual := memoryTimestampSwapFixture()
+	gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+	gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	if reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatal("swapped memory timestamps were normalized away")
+	}
+}
+
+func TestMemoryTimestampSwapProducesObservableDifference(t *testing.T) {
+	baseline, actual := memoryTimestampSwapFixture()
+	differences, err := CompareSnapshots(CompareInput{
+		Case:     "case",
+		Backend:  "candidate",
+		Baseline: NormalizeSnapshot(baseline, DefaultNormalizeOptions()),
+		Actual:   NormalizeSnapshot(actual, DefaultNormalizeOptions()),
+		Options:  DefaultCompareOptions(),
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() error = %v", err)
+	}
+	if len(differences) == 0 {
+		t.Fatal("swapped memory timestamps produced no observable differences")
+	}
+}
+
+func TestNormalizeMemoryTimesToleratesClockSkew(t *testing.T) {
+	base := time.Unix(100, 0).UTC()
+	baseline := Snapshot{Memories: []MemorySnapshot{
+		{
+			AppName: "app", UserID: "user", Content: "first",
+			CreatedAt: base, UpdatedAt: base.Add(time.Second),
+		},
+		{
+			AppName: "app", UserID: "user", Content: "second",
+			CreatedAt: base.Add(2 * time.Second), UpdatedAt: base.Add(3 * time.Second),
+		},
+	}}
+	skewed := Snapshot{Memories: []MemorySnapshot{
+		{
+			AppName: "app", UserID: "user", Content: "first",
+			CreatedAt: base.Add(500 * time.Microsecond),
+			UpdatedAt: base.Add(time.Second).Add(500 * time.Microsecond),
+		},
+		{
+			AppName: "app", UserID: "user", Content: "second",
+			CreatedAt: base.Add(2 * time.Second).Add(500 * time.Microsecond),
+			UpdatedAt: base.Add(3 * time.Second).Add(500 * time.Microsecond),
+		},
+	}}
+	gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+	gotSkewed := NormalizeSnapshot(skewed, DefaultNormalizeOptions())
+	if !reflect.DeepEqual(gotBaseline, gotSkewed) {
+		t.Fatalf(
+			"clock skew was reported as a difference:\nbaseline: %#v\nskewed: %#v",
+			gotBaseline, gotSkewed,
+		)
+	}
+}
+
+func TestNormalizeMemoryTimesSharesSearchResultRanks(t *testing.T) {
+	base := time.Unix(100, 0).UTC()
+	snapshot := Snapshot{
+		Memories: []MemorySnapshot{{
+			AppName: "app", UserID: "user", Content: "first",
+			CreatedAt: base, UpdatedAt: base.Add(time.Second),
+		}},
+		MemorySearches: []MemorySearchSnapshot{{
+			AppName: "app", UserID: "user", Query: "query",
+			Results: []MemorySnapshot{{
+				AppName: "app", UserID: "user", Content: "first",
+				CreatedAt: base, UpdatedAt: base.Add(time.Second),
+			}},
+		}},
+	}
+	got := NormalizeSnapshot(snapshot, DefaultNormalizeOptions())
+	memory := got.Memories[0]
+	result := got.MemorySearches[0].Results[0]
+	if !memory.CreatedAt.Equal(result.CreatedAt) || !memory.UpdatedAt.Equal(result.UpdatedAt) {
+		t.Fatalf("search result ranks differ from top-level memory: %#v vs %#v", memory, result)
+	}
+}

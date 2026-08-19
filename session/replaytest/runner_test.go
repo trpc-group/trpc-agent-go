@@ -11,6 +11,7 @@ package replaytest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -705,20 +706,7 @@ func TestRunnerIsolatesSnapshotsFromInvariants(t *testing.T) {
 			},
 		}},
 	}}
-	candidateSnapshot := comparisonFixture()
-	candidateSnapshot.Sessions[0].State = cloneStateMap(baselineSnapshot.Sessions[0].State)
-	candidateSnapshot.Sessions[0].Events[0].Extensions =
-		cloneStringMap(baselineSnapshot.Sessions[0].Events[0].Extensions)
-	candidateSnapshot.Sessions[0].Summaries[0].Boundary =
-		cloneStringMap(baselineSnapshot.Sessions[0].Summaries[0].Boundary)
-	candidateSnapshot.Sessions[0].Tracks[0].Events[0].Payload =
-		cloneStringMap(baselineSnapshot.Sessions[0].Tracks[0].Events[0].Payload)
-	candidateSnapshot.Memories[0].Topics =
-		append([]string(nil), baselineSnapshot.Memories[0].Topics...)
-	candidateSnapshot.Memories[0].Metadata =
-		cloneStringMap(baselineSnapshot.Memories[0].Metadata)
-	candidateSnapshot.MemorySearches =
-		cloneSnapshot(baselineSnapshot).MemorySearches
+	candidateSnapshot := cloneSnapshot(baselineSnapshot)
 	candidateSnapshot.Sessions[0].Events[0].Content = "candidate"
 	runner := Runner{Backends: []Backend{
 		fakeBackend("baseline", &fakeFixture{
@@ -1143,5 +1131,151 @@ func allCapabilities() CapabilitySet {
 		CapabilityEventPaging:  true,
 		CapabilityTTL:          true,
 		CapabilityMemorySearch: true,
+	}
+}
+
+// countingBackend records fixture creations so tests can assert that
+// malformed cases are rejected before any backend is constructed.
+type countingBackend struct {
+	name    string
+	created int
+}
+
+func (backend *countingBackend) replayBackend() Backend {
+	return Backend{
+		Name: backend.name,
+		New: func(context.Context, string) (Fixture, error) {
+			backend.created++
+			return &fakeFixture{name: backend.name, capabilities: allCapabilities()}, nil
+		},
+	}
+}
+
+func TestRunnerRejectsMalformedCasesBeforeCreatingFixtures(t *testing.T) {
+	malformed := []struct {
+		name      string
+		operation Operation
+	}{
+		{"cyclic state value", cyclicStateMapOperation()},
+		{"cyclic extension value", cyclicExtensionOperation()},
+		{"cyclic parallel child", cyclicParallelOperation()},
+		{"non-serializable state value", complexStateOperation()},
+		{"internal bookkeeping key", Operation{
+			Kind:         OperationUpdateState,
+			SessionID:    "session-1",
+			StateUpdates: map[string]any{"tracks": "value"},
+		}},
+	}
+	for _, tc := range malformed {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &countingBackend{name: "baseline"}
+			runner := Runner{Backends: []Backend{backend.replayBackend()}}
+			_, err := runner.Run(context.Background(), []ReplayCase{{
+				Name:       "malformed",
+				Operations: []Operation{tc.operation},
+			}})
+			if err == nil {
+				t.Fatal("Runner.Run() accepted a malformed case")
+			}
+			if backend.created != 0 {
+				t.Fatalf("Backend.New called %d times before preflight rejection", backend.created)
+			}
+		})
+	}
+}
+
+type mutableTypedValue struct {
+	Labels []string
+}
+
+type privateTypedValue struct {
+	entries []string
+}
+
+func TestExecuteCaseDetachesTypedValuesBeforeClose(t *testing.T) {
+	value := &mutableTypedValue{Labels: []string{"a", "b"}}
+	fixture := &fakeFixture{
+		name:         "typed",
+		capabilities: allCapabilities(),
+		snapshot: Snapshot{Sessions: []SessionSnapshot{{
+			ID:    "session-1",
+			State: map[string]StateValueSnapshot{"typed": JSONStateValue(value)},
+		}}},
+		mutateSnapshotOnClose: func(*Snapshot) {
+			value.Labels[0] = "mutated"
+		},
+	}
+	snapshot, err := executeCase(context.Background(), fixture, ReplayCase{Name: "case"})
+	if err != nil {
+		t.Fatalf("executeCase() error = %v", err)
+	}
+	detached, ok := snapshot.Sessions[0].State["typed"].Value.(map[string]any)
+	if !ok {
+		t.Fatalf(
+			"state value was not detached into a JSON tree: %#v",
+			snapshot.Sessions[0].State["typed"].Value,
+		)
+	}
+	labels, ok := detached["Labels"].([]any)
+	if !ok || len(labels) != 2 || labels[0] != "a" || labels[1] != "b" {
+		t.Fatalf("detached value was affected by Close: %#v", detached)
+	}
+}
+
+func TestExecuteCaseRejectsUnexportedMutableValues(t *testing.T) {
+	fixture := &fakeFixture{
+		name:         "private",
+		capabilities: allCapabilities(),
+		snapshot: Snapshot{Sessions: []SessionSnapshot{{
+			ID: "session-1",
+			State: map[string]StateValueSnapshot{
+				"private": JSONStateValue(privateTypedValue{entries: []string{"x"}}),
+			},
+		}}},
+	}
+	_, err := executeCase(context.Background(), fixture, ReplayCase{Name: "case"})
+	if err == nil || !strings.Contains(err.Error(), "unexported mutable field") {
+		t.Fatalf("executeCase() error = %v, want unexported mutable field rejection", err)
+	}
+}
+
+func TestExecuteCaseRejectsCyclicSnapshotValues(t *testing.T) {
+	value := map[string]any{"key": "value"}
+	value["self"] = value
+	fixture := &fakeFixture{
+		name:         "cyclic",
+		capabilities: allCapabilities(),
+		snapshot: Snapshot{Sessions: []SessionSnapshot{{
+			ID:    "session-1",
+			State: map[string]StateValueSnapshot{"cyclic": JSONStateValue(value)},
+		}}},
+	}
+	_, err := executeCase(context.Background(), fixture, ReplayCase{Name: "case"})
+	if err == nil || !strings.Contains(err.Error(), "cyclic") {
+		t.Fatalf("executeCase() error = %v, want cyclic rejection", err)
+	}
+}
+
+func TestExecuteCaseDetachPreservesNumberPrecision(t *testing.T) {
+	fixture := &fakeFixture{
+		name:         "numbers",
+		capabilities: allCapabilities(),
+		snapshot: Snapshot{Sessions: []SessionSnapshot{{
+			ID: "session-1",
+			State: map[string]StateValueSnapshot{
+				"large": JSONStateValue(json.Number("9007199254740993")),
+			},
+		}}},
+	}
+	snapshot, err := executeCase(context.Background(), fixture, ReplayCase{Name: "case"})
+	if err != nil {
+		t.Fatalf("executeCase() error = %v", err)
+	}
+	number, ok := snapshot.Sessions[0].State["large"].Value.(json.Number)
+	if !ok || number.String() != "9007199254740993" {
+		t.Fatalf(
+			"large integer precision lost after detach: %#v",
+			snapshot.Sessions[0].State["large"].Value,
+		)
 	}
 }

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestOperationValidateRejectsInvalidPayloads(t *testing.T) {
@@ -555,5 +557,149 @@ func TestOperationRejectsOpaqueMutablePayloads(t *testing.T) {
 	if err := operation.Validate(); err == nil ||
 		!strings.Contains(err.Error(), "unexported mutable field") {
 		t.Fatalf("Operation.Validate() error = %v", err)
+	}
+}
+
+func cyclicStateMapOperation() Operation {
+	value := map[string]any{"key": "value"}
+	value["self"] = value
+	return Operation{
+		Kind:         OperationUpdateState,
+		SessionID:    "session-1",
+		StateUpdates: map[string]any{"cyclic": value},
+	}
+}
+
+func cyclicExtensionOperation() Operation {
+	extension := map[string]any{"role": "tool"}
+	extension["self"] = &extension
+	return Operation{
+		Kind:      OperationAppendEvent,
+		SessionID: "session-1",
+		Event: &EventSnapshot{
+			Role:       "user",
+			Content:    "hello",
+			Extensions: map[string]any{"cyclic": extension},
+		},
+	}
+}
+
+func cyclicParallelOperation() Operation {
+	return Operation{
+		Kind:     OperationParallel,
+		Parallel: []Operation{cyclicStateMapOperation()},
+	}
+}
+
+func complexStateOperation() Operation {
+	return Operation{
+		Kind:         OperationUpdateState,
+		SessionID:    "session-1",
+		StateUpdates: map[string]any{"complex": complex(1, 2)},
+	}
+}
+
+func interfaceKeyStateOperation() Operation {
+	return Operation{
+		Kind:         OperationUpdateState,
+		SessionID:    "session-1",
+		StateUpdates: map[string]any{"interfaces": map[any]any{"key": "value"}},
+	}
+}
+
+func TestOperationValidateRejectsCyclicPayloads(t *testing.T) {
+	operations := []struct {
+		name      string
+		operation Operation
+	}{
+		{"cyclic state map", cyclicStateMapOperation()},
+		{"cyclic extension pointer", cyclicExtensionOperation()},
+		{"cyclic parallel child", cyclicParallelOperation()},
+	}
+	for _, tc := range operations {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.operation.Validate(); err == nil {
+				t.Fatal("Operation.Validate() accepted a cyclic payload")
+			}
+		})
+	}
+}
+
+func TestOperationValidateRejectsNonSerializablePayloads(t *testing.T) {
+	operations := []struct {
+		name      string
+		operation Operation
+	}{
+		{"complex state value", complexStateOperation()},
+		{"interface-keyed map", interfaceKeyStateOperation()},
+	}
+	for _, tc := range operations {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.operation.Validate(); err == nil {
+				t.Fatal("Operation.Validate() accepted a non-serializable payload")
+			}
+		})
+	}
+}
+
+func TestOperationValidateAcceptsSharedJSONLikeValues(t *testing.T) {
+	shared := map[string]any{"count": int64(2)}
+	operation := Operation{
+		Kind:      OperationUpdateState,
+		SessionID: "session-1",
+		StateUpdates: map[string]any{
+			"first":  shared,
+			"second": shared,
+		},
+	}
+	if err := operation.Validate(); err != nil {
+		t.Fatalf("shared acyclic values rejected: %v", err)
+	}
+	cloned := cloneOperation(operation)
+	if cloned.StateUpdates["first"] == nil || cloned.StateUpdates["second"] == nil {
+		t.Fatal("cloneOperation() lost shared values")
+	}
+}
+
+func TestUpdateStateRejectsInternalBookkeepingKeys(t *testing.T) {
+	internalKeys := []string{
+		"tracks",
+		session.SummaryLastIncludedTimestampStateKey,
+		session.SummaryLastIncludedEventIDStateKey,
+	}
+	for _, key := range internalKeys {
+		t.Run("update "+key, func(t *testing.T) {
+			operation := Operation{
+				Kind:         OperationUpdateState,
+				SessionID:    "session-1",
+				StateUpdates: map[string]any{key: "value"},
+			}
+			if err := operation.Validate(); err == nil {
+				t.Fatalf("update state key %q passed validation", key)
+			}
+		})
+		t.Run("delete "+key, func(t *testing.T) {
+			operation := Operation{
+				Kind:         OperationUpdateState,
+				SessionID:    "session-1",
+				StateDeletes: []string{key},
+			}
+			if err := operation.Validate(); err == nil {
+				t.Fatalf("delete state key %q passed validation", key)
+			}
+		})
+	}
+}
+
+func TestUpdateStateAcceptsUserStateKeys(t *testing.T) {
+	for _, key := range []string{"profile", "temp:scratch", "summary:custom"} {
+		operation := Operation{
+			Kind:         OperationUpdateState,
+			SessionID:    "session-1",
+			StateUpdates: map[string]any{key: "value"},
+		}
+		if err := operation.Validate(); err != nil {
+			t.Fatalf("update state key %q rejected: %v", key, err)
+		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest"
 )
 
@@ -231,7 +232,9 @@ func TestExampleReportIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalReport() error = %v", err)
 	}
-	if !bytes.Equal(data, encoded) {
+	// The committed example report may carry CRLF line endings depending on
+	// the platform that generated it; compare line-ending agnostically.
+	if !bytes.Equal(bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n")), encoded) {
 		t.Fatalf("example report is stale:\ngot:\n%s\nwant:\n%s", data, encoded)
 	}
 	state := exampleDifferenceAt(t, report.Differences, "$.sessions[0].state.theme.value")
@@ -400,4 +403,40 @@ func exampleDifferenceAt(
 	}
 	t.Fatalf("difference %q not found in %#v", path, differences)
 	return replaytest.Difference{}
+}
+
+// TestPreflightRejectsInternalSessionStateKeys guards against drift between
+// the keys the bundled fixture filters from observable snapshots and the keys
+// the replay framework rejects during operation preflight. Both sides now
+// delegate to session.IsInternalStateKey, so any future internal key added
+// there must also be rejected by Operation.Validate.
+func TestPreflightRejectsInternalSessionStateKeys(t *testing.T) {
+	internalKeys := []string{
+		"tracks",
+		session.SummaryLastIncludedTimestampStateKey,
+		session.SummaryLastIncludedEventIDStateKey,
+	}
+	for _, key := range internalKeys {
+		if !session.IsInternalStateKey(key) {
+			t.Fatalf("session.IsInternalStateKey(%q) = false", key)
+		}
+		operation := replaytest.Operation{
+			Kind:         replaytest.OperationUpdateState,
+			SessionID:    "session-1",
+			StateUpdates: map[string]any{key: "value"},
+		}
+		if err := operation.Validate(); err == nil {
+			t.Errorf("update state key %q passed replay preflight", key)
+		}
+	}
+	for _, key := range []string{"profile", "temp:scratch", "summary:custom"} {
+		operation := replaytest.Operation{
+			Kind:         replaytest.OperationUpdateState,
+			SessionID:    "session-1",
+			StateUpdates: map[string]any{key: "value"},
+		}
+		if err := operation.Validate(); err != nil {
+			t.Errorf("update state key %q rejected by replay preflight: %v", key, err)
+		}
+	}
 }

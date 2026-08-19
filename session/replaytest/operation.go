@@ -10,6 +10,7 @@
 package replaytest
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -47,9 +48,10 @@ const (
 // Operation is a backend-neutral action in a replay case. Parallel children may
 // run concurrently; children that mutate the same session state key must declare
 // an ordering with Name and After. Update-state operations reject app- and
-// user-scoped keys, and a key cannot be both updated and deleted. For append-event
-// tool responses, ToolResponse owns content and implies the tool role; non-empty
-// Event Role and Content fields must agree with those values.
+// user-scoped keys and session bookkeeping keys, and a key cannot be both
+// updated and deleted. For append-event tool responses, ToolResponse owns
+// content and implies the tool role; non-empty Event Role and Content fields
+// must agree with those values.
 type Operation struct {
 	Kind                  OperationKind
 	Name                  string
@@ -80,7 +82,8 @@ func cloneOperation(operation Operation) Operation {
 
 // Validate checks that an operation contains exactly the payload required by its kind.
 // Validate also rejects JSON-like payloads that cannot be safely isolated before
-// fixture execution.
+// fixture execution, including cyclic references and values that JSON encoding
+// cannot serialize.
 func (operation Operation) Validate() error {
 	if operation.Kind == "" {
 		return fmt.Errorf("operation kind is empty")
@@ -100,6 +103,9 @@ func (operation Operation) Validate() error {
 	}
 	if err := validateCloneableJSONLike(operation); err != nil {
 		return fmt.Errorf("operation payload cannot be safely cloned: %w", err)
+	}
+	if _, err := json.Marshal(operation); err != nil {
+		return fmt.Errorf("operation payload is not JSON serializable: %w", err)
 	}
 	return nil
 }
@@ -204,6 +210,9 @@ func validateUpdateState(operation Operation) error {
 		if strings.HasPrefix(key, session.StateAppPrefix) ||
 			strings.HasPrefix(key, session.StateUserPrefix) {
 			return fmt.Errorf("update state key %q uses a reserved scope prefix", key)
+		}
+		if session.IsInternalStateKey(key) {
+			return fmt.Errorf("update state key %q is reserved session bookkeeping", key)
 		}
 		if _, updated := operation.StateUpdates[key]; updated {
 			if _, deleted := deleteKeys[key]; deleted {

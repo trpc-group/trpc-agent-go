@@ -43,6 +43,14 @@ const (
 
 var replayScopeSequence atomic.Uint64
 
+// memoryTimeBase is the deterministic base for replay memory timestamps.
+// Memory services generate wall-clock timestamps that differ between backends
+// and platforms (for example, coarse clocks collapse fast in-memory writes to
+// a single tick), so the fixture assigns a deterministic write-order time to
+// every memory entry. Cross-backend memory chronology is then comparable
+// after normalization.
+var memoryTimeBase = time.Unix(1700000000, 0).UTC()
+
 var errReplayFixtureClosed = errors.New("replay fixture is closed")
 
 type replayFixture struct {
@@ -65,6 +73,8 @@ type replayFixture struct {
 	stateDeletes      map[string]map[string]struct{}
 	stateWriteLocks   map[string]*sync.Mutex
 	searches          []replaytest.MemorySearchSnapshot
+	memoryWriteTimes  map[string]time.Time
+	memoryWriteOrder  int
 }
 
 type replayFixtureConfig struct {
@@ -109,6 +119,7 @@ func newReplayFixture(config replayFixtureConfig) *replayFixture {
 		memoryScopes:      make(map[replaytest.MemoryScope]memory.UserKey),
 		stateDeletes:      make(map[string]map[string]struct{}),
 		stateWriteLocks:   make(map[string]*sync.Mutex),
+		memoryWriteTimes:  make(map[string]time.Time),
 	}
 }
 
@@ -247,6 +258,11 @@ func (fixture *replayFixture) applyWriteMemory(
 	); err != nil {
 		return fmt.Errorf("write memory: %w", err)
 	}
+	fixture.mu.Lock()
+	fixture.memoryWriteOrder++
+	fixture.memoryWriteTimes[operation.Memory.Content] =
+		memoryTimeBase.Add(time.Duration(fixture.memoryWriteOrder) * time.Millisecond)
+	fixture.mu.Unlock()
 	return nil
 }
 
@@ -281,7 +297,7 @@ func (fixture *replayFixture) applySearchMemory(
 		if err := validatePhysicalMemoryScope(entry, physicalScope); err != nil {
 			return fmt.Errorf("search memories for %#v: %w", logicalScope, err)
 		}
-		search.Results = append(search.Results, toLogicalMemorySnapshot(entry, logicalScope))
+		search.Results = append(search.Results, fixture.toLogicalMemorySnapshot(entry, logicalScope))
 	}
 	fixture.mu.Lock()
 	fixture.searches = append(fixture.searches, cloneMemorySearchSnapshot(search))
@@ -376,7 +392,7 @@ func (fixture *replayFixture) Snapshot(ctx context.Context) (replaytest.Snapshot
 				return replaytest.Snapshot{}, fmt.Errorf("read memories for %#v: %w", scope.logical, err)
 			}
 			snapshot.Memories = append(
-				snapshot.Memories, toLogicalMemorySnapshot(entry, scope.logical),
+				snapshot.Memories, fixture.toLogicalMemorySnapshot(entry, scope.logical),
 			)
 		}
 	}
@@ -1006,14 +1022,7 @@ func toSessionSnapshot(
 }
 
 func isInternalSessionStateKey(key string) bool {
-	switch key {
-	case "tracks",
-		session.SummaryLastIncludedTimestampStateKey,
-		session.SummaryLastIncludedEventIDStateKey:
-		return true
-	default:
-		return false
-	}
+	return session.IsInternalStateKey(key)
 }
 
 func replayWindowStart(
@@ -1288,7 +1297,7 @@ func toMemorySnapshot(entry *memory.Entry) replaytest.MemorySnapshot {
 	}
 }
 
-func toLogicalMemorySnapshot(
+func (fixture *replayFixture) toLogicalMemorySnapshot(
 	entry *memory.Entry,
 	logical replaytest.MemoryScope,
 ) replaytest.MemorySnapshot {
@@ -1297,6 +1306,16 @@ func toLogicalMemorySnapshot(
 		snapshot.AppName = logical.AppName
 		snapshot.UserID = logical.UserID
 		snapshot.Scope = logical
+	}
+	if entry == nil || entry.Memory == nil {
+		return snapshot
+	}
+	fixture.mu.Lock()
+	writeTime, recorded := fixture.memoryWriteTimes[entry.Memory.Memory]
+	fixture.mu.Unlock()
+	if recorded {
+		snapshot.CreatedAt = writeTime
+		snapshot.UpdatedAt = writeTime
 	}
 	return snapshot
 }

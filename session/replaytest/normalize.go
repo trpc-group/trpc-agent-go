@@ -118,6 +118,7 @@ func NormalizeSnapshot(snapshot Snapshot, options NormalizeOptions) Snapshot {
 			normalizeMemoryValues(&search.Results[j], options)
 		}
 	}
+	normalizeMemoryTimes(&normalized)
 	normalizeMemoryEventTimes(&normalized, options.TimePrecision)
 	if options.SortMemories {
 		sort.SliceStable(normalized.Memories, func(i, j int) bool {
@@ -213,10 +214,124 @@ func normalizeMemoryValues(
 	snapshot *MemorySnapshot,
 	options NormalizeOptions,
 ) {
-	normalizeTimes([]*time.Time{&snapshot.CreatedAt, &snapshot.UpdatedAt}, options.TimePrecision)
 	snapshot.Topics = append([]string(nil), snapshot.Topics...)
 	sort.Strings(snapshot.Topics)
 	snapshot.Metadata = normalizeMetadataMap(snapshot.Metadata, options)
+}
+
+// normalizeMemoryTimes ranks memory timestamps jointly within each logical
+// scope so that cross-entry chronology remains observable after normalization,
+// while tolerating the absolute time skew between independently executed
+// backends. Ranks are derived from the chronological position of each entry
+// within its scope, so entries with swapped timestamps receive different
+// ranks. Search-result copies share the identity of their top-level memory
+// and are ranked together with it.
+func normalizeMemoryTimes(snapshot *Snapshot) {
+	entries := make([]memoryTimeEntry, 0, len(snapshot.Memories)*2+len(snapshot.MemorySearches)*2)
+	appendEntry := func(memory *MemorySnapshot, fallback MemoryScope) {
+		entries = append(entries, memoryTimeEntry{
+			scope:     memoryIDScope(*memory, fallback),
+			createdAt: &memory.CreatedAt,
+			updatedAt: &memory.UpdatedAt,
+		})
+	}
+	for i := range snapshot.Memories {
+		appendEntry(&snapshot.Memories[i], MemoryScope{})
+	}
+	for i := range snapshot.MemorySearches {
+		scope := MemoryScope{
+			AppName: snapshot.MemorySearches[i].AppName,
+			UserID:  snapshot.MemorySearches[i].UserID,
+		}
+		for j := range snapshot.MemorySearches[i].Results {
+			appendEntry(&snapshot.MemorySearches[i].Results[j], scope)
+		}
+	}
+	scoped := make(map[MemoryScope][]memoryTimeEntry, len(entries))
+	for _, item := range entries {
+		scoped[item.scope] = append(scoped[item.scope], item)
+	}
+	for _, group := range scoped {
+		sort.SliceStable(group, func(i, j int) bool {
+			return memoryTimeKeyLess(
+				memoryTimeKeyFor(group[i]),
+				memoryTimeKeyFor(group[j]),
+			)
+		})
+		position := -1
+		var previous memoryTimeKey
+		for i := range group {
+			key := memoryTimeKeyFor(group[i])
+			if i == 0 || memoryTimeKeyLess(previous, key) {
+				position++
+				previous = key
+			}
+			assignMemoryTimeRanks(group[i], key, position)
+		}
+	}
+}
+
+// memoryTimeEntry is one memory timestamp pair and its logical scope.
+type memoryTimeEntry struct {
+	scope     MemoryScope
+	createdAt *time.Time
+	updatedAt *time.Time
+}
+
+// memoryTimeKey is the (updated, created) pair used to order memory entries
+// within one logical scope. Zero times sort last.
+type memoryTimeKey struct {
+	updated time.Time
+	created time.Time
+}
+
+func memoryTimeKeyFor(item memoryTimeEntry) memoryTimeKey {
+	key := memoryTimeKey{}
+	if !item.updatedAt.IsZero() {
+		key.updated = *item.updatedAt
+	}
+	if !item.createdAt.IsZero() {
+		key.created = *item.createdAt
+	}
+	return key
+}
+
+func memoryTimeKeyLess(left, right memoryTimeKey) bool {
+	if left.updated.IsZero() != right.updated.IsZero() {
+		return !left.updated.IsZero()
+	}
+	if !left.updated.Equal(right.updated) {
+		return left.updated.Before(right.updated)
+	}
+	if left.created.IsZero() != right.created.IsZero() {
+		return !left.created.IsZero()
+	}
+	return left.created.Before(right.created)
+}
+
+// assignMemoryTimeRanks writes the position-derived rank times for one entry.
+// The within-entry created/updated order is preserved unless the two times
+// are equal.
+func assignMemoryTimeRanks(item memoryTimeEntry, key memoryTimeKey, position int) {
+	base := 2*position + 1
+	created, updated := key.created, key.updated
+	switch {
+	case created.IsZero() && updated.IsZero():
+		return
+	case created.IsZero():
+		*item.updatedAt = time.Unix(0, int64(base)).UTC()
+	case updated.IsZero():
+		*item.createdAt = time.Unix(0, int64(base)).UTC()
+	case created.Equal(updated):
+		*item.createdAt = time.Unix(0, int64(base)).UTC()
+		*item.updatedAt = time.Unix(0, int64(base)).UTC()
+	case created.Before(updated):
+		*item.createdAt = time.Unix(0, int64(base)).UTC()
+		*item.updatedAt = time.Unix(0, int64(base+1)).UTC()
+	default:
+		*item.createdAt = time.Unix(0, int64(base+1)).UTC()
+		*item.updatedAt = time.Unix(0, int64(base)).UTC()
+	}
 }
 
 func normalizeMemoryID(
@@ -699,6 +814,28 @@ func normalizeSessionMetadataTimes(createdAt, updatedAt *time.Time) {
 	*updatedAt = time.Unix(0, 1).UTC()
 }
 
+// timeRanks returns a mapping from each input time to a deterministic rank
+// time. Times closer than precision share one rank, and ranks preserve the
+// relative order of the input times.
+func timeRanks(values []time.Time, precision time.Duration) map[time.Time]time.Time {
+	if precision <= 0 {
+		precision = time.Millisecond
+	}
+	ordered := append([]time.Time(nil), values...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Before(ordered[j]) })
+	ranks := make(map[time.Time]time.Time, len(ordered))
+	var anchor time.Time
+	rank := 0
+	for _, value := range ordered {
+		if rank == 0 || value.Sub(anchor) >= precision {
+			rank++
+			anchor = value
+		}
+		ranks[value] = time.Unix(0, int64(rank)).UTC()
+	}
+	return ranks
+}
+
 func normalizeTimes(values []*time.Time, precision time.Duration) {
 	if precision <= 0 {
 		precision = time.Millisecond
@@ -709,26 +846,65 @@ func normalizeTimes(values []*time.Time, precision time.Duration) {
 			ordered = append(ordered, *value)
 		}
 	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Before(ordered[j]) })
-	ranks := make(map[time.Time]int, len(ordered))
-	var anchor time.Time
-	rank := 0
-	for _, value := range ordered {
-		if rank == 0 || value.Sub(anchor) >= precision {
-			rank++
-			anchor = value
-		}
-		ranks[value] = rank
-	}
+	ranks := timeRanks(ordered, precision)
 	for _, value := range values {
 		if value == nil || value.IsZero() {
 			continue
 		}
-		*value = time.Unix(0, int64(ranks[*value])).UTC()
+		*value = ranks[*value]
 	}
 }
 
+// cloneSnapshot returns a deep copy of the snapshot with JSON-like values
+// cloned through reflection.
 func cloneSnapshot(snapshot Snapshot) Snapshot {
+	cloned, err := transformSnapshotValues(snapshot, func(value any) (any, error) {
+		return cloneJSONLike(value), nil
+	})
+	if err != nil {
+		// Unreachable: the reflection clone transform never returns an error.
+		panic(err)
+	}
+	return cloned
+}
+
+// isolateSnapshot validates and detaches every JSON-like snapshot value so
+// that downstream normalization, invariants, comparison, and report encoding
+// only ever observe isolated, serializable JSON trees. Values that cannot be
+// isolated (unexported mutable fields, cyclic references, or non-serializable
+// types) are rejected before fixture cleanup can mutate them.
+func isolateSnapshot(snapshot Snapshot) (Snapshot, error) {
+	return transformSnapshotValues(snapshot, validateAndDetachJSONLike)
+}
+
+// validateAndDetachJSONLike validates that a JSON-like value can be safely
+// isolated and then converts it into a pure JSON tree. Validation rejects
+// values with unexported mutable state (which JSON encoding would silently
+// drop), cyclic references, and non-serializable types; detachment guarantees
+// the result cannot share references with fixture-owned data.
+func validateAndDetachJSONLike(value any) (any, error) {
+	if err := validateCloneableJSONLike(value); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot value cannot be serialized: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var detached any
+	if err := decoder.Decode(&detached); err != nil {
+		return nil, fmt.Errorf("snapshot value cannot be detached: %w", err)
+	}
+	return detached, nil
+}
+
+// transformSnapshotValues returns a deep copy of the snapshot in which every
+// JSON-like value slot is replaced by the transform result.
+func transformSnapshotValues(
+	snapshot Snapshot,
+	transform func(any) (any, error),
+) (Snapshot, error) {
 	cloned := Snapshot{
 		Sessions:       append([]SessionSnapshot(nil), snapshot.Sessions...),
 		Memories:       append([]MemorySnapshot(nil), snapshot.Memories...),
@@ -736,74 +912,152 @@ func cloneSnapshot(snapshot Snapshot) Snapshot {
 		Unsupported:    append([]UnsupportedFeature(nil), snapshot.Unsupported...),
 	}
 	for i := range cloned.Sessions {
-		session := &cloned.Sessions[i]
-		session.State = cloneStateMap(session.State)
-		session.Events = append([]EventSnapshot(nil), session.Events...)
-		for j := range session.Events {
-			event := &session.Events[j]
-			event.StateDelta = cloneStateMap(event.StateDelta)
-			event.Extensions = cloneStringMap(event.Extensions)
-			event.ToolCalls = append([]ToolCallSnapshot(nil), event.ToolCalls...)
-			for k := range event.ToolCalls {
-				event.ToolCalls[k].Arguments = cloneJSONLike(event.ToolCalls[k].Arguments)
-				event.ToolCalls[k].Extra = cloneStringMap(event.ToolCalls[k].Extra)
-			}
-			if event.ToolResponse != nil {
-				response := *event.ToolResponse
-				response.Extra = cloneStringMap(response.Extra)
-				event.ToolResponse = &response
-			}
-		}
-		session.Summaries = append([]SummarySnapshot(nil), session.Summaries...)
-		for j := range session.Summaries {
-			session.Summaries[j].Boundary = cloneStringMap(session.Summaries[j].Boundary)
-		}
-		session.Tracks = append([]TrackSnapshot(nil), session.Tracks...)
-		for j := range session.Tracks {
-			session.Tracks[j].Events = append([]TrackEventSnapshot(nil), session.Tracks[j].Events...)
-			for k := range session.Tracks[j].Events {
-				session.Tracks[j].Events[k].Payload = cloneStringMap(session.Tracks[j].Events[k].Payload)
-			}
+		if err := transformSessionValues(&cloned.Sessions[i], transform); err != nil {
+			return Snapshot{}, err
 		}
 	}
 	for i := range cloned.Memories {
 		cloned.Memories[i].Topics = append([]string(nil), cloned.Memories[i].Topics...)
-		cloned.Memories[i].Metadata = cloneStringMap(cloned.Memories[i].Metadata)
+		var err error
+		cloned.Memories[i].Metadata, err = transformStringMap(cloned.Memories[i].Metadata, transform)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("memory %q metadata: %w", cloned.Memories[i].ID, err)
+		}
 	}
 	for i := range cloned.MemorySearches {
 		search := &cloned.MemorySearches[i]
 		search.Results = append([]MemorySnapshot(nil), search.Results...)
 		for j := range search.Results {
 			search.Results[j].Topics = append([]string(nil), search.Results[j].Topics...)
-			search.Results[j].Metadata = cloneStringMap(search.Results[j].Metadata)
+			var err error
+			search.Results[j].Metadata, err = transformStringMap(search.Results[j].Metadata, transform)
+			if err != nil {
+				return Snapshot{}, fmt.Errorf("memory search %q result %d metadata: %w", search.Query, j, err)
+			}
 		}
 	}
-	return cloned
+	return cloned, nil
 }
 
-func cloneStringMap(value map[string]any) map[string]any {
+func transformSessionValues(
+	session *SessionSnapshot,
+	transform func(any) (any, error),
+) error {
+	var err error
+	session.State, err = transformStateMap(session.State, transform)
+	if err != nil {
+		return fmt.Errorf("session %q state: %w", session.ID, err)
+	}
+	session.Events = append([]EventSnapshot(nil), session.Events...)
+	for j := range session.Events {
+		if err := transformEventValues(&session.Events[j], session.ID, j, transform); err != nil {
+			return err
+		}
+	}
+	session.Summaries = append([]SummarySnapshot(nil), session.Summaries...)
+	for j := range session.Summaries {
+		session.Summaries[j].Boundary, err = transformStringMap(session.Summaries[j].Boundary, transform)
+		if err != nil {
+			return fmt.Errorf(
+				"session %q summary %q boundary: %w", session.ID, session.Summaries[j].FilterKey, err,
+			)
+		}
+	}
+	session.Tracks = append([]TrackSnapshot(nil), session.Tracks...)
+	for j := range session.Tracks {
+		session.Tracks[j].Events = append([]TrackEventSnapshot(nil), session.Tracks[j].Events...)
+		for k := range session.Tracks[j].Events {
+			session.Tracks[j].Events[k].Payload, err = transformStringMap(
+				session.Tracks[j].Events[k].Payload, transform,
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"session %q track %q event %d payload: %w", session.ID, session.Tracks[j].Name, k, err,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func transformEventValues(
+	event *EventSnapshot,
+	sessionID string,
+	index int,
+	transform func(any) (any, error),
+) error {
+	var err error
+	event.StateDelta, err = transformStateMap(event.StateDelta, transform)
+	if err != nil {
+		return fmt.Errorf("session %q event %d state delta: %w", sessionID, index, err)
+	}
+	event.Extensions, err = transformStringMap(event.Extensions, transform)
+	if err != nil {
+		return fmt.Errorf("session %q event %d extensions: %w", sessionID, index, err)
+	}
+	event.ToolCalls = append([]ToolCallSnapshot(nil), event.ToolCalls...)
+	for k := range event.ToolCalls {
+		event.ToolCalls[k].Arguments, err = transform(event.ToolCalls[k].Arguments)
+		if err != nil {
+			return fmt.Errorf(
+				"session %q event %d tool call %d arguments: %w", sessionID, index, k, err,
+			)
+		}
+		event.ToolCalls[k].Extra, err = transformStringMap(event.ToolCalls[k].Extra, transform)
+		if err != nil {
+			return fmt.Errorf(
+				"session %q event %d tool call %d extra: %w", sessionID, index, k, err,
+			)
+		}
+	}
+	if event.ToolResponse != nil {
+		response := *event.ToolResponse
+		response.Extra, err = transformStringMap(response.Extra, transform)
+		if err != nil {
+			return fmt.Errorf(
+				"session %q event %d tool response extra: %w", sessionID, index, err,
+			)
+		}
+		event.ToolResponse = &response
+	}
+	return nil
+}
+
+func transformStringMap(
+	value map[string]any,
+	transform func(any) (any, error),
+) (map[string]any, error) {
 	if value == nil {
-		return nil
+		return nil, nil
 	}
 	cloned := make(map[string]any, len(value))
 	for key, item := range value {
-		cloned[key] = cloneJSONLike(item)
+		transformed, err := transform(item)
+		if err != nil {
+			return nil, fmt.Errorf("key %q: %w", key, err)
+		}
+		cloned[key] = transformed
 	}
-	return cloned
+	return cloned, nil
 }
 
-func cloneStateMap(
+func transformStateMap(
 	values map[string]StateValueSnapshot,
-) map[string]StateValueSnapshot {
+	transform func(any) (any, error),
+) (map[string]StateValueSnapshot, error) {
 	if values == nil {
-		return nil
+		return nil, nil
 	}
 	cloned := make(map[string]StateValueSnapshot, len(values))
 	for key, value := range values {
-		value.Value = cloneJSONLike(value.Value)
+		transformed, err := transform(value.Value)
+		if err != nil {
+			return nil, fmt.Errorf("key %q: %w", key, err)
+		}
+		value.Value = transformed
 		cloned[key] = value
 	}
-	return cloned
+	return cloned, nil
 }
 
 func cloneJSONLike(value any) any {
@@ -826,36 +1080,47 @@ type jsonLikeCloner struct {
 	visited map[cloneReference]reflect.Value
 }
 
+// cloneValidationState tracks references that are fully validated (done) and
+// references on the current validation path (stack). A reference on the stack
+// is a cycle; a reference in done is a shared acyclic subgraph that was
+// already validated and can be skipped, matching JSON serialization semantics.
+type cloneValidationState struct {
+	done  map[cloneReference]struct{}
+	stack map[cloneReference]struct{}
+}
+
 func validateCloneableJSONLike(value any) error {
 	if value == nil {
 		return nil
 	}
-	return validateCloneableJSONLikeValue(
-		reflect.ValueOf(value), make(map[cloneReference]struct{}),
-	)
+	return validateCloneableJSONLikeValue(reflect.ValueOf(value), &cloneValidationState{
+		done:  make(map[cloneReference]struct{}),
+		stack: make(map[cloneReference]struct{}),
+	})
 }
 
 func validateCloneableJSONLikeValue(
 	value reflect.Value,
-	visited map[cloneReference]struct{},
+	state *cloneValidationState,
 ) error {
 	if !value.IsValid() {
 		return nil
 	}
 	switch value.Kind() {
 	case reflect.Interface:
-		return validateCloneableInterface(value, visited)
+		return validateCloneableInterface(value, state)
 	case reflect.Map:
-		return validateCloneableMap(value, visited)
+		return validateCloneableMap(value, state)
 	case reflect.Pointer:
-		return validateCloneablePointer(value, visited)
+		return validateCloneablePointer(value, state)
 	case reflect.Slice:
-		return validateCloneableSlice(value, visited)
+		return validateCloneableSlice(value, state)
 	case reflect.Array:
-		return validateCloneableArray(value, visited)
+		return validateCloneableArray(value, state)
 	case reflect.Struct:
-		return validateCloneableStruct(value, visited)
-	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		return validateCloneableStruct(value, state)
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer,
+		reflect.Complex64, reflect.Complex128, reflect.Uintptr:
 		return fmt.Errorf("value type %s cannot be safely cloned", value.Type())
 	}
 	return nil
@@ -863,73 +1128,88 @@ func validateCloneableJSONLikeValue(
 
 func validateCloneableInterface(
 	value reflect.Value,
-	visited map[cloneReference]struct{},
+	state *cloneValidationState,
 ) error {
 	if value.IsNil() {
 		return nil
 	}
-	return validateCloneableJSONLikeValue(value.Elem(), visited)
+	return validateCloneableJSONLikeValue(value.Elem(), state)
 }
 
 func validateCloneableMap(
 	value reflect.Value,
-	visited map[cloneReference]struct{},
+	state *cloneValidationState,
 ) error {
 	if value.IsNil() {
 		return nil
 	}
-	if cloneReferenceVisited(visited, mapCloneReference(value)) {
-		return nil
+	reference := mapCloneReference(value)
+	proceed, err := enterCloneReference(state, reference, value.Type())
+	if err != nil || !proceed {
+		return err
 	}
+	defer exitCloneReference(state, reference)
 	iterator := value.MapRange()
 	for iterator.Next() {
 		if !isSafeJSONMapKey(iterator.Key()) {
 			return fmt.Errorf("map key type %s cannot be safely cloned", iterator.Key().Type())
 		}
-		if err := validateCloneableJSONLikeValue(iterator.Value(), visited); err != nil {
+		if err := validateCloneableJSONLikeValue(iterator.Value(), state); err != nil {
 			return err
 		}
 	}
+	finishCloneReference(state, reference)
 	return nil
 }
 
 func validateCloneablePointer(
 	value reflect.Value,
-	visited map[cloneReference]struct{},
+	state *cloneValidationState,
 ) error {
 	if value.IsNil() {
 		return nil
 	}
-	if cloneReferenceVisited(visited, pointerCloneReference(value)) {
-		return nil
+	reference := pointerCloneReference(value)
+	proceed, err := enterCloneReference(state, reference, value.Type())
+	if err != nil || !proceed {
+		return err
 	}
-	return validateCloneableJSONLikeValue(value.Elem(), visited)
+	defer exitCloneReference(state, reference)
+	if err := validateCloneableJSONLikeValue(value.Elem(), state); err != nil {
+		return err
+	}
+	finishCloneReference(state, reference)
+	return nil
 }
 
 func validateCloneableSlice(
 	value reflect.Value,
-	visited map[cloneReference]struct{},
+	state *cloneValidationState,
 ) error {
 	if value.IsNil() {
 		return nil
 	}
-	if cloneReferenceVisited(visited, sliceCloneReference(value)) {
-		return nil
+	reference := sliceCloneReference(value)
+	proceed, err := enterCloneReference(state, reference, value.Type())
+	if err != nil || !proceed {
+		return err
 	}
+	defer exitCloneReference(state, reference)
 	for i := 0; i < value.Len(); i++ {
-		if err := validateCloneableJSONLikeValue(value.Index(i), visited); err != nil {
+		if err := validateCloneableJSONLikeValue(value.Index(i), state); err != nil {
 			return err
 		}
 	}
+	finishCloneReference(state, reference)
 	return nil
 }
 
 func validateCloneableArray(
 	value reflect.Value,
-	visited map[cloneReference]struct{},
+	state *cloneValidationState,
 ) error {
 	for i := 0; i < value.Len(); i++ {
-		if err := validateCloneableJSONLikeValue(value.Index(i), visited); err != nil {
+		if err := validateCloneableJSONLikeValue(value.Index(i), state); err != nil {
 			return err
 		}
 	}
@@ -938,7 +1218,7 @@ func validateCloneableArray(
 
 func validateCloneableStruct(
 	value reflect.Value,
-	visited map[cloneReference]struct{},
+	state *cloneValidationState,
 ) error {
 	if value.Type() == reflect.TypeOf(time.Time{}) {
 		return nil
@@ -954,22 +1234,34 @@ func validateCloneableStruct(
 			}
 			continue
 		}
-		if err := validateCloneableJSONLikeValue(value.Field(i), visited); err != nil {
+		if err := validateCloneableJSONLikeValue(value.Field(i), state); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func cloneReferenceVisited(
-	visited map[cloneReference]struct{},
+func enterCloneReference(
+	state *cloneValidationState,
 	reference cloneReference,
-) bool {
-	if _, ok := visited[reference]; ok {
-		return true
+	valueType reflect.Type,
+) (bool, error) {
+	if _, onStack := state.stack[reference]; onStack {
+		return false, fmt.Errorf("value type %s contains a cyclic reference", valueType)
 	}
-	visited[reference] = struct{}{}
-	return false
+	if _, finished := state.done[reference]; finished {
+		return false, nil
+	}
+	state.stack[reference] = struct{}{}
+	return true, nil
+}
+
+func exitCloneReference(state *cloneValidationState, reference cloneReference) {
+	delete(state.stack, reference)
+}
+
+func finishCloneReference(state *cloneValidationState, reference cloneReference) {
+	state.done[reference] = struct{}{}
 }
 
 func isSafeJSONMapKey(value reflect.Value) bool {
