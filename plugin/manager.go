@@ -426,17 +426,13 @@ func (m *Manager) AfterToolMessages(
 func (m *Manager) AfterToolRound(
 	ctx context.Context,
 	args *AfterToolRoundArgs,
-) error {
+) {
 	if m == nil || args == nil {
-		return nil
+		return
 	}
-	var errs []error
 	for _, h := range m.afterToolRoundHooks {
-		if err := h.hook(ctx, args); err != nil {
-			errs = append(errs, fmt.Errorf("plugin %q: %w", h.name, err))
-		}
+		h.hook(ctx, args)
 	}
-	return errors.Join(errs...)
 }
 
 func normalizeToolResultReplacements(

@@ -31,12 +31,8 @@ func TestPluginAddsOneTransientWarningAndCleansUp(t *testing.T) {
 		ToolResultMessages: results,
 		Complete:           true,
 	}
-	if err := manager.AfterToolRound(context.Background(), args); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.AfterToolRound(context.Background(), args); err != nil {
-		t.Fatal(err)
-	}
+	manager.AfterToolRound(context.Background(), args)
+	manager.AfterToolRound(context.Background(), args)
 
 	ctx := agent.NewInvocationContext(context.Background(), invocation)
 	request := &model.Request{}
@@ -91,9 +87,7 @@ func TestPluginIgnoresIncompleteRound(t *testing.T) {
 		ToolResultMessages: []model.Message{model.NewToolMessage("call", "search", "same")},
 	}
 	args.Complete = false
-	if err := manager.AfterToolRound(context.Background(), args); err != nil {
-		t.Fatal(err)
-	}
+	manager.AfterToolRound(context.Background(), args)
 	if _, ok := agent.GetStateValue[detectorState](invocation, stateKey); !ok {
 		// An empty state is acceptable, but the plugin must not create a pending warning.
 		return

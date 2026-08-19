@@ -34,8 +34,9 @@ type AfterToolRoundArgs struct {
 	Complete bool
 }
 
-// AfterToolRoundCallback observes one tool execution round.
+// AfterToolRoundCallback observes one tool execution round. It cannot change
+// the tool round outcome.
 type AfterToolRoundCallback func(
 	ctx context.Context,
 	args *AfterToolRoundArgs,
-) error
+)

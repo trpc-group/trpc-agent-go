@@ -13,7 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"strings"
+	"io"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -31,14 +31,9 @@ type roundFingerprint struct {
 }
 
 type callFingerprint struct {
-	ToolName  string            `json:"tool_name"`
-	Arguments string            `json:"arguments"`
-	Result    resultFingerprint `json:"result"`
-}
-
-type resultFingerprint struct {
-	Content      string              `json:"content,omitempty"`
-	ContentParts []model.ContentPart `json:"content_parts,omitempty"`
+	ToolName  string        `json:"tool_name"`
+	Arguments string        `json:"arguments"`
+	Result    model.Message `json:"result"`
 }
 
 func (detector) observe(
@@ -80,13 +75,11 @@ func fingerprintRound(
 	}
 	for i, toolCall := range toolCalls {
 		result := toolResultMessages[i]
+		result.ToolID = ""
 		round.ToolCalls = append(round.ToolCalls, callFingerprint{
 			ToolName:  toolCall.Function.Name,
 			Arguments: canonicalArguments(toolCall.Function.Arguments),
-			Result: resultFingerprint{
-				Content:      result.Content,
-				ContentParts: result.ContentParts,
-			},
+			Result:    result,
 		})
 	}
 	encoded, err := json.Marshal(round)
@@ -102,11 +95,17 @@ func canonicalArguments(arguments []byte) string {
 	if len(trimmed) == 0 {
 		return ""
 	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.UseNumber()
 	var value any
-	if json.Unmarshal(trimmed, &value) == nil {
+	if decoder.Decode(&value) == nil {
+		var extra any
+		if decoder.Decode(&extra) != io.EOF {
+			return string(trimmed)
+		}
 		if canonical, err := json.Marshal(value); err == nil {
 			return string(canonical)
 		}
 	}
-	return strings.Join(strings.Fields(string(trimmed)), " ")
+	return string(trimmed)
 }

@@ -33,6 +33,30 @@ func TestFingerprintRoundIgnoresToolIDsAndCanonicalizesArguments(t *testing.T) {
 	}
 }
 
+func TestFingerprintRoundPreservesInvalidArgumentWhitespaceAndResultFields(t *testing.T) {
+	response := toolResponse("search", []byte(`{"query":"x"}`))
+	first := []model.Message{model.NewToolMessage("call-a", "search", "same")}
+	second := []model.Message{model.NewToolMessage("call-b", "other", "same")}
+
+	fingerprintFirst, ok := fingerprintRound(response, first)
+	if !ok {
+		t.Fatal("fingerprintRound returned false")
+	}
+	fingerprintSecond, ok := fingerprintRound(response, second)
+	if !ok {
+		t.Fatal("fingerprintRound returned false")
+	}
+	if fingerprintFirst == fingerprintSecond {
+		t.Fatal("different model-visible result fields produced the same fingerprint")
+	}
+
+	invalidA := canonicalArguments([]byte(`{"query":"a  b",}`))
+	invalidB := canonicalArguments([]byte(`{"query":"a b",}`))
+	if invalidA == invalidB {
+		t.Fatal("argument canonicalization collapsed meaningful whitespace")
+	}
+}
+
 func TestDetectorWarnsOnceUntilRoundChanges(t *testing.T) {
 	d := detector{}
 	response := toolResponse("search", []byte(`{"query":"x"}`))

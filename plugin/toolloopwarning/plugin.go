@@ -66,9 +66,9 @@ func (p *toolLoopWarningPlugin) beforeAgent(
 func (p *toolLoopWarningPlugin) afterToolRound(
 	_ context.Context,
 	args *plugin.AfterToolRoundArgs,
-) error {
+) {
 	if p == nil || args == nil || args.Invocation == nil {
-		return nil
+		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -80,7 +80,6 @@ func (p *toolLoopWarningPlugin) afterToolRound(
 		args.Complete,
 	)
 	args.Invocation.SetState(stateKey, state)
-	return nil
 }
 
 func (p *toolLoopWarningPlugin) beforeModel(

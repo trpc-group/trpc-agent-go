@@ -261,11 +261,10 @@ func (r *afterToolRoundRecorder) Register(registry *plugin.Registry) {
 	registry.AfterToolRound(func(
 		_ context.Context,
 		args *plugin.AfterToolRoundArgs,
-	) error {
+	) {
 		r.calls++
 		r.complete = args.Complete
 		r.messages = append([]model.Message(nil), args.ToolResultMessages...)
-		return nil
 	})
 }
 
