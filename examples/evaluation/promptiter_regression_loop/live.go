@@ -125,16 +125,12 @@ func (b *liveBudget) snapshot(stage budgetStage) generationUsage {
 
 func (b *liveBudget) reserveCall(
 	stage budgetStage,
-	estimatedTokens int,
-	estimatedCost float64,
+	estimate generationUsage,
 ) (generationUsage, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	reservation := generationUsage{
-		Calls:       1,
-		InputTokens: estimatedTokens,
-		CostCNY:     estimatedCost,
-	}
+	reservation := estimate
+	reservation.Calls = 1
 	stageUsage := b.byStage[stage]
 	if err := checkBudget(
 		"live",
@@ -157,7 +153,7 @@ func (b *liveBudget) reserveCall(
 		); err != nil {
 			return generationUsage{}, err
 		}
-		if err := b.checkEvaluationReserve(estimatedTokens, estimatedCost); err != nil {
+		if err := b.checkEvaluationReserve(estimate); err != nil {
 			return generationUsage{}, err
 		}
 	}
@@ -167,7 +163,7 @@ func (b *liveBudget) reserveCall(
 	return reservation, nil
 }
 
-func (b *liveBudget) checkEvaluationReserve(estimatedTokens int, estimatedCost float64) error {
+func (b *liveBudget) checkEvaluationReserve(estimate generationUsage) error {
 	reserve := b.evaluationReserve
 	if b.gate.MaxCalls > 0 &&
 		b.total.Calls+1+reserve.Calls > b.gate.MaxCalls {
@@ -178,7 +174,7 @@ func (b *liveBudget) checkEvaluationReserve(estimatedTokens int, estimatedCost f
 		)
 	}
 	if b.gate.MaxTokens > 0 &&
-		b.total.tokens()+estimatedTokens+reserve.Tokens > b.gate.MaxTokens {
+		b.total.tokens()+estimate.tokens()+reserve.Tokens > b.gate.MaxTokens {
 		return fmt.Errorf(
 			"live optimizer cannot preserve %d evaluation tokens within global limit %d",
 			reserve.Tokens,
@@ -186,7 +182,7 @@ func (b *liveBudget) checkEvaluationReserve(estimatedTokens int, estimatedCost f
 		)
 	}
 	if b.gate.MaxCostCNY > 0 &&
-		b.total.CostCNY+estimatedCost+reserve.CostCNY > b.gate.MaxCostCNY {
+		b.total.CostCNY+estimate.CostCNY+reserve.CostCNY > b.gate.MaxCostCNY {
 		return fmt.Errorf(
 			"live optimizer cannot preserve %.4f CNY evaluation budget within global limit %.4f",
 			reserve.CostCNY,
@@ -341,7 +337,7 @@ func (g *liveGenerator) Generate(
 ) (generationResult, error) {
 	var lastErr error
 	var accumulated generationUsage
-	estimatedTokens, estimatedCost := estimateTextRequest(
+	estimate := estimateTextRequest(
 		prompt,
 		input,
 		512,
@@ -354,8 +350,7 @@ func (g *liveGenerator) Generate(
 		}
 		reservation, err := g.budget.reserveCall(
 			budgetStageEvaluation,
-			estimatedTokens,
-			estimatedCost,
+			estimate,
 		)
 		if err != nil {
 			return generationResult{Usage: accumulated}, err
@@ -523,7 +518,7 @@ func (m *budgetedRetryModel) GenerateContent(
 	ctx context.Context,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
-	estimatedTokens, estimatedCost := estimateModelRequest(
+	estimate := estimateModelRequest(
 		request,
 		m.inputCNYPerMillion,
 		m.outputCNYPerMillion,
@@ -535,8 +530,7 @@ func (m *budgetedRetryModel) GenerateContent(
 		}
 		reservation, err := m.budget.reserveCall(
 			budgetStageOptimizer,
-			estimatedTokens,
-			estimatedCost,
+			estimate,
 		)
 		if err != nil {
 			return nil, err
@@ -629,20 +623,23 @@ func estimateTextRequest(
 	maxOutputTokens int,
 	inputCNYPerMillion float64,
 	outputCNYPerMillion float64,
-) (int, float64) {
+) generationUsage {
 	inputTokens := conservativeTokenUpperBound(
 		len([]byte(prompt)) + len([]byte(input)) + 128,
 	)
-	return inputTokens + maxOutputTokens,
-		float64(inputTokens)*inputCNYPerMillion/1_000_000 +
-			float64(maxOutputTokens)*outputCNYPerMillion/1_000_000
+	return generationUsage{
+		InputTokens:  inputTokens,
+		OutputTokens: maxOutputTokens,
+		CostCNY: float64(inputTokens)*inputCNYPerMillion/1_000_000 +
+			float64(maxOutputTokens)*outputCNYPerMillion/1_000_000,
+	}
 }
 
 func estimateModelRequest(
 	request *model.Request,
 	inputCNYPerMillion float64,
 	outputCNYPerMillion float64,
-) (int, float64) {
+) generationUsage {
 	data, _ := json.Marshal(request)
 	maxOutputTokens := 1024
 	if request != nil && request.GenerationConfig.MaxTokens != nil {

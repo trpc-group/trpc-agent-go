@@ -89,9 +89,9 @@ func TestLiveGeneratorCountsRetriesAndUsage(t *testing.T) {
 	result, err := generator.Generate(context.Background(), "prompt", "input")
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.Usage.Calls)
-	estimatedTokens, _ := estimateTextRequest("prompt", "input", 512, 1, 2)
-	assert.Equal(t, estimatedTokens+10, result.Usage.InputTokens)
-	assert.Equal(t, 2, result.Usage.OutputTokens)
+	estimate := estimateTextRequest("prompt", "input", 512, 1, 2)
+	assert.Equal(t, estimate.InputTokens+10, result.Usage.InputTokens)
+	assert.Equal(t, estimate.OutputTokens+2, result.Usage.OutputTokens)
 	assert.Equal(t, 2, client.calls)
 }
 
@@ -332,8 +332,9 @@ func TestPerAttemptDeadlineRetriesAndAccountsEveryRequest(t *testing.T) {
 		assert.Equal(t, int32(2), calls.Load())
 		usage := budget.snapshot(budgetStageEvaluation)
 		assert.Equal(t, 2, usage.Calls)
-		estimatedTokens, _ := estimateTextRequest("prompt", "input", 512, 1, 2)
-		assert.Equal(t, 2*estimatedTokens, usage.tokens())
+		estimate := estimateTextRequest("prompt", "input", 512, 1, 2)
+		assert.Equal(t, 2*estimate.InputTokens, usage.InputTokens)
+		assert.Equal(t, 2*estimate.OutputTokens, usage.OutputTokens)
 	})
 
 	t.Run("optimizer", func(t *testing.T) {
@@ -367,8 +368,9 @@ func TestPerAttemptDeadlineRetriesAndAccountsEveryRequest(t *testing.T) {
 		assert.Equal(t, int32(2), calls.Load())
 		usage := budget.snapshot(budgetStageOptimizer)
 		assert.Equal(t, 2, usage.Calls)
-		estimatedTokens, _ := estimateModelRequest(request, 1, 2)
-		assert.Equal(t, 2*estimatedTokens, usage.tokens())
+		estimate := estimateModelRequest(request, 1, 2)
+		assert.Equal(t, 2*estimate.InputTokens, usage.InputTokens)
+		assert.Equal(t, 2*estimate.OutputTokens, usage.OutputTokens)
 	})
 }
 
@@ -382,10 +384,10 @@ func TestFailedEvaluationAttemptRetainsEstimatedBudget(t *testing.T) {
 	}))
 	defer server.Close()
 
-	estimatedTokens, estimatedCost := estimateTextRequest("prompt", "input", 512, 1, 2)
+	estimate := estimateTextRequest("prompt", "input", 512, 1, 2)
 	budget := newLiveBudget(
 		gateFileConfig{
-			MaxCalls: 3, MaxTokens: estimatedTokens, MaxCostCNY: estimatedCost,
+			MaxCalls: 3, MaxTokens: estimate.tokens(), MaxCostCNY: estimate.CostCNY,
 		},
 		optimizerBudgetConfig{},
 	)
@@ -402,8 +404,9 @@ func TestFailedEvaluationAttemptRetainsEstimatedBudget(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load())
 	usage := budget.snapshot(budgetStageEvaluation)
 	assert.Equal(t, 1, usage.Calls)
-	assert.Equal(t, estimatedTokens, usage.tokens())
-	assert.InDelta(t, estimatedCost, usage.CostCNY, 1e-12)
+	assert.Equal(t, estimate.InputTokens, usage.InputTokens)
+	assert.Equal(t, estimate.OutputTokens, usage.OutputTokens)
+	assert.InDelta(t, estimate.CostCNY, usage.CostCNY, 1e-12)
 }
 
 func TestFailedOptimizerAttemptRetainsEstimatedBudget(t *testing.T) {
@@ -428,13 +431,13 @@ func TestFailedOptimizerAttemptRetainsEstimatedBudget(t *testing.T) {
 		Messages:         []model.Message{model.NewUserMessage("optimize")},
 		GenerationConfig: model.GenerationConfig{MaxTokens: &maxTokens},
 	}
-	estimatedTokens, estimatedCost := estimateModelRequest(request, 1, 2)
+	estimate := estimateModelRequest(request, 1, 2)
 	budget := newLiveBudget(
 		gateFileConfig{
-			MaxCalls: 3, MaxTokens: estimatedTokens, MaxCostCNY: estimatedCost,
+			MaxCalls: 3, MaxTokens: estimate.tokens(), MaxCostCNY: estimate.CostCNY,
 		},
 		optimizerBudgetConfig{
-			MaxCalls: 3, MaxTokens: estimatedTokens, MaxCostCNY: estimatedCost,
+			MaxCalls: 3, MaxTokens: estimate.tokens(), MaxCostCNY: estimate.CostCNY,
 		},
 	)
 	retrying := &budgetedRetryModel{
@@ -449,8 +452,9 @@ func TestFailedOptimizerAttemptRetainsEstimatedBudget(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load())
 	usage := budget.snapshot(budgetStageOptimizer)
 	assert.Equal(t, 1, usage.Calls)
-	assert.Equal(t, estimatedTokens, usage.tokens())
-	assert.InDelta(t, estimatedCost, usage.CostCNY, 1e-12)
+	assert.Equal(t, estimate.InputTokens, usage.InputTokens)
+	assert.Equal(t, estimate.OutputTokens, usage.OutputTokens)
+	assert.InDelta(t, estimate.CostCNY, usage.CostCNY, 1e-12)
 }
 
 func TestBudgetedOptimizerModelCountsRetriesInSharedBudget(t *testing.T) {
@@ -480,9 +484,9 @@ func TestBudgetedOptimizerModelCountsRetriesInSharedBudget(t *testing.T) {
 	optimizerUsage := budget.snapshot(budgetStageOptimizer)
 	assert.Equal(t, 2, client.calls)
 	assert.Equal(t, 2, optimizerUsage.Calls)
-	estimatedTokens, _ := estimateModelRequest(request, 1, 2)
-	assert.Equal(t, estimatedTokens+10, optimizerUsage.InputTokens)
-	assert.Equal(t, 2, optimizerUsage.OutputTokens)
+	estimate := estimateModelRequest(request, 1, 2)
+	assert.Equal(t, estimate.InputTokens+10, optimizerUsage.InputTokens)
+	assert.Equal(t, estimate.OutputTokens+2, optimizerUsage.OutputTokens)
 	assert.Equal(t, optimizerUsage, budget.snapshot(""))
 }
 

@@ -554,6 +554,11 @@ func loadEvalSet(path string) (evalSetFile, error) {
 		if c.EvalID == "" || len(c.Conversation) != 1 {
 			return evalSetFile{}, fmt.Errorf("eval case must have an ID and exactly one invocation")
 		}
+		for _, keyword := range c.ExpectedKeywords {
+			if strings.TrimSpace(keyword) == "" {
+				return evalSetFile{}, fmt.Errorf("eval case %q has an empty expected keyword", c.EvalID)
+			}
+		}
 		for _, phrase := range c.ForbiddenPhrases {
 			if strings.TrimSpace(phrase) == "" {
 				return evalSetFile{}, fmt.Errorf("eval case %q has an empty forbidden phrase", c.EvalID)

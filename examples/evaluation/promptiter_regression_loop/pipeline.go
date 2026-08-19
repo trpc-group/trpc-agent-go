@@ -461,7 +461,7 @@ func candidateEvaluationReservation(cfg *loadedConfig) resourceReservation {
 			if len(evalCase.Conversation) > 0 {
 				input = evalCase.Conversation[0].UserContent.Content
 			}
-			tokens, cost := estimateTextRequest(
+			estimate := estimateTextRequest(
 				strings.Repeat("x", maxCandidateBytes),
 				input,
 				512,
@@ -469,8 +469,8 @@ func candidateEvaluationReservation(cfg *loadedConfig) resourceReservation {
 				cfg.Live.OutputCNYPerMillion,
 			)
 			reservation.Calls += runs * attempts
-			reservation.Tokens += tokens * runs * attempts
-			reservation.CostCNY += cost * float64(runs*attempts)
+			reservation.Tokens += estimate.tokens() * runs * attempts
+			reservation.CostCNY += estimate.CostCNY * float64(runs*attempts)
 		}
 	}
 	addSet(cfg.Train, 1)

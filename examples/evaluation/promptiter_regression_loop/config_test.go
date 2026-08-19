@@ -172,6 +172,29 @@ func TestValidateDatasetIsolationRejectsLeakage(t *testing.T) {
 	})
 }
 
+func TestLoadEvalSetRejectsBlankExpectedKeyword(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "blank-keyword.evalset.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{
+		"evalSetId":"blank-keyword-set",
+		"name":"Blank keyword regression",
+		"evalCases":[{
+			"evalId":"blank-keyword",
+			"category":"semantic",
+			"requiredDirective":"ANSWER_CORRECTLY",
+			"expectedKeywords":["   "],
+			"conversation":[{
+				"invocationId":"blank-keyword-1",
+				"userContent":{"role":"user","content":"question"},
+				"finalResponse":{"role":"assistant","content":"expected answer"}
+			}]
+		}]
+	}`), 0o600))
+
+	_, err := loadEvalSet(path)
+
+	assert.ErrorContains(t, err, `eval case "blank-keyword" has an empty expected keyword`)
+}
+
 func TestSetDefaultsPreservesExplicitZeroRetries(t *testing.T) {
 	var explicit pipelineConfig
 	require.NoError(t, json.Unmarshal([]byte(`{"live":{"maxRetries":0}}`), &explicit))
