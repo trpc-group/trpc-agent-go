@@ -28,8 +28,8 @@ The integration works in three parts:
 
 > **Multi-tenant note:** automatic recall and `tdai_memory_search` remain
 > disabled by default for compatibility with legacy gateways. New cloud and
-> self-hosted integrations should configure `WithServiceIdentity`; the current
-> data plane then scopes L0/L1 by service, team, agent, and user. L2/L3 are
+> self-hosted integrations should use `NewServiceWithIdentity`; the current data
+> plane then scopes L0/L1 by service, team, agent, and user. L2/L3 are
 > intentionally shared at the team-and-agent level.
 
 ### Architecture
@@ -226,15 +226,16 @@ import (
 
 // 1. Create the TencentDB Agent Memory service.
 //    New cloud and self-hosted integrations use the same identity-scoped API.
-memSvc, err := memorytencentdb.NewService(
+identity := memorytencentdb.NewServiceIdentity(
+    os.Getenv("TDAI_SERVICE_ID"),
+    os.Getenv("TDAI_TEAM_ID"),
+    os.Getenv("TDAI_AGENT_ID"),
+)
+memSvc, err := memorytencentdb.NewServiceWithIdentity(
+    identity,
     memorytencentdb.WithGatewayURL("http://127.0.0.1:8420"),
     // Optional only for a self-hosted gateway with authentication disabled.
     memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
-    memorytencentdb.WithServiceIdentity(
-        os.Getenv("TDAI_SERVICE_ID"),
-        os.Getenv("TDAI_TEAM_ID"),
-        os.Getenv("TDAI_AGENT_ID"),
-    ),
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
@@ -282,9 +283,9 @@ Key points:
 - `runner.WithPlugins(memSvc.ContextOffloadPlugin())` activates only when
   `ContextOffloadConfig.Enabled` is true. The companion
   `tdai_read_offload_ref` tool is then included in `memSvc.Tools()`.
-- `WithServiceIdentity` selects the current identity-scoped API. L0/L1 memory
-  is isolated by service, team, agent, and framework user; L2/L3 memory is
-  shared by users of the same team and agent. Omitting the option preserves the
+- `NewServiceWithIdentity` selects the current identity-scoped API. L0/L1
+  memory is isolated by service, team, agent, and framework user; L2/L3 memory
+  is shared by users of the same team and agent. `NewService` preserves the
   legacy gateway routes. `AppName` and `WithSessionKeyFunc` are not sent as V3
   isolation fields; use distinct service, team, or agent identities when
   applications must not share memory.
@@ -295,6 +296,11 @@ Key points:
 
 ## Configuration Options
 
+Use `NewService` for the Legacy gateway API. For the V3 data plane shared by
+cloud and self-hosted gateways, create a `ServiceIdentity` with
+`NewServiceIdentity(serviceID, teamID, agentID)`, then pass it to
+`NewServiceWithIdentity(identity, opts...)`. All three IDs are required.
+
 | Option                         | Description                                         | Default                 |
 | ------------------------------ | --------------------------------------------------- | ----------------------- |
 | `WithGatewayURL(url)`          | TencentDB Agent Memory gateway URL                  | `http://127.0.0.1:8420` |
@@ -304,7 +310,6 @@ Key points:
 | `WithIngestJobTimeout(d)`      | Timeout for queued capture jobs                     | `30s`                   |
 | `WithSessionKeyFunc(fn)`       | Custom framework session to gateway `session_key` mapping | base64url(app):base64url(user):base64url(session) |
 | `WithAPIKey(key)`              | Send `Authorization: Bearer <key>` (gateway `TDAI_GATEWAY_API_KEY`) | none      |
-| `WithServiceIdentity(serviceID, teamID, agentID)` | Use the V3 data plane shared by cloud and self-hosted gateways | disabled; legacy routes remain active |
 | `WithRecallEnabled(bool)`      | Enable automatic recall; Legacy may read a shared store, while V3 scopes L1 by user and L2/L3 by team/agent | `false` |
 | `WithMemorySearchTool(bool)`   | Expose `tdai_memory_search`; Legacy may read a shared store, while V3 scopes L1 by user | `false` |
 | `WithConversationSearchTool(bool)` | Expose `tdai_conversation_search`               | `true`                  |

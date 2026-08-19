@@ -92,8 +92,6 @@ type Options struct {
 	ToolPrefix                   string
 
 	ContextOffload ContextOffloadConfig
-
-	identity *serviceIdentity
 }
 
 // Option configures Service.
@@ -184,25 +182,6 @@ func WithAPIKey(key string) Option {
 	}
 }
 
-// WithServiceIdentity configures the service, team, and agent identity used by
-// TencentDB Agent Memory's V3 API. All three IDs are required. Use WithAPIKey
-// when the gateway requires Bearer authentication; self-hosted gateways that
-// keep authentication disabled can omit it. Omitting this option preserves the
-// legacy gateway API.
-// User and session IDs come from the framework session. The optional TencentDB
-// task ID is not sent by this adapter.
-// The same option applies to cloud and self-hosted deployments; use
-// WithGatewayURL and WithAPIKey to configure the deployment endpoint.
-func WithServiceIdentity(serviceID, teamID, agentID string) Option {
-	return func(o *Options) {
-		o.identity = &serviceIdentity{
-			serviceID: strings.TrimSpace(serviceID),
-			teamID:    strings.TrimSpace(teamID),
-			agentID:   strings.TrimSpace(agentID),
-		}
-	}
-}
-
 // WithIngestWorkers sets the number of async capture workers.
 func WithIngestWorkers(n int) Option {
 	return func(o *Options) {
@@ -245,8 +224,8 @@ func WithSessionKeyFunc(fn SessionKeyFunc) Option {
 //
 // It is off by default. Legacy gateways may recall from a shared long-term
 // store without enforcing the request's user/session scope. The
-// identity-scoped data plane selected by WithServiceIdentity scopes L0/L1 by
-// service/team/agent/user and L2/L3 by service/team/agent. Recall remains
+// identity-scoped data plane selected by NewServiceWithIdentity scopes L0/L1
+// by service/team/agent/user and L2/L3 by service/team/agent. Recall remains
 // opt-in to preserve existing defaults.
 func WithRecallEnabled(enabled bool) Option {
 	return func(o *Options) {

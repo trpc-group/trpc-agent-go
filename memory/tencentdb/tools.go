@@ -118,7 +118,7 @@ func (s *Service) buildTools() []tool.Tool {
 	if s.opts.ContextOffload.Enabled {
 		add(s.newReadOffloadRefTool(s.nativeToolName("read_offload_ref")))
 	}
-	if s.client != nil && s.client.identity != nil {
+	if s.client.usesV3API() {
 		add(s.newScenarioReadTool(s.nativeToolName("read_scenario")))
 	}
 	return out
@@ -137,7 +137,7 @@ func nativeToolName(opts Options, name string) string {
 }
 
 func (s *Service) newMemorySearchTool(name string) tool.CallableTool {
-	if s.client != nil && s.client.identity != nil {
+	if s.client.usesV3API() {
 		return s.newV3MemorySearchTool(name)
 	}
 	return s.newLegacyMemorySearchTool(name)
@@ -250,7 +250,7 @@ func (s *Service) newConversationSearchTool(name string) tool.CallableTool {
 	}
 	description := "Search TencentDB Agent Memory conversation history. " +
 		"Defaults to the current session_key and is useful for recalling earlier raw exchanges."
-	if s.client != nil && s.client.identity != nil {
+	if s.client.usesV3API() {
 		description = "Search TencentDB Agent Memory conversation history. " +
 			"Defaults to the current session_id and is useful for recalling earlier raw exchanges."
 	}

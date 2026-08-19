@@ -80,18 +80,19 @@ if gatewayURL == "" {
     gatewayURL = "http://127.0.0.1:8420"
 }
 
-memSvc, err := memorytencentdb.NewService(
+identity := memorytencentdb.NewServiceIdentity(
+    os.Getenv("TDAI_SERVICE_ID"),
+    os.Getenv("TDAI_TEAM_ID"),
+    os.Getenv("TDAI_AGENT_ID"),
+)
+memSvc, err := memorytencentdb.NewServiceWithIdentity(
+    identity,
     memorytencentdb.WithGatewayURL(gatewayURL),
     // Recommended for new cloud and self-hosted integrations. This selects the
     // identity-scoped data plane; all IDs are required. The API key is required
     // only when the gateway enables Bearer authentication.
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
-    // memorytencentdb.WithServiceIdentity(
-    //     os.Getenv("TDAI_SERVICE_ID"),
-    //     os.Getenv("TDAI_TEAM_ID"),
-    //     os.Getenv("TDAI_AGENT_ID"),
-    // ),
-    // Recall/search remain opt-in; Legacy mode requires a trusted gateway.
+    // Recall/search remain opt-in.
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
     // Optional short-term context offload through the gateway v2 API.
@@ -258,6 +259,11 @@ even after conversation history is reset.
 
 ## Configuration Options
 
+Use `NewService` for the Legacy gateway API. For the V3 data plane shared by
+cloud and self-hosted deployments, create a `ServiceIdentity` with
+`NewServiceIdentity(serviceID, teamID, agentID)`, then pass it to
+`NewServiceWithIdentity(identity, opts...)`. All three IDs are required.
+
 | Option | Purpose | Default |
 | ------ | ------- | ------- |
 | `WithGatewayURL(url)` | TencentDB Agent Memory gateway URL. | `http://127.0.0.1:8420` |
@@ -267,7 +273,6 @@ even after conversation history is reset.
 | `WithIngestJobTimeout(d)` | Timeout for queued capture jobs. | `30s` |
 | `WithSessionKeyFunc(fn)` | Customize session to gateway `session_key` mapping. | `base64url(app):base64url(user):base64url(session)` |
 | `WithAPIKey(key)` | Send `Authorization: Bearer <key>` (gateway `TDAI_GATEWAY_API_KEY`). | none |
-| `WithServiceIdentity(serviceID, teamID, agentID)` | Use the V3 data plane shared by cloud and self-hosted deployments. Requires all three IDs; add `WithAPIKey` when the gateway enables Bearer authentication. | disabled; Legacy gateway API remains active |
 | `WithRecallEnabled(bool)` | Enable automatic recall. Legacy may read a shared store; V3 scopes L1 by user and L2/L3 by team/agent. | `false` |
 | `WithMemorySearchTool(bool)` | Expose `tdai_memory_search`. Legacy may read a shared store; V3 scopes L1 by user. | `false` |
 | `WithConversationSearchTool(bool)` | Expose `tdai_conversation_search`. | `true` |
@@ -275,16 +280,18 @@ even after conversation history is reset.
 | `WithToolPrefix(prefix)` | Change native tool prefix. | `tdai` |
 | `WithContextOffload(ContextOffloadConfig)` | Configure explicit short-term context offload for large tool results. | disabled |
 
-`WithServiceIdentity` is the recommended entry point for new integrations. It
-sends `service_id` as `X-TDAI-Service-Id`, derives `user_id` and `session_id`
-from the current framework session, and uses the identity-scoped V3 data-plane
-routes. Omitting it preserves the Legacy `/capture`, `/recall`, and `/search/*`
-behavior. The option describes API semantics rather than deployment type, so
-cloud and self-hosted gateways use the same configuration surface. L0/L1 are
-scoped by service, team, agent, and user; L2/L3 are shared by users and sessions
-of the same service, team, and agent. The optional TencentDB `task_id` is not
-sent by this adapter. Self-hosted gateways that keep authentication disabled can
-omit `WithAPIKey`; authenticated self-hosted gateways and managed services must
+`NewServiceWithIdentity` is the recommended entry point for new integrations.
+The opaque `ServiceIdentity` keeps V3 identity configuration separate from the
+Legacy-compatible `Options` structure. The V3 client sends `service_id` as
+`X-TDAI-Service-Id`, derives `user_id` and `session_id` from the current
+framework session, and uses the identity-scoped data-plane routes. `NewService`
+preserves the Legacy `/capture`, `/recall`, and `/search/*` behavior. The
+constructor describes API semantics rather than deployment type, so cloud and
+self-hosted gateways use the same configuration surface. L0/L1 are scoped by
+service, team, agent, and user; L2/L3 are shared by users and sessions of the
+same service, team, and agent. The optional TencentDB `task_id` is not sent by
+this adapter. Self-hosted gateways that keep authentication disabled can omit
+`WithAPIKey`; authenticated self-hosted gateways and managed services must
 provide it.
 
 When V3 is selected, `memSvc.Tools()` includes `tdai_read_scenario` so the

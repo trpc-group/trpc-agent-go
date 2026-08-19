@@ -66,12 +66,20 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("tencentdb memory gateway request failed: status=%d body=%s", e.StatusCode, e.Body)
 }
 
+type apiMode uint8
+
+const (
+	apiModeLegacy apiMode = iota
+	apiModeV3
+)
+
 type gatewayClient struct {
 	baseURL      string
 	hc           *http.Client
 	timeout      time.Duration
 	maxBodyBytes int64
 	apiKey       string
+	mode         apiMode
 	identity     *serviceIdentity
 }
 
@@ -81,6 +89,14 @@ type offloadGatewayClient struct {
 }
 
 func newGatewayClient(opts Options) (*gatewayClient, error) {
+	return newGatewayClientWithMode(opts, apiModeLegacy, nil)
+}
+
+func newGatewayClientWithMode(
+	opts Options,
+	mode apiMode,
+	identity *serviceIdentity,
+) (*gatewayClient, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.GatewayURL), "/")
 	if baseURL == "" {
 		return nil, errors.New("tencentdb memory: gateway url is required")
@@ -101,8 +117,17 @@ func newGatewayClient(opts Options) (*gatewayClient, error) {
 		maxBodyBytes = defaultMaxBodyBytes
 	}
 	apiKey := strings.TrimSpace(opts.APIKey)
-	if err := validateServiceIdentity(opts.identity); err != nil {
-		return nil, err
+	switch mode {
+	case apiModeLegacy:
+		if identity != nil {
+			return nil, errors.New("tencentdb memory: legacy API does not accept service identity")
+		}
+	case apiModeV3:
+		if err := validateServiceIdentity(identity); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("tencentdb memory: unsupported API mode: %d", mode)
 	}
 	return &gatewayClient{
 		baseURL:      baseURL,
@@ -110,7 +135,8 @@ func newGatewayClient(opts Options) (*gatewayClient, error) {
 		timeout:      opts.Timeout,
 		maxBodyBytes: maxBodyBytes,
 		apiKey:       apiKey,
-		identity:     opts.identity,
+		mode:         mode,
+		identity:     identity,
 	}, nil
 }
 
@@ -149,7 +175,7 @@ func validCompactionRatio(ratio float64) bool {
 }
 
 func (c *gatewayClient) capture(ctx context.Context, req captureRequest) (*captureResponse, error) {
-	if c.identity != nil {
+	if c.usesV3API() {
 		return c.captureV3(ctx, req)
 	}
 	var rsp captureResponse
@@ -160,7 +186,7 @@ func (c *gatewayClient) capture(ctx context.Context, req captureRequest) (*captu
 }
 
 func (c *gatewayClient) recall(ctx context.Context, req recallRequest) (*recallResponse, error) {
-	if c.identity != nil {
+	if c.usesV3API() {
 		return c.recallV3(ctx, req)
 	}
 	var rsp recallResponse
@@ -171,7 +197,7 @@ func (c *gatewayClient) recall(ctx context.Context, req recallRequest) (*recallR
 }
 
 func (c *gatewayClient) searchMemories(ctx context.Context, req searchMemoriesRequest) (*searchMemoriesResponse, error) {
-	if c.identity != nil {
+	if c.usesV3API() {
 		return c.searchMemoriesV3(ctx, req)
 	}
 	var rsp searchMemoriesResponse
@@ -182,7 +208,7 @@ func (c *gatewayClient) searchMemories(ctx context.Context, req searchMemoriesRe
 }
 
 func (c *gatewayClient) searchConversations(ctx context.Context, req searchConversationsRequest) (*searchConversationsResponse, error) {
-	if c.identity != nil {
+	if c.usesV3API() {
 		return c.searchConversationsV3(ctx, req)
 	}
 	var rsp searchConversationsResponse
@@ -362,7 +388,7 @@ func (c *gatewayClient) doJSONOnce(
 
 func validateServiceIdentity(identity *serviceIdentity) error {
 	if identity == nil {
-		return nil
+		return errors.New("tencentdb memory: service identity is required")
 	}
 	if identity.serviceID == "" {
 		return errors.New("tencentdb memory: service identity service id is required")
@@ -374,6 +400,10 @@ func validateServiceIdentity(identity *serviceIdentity) error {
 		return errors.New("tencentdb memory: service identity agent id is required")
 	}
 	return nil
+}
+
+func (c *gatewayClient) usesV3API() bool {
+	return c != nil && c.mode == apiModeV3
 }
 
 func (c *gatewayClient) captureV3(
@@ -452,6 +482,11 @@ func (c *gatewayClient) recallV3(
 		)
 	}()
 	wg.Wait()
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 
 	errs := []error{atomicErr, scenarioErr, coreErr}
 	if atomicErr != nil && scenarioErr != nil && coreErr != nil {
@@ -521,9 +556,9 @@ func (c *gatewayClient) readScenarioV3(
 	userID string,
 	path string,
 ) (*v3ScenarioFile, error) {
-	if c == nil || c.identity == nil {
+	if !c.usesV3API() {
 		return nil, errors.New(
-			"tencentdb memory: scenario read requires service identity",
+			"tencentdb memory: scenario read requires the V3 API",
 		)
 	}
 	return doV3JSON[v3ScenarioFile](

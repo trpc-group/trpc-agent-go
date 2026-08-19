@@ -134,16 +134,6 @@ func main() {
 		memorytencentdb.WithRecallEnabled(true),
 		memorytencentdb.WithMemorySearchTool(true),
 	}
-	if identityEnabled {
-		memoryOptions = append(
-			memoryOptions,
-			memorytencentdb.WithServiceIdentity(
-				*serviceID,
-				*teamID,
-				*agentID,
-			),
-		)
-	}
 	if offloadEnabled {
 		memoryOptions = append(
 			memoryOptions,
@@ -155,7 +145,23 @@ func main() {
 			),
 		)
 	}
-	memSvc, err := memorytencentdb.NewService(memoryOptions...)
+	var (
+		memSvc *memorytencentdb.Service
+		err    error
+	)
+	if identityEnabled {
+		identity := memorytencentdb.NewServiceIdentity(
+			*serviceID,
+			*teamID,
+			*agentID,
+		)
+		memSvc, err = memorytencentdb.NewServiceWithIdentity(
+			identity,
+			memoryOptions...,
+		)
+	} else {
+		memSvc, err = memorytencentdb.NewService(memoryOptions...)
+	}
 	if err != nil {
 		log.Fatalf("create TencentDB Agent Memory service: %v", err)
 	}

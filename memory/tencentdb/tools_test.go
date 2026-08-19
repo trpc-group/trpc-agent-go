@@ -180,10 +180,10 @@ func TestV3MemorySearchAndScenarioReadTools(t *testing.T) {
 	}))
 	defer server.Close()
 
-	svc, err := NewService(
+	svc, err := NewServiceWithIdentity(
+		NewServiceIdentity("service-1", "team-1", "agent-1"),
 		WithGatewayURL(server.URL),
 		WithAPIKey("test-key"),
-		WithServiceIdentity("service-1", "team-1", "agent-1"),
 		WithMemorySearchTool(true),
 		WithStandardAliases(true),
 	)

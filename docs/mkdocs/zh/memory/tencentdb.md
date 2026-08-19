@@ -71,17 +71,18 @@ if gatewayURL == "" {
     gatewayURL = "http://127.0.0.1:8420"
 }
 
-memSvc, err := memorytencentdb.NewService(
+identity := memorytencentdb.NewServiceIdentity(
+    os.Getenv("TDAI_SERVICE_ID"),
+    os.Getenv("TDAI_TEAM_ID"),
+    os.Getenv("TDAI_AGENT_ID"),
+)
+memSvc, err := memorytencentdb.NewServiceWithIdentity(
+    identity,
     memorytencentdb.WithGatewayURL(gatewayURL),
     // 新接入的云端版和自建版都推荐启用身份隔离数据面；三个 ID 必填。
     // 只有 gateway 启用 Bearer 鉴权时才需要 API key。
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
-    // memorytencentdb.WithServiceIdentity(
-    //     os.Getenv("TDAI_SERVICE_ID"),
-    //     os.Getenv("TDAI_TEAM_ID"),
-    //     os.Getenv("TDAI_AGENT_ID"),
-    // ),
-    // Recall/search 保持 opt-in；Legacy 模式需要可信 gateway。
+    // Recall/search 保持 opt-in。
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
     // 可选短期上下文卸载，通过 gateway v2 API 完成。
@@ -237,6 +238,11 @@ capture，再切换到新 session；Legacy gateway 还会收到 `/session/end`�
 
 ## 配置选项
 
+`NewService` 使用 Legacy Gateway API。接入云端版和自建版共用的 V3
+数据面时，先通过 `NewServiceIdentity(serviceID, teamID, agentID)` 创建
+`ServiceIdentity`，再调用 `NewServiceWithIdentity(identity, opts...)`；三个
+ID 均为必填项。
+
 | 选项 | 作用 | 默认值 |
 | ---- | ---- | ------ |
 | `WithGatewayURL(url)` | TencentDB Agent Memory gateway URL。 | `http://127.0.0.1:8420` |
@@ -246,7 +252,6 @@ capture，再切换到新 session；Legacy gateway 还会收到 `/session/end`�
 | `WithIngestJobTimeout(d)` | 队列中 capture 任务的超时时间。 | `30s` |
 | `WithSessionKeyFunc(fn)` | 自定义 framework session 到 gateway `session_key` 的映射。 | `base64url(app):base64url(user):base64url(session)` |
 | `WithAPIKey(key)` | 发送 `Authorization: Bearer <key>`（对应 gateway 的 `TDAI_GATEWAY_API_KEY`）。 | 无 |
-| `WithServiceIdentity(serviceID, teamID, agentID)` | 使用云端版和自建版共用的 V3 数据面；三个 ID 必填，gateway 启用 Bearer 鉴权时再配置 `WithAPIKey`。 | 关闭，继续使用 Legacy Gateway API |
 | `WithRecallEnabled(bool)` | 是否启用自动 recall；Legacy 可能读取共享存储，V3 的 L1 按 User、L2/L3 按 Team/Agent。 | `false` |
 | `WithMemorySearchTool(bool)` | 是否暴露 `tdai_memory_search`；Legacy 可能读取共享存储，V3 的 L1 按 User。 | `false` |
 | `WithConversationSearchTool(bool)` | 是否暴露 `tdai_conversation_search`。 | `true` |
@@ -254,10 +259,11 @@ capture，再切换到新 session；Legacy gateway 还会收到 `/session/end`�
 | `WithToolPrefix(prefix)` | 修改原生工具名前缀。 | `tdai` |
 | `WithContextOffload(ContextOffloadConfig)` | 配置较大工具结果的显式短期上下文卸载。 | 关闭 |
 
-新接入推荐使用 `WithServiceIdentity`。它把 `service_id` 放入
-`X-TDAI-Service-Id`，并从当前 framework session 派生 `user_id` 和
-`session_id`，随后调用身份隔离的 V3 数据面接口。不配置时继续沿用
-Legacy `/capture`、`/recall` 和 `/search/*`，现有用户行为不变。这个 Option
+新接入推荐使用 `NewServiceWithIdentity`。不透明的 `ServiceIdentity` 将 V3
+身份配置与保持 Legacy 兼容的 `Options` 分开。V3 客户端把 `service_id`
+放入 `X-TDAI-Service-Id`，并从当前 framework session 派生 `user_id` 和
+`session_id`，随后调用身份隔离的数据面接口。`NewService` 继续沿用
+Legacy `/capture`、`/recall` 和 `/search/*`，现有用户行为不变。构造函数
 描述的是接口语义，云端版和自建版使用相同的接入方式。L0/L1 按
 Service、Team、Agent、User 隔离；L2/L3 在相同 Service、Team、Agent
 下跨 User 和 Session 共享。adapter 暂不发送可选的 TencentDB `task_id`。

@@ -25,6 +25,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestGatewayClientEndpointsAndErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -162,7 +168,13 @@ func TestGatewayClientDecodeAndRequestEdges(t *testing.T) {
 	require.Error(t, client.doJSONOnce(context.Background(), httpMethodGet, "://bad", nil, nil, true), "expected request build error")
 }
 
-func TestWithServiceIdentityValidation(t *testing.T) {
+func TestNewServiceWithIdentityValidation(t *testing.T) {
+	_, err := NewServiceWithIdentity(
+		ServiceIdentity{},
+		WithGatewayURL("http://127.0.0.1:8420"),
+	)
+	require.ErrorContains(t, err, "service identity is required")
+
 	tests := []struct {
 		name      string
 		serviceID string
@@ -195,27 +207,28 @@ func TestWithServiceIdentityValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewService(
+			_, err := NewServiceWithIdentity(
+				NewServiceIdentity(tt.serviceID, tt.teamID, tt.agentID),
 				WithGatewayURL("http://127.0.0.1:8420"),
 				WithAPIKey(tt.apiKey),
-				WithServiceIdentity(tt.serviceID, tt.teamID, tt.agentID),
 			)
 			require.ErrorContains(t, err, tt.wantError)
 		})
 	}
 
-	svc, err := NewService(
+	svc, err := NewServiceWithIdentity(
+		NewServiceIdentity("service-1", "team-1", "agent-1"),
 		WithGatewayURL("http://127.0.0.1:8420"),
-		WithServiceIdentity("service-1", "team-1", "agent-1"),
 	)
 	require.NoError(t, err)
+	assert.Equal(t, apiModeV3, svc.client.mode)
 	assert.Empty(t, svc.client.apiKey)
 	require.NoError(t, svc.Close())
 
-	svc, err = NewService(
+	svc, err = NewServiceWithIdentity(
+		NewServiceIdentity(" service-1 ", " team-1 ", " agent-1 "),
 		WithGatewayURL("http://127.0.0.1:8420"),
 		WithAPIKey(" key "),
-		WithServiceIdentity(" service-1 ", " team-1 ", " agent-1 "),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, svc.client.identity)
@@ -223,18 +236,35 @@ func TestWithServiceIdentityValidation(t *testing.T) {
 	assert.Equal(t, "team-1", svc.client.identity.teamID)
 	assert.Equal(t, "agent-1", svc.client.identity.agentID)
 	require.NoError(t, svc.Close())
+}
 
-	svc, err = NewService(
-		WithGatewayURL("http://127.0.0.1:8420"),
-		WithAPIKey("key"),
-		WithServiceIdentity("service-old", "team-old", "agent-old"),
-		WithServiceIdentity("service-new", "team-new", "agent-new"),
-	)
+func TestNewServiceUsesLegacyAPI(t *testing.T) {
+	svc, err := NewService(WithGatewayURL("http://127.0.0.1:8420"))
 	require.NoError(t, err)
-	assert.Equal(t, "service-new", svc.client.identity.serviceID)
-	assert.Equal(t, "team-new", svc.client.identity.teamID)
-	assert.Equal(t, "agent-new", svc.client.identity.agentID)
+	assert.Equal(t, apiModeLegacy, svc.client.mode)
+	assert.Nil(t, svc.client.identity)
 	require.NoError(t, svc.Close())
+}
+
+func TestNewGatewayClientRejectsInvalidModeState(t *testing.T) {
+	identity := &serviceIdentity{
+		serviceID: "service-1",
+		teamID:    "team-1",
+		agentID:   "agent-1",
+	}
+	_, err := newGatewayClientWithMode(
+		Options{GatewayURL: "http://127.0.0.1:8420"},
+		apiModeLegacy,
+		identity,
+	)
+	require.ErrorContains(t, err, "legacy API does not accept service identity")
+
+	_, err = newGatewayClientWithMode(
+		Options{GatewayURL: "http://127.0.0.1:8420"},
+		apiMode(255),
+		nil,
+	)
+	require.ErrorContains(t, err, "unsupported API mode")
 }
 
 func TestV3VersionUnmarshal(t *testing.T) {
@@ -279,13 +309,12 @@ func TestGatewayClientV3WithoutAPIKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := newGatewayClient(Options{
+	client, err := newGatewayClientWithMode(Options{
 		GatewayURL: server.URL,
-		identity: &serviceIdentity{
-			serviceID: "service-1",
-			teamID:    "team-1",
-			agentID:   "agent-1",
-		},
+	}, apiModeV3, &serviceIdentity{
+		serviceID: "service-1",
+		teamID:    "team-1",
+		agentID:   "agent-1",
 	})
 	require.NoError(t, err)
 	_, err = client.capture(context.Background(), captureRequest{
@@ -299,6 +328,88 @@ func TestGatewayClientV3WithoutAPIKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, authorization)
 	assert.Equal(t, "service-1", serviceID)
+}
+
+func TestGatewayClientV3RecallPropagatesContextError(t *testing.T) {
+	tests := []struct {
+		name             string
+		newContext       func() (context.Context, context.CancelFunc)
+		cancelAfterStart bool
+		want             error
+	}{
+		{
+			name: "canceled",
+			newContext: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+			cancelAfterStart: true,
+			want:             context.Canceled,
+		},
+		{
+			name: "deadline exceeded",
+			newContext: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 100*time.Millisecond)
+			},
+			want: context.DeadlineExceeded,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blockedRequests := make(chan struct{}, 2)
+			hc := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path == pathV3AtomicSearch {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(strings.NewReader(
+							`{"code":0,"message":"ok","request_id":"request-1","data":{"items":[]}}`,
+						)),
+						Request: req,
+					}, nil
+				}
+				blockedRequests <- struct{}{}
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			})}
+			client, err := newGatewayClientWithMode(Options{
+				GatewayURL: "http://memory.test",
+				HTTPClient: hc,
+				Timeout:    time.Second,
+			}, apiModeV3, &serviceIdentity{
+				serviceID: "service-1",
+				teamID:    "team-1",
+				agentID:   "agent-1",
+			})
+			require.NoError(t, err)
+
+			ctx, cancel := tt.newContext()
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				_, err := client.recall(ctx, recallRequest{
+					Query:  "remembered preference",
+					UserID: "user-1",
+				})
+				result <- err
+			}()
+			for i := 0; i < 2; i++ {
+				select {
+				case <-blockedRequests:
+				case <-time.After(time.Second):
+					t.Fatal("v3 recall request did not start")
+				}
+			}
+			if tt.cancelAfterStart {
+				cancel()
+			}
+			select {
+			case err := <-result:
+				require.ErrorIs(t, err, tt.want)
+			case <-time.After(time.Second):
+				t.Fatal("v3 recall did not return after context completion")
+			}
+		})
+	}
 }
 
 func TestGatewayClientV3DataPlane(t *testing.T) {
@@ -421,15 +532,14 @@ func TestGatewayClientV3DataPlane(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := newGatewayClient(Options{
+	client, err := newGatewayClientWithMode(Options{
 		GatewayURL: server.URL,
 		APIKey:     "test-key",
 		Timeout:    time.Second,
-		identity: &serviceIdentity{
-			serviceID: "service-1",
-			teamID:    "team-1",
-			agentID:   "agent-1",
-		},
+	}, apiModeV3, &serviceIdentity{
+		serviceID: "service-1",
+		teamID:    "team-1",
+		agentID:   "agent-1",
 	})
 	require.NoError(t, err)
 
@@ -525,14 +635,13 @@ func TestGatewayClientV3Errors(t *testing.T) {
 		})
 	}))
 	defer server.Close()
-	client, err := newGatewayClient(Options{
+	client, err := newGatewayClientWithMode(Options{
 		GatewayURL: server.URL,
 		APIKey:     "test-key",
-		identity: &serviceIdentity{
-			serviceID: "service-1",
-			teamID:    "team-1",
-			agentID:   "agent-1",
-		},
+	}, apiModeV3, &serviceIdentity{
+		serviceID: "service-1",
+		teamID:    "team-1",
+		agentID:   "agent-1",
 	})
 	require.NoError(t, err)
 
@@ -573,10 +682,10 @@ func TestServiceV3IngestAndEndSession(t *testing.T) {
 	}))
 	defer server.Close()
 
-	svc, err := NewService(
+	svc, err := NewServiceWithIdentity(
+		NewServiceIdentity("service-1", "team-1", "agent-1"),
 		WithGatewayURL(server.URL),
 		WithAPIKey("test-key"),
-		WithServiceIdentity("service-1", "team-1", "agent-1"),
 		WithIngestJobTimeout(time.Second),
 	)
 	require.NoError(t, err)

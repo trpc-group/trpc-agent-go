@@ -110,10 +110,10 @@ func TestV3RecallPluginSeparatesDynamicAndSystemContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	svc, err := NewService(
+	svc, err := NewServiceWithIdentity(
+		NewServiceIdentity("service-1", "team-1", "agent-1"),
 		WithGatewayURL(server.URL),
 		WithAPIKey("test-key"),
-		WithServiceIdentity("service-1", "team-1", "agent-1"),
 		WithRecallEnabled(true),
 	)
 	require.NoError(t, err)

@@ -27,7 +27,7 @@ var _ session.Ingestor = (*Service)(nil)
 // Service is a TencentDB Agent Memory gateway adapter.
 //
 // Legacy gateway routes are best treated as a trusted sidecar. Callers can use
-// WithServiceIdentity to select the identity-scoped data plane, which sends
+// NewServiceWithIdentity to select the identity-scoped data plane, which sends
 // service/team/agent/user identity to gateways that implement the current API.
 type Service struct {
 	opts          Options
@@ -48,8 +48,49 @@ type Service struct {
 	tools []tool.Tool
 }
 
-// NewService creates a TencentDB Agent Memory service.
+// ServiceIdentity identifies the service, team, and agent used by TencentDB
+// Agent Memory's identity-scoped API. Its contents are intentionally opaque so
+// the identity contract can grow without changing Options or existing call
+// sites. ServiceIdentity values are immutable after construction and may be
+// copied or reused concurrently. The zero value is invalid; create values with
+// NewServiceIdentity.
+type ServiceIdentity struct {
+	config *serviceIdentity
+}
+
+// NewServiceIdentity creates an identity for TencentDB Agent Memory's
+// identity-scoped API. The IDs are normalized when the identity is created and
+// validated by NewServiceWithIdentity.
+func NewServiceIdentity(serviceID, teamID, agentID string) ServiceIdentity {
+	return ServiceIdentity{
+		config: &serviceIdentity{
+			serviceID: strings.TrimSpace(serviceID),
+			teamID:    strings.TrimSpace(teamID),
+			agentID:   strings.TrimSpace(agentID),
+		},
+	}
+}
+
+// NewService creates a TencentDB Agent Memory service that uses the Legacy
+// gateway API.
 func NewService(opts ...Option) (*Service, error) {
+	return newService(apiModeLegacy, nil, opts...)
+}
+
+// NewServiceWithIdentity creates a TencentDB Agent Memory service that uses
+// the identity-scoped V3 API. Identity must be created with
+// NewServiceIdentity, and its service, team, and agent IDs must all be non-empty.
+// User and session IDs come from the framework session. Use WithAPIKey when the
+// gateway requires Bearer authentication; self-hosted gateways that keep
+// authentication disabled can omit it.
+func NewServiceWithIdentity(
+	identity ServiceIdentity,
+	opts ...Option,
+) (*Service, error) {
+	return newService(apiModeV3, identity.config, opts...)
+}
+
+func newService(mode apiMode, identity *serviceIdentity, opts ...Option) (*Service, error) {
 	options := defaultOptions()
 	for _, opt := range opts {
 		if opt != nil {
@@ -59,7 +100,7 @@ func NewService(opts ...Option) (*Service, error) {
 	options.ContextOffload = normalizeContextOffloadConfig(
 		options.ContextOffload,
 	)
-	client, err := newGatewayClient(options)
+	client, err := newGatewayClientWithMode(options, mode, identity)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +196,7 @@ func (s *Service) EndSession(ctx context.Context, sess *session.Session) error {
 		s.finishSerialBarrier(sessionKey, barrier, err)
 		return err
 	}
-	if s.client.identity != nil {
+	if s.client.usesV3API() {
 		s.finishSerialBarrier(sessionKey, barrier, nil)
 		return nil
 	}
@@ -286,7 +327,7 @@ func (s *Service) reserveIngestJob(sess *session.Session, sessionKey string) (in
 		s.inFlight[sessionKey] = scan.Latest
 	}
 	messages := scan.Messages
-	if s.client.identity == nil {
+	if !s.client.usesV3API() {
 		var latestSynthetic int64
 		messages, latestSynthetic = normalizeGatewayMessageTimestampsAfter(
 			scan.Messages,
