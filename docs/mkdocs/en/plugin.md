@@ -372,6 +372,11 @@ the appropriate time in the caller.
 - `BeforeTool`: runs before a tool is called, can modify the tool arguments
   (JavaScript Object Notation (JSON) bytes).
 - `AfterTool`: runs after a tool returns, can replace the result.
+- `AfterToolRound`: observes one assistant tool-call round after all tool calls
+  from that response finish. `Complete` is false when the round is interrupted;
+  otherwise it is true. `ToolResultMessages` follows the assistant tool-call
+  order. The callback is read-only and cannot change the tool results or control
+  flow.
 
 ### Event hook
 
@@ -634,6 +639,33 @@ The output is one JSON debug message per line, for example:
 `plugin.NewGlobalInstruction(text)` prepends a system message to every model
 request. This is useful for organization-wide policies or shared behavior that
 should apply to all agents managed by a Runner.
+
+### ToolLoopWarning
+
+`toolloopwarning.New()` adds a transient warning to the next model request when
+the same complete tool-call round repeats. It warns once per repeated loop and
+does not make an additional model or tool call. The plugin is opt-in and is
+disabled unless registered on a Runner.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolloopwarning"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+agentInstance := llmagent.New(
+	"my-agent",
+	llmagent.WithModel(openai.New("gpt-4o-mini")),
+)
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(toolloopwarning.New()),
+)
+defer runnerInstance.Close()
+```
 
 ### ToolCallID
 
@@ -1136,7 +1168,8 @@ The example includes verified scenarios for:
 - A defensive analysis request that is allowed
 
 The repository currently includes Logging, DebugLog, GlobalInstruction,
-ToolCallID, ToolError, MessageMerger, ErrorMessage, and Guardrail as built-in
+ToolCallID, ToolError, ToolLoopWarning, MessageMerger, ErrorMessage, and
+Guardrail as built-in
 plugins. Tool Approval, Prompt Injection, and Unsafe Intent are currently
 built-in capabilities under the Guardrail plugin. Additional plugins can be
 implemented as custom plugins.
@@ -1157,6 +1190,7 @@ Use the `Registry` methods:
 - `BeforeAgent`, `AfterAgent`
 - `BeforeModel`, `AfterModel`
 - `BeforeTool`, `AfterTool`
+- `AfterToolRound`
 - `OnEvent`
 
 ### 3) (Optional) implement `plugin.Closer`

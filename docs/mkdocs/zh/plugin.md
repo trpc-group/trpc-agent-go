@@ -395,6 +395,10 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 - `BeforeTool`：工具调用前，可以修改工具参数（JSON（JavaScript Object Notation）
   字节）
 - `AfterTool`：工具调用后，可以替换结果
+- `AfterToolRound`：一轮工具调用结束后触发，用于观测同一条 assistant 响应中的完整工具
+  调用轮次。`Complete=false` 表示这一轮被中断，否则为 `true`。
+  `ToolResultMessages` 按 assistant tool call 的顺序排列。该回调只读，不能修改工具结果
+  或改变主流程。
 
 ### Event Hook 点
 
@@ -648,6 +652,32 @@ events, err := runnerInstance.Run(
 
 `plugin.NewGlobalInstruction(text)` 会在每一次模型请求前，统一追加一条 system
 message。适合用来实现全局策略或统一行为（例如安全约束、风格要求）。
+
+### ToolLoopWarning（工具循环提醒）
+
+`toolloopwarning.New()` 用于在同一轮完整工具调用重复时，向下一次模型请求临时追加一条
+提醒。相同循环只提醒一次，不会额外发起模型调用或工具调用。该插件默认关闭，只有显式
+注册到 Runner 后才会生效。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolloopwarning"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+agentInstance := llmagent.New(
+	"my-agent",
+	llmagent.WithModel(openai.New("gpt-4o-mini")),
+)
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(toolloopwarning.New()),
+)
+defer runnerInstance.Close()
+```
 
 ### ToolCallID
 
@@ -1100,7 +1130,7 @@ FinishReason：
 
 完整示例见 [examples/plugin/errormessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/errormessage)。
 
-说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、ToolError、MessageMerger、ErrorMessage、Guardrail 八类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
+说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、ToolError、ToolLoopWarning、MessageMerger、ErrorMessage、Guardrail 九类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
 
 ## 如何扩展：写一个自己的插件
 
@@ -1118,6 +1148,7 @@ FinishReason：
 - `BeforeAgent`, `AfterAgent`
 - `BeforeModel`, `AfterModel`
 - `BeforeTool`, `AfterTool`
+- `AfterToolRound`
 - `OnEvent`
 
 注册回调的方式就是：在 `Register(reg *plugin.Registry)` 中调用这些方法。例如：
