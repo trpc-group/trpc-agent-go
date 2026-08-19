@@ -50,15 +50,7 @@ Hermes therefore also provides background review. After the main task has replie
 
 The Reviewer first checks whether any Skill used in the task needs to be revised. It creates a new Skill only when the task reveals a genuinely new, reusable procedure. As the library grows, a Curator tracks which Skills are frequently viewed, used, and modified; merges overlapping entries; marks long-unused content for cleanup or archival; protects important entries from automated reorganization; and preserves a backup before making changes. If automated curation goes wrong, the backup supports recovery.
 
-```mermaid
-flowchart LR
-    A["Complete a complex task"] --> B["Write a Skill in the foreground<br/>or review the task in the background"]
-    B --> C["Create or revise a Skill"]
-    C --> D["Load it on demand in later tasks"]
-    D --> E["Discover a problem during use"]
-    E --> C
-    C --> F["Curator: deduplicate, archive, and roll back"]
-```
+![Hermes Skill learning and curation cycle](../../assets/img/blog/evolution/en/diagram_skill_cycle_en.png)
 
 Hermes' approach can be summarized as follows: after completing a task, the agent turns reusable methods into procedural memory. Hermes, however, primarily targets personal or single-machine environments. A server-side framework has additional questions to answer. Do multiple applications and users share Skills? May an automated Reviewer overwrite a manually maintained Skill? Can a candidate produced by a failed task be published? What happens when two Reviewers create nearly identical Skills at the same time? Who approves, records, and rolls back a change?
 
@@ -104,22 +96,7 @@ A version produced by online learning may become the initial version for offline
 
 Online Evolution separates **completing the current task** from **extracting a method from that task**. When the background queue has capacity, the user receives the weather report before the system summarizes the execution. A failure in background learning does not turn the completed task into a failure. If the queue is full, the framework falls back to synchronous processing, which may delay the current response; Section 5 explains this behavior in detail.
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant A as Foreground agent
-    participant L as Background learning
-    participant S as Skill repository
-
-    U->>A: Start a task
-    A->>S: Load an existing method on demand
-    S-->>A: Return the Skill
-    A-->>U: Deliver the task result
-    A-)L: Submit new traces and an optional outcome
-    L->>L: Decide → extract → reconcile → check
-    L->>S: Publish a new version that passes configured checks
-    Note over S,A: The new Skill takes effect from the next task
-```
+![Online Evolution returns the task result before background learning](../../assets/img/blog/evolution/en/diagram_online_learning_en.png)
 
 ### When the Queue Has Capacity, Return the Current Result Before Reviewing the Trace
 
@@ -161,22 +138,7 @@ The four Gates can be combined according to business needs. A structural or safe
 
 Gates decide whether a candidate may be published. Revision history makes it possible to recover after publication. Production deployments typically save each create, update, or delete as an immutable revision rather than overwriting the file, and maintain a separate pointer to the active revision. Publishing a new version leaves the previous one intact; if online performance deteriorates, the pointer can be moved back to an earlier revision.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Candidate
-    Candidate --> Rejected: Structure or safety check fails
-    Candidate --> PendingEvaluation: Task failed, agent errored, or score is below threshold
-    PendingEvaluation --> Candidate: Add evaluation evidence and submit a new candidate
-    Candidate --> PendingApproval: Human approval is required
-    Candidate --> Active: Configured checks pass
-    PendingApproval --> Active: Approve
-    PendingApproval --> Rejected: Reject
-    Active --> Archived: Replaced by a new revision
-    Archived --> Active: Roll back
-    note right of PendingEvaluation
-        Requires more evaluation and is not published automatically
-    end note
-```
+![Evolution candidate and revision lifecycle](../../assets/img/blog/evolution/en/diagram_revision_lifecycle_en.png)
 
 The Gates, revision history, and active revision must use the same user or application partition so that a candidate cannot be published into the wrong scope.
 
@@ -210,23 +172,7 @@ Holdout measures unseen tasks only because it has not influenced any previous re
 
 The built-in offline optimizer in tRPC-Agent-Go draws on [GEPA (Genetic-Pareto)](https://arxiv.org/abs/2507.19457). A practical way to understand it is as a sequence of small experiments: choose one retained version as the starting point for a round, change one part, then use task scores to decide whether the change is worth keeping. At the beginning, the initial Skill is the first member of the candidate pool—the set of retained versions that may be revised in later rounds.
 
-```mermaid
-flowchart TB
-    P["Choose a Skill from the candidate pool<br/>as this round's starting point"] --> F["Sample a small Feedback batch<br/>and collect outputs, scores, and feedback"]
-    F --> R["The reflection model changes one Skill field<br/>to produce a revised version"]
-    R --> C["Run the revised version on the same batch<br/>with the same random seed"]
-    C --> G{"Is the revised version's total score<br/>higher than the starting version's?"}
-    G -->|No| X["Discard this revision"]
-    G -->|Yes| V["Evaluate on the full Validation set<br/>and add it to the candidate pool"]
-    X --> Q{"Reached the iteration<br/>or evaluation limit?"}
-    V --> Q
-    Q -->|No| P
-    Q -->|Yes| B["Choose the final version from all candidates<br/>by Validation average score"]
-    B --> H["Only now use Holdout<br/>to compare the initial and candidate versions"]
-    H --> D{"Candidate differs from the initial version,<br/>meets the average requirement, and has<br/>no regression on Critical cases?"}
-    D -->|Yes| S["Candidate is eligible for submission"]
-    D -->|No| K["Keep the initial Skill"]
-```
+![GEPA generates, compares, retains, and confirms Skill revisions](../../assets/img/blog/evolution/en/diagram_gepa_optimization_en.png)
 
 **Each round attempts one change.** The system chooses a Skill from the candidate pool as the starting point, then runs it on a small Feedback batch. The reflection model sees the Skill, actual outputs, scores, and evaluator feedback and edits exactly one of `steps`, `pitfalls`, `when_to_use`, or `description`. In the weather example, a round that edits `steps` may replace “rerun the whole batch” with “record and retry failed cities,” but it will not rewrite the applicability conditions and capability description at the same time. The resulting score change is therefore easier to relate to a concrete edit.
 
@@ -576,16 +522,7 @@ An Evaluator should not rely solely on an average score. It should first verify 
 
 Frozen confirmation compares old and new Skills in relatively isolated conditions. It cannot cover ordering across continuous tasks, changes to shared Skills, or background Reviewer cost. A candidate that passes Holdout can therefore fail in the complete runtime. Before approval and rollout, the application can retrieve the candidate revision and replay historical or synthetic tasks in an environment isolated from production. This “shadow replay” does not change the active revision. If evaluation passes, approve the candidate and expose it first to one tenant or a small traffic slice, then expand gradually once metrics stabilize. Evolution does not provide a built-in shadow-replay switch; the application must implement task isolation, traffic replay, and metric comparison.
 
-```mermaid
-flowchart LR
-    A["Offline search"] --> B["Frozen candidate and Holdout"]
-    B --> C["Await approval: pending_approval"]
-    C --> D["Shadow replay"]
-    D --> E["Approve candidate"]
-    E --> F["Small traffic slice or one tenant"]
-    F --> G["Gradually expand"]
-    G --> H["Continue monitoring with rollback ready"]
-```
+![Evolution production rollout from offline candidate to monitored traffic](../../assets/img/blog/evolution/en/diagram_production_rollout_en.png)
 
 Shadow replay tests sequential tasks and Reviewer cost in an isolated environment. Limited traffic then confirms that the real agent loads the correct revision and that task scores and cost remain acceptable. Only after metrics stabilize should traffic expand. Before each expansion, verify that the candidate writes only to the intended user's or application's managed directory, `ActivePointer` identifies the approved revision, and the agent reads it after Repository refresh. Data entering replay and audit systems should be sanitized first.
 
