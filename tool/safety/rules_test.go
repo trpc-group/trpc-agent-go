@@ -1088,11 +1088,131 @@ func TestGuardScansSedInlinePrograms(t *testing.T) {
 			decision: safety.DecisionAllow,
 			rule:     "safety.no_findings",
 		},
+		{
+			name:     "program after option separator",
+			command:  `sed -- '1e rm -rf .' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "GNU relative address execution",
+			command:  `sed -e '1,+2e rm -rf .' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "GNU step address execution",
+			command:  `sed -e '1,~2e rm -rf .' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "benign transliteration",
+			command:  `sed -e 'y/abc/xyz/' input.txt`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "malformed transliteration",
+			command:  `sed -e 'y/abc' input.txt`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "separate line length option",
+			command:  `sed -l 80 -e '1p' input.txt`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "attached line length option",
+			command:  `sed --line-length=80 -e '1p' input.txt`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "missing line length value",
+			command:  `sed --line-length`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "specified program before option separator",
+			command:  `sed -e '1p' -- input.txt`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "missing program after option separator",
+			command:  `sed --`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "external program file",
+			command:  `sed -f rules.sed input.txt`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "attached external program file",
+			command:  `sed --file=rules.sed input.txt`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "unknown option",
+			command:  `sed --future-option '1p' input.txt`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "known no-value option",
+			command:  `sed --debug -e '1p' input.txt`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "last-line address execution",
+			command:  `sed -e '$e rm -rf .' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "regexp address execution",
+			command:  `sed -e '/match/e rm -rf .' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "alternate regexp address execution",
+			command:  `sed -e '\%match%e rm -rf .' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "malformed relative address",
+			command:  `sed -e '1,+e echo safe' input.txt`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "dynamic backreference replacement",
+			command:  `sed -e 's/.*/echo \1/e' input.txt`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "static escaped replacement",
+			command:  `sed -e 's/.*/echo \q/e' input.txt`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.command",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			report := guard.Scan(safety.Request{Command: tc.command})
-			require.Equal(t, tc.decision, report.Decision)
-			require.Equal(t, tc.rule, report.RuleID)
+			require.Equal(t, tc.decision, report.Decision, "%+v", report)
+			require.Equal(t, tc.rule, report.RuleID, "%+v", report)
 		})
 	}
 }

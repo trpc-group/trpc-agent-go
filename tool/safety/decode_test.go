@@ -861,6 +861,86 @@ func TestDecodeNilAndClosedWorldRequests(t *testing.T) {
 	require.Equal(t, BackendUnknown, req.Backend)
 }
 
+func TestDecodeClosedWorldCompositeValues(t *testing.T) {
+	reader := &decodeDeclarationTool{declaration: &tool.Declaration{
+		Name: "typed_reader",
+		InputSchema: &tool.Schema{
+			Type: "object",
+			Required: []string{
+				"ids", "count", "ratio", "enabled", "note", "label",
+			},
+			AdditionalProperties: false,
+			Properties: map[string]*tool.Schema{
+				"ids": {
+					Type:  "array",
+					Items: &tool.Schema{Type: "integer"},
+				},
+				"count":   {Type: "integer"},
+				"ratio":   {Type: "number"},
+				"enabled": {Type: "boolean"},
+				"note":    {Type: "null"},
+				"label":   {Type: "string"},
+			},
+		},
+	}}
+	metadata := tool.ToolMetadata{ReadOnly: true}
+
+	decoded, scan, err := requestFromPermissionRequest(&tool.PermissionRequest{
+		Tool: reader,
+		Arguments: []byte(
+			`{"ids":[1,2],"count":3,"ratio":1.5,` +
+				`"enabled":true,"note":null,"label":"ok"}`,
+		),
+		Metadata: metadata,
+	})
+	require.NoError(t, err)
+	require.False(t, scan)
+	require.Empty(t, decoded)
+
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "array type mismatch",
+			raw:  `{"ids":1,"count":3,"ratio":1.5,"enabled":true,"note":null,"label":"ok"}`,
+		},
+		{
+			name: "array element mismatch",
+			raw:  `{"ids":[1.5],"count":3,"ratio":1.5,"enabled":true,"note":null,"label":"ok"}`,
+		},
+		{
+			name: "integer type mismatch",
+			raw:  `{"ids":[1],"count":"3","ratio":1.5,"enabled":true,"note":null,"label":"ok"}`,
+		},
+		{
+			name: "number type mismatch",
+			raw:  `{"ids":[1],"count":3,"ratio":"1.5","enabled":true,"note":null,"label":"ok"}`,
+		},
+		{
+			name: "boolean type mismatch",
+			raw:  `{"ids":[1],"count":3,"ratio":1.5,"enabled":"true","note":null,"label":"ok"}`,
+		},
+		{
+			name: "null type mismatch",
+			raw:  `{"ids":[1],"count":3,"ratio":1.5,"enabled":true,"note":"value","label":"ok"}`,
+		},
+		{
+			name: "string type mismatch",
+			raw:  `{"ids":[1],"count":3,"ratio":1.5,"enabled":true,"note":null,"label":1}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decoded, scan, err := requestFromPermissionRequest(&tool.PermissionRequest{
+				Tool: reader, Arguments: []byte(tc.raw), Metadata: metadata,
+			})
+			require.NoError(t, err)
+			require.True(t, scan)
+			require.Equal(t, BackendUnknown, decoded.Backend)
+		})
+	}
+}
+
 func TestDecodeAdversarialClosedWorldSchemasFailSafe(t *testing.T) {
 	t.Run("cycle", func(t *testing.T) {
 		cyclic := &tool.Schema{
