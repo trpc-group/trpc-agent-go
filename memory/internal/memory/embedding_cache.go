@@ -21,9 +21,16 @@ type requestEmbeddingCacheKey struct {
 	text  string
 }
 
+type requestEmbeddingCacheEntry struct {
+	ready     chan struct{}
+	embedding []float64
+	err       error
+	done      bool
+}
+
 type requestEmbeddingCache struct {
-	mu     sync.RWMutex
-	values map[requestEmbeddingCacheKey][]float64
+	mu      sync.Mutex
+	entries map[requestEmbeddingCacheKey]*requestEmbeddingCacheEntry
 }
 
 // WithRequestEmbeddingCache enables exact embedding reuse for the lifetime of
@@ -34,7 +41,7 @@ func WithRequestEmbeddingCache(ctx context.Context) context.Context {
 	}
 	return context.WithValue(ctx, requestEmbeddingCacheContextKey{},
 		&requestEmbeddingCache{
-			values: make(map[requestEmbeddingCacheKey][]float64),
+			entries: make(map[requestEmbeddingCacheKey]*requestEmbeddingCacheEntry),
 		})
 }
 
@@ -49,29 +56,42 @@ func GetOrComputeRequestEmbedding(
 	compute func() ([]float64, error),
 ) ([]float64, error) {
 	cache, ok := ctx.Value(requestEmbeddingCacheContextKey{}).(*requestEmbeddingCache)
-	if !ok || cache == nil || scope == nil ||
-		!reflect.TypeOf(scope).Comparable() {
+	scopeValue := reflect.ValueOf(scope)
+	if !ok || cache == nil || !scopeValue.IsValid() ||
+		!scopeValue.Comparable() {
 		return compute()
 	}
 
 	key := requestEmbeddingCacheKey{scope: scope, text: text}
-	cache.mu.RLock()
-	value, found := cache.values[key]
-	cache.mu.RUnlock()
+	cache.mu.Lock()
+	entry, found := cache.entries[key]
 	if found {
-		return value, nil
+		if entry.done {
+			value, err := entry.embedding, entry.err
+			cache.mu.Unlock()
+			return value, err
+		}
+		cache.mu.Unlock()
+		select {
+		case <-entry.ready:
+			return entry.embedding, entry.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
+	entry = &requestEmbeddingCacheEntry{ready: make(chan struct{})}
+	cache.entries[key] = entry
+	cache.mu.Unlock()
 
 	value, err := compute()
-	if err != nil {
-		return nil, err
-	}
 	cache.mu.Lock()
-	if existing, exists := cache.values[key]; exists {
-		value = existing
-	} else {
-		cache.values[key] = value
+	entry.embedding = value
+	entry.err = err
+	entry.done = true
+	if err != nil {
+		delete(cache.entries, key)
 	}
+	close(entry.ready)
 	cache.mu.Unlock()
-	return value, nil
+	return value, err
 }

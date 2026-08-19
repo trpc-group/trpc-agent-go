@@ -11,7 +11,10 @@ package memory
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -78,8 +81,14 @@ func TestGetOrComputeRequestEmbeddingBypassesInvalidCache(t *testing.T) {
 		[]string{"not comparable"}, "same text", compute,
 	)
 	require.NoError(t, err)
+	_, err = GetOrComputeRequestEmbedding(
+		WithRequestEmbeddingCache(context.Background()),
+		struct{ Value any }{Value: []byte("not comparable at runtime")},
+		"same text", compute,
+	)
+	require.NoError(t, err)
 
-	assert.Equal(t, 2, calls)
+	assert.Equal(t, 3, calls)
 }
 
 func TestGetOrComputeRequestEmbeddingDoesNotCacheErrors(t *testing.T) {
@@ -101,6 +110,37 @@ func TestGetOrComputeRequestEmbeddingDoesNotCacheErrors(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
+func TestGetOrComputeRequestEmbeddingCoalescesConcurrentMisses(t *testing.T) {
+	const goroutines = 16
+	ctx := WithRequestEmbeddingCache(context.Background())
+	scope := new(int)
+	start := make(chan struct{})
+	var calls atomic.Int32
+	compute := func() ([]float64, error) {
+		calls.Add(1)
+		time.Sleep(20 * time.Millisecond)
+		return []float64{1, 2, 3}, nil
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			got, err := GetOrComputeRequestEmbedding(
+				ctx, scope, "same text", compute,
+			)
+			assert.NoError(t, err)
+			assert.Equal(t, []float64{1, 2, 3}, got)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), calls.Load())
+}
+
 func BenchmarkGetOrComputeRequestEmbedding(b *testing.B) {
 	embedding := make([]float64, 1536)
 	compute := func() ([]float64, error) {
@@ -110,14 +150,14 @@ func BenchmarkGetOrComputeRequestEmbedding(b *testing.B) {
 
 	b.Run("disabled", func(b *testing.B) {
 		ctx := context.Background()
-		for b.Loop() {
+		for i := 0; i < b.N; i++ {
 			_, _ = GetOrComputeRequestEmbedding(
 				ctx, scope, "same text", compute,
 			)
 		}
 	})
 	b.Run("miss", func(b *testing.B) {
-		for b.Loop() {
+		for i := 0; i < b.N; i++ {
 			ctx := WithRequestEmbeddingCache(context.Background())
 			_, _ = GetOrComputeRequestEmbedding(
 				ctx, scope, "same text", compute,
@@ -130,7 +170,7 @@ func BenchmarkGetOrComputeRequestEmbedding(b *testing.B) {
 			ctx, scope, "same text", compute,
 		)
 		b.ResetTimer()
-		for b.Loop() {
+		for i := 0; i < b.N; i++ {
 			_, _ = GetOrComputeRequestEmbedding(
 				ctx, scope, "same text", compute,
 			)
