@@ -18,6 +18,9 @@
 // and records it in session history with the queued-message source
 // "plugin/toolloopwarning". The detector resets after each match, so four
 // identical rounds produce warnings after the second and fourth rounds.
+// Tool results are fingerprinted only after every Runner OnEvent hook has
+// finished, so the comparison uses the event that is about to be persisted.
+// A queued user message consumed between rounds breaks their adjacency.
 //
 // The plugin makes no additional model or tool calls. It does not stop or
 // retry the invocation.

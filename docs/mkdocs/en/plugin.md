@@ -654,9 +654,12 @@ role is `user`; the queued-message extension records
 `source: "plugin/toolloopwarning"` so consumers can distinguish it from direct
 user input. The persisted event remains part of later history and replay.
 
-The plugin observes the existing `AfterToolMessages` hook. Register it after
-other Runner plugins that replace tool result messages if it should evaluate
-their final output.
+The plugin associates tool-call metadata at `AfterToolMessages`, then computes
+the fingerprint after the complete Runner `OnEvent` transformation pipeline.
+Its result therefore does not depend on whether a result-transforming plugin is
+registered before or after it. A queued user message consumed between two tool
+rounds breaks their adjacency. Cloned child invocations use an invocation-local
+warning queue and do not borrow the lead agent's user-steer queue.
 
 ```go
 import (

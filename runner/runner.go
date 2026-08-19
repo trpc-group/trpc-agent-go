@@ -1623,6 +1623,7 @@ func (r *runner) processSingleAgentEvent(
 		}
 		return nil
 	}
+	r.applyAfterEventPlugins(ctx, loop.invocation, agentEvent)
 	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
@@ -1920,6 +1921,21 @@ func (r *runner) applyEventPluginsNoSpan(
 	}
 	backfillEventMetadata(updated, e)
 	return updated
+}
+
+func (r *runner) applyAfterEventPlugins(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	e *event.Event,
+) {
+	if invocation == nil || invocation.Plugins == nil || e == nil {
+		return
+	}
+	hooks, ok := invocation.Plugins.(afterEventManager)
+	if !ok {
+		return
+	}
+	hooks.AfterEvent(ctx, invocation, e)
 }
 
 func (r *runner) applyAfterRunPlugins(

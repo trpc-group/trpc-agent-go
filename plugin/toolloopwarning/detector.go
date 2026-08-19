@@ -21,9 +21,10 @@ import (
 )
 
 type detectorState struct {
-	mu       sync.Mutex
-	previous string
-	pending  *pendingRound
+	mu           sync.Mutex
+	previous     string
+	pending      *pendingRound
+	stagedEvents map[string][]model.ToolCall
 }
 
 type pendingRound struct {
@@ -51,6 +52,13 @@ func (s *detectorState) observeToolMessages(
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.observeToolMessagesLocked(toolCalls, toolResultMessages)
+}
+
+func (s *detectorState) observeToolMessagesLocked(
+	toolCalls []model.ToolCall,
+	toolResultMessages []model.Message,
+) bool {
 
 	identity, ok := toolRoundIdentity(toolCalls)
 	if !ok {
@@ -104,6 +112,83 @@ func (s *detectorState) observeToolMessages(
 	return true
 }
 
+func (s *detectorState) stageEvent(
+	eventID string,
+	toolCalls []model.ToolCall,
+) bool {
+	if s == nil || eventID == "" || len(toolCalls) == 0 {
+		return false
+	}
+	if _, ok := toolRoundIdentity(toolCalls); !ok {
+		s.reset()
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stagedEvents == nil {
+		s.stagedEvents = make(map[string][]model.ToolCall)
+	}
+	if _, exists := s.stagedEvents[eventID]; exists {
+		s.resetLocked()
+		return false
+	}
+	s.stagedEvents[eventID] = cloneToolCalls(toolCalls)
+	return true
+}
+
+func (s *detectorState) observeStagedEvent(
+	eventID string,
+	toolResultMessages []model.Message,
+) (bool, bool) {
+	if s == nil || eventID == "" {
+		return false, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	toolCalls, ok := s.stagedEvents[eventID]
+	if !ok {
+		for stagedEventID, stagedToolCalls := range s.stagedEvents {
+			if !resultsBelongToToolCalls(
+				stagedToolCalls,
+				toolResultMessages,
+			) {
+				continue
+			}
+			eventID = stagedEventID
+			toolCalls = stagedToolCalls
+			ok = true
+			break
+		}
+		if !ok {
+			return false, false
+		}
+	}
+	delete(s.stagedEvents, eventID)
+	return s.observeToolMessagesLocked(toolCalls, toolResultMessages), true
+}
+
+func resultsBelongToToolCalls(
+	toolCalls []model.ToolCall,
+	toolResultMessages []model.Message,
+) bool {
+	if len(toolCalls) == 0 || len(toolResultMessages) == 0 {
+		return false
+	}
+	expected := make(map[string]struct{}, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		expected[toolCall.ID] = struct{}{}
+	}
+	for _, message := range toolResultMessages {
+		if message.ToolID == "" {
+			return false
+		}
+		if _, ok := expected[message.ToolID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *detectorState) reset() {
 	if s == nil {
 		return
@@ -116,6 +201,7 @@ func (s *detectorState) reset() {
 func (s *detectorState) resetLocked() {
 	s.previous = ""
 	s.pending = nil
+	s.stagedEvents = nil
 }
 
 func (p *pendingRound) addResults(messages []model.Message) bool {

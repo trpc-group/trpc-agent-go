@@ -664,8 +664,10 @@ message，并按 ID 匹配；不完整或格式异常的轮次会重置 detector
 `source: "plugin/toolloopwarning"`，供消费方区分框架注入和用户直接输入。该 event 会继续
 参与后续历史与回放。
 
-该插件观察现有的 `AfterToolMessages` hook。如果需要基于其他 Runner plugin 替换后的最终
-工具结果判断，应把它注册在这些 plugin 之后。
+该插件会在 `AfterToolMessages` 阶段关联 tool call 元数据，并在完整的 Runner `OnEvent`
+变换链结束后计算指纹，因此结果不依赖它与结果变换插件之间的注册顺序。两个工具轮次之间
+如果消费了一条 queued user message，则两者不再相邻。克隆出的 child invocation 使用自己
+的提醒队列，不会借用 lead agent 的 user-steer queue。
 
 ```go
 import (

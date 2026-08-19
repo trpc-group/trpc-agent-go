@@ -2023,8 +2023,19 @@ type chainTestPluginManager struct {
 	modelCallbacks *model.Callbacks
 	toolCallbacks  *tool.Callbacks
 	eventHook      func(context.Context, *agent.Invocation, *event.Event) (*event.Event, error)
+	afterEventHook func(context.Context, *agent.Invocation, *event.Event)
 	afterRunHook   func(context.Context, *plugin.AfterRunArgs) error
 	closeHook      func(context.Context) error
+}
+
+func (m *chainTestPluginManager) AfterEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	e *event.Event,
+) {
+	if m.afterEventHook != nil {
+		m.afterEventHook(ctx, invocation, e)
+	}
 }
 
 func (m *chainTestPluginManager) AgentCallbacks() *agent.Callbacks {
@@ -2142,6 +2153,9 @@ func TestPluginManagerChain_RunsCallbacksInManagerOrder(t *testing.T) {
 	eventOut, err := chain.OnEvent(context.Background(), nil, &event.Event{Tag: "start"})
 	require.NoError(t, err)
 	require.Equal(t, "start-first-second", eventOut.Tag)
+	afterEvent, ok := chain.(afterEventManager)
+	require.True(t, ok)
+	afterEvent.AfterEvent(context.Background(), nil, eventOut)
 	afterRun, ok := chain.(afterRunManager)
 	require.True(t, ok)
 	err = afterRun.AfterRun(context.Background(), &plugin.AfterRunArgs{})
@@ -2161,6 +2175,8 @@ func TestPluginManagerChain_RunsCallbacksInManagerOrder(t *testing.T) {
 		"second:after-tool",
 		"first:event",
 		"second:event",
+		"first:after-event",
+		"second:after-event",
 		"first:after-run",
 		"second:after-run",
 	}, order)
@@ -2272,6 +2288,9 @@ func newChainTestPluginManager(name string, order *[]string) *chainTestPluginMan
 			*order = append(*order, name+":event")
 			e.Tag += "-" + name
 			return e, nil
+		},
+		afterEventHook: func(context.Context, *agent.Invocation, *event.Event) {
+			*order = append(*order, name+":after-event")
 		},
 		afterRunHook: func(context.Context, *plugin.AfterRunArgs) error {
 			*order = append(*order, name+":after-run")

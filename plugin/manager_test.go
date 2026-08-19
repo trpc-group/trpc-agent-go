@@ -122,6 +122,7 @@ func TestManager_CallbackSetsNilWhenEmpty(t *testing.T) {
 	out, err := m.OnEvent(context.Background(), &agent.Invocation{}, e)
 	require.NoError(t, err)
 	require.Same(t, e, out)
+	m.AfterEvent(context.Background(), &agent.Invocation{}, e)
 	require.NoError(t, m.AfterRun(context.Background(), &plugin.AfterRunArgs{}))
 	require.NoError(t, m.Close(context.Background()))
 	require.NoError(t, m.Close(nil))
@@ -140,8 +141,52 @@ func TestManager_NilReceiver_IsSafe(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Nil(t, out)
+	m.AfterEvent(context.Background(), nil, nil)
 	require.NoError(t, m.AfterRun(context.Background(), nil))
 	require.NoError(t, m.Close(nil))
+}
+
+func TestManager_AfterEventObservesTransformedEvent(t *testing.T) {
+	var observed *event.Event
+	transformer := &testPlugin{
+		name: "transformer",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				_ context.Context,
+				_ *agent.Invocation,
+				_ *event.Event,
+			) (*event.Event, error) {
+				return &event.Event{Tag: "transformed"}, nil
+			})
+		},
+	}
+	observer := &testPlugin{
+		name: "observer",
+		reg: func(r *plugin.Registry) {
+			r.AfterEvent(func(
+				_ context.Context,
+				_ *agent.Invocation,
+				e *event.Event,
+			) {
+				observed = e
+				e.Tag = "observer-mutation"
+			})
+		},
+	}
+	m := plugin.MustNewManager(observer, transformer)
+
+	transformed, err := m.OnEvent(
+		context.Background(),
+		&agent.Invocation{},
+		&event.Event{Tag: "original"},
+	)
+	require.NoError(t, err)
+	m.AfterEvent(context.Background(), &agent.Invocation{}, transformed)
+
+	require.NotSame(t, transformed, observed)
+	require.Equal(t, transformed.ID, observed.ID)
+	require.Equal(t, "observer-mutation", observed.Tag)
+	require.Equal(t, "transformed", transformed.Tag)
 }
 
 func TestManager_Close_ReverseOrderAndJoinErrors(t *testing.T) {
@@ -1135,6 +1180,7 @@ func TestRegistry_NilReceiver_IsSafe(t *testing.T) {
 	r.BeforeTool(nil)
 	r.AfterTool(nil)
 	r.OnEvent(nil)
+	r.AfterEvent(nil)
 	r.AfterRun(nil)
 }
 
