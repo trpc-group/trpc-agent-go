@@ -258,9 +258,13 @@ func (p *TimeRequestProcessor) addTimeToUserMessage(req *model.Request, timeCont
 	req.Messages = append(req.Messages, model.NewUserMessage(timeContent))
 }
 
-// containsTimeInfo checks if the given content already contains the time information.
+// containsTimeInfo reports whether content already has this request's clock
+// block. A raw timestamp in user text is not enough; skip only when the
+// official current-time or current-date label is present.
 func containsTimeInfo(content, timeInfo string) bool {
-	// Extract just the time part for comparison.
-	timePart := strings.TrimPrefix(timeInfo, "The current time is: ")
-	return strings.Contains(content, timePart)
+	if !strings.Contains(content, "The current time is:") &&
+		!strings.Contains(content, "The current date is:") {
+		return false
+	}
+	return strings.Contains(content, timeInfo)
 }

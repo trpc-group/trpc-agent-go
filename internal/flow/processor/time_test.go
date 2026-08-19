@@ -215,6 +215,16 @@ func TestTimeRequestProcessor_ProcessRequest_CreatesUserForStablePrefix(t *testi
 	}
 }
 
+func TestContainsTimeInfo_RequiresClockLabel(t *testing.T) {
+	timeInfo := "The current time is: Monday, January 02, 2006 15:04:05 MST"
+	if containsTimeInfo("Alert started at Monday, January 02, 2006 15:04:05 MST", timeInfo) {
+		t.Fatal("raw timestamp in user text must not skip clock injection")
+	}
+	if !containsTimeInfo("Investigate the alert\n\n"+timeInfo, timeInfo) {
+		t.Fatal("an official clock block should skip a second injection")
+	}
+}
+
 func TestTimeRequestProcessor_RebuildRequestForContextCompaction(t *testing.T) {
 	processor := NewTimeRequestProcessor(WithAddCurrentTime(true))
 	req := &model.Request{
