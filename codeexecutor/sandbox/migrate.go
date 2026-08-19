@@ -94,10 +94,28 @@ func (r *Runtime) migrateLegacyWorkspace(newKey, legacyKey string) error {
 	if oldPath == newPath {
 		return nil
 	}
-	info, err := os.Stat(oldPath)
-	if err != nil || !info.IsDir() {
+	// Lstat (not Stat) so the final legacy path component is not
+	// followed: a workspace root that is itself a symlink would otherwise
+	// be moved by os.Rename and then written through on layout creation,
+	// escaping the configured workspace root.
+	info, err := os.Lstat(oldPath)
+	if os.IsNotExist(err) {
 		// No legacy directory on disk (fresh install or already
 		// migrated): nothing to upgrade.
+		return nil
+	}
+	if err != nil {
+		// Propagate permission/I/O failures instead of silently treating
+		// them as "nothing to migrate" — that would orphan persisted
+		// state and leave a fresh empty workspace in its place.
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		// A symlinked legacy root is untrusted (may point outside the
+		// configured root). Never move or follow it; leave it in place.
+		return nil
+	}
+	if !info.IsDir() {
 		return nil
 	}
 	if _, err := os.Stat(newPath); err == nil {

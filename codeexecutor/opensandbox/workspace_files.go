@@ -375,6 +375,25 @@ func (u *batchUploader) visit(
 	if err != nil {
 		return err
 	}
+	// TOCTOU guard: between the DirEntry.Info inspection above and this
+	// reopen by pathname, a concurrent writer could swap the checked
+	// regular file for a symlink (or another file) pointing outside the
+	// source root. Re-stat the just-opened handle and require it to be
+	// the same file we inspected before queuing it for upload; otherwise
+	// we would read and ship an arbitrary host path outside hostRoot.
+	//
+	// Executing processes substitute symlinks on open, so the handle we
+	// hold is already the final target; that is why we trust Stat here
+	// rather than re-probing the pathname.
+	openedInfo, statErr := f.Stat()
+	if statErr != nil {
+		f.Close()
+		return statErr
+	}
+	if !os.SameFile(info, openedInfo) {
+		f.Close()
+		return fmt.Errorf("opensandbox: %s changed during staging (replaced by a different file or symlink); refusing upload", p)
+	}
 	u.openFiles = append(u.openFiles, f)
 	u.entries = append(u.entries, osb.UploadFileEntry{
 		File: f,

@@ -73,6 +73,8 @@ export OPENSANDBOX_API_KEY=your-api-key                             # API key
 # export OPENSANDBOX_USE_SERVER_PROXY=1                             # Route execd via server (Docker Desktop / WSL2)
 ```
 
+The custom image (and its entrypoint) must provide a POSIX shell (`bash` or a compatible shell invoked via `bash -c`) plus GNU coreutils such as `readlink -m` and `stat -c`. Minimal or Alpine busybox images that lack these tools will create successfully but fail on the first workspace or output-collection operation. Use the default `opensandbox/code-interpreter` image unless you can guarantee these tools are present.
+
 Run with OpenSandbox backend:
 
 ```bash

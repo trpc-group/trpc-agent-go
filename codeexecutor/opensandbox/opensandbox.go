@@ -55,6 +55,14 @@ func WithProtocol(protocol string) Option {
 // used; an explicit empty string is treated as "use the default" so
 // callers cannot accidentally clear the image and trigger an SDK
 // "missing image" error.
+//
+// The selected image must provide a POSIX shell accessible as `bash`
+// (invoked via `bash -c`) and the GNU coreutils `readlink -m` and
+// `stat -c`, which the workspace runtime invokes unconditionally for
+// staging and output collection. Minimal or Alpine busybox images that
+// lack these tools will construct a sandbox successfully but fail at the
+// first workspace or collection operation. Stick to the default
+// CodeInterpreterImage unless you can guarantee these tools are present.
 func WithImage(image string) Option {
 	return func(c *CodeExecutor) {
 		if image != "" {

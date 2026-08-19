@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1939,6 +1940,64 @@ func TestWorkspace_WalkAndUpload_StreamsFiles(t *testing.T) {
 
 	// End-to-end walk still succeeds against the mock upload endpoint.
 	require.NoError(t, exec.rt.walkAndUpload(context.Background(), sb, dir, ws.Path, ws.Path))
+}
+
+// mockDirEntry is a synthetic fs.DirEntry whose Info() always returns the
+// fixed entry, regardless of the on-disk state of the pathname. It lets
+// tests deterministically reproduce the TOCTOU window in batchUploader.visit:
+// the inspected entry claims a regular file while the pathname on disk has
+// been swapped to a symlink.
+type mockDirEntry struct {
+	info os.FileInfo
+}
+
+func (m mockDirEntry) Name() string       { return m.info.Name() }
+func (m mockDirEntry) IsDir() bool        { return m.info.IsDir() }
+func (m mockDirEntry) Type() fs.FileMode  { return m.info.Mode().Type() }
+func (m mockDirEntry) Info() (os.FileInfo, error) { return m.info, nil }
+
+// TestWorkspace_WalkAndUpload_SwapToSymlinkRejected is the TOCTOU regression
+// for batchUploader: after an entry was inspected as a regular file, a
+// concurrent writer swaps the pathname for a symlink pointing outside
+// hostRoot. The uploader must detect the mismatch (os.SameFile) and refuse
+// to stage the arbitrary outside file instead of shipping it into the
+// sandbox.
+func TestWorkspace_WalkAndUpload_SwapToSymlinkRejected(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0o600))
+	victim := filepath.Join(dir, "victim.txt")
+	require.NoError(t, os.WriteFile(victim, []byte("original"), 0o644))
+
+	// The inspected entry (used for the type/same-file check) describes a
+	// regular file with a distinct identity (nil Sys). On disk it is then
+	// replaced by a symlink to a path outside hostRoot.
+	inspected := mockFileInfo{mode: 0o644}
+
+	if err := os.Remove(victim); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), victim); err != nil {
+		t.Skipf("symlink creation failed (Windows needs admin/developer mode): %v", err)
+	}
+
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-toctou-swap", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	sb, err := exec.rt.sandbox()
+	require.NoError(t, err)
+
+	u := &batchUploader{r: exec.rt, sb: sb, destRoot: ws.Path, wsBase: ws.Path}
+	err = u.visit(context.Background(), dir, ws.Path, victim, mockDirEntry{info: inspected})
+	require.Error(t, err, "visit must reject a source swapped to a symlink")
+	require.Contains(t, err.Error(), "changed during staging",
+		"error message should identify the refused upload")
+	require.Empty(t, u.openFiles, "no file handle should remain open after rejection")
+	require.Empty(t, u.entries, "no upload entry should be queued for the swapped file")
 }
 
 // TestWorkspace_WalkAndUpload_BatchedBySize verifies that walkAndUpload

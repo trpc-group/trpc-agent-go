@@ -414,3 +414,38 @@ func TestWorkspaceRegistryAcquire_MigratesLegacyWorkspace(t *testing.T) {
 	assertMigratedFileContent(
 		t, filepath.Join(newPath, "out", "result.txt"), "legacy-out")
 }
+
+// TestMigrateLegacyWorkspace_SymlinkedLegacyRootRejected guards against the
+// migration following a legacy root that is itself a symlink. If the legacy
+// path is a symlink pointing outside the configured workspace root,
+// os.Rename would move the link and subsequent layout creation would write
+// through it, escaping the root. Migration must refuse to move it.
+func TestMigrateLegacyWorkspace_SymlinkedLegacyRootRejected(t *testing.T) {
+	root := t.TempDir()
+	newKey, legacyKey := migrateKeyPair(t)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "sensitive.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath, _ := workspacePathForID(root, legacyKey)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, legacyPath); err != nil {
+		t.Skipf("cannot create symlink in this environment: %v", err)
+	}
+
+	rt := NewRuntime(WithWorkspaceRoot(root))
+	if err := rt.migrateLegacyWorkspace(newKey, legacyKey); err != nil {
+		t.Fatalf("migrateLegacyWorkspace on symlinked legacy root = %v, want no error (refuse)", err)
+	}
+
+	// The symlink must be left in place, the new workspace must not be
+	// created through it, and nothing must be written outside the root.
+	assertPathExists(t, legacyPath)
+	newPath, _ := workspacePathForID(root, newKey)
+	assertPathMissing(t, newPath)
+	if data, err := os.ReadFile(filepath.Join(outside, "sensitive.txt")); err != nil || string(data) != "secret" {
+		t.Fatalf("outside file altered: content=%q err=%v", data, err)
+	}
+}
