@@ -14,16 +14,22 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"strconv"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-type detector struct{}
-
 type detectorState struct {
-	Previous string
-	Warned   bool
-	Pending  bool
+	mu       sync.Mutex
+	previous string
+	pending  *pendingRound
+}
+
+type pendingRound struct {
+	identity  string
+	toolCalls []model.ToolCall
+	results   map[string]model.Message
 }
 
 type roundFingerprint struct {
@@ -36,58 +42,176 @@ type callFingerprint struct {
 	Result    model.Message `json:"result"`
 }
 
-func (detector) observe(
-	state detectorState,
-	toolCallResponse *model.Response,
+func (s *detectorState) observeToolMessages(
+	toolCalls []model.ToolCall,
 	toolResultMessages []model.Message,
-	complete bool,
-) detectorState {
-	if !complete {
-		return detectorState{}
+) bool {
+	if s == nil {
+		return false
 	}
-	fingerprint, ok := fingerprintRound(toolCallResponse, toolResultMessages)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	identity, ok := toolRoundIdentity(toolCalls)
 	if !ok {
-		return detectorState{}
+		s.resetLocked()
+		return false
 	}
-	if fingerprint != state.Previous {
-		return detectorState{Previous: fingerprint}
+	if s.pending == nil || s.pending.identity != identity {
+		if s.pending != nil {
+			// A different round before all prior results arrived breaks
+			// adjacency, but the new round may still seed a comparison.
+			s.resetLocked()
+		}
+		s.pending = &pendingRound{
+			identity:  identity,
+			toolCalls: cloneToolCalls(toolCalls),
+			results:   make(map[string]model.Message, len(toolCalls)),
+		}
 	}
-	if !state.Warned {
-		state.Pending = true
-		state.Warned = true
+	if !s.pending.addResults(toolResultMessages) {
+		s.resetLocked()
+		return false
 	}
-	return state
+	if len(s.pending.results) < len(s.pending.toolCalls) {
+		return false
+	}
+
+	orderedResults := make([]model.Message, 0, len(s.pending.toolCalls))
+	for _, toolCall := range s.pending.toolCalls {
+		result, exists := s.pending.results[toolCall.ID]
+		if !exists {
+			s.resetLocked()
+			return false
+		}
+		orderedResults = append(orderedResults, result)
+	}
+	fingerprint, ok := fingerprintRound(
+		s.pending.toolCalls,
+		orderedResults,
+	)
+	s.pending = nil
+	if !ok {
+		s.resetLocked()
+		return false
+	}
+	if fingerprint != s.previous {
+		s.previous = fingerprint
+		return false
+	}
+	// Reset after a match so every identical pair gets one warning.
+	s.previous = ""
+	return true
 }
 
-func fingerprintRound(
-	toolCallResponse *model.Response,
-	toolResultMessages []model.Message,
-) (string, bool) {
-	if toolCallResponse == nil || len(toolCallResponse.Choices) == 0 {
+func (s *detectorState) reset() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resetLocked()
+}
+
+func (s *detectorState) resetLocked() {
+	s.previous = ""
+	s.pending = nil
+}
+
+func (p *pendingRound) addResults(messages []model.Message) bool {
+	if p == nil || len(messages) == 0 {
+		return false
+	}
+	expected := make(map[string]struct{}, len(p.toolCalls))
+	for _, toolCall := range p.toolCalls {
+		expected[toolCall.ID] = struct{}{}
+	}
+	for _, message := range messages {
+		if message.Role != model.RoleTool || message.ToolID == "" ||
+			message.ToolName == "" {
+			return false
+		}
+		if _, exists := expected[message.ToolID]; !exists {
+			return false
+		}
+		if _, exists := p.results[message.ToolID]; exists {
+			return false
+		}
+		p.results[message.ToolID] = message
+	}
+	return len(p.results) <= len(p.toolCalls)
+}
+
+func toolRoundIdentity(toolCalls []model.ToolCall) (string, bool) {
+	if len(toolCalls) == 0 {
 		return "", false
 	}
-	toolCalls := toolCallResponse.Choices[0].Message.ToolCalls
-	if len(toolCalls) == 0 || len(toolCalls) != len(toolResultMessages) {
-		return "", false
+	type identityCall struct {
+		ID        string `json:"id"`
+		ToolName  string `json:"tool_name"`
+		Arguments string `json:"arguments"`
 	}
-	round := roundFingerprint{
-		ToolCalls: make([]callFingerprint, 0, len(toolCalls)),
-	}
-	for i, toolCall := range toolCalls {
-		result := toolResultMessages[i]
-		result.ToolID = ""
-		round.ToolCalls = append(round.ToolCalls, callFingerprint{
+	identity := make([]identityCall, 0, len(toolCalls))
+	seen := make(map[string]struct{}, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		if toolCall.ID == "" || toolCall.Function.Name == "" {
+			return "", false
+		}
+		if _, exists := seen[toolCall.ID]; exists {
+			return "", false
+		}
+		seen[toolCall.ID] = struct{}{}
+		identity = append(identity, identityCall{
+			ID:        toolCall.ID,
 			ToolName:  toolCall.Function.Name,
-			Arguments: canonicalArguments(toolCall.Function.Arguments),
-			Result:    result,
+			Arguments: string(toolCall.Function.Arguments),
 		})
 	}
-	encoded, err := json.Marshal(round)
+	encoded, err := json.Marshal(identity)
 	if err != nil {
 		return "", false
 	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:]), true
+}
+
+func fingerprintRound(
+	toolCalls []model.ToolCall,
+	toolResultMessages []model.Message,
+) (string, bool) {
+	if len(toolCalls) == 0 || len(toolCalls) != len(toolResultMessages) {
+		return "", false
+	}
+	fingerprint := roundFingerprint{
+		ToolCalls: make([]callFingerprint, 0, len(toolCalls)),
+	}
+	for i, toolCall := range toolCalls {
+		fingerprint.ToolCalls = append(fingerprint.ToolCalls, callFingerprint{
+			ToolName: toolCall.Function.Name,
+			Arguments: digestText(
+				canonicalArguments(toolCall.Function.Arguments),
+			),
+			Result: boundedResultMessage(toolResultMessages[i]),
+		})
+	}
+	encoded, err := json.Marshal(fingerprint)
+	if err != nil {
+		return "", false
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), true
+}
+
+func cloneToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
+	cloned := make([]model.ToolCall, len(toolCalls))
+	copy(cloned, toolCalls)
+	for i := range cloned {
+		cloned[i].Function.Arguments = append(
+			[]byte(nil),
+			toolCalls[i].Function.Arguments...,
+		)
+	}
+	return cloned
 }
 
 func canonicalArguments(arguments []byte) string {
@@ -100,12 +224,72 @@ func canonicalArguments(arguments []byte) string {
 	var value any
 	if decoder.Decode(&value) == nil {
 		var extra any
-		if decoder.Decode(&extra) != io.EOF {
-			return string(trimmed)
-		}
-		if canonical, err := json.Marshal(value); err == nil {
-			return string(canonical)
+		if decoder.Decode(&extra) == io.EOF {
+			if canonical, err := json.Marshal(value); err == nil {
+				return string(canonical)
+			}
 		}
 	}
 	return string(trimmed)
+}
+
+func boundedResultMessage(message model.Message) model.Message {
+	message.ToolID = ""
+	message.Content = digestText(message.Content)
+	message.ReasoningContent = digestText(message.ReasoningContent)
+	message.ReasoningSignature = digestText(message.ReasoningSignature)
+	if len(message.ContentParts) == 0 {
+		return message
+	}
+	parts := make([]model.ContentPart, len(message.ContentParts))
+	for i, part := range message.ContentParts {
+		parts[i] = boundedContentPart(part)
+	}
+	message.ContentParts = parts
+	return message
+}
+
+func boundedContentPart(part model.ContentPart) model.ContentPart {
+	if part.Text != nil {
+		text := digestText(*part.Text)
+		part.Text = &text
+	}
+	if part.Image != nil {
+		image := *part.Image
+		image.Data = digestBytes(image.Data)
+		part.Image = &image
+	}
+	if part.Audio != nil {
+		audio := *part.Audio
+		audio.Data = digestBytes(audio.Data)
+		part.Audio = &audio
+	}
+	if part.Video != nil {
+		video := *part.Video
+		video.Data = digestBytes(video.Data)
+		part.Video = &video
+	}
+	if part.File != nil {
+		file := *part.File
+		file.Data = digestBytes(file.Data)
+		part.File = &file
+	}
+	return part
+}
+
+func digestText(value string) string {
+	if value == "" {
+		return ""
+	}
+	hasher := sha256.New()
+	_, _ = io.WriteString(hasher, value)
+	return strconv.Itoa(len(value)) + ":" + hex.EncodeToString(hasher.Sum(nil))
+}
+
+func digestBytes(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	digest := sha256.Sum256(value)
+	return digest[:]
 }

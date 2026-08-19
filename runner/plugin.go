@@ -34,10 +34,6 @@ type afterRunManager interface {
 	AfterRun(context.Context, *plugin.AfterRunArgs) error
 }
 
-type afterToolRoundManager interface {
-	AfterToolRound(context.Context, *plugin.AfterToolRoundArgs)
-}
-
 func newPluginManagerChain(managers ...agent.PluginManager) agent.PluginManager {
 	filtered := make([]agent.PluginManager, 0, len(managers))
 	for _, manager := range managers {
@@ -187,19 +183,6 @@ func (c pluginManagerChain) AfterToolMessages(
 		}
 	}
 	return last, nil
-}
-
-func (c pluginManagerChain) AfterToolRound(
-	ctx context.Context,
-	args *plugin.AfterToolRoundArgs,
-) {
-	for _, manager := range c {
-		hooks, ok := manager.(afterToolRoundManager)
-		if !ok {
-			continue
-		}
-		hooks.AfterToolRound(ctx, args)
-	}
 }
 
 func (c pluginManagerChain) Close(ctx context.Context) error {

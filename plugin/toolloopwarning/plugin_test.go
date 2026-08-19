@@ -10,90 +10,667 @@ package toolloopwarning
 
 import (
 	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/plugin"
+	pluginbase "trpc.group/trpc-go/trpc-agent-go/plugin"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-func TestPluginAddsOneTransientWarningAndCleansUp(t *testing.T) {
-	manager, err := plugin.NewManager(New())
-	if err != nil {
-		t.Fatal(err)
-	}
-	invocation := &agent.Invocation{}
-	response := toolResponse("search", []byte(`{"query":"x"}`))
-	results := []model.Message{model.NewToolMessage("call", "search", "same")}
-	args := &plugin.AfterToolRoundArgs{
-		Invocation:         invocation,
-		ToolCallResponse:   response,
-		ToolResultMessages: results,
-		Complete:           true,
-	}
-	manager.AfterToolRound(context.Background(), args)
-	manager.AfterToolRound(context.Background(), args)
+func TestPluginWarnsOnEachRepeatedPair(t *testing.T) {
+	manager, err := pluginbase.NewManager(New())
+	require.NoError(t, err)
+	invocation := newPluginInvocation(t, manager)
 
-	ctx := agent.NewInvocationContext(context.Background(), invocation)
-	request := &model.Request{}
-	if _, err := manager.ModelCallbacks().RunBeforeModel(
-		ctx,
-		&model.BeforeModelArgs{Request: request},
-	); err != nil {
-		t.Fatal(err)
+	warnings := make([]bool, 0, 4)
+	for i := 0; i < 4; i++ {
+		arguments := `{"query":"x","limit":1}`
+		if i%2 == 1 {
+			arguments = ` { "limit": 1, "query": "x" } `
+		}
+		warnings = append(warnings, observeCompleteRound(
+			t,
+			manager,
+			invocation,
+			eventCall{
+				index:     0,
+				id:        fmt.Sprintf("call-%d", i),
+				name:      "search",
+				arguments: arguments,
+				result:    "same",
+			},
+		))
 	}
-	if len(request.Messages) != 1 || request.Messages[0].Content != warning {
-		t.Fatalf("warning was not appended: %+v", request.Messages)
-	}
+	require.Equal(t, []bool{false, true, false, true}, warnings)
+}
 
-	secondRequest := &model.Request{}
-	if _, err := manager.ModelCallbacks().RunBeforeModel(
-		ctx,
-		&model.BeforeModelArgs{Request: secondRequest},
-	); err != nil {
-		t.Fatal(err)
-	}
-	if len(secondRequest.Messages) != 0 {
-		t.Fatalf("warning was appended more than once: %+v", secondRequest.Messages)
-	}
+func TestPluginChangedOrMalformedRoundResetsDetection(t *testing.T) {
+	manager, err := pluginbase.NewManager(New())
+	require.NoError(t, err)
+	invocation := newPluginInvocation(t, manager)
 
-	if _, err := manager.AgentCallbacks().RunAfterAgent(
-		context.Background(),
-		&agent.AfterAgentArgs{Invocation: invocation},
-	); err != nil {
-		t.Fatal(err)
-	}
-	thirdRequest := &model.Request{}
-	if _, err := manager.ModelCallbacks().RunBeforeModel(
-		ctx,
-		&model.BeforeModelArgs{Request: thirdRequest},
-	); err != nil {
-		t.Fatal(err)
-	}
-	if len(thirdRequest.Messages) != 0 {
-		t.Fatalf("warning state survived after agent: %+v", thirdRequest.Messages)
+	require.False(t, observeOneCallRound(t, manager, invocation,
+		"call-1", "search", `{"query":"x"}`, "same"))
+	require.False(t, observeOneCallRound(t, manager, invocation,
+		"call-2", "search", `{"query":"y"}`, "same"))
+	require.True(t, observeOneCallRound(t, manager, invocation,
+		"call-3", "search", `{"query":"y"}`, "same"))
+
+	require.False(t, observeOneCallRound(t, manager, invocation,
+		"call-4", "search", `{"query":"z"}`, "same"))
+	toolCalls := []model.ToolCall{newToolCall(
+		"call-5", "search", `{"query":"z"}`,
+	)}
+	malformed := model.NewToolMessage("", "search", "same")
+	require.False(t, observeToolMessages(
+		t, manager, invocation, toolCalls, []model.Message{malformed},
+	))
+	require.False(t, observeOneCallRound(t, manager, invocation,
+		"call-6", "search", `{"query":"z"}`, "same"))
+	require.True(t, observeOneCallRound(t, manager, invocation,
+		"call-7", "search", `{"query":"z"}`, "same"))
+}
+
+func TestPluginCombinesOutOfOrderPerCallResults(t *testing.T) {
+	manager, err := pluginbase.NewManager(New())
+	require.NoError(t, err)
+	invocation := newPluginInvocation(t, manager)
+
+	for round := 0; round < 2; round++ {
+		suffix := round + 1
+		toolCalls := []model.ToolCall{
+			newToolCall(
+				fmt.Sprintf("call-slow-%d", suffix),
+				"slow",
+				`{"value":"same"}`,
+			),
+			newToolCall(
+				fmt.Sprintf("call-fast-%d", suffix),
+				"fast",
+				`{"value":"same"}`,
+			),
+		}
+		fastResult := model.NewToolMessage(
+			fmt.Sprintf("call-fast-%d", suffix), "fast", "fast",
+		)
+		require.False(t, observeToolMessages(
+			t, manager, invocation, toolCalls, []model.Message{fastResult},
+		))
+
+		slowResult := model.NewToolMessage(
+			fmt.Sprintf("call-slow-%d", suffix), "slow", "slow",
+		)
+		require.Equal(
+			t,
+			round == 1,
+			observeToolMessages(
+				t, manager, invocation, toolCalls, []model.Message{slowResult},
+			),
+		)
 	}
 }
 
-func TestPluginIgnoresIncompleteRound(t *testing.T) {
-	manager, err := plugin.NewManager(New())
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestPluginIncompleteTerminalEventResetsDetection(t *testing.T) {
+	manager, err := pluginbase.NewManager(New())
+	require.NoError(t, err)
+	invocation := newPluginInvocation(t, manager)
+	require.False(t, observeOneCallRound(t, manager, invocation,
+		"call-1", "search", `{}`, "same"))
+
+	errorEvent := event.NewErrorEvent(
+		invocation.InvocationID,
+		"assistant",
+		model.ErrorTypeFlowError,
+		"tool round interrupted",
+	)
+	toolresultround.Mark(errorEvent, true)
+	_, err = manager.OnEvent(context.Background(), invocation, errorEvent)
+	require.NoError(t, err)
+
+	require.False(t, observeOneCallRound(t, manager, invocation,
+		"call-2", "search", `{}`, "same"))
+	require.True(t, observeOneCallRound(t, manager, invocation,
+		"call-3", "search", `{}`, "same"))
+}
+
+func TestPluginAgentCallbacksClearInvocationState(t *testing.T) {
+	manager, err := pluginbase.NewManager(New())
+	require.NoError(t, err)
 	invocation := &agent.Invocation{}
-	args := &plugin.AfterToolRoundArgs{
-		Invocation:         invocation,
-		ToolCallResponse:   toolResponse("search", []byte(`{"query":"x"}`)),
-		ToolResultMessages: []model.Message{model.NewToolMessage("call", "search", "same")},
+	stale := &detectorState{previous: "stale"}
+	invocation.SetState(stateKey, stale)
+
+	_, err = manager.AgentCallbacks().RunBeforeAgent(
+		context.Background(),
+		&agent.BeforeAgentArgs{Invocation: invocation},
+	)
+	require.NoError(t, err)
+	state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
+	require.True(t, ok)
+	require.NotSame(t, stale, state)
+	require.Empty(t, state.previous)
+
+	_, err = manager.AgentCallbacks().RunAfterAgent(
+		context.Background(),
+		&agent.AfterAgentArgs{Invocation: invocation},
+	)
+	require.NoError(t, err)
+	_, ok = agent.GetStateValue[*detectorState](invocation, stateKey)
+	require.False(t, ok)
+}
+
+func TestPluginHandlesNilInputsAndMissingInvocation(t *testing.T) {
+	var nilPlugin *toolLoopWarningPlugin
+	require.Empty(t, nilPlugin.Name())
+	nilPlugin.Register(nil)
+	_, err := nilPlugin.beforeAgent(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nilPlugin.afterToolMessages(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nilPlugin.onEvent(context.Background(), nil, nil)
+	require.NoError(t, err)
+	_, err = nilPlugin.afterAgent(context.Background(), nil)
+	require.NoError(t, err)
+
+	plugin := &toolLoopWarningPlugin{}
+	plugin.Register(nil)
+	plugin.Register(&pluginbase.Registry{})
+	_, err = plugin.beforeAgent(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = plugin.beforeAgent(context.Background(), &agent.BeforeAgentArgs{})
+	require.NoError(t, err)
+	_, err = plugin.afterToolMessages(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = plugin.afterToolMessages(
+		context.Background(),
+		&pluginbase.AfterToolMessagesArgs{},
+	)
+	require.NoError(t, err)
+	_, err = plugin.onEvent(context.Background(), nil, &event.Event{})
+	require.NoError(t, err)
+	_, err = plugin.onEvent(context.Background(), &agent.Invocation{}, nil)
+	require.NoError(t, err)
+	_, err = plugin.afterAgent(context.Background(), &agent.AfterAgentArgs{})
+	require.NoError(t, err)
+}
+
+func TestPluginKeepsConcurrentInvocationsIndependent(t *testing.T) {
+	plugin := &toolLoopWarningPlugin{}
+	const invocationCount = 32
+	var wg sync.WaitGroup
+	errors := make(chan error, invocationCount)
+	for i := 0; i < invocationCount; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			invocation := agent.NewInvocation()
+			queue := steer.NewQueue()
+			steer.Attach(invocation, queue)
+			warningCount := 0
+			for round := 0; round < 4; round++ {
+				toolCall := newToolCall(
+					fmt.Sprintf("call-%d-%d", index, round),
+					"search",
+					`{"query":"same"}`,
+				)
+				result := model.NewToolMessage(
+					toolCall.ID, "search", "same",
+				)
+				if _, err := plugin.afterToolMessages(
+					context.Background(),
+					&pluginbase.AfterToolMessagesArgs{
+						Invocation:         invocation,
+						ToolCalls:          []model.ToolCall{toolCall},
+						ToolResultMessages: []model.Message{result},
+					},
+				); err != nil {
+					errors <- err
+					return
+				}
+				warningCount += len(steer.DrainQueued(invocation))
+			}
+			if warningCount != 2 {
+				errors <- fmt.Errorf(
+					"invocation %d warning count = %d, want 2",
+					index,
+					warningCount,
+				)
+			}
+		}(i)
 	}
-	args.Complete = false
-	manager.AfterToolRound(context.Background(), args)
-	if _, ok := agent.GetStateValue[detectorState](invocation, stateKey); !ok {
-		// An empty state is acceptable, but the plugin must not create a pending warning.
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		require.NoError(t, err)
+	}
+}
+
+func TestPluginRunnerIntegrationUsesFinalOrderedToolResults(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		perCall bool
+	}{
+		{name: "disabled", enabled: false},
+		{name: "aggregate", enabled: true},
+		{name: "per_call", enabled: true, perCall: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			modelStub, slowCalls, fastCalls, sessionService, runnerInstance := runRepeatedRound(
+				t,
+				test.enabled,
+				test.perCall,
+			)
+			requests := modelStub.Requests()
+			require.Len(t, requests, 3)
+			require.False(t, hasWarning(requests[0]))
+			require.False(t, hasWarning(requests[1]))
+			require.Equal(t, test.enabled, hasWarning(requests[2]))
+			require.Equal(t, int32(2), slowCalls.Load())
+			require.Equal(t, int32(2), fastCalls.Load())
+			require.Equal(
+				t,
+				[]string{"call-slow-2", "call-fast-2"},
+				lastToolResultIDs(requests[2], 2),
+			)
+			require.Equal(
+				t,
+				[]string{"visible:slow", "visible:fast"},
+				lastToolResultContents(requests[2], 2),
+			)
+			assertSessionWarning(t, sessionService, test.enabled)
+
+			events, err := runnerInstance.Run(
+				context.Background(),
+				"user",
+				"session",
+				model.NewUserMessage("continue"),
+			)
+			require.NoError(t, err)
+			for range events {
+			}
+			requests = modelStub.Requests()
+			require.Len(t, requests, 4)
+			require.Equal(t, test.enabled, hasWarning(requests[3]))
+		})
+	}
+}
+
+func newPluginInvocation(
+	t *testing.T,
+	manager *pluginbase.Manager,
+) *agent.Invocation {
+	t.Helper()
+	invocation := agent.NewInvocation()
+	steer.Attach(invocation, steer.NewQueue())
+	_, err := manager.AgentCallbacks().RunBeforeAgent(
+		context.Background(),
+		&agent.BeforeAgentArgs{Invocation: invocation},
+	)
+	require.NoError(t, err)
+	return invocation
+}
+
+func observeToolMessages(
+	t *testing.T,
+	manager *pluginbase.Manager,
+	invocation *agent.Invocation,
+	toolCalls []model.ToolCall,
+	results []model.Message,
+) bool {
+	t.Helper()
+	_, err := manager.AfterToolMessages(
+		context.Background(),
+		&pluginbase.AfterToolMessagesArgs{
+			Invocation:         invocation,
+			ToolCalls:          toolCalls,
+			ToolResultMessages: results,
+		},
+	)
+	require.NoError(t, err)
+	queued := steer.DrainQueued(invocation)
+	if len(queued) == 0 {
+		return false
+	}
+	require.Len(t, queued, 1)
+	require.Equal(t, model.RoleUser, queued[0].Message.Role)
+	require.Equal(t, warning, queued[0].Message.Content)
+	require.Equal(t, warningSource, queued[0].Source)
+	return true
+}
+
+func observeOneCallRound(
+	t *testing.T,
+	manager *pluginbase.Manager,
+	invocation *agent.Invocation,
+	id string,
+	name string,
+	arguments string,
+	result string,
+) bool {
+	t.Helper()
+	return observeCompleteRound(t, manager, invocation, eventCall{
+		index:     0,
+		id:        id,
+		name:      name,
+		arguments: arguments,
+		result:    result,
+	})
+}
+
+func observeCompleteRound(
+	t *testing.T,
+	manager *pluginbase.Manager,
+	invocation *agent.Invocation,
+	calls ...eventCall,
+) bool {
+	t.Helper()
+	toolCalls := make([]model.ToolCall, len(calls))
+	results := make([]model.Message, len(calls))
+	for _, call := range calls {
+		toolCalls[call.index] = newToolCall(
+			call.id,
+			call.name,
+			call.arguments,
+		)
+		results[call.index] = model.NewToolMessage(
+			call.id,
+			call.name,
+			call.result,
+		)
+	}
+	return observeToolMessages(t, manager, invocation, toolCalls, results)
+}
+
+func hasWarning(messages []model.Message) bool {
+	for _, message := range messages {
+		if message.Role == model.RoleUser && message.Content == warning {
+			return true
+		}
+	}
+	return false
+}
+
+type eventCall struct {
+	index     int
+	id        string
+	name      string
+	arguments string
+	result    string
+}
+
+type repeatedRoundModel struct {
+	mu       sync.Mutex
+	requests [][]model.Message
+}
+
+func (m *repeatedRoundModel) Info() model.Info {
+	return model.Info{Name: "repeated-round-model"}
+}
+
+func (m *repeatedRoundModel) GenerateContent(
+	_ context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	m.requests = append(m.requests, cloneMessages(request.Messages))
+	callIndex := len(m.requests) - 1
+	m.mu.Unlock()
+
+	response := &model.Response{
+		ID:   "final-response",
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("done"),
+		}},
+	}
+	if callIndex < 2 {
+		suffix := callIndex + 1
+		arguments := `{"value":"same"}`
+		if callIndex == 1 {
+			arguments = ` { "value": "same" } `
+		}
+		response = &model.Response{
+			ID:   fmt.Sprintf("tool-response-%d", suffix),
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						newToolCall(fmt.Sprintf("call-slow-%d", suffix), "slow", arguments),
+						newToolCall(fmt.Sprintf("call-fast-%d", suffix), "fast", arguments),
+					},
+				},
+			}},
+		}
+	}
+	responses := make(chan *model.Response, 1)
+	responses <- response
+	close(responses)
+	return responses, nil
+}
+
+func (m *repeatedRoundModel) Requests() [][]model.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	requests := make([][]model.Message, len(m.requests))
+	for i, messages := range m.requests {
+		requests[i] = cloneMessages(messages)
+	}
+	return requests
+}
+
+type parallelInput struct {
+	Value string `json:"value"`
+}
+
+func runRepeatedRound(
+	t *testing.T,
+	warningEnabled bool,
+	perCallResults bool,
+) (
+	*repeatedRoundModel,
+	*atomic.Int32,
+	*atomic.Int32,
+	*sessioninmemory.SessionService,
+	runner.Runner,
+) {
+	t.Helper()
+	fastDone := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	var slowCalls atomic.Int32
+	var fastCalls atomic.Int32
+	slowTool := function.NewFunctionTool(
+		func(ctx context.Context, _ parallelInput) (string, error) {
+			index := int(slowCalls.Add(1) - 1)
+			select {
+			case <-fastDone[index]:
+				return fmt.Sprintf("slow-raw-%d", index+1), nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+		function.WithName("slow"),
+		function.WithDescription("Returns after fast finishes."),
+	)
+	fastTool := function.NewFunctionTool(
+		func(_ context.Context, _ parallelInput) (string, error) {
+			index := int(fastCalls.Add(1) - 1)
+			close(fastDone[index])
+			return fmt.Sprintf("fast-raw-%d", index+1), nil
+		},
+		function.WithName("fast"),
+		function.WithDescription("Returns immediately."),
+	)
+	modelStub := &repeatedRoundModel{}
+	agentInstance := llmagent.New(
+		"assistant",
+		llmagent.WithModel(modelStub),
+		llmagent.WithTools([]tool.Tool{slowTool, fastTool}),
+		llmagent.WithEnableParallelTools(true),
+	)
+	resultTransformer := &testPlugin{
+		name: "visible-result-transformer",
+		register: func(registry *pluginbase.Registry) {
+			registry.AfterToolMessages(func(
+				_ context.Context,
+				args *pluginbase.AfterToolMessagesArgs,
+			) (*pluginbase.AfterToolMessagesResult, error) {
+				replacements := make(
+					[]model.Message,
+					len(args.ToolResultMessages),
+				)
+				for i, message := range args.ToolResultMessages {
+					message.Content = "visible:" + message.ToolName
+					replacements[i] = message
+				}
+				return &pluginbase.AfterToolMessagesResult{
+					ToolResultMessages: replacements,
+				}, nil
+			})
+		},
+	}
+	plugins := []pluginbase.Plugin{resultTransformer}
+	if warningEnabled {
+		plugins = append(plugins, New())
+	}
+	sessionService := sessioninmemory.NewSessionService()
+	runnerInstance := runner.NewRunner(
+		"tool-loop-warning-app",
+		agentInstance,
+		runner.WithSessionService(sessionService),
+		runner.WithPlugins(plugins...),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, runnerInstance.Close())
+		require.NoError(t, sessionService.Close())
+	})
+	var runOptions []agent.RunOption
+	if perCallResults {
+		runOptions = append(
+			runOptions,
+			agent.WithToolResultEventPerCallEnabled(true),
+		)
+	}
+	events, err := runnerInstance.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("run tools"),
+		runOptions...,
+	)
+	require.NoError(t, err)
+	for event := range events {
+		_ = event
+	}
+	return modelStub, &slowCalls, &fastCalls, sessionService, runnerInstance
+}
+
+type testPlugin struct {
+	name     string
+	register func(*pluginbase.Registry)
+}
+
+func (p *testPlugin) Name() string {
+	return p.name
+}
+
+func (p *testPlugin) Register(registry *pluginbase.Registry) {
+	p.register(registry)
+}
+
+func cloneMessages(messages []model.Message) []model.Message {
+	cloned := make([]model.Message, len(messages))
+	for i, message := range messages {
+		cloned[i] = message
+		cloned[i].ToolCalls = append([]model.ToolCall(nil), message.ToolCalls...)
+		cloned[i].ContentParts = append([]model.ContentPart(nil), message.ContentParts...)
+	}
+	return cloned
+}
+
+func lastToolResultIDs(messages []model.Message, count int) []string {
+	results := lastToolResults(messages, count)
+	ids := make([]string, 0, len(results))
+	for _, result := range results {
+		ids = append(ids, result.ToolID)
+	}
+	return ids
+}
+
+func lastToolResultContents(messages []model.Message, count int) []string {
+	results := lastToolResults(messages, count)
+	contents := make([]string, 0, len(results))
+	for _, result := range results {
+		contents = append(contents, result.Content)
+	}
+	return contents
+}
+
+func lastToolResults(messages []model.Message, count int) []model.Message {
+	results := make([]model.Message, 0, count)
+	for i := len(messages) - 1; i >= 0 && len(results) < count; i-- {
+		if messages[i].Role == model.RoleTool {
+			results = append(results, messages[i])
+		}
+	}
+	for left, right := 0, len(results)-1; left < right; left, right = left+1, right-1 {
+		results[left], results[right] = results[right], results[left]
+	}
+	return results
+}
+
+func assertSessionWarning(
+	t *testing.T,
+	service *sessioninmemory.SessionService,
+	want bool,
+) {
+	t.Helper()
+	sess, err := service.GetSession(context.Background(), session.Key{
+		AppName:   "tool-loop-warning-app",
+		UserID:    "user",
+		SessionID: "session",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	var warningEvents []event.Event
+	for _, sessionEvent := range sess.GetEvents() {
+		if sessionEvent.Response == nil {
+			continue
+		}
+		for _, choice := range sessionEvent.Response.Choices {
+			if choice.Message.Content == warning {
+				warningEvents = append(warningEvents, sessionEvent)
+			}
+		}
+	}
+	if !want {
+		require.Empty(t, warningEvents)
 		return
 	}
-	state, _ := agent.GetStateValue[detectorState](invocation, stateKey)
-	if state.Pending {
-		t.Fatal("incomplete round created a pending warning")
-	}
+	require.Len(t, warningEvents, 1)
+	warningEvent := warningEvents[0]
+	require.Equal(t, "user", warningEvent.Author)
+	require.Equal(t, model.RoleUser, warningEvent.Choices[0].Message.Role)
+	metadata, ok, err := event.GetExtension[steer.QueuedUserMessageMetadata](
+		&warningEvent,
+		steer.ExtensionKeyQueuedUserMessage,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, steer.QueuedUserMessageStatusConsumed, metadata.Status)
+	require.Equal(t, warningSource, metadata.Source)
 }

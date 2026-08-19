@@ -9,104 +9,201 @@
 package toolloopwarning
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestFingerprintRoundIgnoresToolIDsAndCanonicalizesArguments(t *testing.T) {
-	responseA := toolResponse("search", []byte(`{"query":"x","limit":1}`))
-	responseB := toolResponse("search", []byte(` { "limit": 1, "query": "x" } `))
-	resultA := []model.Message{model.NewToolMessage("call-a", "search", "same")}
-	resultB := []model.Message{model.NewToolMessage("call-b", "search", "same")}
+func TestFingerprintRoundCanonicalizesArgumentsAndIgnoresIDs(t *testing.T) {
+	callsA := []model.ToolCall{
+		newToolCall(
+			"call-search-a",
+			"search",
+			`{"query":"x","limit":9007199254740993}`,
+		),
+		newToolCall("call-read-a", "read", `{"path":"a.go"}`),
+	}
+	callsB := []model.ToolCall{
+		newToolCall(
+			"call-search-b",
+			"search",
+			` { "limit": 9007199254740993, "query": "x" } `,
+		),
+		newToolCall("call-read-b", "read", `{"path":"a.go"}`),
+	}
+	resultsA := []model.Message{
+		model.NewToolMessage("call-search-a", "search", "matches"),
+		model.NewToolMessage("call-read-a", "read", "file"),
+	}
+	resultsB := []model.Message{
+		model.NewToolMessage("call-search-b", "search", "matches"),
+		model.NewToolMessage("call-read-b", "read", "file"),
+	}
 
-	fingerprintA, ok := fingerprintRound(responseA, resultA)
-	if !ok {
-		t.Fatal("fingerprintRound returned false")
+	fingerprintA, ok := fingerprintRound(callsA, resultsA)
+	require.True(t, ok)
+	fingerprintB, ok := fingerprintRound(callsB, resultsB)
+	require.True(t, ok)
+	require.Equal(t, fingerprintA, fingerprintB)
+}
+
+func TestFingerprintRoundDetectsSemanticFieldsChanging(t *testing.T) {
+	baseFingerprint, ok := fingerprintRound(
+		[]model.ToolCall{newToolCall("call-1", "search", `{"query":"x"}`)},
+		[]model.Message{model.NewToolMessage("call-1", "search", "same")},
+	)
+	require.True(t, ok)
+
+	tests := map[string]struct {
+		call   model.ToolCall
+		result model.Message
+	}{
+		"tool name": {
+			call:   newToolCall("call-2", "read", `{"query":"x"}`),
+			result: model.NewToolMessage("call-2", "read", "same"),
+		},
+		"arguments": {
+			call:   newToolCall("call-2", "search", `{"query":"y"}`),
+			result: model.NewToolMessage("call-2", "search", "same"),
+		},
+		"result content": {
+			call:   newToolCall("call-2", "search", `{"query":"x"}`),
+			result: model.NewToolMessage("call-2", "search", "changed"),
+		},
+		"result tool name": {
+			call:   newToolCall("call-2", "search", `{"query":"x"}`),
+			result: model.NewToolMessage("call-2", "different", "same"),
+		},
 	}
-	fingerprintB, ok := fingerprintRound(responseB, resultB)
-	if !ok {
-		t.Fatal("fingerprintRound returned false")
-	}
-	if fingerprintA != fingerprintB {
-		t.Fatalf("fingerprints differ: %q != %q", fingerprintA, fingerprintB)
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			fingerprint, ok := fingerprintRound(
+				[]model.ToolCall{test.call},
+				[]model.Message{test.result},
+			)
+			require.True(t, ok)
+			require.NotEqual(t, baseFingerprint, fingerprint)
+		})
 	}
 }
 
-func TestFingerprintRoundPreservesInvalidArgumentWhitespaceAndResultFields(t *testing.T) {
-	response := toolResponse("search", []byte(`{"query":"x"}`))
-	first := []model.Message{model.NewToolMessage("call-a", "search", "same")}
-	second := []model.Message{model.NewToolMessage("call-b", "other", "same")}
+func TestCanonicalArgumentsPreservesNumbersAndInvalidJSON(t *testing.T) {
+	require.Equal(t, "", canonicalArguments(nil))
+	require.Equal(t, "", canonicalArguments([]byte(" \n\t")))
+	require.Equal(
+		t,
+		`{"a":1,"n":9007199254740993}`,
+		canonicalArguments([]byte(` { "n": 9007199254740993, "a": 1 } `)),
+	)
+	require.NotEqual(
+		t,
+		canonicalArguments([]byte(`{"n":9007199254740992}`)),
+		canonicalArguments([]byte(`{"n":9007199254740993}`)),
+	)
+	require.Equal(
+		t,
+		`{"query":"a  b",}`,
+		canonicalArguments([]byte(`  {"query":"a  b",}  `)),
+	)
+	require.NotEqual(
+		t,
+		canonicalArguments([]byte(`{"query":"a  b",}`)),
+		canonicalArguments([]byte(`{"query":"a b",}`)),
+	)
+	require.Equal(t, `1 2`, canonicalArguments([]byte(` 1 2 `)))
+}
 
-	fingerprintFirst, ok := fingerprintRound(response, first)
-	if !ok {
-		t.Fatal("fingerprintRound returned false")
-	}
-	fingerprintSecond, ok := fingerprintRound(response, second)
-	if !ok {
-		t.Fatal("fingerprintRound returned false")
-	}
-	if fingerprintFirst == fingerprintSecond {
-		t.Fatal("different model-visible result fields produced the same fingerprint")
-	}
+func TestDetectorRejectsMalformedRounds(t *testing.T) {
+	_, ok := toolRoundIdentity(nil)
+	require.False(t, ok)
+	_, ok = toolRoundIdentity([]model.ToolCall{newToolCall("", "search", `{}`)})
+	require.False(t, ok)
+	_, ok = toolRoundIdentity([]model.ToolCall{newToolCall("call", "", `{}`)})
+	require.False(t, ok)
+	_, ok = toolRoundIdentity([]model.ToolCall{
+		newToolCall("call", "search", `{}`),
+		newToolCall("call", "read", `{}`),
+	})
+	require.False(t, ok)
 
-	invalidA := canonicalArguments([]byte(`{"query":"a  b",}`))
-	invalidB := canonicalArguments([]byte(`{"query":"a b",}`))
-	if invalidA == invalidB {
-		t.Fatal("argument canonicalization collapsed meaningful whitespace")
+	toolCalls := []model.ToolCall{newToolCall("call", "search", `{}`)}
+	invalidResults := []model.Message{
+		model.NewToolMessage("", "search", "same"),
+		model.NewToolMessage("other", "search", "same"),
+		model.NewAssistantMessage("same"),
+		{Role: model.RoleTool, ToolID: "call", Content: "same"},
+	}
+	for _, result := range invalidResults {
+		state := &detectorState{}
+		require.False(t, state.observeToolMessages(
+			toolCalls,
+			[]model.Message{result},
+		))
+		require.Empty(t, state.previous)
+		require.Nil(t, state.pending)
 	}
 }
 
-func TestDetectorWarnsOnceUntilRoundChanges(t *testing.T) {
-	d := detector{}
-	response := toolResponse("search", []byte(`{"query":"x"}`))
-	results := []model.Message{model.NewToolMessage("call", "search", "same")}
+func TestFingerprintRoundBoundsMultimodalPayloads(t *testing.T) {
+	text := strings.Repeat("text", 1<<16)
+	binary := bytes.Repeat([]byte{0x5a}, 1<<20)
+	result := model.NewToolMessage("call-1", "inspect", strings.Repeat("result", 1<<15))
+	result.ReasoningContent = "reasoning"
+	result.ReasoningSignature = "signature"
+	result.ContentParts = []model.ContentPart{
+		{Type: model.ContentTypeText, Text: &text},
+		{Type: model.ContentTypeImage, Image: &model.Image{Data: binary, Format: "png"}},
+		{Type: model.ContentTypeAudio, Audio: &model.Audio{Data: binary, Format: "wav"}},
+		{Type: model.ContentTypeVideo, Video: &model.Video{Data: binary, Format: "mp4"}},
+		{Type: model.ContentTypeFile, File: &model.File{Data: binary, Name: "data.bin"}},
+		{Type: model.ContentTypeFile, ContentRef: &model.ContentRef{ArtifactRef: "artifact://data@0"}},
+	}
+	toolCalls := []model.ToolCall{newToolCall("call-1", "inspect", `{}`)}
+	fingerprint, ok := fingerprintRound(toolCalls, []model.Message{result})
+	require.True(t, ok)
+	require.NotEmpty(t, fingerprint)
+	require.Len(t, result.ContentParts[1].Image.Data, len(binary))
 
-	state := d.observe(detectorState{}, response, results, true)
-	if state.Pending {
-		t.Fatal("first round should not be pending")
-	}
-	state = d.observe(state, response, results, true)
-	if !state.Pending {
-		t.Fatal("repeated round should be pending")
-	}
-	state.Pending = false
-	state = d.observe(state, response, results, true)
-	if state.Pending {
-		t.Fatal("same loop should not warn repeatedly")
-	}
-
-	changed := toolResponse("search", []byte(`{"query":"y"}`))
-	state = d.observe(state, changed, results, true)
-	state = d.observe(state, changed, results, true)
-	if !state.Pending {
-		t.Fatal("a new repeated round should warn again")
-	}
+	changedResult := result
+	changedResult.ContentParts = append([]model.ContentPart(nil), result.ContentParts...)
+	changedImage := *result.ContentParts[1].Image
+	changedImage.Data = append([]byte(nil), binary...)
+	changedImage.Data[len(changedImage.Data)-1]++
+	changedResult.ContentParts[1].Image = &changedImage
+	changedFingerprint, ok := fingerprintRound(
+		toolCalls,
+		[]model.Message{changedResult},
+	)
+	require.True(t, ok)
+	require.NotEqual(t, fingerprint, changedFingerprint)
+	require.Nil(t, digestBytes(nil))
+	require.Len(t, digestBytes([]byte{}), sha256Size)
 }
 
-func TestDetectorIncompleteRoundClearsState(t *testing.T) {
-	d := detector{}
-	response := toolResponse("search", []byte(`{"query":"x"}`))
-	results := []model.Message{model.NewToolMessage("call", "search", "same")}
-
-	state := d.observe(detectorState{}, response, results, true)
-	state = d.observe(state, response, results, false)
-	if state != (detectorState{}) {
-		t.Fatalf("incomplete round left state: %+v", state)
-	}
+func TestFingerprintRoundRejectsUnencodableResult(t *testing.T) {
+	result := model.NewToolMessage("call-1", "search", "same")
+	result.ToolCalls = []model.ToolCall{{
+		ExtraFields: map[string]any{"unsupported": make(chan int)},
+	}}
+	_, ok := fingerprintRound(
+		[]model.ToolCall{newToolCall("call-1", "search", `{}`)},
+		[]model.Message{result},
+	)
+	require.False(t, ok)
 }
 
-func toolResponse(name string, arguments []byte) *model.Response {
-	return &model.Response{
-		Choices: []model.Choice{{
-			Message: model.Message{
-				ToolCalls: []model.ToolCall{{
-					Function: model.FunctionDefinitionParam{
-						Name:      name,
-						Arguments: arguments,
-					},
-				}},
-			},
-		}},
+const sha256Size = 32
+
+func newToolCall(id, name, arguments string) model.ToolCall {
+	return model.ToolCall{
+		ID:   id,
+		Type: "function",
+		Function: model.FunctionDefinitionParam{
+			Name:      name,
+			Arguments: []byte(arguments),
+		},
 	}
 }

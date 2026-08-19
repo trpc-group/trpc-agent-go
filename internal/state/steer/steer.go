@@ -38,13 +38,25 @@ const (
 
 // QueuedUserMessageMetadata describes the queued user-message event state.
 type QueuedUserMessageMetadata struct {
+	// Status describes how the queued message was handled.
 	Status string `json:"status"`
+	// Source identifies a framework producer for synthetic messages. It is
+	// empty for ordinary messages queued through runner.EnqueueUserMessage.
+	Source string `json:"source,omitempty"`
+}
+
+// QueuedMessage is one message waiting for a safe model-turn boundary.
+type QueuedMessage struct {
+	// Message is the user-role message to persist and send to the model.
+	Message model.Message
+	// Source identifies the framework producer of a synthetic message.
+	Source string
 }
 
 // Queue stores queued user messages in FIFO order.
 type Queue struct {
 	mu       sync.Mutex
-	messages []model.Message
+	messages []QueuedMessage
 	closed   bool
 }
 
@@ -55,6 +67,10 @@ func NewQueue() *Queue {
 
 // Enqueue appends one message unless the queue has been closed.
 func (q *Queue) Enqueue(message model.Message) bool {
+	return q.enqueue(QueuedMessage{Message: message})
+}
+
+func (q *Queue) enqueue(message QueuedMessage) bool {
 	if q == nil {
 		return false
 	}
@@ -70,6 +86,18 @@ func (q *Queue) Enqueue(message model.Message) bool {
 
 // Drain returns all queued messages in FIFO order.
 func (q *Queue) Drain() []model.Message {
+	queued := q.drainQueued()
+	if len(queued) == 0 {
+		return nil
+	}
+	messages := make([]model.Message, 0, len(queued))
+	for _, message := range queued {
+		messages = append(messages, message.Message)
+	}
+	return messages
+}
+
+func (q *Queue) drainQueued() []QueuedMessage {
 	if q == nil {
 		return nil
 	}
@@ -79,25 +107,14 @@ func (q *Queue) Drain() []model.Message {
 	if len(q.messages) == 0 {
 		return nil
 	}
-	drained := append([]model.Message(nil), q.messages...)
+	drained := append([]QueuedMessage(nil), q.messages...)
 	q.messages = nil
 	return drained
 }
 
 // Discard removes all queued messages without closing the queue.
 func (q *Queue) Discard() []model.Message {
-	if q == nil {
-		return nil
-	}
-
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.messages) == 0 {
-		return nil
-	}
-	discarded := append([]model.Message(nil), q.messages...)
-	q.messages = nil
-	return discarded
+	return q.Drain()
 }
 
 // Close rejects future enqueues.
@@ -153,6 +170,32 @@ func IsAttached(inv *agent.Invocation) bool {
 	return ok && queue != nil
 }
 
+// EnqueueWithSource queues a synthetic user-role message and records its
+// framework source on the event emitted when the message is consumed. It
+// returns false when the source is empty, the message is not a non-empty user
+// message, or the invocation has no open queue.
+func EnqueueWithSource(
+	inv *agent.Invocation,
+	message model.Message,
+	source string,
+) bool {
+	if source == "" || message.Role != model.RoleUser ||
+		!model.HasPayload(message) {
+		return false
+	}
+	queue, ok := agent.GetStateValue[*Queue](
+		inv,
+		StateKeyQueuedUserMessages,
+	)
+	if !ok || queue == nil {
+		return false
+	}
+	return queue.enqueue(QueuedMessage{
+		Message: message,
+		Source:  source,
+	})
+}
+
 // Drain removes and returns queued messages from the invocation.
 func Drain(inv *agent.Invocation) []model.Message {
 	queue, ok := agent.GetStateValue[*Queue](
@@ -163,6 +206,20 @@ func Drain(inv *agent.Invocation) []model.Message {
 		return nil
 	}
 	return queue.Drain()
+}
+
+// DrainQueued removes and returns all queued messages with their source
+// metadata in FIFO order. It returns nil when no queue is attached or the queue
+// is empty.
+func DrainQueued(inv *agent.Invocation) []QueuedMessage {
+	queue, ok := agent.GetStateValue[*Queue](
+		inv,
+		StateKeyQueuedUserMessages,
+	)
+	if !ok || queue == nil {
+		return nil
+	}
+	return queue.drainQueued()
 }
 
 // Close rejects future enqueues for the invocation queue. A borrowed

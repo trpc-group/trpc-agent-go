@@ -10,32 +10,36 @@ package toolloopwarning
 
 import (
 	"context"
-	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 )
 
 const (
-	pluginName = "tool-loop-warning"
-	stateKey   = "plugin:toolloopwarning"
-	warning    = "The same tool-call loop has repeated. Please change your approach or stop calling the same tools with the same inputs."
+	pluginName    = "tool_loop_warning"
+	stateKey      = "plugin:toolloopwarning"
+	warningSource = "plugin/toolloopwarning"
+	warning       = "The same tool-call loop has repeated. Please change your approach or stop calling the same tools with the same inputs."
 )
 
-type toolLoopWarningPlugin struct {
-	detector detector
-	mu       sync.Mutex
-}
+type toolLoopWarningPlugin struct{}
 
-// New creates a plugin that warns the model once when an identical complete
-// tool round repeats. The plugin is disabled unless installed on a Runner.
+// New returns an opt-in plugin that persists a synthetic user-role instruction
+// when two consecutive complete tool rounds are identical. The detector resets
+// after each match and never stops or retries the invocation.
 func New() plugin.Plugin {
 	return &toolLoopWarningPlugin{}
 }
 
 // Name implements plugin.Plugin.
 func (p *toolLoopWarningPlugin) Name() string {
+	if p == nil {
+		return ""
+	}
 	return pluginName
 }
 
@@ -45,8 +49,8 @@ func (p *toolLoopWarningPlugin) Register(r *plugin.Registry) {
 		return
 	}
 	r.BeforeAgent(p.beforeAgent)
-	r.AfterToolRound(p.afterToolRound)
-	r.BeforeModel(p.beforeModel)
+	r.AfterToolMessages(p.afterToolMessages)
+	r.OnEvent(p.onEvent)
 	r.AfterAgent(p.afterAgent)
 }
 
@@ -57,55 +61,53 @@ func (p *toolLoopWarningPlugin) beforeAgent(
 	if p == nil || args == nil || args.Invocation == nil {
 		return nil, nil
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	args.Invocation.DeleteState(stateKey)
+	args.Invocation.SetState(stateKey, &detectorState{})
 	return nil, nil
 }
 
-func (p *toolLoopWarningPlugin) afterToolRound(
+func (p *toolLoopWarningPlugin) afterToolMessages(
 	_ context.Context,
-	args *plugin.AfterToolRoundArgs,
-) {
+	args *plugin.AfterToolMessagesArgs,
+) (*plugin.AfterToolMessagesResult, error) {
 	if p == nil || args == nil || args.Invocation == nil {
-		return
+		return nil, nil
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	state, _ := agent.GetStateValue[detectorState](args.Invocation, stateKey)
-	state = p.detector.observe(
-		state,
-		args.ToolCallResponse,
-		args.ToolResultMessages,
-		args.Complete,
+	state := detectorStateFor(args.Invocation)
+	if !state.observeToolMessages(args.ToolCalls, args.ToolResultMessages) {
+		return nil, nil
+	}
+	steer.EnqueueWithSource(
+		args.Invocation,
+		model.NewUserMessage(warning),
+		warningSource,
 	)
-	args.Invocation.SetState(stateKey, state)
+	return nil, nil
 }
 
-func (p *toolLoopWarningPlugin) beforeModel(
-	ctx context.Context,
-	args *model.BeforeModelArgs,
-) (*model.BeforeModelResult, error) {
-	if p == nil || args == nil || args.Request == nil {
-		return nil, nil
+func (p *toolLoopWarningPlugin) onEvent(
+	_ context.Context,
+	invocation *agent.Invocation,
+	ev *event.Event,
+) (*event.Event, error) {
+	if p == nil || invocation == nil || ev == nil {
+		return ev, nil
 	}
-	invocation, ok := agent.InvocationFromContext(ctx)
-	if !ok || invocation == nil {
-		return nil, nil
+	if toolresultround.HasMarker(ev) &&
+		(ev.Response == nil ||
+			ev.Response.Object != model.ObjectTypeToolResponse) {
+		detectorStateFor(invocation).reset()
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	state, ok := agent.GetStateValue[detectorState](invocation, stateKey)
-	if !ok || !state.Pending {
-		return nil, nil
+	return ev, nil
+}
+
+func detectorStateFor(invocation *agent.Invocation) *detectorState {
+	state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
+	if ok && state != nil {
+		return state
 	}
-	args.Request.Messages = append(args.Request.Messages, model.Message{
-		Role:    model.RoleUser,
-		Content: warning,
-	})
-	state.Pending = false
+	state = &detectorState{}
 	invocation.SetState(stateKey, state)
-	return nil, nil
+	return state
 }
 
 func (p *toolLoopWarningPlugin) afterAgent(
@@ -115,8 +117,6 @@ func (p *toolLoopWarningPlugin) afterAgent(
 	if p == nil || args == nil || args.Invocation == nil {
 		return nil, nil
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	args.Invocation.DeleteState(stateKey)
 	return nil, nil
 }

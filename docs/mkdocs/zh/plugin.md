@@ -395,10 +395,6 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 - `BeforeTool`：工具调用前，可以修改工具参数（JSON（JavaScript Object Notation）
   字节）
 - `AfterTool`：工具调用后，可以替换结果
-- `AfterToolRound`：一轮工具调用结束后触发，用于观测同一条 assistant 响应中的完整工具
-  调用轮次。`Complete=false` 表示这一轮被中断，否则为 `true`。
-  `ToolResultMessages` 按 assistant tool call 的顺序排列。该回调只读，不能修改工具结果
-  或改变主流程。
 
 ### Event Hook 点
 
@@ -655,9 +651,21 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 
 ### ToolLoopWarning（工具循环提醒）
 
-`toolloopwarning.New()` 用于在同一轮完整工具调用重复时，向下一次模型请求临时追加一条
-提醒。相同循环只提醒一次，不会额外发起模型调用或工具调用。该插件默认关闭，只有显式
-注册到 Runner 后才会生效。
+`toolloopwarning.New()` 会在最终模型可见的工具结果准备完成后，比较相邻的完整工具轮次。
+当工具名称、规范化后的 JSON 参数以及结果都相同时，插件会排队一条 synthetic user-role
+提醒，并重置 detector。因此，连续四个相同轮次会在第二、第四个轮次结束后提醒。
+
+检测会忽略 tool call ID。V1 的完整轮次要求每个 tool call 恰好对应一条末尾 tool result
+message，并按 ID 匹配；不完整或格式异常的轮次会重置 detector。该插件默认关闭，不会额外
+发起模型调用或工具调用，也不会停止 invocation 或触发重试。
+
+在下一个安全的模型轮次边界，Runner 会先把提醒作为 session event 持久化，再构造下一次
+模型请求。它在模型协议中的 role 是 `user`；queued-message extension 会记录
+`source: "plugin/toolloopwarning"`，供消费方区分框架注入和用户直接输入。该 event 会继续
+参与后续历史与回放。
+
+该插件观察现有的 `AfterToolMessages` hook。如果需要基于其他 Runner plugin 替换后的最终
+工具结果判断，应把它注册在这些 plugin 之后。
 
 ```go
 import (
@@ -1148,7 +1156,6 @@ FinishReason：
 - `BeforeAgent`, `AfterAgent`
 - `BeforeModel`, `AfterModel`
 - `BeforeTool`, `AfterTool`
-- `AfterToolRound`
 - `OnEvent`
 
 注册回调的方式就是：在 `Register(reg *plugin.Registry)` 中调用这些方法。例如：

@@ -372,11 +372,6 @@ the appropriate time in the caller.
 - `BeforeTool`: runs before a tool is called, can modify the tool arguments
   (JavaScript Object Notation (JSON) bytes).
 - `AfterTool`: runs after a tool returns, can replace the result.
-- `AfterToolRound`: observes one assistant tool-call round after all tool calls
-  from that response finish. `Complete` is false when the round is interrupted;
-  otherwise it is true. `ToolResultMessages` follows the assistant tool-call
-  order. The callback is read-only and cannot change the tool results or control
-  flow.
 
 ### Event hook
 
@@ -642,10 +637,26 @@ should apply to all agents managed by a Runner.
 
 ### ToolLoopWarning
 
-`toolloopwarning.New()` adds a transient warning to the next model request when
-the same complete tool-call round repeats. It warns once per repeated loop and
-does not make an additional model or tool call. The plugin is opt-in and is
-disabled unless registered on a Runner.
+`toolloopwarning.New()` compares consecutive complete tool-call rounds after
+their final model-facing tool result messages are available. When the tool
+names, canonical JSON arguments, and results are identical, it queues a
+synthetic user-role instruction and resets the detector. Thus four identical
+rounds produce warnings after the second and fourth rounds.
+
+Tool-call IDs are ignored. A complete V1 round requires exactly one trailing
+tool-result message per tool call, matched by ID. An incomplete or malformed
+round resets detection. The plugin is opt-in, makes no additional model or tool
+calls, and does not stop or retry the invocation.
+
+At the next safe model-turn boundary, the Runner persists the instruction as a
+session event before constructing the next model request. Its model protocol
+role is `user`; the queued-message extension records
+`source: "plugin/toolloopwarning"` so consumers can distinguish it from direct
+user input. The persisted event remains part of later history and replay.
+
+The plugin observes the existing `AfterToolMessages` hook. Register it after
+other Runner plugins that replace tool result messages if it should evaluate
+their final output.
 
 ```go
 import (
@@ -1190,7 +1201,6 @@ Use the `Registry` methods:
 - `BeforeAgent`, `AfterAgent`
 - `BeforeModel`, `AfterModel`
 - `BeforeTool`, `AfterTool`
-- `AfterToolRound`
 - `OnEvent`
 
 ### 3) (Optional) implement `plugin.Closer`

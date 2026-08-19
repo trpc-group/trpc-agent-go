@@ -33,6 +33,16 @@ func TestQueuedUserMessageWireValues(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.JSONEq(t, `{"status":"consumed"}`, string(payload))
+	payload, err = json.Marshal(QueuedUserMessageMetadata{
+		Status: QueuedUserMessageStatusConsumed,
+		Source: "plugin/example",
+	})
+	require.NoError(t, err)
+	require.JSONEq(
+		t,
+		`{"status":"consumed","source":"plugin/example"}`,
+		string(payload),
+	)
 }
 
 func TestQueue_FIFOAndClose(t *testing.T) {
@@ -71,6 +81,38 @@ func TestAttachDrainAndClear(t *testing.T) {
 	require.False(t, IsAttached(invocation))
 	require.False(t, queue.Enqueue(model.NewUserMessage("later")))
 	require.Nil(t, Drain(invocation))
+}
+
+func TestEnqueueWithSourceAndDrainQueued(t *testing.T) {
+	invocation := agent.NewInvocation()
+	queue := NewQueue()
+	Attach(invocation, queue)
+
+	require.True(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("synthetic"),
+		"plugin/example",
+	))
+	drained := DrainQueued(invocation)
+	require.Len(t, drained, 1)
+	require.Equal(t, "synthetic", drained[0].Message.Content)
+	require.Equal(t, "plugin/example", drained[0].Source)
+	require.Nil(t, DrainQueued(invocation))
+	require.False(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("synthetic"),
+		"",
+	))
+	require.False(t, EnqueueWithSource(
+		invocation,
+		model.NewAssistantMessage("synthetic"),
+		"plugin/example",
+	))
+	require.False(t, EnqueueWithSource(
+		invocation,
+		model.Message{Role: model.RoleUser},
+		"plugin/example",
+	))
 }
 
 func TestClose_RejectsFutureEnqueueAndPreservesQueuedMessages(t *testing.T) {
@@ -227,4 +269,10 @@ func TestNilSafety(t *testing.T) {
 	queue.Close()
 	Clear(invocation)
 	require.Nil(t, Drain(invocation))
+	require.Nil(t, DrainQueued(invocation))
+	require.False(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("x"),
+		"plugin/example",
+	))
 }

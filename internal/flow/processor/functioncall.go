@@ -630,7 +630,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 	if p.enableParallelTools {
 		execute = p.executeToolCallsInParallelAndEmitPerCallResultEvents
 	}
-	lastEvent, roundMessages, err := execute(
+	lastEvent, err := execute(
 		ctx,
 		invocation,
 		req,
@@ -640,14 +640,8 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 		eventChan,
 	)
 	if err == nil {
-		p.runAfterToolRoundHook(
-			ctx, invocation, req, llmResponse, roundMessages, true,
-		)
 		return lastEvent, nil
 	}
-	p.runAfterToolRoundHook(
-		ctx, invocation, req, llmResponse, roundMessages, false,
-	)
 	log.ErrorfContext(
 		ctx,
 		"Per-tool-call result event handling failed for agent %s: %v",
@@ -837,10 +831,6 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 			eventChan,
 		)
 		if err != nil {
-			p.runAfterToolRoundHook(
-				ctx, invocation, req, llmResponse,
-				toolResultMessagesFromEvent(mergedEvent), false,
-			)
 			recordExecutionTraceToolResults(ctx, invocation, toolResults, mergedEvent)
 			return mergedEvent, err
 		}
@@ -851,16 +841,8 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 			llmResponse,
 			mergedEvent,
 		); err != nil {
-			p.runAfterToolRoundHook(
-				ctx, invocation, req, llmResponse,
-				toolResultMessagesFromEvent(mergedEvent), false,
-			)
 			return nil, err
 		}
-		p.runAfterToolRoundHook(
-			ctx, invocation, req, llmResponse,
-			toolResultMessagesFromEvent(mergedEvent), true,
-		)
 		recordExecutionTraceToolResults(ctx, invocation, toolResults, mergedEvent)
 		return mergedEvent, nil
 	}
@@ -871,10 +853,6 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 			ctx, invocation, llmResponse, tools, eventChan, i, tc,
 		)
 		if err != nil {
-			p.runAfterToolRoundHook(
-				ctx, invocation, req, llmResponse,
-				toolResultMessagesFromToolResults(toolResults), false,
-			)
 			recordExecutionTraceToolResult(ctx, invocation, result)
 			return nil, err
 		}
@@ -890,9 +868,6 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
 			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
-				p.runAfterToolRoundHook(
-					ctx, invocation, req, llmResponse, nil, false,
-				)
 				return nil, nil
 			}
 		}
@@ -909,16 +884,8 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		llmResponse,
 		mergedEvent,
 	); err != nil {
-		p.runAfterToolRoundHook(
-			ctx, invocation, req, llmResponse,
-			toolResultMessagesFromEvent(mergedEvent), false,
-		)
 		return nil, err
 	}
-	p.runAfterToolRoundHook(
-		ctx, invocation, req, llmResponse,
-		toolResultMessagesFromEvent(mergedEvent), true,
-	)
 	recordExecutionTraceToolResults(ctx, invocation, toolResults, mergedEvent)
 	return mergedEvent, nil
 }
@@ -931,9 +898,8 @@ func (p *FunctionCallResponseProcessor) executeToolCallsSequentiallyAndEmitPerCa
 	toolCalls []model.ToolCall,
 	tools map[string]tool.Tool,
 	eventChan chan<- *event.Event,
-) (*event.Event, []model.Message, error) {
+) (*event.Event, error) {
 	stateResults := make([]toolResult, len(toolCalls))
-	roundMessages := make([]model.Message, 0, len(toolCalls))
 	var (
 		lastEvent    *event.Event
 		finalization toolRoundFinalization
@@ -950,7 +916,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsSequentiallyAndEmitPerCa
 		)
 		if err != nil {
 			recordExecutionTraceToolResult(ctx, invocation, result)
-			return lastEvent, roundMessages, p.finalizeToolRoundError(
+			return lastEvent, p.finalizeToolRoundError(
 				ctx,
 				invocation,
 				stateResults,
@@ -963,7 +929,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsSequentiallyAndEmitPerCa
 				"per-tool-call result missing terminal event for tool %q",
 				toolCall.Function.Name,
 			)
-			return lastEvent, roundMessages, p.finalizeToolRoundError(
+			return lastEvent, p.finalizeToolRoundError(
 				ctx,
 				invocation,
 				stateResults,
@@ -992,7 +958,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsSequentiallyAndEmitPerCa
 			i < len(toolCalls)-1,
 		)
 		if err != nil {
-			return lastEvent, roundMessages, p.finalizeToolRoundError(
+			return lastEvent, p.finalizeToolRoundError(
 				ctx,
 				invocation,
 				stateResults,
@@ -1000,13 +966,9 @@ func (p *FunctionCallResponseProcessor) executeToolCallsSequentiallyAndEmitPerCa
 				err,
 			)
 		}
-		roundMessages = append(
-			roundMessages,
-			toolResultMessagesFromEvent(result.event)...,
-		)
 		recordExecutionTraceToolResults(ctx, invocation, []toolResult{result}, result.event)
 	}
-	return lastEvent, roundMessages, nil
+	return lastEvent, nil
 }
 
 func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCallResultEvents(
@@ -1017,7 +979,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 	toolCalls []model.ToolCall,
 	tools map[string]tool.Tool,
 	eventChan chan<- *event.Event,
-) (*event.Event, []model.Message, error) {
+) (*event.Event, error) {
 	batchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	resultChan, wait := p.startParallelToolCalls(
@@ -1032,7 +994,6 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 
 	stateResults := make([]toolResult, len(toolCalls))
 	traceResults := make([]toolResult, len(toolCalls))
-	roundMessagesByIndex := make([][]model.Message, len(toolCalls))
 	received := 0
 	var (
 		lastEvent     *event.Event
@@ -1098,7 +1059,6 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 			cancel()
 			continue
 		}
-		roundMessagesByIndex[result.index] = toolResultMessagesFromEvent(result.event)
 		traceResults[result.index] = result
 	}
 	if err := firstNonNilErr(toolErr, processingErr, wait()); err != nil {
@@ -1108,7 +1068,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 			p.compactToolResults(traceResults),
 			nil,
 		)
-		return lastEvent, flattenToolRoundMessages(roundMessagesByIndex), p.finalizeToolRoundError(
+		return lastEvent, p.finalizeToolRoundError(
 			ctx,
 			invocation,
 			stateResults,
@@ -1122,7 +1082,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 			received,
 			len(toolCalls),
 		)
-		return lastEvent, flattenToolRoundMessages(roundMessagesByIndex), p.finalizeToolRoundError(
+		return lastEvent, p.finalizeToolRoundError(
 			ctx,
 			invocation,
 			stateResults,
@@ -1136,23 +1096,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 		p.compactToolResults(traceResults),
 		nil,
 	)
-	return lastEvent, flattenToolRoundMessages(roundMessagesByIndex), nil
-}
-
-func flattenToolRoundMessages(messagesByIndex [][]model.Message) []model.Message {
-	var messages []model.Message
-	for _, messagesAtIndex := range messagesByIndex {
-		messages = append(messages, messagesAtIndex...)
-	}
-	return messages
-}
-
-func toolResultMessagesFromToolResults(results []toolResult) []model.Message {
-	var messages []model.Message
-	for _, result := range results {
-		messages = append(messages, toolResultMessagesFromEvent(result.event)...)
-	}
-	return messages
+	return lastEvent, nil
 }
 
 func cloneToolResultForStateFinalization(result toolResult) toolResult {
@@ -1361,37 +1305,6 @@ type afterToolMessagesManager interface {
 		context.Context,
 		*plugin.AfterToolMessagesArgs,
 	) (*plugin.AfterToolMessagesResult, error)
-}
-
-type afterToolRoundManager interface {
-	AfterToolRound(
-		context.Context,
-		*plugin.AfterToolRoundArgs,
-	)
-}
-
-func (p *FunctionCallResponseProcessor) runAfterToolRoundHook(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	req *model.Request,
-	llmResponse *model.Response,
-	toolResultMessages []model.Message,
-	complete bool,
-) {
-	if invocation == nil || invocation.Plugins == nil {
-		return
-	}
-	hooks, ok := invocation.Plugins.(afterToolRoundManager)
-	if !ok {
-		return
-	}
-	hooks.AfterToolRound(ctx, &plugin.AfterToolRoundArgs{
-		Invocation:         invocation,
-		Request:            req,
-		ToolCallResponse:   llmResponse,
-		ToolResultMessages: cloneModelMessages(toolResultMessages),
-		Complete:           complete,
-	})
 }
 
 func (p *FunctionCallResponseProcessor) applyAfterToolMessagesHooks(
@@ -1604,9 +1517,7 @@ func cloneModelMessages(messages []model.Message) []model.Message {
 		return nil
 	}
 	out := make([]model.Message, len(messages))
-	for i, message := range messages {
-		out[i] = cloneToolResultMessage(message)
-	}
+	copy(out, messages)
 	return out
 }
 
