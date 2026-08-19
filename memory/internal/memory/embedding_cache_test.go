@@ -30,7 +30,6 @@ func TestGetOrComputeRequestEmbedding(t *testing.T) {
 		ctx, scope, "same text", compute,
 	)
 	require.NoError(t, err)
-	first[0] = 99
 	ctx = WithRequestEmbeddingCache(ctx)
 	second, err := GetOrComputeRequestEmbedding(
 		ctx, scope, "same text", compute,
@@ -38,6 +37,7 @@ func TestGetOrComputeRequestEmbedding(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, calls)
+	assert.Equal(t, []float64{1, 2, 3}, first)
 	assert.Equal(t, []float64{1, 2, 3}, second)
 }
 
@@ -99,4 +99,41 @@ func TestGetOrComputeRequestEmbeddingDoesNotCacheErrors(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 	}
 	assert.Equal(t, 2, calls)
+}
+
+func BenchmarkGetOrComputeRequestEmbedding(b *testing.B) {
+	embedding := make([]float64, 1536)
+	compute := func() ([]float64, error) {
+		return embedding, nil
+	}
+	scope := new(int)
+
+	b.Run("disabled", func(b *testing.B) {
+		ctx := context.Background()
+		for b.Loop() {
+			_, _ = GetOrComputeRequestEmbedding(
+				ctx, scope, "same text", compute,
+			)
+		}
+	})
+	b.Run("miss", func(b *testing.B) {
+		for b.Loop() {
+			ctx := WithRequestEmbeddingCache(context.Background())
+			_, _ = GetOrComputeRequestEmbedding(
+				ctx, scope, "same text", compute,
+			)
+		}
+	})
+	b.Run("hit", func(b *testing.B) {
+		ctx := WithRequestEmbeddingCache(context.Background())
+		_, _ = GetOrComputeRequestEmbedding(
+			ctx, scope, "same text", compute,
+		)
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = GetOrComputeRequestEmbedding(
+				ctx, scope, "same text", compute,
+			)
+		}
+	})
 }

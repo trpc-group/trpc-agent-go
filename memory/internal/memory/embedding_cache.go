@@ -40,7 +40,8 @@ func WithRequestEmbeddingCache(ctx context.Context) context.Context {
 
 // GetOrComputeRequestEmbedding reuses an exact embedding within one
 // auto-memory request. Scope must be a comparable service identity; invalid
-// scopes bypass the cache. Failed computations are never cached.
+// scopes bypass the cache. Failed computations are never cached. The returned
+// embedding is shared and must be treated as read-only.
 func GetOrComputeRequestEmbedding(
 	ctx context.Context,
 	scope any,
@@ -58,24 +59,19 @@ func GetOrComputeRequestEmbedding(
 	value, found := cache.values[key]
 	cache.mu.RUnlock()
 	if found {
-		return cloneEmbedding(value), nil
+		return value, nil
 	}
 
 	value, err := compute()
 	if err != nil {
 		return nil, err
 	}
-	stored := cloneEmbedding(value)
 	cache.mu.Lock()
 	if existing, exists := cache.values[key]; exists {
-		stored = existing
+		value = existing
 	} else {
-		cache.values[key] = stored
+		cache.values[key] = value
 	}
 	cache.mu.Unlock()
-	return cloneEmbedding(stored), nil
-}
-
-func cloneEmbedding(value []float64) []float64 {
-	return append([]float64(nil), value...)
+	return value, nil
 }
