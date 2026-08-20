@@ -294,7 +294,7 @@ func runWriteFaultCase(
 		NormalizeOptions: standardNormalizeOptions(),
 		CompareOptions:   replaytest.DefaultCompareOptions(),
 	}
-	report, err := runner.Run(context.Background(), []replaytest.ReplayCase{replayCase})
+	report, err := runReplayCases(context.Background(), runner, []replaytest.ReplayCase{replayCase})
 	if err != nil {
 		t.Fatalf("Runner.Run() error = %v", err)
 	}

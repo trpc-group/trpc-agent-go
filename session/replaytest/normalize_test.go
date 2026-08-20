@@ -1237,14 +1237,15 @@ func TestNormalizeMemoryTimesSharesSearchResultRanks(t *testing.T) {
 	base := time.Unix(100, 0).UTC()
 	snapshot := Snapshot{
 		Memories: []MemorySnapshot{{
-			AppName: "app", UserID: "user", Content: "first",
+			ID: "memory-1", AppName: "app", UserID: "user", Content: "first",
 			CreatedAt: base, UpdatedAt: base.Add(time.Second),
 		}},
 		MemorySearches: []MemorySearchSnapshot{{
 			AppName: "app", UserID: "user", Query: "query",
 			Results: []MemorySnapshot{{
-				AppName: "app", UserID: "user", Content: "first",
-				CreatedAt: base, UpdatedAt: base.Add(time.Second),
+				ID: "memory-1", AppName: "app", UserID: "user", Content: "changed copy",
+				CreatedAt: base.Add(500 * time.Microsecond),
+				UpdatedAt: base.Add(time.Second).Add(500 * time.Microsecond),
 			}},
 		}},
 	}
@@ -1253,5 +1254,25 @@ func TestNormalizeMemoryTimesSharesSearchResultRanks(t *testing.T) {
 	result := got.MemorySearches[0].Results[0]
 	if !memory.CreatedAt.Equal(result.CreatedAt) || !memory.UpdatedAt.Equal(result.UpdatedAt) {
 		t.Fatalf("search result ranks differ from top-level memory: %#v vs %#v", memory, result)
+	}
+}
+
+func TestNormalizeMemoryTimesUsesConfiguredPrecision(t *testing.T) {
+	base := time.Unix(100, 0).UTC()
+	baseline := Snapshot{Memories: []MemorySnapshot{{
+		ID: "memory-1", AppName: "app", UserID: "user",
+		CreatedAt: base, UpdatedAt: base.Add(500 * time.Microsecond),
+	}}}
+	actual := Snapshot{Memories: []MemorySnapshot{{
+		ID: "memory-1", AppName: "app", UserID: "user",
+		CreatedAt: base, UpdatedAt: base,
+	}}}
+	options := DefaultNormalizeOptions()
+	if got, want := NormalizeSnapshot(actual, options), NormalizeSnapshot(baseline, options); !reflect.DeepEqual(got, want) {
+		t.Fatalf("sub-precision memory times differ:\ngot:  %#v\nwant: %#v", got, want)
+	}
+	options.TimePrecision = 100 * time.Microsecond
+	if got, want := NormalizeSnapshot(actual, options), NormalizeSnapshot(baseline, options); reflect.DeepEqual(got, want) {
+		t.Fatalf("material memory time difference was normalized away:\ngot:  %#v\nwant: %#v", got, want)
 	}
 }

@@ -50,7 +50,7 @@ func TestOptionalIntegrationReplayMatrix(t *testing.T) {
 				CompareOptions:        replaytest.DefaultCompareOptions(),
 				UnsupportedAllowances: replayUnsupportedAllowances(factory.Name),
 			}
-			report, err := runner.Run(ctx, replaytest.StandardReplayCases())
+			report, err := runReplayCases(ctx, runner, replaytest.StandardReplayCases())
 			if err != nil {
 				t.Fatalf("Runner.Run() error = %v", err)
 			}

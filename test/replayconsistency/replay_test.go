@@ -53,7 +53,7 @@ func TestLightweightReplayMatrix(t *testing.T) {
 		CompareOptions:   replaytest.DefaultCompareOptions(),
 	}
 	started := time.Now()
-	report, err := runner.Run(ctx, replaytest.StandardReplayCases())
+	report, err := runReplayCases(ctx, runner, replaytest.StandardReplayCases())
 	if err != nil {
 		t.Fatalf("Runner.Run() error = %v", err)
 	}
@@ -91,7 +91,7 @@ func TestAfterWriteRetryDetectsDuplicateEvent(t *testing.T) {
 		}},
 	}
 	runner := replaytest.Runner{Backends: []replaytest.Backend{newInMemoryBackend()}}
-	_, err := runner.Run(context.Background(), []replaytest.ReplayCase{replayCase})
+	_, err := runReplayCases(context.Background(), runner, []replaytest.ReplayCase{replayCase})
 	if err == nil || !strings.Contains(err.Error(), "retry must not duplicate event") {
 		t.Fatalf("Runner.Run() error = %v", err)
 	}
@@ -209,7 +209,7 @@ func runLightweightRecoveryCase(t *testing.T, replayCase replaytest.ReplayCase) 
 		NormalizeOptions: standardNormalizeOptions(),
 		CompareOptions:   replaytest.DefaultCompareOptions(),
 	}
-	report, err := runner.Run(context.Background(), []replaytest.ReplayCase{replayCase})
+	report, err := runReplayCases(context.Background(), runner, []replaytest.ReplayCase{replayCase})
 	if err != nil {
 		t.Fatalf("Runner.Run() error = %v", err)
 	}
@@ -438,5 +438,66 @@ func TestPreflightRejectsInternalSessionStateKeys(t *testing.T) {
 		if err := operation.Validate(); err != nil {
 			t.Errorf("update state key %q rejected by replay preflight: %v", key, err)
 		}
+	}
+}
+
+func TestAdapterPreflightRejectsPayloadsBeforeCreatingFixtures(t *testing.T) {
+	invalidRawEvent := replaytest.Operation{
+		Kind: replaytest.OperationAppendEvent, SessionID: "session-1",
+		Event: &replaytest.EventSnapshot{
+			Extensions: map[string]any{"raw": []byte(`{"broken"`)},
+		},
+	}
+	tests := []struct {
+		name      string
+		operation replaytest.Operation
+	}{
+		{
+			name: "invalid raw bytes in parallel child",
+			operation: replaytest.Operation{
+				Kind:     replaytest.OperationParallel,
+				Parallel: []replaytest.Operation{invalidRawEvent},
+			},
+		},
+		{
+			name: "reserved event extension",
+			operation: replaytest.Operation{
+				Kind: replaytest.OperationAppendEvent, SessionID: "session-1",
+				Event: &replaytest.EventSnapshot{Extensions: map[string]any{
+					toolResponseExtraExtensionKey: map[string]any{"provider": "caller"},
+				}},
+			},
+		},
+		{
+			name: "unsupported memory metadata",
+			operation: replaytest.Operation{
+				Kind: replaytest.OperationWriteMemory,
+				Memory: &replaytest.MemorySnapshot{
+					AppName: "app", UserID: "user", Content: "memory",
+					Metadata: map[string]any{"unsupported": true},
+				},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			created := 0
+			runner := replaytest.Runner{Backends: []replaytest.Backend{{
+				Name: "backend",
+				New: func(context.Context, string) (replaytest.Fixture, error) {
+					created++
+					return nil, fmt.Errorf("unexpected fixture creation")
+				},
+			}}}
+			_, err := runReplayCases(context.Background(), runner, []replaytest.ReplayCase{{
+				Name: "invalid", Operations: []replaytest.Operation{test.operation},
+			}})
+			if err == nil {
+				t.Fatal("runReplayCases() accepted invalid adapter payload")
+			}
+			if created != 0 {
+				t.Fatalf("Backend.New called %d times before adapter preflight rejection", created)
+			}
+		})
 	}
 }

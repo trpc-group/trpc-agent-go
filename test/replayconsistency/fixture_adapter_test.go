@@ -47,6 +47,50 @@ func TestFixtureJSONDecodingPreservesExactNumbers(t *testing.T) {
 	}
 }
 
+func TestReplayFixturePreservesBackendMemoryTimes(t *testing.T) {
+	fixture := newReplayFixture(replayFixtureConfig{
+		name:           "inmemory",
+		sessionService: sessioninmemory.NewSessionService(),
+		memoryService:  memoryinmemory.NewMemoryService(),
+	})
+	t.Cleanup(func() {
+		if err := fixture.Close(); err != nil {
+			t.Errorf("fixture.Close() error = %v", err)
+		}
+	})
+	before := time.Now().Add(-time.Second)
+	users := []string{"user-1", "user-2"}
+	for _, userID := range users {
+		err := fixture.Apply(context.Background(), replaytest.Operation{
+			Kind: replaytest.OperationWriteMemory,
+			Memory: &replaytest.MemorySnapshot{
+				AppName: "app", UserID: userID, Content: "same content",
+				Topics: []string{"fact"}, Metadata: map[string]any{"kind": "fact"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("fixture.Apply() error = %v", err)
+		}
+	}
+	after := time.Now().Add(time.Second)
+	snapshot, err := fixture.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("fixture.Snapshot() error = %v", err)
+	}
+	if len(snapshot.Memories) != len(users) {
+		t.Fatalf("snapshot memories = %#v", snapshot.Memories)
+	}
+	for index, item := range snapshot.Memories {
+		if item.UserID != users[index] {
+			t.Fatalf("snapshot memory scopes = %#v, want %v", snapshot.Memories, users)
+		}
+		if item.CreatedAt.Before(before) || item.CreatedAt.After(after) ||
+			item.UpdatedAt.Before(before) || item.UpdatedAt.After(after) {
+			t.Fatalf("fixture replaced backend memory times: %#v", item)
+		}
+	}
+}
+
 func TestFixtureJSONDecodingTagsInvalidRawJSON(t *testing.T) {
 	decoded := decodeRawMap(map[string]json.RawMessage{
 		"invalid": json.RawMessage(`value`),

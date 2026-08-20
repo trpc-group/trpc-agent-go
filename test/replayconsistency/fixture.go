@@ -19,6 +19,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,14 +44,6 @@ const (
 
 var replayScopeSequence atomic.Uint64
 
-// memoryTimeBase is the deterministic base for replay memory timestamps.
-// Memory services generate wall-clock timestamps that differ between backends
-// and platforms (for example, coarse clocks collapse fast in-memory writes to
-// a single tick), so the fixture assigns a deterministic write-order time to
-// every memory entry. Cross-backend memory chronology is then comparable
-// after normalization.
-var memoryTimeBase = time.Unix(1700000000, 0).UTC()
-
 var errReplayFixtureClosed = errors.New("replay fixture is closed")
 
 type replayFixture struct {
@@ -73,8 +66,8 @@ type replayFixture struct {
 	stateDeletes      map[string]map[string]struct{}
 	stateWriteLocks   map[string]*sync.Mutex
 	searches          []replaytest.MemorySearchSnapshot
-	memoryWriteTimes  map[string]time.Time
-	memoryWriteOrder  int
+	memoryWriteOrders map[string]int
+	nextMemoryWrite   int
 }
 
 type replayFixtureConfig struct {
@@ -119,8 +112,69 @@ func newReplayFixture(config replayFixtureConfig) *replayFixture {
 		memoryScopes:      make(map[replaytest.MemoryScope]memory.UserKey),
 		stateDeletes:      make(map[string]map[string]struct{}),
 		stateWriteLocks:   make(map[string]*sync.Mutex),
-		memoryWriteTimes:  make(map[string]time.Time),
+		memoryWriteOrders: make(map[string]int),
 	}
+}
+
+// runReplayCases validates adapter-specific payload contracts before Runner
+// creates any backend fixture.
+func runReplayCases(
+	ctx context.Context,
+	runner replaytest.Runner,
+	cases []replaytest.ReplayCase,
+) (replaytest.Report, error) {
+	if err := validateReplayAdapterCases(cases); err != nil {
+		return replaytest.Report{}, err
+	}
+	return runner.Run(ctx, cases)
+}
+
+func validateReplayAdapterCases(cases []replaytest.ReplayCase) error {
+	for _, replayCase := range cases {
+		for operationIndex, operation := range replayCase.Operations {
+			if err := validateReplayAdapterOperation(operation); err != nil {
+				return fmt.Errorf(
+					"case %q operation %d: %w",
+					replayCase.Name, operationIndex, err,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func validateReplayAdapterOperation(operation replaytest.Operation) error {
+	if err := operation.Validate(); err != nil {
+		return err
+	}
+	switch operation.Kind {
+	case replaytest.OperationAppendEvent:
+		_, err := toEvent(operation.Event)
+		return err
+	case replaytest.OperationUpdateState:
+		_, err := toStateMap(operation.StateUpdates, operation.StateDeletes)
+		return err
+	case replaytest.OperationWriteMemory:
+		_, err := toMemoryMetadata(operation.Memory.Metadata)
+		return err
+	case replaytest.OperationAppendTrack:
+		_, err := json.Marshal(trackPayload{
+			EventType: operation.TrackEvent.EventType, InvocationID: operation.TrackEvent.InvocationID,
+			Payload: operation.TrackEvent.Payload, Error: operation.TrackEvent.Error,
+			Duration: operation.TrackEvent.Duration,
+		})
+		if err != nil {
+			return fmt.Errorf("marshal track payload: %w", err)
+		}
+		return nil
+	case replaytest.OperationParallel:
+		for index, child := range operation.Parallel {
+			if err := validateReplayAdapterOperation(child); err != nil {
+				return fmt.Errorf("parallel child %d: %w", index, err)
+			}
+		}
+	}
+	return nil
 }
 
 func (fixture *replayFixture) Name() string {
@@ -249,19 +303,30 @@ func (fixture *replayFixture) applyWriteMemory(
 	if err != nil {
 		return err
 	}
+	logicalScope := replaytest.MemoryScope{
+		AppName: operation.Memory.AppName,
+		UserID:  operation.Memory.UserID,
+	}
 	if err := fixture.memoryService.AddMemory(
 		ctx,
-		fixture.memoryKey(operation.Memory.AppName, operation.Memory.UserID),
+		fixture.memoryKey(logicalScope.AppName, logicalScope.UserID),
 		operation.Memory.Content,
 		operation.Memory.Topics,
 		memory.WithMetadata(metadata),
 	); err != nil {
 		return fmt.Errorf("write memory: %w", err)
 	}
+	writeKey := memoryWriteKey(logicalScope, &memory.Memory{
+		Memory:       operation.Memory.Content,
+		Topics:       operation.Memory.Topics,
+		Kind:         metadata.Kind,
+		EventTime:    metadata.EventTime,
+		Participants: metadata.Participants,
+		Location:     metadata.Location,
+	})
 	fixture.mu.Lock()
-	fixture.memoryWriteOrder++
-	fixture.memoryWriteTimes[operation.Memory.Content] =
-		memoryTimeBase.Add(time.Duration(fixture.memoryWriteOrder) * time.Millisecond)
+	fixture.nextMemoryWrite++
+	fixture.memoryWriteOrders[writeKey] = fixture.nextMemoryWrite
 	fixture.mu.Unlock()
 	return nil
 }
@@ -391,6 +456,19 @@ func (fixture *replayFixture) Snapshot(ctx context.Context) (replaytest.Snapshot
 			if err := validatePhysicalMemoryScope(entry, scope.physical); err != nil {
 				return replaytest.Snapshot{}, fmt.Errorf("read memories for %#v: %w", scope.logical, err)
 			}
+		}
+		sort.SliceStable(entries, func(i, j int) bool {
+			left, leftOK := bookkeeping.memoryWriteOrders[memoryWriteKey(scope.logical, entries[i].Memory)]
+			right, rightOK := bookkeeping.memoryWriteOrders[memoryWriteKey(scope.logical, entries[j].Memory)]
+			if leftOK != rightOK {
+				return leftOK
+			}
+			if leftOK && left != right {
+				return left < right
+			}
+			return entries[i].ID < entries[j].ID
+		})
+		for _, entry := range entries {
 			snapshot.Memories = append(
 				snapshot.Memories, fixture.toLogicalMemorySnapshot(entry, scope.logical),
 			)
@@ -407,6 +485,7 @@ type fixtureBookkeeping struct {
 	memoryScopes      []memoryScopeBinding
 	stateDeletes      map[string]map[string]struct{}
 	searches          []replaytest.MemorySearchSnapshot
+	memoryWriteOrders map[string]int
 }
 
 type memoryScopeBinding struct {
@@ -424,6 +503,7 @@ func (fixture *replayFixture) snapshotBookkeeping() fixtureBookkeeping {
 		memoryScopes:      make([]memoryScopeBinding, 0, len(fixture.memoryScopes)),
 		stateDeletes:      make(map[string]map[string]struct{}, len(fixture.stateDeletes)),
 		searches:          cloneMemorySearchSnapshots(fixture.searches),
+		memoryWriteOrders: make(map[string]int, len(fixture.memoryWriteOrders)),
 	}
 	for id := range fixture.sessionIDs {
 		bookkeeping.sessionIDs = append(bookkeeping.sessionIDs, id)
@@ -445,6 +525,9 @@ func (fixture *replayFixture) snapshotBookkeeping() fixtureBookkeeping {
 			bookkeeping.stateDeletes[id][key] = struct{}{}
 		}
 	}
+	for key, order := range fixture.memoryWriteOrders {
+		bookkeeping.memoryWriteOrders[key] = order
+	}
 	sort.Strings(bookkeeping.sessionIDs)
 	sort.Strings(bookkeeping.cleanupSessionIDs)
 	sort.Slice(bookkeeping.memoryScopes, func(i, j int) bool {
@@ -455,6 +538,58 @@ func (fixture *replayFixture) snapshotBookkeeping() fixtureBookkeeping {
 		return left.UserID < right.UserID
 	})
 	return bookkeeping
+}
+
+func memoryWriteKey(scope replaytest.MemoryScope, item *memory.Memory) string {
+	if item == nil {
+		return ""
+	}
+	participants := make([]string, 0, len(item.Participants))
+	for _, participant := range item.Participants {
+		if participant = strings.TrimSpace(participant); participant != "" {
+			participants = append(participants, participant)
+		}
+	}
+	sort.Slice(participants, func(i, j int) bool {
+		left, right := strings.ToLower(participants[i]), strings.ToLower(participants[j])
+		if left != right {
+			return left < right
+		}
+		return participants[i] < participants[j]
+	})
+	uniqueParticipants := participants[:0]
+	for _, participant := range participants {
+		if len(uniqueParticipants) == 0 ||
+			!strings.EqualFold(uniqueParticipants[len(uniqueParticipants)-1], participant) {
+			uniqueParticipants = append(uniqueParticipants, participant)
+		}
+	}
+	kind := item.Kind
+	if kind == "" {
+		kind = memory.KindFact
+	}
+	descriptor := struct {
+		Scope        replaytest.MemoryScope `json:"scope"`
+		Content      string                 `json:"content"`
+		Topics       []string               `json:"topics"`
+		Kind         memory.Kind            `json:"kind"`
+		EventTime    *time.Time             `json:"event_time"`
+		Participants []string               `json:"participants"`
+		Location     string                 `json:"location"`
+	}{
+		Scope:        scope,
+		Content:      item.Memory,
+		Topics:       item.Topics,
+		Kind:         kind,
+		EventTime:    item.EventTime,
+		Participants: uniqueParticipants,
+		Location:     strings.TrimSpace(item.Location),
+	}
+	encoded, err := json.Marshal(descriptor)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func (fixture *replayFixture) recordStateDeletes(operation replaytest.Operation) {
@@ -1309,13 +1444,6 @@ func (fixture *replayFixture) toLogicalMemorySnapshot(
 	}
 	if entry == nil || entry.Memory == nil {
 		return snapshot
-	}
-	fixture.mu.Lock()
-	writeTime, recorded := fixture.memoryWriteTimes[entry.Memory.Memory]
-	fixture.mu.Unlock()
-	if recorded {
-		snapshot.CreatedAt = writeTime
-		snapshot.UpdatedAt = writeTime
 	}
 	return snapshot
 }

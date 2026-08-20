@@ -1016,6 +1016,79 @@ func TestExecuteCaseDetachesSnapshotBeforeClosingFixture(t *testing.T) {
 	}
 }
 
+func TestRunnerReportsInvalidRawSnapshotValue(t *testing.T) {
+	raw := json.RawMessage(`{"broken"`)
+	baseline := Snapshot{Sessions: []SessionSnapshot{{
+		ID: "session", Events: []EventSnapshot{{
+			ID: "event", Extensions: map[string]any{
+				"raw": map[string]any{"nested": raw},
+			},
+		}},
+	}}}
+	actual := Snapshot{Sessions: []SessionSnapshot{{
+		ID: "session", Events: []EventSnapshot{{
+			ID: "event", Extensions: map[string]any{
+				"raw": map[string]any{"nested": map[string]any{"valid": true}},
+			},
+		}},
+	}}}
+	baselineFixture := &fakeFixture{
+		name: "baseline", capabilities: allCapabilities(), snapshot: baseline,
+		mutateSnapshotOnClose: func(*Snapshot) {
+			raw[0] = '['
+		},
+	}
+	runner := Runner{
+		Backends: []Backend{
+			fakeBackend("baseline", baselineFixture),
+			fakeBackend("actual", &fakeFixture{
+				name: "actual", capabilities: allCapabilities(), snapshot: actual,
+			}),
+		},
+		NormalizeOptions: DefaultNormalizeOptions(),
+		CompareOptions:   DefaultCompareOptions(),
+	}
+	report, err := runner.Run(context.Background(), []ReplayCase{{Name: "invalid-raw"}})
+	if err != nil {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+	for _, difference := range report.Differences {
+		if difference.Path == "$.sessions[0].events[0].extensions.raw.nested" {
+			if !difference.BaselineInvalidRawJSON {
+				t.Fatalf("difference did not mark invalid baseline raw JSON: %#v", difference)
+			}
+			if difference.Baseline != invalidRawJSONValue(`{"broken"`) {
+				t.Fatalf("invalid raw JSON changed during fixture Close: %#v", difference.Baseline)
+			}
+			return
+		}
+	}
+	t.Fatalf("invalid raw JSON difference missing: %#v", report.Differences)
+}
+
+func TestExecuteCasePreservesBinaryStateBeforeClosingFixture(t *testing.T) {
+	binary := []byte{0xff, 0x00, 0x7f}
+	fixture := &fakeFixture{
+		name: "binary", capabilities: allCapabilities(),
+		snapshot: Snapshot{Sessions: []SessionSnapshot{{
+			ID: "session", State: map[string]StateValueSnapshot{
+				"binary": BinaryStateValue(binary),
+			},
+		}}},
+		mutateSnapshotOnClose: func(*Snapshot) {
+			binary[0] = 0x00
+		},
+	}
+	snapshot, err := executeCase(context.Background(), fixture, ReplayCase{Name: "case"})
+	if err != nil {
+		t.Fatalf("executeCase() error = %v", err)
+	}
+	got, ok := snapshot.Sessions[0].State["binary"].Value.([]byte)
+	if !ok || !reflect.DeepEqual(got, []byte{0xff, 0x00, 0x7f}) {
+		t.Fatalf("detached binary state = %#v", snapshot.Sessions[0].State["binary"].Value)
+	}
+}
+
 type fakeFixture struct {
 	mu                    sync.Mutex
 	name                  string

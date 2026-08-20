@@ -118,7 +118,7 @@ func NormalizeSnapshot(snapshot Snapshot, options NormalizeOptions) Snapshot {
 			normalizeMemoryValues(&search.Results[j], options)
 		}
 	}
-	normalizeMemoryTimes(&normalized)
+	normalizeMemoryTimes(&normalized, options.TimePrecision)
 	normalizeMemoryEventTimes(&normalized, options.TimePrecision)
 	if options.SortMemories {
 		sort.SliceStable(normalized.Memories, func(i, j int) bool {
@@ -226,11 +226,27 @@ func normalizeMemoryValues(
 // within its scope, so entries with swapped timestamps receive different
 // ranks. Search-result copies share the identity of their top-level memory
 // and are ranked together with it.
-func normalizeMemoryTimes(snapshot *Snapshot) {
-	entries := make([]memoryTimeEntry, 0, len(snapshot.Memories)*2+len(snapshot.MemorySearches)*2)
+func normalizeMemoryTimes(snapshot *Snapshot, precision time.Duration) {
+	identities := make(map[memoryTimeIdentity]*memoryTimeGroup)
+	scoped := make(map[MemoryScope][]*memoryTimeGroup)
+	anonymous := 0
 	appendEntry := func(memory *MemorySnapshot, fallback MemoryScope) {
-		entries = append(entries, memoryTimeEntry{
-			scope:     memoryIDScope(*memory, fallback),
+		scope := memoryIDScope(*memory, fallback)
+		identity := memoryTimeIdentity{scope: scope, id: memory.ID}
+		if identity.id == "" {
+			anonymous++
+			identity.anonymous = anonymous
+		}
+		group, exists := identities[identity]
+		if !exists {
+			group = &memoryTimeGroup{key: memoryTimeKey{
+				created: memory.CreatedAt,
+				updated: memory.UpdatedAt,
+			}}
+			identities[identity] = group
+			scoped[scope] = append(scoped[scope], group)
+		}
+		group.entries = append(group.entries, memoryTimeEntry{
 			createdAt: &memory.CreatedAt,
 			updatedAt: &memory.UpdatedAt,
 		})
@@ -247,33 +263,30 @@ func normalizeMemoryTimes(snapshot *Snapshot) {
 			appendEntry(&snapshot.MemorySearches[i].Results[j], scope)
 		}
 	}
-	scoped := make(map[MemoryScope][]memoryTimeEntry, len(entries))
-	for _, item := range entries {
-		scoped[item.scope] = append(scoped[item.scope], item)
-	}
-	for _, group := range scoped {
-		sort.SliceStable(group, func(i, j int) bool {
-			return memoryTimeKeyLess(
-				memoryTimeKeyFor(group[i]),
-				memoryTimeKeyFor(group[j]),
-			)
-		})
-		position := -1
-		var previous memoryTimeKey
-		for i := range group {
-			key := memoryTimeKeyFor(group[i])
-			if i == 0 || memoryTimeKeyLess(previous, key) {
-				position++
-				previous = key
-			}
-			assignMemoryTimeRanks(group[i], key, position)
-		}
+	for _, groups := range scoped {
+		normalizeScopedMemoryTimes(groups, precision)
 	}
 }
 
-// memoryTimeEntry is one memory timestamp pair and its logical scope.
-type memoryTimeEntry struct {
+// memoryTimeIdentity links top-level and search-result copies using backend
+// identity. Empty backend IDs remain independent because they cannot be linked
+// without guessing from mutable semantic fields such as content.
+type memoryTimeIdentity struct {
 	scope     MemoryScope
+	id        string
+	anonymous int
+}
+
+// memoryTimeGroup contains every snapshot carrying one stable memory identity.
+// The first snapshot is authoritative; top-level memories are visited before
+// search results.
+type memoryTimeGroup struct {
+	key     memoryTimeKey
+	entries []memoryTimeEntry
+}
+
+// memoryTimeEntry is one observable copy of a memory timestamp pair.
+type memoryTimeEntry struct {
 	createdAt *time.Time
 	updatedAt *time.Time
 }
@@ -285,15 +298,51 @@ type memoryTimeKey struct {
 	created time.Time
 }
 
-func memoryTimeKeyFor(item memoryTimeEntry) memoryTimeKey {
-	key := memoryTimeKey{}
-	if !item.updatedAt.IsZero() {
-		key.updated = *item.updatedAt
+func normalizeScopedMemoryTimes(groups []*memoryTimeGroup, precision time.Duration) {
+	createdValues := make([]time.Time, 0, len(groups))
+	updatedValues := make([]time.Time, 0, len(groups))
+	for _, group := range groups {
+		if !group.key.created.IsZero() {
+			createdValues = append(createdValues, group.key.created)
+		}
+		if !group.key.updated.IsZero() {
+			updatedValues = append(updatedValues, group.key.updated)
+		}
 	}
-	if !item.createdAt.IsZero() {
-		key.created = *item.createdAt
+	createdRanks := timeRanks(createdValues, precision)
+	updatedRanks := timeRanks(updatedValues, precision)
+	sort.SliceStable(groups, func(i, j int) bool {
+		left, right := groups[i], groups[j]
+		leftKey := rankedMemoryTimeKey(left.key, createdRanks, updatedRanks)
+		rightKey := rankedMemoryTimeKey(right.key, createdRanks, updatedRanks)
+		if memoryTimeKeyLess(leftKey, rightKey) {
+			return true
+		}
+		if memoryTimeKeyLess(rightKey, leftKey) {
+			return false
+		}
+		return false
+	})
+	for position, group := range groups {
+		for _, entry := range group.entries {
+			assignMemoryTimeRanks(entry, group.key, position, precision)
+		}
 	}
-	return key
+}
+
+func rankedMemoryTimeKey(
+	key memoryTimeKey,
+	createdRanks map[time.Time]time.Time,
+	updatedRanks map[time.Time]time.Time,
+) memoryTimeKey {
+	ranked := memoryTimeKey{}
+	if !key.created.IsZero() {
+		ranked.created = createdRanks[key.created]
+	}
+	if !key.updated.IsZero() {
+		ranked.updated = updatedRanks[key.updated]
+	}
+	return ranked
 }
 
 func memoryTimeKeyLess(left, right memoryTimeKey) bool {
@@ -309,10 +358,18 @@ func memoryTimeKeyLess(left, right memoryTimeKey) bool {
 	return left.created.Before(right.created)
 }
 
-// assignMemoryTimeRanks writes the position-derived rank times for one entry.
-// The within-entry created/updated order is preserved unless the two times
-// are equal.
-func assignMemoryTimeRanks(item memoryTimeEntry, key memoryTimeKey, position int) {
+// assignMemoryTimeRanks writes position-derived ranks for one stable memory
+// identity. Precision only collapses the created/updated pair; backend latency
+// between different writes does not create extra semantic ranks.
+func assignMemoryTimeRanks(
+	item memoryTimeEntry,
+	key memoryTimeKey,
+	position int,
+	precision time.Duration,
+) {
+	if precision <= 0 {
+		precision = time.Millisecond
+	}
 	base := 2*position + 1
 	created, updated := key.created, key.updated
 	switch {
@@ -322,7 +379,7 @@ func assignMemoryTimeRanks(item memoryTimeEntry, key memoryTimeKey, position int
 		*item.updatedAt = time.Unix(0, int64(base)).UTC()
 	case updated.IsZero():
 		*item.createdAt = time.Unix(0, int64(base)).UTC()
-	case created.Equal(updated):
+	case memoryTimesWithinPrecision(created, updated, precision):
 		*item.createdAt = time.Unix(0, int64(base)).UTC()
 		*item.updatedAt = time.Unix(0, int64(base)).UTC()
 	case created.Before(updated):
@@ -332,6 +389,13 @@ func assignMemoryTimeRanks(item memoryTimeEntry, key memoryTimeKey, position int
 		*item.createdAt = time.Unix(0, int64(base+1)).UTC()
 		*item.updatedAt = time.Unix(0, int64(base)).UTC()
 	}
+}
+
+func memoryTimesWithinPrecision(left, right time.Time, precision time.Duration) bool {
+	if left.Before(right) {
+		return right.Sub(left) < precision
+	}
+	return left.Sub(right) < precision
 }
 
 func normalizeMemoryID(
@@ -870,22 +934,84 @@ func cloneSnapshot(snapshot Snapshot) Snapshot {
 
 // isolateSnapshot validates and detaches every JSON-like snapshot value so
 // that downstream normalization, invariants, comparison, and report encoding
-// only ever observe isolated, serializable JSON trees. Values that cannot be
-// isolated (unexported mutable fields, cyclic references, or non-serializable
-// types) are rejected before fixture cleanup can mutate them.
+// only ever observe isolated values. Raw JSON and binary state retain their
+// byte representation; other values become serializable JSON trees. Values
+// that cannot be safely isolated are rejected before fixture cleanup mutates
+// them.
 func isolateSnapshot(snapshot Snapshot) (Snapshot, error) {
 	return transformSnapshotValues(snapshot, validateAndDetachJSONLike)
 }
 
 // validateAndDetachJSONLike validates that a JSON-like value can be safely
-// isolated and then converts it into a pure JSON tree. Validation rejects
-// values with unexported mutable state (which JSON encoding would silently
-// drop), cyclic references, and non-serializable types; detachment guarantees
-// the result cannot share references with fixture-owned data.
+// isolated and then recursively detaches it. Raw JSON and byte slices are
+// copied without decoding so malformed backend data remains reportable.
 func validateAndDetachJSONLike(value any) (any, error) {
 	if err := validateCloneableJSONLike(value); err != nil {
 		return nil, err
 	}
+	return detachJSONLikeValue(reflect.ValueOf(value))
+}
+
+func detachJSONLikeValue(value reflect.Value) (any, error) {
+	if !value.IsValid() {
+		return nil, nil
+	}
+	if value.CanInterface() {
+		switch typed := value.Interface().(type) {
+		case json.RawMessage:
+			return append(json.RawMessage(nil), typed...), nil
+		case []byte:
+			return append([]byte(nil), typed...), nil
+		}
+		if _, ok := value.Interface().(json.Marshaler); ok {
+			return detachEncodedJSON(value.Interface())
+		}
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if value.IsNil() {
+			return nil, nil
+		}
+		return detachJSONLikeValue(value.Elem())
+	case reflect.Map:
+		if value.IsNil() {
+			return nil, nil
+		}
+		if value.Type().Key().Kind() != reflect.String {
+			return detachEncodedJSON(value.Interface())
+		}
+		detached := make(map[string]any, value.Len())
+		iterator := value.MapRange()
+		for iterator.Next() {
+			item, err := detachJSONLikeValue(iterator.Value())
+			if err != nil {
+				return nil, err
+			}
+			detached[iterator.Key().String()] = item
+		}
+		return detached, nil
+	case reflect.Slice, reflect.Array:
+		if value.Kind() == reflect.Slice && value.IsNil() {
+			return nil, nil
+		}
+		detached := make([]any, value.Len())
+		for i := 0; i < value.Len(); i++ {
+			item, err := detachJSONLikeValue(value.Index(i))
+			if err != nil {
+				return nil, err
+			}
+			detached[i] = item
+		}
+		return detached, nil
+	default:
+		if !value.CanInterface() {
+			return nil, fmt.Errorf("snapshot value type %s cannot be detached", value.Type())
+		}
+		return detachEncodedJSON(value.Interface())
+	}
+}
+
+func detachEncodedJSON(value any) (any, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot value cannot be serialized: %w", err)
@@ -1050,6 +1176,13 @@ func transformStateMap(
 	}
 	cloned := make(map[string]StateValueSnapshot, len(values))
 	for key, value := range values {
+		if value.Kind == StateValueBinary {
+			if binary, ok := value.Value.([]byte); ok {
+				value.Value = append([]byte(nil), binary...)
+				cloned[key] = value
+				continue
+			}
+		}
 		transformed, err := transform(value.Value)
 		if err != nil {
 			return nil, fmt.Errorf("key %q: %w", key, err)
