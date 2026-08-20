@@ -18,7 +18,8 @@ The boundary is intentionally different from built-in backends:
 - Native tools expose read-oriented search through `tdai_conversation_search`
   (session-scoped, on by default) and `tdai_memory_search` (opt-in via
   `WithMemorySearchTool(true)`). V3 integrations also expose
-  `tdai_read_scenario` to read an L2 path returned by scene navigation.
+  `tdai_read_scenario` to read bounded L2 content selected from scene
+  navigation.
 - An optional short-term context offload plugin delegates tool-result
   externalization, L1/L1.5/L2/L3 processing, drill-down, and persistence to
   TencentDB Agent Memory gateway hook APIs. The Go adapter does not write local
@@ -301,7 +302,10 @@ this adapter. Self-hosted gateways that keep authentication disabled can omit
 provide it.
 
 When V3 is selected, `memSvc.Tools()` includes `tdai_read_scenario` so the
-agent can read an L2 file selected from scene navigation.
+agent can read an L2 file selected from scene navigation. Recall injects at
+most 100 non-empty scenario paths and 8 KiB of navigation text. Scenario reads
+return at most 16 KiB; a shortened result ends with `...[truncated]` and sets
+`truncated` to `true`.
 
 `ContextOffloadConfig` only controls the Go adapter's gateway integration.
 Offload layers, state, storage, TTL, and isolation are owned by the TencentDB

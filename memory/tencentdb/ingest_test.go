@@ -381,7 +381,7 @@ func TestV3CaptureTruncatesOversizedMessageAndAdvancesCheckpoint(t *testing.T) {
 
 	require.Len(t, got.Messages, 2)
 	assert.Equal(t, maxV3MessageContentUTF16Units, v3UTF16Length(got.Messages[0].Content))
-	assert.True(t, strings.HasSuffix(got.Messages[0].Content, v3TruncatedMessageContentSuffix))
+	assert.True(t, strings.HasSuffix(got.Messages[0].Content, v3TruncationMarker))
 	assert.Equal(t, "ok", got.Messages[1].Content)
 	assert.True(t, readBestEffortLastCaptureAt(sess).Equal(sess.Events[len(sess.Events)-1].Timestamp))
 	_, ok = svc.reserveIngestJob(sess, sessionKey)

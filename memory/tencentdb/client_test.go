@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -349,8 +350,8 @@ func TestTruncateV3MessageContent(t *testing.T) {
 			wantContent: strings.Repeat(
 				"x",
 				maxV3MessageContentUTF16Units-
-					v3UTF16Length(v3TruncatedMessageContentSuffix),
-			) + v3TruncatedMessageContentSuffix,
+					v3UTF16Length(v3TruncationMarker),
+			) + v3TruncationMarker,
 			wantTruncated: true,
 		},
 	}
@@ -1028,6 +1029,29 @@ func TestV3FormattingSkipsEmptyValues(t *testing.T) {
 	})
 	assert.Equal(t, "- path.md\n- folder/\n- a.md\n- b.md\n- c.md", scenarios)
 	assert.Equal(t, 5, scenarioCount)
+
+	entries := make([]v3ScenarioEntry, 0, maxV3ScenarioNavigationEntries+1)
+	for i := 0; i <= maxV3ScenarioNavigationEntries; i++ {
+		entries = append(entries, v3ScenarioEntry{Path: fmt.Sprintf("path-%03d.md", i)})
+	}
+	scenarios, scenarioCount = formatV3ScenarioEntries(entries)
+	assert.Equal(t, maxV3ScenarioNavigationEntries, scenarioCount)
+	assert.LessOrEqual(t, len(scenarios), maxV3ScenarioNavigationBytes)
+	assert.True(t, strings.HasSuffix(scenarios, v3TruncationMarker))
+	assert.NotContains(t, scenarios, "path-100.md")
+
+	largeEntries := make([]v3ScenarioEntry, 0, maxV3ScenarioNavigationEntries)
+	for i := 0; i < maxV3ScenarioNavigationEntries; i++ {
+		largeEntries = append(largeEntries, v3ScenarioEntry{
+			Path: fmt.Sprintf("folder/%s/%03d.md", strings.Repeat("界", 100), i),
+		})
+	}
+	scenarios, scenarioCount = formatV3ScenarioEntries(largeEntries)
+	assert.Positive(t, scenarioCount)
+	assert.Less(t, scenarioCount, maxV3ScenarioNavigationEntries)
+	assert.LessOrEqual(t, len(scenarios), maxV3ScenarioNavigationBytes)
+	assert.True(t, utf8.ValidString(scenarios))
+	assert.True(t, strings.HasSuffix(scenarios, v3TruncationMarker))
 	assert.Empty(t, formatV3Timestamp(0))
 	assert.True(t, strings.Contains(formatV3Timestamp(1), "1970-01-01"))
 }

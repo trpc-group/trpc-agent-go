@@ -54,11 +54,11 @@ const (
 	pathV3ScenarioRead       = "/v3/scenario/read"
 	pathV3CoreRead           = "/v3/core/read"
 
-	maxErrorBodyPreview             = 512
-	maxV3ConversationBatchSize      = 100
-	maxV3MessageContentUTF16Units   = 8192
-	maxV3SearchQueryUTF16Units      = 2048
-	v3TruncatedMessageContentSuffix = "\n...[truncated]"
+	maxErrorBodyPreview           = 512
+	maxV3ConversationBatchSize    = 100
+	maxV3MessageContentUTF16Units = 8192
+	maxV3SearchQueryUTF16Units    = 2048
+	v3TruncationMarker            = "\n...[truncated]"
 )
 
 // APIError describes a non-2xx response returned by the gateway.
@@ -668,9 +668,9 @@ func truncateV3MessageContent(content string) (string, bool) {
 		return content, false
 	}
 	budget := maxV3MessageContentUTF16Units -
-		v3UTF16Length(v3TruncatedMessageContentSuffix)
+		v3UTF16Length(v3TruncationMarker)
 	return truncateV3UTF16(content, budget) +
-		v3TruncatedMessageContentSuffix, true
+		v3TruncationMarker, true
 }
 
 func truncateV3SearchQuery(query string) string {
@@ -781,16 +781,4 @@ func formatV3ConversationHits(items []v3ConversationSearchHit) string {
 		lines = append(lines, fmt.Sprintf("[%s] %s", role, content))
 	}
 	return strings.Join(lines, "\n")
-}
-
-func formatV3ScenarioEntries(items []v3ScenarioEntry) (string, int) {
-	lines := make([]string, 0, len(items))
-	for _, item := range items {
-		path := strings.TrimSpace(item.Path)
-		if path == "" {
-			continue
-		}
-		lines = append(lines, "- "+path)
-	}
-	return strings.Join(lines, "\n"), len(lines)
 }

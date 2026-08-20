@@ -14,7 +14,8 @@ tRPC-Agent-Go 侧继续负责 Runner、Session、Plugin 和 Tool 生命周期的
   V3 会组合 L1 atomic search、L2 scene navigation 和 L3 core read。
 - 通过 `tdai_conversation_search`（按 session 作用域，默认开启）和
   `tdai_memory_search`（需 `WithMemorySearchTool(true)` 显式开启）暴露只读检索工具。
-  V3 接入还会提供 `tdai_read_scenario`，按 scene navigation 返回的路径读取 L2 全文。
+  V3 接入还会提供 `tdai_read_scenario`，按 scene navigation 返回的路径读取有界的
+  L2 内容。
 - 可选的短期上下文卸载 plugin 会把工具结果外置化、L1/L1.5/L2/L3、
   drill-down 和持久化委托给 TencentDB Agent Memory gateway hook API。
   Go adapter 不写本地 offload 文件。它与 recall 相互独立，默认关闭。
@@ -276,7 +277,9 @@ Service、Team、Agent、User 隔离；L2/L3 在相同 Service、Team、Agent
 和云端服务仍需提供 API key。
 
 启用 V3 后，`memSvc.Tools()` 会包含 `tdai_read_scenario`，用于读取 scene
-navigation 选中的 L2 文件。
+navigation 选中的 L2 文件。Recall 最多注入 100 个非空路径和 8 KiB navigation
+文本；场景文件最多返回 16 KiB，截断时内容以 `...[truncated]` 结尾，且
+`truncated` 为 `true`。
 
 `ContextOffloadConfig` 只控制 Go adapter 的 gateway 对接。offload 层级、
 状态、存储、TTL 和隔离由 TencentDB Agent Memory gateway 负责。Go adapter

@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	memorypkg "trpc.group/trpc-go/trpc-agent-go/memory"
@@ -22,8 +23,11 @@ import (
 )
 
 const (
-	defaultSearchLimit = 5
-	maxSearchLimit     = 20
+	defaultSearchLimit             = 5
+	maxSearchLimit                 = 20
+	maxV3ScenarioNavigationEntries = 100
+	maxV3ScenarioNavigationBytes   = 8 << 10
+	maxV3ScenarioContentBytes      = 16 << 10
 )
 
 type searchMemoriesToolRequest struct {
@@ -65,6 +69,7 @@ type readScenarioToolResponse struct {
 	Path      string `json:"path"`
 	Version   string `json:"version"`
 	Content   string `json:"content"`
+	Truncated bool   `json:"truncated,omitempty"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -278,10 +283,12 @@ func (s *Service) newScenarioReadTool(name string) tool.CallableTool {
 		if err != nil {
 			return nil, err
 		}
+		content, truncated := truncateV3ScenarioContent(rsp.Content)
 		return &readScenarioToolResponse{
 			Path:      rsp.Path,
 			Version:   string(rsp.Version),
-			Content:   rsp.Content,
+			Content:   content,
+			Truncated: truncated,
 			CreatedAt: rsp.CreatedAt,
 			UpdatedAt: rsp.UpdatedAt,
 		}, nil
@@ -290,8 +297,68 @@ func (s *Service) newScenarioReadTool(name string) tool.CallableTool {
 		fn,
 		function.WithName(name),
 		function.WithDescription("Read a TencentDB Agent Memory L2 scenario file by a path returned by scene navigation. "+
-			"Use this after a relevant scenario path is identified and its full details are needed."),
+			"Responses are capped at 16 KiB and mark truncated content."),
 	)
+}
+
+func formatV3ScenarioEntries(items []v3ScenarioEntry) (string, int) {
+	lines := make([]string, 0, maxV3ScenarioNavigationEntries)
+	bytesUsed := 0
+	truncated := false
+	for _, item := range items {
+		path := strings.TrimSpace(item.Path)
+		if path == "" {
+			continue
+		}
+		line := "- " + path
+		separatorBytes := 0
+		if len(lines) > 0 {
+			separatorBytes = 1
+		}
+		if len(lines) == maxV3ScenarioNavigationEntries ||
+			bytesUsed+separatorBytes+len(line) > maxV3ScenarioNavigationBytes {
+			truncated = true
+			break
+		}
+		lines = append(lines, line)
+		bytesUsed += separatorBytes + len(line)
+	}
+	for truncated && len(lines) > 0 &&
+		bytesUsed+len(v3TruncationMarker) > maxV3ScenarioNavigationBytes {
+		last := len(lines) - 1
+		bytesUsed -= len(lines[last])
+		if last > 0 {
+			bytesUsed--
+		}
+		lines = lines[:last]
+	}
+	context := strings.Join(lines, "\n")
+	if truncated {
+		if context == "" {
+			context = strings.TrimPrefix(v3TruncationMarker, "\n")
+		} else {
+			context += v3TruncationMarker
+		}
+	}
+	return context, len(lines)
+}
+
+func truncateV3ScenarioContent(content string) (string, bool) {
+	if len(content) <= maxV3ScenarioContentBytes {
+		return content, false
+	}
+	limit := maxV3ScenarioContentBytes - len(v3TruncationMarker)
+	end := 0
+	for offset := 0; offset < len(content); {
+		_, size := utf8.DecodeRuneInString(content[offset:])
+		next := offset + size
+		if next > limit {
+			break
+		}
+		end = next
+		offset = next
+	}
+	return content[:end] + v3TruncationMarker, true
 }
 
 func (s *Service) newReadOffloadRefTool(name string) tool.CallableTool {

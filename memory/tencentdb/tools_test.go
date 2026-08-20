@@ -14,8 +14,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -145,6 +147,7 @@ func TestV3MemorySearchAndScenarioReadTools(t *testing.T) {
 	var atomicReq map[string]any
 	var scenarioRequests []v3ScenarioReadRequest
 	content := "Review transaction boundaries before merging."
+	oversizedContent := strings.Repeat("界", maxV3ScenarioContentBytes)
 	version := "v1"
 	createdAt := "2026-08-01T00:00:00Z"
 	updatedAt := "2026-08-13T00:00:00Z"
@@ -166,10 +169,14 @@ func TestV3MemorySearchAndScenarioReadTools(t *testing.T) {
 			var req v3ScenarioReadRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 			scenarioRequests = append(scenarioRequests, req)
+			fileContent := content
+			if req.Path == "oversized.md" {
+				fileContent = oversizedContent
+			}
 			file := v3ScenarioFile{
 				Path:      req.Path,
 				Version:   v3Version(version),
-				Content:   content,
+				Content:   fileContent,
 				CreatedAt: createdAt,
 				UpdatedAt: updatedAt,
 			}
@@ -246,14 +253,35 @@ func TestV3MemorySearchAndScenarioReadTools(t *testing.T) {
 	assert.Equal(t, "reviews.md", scenarioRsp.Path)
 	assert.Equal(t, version, scenarioRsp.Version)
 	assert.Equal(t, content, scenarioRsp.Content)
+	assert.False(t, scenarioRsp.Truncated)
 	assert.Equal(t, createdAt, scenarioRsp.CreatedAt)
 	assert.Equal(t, updatedAt, scenarioRsp.UpdatedAt)
+	raw, err = scenarioTool.Call(ctx, []byte(`{"path":"oversized.md"}`))
+	require.NoError(t, err)
+	oversizedRsp := raw.(*readScenarioToolResponse)
+	assert.Equal(t, "oversized.md", oversizedRsp.Path)
+	assert.True(t, oversizedRsp.Truncated)
+	assert.LessOrEqual(t, len(oversizedRsp.Content), maxV3ScenarioContentBytes)
+	assert.True(t, utf8.ValidString(oversizedRsp.Content))
+	assert.True(t, strings.HasSuffix(oversizedRsp.Content, v3TruncationMarker))
 
-	require.Len(t, scenarioRequests, 1)
+	require.Len(t, scenarioRequests, 2)
 	for _, req := range scenarioRequests {
 		assert.Equal(t, "team-1", req.TeamID)
 		assert.Equal(t, "agent-1", req.AgentID)
 		assert.Equal(t, "user-1", req.UserID)
 		assert.Empty(t, req.SessionID)
 	}
+}
+
+func TestTruncateV3ScenarioContentBoundary(t *testing.T) {
+	exact := strings.Repeat("a", maxV3ScenarioContentBytes)
+	content, truncated := truncateV3ScenarioContent(exact)
+	assert.Equal(t, exact, content)
+	assert.False(t, truncated)
+
+	content, truncated = truncateV3ScenarioContent(exact + "a")
+	assert.True(t, truncated)
+	assert.Len(t, content, maxV3ScenarioContentBytes)
+	assert.True(t, strings.HasSuffix(content, v3TruncationMarker))
 }

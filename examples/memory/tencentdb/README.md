@@ -19,8 +19,8 @@ The integration works in three parts:
 3. **Read-only tools** — The agent can explicitly search memory through
    `tdai_memory_search` (opt-in via `WithMemorySearchTool(true)`) and
    conversation history through `tdai_conversation_search`. V3 integrations
-   also expose `tdai_read_scenario` to read an L2 file selected from scene
-   navigation.
+   also expose `tdai_read_scenario` to read bounded L2 content selected from
+   scene navigation.
 4. **Context offload v2 (optional)** — Tool results are sent to
    `/v2/offload/ingest`; model context is compacted through
    `/v2/offload/compact`; and the agent can recover archived details with
@@ -307,7 +307,10 @@ Key points:
   isolation fields; use distinct service, team, or agent identities when
   applications must not share memory.
 - V3 adds `tdai_read_scenario` to `memSvc.Tools()` so the agent can read L2
-  content in the configured service/team/agent scope.
+  content in the configured service/team/agent scope. Recall injects at most
+  100 non-empty scenario paths and 8 KiB of navigation text. Scenario reads
+  return at most 16 KiB and mark shortened content with `...[truncated]` and
+  `truncated: true`.
 - `EndSession` waits for queued capture in both modes. It additionally calls
   `/session/end` only for Legacy gateways because V3 has no remote equivalent.
   It is not a V3 long-term extraction barrier; use an explicit delay or gateway
