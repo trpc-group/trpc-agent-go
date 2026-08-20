@@ -1233,6 +1233,54 @@ func TestNormalizeMemoryTimesToleratesClockSkew(t *testing.T) {
 	}
 }
 
+func TestNormalizeMemoryTimesToleratesReversedTiedInputOrder(t *testing.T) {
+	base := time.Unix(100, 0).UTC()
+	testCases := []struct {
+		name         string
+		firstOffset  time.Duration
+		secondOffset time.Duration
+	}{
+		{name: "identical", firstOffset: 0, secondOffset: 0},
+		{name: "sub_precision", firstOffset: 100 * time.Microsecond, secondOffset: 500 * time.Microsecond},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			baseline := Snapshot{Memories: []MemorySnapshot{
+				{
+					ID: "baseline-first", AppName: "app", UserID: "user", Content: "first",
+					CreatedAt: base.Add(testCase.firstOffset),
+					UpdatedAt: base.Add(time.Second).Add(testCase.firstOffset),
+				},
+				{
+					ID: "baseline-second", AppName: "app", UserID: "user", Content: "second",
+					CreatedAt: base.Add(testCase.secondOffset),
+					UpdatedAt: base.Add(time.Second).Add(testCase.secondOffset),
+				},
+			}}
+			reversed := Snapshot{Memories: []MemorySnapshot{
+				{
+					ID: "candidate-second", AppName: "app", UserID: "user", Content: "second",
+					CreatedAt: base.Add(testCase.secondOffset),
+					UpdatedAt: base.Add(time.Second).Add(testCase.secondOffset),
+				},
+				{
+					ID: "candidate-first", AppName: "app", UserID: "user", Content: "first",
+					CreatedAt: base.Add(testCase.firstOffset),
+					UpdatedAt: base.Add(time.Second).Add(testCase.firstOffset),
+				},
+			}}
+			gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+			gotReversed := NormalizeSnapshot(reversed, DefaultNormalizeOptions())
+			if !reflect.DeepEqual(gotBaseline, gotReversed) {
+				t.Fatalf(
+					"reversed tied memory order was reported as a difference:\nbaseline: %#v\nreversed: %#v",
+					gotBaseline, gotReversed,
+				)
+			}
+		})
+	}
+}
+
 func TestNormalizeMemoryTimesSharesSearchResultRanks(t *testing.T) {
 	base := time.Unix(100, 0).UTC()
 	snapshot := Snapshot{

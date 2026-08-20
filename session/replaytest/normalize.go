@@ -323,7 +323,14 @@ func normalizeScopedMemoryTimes(groups []*memoryTimeGroup, precision time.Durati
 		}
 		return false
 	})
-	for position, group := range groups {
+	position := -1
+	var previous memoryTimeKey
+	for _, group := range groups {
+		key := rankedMemoryTimeKey(group.key, createdRanks, updatedRanks)
+		if position < 0 || !memoryTimeKeyEqual(previous, key) {
+			position++
+			previous = key
+		}
 		for _, entry := range group.entries {
 			assignMemoryTimeRanks(entry, group.key, position, precision)
 		}
@@ -356,6 +363,10 @@ func memoryTimeKeyLess(left, right memoryTimeKey) bool {
 		return !left.created.IsZero()
 	}
 	return left.created.Before(right.created)
+}
+
+func memoryTimeKeyEqual(left, right memoryTimeKey) bool {
+	return left.updated.Equal(right.updated) && left.created.Equal(right.created)
 }
 
 // assignMemoryTimeRanks writes position-derived ranks for one stable memory
