@@ -322,6 +322,110 @@ func TestRunnerLatestTurnReplacementRestoresUnfinishedTurn(t *testing.T) {
 	assert.Equal(t, "edited", active.Events[0].Response.Choices[0].Message.Content)
 }
 
+func TestRunnerLatestTurnReplacementRetainsSharedState(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	appStateKey := session.StateAppPrefix + "shared"
+	userStateKey := session.StateUserPrefix + "private"
+	sess, err := service.CreateSession(ctx, key, session.StateMap{
+		"phase": []byte("before"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, service.UpdateAppState(ctx, key.AppName, session.StateMap{
+		"shared": []byte("app-before"),
+	}))
+	require.NoError(t, service.UpdateUserState(ctx, session.UserKey{
+		AppName: key.AppName,
+		UserID:  key.UserID,
+	}, session.StateMap{
+		"private": []byte("user-before"),
+	}))
+	baseline := event.NewResponseEvent(
+		"before-invocation",
+		"agent",
+		&model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("before"),
+		}}},
+	)
+	baseline.ID = "before"
+	baseline.RequestID = "request-before"
+	require.NoError(t, service.AppendEvent(ctx, sess, baseline))
+
+	start := event.NewResponseEvent(
+		"latest-invocation",
+		authorUser,
+		&model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.NewUserMessage("original"),
+		}}},
+	)
+	start.ID = "latest"
+	start.RequestID = "request-original"
+	require.NoError(t, service.AppendEvent(
+		revision.ContextWithTurnStart(ctx, revision.TurnStart{
+			RequestID: start.RequestID, InvocationID: start.InvocationID,
+		}),
+		sess,
+		start,
+	))
+	stateEvent := event.NewResponseEvent(
+		start.InvocationID,
+		"agent",
+		&model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("original response"),
+		}}},
+	)
+	stateEvent.ID = "state"
+	stateEvent.RequestID = start.RequestID
+	stateEvent.StateDelta = session.StateMap{
+		"phase":      []byte("after"),
+		appStateKey:  []byte("app-after"),
+		userStateKey: []byte("user-after"),
+	}
+	require.NoError(t, service.AppendEvent(ctx, sess, stateEvent))
+	require.NoError(t, service.UpdateAppState(ctx, key.AppName, session.StateMap{
+		"shared": []byte("app-after"),
+	}))
+	require.NoError(t, service.UpdateUserState(ctx, session.UserKey{
+		AppName: key.AppName,
+		UserID:  key.UserID,
+	}, session.StateMap{
+		"private": []byte("user-after"),
+	}))
+	completion := event.NewResponseEvent(
+		start.InvocationID,
+		"app",
+		&model.Response{Done: true, Object: model.ObjectTypeRunnerCompletion},
+	)
+	completion.RequestID = start.RequestID
+	require.NoError(t, service.AppendEvent(ctx, sess, completion))
+
+	r := NewRunner("app", &mockAgent{name: "agent"}, WithSessionService(service))
+	events, err := r.Run(
+		ctx,
+		key.UserID,
+		key.SessionID,
+		model.NewUserMessage("edited"),
+		agent.WithLatestTurnReplacement(start.RequestID, "request-edited"),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	active, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	phase, ok := active.GetState("phase")
+	require.True(t, ok)
+	assert.Equal(t, []byte("before"), phase)
+	appState, ok := active.GetState(appStateKey)
+	require.True(t, ok)
+	assert.Equal(t, []byte("app-after"), appState)
+	userState, ok := active.GetState(userStateKey)
+	require.True(t, ok)
+	assert.Equal(t, []byte("user-after"), userState)
+}
+
 func TestRunnerLatestTurnReplacementReservesNewRequestBeforeMutation(t *testing.T) {
 	ctx := context.Background()
 	service := sessioninmemory.NewSessionService()

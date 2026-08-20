@@ -239,14 +239,6 @@ if checkpoint then
     if evtRequestID ~= checkpoint.requestID then
         checkpoint.hazard = true
     end
-    local stateDelta = evt.stateDelta
-    if stateDelta then
-        for key, _ in pairs(stateDelta) do
-            if string.sub(key, 1, 4) == 'app:' or string.sub(key, 1, 5) == 'user:' then
-                checkpoint.hazard = true
-            end
-        end
-    end
     revisionChanged = true
 end
 

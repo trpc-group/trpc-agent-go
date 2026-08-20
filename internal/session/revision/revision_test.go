@@ -942,12 +942,12 @@ func TestApplyEventWriteRejectsUnsafeBoundaries(t *testing.T) {
 		assert.True(t, record.Checkpoint.Hazard)
 	})
 
-	t.Run("shared state delta taints checkpoint", func(t *testing.T) {
+	t.Run("shared state delta remains replaceable", func(t *testing.T) {
 		record := runningRevisionRecord(t)
 		evt := revisionTestEvent("request", "invocation", false)
 		evt.StateDelta = session.StateMap{session.StateAppPrefix + "key": []byte("value")}
 		ApplyEventWrite(record, Write{HasExpectedGeneration: true}, evt, true)
-		assert.True(t, record.Checkpoint.Hazard)
+		assert.False(t, record.Checkpoint.Hazard)
 	})
 }
 

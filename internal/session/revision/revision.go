@@ -670,9 +670,6 @@ func ApplyEventWrite(
 	if evt.RequestID != checkpoint.RequestID {
 		checkpoint.Hazard = true
 	}
-	if hasNonSessionStateDelta(evt.StateDelta) {
-		checkpoint.Hazard = true
-	}
 	if !evt.IsRunnerCompletion() {
 		return true
 	}
@@ -712,16 +709,6 @@ func applyTurnStart(
 		checkpoint.Hazard = true
 	}
 	return true
-}
-
-func hasNonSessionStateDelta(delta map[string][]byte) bool {
-	for key := range delta {
-		if strings.HasPrefix(key, session.StateAppPrefix) ||
-			strings.HasPrefix(key, session.StateUserPrefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // ApplyTrackWrite records a track mutation and verifies that track activity

@@ -46,6 +46,9 @@ func Run(t *testing.T, service session.Service) {
 	t.Run("turn-start restore state", func(t *testing.T) {
 		testTurnStartRestoreState(t, service)
 	})
+	t.Run("shared state retained", func(t *testing.T) {
+		testSharedStateRetained(t, service)
+	})
 	t.Run("listed projection fencing", func(t *testing.T) {
 		testListedProjectionFencing(t, service)
 	})
@@ -373,6 +376,78 @@ func testTurnStartRestoreState(t *testing.T, service session.Service) {
 	}
 }
 
+func testSharedStateRetained(t *testing.T, service session.Service) {
+	ctx := context.Background()
+	key := contractKey(t, "shared-state-retained")
+	appStateKey := session.StateAppPrefix + "shared"
+	userStateKey := session.StateUserPrefix + "private"
+	sess, err := service.CreateSession(ctx, key, session.StateMap{
+		"phase": []byte("before"),
+	})
+	requireNoError(t, err)
+	requireNoError(t, service.UpdateAppState(ctx, key.AppName, session.StateMap{
+		"shared": []byte("app-before"),
+	}))
+	requireNoError(t, service.UpdateUserState(ctx, session.UserKey{
+		AppName: key.AppName,
+		UserID:  key.UserID,
+	}, session.StateMap{
+		"private": []byte("user-before"),
+	}))
+	requireNoError(t, service.AppendEvent(
+		ctx,
+		sess,
+		messageEvent("before", "before", "before-invocation", model.RoleUser),
+	))
+
+	turnCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID:    "latest",
+		InvocationID: "latest-invocation",
+	})
+	requireNoError(t, service.AppendEvent(
+		turnCtx,
+		sess,
+		messageEvent("latest", "latest", "latest-invocation", model.RoleUser),
+	))
+	stateEvent := messageEvent(
+		"state", "latest", "latest-invocation", model.RoleAssistant,
+	)
+	stateEvent.StateDelta = session.StateMap{
+		"phase":      []byte("after"),
+		appStateKey:  []byte("app-after"),
+		userStateKey: []byte("user-after"),
+	}
+	requireNoError(t, service.AppendEvent(ctx, sess, stateEvent))
+	requireNoError(t, service.UpdateAppState(ctx, key.AppName, session.StateMap{
+		"shared": []byte("app-after"),
+	}))
+	requireNoError(t, service.UpdateUserState(ctx, session.UserKey{
+		AppName: key.AppName,
+		UserID:  key.UserID,
+	}, session.StateMap{
+		"private": []byte("user-after"),
+	}))
+	requireNoError(t, service.AppendEvent(
+		ctx,
+		sess,
+		completionEvent("latest", "latest-invocation"),
+	))
+
+	result, err := revision.ReplaceLatestTurn(
+		ctx,
+		service,
+		revision.LatestTurnReplacementRequest{
+			Key:               key,
+			ExpectedRequestID: "latest",
+			IdempotencyKey:    "replacement",
+		},
+	)
+	requireNoError(t, err)
+	assertStateValue(t, result.ActiveSession, "phase", "before")
+	assertStateValue(t, result.ActiveSession, appStateKey, "app-after")
+	assertStateValue(t, result.ActiveSession, userStateKey, "user-after")
+}
+
 func testRestoreAndFencing(t *testing.T, service session.Service) {
 	ctx := context.Background()
 	key := contractKey(t, "restore")
@@ -625,5 +700,18 @@ func requireNoError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertStateValue(
+	t *testing.T,
+	sess *session.Session,
+	key string,
+	want string,
+) {
+	t.Helper()
+	got, ok := sess.GetState(key)
+	if !ok || string(got) != want {
+		t.Fatalf("state %q = %q, %v; want %q", key, got, ok, want)
 	}
 }
