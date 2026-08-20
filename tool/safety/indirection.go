@@ -34,6 +34,9 @@ func scanCommandIndirectionAtDepth(
 		switch base := commandBase(argv[0]); base {
 		case "git", "git.exe":
 			findings = append(findings, scanGitClean(argv[1:])...)
+			findings = append(findings, scanGitSubmoduleForeach(
+				policy, argv[1:], depth+1,
+			)...)
 			findings = append(findings, scanGitExecutionConfigs(
 				policy, req.Env, argv[1:], depth+1,
 			)...)
@@ -42,6 +45,10 @@ func scanCommandIndirectionAtDepth(
 			)...)
 		case "git-clean", "git-clean.exe":
 			findings = append(findings, scanGitCleanArguments(argv[1:], false)...)
+		case "git-submodule", "git-submodule.exe":
+			findings = append(findings, scanGitSubmoduleForeachInvocation(
+				policy, parseDirectGitSubmoduleInvocation(argv[1:]), depth+1,
+			)...)
 		case "tar":
 			findings = append(findings, scanTarExecutionOptions(
 				policy, argv[1:], depth+1,
@@ -50,9 +57,9 @@ func scanCommandIndirectionAtDepth(
 			findings = append(findings, scanFindExecutionActions(
 				policy, argv[1:], depth+1,
 			)...)
-		case "ssh", "scp", "sftp":
+		case "ssh", "scp", "sftp", "ssh.exe", "scp.exe", "sftp.exe":
 			findings = append(findings, scanSSHExecutionOptions(
-				policy, base, argv[1:], depth+1,
+				policy, strings.TrimSuffix(base, ".exe"), argv[1:], depth+1,
 			)...)
 		}
 	}
@@ -66,33 +73,66 @@ func scanSSHExecutionOptions(
 	depth int,
 ) []Finding {
 	var findings []Finding
-	for _, option := range sshConfigurationOptions(client, args) {
+	parsed := parseSSHArguments(client, args)
+	for _, option := range parsed.configurationOptions {
 		value, name, matched := sshExecutionCommand(option)
 		if !matched {
 			continue
 		}
 		findings = append(findings, newFinding(
 			DecisionNeedsHumanReview, RiskHigh, "command.indirect_execution",
-			"SSH "+name+" can execute a local command",
+			"SSH "+name+" can execute a command",
 			"remove the command-selecting SSH option or review its complete command",
 		))
 		findings = append(findings, scanNestedCommandAtDepth(
 			policy, value, depth,
 		)...)
 	}
+	if client == "ssh" && len(parsed.remoteCommand) > 0 {
+		findings = append(findings, scanNestedCommandAtDepth(
+			policy, strings.Join(parsed.remoteCommand, " "), depth,
+		)...)
+	}
 	return findings
 }
 
-func sshConfigurationOptions(client string, args []string) []string {
-	var options []string
+type sshArguments struct {
+	configurationOptions []string
+	remoteCommand        []string
+	localArguments       []string
+}
+
+func parseSSHArguments(client string, args []string) sshArguments {
+	parsed := sshArguments{localArguments: args}
 	destinationSeen := false
 	for index := 0; index < len(args); {
 		arg := args[index]
-		if arg == "--" || arg == "-" {
+		if arg == "--" {
+			parsed.localArguments = args[:index]
+			index++
+			if client != "ssh" {
+				break
+			}
+			if !destinationSeen && index < len(args) {
+				index++
+			}
+			parsed.remoteCommand = append(
+				[]string(nil), args[index:]...,
+			)
+			break
+		}
+		if arg == "-" {
+			parsed.localArguments = args[:index]
 			break
 		}
 		if !strings.HasPrefix(arg, "-") {
 			if client != "ssh" || destinationSeen {
+				if client == "ssh" {
+					parsed.localArguments = args[:index]
+					parsed.remoteCommand = append(
+						[]string(nil), args[index:]...,
+					)
+				}
 				break
 			}
 			destinationSeen = true
@@ -109,18 +149,22 @@ func sshConfigurationOptions(client string, args []string) []string {
 			continue
 		}
 		if !consumesNext {
-			options = append(options, value)
+			parsed.configurationOptions = append(
+				parsed.configurationOptions, value,
+			)
 			index++
 			continue
 		}
 		if index+1 < len(args) {
-			options = append(options, args[index+1])
+			parsed.configurationOptions = append(
+				parsed.configurationOptions, args[index+1],
+			)
 			index += 2
 			continue
 		}
 		index++
 	}
-	return options
+	return parsed
 }
 
 func sshConfigurationOption(arg string) (string, bool, bool) {
@@ -159,6 +203,11 @@ func sshExecutionCommand(option string) (string, string, bool) {
 	if !matched {
 		return "", "", false
 	}
+	if name == "RemoteCommand" && strings.EqualFold(
+		strings.TrimSpace(value), "none",
+	) {
+		return "", "", false
+	}
 	return value, name, true
 }
 
@@ -195,6 +244,8 @@ func sshExecutionOptionName(value string) (string, bool) {
 		return "KnownHostsCommand", true
 	case strings.EqualFold(strings.TrimSpace(value), "ProxyCommand"):
 		return "ProxyCommand", true
+	case strings.EqualFold(strings.TrimSpace(value), "RemoteCommand"):
+		return "RemoteCommand", true
 	default:
 		return "", false
 	}

@@ -23,7 +23,9 @@ var explicitURLPattern = regexp.MustCompile(
 
 var networkCommands = map[string]struct{}{
 	"curl": {}, "wget": {}, "nc": {}, "netcat": {}, "ssh": {},
-	"scp": {}, "sftp": {}, "ftp": {}, "git": {},
+	"scp": {}, "sftp": {}, "ftp": {}, "git": {}, "ssh.exe": {},
+	"scp.exe": {}, "sftp.exe": {}, "git.exe": {}, "git-submodule": {},
+	"git-submodule.exe": {},
 }
 
 var nonNetworkCommands = map[string]struct{}{
@@ -63,7 +65,8 @@ func scanNetwork(
 		}
 		destinations, unresolved := networkDestinations(argv)
 		var rewritePrefixes []string
-		if commandBase(argv[0]) == "git" {
+		base := commandBase(argv[0])
+		if base == "git" || base == "git.exe" {
 			var rewriteFindings []Finding
 			rewriteFindings, rewritePrefixes = scanGitURLRewrites(
 				policy, environment, argv, destinations,
@@ -105,14 +108,18 @@ func networkDestinations(argv []string) ([]string, bool) {
 		return nil, false
 	}
 	switch commandBase(argv[0]) {
-	case "ssh":
+	case "ssh", "ssh.exe":
 		return firstPositional(argv[1:], sshValueOptions), false
-	case "scp":
+	case "scp", "scp.exe":
 		return scpRemoteDestinations(argv[1:], scpValueOptions), false
-	case "sftp":
+	case "sftp", "sftp.exe":
 		return firstPositional(argv[1:], sftpValueOptions), false
-	case "git":
+	case "git", "git.exe":
 		return gitNetworkDestinations(argv[1:])
+	case "git-submodule", "git-submodule.exe":
+		return gitSubmoduleNetworkDestinations(
+			parseDirectGitSubmoduleInvocation(argv[1:]),
+		)
 	case "nc", "netcat":
 		return netcatDestination(argv[1:]), false
 	case "ftp":
@@ -366,6 +373,9 @@ func scpRemoteDestinations(args []string, valueOptions map[string]struct{}) []st
 }
 
 func gitNetworkDestinations(args []string) ([]string, bool) {
+	if invocation := parseGitSubmoduleInvocation(args); invocation.matched {
+		return gitSubmoduleNetworkDestinations(invocation)
+	}
 	globalValues := map[string]struct{}{
 		"-C": {}, "-c": {}, "--config-env": {}, "--git-dir": {}, "--work-tree": {},
 	}
@@ -761,11 +771,17 @@ func scanNetworkText(policy Policy, text string) []Finding {
 
 func destinationOverrideFinding(argv []string) (Finding, bool) {
 	base := commandBase(argv[0])
-	sshClient := base == "ssh" || base == "scp" || base == "sftp"
-	for i := 1; i < len(argv); i++ {
-		rawArg := argv[i]
+	sshClient := isSSHNetworkClient(base)
+	args := argv[1:]
+	if sshClient {
+		args = parseSSHArguments(
+			strings.TrimSuffix(base, ".exe"), args,
+		).localArguments
+	}
+	for i := 0; i < len(args); i++ {
+		rawArg := args[i]
 		arg := strings.ToLower(rawArg)
-		if sshClient && sshDestinationOverrideArgument(argv, i) {
+		if sshClient && sshDestinationOverrideArgument(args, i) {
 			return sshDestinationOverrideFinding(), true
 		}
 		if genericDestinationOverrideArgument(arg) {
@@ -870,8 +886,11 @@ func sshDestinationOverrideOption(value string) bool {
 
 func networkConfigFinding(argv []string) (Finding, bool) {
 	base := commandBase(argv[0])
-	if base == "ssh" || base == "scp" || base == "sftp" {
-		for _, arg := range argv[1:] {
+	if isSSHNetworkClient(base) {
+		args := parseSSHArguments(
+			strings.TrimSuffix(base, ".exe"), argv[1:],
+		).localArguments
+		for _, arg := range args {
 			if arg == "-F" || strings.HasPrefix(arg, "-F") {
 				return newFinding(
 					DecisionNeedsHumanReview, RiskMedium, "network.config",
@@ -904,6 +923,11 @@ func networkConfigFinding(argv []string) (Finding, bool) {
 		}
 	}
 	return Finding{}, false
+}
+
+func isSSHNetworkClient(base string) bool {
+	base = strings.TrimSuffix(base, ".exe")
+	return base == "ssh" || base == "scp" || base == "sftp"
 }
 
 func wgetExecutableConfigOption(arg string) bool {

@@ -94,14 +94,19 @@ are blocked; broad output globs require review unless they are scoped beneath
 the dedicated `out/` directory. The scanner also reviews Git configuration
 that selects aliases, hooks, helpers or external programs. Inline AWK process
 bridges, sed `e` and `s///e` programs, and SSH `LocalCommand`,
-`KnownHostsCommand`, or `ProxyCommand` options are command indirection: literal
-nested commands are scanned by the same command policy, while dynamic or
-ambiguous forms require review. SSH configuration values accept both `key=value`
-and `key value`; `Hostname` and `ProxyJump` are treated as destination
-overrides in either form. Unknown executables receiving an explicit URL or a
-syntactically valid numeric `host:port` operand are treated as potential
-network clients and require review; colon-delimited non-port data and dotted
-filenames are not network signals. A tool that publishes destructive metadata
+`KnownHostsCommand`, `ProxyCommand`, or `RemoteCommand` options are command
+indirection: literal nested commands are scanned by the same command policy,
+while dynamic or ambiguous forms require review. SSH configuration values accept
+both `key=value` and `key value`; `Hostname` and `ProxyJump` are treated as
+destination overrides in either form. SSH remote command operands and Git
+`submodule foreach` command tails follow the same nested-command rule. Explicit
+repositories passed to `git submodule add` or `git submodule--helper clone` are
+checked against the network allowlist; `submodule update` requires review because
+its effective URLs can come from repository configuration. Unknown executables
+receiving an explicit URL or a syntactically valid numeric `host:port` operand
+are treated as potential network clients and require review; colon-delimited
+non-port data and dotted filenames are not network signals. A tool that publishes
+destructive metadata
 also requires review even when its schema does not expose recognizable
 execution fields; stronger deny findings still take precedence.
 

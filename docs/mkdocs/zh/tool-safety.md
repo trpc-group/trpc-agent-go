@@ -77,14 +77,18 @@ Permission 扫描还会把解释器 stdin 和 `-f -` stdin 作为可执行内容
 禁止路径时会直接拦截；宽泛输出 glob 只有限定在专用 `out/` 目录下才会放行，
 否则需要人工复核。扫描器还会复核选择 alias、hook、helper 或外部程序的 Git
 配置。AWK 内联程序中的进程桥接、sed 的 `e` 与 `s///e`，以及 SSH 的
-`LocalCommand`、`KnownHostsCommand`、`ProxyCommand` 都属于命令间接执行：
+`LocalCommand`、`KnownHostsCommand`、`ProxyCommand`、`RemoteCommand` 都
+属于命令间接执行：
 字面量嵌套命令复用相同的命令策略扫描，动态或无法明确解析的形式进入人工复核。
 SSH 配置值同时支持 `key=value` 和 `key value` 两种形式；`Hostname` 与
-`ProxyJump` 在两种形式下都会作为目的地覆盖处理。如果 Tool metadata 声明
-destructive，即使 schema 中没有可识别的执行字段也至少需要人工复核。未知
-可执行文件收到显式 URL 或语法有效、端口为数字的 `host:port` 参数时，也会
-被视为潜在网络客户端并进入人工复核；冒号分隔的非端口数据与带点文件名不会
-被当成网络信号。已有的更强 deny 结论仍然优先。
+`ProxyJump` 在两种形式下都会作为目的地覆盖处理。SSH 远程命令参数与 Git
+`submodule foreach` 的命令尾部同样按嵌套命令处理。传给 `git submodule add`
+或 `git submodule--helper clone` 的显式仓库地址会应用网络白名单；`submodule
+update` 的有效 URL 可能来自仓库配置，因此需要人工复核。如果 Tool metadata
+声明 destructive，即使 schema 中没有可识别的执行字段也至少需要人工复核。
+未知可执行文件收到显式 URL 或语法有效、端口为数字的 `host:port` 参数时，也
+会被视为潜在网络客户端并进入人工复核；冒号分隔的非端口数据与带点文件名
+不会被当成网络信号。已有的更强 deny 结论仍然优先。
 
 ## Filter 与 Permission 边界
 

