@@ -204,17 +204,6 @@ func TestPluginBeforeAgentInitializesStateWithoutAttachingQueue(t *testing.T) {
 	require.False(t, steer.IsAttached(invocation))
 }
 
-func TestOptionsAccumulateExcludedToolNamesAndIgnoreEmpty(t *testing.T) {
-	o := newOptions(
-		WithExcludedToolNames("poll", ""),
-		WithExcludedToolNames("background"),
-		WithExcludedToolNames(),
-	)
-	require.Contains(t, o.excludedToolNames, "poll")
-	require.Contains(t, o.excludedToolNames, "background")
-	require.NotContains(t, o.excludedToolNames, "")
-}
-
 func TestPluginHandlesNilInputsAndMissingInvocation(t *testing.T) {
 	var nilPlugin *toolLoopWarningPlugin
 	require.Empty(t, nilPlugin.Name())
@@ -279,11 +268,13 @@ func TestPluginAcceptsReplacementToolMessagesWithoutToolName(t *testing.T) {
 	}
 }
 
-func TestPluginOptionsCustomizeWarningAndExcludeTools(t *testing.T) {
+func TestPluginOptionsCustomizeWarningAndAccumulateExcludedTools(t *testing.T) {
 	const customWarning = "choose a different strategy"
 	manager := pluginbase.MustNewManager(New(
 		WithWarningMessage(customWarning),
-		WithExcludedToolNames("poll"),
+		WithExcludedToolNames("poll", ""),
+		WithExcludedToolNames("background"),
+		WithExcludedToolNames(),
 	))
 	invocation := newPluginInvocation(t, manager)
 
@@ -304,6 +295,17 @@ func TestPluginOptionsCustomizeWarningAndExcludeTools(t *testing.T) {
 				name:   "search",
 				result: "same",
 			},
+		))
+	}
+	for round := 0; round < 2; round++ {
+		require.False(t, observeOneCallRound(
+			t,
+			manager,
+			invocation,
+			fmt.Sprintf("background-%d", round),
+			"background",
+			`{}`,
+			"pending",
 		))
 	}
 	require.False(t, observeOneCallRound(
