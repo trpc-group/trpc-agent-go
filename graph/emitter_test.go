@@ -11,13 +11,26 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 )
+
+func requireEmitterEvent(t *testing.T, eventChan <-chan *event.Event) *event.Event {
+	t.Helper()
+	select {
+	case evt := <-eventChan:
+		return evt
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for event")
+	}
+	return nil
+}
 
 func TestEventEmitter_EmitCustom(t *testing.T) {
 	eventChan := make(chan *event.Event, 10)
@@ -49,6 +62,7 @@ func TestEventEmitter_EmitProgress(t *testing.T) {
 		eventChan,
 		WithEmitterNodeID("test-node"),
 		WithEmitterInvocationID("test-invocation"),
+		WithEmitterBranch("test-branch"),
 	)
 
 	// Test normal progress
@@ -58,6 +72,7 @@ func TestEventEmitter_EmitProgress(t *testing.T) {
 	select {
 	case evt := <-eventChan:
 		assert.Equal(t, ObjectTypeGraphNodeCustom, evt.Object)
+		assert.Equal(t, "test-branch", evt.Branch)
 		assert.Contains(t, evt.StateDelta, MetadataKeyNodeCustom)
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for event")
@@ -77,6 +92,7 @@ func TestEventEmitter_EmitText(t *testing.T) {
 		eventChan,
 		WithEmitterNodeID("test-node"),
 		WithEmitterInvocationID("test-invocation"),
+		WithEmitterBranch("test-branch"),
 	)
 
 	err := emitter.EmitText("Hello, World!")
@@ -85,6 +101,7 @@ func TestEventEmitter_EmitText(t *testing.T) {
 	select {
 	case evt := <-eventChan:
 		assert.Equal(t, ObjectTypeGraphNodeCustom, evt.Object)
+		assert.Equal(t, "test-branch", evt.Branch)
 		assert.Contains(t, evt.StateDelta, MetadataKeyNodeCustom)
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for event")
@@ -112,6 +129,93 @@ func TestEventEmitter_Emit(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for event")
 	}
+}
+
+func TestEventEmitter_EmitPreservesExplicitEventFields(t *testing.T) {
+	eventChan := make(chan *event.Event, 10)
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("injected-invocation"),
+		agent.WithInvocationBranch("injected-branch"),
+		agent.WithInvocationEventFilterKey("injected-filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "injected-request",
+		}),
+	)
+	emitter := NewEventEmitter(
+		eventChan,
+		WithEmitterNodeID("test-node"),
+		WithEmitterInvocationID("fallback-invocation"),
+		WithEmitterBranch("fallback-branch"),
+		withEmitterInvocation(inv),
+	)
+	evt := event.New("explicit-invocation", "", event.WithBranch("explicit-branch"))
+	evt.RequestID = "explicit-request"
+	evt.ParentInvocationID = "explicit-parent"
+	evt.FilterKey = "explicit-filter"
+	err := emitter.Emit(evt)
+	require.NoError(t, err)
+	received := requireEmitterEvent(t, eventChan)
+	require.Equal(t, "explicit-request", received.RequestID)
+	require.Equal(t, "explicit-parent", received.ParentInvocationID)
+	require.Equal(t, "explicit-invocation", received.InvocationID)
+	require.Equal(t, "explicit-branch", received.Branch)
+	require.Equal(t, "explicit-filter", received.FilterKey)
+	require.Equal(t, "test-node", received.Author)
+}
+
+func TestEventEmitter_EmitDoesNotMixDifferentInvocationFields(t *testing.T) {
+	eventChan := make(chan *event.Event, 10)
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("current-invocation"),
+		agent.WithInvocationBranch("current-branch"),
+		agent.WithInvocationEventFilterKey("current-filter"),
+		agent.WithInvocationParentMetadata(&event.ParentInvocationMetadata{
+			TriggerType: event.TriggerTypeToolCall,
+			TriggerID:   "current-trigger",
+			TriggerName: "current-tool",
+		}),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "current-request",
+		}),
+	)
+	emitter := NewEventEmitter(
+		eventChan,
+		WithEmitterNodeID("test-node"),
+		withEmitterInvocation(inv),
+	)
+	err := emitter.Emit(event.New("other-invocation", ""))
+	require.NoError(t, err)
+	received := requireEmitterEvent(t, eventChan)
+	require.Equal(t, "other-invocation", received.InvocationID)
+	require.Empty(t, received.RequestID)
+	require.Empty(t, received.Branch)
+	require.Empty(t, received.FilterKey)
+	require.Nil(t, received.ParentMetadata)
+	require.Equal(t, "test-node", received.Author)
+}
+
+func TestEventEmitter_EmitCustomInheritsParentFields(t *testing.T) {
+	eventChan := make(chan *event.Event, 10)
+	parent := agent.NewInvocation(agent.WithInvocationID("parent-invocation"))
+	parentMetadata := &event.ParentInvocationMetadata{
+		TriggerType: event.TriggerTypeToolCall,
+		TriggerID:   "tool-call",
+		TriggerName: "tool-name",
+	}
+	child := parent.Clone(
+		agent.WithInvocationID("child-invocation"),
+		agent.WithInvocationParentMetadata(parentMetadata),
+	)
+	emitter := NewEventEmitter(
+		eventChan,
+		WithEmitterNodeID("test-node"),
+		withEmitterInvocation(child),
+	)
+	err := emitter.EmitCustom("test-type", nil)
+	require.NoError(t, err)
+	received := requireEmitterEvent(t, eventChan)
+	require.Equal(t, "parent-invocation", received.ParentInvocationID)
+	require.Same(t, parentMetadata, received.ParentMetadata)
 }
 
 func TestEventEmitter_NilEvent(t *testing.T) {
@@ -190,6 +294,76 @@ func TestGetEventEmitter_WithValidContext(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for event")
 	}
+}
+
+func TestGetEventEmitterWithContext_InjectsInvocation(t *testing.T) {
+	eventChan := make(chan *event.Event, 10)
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("test-invocation"),
+		agent.WithInvocationBranch("test-branch"),
+		agent.WithInvocationEventFilterKey("test-filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "test-request",
+		}),
+	)
+	execCtx := &ExecutionContext{
+		InvocationID: "stale-invocation",
+		Invocation:   inv,
+		EventChan:    eventChan,
+	}
+	state := State{
+		StateKeyExecContext:   execCtx,
+		StateKeyCurrentNodeID: "test-node",
+	}
+
+	emitter := GetEventEmitterWithContext(context.Background(), state)
+	err := emitter.EmitCustom("test-type", map[string]any{"foo": "bar"})
+	require.NoError(t, err)
+
+	evt := requireEmitterEvent(t, eventChan)
+	require.Equal(t, "test-request", evt.RequestID)
+	require.Equal(t, "test-invocation", evt.InvocationID)
+	require.Equal(t, "test-branch", evt.Branch)
+	require.Equal(t, "test-filter", evt.FilterKey)
+	require.Contains(t, evt.StateDelta, MetadataKeyNodeCustom)
+	var metadata NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(evt.StateDelta[MetadataKeyNodeCustom], &metadata))
+	require.Equal(t, "test-invocation", metadata.InvocationID)
+	require.Equal(t, "test-node", metadata.NodeID)
+}
+
+func TestGetEventEmitterWithContext_InjectsContextInvocation(t *testing.T) {
+	eventChan := make(chan *event.Event, 10)
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("ctx-invocation"),
+		agent.WithInvocationBranch("ctx-branch"),
+		agent.WithInvocationEventFilterKey("ctx-filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "ctx-request",
+		}),
+	)
+	execCtx := &ExecutionContext{
+		InvocationID: "stale-invocation",
+		EventChan:    eventChan,
+	}
+	state := State{
+		StateKeyExecContext:   execCtx,
+		StateKeyCurrentNodeID: "test-node",
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	emitter := GetEventEmitterWithContext(ctx, state)
+	err := emitter.EmitCustom("test-type", map[string]any{"foo": "bar"})
+	require.NoError(t, err)
+	evt := requireEmitterEvent(t, eventChan)
+	require.Equal(t, "ctx-request", evt.RequestID)
+	require.Equal(t, "ctx-invocation", evt.InvocationID)
+	require.Equal(t, "ctx-branch", evt.Branch)
+	require.Equal(t, "ctx-filter", evt.FilterKey)
+	require.Contains(t, evt.StateDelta, MetadataKeyNodeCustom)
+	var metadata NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(evt.StateDelta[MetadataKeyNodeCustom], &metadata))
+	require.Equal(t, "ctx-invocation", metadata.InvocationID)
+	require.Equal(t, "test-node", metadata.NodeID)
 }
 
 func TestGetEventEmitterWithContext(t *testing.T) {
