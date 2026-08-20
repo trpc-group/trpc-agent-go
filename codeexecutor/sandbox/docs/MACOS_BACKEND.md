@@ -78,9 +78,14 @@ The network model stays binary:
 - `NetworkEnabled` adds broad outbound and inbound network allow rules.
 
 This is not the same as Linux `--unshare-net`. Linux uses a network namespace
-boundary. macOS uses Seatbelt network rules plus Mach service and Unix socket
-policy. The cross-platform model remains binary, while macOS-specific extension
-fields expose IPC affordances that Linux does not claim to support.
+boundary plus an AF_UNIX/AF_VSOCK/io_uring seccomp filter under
+`NetworkRestricted`, so the guest cannot create pathname or abstract Unix domain
+sockets or VM sockets even though host socket paths remain visible under
+`--ro-bind / /`. Anonymous stream and seqpacket socketpairs remain available.
+macOS uses Seatbelt network rules plus Mach service and Unix socket policy. The
+cross-platform model remains binary, while macOS-specific extension fields
+expose IPC affordances that Linux does not claim to support through path
+allowlists.
 
 `WithMacOSWeakerNetworkIsolation` allows certificate trust services such as
 `com.apple.trustd.agent` for tools that need system TLS trust validation. This
@@ -88,11 +93,12 @@ can be useful for Go-based CLI tools behind proxies or custom CAs, but it
 reduces isolation because Mach services can become data-exfiltration channels.
 
 `WithMacOSUnixSocketPaths` allows AF_UNIX socket bind/connect operations for
-explicit absolute socket paths. Linux keeps the namespace-level network model and
-does not provide a matching Unix socket path policy in this backend. Prefer the
-canonical macOS spelling for socket clients, for example `/private/tmp/...`
-instead of `/tmp/...`, because Seatbelt matches Unix socket paths at connect
-time.
+explicit absolute socket paths. Linux denies pathname and abstract AF_UNIX
+sockets and AF_VSOCK under `NetworkRestricted` through seccomp, keeps anonymous
+stream and seqpacket socketpairs available, and does not provide a matching Unix
+socket path allowlist. Prefer the canonical macOS spelling for socket clients,
+for example `/private/tmp/...` instead of `/tmp/...`, because Seatbelt matches
+Unix socket paths at connect time.
 
 Proxy-aware routing, per-domain/IP/port allow-lists, and loopback-only network
 policies are not part of this implementation.
@@ -145,9 +151,9 @@ caller lifecycle responsibilities, data flow, filtering model, and limitations.
 | Mount namespace | Supported | Not supported |
 | PID namespace | Supported with `--unshare-pid` | Not supported |
 | Parent death handling | `--die-with-parent` plus process-group cleanup | Process-group cleanup only |
-| Network boundary | Binary namespace model via `--unshare-net` | Binary Seatbelt model, with macOS IPC extensions |
+| Network boundary | `--unshare-net` plus AF_UNIX/AF_VSOCK/io_uring seccomp under restricted | Binary Seatbelt model, with macOS IPC extensions |
 | Mach services | Not applicable | Backend-specific allow-list |
-| Unix socket path policy | Not exposed by this backend | Supported for exact absolute macOS socket paths |
+| Unix socket path policy | No path allowlist; restricted denies pathname/abstract AF_UNIX and AF_VSOCK via seccomp, allows stream/seqpacket socketpair | Supported for exact absolute macOS socket paths |
 | Dynamic glob deny | Static mount masks | Dynamic Seatbelt regex hard deny |
 | Runtime denial diagnostics | Not exposed by this backend | Supported through macOS unified log diagnostics |
 | Protected metadata | Read-only masks | Write allow exclusions |

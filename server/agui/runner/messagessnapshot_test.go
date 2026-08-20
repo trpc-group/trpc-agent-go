@@ -1363,6 +1363,267 @@ func TestMessagesSnapshotFollowSkipsWhenInitialTrackEmpty(t *testing.T) {
 	require.Equal(t, 1, calls)
 }
 
+func TestMessagesSnapshotFollowStartsFromEmptyTrackWhenRunIsActive(t *testing.T) {
+	base := time.Now().Add(-time.Second)
+	key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
+	initial := &session.TrackEvents{Track: track.TrackAGUI}
+	follow := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newTrackEventAt(t, aguievents.NewCustomEvent("node.progress", aguievents.WithValue(map[string]any{"p": 1})), base),
+			newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "real-run"), base.Add(time.Millisecond)),
+		},
+	}
+	tr := &sequenceTracker{first: initial, second: follow}
+	r := &runner{
+		runner:                            noopBaseRunner{},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		runAgentInputHook:                 NewOptions().RunAgentInputHook,
+		appName:                           "demo",
+		tracker:                           tr,
+		running:                           map[session.Key]*sessionContext{key: {}},
+		flushInterval:                     time.Millisecond,
+		timeout:                           50 * time.Millisecond,
+		messagesSnapshotFollowEnabled:     true,
+		messagesSnapshotFollowMaxDuration: 50 * time.Millisecond,
+	}
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "req-run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 4)
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Empty(t, snapshot.Messages)
+	require.IsType(t, (*aguievents.CustomEvent)(nil), collected[2])
+	finished, ok := collected[3].(*aguievents.RunFinishedEvent)
+	require.True(t, ok)
+	require.Equal(t, "req-run", finished.RunID())
+	tr.mu.Lock()
+	calls := tr.calls
+	tr.mu.Unlock()
+	require.Equal(t, 2, calls)
+}
+
+func TestMessagesSnapshotFollowAcrossRunnersAfterOwnerRunStarted(t *testing.T) {
+	tests := []struct {
+		name         string
+		seedHistory  bool
+		input        types.Message
+		wantMessages int
+	}{
+		{
+			name:         "empty history with user input",
+			input:        types.Message{ID: "new-user", Role: types.RoleUser, Content: "new"},
+			wantMessages: 1,
+		},
+		{
+			name:         "previous terminal history with user input",
+			seedHistory:  true,
+			input:        types.Message{ID: "new-user", Role: types.RoleUser, Content: "new"},
+			wantMessages: 2,
+		},
+		{
+			name:        "previous terminal history with tool input",
+			seedHistory: true,
+			input: types.Message{
+				ID: "tool-result", Role: types.RoleTool, Content: "result", ToolCallID: "tool-call",
+			},
+			wantMessages: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc := newFollowObservingSessionService()
+			if tt.seedHistory {
+				key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
+				sess, err := svc.CreateSession(ctx, key, session.StateMap{})
+				require.NoError(t, err)
+				base := time.Now().Add(-time.Hour)
+				seed := []session.TrackEvent{
+					newUserMessageTrackEventAt(t, "old-user", "old", base),
+					newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "old-run"), base.Add(time.Millisecond)),
+				}
+				for i := range seed {
+					require.NoError(t, svc.AppendTrackEvent(ctx, sess, &seed[i]))
+				}
+			}
+
+			agentEvents := make(chan *event.Event)
+			owner := New(
+				&streamingWaitRunner{started: make(chan struct{}), events: agentEvents},
+				WithAppName("demo"),
+				WithSessionService(svc),
+				WithFlushInterval(time.Hour),
+				WithMessagesSnapshotFollowEnabled(true),
+			).(*runner)
+			ownerStream, err := owner.Run(ctx, &adapter.RunAgentInput{
+				ThreadID: "thread",
+				RunID:    "owner-run",
+				Messages: []types.Message{tt.input},
+			})
+			require.NoError(t, err)
+			ownerStarted, ok := nextAGUIEvent(t, ownerStream).(*aguievents.RunStartedEvent)
+			require.True(t, ok)
+			require.Equal(t, "owner-run", ownerStarted.RunID())
+			ownerRest := make(chan []aguievents.Event, 1)
+			go func() {
+				var rest []aguievents.Event
+				for evt := range ownerStream {
+					rest = append(rest, evt)
+				}
+				ownerRest <- rest
+			}()
+
+			follower := New(
+				noopBaseRunner{},
+				WithAppName("demo"),
+				WithSessionService(svc),
+				WithFlushInterval(time.Millisecond),
+				WithMessagesSnapshotFollowEnabled(true),
+				WithMessagesSnapshotFollowMaxDuration(time.Second),
+			).(*runner)
+			followStream, err := follower.MessagesSnapshot(ctx, &adapter.RunAgentInput{
+				ThreadID: "thread",
+				RunID:    "follow-run",
+			})
+			require.NoError(t, err)
+			require.IsType(t, (*aguievents.RunStartedEvent)(nil), nextAGUIEvent(t, followStream))
+			snapshot, ok := nextAGUIEvent(t, followStream).(*aguievents.MessagesSnapshotEvent)
+			require.True(t, ok)
+			require.Len(t, snapshot.Messages, tt.wantMessages)
+
+			select {
+			case <-svc.followPolled:
+			case <-time.After(time.Second):
+				require.FailNow(t, "timeout waiting for cross-runner history follow")
+			}
+
+			go func() {
+				agentEvents <- &event.Event{Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Done:   true,
+				}}
+				close(agentEvents)
+			}()
+			select {
+			case <-ownerRest:
+			case <-time.After(time.Second):
+				require.FailNow(t, "timeout waiting for owner stream to finish")
+			}
+			followed := collectEvents(t, followStream)
+			require.NotEmpty(t, followed)
+			var followedOwnerStarted int
+			for _, evt := range followed {
+				if started, ok := evt.(*aguievents.RunStartedEvent); ok && started.RunID() == "owner-run" {
+					followedOwnerStarted++
+				}
+			}
+			require.Zero(t, followedOwnerStarted)
+			persisted, err := svc.GetTrackEvents(ctx,
+				session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}, track.TrackAGUI)
+			require.NoError(t, err)
+			persistedOwnerStarted := 0
+			for _, trackEvent := range persisted.Events {
+				evt, decodeErr := aguievents.EventFromJSON(trackEvent.Payload)
+				if decodeErr == nil && evt.Type() == aguievents.EventTypeRunStarted && evt.RunID() == "owner-run" {
+					persistedOwnerStarted++
+				}
+			}
+			require.Equal(t, 1, persistedOwnerStarted)
+			finished, ok := followed[len(followed)-1].(*aguievents.RunFinishedEvent)
+			require.True(t, ok)
+			require.Equal(t, "follow-run", finished.RunID())
+		})
+	}
+}
+
+func TestMessagesSnapshotFollowSkipsEmptyActiveRunWhenFlushDisabled(t *testing.T) {
+	base := time.Now().Add(-time.Second)
+	key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
+	initial := &session.TrackEvents{Track: track.TrackAGUI}
+	follow := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newTrackEventAt(t, aguievents.NewCustomEvent("node.progress", aguievents.WithValue(map[string]any{"p": 1})), base),
+			newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "real-run"), base.Add(time.Millisecond)),
+		},
+	}
+	tr := &sequenceTracker{first: initial, second: follow}
+	r := &runner{
+		runner:                            noopBaseRunner{},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		runAgentInputHook:                 NewOptions().RunAgentInputHook,
+		appName:                           "demo",
+		tracker:                           tr,
+		running:                           map[session.Key]*sessionContext{key: {}},
+		flushInterval:                     0,
+		timeout:                           50 * time.Millisecond,
+		messagesSnapshotFollowEnabled:     true,
+		messagesSnapshotFollowMaxDuration: 50 * time.Millisecond,
+	}
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "req-run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Empty(t, snapshot.Messages)
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
+	tr.mu.Lock()
+	calls := tr.calls
+	tr.mu.Unlock()
+	require.Equal(t, 1, calls)
+}
+
+func TestMessagesSnapshotFollowSkipsNonTerminalHistoryWhenFlushDisabled(t *testing.T) {
+	base := time.Now().Add(-time.Second)
+	initial := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newUserMessageTrackEventAt(t, "user-1", "hi", base.Add(-time.Millisecond)),
+			newTrackEventAt(t, aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")), base),
+			newTrackEventAt(t, aguievents.NewTextMessageContentEvent("msg-1", "hello"), base.Add(time.Millisecond)),
+			newTrackEventAt(t, aguievents.NewTextMessageEndEvent("msg-1"), base.Add(2*time.Millisecond)),
+		},
+	}
+	follow := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newTrackEventAt(t, aguievents.NewCustomEvent("node.progress", aguievents.WithValue(map[string]any{"p": 1})),
+				base.Add(3*time.Millisecond)),
+			newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "real-run"), base.Add(4*time.Millisecond)),
+		},
+	}
+	tr := &sequenceTracker{first: initial, second: follow}
+	r := &runner{
+		runner:                            noopBaseRunner{},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		runAgentInputHook:                 NewOptions().RunAgentInputHook,
+		appName:                           "demo",
+		tracker:                           tr,
+		flushInterval:                     0,
+		timeout:                           time.Second,
+		messagesSnapshotFollowEnabled:     true,
+		messagesSnapshotFollowMaxDuration: time.Second,
+	}
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "req-run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Len(t, snapshot.Messages, 2)
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
+	tr.mu.Lock()
+	calls := tr.calls
+	tr.mu.Unlock()
+	require.Equal(t, 1, calls)
+}
+
 func TestMessagesSnapshotFollowEmitsRunErrorOnTerminalErrorEvent(t *testing.T) {
 	base := time.Now().Add(-time.Second)
 	initial := &session.TrackEvents{
@@ -1579,6 +1840,18 @@ func collectAGUIEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Ev
 		events = append(events, evt)
 	}
 	return events
+}
+
+func nextAGUIEvent(t *testing.T, ch <-chan aguievents.Event) aguievents.Event {
+	t.Helper()
+	select {
+	case evt, ok := <-ch:
+		require.True(t, ok)
+		return evt
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for AG-UI event")
+		return nil
+	}
 }
 
 func withSnapshotRawEvent(
@@ -1875,6 +2148,39 @@ type testSessionService struct {
 	lastGetKey    session.Key
 	appendTrackFn func(ctx context.Context, sess *session.Session,
 		evt *session.TrackEvent, opts ...session.Option) error
+}
+
+type followObservingSessionService struct {
+	*inmemory.SessionService
+	mu            sync.Mutex
+	getTrackCalls int
+	followOnce    sync.Once
+	followPolled  chan struct{}
+}
+
+func newFollowObservingSessionService() *followObservingSessionService {
+	return &followObservingSessionService{
+		SessionService: inmemory.NewSessionService(),
+		followPolled:   make(chan struct{}),
+	}
+}
+
+func (s *followObservingSessionService) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	trackName session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	s.mu.Lock()
+	s.getTrackCalls++
+	call := s.getTrackCalls
+	s.mu.Unlock()
+	if call >= 2 {
+		s.followOnce.Do(func() {
+			close(s.followPolled)
+		})
+	}
+	return s.SessionService.GetTrackEvents(ctx, key, trackName, opts...)
 }
 
 func (s *testSessionService) CreateSession(ctx context.Context, key session.Key, state session.StateMap,

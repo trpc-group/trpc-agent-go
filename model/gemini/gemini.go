@@ -620,6 +620,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			maxInputTokens,
 		)
 	}
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "gemini.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
@@ -630,7 +634,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in gemini.Model",
 				err,
 			)
-			modeltailoring.ApplyResult(ctx, "gemini.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "gemini.Model", request, tailored,
+			)
 			return
 		}
 		log.WarnContext(
@@ -641,7 +647,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "gemini.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "gemini.Model", request, tailored,
+	)
 }
 
 // InputTokenBudget returns the same input budget used by token tailoring.

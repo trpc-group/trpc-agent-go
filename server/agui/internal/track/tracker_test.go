@@ -12,6 +12,7 @@ package track
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -28,7 +29,6 @@ func TestTrackerAppendCreatesSession(t *testing.T) {
 	svc := inmemory.NewSessionService()
 	tracker, err := New(svc)
 	require.NoError(t, err)
-
 	key := session.Key{
 		AppName:   "app",
 		UserID:    "user",
@@ -36,11 +36,13 @@ func TestTrackerAppendCreatesSession(t *testing.T) {
 	}
 	err = tracker.AppendEvent(context.Background(), key, aguievents.NewTextMessageStartEvent("msg", aguievents.WithRole("user")))
 	require.NoError(t, err)
-
 	sess, err := svc.GetSession(context.Background(), key)
 	require.NoError(t, err)
+	require.Nil(t, sess)
+	require.NoError(t, tracker.Flush(context.Background(), key))
+	sess, err = svc.GetSession(context.Background(), key)
+	require.NoError(t, err)
 	require.NotNil(t, sess)
-
 	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
 	require.NoError(t, err)
 	require.NotNil(t, trackEvents)
@@ -82,6 +84,8 @@ func TestTrackerAppendEventErrors(t *testing.T) {
 		tracker, err := New(svc)
 		require.NoError(t, err)
 		err = tracker.AppendEvent(ctx, validKey, aguievents.NewRunStartedEvent("thread", "run"))
+		require.NoError(t, err)
+		err = tracker.Flush(ctx, validKey)
 		require.ErrorContains(t, err, "get session: boom")
 	})
 	t.Run("create session error", func(t *testing.T) {
@@ -95,17 +99,23 @@ func TestTrackerAppendEventErrors(t *testing.T) {
 		tracker, err := New(svc)
 		require.NoError(t, err)
 		err = tracker.AppendEvent(ctx, validKey, aguievents.NewRunStartedEvent("thread", "run"))
+		require.NoError(t, err)
+		err = tracker.Flush(ctx, validKey)
 		require.ErrorContains(t, err, "create session: fail")
 	})
 	t.Run("append track event error", func(t *testing.T) {
 		svc := newHookSessionService()
+		appendErr := errors.New("append broke")
 		svc.appendTrackFn = func(context.Context, *session.Session, *session.TrackEvent, ...session.Option) error {
-			return errors.New("append broke")
+			return appendErr
 		}
 		tracker, err := New(svc)
 		require.NoError(t, err)
 		err = tracker.AppendEvent(ctx, validKey, aguievents.NewRunStartedEvent("thread", "run"))
+		require.NoError(t, err)
+		err = tracker.Flush(ctx, validKey)
 		require.ErrorContains(t, err, "persist events: append track event")
+		require.ErrorIs(t, err, appendErr)
 	})
 }
 
@@ -120,8 +130,9 @@ func TestTrackerAppendEventUsesCurrentTimestamp(t *testing.T) {
 	eventTimestamp := time.Now().Add(-time.Minute).UnixMilli()
 	eventWithTs.SetTimestamp(eventTimestamp)
 
-	before := time.Now()
 	require.NoError(t, tracker.AppendEvent(ctx, key, eventWithTs))
+	before := time.Now()
+	require.NoError(t, tracker.Flush(ctx, key))
 	after := time.Now()
 
 	sess, err := svc.GetSession(ctx, key)
@@ -157,6 +168,7 @@ func TestTrackerReuseEnsuredSession(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunFinishedEvent("thread", "run")))
+	require.NoError(t, tracker.Flush(ctx, key))
 
 	require.Equal(t, 1, getCalls)
 	require.Equal(t, 1, createCalls)
@@ -182,6 +194,7 @@ func TestTrackerUsesEffectiveRunnerRequestID(t *testing.T) {
 		key,
 		aguievents.NewRunStartedEvent("thread", "protocol-run"),
 	))
+	require.NoError(t, tracker.Flush(context.Background(), key))
 	stored, err := svc.GetSession(ctx, key)
 	require.NoError(t, err)
 	trackEvents, err := stored.GetTrackEvents(TrackAGUI)
@@ -282,6 +295,8 @@ func TestTrackerSessionUnavailableWhenCreateReturnsNil(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
 
 	err = tracker.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run"))
+	require.NoError(t, err)
+	err = tracker.Flush(ctx, key)
 	require.ErrorContains(t, err, "session unavailable")
 	require.Equal(t, 1, getCalls)
 	require.Equal(t, 1, createCalls)
@@ -308,6 +323,7 @@ func TestTrackerEnsureSessionUsesExisting(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
 
 	require.NoError(t, trk.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
+	require.NoError(t, trk.Flush(ctx, key))
 	require.Equal(t, 0, createCalls)
 
 	internal := trk.(*tracker)
@@ -382,6 +398,7 @@ func TestTrackerGetEventsSuccess(t *testing.T) {
 
 	first := aguievents.NewTextMessageStartEvent("msg", aguievents.WithRole("user"))
 	require.NoError(t, tracker.AppendEvent(ctx, key, first))
+	require.NoError(t, tracker.Flush(ctx, key))
 
 	events, err := tracker.GetEvents(ctx, key)
 	require.NoError(t, err)
@@ -392,6 +409,97 @@ func TestTrackerGetEventsSuccess(t *testing.T) {
 	start, ok := parsed.(*aguievents.TextMessageStartEvent)
 	require.True(t, ok)
 	require.Equal(t, first.MessageID, start.MessageID)
+}
+
+func TestTrackerSnapshotsAppendOutputBeforeCallerMutation(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("aggregation_enabled_%t", enabled), func(t *testing.T) {
+			ctx := context.Background()
+			svc := inmemory.NewSessionService()
+			tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(enabled)))
+			require.NoError(t, err)
+			key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+
+			values := []any{"first", map[string]any{"nested": "original"}}
+			event := aguievents.NewCustomEvent("original", aguievents.WithValue(values))
+			require.NoError(t, tracker.AppendEvent(ctx, key, event))
+			event.Name = "mutated"
+			values[0] = "changed"
+			values[1].(map[string]any)["nested"] = "changed"
+
+			require.NoError(t, tracker.Flush(ctx, key))
+			trackEvents, err := tracker.GetEvents(ctx, key)
+			require.NoError(t, err)
+			require.Len(t, trackEvents.Events, 1)
+			parsed, err := aguievents.EventFromJSON(trackEvents.Events[0].Payload)
+			require.NoError(t, err)
+			custom, ok := parsed.(*aguievents.CustomEvent)
+			require.True(t, ok)
+			require.Equal(t, "original", custom.Name)
+			require.Equal(t, []any{"first", map[string]any{"nested": "original"}}, custom.Value)
+		})
+	}
+}
+
+func TestTrackerSupportsCustomAggregatorMergingMultipleCustomEvents(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc, WithAggregatorFactory(
+		func(context.Context, ...aggregator.Option) aggregator.Aggregator {
+			return &customEventMergingAggregator{}
+		},
+	))
+	require.NoError(t, err)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("first")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("second")))
+	require.NoError(t, tracker.Flush(ctx, key))
+
+	trackEvents, err := tracker.GetEvents(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 1)
+	parsed, err := aguievents.EventFromJSON(trackEvents.Events[0].Payload)
+	require.NoError(t, err)
+	custom, ok := parsed.(*aguievents.CustomEvent)
+	require.True(t, ok)
+	require.Equal(t, "merged", custom.Name)
+	require.Equal(t, []any{"first", "second"}, custom.Value)
+}
+
+func TestTrackerSnapshotsCustomAggregatorOutputs(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	extraValue := map[string]any{"state": "original"}
+	extra := aguievents.NewCustomEvent("extra", aguievents.WithValue(extraValue))
+	tracker, err := New(svc, WithAggregatorFactory(
+		func(context.Context, ...aggregator.Option) aggregator.Aggregator {
+			return &multiOutputAggregator{extra: extra}
+		},
+	))
+	require.NoError(t, err)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	inputValue := map[string]any{"state": "original"}
+	input := aguievents.NewCustomEvent("input", aguievents.WithValue(inputValue))
+
+	require.NoError(t, tracker.AppendEvent(ctx, key, input))
+	input.Name = "mutated-input"
+	inputValue["state"] = "changed"
+	extra.Name = "mutated-extra"
+	extraValue["state"] = "changed"
+	require.NoError(t, tracker.Flush(ctx, key))
+
+	trackEvents, err := tracker.GetEvents(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 2)
+	for i, wantName := range []string{"input", "extra"} {
+		parsed, parseErr := aguievents.EventFromJSON(trackEvents.Events[i].Payload)
+		require.NoError(t, parseErr)
+		custom, ok := parsed.(*aguievents.CustomEvent)
+		require.True(t, ok)
+		require.Equal(t, wantName, custom.Name)
+		require.Equal(t, map[string]any{"state": "original"}, custom.Value)
+	}
 }
 
 func TestTrackerAggregatesTextContent(t *testing.T) {
@@ -406,6 +514,7 @@ func TestTrackerAggregatesTextContent(t *testing.T) {
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hello")))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "world")))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageEndEvent("msg")))
+	require.NoError(t, tracker.Flush(ctx, key))
 
 	sess, err := svc.GetSession(ctx, key)
 	require.NoError(t, err)
@@ -431,6 +540,7 @@ func TestTrackerAggregatesToolCallArgs(t *testing.T) {
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallArgsEvent("call-1", `{"content":"12`)))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallArgsEvent("call-1", `34"}`)))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewToolCallEndEvent("call-1")))
+	require.NoError(t, tracker.Flush(ctx, key))
 	sess, err := svc.GetSession(ctx, key)
 	require.NoError(t, err)
 	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
@@ -456,6 +566,7 @@ func TestTrackerAggregationDisabled(t *testing.T) {
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hello")))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "world")))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageEndEvent("msg")))
+	require.NoError(t, tracker.Flush(ctx, key))
 
 	sess, err := svc.GetSession(ctx, key)
 	require.NoError(t, err)
@@ -513,6 +624,225 @@ func TestTrackerFlushPersistsPendingAggregation(t *testing.T) {
 	require.ErrorContains(t, err, "session state not found")
 }
 
+func TestTrackerFlushFailureDropsRemainingBatchBeforeNewEvents(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	var appendCalls int
+	failSecond := true
+	svc.appendTrackFn = func(ctx context.Context, sess *session.Session, evt *session.TrackEvent, opts ...session.Option) error {
+		appendCalls++
+		if failSecond && appendCalls == 2 {
+			return errors.New("append broke")
+		}
+		return svc.SessionService.AppendTrackEvent(ctx, sess, evt, opts...)
+	}
+	tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	require.NoError(t, err)
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("middle")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunFinishedEvent("thread", "run")))
+	err = tracker.Flush(ctx, key)
+	require.ErrorContains(t, err, "append broke")
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("after")))
+	failSecond = false
+	require.NoError(t, tracker.Flush(ctx, key))
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 2)
+	requireTrackEventType(t, trackEvents.Events[0], aguievents.EventTypeRunStarted)
+	requireTrackEventType(t, trackEvents.Events[1], aguievents.EventTypeCustom)
+}
+
+func TestTrackerRepeatedFlushFailuresDoNotRetainFailedBatches(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	fail := true
+	svc.appendTrackFn = func(ctx context.Context, sess *session.Session, evt *session.TrackEvent, opts ...session.Option) error {
+		if fail {
+			return errors.New("append broke")
+		}
+		return svc.SessionService.AppendTrackEvent(ctx, sess, evt, opts...)
+	}
+	tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	require.NoError(t, err)
+	for range 100 {
+		require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("failed")))
+		err = tracker.Flush(ctx, key)
+		require.ErrorContains(t, err, "append broke")
+	}
+	fail = false
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("after")))
+	require.NoError(t, tracker.Flush(ctx, key))
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 1)
+	parsed, err := aguievents.EventFromJSON(trackEvents.Events[0].Payload)
+	require.NoError(t, err)
+	custom, ok := parsed.(*aguievents.CustomEvent)
+	require.True(t, ok)
+	require.Equal(t, "after", custom.Name)
+}
+
+func TestTrackerFlushDoesNotRetryAmbiguouslyCommittedEvent(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	first := true
+	svc.appendTrackFn = func(ctx context.Context, sess *session.Session, evt *session.TrackEvent, opts ...session.Option) error {
+		if err := svc.SessionService.AppendTrackEvent(ctx, sess, evt, opts...); err != nil {
+			return err
+		}
+		if first {
+			first = false
+			return errors.New("acknowledgement lost")
+		}
+		return nil
+	}
+	tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	require.NoError(t, err)
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("original")))
+	err = tracker.Flush(ctx, key)
+	require.ErrorContains(t, err, "acknowledgement lost")
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("after")))
+	require.NoError(t, tracker.Flush(ctx, key))
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 2)
+	for i, want := range []string{"original", "after"} {
+		parsed, parseErr := aguievents.EventFromJSON(trackEvents.Events[i].Payload)
+		require.NoError(t, parseErr)
+		custom, ok := parsed.(*aguievents.CustomEvent)
+		require.True(t, ok)
+		require.Equal(t, want, custom.Name)
+	}
+}
+
+func TestTrackerCloseFailureReleasesStateBeforeNewEvents(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	var appendCalls int
+	failSecond := true
+	svc.appendTrackFn = func(ctx context.Context, sess *session.Session, evt *session.TrackEvent, opts ...session.Option) error {
+		appendCalls++
+		if failSecond && appendCalls == 2 {
+			return errors.New("append broke")
+		}
+		return svc.SessionService.AppendTrackEvent(ctx, sess, evt, opts...)
+	}
+	tr, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	require.NoError(t, err)
+	require.NoError(t, tr.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
+	require.NoError(t, tr.AppendEvent(ctx, key, aguievents.NewCustomEvent("middle")))
+	require.NoError(t, tr.AppendEvent(ctx, key, aguievents.NewRunFinishedEvent("thread", "run")))
+	err = tr.Close(ctx, key)
+	require.ErrorContains(t, err, "append broke")
+	impl, ok := tr.(*tracker)
+	require.True(t, ok)
+	require.Nil(t, impl.getExistingSessionState(key))
+	require.NoError(t, tr.AppendEvent(ctx, key, aguievents.NewCustomEvent("after")))
+	failSecond = false
+	require.NoError(t, tr.Close(ctx, key))
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 2)
+	requireTrackEventType(t, trackEvents.Events[0], aguievents.EventTypeRunStarted)
+	requireTrackEventType(t, trackEvents.Events[1], aguievents.EventTypeCustom)
+	err = tr.Flush(ctx, key)
+	require.ErrorContains(t, err, "session state not found")
+}
+
+func TestTrackerAppendEventDuringCloseReturnsErrorAndDoesNotLoseLaterEvents(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	svc.appendTrackFn = func(ctx context.Context, sess *session.Session, evt *session.TrackEvent, opts ...session.Option) error {
+		startOnce.Do(func() {
+			close(started)
+		})
+		<-release
+		return svc.SessionService.AppendTrackEvent(ctx, sess, evt, opts...)
+	}
+	tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	require.NoError(t, err)
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- tracker.Close(ctx, key)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for close persistence")
+	}
+	err = tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("during"))
+	require.ErrorContains(t, err, "session state is closing")
+	close(release)
+	require.NoError(t, <-closeDone)
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("after")))
+	require.NoError(t, tracker.Flush(ctx, key))
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 2)
+	requireTrackEventType(t, trackEvents.Events[0], aguievents.EventTypeRunStarted)
+	requireTrackEventType(t, trackEvents.Events[1], aguievents.EventTypeCustom)
+}
+
+func TestTrackerAppendEventDoesNotWaitForInFlightFlushPersistence(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	svc.appendTrackFn = func(ctx context.Context, sess *session.Session, evt *session.TrackEvent, opts ...session.Option) error {
+		startOnce.Do(func() {
+			close(started)
+		})
+		<-release
+		return svc.SessionService.AppendTrackEvent(ctx, sess, evt, opts...)
+	}
+	tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	require.NoError(t, err)
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewRunStartedEvent("thread", "run")))
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- tracker.Flush(ctx, key)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for flush persistence")
+	}
+	appendDone := make(chan error, 1)
+	go func() {
+		appendDone <- tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("after"))
+	}()
+	select {
+	case err := <-appendDone:
+		require.NoError(t, err)
+	case <-time.After(100 * time.Millisecond):
+		require.FailNow(t, "append waited for flush persistence")
+	}
+	close(release)
+	require.NoError(t, <-flushDone)
+}
+
 func TestTrackerFlushReturnsAggregatorError(t *testing.T) {
 	ctx := context.Background()
 	svc := inmemory.NewSessionService()
@@ -548,6 +878,13 @@ func TestTrackerCloseInvalidKey(t *testing.T) {
 	require.NoError(t, err)
 	err = tracker.Close(context.Background(), session.Key{})
 	require.ErrorContains(t, err, "session key")
+}
+
+func requireTrackEventType(t *testing.T, trackEvent session.TrackEvent, eventType aguievents.EventType) {
+	t.Helper()
+	evt, err := aguievents.EventFromJSON(trackEvent.Payload)
+	require.NoError(t, err)
+	require.Equal(t, eventType, evt.Type())
 }
 
 type serviceWithoutTrack struct{}
@@ -620,6 +957,40 @@ type stubAggregator struct {
 	mu       sync.Mutex
 	flushErr error
 	flushCh  chan struct{}
+}
+
+type customEventMergingAggregator struct {
+	names []string
+}
+
+type multiOutputAggregator struct {
+	extra aguievents.Event
+}
+
+func (a *multiOutputAggregator) Append(_ context.Context, event aguievents.Event) ([]aguievents.Event, error) {
+	return []aguievents.Event{event, a.extra}, nil
+}
+
+func (*multiOutputAggregator) Flush(context.Context) ([]aguievents.Event, error) {
+	return nil, nil
+}
+
+func (a *customEventMergingAggregator) Append(_ context.Context, event aguievents.Event) ([]aguievents.Event, error) {
+	custom, ok := event.(*aguievents.CustomEvent)
+	if !ok {
+		return []aguievents.Event{event}, nil
+	}
+	a.names = append(a.names, custom.Name)
+	return nil, nil
+}
+
+func (a *customEventMergingAggregator) Flush(context.Context) ([]aguievents.Event, error) {
+	if len(a.names) == 0 {
+		return nil, nil
+	}
+	names := append([]string(nil), a.names...)
+	a.names = nil
+	return []aguievents.Event{aguievents.NewCustomEvent("merged", aguievents.WithValue(names))}, nil
 }
 
 func (s *stubAggregator) Append(ctx context.Context, event aguievents.Event) ([]aguievents.Event, error) {
