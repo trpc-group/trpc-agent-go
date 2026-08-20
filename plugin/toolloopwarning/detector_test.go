@@ -73,10 +73,6 @@ func TestFingerprintRoundDetectsSemanticFieldsChanging(t *testing.T) {
 			call:   newToolCall("call-2", "search", `{"query":"x"}`),
 			result: model.NewToolMessage("call-2", "search", "changed"),
 		},
-		"result tool name": {
-			call:   newToolCall("call-2", "search", `{"query":"x"}`),
-			result: model.NewToolMessage("call-2", "different", "same"),
-		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -88,6 +84,15 @@ func TestFingerprintRoundDetectsSemanticFieldsChanging(t *testing.T) {
 			require.NotEqual(t, baseFingerprint, fingerprint)
 		})
 	}
+	resultWithDifferentToolName := model.NewToolMessage(
+		"call-2", "different", "same",
+	)
+	fingerprint, ok := fingerprintRound(
+		[]model.ToolCall{newToolCall("call-2", "search", `{"query":"x"}`)},
+		[]model.Message{resultWithDifferentToolName},
+	)
+	require.True(t, ok)
+	require.Equal(t, baseFingerprint, fingerprint)
 }
 
 func TestCanonicalArgumentsPreservesNumbersAndInvalidJSON(t *testing.T) {
@@ -134,7 +139,6 @@ func TestDetectorRejectsMalformedRounds(t *testing.T) {
 		model.NewToolMessage("", "search", "same"),
 		model.NewToolMessage("other", "search", "same"),
 		model.NewAssistantMessage("same"),
-		{Role: model.RoleTool, ToolID: "call", Content: "same"},
 	}
 	for _, result := range invalidResults {
 		state := &detectorState{}
@@ -145,6 +149,17 @@ func TestDetectorRejectsMalformedRounds(t *testing.T) {
 		require.Empty(t, state.previous)
 		require.Nil(t, state.pending)
 	}
+	resultWithoutToolName := model.Message{
+		Role:    model.RoleTool,
+		ToolID:  "call",
+		Content: "same",
+	}
+	state := &detectorState{}
+	require.False(t, state.observeToolMessages(
+		toolCalls,
+		[]model.Message{resultWithoutToolName},
+	))
+	require.NotEmpty(t, state.previous)
 }
 
 func TestFingerprintRoundBoundsMultimodalPayloads(t *testing.T) {

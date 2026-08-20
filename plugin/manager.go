@@ -50,15 +50,6 @@ type EventHook func(
 	e *event.Event,
 ) (*event.Event, error)
 
-// AfterEventHook observes a cloned view of an agent-emitted event after the
-// Runner's complete OnEvent chain has finished transforming it. The hook runs
-// before persistence and forwarding and must treat the view as read-only.
-type AfterEventHook func(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	e *event.Event,
-)
-
 // AfterRunArgs contains context available after one Runner.Run finishes.
 type AfterRunArgs struct {
 	// Invocation is the root invocation associated with the run.
@@ -207,16 +198,6 @@ func (r *Registry) OnEvent(hook EventHook) {
 	})
 }
 
-// AfterEvent registers an observer for finalized events received from an
-// Agent.Run stream. It runs after the complete Runner OnEvent chain and before
-// persistence and forwarding.
-func (r *Registry) AfterEvent(hook AfterEventHook) {
-	if r == nil || r.mgr == nil || hook == nil {
-		return
-	}
-	r.mgr.afterEventHooks = append(r.mgr.afterEventHooks, hook)
-}
-
 // AfterRun registers a hook that observes a completed Runner.Run.
 func (r *Registry) AfterRun(hook AfterRunHook) {
 	if r == nil || r.mgr == nil || hook == nil {
@@ -237,7 +218,6 @@ type Manager struct {
 	modelCallbacks         *model.Callbacks
 	toolCallbacks          *tool.Callbacks
 	eventHooks             []namedEventHook
-	afterEventHooks        []AfterEventHook
 	afterRunHooks          []namedAfterRunHook
 	afterToolMessagesHooks []namedAfterToolMessagesHook
 }
@@ -358,25 +338,6 @@ func (m *Manager) OnEvent(
 		}
 	}
 	return curr, nil
-}
-
-// AfterEvent runs registered finalized-event observers in plugin order.
-func (m *Manager) AfterEvent(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	e *event.Event,
-) {
-	if m == nil || e == nil {
-		return
-	}
-	for _, hook := range m.afterEventHooks {
-		snapshot := e.Clone()
-		if snapshot == nil {
-			continue
-		}
-		snapshot.ID = e.ID
-		hook(ctx, invocation, snapshot)
-	}
 }
 
 // AfterRun runs registered after-run hooks in plugin order.

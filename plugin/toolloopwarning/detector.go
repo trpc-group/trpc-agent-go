@@ -21,10 +21,11 @@ import (
 )
 
 type detectorState struct {
-	mu           sync.Mutex
-	previous     string
-	pending      *pendingRound
-	stagedEvents map[string][]model.ToolCall
+	mu          sync.Mutex
+	previous    string
+	repeatCount int
+	warned      bool
+	pending     *pendingRound
 }
 
 type pendingRound struct {
@@ -105,87 +106,15 @@ func (s *detectorState) observeToolMessagesLocked(
 	}
 	if fingerprint != s.previous {
 		s.previous = fingerprint
+		s.repeatCount = 1
+		s.warned = false
 		return false
 	}
-	// Reset after a match so every identical pair gets one warning.
-	s.previous = ""
-	return true
-}
-
-func (s *detectorState) stageEvent(
-	eventID string,
-	toolCalls []model.ToolCall,
-) bool {
-	if s == nil || eventID == "" || len(toolCalls) == 0 {
+	s.repeatCount++
+	if s.warned || s.repeatCount < 2 {
 		return false
 	}
-	if _, ok := toolRoundIdentity(toolCalls); !ok {
-		s.reset()
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.stagedEvents == nil {
-		s.stagedEvents = make(map[string][]model.ToolCall)
-	}
-	if _, exists := s.stagedEvents[eventID]; exists {
-		s.resetLocked()
-		return false
-	}
-	s.stagedEvents[eventID] = cloneToolCalls(toolCalls)
-	return true
-}
-
-func (s *detectorState) observeStagedEvent(
-	eventID string,
-	toolResultMessages []model.Message,
-) (bool, bool) {
-	if s == nil || eventID == "" {
-		return false, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	toolCalls, ok := s.stagedEvents[eventID]
-	if !ok {
-		for stagedEventID, stagedToolCalls := range s.stagedEvents {
-			if !resultsBelongToToolCalls(
-				stagedToolCalls,
-				toolResultMessages,
-			) {
-				continue
-			}
-			eventID = stagedEventID
-			toolCalls = stagedToolCalls
-			ok = true
-			break
-		}
-		if !ok {
-			return false, false
-		}
-	}
-	delete(s.stagedEvents, eventID)
-	return s.observeToolMessagesLocked(toolCalls, toolResultMessages), true
-}
-
-func resultsBelongToToolCalls(
-	toolCalls []model.ToolCall,
-	toolResultMessages []model.Message,
-) bool {
-	if len(toolCalls) == 0 || len(toolResultMessages) == 0 {
-		return false
-	}
-	expected := make(map[string]struct{}, len(toolCalls))
-	for _, toolCall := range toolCalls {
-		expected[toolCall.ID] = struct{}{}
-	}
-	for _, message := range toolResultMessages {
-		if message.ToolID == "" {
-			return false
-		}
-		if _, ok := expected[message.ToolID]; !ok {
-			return false
-		}
-	}
+	s.warned = true
 	return true
 }
 
@@ -200,8 +129,9 @@ func (s *detectorState) reset() {
 
 func (s *detectorState) resetLocked() {
 	s.previous = ""
+	s.repeatCount = 0
+	s.warned = false
 	s.pending = nil
-	s.stagedEvents = nil
 }
 
 func (p *pendingRound) addResults(messages []model.Message) bool {
@@ -213,8 +143,7 @@ func (p *pendingRound) addResults(messages []model.Message) bool {
 		expected[toolCall.ID] = struct{}{}
 	}
 	for _, message := range messages {
-		if message.Role != model.RoleTool || message.ToolID == "" ||
-			message.ToolName == "" {
+		if message.Role != model.RoleTool || message.ToolID == "" {
 			return false
 		}
 		if _, exists := expected[message.ToolID]; !exists {
@@ -321,6 +250,10 @@ func canonicalArguments(arguments []byte) string {
 
 func boundedResultMessage(message model.Message) model.Message {
 	message.ToolID = ""
+	// The tool-call fingerprint already carries the authoritative tool name.
+	// Tool-result replacement hooks are required to preserve role and tool ID,
+	// but are allowed to omit ToolName.
+	message.ToolName = ""
 	// Tool calls belong to assistant messages and do not participate in a
 	// tool-result fingerprint. Clearing them also keeps unexpected payloads
 	// bounded.

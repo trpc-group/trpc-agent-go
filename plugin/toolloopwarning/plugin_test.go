@@ -19,8 +19,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/finalevent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	pluginbase "trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -30,13 +30,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-func TestPluginWarnsOnEachRepeatedPair(t *testing.T) {
+func TestPluginWarnsOncePerUnchangedStreak(t *testing.T) {
 	manager, err := pluginbase.NewManager(New())
 	require.NoError(t, err)
 	invocation := newPluginInvocation(t, manager)
 
-	warnings := make([]bool, 0, 4)
-	for i := 0; i < 4; i++ {
+	warnings := make([]bool, 0, 6)
+	for i := 0; i < 6; i++ {
 		arguments := `{"query":"x","limit":1}`
 		if i%2 == 1 {
 			arguments = ` { "limit": 1, "query": "x" } `
@@ -54,13 +54,14 @@ func TestPluginWarnsOnEachRepeatedPair(t *testing.T) {
 			},
 		))
 	}
-	require.Equal(t, []bool{false, true, false, true}, warnings)
+	require.Equal(t, []bool{false, true, false, false, false, false}, warnings)
 }
 
 func TestPluginDropsWarningWhenInvocationQueueIsClosed(t *testing.T) {
 	manager, err := pluginbase.NewManager(New())
 	require.NoError(t, err)
 	invocation := newPluginInvocation(t, manager)
+	steer.Attach(invocation, steer.NewQueue())
 	steer.Close(invocation)
 
 	require.False(t, observeOneCallRound(t, manager, invocation,
@@ -171,7 +172,12 @@ func TestPluginCorrelatesReplacementEventByToolIDs(t *testing.T) {
 
 		replacement := *original
 		replacement.ID = fmt.Sprintf("replacement-%d", round)
-		manager.AfterEvent(context.Background(), invocation, &replacement)
+		finalevent.Run(
+			context.Background(),
+			invocation,
+			original.ID,
+			&replacement,
+		)
 	}
 
 	queued := steer.DrainQueued(invocation)
@@ -179,29 +185,7 @@ func TestPluginCorrelatesReplacementEventByToolIDs(t *testing.T) {
 	require.Equal(t, warningSource, queued[0].Source)
 }
 
-func TestPluginIncompleteTerminalEventResetsDetection(t *testing.T) {
-	manager, err := pluginbase.NewManager(New())
-	require.NoError(t, err)
-	invocation := newPluginInvocation(t, manager)
-	require.False(t, observeOneCallRound(t, manager, invocation,
-		"call-1", "search", `{}`, "same"))
-
-	errorEvent := event.NewErrorEvent(
-		invocation.InvocationID,
-		"assistant",
-		model.ErrorTypeFlowError,
-		"tool round interrupted",
-	)
-	toolresultround.Mark(errorEvent, true)
-	manager.AfterEvent(context.Background(), invocation, errorEvent)
-
-	require.False(t, observeOneCallRound(t, manager, invocation,
-		"call-2", "search", `{}`, "same"))
-	require.True(t, observeOneCallRound(t, manager, invocation,
-		"call-3", "search", `{}`, "same"))
-}
-
-func TestPluginAgentCallbacksClearInvocationState(t *testing.T) {
+func TestPluginBeforeAgentInitializesStateWithoutAttachingQueue(t *testing.T) {
 	manager, err := pluginbase.NewManager(New())
 	require.NoError(t, err)
 	invocation := &agent.Invocation{}
@@ -217,27 +201,7 @@ func TestPluginAgentCallbacksClearInvocationState(t *testing.T) {
 	require.True(t, ok)
 	require.NotSame(t, stale, state)
 	require.Empty(t, state.previous)
-	require.True(t, steer.IsAttached(invocation))
-
-	_, err = manager.AgentCallbacks().RunAfterAgent(
-		context.Background(),
-		&agent.AfterAgentArgs{Invocation: invocation},
-	)
-	require.NoError(t, err)
-	_, ok = agent.GetStateValue[*detectorState](invocation, stateKey)
-	require.False(t, ok)
 	require.False(t, steer.IsAttached(invocation))
-	manager.AfterEvent(
-		context.Background(),
-		invocation,
-		event.NewResponseEvent(
-			invocation.InvocationID,
-			"assistant",
-			&model.Response{Done: true},
-		),
-	)
-	_, ok = agent.GetStateValue[*detectorState](invocation, stateKey)
-	require.False(t, ok)
 }
 
 func TestPluginHandlesNilInputsAndMissingInvocation(t *testing.T) {
@@ -248,11 +212,8 @@ func TestPluginHandlesNilInputsAndMissingInvocation(t *testing.T) {
 	require.NoError(t, err)
 	_, err = nilPlugin.afterToolMessages(context.Background(), nil)
 	require.NoError(t, err)
-	nilPlugin.afterEvent(context.Background(), nil, nil)
-	_, err = nilPlugin.afterAgent(context.Background(), nil)
-	require.NoError(t, err)
 
-	plugin := &toolLoopWarningPlugin{}
+	plugin := &toolLoopWarningPlugin{warning: defaultWarning}
 	plugin.Register(nil)
 	plugin.Register(&pluginbase.Registry{})
 	_, err = plugin.beforeAgent(context.Background(), nil)
@@ -266,14 +227,108 @@ func TestPluginHandlesNilInputsAndMissingInvocation(t *testing.T) {
 		&pluginbase.AfterToolMessagesArgs{},
 	)
 	require.NoError(t, err)
-	plugin.afterEvent(context.Background(), nil, &event.Event{})
-	plugin.afterEvent(context.Background(), &agent.Invocation{}, nil)
-	_, err = plugin.afterAgent(context.Background(), &agent.AfterAgentArgs{})
+}
+
+func TestPluginRequiresRunnerFinalization(t *testing.T) {
+	manager := pluginbase.MustNewManager(New())
+	invocation := agent.NewInvocation()
+	_, err := manager.AgentCallbacks().RunBeforeAgent(
+		context.Background(),
+		&agent.BeforeAgentArgs{Invocation: invocation},
+	)
 	require.NoError(t, err)
+
+	require.False(t, observeOneCallRound(
+		t, manager, invocation, "call-1", "search", `{}`, "same",
+	))
+	require.False(t, observeOneCallRound(
+		t, manager, invocation, "call-2", "search", `{}`, "same",
+	))
+	require.False(t, steer.IsAttached(invocation))
+}
+
+func TestPluginAcceptsReplacementToolMessagesWithoutToolName(t *testing.T) {
+	manager := pluginbase.MustNewManager(New())
+	invocation := newPluginInvocation(t, manager)
+	for round := 0; round < 2; round++ {
+		toolCall := newToolCall(
+			fmt.Sprintf("call-%d", round),
+			"search",
+			`{"query":"same"}`,
+		)
+		result := model.NewToolMessage(toolCall.ID, "search", "same")
+		result.ToolName = ""
+		require.Equal(t, round == 1, observeToolMessages(
+			t,
+			manager,
+			invocation,
+			[]model.ToolCall{toolCall},
+			[]model.Message{result},
+		))
+	}
+}
+
+func TestPluginOptionsCustomizeWarningAndExcludeTools(t *testing.T) {
+	const customWarning = "choose a different strategy"
+	manager := pluginbase.MustNewManager(New(
+		WithWarningMessage(customWarning),
+		WithExcludedToolNames("poll"),
+	))
+	invocation := newPluginInvocation(t, manager)
+
+	for round := 0; round < 2; round++ {
+		require.False(t, observeCompleteRound(
+			t,
+			manager,
+			invocation,
+			eventCall{
+				index:  0,
+				id:     fmt.Sprintf("poll-%d", round),
+				name:   "poll",
+				result: "pending",
+			},
+			eventCall{
+				index:  1,
+				id:     fmt.Sprintf("search-in-poll-%d", round),
+				name:   "search",
+				result: "same",
+			},
+		))
+	}
+	require.False(t, observeOneCallRound(
+		t, manager, invocation, "search-1", "search", `{}`, "same",
+	))
+
+	toolCall := newToolCall("search-2", "search", `{}`)
+	result := model.NewToolMessage(toolCall.ID, "search", "same")
+	toolResultEvent := event.NewResponseEvent(
+		invocation.InvocationID,
+		"assistant",
+		&model.Response{
+			Object:  model.ObjectTypeToolResponse,
+			Choices: toolResultChoices([]model.Message{result}),
+		},
+	)
+	_, err := manager.AfterToolMessages(
+		context.Background(),
+		&pluginbase.AfterToolMessagesArgs{
+			Invocation:         invocation,
+			ToolCalls:          []model.ToolCall{toolCall},
+			ToolResultMessages: []model.Message{result},
+			ToolResultEvent:    toolResultEvent,
+		},
+	)
+	require.NoError(t, err)
+	finalevent.Run(
+		context.Background(), invocation, toolResultEvent.ID, toolResultEvent,
+	)
+	queued := steer.DrainQueued(invocation)
+	require.Len(t, queued, 1)
+	require.Equal(t, customWarning, queued[0].Message.Content)
 }
 
 func TestPluginKeepsConcurrentInvocationsIndependent(t *testing.T) {
-	plugin := &toolLoopWarningPlugin{}
+	plugin := New().(*toolLoopWarningPlugin)
 	const invocationCount = 32
 	var wg sync.WaitGroup
 	errors := make(chan error, invocationCount)
@@ -282,8 +337,7 @@ func TestPluginKeepsConcurrentInvocationsIndependent(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 			invocation := agent.NewInvocation()
-			queue := steer.NewQueue()
-			steer.Attach(invocation, queue)
+			finalevent.Attach(invocation)
 			warningCount := 0
 			for round := 0; round < 4; round++ {
 				toolCall := newToolCall(
@@ -306,9 +360,9 @@ func TestPluginKeepsConcurrentInvocationsIndependent(t *testing.T) {
 				}
 				warningCount += len(steer.DrainQueued(invocation))
 			}
-			if warningCount != 2 {
+			if warningCount != 1 {
 				errors <- fmt.Errorf(
-					"invocation %d warning count = %d, want 2",
+					"invocation %d warning count = %d, want 1",
 					index,
 					warningCount,
 				)
@@ -323,9 +377,9 @@ func TestPluginKeepsConcurrentInvocationsIndependent(t *testing.T) {
 }
 
 func TestPluginSerializesSharedInvocationStateInitialization(t *testing.T) {
-	plugin := &toolLoopWarningPlugin{}
+	plugin := New().(*toolLoopWarningPlugin)
 	invocation := agent.NewInvocation()
-	steer.Attach(invocation, steer.NewQueue())
+	finalevent.Attach(invocation)
 
 	const callbackCount = 64
 	var wg sync.WaitGroup
@@ -334,34 +388,23 @@ func TestPluginSerializesSharedInvocationStateInitialization(t *testing.T) {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			if index%2 == 0 {
-				toolCall := newToolCall(
-					fmt.Sprintf("call-%d", index),
-					"search",
-					`{"query":"same"}`,
-				)
-				err := observeToolMessagesDirect(
-					context.Background(),
-					plugin,
-					invocation,
-					[]model.ToolCall{toolCall},
-					[]model.Message{model.NewToolMessage(
-						toolCall.ID, "search", "same",
-					)},
-				)
-				if err != nil {
-					errors <- err
-				}
-				return
-			}
-			errorEvent := event.NewErrorEvent(
-				invocation.InvocationID,
-				"assistant",
-				model.ErrorTypeFlowError,
-				"tool round interrupted",
+			toolCall := newToolCall(
+				fmt.Sprintf("call-%d", index),
+				"search",
+				`{"query":"same"}`,
 			)
-			toolresultround.Mark(errorEvent, true)
-			plugin.afterEvent(context.Background(), invocation, errorEvent)
+			err := observeToolMessagesDirect(
+				context.Background(),
+				plugin,
+				invocation,
+				[]model.ToolCall{toolCall},
+				[]model.Message{model.NewToolMessage(
+					toolCall.ID, "search", "same",
+				)},
+			)
+			if err != nil {
+				errors <- err
+			}
 		}(i)
 	}
 	wg.Wait()
@@ -527,7 +570,7 @@ func newPluginInvocation(
 ) *agent.Invocation {
 	t.Helper()
 	invocation := agent.NewInvocation()
-	steer.Attach(invocation, steer.NewQueue())
+	finalevent.Attach(invocation)
 	_, err := manager.AgentCallbacks().RunBeforeAgent(
 		context.Background(),
 		&agent.BeforeAgentArgs{Invocation: invocation},
@@ -562,14 +605,19 @@ func observeToolMessages(
 		},
 	)
 	require.NoError(t, err)
-	manager.AfterEvent(context.Background(), invocation, toolResultEvent)
+	finalevent.Run(
+		context.Background(),
+		invocation,
+		toolResultEvent.ID,
+		toolResultEvent,
+	)
 	queued := steer.DrainQueued(invocation)
 	if len(queued) == 0 {
 		return false
 	}
 	require.Len(t, queued, 1)
 	require.Equal(t, model.RoleUser, queued[0].Message.Role)
-	require.Equal(t, warning, queued[0].Message.Content)
+	require.Equal(t, defaultWarning, queued[0].Message.Content)
 	require.Equal(t, warningSource, queued[0].Source)
 	return true
 }
@@ -601,7 +649,7 @@ func observeToolMessagesDirect(
 	if err != nil {
 		return err
 	}
-	plugin.afterEvent(ctx, invocation, toolResultEvent)
+	finalevent.Run(ctx, invocation, toolResultEvent.ID, toolResultEvent)
 	return nil
 }
 
@@ -658,7 +706,7 @@ func observeCompleteRound(
 
 func hasWarning(messages []model.Message) bool {
 	for _, message := range messages {
-		if message.Role == model.RoleUser && message.Content == warning {
+		if message.Role == model.RoleUser && message.Content == defaultWarning {
 			return true
 		}
 	}
@@ -870,7 +918,7 @@ func runRepeatedRound(
 		)
 	}
 	// Install the result transformer as a per-run manager after the Runner's
-	// toolloopwarning manager. AfterEvent must still observe its replacement.
+	// toolloopwarning manager. Detection must still observe its replacement.
 	runOptions = append(runOptions, pluginbase.WithPlugins(resultTransformer))
 	runOptions = append(runOptions, agent.WithRequestID(requestID))
 	events, err := runnerInstance.Run(
@@ -960,7 +1008,7 @@ func assertSessionWarning(
 			continue
 		}
 		for _, choice := range sessionEvent.Response.Choices {
-			if choice.Message.Content == warning {
+			if choice.Message.Content == defaultWarning {
 				warningEvents = append(warningEvents, sessionEvent)
 			}
 		}

@@ -10,17 +10,21 @@
 // identical consecutive tool rounds.
 //
 // Register the plugin with runner.WithPlugins(toolloopwarning.New()). The
-// plugin is inactive unless registered.
+// plugin is inactive unless registered and depends on Runner's event
+// finalization path; calling an Agent directly does not enable detection.
 //
 // Two adjacent complete tool rounds match when their tool names, canonical
 // JSON arguments, and final model-visible results are identical. On a match,
 // the plugin queues one synthetic user-role message for the next model turn
 // and records it in session history with the queued-message source
-// "plugin/toolloopwarning". The detector resets after each match, so four
-// identical rounds produce warnings after the second and fourth rounds.
+// "plugin/toolloopwarning". It warns once after the second identical round and
+// remains armed without repeating the warning until the round changes or a
+// different queued user message is consumed.
 // Tool results are fingerprinted only after every Runner OnEvent hook has
 // finished, so the comparison uses the event that is about to be persisted.
-// A queued user message consumed between rounds breaks their adjacency.
+// A queued user message from another source consumed between rounds breaks
+// their adjacency. WithExcludedToolNames can exclude polling or other tools
+// whose repeated results are expected.
 //
 // The plugin makes no additional model or tool calls. It does not stop or
 // retry the invocation.

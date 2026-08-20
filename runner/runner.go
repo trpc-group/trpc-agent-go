@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/finalevent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
@@ -271,7 +272,7 @@ type SteerableRunner interface {
 // compatible.
 type QueuedUserMessagesCanceler interface {
 	// CancelQueuedUserMessages discards user messages that are queued but not
-	// yet consumed for the active request.
+	// yet consumed for the active request, including sourced synthetic messages.
 	CancelQueuedUserMessages(requestID string) bool
 }
 
@@ -294,8 +295,9 @@ func EnqueueUserMessage(
 	return steerable.EnqueueUserMessage(requestID, message)
 }
 
-// CancelQueuedUserMessages discards queued user messages on runners that
-// support steering.
+// CancelQueuedUserMessages discards all queued user messages on runners that
+// support steering, regardless of whether their source is direct user input or
+// a framework producer.
 func CancelQueuedUserMessages(r Runner, requestID string) bool {
 	cancelable, ok := r.(QueuedUserMessagesCanceler)
 	if !ok {
@@ -754,6 +756,9 @@ func (r *runner) Run(
 	// processor clones the session for state-delta isolation.
 	livesession.Attach(invocation, sess)
 	barrier.Enable(invocation)
+	if invocation.Plugins != nil {
+		finalevent.Attach(invocation)
+	}
 
 	// Run the agent and get the event channel.
 	startCtx, startSpan, startStarted := startRunnerLatencySpan(
@@ -766,6 +771,7 @@ func (r *runner) Run(
 	finishRunnerLatencySpan(startSpan, startStarted, err)
 	if err != nil {
 		r.persistAgentRunError(execCtx, currentTurnSession, invocation, ag, err)
+		finalevent.Clear(invocation)
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
 		execCancel()
@@ -1497,6 +1503,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		appender.Clear(loop.invocation)
+		finalevent.Clear(loop.invocation)
 		livesession.Clear(loop.invocation)
 		steer.Clear(loop.invocation)
 		r.unregisterRun(loop.invocation.RunOptions.RequestID)
@@ -1571,6 +1578,7 @@ func (r *runner) processSingleAgentEvent(
 		log.Errorf("agentEvent is nil")
 		return nil
 	}
+	originalEventID := agentEvent.ID
 	hasToolResultRoundMarker := toolresultround.HasMarker(agentEvent)
 	toolResultRoundIncomplete := toolresultround.IsIncomplete(agentEvent)
 	if toolResultRoundIncomplete {
@@ -1592,6 +1600,7 @@ func (r *runner) processSingleAgentEvent(
 		traceDetails,
 	)
 	if agentEvent == nil {
+		finalevent.Discard(loop.invocation, originalEventID)
 		return nil
 	}
 	restoreToolResultRoundMarker(agentEvent, hasToolResultRoundMarker, toolResultRoundIncomplete)
@@ -1614,16 +1623,18 @@ func (r *runner) processSingleAgentEvent(
 	}
 	r.markCompletionSnapshotOnly(loop, agentEvent)
 	if shouldSuppressGraphCompletionEvent(loop, agentEvent) {
+		finalevent.Discard(loop.invocation, originalEventID)
 		return nil
 	}
 	if shouldSuppressGraphExecutorBarrierEvent(loop, agentEvent) {
+		finalevent.Discard(loop.invocation, originalEventID)
 		if agentEvent.RequiresCompletion {
 			completionID := agent.GetAppendEventNoticeKey(agentEvent.ID)
 			loop.invocation.NotifyCompletion(ctx, completionID)
 		}
 		return nil
 	}
-	r.applyAfterEventPlugins(ctx, loop.invocation, agentEvent)
+	finalevent.Run(ctx, loop.invocation, originalEventID, agentEvent)
 	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
@@ -1921,21 +1932,6 @@ func (r *runner) applyEventPluginsNoSpan(
 	}
 	backfillEventMetadata(updated, e)
 	return updated
-}
-
-func (r *runner) applyAfterEventPlugins(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	e *event.Event,
-) {
-	if invocation == nil || invocation.Plugins == nil || e == nil {
-		return
-	}
-	hooks, ok := invocation.Plugins.(afterEventManager)
-	if !ok {
-		return
-	}
-	hooks.AfterEvent(ctx, invocation, e)
 }
 
 func (r *runner) applyAfterRunPlugins(

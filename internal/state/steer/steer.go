@@ -26,6 +26,8 @@ const StateKeyQueuedUserMessages = "__queued_user_messages__"
 // the queue but must not close it (see AttachBorrowed and Close).
 const stateKeyBorrowed = "__queued_user_messages_borrowed__"
 
+const stateKeyConsumptionObservers = "__queued_user_message_observers__"
+
 const (
 	// ExtensionKeyQueuedUserMessage marks events emitted when queued user
 	// messages are consumed at a safe boundary.
@@ -51,6 +53,16 @@ type QueuedMessage struct {
 	Message model.Message
 	// Source identifies the framework producer of a synthetic message.
 	Source string
+}
+
+type namedConsumptionObserver struct {
+	name     string
+	observer func(QueuedMessage)
+}
+
+type consumptionObservers struct {
+	mu        sync.Mutex
+	observers []namedConsumptionObserver
 }
 
 // Queue stores queued user messages in FIFO order.
@@ -198,14 +210,15 @@ func EnqueueWithSource(
 
 // Drain removes and returns queued messages from the invocation.
 func Drain(inv *agent.Invocation) []model.Message {
-	queue, ok := agent.GetStateValue[*Queue](
-		inv,
-		StateKeyQueuedUserMessages,
-	)
-	if !ok || queue == nil {
+	queued := DrainQueued(inv)
+	if len(queued) == 0 {
 		return nil
 	}
-	return queue.Drain()
+	messages := make([]model.Message, 0, len(queued))
+	for _, message := range queued {
+		messages = append(messages, message.Message)
+	}
+	return messages
 }
 
 // DrainQueued removes and returns all queued messages with their source
@@ -219,7 +232,59 @@ func DrainQueued(inv *agent.Invocation) []QueuedMessage {
 	if !ok || queue == nil {
 		return nil
 	}
-	return queue.drainQueued()
+	queued := queue.drainQueued()
+	for _, message := range queued {
+		notifyConsumption(inv, message)
+	}
+	return queued
+}
+
+// RegisterConsumptionObserver registers an invocation-scoped observer. A
+// later registration with the same name replaces the existing observer.
+func RegisterConsumptionObserver(
+	inv *agent.Invocation,
+	name string,
+	observer func(QueuedMessage),
+) {
+	if inv == nil || name == "" || observer == nil {
+		return
+	}
+	h, ok := agent.GetStateValue[*consumptionObservers](
+		inv,
+		stateKeyConsumptionObservers,
+	)
+	if !ok || h == nil {
+		h = &consumptionObservers{}
+		inv.SetState(stateKeyConsumptionObservers, h)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i := range h.observers {
+		if h.observers[i].name == name {
+			h.observers[i].observer = observer
+			return
+		}
+	}
+	h.observers = append(h.observers, namedConsumptionObserver{
+		name:     name,
+		observer: observer,
+	})
+}
+
+func notifyConsumption(inv *agent.Invocation, message QueuedMessage) {
+	h, ok := agent.GetStateValue[*consumptionObservers](
+		inv,
+		stateKeyConsumptionObservers,
+	)
+	if !ok || h == nil {
+		return
+	}
+	h.mu.Lock()
+	observers := append([]namedConsumptionObserver(nil), h.observers...)
+	h.mu.Unlock()
+	for _, entry := range observers {
+		entry.observer(message)
+	}
 }
 
 // Close rejects future enqueues for the invocation queue. A borrowed
@@ -245,4 +310,5 @@ func Clear(inv *agent.Invocation) {
 	Close(inv)
 	inv.DeleteState(StateKeyQueuedUserMessages)
 	inv.DeleteState(stateKeyBorrowed)
+	inv.DeleteState(stateKeyConsumptionObservers)
 }

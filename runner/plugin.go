@@ -34,10 +34,6 @@ type afterRunManager interface {
 	AfterRun(context.Context, *plugin.AfterRunArgs) error
 }
 
-type afterEventManager interface {
-	AfterEvent(context.Context, *agent.Invocation, *event.Event)
-}
-
 func newPluginManagerChain(managers ...agent.PluginManager) agent.PluginManager {
 	filtered := make([]agent.PluginManager, 0, len(managers))
 	for _, manager := range managers {
@@ -152,20 +148,6 @@ func (c pluginManagerChain) OnEvent(ctx context.Context, invocation *agent.Invoc
 		}
 	}
 	return current, nil
-}
-
-func (c pluginManagerChain) AfterEvent(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	e *event.Event,
-) {
-	for _, manager := range c {
-		hooks, ok := manager.(afterEventManager)
-		if !ok {
-			continue
-		}
-		hooks.AfterEvent(ctx, invocation, e)
-	}
 }
 
 func (c pluginManagerChain) AfterRun(ctx context.Context, args *plugin.AfterRunArgs) error {

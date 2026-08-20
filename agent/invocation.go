@@ -60,6 +60,9 @@ const (
 	// appenderStateKey is the invocation state key used by internal appender
 	// attachment (see internal/state/appender).
 	appenderStateKey = "__append_event__"
+	// finalEventCallbacksStateKey is the invocation state key used by internal
+	// final-event callback attachment (see internal/state/finalevent).
+	finalEventCallbacksStateKey = "__final_event_callbacks__"
 	// liveSessionStateKey is the invocation state key used by internal
 	// livesession attachment (see internal/state/livesession). Sub-agents
 	// (e.g., AgentTool) read this pointer to restore the runner's live
@@ -1753,6 +1756,7 @@ func isCloneStateKey(key string) bool {
 	case flusherStateKey,
 		barrierStateKey,
 		appenderStateKey,
+		finalEventCallbacksStateKey,
 		liveSessionStateKey,
 		streamHubStateKey,
 		messageoriginkey.Key,

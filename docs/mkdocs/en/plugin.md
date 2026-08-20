@@ -639,14 +639,17 @@ should apply to all agents managed by a Runner.
 
 `toolloopwarning.New()` compares consecutive complete tool-call rounds after
 their final model-facing tool result messages are available. When the tool
-names, canonical JSON arguments, and results are identical, it queues a
-synthetic user-role instruction and resets the detector. Thus four identical
-rounds produce warnings after the second and fourth rounds.
+names, canonical JSON arguments, and results are identical, it queues one
+synthetic user-role instruction after the second round. It does not repeat the
+warning while the same round remains unchanged; a changed round or a queued
+user message from another source starts a new streak.
 
-Tool-call IDs are ignored. A complete V1 round requires exactly one trailing
+Tool-call IDs are ignored. A complete round requires exactly one trailing
 tool-result message per tool call, matched by ID. An incomplete or malformed
 round resets detection. The plugin is opt-in, makes no additional model or tool
-calls, and does not stop or retry the invocation.
+calls, and does not stop or retry the invocation. It must be registered on a
+`Runner`; direct calls to `Agent.Run` do not provide the finalized-event path
+needed for detection.
 
 At the next safe model-turn boundary, the Runner persists the instruction as a
 session event before constructing the next model request. Its model protocol
@@ -658,8 +661,14 @@ The plugin associates tool-call metadata at `AfterToolMessages`, then computes
 the fingerprint after the complete Runner `OnEvent` transformation pipeline.
 Its result therefore does not depend on whether a result-transforming plugin is
 registered before or after it. A queued user message consumed between two tool
-rounds breaks their adjacency. Cloned child invocations use an invocation-local
-warning queue and do not borrow the lead agent's user-steer queue.
+rounds breaks their adjacency unless it is this plugin's own warning. For a
+cloned child invocation, the plugin creates an invocation-local queue only when
+a warning is actually needed; it never borrows the lead agent's user-steer
+queue.
+
+Use `WithExcludedToolNames(...)` for polling or other tools whose repeated
+results are expected. Use `WithWarningMessage(...)` to localize or customize
+the synthetic instruction.
 
 ```go
 import (
@@ -676,7 +685,9 @@ agentInstance := llmagent.New(
 runnerInstance := runner.NewRunner(
 	"my-app",
 	agentInstance,
-	runner.WithPlugins(toolloopwarning.New()),
+	runner.WithPlugins(toolloopwarning.New(
+		toolloopwarning.WithExcludedToolNames("poll_status"),
+	)),
 )
 defer runnerInstance.Close()
 ```
@@ -1183,10 +1194,9 @@ The example includes verified scenarios for:
 
 The repository currently includes Logging, DebugLog, GlobalInstruction,
 ToolCallID, ToolError, ToolLoopWarning, MessageMerger, ErrorMessage, and
-Guardrail as built-in
-plugins. Tool Approval, Prompt Injection, and Unsafe Intent are currently
-built-in capabilities under the Guardrail plugin. Additional plugins can be
-implemented as custom plugins.
+Guardrail as built-in plugins. Tool Approval, Prompt Injection, and Unsafe
+Intent are currently built-in capabilities under the Guardrail plugin.
+Additional plugins can be implemented as custom plugins.
 
 ## Writing Your Own Plugin
 

@@ -14,36 +14,35 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/finalevent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 )
 
 const (
-	pluginName    = "tool_loop_warning"
-	stateKey      = "plugin:toolloopwarning"
-	ownedQueueKey = "plugin:toolloopwarning:owned_queue"
-	warningSource = "plugin/toolloopwarning"
-	warning       = "The same tool-call loop has repeated. Please change your approach or stop calling the same tools with the same inputs."
+	pluginName     = "tool_loop_warning"
+	stateKey       = "plugin:toolloopwarning"
+	warningSource  = "plugin/toolloopwarning"
+	defaultWarning = "The same tool-call loop has repeated. Please change your approach or stop calling the same tools with the same inputs."
 )
 
 type toolLoopWarningPlugin struct {
-	stateInitMu sync.Mutex
-	invocations map[string]invocationDetector
-}
-
-type invocationDetector struct {
-	invocation *agent.Invocation
-	state      *detectorState
+	stateInitMu       sync.Mutex
+	warning           string
+	excludedToolNames map[string]struct{}
 }
 
 // New returns an opt-in plugin that persists a synthetic user-role instruction
-// when two consecutive complete tool rounds are identical. The detector resets
-// after each match and never stops or retries the invocation.
-func New() plugin.Plugin {
-	return &toolLoopWarningPlugin{}
+// when two consecutive complete tool rounds are identical. It warns once per
+// unchanged streak and never stops or retries the invocation.
+func New(opts ...Option) plugin.Plugin {
+	o := newOptions(opts...)
+	return &toolLoopWarningPlugin{
+		warning:           o.warning,
+		excludedToolNames: o.excludedToolNames,
+	}
 }
 
 // Name implements plugin.Plugin.
@@ -61,8 +60,6 @@ func (p *toolLoopWarningPlugin) Register(r *plugin.Registry) {
 	}
 	r.BeforeAgent(p.beforeAgent)
 	r.AfterToolMessages(p.afterToolMessages)
-	r.AfterEvent(p.afterEvent)
-	r.AfterAgent(p.afterAgent)
 }
 
 func (p *toolLoopWarningPlugin) beforeAgent(
@@ -72,20 +69,17 @@ func (p *toolLoopWarningPlugin) beforeAgent(
 	if p == nil || args == nil || args.Invocation == nil {
 		return nil, nil
 	}
-	ownedQueue := false
-	if !steer.IsAttached(args.Invocation) {
-		steer.Attach(args.Invocation, steer.NewQueue())
-		args.Invocation.SetState(ownedQueueKey, true)
-		ownedQueue = true
-	}
-	p.stateInitMu.Lock()
-	defer p.stateInitMu.Unlock()
 	state := &detectorState{}
 	args.Invocation.SetState(stateKey, state)
-	if !ownedQueue {
-		args.Invocation.DeleteState(ownedQueueKey)
-	}
-	p.rememberInvocationLocked(args.Invocation, state)
+	steer.RegisterConsumptionObserver(
+		args.Invocation,
+		pluginName,
+		func(message steer.QueuedMessage) {
+			if message.Source != warningSource {
+				state.reset()
+			}
+		},
+	)
 	return nil, nil
 }
 
@@ -96,99 +90,55 @@ func (p *toolLoopWarningPlugin) afterToolMessages(
 	if p == nil || args == nil || args.Invocation == nil {
 		return nil, nil
 	}
-	state := p.detectorStateFor(args.Invocation)
-	if args.ToolResultEvent == nil ||
-		!state.stageEvent(args.ToolResultEvent.ID, args.ToolCalls) {
+	invocation := args.Invocation
+	state := p.detectorStateFor(invocation)
+	if args.ToolResultEvent == nil || args.ToolResultEvent.ID == "" ||
+		len(args.ToolCalls) == 0 || p.containsExcludedTool(args.ToolCalls) {
+		state.reset()
+		return nil, nil
+	}
+	toolCalls := cloneToolCalls(args.ToolCalls)
+	registered := finalevent.Register(
+		invocation,
+		args.ToolResultEvent.ID,
+		func(ctx context.Context, ev *event.Event) {
+			if !state.observeToolMessages(
+				toolCalls,
+				toolResultMessagesFromEvent(ev),
+			) {
+				return
+			}
+			if !steer.IsAttached(invocation) {
+				steer.Attach(invocation, steer.NewQueue())
+			}
+			if !steer.EnqueueWithSource(
+				invocation,
+				model.NewUserMessage(p.warning),
+				warningSource,
+			) {
+				log.DebugfContext(
+					ctx,
+					"[%s] skip warning because no open user-message queue is attached",
+					pluginName,
+				)
+			}
+		},
+	)
+	if !registered {
 		state.reset()
 	}
 	return nil, nil
 }
 
-func (p *toolLoopWarningPlugin) afterEvent(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	ev *event.Event,
-) {
-	if p == nil || invocation == nil || ev == nil {
-		return
-	}
-	target, state := p.detectorForEvent(invocation, ev)
-	if state == nil || target == nil {
-		return
-	}
-	if isConsumedQueuedUserMessage(ev) {
-		state.reset()
-		return
-	}
-	warn, staged := state.observeStagedEvent(
-		ev.ID,
-		toolResultMessagesFromEvent(ev),
-	)
-	if staged {
-		if warn && !steer.EnqueueWithSource(
-			target,
-			model.NewUserMessage(warning),
-			warningSource,
-		) {
-			log.DebugfContext(
-				ctx,
-				"[%s] skip warning because no open user-message queue is attached",
-				pluginName,
-			)
+func (p *toolLoopWarningPlugin) containsExcludedTool(
+	toolCalls []model.ToolCall,
+) bool {
+	for _, toolCall := range toolCalls {
+		if _, excluded := p.excludedToolNames[toolCall.Function.Name]; excluded {
+			return true
 		}
-		return
 	}
-	if toolresultround.HasMarker(ev) {
-		state.reset()
-	}
-}
-
-func (p *toolLoopWarningPlugin) detectorForEvent(
-	invocation *agent.Invocation,
-	ev *event.Event,
-) (*agent.Invocation, *detectorState) {
-	if invocation == nil || ev == nil {
-		return nil, nil
-	}
-	if ev.InvocationID == "" || ev.InvocationID == invocation.InvocationID {
-		state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
-		if !ok || state == nil {
-			return nil, nil
-		}
-		return invocation, state
-	}
-	p.stateInitMu.Lock()
-	defer p.stateInitMu.Unlock()
-	entry, ok := p.invocations[ev.InvocationID]
-	if !ok {
-		return nil, nil
-	}
-	return entry.invocation, entry.state
-}
-
-func (p *toolLoopWarningPlugin) rememberInvocationLocked(
-	invocation *agent.Invocation,
-	state *detectorState,
-) {
-	if invocation == nil || state == nil || invocation.InvocationID == "" {
-		return
-	}
-	if p.invocations == nil {
-		p.invocations = make(map[string]invocationDetector)
-	}
-	p.invocations[invocation.InvocationID] = invocationDetector{
-		invocation: invocation,
-		state:      state,
-	}
-}
-
-func isConsumedQueuedUserMessage(ev *event.Event) bool {
-	metadata, ok, err := event.GetExtension[steer.QueuedUserMessageMetadata](
-		ev,
-		steer.ExtensionKeyQueuedUserMessage,
-	)
-	return err == nil && ok &&
-		metadata.Status == steer.QueuedUserMessageStatusConsumed
+	return false
 }
 
 func toolResultMessagesFromEvent(ev *event.Event) []model.Message {
@@ -215,41 +165,15 @@ func (p *toolLoopWarningPlugin) detectorStateFor(
 ) *detectorState {
 	state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
 	if ok && state != nil {
-		p.stateInitMu.Lock()
-		p.rememberInvocationLocked(invocation, state)
-		p.stateInitMu.Unlock()
 		return state
 	}
 	p.stateInitMu.Lock()
 	defer p.stateInitMu.Unlock()
 	state, ok = agent.GetStateValue[*detectorState](invocation, stateKey)
 	if ok && state != nil {
-		p.rememberInvocationLocked(invocation, state)
 		return state
 	}
 	state = &detectorState{}
 	invocation.SetState(stateKey, state)
-	p.rememberInvocationLocked(invocation, state)
 	return state
-}
-
-func (p *toolLoopWarningPlugin) afterAgent(
-	_ context.Context,
-	args *agent.AfterAgentArgs,
-) (*agent.AfterAgentResult, error) {
-	if p == nil || args == nil || args.Invocation == nil {
-		return nil, nil
-	}
-	ownedQueue, _ := agent.GetStateValue[bool](args.Invocation, ownedQueueKey)
-	p.stateInitMu.Lock()
-	if args.Invocation.InvocationID != "" {
-		delete(p.invocations, args.Invocation.InvocationID)
-	}
-	p.stateInitMu.Unlock()
-	args.Invocation.DeleteState(stateKey)
-	args.Invocation.DeleteState(ownedQueueKey)
-	if ownedQueue {
-		steer.Clear(args.Invocation)
-	}
-	return nil, nil
 }

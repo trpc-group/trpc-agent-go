@@ -121,6 +121,38 @@ func TestEnqueueWithSourceAndDrainQueued(t *testing.T) {
 	))
 }
 
+func TestConsumptionObserverIsInvocationScopedAndReplaceable(t *testing.T) {
+	invocation := agent.NewInvocation()
+	var observed []QueuedMessage
+	RegisterConsumptionObserver(invocation, "test", func(message QueuedMessage) {
+		observed = append(observed, QueuedMessage{Source: "stale"})
+	})
+	RegisterConsumptionObserver(invocation, "test", func(message QueuedMessage) {
+		observed = append(observed, message)
+	})
+	queue := NewQueue()
+	Attach(invocation, queue)
+	require.True(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("synthetic"),
+		"plugin/example",
+	))
+	require.Len(t, DrainQueued(invocation), 1)
+	require.Len(t, observed, 1)
+	require.Equal(t, "synthetic", observed[0].Message.Content)
+	require.Equal(t, "plugin/example", observed[0].Source)
+
+	Clear(invocation)
+	Attach(invocation, NewQueue())
+	require.True(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("later"),
+		"plugin/example",
+	))
+	require.Len(t, DrainQueued(invocation), 1)
+	require.Len(t, observed, 1)
+}
+
 func TestClose_RejectsFutureEnqueueAndPreservesQueuedMessages(t *testing.T) {
 	invocation := agent.NewInvocation()
 	queue := NewQueue()
@@ -274,6 +306,7 @@ func TestNilSafety(t *testing.T) {
 	require.Nil(t, queue.Discard())
 	queue.Close()
 	Clear(invocation)
+	RegisterConsumptionObserver(invocation, "", nil)
 	require.Nil(t, Drain(invocation))
 	require.Nil(t, DrainQueued(invocation))
 	require.False(t, EnqueueWithSource(
