@@ -164,21 +164,19 @@ func (t *tracker) persistEvents(
 	key session.Key,
 	state *sessionState,
 	events []aguievents.Event,
-) (int, error) {
+) error {
 	if len(events) == 0 {
-		return 0, nil
+		return nil
 	}
 	sess, err := t.ensureSessionExists(ctx, key, state)
 	if err != nil {
-		return 0, fmt.Errorf("ensure session exists: %w", err)
+		return fmt.Errorf("ensure session exists: %w", err)
 	}
 	var overallErr error
-	processed := 0
 	for _, e := range events {
 		payload, err := e.ToJSON()
 		if err != nil {
 			multierr.AppendInto(&overallErr, fmt.Errorf("marshal event %v: %w", e, err))
-			processed++
 			continue
 		}
 		trackEvent := &session.TrackEvent{
@@ -195,12 +193,11 @@ func (t *tracker) persistEvents(
 			multierr.AppendInto(&overallErr, fmt.Errorf("append track event %v: %w", trackEvent, err))
 			break
 		}
-		processed++
 	}
 	if overallErr != nil {
-		return processed, fmt.Errorf("persist events: %w", overallErr)
+		return fmt.Errorf("persist events: %w", overallErr)
 	}
-	return processed, nil
+	return nil
 }
 
 // ensureSessionExists fetches the session or creates one when absent.
@@ -262,14 +259,7 @@ func (t *tracker) flush(ctx context.Context, key session.Key, state *sessionStat
 	if err != nil {
 		return err
 	}
-	processed, persistErr := t.persistEvents(ctx, key, state, batch)
-	if persistErr != nil {
-		state.mu.Lock()
-		t.prependPending(state, batch[processed:])
-		state.mu.Unlock()
-		return persistErr
-	}
-	return nil
+	return t.persistEvents(ctx, key, state, batch)
 }
 
 func (t *tracker) closeState(ctx context.Context, key session.Key, state *sessionState) error {
@@ -279,8 +269,7 @@ func (t *tracker) closeState(ctx context.Context, key session.Key, state *sessio
 	if err != nil {
 		return err
 	}
-	_, persistErr := t.persistEvents(ctx, key, state, batch)
-	return persistErr
+	return t.persistEvents(ctx, key, state, batch)
 }
 
 func (t *tracker) drainPending(ctx context.Context, state *sessionState) ([]aguievents.Event, error) {
@@ -306,14 +295,4 @@ func (t *tracker) drainPendingLocked(ctx context.Context, state *sessionState) (
 	batch = append(batch, events...)
 	state.pending = nil
 	return batch, nil
-}
-
-func (t *tracker) prependPending(state *sessionState, events []aguievents.Event) {
-	if len(events) == 0 {
-		return
-	}
-	pending := make([]aguievents.Event, 0, len(events)+len(state.pending))
-	pending = append(pending, events...)
-	pending = append(pending, state.pending...)
-	state.pending = pending
 }

@@ -100,7 +100,7 @@ curl -N -X POST http://localhost:8080/history \
 
 - `aggregator.WithEnabled(true)` 用于控制是否启用事件聚合，默认开启。
 - `agui.WithFlushInterval(time.Second)` 用于控制历史事件写入会话存储的刷新间隔，默认 `1s`。设置为 `0` 表示不进行运行中的定时写入；这种配置通常适合不需要在运行中通过 `/history` 续传事件的场景，历史事件主要会在运行结束收尾时写入。运行时间较长或事件量较大时，未写入的历史事件会持续占用进程内存，直到运行结束收尾。
-- `agui.WithTrackPersistenceTimeout(5*time.Second)` 用于限制每次 AG-UI 历史持久化操作等待会话存储的最长时间，包括初始尽力刷新、运行中的定时刷新以及最终 `Close` 刷新，默认 `5s`。如果最终 `Close` 失败或超时，错误会被记录，同时释放已结束 run 的进程内 tracker 状态；尚未写入的剩余事件会被丢弃。设置为 `0` 表示不设置超时。
+- `agui.WithTrackPersistenceTimeout(5*time.Second)` 用于限制每次 AG-UI 历史持久化操作等待会话存储的最长时间，包括初始尽力刷新、运行中的定时刷新以及最终 `Close` 刷新，默认 `5s`。运行中的刷新失败时会返回错误，并丢弃本次已取出的 batch，而不会自动重试；刷新期间新进入队列的事件仍可由后续刷新处理。如果最终 `Close` 失败或超时，错误会被记录，同时释放已结束 run 的进程内 tracker 状态；尚未写入的剩余事件会被丢弃。设置为 `0` 表示不设置超时。
 - `agui.WithPostRunFinalizationTimeout(5*time.Second)` 用于设置运行结束后生成和发送协议收尾事件时使用的超时，默认 `5s`。它不限制最终历史 `Flush` 或 `Close`；这些操作使用 `agui.WithTrackPersistenceTimeout`。设置为 `0` 表示不设置超时。
 
 ```go
@@ -247,7 +247,7 @@ server, err := agui.New(
 
 `RUN_STARTED → MESSAGES_SNAPSHOT → 后续 AG-UI 事件 → RUN_FINISHED/RUN_ERROR`
 
-对于已启用历史追踪、消息快照续传且刷新间隔为正的运行，Runner 会在记录初始 `RUN_STARTED` 事件后、将该事件发送到实时 SSE 流之前，尽力执行一次刷新。使用同步 `TrackService` 且刷新成功时，其他共享同一个 `SessionService` 的实例可在 `RUN_STARTED` 已发出后观察到非终态事件；后续事件仍按周期缓冲写入。初始刷新失败只会记录错误，不会阻止 run 继续执行，尚未写入的事件仍可由后续定时刷新或最终关闭重试。异步 `TrackService` 在刷新调用返回后仍可能延迟跨实例可见性。
+对于已启用历史追踪、消息快照续传且刷新间隔为正的运行，Runner 会在记录初始 `RUN_STARTED` 事件后、将该事件发送到实时 SSE 流之前，尽力执行一次刷新。使用同步 `TrackService` 且刷新成功时，其他共享同一个 `SessionService` 的实例可在 `RUN_STARTED` 已发出后观察到非终态事件；后续事件仍按周期缓冲写入。初始刷新失败只会记录错误，不会阻止 run 继续执行；本次已取出的 batch 不会重试，之后记录的新事件仍可由后续定时刷新或最终关闭处理。异步 `TrackService` 在刷新调用返回后仍可能延迟跨实例可见性。
 
 相关配置如下：
 

@@ -511,7 +511,7 @@ func TestTrackerFlushPersistsPendingAggregation(t *testing.T) {
 	require.ErrorContains(t, err, "session state not found")
 }
 
-func TestTrackerFlushFailureRetriesUnprocessedSuffixBeforeNewEvents(t *testing.T) {
+func TestTrackerFlushFailureDropsRemainingBatchBeforeNewEvents(t *testing.T) {
 	ctx := context.Background()
 	svc := newHookSessionService()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
@@ -538,11 +538,78 @@ func TestTrackerFlushFailureRetriesUnprocessedSuffixBeforeNewEvents(t *testing.T
 	require.NoError(t, err)
 	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
 	require.NoError(t, err)
-	require.Len(t, trackEvents.Events, 4)
+	require.Len(t, trackEvents.Events, 2)
 	requireTrackEventType(t, trackEvents.Events[0], aguievents.EventTypeRunStarted)
 	requireTrackEventType(t, trackEvents.Events[1], aguievents.EventTypeCustom)
-	requireTrackEventType(t, trackEvents.Events[2], aguievents.EventTypeRunFinished)
-	requireTrackEventType(t, trackEvents.Events[3], aguievents.EventTypeCustom)
+}
+
+func TestTrackerRepeatedFlushFailuresDoNotRetainFailedBatches(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	fail := true
+	svc.appendTrackFn = func(ctx context.Context, sess *session.Session, evt *session.TrackEvent, opts ...session.Option) error {
+		if fail {
+			return errors.New("append broke")
+		}
+		return svc.SessionService.AppendTrackEvent(ctx, sess, evt, opts...)
+	}
+	tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	require.NoError(t, err)
+	for range 100 {
+		require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("failed")))
+		err = tracker.Flush(ctx, key)
+		require.ErrorContains(t, err, "append broke")
+	}
+	fail = false
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("after")))
+	require.NoError(t, tracker.Flush(ctx, key))
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 1)
+	parsed, err := aguievents.EventFromJSON(trackEvents.Events[0].Payload)
+	require.NoError(t, err)
+	custom, ok := parsed.(*aguievents.CustomEvent)
+	require.True(t, ok)
+	require.Equal(t, "after", custom.Name)
+}
+
+func TestTrackerFlushDoesNotRetryAmbiguouslyCommittedEvent(t *testing.T) {
+	ctx := context.Background()
+	svc := newHookSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	first := true
+	svc.appendTrackFn = func(ctx context.Context, sess *session.Session, evt *session.TrackEvent, opts ...session.Option) error {
+		if err := svc.SessionService.AppendTrackEvent(ctx, sess, evt, opts...); err != nil {
+			return err
+		}
+		if first {
+			first = false
+			return errors.New("acknowledgement lost")
+		}
+		return nil
+	}
+	tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(false)))
+	require.NoError(t, err)
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("original")))
+	err = tracker.Flush(ctx, key)
+	require.ErrorContains(t, err, "acknowledgement lost")
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("after")))
+	require.NoError(t, tracker.Flush(ctx, key))
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 2)
+	for i, want := range []string{"original", "after"} {
+		parsed, parseErr := aguievents.EventFromJSON(trackEvents.Events[i].Payload)
+		require.NoError(t, parseErr)
+		custom, ok := parsed.(*aguievents.CustomEvent)
+		require.True(t, ok)
+		require.Equal(t, want, custom.Name)
+	}
 }
 
 func TestTrackerCloseFailureReleasesStateBeforeNewEvents(t *testing.T) {
