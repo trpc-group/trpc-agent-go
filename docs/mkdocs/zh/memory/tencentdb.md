@@ -220,21 +220,25 @@ gateway 就绪后运行示例：
 cd examples/memory/tencentdb
 export OPENAI_API_KEY="your-openai-compatible-api-key"
 export TENCENTDB_AGENT_MEMORY_GATEWAY="http://127.0.0.1:8420"
-go run .
+go run . -turn-wait 10s
 ```
 
-然后发送事实、结束当前会话并新建会话，再提相关问题：
+发送事实后，等程序重新显示下一个 `You:` 提示符，再输入 `/new`。配置的等待
+发生在本轮完成之后、程序接受下一条命令之前：
 
 ```text
 You: 请记住以下信息：我的项目代号是 Apollo Lake，部署窗口是周五晚上，回答偏好是简洁。
+Waiting 10s to allow asynchronous gateway extraction...
 You: /new
 You: 我的项目代号、部署窗口和回答偏好是什么？
 ```
 
-前两条消息会被 gateway capture。示例里的 `/new` 命令会先等待待处理的
-capture，再切换到新 session；Legacy gateway 还会收到 `/session/end`，V3
-没有对应的远端结束接口。对话历史会重置，但同一个用户仍然可以通过 plugin 和
-原生检索工具召回已经提取的长期记忆。
+`-turn-wait` 只是为 gateway 的异步长期记忆提取预留一段固定时间，并不代表
+服务端已经就绪；如果当前部署需要更久，应增加等待时间，或通过 gateway 的
+观测能力确认提取完成。`/new` 只会等待本地待处理的 capture，再切换到新
+session。Legacy gateway 还会收到 `/session/end`；V3 没有对应的远端结束或
+提取屏障接口。V3 conversation search 只查询新 session，因此跨 session 召回
+依赖上一轮已经生成可检索的长期记忆。
 
 ## 配置选项
 

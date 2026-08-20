@@ -86,10 +86,10 @@ var (
 		os.Getenv("TDAI_OFFLOAD_SERVICE_ID"),
 		"TencentDB Agent Memory service ID; enables context offload v2 when a gateway API key is also configured",
 	)
-	waitBeforeRecall = flag.Duration(
+	turnWait = flag.Duration(
 		"turn-wait",
 		0,
-		"Delay after each user turn to wait for gateway capture/extraction",
+		"Fixed delay after each completed turn to allow asynchronous gateway extraction before cross-session recall",
 	)
 	endSession = flag.Bool(
 		"end-session",
@@ -200,6 +200,11 @@ func main() {
 	}
 	if identityEnabled {
 		fmt.Printf("Identity-scoped data plane: enabled (service=%s team=%s agent=%s)\n", *serviceID, *teamID, *agentID)
+		if *turnWait > 0 {
+			fmt.Printf("Post-turn extraction delay: %s\n", *turnWait)
+		} else {
+			fmt.Println("Post-turn extraction delay: disabled; V3 cross-session recall may not be ready immediately")
+		}
 	}
 	fmt.Printf("App: %s\nUser: %s\nSession: %s\n", *appName, *userID, sid)
 	fmt.Println(strings.Repeat("=", 60))
@@ -239,7 +244,7 @@ func (c *memoryChat) start(ctx context.Context) error {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("Special commands:")
-	fmt.Println("  /new      - end current session and start a new session for the same user")
+	fmt.Println("  /new      - finish pending capture and start a new session for the same user")
 	fmt.Println("  /session  - show current session")
 	fmt.Println("  /end      - end current session")
 	fmt.Println("  /exit     - end the conversation")
@@ -293,9 +298,9 @@ func (c *memoryChat) processMessage(ctx context.Context, input string) error {
 		return err
 	}
 	printRunResult(result)
-	if *waitBeforeRecall > 0 {
-		fmt.Printf("Waiting %s for gateway capture/extraction...\n", *waitBeforeRecall)
-		time.Sleep(*waitBeforeRecall)
+	if *turnWait > 0 {
+		fmt.Printf("Waiting %s to allow asynchronous gateway extraction...\n", *turnWait)
+		time.Sleep(*turnWait)
 	}
 	return nil
 }
@@ -309,7 +314,11 @@ func (c *memoryChat) startNewSession(ctx context.Context) error {
 	fmt.Println("Started new session.")
 	fmt.Printf("  Previous: %s\n", oldSessionID)
 	fmt.Printf("  Current:  %s\n", c.sessionID)
-	fmt.Println("  Long-term memories are preserved for the same user.")
+	if c.v3Enabled {
+		fmt.Println("  V3 capture is complete; asynchronous long-term extraction may still be running.")
+	} else {
+		fmt.Println("  Long-term memories remain available for the same user.")
+	}
 	fmt.Println()
 	return nil
 }

@@ -239,23 +239,27 @@ Run the example after the gateway is ready:
 cd examples/memory/tencentdb
 export OPENAI_API_KEY="your-openai-compatible-api-key"
 export TENCENTDB_AGENT_MEMORY_GATEWAY="http://127.0.0.1:8420"
-go run .
+go run . -turn-wait 10s
 ```
 
-Then send facts, end the current session, and ask related questions in a new
-session:
+Then send facts and wait until the next `You:` prompt appears before entering
+`/new`. The configured delay runs after the completed turn, before the example
+accepts the next command:
 
 ```text
 You: Remember this profile: my project code name is Apollo Lake, my deployment window is Friday night, and I prefer concise answers.
+Waiting 10s to allow asynchronous gateway extraction...
 You: /new
 You: What is my project code name, deployment window, and answer preference?
 ```
 
-The first messages are captured by the gateway. The example's `/new` command
-waits for pending capture before switching to a fresh session. Legacy gateways
-also receive `/session/end`; V3 has no remote session-end endpoint. The same
-user can recall extracted memories through the plugin and native search tools
-even after conversation history is reset.
+`-turn-wait` is a fixed allowance for the gateway's asynchronous long-term
+extraction, not a readiness guarantee. Increase it or verify extraction through
+gateway observability if the deployment needs more time. The `/new` command
+only waits for pending local capture before switching sessions. Legacy gateways
+also receive `/session/end`; V3 has no remote session-end or extraction-barrier
+endpoint. V3 conversation search is scoped to the new session, so cross-session
+recall depends on the previous turn having reached extracted long-term memory.
 
 ## Configuration Options
 

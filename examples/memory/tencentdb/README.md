@@ -58,12 +58,16 @@ User message
 
 The program starts an interactive chat loop:
 
-1. Send a few messages that contain stable facts or preferences.
-2. Use `/new` to finish pending capture work and start a fresh session for the
-   same user. Legacy gateways also receive `/session/end`; V3 has no equivalent
-   remote endpoint.
-3. Ask related questions in the new session. The recall plugin and native
-   search tools can retrieve memories extracted by the gateway.
+1. Start the walkthrough with `-turn-wait` and send a message that contains
+   stable facts or preferences.
+2. Wait until the configured post-turn delay finishes and the next prompt
+   appears. This gives the gateway time for asynchronous extraction but is not
+   a readiness guarantee.
+3. Use `/new` to finish pending local capture work and start a fresh session for
+   the same user. Legacy gateways also receive `/session/end`; V3 has no remote
+   session-end or extraction-barrier endpoint.
+4. Ask related questions in the new session. V3 cross-session recall succeeds
+   after the gateway has extracted the previous turn into long-term memory.
 
 ## Prerequisites
 
@@ -129,7 +133,7 @@ setups that previously reused that variable should move the offload value to
 | `-team-id`           | Team ID; setting any service/team/agent ID requests the identity-scoped data plane | env `TDAI_TEAM_ID` |
 | `-agent-id`          | Agent ID; setting any service/team/agent ID requests the identity-scoped data plane | env `TDAI_AGENT_ID` |
 | `-offload-service-id` | Service ID for context offload v2; requires `-gateway-api-key` | env `TDAI_OFFLOAD_SERVICE_ID` |
-| `-turn-wait`         | Delay after each turn for gateway capture/extraction | `0s`                   |
+| `-turn-wait`         | Fixed delay after each completed turn to allow asynchronous extraction before cross-session recall; not a readiness guarantee | `0s` |
 | `-end-session`       | End before exit: call Legacy `/session/end`, or wait for pending V3 capture | `false` |
 
 ## Usage
@@ -145,17 +149,24 @@ export TDAI_TEAM_ID="your-team-id"
 export TDAI_AGENT_ID="your-agent-id"
 
 cd examples/memory/tencentdb
-go run .
+go run . -turn-wait 10s
 ```
 
-Then try:
+Then try the following flow. Wait until the delay finishes and the next `You:`
+prompt appears before entering `/new`:
 
 ```text
 You: Remember this profile: my project code name is Apollo Lake, my deployment window is Friday night, and I prefer concise answers.
+Waiting 10s to allow asynchronous gateway extraction...
 You: /new
 You: What is my project code name, deployment window, and answer preference?
 You: /exit
 ```
+
+The delay is an allowance rather than a server readiness check. Increase it or
+verify extraction through gateway observability when the deployment needs more
+time. `/new` itself waits only for local capture; it does not wait for V3 L1
+extraction to finish.
 
 ### Custom Model
 
@@ -195,7 +206,7 @@ User: demo-user
 Session: tencentdb-1713012345
 ============================================================
 Special commands:
-  /new      - end current session and start a new session for the same user
+  /new      - finish pending capture and start a new session for the same user
   /session  - show current session
   /end      - end current session
   /exit     - end the conversation
@@ -203,9 +214,11 @@ Special commands:
 You: My project code name is Apollo Lake. I prefer concise answers.
 Tool calls: tdai_memory_search, tdai_conversation_search
 Assistant: Noted.
+Waiting 10s to allow asynchronous gateway extraction...
 
 You: /new
 Started new session.
+  V3 capture is complete; asynchronous long-term extraction may still be running.
 
 You: What is my project code name?
 Tool calls: tdai_memory_search
@@ -293,6 +306,8 @@ Key points:
   content in the configured service/team/agent scope.
 - `EndSession` waits for queued capture in both modes. It additionally calls
   `/session/end` only for Legacy gateways because V3 has no remote equivalent.
+  It is not a V3 long-term extraction barrier; use an explicit delay or gateway
+  readiness signal before demonstrating cross-session recall.
 
 ## Configuration Options
 
