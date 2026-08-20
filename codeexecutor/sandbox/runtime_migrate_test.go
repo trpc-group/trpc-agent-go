@@ -14,6 +14,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -102,7 +103,7 @@ func TestMigrateLegacyWorkspace_MigratesOldDirectory(t *testing.T) {
 	legacyPath := seedLegacyWorkspace(t, root, legacyKey)
 	rt := NewRuntime(WithWorkspaceRoot(root))
 
-	if err := rt.migrateLegacyWorkspace(newKey, legacyKey); err != nil {
+	if err := rt.migrateLegacyWorkspace(newKey, []string{legacyKey}); err != nil {
 		t.Fatalf("migrateLegacyWorkspace error = %v", err)
 	}
 
@@ -118,7 +119,7 @@ func TestMigrateLegacyWorkspace_NoLegacyIsNoop(t *testing.T) {
 	newKey, legacyKey := migrateKeyPair(t)
 	rt := NewRuntime(WithWorkspaceRoot(root))
 
-	if err := rt.migrateLegacyWorkspace(newKey, legacyKey); err != nil {
+	if err := rt.migrateLegacyWorkspace(newKey, []string{legacyKey}); err != nil {
 		t.Fatalf("migrateLegacyWorkspace without legacy dir error = %v", err)
 	}
 
@@ -146,7 +147,7 @@ func TestMigrateLegacyWorkspace_AlreadyMigrated(t *testing.T) {
 	}
 
 	rt := NewRuntime(WithWorkspaceRoot(root))
-	if err := rt.migrateLegacyWorkspace(newKey, legacyKey); err != nil {
+	if err := rt.migrateLegacyWorkspace(newKey, []string{legacyKey}); err != nil {
 		t.Fatalf("migrateLegacyWorkspace with existing destination error = %v", err)
 	}
 
@@ -178,7 +179,7 @@ func TestMigrateLegacyWorkspace_ConcurrentRace(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			errs[i] = rt.migrateLegacyWorkspace(newKey, legacyKey)
+			errs[i] = rt.migrateLegacyWorkspace(newKey, []string{legacyKey})
 		}(i)
 	}
 	close(start)
@@ -385,6 +386,84 @@ func TestExecuteCode_MigratesLegacySessionWorkspace_ExplicitKey(t *testing.T) {
 		t, filepath.Join(newPath, "out", "result.txt"), "legacy-out")
 }
 
+// TestExecuteCode_MigratesLegacySessionWorkspace_AppOnlyTenant covers the
+// app-only historical form: the pre-change sandbox executor joined each
+// non-empty session field, persisting (app, "", id) under "app/id". Direct
+// ExecuteCode calls with that session must migrate the "app/id" directory,
+// not orphan it behind a fresh sess-<hex> workspace.
+func TestExecuteCode_MigratesLegacySessionWorkspace_AppOnlyTenant(t *testing.T) {
+	root := t.TempDir()
+	newKey := codeexecutor.SessionWorkspaceKey(migrateApp, "", migrateSession)
+	if newKey == "" {
+		t.Fatal("SessionWorkspaceKey returned empty for app-only session")
+	}
+	legacyPath := seedLegacyWorkspace(t, root, migrateApp+"/"+migrateSession)
+	e := New(
+		WithWorkspaceRoot(root),
+		WithPermissionProfile(DangerFullAccessProfile()),
+	)
+
+	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{
+			AppName: migrateApp,
+			ID:      migrateSession,
+		},
+	})
+	if _, err := e.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Language: "bash", Code: "echo upgraded"},
+		},
+	}); err != nil {
+		t.Fatalf("ExecuteCode error = %v", err)
+	}
+
+	newPath, _ := workspacePathForID(root, newKey)
+	assertPathExists(t, newPath)
+	assertPathMissing(t, legacyPath)
+	assertMigratedFileContent(
+		t, filepath.Join(newPath, "work", "source.txt"), "legacy-work")
+	assertMigratedFileContent(
+		t, filepath.Join(newPath, "out", "result.txt"), "legacy-out")
+}
+
+// TestExecuteCode_MigratesLegacySessionWorkspace_UserOnlyTenant is the
+// user-only counterpart: the pre-change sandbox executor persisted
+// ("", user, id) under "user/id", and that directory must be migrated too.
+func TestExecuteCode_MigratesLegacySessionWorkspace_UserOnlyTenant(t *testing.T) {
+	root := t.TempDir()
+	newKey := codeexecutor.SessionWorkspaceKey("", migrateUser, migrateSession)
+	if newKey == "" {
+		t.Fatal("SessionWorkspaceKey returned empty for user-only session")
+	}
+	legacyPath := seedLegacyWorkspace(t, root, migrateUser+"/"+migrateSession)
+	e := New(
+		WithWorkspaceRoot(root),
+		WithPermissionProfile(DangerFullAccessProfile()),
+	)
+
+	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{
+			UserID: migrateUser,
+			ID:     migrateSession,
+		},
+	})
+	if _, err := e.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Language: "bash", Code: "echo upgraded"},
+		},
+	}); err != nil {
+		t.Fatalf("ExecuteCode error = %v", err)
+	}
+
+	newPath, _ := workspacePathForID(root, newKey)
+	assertPathExists(t, newPath)
+	assertPathMissing(t, legacyPath)
+	assertMigratedFileContent(
+		t, filepath.Join(newPath, "work", "source.txt"), "legacy-work")
+	assertMigratedFileContent(
+		t, filepath.Join(newPath, "out", "result.txt"), "legacy-out")
+}
+
 // TestWorkspaceRegistryAcquire_MigratesLegacyWorkspace is the registry-path
 // regression: skill_run (via workspacesession.Resolver) and openclaw acquire
 // PerSession workspaces through WorkspaceRegistry.Acquire with the hashed
@@ -419,7 +498,9 @@ func TestWorkspaceRegistryAcquire_MigratesLegacyWorkspace(t *testing.T) {
 // migration following a legacy root that is itself a symlink. If the legacy
 // path is a symlink pointing outside the configured workspace root,
 // os.Rename would move the link and subsequent layout creation would write
-// through it, escaping the root. Migration must refuse to move it.
+// through it, escaping the root. Migration must refuse to move it AND must
+// surface an error so CreateWorkspace does not silently continue with a
+// fresh workspace while persisted state sits behind the symlink.
 func TestMigrateLegacyWorkspace_SymlinkedLegacyRootRejected(t *testing.T) {
 	root := t.TempDir()
 	newKey, legacyKey := migrateKeyPair(t)
@@ -436,8 +517,12 @@ func TestMigrateLegacyWorkspace_SymlinkedLegacyRootRejected(t *testing.T) {
 	}
 
 	rt := NewRuntime(WithWorkspaceRoot(root))
-	if err := rt.migrateLegacyWorkspace(newKey, legacyKey); err != nil {
-		t.Fatalf("migrateLegacyWorkspace on symlinked legacy root = %v, want no error (refuse)", err)
+	err := rt.migrateLegacyWorkspace(newKey, []string{legacyKey})
+	if err == nil {
+		t.Fatal("migrateLegacyWorkspace on symlinked legacy root = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("error should identify the symlinked root: %v", err)
 	}
 
 	// The symlink must be left in place, the new workspace must not be
@@ -447,5 +532,98 @@ func TestMigrateLegacyWorkspace_SymlinkedLegacyRootRejected(t *testing.T) {
 	assertPathMissing(t, newPath)
 	if data, err := os.ReadFile(filepath.Join(outside, "sensitive.txt")); err != nil || string(data) != "secret" {
 		t.Fatalf("outside file altered: content=%q err=%v", data, err)
+	}
+}
+
+// TestMigrateLegacyWorkspace_NonDirectoryLegacyRootFails verifies that a
+// legacy path which exists but is not a directory (e.g. a regular file) is
+// an unexpected type and fails migration instead of being skipped silently.
+func TestMigrateLegacyWorkspace_NonDirectoryLegacyRootFails(t *testing.T) {
+	root := t.TempDir()
+	newKey, legacyKey := migrateKeyPair(t)
+	legacyPath, _ := workspacePathForID(root, legacyKey)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := NewRuntime(WithWorkspaceRoot(root))
+	err := rt.migrateLegacyWorkspace(newKey, []string{legacyKey})
+	if err == nil {
+		t.Fatal("migrateLegacyWorkspace on non-directory legacy root = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("error should identify the non-directory root: %v", err)
+	}
+
+	newPath, _ := workspacePathForID(root, newKey)
+	assertPathMissing(t, newPath)
+	// The unexpected file must be preserved, not consumed.
+	assertPathExists(t, legacyPath)
+}
+
+// TestMigrateLegacyWorkspace_AmbiguousLegacyFormsFail covers sessions whose
+// identity is partially populated: the pre-change sandbox executor joined
+// each non-empty field ("app/id"), while the processor/resolver path used
+// just "id". When BOTH forms exist on disk, migration cannot decide which
+// one holds the session state and must fail instead of guessing.
+func TestMigrateLegacyWorkspace_AmbiguousLegacyFormsFail(t *testing.T) {
+	root := t.TempDir()
+	newKey := codeexecutor.SessionWorkspaceKey(migrateApp, "", migrateSession)
+	if newKey == "" {
+		t.Fatal("SessionWorkspaceKey returned empty for app-only session")
+	}
+	joinedForm := seedLegacyWorkspace(t, root, migrateApp+"/"+migrateSession)
+	idOnlyForm := seedLegacyWorkspace(t, root, migrateSession)
+	rt := NewRuntime(WithWorkspaceRoot(root))
+
+	err := rt.migrateLegacyWorkspace(
+		newKey, legacyWorkspaceKeyCandidates(migrateApp, "", migrateSession))
+	if err == nil {
+		t.Fatal("migrateLegacyWorkspace with both legacy forms = nil, want ambiguity error")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("error should identify the ambiguity: %v", err)
+	}
+
+	// Nothing migrated or deleted; both legacy directories stay put.
+	newPath, _ := workspacePathForID(root, newKey)
+	assertPathMissing(t, newPath)
+	assertPathExists(t, joinedForm)
+	assertPathExists(t, idOnlyForm)
+}
+
+// TestValidateMigratedWorkspace_RejectsSymlinkAndNonDirectory unit-tests the
+// post-rename revalidation: a freshly migrated path must be a plain
+// directory. This is the guard for the Lstat→Rename swap window: if the
+// source is replaced by a symlink between the probe and the rename, the
+// moved destination is a link and layout creation must not write through it.
+func TestValidateMigratedWorkspace_RejectsSymlinkAndNonDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	realDir := filepath.Join(dir, "real-dir")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateMigratedWorkspace(realDir); err != nil {
+		t.Fatalf("validateMigratedWorkspace on real directory = %v, want nil", err)
+	}
+
+	plainFile := filepath.Join(dir, "plain-file")
+	if err := os.WriteFile(plainFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateMigratedWorkspace(plainFile); err == nil {
+		t.Fatal("validateMigratedWorkspace on regular file = nil, want error")
+	}
+
+	link := filepath.Join(dir, "symlink-to-dir")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("cannot create symlink in this environment: %v", err)
+	}
+	if err := validateMigratedWorkspace(link); err == nil {
+		t.Fatal("validateMigratedWorkspace on symlink = nil, want error")
 	}
 }

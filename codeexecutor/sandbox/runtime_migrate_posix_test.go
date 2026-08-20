@@ -47,7 +47,7 @@ func TestMigrateLegacyWorkspace_NonNotExistStatErrorPropagated(t *testing.T) {
 	}
 
 	rt := NewRuntime(WithWorkspaceRoot(root))
-	if err := rt.migrateLegacyWorkspace(newKey, legacyKey); err == nil {
+	if err := rt.migrateLegacyWorkspace(newKey, []string{legacyKey}); err == nil {
 		t.Fatal("migrateLegacyWorkspace = nil, want propagated stat error")
 	}
 

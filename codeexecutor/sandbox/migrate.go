@@ -12,7 +12,9 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -34,88 +36,156 @@ func legacyWorkspaceKeyFromContext(ctx context.Context) string {
 	return key
 }
 
-// resolveLegacyWorkspaceKey decides which legacy key (if any) a
-// CreateWorkspace call with the given execID should migrate from.
+// legacyWorkspaceKeyCandidates returns every workspace key form that a
+// pre-encoding-change binary could have persisted for the session identity.
+//
+// Two historical derivations existed and both must be probed:
+//   - the sandbox executor's executionIDFromContext joined each non-empty
+//     session field with "/" ("app/user/id", "app/id", "user/id", or "id");
+//   - workspacesession.KeyFromInvocation — used by the flow processor,
+//     skill runs, and openclaw — produced "app/user/id" only when both app
+//     and user were present, otherwise just "id".
+//
+// For sessions with partial identity the two forms differ, and different
+// call paths could have persisted either shape for the same session, so
+// migration probes all of them and refuses to guess when several exist.
+func legacyWorkspaceKeyCandidates(app, user, id string) []string {
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+	var parts []string
+	if app != "" {
+		parts = append(parts, app)
+	}
+	if user != "" {
+		parts = append(parts, user)
+	}
+	parts = append(parts, id)
+	joined := strings.Join(parts, "/")
+	resolverForm := codeexecutor.LegacySessionWorkspaceKey(app, user, id)
+	if joined == resolverForm {
+		return []string{joined}
+	}
+	return []string{joined, resolverForm}
+}
+
+// resolveLegacyWorkspaceKeys decides which legacy keys (if any) a
+// CreateWorkspace call with the given execID should consider migrating from.
 //
 // An explicitly attached context value (withLegacyWorkspaceKey) wins as an
-// override. Otherwise the key is derived by shape: framework callers do not
-// attach the private context value, they simply pass
+// override. Otherwise the keys are derived by shape: framework callers do
+// not attach the private context value, they simply pass
 // workspacesession.KeyFromInvocation(invocation) — which equals
 // codeexecutor.SessionWorkspaceKey(app, user, id) — as the workspace ID.
 // When execID matches that value for the invocation's session, the legacy
-// form of the same session's key is returned so the runtime can migrate the
-// pre-encoding-change directory. Any other execID (explicit caller-chosen
-// IDs, ephemeral keys, "default") returns "" and skips migration: those IDs
-// are identical on old and new binaries, so no legacy directory exists
-// under a different name.
-func resolveLegacyWorkspaceKey(ctx context.Context, execID string) string {
+// forms of the same session's key are returned so the runtime can migrate
+// the pre-encoding-change directory. Any other execID (explicit
+// caller-chosen IDs, ephemeral keys, "default") returns nil and skips
+// migration: those IDs are identical on old and new binaries, so no legacy
+// directory exists under a different name.
+func resolveLegacyWorkspaceKeys(ctx context.Context, execID string) []string {
 	if legacy := legacyWorkspaceKeyFromContext(ctx); legacy != "" {
-		return legacy
+		return []string{legacy}
 	}
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.Session == nil {
-		return ""
+		return nil
 	}
 	sessKey := codeexecutor.SessionWorkspaceKey(
 		inv.Session.AppName, inv.Session.UserID, inv.Session.ID)
 	if sessKey == "" || execID != sessKey {
-		return ""
+		return nil
 	}
-	return codeexecutor.LegacySessionWorkspaceKey(
+	return legacyWorkspaceKeyCandidates(
 		inv.Session.AppName, inv.Session.UserID, inv.Session.ID)
 }
 
 // migrateLegacyWorkspace upgrades a pre-encoding-change PerSession workspace
-// to the current key layout. Legacy binaries derived the workspace path from
-// the legacy key format (app/user/id or id); after the encoding change the
-// same session resolves to a different directory and the old one would be
-// orphaned. Best effort: when no legacy directory exists (fresh install or
-// already migrated) it returns silently. Concurrent-safe: if another
-// goroutine wins the rename, the loser detects the destination exists and
-// continues.
+// to the current key layout. Legacy binaries persisted the workspace under
+// one of several historical key forms (see legacyWorkspaceKeyCandidates);
+// after the encoding change the same session resolves to a different
+// directory and the old one would be orphaned.
+//
+// Semantics:
+//   - No legacy directory on disk (fresh install or already migrated):
+//     returns nil silently.
+//   - A legacy path that exists but is not a plain directory (symlink,
+//     regular file, ...) is an unexpected type and returns an error instead
+//     of silently continuing with a fresh workspace.
+//   - Several legacy forms existing at once for the same session is
+//     ambiguous: which directory holds the state to upgrade cannot be
+//     decided safely, so migration fails rather than guesses. Ambiguity is
+//     only fatal when a migration would actually run; when the destination
+//     already exists (already upgraded or newer data present) the legacy
+//     directories are preserved untouched and no choice is needed.
+//   - Permission/I/O failures while probing are propagated, never treated
+//     as "nothing to migrate".
+//   - The rename step is revalidated: after moving the legacy directory to
+//     the new path, the destination is Lstat'ed again so a source swapped
+//     to a symlink between the initial check and the rename cannot be
+//     written through on layout creation.
 //
 // Migration applies only to session-persistent workspaces; per-turn and
 // temporary workspaces are not reused across runs, so their legacy
 // directories are left untouched. No data is ever deleted: when the
-// destination already exists the legacy directory is preserved as-is.
-func (r *Runtime) migrateLegacyWorkspace(newKey, legacyKey string) error {
+// destination already exists the legacy directories are preserved as-is.
+// Concurrent-safe: if another goroutine wins the rename, the loser detects
+// the destination exists and returns nil.
+func (r *Runtime) migrateLegacyWorkspace(newKey string, legacyKeys []string) error {
 	if r.sessionPolicy.Persistence != SessionPersistencePerSession {
 		return nil
 	}
-	if legacyKey == "" || newKey == "" || legacyKey == newKey {
+	if newKey == "" || len(legacyKeys) == 0 {
 		return nil
 	}
 	// workspacePathForID splits keys on "/" and sanitizes each segment,
-	// so the legacy "app/user/id" key resolves to the same directory a
+	// so a legacy "app/user/id" key resolves to the same directory a
 	// pre-change binary used, while the new "sess-<hex>" key is a single
 	// segment that sanitizeID passes through unchanged.
-	oldPath, _ := workspacePathForID(r.root, legacyKey)
 	newPath, _ := workspacePathForID(r.root, newKey)
-	if oldPath == newPath {
+	if newPath == "" {
 		return nil
 	}
-	// Lstat (not Stat) so the final legacy path component is not
-	// followed: a workspace root that is itself a symlink would otherwise
-	// be moved by os.Rename and then written through on layout creation,
-	// escaping the configured workspace root.
-	info, err := os.Lstat(oldPath)
-	if os.IsNotExist(err) {
-		// No legacy directory on disk (fresh install or already
-		// migrated): nothing to upgrade.
-		return nil
+	// Probe every historically emitted key form.
+	var found string
+	for _, legacyKey := range legacyKeys {
+		if legacyKey == "" || legacyKey == newKey {
+			continue
+		}
+		oldPath, _ := workspacePathForID(r.root, legacyKey)
+		if oldPath == "" || oldPath == newPath {
+			continue
+		}
+		// Lstat (not Stat) so a legacy root that is itself a symlink is
+		// never followed: such a root is an unexpected, untrusted type
+		// and must surface as an error instead of being moved and then
+		// written through on layout creation.
+		info, err := os.Lstat(oldPath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			// Propagate permission/I/O failures instead of silently
+			// treating them as "nothing to migrate" — that would orphan
+			// persisted state behind a fresh empty workspace.
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf(
+				"sandbox: legacy workspace %s is a symlink; refusing migration", oldPath)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf(
+				"sandbox: legacy workspace %s is not a directory; refusing migration", oldPath)
+		}
+		if found != "" {
+			return fmt.Errorf(
+				"sandbox: ambiguous legacy workspaces %s and %s both exist for session; refusing migration",
+				found, oldPath)
+		}
+		found = oldPath
 	}
-	if err != nil {
-		// Propagate permission/I/O failures instead of silently treating
-		// them as "nothing to migrate" — that would orphan persisted
-		// state and leave a fresh empty workspace in its place.
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		// A symlinked legacy root is untrusted (may point outside the
-		// configured root). Never move or follow it; leave it in place.
-		return nil
-	}
-	if !info.IsDir() {
+	if found == "" {
 		return nil
 	}
 	if _, err := os.Stat(newPath); err == nil {
@@ -126,13 +196,38 @@ func (r *Runtime) migrateLegacyWorkspace(newKey, legacyKey string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.Rename(oldPath, newPath); err != nil {
+	if err := os.Rename(found, newPath); err != nil {
 		// A concurrent goroutine may have won the rename; if the
 		// destination now exists the upgrade already happened.
 		if _, statErr := os.Stat(newPath); statErr == nil {
 			return nil
 		}
 		return err
+	}
+	// Revalidate the destination: if the source was swapped for a symlink
+	// between the Lstat probe and the rename, os.Rename moved the link
+	// itself and layout creation below would write through it, outside
+	// the configured root. Undo the move (best effort) and fail.
+	if err := validateMigratedWorkspace(newPath); err != nil {
+		_ = os.Rename(newPath, found)
+		return fmt.Errorf(
+			"sandbox: legacy workspace %s changed during migration: %w", found, err)
+	}
+	return nil
+}
+
+// validateMigratedWorkspace verifies that a freshly migrated workspace path
+// is a plain directory rather than a symlink or other unexpected type.
+func validateMigratedWorkspace(newPath string) error {
+	info, err := os.Lstat(newPath)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("migrated path %s is a symlink", newPath)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("migrated path %s is not a directory", newPath)
 	}
 	return nil
 }
