@@ -124,6 +124,8 @@ func (r *Runtime) runProgram(
 		}
 		return codeexecutor.RunResult{}, backendError(ErrSetupFailed, backendName, err)
 	}
+	// Parent ExtraFiles are no longer needed once the child has inherited them.
+	releaseCmdExtraFiles(cmd)
 	waitErr := cmd.Wait()
 	duration := time.Since(start)
 	timedOut := runCtx.Err() == context.DeadlineExceeded
@@ -226,6 +228,9 @@ func (r *Runtime) prepareRun(
 		normalizeProfile(r.profile),
 		additionalPermissionsFromContext(ctx),
 	)
+	if err := validateProfileNetworkPolicy(profile); err != nil {
+		return runPreparation{}, err
+	}
 	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
 		return runPreparation{}, err
 	}
@@ -295,6 +300,9 @@ func (r *Runtime) commandForProfile(
 	spec codeexecutor.RunProgramSpec,
 	diagnostics sandboxDenialRun,
 ) (*exec.Cmd, string, commandCleanup, error) {
+	if err := validateProfileNetworkPolicy(profile); err != nil {
+		return nil, "", nil, err
+	}
 	switch profile.enforcement() {
 	case enforcementDisabled:
 		// #nosec G204 -- RunProgram intentionally executes caller-provided

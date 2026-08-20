@@ -258,8 +258,9 @@ func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	}
 }
 
-// WithConcurrentMessageStreamsEnabled controls whether multiple text and reasoning
-// message streams with different message IDs may stay open concurrently.
+// WithConcurrentMessageStreamsEnabled controls whether text and reasoning
+// message streams are scoped by message ID. It is enabled by default; pass false
+// to preserve the previous legacy serial message-stream boundaries.
 func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithConcurrentMessageStreamsEnabled(enabled))

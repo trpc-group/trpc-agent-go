@@ -296,20 +296,28 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		log.DebugfContext(ctx, "auto-calculated max input tokens: model=%s, maxInputTokens=%d",
 			m.name, maxInputTokens)
 	}
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "hunyuan.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
 		if len(tailored) > 0 {
 			log.WarnContext(ctx, "token tailoring returned best-effort messages in hunyuan.Model", err)
-			modeltailoring.ApplyResult(ctx, "hunyuan.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "hunyuan.Model", request, tailored,
+			)
 			return
 		}
 		log.WarnContext(ctx, "token tailoring failed in hunyuan.Model", "error", err)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "hunyuan.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "hunyuan.Model", request, tailored,
+	)
 }
 
 // InputTokenBudget returns the same input budget used by token tailoring.

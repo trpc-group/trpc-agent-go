@@ -1710,9 +1710,10 @@ child := agenttool.NewTool(
 Agent、模型、工具、skills、权限等配置好，再把它包装成父 Agent 的一个工具。
 
 当你的应用无法提前穷举所有专家角色，而是希望父 Agent 在每次调用时按任务临时选择
-工具子集或指定本次执行指令，可以使用 `agenttool.NewDynamicTool()`。它会向模型暴露
-一个默认名为 `dynamic_agent` 的工具；模型调用它时，不是在创建任意 Go 对象，也不是
-选择某个已注册 Agent，而是在代码定义的边界内运行一次短生命周期的子 Agent invocation。
+工具子集、指定本次执行指令，或选择一个显式注册的模型 profile，可以使用
+`agenttool.NewDynamicTool()`。它会向模型暴露一个默认名为 `dynamic_agent` 的工具；模型
+调用它时，不是在创建任意 Go 对象，也不是选择某个已注册 Agent，而是在代码定义的边界
+内运行一次短生命周期的子 Agent invocation。
 
 典型接入方式如下：
 
@@ -1750,6 +1751,8 @@ parent := llmagent.New(
 - `instruction`：可选，作为本次子 Agent invocation 的角色、约束或执行指令。
 - `tools`：可选，精确指定本次允许子 Agent 使用哪些工具名。传空数组表示本次不授予
   任何业务工具。
+- `model`：仅在宿主注册了模型 profile 时出现，用于给本次 invocation 选择一个白名单
+  profile；省略时保持原有的 base/template 模型行为。
 
 如果默认从父 Agent 派生能力面不符合业务边界，可以在代码侧显式设置模板 Agent 或最大
 能力面：
@@ -1762,7 +1765,7 @@ workerTemplate := llmagent.New(
 )
 
 dynamicAgent := agenttool.NewDynamicTool(
-    // 可选：定义子 Agent 的模型、executor、callbacks、权限策略等执行边界。
+    // 可选：定义子 Agent 的默认模型、executor、callbacks、权限策略等执行边界。
     agenttool.WithTemplateAgent(workerTemplate),
     // 可选：限制模型最多只能从这些工具里选择。
     agenttool.WithCapabilityTools([]tool.Tool{readFileTool, searchCodeTool}),
@@ -1770,15 +1773,54 @@ dynamicAgent := agenttool.NewDynamicTool(
 ```
 
 `WithTemplateAgent` 是代码侧边界，不是模型参数。模型不能通过 `dynamic_agent` 选择任意
-Agent、模型或 executor；它只能在开发者配置好的边界内，为这一次调用填写 `request`、
-`instruction`，并按需选择 tools/skills 子集。
+Agent、provider 模型名或 executor；它只能在开发者配置好的边界内，为这一次调用填写
+`request`、`instruction`，按需选择 tools/skills 子集，并选择显式注册的模型 profile。
+
+如果希望父 Agent 在宿主批准的模型角色之间选择，可以注册带说明的稳定别名：
+
+```go
+dynamicAgent := agenttool.NewDynamicTool(
+    agenttool.WithTemplateAgent(workerTemplate),
+    agenttool.WithAgentModelProfile(
+        "fast",
+        "适合抽取信息和快速起草的低延迟模型。",
+        fastModel,
+    ),
+    agenttool.WithAgentModelProfile(
+        "deep",
+        "适合综合分析和严格评审的高能力模型。",
+        deepModel,
+    ),
+)
+```
+
+注册后，工具 schema 会增加带 enum 的 `model` 字段。调用可以传
+`"model": "fast"` 或 `"model": "deep"`；未知别名会在子 Agent 运行前失败。
+所选模型通过 invocation-scoped surface patch 挂载，不会修改共享模板，因此并发调用可以
+安全地选择不同 profile。省略 `model` 时：配置了模板就继续使用模板默认模型；未配置模板
+则继续使用父 Agent 当前有效的模型选择。
+profile 名称和说明会暴露给父模型，请勿在其中放入凭据或私有 provider 配置。
+
+显式选择 profile 会形成新的模型请求边界，不会继承父请求的 `ModelContextWindow`、
+`ModelRequestExtraFields` 或 `ModelRequestHeaders`；provider 专属配置应放在注册的模型实例
+上。省略 `model` 的调用继续保持原有继承行为。
+
+`llmagent.WithModels` 仍可用于宿主控制的模型切换，但其中的 registry 不会自动通过
+`dynamic_agent` 暴露。这是有意的：模型可见的别名需要面向任务的说明和显式白名单。
+profile 可以指向 registry 中已经存在的同一个模型实例，但两者的能力边界不同。配置模板
+时，原有模板边界仍会阻止父 RunOptions 的模型覆盖泄漏到子 Agent；应由宿主设置模板默认
+模型，或显式注册 profile。未配置模板时，省略 `model` 会保留继承的 RunOptions 行为。
+profile 选择由 LLMAgent 消费；其他 Agent 实现保留自己的模型语义，因此需要模型路由时应
+使用 LLMAgent 作为 base 或 template。
 
 常用选项：
 
 - `WithName(name)`：修改模型可见工具名。仅对 `NewDynamicTool` 生效；普通
   `NewTool(agent)` 的工具名始终来自被包装 Agent 的 `Info().Name`。
-- `WithTemplateAgent(agent)`：设置动态子 Agent 的模板，常用于固定模型、executor、
+- `WithTemplateAgent(agent)`：设置动态子 Agent 的模板，常用于固定默认模型、executor、
   callbacks、权限策略等执行边界。
+- `WithAgentModelProfile(name, description, model)`：注册一个宿主授权的模型别名，可对
+  单次子 Agent 调用覆盖模型；可重复添加。未注册任何 profile 时不会暴露 `model` 字段。
 - `WithCapabilityTools(tools)`：设置模型可选择的最大工具集合。未设置时默认从父 Agent
   本轮有效业务工具派生。显式设置后，这些工具名会被枚举进 `tools` 字段的 schema，模型从
   已知集合中选择而非猜测字符串（父派生工具面与 `WithCapabilityProvider` 在每次调用时
@@ -1807,7 +1849,7 @@ Dynamic AgentTool 与另外两种多 Agent 机制的边界不同：
 | --- | --- | --- | --- |
 | `agenttool.NewTool(agent)` | 一个固定的工具入口 | 每次工具调用 | 返回工具结果给父 Agent |
 | `transfer_to_agent` | 一个已注册 sub-agent | 当前轮继续由目标 Agent 处理 | 控制权移交 |
-| `agenttool.NewDynamicTool()` | 本次调用的 `request`、`instruction` 和 tools/skills 子集 | 每次工具调用 | 返回工具结果给父 Agent |
+| `agenttool.NewDynamicTool()` | 本次调用的 `request`、`instruction`、tools/skills 子集，以及可选的已注册模型 profile | 每次工具调用 | 返回工具结果给父 Agent |
 
 如果同一个专家 Agent 同时通过 `WithSubAgents` 和 `agenttool.NewTool(agent)` 暴露给父
 Agent，模型会看到两条不同路径：`transfer_to_agent` 和普通 AgentTool。框架可以运行，

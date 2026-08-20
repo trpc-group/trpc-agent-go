@@ -284,5 +284,5 @@ Key points:
 - [Simple Memory Example](../simple/) — Agentic mode with manual tool calling
 - [Auto Memory Example](../auto/) — Automatic background extraction using a
   local LLM extractor
-- [Memory Documentation](../../../docs/mkdocs/en/memory.md)
+- [Memory Documentation](../../../docs/mkdocs/en/memory/index.md)
 - [Ecosystem Integration Guide](../../../docs/mkdocs/en/ecosystem.md)

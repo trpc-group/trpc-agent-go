@@ -33,6 +33,7 @@ func NewFactory(innerFactory runner.TranslatorFactory, baseOpts []translator.Opt
 	}
 	return func(ctx context.Context, input *adapter.RunAgentInput, opts ...translator.Option) (translator.Translator, error) {
 		allOpts := append(slices.Clone(baseOpts), opts...)
+		allOpts = append(allOpts, translator.WithConcurrentMessageStreamsEnabled(false))
 		inner, err := innerFactory(ctx, input, allOpts...)
 		if err != nil {
 			return nil, err
