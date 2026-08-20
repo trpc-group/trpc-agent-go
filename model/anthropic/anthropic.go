@@ -1087,9 +1087,16 @@ func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 	var result []anthropic.ToolUnionParam
 	for _, t := range toolorder.SortedTools(tools) {
 		declaration := t.Declaration()
+		effectiveSchemaType := declaration.InputSchema.Type
+		// The Anthropic SDK marshals an empty type as "object". Use that
+		// effective type when normalizing properties so a typed nil map does
+		// not become JSON null for an implicit object schema.
+		if effectiveSchemaType == "" {
+			effectiveSchemaType = "object"
+		}
 		properties := declaration.InputSchema.Properties
 		// Some Anthropic-compatible endpoints reject null properties for object schemas.
-		if declaration.InputSchema.Type == "object" && properties == nil {
+		if effectiveSchemaType == "object" && properties == nil {
 			properties = map[string]*tool.Schema{}
 		}
 		result = append(result, anthropic.ToolUnionParam{

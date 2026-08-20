@@ -360,17 +360,38 @@ func Test_convertTools(t *testing.T) {
 }
 
 func Test_convertTools_NoArgObjectSchemaUsesEmptyProperties(t *testing.T) {
-	params := convertTools(map[string]tool.Tool{
-		"no_arg_tool": stubTool{decl: &tool.Declaration{
-			Name:        "no_arg_tool",
-			InputSchema: &tool.Schema{Type: "object"},
-		}},
-	})
+	tests := []struct {
+		name        string
+		inputSchema *tool.Schema
+	}{
+		{
+			name:        "explicit object type",
+			inputSchema: &tool.Schema{Type: "object"},
+		},
+		{
+			name:        "implicit SDK object type",
+			inputSchema: &tool.Schema{},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			params := convertTools(map[string]tool.Tool{
+				"no_arg_tool": stubTool{decl: &tool.Declaration{
+					Name:        "no_arg_tool",
+					InputSchema: tt.inputSchema,
+				}},
+			})
 
-	body, err := json.Marshal(params)
-	require.NoError(t, err)
-	require.Contains(t, string(body), `"properties":{}`)
-	require.NotContains(t, string(body), `"properties":null`)
+			body, err := json.Marshal(params)
+			require.NoError(t, err)
+			require.Contains(t, string(body), `"properties":{}`)
+			require.NotContains(t, string(body), `"properties":null`)
+			require.Contains(t, string(body), `"type":"object"`)
+			require.Equal(t, tt.inputSchema.Type, string(params[0].OfTool.InputSchema.Type))
+			require.Nil(t, tt.inputSchema.Properties)
+		})
+	}
 }
 
 func Test_buildToolDescription_AppendsOutputSchema(t *testing.T) {
