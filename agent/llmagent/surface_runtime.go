@@ -10,6 +10,7 @@ package llmagent
 
 import (
 	"context"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
@@ -222,7 +223,7 @@ func (a *LLMAgent) skillToolFlagsForInvocation(
 
 // ExecutionTraceAppliedSurfaceIDs reports the effective surfaces that affected one invocation step.
 func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []string {
-	nodeID := agent.InvocationSurfaceRootNodeID(inv)
+	nodeID := executionTraceSurfaceNodeID(inv)
 	if nodeID == "" {
 		return nil
 	}
@@ -269,6 +270,57 @@ func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []stri
 		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeSkill))
 	}
 	return appliedSurfaceIDs
+}
+
+// executionTraceSurfaceNodeID returns the node id that can safely publish applied surfaces.
+func executionTraceSurfaceNodeID(inv *agent.Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	nodeID := agent.InvocationSurfaceRootNodeID(inv)
+	if nodeID == "" {
+		return ""
+	}
+	if inv.GetParentInvocation() != nil {
+		if !executionTraceNodeIsUnderParent(inv) {
+			return ""
+		}
+	}
+	return nodeID
+}
+
+// executionTraceStepNodeID returns the static trace node id for an LLM step.
+func executionTraceStepNodeID(inv *agent.Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	nodeID := agent.InvocationTraceNodeID(inv)
+	if nodeID == "" {
+		return ""
+	}
+	if inv.GetParentInvocation() != nil {
+		if !executionTraceNodeIsUnderParent(inv) {
+			return ""
+		}
+	}
+	return nodeID
+}
+
+// executionTraceNodeIsUnderParent reports whether the invocation maps to a static child node.
+func executionTraceNodeIsUnderParent(inv *agent.Invocation) bool {
+	parent := inv.GetParentInvocation()
+	if parent == nil {
+		return false
+	}
+	parentNodeID := agent.InvocationTraceNodeID(parent)
+	nodeID := agent.InvocationTraceNodeID(inv)
+	if parentNodeID == "" || nodeID == "" || nodeID == parentNodeID {
+		return false
+	}
+	if rootNodeID := agent.InvocationTeamMemberTraceRoot(inv); rootNodeID != "" {
+		return nodeID == rootNodeID || strings.HasPrefix(nodeID, rootNodeID+"/")
+	}
+	return strings.HasPrefix(nodeID, parentNodeID+"/")
 }
 
 // InvocationToolSurface returns the invocation-scoped tool surface and user tool names.
