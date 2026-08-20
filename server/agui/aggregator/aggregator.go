@@ -20,7 +20,8 @@ import (
 
 // Aggregator buffers and merges AG-UI events before they are persisted.
 type Aggregator interface {
-	// Append ingests one event and returns zero or more events to enqueue for the next flush.
+	// Append ingests one borrowed event and returns zero or more aggregated events ready to persist.
+	// Implementations that retain event data after Append returns must copy the data they need.
 	Append(ctx context.Context, event aguievents.Event) ([]aguievents.Event, error)
 	// Flush emits any buffered events and clears internal state.
 	Flush(ctx context.Context) ([]aguievents.Event, error)
@@ -37,93 +38,115 @@ func New(ctx context.Context, opt ...Option) Aggregator {
 	}
 }
 
-// aggregator keeps a pending event queue and merges content by stable stream keys before persistence.
+// aggregator merges adjacent text, reasoning, and tool-call argument events before persistence.
 type aggregator struct {
-	mu      sync.Mutex
-	enabled bool                 // enabled indicates whether aggregation is active.
-	pending []aguievents.Event   // pending stores events in their first-observed order.
-	slots   map[aggregateKey]int // slots maps active aggregate streams to pending positions.
-	buffers map[aggregateKey]*strings.Builder
+	mu       sync.Mutex
+	enabled  bool            // enabled indicates whether aggregation is active.
+	lastID   string          // lastID tracks the buffered message or tool call.
+	lastType bufferType      // lastType tracks the event type being buffered.
+	buffer   strings.Builder // buffer stores concatenated deltas for the buffered entity.
 }
 
-type aggregateKind int
+type bufferType int
 
 const (
-	aggregateKindText aggregateKind = iota
-	aggregateKindReasoning
-	aggregateKindToolArgs
+	bufferTypeUnknown bufferType = iota
+	bufferTypeText
+	bufferTypeReasoning
+	bufferTypeToolArgs
 )
 
-type aggregateKey struct {
-	kind aggregateKind
-	id   string
-}
-
-// Append aggregates content events with the same active stream key.
+// Append aggregates adjacent content events with the same message or tool call ID.
 func (a *aggregator) Append(_ context.Context, event aguievents.Event) ([]aguievents.Event, error) {
 	if !a.enabled {
 		return []aguievents.Event{event}, nil
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.slots == nil {
-		a.slots = make(map[aggregateKey]int)
-	}
-	if a.buffers == nil {
-		a.buffers = make(map[aggregateKey]*strings.Builder)
-	}
 	switch e := event.(type) {
 	case *aguievents.TextMessageContentEvent:
-		a.appendContent(aggregateKey{kind: aggregateKindText, id: e.MessageID}, e.Delta, func(delta string) aguievents.Event {
-			return aguievents.NewTextMessageContentEvent(e.MessageID, delta)
-		})
+		return a.handleTextContent(e), nil
 	case *aguievents.ReasoningMessageContentEvent:
-		a.appendContent(aggregateKey{kind: aggregateKindReasoning, id: e.MessageID}, e.Delta, func(delta string) aguievents.Event {
-			return aguievents.NewReasoningMessageContentEvent(e.MessageID, delta)
-		})
+		return a.handleReasoningContent(e), nil
 	case *aguievents.ToolCallArgsEvent:
-		a.appendContent(aggregateKey{kind: aggregateKindToolArgs, id: e.ToolCallID}, e.Delta, func(delta string) aguievents.Event {
-			return aguievents.NewToolCallArgsEvent(e.ToolCallID, delta)
-		})
+		return a.handleToolArgs(e), nil
 	default:
-		a.closeSlotsForBarrier()
-		a.pending = append(a.pending, event)
+		events := a.flush()
+		events = append(events, event)
+		return events, nil
 	}
-	return nil, nil
 }
 
-// Flush emits pending events and clears buffered content.
+// Flush flushes any buffered text and reasoning content.
 func (a *aggregator) Flush(context.Context) ([]aguievents.Event, error) {
 	if !a.enabled {
 		return nil, nil
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if len(a.pending) == 0 {
-		return nil, nil
-	}
-	events := append([]aguievents.Event(nil), a.pending...)
-	a.pending = nil
-	a.slots = nil
-	a.buffers = nil
-	return events, nil
+	return a.flush(), nil
 }
 
-func (a *aggregator) appendContent(key aggregateKey, delta string, build func(string) aguievents.Event) {
-	if idx, ok := a.slots[key]; ok {
-		buffer := a.buffers[key]
-		buffer.WriteString(delta)
-		a.pending[idx] = build(buffer.String())
-		return
+// handleTextContent merges content when message ID matches the buffer; otherwise flushes first.
+func (a *aggregator) handleTextContent(event *aguievents.TextMessageContentEvent) []aguievents.Event {
+	if a.lastID == event.MessageID && a.lastType == bufferTypeText {
+		a.buffer.WriteString(event.Delta)
+		return nil
 	}
-	buffer := &strings.Builder{}
-	buffer.WriteString(delta)
-	a.slots[key] = len(a.pending)
-	a.buffers[key] = buffer
-	a.pending = append(a.pending, build(delta))
+	events := a.flush()
+	a.lastID = event.MessageID
+	a.lastType = bufferTypeText
+	a.buffer.Reset()
+	a.buffer.WriteString(event.Delta)
+	return events
 }
 
-func (a *aggregator) closeSlotsForBarrier() {
-	a.slots = nil
-	a.buffers = nil
+func (a *aggregator) handleReasoningContent(event *aguievents.ReasoningMessageContentEvent) []aguievents.Event {
+	if a.lastID == event.MessageID && a.lastType == bufferTypeReasoning {
+		a.buffer.WriteString(event.Delta)
+		return nil
+	}
+	events := a.flush()
+	a.lastID = event.MessageID
+	a.lastType = bufferTypeReasoning
+	a.buffer.Reset()
+	a.buffer.WriteString(event.Delta)
+	return events
+}
+
+func (a *aggregator) handleToolArgs(event *aguievents.ToolCallArgsEvent) []aguievents.Event {
+	if a.lastID == event.ToolCallID && a.lastType == bufferTypeToolArgs {
+		a.buffer.WriteString(event.Delta)
+		return nil
+	}
+	events := a.flush()
+	a.lastID = event.ToolCallID
+	a.lastType = bufferTypeToolArgs
+	a.buffer.Reset()
+	a.buffer.WriteString(event.Delta)
+	return events
+}
+
+// flush emits the buffered content as one event and clears internal state.
+func (a *aggregator) flush() []aguievents.Event {
+	if a.buffer.Len() == 0 {
+		return nil
+	}
+	content := a.buffer.String()
+	var event aguievents.Event
+	switch a.lastType {
+	case bufferTypeText:
+		event = aguievents.NewTextMessageContentEvent(a.lastID, content)
+	case bufferTypeReasoning:
+		event = aguievents.NewReasoningMessageContentEvent(a.lastID, content)
+	case bufferTypeToolArgs:
+		event = aguievents.NewToolCallArgsEvent(a.lastID, content)
+	default:
+		a.buffer.Reset()
+		return nil
+	}
+	a.buffer.Reset()
+	a.lastID = ""
+	a.lastType = bufferTypeUnknown
+	return []aguievents.Event{event}
 }

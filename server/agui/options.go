@@ -165,7 +165,8 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
-// WithFlushInterval sets how often buffered AG-UI events are flushed for a session.
+// WithFlushInterval configures startup and periodic history flushes. A positive duration enables both;
+// zero disables both and leaves buffered history for finalization.
 func WithFlushInterval(d time.Duration) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithFlushInterval(d))

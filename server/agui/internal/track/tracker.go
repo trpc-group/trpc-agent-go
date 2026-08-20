@@ -57,7 +57,7 @@ type sessionState struct {
 	mu         sync.Mutex            // mu guards the aggregator and pending events.
 	persistMu  sync.Mutex            // persistMu serializes storage writes for the session.
 	aggregator aggregator.Aggregator // aggregator aggregates events.
-	pending    []aguievents.Event    // pending stores events waiting for the next persistence flush.
+	pending    []json.RawMessage     // pending stores immutable payloads waiting for persistence.
 	session    *session.Session      // session caches the ensured session to avoid repeated lookups.
 	closing    bool                  // closing rejects appends while Close is draining the final batch.
 }
@@ -96,7 +96,11 @@ func (t *tracker) AppendEvent(ctx context.Context, key session.Key, event aguiev
 	if err != nil {
 		return fmt.Errorf("aggregate event: %w", err)
 	}
-	state.pending = append(state.pending, aggregated...)
+	payloads, err := snapshotEvents(aggregated)
+	state.pending = append(state.pending, payloads...)
+	if err != nil {
+		return fmt.Errorf("snapshot aggregated events: %w", err)
+	}
 	return nil
 }
 
@@ -163,9 +167,9 @@ func (t *tracker) persistEvents(
 	ctx context.Context,
 	key session.Key,
 	state *sessionState,
-	events []aguievents.Event,
+	payloads []json.RawMessage,
 ) error {
-	if len(events) == 0 {
+	if len(payloads) == 0 {
 		return nil
 	}
 	sess, err := t.ensureSessionExists(ctx, key, state)
@@ -173,12 +177,7 @@ func (t *tracker) persistEvents(
 		return fmt.Errorf("ensure session exists: %w", err)
 	}
 	var overallErr error
-	for _, e := range events {
-		payload, err := e.ToJSON()
-		if err != nil {
-			multierr.AppendInto(&overallErr, fmt.Errorf("marshal event %v: %w", e, err))
-			continue
-		}
+	for _, payload := range payloads {
 		trackEvent := &session.TrackEvent{
 			Track:     TrackAGUI,
 			Payload:   json.RawMessage(append([]byte(nil), payload...)),
@@ -198,6 +197,21 @@ func (t *tracker) persistEvents(
 		return fmt.Errorf("persist events: %w", overallErr)
 	}
 	return nil
+}
+
+// snapshotEvents serializes aggregator outputs before their ownership is returned to the caller.
+func snapshotEvents(events []aguievents.Event) ([]json.RawMessage, error) {
+	payloads := make([]json.RawMessage, 0, len(events))
+	var overallErr error
+	for _, event := range events {
+		payload, err := event.ToJSON()
+		if err != nil {
+			multierr.AppendInto(&overallErr, fmt.Errorf("marshal event %v: %w", event, err))
+			continue
+		}
+		payloads = append(payloads, json.RawMessage(append([]byte(nil), payload...)))
+	}
+	return payloads, overallErr
 }
 
 // ensureSessionExists fetches the session or creates one when absent.
@@ -255,44 +269,44 @@ func (t *tracker) deleteSessionState(key session.Key, state *sessionState) {
 func (t *tracker) flush(ctx context.Context, key session.Key, state *sessionState) error {
 	state.persistMu.Lock()
 	defer state.persistMu.Unlock()
-	batch, err := t.drainPending(ctx, state)
-	if err != nil {
-		return err
-	}
-	return t.persistEvents(ctx, key, state, batch)
+	batch, drainErr := t.drainPending(ctx, state)
+	persistErr := t.persistEvents(ctx, key, state, batch)
+	return multierr.Combine(drainErr, persistErr)
 }
 
 func (t *tracker) closeState(ctx context.Context, key session.Key, state *sessionState) error {
 	state.persistMu.Lock()
 	defer state.persistMu.Unlock()
-	batch, err := t.drainPendingForClose(ctx, state)
-	if err != nil {
-		return err
-	}
-	return t.persistEvents(ctx, key, state, batch)
+	batch, drainErr := t.drainPendingForClose(ctx, state)
+	persistErr := t.persistEvents(ctx, key, state, batch)
+	return multierr.Combine(drainErr, persistErr)
 }
 
-func (t *tracker) drainPending(ctx context.Context, state *sessionState) ([]aguievents.Event, error) {
+func (t *tracker) drainPending(ctx context.Context, state *sessionState) ([]json.RawMessage, error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return t.drainPendingLocked(ctx, state)
 }
 
-func (t *tracker) drainPendingForClose(ctx context.Context, state *sessionState) ([]aguievents.Event, error) {
+func (t *tracker) drainPendingForClose(ctx context.Context, state *sessionState) ([]json.RawMessage, error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.closing = true
 	return t.drainPendingLocked(ctx, state)
 }
 
-func (t *tracker) drainPendingLocked(ctx context.Context, state *sessionState) ([]aguievents.Event, error) {
+func (t *tracker) drainPendingLocked(ctx context.Context, state *sessionState) ([]json.RawMessage, error) {
 	events, err := state.aggregator.Flush(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("aggregator flush: %w", err)
 	}
-	batch := make([]aguievents.Event, 0, len(state.pending)+len(events))
+	payloads, snapshotErr := snapshotEvents(events)
+	batch := make([]json.RawMessage, 0, len(state.pending)+len(payloads))
 	batch = append(batch, state.pending...)
-	batch = append(batch, events...)
+	batch = append(batch, payloads...)
 	state.pending = nil
+	if snapshotErr != nil {
+		return batch, fmt.Errorf("snapshot aggregated events: %w", snapshotErr)
+	}
 	return batch, nil
 }

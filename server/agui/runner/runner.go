@@ -56,6 +56,7 @@ const (
 // Runner executes AG-UI runs and emits AG-UI events.
 type Runner interface {
 	// Run starts processing one AG-UI run request and returns a channel of AG-UI events.
+	// The receiver owns each event after receiving it from the channel and may mutate it.
 	Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan aguievents.Event, error)
 }
 
@@ -157,22 +158,21 @@ type sessionContext struct {
 }
 
 type runInput struct {
-	key                       session.Key
-	threadID                  string
-	runID                     string
-	userID                    string
-	messages                  *runAgentMessages
-	runOption                 []agent.RunOption
-	translator                translator.Translator
-	enableTrack               bool
-	startTrackFlush           func()
-	span                      trace.Span
-	resume                    *resumeInfo
-	terminalEmitted           bool
-	flushTrackBeforeNextWrite bool
-	runAgentInput             *adapter.RunAgentInput
-	done                      chan struct{}
-	consumerDone              <-chan struct{}
+	key             session.Key
+	threadID        string
+	runID           string
+	userID          string
+	messages        *runAgentMessages
+	runOption       []agent.RunOption
+	translator      translator.Translator
+	enableTrack     bool
+	startTrackFlush func()
+	span            trace.Span
+	resume          *resumeInfo
+	terminalEmitted bool
+	runAgentInput   *adapter.RunAgentInput
+	done            chan struct{}
+	consumerDone    <-chan struct{}
 }
 
 type runAgentResult struct {
@@ -512,8 +512,7 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 			}
 		}
 	}
-	input.flushTrackBeforeNextWrite = input.enableTrack && r.shouldFlushInitialTrack()
-	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
+	if !r.emitStartupEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
 		return
 	}
 	if input.messages.inputMessage.Role == model.RoleTool {
@@ -543,10 +542,6 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 	cancel(nil)
 	waitForRunHooks(hookDone, hookRemaining)
 	<-agentRunDone
-}
-
-func (r *runner) shouldFlushInitialTrack() bool {
-	return r.messagesSnapshotFollowEnabled && r.flushInterval > 0
 }
 
 func (r *runner) runEventLoop(
@@ -1137,11 +1132,22 @@ func (r *runner) handleAfterTranslate(ctx context.Context, event aguievents.Even
 
 func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
 	input *runInput) bool {
+	return r.emitEventWithStartupFlush(ctx, events, event, input, false)
+}
+
+func (r *runner) emitStartupEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
+	input *runInput) bool {
+	flushStartup := input.enableTrack && r.flushInterval > 0
+	return r.emitEventWithStartupFlush(ctx, events, event, input, flushStartup)
+}
+
+func (r *runner) emitEventWithStartupFlush(ctx context.Context, events chan<- aguievents.Event,
+	event aguievents.Event, input *runInput, flushStartup bool) bool {
 	if input != nil && input.terminalEmitted {
 		return false
 	}
 	event, ok := r.afterTranslateEvent(ctx, event, input)
-	written := r.writeEvent(ctx, events, event, input)
+	written := r.writeEventWithStartupFlush(ctx, events, event, input, flushStartup)
 	return ok && written
 }
 
@@ -1165,6 +1171,11 @@ func (r *runner) afterTranslateEvent(ctx context.Context, event aguievents.Event
 
 func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
 	input *runInput) bool {
+	return r.writeEventWithStartupFlush(ctx, events, event, input, false)
+}
+
+func (r *runner) writeEventWithStartupFlush(ctx context.Context, events chan<- aguievents.Event,
+	event aguievents.Event, input *runInput, flushStartup bool) bool {
 	if input != nil && input.terminalEmitted {
 		return false
 	}
@@ -1188,17 +1199,17 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 			)
 		}
 	}
-	flushInitial := input.flushTrackBeforeNextWrite
-	input.flushTrackBeforeNextWrite = false
-	if flushInitial {
+	if flushStartup {
 		if err := r.flushTrack(ctx, input.key); err != nil {
 			log.WarnfContext(
 				ctx,
-				"agui run: threadID: %s, runID: %s, flush initial track events: %v",
+				"agui run: threadID: %s, runID: %s, flush startup track events: %v",
 				input.threadID,
 				input.runID,
 				err,
 			)
+		} else if input.startTrackFlush != nil {
+			input.startTrackFlush()
 		}
 	}
 	select {

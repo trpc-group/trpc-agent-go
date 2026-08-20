@@ -12,6 +12,7 @@ package track
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -73,8 +74,6 @@ func TestTrackerAppendEventErrors(t *testing.T) {
 		tracker, err := New(inmemory.NewSessionService())
 		require.NoError(t, err)
 		err = tracker.AppendEvent(ctx, validKey, &failingEvent{})
-		require.NoError(t, err)
-		err = tracker.Flush(ctx, validKey)
 		require.ErrorContains(t, err, "marshal event")
 	})
 	t.Run("get session error", func(t *testing.T) {
@@ -387,6 +386,97 @@ func TestTrackerGetEventsSuccess(t *testing.T) {
 	start, ok := parsed.(*aguievents.TextMessageStartEvent)
 	require.True(t, ok)
 	require.Equal(t, first.MessageID, start.MessageID)
+}
+
+func TestTrackerSnapshotsAppendOutputBeforeCallerMutation(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("aggregation_enabled_%t", enabled), func(t *testing.T) {
+			ctx := context.Background()
+			svc := inmemory.NewSessionService()
+			tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(enabled)))
+			require.NoError(t, err)
+			key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+
+			values := []any{"first", map[string]any{"nested": "original"}}
+			event := aguievents.NewCustomEvent("original", aguievents.WithValue(values))
+			require.NoError(t, tracker.AppendEvent(ctx, key, event))
+			event.Name = "mutated"
+			values[0] = "changed"
+			values[1].(map[string]any)["nested"] = "changed"
+
+			require.NoError(t, tracker.Flush(ctx, key))
+			trackEvents, err := tracker.GetEvents(ctx, key)
+			require.NoError(t, err)
+			require.Len(t, trackEvents.Events, 1)
+			parsed, err := aguievents.EventFromJSON(trackEvents.Events[0].Payload)
+			require.NoError(t, err)
+			custom, ok := parsed.(*aguievents.CustomEvent)
+			require.True(t, ok)
+			require.Equal(t, "original", custom.Name)
+			require.Equal(t, []any{"first", map[string]any{"nested": "original"}}, custom.Value)
+		})
+	}
+}
+
+func TestTrackerSupportsCustomAggregatorMergingMultipleCustomEvents(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc, WithAggregatorFactory(
+		func(context.Context, ...aggregator.Option) aggregator.Aggregator {
+			return &customEventMergingAggregator{}
+		},
+	))
+	require.NoError(t, err)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("first")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewCustomEvent("second")))
+	require.NoError(t, tracker.Flush(ctx, key))
+
+	trackEvents, err := tracker.GetEvents(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 1)
+	parsed, err := aguievents.EventFromJSON(trackEvents.Events[0].Payload)
+	require.NoError(t, err)
+	custom, ok := parsed.(*aguievents.CustomEvent)
+	require.True(t, ok)
+	require.Equal(t, "merged", custom.Name)
+	require.Equal(t, []any{"first", "second"}, custom.Value)
+}
+
+func TestTrackerSnapshotsCustomAggregatorOutputs(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	extraValue := map[string]any{"state": "original"}
+	extra := aguievents.NewCustomEvent("extra", aguievents.WithValue(extraValue))
+	tracker, err := New(svc, WithAggregatorFactory(
+		func(context.Context, ...aggregator.Option) aggregator.Aggregator {
+			return &multiOutputAggregator{extra: extra}
+		},
+	))
+	require.NoError(t, err)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	inputValue := map[string]any{"state": "original"}
+	input := aguievents.NewCustomEvent("input", aguievents.WithValue(inputValue))
+
+	require.NoError(t, tracker.AppendEvent(ctx, key, input))
+	input.Name = "mutated-input"
+	inputValue["state"] = "changed"
+	extra.Name = "mutated-extra"
+	extraValue["state"] = "changed"
+	require.NoError(t, tracker.Flush(ctx, key))
+
+	trackEvents, err := tracker.GetEvents(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 2)
+	for i, wantName := range []string{"input", "extra"} {
+		parsed, parseErr := aguievents.EventFromJSON(trackEvents.Events[i].Payload)
+		require.NoError(t, parseErr)
+		custom, ok := parsed.(*aguievents.CustomEvent)
+		require.True(t, ok)
+		require.Equal(t, wantName, custom.Name)
+		require.Equal(t, map[string]any{"state": "original"}, custom.Value)
+	}
 }
 
 func TestTrackerAggregatesTextContent(t *testing.T) {
@@ -844,6 +934,40 @@ type stubAggregator struct {
 	mu       sync.Mutex
 	flushErr error
 	flushCh  chan struct{}
+}
+
+type customEventMergingAggregator struct {
+	names []string
+}
+
+type multiOutputAggregator struct {
+	extra aguievents.Event
+}
+
+func (a *multiOutputAggregator) Append(_ context.Context, event aguievents.Event) ([]aguievents.Event, error) {
+	return []aguievents.Event{event, a.extra}, nil
+}
+
+func (*multiOutputAggregator) Flush(context.Context) ([]aguievents.Event, error) {
+	return nil, nil
+}
+
+func (a *customEventMergingAggregator) Append(_ context.Context, event aguievents.Event) ([]aguievents.Event, error) {
+	custom, ok := event.(*aguievents.CustomEvent)
+	if !ok {
+		return []aguievents.Event{event}, nil
+	}
+	a.names = append(a.names, custom.Name)
+	return nil, nil
+}
+
+func (a *customEventMergingAggregator) Flush(context.Context) ([]aguievents.Event, error) {
+	if len(a.names) == 0 {
+		return nil, nil
+	}
+	names := append([]string(nil), a.names...)
+	a.names = nil
+	return []aguievents.Event{aguievents.NewCustomEvent("merged", aguievents.WithValue(names))}, nil
 }
 
 func (s *stubAggregator) Append(ctx context.Context, event aguievents.Event) ([]aguievents.Event, error) {
