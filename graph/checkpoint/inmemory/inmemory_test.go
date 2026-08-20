@@ -453,7 +453,8 @@ func TestInMemoryCheckpointSaverGetLatest(t *testing.T) {
 			Metadata:    metadata,
 			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
-		checkpoint.Timestamp = time.Now().UTC().Add(time.Duration(i) * time.Millisecond)
+		baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		checkpoint.Timestamp = baseTime.Add(time.Duration(i) * time.Millisecond)
 		lastConfig, err = saver.Put(ctx, req)
 		require.NoError(t, err)
 	}
@@ -485,6 +486,7 @@ func TestInMemoryCheckpointSaverFilters(t *testing.T) {
 
 	// Create checkpoints with different metadata.
 	var checkpointConfigs []map[string]any
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 5; i++ {
 		checkpoint := graph.NewCheckpoint(
 			map[string]any{"step": i},
@@ -515,7 +517,7 @@ func TestInMemoryCheckpointSaverFilters(t *testing.T) {
 			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
 		// Set distinct timestamps to avoid identical clock ticks in rapid loop
-		checkpoint.Timestamp = time.Now().UTC().Add(time.Duration(i) * time.Millisecond)
+		checkpoint.Timestamp = baseTime.Add(time.Duration(i) * time.Millisecond)
 		cfg, err := saver.Put(ctx, req)
 		require.NoError(t, err)
 		checkpointConfigs = append(checkpointConfigs, cfg)
