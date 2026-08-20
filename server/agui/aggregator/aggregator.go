@@ -77,7 +77,7 @@ func (a *aggregator) Append(_ context.Context, event aguievents.Event) ([]aguiev
 	}
 }
 
-// Flush flushes any buffered text and reasoning content.
+// Flush flushes any buffered content.
 func (a *aggregator) Flush(context.Context) ([]aguievents.Event, error) {
 	if !a.enabled {
 		return nil, nil
