@@ -39,6 +39,7 @@ const (
 	clickHouseBackend             = "clickhouse"
 	toolResponseExtraExtensionKey = "replaytest.tool_response_extra"
 	fixtureCleanupTimeout         = 5 * time.Second
+	memoryWriteTimestampStep      = 2 * time.Millisecond
 	serviceCloseOperationCount    = 2
 )
 
@@ -328,6 +329,8 @@ func (fixture *replayFixture) applyWriteMemory(
 	fixture.nextMemoryWrite++
 	fixture.memoryWriteOrders[writeKey] = fixture.nextMemoryWrite
 	fixture.mu.Unlock()
+	// Keep serialized fixture writes in separate backend timestamp buckets.
+	time.Sleep(memoryWriteTimestampStep)
 	return nil
 }
 
