@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -452,6 +453,7 @@ func TestInMemoryCheckpointSaverGetLatest(t *testing.T) {
 			Metadata:    metadata,
 			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
+		checkpoint.Timestamp = time.Now().UTC().Add(time.Duration(i) * time.Millisecond)
 		lastConfig, err = saver.Put(ctx, req)
 		require.NoError(t, err)
 	}
@@ -512,6 +514,8 @@ func TestInMemoryCheckpointSaverFilters(t *testing.T) {
 			Metadata:    metadata,
 			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
+		// Set distinct timestamps to avoid identical clock ticks in rapid loop
+		checkpoint.Timestamp = time.Now().UTC().Add(time.Duration(i) * time.Millisecond)
 		cfg, err := saver.Put(ctx, req)
 		require.NoError(t, err)
 		checkpointConfigs = append(checkpointConfigs, cfg)

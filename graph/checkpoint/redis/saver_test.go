@@ -898,18 +898,21 @@ func TestRedis_List_WithBeforeAndCrossNamespace(t *testing.T) {
 		assert.True(t, tu.Checkpoint.ID == ck1.ID || tu.Checkpoint.ID == ck2.ID)
 	}
 
-	// Namespace-specific list with Before(ck3) in nsA should return only ck1
+	// Namespace-specific list with Before(ck3) in nsA should return [ck2, ck1] in newest-first descending order
 	cfgNsA := graph.CreateCheckpointConfig(lineageID, "", "nsA")
 	filter2 := graph.NewCheckpointFilter().WithBefore(graph.CreateCheckpointConfig(lineageID, ck3.ID, "nsA"))
 	tuples2, err := saver.List(ctx, cfgNsA, filter2)
 	require.NoError(t, err)
-	// Should not include ck3
-	for _, tu := range tuples2 {
-		assert.NotEqual(t, tu.Checkpoint.ID, ck3.ID)
-	}
-	if len(tuples2) > 0 {
-		assert.Equal(t, ck1.ID, tuples2[0].Checkpoint.ID)
-	}
+	require.Len(t, tuples2, 2)
+	assert.Equal(t, ck2.ID, tuples2[0].Checkpoint.ID, "expected newest checkpoint before ck3 to be first (ck2)")
+	assert.Equal(t, ck1.ID, tuples2[1].Checkpoint.ID, "expected older checkpoint before ck3 to be second (ck1)")
+
+	// With Limit 1, should get ck2 (the newest one before ck3), NOT ck1 (the oldest one)
+	filterLimit := graph.NewCheckpointFilter().WithBefore(graph.CreateCheckpointConfig(lineageID, ck3.ID, "nsA")).WithLimit(1)
+	tuplesLimit, err := saver.List(ctx, cfgNsA, filterLimit)
+	require.NoError(t, err)
+	require.Len(t, tuplesLimit, 1)
+	assert.Equal(t, ck2.ID, tuplesLimit[0].Checkpoint.ID, "expected limit=1 to return newest checkpoint before ck3 (ck2)")
 }
 
 func TestRedis_List_CrossNamespace_Limit1(t *testing.T) {
