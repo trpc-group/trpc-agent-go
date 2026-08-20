@@ -13,6 +13,7 @@ import (
 	"context"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -47,6 +48,7 @@ type eventEmitter struct {
 	eventChan    chan<- *event.Event
 	nodeID       string
 	invocationID string
+	invocation   *agent.Invocation
 	stepNumber   int
 	branch       string
 	timeout      time.Duration
@@ -73,6 +75,12 @@ func WithEmitterNodeID(nodeID string) EventEmitterOption {
 func WithEmitterInvocationID(invocationID string) EventEmitterOption {
 	return func(e *eventEmitter) {
 		e.invocationID = invocationID
+	}
+}
+
+func withEmitterInvocation(invocation *agent.Invocation) EventEmitterOption {
+	return func(e *eventEmitter) {
+		e.invocation = invocation
 	}
 }
 
@@ -125,13 +133,13 @@ func (e *eventEmitter) Emit(evt *event.Event) error {
 
 	// Inject context information if not already set
 	if evt.InvocationID == "" {
-		evt.InvocationID = e.invocationID
+		evt.InvocationID = e.eventInvocationID()
 	}
 	if evt.Author == "" {
 		evt.Author = e.nodeID
 	}
-	if evt.Branch == "" && e.branch != "" {
-		evt.Branch = e.branch
+	if evt.Branch == "" && e.shouldFillInvocationFields(evt) && e.eventBranch() != "" {
+		evt.Branch = e.eventBranch()
 	}
 
 	return e.emitWithRecover(evt)
@@ -139,24 +147,25 @@ func (e *eventEmitter) Emit(evt *event.Event) error {
 
 // EmitCustom sends a custom event with the specified event type and payload.
 func (e *eventEmitter) EmitCustom(eventType string, payload any) error {
+	invocationID := e.eventInvocationID()
 	metadata := NodeCustomEventMetadata{
 		EventType:    eventType,
 		Category:     NodeCustomEventCategoryCustom,
 		NodeID:       e.nodeID,
-		InvocationID: e.invocationID,
+		InvocationID: invocationID,
 		StepNumber:   e.stepNumber,
 		Timestamp:    time.Now(),
 		Payload:      payload,
 	}
 
 	evt := NewGraphEvent(
-		e.invocationID,
+		invocationID,
 		e.nodeID,
 		ObjectTypeGraphNodeCustom,
 		WithNodeCustomMetadata(metadata),
 	)
-	if e.branch != "" {
-		evt.Branch = e.branch
+	if e.eventBranch() != "" {
+		evt.Branch = e.eventBranch()
 	}
 
 	return e.emitWithRecover(evt)
@@ -172,11 +181,12 @@ func (e *eventEmitter) EmitProgress(progress float64, message string) error {
 		progress = 100
 	}
 
+	invocationID := e.eventInvocationID()
 	metadata := NodeCustomEventMetadata{
 		EventType:    "progress",
 		Category:     NodeCustomEventCategoryProgress,
 		NodeID:       e.nodeID,
-		InvocationID: e.invocationID,
+		InvocationID: invocationID,
 		StepNumber:   e.stepNumber,
 		Timestamp:    time.Now(),
 		Progress:     progress,
@@ -184,13 +194,13 @@ func (e *eventEmitter) EmitProgress(progress float64, message string) error {
 	}
 
 	evt := NewGraphEvent(
-		e.invocationID,
+		invocationID,
 		e.nodeID,
 		ObjectTypeGraphNodeCustom,
 		WithNodeCustomMetadata(metadata),
 	)
-	if e.branch != "" {
-		evt.Branch = e.branch
+	if e.eventBranch() != "" {
+		evt.Branch = e.eventBranch()
 	}
 
 	return e.emitWithRecover(evt)
@@ -198,24 +208,25 @@ func (e *eventEmitter) EmitProgress(progress float64, message string) error {
 
 // EmitText sends a streaming text event.
 func (e *eventEmitter) EmitText(text string) error {
+	invocationID := e.eventInvocationID()
 	metadata := NodeCustomEventMetadata{
 		EventType:    "text",
 		Category:     NodeCustomEventCategoryText,
 		NodeID:       e.nodeID,
-		InvocationID: e.invocationID,
+		InvocationID: invocationID,
 		StepNumber:   e.stepNumber,
 		Timestamp:    time.Now(),
 		Message:      text,
 	}
 
 	evt := NewGraphEvent(
-		e.invocationID,
+		invocationID,
 		e.nodeID,
 		ObjectTypeGraphNodeCustom,
 		WithNodeCustomMetadata(metadata),
 	)
-	if e.branch != "" {
-		evt.Branch = e.branch
+	if e.eventBranch() != "" {
+		evt.Branch = e.eventBranch()
 	}
 
 	return e.emitWithRecover(evt)
@@ -226,6 +237,47 @@ func (e *eventEmitter) Context() context.Context {
 	return e.ctx
 }
 
+func (e *eventEmitter) eventInvocationID() string {
+	if e.invocation != nil && e.invocation.InvocationID != "" {
+		return e.invocation.InvocationID
+	}
+	return e.invocationID
+}
+
+func (e *eventEmitter) eventBranch() string {
+	if e.invocation != nil && e.invocation.Branch != "" {
+		return e.invocation.Branch
+	}
+	return e.branch
+}
+
+func (e *eventEmitter) shouldFillInvocationFields(evt *event.Event) bool {
+	invocationID := e.eventInvocationID()
+	return evt.InvocationID == "" || evt.InvocationID == invocationID
+}
+
+func fillEventInvocationFields(invocation *agent.Invocation, evt *event.Event) {
+	if invocation == nil {
+		return
+	}
+	if evt.RequestID == "" {
+		evt.RequestID = invocation.RunOptions.RequestID
+	}
+	parent := invocation.GetParentInvocation()
+	if evt.ParentInvocationID == "" && parent != nil {
+		evt.ParentInvocationID = parent.InvocationID
+	}
+	if evt.Branch == "" {
+		evt.Branch = invocation.Branch
+	}
+	if evt.FilterKey == "" {
+		evt.FilterKey = invocation.GetEventFilterKey()
+	}
+	if evt.ParentMetadata == nil && invocation.ParentMetadata != nil {
+		evt.ParentMetadata = invocation.ParentMetadata
+	}
+}
+
 // emitWithRecover sends an event to the channel with panic recovery.
 func (e *eventEmitter) emitWithRecover(evt *event.Event) (err error) {
 	defer func() {
@@ -234,7 +286,15 @@ func (e *eventEmitter) emitWithRecover(evt *event.Event) (err error) {
 			err = nil // Don't propagate panic as error
 		}
 	}()
-
+	if e.shouldFillInvocationFields(evt) {
+		fillEventInvocationFields(e.invocation, evt)
+	}
+	if evt.InvocationID == "" {
+		evt.InvocationID = e.eventInvocationID()
+	}
+	if evt.Branch == "" && e.shouldFillInvocationFields(evt) {
+		evt.Branch = e.eventBranch()
+	}
 	return event.EmitEventWithTimeout(e.ctx, e.eventChan, evt, e.timeout)
 }
 
@@ -277,6 +337,8 @@ func GetEventEmitter(state State) EventEmitter {
 }
 
 // GetEventEmitterWithContext retrieves an EventEmitter from the given State with a custom context.
+// It prefers the execution-context invocation, then the context invocation,
+// and finally the execution-context invocation ID.
 func GetEventEmitterWithContext(ctx context.Context, state State) EventEmitter {
 	if state == nil {
 		return &noopEmitter{}
@@ -296,11 +358,20 @@ func GetEventEmitterWithContext(ctx context.Context, state State) EventEmitter {
 	// Get current node ID from state
 	nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 
-	// Create EventEmitter with context information
-	return NewEventEmitter(
-		execCtx.EventChan,
+	invocation := execCtx.Invocation
+	if invocation == nil && ctx != nil {
+		invocation, _ = agent.InvocationFromContext(ctx)
+	}
+
+	opts := []EventEmitterOption{
 		WithEmitterContext(ctx),
 		WithEmitterNodeID(nodeID),
-		WithEmitterInvocationID(execCtx.InvocationID),
-	)
+	}
+	if invocation != nil {
+		opts = append(opts, withEmitterInvocation(invocation))
+	}
+	if invocation == nil || invocation.InvocationID == "" {
+		opts = append(opts, WithEmitterInvocationID(execCtx.InvocationID))
+	}
+	return NewEventEmitter(execCtx.EventChan, opts...)
 }
