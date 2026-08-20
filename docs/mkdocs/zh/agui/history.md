@@ -100,8 +100,8 @@ curl -N -X POST http://localhost:8080/history \
 
 - `aggregator.WithEnabled(true)` 用于控制是否启用事件聚合，默认开启。
 - `agui.WithFlushInterval(time.Second)` 用于控制历史事件写入会话存储的刷新间隔，默认 `1s`。设置为 `0` 表示不进行运行中的定时写入；这种配置通常适合不需要在运行中通过 `/history` 续传事件的场景，历史事件主要会在运行结束收尾时写入。运行时间较长或事件量较大时，未写入的历史事件会持续占用进程内存，直到运行结束收尾。
-- `agui.WithTrackPersistenceTimeout(5*time.Second)` 用于限制单次历史事件写入会话存储的最长等待时间，默认 `5s`。设置为 `0` 表示不设置超时。
-- `agui.WithPostRunFinalizationTimeout(5*time.Second)` 用于限制运行结束后收尾流程的最长执行时间，默认 `5s`。收尾流程会补齐仍然打开的协议结束事件，并尽量把剩余历史事件写入 `SessionService`。如果最终写入失败，错误会被记录，同时释放已结束 run 的进程内 tracker 状态；尚未写入的剩余事件会被丢弃，而不会无限期滞留。如果会话存储变慢或异常，超时可以避免请求长时间阻塞。设置为 `0` 表示不设置超时。
+- `agui.WithTrackPersistenceTimeout(5*time.Second)` 用于限制每次 AG-UI 历史持久化操作等待会话存储的最长时间，包括初始尽力刷新、运行中的定时刷新以及最终 `Close` 刷新，默认 `5s`。如果最终 `Close` 失败或超时，错误会被记录，同时释放已结束 run 的进程内 tracker 状态；尚未写入的剩余事件会被丢弃。设置为 `0` 表示不设置超时。
+- `agui.WithPostRunFinalizationTimeout(5*time.Second)` 用于设置运行结束后生成和发送协议收尾事件时使用的超时，默认 `5s`。它不限制最终历史 `Flush` 或 `Close`；这些操作使用 `agui.WithTrackPersistenceTimeout`。设置为 `0` 表示不设置超时。
 
 ```go
 import (
