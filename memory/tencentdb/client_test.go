@@ -12,6 +12,7 @@ package tencentdb
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -328,6 +329,89 @@ func TestGatewayClientV3WithoutAPIKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, authorization)
 	assert.Equal(t, "service-1", serviceID)
+}
+
+func TestGatewayClientV3CaptureBatchesMessages(t *testing.T) {
+	tests := []struct {
+		name         string
+		messageCount int
+		wantSizes    []int
+	}{
+		{
+			name:         "exact boundary",
+			messageCount: maxV3ConversationBatchSize,
+			wantSizes:    []int{maxV3ConversationBatchSize},
+		},
+		{
+			name:         "one over boundary",
+			messageCount: maxV3ConversationBatchSize + 1,
+			wantSizes:    []int{maxV3ConversationBatchSize, 1},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				batchesMu sync.Mutex
+				batches   [][]v3Message
+			)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req v3ConversationAddRequest
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				batchesMu.Lock()
+				batches = append(batches, append([]v3Message(nil), req.Messages...))
+				batchesMu.Unlock()
+				writeV3TestEnvelope(w, v3ConversationAddData{
+					AcceptedIDs:      make([]string, len(req.Messages)),
+					AcceptedVersions: make([]string, len(req.Messages)),
+					TotalCount:       len(req.Messages),
+				})
+			}))
+			defer server.Close()
+
+			client, err := newGatewayClientWithMode(Options{
+				GatewayURL: server.URL,
+			}, apiModeV3, &serviceIdentity{
+				serviceID: "service-1",
+				teamID:    "team-1",
+				agentID:   "agent-1",
+			})
+			require.NoError(t, err)
+
+			messages := make([]tdaiMessage, tt.messageCount)
+			wantContents := make([]string, tt.messageCount)
+			for i := range messages {
+				content := fmt.Sprintf("message-%03d", i)
+				messages[i] = tdaiMessage{Role: "user", Content: content}
+				wantContents[i] = content
+			}
+			captured, err := client.capture(context.Background(), captureRequest{
+				UserID:    "user-1",
+				SessionID: "session-1",
+				Messages:  messages,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.messageCount, captured.L0Recorded)
+
+			var (
+				gotSizes    []int
+				gotContents []string
+			)
+			batchesMu.Lock()
+			gotBatches := append([][]v3Message(nil), batches...)
+			batchesMu.Unlock()
+			for _, batch := range gotBatches {
+				gotSizes = append(gotSizes, len(batch))
+				for _, message := range batch {
+					gotContents = append(gotContents, message.Content)
+				}
+			}
+			assert.Equal(t, tt.wantSizes, gotSizes)
+			assert.Equal(t, wantContents, gotContents)
+		})
+	}
 }
 
 func TestGatewayClientV3RecallPropagatesContextError(t *testing.T) {

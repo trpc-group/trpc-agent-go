@@ -133,7 +133,9 @@ func (s *Service) contextOffloadClient() *offloadGatewayClient {
 }
 
 // IngestSession captures the latest user/assistant exchange and transcript
-// messages into the TencentDB Agent Memory gateway.
+// messages into the TencentDB Agent Memory gateway. Capture uses at-least-once
+// delivery: the checkpoint advances only after every batch is acknowledged,
+// so an ambiguous transport failure may replay L0 messages.
 func (s *Service) IngestSession(
 	ctx context.Context,
 	sess *session.Session,

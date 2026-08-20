@@ -131,7 +131,7 @@ defer r.Close()
 - Register TencentDB-native search tools with `llmagent.WithTools(memSvc.Tools())`
 - Use `runner.WithSessionIngestor(memSvc)` to send session transcripts to
   Legacy `/capture` or V3 `/v3/conversation/add`; V3 preserves event
-  timestamps and sends the documented conversation-add request directly.
+  timestamps and sends ordered batches of at most 100 messages.
 - Use `runner.WithPlugins(memSvc.Plugin())` to enable automatic recall before
   model calls; Legacy calls `/recall`, while V3 composes L1/L2/L3 reads
 - Use `runner.WithPlugins(memSvc.ContextOffloadPlugin())` only when
@@ -329,6 +329,10 @@ modes and does not write local offload state.
   searchable.
 - `tdai_conversation_search` searches conversation history in the current
   Legacy `session_key` or V3 `session_id`.
+- Capture uses at-least-once delivery. The checkpoint advances only after the
+  complete capture is acknowledged. An ambiguous gateway failure may therefore
+  replay accepted L0 messages because the current V3 API has no client
+  write-idempotency key.
 - Context offload is opt-in and gateway-owned. It uses only
   `/v2/offload/ingest`, `/v2/offload/compact`, and `/v2/offload/read-ref`; it
   does not call `/capture` or `/recall`.

@@ -53,7 +53,8 @@ const (
 	pathV3ScenarioRead       = "/v3/scenario/read"
 	pathV3CoreRead           = "/v3/core/read"
 
-	maxErrorBodyPreview = 512
+	maxErrorBodyPreview        = 512
+	maxV3ConversationBatchSize = 100
 )
 
 // APIError describes a non-2xx response returned by the gateway.
@@ -418,20 +419,31 @@ func (c *gatewayClient) captureV3(
 			Timestamp: formatV3Timestamp(message.Timestamp),
 		})
 	}
-	data, err := doV3JSON[v3ConversationAddData](
-		ctx,
-		c,
-		pathV3ConversationAdd,
-		v3ConversationAddRequest{
-			v3Isolation: c.v3Isolation(req.UserID, req.SessionID),
-			Messages:    messages,
-		},
-	)
-	if err != nil {
-		return nil, err
+	recorded := 0
+	for start := 0; start < len(messages); start += maxV3ConversationBatchSize {
+		end := start + maxV3ConversationBatchSize
+		if end > len(messages) {
+			end = len(messages)
+		}
+		data, err := doV3JSON[v3ConversationAddData](
+			ctx,
+			c,
+			pathV3ConversationAdd,
+			v3ConversationAddRequest{
+				v3Isolation: c.v3Isolation(req.UserID, req.SessionID),
+				Messages:    messages[start:end],
+			},
+		)
+		if err != nil {
+			// The V3 API has no client write-idempotency contract. Treat the
+			// complete capture as failed so the service checkpoint stays put and
+			// a later ingest replays the transcript instead of dropping messages.
+			return nil, err
+		}
+		recorded += len(data.AcceptedIDs)
 	}
 	return &captureResponse{
-		L0Recorded: len(data.AcceptedIDs),
+		L0Recorded: recorded,
 	}, nil
 }
 

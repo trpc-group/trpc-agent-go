@@ -121,7 +121,7 @@ defer r.Close()
 - 通过 `llmagent.WithTools(memSvc.Tools())` 注册 TencentDB 原生检索工具。
 - 通过 `runner.WithSessionIngestor(memSvc)` 把 session transcript 发送给
   Legacy `/capture` 或 V3 `/v3/conversation/add`；V3 会保留事件时间戳，并按
-  文档定义直接发送 conversation-add 请求。
+  顺序发送每批最多 100 条消息的 conversation-add 请求。
 - 通过 `runner.WithPlugins(memSvc.Plugin())` 在模型调用前启用自动 recall；
   Legacy 请求 `/recall`，V3 组合读取 L1/L2/L3。
 - 只有在配置 `WithContextOffload(...)`（包括 `Enabled: true` 和
@@ -299,6 +299,9 @@ navigation 选中的 L2 文件。
 - `tdai_memory_search` 检索已提取的长期记忆；提取是异步的，新捕获的信息可能需要短暂等待后才可检索。
 - `tdai_conversation_search` 检索当前 Legacy `session_key` 或 V3 `session_id`
   范围内的对话历史。
+- capture 采用 at-least-once 语义，只有完整 capture 得到确认后才推进
+  checkpoint。结果不确定的 gateway 失败可能导致已接收的 L0 消息被重放，
+  因为当前 V3 API 尚未提供客户端写入幂等键。
 - context offload 是显式开启、由 gateway 承载的能力，只调用
   `/v2/offload/ingest`、`/v2/offload/compact` 和
   `/v2/offload/read-ref`，不调用 `/capture` 或 `/recall`。

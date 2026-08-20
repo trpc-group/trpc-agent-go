@@ -288,8 +288,10 @@ Key points:
   `tdai_memory_search` is added only when `WithMemorySearchTool(true)` is set.
 - `runner.WithSessionIngestor(memSvc)` sends session transcript messages to the
   gateway after each turn. V3 preserves event timestamps and sends the
-  documented conversation-add request directly; Legacy keeps its compatibility
-  timestamps.
+  documented conversation-add request in ordered batches of at most 100;
+  Legacy keeps its compatibility timestamps. Capture is at-least-once: the
+  checkpoint advances only after the complete capture is acknowledged, so an
+  ambiguous transport failure can replay L0 messages.
 - `runner.WithPlugins(memSvc.Plugin())` performs automatic recall before model
   calls and injects returned context into the request, but only when
   `WithRecallEnabled(true)` is set.
