@@ -146,44 +146,9 @@ func (r *Runtime) migrateLegacyWorkspace(newKey string, legacyKeys []string) err
 	if newPath == "" {
 		return nil
 	}
-	// Probe every historically emitted key form.
-	var found string
-	for _, legacyKey := range legacyKeys {
-		if legacyKey == "" || legacyKey == newKey {
-			continue
-		}
-		oldPath, _ := workspacePathForID(r.root, legacyKey)
-		if oldPath == "" || oldPath == newPath {
-			continue
-		}
-		// Lstat (not Stat) so a legacy root that is itself a symlink is
-		// never followed: such a root is an unexpected, untrusted type
-		// and must surface as an error instead of being moved and then
-		// written through on layout creation.
-		info, err := os.Lstat(oldPath)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			// Propagate permission/I/O failures instead of silently
-			// treating them as "nothing to migrate" — that would orphan
-			// persisted state behind a fresh empty workspace.
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf(
-				"sandbox: legacy workspace %s is a symlink; refusing migration", oldPath)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf(
-				"sandbox: legacy workspace %s is not a directory; refusing migration", oldPath)
-		}
-		if found != "" {
-			return fmt.Errorf(
-				"sandbox: ambiguous legacy workspaces %s and %s both exist for session; refusing migration",
-				found, oldPath)
-		}
-		found = oldPath
+	found, err := probeLegacyWorkspace(r.root, newPath, newKey, legacyKeys)
+	if err != nil {
+		return err
 	}
 	if found == "" {
 		return nil
@@ -214,6 +179,54 @@ func (r *Runtime) migrateLegacyWorkspace(newKey string, legacyKeys []string) err
 			"sandbox: legacy workspace %s changed during migration: %w", found, err)
 	}
 	return nil
+}
+
+// probeLegacyWorkspace scans the historical key forms for an existing
+// legacy directory to migrate and returns its path, or "" when none
+// exists. It fails on unexpected entry types (symlink, non-directory),
+// on ambiguity between several existing forms, and on I/O errors, so
+// migration never silently discards persisted state behind a fresh
+// empty workspace.
+func probeLegacyWorkspace(root, newPath, newKey string, legacyKeys []string) (string, error) {
+	var found string
+	for _, legacyKey := range legacyKeys {
+		if legacyKey == "" || legacyKey == newKey {
+			continue
+		}
+		oldPath, _ := workspacePathForID(root, legacyKey)
+		if oldPath == "" || oldPath == newPath {
+			continue
+		}
+		// Lstat (not Stat) so a legacy root that is itself a symlink is
+		// never followed: such a root is an unexpected, untrusted type
+		// and must surface as an error instead of being moved and then
+		// written through on layout creation.
+		info, err := os.Lstat(oldPath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			// Propagate permission/I/O failures instead of silently
+			// treating them as "nothing to migrate" — that would orphan
+			// persisted state behind a fresh empty workspace.
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf(
+				"sandbox: legacy workspace %s is a symlink; refusing migration", oldPath)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf(
+				"sandbox: legacy workspace %s is not a directory; refusing migration", oldPath)
+		}
+		if found != "" {
+			return "", fmt.Errorf(
+				"sandbox: ambiguous legacy workspaces %s and %s both exist for session; refusing migration",
+				found, oldPath)
+		}
+		found = oldPath
+	}
+	return found, nil
 }
 
 // validateMigratedWorkspace verifies that a freshly migrated workspace path
