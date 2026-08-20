@@ -1087,13 +1087,18 @@ func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 	var result []anthropic.ToolUnionParam
 	for _, t := range toolorder.SortedTools(tools) {
 		declaration := t.Declaration()
+		properties := declaration.InputSchema.Properties
+		// Some Anthropic-compatible endpoints reject null properties for object schemas.
+		if declaration.InputSchema.Type == "object" && properties == nil {
+			properties = map[string]*tool.Schema{}
+		}
 		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        declaration.Name,
 				Description: anthropic.String(buildToolDescription(declaration)),
 				InputSchema: anthropic.ToolInputSchemaParam{
 					Type:       constant.Object(declaration.InputSchema.Type),
-					Properties: declaration.InputSchema.Properties,
+					Properties: properties,
 					Required:   declaration.InputSchema.Required,
 				},
 			},

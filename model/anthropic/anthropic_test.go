@@ -359,6 +359,20 @@ func Test_convertTools(t *testing.T) {
 	assert.Equal(t, "t1", params[0].OfTool.Name)
 }
 
+func Test_convertTools_NoArgObjectSchemaUsesEmptyProperties(t *testing.T) {
+	params := convertTools(map[string]tool.Tool{
+		"no_arg_tool": stubTool{decl: &tool.Declaration{
+			Name:        "no_arg_tool",
+			InputSchema: &tool.Schema{Type: "object"},
+		}},
+	})
+
+	body, err := json.Marshal(params)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"properties":{}`)
+	require.NotContains(t, string(body), `"properties":null`)
+}
+
 func Test_buildToolDescription_AppendsOutputSchema(t *testing.T) {
 	schema := &tool.Schema{
 		Type: "object",
