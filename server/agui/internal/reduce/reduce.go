@@ -257,10 +257,10 @@ func (r *reducer) finalizePartial() {
 		if state.phase != toolAwaitingArgs || state.content.Len() == 0 {
 			continue
 		}
-		if state.messageIndex < 0 || state.messageIndex >= len(r.messages) {
+		parent, ok := r.toolCallParent(state)
+		if !ok {
 			continue
 		}
-		parent := r.messages[state.messageIndex]
 		if state.index < 0 || state.index >= len(parent.ToolCalls) {
 			continue
 		}
@@ -717,10 +717,10 @@ func (r *reducer) handleToolEnd(e *aguievents.ToolCallEndEvent) error {
 	if state.phase != toolAwaitingArgs {
 		return fmt.Errorf("duplicate tool call end: %s", e.ToolCallID)
 	}
-	if state.messageIndex < 0 || state.messageIndex >= len(r.messages) {
+	parent, ok := r.toolCallParent(state)
+	if !ok {
 		return fmt.Errorf("tool call end missing parent message: %s", state.messageID)
 	}
-	parent := r.messages[state.messageIndex]
 	if state.index < 0 || state.index >= len(parent.ToolCalls) {
 		return fmt.Errorf("tool call end missing parent tool call: %s", e.ToolCallID)
 	}
@@ -738,6 +738,10 @@ func (r *reducer) handleToolResult(e *aguievents.ToolCallResultEvent) error {
 	if !ok || state.phase != toolAwaitingResult {
 		return fmt.Errorf("tool call result without completed call: %s", e.ToolCallID)
 	}
+	parent, ok := r.toolCallParent(state)
+	if !ok {
+		return fmt.Errorf("tool call result missing parent message: %s", state.messageID)
+	}
 	role := string(model.RoleTool)
 	if e.Role != nil && *e.Role != "" {
 		role = *e.Role
@@ -750,14 +754,33 @@ func (r *reducer) handleToolResult(e *aguievents.ToolCallResultEvent) error {
 		Content:    &content,
 		ToolCallID: toolCallID,
 	}
-	r.insertMessage(r.toolResultInsertIndex(state.messageIndex, state.messageID), msg)
+	r.insertMessage(r.toolResultInsertIndex(state.messageIndex, parent, e.ToolCallID), msg)
 	state.phase = toolCompleted
 	return nil
 }
 
-func (r *reducer) toolResultInsertIndex(parentIndex int, parentMessageID string) int {
-	if parentIndex < 0 || parentIndex >= len(r.messages) {
-		return len(r.messages)
+func (r *reducer) toolCallParent(state *toolCallState) (*aguievents.Message, bool) {
+	if state.messageIndex < 0 || state.messageIndex >= len(r.messages) {
+		return nil, false
+	}
+	parent := r.messages[state.messageIndex]
+	if parent == nil || parent.ID != state.messageID {
+		return nil, false
+	}
+	return parent, true
+}
+
+func (r *reducer) toolResultInsertIndex(parentIndex int, parent *aguievents.Message, toolCallID string) int {
+	toolCallOrder := make(map[string]int, len(parent.ToolCalls))
+	targetOrder := -1
+	for i, call := range parent.ToolCalls {
+		toolCallOrder[call.ID] = i
+		if call.ID == toolCallID {
+			targetOrder = i
+		}
+	}
+	if targetOrder < 0 {
+		return parentIndex + 1
 	}
 	index := parentIndex + 1
 	for index < len(r.messages) {
@@ -765,8 +788,8 @@ func (r *reducer) toolResultInsertIndex(parentIndex int, parentMessageID string)
 		if message == nil || message.Role != types.RoleTool || message.ToolCallID == "" {
 			break
 		}
-		state, ok := r.toolCalls[message.ToolCallID]
-		if !ok || state.messageID != parentMessageID {
+		order, ok := toolCallOrder[message.ToolCallID]
+		if !ok || order >= targetOrder {
 			break
 		}
 		index++

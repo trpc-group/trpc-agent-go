@@ -93,8 +93,8 @@ func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 }
 
 // WithConcurrentMessageStreamsEnabled controls whether text and reasoning
-// message streams are scoped by message ID. Disable it for legacy serial
-// message-stream boundaries.
+// message streams are scoped by message ID. It is enabled by default; pass false
+// to preserve the previous legacy serial message-stream boundaries.
 func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.concurrentMessageStreamsEnabled = enabled

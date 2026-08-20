@@ -879,6 +879,74 @@ func TestReduceToolResultInsertedAfterOwnerAssistant(t *testing.T) {
 	assert.Equal(t, "next", content)
 }
 
+func TestReduceToolResultsKeepOwnerOrderAcrossRunBoundaries(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewRunStartedEvent("thread", "run-1"),
+		aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant")),
+		aguievents.NewToolCallStartEvent("call-1", "first", aguievents.WithParentMessageID("assistant-1")),
+		aguievents.NewToolCallArgsEvent("call-1", "{\"step\":1}"),
+		aguievents.NewToolCallEndEvent("call-1"),
+		aguievents.NewToolCallStartEvent("call-2", "second", aguievents.WithParentMessageID("assistant-1")),
+		aguievents.NewToolCallArgsEvent("call-2", "{\"step\":2}"),
+		aguievents.NewToolCallEndEvent("call-2"),
+		aguievents.NewTextMessageEndEvent("assistant-1"),
+		aguievents.NewRunFinishedEvent("thread", "run-1"),
+		aguievents.NewRunStartedEvent("thread", "run-2"),
+		aguievents.NewToolCallResultEvent("tool-msg-1", "call-1", "first-result"),
+		aguievents.NewRunFinishedEvent("thread", "run-2"),
+		aguievents.NewRunStartedEvent("thread", "run-3"),
+		aguievents.NewToolCallResultEvent("tool-msg-2", "call-2", "second-result"),
+		aguievents.NewRunFinishedEvent("thread", "run-3"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	// Assert that tool result siblings stay in parent ToolCalls order after pruning.
+	assistant := msgs[0]
+	require.Len(t, assistant.ToolCalls, 2)
+	assert.Equal(t, "call-1", assistant.ToolCalls[0].ID)
+	assert.Equal(t, "call-2", assistant.ToolCalls[1].ID)
+	assert.Equal(t, "tool-msg-1", msgs[1].ID)
+	assert.Equal(t, types.RoleTool, msgs[1].Role)
+	assert.Equal(t, "call-1", msgs[1].ToolCallID)
+	firstContent, ok := msgs[1].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "first-result", firstContent)
+	assert.Equal(t, "tool-msg-2", msgs[2].ID)
+	assert.Equal(t, types.RoleTool, msgs[2].Role)
+	assert.Equal(t, "call-2", msgs[2].ToolCallID)
+	secondContent, ok := msgs[2].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "second-result", secondContent)
+}
+
+func TestReduceToolResultInsertionShiftsOpenReasoningIndex(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant")),
+		aguievents.NewToolCallStartEvent("call-1", "search", aguievents.WithParentMessageID("assistant-1")),
+		aguievents.NewToolCallArgsEvent("call-1", "{\"q\":\"hi\"}"),
+		aguievents.NewToolCallEndEvent("call-1"),
+		aguievents.NewTextMessageEndEvent("assistant-1"),
+		aguievents.NewReasoningMessageStartEvent("reasoning-1", "reasoning"),
+		aguievents.NewToolCallResultEvent("tool-msg-1", "call-1", "done"),
+		aguievents.NewReasoningMessageContentEvent("reasoning-1", "thinking"),
+		aguievents.NewReasoningMessageEndEvent("reasoning-1"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "assistant-1", msgs[0].ID)
+	assert.Equal(t, "tool-msg-1", msgs[1].ID)
+	toolContent, ok := msgs[1].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "done", toolContent)
+	assert.Equal(t, "reasoning-1", msgs[2].ID)
+	assert.Equal(t, types.RoleReasoning, msgs[2].Role)
+	reasoningContent, ok := msgs[2].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "thinking", reasoningContent)
+}
+
 func TestAssistantMultipleToolCalls(t *testing.T) {
 	events := []session.TrackEvent{
 		newTrackEvent(aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
