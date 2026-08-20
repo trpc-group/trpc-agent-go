@@ -756,9 +756,7 @@ func (r *runner) Run(
 	// processor clones the session for state-delta isolation.
 	livesession.Attach(invocation, sess)
 	barrier.Enable(invocation)
-	if invocation.Plugins != nil {
-		finalevent.Attach(invocation)
-	}
+	enableFinalEventCallbacks(invocation)
 
 	// Run the agent and get the event channel.
 	startCtx, startSpan, startStarted := startRunnerLatencySpan(
@@ -790,6 +788,12 @@ func (r *runner) Run(
 		handle,
 		executionTraceInput,
 	), nil
+}
+
+func enableFinalEventCallbacks(invocation *agent.Invocation) {
+	if invocation != nil && invocation.Plugins != nil {
+		finalevent.Attach(invocation)
+	}
 }
 
 func (r *runner) newRunInvocation(

@@ -651,11 +651,13 @@ calls, and does not stop or retry the invocation. It must be registered on a
 `Runner`; direct calls to `Agent.Run` do not provide the finalized-event path
 needed for detection.
 
-At the next safe model-turn boundary, the Runner persists the instruction as a
-session event before constructing the next model request. Its model protocol
-role is `user`; the queued-message extension records
+After a successful enqueue, the Runner persists the instruction at the next
+safe model-turn boundary as a session event before constructing the next model
+request. Its model protocol role is `user`; the queued-message extension records
 `source: "plugin/toolloopwarning"` so consumers can distinguish it from direct
 user input. The persisted event remains part of later history and replay.
+If the invocation queue is concurrently closed or cleared before enqueue, the
+plugin logs at debug level and continues without a warning or persisted event.
 
 The plugin associates tool-call metadata at `AfterToolMessages`, then computes
 the fingerprint after the complete Runner `OnEvent` transformation pipeline.

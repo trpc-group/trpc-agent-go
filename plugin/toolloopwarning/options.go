@@ -39,6 +39,8 @@ func WithWarningMessage(message string) Option {
 
 // WithExcludedToolNames excludes named tools from loop detection. A round
 // containing any excluded tool breaks adjacency and never triggers a warning.
+// Repeated uses add to the exclusion set rather than replacing it. Empty names,
+// including nil or empty input, are ignored.
 func WithExcludedToolNames(names ...string) Option {
 	return func(o *options) {
 		if o.excludedToolNames == nil {

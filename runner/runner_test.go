@@ -5048,6 +5048,7 @@ func TestRunnerClearsFinalEventCallbacksAtTerminalBoundaries(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var invocation *agent.Invocation
+			registeredBeforeTerminal := make(chan bool, 1)
 			capture := &testPlugin{
 				name: "capture-invocation",
 				reg: func(registry *plugin.Registry) {
@@ -5056,6 +5057,11 @@ func TestRunnerClearsFinalEventCallbacksAtTerminalBoundaries(t *testing.T) {
 						args *agent.BeforeAgentArgs,
 					) (*agent.BeforeAgentResult, error) {
 						invocation = args.Invocation
+						registeredBeforeTerminal <- finalevent.Register(
+							invocation,
+							"pending-before-terminal",
+							func(context.Context, *event.Event) {},
+						)
 						if !test.shortCircuit {
 							return nil, nil
 						}
@@ -5097,6 +5103,7 @@ func TestRunnerClearsFinalEventCallbacksAtTerminalBoundaries(t *testing.T) {
 				}
 			}
 			require.NotNil(t, invocation)
+			require.True(t, <-registeredBeforeTerminal)
 			require.False(t, finalevent.Register(
 				invocation,
 				"late-event",

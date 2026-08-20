@@ -11,7 +11,9 @@ package steer
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,6 +85,31 @@ func TestAttachDrainAndClear(t *testing.T) {
 	require.Nil(t, Drain(invocation))
 }
 
+func TestEnsureAttachedCreatesOneQueueConcurrently(t *testing.T) {
+	const workers = 64
+	invocation := agent.NewInvocation()
+	queues := make([]*Queue, workers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range queues {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			queues[index] = EnsureAttached(invocation)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	require.NotNil(t, queues[0])
+	for _, queue := range queues[1:] {
+		require.Same(t, queues[0], queue)
+	}
+	require.True(t, queues[0].Enqueue(model.NewUserMessage("kept")))
+	require.Len(t, Drain(invocation), 1)
+}
+
 func TestEnqueueWithSourceAndDrainQueued(t *testing.T) {
 	invocation := agent.NewInvocation()
 	queue := NewQueue()
@@ -151,6 +178,39 @@ func TestConsumptionObserverIsInvocationScopedAndReplaceable(t *testing.T) {
 	))
 	require.Len(t, DrainQueued(invocation), 1)
 	require.Len(t, observed, 1)
+}
+
+func TestRegisterConsumptionObserverCreatesOneHolderConcurrently(t *testing.T) {
+	const workers = 64
+	invocation := agent.NewInvocation()
+	start := make(chan struct{})
+	var observed atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			RegisterConsumptionObserver(
+				invocation,
+				fmt.Sprintf("observer-%d", index),
+				func(QueuedMessage) {
+					observed.Add(1)
+				},
+			)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	Attach(invocation, NewQueue())
+	require.True(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("synthetic"),
+		"plugin/example",
+	))
+	require.Len(t, DrainQueued(invocation), 1)
+	require.Equal(t, int64(workers), observed.Load())
 }
 
 func TestClose_RejectsFutureEnqueueAndPreservesQueuedMessages(t *testing.T) {

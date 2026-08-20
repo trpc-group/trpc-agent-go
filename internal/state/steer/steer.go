@@ -65,6 +65,11 @@ type consumptionObservers struct {
 	observers []namedConsumptionObserver
 }
 
+// invocationStateMu serializes compound updates to steer-owned invocation
+// state. Invocation.GetState and SetState are individually safe, but a
+// read-then-create sequence must also be atomic.
+var invocationStateMu sync.Mutex
+
 // Queue stores queued user messages in FIFO order.
 type Queue struct {
 	mu       sync.Mutex
@@ -146,11 +151,37 @@ func Attach(inv *agent.Invocation, queue *Queue) {
 	if inv == nil || queue == nil {
 		return
 	}
+	invocationStateMu.Lock()
+	defer invocationStateMu.Unlock()
+	attachOwned(inv, queue)
+}
+
+func attachOwned(inv *agent.Invocation, queue *Queue) {
 	inv.SetState(StateKeyQueuedUserMessages, queue)
 	// Establish owning semantics unconditionally: clear any stale borrowed
 	// marker so Close/Clear close the queue regardless of a prior
 	// AttachBorrowed on this invocation.
 	inv.DeleteState(stateKeyBorrowed)
+}
+
+// EnsureAttached returns the invocation's existing queue or atomically
+// attaches and returns a new owned queue. An existing borrowed attachment
+// retains its ownership semantics. It returns nil for a nil invocation.
+func EnsureAttached(inv *agent.Invocation) *Queue {
+	if inv == nil {
+		return nil
+	}
+	invocationStateMu.Lock()
+	defer invocationStateMu.Unlock()
+	if queue, ok := agent.GetStateValue[*Queue](
+		inv,
+		StateKeyQueuedUserMessages,
+	); ok && queue != nil {
+		return queue
+	}
+	queue := NewQueue()
+	attachOwned(inv, queue)
+	return queue
 }
 
 // AttachBorrowed binds a queue to the invocation without ownership: the
@@ -163,6 +194,8 @@ func AttachBorrowed(inv *agent.Invocation, queue *Queue) {
 	if inv == nil || queue == nil {
 		return
 	}
+	invocationStateMu.Lock()
+	defer invocationStateMu.Unlock()
 	inv.SetState(StateKeyQueuedUserMessages, queue)
 	inv.SetState(stateKeyBorrowed, true)
 }
@@ -249,14 +282,7 @@ func RegisterConsumptionObserver(
 	if inv == nil || name == "" || observer == nil {
 		return
 	}
-	h, ok := agent.GetStateValue[*consumptionObservers](
-		inv,
-		stateKeyConsumptionObservers,
-	)
-	if !ok || h == nil {
-		h = &consumptionObservers{}
-		inv.SetState(stateKeyConsumptionObservers, h)
-	}
+	h := consumptionObserversFor(inv)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for i := range h.observers {
@@ -269,6 +295,20 @@ func RegisterConsumptionObserver(
 		name:     name,
 		observer: observer,
 	})
+}
+
+func consumptionObserversFor(inv *agent.Invocation) *consumptionObservers {
+	invocationStateMu.Lock()
+	defer invocationStateMu.Unlock()
+	h, ok := agent.GetStateValue[*consumptionObservers](
+		inv,
+		stateKeyConsumptionObservers,
+	)
+	if !ok || h == nil {
+		h = &consumptionObservers{}
+		inv.SetState(stateKeyConsumptionObservers, h)
+	}
+	return h
 }
 
 func notifyConsumption(inv *agent.Invocation, message QueuedMessage) {
@@ -290,7 +330,16 @@ func notifyConsumption(inv *agent.Invocation, message QueuedMessage) {
 // Close rejects future enqueues for the invocation queue. A borrowed
 // attachment (see AttachBorrowed) is left open: only its owner may close it.
 func Close(inv *agent.Invocation) {
-	if inv == nil || isBorrowed(inv) {
+	if inv == nil {
+		return
+	}
+	invocationStateMu.Lock()
+	defer invocationStateMu.Unlock()
+	closeQueue(inv)
+}
+
+func closeQueue(inv *agent.Invocation) {
+	if isBorrowed(inv) {
 		return
 	}
 	queue, ok := agent.GetStateValue[*Queue](
@@ -307,7 +356,9 @@ func Clear(inv *agent.Invocation) {
 	if inv == nil {
 		return
 	}
-	Close(inv)
+	invocationStateMu.Lock()
+	defer invocationStateMu.Unlock()
+	closeQueue(inv)
 	inv.DeleteState(StateKeyQueuedUserMessages)
 	inv.DeleteState(stateKeyBorrowed)
 	inv.DeleteState(stateKeyConsumptionObservers)

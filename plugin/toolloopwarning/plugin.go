@@ -108,9 +108,7 @@ func (p *toolLoopWarningPlugin) afterToolMessages(
 			) {
 				return
 			}
-			if !steer.IsAttached(invocation) {
-				steer.Attach(invocation, steer.NewQueue())
-			}
+			steer.EnsureAttached(invocation)
 			if !steer.EnqueueWithSource(
 				invocation,
 				model.NewUserMessage(p.warning),

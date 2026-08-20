@@ -204,6 +204,17 @@ func TestPluginBeforeAgentInitializesStateWithoutAttachingQueue(t *testing.T) {
 	require.False(t, steer.IsAttached(invocation))
 }
 
+func TestOptionsAccumulateExcludedToolNamesAndIgnoreEmpty(t *testing.T) {
+	o := newOptions(
+		WithExcludedToolNames("poll", ""),
+		WithExcludedToolNames("background"),
+		WithExcludedToolNames(),
+	)
+	require.Contains(t, o.excludedToolNames, "poll")
+	require.Contains(t, o.excludedToolNames, "background")
+	require.NotContains(t, o.excludedToolNames, "")
+}
+
 func TestPluginHandlesNilInputsAndMissingInvocation(t *testing.T) {
 	var nilPlugin *toolLoopWarningPlugin
 	require.Empty(t, nilPlugin.Name())
