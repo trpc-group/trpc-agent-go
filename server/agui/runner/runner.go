@@ -509,8 +509,6 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 					runID,
 					err,
 				)
-			} else if !r.shouldFlushInitialTrack() {
-				input.startTrackFlush()
 			}
 		}
 	}
@@ -582,6 +580,9 @@ func (r *runner) runEventLoop(
 			return hookDone, hookRemaining
 		case result := <-agentRun:
 			agentRun = nil
+			if input.startTrackFlush != nil {
+				input.startTrackFlush()
+			}
 			if result.err != nil {
 				if ctx.Err() != nil {
 					r.emitPostRunTerminalEvent(ctx, events, input)
@@ -1175,7 +1176,6 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 		input.threadID,
 		input.runID,
 	)
-	tracked := false
 	if input.enableTrack && r.shouldTrackEvent(event) {
 		if err := r.recordTrackEvent(ctx, input.key, event); err != nil {
 			log.WarnfContext(
@@ -1186,8 +1186,6 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 				input.runID,
 				err,
 			)
-		} else {
-			tracked = true
 		}
 	}
 	flushInitial := input.flushTrackBeforeNextWrite
@@ -1202,9 +1200,6 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 				err,
 			)
 		}
-	}
-	if (tracked || flushInitial) && input.startTrackFlush != nil {
-		input.startTrackFlush()
 	}
 	select {
 	case events <- event:

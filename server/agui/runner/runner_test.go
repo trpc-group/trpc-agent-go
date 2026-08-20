@@ -3473,6 +3473,77 @@ func TestRunSkipsInitialFollowFlushWhenUnused(t *testing.T) {
 	}
 }
 
+func TestRunStartsPeriodicTrackFlushAfterWrappedRunnerReturns(t *testing.T) {
+	for _, role := range []types.Role{types.RoleUser, types.RoleTool} {
+		t.Run(string(role), func(t *testing.T) {
+			tracker := &blockingInitialFlushTracker{flushStarted: make(chan struct{})}
+			wrappedRunStarted := make(chan struct{})
+			releaseWrappedRun := make(chan struct{})
+			agentEvents := make(chan *agentevent.Event)
+			var releaseWrappedRunOnce sync.Once
+			var closeAgentEventsOnce sync.Once
+			t.Cleanup(func() {
+				releaseWrappedRunOnce.Do(func() { close(releaseWrappedRun) })
+				closeAgentEventsOnce.Do(func() { close(agentEvents) })
+			})
+			underlying := &fakeRunner{run: func(context.Context, string, string, model.Message,
+				...agent.RunOption) (<-chan *agentevent.Event, error) {
+				close(wrappedRunStarted)
+				<-releaseWrappedRun
+				return agentEvents, nil
+			}}
+			r := &runner{
+				runner:            underlying,
+				translatorFactory: defaultTranslatorFactory,
+				userIDResolver:    defaultUserIDResolver,
+				stateResolver:     defaultStateResolver,
+				runOptionResolver: defaultRunOptionResolver,
+				tracker:           tracker,
+				startSpan:         defaultStartSpan,
+				flushInterval:     5 * time.Millisecond,
+			}
+			message := types.Message{Role: role, Content: "input"}
+			if role == types.RoleTool {
+				message.ToolCallID = "call"
+			}
+			events, err := r.Run(context.Background(), &adapter.RunAgentInput{
+				ThreadID: "thread", RunID: "run", Messages: []types.Message{message},
+			})
+			require.NoError(t, err)
+			drained := make(chan struct{})
+			go func() {
+				defer close(drained)
+				for range events {
+				}
+			}()
+			select {
+			case <-wrappedRunStarted:
+			case <-time.After(time.Second):
+				require.FailNow(t, "timeout waiting for wrapped runner to start")
+			}
+			select {
+			case <-tracker.flushStarted:
+				require.FailNow(t, "periodic track flush started before wrapped runner returned")
+			case <-time.After(50 * time.Millisecond):
+			}
+
+			releaseWrappedRunOnce.Do(func() { close(releaseWrappedRun) })
+			select {
+			case <-tracker.flushStarted:
+			case <-time.After(time.Second):
+				require.FailNow(t, "timeout waiting for periodic track flush")
+			}
+			closeAgentEventsOnce.Do(func() { close(agentEvents) })
+			select {
+			case <-drained:
+			case <-time.After(time.Second):
+				require.FailNow(t, "timeout waiting for run to finish")
+			}
+			require.Equal(t, 1, underlying.calls)
+		})
+	}
+}
+
 func TestRunInitialFollowFlushFailureDoesNotAbortRun(t *testing.T) {
 	tracker := &blockingInitialFlushTracker{flushErr: errors.New("flush failed")}
 	underlying := &fakeRunner{run: func(context.Context, string, string, model.Message,
