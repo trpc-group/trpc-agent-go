@@ -698,6 +698,10 @@ func validateReportInvariants(report *Report) error {
 		if len(report.Candidates) > 0 {
 			return errors.New("candidates exist without completed baseline validation")
 		}
+		if report.SearchProfile.Hash != report.InitialProfile.Hash ||
+			report.ReleasedProfile.Hash != report.InitialProfile.Hash {
+			return errors.New("profile lineage changed before completed baseline validation")
+		}
 		if report.BaselineValidation == nil &&
 			(report.InitialProfile.EvaluationRunID != "" ||
 				report.SearchProfile.EvaluationRunID != "" ||
@@ -835,10 +839,9 @@ func validateIncompleteCandidate(
 			return err
 		}
 	}
-	if candidate.Profile == nil &&
-		(candidate.SearchDecision.Status != DecisionNotEvaluable ||
-			candidate.ReleaseDecision.Status != DecisionNotEvaluable) {
-		return fmt.Errorf("%s has an evaluable decision without a profile", label)
+	if candidate.SearchDecision.Status != DecisionNotEvaluable ||
+		candidate.ReleaseDecision.Status != DecisionNotEvaluable {
+		return fmt.Errorf("%s is incomplete but has an evaluable decision", label)
 	}
 	_, _, err := validateCandidateTransition(label, candidate)
 	return err
@@ -1833,17 +1836,40 @@ func validateReportResourceLedgers(report *Report) error {
 	if err := validateResourceLedger("global", report.Resources); err != nil {
 		return err
 	}
-	remaining := make(map[ResourceEntry]int, len(report.Resources.Entries))
+	globalByRound := make(map[int]map[ResourceEntry]int)
 	for _, entry := range report.Resources.Entries {
-		remaining[entry]++
+		if entry.Round == 0 {
+			continue
+		}
+		if globalByRound[entry.Round] == nil {
+			globalByRound[entry.Round] = make(map[ResourceEntry]int)
+		}
+		globalByRound[entry.Round][entry]++
 	}
+	seenRounds := make(map[int]struct{}, len(report.Candidates))
 	for i := range report.Candidates {
 		candidate := &report.Candidates[i]
 		label := fmt.Sprintf("candidate %q", candidate.ID)
 		if err := validateResourceLedger(label, candidate.Resources); err != nil {
 			return err
 		}
+		if _, exists := seenRounds[candidate.Round]; exists {
+			return fmt.Errorf("duplicate candidate resource round %d", candidate.Round)
+		}
+		seenRounds[candidate.Round] = struct{}{}
+		remaining := make(map[ResourceEntry]int, len(globalByRound[candidate.Round]))
+		for entry, count := range globalByRound[candidate.Round] {
+			remaining[entry] = count
+		}
 		for _, entry := range candidate.Resources.Entries {
+			if entry.Round != candidate.Round {
+				return fmt.Errorf(
+					"%s resource entry round %d does not match candidate round %d",
+					label,
+					entry.Round,
+					candidate.Round,
+				)
+			}
 			if remaining[entry] == 0 {
 				return fmt.Errorf(
 					"%s resource entry for stage %q is absent from the global ledger",
@@ -1852,6 +1878,22 @@ func validateReportResourceLedgers(report *Report) error {
 				)
 			}
 			remaining[entry]--
+		}
+		for entry, count := range remaining {
+			if count > 0 {
+				return fmt.Errorf(
+					"global resource entry for stage %q round %d is absent from %s ledger",
+					entry.Stage,
+					entry.Round,
+					label,
+				)
+			}
+		}
+		delete(globalByRound, candidate.Round)
+	}
+	for round, entries := range globalByRound {
+		if len(entries) > 0 {
+			return fmt.Errorf("global resource entries for round %d have no candidate ledger", round)
 		}
 	}
 	return nil

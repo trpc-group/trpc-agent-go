@@ -134,6 +134,48 @@ func TestPipelineUsesNativeEngineWithoutHeldoutLeakageAndPropagatesEvidenceHints
 	require.NotContains(t, stages, "promptiter")
 }
 
+func TestPipelineReportDoesNotAliasCallerRunConfig(t *testing.T) {
+	staticEngine := &pipelineStaticEngine{
+		structure: pipelineTestStructure(),
+		result:    pipelineCandidateRunResult(),
+	}
+	pipeline, err := New(staticEngine, &pipelineSnapshotEvaluator{})
+	require.NoError(t, err)
+	config := pipelineRunConfig()
+	config.Runtime.Model = map[string]any{
+		"name":   "model-a",
+		"nested": map[string]any{"temperature": float64(0)},
+	}
+	config.Runtime.Evaluator = map[string]any{"name": "evaluator-a"}
+	require.NoError(t, BindRuntime(&config, config.Runtime))
+
+	report, err := pipeline.Run(context.Background(), &config)
+	require.NoError(t, err)
+	require.Equal(t, PipelineSucceeded, report.Status)
+
+	config.Train.CaseIDs[0] = "mutated-train"
+	config.Train.MetricNames[0] = "mutated-metric"
+	config.Train.NormalizedInputHashes["train-a"] = "mutated-input"
+	config.Validation.CaseIDs[0] = "mutated-heldout"
+	config.PromptIter.InternalValidationCaseIDs[0] = "mutated-internal"
+	config.Gate.MetricDirections["quality"] = ScoreLowerIsBetter
+	config.Runtime.Model["name"] = "model-b"
+	config.Runtime.Model["nested"].(map[string]any)["temperature"] = float64(1)
+	config.Runtime.Evaluator["name"] = "evaluator-b"
+
+	require.Equal(t, []string{"train-a"}, report.ResolvedConfig.Train.CaseIDs)
+	require.Equal(t, []string{"quality"}, report.ResolvedConfig.Train.MetricNames)
+	require.Equal(t, "normalized-train", report.ResolvedConfig.Train.NormalizedInputHashes["train-a"])
+	require.Equal(t, []string{"heldout-a"}, report.ResolvedConfig.Validation.CaseIDs)
+	require.Equal(t, []string{"train-a"}, report.ResolvedConfig.PromptIter.InternalValidationCaseIDs)
+	require.Equal(t, ScoreHigherIsBetter, report.ResolvedConfig.Gate.MetricDirections["quality"])
+	require.Equal(t, "model-a", report.Runtime.Model["name"])
+	require.Equal(t, float64(0), report.Runtime.Model["nested"].(map[string]any)["temperature"])
+	require.Equal(t, "evaluator-a", report.Runtime.Evaluator["name"])
+	_, err = RenderJSON(report)
+	require.NoError(t, err)
+}
+
 func TestPipelineStopsNativePromptIterAtObservedModelCallThresholdBoundary(t *testing.T) {
 	ctx := context.Background()
 	structure := pipelineTestStructure()

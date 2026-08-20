@@ -152,8 +152,11 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 	if config == nil {
 		return nil, errors.New("run config is nil")
 	}
-	cfg := *config
-	if err := validateRunConfig(&cfg); err != nil {
+	if err := validateRunConfig(config); err != nil {
+		return nil, err
+	}
+	cfg, err := cloneRunConfig(config)
+	if err != nil {
 		return nil, err
 	}
 	structure, err := p.engine.Describe(ctx)

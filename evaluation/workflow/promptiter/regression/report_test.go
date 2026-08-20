@@ -1247,6 +1247,44 @@ func TestRenderSuccessfulReportRejectsIncompleteOrForgedAuditBindings(t *testing
 			},
 			wantError: "absent from the global ledger",
 		},
+		{
+			name: "global candidate resource entry required",
+			mutate: func(report *Report) {
+				entry := ResourceEntry{
+					Stage: "candidate-train",
+					Round: 1,
+					Usage: ResourceUsage{
+						ModelCalls: Count{Available: true, Value: 1},
+					},
+				}
+				report.Resources = ResourceLedger{
+					Entries:    []ResourceEntry{entry},
+					Cumulative: entry.Usage,
+				}
+			},
+			wantError: "absent from candidate",
+		},
+		{
+			name: "candidate resource round binding",
+			mutate: func(report *Report) {
+				entry := ResourceEntry{
+					Stage: "candidate-train",
+					Round: 2,
+					Usage: ResourceUsage{
+						ModelCalls: Count{Available: true, Value: 1},
+					},
+				}
+				report.Resources = ResourceLedger{
+					Entries:    []ResourceEntry{entry},
+					Cumulative: entry.Usage,
+				}
+				report.Candidates[0].Resources = ResourceLedger{
+					Entries:    []ResourceEntry{entry},
+					Cumulative: entry.Usage,
+				}
+			},
+			wantError: "does not match candidate round",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1401,6 +1439,46 @@ func TestValidateReportAllowsEarlyFailureWithoutSnapshots(t *testing.T) {
 	report.Resources = ResourceLedger{}
 
 	require.NoError(t, validateReport(report))
+}
+
+func TestValidateReportRejectsContradictoryIncompleteLineage(t *testing.T) {
+	t.Run("top-level profile changes before baseline validation", func(t *testing.T) {
+		report := testReport(t)
+		report.Status = PipelineRunFailed
+		report.StopReason = StopNecessaryRunFailed
+		report.BaselineValidation = nil
+		report.Candidates = nil
+		report.InitialProfile.EvaluationRunID = ""
+		report.SearchProfile = withProfileRole(
+			testProfileRecord(t, ProfileCandidate, "forged search"),
+			ProfileSearch,
+		)
+		report.ReleasedProfile = withProfileRole(report.InitialProfile, ProfileReleased)
+		report.FinalDecision = notEvaluableDecision("baseline validation failed")
+
+		require.ErrorContains(t, validateReport(report), "lineage changed before completed baseline")
+	})
+
+	t.Run("incomplete candidate has evaluable decision", func(t *testing.T) {
+		report := testReport(t)
+		report.Status = PipelineRunFailed
+		report.StopReason = StopNecessaryRunFailed
+		report.Candidates[0].Status = EvaluationNotEvaluable
+
+		require.ErrorContains(t, validateReport(report), "incomplete but has an evaluable decision")
+	})
+
+	t.Run("incomplete candidate updates profile pointer", func(t *testing.T) {
+		report := testReport(t)
+		report.Status = PipelineRunFailed
+		report.StopReason = StopNecessaryRunFailed
+		candidate := &report.Candidates[0]
+		candidate.Status = EvaluationNotEvaluable
+		candidate.SearchDecision = notEvaluableDecision("candidate incomplete")
+		candidate.ReleaseDecision = notEvaluableDecision("candidate incomplete")
+
+		require.ErrorContains(t, validateReport(report), "release transition")
+	})
 }
 
 func testReport(t *testing.T) *Report {

@@ -242,6 +242,22 @@ func TestNormalizedEvalCaseInputScenarioAndExcludedLabels(t *testing.T) {
 		SessionInput: &evalset.SessionInput{UserID: "user"},
 	}
 	identity := normalizedInputForTest(t, scenario)
+	omittedDriver := cloneEvalCaseForTest(t, scenario)
+	omittedDriver.ConversationScenario.Driver = ""
+	omittedIdentity := normalizedInputForTest(t, omittedDriver)
+	require.Equal(t, identity, omittedIdentity)
+	require.ErrorContains(t, validateHeldoutExclusion(
+		DatasetSpec{
+			EvalSetID:             "train",
+			CaseIDs:               []string{"train-case"},
+			NormalizedInputHashes: map[string]string{"train-case": omittedIdentity},
+		},
+		DatasetSpec{
+			EvalSetID:             "heldout",
+			CaseIDs:               []string{"heldout-case"},
+			NormalizedInputHashes: map[string]string{"heldout-case": identity},
+		},
+	), "same normalized input")
 	for _, mutate := range []func(*evalset.ConversationScenario){
 		func(item *evalset.ConversationScenario) { item.Driver = evalset.ConversationScenarioDriverExpected },
 		func(item *evalset.ConversationScenario) { item.StartingPrompt = "different" },

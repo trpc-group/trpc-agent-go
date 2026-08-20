@@ -984,8 +984,12 @@ func normalizedEvalCaseInput(evalCase *evalset.EvalCase) (string, error) {
 
 	hasUserInput := false
 	if scenario := evalCase.ConversationScenario; scenario != nil {
+		driver := scenario.Driver
+		if driver == "" {
+			driver = evalset.ConversationScenarioDriverActual
+		}
 		identity.Scenario = &canonicalConversationScenario{
-			Driver:                string(scenario.Driver),
+			Driver:                string(driver),
 			StartingPrompt:        normalizeInputText(scenario.StartingPrompt),
 			ConversationPlan:      normalizeInputText(scenario.ConversationPlan),
 			StopSignal:            normalizeInputText(scenario.StopSignal),
@@ -1096,6 +1100,23 @@ func canonicalInputValue(value any) (any, error) {
 
 func normalizeInputText(value string) string {
 	return strings.ToLower(strings.Join(strings.Fields(value), " "))
+}
+
+func cloneRunConfig(source *RunConfig) (RunConfig, error) {
+	data, err := json.Marshal(source)
+	if err != nil {
+		return RunConfig{}, fmt.Errorf("marshal run config for copy: %w", err)
+	}
+	var cloned RunConfig
+	if err := json.Unmarshal(data, &cloned); err != nil {
+		return RunConfig{}, fmt.Errorf("decode copied run config: %w", err)
+	}
+	cloned.sourceConfigHash = source.sourceConfigHash
+	cloned.executionNonce = source.executionNonce
+	cloned.trainEvalSetInput = bytes.Clone(source.trainEvalSetInput)
+	cloned.validationEvalSetInput = bytes.Clone(source.validationEvalSetInput)
+	cloned.metricsInput = bytes.Clone(source.metricsInput)
+	return cloned, nil
 }
 
 func validateHeldoutExclusion(train, validation DatasetSpec) error {
