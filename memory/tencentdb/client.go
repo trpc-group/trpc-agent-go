@@ -33,6 +33,7 @@ const (
 	httpHeaderServiceID     = "X-TDAI-Service-Id"
 	httpContentTypeJSON     = "application/json"
 	httpAuthBearerPrefix    = "Bearer "
+	v3LocalBearerToken      = "local"
 
 	httpMethodGet  = "GET"
 	httpMethodPost = "POST"
@@ -53,8 +54,11 @@ const (
 	pathV3ScenarioRead       = "/v3/scenario/read"
 	pathV3CoreRead           = "/v3/core/read"
 
-	maxErrorBodyPreview        = 512
-	maxV3ConversationBatchSize = 100
+	maxErrorBodyPreview             = 512
+	maxV3ConversationBatchSize      = 100
+	maxV3MessageContentUTF16Units   = 8192
+	maxV3SearchQueryUTF16Units      = 2048
+	v3TruncatedMessageContentSuffix = "\n...[truncated]"
 )
 
 // APIError describes a non-2xx response returned by the gateway.
@@ -413,9 +417,18 @@ func (c *gatewayClient) captureV3(
 ) (*captureResponse, error) {
 	messages := make([]v3Message, 0, len(req.Messages))
 	for _, message := range req.Messages {
+		content, truncated := truncateV3MessageContent(message.Content)
+		if truncated {
+			log.Warnf(
+				"tencentdb memory: v3 capture truncated oversized message: role=%s original_utf16_units=%d limit=%d",
+				message.Role,
+				v3UTF16Length(message.Content),
+				maxV3MessageContentUTF16Units,
+			)
+		}
 		messages = append(messages, v3Message{
 			Role:      message.Role,
-			Content:   message.Content,
+			Content:   content,
 			Timestamp: formatV3Timestamp(message.Timestamp),
 		})
 	}
@@ -479,7 +492,7 @@ func (c *gatewayClient) recallV3(
 			pathV3AtomicSearch,
 			v3AtomicSearchRequest{
 				v3Isolation: isolation,
-				Query:       req.Query,
+				Query:       truncateV3SearchQuery(req.Query),
 				Limit:       defaultSearchLimit,
 			},
 		)
@@ -534,7 +547,7 @@ func (c *gatewayClient) searchMemoriesV3(
 		pathV3AtomicSearch,
 		v3AtomicSearchRequest{
 			v3Isolation: c.v3Isolation(req.UserID, ""),
-			Query:       req.Query,
+			Query:       truncateV3SearchQuery(req.Query),
 			Limit:       req.Limit,
 			Type:        req.Type,
 		},
@@ -559,7 +572,7 @@ func (c *gatewayClient) searchConversationsV3(
 		pathV3ConversationSearch,
 		v3ConversationSearchRequest{
 			v3Isolation: c.v3Isolation(req.UserID, req.SessionID),
-			Query:       req.Query,
+			Query:       truncateV3SearchQuery(req.Query),
 			Limit:       req.Limit,
 		},
 	)
@@ -608,6 +621,15 @@ func doV3JSON[T any](
 	path string,
 	req any,
 ) (*T, error) {
+	headers := map[string]string{
+		httpHeaderServiceID: client.identity.serviceID,
+	}
+	if client.apiKey == "" {
+		// The self-hosted gateway still parses a non-empty Bearer token when
+		// its shared-secret check is disabled. Match the upstream client so
+		// unauthenticated local V3 deployments remain usable.
+		headers[httpHeaderAuthorization] = httpAuthBearerPrefix + v3LocalBearerToken
+	}
 	var envelope v3ResponseEnvelope[T]
 	if err := client.doJSONWithHeaders(
 		ctx,
@@ -615,7 +637,7 @@ func doV3JSON[T any](
 		path,
 		req,
 		&envelope,
-		map[string]string{httpHeaderServiceID: client.identity.serviceID},
+		headers,
 	); err != nil {
 		return nil, err
 	}
@@ -639,6 +661,50 @@ func formatV3Timestamp(timestamp int64) string {
 		return ""
 	}
 	return time.UnixMilli(timestamp).UTC().Format(time.RFC3339Nano)
+}
+
+func truncateV3MessageContent(content string) (string, bool) {
+	if v3UTF16Length(content) <= maxV3MessageContentUTF16Units {
+		return content, false
+	}
+	budget := maxV3MessageContentUTF16Units -
+		v3UTF16Length(v3TruncatedMessageContentSuffix)
+	return truncateV3UTF16(content, budget) +
+		v3TruncatedMessageContentSuffix, true
+}
+
+func truncateV3SearchQuery(query string) string {
+	return truncateV3UTF16(query, maxV3SearchQueryUTF16Units)
+}
+
+func truncateV3UTF16(value string, maxUnits int) string {
+	if maxUnits <= 0 {
+		return ""
+	}
+	units := 0
+	for i, r := range value {
+		width := v3UTF16RuneWidth(r)
+		if units+width > maxUnits {
+			return value[:i]
+		}
+		units += width
+	}
+	return value
+}
+
+func v3UTF16Length(value string) int {
+	units := 0
+	for _, r := range value {
+		units += v3UTF16RuneWidth(r)
+	}
+	return units
+}
+
+func v3UTF16RuneWidth(r rune) int {
+	if r > 0xffff {
+		return 2
+	}
+	return 1
 }
 
 func buildV3RecallResponse(

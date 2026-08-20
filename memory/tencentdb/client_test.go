@@ -327,8 +327,138 @@ func TestGatewayClientV3WithoutAPIKey(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	assert.Empty(t, authorization)
+	assert.Equal(t, "Bearer "+v3LocalBearerToken, authorization)
 	assert.Equal(t, "service-1", serviceID)
+}
+
+func TestTruncateV3MessageContent(t *testing.T) {
+	tests := []struct {
+		name          string
+		content       string
+		wantContent   string
+		wantTruncated bool
+	}{
+		{
+			name:        "exact boundary",
+			content:     strings.Repeat("x", maxV3MessageContentUTF16Units),
+			wantContent: strings.Repeat("x", maxV3MessageContentUTF16Units),
+		},
+		{
+			name:    "one over boundary",
+			content: strings.Repeat("x", maxV3MessageContentUTF16Units+1),
+			wantContent: strings.Repeat(
+				"x",
+				maxV3MessageContentUTF16Units-
+					v3UTF16Length(v3TruncatedMessageContentSuffix),
+			) + v3TruncatedMessageContentSuffix,
+			wantTruncated: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, truncated := truncateV3MessageContent(tt.content)
+			assert.Equal(t, tt.wantContent, got)
+			assert.Equal(t, tt.wantTruncated, truncated)
+			assert.LessOrEqual(
+				t,
+				v3UTF16Length(got),
+				maxV3MessageContentUTF16Units,
+			)
+		})
+	}
+}
+
+func TestTruncateV3TextPreservesUTF8AtUTF16Boundary(t *testing.T) {
+	value := strings.Repeat("😀", 2) + "tail"
+	got := truncateV3UTF16(value, 5)
+	assert.Equal(t, "😀😀t", got)
+	assert.Equal(t, 5, v3UTF16Length(got))
+}
+
+func TestTruncateV3SearchQuery(t *testing.T) {
+	exact := strings.Repeat("q", maxV3SearchQueryUTF16Units)
+	assert.Equal(t, exact, truncateV3SearchQuery(exact))
+	assert.Equal(
+		t,
+		exact,
+		truncateV3SearchQuery(exact+"q"),
+	)
+}
+
+func TestGatewayClientV3BoundsSearchQueries(t *testing.T) {
+	var (
+		queriesMu           sync.Mutex
+		atomicQueries       []string
+		conversationQueries []string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case pathV3AtomicSearch:
+			var req v3AtomicSearchRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			queriesMu.Lock()
+			atomicQueries = append(atomicQueries, req.Query)
+			queriesMu.Unlock()
+			writeV3TestEnvelope(w, v3AtomicSearchData{})
+		case pathV3ConversationSearch:
+			var req v3ConversationSearchRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			queriesMu.Lock()
+			conversationQueries = append(conversationQueries, req.Query)
+			queriesMu.Unlock()
+			writeV3TestEnvelope(w, v3ConversationSearchData{})
+		case pathV3ScenarioList:
+			writeV3TestEnvelope(w, v3ScenarioListData{})
+		case pathV3CoreRead:
+			writeV3TestEnvelope(w, v3CoreFile{})
+		default:
+			http.Error(w, "unexpected path", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := newGatewayClientWithMode(Options{
+		GatewayURL: server.URL,
+	}, apiModeV3, &serviceIdentity{
+		serviceID: "service-1",
+		teamID:    "team-1",
+		agentID:   "agent-1",
+	})
+	require.NoError(t, err)
+	query := strings.Repeat("q", maxV3SearchQueryUTF16Units+1)
+	want := strings.Repeat("q", maxV3SearchQueryUTF16Units)
+
+	_, err = client.searchMemories(context.Background(), searchMemoriesRequest{
+		Query:  query,
+		Limit:  1,
+		UserID: "user-1",
+	})
+	require.NoError(t, err)
+	_, err = client.searchConversations(context.Background(), searchConversationsRequest{
+		Query:     query,
+		Limit:     1,
+		SessionID: "session-1",
+		UserID:    "user-1",
+	})
+	require.NoError(t, err)
+	_, err = client.recall(context.Background(), recallRequest{
+		Query:  query,
+		UserID: "user-1",
+	})
+	require.NoError(t, err)
+
+	queriesMu.Lock()
+	gotAtomic := append([]string(nil), atomicQueries...)
+	gotConversation := append([]string(nil), conversationQueries...)
+	queriesMu.Unlock()
+	assert.Equal(t, []string{want, want}, gotAtomic)
+	assert.Equal(t, []string{want}, gotConversation)
 }
 
 func TestGatewayClientV3CaptureBatchesMessages(t *testing.T) {
@@ -590,7 +720,11 @@ func TestGatewayClientV3DataPlane(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			require.Len(t, rawAddReq.Messages, 1)
+			if !assert.Len(t, rawAddReq.Messages, 1) {
+				mu.Unlock()
+				http.Error(w, "unexpected message count", http.StatusBadRequest)
+				return
+			}
 			assert.NotContains(t, rawAddReq.Messages[0], "id")
 			mu.Unlock()
 			writeV3TestEnvelope(w, v3ConversationAddData{

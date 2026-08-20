@@ -82,7 +82,8 @@ func NewService(opts ...Option) (*Service, error) {
 // NewServiceIdentity, and its service, team, and agent IDs must all be non-empty.
 // User and session IDs come from the framework session. Use WithAPIKey when the
 // gateway requires Bearer authentication; self-hosted gateways that keep
-// authentication disabled can omit it.
+// authentication disabled can omit it, in which case V3 requests send the
+// non-secret Bearer placeholder required by the upstream gateway parser.
 func NewServiceWithIdentity(
 	identity ServiceIdentity,
 	opts ...Option,

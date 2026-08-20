@@ -80,7 +80,8 @@ memSvc, err := memorytencentdb.NewServiceWithIdentity(
     identity,
     memorytencentdb.WithGatewayURL(gatewayURL),
     // 新接入的云端版和自建版都推荐启用身份隔离数据面；三个 ID 必填。
-    // 只有 gateway 启用 Bearer 鉴权时才需要 API key。
+    // 只有 gateway 启用共享密钥鉴权时才需要 API key；未配置时，adapter
+    // 会自动发送自建 gateway 解析器要求的非敏感 Bearer 占位值。
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
     // Recall/search 保持 opt-in。
     memorytencentdb.WithRecallEnabled(true),
@@ -295,13 +296,20 @@ navigation 选中的 L2 文件。
 - Legacy 模式会把 app、user、session 编码进 `session_key`，但这不是强租户边界；
   V3 会发送配置的 Service、Team、Agent 以及 framework User、Session ID。自动
   recall 和 `tdai_memory_search` 仍保持 opt-in，以维持现有默认行为。
-- 当 gateway 设置了 `TDAI_GATEWAY_API_KEY` 时，请用 `WithAPIKey(...)` 让请求携带 `Authorization: Bearer <key>`，否则除 `/health` 外的路由都会返回 401（health 仍可通过）。
+- V3 请求始终携带非空 Bearer header。配置 `WithAPIKey(...)` 时发送真实
+  key；未配置时，adapter 会发送自建 gateway 解析器要求的非敏感 `local`
+  占位值。该占位值只适用于关闭共享密钥鉴权的部署。如果 gateway 设置了
+  `TDAI_GATEWAY_API_KEY`，必须配置匹配的 key，否则除 `/health` 外的路由
+  都会返回 401（health 仍可通过）。
 - `tdai_memory_search` 检索已提取的长期记忆；提取是异步的，新捕获的信息可能需要短暂等待后才可检索。
 - `tdai_conversation_search` 检索当前 Legacy `session_key` 或 V3 `session_id`
   范围内的对话历史。
 - capture 采用 at-least-once 语义，只有完整 capture 得到确认后才推进
   checkpoint。结果不确定的 gateway 失败可能导致已接收的 L0 消息被重放，
   因为当前 V3 API 尚未提供客户端写入幂等键。
+- V3 capture 会将超过 gateway 8192 字符上限的单条 L0 消息截断，并追加
+  `...[truncated]`；后续消息仍会继续写入，收到有界请求的完整确认后即可
+  推进 checkpoint。V3 检索 query 同样会限制在 gateway 的 2048 字符上限内。
 - context offload 是显式开启、由 gateway 承载的能力，只调用
   `/v2/offload/ingest`、`/v2/offload/compact` 和
   `/v2/offload/read-ref`，不调用 `/capture` 或 `/recall`。

@@ -108,7 +108,7 @@ example at another gateway URL with `-gateway`.
 | `OPENAI_API_KEY`                 | Yes      | API key for the chat model          |                          |
 | `OPENAI_BASE_URL`                | No       | Base URL for the model API endpoint | `https://api.openai.com/v1` |
 | `TENCENTDB_AGENT_MEMORY_GATEWAY` | No       | TencentDB Agent Memory gateway URL  | `http://127.0.0.1:8420`  |
-| `TDAI_GATEWAY_API_KEY`           | For authenticated gateway/offload | Gateway API key sent as `Authorization: Bearer`; optional for a self-hosted gateway with authentication disabled | |
+| `TDAI_GATEWAY_API_KEY`           | For authenticated gateway/offload | Gateway API key sent as `Authorization: Bearer`; V3 uses a non-secret `local` placeholder when omitted for a self-hosted gateway with authentication disabled | |
 | `TDAI_SERVICE_ID`                | For identity | Memory service ID sent as `X-TDAI-Service-Id` for V3 | |
 | `TDAI_TEAM_ID`                   | For identity | Team isolation ID | |
 | `TDAI_AGENT_ID`                  | For identity | Agent isolation ID | |
@@ -288,10 +288,12 @@ Key points:
   `tdai_memory_search` is added only when `WithMemorySearchTool(true)` is set.
 - `runner.WithSessionIngestor(memSvc)` sends session transcript messages to the
   gateway after each turn. V3 preserves event timestamps and sends the
-  documented conversation-add request in ordered batches of at most 100;
-  Legacy keeps its compatibility timestamps. Capture is at-least-once: the
-  checkpoint advances only after the complete capture is acknowledged, so an
-  ambiguous transport failure can replay L0 messages.
+  documented conversation-add request in ordered batches of at most 100. It
+  truncates individual L0 messages beyond the gateway's 8192-character limit,
+  marks them with `...[truncated]`, and continues with later messages. Legacy
+  keeps its compatibility timestamps. Capture is at-least-once: the checkpoint
+  advances only after the complete capture is acknowledged, so an ambiguous
+  transport failure can replay L0 messages.
 - `runner.WithPlugins(memSvc.Plugin())` performs automatic recall before model
   calls and injects returned context into the request, but only when
   `WithRecallEnabled(true)` is set.

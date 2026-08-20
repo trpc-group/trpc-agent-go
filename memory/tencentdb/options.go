@@ -80,7 +80,8 @@ type Options struct {
 
 	// APIKey is sent as an "Authorization: Bearer <key>" header on gateway
 	// requests. It is required when the gateway is started with
-	// TDAI_GATEWAY_API_KEY.
+	// TDAI_GATEWAY_API_KEY. Identity-scoped V3 requests use a non-secret local
+	// placeholder when APIKey is empty to satisfy the self-hosted gateway parser.
 	APIKey string
 
 	SessionKeyFunc SessionKeyFunc

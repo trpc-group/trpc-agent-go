@@ -90,7 +90,9 @@ memSvc, err := memorytencentdb.NewServiceWithIdentity(
     memorytencentdb.WithGatewayURL(gatewayURL),
     // Recommended for new cloud and self-hosted integrations. This selects the
     // identity-scoped data plane; all IDs are required. The API key is required
-    // only when the gateway enables Bearer authentication.
+    // only when the gateway enables shared-secret authentication. Without one,
+    // the adapter sends the non-secret Bearer placeholder expected by the
+    // self-hosted gateway parser.
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
     // Recall/search remain opt-in.
     memorytencentdb.WithRecallEnabled(true),
@@ -321,9 +323,12 @@ modes and does not write local offload state.
   hard tenant boundary. V3 sends the configured service/team/agent plus the
   framework user/session IDs. Automatic recall and `tdai_memory_search` remain
   opt-in to preserve existing behavior.
-- When the gateway is started with `TDAI_GATEWAY_API_KEY`, set `WithAPIKey(...)`
-  so requests carry `Authorization: Bearer <key>`; otherwise every non-health
-  route returns 401 while the health check still passes.
+- V3 requests always carry a non-empty Bearer header. `WithAPIKey(...)` supplies
+  the real key; when it is omitted, the adapter sends the non-secret `local`
+  placeholder required by the self-hosted gateway parser. That placeholder is
+  valid only when shared-secret authentication is disabled. If the gateway is
+  started with `TDAI_GATEWAY_API_KEY`, configure the matching key or non-health
+  routes return 401 while the health check still passes.
 - `tdai_memory_search` searches extracted long-term memory; extraction is
   asynchronous, so newly captured facts may take a short time to become
   searchable.
@@ -333,6 +338,11 @@ modes and does not write local offload state.
   complete capture is acknowledged. An ambiguous gateway failure may therefore
   replay accepted L0 messages because the current V3 API has no client
   write-idempotency key.
+- V3 capture truncates an individual L0 message that exceeds the gateway's
+  8192-character limit and appends `...[truncated]`; later messages continue to
+  be captured and the checkpoint can advance after the bounded request is
+  acknowledged. V3 search queries are likewise bounded to the gateway's
+  2048-character limit.
 - Context offload is opt-in and gateway-owned. It uses only
   `/v2/offload/ingest`, `/v2/offload/compact`, and `/v2/offload/read-ref`; it
   does not call `/capture` or `/recall`.

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -274,7 +275,11 @@ func TestV3CaptureReplaysAfterPartialBatchFailure(t *testing.T) {
 }
 
 func TestV3CaptureDoesNotCheckpointPartialAcceptance(t *testing.T) {
-	var requests atomic.Int32
+	var (
+		capturedMu sync.Mutex
+		captured   [][]v3Message
+		requests   atomic.Int32
+	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != pathV3ConversationAdd {
 			http.Error(w, "unexpected path", http.StatusNotFound)
@@ -285,6 +290,9 @@ func TestV3CaptureDoesNotCheckpointPartialAcceptance(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		capturedMu.Lock()
+		captured = append(captured, append([]v3Message(nil), req.Messages...))
+		capturedMu.Unlock()
 		accepted := len(req.Messages)
 		if requests.Add(1) == 1 {
 			accepted--
@@ -327,6 +335,57 @@ func TestV3CaptureDoesNotCheckpointPartialAcceptance(t *testing.T) {
 	require.NoError(t, svc.capture(context.Background(), retryJob), "retry complete capture")
 	assert.True(t, readBestEffortLastCaptureAt(sess).Equal(sess.Events[len(sess.Events)-1].Timestamp))
 	assert.Equal(t, int32(2), requests.Load())
+	capturedMu.Lock()
+	gotCaptured := append([][]v3Message(nil), captured...)
+	capturedMu.Unlock()
+	require.Len(t, gotCaptured, 2)
+	assert.Equal(t, gotCaptured[0], gotCaptured[1])
+}
+
+func TestV3CaptureTruncatesOversizedMessageAndAdvancesCheckpoint(t *testing.T) {
+	var got v3ConversationAddRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != pathV3ConversationAdd {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeV3TestEnvelope(w, v3ConversationAddData{
+			AcceptedIDs:      make([]string, len(got.Messages)),
+			AcceptedVersions: make([]string, len(got.Messages)),
+			TotalCount:       len(got.Messages),
+		})
+	}))
+	defer server.Close()
+
+	svc, err := NewServiceWithIdentity(
+		NewServiceIdentity("service-1", "team-1", "agent-1"),
+		WithGatewayURL(server.URL),
+	)
+	require.NoError(t, err, "NewServiceWithIdentity")
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	sess := captureReadySession()
+	sess.Events[0].Response.Choices[0].Message = model.NewUserMessage(
+		strings.Repeat("x", maxV3MessageContentUTF16Units+1),
+	)
+	sessionKey := svc.sessionKey(sess)
+	job, ok := svc.reserveIngestJob(sess, sessionKey)
+	require.True(t, ok, "reserve ingest job")
+	require.NoError(t, svc.capture(context.Background(), job), "capture")
+
+	require.Len(t, got.Messages, 2)
+	assert.Equal(t, maxV3MessageContentUTF16Units, v3UTF16Length(got.Messages[0].Content))
+	assert.True(t, strings.HasSuffix(got.Messages[0].Content, v3TruncatedMessageContentSuffix))
+	assert.Equal(t, "ok", got.Messages[1].Content)
+	assert.True(t, readBestEffortLastCaptureAt(sess).Equal(sess.Events[len(sess.Events)-1].Timestamp))
+	_, ok = svc.reserveIngestJob(sess, sessionKey)
+	assert.False(t, ok, "successful bounded capture should advance the checkpoint")
 }
 
 func TestIngestSessionSerializesSameSessionCapturesAndTimestamps(t *testing.T) {
