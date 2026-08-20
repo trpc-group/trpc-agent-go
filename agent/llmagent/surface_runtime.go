@@ -222,6 +222,7 @@ func (a *LLMAgent) skillToolFlagsForInvocation(
 }
 
 // ExecutionTraceAppliedSurfaceIDs reports the effective surfaces that affected one invocation step.
+// It returns nil when a shared-trace child invocation does not map to a static child node.
 func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []string {
 	nodeID := executionTraceSurfaceNodeID(inv)
 	if nodeID == "" {
@@ -281,10 +282,8 @@ func executionTraceSurfaceNodeID(inv *agent.Invocation) string {
 	if nodeID == "" {
 		return ""
 	}
-	if inv.GetParentInvocation() != nil {
-		if !executionTraceNodeIsUnderParent(inv) {
-			return ""
-		}
+	if executionTraceUsesParentCapture(inv) && !executionTraceNodeIsUnderParent(inv) {
+		return ""
 	}
 	return nodeID
 }
@@ -298,12 +297,18 @@ func executionTraceStepNodeID(inv *agent.Invocation) string {
 	if nodeID == "" {
 		return ""
 	}
-	if inv.GetParentInvocation() != nil {
-		if !executionTraceNodeIsUnderParent(inv) {
-			return ""
-		}
+	if executionTraceUsesParentCapture(inv) && !executionTraceNodeIsUnderParent(inv) {
+		return ""
 	}
 	return nodeID
+}
+
+// executionTraceUsesParentCapture reports whether an invocation participates in its parent's trace.
+func executionTraceUsesParentCapture(inv *agent.Invocation) bool {
+	parent := inv.GetParentInvocation()
+	return parent != nil &&
+		inv.RunOptions.ExecutionTraceEnabled &&
+		parent.RunOptions.ExecutionTraceEnabled
 }
 
 // executionTraceNodeIsUnderParent reports whether the invocation maps to a static child node.

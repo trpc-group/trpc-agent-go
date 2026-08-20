@@ -197,6 +197,36 @@ func TestLLMAgent_Run_NonStaticChildInvocationDoesNotCreateTraceStep(t *testing.
 	require.Empty(t, trace.Steps)
 }
 
+func TestLLMAgent_Run_ChildWithOwnTraceCaptureReportsTraceStep(t *testing.T) {
+	m := &captureModel{}
+	agt := New(
+		"router_intent_parser",
+		WithModel(m),
+		WithInstruction("route intent"),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("workflow/classify"),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	child := parent.Clone(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+		agent.WithInvocationMessage(model.NewUserMessage("route")),
+	)
+	ch, err := agt.Run(context.Background(), child)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.NotNil(t, m.got)
+	require.Nil(t, agent.BuildExecutionTrace(parent, atrace.TraceStatusCompleted))
+	trace := agent.BuildExecutionTrace(child, atrace.TraceStatusCompleted)
+	require.NotNil(t, trace)
+	require.Len(t, trace.Steps, 1)
+	require.Equal(t, "router_intent_parser", trace.Steps[0].NodeID)
+	require.Contains(t, trace.Steps[0].AppliedSurfaceIDs, "router_intent_parser#instruction")
+}
+
 func TestLLMAgent_Run_StaticChildInvocationReportsTraceStep(t *testing.T) {
 	m := &captureModel{}
 	agt := New(
