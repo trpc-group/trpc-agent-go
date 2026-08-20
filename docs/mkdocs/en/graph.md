@@ -718,7 +718,16 @@ Important notes:
   multiple LLM nodes, prefer `graph.SetOneShotMessagesByNode(...)` to write all
   entries at once.
 - All state updates are atomic.
-- GraphAgent/Runner only sets `user_input` and no longer pre-populates `messages` with a user message. This allows any pre-LLM node to modify `user_input` and have it take effect in the same round.
+- GraphAgent/Runner sets `user_input` from the invocation user message
+  (`Content`, or textual `ContentParts` when `Content` is empty) and does
+  not pre-populate `messages` for ordinary string-only user input. This
+  allows any pre-LLM node to modify `user_input` and have it take effect
+  in the same round. When the user message has `ContentParts` (for example
+  AG-UI multimodal input) and there is no session history, GraphAgent also
+  places that original message on `messages` so non-text parts are preserved.
+  If a pre-LLM node rewrites `user_input` text, the LLM node updates the last
+  user message text for both the model request and durable `messages` while
+  keeping non-text `ContentParts` (for example images).
 - When Graph runs sub-agents, it preserves the parent run's `RequestID`
   (request identifier) so the current user input is included exactly once,
   even when it already exists in session history.
@@ -950,6 +959,13 @@ Notes
 - UserInput (`StateKeyUserInput`):
 
   - When non-empty, the LLM node uses durable `messages` plus this round's user input to call the model. After the call, it writes the user input and assistant reply to `messages` using `MessageOp` (e.g., `AppendMessages`, `ReplaceLastUser`) atomically, and clears `user_input` to avoid repeated appends.
+  - When the last durable user message is multimodal and its text differs from
+    `user_input`, the LLM node rewrites that message's text for both the model
+    request and durable state, while preserving non-text `ContentParts`.
+    The rewrite is skipped when `user_input` still matches the invocation
+    baseline, which is how session-processor enrichment such as attached-file
+    annotations is preserved. It runs when a pre-LLM node changes
+    `user_input`, or when no baseline exists.
   - Use case: conversational flows where pre-nodes may adjust user input.
   - By default, the user input key is `StateKeyUserInput`. To read one-shot
     input from a different key, use `graph.WithUserInputKey(...)` on that node.
@@ -1220,8 +1236,20 @@ An agent node does not automatically "pipe" its output into the next agent
 node. Edges only control execution order; data flows through graph state.
 
 By default, an agent node builds the child invocation message from
-`state[graph.StateKeyUserInput]`. But `user_input` is **one‑shot**:
-LLM/Agent nodes clear it after a successful run to avoid reusing the same input.
+`state[graph.StateKeyUserInput]`. When the current invocation is multimodal
+(text plus image/file/audio/video, or pure media), that default handoff
+preserves the typed user `Message`, including every `ContentPart` and
+message metadata. An intentional pre-node rewrite of `user_input` updates
+the child text while keeping non-text parts. Ordinary Content-only input
+still becomes `model.NewUserMessage(user_input)`. Explicit
+`WithAgentNodeInputMapper` / `StateKeyAgentInputMessage` still take
+precedence. `user_input` is still cleared after a successful AgentNode.
+The typed current-invocation message lives exactly as long as that
+`user_input` one-shot: any node that clears `user_input` also retires it,
+including the mapper and `StateKeyAgentInputMessage` paths, so a later
+default agent node never re-sends this turn's attachments. A node with
+`WithUserInputKey` clears its own key instead, which leaves the typed
+message available to a later default agent node.
 This is why a chain like `A (agent) → B (agent)` often looks like "A produced
 output, but B got an empty input".
 
@@ -1323,7 +1351,9 @@ run options, inputs, and outputs:
   message. If the returned state contains `graph.StateKeyAgentInputMessage`
   with a `model.Message` or `*model.Message` value, the Agent node uses that
   message as the child Agent input. This is useful for passing `role=tool`
-  tool messages instead of plain user text.
+  tool messages instead of plain user text. When the mapper omits that key,
+  the node uses an explicit `StateKeyAgentInputMessage`, then the current
+  invocation's typed user message, then `user_input`.
 - `WithSubgraphOutputMapper`: project child results → parent state updates.
   For `AddAgentNode`, this receives child results through `SubgraphResult`
   whether the child Agent is a GraphAgent or an LLMAgent.
@@ -1743,7 +1773,8 @@ appRunner := runner.NewRunner(
 )
 
 // Use Runner to execute workflow.
-// Runner only sets StateKeyUserInput; it no longer pre-populates StateKeyMessages.
+// Runner sets StateKeyUserInput from the user message text. Ordinary string
+// input is not pre-written to StateKeyMessages; multimodal ContentParts are.
 message := model.NewUserMessage("User input")
 eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```
@@ -3863,7 +3894,7 @@ sg.AddToolsConditionalEdges(nodeAsk, nodeExecTools, nodeFallback)
 
 GraphAgent stores the current `*session.Session` into state (`graph.StateKeySession`) and expands placeholders before the LLM call.
 
-Tip: GraphAgent seeds `graph.StateKeyMessages` from prior session events for multi‑turn continuity. When resuming from a checkpoint, a plain "resume" message is not injected as `graph.StateKeyUserInput`, preserving the recovered state.
+Tip: GraphAgent seeds `graph.StateKeyMessages` from prior session events for multi‑turn continuity. When resuming from a checkpoint, a plain/text-only "resume" message (`Content == "resume"` with no non-text ContentParts, or ContentParts that are text-only and resolve to "resume") is not injected as `graph.StateKeyUserInput`, preserving the recovered state. A message whose text is "resume" but that also includes non-text parts (image/file/audio/video/etc.) is treated as meaningful input.
 
 ### Concurrency and State Safety
 
@@ -3911,6 +3942,8 @@ Nodes communicate only via the shared `State`. Each node returns a state delta t
 
 - Agent nodes
   - Receive graph `State` via `Invocation.RunOptions.RuntimeState`
+  - Default child input: typed current-invocation user `Message` when the
+    turn is multimodal; otherwise `graph.StateKeyUserInput`
   - Output: set `graph.StateKeyLastResponse` and `graph.StateKeyNodeResponses[<agent_node_id>]`; `graph.StateKeyUserInput` is cleared after execution
 
 Good practice:
@@ -4072,6 +4105,31 @@ it only fills missing non-internal keys. If you need to override a small set of
 existing keys for one resume, use
 `graph.WithCallOptions(graph.WithCallResumeStateOverrideKeys(...))`. If you need to
 change the checkpointed state itself, write a new checkpoint.
+
+The same rule governs the input of a resumed turn. Without authorized resume
+override keys, the checkpoint's values win, including the attachments carried
+by the interrupted turn. An agent node that resumes into the default input
+path therefore receives the checkpointed input, not the message passed to the
+resume call. To replace the current invocation's input on resume, authorize
+both `graph.StateKeyUserInput` and `graph.StateKeyMessages`:
+
+```go
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("use this image instead"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
+        graph.CfgKeyCheckpointID: checkpointID,
+    }),
+    graph.WithCallOptions(graph.WithCallResumeStateOverrideKeys(
+        graph.StateKeyUserInput,
+        graph.StateKeyMessages,
+    )),
+)
+```
+
+Authorize both keys together. Authorizing only `graph.StateKeyUserInput`
+replaces the text but keeps the checkpointed history, so the resumed turn
+drops the new attachments instead of mixing them with a stale conversation.
 
 Use `graph.TimeTravel`:
 
@@ -4740,7 +4798,7 @@ graphAgent, _ := graphagent.New("workflow", g,
 **Q6: Resume did not continue where expected**
 
 - Pass `agent.WithRuntimeState(map[string]any{ graph.CfgKeyLineageID: "...", graph.CfgKeyCheckpointID: "..." })`.
-- Provide `ResumeMap` for HITL continuation when needed. A plain "resume" message is not added to `graph.StateKeyUserInput`.
+- Provide `ResumeMap` for HITL continuation when needed. A plain/text-only "resume" message is not added to `graph.StateKeyUserInput`. A "resume" text that also carries non-text parts, including `Content == "resume"` plus an image or file, is meaningful input.
 
 **Q7: State conflicts in parallel**
 

@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	teletrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -1583,6 +1584,225 @@ func TestExecutor_UpdateStateFromResult_SkipsInternal(t *testing.T) {
 	// Internal key must be dropped; regular key must be applied.
 	require.NotContains(t, execCtx.State, StateKeyExecContext)
 	require.Equal(t, "bar", execCtx.State["foo"])
+}
+
+func TestExecutor_UpdateStateFromResult_ConsumesUserInputBaseline(t *testing.T) {
+	fp := userinputkey.Fingerprint("hello")
+	exec := &Executor{}
+	execCtx := &ExecutionContext{State: State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: fp,
+	}}
+
+	exec.updateStateFromResult(execCtx, State{"keep": true})
+	require.Equal(t, fp, execCtx.State[userinputkey.Baseline])
+	require.Equal(t, "hello", execCtx.State[StateKeyUserInput])
+
+	exec.updateStateFromResult(execCtx, State{StateKeyUserInput: "rewritten"})
+	require.Equal(t, fp, execCtx.State[userinputkey.Baseline])
+	require.Equal(t, "rewritten", execCtx.State[StateKeyUserInput])
+
+	exec.updateStateFromResult(execCtx, State{
+		StateKeyUserInput:     "",
+		userinputkey.Baseline: userinputkey.Fingerprint("injected"),
+	})
+	require.Equal(t, "", execCtx.State[StateKeyUserInput])
+	require.NotContains(t, execCtx.State, userinputkey.Baseline)
+}
+
+func TestExecutor_UpdateStateFromResult_ConsumesInvocationMessageWithDefaultUserInput(t *testing.T) {
+	hello := "hello"
+	typed := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &hello},
+		},
+	}
+	newState := func() (*Executor, *ExecutionContext) {
+		return &Executor{}, &ExecutionContext{State: State{
+			StateKeyUserInput:    hello,
+			userinputkey.Message: typed,
+		}}
+	}
+
+	t.Run("unrelated update keeps typed message", func(t *testing.T) {
+		exec, execCtx := newState()
+		exec.updateStateFromResult(execCtx, State{"keep": true})
+		require.Equal(t, typed, execCtx.State[userinputkey.Message])
+	})
+
+	t.Run("rewriting user input keeps typed message", func(t *testing.T) {
+		exec, execCtx := newState()
+		exec.updateStateFromResult(execCtx, State{StateKeyUserInput: "rewritten"})
+		require.Equal(t, typed, execCtx.State[userinputkey.Message])
+	})
+
+	t.Run("explicit tombstone consumes", func(t *testing.T) {
+		exec, execCtx := newState()
+		exec.updateStateFromResult(execCtx, State{
+			StateKeyUserInput:    "",
+			userinputkey.Message: nil,
+		})
+		require.NotContains(t, execCtx.State, userinputkey.Message)
+	})
+
+	// Ending the default user_input one-shot retires the typed message even
+	// without a tombstone, so a later default AgentNode cannot re-send the
+	// original media. This matches pre-existing user_input semantics.
+	t.Run("clearing default user input consumes without tombstone", func(t *testing.T) {
+		exec, execCtx := newState()
+		exec.updateStateFromResult(execCtx, State{StateKeyUserInput: ""})
+		require.NotContains(t, execCtx.State, userinputkey.Message)
+	})
+
+	// A custom user input key clears its own key, so the default one-shot is
+	// still pending and the typed message must survive.
+	t.Run("clearing custom user input key keeps typed message", func(t *testing.T) {
+		exec, execCtx := newState()
+		exec.updateStateFromResult(execCtx, State{"custom_input": ""})
+		require.Equal(t, typed, execCtx.State[userinputkey.Message])
+		require.Equal(t, hello, execCtx.State[StateKeyUserInput])
+	})
+
+	// Absence of the key is not a clear. Payload-only input has no
+	// user_input at all, and pre-LLM nodes must not retire the media.
+	t.Run("payload only input survives unrelated updates", func(t *testing.T) {
+		exec := &Executor{}
+		execCtx := &ExecutionContext{State: State{
+			userinputkey.Message: typed,
+		}}
+		exec.updateStateFromResult(execCtx, State{"prepared": true})
+		require.Equal(t, typed, execCtx.State[userinputkey.Message])
+	})
+}
+
+func TestExecutor_UpdateStateFromResult_CustomUserInputReducerKeepsBaseline(t *testing.T) {
+	tests := []struct {
+		name      string
+		reducer   StateReducer
+		wantKept  string
+		tombstone bool
+	}{
+		{
+			name: "rejects empty update",
+			reducer: func(existing, update any) any {
+				if s, ok := update.(string); ok && s == "" {
+					return existing
+				}
+				if update == nil {
+					return existing
+				}
+				return update
+			},
+			wantKept:  "hello",
+			tombstone: true,
+		},
+		{
+			name: "transforms empty update",
+			reducer: func(existing, update any) any {
+				if s, ok := update.(string); ok && s == "" {
+					return "kept-by-reducer"
+				}
+				return update
+			},
+			wantKept:  "kept-by-reducer",
+			tombstone: true,
+		},
+		{
+			// The update-derived consume trigger must not bypass the
+			// post-reducer gate either.
+			name: "rejects empty update without tombstone",
+			reducer: func(existing, update any) any {
+				if s, ok := update.(string); ok && s == "" {
+					return existing
+				}
+				return update
+			},
+			wantKept: "hello",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g, err := NewStateGraph(NewStateSchema().AddField(StateKeyUserInput, StateField{
+				Type:    reflect.TypeOf(""),
+				Reducer: tt.reducer,
+			})).
+				AddNode("n", func(context.Context, State) (any, error) {
+					return nil, nil
+				}).
+				SetEntryPoint("n").
+				SetFinishPoint("n").
+				Compile()
+			require.NoError(t, err)
+			exec, err := NewExecutor(g)
+			require.NoError(t, err)
+
+			hello := "hello"
+			typed := model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &hello},
+				},
+			}
+			fp := userinputkey.Fingerprint("hello")
+			execCtx := &ExecutionContext{State: State{
+				StateKeyUserInput:     "hello",
+				userinputkey.Baseline: fp,
+				userinputkey.Message:  typed,
+			}}
+			update := State{StateKeyUserInput: ""}
+			if tt.tombstone {
+				update[userinputkey.Message] = nil
+			}
+			exec.updateStateFromResult(execCtx, update)
+			require.Equal(t, tt.wantKept, execCtx.State[StateKeyUserInput])
+			require.Equal(t, fp, execCtx.State[userinputkey.Baseline])
+			require.Equal(t, typed, execCtx.State[userinputkey.Message])
+		})
+	}
+}
+
+func TestExecutor_UpdateStateFromResult_IgnoresBaselineWrite(t *testing.T) {
+	exec := &Executor{}
+	kept := userinputkey.Fingerprint("hello")
+	execCtx := &ExecutionContext{State: State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: kept,
+	}}
+
+	exec.updateStateFromResult(execCtx, State{
+		userinputkey.Baseline: userinputkey.Fingerprint("injected"),
+		"foo":                 "bar",
+	})
+
+	require.Equal(t, kept, execCtx.State[userinputkey.Baseline])
+	require.Equal(t, "hello", execCtx.State[StateKeyUserInput])
+	require.Equal(t, "bar", execCtx.State["foo"])
+}
+
+func TestExecutor_UpdateStateFromResult_BaselineClearRace(t *testing.T) {
+	exec := &Executor{}
+	execCtx := &ExecutionContext{State: State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: userinputkey.Fingerprint("hello"),
+	}}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				exec.updateStateFromResult(execCtx, State{"k": i})
+				return
+			}
+			exec.updateStateFromResult(execCtx, State{StateKeyUserInput: ""})
+		}(i)
+	}
+	wg.Wait()
+
+	require.NotContains(t, execCtx.State, userinputkey.Baseline)
 }
 
 // TestBasicCommandRouting tests routing using Command objects

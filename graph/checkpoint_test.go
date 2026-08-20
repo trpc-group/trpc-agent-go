@@ -22,6 +22,7 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	toolerrorplugin "trpc.group/trpc-go/trpc-agent-go/plugin/toolerror"
@@ -1228,6 +1229,615 @@ func TestLLMRunner_ExecuteUserInputAndHistoryStages(t *testing.T) {
 	require.NoError(t, err)
 	s2, _ := st2.(State)
 	require.NotNil(t, s2[StateKeyLastResponse])
+}
+
+func TestLLMRunner_ExecuteUserInputStage_PreservesContentParts(t *testing.T) {
+	hello := "hello"
+	world := "world"
+	imagePart := model.ContentPart{
+		Type:  model.ContentTypeImage,
+		Image: &model.Image{URL: "https://example.com/a.png"},
+	}
+	partsOnly := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &hello},
+			imagePart,
+		},
+	}
+
+	capture := &requestCaptureModel{}
+	r := &llmRunner{llmModel: capture, instruction: "", tools: nil, nodeID: "node1"}
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(context.Background(), "s")
+
+	st, err := r.executeUserInputStage(
+		context.Background(),
+		State{
+			StateKeyMessages:  []model.Message{partsOnly},
+			StateKeyUserInput: "hello",
+		},
+		StateKeyUserInput,
+		"hello",
+		span,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, capture.lastReq)
+	require.NotEmpty(t, capture.lastReq.Messages)
+	got := capture.lastReq.Messages[len(capture.lastReq.Messages)-1]
+	require.Equal(t, model.RoleUser, got.Role)
+	require.Empty(t, got.Content)
+	require.Equal(t, partsOnly.ContentParts, got.ContentParts)
+
+	s, ok := st.(State)
+	require.True(t, ok)
+	ops, ok := s[StateKeyMessages].([]MessageOp)
+	require.True(t, ok)
+	for _, op := range ops {
+		_, isReplace := op.(ReplaceLastUser)
+		require.False(t, isReplace, "matching parts-only user message must not be replaced")
+	}
+
+	mismatch := &requestCaptureModel{}
+	r.llmModel = mismatch
+	mismatchMsgs := []model.Message{{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &world},
+			imagePart,
+		},
+	}}
+	mismatchSt, err := r.executeUserInputStage(
+		context.Background(),
+		State{
+			StateKeyMessages:  mismatchMsgs,
+			StateKeyUserInput: "hello",
+		},
+		StateKeyUserInput,
+		"hello",
+		span,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, mismatch.lastReq)
+	replaced := mismatch.lastReq.Messages[len(mismatch.lastReq.Messages)-1]
+	require.Equal(t, model.RoleUser, replaced.Role)
+	require.Empty(t, replaced.Content)
+	require.Len(t, replaced.ContentParts, 2)
+	require.Equal(t, model.ContentTypeText, replaced.ContentParts[0].Type)
+	require.NotNil(t, replaced.ContentParts[0].Text)
+	require.Equal(t, "hello", *replaced.ContentParts[0].Text)
+	require.Equal(t, imagePart, replaced.ContentParts[1])
+	mismatchState, ok := mismatchSt.(State)
+	require.True(t, ok)
+	mismatchOps, ok := mismatchState[StateKeyMessages].([]MessageOp)
+	require.True(t, ok)
+	durableAny := MessageReducer(mismatchMsgs, mismatchOps)
+	durable, ok := durableAny.([]model.Message)
+	require.True(t, ok)
+	require.NotEmpty(t, durable)
+	require.True(t, model.MessagesEqual(replaced, durable[0]))
+
+	ordinary := &requestCaptureModel{}
+	r.llmModel = ordinary
+	_, err = r.executeUserInputStage(
+		context.Background(),
+		State{
+			StateKeyMessages:  []model.Message{model.NewUserMessage("hello")},
+			StateKeyUserInput: "hello",
+		},
+		StateKeyUserInput,
+		"hello",
+		span,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ordinary.lastReq)
+	require.Equal(
+		t,
+		model.NewUserMessage("hello"),
+		ordinary.lastReq.Messages[len(ordinary.lastReq.Messages)-1],
+	)
+
+	ordinaryMismatch := &requestCaptureModel{}
+	r.llmModel = ordinaryMismatch
+	ordinaryMismatchSt, err := r.executeUserInputStage(
+		context.Background(),
+		State{
+			StateKeyMessages:  []model.Message{model.NewUserMessage("old")},
+			StateKeyUserInput: "new",
+		},
+		StateKeyUserInput,
+		"new",
+		span,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ordinaryMismatch.lastReq)
+	require.Equal(
+		t,
+		model.NewUserMessage("new"),
+		ordinaryMismatch.lastReq.Messages[len(ordinaryMismatch.lastReq.Messages)-1],
+	)
+	ordinaryMismatchState, ok := ordinaryMismatchSt.(State)
+	require.True(t, ok)
+	ordinaryMismatchOps, ok := ordinaryMismatchState[StateKeyMessages].([]MessageOp)
+	require.True(t, ok)
+	var foundReplaceLastUser bool
+	for _, op := range ordinaryMismatchOps {
+		if replace, ok := op.(ReplaceLastUser); ok {
+			require.Equal(t, "new", replace.Content)
+			foundReplaceLastUser = true
+		}
+		_, isPrivateReplace := op.(replaceLastUserMessage)
+		require.False(t, isPrivateReplace, "ordinary string mismatch must use ReplaceLastUser")
+	}
+	require.True(t, foundReplaceLastUser, "ordinary string mismatch must emit ReplaceLastUser")
+
+	contentAndParts := model.Message{
+		Role:    model.RoleUser,
+		Content: "from-content",
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &world},
+			imagePart,
+		},
+	}
+	authoritative := &requestCaptureModel{}
+	r.llmModel = authoritative
+	_, err = r.executeUserInputStage(
+		context.Background(),
+		State{
+			StateKeyMessages:  []model.Message{contentAndParts},
+			StateKeyUserInput: "from-content",
+		},
+		StateKeyUserInput,
+		"from-content",
+		span,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, authoritative.lastReq)
+	kept := authoritative.lastReq.Messages[len(authoritative.lastReq.Messages)-1]
+	require.Equal(t, "from-content", kept.Content)
+	require.Equal(t, contentAndParts.ContentParts, kept.ContentParts)
+}
+
+func TestLLMRunner_ExecuteUserInputStage_BaselinePreservesProcessorEnrichment(t *testing.T) {
+	userText := "please summarize"
+	annotation := "Attached files (1): notes.txt (text/plain)\n"
+	filePart := model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			Name:     "notes.txt",
+			Data:     []byte("file-bytes"),
+			MimeType: "text/plain",
+		},
+	}
+	enriched := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &annotation},
+			{Type: model.ContentTypeText, Text: &userText},
+			filePart,
+		},
+	}
+
+	capture := &requestCaptureModel{}
+	r := &llmRunner{llmModel: capture, instruction: "", tools: nil, nodeID: "node1"}
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(context.Background(), "s")
+
+	st, err := r.executeUserInputStage(
+		context.Background(),
+		State{
+			StateKeyMessages:      []model.Message{enriched},
+			StateKeyUserInput:     userText,
+			userinputkey.Baseline: userinputkey.Fingerprint(userText),
+		},
+		StateKeyUserInput,
+		userText,
+		span,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, capture.lastReq)
+	got := capture.lastReq.Messages[len(capture.lastReq.Messages)-1]
+	require.Equal(t, model.RoleUser, got.Role)
+	require.Equal(t, enriched.ContentParts, got.ContentParts)
+
+	s, ok := st.(State)
+	require.True(t, ok)
+	ops, ok := s[StateKeyMessages].([]MessageOp)
+	require.True(t, ok)
+	for _, op := range ops {
+		_, isReplace := op.(ReplaceLastUser)
+		require.False(t, isReplace)
+		_, isPrivateReplace := op.(replaceLastUserMessage)
+		require.False(t, isPrivateReplace)
+	}
+	durableAny := MessageReducer([]model.Message{enriched}, ops)
+	durable, ok := durableAny.([]model.Message)
+	require.True(t, ok)
+	require.NotEmpty(t, durable)
+	require.True(t, model.MessagesEqual(got, durable[0]))
+}
+
+func TestLLMRunner_ExecuteUserInputStage_BaselineRewriteWhenUserInputChanges(t *testing.T) {
+	userText := "please summarize"
+	annotation := "Attached files (1): notes.txt (text/plain)\n"
+	filePart := model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			Name:     "notes.txt",
+			Data:     []byte("file-bytes"),
+			MimeType: "text/plain",
+		},
+	}
+	enriched := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &annotation},
+			{Type: model.ContentTypeText, Text: &userText},
+			filePart,
+		},
+	}
+
+	capture := &requestCaptureModel{}
+	r := &llmRunner{llmModel: capture, instruction: "", tools: nil, nodeID: "node1"}
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(context.Background(), "s")
+
+	st, err := r.executeUserInputStage(
+		context.Background(),
+		State{
+			StateKeyMessages:      []model.Message{enriched},
+			StateKeyUserInput:     "rewritten",
+			userinputkey.Baseline: userinputkey.Fingerprint(userText),
+		},
+		StateKeyUserInput,
+		"rewritten",
+		span,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, capture.lastReq)
+	got := capture.lastReq.Messages[len(capture.lastReq.Messages)-1]
+	require.Equal(t, model.RoleUser, got.Role)
+	require.Empty(t, got.Content)
+	require.Len(t, got.ContentParts, 2)
+	require.Equal(t, model.ContentTypeText, got.ContentParts[0].Type)
+	require.NotNil(t, got.ContentParts[0].Text)
+	require.Equal(t, "rewritten", *got.ContentParts[0].Text)
+	require.Equal(t, filePart, got.ContentParts[1])
+
+	s, ok := st.(State)
+	require.True(t, ok)
+	ops, ok := s[StateKeyMessages].([]MessageOp)
+	require.True(t, ok)
+	durableAny := MessageReducer([]model.Message{enriched}, ops)
+	durable, ok := durableAny.([]model.Message)
+	require.True(t, ok)
+	require.NotEmpty(t, durable)
+	require.True(t, model.MessagesEqual(got, durable[0]))
+}
+
+func TestCreateCheckpoint_KeepsUserInputBaseline(t *testing.T) {
+	hello := "hello"
+	typed := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &hello},
+			{
+				Type:  model.ContentTypeImage,
+				Image: &model.Image{URL: "https://example.com/a.png"},
+			},
+		},
+	}
+	saver := &capturingSaver{}
+	cm := NewCheckpointManager(saver)
+	cfg := CreateCheckpointConfig("ln-baseline", "", "")
+	st := State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: userinputkey.Fingerprint("hello"),
+		userinputkey.Message:  typed,
+		StateKeyExecContext:   &ExecutionContext{InvocationID: "x"},
+	}
+	ck, err := cm.CreateCheckpoint(
+		context.Background(), cfg, st, CheckpointSourceInput, 0,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ck)
+	vals := saver.lastPut.Checkpoint.ChannelValues
+	require.NotNil(t, vals)
+	require.Equal(t, userinputkey.Fingerprint("hello"), vals[userinputkey.Baseline])
+	got, ok := decodeInvocationUserMessage(vals[userinputkey.Message])
+	require.True(t, ok)
+	require.True(t, model.MessagesEqual(typed, got))
+	require.NotContains(t, vals, StateKeyExecContext)
+}
+
+func TestExecutor_UserInputBaselineSurvivesUntilLLMConsumption(t *testing.T) {
+	fp := userinputkey.Fingerprint("hello")
+	var sawBeforeLLM bool
+	var prepareBaseline string
+	var prepareBaselineOK bool
+	var afterRan bool
+	var sawBaselineAfterLLM bool
+	var afterUserInput any
+	g, err := NewStateGraph(MessagesStateSchema()).
+		AddNode("prepare", func(_ context.Context, state State) (any, error) {
+			prepareBaseline, prepareBaselineOK = state[userinputkey.Baseline].(string)
+			sawBeforeLLM = true
+			return State{"prepared": true}, nil
+		}).
+		AddLLMNode("ask", &dummyModel{}, "", nil).
+		AddNode("after", func(_ context.Context, state State) (any, error) {
+			afterRan = true
+			_, sawBaselineAfterLLM = state[userinputkey.Baseline]
+			afterUserInput = state[StateKeyUserInput]
+			return nil, nil
+		}).
+		SetEntryPoint("prepare").
+		AddEdge("prepare", "ask").
+		AddEdge("ask", "after").
+		SetFinishPoint("after").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(context.Background(), State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: fp,
+		CfgKeyLineageID:       "ln-baseline-lifecycle",
+	}, &agent.Invocation{InvocationID: "ln-baseline-lifecycle"})
+	require.NoError(t, err)
+	for evt := range ch {
+		if evt != nil && evt.Done && evt.Object == ObjectTypeGraphExecution {
+			require.NotContains(t, evt.StateDelta, userinputkey.Baseline)
+		}
+	}
+	require.True(t, sawBeforeLLM)
+	require.True(t, prepareBaselineOK)
+	require.Equal(t, fp, prepareBaseline)
+	require.True(t, afterRan)
+	require.False(t, sawBaselineAfterLLM)
+	require.Equal(t, "", afterUserInput)
+
+	var sawInputBaseline bool
+	var sawPreLLMLoopBaseline bool
+	var sawPostLLMCheckpoint bool
+	for _, tuple := range saver.byID {
+		if tuple == nil || tuple.Checkpoint == nil || tuple.Metadata == nil {
+			continue
+		}
+		vals := tuple.Checkpoint.ChannelValues
+		switch tuple.Metadata.Source {
+		case CheckpointSourceInput:
+			require.Equal(t, fp, vals[userinputkey.Baseline])
+			sawInputBaseline = true
+		case CheckpointSourceLoop:
+			if got, ok := vals[userinputkey.Baseline]; ok {
+				require.Equal(t, fp, got)
+				sawPreLLMLoopBaseline = true
+				continue
+			}
+			sawPostLLMCheckpoint = true
+		}
+	}
+	require.True(t, sawInputBaseline)
+	require.True(t, sawPreLLMLoopBaseline)
+	require.True(t, sawPostLLMCheckpoint)
+}
+
+func TestExecutor_UserInputBaselineKeptOnModelError(t *testing.T) {
+	fp := userinputkey.Fingerprint("hello")
+	g, err := NewStateGraph(MessagesStateSchema()).
+		AddLLMNode("ask", &errModel{}, "", nil).
+		SetEntryPoint("ask").
+		SetFinishPoint("ask").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(context.Background(), State{
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: fp,
+		CfgKeyLineageID:       "ln-baseline-error",
+	}, &agent.Invocation{InvocationID: "ln-baseline-error"})
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.NotEmpty(t, saver.byID)
+	for _, tuple := range saver.byID {
+		if tuple == nil || tuple.Checkpoint == nil {
+			continue
+		}
+		require.Equal(t, fp, tuple.Checkpoint.ChannelValues[userinputkey.Baseline])
+	}
+}
+
+func TestLLMRunner_ExecuteUserInputStage_ConsumedBaselineDoesNotSuppressLaterRewrite(t *testing.T) {
+	userText := "please summarize"
+	annotation := "Attached files (1): notes.txt (text/plain)\n"
+	filePart := model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			Name:     "notes.txt",
+			Data:     []byte("file-bytes"),
+			MimeType: "text/plain",
+		},
+	}
+	enriched := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &annotation},
+			{Type: model.ContentTypeText, Text: &userText},
+			filePart,
+		},
+	}
+
+	g, err := NewStateGraph(MessagesStateSchema()).
+		AddNode("noop", func(context.Context, State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("noop").
+		SetFinishPoint("noop").
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+	execCtx := &ExecutionContext{State: State{
+		StateKeyMessages:      []model.Message{enriched},
+		StateKeyUserInput:     userText,
+		userinputkey.Baseline: userinputkey.Fingerprint(userText),
+	}}
+
+	capture := &requestCaptureModel{}
+	r := &llmRunner{llmModel: capture, instruction: "", tools: nil, nodeID: "node1"}
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(context.Background(), "s")
+
+	first, err := r.executeUserInputStage(
+		context.Background(),
+		execCtx.State,
+		StateKeyUserInput,
+		userText,
+		span,
+	)
+	require.NoError(t, err)
+	firstState, ok := first.(State)
+	require.True(t, ok)
+	exec.updateStateFromResult(execCtx, firstState)
+	require.NotContains(t, execCtx.State, userinputkey.Baseline)
+
+	laterUser := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &annotation},
+			filePart,
+		},
+	}
+	exec.updateStateFromResult(execCtx, State{StateKeyUserInput: userText})
+	require.NotContains(t, execCtx.State, userinputkey.Baseline)
+	execCtx.State[StateKeyMessages] = []model.Message{laterUser}
+
+	laterCapture := &requestCaptureModel{}
+	r.llmModel = laterCapture
+	_, err = r.executeUserInputStage(
+		context.Background(),
+		execCtx.State,
+		StateKeyUserInput,
+		userText,
+		span,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, laterCapture.lastReq)
+	got := laterCapture.lastReq.Messages[len(laterCapture.lastReq.Messages)-1]
+	require.Equal(t, model.RoleUser, got.Role)
+	require.Len(t, got.ContentParts, 2)
+	require.Equal(t, model.ContentTypeText, got.ContentParts[0].Type)
+	require.NotNil(t, got.ContentParts[0].Text)
+	require.Equal(t, userText, *got.ContentParts[0].Text)
+	require.Equal(t, filePart, got.ContentParts[1])
+}
+
+func TestLLMRunner_ExecuteUserInputStage_ModelErrorKeepsCallerBaseline(t *testing.T) {
+	fp := userinputkey.Fingerprint("hello")
+	state := State{
+		StateKeyMessages:      []model.Message{model.NewUserMessage("hello")},
+		StateKeyUserInput:     "hello",
+		userinputkey.Baseline: fp,
+	}
+	r := &llmRunner{llmModel: &errModel{}, instruction: "", tools: nil, nodeID: "node1"}
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(context.Background(), "s")
+
+	_, err := r.executeUserInputStage(
+		context.Background(),
+		state,
+		StateKeyUserInput,
+		"hello",
+		span,
+	)
+	require.Error(t, err)
+	require.Equal(t, fp, state[userinputkey.Baseline])
+	require.Equal(t, "hello", state[StateKeyUserInput])
+}
+
+func TestLLMRunner_Execute_PureImageUsesHistoryWhenUserInputCleared(t *testing.T) {
+	imageMsg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{{
+			Type:  model.ContentTypeImage,
+			Image: &model.Image{URL: "https://example.com/a.png"},
+		}},
+	}
+	capture := &requestCaptureModel{}
+	r := &llmRunner{llmModel: capture, instruction: "", tools: nil, nodeID: "node1"}
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	_, span := tracer.Start(context.Background(), "s")
+
+	_, err := r.execute(context.Background(), State{
+		StateKeyMessages: []model.Message{imageMsg},
+	}, span)
+	require.NoError(t, err)
+	require.NotNil(t, capture.lastReq)
+	require.NotEmpty(t, capture.lastReq.Messages)
+	got := capture.lastReq.Messages[len(capture.lastReq.Messages)-1]
+	require.Equal(t, model.RoleUser, got.Role)
+	require.Empty(t, got.Content)
+	require.Equal(t, imageMsg.ContentParts, got.ContentParts)
+
+	stale := &requestCaptureModel{}
+	r.llmModel = stale
+	staleSt, err := r.execute(context.Background(), State{
+		StateKeyMessages:  []model.Message{imageMsg},
+		StateKeyUserInput: "stale",
+	}, span)
+	require.NoError(t, err)
+	require.NotNil(t, stale.lastReq)
+	replaced := stale.lastReq.Messages[len(stale.lastReq.Messages)-1]
+	require.Equal(t, model.RoleUser, replaced.Role)
+	require.Empty(t, replaced.Content)
+	require.Len(t, replaced.ContentParts, 2)
+	require.Equal(t, model.ContentTypeText, replaced.ContentParts[0].Type)
+	require.NotNil(t, replaced.ContentParts[0].Text)
+	require.Equal(t, "stale", *replaced.ContentParts[0].Text)
+	require.Equal(t, imageMsg.ContentParts[0], replaced.ContentParts[1])
+	staleState, ok := staleSt.(State)
+	require.True(t, ok)
+	staleOps, ok := staleState[StateKeyMessages].([]MessageOp)
+	require.True(t, ok)
+	durableAny := MessageReducer([]model.Message{imageMsg}, staleOps)
+	durable, ok := durableAny.([]model.Message)
+	require.True(t, ok)
+	require.NotEmpty(t, durable)
+	require.True(t, model.MessagesEqual(replaced, durable[0]))
+}
+
+type requestCaptureModel struct {
+	lastReq *model.Request
+}
+
+func (m *requestCaptureModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.lastReq = req
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *requestCaptureModel) Info() model.Info {
+	return model.Info{Name: "request-capture"}
 }
 
 // dummy model returning no responses

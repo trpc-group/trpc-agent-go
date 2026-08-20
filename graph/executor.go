@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
@@ -637,6 +638,7 @@ func (e *Executor) resumeOrInitWithSaver(
 		initialState,
 		resumeStateOverrideKeys,
 	)
+	e.applyInvocationInputPatch(restored, initialState, resumeStateOverrideKeys)
 
 	resumedStep := 0
 	if tuple.Metadata != nil {
@@ -678,6 +680,11 @@ func (e *Executor) restoreStateFromCheckpoint(tuple *CheckpointTuple) State {
 	if raw, ok := restored[StateKeyOneShotMessages]; ok {
 		if msgs, err := decodeMessages(raw); err == nil {
 			restored[StateKeyOneShotMessages] = msgs
+		}
+	}
+	if raw, ok := restored[userinputkey.Message]; ok {
+		if msg, decoded := decodeInvocationUserMessage(raw); decoded {
+			restored[userinputkey.Message] = msg
 		}
 	}
 	if e.graph.Schema() == nil {
@@ -725,6 +732,71 @@ func (e *Executor) mergeInitialStateNonInternal(
 		}
 	}
 	return restored
+}
+
+// applyInvocationInputPatch applies GraphAgent's current-invocation input
+// metadata after the public resume merge. Underscore-prefixed keys are not
+// globally writable on resume; this patch is executor-owned and is applied
+// only when the corresponding public override keys are authorized.
+//
+// Baseline and the typed invocation message are installed only when both
+// messages and user_input are authorized, so they stay aligned with the
+// current durable last user message. Authorizing only user_input drops a
+// stale restored Baseline and typed message without installing the current
+// ones. Authorizing only messages leaves the restored Baseline and typed
+// message paired with the restored user_input.
+func (e *Executor) applyInvocationInputPatch(
+	restored,
+	initial State,
+	resumeStateOverrideKeys map[string]struct{},
+) {
+	if restored == nil {
+		return
+	}
+	delete(restored, userinputkey.PatchKey)
+	if initial == nil {
+		return
+	}
+	patch, ok := initial[userinputkey.PatchKey].(userinputkey.Patch)
+	if !ok {
+		return
+	}
+	userInputAuthorized := resumeOverrideAuthorized(
+		resumeStateOverrideKeys,
+		StateKeyUserInput,
+	)
+	messagesAuthorized := resumeOverrideAuthorized(
+		resumeStateOverrideKeys,
+		StateKeyMessages,
+	)
+	if userInputAuthorized && patch.ClearUserInput {
+		delete(restored, StateKeyUserInput)
+	}
+	switch {
+	case userInputAuthorized && messagesAuthorized:
+		if patch.Baseline != "" {
+			restored[userinputkey.Baseline] = patch.Baseline
+		} else {
+			delete(restored, userinputkey.Baseline)
+		}
+		if msg, ok := decodeInvocationUserMessage(initial[userinputkey.Message]); ok {
+			restored[userinputkey.Message] = deepCopyModelMessage(msg)
+		} else {
+			delete(restored, userinputkey.Message)
+		}
+	case userInputAuthorized:
+		// New user_input does not correspond to the restored last message.
+		delete(restored, userinputkey.Baseline)
+		delete(restored, userinputkey.Message)
+	}
+}
+
+func resumeOverrideAuthorized(keys map[string]struct{}, key string) bool {
+	if len(keys) == 0 || key == "" {
+		return false
+	}
+	_, ok := keys[key]
+	return ok
 }
 
 // applyExecutableNextNodes sets StateKeyNextNodes when suitable.
@@ -1913,6 +1985,9 @@ func (e *Executor) initializeState(initialState State) State {
 			}
 		}
 	}
+	// Patch is resume-only metadata. First-run Baseline is already on
+	// initial state; do not leak the patch into execution or checkpoints.
+	delete(execState, userinputkey.PatchKey)
 	return execState
 }
 
@@ -4236,6 +4311,13 @@ func (e *Executor) updateStateFromResult(execCtx *ExecutionContext, stateResult 
 	execCtx.stateMutex.Lock()
 	defer execCtx.stateMutex.Unlock()
 
+	// Decide consumption from the original update before sanitizing
+	// internal keys. A node either requests consume explicitly with the
+	// Message: nil tombstone, or ends the default user_input one-shot by
+	// clearing it, which retires the typed message just the same.
+	consumeRequested := invocationMessageConsumeRequested(stateResult) ||
+		updateClearsDefaultUserInput(stateResult)
+
 	// Sanitize: drop internal/ephemeral keys from user node updates.
 	// These keys (e.g., exec_context) are maintained by the executor and
 	// may contain concurrently-mutated maps. Accepting them causes
@@ -4255,10 +4337,74 @@ func (e *Executor) updateStateFromResult(execCtx *ExecutionContext, stateResult 
 	// Use schema-based reducers when available for proper merging.
 	if e.graph != nil && e.graph.Schema() != nil {
 		execCtx.State = e.graph.Schema().ApplyUpdate(execCtx.State, stateResult)
-		return
+	} else {
+		// Fallback to direct assignment if no schema available.
+		maps.Copy(execCtx.State, stateResult)
 	}
-	// Fallback to direct assignment if no schema available.
-	maps.Copy(execCtx.State, stateResult)
+	// Consume Baseline only after the reducer has actually cleared
+	// user_input. A custom schema may reject or transform an empty
+	// update, leaving the one-shot value in executor-owned state; the
+	// fingerprint must survive in that case so later rewrite decisions
+	// stay correct. Model errors return no State update, so Baseline
+	// also survives that path.
+	if defaultUserInputCleared(execCtx.State) {
+		delete(execCtx.State, userinputkey.Baseline)
+		// Typed current-invocation input follows the same post-reducer
+		// rule, but only when the update also ended the default
+		// user_input one-shot. Custom user input keys clear their own
+		// key, so they leave the typed message pending.
+		if consumeRequested {
+			delete(execCtx.State, userinputkey.Message)
+		}
+	}
+}
+
+// invocationMessageConsumeRequested reports whether a node update carries the
+// consume tombstone, which a node writes after it consumed the typed
+// current-invocation message without a default user_input value to clear.
+func invocationMessageConsumeRequested(update State) bool {
+	if update == nil {
+		return false
+	}
+	v, ok := update[userinputkey.Message]
+	return ok && v == nil
+}
+
+// updateClearsDefaultUserInput reports whether a node update explicitly ends
+// the default user_input one-shot by writing an empty string to it.
+//
+// The input mapper and StateKeyAgentInputMessage paths still clear that key,
+// so the typed current-invocation message must not outlive it and a later
+// default agent node cannot re-send this turn's attachments. A node with a
+// custom user input key clears its own key instead and leaves the typed
+// message pending. Absence of the key is not a clear either: a pre-LLM node
+// that never touches user_input keeps the typed message pending, which is
+// what payload-only input relies on.
+func updateClearsDefaultUserInput(update State) bool {
+	if update == nil {
+		return false
+	}
+	v, ok := update[StateKeyUserInput]
+	if !ok {
+		return false
+	}
+	s, ok := v.(string)
+	return ok && s == ""
+}
+
+// defaultUserInputCleared reports whether executor-owned state no longer
+// holds a pending default user_input value. Baseline is only meaningful
+// while that one-shot string is still pending for the LLM user-input stage.
+func defaultUserInputCleared(state State) bool {
+	if state == nil {
+		return true
+	}
+	v, ok := state[StateKeyUserInput]
+	if !ok || v == nil {
+		return true
+	}
+	s, ok := v.(string)
+	return ok && s == ""
 }
 
 // syncResumeState copies resume-related keys from a node-local state view into the shared executor state.

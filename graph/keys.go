@@ -10,6 +10,8 @@
 
 package graph
 
+import "trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
+
 // Config map keys (used under config["configurable"])
 const (
 	CfgKeyConfigurable = "configurable"
@@ -121,7 +123,18 @@ func isInternalStateKey(key string) bool {
 	case MetadataKeyNode, MetadataKeyPregel, MetadataKeyChannel,
 		MetadataKeyState, MetadataKeyCompletion, MetadataKeyNodeCustom,
 		MetadataKeyNodeEmitter,
-		stateKeyCompletedToolMessages:
+		stateKeyCompletedToolMessages,
+		// Baseline is executor-owned. Exclude it from completion events and
+		// child RuntimeState. Checkpoints still persist it via safeClone
+		// until the executor consumes it with user_input.
+		userinputkey.Baseline,
+		// Message is executor-owned. Exclude it from completion events and
+		// child RuntimeState. Checkpoints still persist it via safeClone
+		// until an LLM or AgentNode input stage consumes it.
+		userinputkey.Message,
+		// Patch is ephemeral resume metadata. It must not appear in
+		// completion events, child RuntimeState, or node updates.
+		userinputkey.PatchKey:
 		return true
 	default:
 		return false

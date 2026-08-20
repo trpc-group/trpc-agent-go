@@ -118,6 +118,14 @@ func deepCopyFastPathWithVisited(value any, visited visitedMap) (any, bool) {
 		return deepCopyBytesWithVisited(v, visited), true
 	case []model.Message:
 		return deepCopyModelMessagesWithVisited(v, visited), true
+	case model.Message:
+		return deepCopyModelMessageWithVisited(v, visited), true
+	case *model.Message:
+		if v == nil {
+			return (*model.Message)(nil), true
+		}
+		copied := deepCopyModelMessageWithVisited(*v, visited)
+		return &copied, true
 	case MessageOp:
 		op, ok := deepCopyMessageOpWithVisited(v, visited)
 		if !ok {
@@ -304,6 +312,8 @@ func canDeepCopyMessageOpFastPath(op MessageOp) bool {
 		return true
 	case ReplaceLastUser:
 		return true
+	case replaceLastUserMessage:
+		return true
 	case RemoveAllMessages:
 		return true
 	default:
@@ -382,11 +392,28 @@ func deepCopyMessageOpWithVisited(
 		return v, true
 	case ReplaceLastUser:
 		return v, true
+	case replaceLastUserMessage:
+		msgs := deepCopyModelMessagesWithVisited([]model.Message{v.Message}, visited)
+		v.Message = msgs[0]
+		return v, true
 	case RemoveAllMessages:
 		return v, true
 	default:
 		return nil, false
 	}
+}
+
+func deepCopyModelMessage(in model.Message) model.Message {
+	visited := newVisitedMap()
+	return deepCopyModelMessageWithVisited(in, visited)
+}
+
+func deepCopyModelMessageWithVisited(
+	in model.Message,
+	visited visitedMap,
+) model.Message {
+	copied := deepCopyModelMessagesWithVisited([]model.Message{in}, visited)
+	return copied[0]
 }
 
 func deepCopyModelMessages(in []model.Message) []model.Message {
@@ -460,45 +487,57 @@ func deepCopyModelContentPartsWithVisited(
 		out := make([]model.ContentPart, len(in))
 		visited[key] = out
 		for i := range in {
-			out[i] = in[i]
-			if in[i].Text != nil {
-				out[i].Text = deepCopyStringPointerWithVisited(in[i].Text, visited)
-			}
-			if in[i].Image != nil {
-				out[i].Image = deepCopyModelImageWithVisited(in[i].Image, visited)
-			}
-			if in[i].Audio != nil {
-				out[i].Audio = deepCopyModelAudioWithVisited(in[i].Audio, visited)
-			}
-			if in[i].Video != nil {
-				out[i].Video = deepCopyModelVideoWithVisited(in[i].Video, visited)
-			}
-			if in[i].File != nil {
-				out[i].File = deepCopyModelFileWithVisited(in[i].File, visited)
-			}
+			out[i] = deepCopyModelContentPartWithVisited(in[i], visited)
 		}
 		return out
 	}
 	out := make([]model.ContentPart, len(in))
 	for i := range in {
-		out[i] = in[i]
-		if in[i].Text != nil {
-			out[i].Text = deepCopyStringPointerWithVisited(in[i].Text, visited)
-		}
-		if in[i].Image != nil {
-			out[i].Image = deepCopyModelImageWithVisited(in[i].Image, visited)
-		}
-		if in[i].Audio != nil {
-			out[i].Audio = deepCopyModelAudioWithVisited(in[i].Audio, visited)
-		}
-		if in[i].Video != nil {
-			out[i].Video = deepCopyModelVideoWithVisited(in[i].Video, visited)
-		}
-		if in[i].File != nil {
-			out[i].File = deepCopyModelFileWithVisited(in[i].File, visited)
-		}
+		out[i] = deepCopyModelContentPartWithVisited(in[i], visited)
 	}
 	return out
+}
+
+func deepCopyModelContentPartWithVisited(
+	in model.ContentPart,
+	visited visitedMap,
+) model.ContentPart {
+	out := in
+	if in.Text != nil {
+		out.Text = deepCopyStringPointerWithVisited(in.Text, visited)
+	}
+	if in.Image != nil {
+		out.Image = deepCopyModelImageWithVisited(in.Image, visited)
+	}
+	if in.Audio != nil {
+		out.Audio = deepCopyModelAudioWithVisited(in.Audio, visited)
+	}
+	if in.Video != nil {
+		out.Video = deepCopyModelVideoWithVisited(in.Video, visited)
+	}
+	if in.File != nil {
+		out.File = deepCopyModelFileWithVisited(in.File, visited)
+	}
+	if in.ContentRef != nil {
+		out.ContentRef = deepCopyModelContentRefWithVisited(in.ContentRef, visited)
+	}
+	return out
+}
+
+func deepCopyModelContentRefWithVisited(
+	in *model.ContentRef,
+	visited visitedMap,
+) *model.ContentRef {
+	if in == nil {
+		return nil
+	}
+	key := pointerVisitKey(reflect.ValueOf(in).Pointer(), reflect.TypeOf(in))
+	if cached, ok := visited[key]; ok {
+		return cached.(*model.ContentRef)
+	}
+	out := *in
+	visited[key] = &out
+	return &out
 }
 
 func deepCopyModelImage(in *model.Image) *model.Image {

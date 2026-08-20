@@ -1275,6 +1275,7 @@ func TestProcessAgentEventStream_OutputMapperReceivesAssistantToolCalls(t *testi
 			return State{"has_external_call": len(r.ToolCalls) > 0}
 		},
 		"",
+		false,
 	)
 	state, ok := out.(State)
 	require.True(t, ok)
@@ -1314,6 +1315,7 @@ func TestFinalizeAgentNodeOutput_DefaultPreservesStateContractAndStoresFallback(
 		},
 		nil,
 		"",
+		false,
 	)
 
 	state, ok := out.(State)
@@ -1343,6 +1345,7 @@ func TestFinalizeAgentNodeOutput_OutputMapperDoesNotInjectLastResponseID(t *test
 			return State{"custom": "value"}
 		},
 		"",
+		false,
 	)
 
 	state, ok := out.(State)
@@ -1367,6 +1370,7 @@ func TestFinalizeAgentNodeOutput_OutputMapperEmptyPreservesNoUpdateContract(t *t
 			return State{}
 		},
 		"",
+		false,
 	)
 
 	state, ok := out.(State)

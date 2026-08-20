@@ -743,11 +743,12 @@ func TestDeepCopyFastPathHelperCoverage(t *testing.T) {
 		text := "hello"
 		in := []model.ContentPart{
 			{
-				Type:  model.ContentTypeText,
-				Text:  &text,
-				Image: &model.Image{Data: []byte("img")},
-				Audio: &model.Audio{Data: []byte("aud"), Format: "wav"},
-				File:  &model.File{Name: "f.txt", Data: []byte("file")},
+				Type:       model.ContentTypeText,
+				Text:       &text,
+				Image:      &model.Image{Data: []byte("img")},
+				Audio:      &model.Audio{Data: []byte("aud"), Format: "wav"},
+				File:       &model.File{Name: "f.txt", Data: []byte("file")},
+				ContentRef: &model.ContentRef{ArtifactName: "artifact"},
 			},
 		}
 
@@ -756,13 +757,16 @@ func TestDeepCopyFastPathHelperCoverage(t *testing.T) {
 		require.NotSame(t, in[0].Image, out[0].Image)
 		require.NotSame(t, in[0].Audio, out[0].Audio)
 		require.NotSame(t, in[0].File, out[0].File)
+		require.NotSame(t, in[0].ContentRef, out[0].ContentRef)
 
 		in[0].Image.Data[0] = 'X'
 		in[0].Audio.Data[0] = 'Y'
 		in[0].File.Data[0] = 'Z'
+		in[0].ContentRef.ArtifactName = "mutated"
 		require.Equal(t, "img", string(out[0].Image.Data))
 		require.Equal(t, "aud", string(out[0].Audio.Data))
 		require.Equal(t, "file", string(out[0].File.Data))
+		require.Equal(t, "artifact", out[0].ContentRef.ArtifactName)
 	})
 
 	t.Run("unsupported message ops return false", func(t *testing.T) {
@@ -808,6 +812,33 @@ func TestDeepCopyWrapperHelperCoverage(t *testing.T) {
 		require.True(t, ok)
 		_, ok = copiedOp.(ReplaceLastUser)
 		require.True(t, ok)
+
+		text := "caption"
+		replaceMsg := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeText, Text: &text},
+				{
+					Type:  model.ContentTypeImage,
+					Image: &model.Image{Data: []byte("img")},
+				},
+			},
+		}
+		copiedOp, ok = deepCopyMessageOp(replaceLastUserMessage{Message: replaceMsg})
+		require.True(t, ok)
+		copiedReplace, ok := copiedOp.(replaceLastUserMessage)
+		require.True(t, ok)
+		require.NotSame(
+			t,
+			replaceMsg.ContentParts[1].Image,
+			copiedReplace.Message.ContentParts[1].Image,
+		)
+		replaceMsg.ContentParts[1].Image.Data[0] = 'X'
+		assert.Equal(
+			t,
+			"img",
+			string(copiedReplace.Message.ContentParts[1].Image.Data),
+		)
 
 		copiedOp, ok = deepCopyMessageOp(RemoveAllMessages{})
 		require.True(t, ok)
@@ -1051,6 +1082,32 @@ func TestDeepCopyAny_MessageZeroLenSlicesDoNotAlias(t *testing.T) {
 	if got := msgs[0].ToolCalls[0].ID; got != "orig" {
 		t.Fatalf("original tool calls aliased copied slice: got=%q want=%q", got, "orig")
 	}
+}
+
+func TestDeepCopyAny_SingleMessageDoesNotAlias(t *testing.T) {
+	hello := "hello"
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &hello},
+			{
+				Type:       model.ContentTypeImage,
+				Image:      &model.Image{URL: "https://example.com/a.png", Data: []byte("img")},
+				ContentRef: &model.ContentRef{ArtifactName: "artifact"},
+			},
+		},
+	}
+	copiedAny := deepCopyAny(msg)
+	copied, ok := copiedAny.(model.Message)
+	require.True(t, ok)
+	require.True(t, model.MessagesEqual(msg, copied))
+	require.NotSame(t, msg.ContentParts[1].ContentRef, copied.ContentParts[1].ContentRef)
+	*copied.ContentParts[0].Text = "mutated"
+	copied.ContentParts[1].Image.Data[0] = 'X'
+	copied.ContentParts[1].ContentRef.ArtifactName = "mutated"
+	require.Equal(t, "hello", *msg.ContentParts[0].Text)
+	require.Equal(t, []byte("img"), msg.ContentParts[1].Image.Data)
+	require.Equal(t, "artifact", msg.ContentParts[1].ContentRef.ArtifactName)
 }
 
 func TestDeepCopyAny_MessageOpZeroLenSlicesDoNotAlias(t *testing.T) {

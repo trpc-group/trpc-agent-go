@@ -25,7 +25,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/userinputkey"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	utilmessage "trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
@@ -467,22 +469,16 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		appendNonUserInvocationMessage(initialState, invocation.Message)
 	}
 
-	// Add invocation message to state.
-	// When resuming from checkpoint, only add user input if it's meaningful content
-	// (not just a resume signal), following LangGraph's pattern.
+	// Add invocation user input to state.
+	// When resuming from checkpoint, skip a plain/text-only "resume" sentinel
+	// so checkpoint state is preserved. Derive user_input from Content, or
+	// from textual ContentParts when Content is empty. Pure non-text input is
+	// not given a fabricated user_input string; it remains on
+	// StateKeyMessages, and any inherited text user_input is cleared so
+	// llmRunner does not replace it.
 	isResuming := invocation.RunOptions.RuntimeState != nil &&
 		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
-
-	if invocation.Message.Content != "" && invocation.Message.Role == model.RoleUser {
-		// If resuming and the message is just "resume", don't add it as input.
-		// This allows pure checkpoint resumption without input interference.
-		if isResuming && invocation.Message.Content == "resume" {
-			// Skip adding user_input to preserve checkpoint state.
-		} else {
-			// Add user input for normal execution or resume with meaningful input.
-			initialState[graph.StateKeyUserInput] = invocation.Message.Content
-		}
-	}
+	applyUserInvocationInput(initialState, invocation, isResuming)
 	// Add session context if available.
 	if invocation.Session != nil {
 		initialState[graph.StateKeySession] = invocation.Session
@@ -495,6 +491,107 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	}
 
 	return initialState
+}
+
+func applyUserInvocationInput(
+	initialState graph.State,
+	invocation *agent.Invocation,
+	isResuming bool,
+) {
+	if initialState != nil {
+		// Never trust caller-supplied invocation-input metadata.
+		delete(initialState, userinputkey.PatchKey)
+		delete(initialState, userinputkey.Baseline)
+		delete(initialState, userinputkey.Message)
+	}
+	if invocation == nil || initialState == nil {
+		return
+	}
+	msg := invocation.Message
+	if msg.Role != model.RoleUser {
+		return
+	}
+	userInput := utilmessage.TextContent(msg)
+	// Skip only a plain/text-only resume sentinel. ContentParts whose text
+	// is "resume" but that also carry non-text parts are meaningful input.
+	if isResuming && isPlainResumeInput(msg) {
+		return
+	}
+	// Session processors may enrich a ContentParts-only invocation message
+	// before it reaches the LLM (for example with attached-file annotations).
+	// Keep user_input raw for pre-LLM nodes, and record its private baseline so
+	// the LLM can distinguish processor enrichment from an intentional rewrite.
+	// Content-only input deliberately keeps the legacy behavior.
+	var patch userinputkey.Patch
+	hasInvocationInput := false
+	if len(msg.ContentParts) > 0 {
+		// Store the typed current-invocation message for AgentNode default
+		// handoff. Durable history may later hold a different last user
+		// message. Executor node copies and child handoff deep-copy it.
+		initialState[userinputkey.Message] = msg
+		hasInvocationInput = true
+	}
+	if invocation.Session != nil && msg.Content == "" &&
+		len(msg.ContentParts) > 0 && userInput != "" {
+		fp := userinputkey.Fingerprint(userInput)
+		initialState[userinputkey.Baseline] = fp
+		patch.Baseline = fp
+		hasInvocationInput = true
+	}
+	if userInput != "" {
+		initialState[graph.StateKeyUserInput] = userInput
+		hasInvocationInput = true
+	} else if model.HasPayload(msg) {
+		// Payload-only input must not keep inherited text user_input, or
+		// llmRunner takes the stale text path and drops ContentParts.
+		// Absence is not a resume deletion; the patch tombstone is.
+		delete(initialState, graph.StateKeyUserInput)
+		patch.ClearUserInput = true
+		hasInvocationInput = true
+	}
+	// Write the patch only for this invocation's input decision. A
+	// zero-value Baseline still matters on authorized restore: it drops a
+	// stale fingerprint when the current turn recorded none. Empty
+	// no-payload messages are not an input decision and must not tombstone
+	// restored Baseline.
+	if hasInvocationInput {
+		initialState[userinputkey.PatchKey] = patch
+	}
+	if invocation.Session != nil || len(msg.ContentParts) == 0 {
+		return
+	}
+	messages, _ := graph.GetStateValue[[]model.Message](
+		initialState,
+		graph.StateKeyMessages,
+	)
+	// Deduplicate only when the existing tail is the same invocation
+	// message. A different prior user message in RuntimeState must not
+	// drop the current ContentParts.
+	if len(messages) > 0 && model.MessagesEqual(messages[len(messages)-1], msg) {
+		return
+	}
+	// Copy before append so a caller-owned RuntimeState/initial slice
+	// whose cap>len is not mutated through the shared backing array.
+	copied := make([]model.Message, len(messages), len(messages)+1)
+	copy(copied, messages)
+	initialState[graph.StateKeyMessages] = append(copied, msg)
+}
+
+// isPlainResumeInput reports whether msg is the checkpoint resume sentinel.
+// The sentinel applies only to text-only input whose projected text is
+// "resume". Content == "resume" with no non-text ContentParts keeps the
+// legacy skip behavior. Any image, file, audio, or video part is meaningful
+// input even when Content or the joined text parts equal "resume".
+func isPlainResumeInput(msg model.Message) bool {
+	if utilmessage.TextContent(msg) != "resume" {
+		return false
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText {
+			return false
+		}
+	}
+	return true
 }
 
 func appendNonUserInvocationMessage(initialState graph.State, message model.Message) {
