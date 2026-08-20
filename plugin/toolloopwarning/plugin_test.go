@@ -416,8 +416,10 @@ func TestPluginSerializesSharedInvocationStateInitialization(t *testing.T) {
 	state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
 	require.True(t, ok)
 	require.NotNil(t, state)
+	queued := steer.DrainQueued(invocation)
+	require.Len(t, queued, 1)
+	require.Equal(t, warningSource, queued[0].Source)
 	state.reset()
-	steer.DrainQueued(invocation)
 
 	for round := 0; round < 2; round++ {
 		toolCall := newToolCall(
@@ -436,7 +438,7 @@ func TestPluginSerializesSharedInvocationStateInitialization(t *testing.T) {
 		)
 		require.NoError(t, err)
 	}
-	queued := steer.DrainQueued(invocation)
+	queued = steer.DrainQueued(invocation)
 	require.Len(t, queued, 1)
 	require.Equal(t, warningSource, queued[0].Source)
 }
