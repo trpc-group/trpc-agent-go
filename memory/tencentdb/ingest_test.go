@@ -273,6 +273,62 @@ func TestV3CaptureReplaysAfterPartialBatchFailure(t *testing.T) {
 	}, gotSizes)
 }
 
+func TestV3CaptureDoesNotCheckpointPartialAcceptance(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != pathV3ConversationAdd {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		var req v3ConversationAddRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		accepted := len(req.Messages)
+		if requests.Add(1) == 1 {
+			accepted--
+		}
+		writeV3TestEnvelope(w, v3ConversationAddData{
+			AcceptedIDs:      make([]string, accepted),
+			AcceptedVersions: make([]string, accepted),
+			TotalCount:       accepted,
+		})
+	}))
+	defer server.Close()
+
+	svc, err := NewServiceWithIdentity(
+		NewServiceIdentity("service-1", "team-1", "agent-1"),
+		WithGatewayURL(server.URL),
+	)
+	require.NoError(t, err, "NewServiceWithIdentity")
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	sess := captureReadySession()
+	sessionKey := svc.sessionKey(sess)
+	firstJob, ok := svc.reserveIngestJob(sess, sessionKey)
+	require.True(t, ok, "reserve first ingest job")
+	require.ErrorContains(
+		t,
+		svc.capture(context.Background(), firstJob),
+		"v3 capture partially accepted messages",
+	)
+	assert.True(t, readBestEffortLastCaptureAt(sess).IsZero())
+	svc.cursorMu.Lock()
+	_, checkpointed := svc.lastCapture[sessionKey]
+	svc.cursorMu.Unlock()
+	assert.False(t, checkpointed, "partial acceptance must not advance the checkpoint")
+
+	retryJob, ok := svc.reserveIngestJob(sess, sessionKey)
+	require.True(t, ok, "reserve retry ingest job")
+	require.Len(t, retryJob.req.Messages, len(firstJob.req.Messages))
+	require.NoError(t, svc.capture(context.Background(), retryJob), "retry complete capture")
+	assert.True(t, readBestEffortLastCaptureAt(sess).Equal(sess.Events[len(sess.Events)-1].Timestamp))
+	assert.Equal(t, int32(2), requests.Load())
+}
+
 func TestIngestSessionSerializesSameSessionCapturesAndTimestamps(t *testing.T) {
 	releaseFirst := make(chan struct{})
 	firstReqC := make(chan captureRequest, 1)

@@ -414,6 +414,57 @@ func TestGatewayClientV3CaptureBatchesMessages(t *testing.T) {
 	}
 }
 
+func TestGatewayClientV3CaptureRejectsPartialAcceptance(t *testing.T) {
+	tests := []struct {
+		name string
+		data v3ConversationAddData
+	}{
+		{
+			name: "accepted ids are incomplete",
+			data: v3ConversationAddData{
+				AcceptedIDs:      []string{"message-1"},
+				AcceptedVersions: []string{"v1"},
+				TotalCount:       2,
+			},
+		},
+		{
+			name: "total count is incomplete",
+			data: v3ConversationAddData{
+				AcceptedIDs:      []string{"message-1", "message-2"},
+				AcceptedVersions: []string{"v1", "v1"},
+				TotalCount:       1,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeV3TestEnvelope(w, tt.data)
+			}))
+			defer server.Close()
+
+			client, err := newGatewayClientWithMode(Options{
+				GatewayURL: server.URL,
+			}, apiModeV3, &serviceIdentity{
+				serviceID: "service-1",
+				teamID:    "team-1",
+				agentID:   "agent-1",
+			})
+			require.NoError(t, err)
+
+			_, err = client.capture(context.Background(), captureRequest{
+				UserID:    "user-1",
+				SessionID: "session-1",
+				Messages: []tdaiMessage{
+					{Role: "user", Content: "remember this"},
+					{Role: "assistant", Content: "stored"},
+				},
+			})
+			require.ErrorContains(t, err, "v3 capture partially accepted messages")
+		})
+	}
+}
+
 func TestGatewayClientV3RecallPropagatesContextError(t *testing.T) {
 	tests := []struct {
 		name             string

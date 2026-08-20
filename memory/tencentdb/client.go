@@ -440,6 +440,15 @@ func (c *gatewayClient) captureV3(
 			// a later ingest replays the transcript instead of dropping messages.
 			return nil, err
 		}
+		batchSize := end - start
+		if len(data.AcceptedIDs) < batchSize || data.TotalCount < batchSize {
+			return nil, fmt.Errorf(
+				"tencentdb memory: v3 capture partially accepted messages: accepted_ids=%d total_count=%d submitted=%d",
+				len(data.AcceptedIDs),
+				data.TotalCount,
+				batchSize,
+			)
+		}
 		recorded += len(data.AcceptedIDs)
 	}
 	return &captureResponse{
