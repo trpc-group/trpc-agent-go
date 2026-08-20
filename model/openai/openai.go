@@ -784,6 +784,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			maxInputTokens,
 		)
 	}
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "openai.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
@@ -794,7 +798,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in openai.Model",
 				err,
 			)
-			modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "openai.Model", request, tailored,
+			)
 			return
 		}
 		log.WarnContext(
@@ -805,7 +811,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "openai.Model", request, tailored,
+	)
 }
 
 // InputTokenBudget returns the same input budget used by token tailoring.
@@ -959,10 +967,16 @@ func (m *Model) buildChatRequestWithToolControl(
 		}
 	}
 
-	// MaxTokens is deprecated and not compatible with o-series models.
-	// Use MaxCompletionTokens instead.
 	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
-		chatRequest.MaxCompletionTokens = openai.Int(int64(*mt))
+		if m.variant == VariantDeepSeek {
+			// DeepSeek's Chat Completions API documents max_tokens as the
+			// output limit: https://api-docs.deepseek.com/api/create-chat-completion.
+			chatRequest.MaxTokens = openai.Int(int64(*mt))
+		} else {
+			// max_tokens is deprecated and incompatible with OpenAI o-series
+			// models. Use max_completion_tokens for other variants.
+			chatRequest.MaxCompletionTokens = openai.Int(int64(*mt))
+		}
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = openai.Float(*request.Temperature)
