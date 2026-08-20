@@ -306,10 +306,18 @@ type fileSearchResult struct {
 // the SDK decodes the full JSON array into memory before the caller
 // can apply any cap, causing unbounded host memory consumption.
 //
-// The bash script caps output at maxCollectFiles+1 lines on the
+// The bash script caps output at maxCollectFiles+1 records on the
 // server side (via a counter that breaks the loop), so only bounded
 // data traverses the network and enters host memory. The +1 margin
 // lets Collect detect that the cap was reached.
+//
+// Output framing is NUL-delimited: each record is "path\0size\0" and
+// the leading "__OSB_BASE__=<base>" marker is itself NUL-terminated.
+// Filenames produced by user or model code may legally contain tabs
+// and newlines, so neither can serve as a record delimiter; NUL is the
+// only byte POSIX guarantees cannot appear in a filename. The size
+// field gets its own NUL frame so a tab or newline inside the path
+// cannot bleed into the size.
 //
 // Patterns without a path separator get a **/ prefix so they match
 // recursively across the full directory tree, preserving the previous
@@ -334,13 +342,14 @@ func (r *workspaceRuntime) listFilesByGlob(
 	//    stays under the workspace base
 	// 5. Dedup by resolved path BEFORE counting (overlapping patterns
 	//    such as **/* and **/*.txt must not double-spend the budget)
-	// 6. Print "path\tsize" for each unique valid match
+	// 6. Print "path\0size\0" for each unique valid match (NUL framing
+	//    keeps filenames containing tabs or newlines parseable)
 	// 7. Stop after maxCollectFiles+1 unique results (server-side cap)
 	var cmd strings.Builder
 	cmd.WriteString("cd ")
 	cmd.WriteString(shellQuote(wsPath))
 	cmd.WriteString(" && __osb_base=$(readlink -f . 2>/dev/null || pwd); ")
-	cmd.WriteString("printf '__OSB_BASE__=%s\\n' \"$__osb_base\"; ")
+	cmd.WriteString("printf '__OSB_BASE__=%s\\0' \"$__osb_base\"; ")
 	cmd.WriteString("shopt -s globstar nullglob dotglob; ")
 	// Associative set of already-emitted resolved paths so overlapping
 	// patterns only consume one unit of the unique-file budget.
@@ -384,7 +393,7 @@ func (r *workspaceRuntime) listFilesByGlob(
 	// stat -c %s is GNU stat (available in the code-interpreter image);
 	// fall back to 0 if stat fails.
 	cmd.WriteString("__osb_size=$(stat -c %s \"$__osb_rp\" 2>/dev/null || echo 0); ")
-	cmd.WriteString("printf '%s\\t%s\\n' \"$__osb_rp\" \"$__osb_size\"; ")
+	cmd.WriteString("printf '%s\\0%s\\0' \"$__osb_rp\" \"$__osb_size\"; ")
 	cmd.WriteString("__osb_count=$((__osb_count + 1)); ")
 	cmd.WriteString(";; ")
 	cmd.WriteString("esac; ")
@@ -397,26 +406,23 @@ func (r *workspaceRuntime) listFilesByGlob(
 		return nil, fmt.Errorf("opensandbox: list files by glob: %w", err)
 	}
 
+	// Parse the NUL-framed output. tokens[0] is the
+	// "__OSB_BASE__=<base>" marker; every subsequent pair of tokens is
+	// one "path, size" record. Splitting on NUL (rather than newline or
+	// tab) keeps filenames containing tabs or newlines intact, and no
+	// TrimSpace is applied so leading/trailing spaces in a filename
+	// survive — POSIX forbids NUL in filenames, making it the only safe
+	// delimiter. An unpaired trailing token (output truncated mid-record)
+	// is dropped by the i+1 < len(tokens) bound.
+	tokens := strings.Split(stdout, "\x00")
 	var out []fileSearchResult
 	seen := map[string]bool{}
-	for _, line := range strings.Split(stdout, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	for i := 1; i+1 < len(tokens); i += 2 {
+		p := tokens[i]
+		if p == "" {
 			continue
 		}
-		// Skip the __OSB_BASE__ marker line emitted by the script.
-		if strings.HasPrefix(line, "__OSB_BASE__=") {
-			continue
-		}
-		// Parse "path\tsize" format.
-		var p string
-		var size int64
-		if tabIdx := strings.IndexByte(line, '\t'); tabIdx >= 0 {
-			p = line[:tabIdx]
-			size, _ = strconv.ParseInt(line[tabIdx+1:], 10, 64)
-		} else {
-			p = line
-		}
+		size, _ := strconv.ParseInt(tokens[i+1], 10, 64)
 		clean := path.Clean(p)
 		// Defence-in-depth: filter on the Go side too, in case the
 		// shell-level case check was bypassed by a crafted path.

@@ -274,6 +274,10 @@ jobs:
       matrix: ${{ fromJson(needs.discover-go-modules.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v3
+        with:
+          # Full history: the upstream-dependency consumer check
+          # materializes pinned pseudo-version commits via git archive.
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"

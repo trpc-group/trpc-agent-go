@@ -205,20 +205,74 @@ func (m *mockOpenSandboxServer) setSymlink(link, target string) {
 
 // readlinkPathRe matches absolute POSIX paths (e.g. /tmp/run/ws_x/src)
 // embedded in a `bash -c 'readlink -f ...'` command, regardless of
-// the shell quoting scheme used by shellQuote.
+// the shell quoting scheme used by shellQuote. It cannot match paths
+// containing whitespace (tabs, newlines) — use parseShellQuotedPaths
+// for those.
 var readlinkPathRe = regexp.MustCompile(`(/[^\s'\\]+)`)
 
-// cdPathRe extracts the workspace path from the listFilesByGlob
-// script's opening `cd '<wsPath>'` clause. shellQuote nests the
-// inner single-quoted path inside the outer bash -c '...' quote,
-// producing `'\”<path>'\”`; the existing readlinkPathRe reliably
-// captures the first absolute path in the command, which is wsPath.
-var cdPathRe = readlinkPathRe
+// parseShellQuotedPaths extracts single-quoted path arguments from a
+// command of the form `bash -c '<script>'`. runBash wraps every script
+// in shellQuote, so a path appears as a doubly-nested `'\”<path>'\”`;
+// the parser first unwraps the outer bash -c quoting (reversing
+// shellQuote's '\” escapes) and then returns the single-quoted
+// segments of the inner script that are absolute paths. Unlike
+// readlinkPathRe it keeps paths containing tabs and newlines intact:
+// the whitespace-averse regex would split them into fragments and make
+// the mock resolve the wrong path. Unquoted text (e.g. /dev/null in
+// `2>/dev/null`) is never matched.
+func parseShellQuotedPaths(cmd string) []string {
+	idx := strings.Index(cmd, "bash -c '")
+	if idx < 0 {
+		return nil
+	}
+	i := idx + len("bash -c '")
+	var script strings.Builder
+	closed := false
+	for i < len(cmd) {
+		if cmd[i] == '\'' {
+			// '\'' escapes a literal quote inside the outer quoting.
+			if i+3 < len(cmd) && cmd[i+1] == '\\' && cmd[i+2] == '\'' && cmd[i+3] == '\'' {
+				script.WriteByte('\'')
+				i += 4
+				continue
+			}
+			closed = true
+			break
+		}
+		script.WriteByte(cmd[i])
+		i++
+	}
+	if !closed {
+		return nil
+	}
+	s := script.String()
+	var out []string
+	for j := 0; j < len(s); j++ {
+		if s[j] != '\'' {
+			continue
+		}
+		k := j + 1
+		for k < len(s) && s[k] != '\'' {
+			k++
+		}
+		if k >= len(s) {
+			break // unterminated segment
+		}
+		if seg := s[j+1 : k]; strings.HasPrefix(seg, "/") {
+			out = append(out, seg)
+		}
+		j = k
+	}
+	return out
+}
 
 // parseCDPath returns the workspace path embedded in the
 // listFilesByGlob bash script, or "" if not found.
 func parseCDPath(cmd string) string {
-	m := cdPathRe.FindStringSubmatch(cmd)
+	if paths := parseShellQuotedPaths(cmd); len(paths) > 0 {
+		return paths[0]
+	}
+	m := readlinkPathRe.FindStringSubmatch(cmd)
 	if m == nil {
 		return ""
 	}
@@ -226,9 +280,12 @@ func parseCDPath(cmd string) string {
 }
 
 // parseSingleReadlinkPath extracts the path argument from a
-// `bash -c 'readlink -f <path>'` command. Uses a regex because
-// shellQuote's nested quoting makes simple string splitting fragile.
+// `bash -c 'readlink -f <path>'` command.
 func parseSingleReadlinkPath(cmd string) string {
+	if paths := parseShellQuotedPaths(cmd); len(paths) > 0 {
+		return paths[0]
+	}
+	// Fallback for unquoted paths.
 	m := readlinkPathRe.FindStringSubmatch(cmd)
 	if m == nil {
 		return ""
@@ -238,20 +295,14 @@ func parseSingleReadlinkPath(cmd string) string {
 
 // parseBatchReadlinkPaths extracts each path from a batch
 // `for p in <p1> <p2> ...; do readlink -f -- "$p"; done` command.
-// Only the "for p in ...; do" portion is scanned so that /dev/null
-// (from `2>/dev/null` in the script body) is not picked up as a path.
+// The whole command is scanned by parseShellQuotedPaths, which only
+// matches quoted segments, so /dev/null (from `2>/dev/null` in the
+// script body) is never picked up as a path.
 func parseBatchReadlinkPaths(cmd string) []string {
-	idx := strings.Index(cmd, "; do")
-	if idx < 0 {
+	if !strings.Contains(cmd, "; do") {
 		return nil
 	}
-	head := cmd[:idx]
-	matches := readlinkPathRe.FindAllStringSubmatch(head, -1)
-	paths := make([]string, 0, len(matches))
-	for _, m := range matches {
-		paths = append(paths, m[1])
-	}
-	return paths
+	return parseShellQuotedPaths(cmd)
 }
 
 // resolveMockSymlink simulates `readlink -f` / `readlink -m` against
@@ -526,7 +577,8 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	// synthesizes the output the script would produce: for each
 	// configured search result, resolve symlinks, skip directories
 	// (matching [ -f "$f" ]) and paths that escape the workspace base
-	// (matching the case "$__osb_rp" guard), and emit "path\tsize".
+	// (matching the case "$__osb_rp" guard), and emit NUL-framed
+	// "path\0size\0" records after a NUL-terminated __OSB_BASE__ marker.
 	if strings.Contains(req.Command, "__OSB_BASE__=") &&
 		strings.Contains(req.Command, "shopt -s globstar") {
 		wsPath := parseCDPath(req.Command)
@@ -536,7 +588,7 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		symlinks := m.symlinks
 		m.mu.Unlock()
 		var out strings.Builder
-		out.WriteString("__OSB_BASE__=" + wsPath + "\n")
+		out.WriteString("__OSB_BASE__=" + wsPath + "\x00")
 		emit := func(name string) {
 			full := path.Join(wsPath, name)
 			resolved := resolveMockSymlink(full, symlinks)
@@ -547,7 +599,7 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 			if data, ok := filesSnap[full]; ok {
 				size = int64(len(data))
 			}
-			fmt.Fprintf(&out, "%s\t%d\n", resolved, size)
+			fmt.Fprintf(&out, "%s\x00%d\x00", resolved, size)
 		}
 		if len(searchResults) > 0 {
 			for _, spec := range searchResults {
@@ -623,7 +675,12 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		flusher.Flush()
 	}
 	if stdout != "" {
-		fmt.Fprintf(w, `{"type":"stdout","text":%q}`, stdout)
+		// Marshal the text with encoding/json: the listFilesByGlob
+		// output now contains NUL bytes (NUL-framed records), which
+		// fmt's %q renders as \x00 — an invalid JSON escape. json.Marshal
+		// emits the spec-compliant \u0000 instead.
+		sb, _ := json.Marshal(stdout)
+		fmt.Fprintf(w, `{"type":"stdout","text":%s}`, sb)
 		fmt.Fprint(w, "\n\n")
 		if flusher != nil {
 			flusher.Flush()
@@ -1359,6 +1416,51 @@ func TestWorkspace_Collect_MultipleFiles(t *testing.T) {
 		assert.Equal(t, "mock-content", f.Content)
 		assert.False(t, f.Truncated)
 	}
+}
+
+// TestWorkspace_Collect_FilenamesWithDelimiters verifies that filenames
+// containing tabs and embedded newlines — both legal in POSIX filenames
+// and producible by user or model code — survive collection end to end.
+// Regression for the previous "path\tsize\n" listFilesByGlob framing
+// where a tab split the name from the size and a newline split one
+// record into two, silently omitting or misidentifying the file.
+func TestWorkspace_Collect_FilenamesWithDelimiters(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	tabName := "report\t2026.txt"
+	newlineName := "line1\nline2.txt"
+	m.setSearchResults([]string{tabName, newlineName})
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-delim", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Seed distinctive content for the tab-named file so the test also
+	// verifies its size is parsed from the NUL-framed size field rather
+	// than from a tab-delimited suffix of the name.
+	tabPath := filepath.ToSlash(filepath.Join(ws.Path, tabName))
+	m.setDownloadData(tabPath, []byte(strings.Repeat("x", 100)))
+
+	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+
+	byName := map[string]codeexecutor.File{}
+	for _, f := range files {
+		byName[f.Name] = f
+	}
+	tabFile, ok := byName[tabName]
+	require.True(t, ok, "file with a tab in its name should be collected intact, got %q", files[0].Name)
+	assert.Equal(t, strings.Repeat("x", 100), tabFile.Content)
+	assert.Equal(t, int64(100), tabFile.SizeBytes)
+	assert.False(t, tabFile.Truncated)
+
+	newlineFile, ok := byName[newlineName]
+	require.True(t, ok, "file with an embedded newline in its name should be collected intact")
+	assert.Equal(t, "mock-content", newlineFile.Content)
+	assert.False(t, newlineFile.Truncated)
 }
 
 func TestWorkspace_Collect_Truncation(t *testing.T) {

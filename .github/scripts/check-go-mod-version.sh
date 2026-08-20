@@ -147,6 +147,7 @@ validate_resolvable_version() {
   local line_number="$2"
   local dep_path="$3"
   local dep_ver="$4"
+  local quiet="${5:-}"
   local resolver_dir="${tmp_dir}/resolver"
 
   mkdir -p "${resolver_dir}"
@@ -154,11 +155,13 @@ validate_resolvable_version() {
     (cd "${resolver_dir}" && GOWORK=off go mod init example.com/module-version-check >/dev/null 2>&1)
   fi
 
-  if (cd "${resolver_dir}" && GOWORK=off go mod download -json "${dep_path}@${dep_ver}" >/dev/null 2>&1); then
+  if (cd "${resolver_dir}" && GOWORK=off go mod download "${dep_path}@${dep_ver}" >/dev/null 2>&1); then
     return 0
   fi
 
-  echo "::error file=${rel_path},line=${line_number}::Version '${dep_ver}' for module '${dep_path}' cannot be resolved by go mod download."
+  if [ -z "${quiet}" ]; then
+    echo "::error file=${rel_path},line=${line_number}::Version '${dep_ver}' for module '${dep_path}' cannot be resolved by go mod download."
+  fi
   return 1
 }
 
@@ -229,6 +232,27 @@ for go_mod in "${go_mod_files[@]}"; do
     line_number="$(require_line_number "${go_mod}" "${dep_path}")"
     [ -z "${line_number}" ] && line_number=1
 
+    if echo "${dep_ver}" | grep -Eq "${pseudo_regex}"; then
+      # Pseudo-version: valid when the commit is present in this
+      # checkout, or when the version resolves remotely. The local
+      # check covers bootstrap pins — a submodule requiring a
+      # pseudo-version of a root-module commit from the current change
+      # that has not landed on a default branch yet, so `go mod
+      # download` cannot resolve it until the change merges. The
+      # external-consumer CI check compiles the module against the
+      # exact commit to validate such pins.
+      commit="${dep_ver##*-}"
+      if git cat-file -e "${commit}^{commit}" >/dev/null 2>&1; then
+        continue
+      fi
+      if ! validate_resolvable_version "${rel_path}" "${line_number}" "${dep_path}" "${dep_ver}" quiet; then
+        has_error=true
+        has_match=true
+        echo "::error file=${rel_path},line=${line_number}::Pseudo-version '${dep_ver}' for module '${dep_path}' references missing commit ${commit}."
+      fi
+      continue
+    fi
+
     if ! validate_resolvable_version "${rel_path}" "${line_number}" "${dep_path}" "${dep_ver}"; then
       has_error=true
       has_match=true
@@ -243,16 +267,7 @@ for go_mod in "${go_mod_files[@]}"; do
 
     version_ok=false
 
-    if echo "${dep_ver}" | grep -Eq "${pseudo_regex}"; then
-      commit="${dep_ver##*-}"
-      if git cat-file -e "${commit}^{commit}" >/dev/null 2>&1; then
-        version_ok=true
-      else
-        has_error=true
-        has_match=true
-        echo "::error file=${rel_path},line=${line_number}::Pseudo-version '${dep_ver}' for module '${dep_path}' references missing commit ${commit}."
-      fi
-    elif [ -n "${tags}" ] && [[ " ${tags} " == *" ${dep_ver} "* ]]; then
+    if [ -n "${tags}" ] && [[ " ${tags} " == *" ${dep_ver} "* ]]; then
       version_ok=true
     else
       has_error=true
