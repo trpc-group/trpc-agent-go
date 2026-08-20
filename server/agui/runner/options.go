@@ -207,7 +207,8 @@ func WithAggregatorFactory(factory aggregator.Factory) Option {
 	}
 }
 
-// WithFlushInterval sets how often buffered AG-UI events are flushed for a session.
+// WithFlushInterval configures startup and periodic history flushes. A positive duration enables both;
+// zero disables both and leaves buffered history for finalization.
 func WithFlushInterval(d time.Duration) Option {
 	return func(o *Options) {
 		o.FlushInterval = d
