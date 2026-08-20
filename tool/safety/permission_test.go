@@ -245,6 +245,52 @@ func TestPermissionPolicyBlocksInlineSedAndSSHOptionBypasses(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyClassifiesDestructiveGitClean(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"git"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+	for _, tc := range []struct {
+		name     string
+		command  string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "forced recursive pathspec cleanup",
+			command:  "git clean -fdx -- build/",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.git_clean",
+		},
+		{
+			name:     "forced file cleanup",
+			command:  "git clean -f -- generated.tmp",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.git_clean",
+		},
+		{
+			name:    "dry run",
+			command: "git clean -nfdx -- build/",
+			want:    tool.PermissionActionAllow,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments, err := json.Marshal(map[string]string{
+				"command": tc.command,
+			})
+			require.NoError(t, err)
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
 func TestPermissionPolicyReviewsUnknownClientHostPort(t *testing.T) {
 	guardPolicy := DefaultPolicy()
 	guardPolicy.AllowedCommands = []string{"openssl"}

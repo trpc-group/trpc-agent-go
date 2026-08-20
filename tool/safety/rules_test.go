@@ -77,6 +77,127 @@ func TestGuardDeniesRecursiveCurrentDirectoryDeletion(t *testing.T) {
 	}
 }
 
+func TestGuardClassifiesDestructiveGitClean(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = []string{"git", "git-clean", "git.exe", "git-clean.exe"}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			name:     "combined forced recursive ignored cleanup",
+			command:  "git clean -fdx",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "separate forced recursive ignored cleanup",
+			command:  "git clean -f -d -x",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "global option and pathspec scoped cleanup",
+			command:  "git -C work clean --force -d -X -- build/",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "direct git clean helper",
+			command:  "git-clean -fdx",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "Windows git executable",
+			command:  "git.exe clean -fdx",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "Windows direct git clean helper",
+			command:  "git-clean.exe -fdx",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "forced file cleanup requires review",
+			command:  "git clean -f -- generated.tmp",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "configured force requires review",
+			command:  "git -c clean.requireForce=false clean -dx",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "plain cleanup requires review",
+			command:  "git clean",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "dry run combined flags",
+			command:  "git clean -nfdx",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "dry run long option",
+			command:  "git clean --dry-run --force -d -x -- build/",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "interactive cleanup",
+			command:  "git clean -ifdx",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "unknown global option prevents dry run trust",
+			command:  "git --future-option clean -nfdx",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "dry run overridden",
+			command:  "git clean -n --no-dry-run -fdx",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "interactive mode overridden",
+			command:  "git clean -i --no-interactive -fdx",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_clean",
+		},
+		{
+			name:     "global option operand named clean",
+			command:  "git -C clean status -fdx",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "non clean subcommand payload",
+			command:  "git status -- clean -fdx",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision, "%+v", report)
+			require.Equal(t, tc.rule, report.RuleID, "%+v", report)
+		})
+	}
+}
+
 func TestGuardScansSensitiveArgs(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.AllowedCommands = []string{"curl"}

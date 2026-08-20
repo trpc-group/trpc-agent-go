@@ -32,13 +32,16 @@ func scanCommandIndirectionAtDepth(
 			continue
 		}
 		switch base := commandBase(argv[0]); base {
-		case "git":
+		case "git", "git.exe":
+			findings = append(findings, scanGitClean(argv[1:])...)
 			findings = append(findings, scanGitExecutionConfigs(
 				policy, req.Env, argv[1:], depth+1,
 			)...)
 			findings = append(findings, scanGitProxyConfigs(
 				policy, req.Env, argv[1:],
 			)...)
+		case "git-clean", "git-clean.exe":
+			findings = append(findings, scanGitCleanArguments(argv[1:], false)...)
 		case "tar":
 			findings = append(findings, scanTarExecutionOptions(
 				policy, argv[1:], depth+1,
