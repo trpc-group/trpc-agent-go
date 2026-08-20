@@ -361,16 +361,27 @@ func Test_convertTools(t *testing.T) {
 
 func Test_convertTools_NoArgObjectSchemaUsesEmptyProperties(t *testing.T) {
 	tests := []struct {
-		name        string
-		inputSchema *tool.Schema
+		name                string
+		inputSchema         *tool.Schema
+		wantEmptyProperties bool
+		wantSerializedType  string
 	}{
 		{
-			name:        "explicit object type",
-			inputSchema: &tool.Schema{Type: "object"},
+			name:                "explicit object type",
+			inputSchema:         &tool.Schema{Type: "object"},
+			wantEmptyProperties: true,
+			wantSerializedType:  "object",
 		},
 		{
-			name:        "implicit SDK object type",
-			inputSchema: &tool.Schema{},
+			name:                "implicit SDK object type",
+			inputSchema:         &tool.Schema{},
+			wantEmptyProperties: true,
+			wantSerializedType:  "object",
+		},
+		{
+			name:               "non-object type",
+			inputSchema:        &tool.Schema{Type: "array"},
+			wantSerializedType: "array",
 		},
 	}
 	for _, tt := range tests {
@@ -385,9 +396,14 @@ func Test_convertTools_NoArgObjectSchemaUsesEmptyProperties(t *testing.T) {
 
 			body, err := json.Marshal(params)
 			require.NoError(t, err)
-			require.Contains(t, string(body), `"properties":{}`)
-			require.NotContains(t, string(body), `"properties":null`)
-			require.Contains(t, string(body), `"type":"object"`)
+			if tt.wantEmptyProperties {
+				require.Contains(t, string(body), `"properties":{}`)
+				require.NotContains(t, string(body), `"properties":null`)
+			} else {
+				require.Contains(t, string(body), `"properties":null`)
+				require.NotContains(t, string(body), `"properties":{}`)
+			}
+			require.Contains(t, string(body), `"type":"`+tt.wantSerializedType+`"`)
 			require.Equal(t, tt.inputSchema.Type, string(params[0].OfTool.InputSchema.Type))
 			require.Nil(t, tt.inputSchema.Properties)
 		})
