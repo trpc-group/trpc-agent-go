@@ -640,6 +640,66 @@ func TestEventConversionRoundTripsToolResponseExtra(t *testing.T) {
 	}
 }
 
+func TestEventConversionRoundTripsUnambiguousStateKinds(t *testing.T) {
+	binary := []byte{0xff, 0xfe}
+	want := &replaytest.EventSnapshot{
+		ID:           "event-state",
+		InvocationID: "invocation-state",
+		Author:       "assistant",
+		Role:         "assistant",
+		Object:       "chat.completion",
+		Done:         true,
+		StateDelta: map[string]replaytest.StateValueSnapshot{
+			"text":   replaytest.TextStateValue("not-json"),
+			"binary": replaytest.BinaryStateValue(binary),
+		},
+	}
+	evt, err := toEvent(want)
+	if err != nil {
+		t.Fatalf("toEvent() error = %v", err)
+	}
+	got := toEventSnapshot(evt, false)
+	if got.StateDelta["text"].Kind != replaytest.StateValueText {
+		t.Fatalf("text state kind = %q, want %q", got.StateDelta["text"].Kind, replaytest.StateValueText)
+	}
+	if got.StateDelta["binary"].Kind != replaytest.StateValueBinary {
+		t.Fatalf("binary state kind = %q, want %q", got.StateDelta["binary"].Kind, replaytest.StateValueBinary)
+	}
+	if !reflect.DeepEqual(got.StateDelta, want.StateDelta) {
+		t.Fatalf("state delta = %#v, want %#v", got.StateDelta, want.StateDelta)
+	}
+}
+
+func TestEventConversionRejectsAmbiguousStateKinds(t *testing.T) {
+	tests := []struct {
+		name  string
+		value replaytest.StateValueSnapshot
+	}{
+		{name: "text null", value: replaytest.TextStateValue("null")},
+		{name: "text JSON object", value: replaytest.TextStateValue(`{"kind":"text"}`)},
+		{name: "binary null", value: replaytest.BinaryStateValue([]byte("null"))},
+		{name: "binary JSON object", value: replaytest.BinaryStateValue([]byte(`{"kind":"binary"}`))},
+		{name: "binary UTF-8 text", value: replaytest.BinaryStateValue([]byte("not-json"))},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			operation := replaytest.Operation{
+				Kind:      replaytest.OperationAppendEvent,
+				SessionID: "session-state",
+				Event: &replaytest.EventSnapshot{
+					StateDelta: map[string]replaytest.StateValueSnapshot{
+						"state": test.value,
+					},
+				},
+			}
+			err := validateReplayAdapterOperation(operation)
+			if err == nil || !strings.Contains(err.Error(), "cannot round-trip") {
+				t.Fatalf("validateReplayAdapterOperation() error = %v, want cannot round-trip", err)
+			}
+		})
+	}
+}
+
 func TestEventConversionPreservesRawJSONPayloads(t *testing.T) {
 	want := &replaytest.EventSnapshot{
 		ID:           "event-raw",

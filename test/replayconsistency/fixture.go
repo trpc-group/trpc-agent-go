@@ -731,9 +731,31 @@ func toSnapshotStateMap(
 		if err != nil {
 			return nil, fmt.Errorf("encode state %q: %w", key, err)
 		}
+		if err := validateSnapshotStateValueRoundTrip(value, encoded); err != nil {
+			return nil, fmt.Errorf("encode state %q: %w", key, err)
+		}
 		state[key] = encoded
 	}
 	return state, nil
+}
+
+func validateSnapshotStateValueRoundTrip(
+	value replaytest.StateValueSnapshot,
+	encoded []byte,
+) error {
+	switch value.Kind {
+	case replaytest.StateValueText, replaytest.StateValueBinary:
+	default:
+		return nil
+	}
+	decoded := decodeStateValue(encoded)
+	if decoded.Kind == value.Kind {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s state cannot round-trip through adapter storage; decodes as %s",
+		value.Kind, decoded.Kind,
+	)
 }
 
 func encodeSnapshotStateValue(value replaytest.StateValueSnapshot) ([]byte, error) {
