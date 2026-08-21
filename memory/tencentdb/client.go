@@ -747,7 +747,7 @@ func buildV3RecallResponse(
 		context, count := formatV3ScenarioEntries(scenarioData.Entries)
 		if context != "" {
 			var added bool
-			systemParts, remaining, added = appendV3RecallSystemSection(
+			systemParts, _, added = appendV3RecallSystemSection(
 				systemParts,
 				remaining,
 				"scene-navigation",
