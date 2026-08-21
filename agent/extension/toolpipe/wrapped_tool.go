@@ -18,12 +18,13 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // declaredCallableTool is a request-local tool wrapper that returns
 // an augmented Declaration while delegating Call and optional interfaces
-// (SkipSummarization) to the original.
+// (SkipSummarization, IsConcurrencySafe) to the original.
 // It is NOT a persistent wrapper — it only lives within one
 // BeforeModel callback's Request.Tools replacement. The original
 // tool object is never mutated.
@@ -116,6 +117,22 @@ func (t *declaredCallableTool) SkipSummarization() bool {
 		return s.SkipSummarization()
 	}
 	return false
+}
+
+// IsConcurrencySafe delegates the inner tool's concurrency objection.
+//
+// The framework's parallel tool paths ask this of whatever sits in
+// Request.Tools, and this wrapper is what sits there once BeforeModel has run.
+// Without the delegation a tool that explicitly declined to share its turn —
+// function.WithConcurrencySafe(false), or any tool.ConcurrencyAware
+// implementation — would read as raising no objection purely because ToolPipe
+// augmented its schema, and would be readmitted to the parallel path.
+//
+// Resolution goes through itool.IsConcurrencySafe rather than
+// tool.IsConcurrencySafe so a NamedTool or declaration overlay between this
+// wrapper and the objecting tool does not hide the objection either.
+func (t *declaredCallableTool) IsConcurrencySafe() bool {
+	return itool.IsConcurrencySafe(t.inner)
 }
 
 // StreamableCall implements tool.StreamableTool — only on the streamable wrapper.
@@ -436,9 +453,10 @@ func resultToString(result any) string {
 
 // Compile-time interface checks.
 var (
-	_ tool.Tool           = (*declaredCallableTool)(nil)
-	_ tool.CallableTool   = (*declaredCallableTool)(nil)
-	_ tool.Tool           = (*declaredStreamableCallableTool)(nil)
-	_ tool.CallableTool   = (*declaredStreamableCallableTool)(nil)
-	_ tool.StreamableTool = (*declaredStreamableCallableTool)(nil)
+	_ tool.Tool             = (*declaredCallableTool)(nil)
+	_ tool.CallableTool     = (*declaredCallableTool)(nil)
+	_ tool.ConcurrencyAware = (*declaredCallableTool)(nil)
+	_ tool.Tool             = (*declaredStreamableCallableTool)(nil)
+	_ tool.CallableTool     = (*declaredStreamableCallableTool)(nil)
+	_ tool.StreamableTool   = (*declaredStreamableCallableTool)(nil)
 )

@@ -110,3 +110,43 @@ func TestIsConcurrencySafeResolvesNamedTools(t *testing.T) {
 		t.Error("a nil tool cannot object")
 	}
 }
+
+// Wrappers nest: a toolset's tool is a NamedTool, and a host that patches its
+// declaration wraps that in an overlay — or the reverse, when the patch is
+// applied to the toolset's tools before they are named.
+//
+// NamedTool.IsConcurrencySafe must therefore resolve rather than ask its
+// original directly. Asked directly, an overlay reports the default, so a
+// NamedTool over a patched objecting tool would answer "safe" to any caller
+// holding the wrapper — including tool.IsConcurrencySafe, which stops at the
+// first ConcurrencyAware it finds and would never reach the resolver.
+func TestNamedToolResolvesNestedDeclarationOverlays(t *testing.T) {
+	patched := ApplyDeclarations(
+		[]tool.Tool{unsafeTool{}},
+		[]tool.Declaration{{Name: "unsafe", Description: "patched"}},
+	)[0]
+	wrapped := NewUnprefixedNamedTool(patched)
+
+	if wrapped.IsConcurrencySafe() {
+		t.Error("a named wrapper over an overlay must not hide the objection")
+	}
+	if IsConcurrencySafe(wrapped) {
+		t.Error("the resolver must reach the objection through both wrappers")
+	}
+	if tool.IsConcurrencySafe(tool.Tool(wrapped)) {
+		t.Error("the named wrapper must report the objection to plain callers too")
+	}
+}
+
+// The nested case must not manufacture an objection either.
+func TestNamedToolResolvesNestedOverlaysWithoutObjection(t *testing.T) {
+	patched := ApplyDeclarations(
+		[]tool.Tool{plainTool{}},
+		[]tool.Declaration{{Name: "plain", Description: "patched"}},
+	)[0]
+	wrapped := NewUnprefixedNamedTool(patched)
+
+	if !wrapped.IsConcurrencySafe() {
+		t.Error("nesting wrappers must leave an unobjecting tool admissible")
+	}
+}
