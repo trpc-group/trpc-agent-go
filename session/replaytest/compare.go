@@ -328,7 +328,7 @@ func isKnownSnapshotSlicePath(path string, value any) bool {
 		return false
 	}
 	switch path {
-	case "$.sessions", "$.memories", "$.memory_searches", "$.unsupported":
+	case "$.sessions", "$.memories", "$.memory_searches":
 		return true
 	}
 	return isSnapshotFieldPath(path, "events", isSessionItemPath) ||

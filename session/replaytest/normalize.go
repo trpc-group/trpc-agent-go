@@ -95,11 +95,6 @@ func NormalizeSnapshot(snapshot Snapshot, options NormalizeOptions) Snapshot {
 		return memorySearchSortKey(normalized.MemorySearches[i]) <
 			memorySearchSortKey(normalized.MemorySearches[j])
 	})
-	sort.Slice(normalized.Unsupported, func(i, j int) bool {
-		left := string(normalized.Unsupported[i].Capability) + "\x00" + normalized.Unsupported[i].Reason
-		right := string(normalized.Unsupported[j].Capability) + "\x00" + normalized.Unsupported[j].Reason
-		return left < right
-	})
 
 	memoryIDs := newScopedLogicalIDMaps("memory")
 	ids := normalizationIDs{}
@@ -221,38 +216,86 @@ func normalizeMemoryValues(
 
 // normalizeMemoryTimes ranks memory timestamps jointly within each logical
 // scope so that cross-entry chronology remains observable after normalization,
-// while tolerating the absolute time skew between independently executed
-// backends. Ranks are derived from the chronological position of each entry
-// within its scope, so entries with swapped timestamps receive different
-// ranks. Search-result copies share the identity of their top-level memory
-// and are ranked together with it.
+// while tolerating absolute time skew between independently executed backends.
+// Search-result copies inherit their top-level memory's rank only when their
+// observed timestamps match within precision; stale or corrupted search
+// timestamps are encoded as relative differences without shifting the
+// top-level memory's rank.
 func normalizeMemoryTimes(snapshot *Snapshot, precision time.Duration) {
-	identities := make(map[memoryTimeIdentity]*memoryTimeGroup)
-	scoped := make(map[MemoryScope][]*memoryTimeGroup)
-	anonymous := 0
-	appendEntry := func(memory *MemorySnapshot, fallback MemoryScope) {
+	topLevel := make(map[MemoryScope][]*memoryTimeGroup)
+	ownerRaw := make(map[memoryTimeIdentity]memoryTimeKey)
+	appendTopLevel := func(memory *MemorySnapshot, fallback MemoryScope) {
 		scope := memoryIDScope(*memory, fallback)
-		identity := memoryTimeIdentity{scope: scope, id: memory.ID}
-		if identity.id == "" {
-			anonymous++
-			identity.anonymous = anonymous
+		key := memoryTimeKey{
+			created: memory.CreatedAt,
+			updated: memory.UpdatedAt,
 		}
-		group, exists := identities[identity]
-		if !exists {
-			group = &memoryTimeGroup{key: memoryTimeKey{
-				created: memory.CreatedAt,
-				updated: memory.UpdatedAt,
-			}}
-			identities[identity] = group
-			scoped[scope] = append(scoped[scope], group)
-		}
+		group := &memoryTimeGroup{key: key}
 		group.entries = append(group.entries, memoryTimeEntry{
 			createdAt: &memory.CreatedAt,
 			updatedAt: &memory.UpdatedAt,
 		})
+		topLevel[scope] = append(topLevel[scope], group)
+		if memory.ID != "" {
+			identity := memoryTimeIdentity{scope: scope, id: memory.ID}
+			if _, exists := ownerRaw[identity]; !exists {
+				ownerRaw[identity] = key
+			}
+		}
 	}
 	for i := range snapshot.Memories {
-		appendEntry(&snapshot.Memories[i], MemoryScope{})
+		appendTopLevel(&snapshot.Memories[i], MemoryScope{})
+	}
+	for _, groups := range topLevel {
+		normalizeScopedMemoryTimes(groups, precision)
+	}
+
+	owners := make(map[memoryTimeIdentity]memoryTimeOwner, len(ownerRaw))
+	for i := range snapshot.Memories {
+		memory := &snapshot.Memories[i]
+		if memory.ID == "" {
+			continue
+		}
+		scope := memoryIDScope(*memory, MemoryScope{})
+		identity := memoryTimeIdentity{scope: scope, id: memory.ID}
+		raw, exists := ownerRaw[identity]
+		if !exists {
+			continue
+		}
+		if _, duplicate := owners[identity]; duplicate {
+			continue
+		}
+		owners[identity] = memoryTimeOwner{
+			raw: raw,
+			normalized: memoryTimeKey{
+				created: memory.CreatedAt,
+				updated: memory.UpdatedAt,
+			},
+		}
+	}
+
+	searches := make(map[MemoryScope][]*memoryTimeGroup)
+	appendSearch := func(memory *MemorySnapshot, fallback MemoryScope) {
+		scope := memoryIDScope(*memory, fallback)
+		key := memoryTimeKey{
+			created: memory.CreatedAt,
+			updated: memory.UpdatedAt,
+		}
+		entry := memoryTimeEntry{
+			createdAt: &memory.CreatedAt,
+			updatedAt: &memory.UpdatedAt,
+		}
+		if memory.ID != "" {
+			identity := memoryTimeIdentity{scope: scope, id: memory.ID}
+			if owner, exists := owners[identity]; exists {
+				assignLinkedMemoryTimeRanks(entry, key, owner, precision)
+				return
+			}
+		}
+		searches[scope] = append(searches[scope], &memoryTimeGroup{
+			key:     key,
+			entries: []memoryTimeEntry{entry},
+		})
 	}
 	for i := range snapshot.MemorySearches {
 		scope := MemoryScope{
@@ -260,26 +303,25 @@ func normalizeMemoryTimes(snapshot *Snapshot, precision time.Duration) {
 			UserID:  snapshot.MemorySearches[i].UserID,
 		}
 		for j := range snapshot.MemorySearches[i].Results {
-			appendEntry(&snapshot.MemorySearches[i].Results[j], scope)
+			appendSearch(&snapshot.MemorySearches[i].Results[j], scope)
 		}
 	}
-	for _, groups := range scoped {
+	for _, groups := range searches {
 		normalizeScopedMemoryTimes(groups, precision)
 	}
 }
 
-// memoryTimeIdentity links top-level and search-result copies using backend
-// identity. Empty backend IDs remain independent because they cannot be linked
-// without guessing from mutable semantic fields such as content.
 type memoryTimeIdentity struct {
-	scope     MemoryScope
-	id        string
-	anonymous int
+	scope MemoryScope
+	id    string
 }
 
-// memoryTimeGroup contains every snapshot carrying one stable memory identity.
-// The first snapshot is authoritative; top-level memories are visited before
-// search results.
+type memoryTimeOwner struct {
+	raw        memoryTimeKey
+	normalized memoryTimeKey
+}
+
+// memoryTimeGroup contains one observed memory timestamp pair.
 type memoryTimeGroup struct {
 	key     memoryTimeKey
 	entries []memoryTimeEntry
@@ -400,6 +442,47 @@ func assignMemoryTimeRanks(
 		*item.createdAt = time.Unix(0, int64(base+1)).UTC()
 		*item.updatedAt = time.Unix(0, int64(base)).UTC()
 	}
+}
+
+func assignLinkedMemoryTimeRanks(
+	item memoryTimeEntry,
+	observed memoryTimeKey,
+	owner memoryTimeOwner,
+	precision time.Duration,
+) {
+	*item.createdAt = linkedMemoryTimeRank(
+		observed.created, owner.raw.created, owner.normalized.created, precision,
+	)
+	*item.updatedAt = linkedMemoryTimeRank(
+		observed.updated, owner.raw.updated, owner.normalized.updated, precision,
+	)
+}
+
+func linkedMemoryTimeRank(
+	observed time.Time,
+	ownerRaw time.Time,
+	ownerNormalized time.Time,
+	precision time.Duration,
+) time.Time {
+	if observed.IsZero() {
+		return time.Time{}
+	}
+	if ownerRaw.IsZero() {
+		return time.Unix(0, 1).UTC()
+	}
+	if memoryTimesWithinPrecision(observed, ownerRaw, precision) {
+		return ownerNormalized
+	}
+	if ownerNormalized.IsZero() {
+		if observed.Before(ownerRaw) {
+			return time.Unix(0, -1).UTC()
+		}
+		return time.Unix(0, 1).UTC()
+	}
+	if observed.Before(ownerRaw) {
+		return ownerNormalized.Add(-time.Nanosecond)
+	}
+	return ownerNormalized.Add(time.Nanosecond)
 }
 
 func memoryTimesWithinPrecision(left, right time.Time, precision time.Duration) bool {
@@ -569,7 +652,7 @@ func normalizeMemoryEventTimes(snapshot *Snapshot, precision time.Duration) {
 	for _, reference := range references {
 		times = append(times, reference.value)
 	}
-	normalizeTimes(times, precision)
+	normalizeAbsoluteTimes(times, precision)
 	for _, reference := range references {
 		reference.values[reference.key] = reference.value.UTC().Format(time.RFC3339Nano)
 	}
@@ -828,7 +911,7 @@ func normalizeSessionTimes(snapshot *SessionSnapshot, precision time.Duration) {
 			conversationTimes = append(conversationTimes, &value)
 		}
 	}
-	normalizeTimes(conversationTimes, precision)
+	normalizeAbsoluteTimes(conversationTimes, precision)
 	for _, boundaryTime := range boundaryTimes {
 		boundaryTime.values[boundaryTime.key] = *boundaryTime.value
 	}
@@ -838,7 +921,7 @@ func normalizeSessionTimes(snapshot *SessionSnapshot, precision time.Duration) {
 			trackTimes = append(trackTimes, &snapshot.Tracks[i].Events[j].Timestamp)
 		}
 	}
-	normalizeTimes(trackTimes, precision)
+	normalizeAbsoluteTimes(trackTimes, precision)
 }
 
 func summaryBoundaryCutoffTime(boundary map[string]any) (time.Time, bool) {
@@ -927,6 +1010,18 @@ func normalizeTimes(values []*time.Time, precision time.Duration) {
 			continue
 		}
 		*value = ranks[*value]
+	}
+}
+
+func normalizeAbsoluteTimes(values []*time.Time, precision time.Duration) {
+	if precision <= 0 {
+		precision = time.Millisecond
+	}
+	for _, value := range values {
+		if value == nil || value.IsZero() {
+			continue
+		}
+		*value = value.UTC().Truncate(precision)
 	}
 }
 
@@ -1046,7 +1141,6 @@ func transformSnapshotValues(
 		Sessions:       append([]SessionSnapshot(nil), snapshot.Sessions...),
 		Memories:       append([]MemorySnapshot(nil), snapshot.Memories...),
 		MemorySearches: append([]MemorySearchSnapshot(nil), snapshot.MemorySearches...),
-		Unsupported:    append([]UnsupportedFeature(nil), snapshot.Unsupported...),
 	}
 	for i := range cloned.Sessions {
 		if err := transformSessionValues(&cloned.Sessions[i], transform); err != nil {

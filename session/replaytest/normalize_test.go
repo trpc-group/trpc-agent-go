@@ -32,6 +32,10 @@ func TestNormalizeSnapshotRemovesOnlyBackendNoise(t *testing.T) {
 		"event-b", "memory-b", "invocation-b",
 		normalizationObservation{timestamp: time.Unix(20, 0), score: 0.8123451},
 	)
+	actual.Sessions[0].Events[0].Timestamp = baseline.Sessions[0].Events[0].Timestamp
+	actual.Sessions[0].Summaries[0].UpdatedAt = baseline.Sessions[0].Summaries[0].UpdatedAt
+	actual.Sessions[0].Tracks[0].Events[0].Timestamp =
+		baseline.Sessions[0].Tracks[0].Events[0].Timestamp
 	actual.Sessions[0].State = map[string]StateValueSnapshot{
 		"profile": JSONStateValue(map[string]any{"level": int64(2), "active": true}),
 	}
@@ -699,8 +703,15 @@ func TestNormalizeSnapshotPreservesTemporalSemantics(t *testing.T) {
 	actual.Sessions[0].Tracks[0].Events[0].Duration = 10 * time.Millisecond
 	actual.Sessions[0].Tracks[0].Events[1].Duration = 20 * time.Millisecond
 	gotActual = NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	if reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatal("caller-supplied timestamp shift was normalized away")
+	}
+
+	actual.Sessions[0].Events[0].Timestamp = base
+	actual.Sessions[0].Events[1].Timestamp = base.Add(time.Second)
+	gotActual = NormalizeSnapshot(actual, DefaultNormalizeOptions())
 	if !reflect.DeepEqual(gotBaseline, gotActual) {
-		t.Fatalf("equivalent absolute durations differ:\n%#v\n%#v", gotBaseline, gotActual)
+		t.Fatalf("equivalent absolute timestamps and durations differ:\n%#v\n%#v", gotBaseline, gotActual)
 	}
 
 	actual.Sessions[0].Events[0].Timestamp = base.Add(12 * time.Second)
@@ -1302,6 +1313,51 @@ func TestNormalizeMemoryTimesSharesSearchResultRanks(t *testing.T) {
 	result := got.MemorySearches[0].Results[0]
 	if !memory.CreatedAt.Equal(result.CreatedAt) || !memory.UpdatedAt.Equal(result.UpdatedAt) {
 		t.Fatalf("search result ranks differ from top-level memory: %#v vs %#v", memory, result)
+	}
+}
+
+func TestNormalizeMemoryTimesPreservesSearchResultTimestampMismatch(t *testing.T) {
+	base := time.Unix(100, 0).UTC()
+	baseline := Snapshot{
+		Memories: []MemorySnapshot{{
+			ID: "memory-1", AppName: "app", UserID: "user", Content: "first",
+			CreatedAt: base, UpdatedAt: base.Add(time.Second),
+		}},
+		MemorySearches: []MemorySearchSnapshot{{
+			AppName: "app", UserID: "user", Query: "query",
+			Results: []MemorySnapshot{{
+				ID: "memory-1", AppName: "app", UserID: "user", Content: "first",
+				CreatedAt: base, UpdatedAt: base.Add(time.Second),
+			}},
+		}},
+	}
+	actual := Snapshot{
+		Memories: []MemorySnapshot{{
+			ID: "memory-1", AppName: "app", UserID: "user", Content: "first",
+			CreatedAt: base, UpdatedAt: base.Add(time.Second),
+		}},
+		MemorySearches: []MemorySearchSnapshot{{
+			AppName: "app", UserID: "user", Query: "query",
+			Results: []MemorySnapshot{{
+				ID: "memory-1", AppName: "app", UserID: "user", Content: "first",
+				CreatedAt: base.Add(-2 * time.Second),
+				UpdatedAt: base.Add(-time.Second),
+			}},
+		}},
+	}
+	gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+	gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	if reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatal("stale search result timestamps were normalized away")
+	}
+	if !reflect.DeepEqual(gotBaseline.Memories, gotActual.Memories) {
+		t.Fatalf("search result timestamps shifted top-level ranks:\nbaseline: %#v\nactual: %#v", gotBaseline.Memories, gotActual.Memories)
+	}
+	if reflect.DeepEqual(
+		gotBaseline.MemorySearches[0].Results[0],
+		gotActual.MemorySearches[0].Results[0],
+	) {
+		t.Fatal("search result timestamp mismatch is not observable")
 	}
 }
 

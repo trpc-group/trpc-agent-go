@@ -57,7 +57,6 @@ type Snapshot struct {
 	Sessions       []SessionSnapshot      `json:"sessions,omitempty"`
 	Memories       []MemorySnapshot       `json:"memories,omitempty"`
 	MemorySearches []MemorySearchSnapshot `json:"memory_searches,omitempty"`
-	Unsupported    []UnsupportedFeature   `json:"unsupported,omitempty"`
 }
 
 // SessionSnapshot contains persisted session data relevant to replay.
@@ -204,12 +203,6 @@ type MemorySearchSnapshot struct {
 	UserID  string           `json:"user_id"`
 	Query   string           `json:"query"`
 	Results []MemorySnapshot `json:"results"`
-}
-
-// UnsupportedFeature records an explicit backend capability gap.
-type UnsupportedFeature struct {
-	Capability Capability `json:"capability"`
-	Reason     string     `json:"reason"`
 }
 
 // Locator identifies the semantic object containing a difference.

@@ -279,8 +279,11 @@ func validateMemory(item MemorySnapshot, expected memoryExpectation) error {
 func validatePreferenceMetadata(metadata map[string]any) error {
 	eventTime, ok := metadata["event_time"].(string)
 	parsedTime, err := time.Parse(time.RFC3339Nano, eventTime)
+	wantEventTime := standardTime.Add(-time.Hour).
+		UTC().
+		Truncate(DefaultNormalizeOptions().TimePrecision)
 	participants, participantsOK := metadata["participants"].([]any)
-	if !ok || err != nil || !parsedTime.Equal(time.Unix(0, 1).UTC()) ||
+	if !ok || err != nil || !parsedTime.Equal(wantEventTime) ||
 		metadata["location"] != "Shenzhen" ||
 		!participantsOK || !sameStringSet(participants, "user", "assistant") {
 		return fmt.Errorf("preference metadata = %#v, want event_time, location, and participants",
@@ -452,21 +455,21 @@ func concurrentCase() ReplayCase {
 
 func validateConcurrentSnapshot(snapshot Snapshot) error {
 	type expectedEvent struct {
-		id       string
-		author   string
-		content  string
-		timeRank int
+		id      string
+		author  string
+		content string
+		second  int
 	}
 	want := map[string][]expectedEvent{
 		standardSessionID: {
-			{id: "event-0", author: "user", content: "primary request", timeRank: 1},
-			{id: "event-2", author: "tool", content: "later tool", timeRank: 3},
-			{id: "event-1", author: "sub-agent", content: "earlier sub-agent", timeRank: 2},
-			{id: "event-3", author: "assistant", content: "follow-up", timeRank: 4},
+			{id: "event-0", author: "user", content: "primary request", second: 0},
+			{id: "event-2", author: "tool", content: "later tool", second: 2},
+			{id: "event-1", author: "sub-agent", content: "earlier sub-agent", second: 1},
+			{id: "event-3", author: "assistant", content: "follow-up", second: 3},
 		},
 		"session-2": {
-			{id: "event-0", author: "user", content: "secondary request", timeRank: 1},
-			{id: "event-3", author: "sub-agent", content: "parallel", timeRank: 2},
+			{id: "event-0", author: "user", content: "secondary request", second: 0},
+			{id: "event-3", author: "sub-agent", content: "parallel", second: 3},
 		},
 	}
 	if len(snapshot.Sessions) != len(want) {
@@ -482,18 +485,19 @@ func validateConcurrentSnapshot(snapshot Snapshot) error {
 		}
 		for index, wantEvent := range wantEvents {
 			got := sess.Events[index]
+			wantTimestamp := standardTime.Add(time.Duration(wantEvent.second) * time.Second)
 			if got.ID != wantEvent.id || got.Author != wantEvent.author ||
 				got.Content != wantEvent.content ||
-				!got.Timestamp.Equal(time.Unix(0, int64(wantEvent.timeRank)).UTC()) {
+				!got.Timestamp.Equal(wantTimestamp) {
 				return fmt.Errorf(
-					"session %q event %d = %#v, want id=%q author=%q content=%q time rank=%d",
+					"session %q event %d = %#v, want id=%q author=%q content=%q timestamp=%s",
 					sess.ID,
 					index,
 					got,
 					wantEvent.id,
 					wantEvent.author,
 					wantEvent.content,
-					wantEvent.timeRank,
+					wantTimestamp.Format(time.RFC3339Nano),
 				)
 			}
 		}

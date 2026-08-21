@@ -219,14 +219,14 @@ func TestRecoverySnapshotInvariant(t *testing.T) {
 func TestConcurrentSnapshotInvariant(t *testing.T) {
 	valid := Snapshot{Sessions: []SessionSnapshot{
 		{ID: standardSessionID, Events: []EventSnapshot{
-			{ID: "event-0", Author: "user", Content: "primary request", Timestamp: time.Unix(0, 1).UTC()},
-			{ID: "event-2", Author: "tool", Content: "later tool", Timestamp: time.Unix(0, 3).UTC()},
-			{ID: "event-1", Author: "sub-agent", Content: "earlier sub-agent", Timestamp: time.Unix(0, 2).UTC()},
-			{ID: "event-3", Author: "assistant", Content: "follow-up", Timestamp: time.Unix(0, 4).UTC()},
+			{ID: "event-0", Author: "user", Content: "primary request", Timestamp: standardTime},
+			{ID: "event-2", Author: "tool", Content: "later tool", Timestamp: standardTime.Add(2 * time.Second)},
+			{ID: "event-1", Author: "sub-agent", Content: "earlier sub-agent", Timestamp: standardTime.Add(time.Second)},
+			{ID: "event-3", Author: "assistant", Content: "follow-up", Timestamp: standardTime.Add(3 * time.Second)},
 		}},
 		{ID: "session-2", Events: []EventSnapshot{
-			{ID: "event-0", Author: "user", Content: "secondary request", Timestamp: time.Unix(0, 1).UTC()},
-			{ID: "event-3", Author: "sub-agent", Content: "parallel", Timestamp: time.Unix(0, 2).UTC()},
+			{ID: "event-0", Author: "user", Content: "secondary request", Timestamp: standardTime},
+			{ID: "event-3", Author: "sub-agent", Content: "parallel", Timestamp: standardTime.Add(3 * time.Second)},
 		}},
 	}}
 	if err := validateConcurrentSnapshot(valid); err != nil {
