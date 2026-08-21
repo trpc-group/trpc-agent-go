@@ -649,6 +649,55 @@ events, err := runnerInstance.Run(
 `plugin.NewGlobalInstruction(text)` 会在每一次模型请求前，统一追加一条 system
 message。适合用来实现全局策略或统一行为（例如安全约束、风格要求）。
 
+### ToolLoopWarning（工具循环提醒）
+
+`toolloopwarning.New()` 会在最终模型可见的工具结果准备完成后，比较相邻的完整工具轮次。
+当工具名称、规范化后的 JSON 参数以及结果都相同时，插件会在第二个轮次结束后排队一条
+合成的 `user` 角色提醒。同一轮次继续重复时不会反复提醒；轮次内容发生变化，或消费了其他
+来源的排队用户消息后，才会开始新的连续检测。
+
+检测会忽略工具调用 ID。一个完整轮次要求每个工具调用恰好对应一条末尾工具结果消息，
+并按 ID 匹配；不完整或格式异常的轮次会重置检测状态。该插件默认关闭，不会额外发起模型
+调用或工具调用，也不会停止 invocation 或触发重试。插件必须注册到 `Runner`；直接调用
+`Agent.Run` 不会经过检测所需的最终事件处理路径。
+
+提醒成功入队后，Runner 会在下一个安全的模型轮次边界先把它作为会话事件持久化，再构造
+下一次模型请求。它在模型协议中的角色是 `user`；排队消息扩展会记录
+`source: "plugin/toolloopwarning"`，供消费方区分框架注入和用户直接输入。该事件会继续
+参与后续历史与回放。如果 invocation 队列在入队前被并发关闭或清理，插件会记录 debug
+日志并继续执行，不生成提醒或持久化事件。
+
+该插件会在 `AfterToolMessages` 阶段关联工具调用元数据，并在完整的 Runner `OnEvent`
+变换链结束后计算指纹，因此结果不依赖它与结果变换插件之间的注册顺序。两个工具轮次之间
+如果消费了一条其他来源的排队用户消息，则两者不再相邻；插件自身的提醒不会重置检测状态。
+对于克隆出的子 invocation，插件只在确实需要提醒时创建本地队列，不会借用主 agent 的
+用户引导队列。
+
+可使用 `WithExcludedToolNames(...)` 排除轮询等预期会重复的工具；可使用
+`WithWarningMessage(...)` 自定义或本地化提醒内容。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolloopwarning"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+agentInstance := llmagent.New(
+	"my-agent",
+	llmagent.WithModel(openai.New("gpt-4o-mini")),
+)
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(toolloopwarning.New(
+		toolloopwarning.WithExcludedToolNames("poll_status"),
+	)),
+)
+defer runnerInstance.Close()
+```
+
 ### ToolCallID
 
 `plugin/toolcallid` 下的 `toolcallid.New()` 用于在模型返回最终 `ToolCall.ID` 后统一改写为框架使用的 tool call ID。当 provider / model 不能稳定保证 `ToolCall.ID` 足够唯一时，可以启用这个插件。
@@ -1100,7 +1149,7 @@ FinishReason：
 
 完整示例见 [examples/plugin/errormessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/errormessage)。
 
-说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、ToolError、MessageMerger、ErrorMessage、Guardrail 八类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
+说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、ToolError、ToolLoopWarning、MessageMerger、ErrorMessage、Guardrail 九类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
 
 ## 如何扩展：写一个自己的插件
 

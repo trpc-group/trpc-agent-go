@@ -11,7 +11,9 @@ package steer
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -33,6 +35,16 @@ func TestQueuedUserMessageWireValues(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.JSONEq(t, `{"status":"consumed"}`, string(payload))
+	payload, err = json.Marshal(QueuedUserMessageMetadata{
+		Status: QueuedUserMessageStatusConsumed,
+		Source: "plugin/example",
+	})
+	require.NoError(t, err)
+	require.JSONEq(
+		t,
+		`{"status":"consumed","source":"plugin/example"}`,
+		string(payload),
+	)
 }
 
 func TestQueue_FIFOAndClose(t *testing.T) {
@@ -71,6 +83,134 @@ func TestAttachDrainAndClear(t *testing.T) {
 	require.False(t, IsAttached(invocation))
 	require.False(t, queue.Enqueue(model.NewUserMessage("later")))
 	require.Nil(t, Drain(invocation))
+}
+
+func TestEnsureAttachedCreatesOneQueueConcurrently(t *testing.T) {
+	const workers = 64
+	invocation := agent.NewInvocation()
+	queues := make([]*Queue, workers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range queues {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			queues[index] = EnsureAttached(invocation)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	require.NotNil(t, queues[0])
+	for _, queue := range queues[1:] {
+		require.Same(t, queues[0], queue)
+	}
+	require.True(t, queues[0].Enqueue(model.NewUserMessage("kept")))
+	require.Len(t, Drain(invocation), 1)
+}
+
+func TestEnqueueWithSourceAndDrainQueued(t *testing.T) {
+	invocation := agent.NewInvocation()
+	queue := NewQueue()
+	Attach(invocation, queue)
+
+	require.True(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("synthetic"),
+		"plugin/example",
+	))
+	drained := DrainQueued(invocation)
+	require.Len(t, drained, 1)
+	require.Equal(t, "synthetic", drained[0].Message.Content)
+	require.Equal(t, "plugin/example", drained[0].Source)
+	require.Nil(t, DrainQueued(invocation))
+	require.False(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("synthetic"),
+		"",
+	))
+	require.False(t, EnqueueWithSource(
+		invocation,
+		model.NewAssistantMessage("synthetic"),
+		"plugin/example",
+	))
+	require.False(t, EnqueueWithSource(
+		invocation,
+		model.Message{Role: model.RoleUser},
+		"plugin/example",
+	))
+	Close(invocation)
+	require.False(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("synthetic"),
+		"plugin/example",
+	))
+}
+
+func TestConsumptionObserverIsInvocationScopedAndReplaceable(t *testing.T) {
+	invocation := agent.NewInvocation()
+	var observed []QueuedMessage
+	RegisterConsumptionObserver(invocation, "test", func(message QueuedMessage) {
+		observed = append(observed, QueuedMessage{Source: "stale"})
+	})
+	RegisterConsumptionObserver(invocation, "test", func(message QueuedMessage) {
+		observed = append(observed, message)
+	})
+	queue := NewQueue()
+	Attach(invocation, queue)
+	require.True(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("synthetic"),
+		"plugin/example",
+	))
+	require.Len(t, DrainQueued(invocation), 1)
+	require.Len(t, observed, 1)
+	require.Equal(t, "synthetic", observed[0].Message.Content)
+	require.Equal(t, "plugin/example", observed[0].Source)
+
+	Clear(invocation)
+	Attach(invocation, NewQueue())
+	require.True(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("later"),
+		"plugin/example",
+	))
+	require.Len(t, DrainQueued(invocation), 1)
+	require.Len(t, observed, 1)
+}
+
+func TestRegisterConsumptionObserverCreatesOneHolderConcurrently(t *testing.T) {
+	const workers = 64
+	invocation := agent.NewInvocation()
+	start := make(chan struct{})
+	var observed atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			RegisterConsumptionObserver(
+				invocation,
+				fmt.Sprintf("observer-%d", index),
+				func(QueuedMessage) {
+					observed.Add(1)
+				},
+			)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	Attach(invocation, NewQueue())
+	require.True(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("synthetic"),
+		"plugin/example",
+	))
+	require.Len(t, DrainQueued(invocation), 1)
+	require.Equal(t, int64(workers), observed.Load())
 }
 
 func TestClose_RejectsFutureEnqueueAndPreservesQueuedMessages(t *testing.T) {
@@ -226,5 +366,12 @@ func TestNilSafety(t *testing.T) {
 	require.Nil(t, queue.Discard())
 	queue.Close()
 	Clear(invocation)
+	RegisterConsumptionObserver(invocation, "", nil)
 	require.Nil(t, Drain(invocation))
+	require.Nil(t, DrainQueued(invocation))
+	require.False(t, EnqueueWithSource(
+		invocation,
+		model.NewUserMessage("x"),
+		"plugin/example",
+	))
 }

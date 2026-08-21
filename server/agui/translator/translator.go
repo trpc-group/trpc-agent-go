@@ -316,14 +316,18 @@ func (t *translator) queuedUserMessageEvents(
 		)
 		t.recordClosedMessageID(messageID)
 	}
+	activityContent := map[string]any{
+		"requestId": evt.RequestID,
+		"messageId": messageID,
+		"status":    meta.Status,
+	}
+	if meta.Source != "" {
+		activityContent["source"] = meta.Source
+	}
 	events = append(events, aguievents.NewActivitySnapshotEvent(
 		steerConsumedActivityMessageID(messageID),
 		steerConsumedActivityType,
-		map[string]any{
-			"requestId": evt.RequestID,
-			"messageId": messageID,
-			"status":    meta.Status,
-		},
+		activityContent,
 	))
 	return events, true, nil
 }

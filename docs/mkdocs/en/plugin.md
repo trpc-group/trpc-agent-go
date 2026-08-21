@@ -635,6 +635,65 @@ The output is one JSON debug message per line, for example:
 request. This is useful for organization-wide policies or shared behavior that
 should apply to all agents managed by a Runner.
 
+### ToolLoopWarning
+
+`toolloopwarning.New()` compares consecutive complete tool-call rounds after
+their final model-facing tool result messages are available. When the tool
+names, canonical JSON arguments, and results are identical, it queues one
+synthetic user-role instruction after the second round. It does not repeat the
+warning while the same round remains unchanged; a changed round or a queued
+user message from another source starts a new streak.
+
+Tool-call IDs are ignored. A complete round requires exactly one trailing
+tool-result message per tool call, matched by ID. An incomplete or malformed
+round resets detection. The plugin is opt-in, makes no additional model or tool
+calls, and does not stop or retry the invocation. It must be registered on a
+`Runner`; direct calls to `Agent.Run` do not provide the finalized-event path
+needed for detection.
+
+After a successful enqueue, the Runner persists the instruction at the next
+safe model-turn boundary as a session event before constructing the next model
+request. Its model protocol role is `user`; the queued-message extension records
+`source: "plugin/toolloopwarning"` so consumers can distinguish it from direct
+user input. The persisted event remains part of later history and replay.
+If the invocation queue is concurrently closed or cleared before enqueue, the
+plugin logs at debug level and continues without a warning or persisted event.
+
+The plugin associates tool-call metadata at `AfterToolMessages`, then computes
+the fingerprint after the complete Runner `OnEvent` transformation pipeline.
+Its result therefore does not depend on whether a result-transforming plugin is
+registered before or after it. A queued user message consumed between two tool
+rounds breaks their adjacency unless it is this plugin's own warning. For a
+cloned child invocation, the plugin creates an invocation-local queue only when
+a warning is actually needed; it never borrows the lead agent's user-steer
+queue.
+
+Use `WithExcludedToolNames(...)` for polling or other tools whose repeated
+results are expected. Use `WithWarningMessage(...)` to localize or customize
+the synthetic instruction.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolloopwarning"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+agentInstance := llmagent.New(
+	"my-agent",
+	llmagent.WithModel(openai.New("gpt-4o-mini")),
+)
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(toolloopwarning.New(
+		toolloopwarning.WithExcludedToolNames("poll_status"),
+	)),
+)
+defer runnerInstance.Close()
+```
+
 ### ToolCallID
 
 `toolcallid.New()` from `plugin/toolcallid` rewrites the final `ToolCall.ID`
@@ -1136,10 +1195,10 @@ The example includes verified scenarios for:
 - A defensive analysis request that is allowed
 
 The repository currently includes Logging, DebugLog, GlobalInstruction,
-ToolCallID, ToolError, MessageMerger, ErrorMessage, and Guardrail as built-in
-plugins. Tool Approval, Prompt Injection, and Unsafe Intent are currently
-built-in capabilities under the Guardrail plugin. Additional plugins can be
-implemented as custom plugins.
+ToolCallID, ToolError, ToolLoopWarning, MessageMerger, ErrorMessage, and
+Guardrail as built-in plugins. Tool Approval, Prompt Injection, and Unsafe
+Intent are currently built-in capabilities under the Guardrail plugin.
+Additional plugins can be implemented as custom plugins.
 
 ## Writing Your Own Plugin
 
