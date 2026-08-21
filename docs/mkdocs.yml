@@ -46,6 +46,7 @@ nav:
       - Skill: skill.md
       - Evolution: evolution.md
       - Tool: tool.md
+      - Tool Execution Safety: tool-safety.md
       - Session:
           - Overview: session/index.md
           - Noop Session: session/noop.md
@@ -177,6 +178,7 @@ plugins:
                 - Skill: skill.md
                 - Evolution: evolution.md
                 - Tool: tool.md
+                - Tool 执行安全: tool-safety.md
                 - Session:
                     - Overview: session/index.md
                     - Noop Session: session/noop.md
