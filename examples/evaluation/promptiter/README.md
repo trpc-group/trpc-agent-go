@@ -1,6 +1,6 @@
 # PromptIter Examples
 
-This directory contains six PromptIter examples:
+This directory contains six focused PromptIter runtime examples. For an end-to-end optimization and regression gate, see [promptiter_regression_loop](../promptiter_regression_loop/).
 
 - [syncrun](./syncrun): runs the full PromptIter optimization loop directly through `engine.Run` against a single-agent sports recap candidate. Its initial instruction intentionally stays simple so that PromptIter, rather than a strong hand-written seed, drives the gain.
 - [tooldesc](./tooldesc): runs the same synchronous engine flow against a single-agent travel candidate while optimizing only the candidate tool-description surface.
