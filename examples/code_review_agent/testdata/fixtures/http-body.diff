@@ -1,0 +1,14 @@
+diff --git a/client.go b/client.go
+--- a/client.go
++++ b/client.go
+@@ -1,3 +1,8 @@
+ package sample
+ 
++func Fetch() error {
++	resp, err := http.Get("https://example.com")
++	if err != nil {
++		return fmt.Errorf("fetch: %w", err)
++	}
++	_ = resp
++	return nil
++}

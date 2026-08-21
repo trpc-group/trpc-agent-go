@@ -1,0 +1,12 @@
+diff --git a/db.go b/db.go
+index 1111111..2222222 100644
+--- a/db.go
++++ b/db.go
+@@ -1,2 +1,6 @@
+ package foo
++
++func Query() error {
++	db, _ := sql.Open("sqlite", ":memory:")
++	_ = db
++	return nil
++}

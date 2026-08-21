@@ -1,0 +1,9 @@
+diff --git a/dedupe.go b/dedupe.go
+index 1111111..2222222 100644
+--- a/dedupe.go
++++ b/dedupe.go
+@@ -1,2 +1,5 @@
+ package foo
++
++func Crash() { panic("boom") }
++func CrashAgain() { panic("boom") }
