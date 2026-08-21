@@ -39,7 +39,7 @@ gateway/SDK 侧。直接访问 VectorDB 或 SQLite 只能访问存储层，不�
 要求 Node.js 22.16.0 或更高版本。先克隆 SDK 仓库并启动 standalone gateway：
 
 ```bash
-git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
+git clone --branch feat/server_team --single-branch https://github.com/TencentCloud/TencentDB-Agent-Memory.git
 cd TencentDB-Agent-Memory/MemoryCore
 npm install
 

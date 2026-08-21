@@ -86,7 +86,7 @@ pipeline.
 Clone the TencentDB Agent Memory repository and start the standalone gateway:
 
 ```bash
-git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
+git clone --branch feat/server_team --single-branch https://github.com/TencentCloud/TencentDB-Agent-Memory.git
 cd TencentDB-Agent-Memory/MemoryCore
 npm install
 
