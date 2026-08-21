@@ -164,6 +164,67 @@ func TestTimeRequestProcessor_ProcessRequest_WithExistingSystemMessage(t *testin
 	}
 }
 
+func TestTimeRequestProcessor_ProcessRequest_AppendsToUserForStablePrefix(t *testing.T) {
+	processor := NewTimeRequestProcessor(
+		WithAddCurrentTime(true),
+		WithTimePromptPlacement(TimePromptPlacementUser),
+		WithCurrentTimeTool("environment_context_current_time", true),
+	)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("Stable persona and instructions"),
+			model.NewUserMessage("Investigate the alert"),
+		},
+	}
+
+	processor.ProcessRequest(context.Background(), nil, req, make(chan *event.Event, 1))
+
+	if strings.Contains(req.Messages[0].Content, "The current date is:") {
+		t.Fatalf("expected stable system prefix to remain unchanged, got: %s", req.Messages[0].Content)
+	}
+	if !strings.Contains(req.Messages[1].Content, "The current date is:") {
+		t.Fatalf("expected current date on dynamic user turn, got: %s", req.Messages[1].Content)
+	}
+	if !strings.Contains(req.Messages[1].Content, "call the built-in environment_context_current_time tool") {
+		t.Fatalf("expected exact-time tool guidance to be preserved, got: %s", req.Messages[1].Content)
+	}
+}
+
+func TestTimeRequestProcessor_ProcessRequest_CreatesUserForStablePrefix(t *testing.T) {
+	processor := NewTimeRequestProcessor(
+		WithAddCurrentTime(true),
+		WithTimePromptPlacement(TimePromptPlacementUser),
+	)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("Stable persona and instructions"),
+		},
+	}
+
+	processor.ProcessRequest(context.Background(), nil, req, make(chan *event.Event, 1))
+
+	if len(req.Messages) != 2 {
+		t.Fatalf("expected clock user turn after system prefix, got %d messages", len(req.Messages))
+	}
+	if req.Messages[0].Content != "Stable persona and instructions" {
+		t.Fatalf("expected system prefix to remain byte-stable, got: %s", req.Messages[0].Content)
+	}
+	if req.Messages[1].Role != model.RoleUser ||
+		!strings.Contains(req.Messages[1].Content, "The current date is:") {
+		t.Fatalf("expected a dynamic clock user turn, got: %#v", req.Messages[1])
+	}
+}
+
+func TestContainsTimeInfo_RequiresClockLabel(t *testing.T) {
+	timeInfo := "The current time is: Monday, January 02, 2006 15:04:05 MST"
+	if containsTimeInfo("Alert started at Monday, January 02, 2006 15:04:05 MST", timeInfo) {
+		t.Fatal("raw timestamp in user text must not skip clock injection")
+	}
+	if !containsTimeInfo("Investigate the alert\n\n"+timeInfo, timeInfo) {
+		t.Fatal("an official clock block should skip a second injection")
+	}
+}
+
 func TestTimeRequestProcessor_RebuildRequestForContextCompaction(t *testing.T) {
 	processor := NewTimeRequestProcessor(WithAddCurrentTime(true))
 	req := &model.Request{

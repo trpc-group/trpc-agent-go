@@ -111,6 +111,13 @@ const (
 	// user/history. This is more prompt-cache friendly, but recall context
 	// participates in token-budget trimming.
 	PreloadSessionRecallInjectionUser = processor.PreloadSessionRecallInjectionUser
+
+	// TimePromptPlacementSystem adds request-time clock context to the system
+	// prompt. This is the backward-compatible default.
+	TimePromptPlacementSystem = processor.TimePromptPlacementSystem
+	// TimePromptPlacementUser adds request-time clock context to the latest user
+	// turn, preserving a cache-stable system prefix.
+	TimePromptPlacementUser = processor.TimePromptPlacementUser
 )
 
 // SessionSummaryInjectionMode controls where session summaries are injected.
@@ -122,6 +129,9 @@ type PreloadMemoryInjectionMode = processor.PreloadMemoryInjectionMode
 // PreloadSessionRecallInjectionMode controls where recalled session events are
 // injected.
 type PreloadSessionRecallInjectionMode = processor.PreloadSessionRecallInjectionMode
+
+// TimePromptPlacement controls which message receives request-time clock data.
+type TimePromptPlacement = processor.TimePromptPlacement
 
 // ToolTranscriptMode controls how historical tool-call/tool-result transcripts
 // are projected into model requests.
@@ -345,6 +355,9 @@ type Options struct {
 	Timezone string
 	// TimeFormat specifies the format for time display.
 	TimeFormat string
+	// TimePromptPlacement controls whether clock context is added to the system
+	// prompt or latest user turn.
+	TimePromptPlacement TimePromptPlacement
 	// OutputKey is the key in session state to store the output of the agent.
 	OutputKey string
 	// OutputSchema is the JSON schema for validating agent output.
@@ -1727,6 +1740,14 @@ func WithTimezone(timezone string) Option {
 func WithTimeFormat(timeFormat string) Option {
 	return func(opts *Options) {
 		opts.TimeFormat = timeFormat
+	}
+}
+
+// WithTimePromptPlacement selects the message role that receives request-time
+// clock context. User placement keeps the stable system prefix cacheable.
+func WithTimePromptPlacement(placement TimePromptPlacement) Option {
+	return func(opts *Options) {
+		opts.TimePromptPlacement = placement
 	}
 }
 
