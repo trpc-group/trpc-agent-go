@@ -121,8 +121,8 @@ func TestUsageDetailsNormalized(t *testing.T) {
 		},
 		{
 			name:  "inclusive cached input",
-			usage: usageDetails{Input: 100, Output: 50, InputCached: 30},
-			want:  usageDetails{Input: 70, Output: 50, InputCached: 30},
+			usage: usageDetails{Input: 100, Output: 50, Total: 150, InputCached: 30},
+			want:  usageDetails{Input: 70, Output: 50, Total: 150, InputCached: 30},
 		},
 		{
 			name:  "all input cached",

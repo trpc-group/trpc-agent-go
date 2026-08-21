@@ -62,6 +62,7 @@ const (
 type usageDetails struct {
 	Input              int64 `json:"input,omitempty"`
 	Output             int64 `json:"output,omitempty"`
+	Total              int64 `json:"total,omitempty"`
 	InputCached        int64 `json:"input_cached,omitempty"`
 	InputCacheRead     int64 `json:"input_cache_read,omitempty"`
 	InputCacheCreation int64 `json:"input_cache_creation,omitempty"`
@@ -73,6 +74,7 @@ func (u *usageDetails) empty() bool {
 }
 
 // normalized returns mutually exclusive usage buckets as required by Langfuse.
+// Total is an aggregate rather than a bucket and remains provider-reported.
 //
 // OpenAI-compatible and Gemini providers report cached tokens as a subset of
 // input tokens. Anthropic and Bedrock report cache reads and cache creation as
