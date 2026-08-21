@@ -284,12 +284,14 @@ func (t *NamedTool) ToolMetadata() tool.ToolMetadata {
 
 // IsConcurrencySafe delegates to the original tool.
 //
-// It resolves through tool.IsConcurrencySafe rather than reading
+// It resolves through this package's IsConcurrencySafe rather than reading
 // MetadataOf(...).ConcurrencySafe, so a wrapped tool that publishes no
 // concurrency objection keeps the default admission it is entitled to instead of
-// having this wrapper object on its behalf.
+// having this wrapper object on its behalf — and so a declaration overlay
+// between this wrapper and the objecting tool does not hide the objection from a
+// caller that asks this wrapper directly.
 func (t *NamedTool) IsConcurrencySafe() bool {
-	return tool.IsConcurrencySafe(t.original)
+	return IsConcurrencySafe(t.original)
 }
 
 // ShouldDefer delegates to the original tool.
