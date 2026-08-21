@@ -82,6 +82,71 @@ func TestRecallPluginInjectsContext(t *testing.T) {
 	assert.Equal(t, "remembered user context", req.Messages[1].Content)
 }
 
+func TestV3RecallPluginSeparatesDynamicAndSystemContext(t *testing.T) {
+	coreContent := "Keep answers concise."
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "service-1", r.Header.Get(httpHeaderServiceID))
+		switch r.URL.Path {
+		case pathV3AtomicSearch:
+			writeV3TestEnvelope(w, v3AtomicSearchData{
+				Items: []v3AtomicSearchHit{{
+					ID:      "memory-1",
+					Type:    "preference",
+					Content: "Uses PostgreSQL.",
+				}},
+			})
+		case pathV3ScenarioList:
+			writeV3TestEnvelope(w, v3ScenarioListData{
+				Entries: []v3ScenarioEntry{{
+					Path: "reviews.md",
+				}},
+				Total: 1,
+			})
+		case pathV3CoreRead:
+			writeV3TestEnvelope(w, v3CoreFile{Content: coreContent})
+		default:
+			http.Error(w, "unexpected path", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	svc, err := NewServiceWithIdentity(
+		NewServiceIdentity("service-1", "team-1", "agent-1"),
+		WithGatewayURL(server.URL),
+		WithAPIKey("test-key"),
+		WithRecallEnabled(true),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+	mgr, err := pluginpkg.NewManager(svc.Plugin())
+	require.NoError(t, err)
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("base"),
+		model.NewUserMessage("what database do I use?"),
+	}}
+	sess := &session.Session{ID: "s1", AppName: "app", UserID: "user-1"}
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{Session: sess},
+	).Context
+	_, err = mgr.ModelCallbacks().BeforeModel[0](
+		ctx,
+		&model.BeforeModelArgs{Request: req},
+	)
+	require.NoError(t, err)
+
+	require.Len(t, req.Messages, 3)
+	assert.Contains(t, req.Messages[0].Content, coreContent)
+	assert.Contains(t, req.Messages[0].Content, "<agent-core>")
+	assert.NotContains(t, req.Messages[0].Content, "<user-core>")
+	assert.Contains(t, req.Messages[0].Content, "reviews.md")
+	assert.NotContains(t, req.Messages[0].Content, "PostgreSQL")
+	assert.Equal(t, model.RoleUser, req.Messages[1].Role)
+	assert.Contains(t, req.Messages[1].Content, "PostgreSQL")
+	assert.Equal(t, "what database do I use?", req.Messages[2].Content)
+}
+
 func TestRecallAndPluginEdges(t *testing.T) {
 	assert.Empty(t, latestUserText(nil))
 	assert.Empty(t, latestUserText(&model.Request{Messages: []model.Message{model.NewSystemMessage("sys")}}))
