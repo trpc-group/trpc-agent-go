@@ -634,7 +634,9 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	// The __OSB_BASE__ guard prevents this handler from firing on the
 	// listFilesByGlob script, which also contains readlink -f but is
 	// handled by the dedicated block above.
-	if (strings.Contains(req.Command, "readlink -f") ||
+	if (strings.Contains(req.Command, "readlink -z -f") ||
+		strings.Contains(req.Command, "readlink -z -m") ||
+		strings.Contains(req.Command, "readlink -f") ||
 		strings.Contains(req.Command, "readlink -m")) &&
 		!strings.Contains(req.Command, "__OSB_BASE__=") {
 		m.mu.Lock()
@@ -645,19 +647,19 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		if strings.Contains(req.Command, "for p in") {
 			paths := parseBatchReadlinkPaths(req.Command)
 			if malformed {
-				// Return one fewer line than expected so
+				// Return one fewer token than expected so
 				// resolveSandboxPaths falls back to per-path resolve.
 				for i := 0; i < len(paths)-1; i++ {
-					result += resolveMockSymlink(paths[i], symlinks) + "\n"
+					result += resolveMockSymlink(paths[i], symlinks) + "\x00"
 				}
 			} else {
 				for _, p := range paths {
-					result += resolveMockSymlink(p, symlinks) + "\n"
+					result += resolveMockSymlink(p, symlinks) + "\x00"
 				}
 			}
 		} else {
 			p := parseSingleReadlinkPath(req.Command)
-			result = resolveMockSymlink(p, symlinks)
+			result = resolveMockSymlink(p, symlinks) + "\x00"
 		}
 		stdout = result
 		if !forceInfraExit {
@@ -1419,11 +1421,12 @@ func TestWorkspace_Collect_MultipleFiles(t *testing.T) {
 }
 
 // TestWorkspace_Collect_FilenamesWithDelimiters verifies that filenames
-// containing tabs and embedded newlines — both legal in POSIX filenames
-// and producible by user or model code — survive collection end to end.
-// Regression for the previous "path\tsize\n" listFilesByGlob framing
-// where a tab split the name from the size and a newline split one
-// record into two, silently omitting or misidentifying the file.
+// containing tabs, embedded newlines, and a basename whose final byte is
+// a newline — all legal in POSIX filenames and producible by user or
+// model code — survive collection end to end. Regression for the
+// previous "path\tsize\n" framing (tab split the name from the size) and
+// for command-substitution path canonicalization, where Bash $() and
+// readlink's own newline stripped a trailing newline from the name.
 func TestWorkspace_Collect_FilenamesWithDelimiters(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -1432,7 +1435,8 @@ func TestWorkspace_Collect_FilenamesWithDelimiters(t *testing.T) {
 
 	tabName := "report\t2026.txt"
 	newlineName := "line1\nline2.txt"
-	m.setSearchResults([]string{tabName, newlineName})
+	trailingNewlineName := "trailing\n.txt" // final byte of basename is \n
+	m.setSearchResults([]string{tabName, newlineName, trailingNewlineName})
 
 	ws, err := exec.CreateWorkspace(context.Background(), "exec-delim", codeexecutor.WorkspacePolicy{})
 	require.NoError(t, err)
@@ -1443,9 +1447,12 @@ func TestWorkspace_Collect_FilenamesWithDelimiters(t *testing.T) {
 	tabPath := filepath.ToSlash(filepath.Join(ws.Path, tabName))
 	m.setDownloadData(tabPath, []byte(strings.Repeat("x", 100)))
 
+	trailingNewlinePath := filepath.ToSlash(filepath.Join(ws.Path, trailingNewlineName))
+	m.setDownloadData(trailingNewlinePath, []byte("trailing-content"))
+
 	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
 	require.NoError(t, err)
-	require.Len(t, files, 2)
+	require.Len(t, files, 3)
 
 	byName := map[string]codeexecutor.File{}
 	for _, f := range files {
@@ -1461,6 +1468,13 @@ func TestWorkspace_Collect_FilenamesWithDelimiters(t *testing.T) {
 	require.True(t, ok, "file with an embedded newline in its name should be collected intact")
 	assert.Equal(t, "mock-content", newlineFile.Content)
 	assert.False(t, newlineFile.Truncated)
+
+	trailingNewlineFile, ok := byName[trailingNewlineName]
+	require.True(t, ok,
+		"file whose basename ends in a newline should be collected intact, got file names %v",
+		files)
+	assert.Equal(t, "trailing-content", trailingNewlineFile.Content)
+	assert.False(t, trailingNewlineFile.Truncated)
 }
 
 func TestWorkspace_Collect_Truncation(t *testing.T) {

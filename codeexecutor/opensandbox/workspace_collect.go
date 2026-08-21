@@ -153,26 +153,31 @@ func (r *workspaceRuntime) resolveSandboxPaths(
 	if len(results) == 0 {
 		return results, nil
 	}
-	// Use printf with a NUL-separated format to avoid ambiguity from
-	// readlink's own newline output. Each result is on exactly one
-	// line, with no extra echo that would create blank lines.
+	// Resolve each match with GNU readlink -z (NUL-terminated) and read
+	// it back with `read -r -d ''`, then re-emit as one NUL-framed
+	// record per input. Bash command substitution ($()) strips every
+	// trailing newline, and newline-delimited output cannot represent a
+	// filename whose final byte is \n; NUL framing survives both.
 	var script strings.Builder
 	script.WriteString("for p in")
 	for _, fr := range results {
 		script.WriteByte(' ')
 		script.WriteString(shellQuote(fr.path))
 	}
-	script.WriteString(`; do r=$(readlink -f -- "$p" 2>/dev/null) || r=""; printf '%s\n' "$r"; done`)
+	script.WriteString(`; do r=""; IFS= read -r -d '' r < <(readlink -z -f -- "$p" 2>/dev/null) || r=""; printf '%s\0' "$r"; done`)
 	out, err := r.runBash(ctx, script.String(), defaultCollectTimeout)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"opensandbox: resolve paths: %w", err,
 		)
 	}
-	// Trim only trailing newlines, not all whitespace: paths may
-	// contain trailing spaces (see resolveSandboxAncestor for details).
-	lines := strings.Split(strings.TrimRight(out, "\r\n"), "\n")
-	if len(lines) != len(results) {
+	// Parse the NUL-framed records. Splitting on NUL (not newline) and
+	// applying no whitespace trimming preserves a trailing newline in
+	// the canonical path. Each input yields exactly one NUL-terminated
+	// record, so the split produces len(results)+1 tokens where the
+	// final token is the empty tail after the last NUL.
+	tokens := strings.Split(out, "\x00")
+	if len(tokens) != len(results)+1 {
 		// Fallback: if the batch script returned unexpected output,
 		// resolve each path individually.
 		filtered := make([]fileSearchResult, 0, len(results))
@@ -188,9 +193,8 @@ func (r *workspaceRuntime) resolveSandboxPaths(
 		return filtered, nil
 	}
 	filtered := make([]fileSearchResult, 0, len(results))
-	for i, line := range lines {
-		// Trim only trailing \r (from \r\n line endings), not spaces.
-		resolved := strings.TrimRight(line, "\r")
+	for i := 0; i < len(results); i++ {
+		resolved := tokens[i]
 		if resolved == "" || !pathUnder(resolved, wsBase) {
 			continue
 		}
@@ -384,7 +388,7 @@ func (r *workspaceRuntime) listFilesByGlob(
 	cmd.WriteString(" IFS=; for f in $p; do")
 	cmd.WriteString(" if [ \"$__osb_count\" -ge \"$__osb_cap\" ]; then break 2; fi; ")
 	cmd.WriteString("if [ -f \"$f\" ]; then ")
-	cmd.WriteString("__osb_rp=$(readlink -f \"$f\" 2>/dev/null || echo \"$(pwd)/$f\"); ")
+	cmd.WriteString("IFS= read -r -d '' __osb_rp < <(readlink -z -f -- \"$f\" 2>/dev/null) || __osb_rp=\"$(pwd)/$f\"; ")
 	cmd.WriteString("case \"$__osb_rp\" in ")
 	cmd.WriteString("\"$__osb_base\"/*|\"$__osb_base\") ")
 	// Skip paths already counted under an earlier overlapping pattern.

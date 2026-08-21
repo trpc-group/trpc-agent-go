@@ -582,18 +582,18 @@ func pathUnder(p, base string) bool {
 func (r *workspaceRuntime) resolveSandboxPath(
 	ctx context.Context, target, wsBase string,
 ) (string, error) {
-	script := "readlink -f " + shellQuote(target)
+	script := "readlink -z -f " + shellQuote(target)
 	out, err := r.runBash(ctx, script, defaultCreateTimeout)
 	if err != nil {
 		return "", fmt.Errorf(
 			"opensandbox: resolve path %q: %w", target, err,
 		)
 	}
-	// Trim only the trailing newline(s), not all whitespace: Linux
-	// file paths may contain trailing spaces, which TrimSpace would
-	// silently strip, causing the resolved path to point at the wrong
-	// destination.
-	resolved := strings.TrimRight(out, "\r\n")
+	// readlink -z emits a single NUL terminator instead of a newline, so
+	// a filename that itself ends in a newline survives. Strip only that
+	// terminator at the end, never trimming other trailing whitespace
+	// (paths may contain trailing spaces, which TrimSpace would strip).
+	resolved := strings.TrimSuffix(out, "\x00")
 	if resolved == "" {
 		return "", fmt.Errorf(
 			"opensandbox: readlink -f returned empty for %q", target,
@@ -637,17 +637,16 @@ func (r *workspaceRuntime) resolveSandboxAncestor(
 	// Use readlink -m: canonicalizes existing symlink components,
 	// leaves non-existent components as-is. Unlike readlink -f, it
 	// does not fail when intermediate components don't exist.
-	out, err := r.runBash(ctx, "readlink -m "+shellQuote(target), defaultCreateTimeout)
+	out, err := r.runBash(ctx, "readlink -z -m "+shellQuote(target), defaultCreateTimeout)
 	if err != nil {
 		return "", fmt.Errorf(
 			"opensandbox: resolve ancestor %q: %w", target, err,
 		)
 	}
-	// Trim only the trailing newline(s), not all whitespace: Linux
-	// file paths may contain trailing spaces, which TrimSpace would
-	// silently strip, causing the resolved path to point at the wrong
-	// destination.
-	resolved := strings.TrimRight(out, "\r\n")
+	// readlink -z emits a single NUL terminator (not a newline), so a
+	// target whose final component ends in a newline survives. Strip
+	// only that terminator, never trimming other trailing whitespace.
+	resolved := strings.TrimSuffix(out, "\x00")
 	if resolved == "" {
 		return "", fmt.Errorf(
 			"opensandbox: readlink -m returned empty for %q", target,
