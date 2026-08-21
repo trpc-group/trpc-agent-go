@@ -1060,6 +1060,7 @@ func TestCallLLM_TokenTailoringInvalidatesSummarySnapshots(t *testing.T) {
 	req := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage("stable"),
 		model.NewUserMessage("history"),
+		model.NewUserMessage("current"),
 	}}
 	summaryview.AttachProjection(inv, &summaryview.View{
 		ContentRequestLength: len(req.Messages),

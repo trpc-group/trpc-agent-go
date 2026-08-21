@@ -170,6 +170,21 @@ func (s *summaryPartialFailureService) Calls() int {
 	return s.calls
 }
 
+func captureWarningLogs(t *testing.T) func() string {
+	t.Helper()
+	var warnings []string
+	oldWarnfContext := log.WarnfContext
+	log.WarnfContext = func(_ context.Context, format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	}
+	t.Cleanup(func() {
+		log.WarnfContext = oldWarnfContext
+	})
+	return func() string {
+		return strings.Join(warnings, "\n")
+	}
+}
+
 func TestSummarySnapshotAdvancedUsesBoundary(t *testing.T) {
 	cutoff := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
 	sess := &session.Session{
@@ -909,14 +924,7 @@ func TestMaybeCompactContextBeforeLLM_SkipsWhenSummaryRefreshFails(t *testing.T)
 	modelName := "compact-retry-summary-error"
 	model.RegisterModelContextWindow(modelName, 10000)
 	const sensitiveErrorText = "sensitive summary provider content"
-	var warnings []string
-	oldWarnfContext := log.WarnfContext
-	log.WarnfContext = func(_ context.Context, format string, args ...any) {
-		warnings = append(warnings, fmt.Sprintf(format, args...))
-	}
-	t.Cleanup(func() {
-		log.WarnfContext = oldWarnfContext
-	})
+	warningLogs := captureWarningLogs(t)
 
 	baseSvc := inmemory.NewSessionService()
 	t.Cleanup(func() {
@@ -978,10 +986,44 @@ func TestMaybeCompactContextBeforeLLM_SkipsWhenSummaryRefreshFails(t *testing.T)
 
 	require.Equal(t, 1, service.Calls())
 	require.Same(t, req, rebuilt)
-	logged := strings.Join(warnings, "\n")
+	logged := warningLogs()
 	require.Contains(t, logged, "outcome=summary_error")
 	require.NotContains(t, logged, sensitiveErrorText)
 	require.NotContains(t, logged, "post_request_tokens=0")
+}
+
+func TestRunContextCompactionLogsRebuildUnavailable(t *testing.T) {
+	warningLogs := captureWarningLogs(t)
+	service := &summaryInjectingService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(service),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		model.NewUserMessage("history"),
+		model.NewUserMessage("current"),
+	}}
+	decision := contextCompactionDecision{
+		shouldCompact: true,
+		tokenCount:    3000,
+		threshold:     2000,
+		contextWindow: 4000,
+	}
+
+	rebuilt := new(Flow).runContextCompaction(
+		context.Background(),
+		inv,
+		nil,
+		req,
+		&contextCompactionRebuildPlan{},
+		decision,
+	)
+
+	require.Same(t, req, rebuilt)
+	logged := warningLogs()
+	require.Contains(t, logged, "outcome=rebuild_unavailable")
+	require.Contains(t, logged, "post_request_tokens=3000")
 }
 
 func TestMaybeCompactContextBeforeLLM_RebuildsWithoutReplayingEarlierProcessors(t *testing.T) {
