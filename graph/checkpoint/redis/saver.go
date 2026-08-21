@@ -679,7 +679,7 @@ func (s *Saver) findCheckpointNamespace(ctx context.Context, lineageID, checkpoi
 	for _, ns := range namespaces {
 		exists, err := s.client.Exists(ctx, checkpointKey(lineageID, ns, checkpointID)).Result()
 		if err != nil {
-			continue
+			return "", err
 		}
 		if exists > 0 {
 			return ns, nil

@@ -536,13 +536,15 @@ func TestInMemoryCheckpointSaverFilters(t *testing.T) {
 		assert.Equal(t, "even", tuple.Metadata.Extra["type"])
 	}
 
-	// Test Before filter - get checkpoints before the 3rd one.
+	// Test Before filter - get checkpoints before the 3rd one (index 2).
 	beforeFilter := &graph.CheckpointFilter{
 		Before: checkpointConfigs[2], // Before index 2
 	}
 	beforeCheckpoints, err := saver.List(ctx, config, beforeFilter)
 	require.NoError(t, err)
-	assert.Len(t, beforeCheckpoints, 2) // Should have 0 and 1
+	assert.Len(t, beforeCheckpoints, 2) // Should have 1 and 0 in newest-first descending order
+	assert.Equal(t, graph.GetCheckpointID(checkpointConfigs[1]), beforeCheckpoints[0].Checkpoint.ID)
+	assert.Equal(t, graph.GetCheckpointID(checkpointConfigs[0]), beforeCheckpoints[1].Checkpoint.ID)
 
 	// Test combined filters.
 	combinedFilter := &graph.CheckpointFilter{

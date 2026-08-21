@@ -866,21 +866,25 @@ func TestRedis_List_WithBeforeAndCrossNamespace(t *testing.T) {
 
 	ctx := context.Background()
 	lineageID := "ln-before"
-
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	// Create checkpoints across two namespaces (nsA and nsB)
 	ck1 := graph.NewCheckpoint(map[string]any{"i": 1}, map[string]int64{"i": 1}, map[string]map[string]int64{})
+	ck1.Timestamp = baseTime.Add(10 * time.Millisecond)
 	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", "nsA"), Checkpoint: ck1, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0), NewVersions: map[string]int64{"i": 1}})
 	require.NoError(t, err)
-	time.Sleep(5 * time.Millisecond)
+
 	ck2 := graph.NewCheckpoint(map[string]any{"i": 2}, map[string]int64{"i": 2}, map[string]map[string]int64{})
+	ck2.Timestamp = baseTime.Add(20 * time.Millisecond)
 	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", "nsA"), Checkpoint: ck2, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 1), NewVersions: map[string]int64{"i": 2}})
 	require.NoError(t, err)
-	time.Sleep(5 * time.Millisecond)
+
 	ckB := graph.NewCheckpoint(map[string]any{"i": 99}, map[string]int64{"i": 99}, map[string]map[string]int64{})
+	ckB.Timestamp = baseTime.Add(25 * time.Millisecond)
 	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", "nsB"), Checkpoint: ckB, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 2), NewVersions: map[string]int64{"i": 99}})
 	require.NoError(t, err)
-	time.Sleep(5 * time.Millisecond)
+
 	ck3 := graph.NewCheckpoint(map[string]any{"i": 3}, map[string]int64{"i": 3}, map[string]map[string]int64{})
+	ck3.Timestamp = baseTime.Add(30 * time.Millisecond)
 	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", "nsA"), Checkpoint: ck3, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 3), NewVersions: map[string]int64{"i": 3}})
 	require.NoError(t, err)
 
