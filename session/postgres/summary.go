@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -70,18 +71,47 @@ func (s *Service) CreateSessionSummary(
 	// Use UPSERT (INSERT ... ON CONFLICT) for atomic operation.
 	// This handles both insert and update in a single, race-condition-free operation.
 	// Note: Last write wins - no timestamp comparison to avoid silent failures.
-	_, err = s.pgClient.ExecContext(ctx,
-		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+	write := sessionrevision.NewWrite(ctx, sess)
+	err = s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+		state, record, _, err := loadSessionStateForUpdate(
+			ctx, tx, s.tableSessionStates, key,
+		)
+		if err != nil {
+			return fmt.Errorf("load session revision for summary: %w", err)
+		}
+		if err := s.revisionStore().ApplyMutation(
+			record, write,
+		); err != nil {
+			return fmt.Errorf("apply session revision for summary: %w", err)
+		}
+		stateRaw, err := sessionrevision.EncodeState(state, record)
+		if err != nil {
+			return fmt.Errorf("encode session revision for summary: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, fmt.Sprintf(
+			`UPDATE %s SET state = $1
+		 WHERE app_name = $2 AND user_id = $3 AND session_id = $4 AND deleted_at IS NULL`,
+			s.tableSessionStates,
+		), stateRaw, key.AppName, key.UserID, key.SessionID); err != nil {
+			return fmt.Errorf("persist session revision for summary: %w", err)
+		}
+		_, err = tx.ExecContext(ctx,
+			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
 		 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
 		 DO UPDATE SET
 		   summary = EXCLUDED.summary,
 		   updated_at = EXCLUDED.updated_at,
 		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries),
-		sess.AppName, sess.UserID, sess.ID, filterKey, summaryBytes, sum.UpdatedAt, nil)
+			sess.AppName, sess.UserID, sess.ID, filterKey, summaryBytes, sum.UpdatedAt, nil)
+		if err != nil {
+			return fmt.Errorf("upsert summary failed: %w", err)
+		}
+		return nil
+	})
 
 	if err != nil {
-		return fmt.Errorf("upsert summary failed: %w", err)
+		return err
 	}
 
 	return nil

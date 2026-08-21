@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
@@ -66,6 +67,15 @@ const (
 )
 
 var (
+	// ErrLatestTurnReplacementUnsupported indicates that the configured session
+	// service cannot replace the latest persisted turn.
+	ErrLatestTurnReplacementUnsupported = revision.ErrLatestTurnReplacementUnsupported
+	// ErrLatestTurnReplacementConflict indicates that the latest persisted turn
+	// no longer matches the replacement request.
+	ErrLatestTurnReplacementConflict = revision.ErrLatestTurnReplacementConflict
+	// ErrLatestTurnReplacementUnavailable indicates that the latest persisted
+	// turn cannot be replaced safely.
+	ErrLatestTurnReplacementUnavailable = revision.ErrLatestTurnReplacementUnavailable
 	// ErrRunNotFound indicates that the request ID is not active anymore.
 	ErrRunNotFound = errors.New("runner: request id not running")
 	// ErrQueuedUserMessageUnsupported indicates that the runner does not
@@ -534,23 +544,15 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOption,
 ) (out <-chan *event.Event, err error) {
+	preparationCompleted := false
+	defer func() {
+		completePendingRunPreparation(ctx, preparationCompleted, err)
+	}()
 	requestStartedAt := time.Now().UTC()
-	if message.Role == "" && model.HasPayload(message) {
-		log.WarnfContext(
-			ctx,
-			"runner.Run received a message with empty role; defaulting to user",
-		)
-		message.Role = model.RoleUser
+	message, ro, err := r.prepareRunRequest(ctx, message, runOpts)
+	if err != nil {
+		return nil, err
 	}
-
-	ro := agent.RunOptions{RequestID: uuid.NewString()}
-	for _, opt := range runOpts {
-		opt(&ro)
-	}
-	if ro.RequestID == "" {
-		ro.RequestID = uuid.NewString()
-	}
-	r.applyRunnerRunDefaults(&ro)
 	var executionTraceInput *trace.Snapshot
 	if ro.ExecutionTraceEnabled {
 		executionTraceInput = executionTraceInputSnapshot(message, ro)
@@ -588,59 +590,36 @@ func (r *runner) Run(
 		UserID:    userID,
 		SessionID: sessionID,
 	}
-
-	sessionCtx, sessionSpan, sessionStarted := startRunnerRunOptionsLatencySpan(
+	queuedUserMessages := steer.NewQueue()
+	registerCtx, registerSpan, registerStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
 		ro,
-		runnerLatencySpanGetSession,
+		runnerLatencySpanRegisterRun,
 		runnerSessionAttrs(sessionKey, nil)...,
 	)
-	sessionCtx = summaryrestore.ContextWithFilterKey(
-		sessionCtx,
-		sessionRestoreFilterKey(effectiveAppName, ro),
+	handle, err := r.registerRun(
+		ro.RequestID,
+		RunStatus{
+			RequestID:  ro.RequestID,
+			SessionKey: sessionKey,
+			StartedAt:  time.Now(),
+		},
+		execCancel,
+		queuedUserMessages,
 	)
-	sess, err := r.getOrCreateSession(sessionCtx, ro, sessionKey)
-	if sessionStarted && sess != nil {
-		sessionSpan.SetAttributes(runnerSessionAttrs(sessionKey, sess)...)
-	}
-	finishRunnerLatencySpan(sessionSpan, sessionStarted, err)
+	finishRunnerLatencySpan(registerSpan, registerStarted, err)
+	_ = registerCtx
 	if err != nil {
 		execCancel()
 		return nil, err
 	}
+	runRegistered := true
+	defer func() {
+		if runRegistered {
+			r.unregisterRun(ro.RequestID)
+		}
+	}()
 
-	awaitCtx, awaitSpan, awaitStarted := startRunnerRunOptionsLatencySpan(
-		execCtx,
-		ro,
-		runnerLatencySpanAwaitRoute,
-	)
-	ro, awaitUserReplyRootName, awaitUserReplyLookupPath, err := r.applyAwaitUserReplyRoute(
-		awaitCtx,
-		sessionKey,
-		sess,
-		message,
-		ro,
-	)
-	finishRunnerLatencySpan(awaitSpan, awaitStarted, err)
-	if err != nil {
-		execCancel()
-		return nil, err
-	}
-
-	selectCtx, selectSpan, selectStarted := startRunnerRunOptionsLatencySpan(
-		execCtx,
-		ro,
-		runnerLatencySpanSelectAgent,
-	)
-	ag, err := r.selectAgentForRun(selectCtx, ro)
-	if selectStarted && ag != nil {
-		selectSpan.SetAttributes(attribute.String("runner.agent", ag.Info().Name))
-	}
-	finishRunnerLatencySpan(selectSpan, selectStarted, err)
-	if err != nil {
-		execCancel()
-		return nil, err
-	}
 	resolveCtx, resolveSpan, resolveStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
 		ro,
@@ -667,7 +646,77 @@ func (r *runner) Run(
 		execCancel()
 		return nil, err
 	}
+	preselectedAgent, err := r.preselectLatestTurnReplacementAgent(execCtx, ro)
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
 
+	sessionCtx, sessionSpan, sessionStarted := startRunnerRunOptionsLatencySpan(
+		execCtx,
+		ro,
+		runnerLatencySpanGetSession,
+		runnerSessionAttrs(sessionKey, nil)...,
+	)
+	sessionCtx = summaryrestore.ContextWithFilterKey(
+		sessionCtx,
+		sessionRestoreFilterKey(effectiveAppName, ro),
+	)
+	sess, err := r.resolveSessionForRun(sessionCtx, ro, sessionKey)
+	if sessionStarted && sess != nil {
+		sessionSpan.SetAttributes(runnerSessionAttrs(sessionKey, sess)...)
+	}
+	finishRunnerLatencySpan(sessionSpan, sessionStarted, err)
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
+	if generation, ok := revision.Generation(sess); ok {
+		execCtx = revision.ContextWithGeneration(execCtx, generation)
+	}
+
+	awaitCtx, awaitSpan, awaitStarted := startRunnerRunOptionsLatencySpan(
+		execCtx,
+		ro,
+		runnerLatencySpanAwaitRoute,
+	)
+	awaitCtx = contextWithPreselectedAwaitUserReplyRoot(
+		awaitCtx,
+		r.selectedRootLookupName(ro, ""),
+		preselectedAgent,
+	)
+	ro, awaitUserReplyRootName, awaitUserReplyLookupPath, err := r.applyAwaitUserReplyRoute(
+		awaitCtx,
+		sessionKey,
+		sess,
+		message,
+		ro,
+	)
+	finishRunnerLatencySpan(awaitSpan, awaitStarted, err)
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
+
+	selectCtx, selectSpan, selectStarted := startRunnerRunOptionsLatencySpan(
+		execCtx,
+		ro,
+		runnerLatencySpanSelectAgent,
+	)
+	ag, err := r.selectAgentAfterAwaitUserReplyRoute(
+		selectCtx,
+		ro,
+		preselectedAgent,
+		awaitUserReplyLookupPath,
+	)
+	if selectStarted && ag != nil {
+		selectSpan.SetAttributes(attribute.String("runner.agent", ag.Info().Name))
+	}
+	finishRunnerLatencySpan(selectSpan, selectStarted, err)
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
 	invocation := r.newRunInvocation(
 		sess,
 		invocationMessage,
@@ -688,33 +737,8 @@ func (r *runner) Run(
 		return nil, err
 	}
 
-	queuedUserMessages := steer.NewQueue()
 	steer.Attach(invocation, queuedUserMessages)
-
-	registerCtx, registerSpan, registerStarted := startRunnerLatencySpan(
-		execCtx,
-		invocation,
-		runnerLatencySpanRegisterRun,
-		runnerInvocationAttrs(invocation)...,
-	)
-	handle, err := r.registerRun(
-		ro.RequestID,
-		RunStatus{
-			RequestID:    ro.RequestID,
-			InvocationID: invocation.InvocationID,
-			AgentName:    ag.Info().Name,
-			SessionKey:   sessionKey,
-			StartedAt:    time.Now(),
-		},
-		execCancel,
-		queuedUserMessages,
-	)
-	finishRunnerLatencySpan(registerSpan, registerStarted, err)
-	_ = registerCtx
-	if err != nil {
-		execCancel()
-		return nil, err
-	}
+	initializeRunHandle(handle, invocation.InvocationID, ag.Info().Name)
 
 	persistCtx, persistSpan, persistStarted := startRunnerLatencySpan(
 		execCtx,
@@ -727,6 +751,7 @@ func (r *runner) Run(
 		currentTurnSession,
 		invocation,
 		ag,
+		awaitUserReplyLookupPath,
 		message,
 		persistedCurrentTurnMessages,
 		ro,
@@ -738,6 +763,8 @@ func (r *runner) Run(
 		return nil, err
 	}
 	finishRunnerLatencySpan(persistSpan, persistStarted, nil)
+	revision.CompleteRunPreparation(ctx, nil)
+	preparationCompleted = true
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
 	// by embedding it into the context. This is necessary for tools like
@@ -775,6 +802,7 @@ func (r *runner) Run(
 	executionTraceInput = resolveExecutionTraceInvocationInputSnapshot(invocation, executionTraceInput)
 
 	// Process the agent events and emit them to the output channel.
+	runRegistered = false
 	return r.processAgentEvents(
 		execCtx,
 		sess,
@@ -784,6 +812,51 @@ func (r *runner) Run(
 		handle,
 		executionTraceInput,
 	), nil
+}
+
+func initializeRunHandle(handle *runHandle, invocationID, agentName string) {
+	if handle == nil {
+		return
+	}
+	handle.mu.Lock()
+	defer handle.mu.Unlock()
+	handle.status.InvocationID = invocationID
+	handle.status.AgentName = agentName
+}
+
+func completePendingRunPreparation(
+	ctx context.Context,
+	completed bool,
+	runErr error,
+) {
+	if completed {
+		return
+	}
+	revision.CompleteRunPreparation(ctx, runErr)
+}
+
+func (r *runner) prepareRunRequest(
+	ctx context.Context,
+	message model.Message,
+	runOpts []agent.RunOption,
+) (model.Message, agent.RunOptions, error) {
+	if message.Role == "" && model.HasPayload(message) {
+		log.WarnfContext(
+			ctx,
+			"runner.Run received a message with empty role; defaulting to user",
+		)
+		message.Role = model.RoleUser
+	}
+	ro, err := r.resolveRunOptions(runOpts)
+	if err != nil {
+		return model.Message{}, agent.RunOptions{}, err
+	}
+	if ro.LatestTurnReplacement != nil && !model.HasPayload(message) {
+		return model.Message{}, agent.RunOptions{}, fmt.Errorf(
+			"runner: latest-turn replacement message has no payload",
+		)
+	}
+	return message, ro, nil
 }
 
 func (r *runner) newRunInvocation(
@@ -894,6 +967,91 @@ func (r *runner) applyRunnerRunDefaults(ro *agent.RunOptions) {
 	ro.PersistInterruptedAssistant = &persistInterruptedAssistant
 }
 
+func (r *runner) resolveRunOptions(runOpts []agent.RunOption) (agent.RunOptions, error) {
+	ro := agent.NewRunOptions(runOpts...)
+	if err := resolveLatestTurnReplacement(&ro); err != nil {
+		return agent.RunOptions{}, err
+	}
+	if ro.RequestID == "" {
+		ro.RequestID = uuid.NewString()
+	}
+	r.applyRunnerRunDefaults(&ro)
+	return ro, nil
+}
+
+func resolveLatestTurnReplacement(ro *agent.RunOptions) error {
+	if ro == nil || ro.LatestTurnReplacement == nil {
+		return nil
+	}
+	replacement := ro.LatestTurnReplacement
+	if replacement.ExpectedRequestID == "" {
+		return fmt.Errorf(
+			"runner: latest-turn replacement expected request id is empty",
+		)
+	}
+	if replacement.RequestID == "" {
+		return fmt.Errorf(
+			"runner: latest-turn replacement request id is empty",
+		)
+	}
+	if replacement.ExpectedRequestID == replacement.RequestID {
+		return fmt.Errorf(
+			"runner: latest-turn replacement request ids must differ",
+		)
+	}
+	if ro.RequestID != "" && ro.RequestID != replacement.RequestID {
+		return fmt.Errorf(
+			"runner: request id conflicts with latest-turn replacement",
+		)
+	}
+	if ro.Resume || hasRuntimeResume(ro.RuntimeState) {
+		return fmt.Errorf(
+			"runner: latest-turn replacement cannot resume",
+		)
+	}
+	if len(ro.Messages) != 0 {
+		return fmt.Errorf(
+			"runner: latest-turn replacement cannot seed session history",
+		)
+	}
+	ro.RequestID = replacement.RequestID
+	return nil
+}
+
+func hasRuntimeResume(state map[string]any) bool {
+	if len(state) == 0 {
+		return false
+	}
+	switch cmd := state[graph.StateKeyCommand].(type) {
+	case *graph.Command:
+		if cmd != nil && (cmd.Resume != nil || len(cmd.ResumeMap) > 0) {
+			return true
+		}
+	case graph.Command:
+		if cmd.Resume != nil || len(cmd.ResumeMap) > 0 {
+			return true
+		}
+	case *graph.ResumeCommand:
+		if cmd != nil && (cmd.Resume != nil || len(cmd.ResumeMap) > 0) {
+			return true
+		}
+	case graph.ResumeCommand:
+		if cmd.Resume != nil || len(cmd.ResumeMap) > 0 {
+			return true
+		}
+	}
+	if resumeMap, ok := state[graph.StateKeyResumeMap].(map[string]any); ok &&
+		len(resumeMap) > 0 {
+		return true
+	}
+	if resumeMap, ok := state[graph.StateKeyResumeMap].(graph.State); ok &&
+		len(resumeMap) > 0 {
+		return true
+	}
+	_, ok := state[graph.ResumeChannel]
+	return ok
+}
+
 // seedSessionHistory persists caller-supplied history messages into an empty
 // session so that subsequent turns and tool calls build on the same canonical
 // transcript. It is a no-op when no messages are provided or the session
@@ -931,6 +1089,34 @@ type pendingSessionMessage struct {
 	currentTurn   bool
 }
 
+type turnRestoreStateContextKey struct{}
+
+func contextWithTurnRestoreState(
+	ctx context.Context,
+	state session.StateMap,
+) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(state) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, turnRestoreStateContextKey{}, state)
+}
+
+func turnStartForEvent(ctx context.Context, evt *event.Event) revision.TurnStart {
+	start := revision.TurnStart{
+		RequestID:    evt.RequestID,
+		InvocationID: evt.InvocationID,
+	}
+	if ctx != nil {
+		start.RestoreState, _ = ctx.Value(
+			turnRestoreStateContextKey{},
+		).(session.StateMap)
+	}
+	return start
+}
+
 // appendSessionMessages persists messages into the session transcript in the
 // provided order.
 func (r *runner) appendSessionMessages(
@@ -959,6 +1145,7 @@ func (r *runner) appendMessagesAsSessionEvents(
 	ag agent.Agent,
 	messages []pendingSessionMessage,
 ) error {
+	turnStarted := false
 	for _, pending := range messages {
 		msg := pending.message
 		author := ag.Info().Name
@@ -973,7 +1160,14 @@ func (r *runner) appendMessagesAsSessionEvents(
 		)
 		agent.InjectIntoEvent(invocation, evt)
 		evt = r.applyEventPlugins(ctx, invocation, evt)
-		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
+		appendCtx := ctx
+		if pending.currentTurn && !turnStarted {
+			appendCtx = revision.ContextWithTurnStart(
+				ctx, turnStartForEvent(ctx, evt),
+			)
+			turnStarted = true
+		}
+		if err := r.sessionService.AppendEvent(appendCtx, sess, evt); err != nil {
 			return err
 		}
 		if pending.seededHistory {
@@ -1009,6 +1203,7 @@ func (r *runner) appendIncomingMessage(
 	)
 	agent.InjectIntoEvent(invocation, evt)
 	evt = r.applyEventPlugins(ctx, invocation, evt)
+	ctx = revision.ContextWithTurnStart(ctx, turnStartForEvent(ctx, evt))
 	return r.sessionService.AppendEvent(ctx, sess, evt)
 }
 
@@ -1178,6 +1373,28 @@ func (r *runner) selectAgentForRun(
 	return ag, nil
 }
 
+func (r *runner) preselectLatestTurnReplacementAgent(
+	ctx context.Context,
+	ro agent.RunOptions,
+) (agent.Agent, error) {
+	if ro.LatestTurnReplacement == nil {
+		return nil, nil
+	}
+	return r.selectAgentForRun(ctx, ro)
+}
+
+func (r *runner) selectAgentAfterAwaitUserReplyRoute(
+	ctx context.Context,
+	ro agent.RunOptions,
+	preselected agent.Agent,
+	lookupPath string,
+) (agent.Agent, error) {
+	if preselected != nil && lookupPath == "" {
+		return preselected, nil
+	}
+	return r.selectAgentForRun(ctx, ro)
+}
+
 // resolveAgent decides which agent to use for this run.
 func (r *runner) selectAgent(
 	ctx context.Context,
@@ -1236,6 +1453,37 @@ func (r *runner) wrapSelectedAgent(ag agent.Agent) agent.Agent {
 		)
 	}
 	return selected
+}
+
+func (r *runner) resolveSessionForRun(
+	ctx context.Context,
+	ro agent.RunOptions,
+	key session.Key,
+) (*session.Session, error) {
+	replacement := ro.LatestTurnReplacement
+	if replacement == nil {
+		return r.getOrCreateSession(ctx, ro, key)
+	}
+	if r.lookupRun(replacement.ExpectedRequestID) != nil {
+		return nil, fmt.Errorf(
+			"runner: request %q is still running: %w",
+			replacement.ExpectedRequestID,
+			revision.ErrLatestTurnReplacementUnavailable,
+		)
+	}
+	result, err := revision.ReplaceLatestTurn(
+		ctx,
+		r.sessionService,
+		revision.LatestTurnReplacementRequest{
+			Key:               key,
+			ExpectedRequestID: replacement.ExpectedRequestID,
+			IdempotencyKey:    replacement.RequestID,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return result.ActiveSession, nil
 }
 
 // getOrCreateSession returns an existing session or creates a new one.
@@ -1326,6 +1574,7 @@ type eventLoopContext struct {
 	errorEventCount     int
 	emittedEventCount   int
 	detailSpanCount     int
+	routedHazardMarked  bool
 }
 
 // eventPersistenceDeduper coordinates event persistence within one runner
@@ -1582,9 +1831,11 @@ func (r *runner) processSingleAgentEvent(
 		loop.invocation,
 		routeEvent,
 	)
-	if shouldPersistInterruptedAssistant(loop) {
-		r.recordInterruptedAssistantDelta(loop, agentEvent, persistSession)
-	}
+	r.recordInterruptedAssistantDeltaIfEnabled(
+		loop,
+		agentEvent,
+		persistSession,
+	)
 	agentEvent = r.applyEventPluginsWithLatencySpan(
 		ctx,
 		loop.invocation,
@@ -1624,6 +1875,15 @@ func (r *runner) processSingleAgentEvent(
 		return nil
 	}
 	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
+	if err := r.markRoutedTurnHazard(
+		ctx,
+		loop,
+		persistSession,
+		routedEvent,
+		agentEvent,
+	); err != nil {
+		return err
+	}
 
 	// Append qualifying events to session and trigger summarization.
 	persisted := r.handleEventPersistenceOnce(
@@ -1691,6 +1951,52 @@ func (r *runner) processSingleAgentEvent(
 	loop.emittedEventCount++
 	finishRunnerLatencySpan(emitSpan, emitStarted, nil)
 
+	return nil
+}
+
+func (r *runner) recordInterruptedAssistantDeltaIfEnabled(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+	persistSession *session.Session,
+) {
+	if !shouldPersistInterruptedAssistant(loop) {
+		return
+	}
+	r.recordInterruptedAssistantDelta(loop, agentEvent, persistSession)
+}
+
+func (r *runner) markRoutedTurnHazard(
+	ctx context.Context,
+	loop *eventLoopContext,
+	persistSession *session.Session,
+	routedEvent bool,
+	agentEvent *event.Event,
+) error {
+	if !revision.SupportsLatestTurnReplacement(r.sessionService) ||
+		loop.routedHazardMarked ||
+		!routedEvent ||
+		persistSession == nil ||
+		sameSession(persistSession, loop.sess) ||
+		!r.shouldPersistEvent(agentEvent) {
+		return nil
+	}
+	rootKey := session.Key{
+		AppName:   loop.sess.AppName,
+		UserID:    loop.sess.UserID,
+		SessionID: loop.sess.ID,
+	}
+	hazardCtx := revision.ContextWithHazard(ctx)
+	if generation, ok := revision.Generation(loop.sess); ok {
+		hazardCtx = revision.ContextWithGeneration(hazardCtx, generation)
+	}
+	if err := r.sessionService.UpdateSessionState(
+		hazardCtx,
+		rootKey,
+		nil,
+	); err != nil {
+		return fmt.Errorf("mark routed session turn unsafe: %w", err)
+	}
+	loop.routedHazardMarked = true
 	return nil
 }
 
@@ -2705,16 +3011,7 @@ func (r *runner) handleEventPersistence(
 		persistSession = sess
 	}
 
-	persistEvent := agentEvent
-	if isGraphCompletionSnapshotEvent(agentEvent) {
-		eventCopy := *agentEvent
-		if isGraphCompletionEvent(agentEvent) {
-			eventCopy.Response = agentEvent.Response.Clone()
-			eventCopy.Response.Choices = nil
-		}
-		eventCopy.StateDelta = graphCompletionSessionStateDelta(agentEvent.StateDelta)
-		persistEvent = &eventCopy
-	}
+	persistEvent := normalizedPersistenceEvent(invocation, agentEvent)
 
 	appendCtx, appendSpan, appendStarted := startRunnerLatencySpan(
 		ctx,
@@ -2801,6 +3098,33 @@ func (r *runner) handleEventPersistence(
 	// Note: Auto memory extraction is triggered once at runner completion,
 	// not here, to avoid redundant extraction calls.
 	return true
+}
+
+func normalizedPersistenceEvent(
+	invocation *agent.Invocation,
+	agentEvent *event.Event,
+) *event.Event {
+	persistEvent := agentEvent
+	if agentEvent.RequestID == "" || agentEvent.InvocationID == "" {
+		eventCopy := *agentEvent
+		if eventCopy.RequestID == "" {
+			eventCopy.RequestID = invocation.RunOptions.RequestID
+		}
+		if eventCopy.InvocationID == "" {
+			eventCopy.InvocationID = invocation.InvocationID
+		}
+		persistEvent = &eventCopy
+	}
+	if !isGraphCompletionSnapshotEvent(agentEvent) {
+		return persistEvent
+	}
+	eventCopy := *persistEvent
+	if isGraphCompletionEvent(agentEvent) {
+		eventCopy.Response = persistEvent.Response.Clone()
+		eventCopy.Response.Choices = nil
+	}
+	eventCopy.StateDelta = graphCompletionSessionStateDelta(agentEvent.StateDelta)
+	return &eventCopy
 }
 
 func shouldAppendSummaryForkResponse(agentEvent *event.Event) bool {
@@ -4069,7 +4393,13 @@ func (r *runner) resolveCurrentTurnMessages(
 	if err != nil {
 		return model.Message{}, nil, err
 	}
-	return currentTurnMessages[len(currentTurnMessages)-1], filterPayloadMessages(currentTurnMessages), nil
+	persisted := filterPayloadMessages(currentTurnMessages)
+	if ro.LatestTurnReplacement != nil && len(persisted) == 0 {
+		return model.Message{}, nil, fmt.Errorf(
+			"runner: latest-turn replacement rewriter returned no payload messages",
+		)
+	}
+	return currentTurnMessages[len(currentTurnMessages)-1], persisted, nil
 }
 
 func (r *runner) persistCurrentTurnMessages(
@@ -4077,10 +4407,24 @@ func (r *runner) persistCurrentTurnMessages(
 	sess *session.Session,
 	invocation *agent.Invocation,
 	ag agent.Agent,
+	awaitUserReplyLookupPath string,
 	message model.Message,
 	persistedCurrentTurnMessages []model.Message,
 	ro agent.RunOptions,
 ) error {
+	if awaitUserReplyLookupPath != "" {
+		restoreState, err := (agent.AwaitUserReplyRoute{
+			AgentName:  ag.Info().Name,
+			LookupPath: awaitUserReplyLookupPath,
+		}).State()
+		if err != nil {
+			return fmt.Errorf(
+				"runner: preserve await_user_reply route: %w",
+				err,
+			)
+		}
+		ctx = contextWithTurnRestoreState(ctx, restoreState)
+	}
 	if ro.UserMessageRewriter == nil {
 		historySeeded, err := r.seedSessionHistory(
 			ctx,

@@ -170,5 +170,3 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}user_states` (
 --     - JSON columns can be NULL (empty summary not yet generated)
 --     - TEXT columns for potentially large values (e.g., app_states.value)
 
-
-

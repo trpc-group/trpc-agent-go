@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -54,9 +55,11 @@ func (s *Service) getSession(
 			return err
 		}
 		sessState = &SessionState{}
-		if err := json.Unmarshal(stateBytes, sessState); err != nil {
+		record, err := sessionrevision.DecodeState(stateBytes, sessState)
+		if err != nil {
 			return fmt.Errorf("unmarshal session state failed: %w", err)
 		}
+		sessState.revision = record
 		sessState.CreatedAt = createdAt
 		sessState.UpdatedAt = updatedAt
 		return nil
@@ -141,6 +144,7 @@ func (s *Service) getSession(
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
+	sessionrevision.AttachRecord(sess, sessState.revision)
 
 	trackEventsList, err := s.getTrackEvents(
 		ctx,
@@ -237,9 +241,11 @@ func (s *Service) listSessions(
 			return err
 		}
 		var state SessionState
-		if err := json.Unmarshal(stateBytes, &state); err != nil {
+		record, err := sessionrevision.DecodeState(stateBytes, &state)
+		if err != nil {
 			return fmt.Errorf("unmarshal session state failed: %w", err)
 		}
+		state.revision = record
 		state.ID = sessionID
 		state.CreatedAt = createdAt
 		state.UpdatedAt = updatedAt
@@ -260,6 +266,7 @@ func (s *Service) listSessions(
 				session.WithSessionCreatedAt(sessState.CreatedAt),
 				session.WithSessionUpdatedAt(sessState.UpdatedAt),
 			)
+			sessionrevision.AttachRecord(sess, sessState.revision)
 			sessions = append(sessions, mergeState(appState, userState, sess))
 		}
 		return sessions, nil
@@ -312,6 +319,7 @@ func (s *Service) listSessions(
 			session.WithSessionCreatedAt(sessState.CreatedAt),
 			session.WithSessionUpdatedAt(sessState.UpdatedAt),
 		)
+		sessionrevision.AttachRecord(sess, sessState.revision)
 		if len(trackEvents[i]) > 0 {
 			sess.Tracks = make(map[session.Track]*session.TrackEvents, len(trackEvents[i]))
 			for trackName, history := range trackEvents[i] {
@@ -329,6 +337,15 @@ func (s *Service) listSessions(
 
 // addEvent adds an event to a session (MySQL syntax).
 func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Event) error {
+	return s.addEventWithRevision(ctx, key, event, sessionrevision.Write{})
+}
+
+func (s *Service) addEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	event *event.Event,
+	write sessionrevision.Write,
+) error {
 	shouldPersistEvent := event != nil &&
 		event.Response != nil &&
 		!event.IsPartial &&
@@ -348,7 +365,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 
 	// Use transaction to update session state and insert event
 	err = s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
-		sessState, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		sessState, record, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
 		if err != nil {
 			return err
 		}
@@ -373,11 +390,16 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		session.ApplyEventStateDeltaMap(sessState.State, event)
 		updatedAt = sessState.UpdatedAt
 
-		updatedStateBytes, err = json.Marshal(sessState)
+		expiresAt := calculateExpiresAt(s.opts.sessionTTL)
+		if err := s.revisionStore().ApplyEventWrite(
+			ctx, tx, key, record, write, event, shouldPersistEvent,
+		); err != nil {
+			return err
+		}
+		updatedStateBytes, err = sessionrevision.EncodeState(sessState, record)
 		if err != nil {
 			return fmt.Errorf("marshal session state failed: %w", err)
 		}
-		expiresAt := calculateExpiresAt(s.opts.sessionTTL)
 
 		// Update session state
 		_, err = tx.ExecContext(ctx,
@@ -422,6 +444,15 @@ func validateEventRawMessages(event *event.Event) error {
 
 // addTrackEvent adds a track event to a session (MySQL syntax).
 func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
+	return s.addTrackEventWithRevision(ctx, key, trackEvent, sessionrevision.Write{})
+}
+
+func (s *Service) addTrackEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	trackEvent *session.TrackEvent,
+	write sessionrevision.Write,
+) error {
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event failed: %w", err)
@@ -431,7 +462,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 
 	// Use transaction to update session state and insert track event.
 	err = s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
-		sessState, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		sessState, record, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
 		if err != nil {
 			return err
 		}
@@ -459,12 +490,17 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		sessState.UpdatedAt = now
 		updatedAt = sessState.UpdatedAt
 
-		updatedStateBytes, err = json.Marshal(sessState)
+		sessionExpires := calculateExpiresAt(s.opts.sessionTTL)
+		trackExpires := calculateExpiresAt(s.opts.effectiveTrackEventTTL())
+		if err := s.revisionStore().ApplyTrackWrite(
+			record, write, trackEvent,
+		); err != nil {
+			return err
+		}
+		updatedStateBytes, err = sessionrevision.EncodeState(sessState, record)
 		if err != nil {
 			return fmt.Errorf("marshal session state failed: %w", err)
 		}
-		sessionExpires := calculateExpiresAt(s.opts.sessionTTL)
-		trackExpires := calculateExpiresAt(s.opts.effectiveTrackEventTTL())
 
 		// Update session state.
 		_, err = tx.ExecContext(ctx,
@@ -498,7 +534,7 @@ func loadSessionStateForUpdate(
 	tx *sql.Tx,
 	tableSessionStates string,
 	key session.Key,
-) (*SessionState, sql.NullTime, error) {
+) (*SessionState, *sessionrevision.PersistedRecord, sql.NullTime, error) {
 	var stateBytes []byte
 	var currentExpiresAt sql.NullTime
 	err := tx.QueryRowContext(
@@ -510,17 +546,18 @@ func loadSessionStateForUpdate(
 		key.AppName, key.UserID, key.SessionID,
 	).Scan(&stateBytes, &currentExpiresAt)
 	if err == sql.ErrNoRows {
-		return nil, sql.NullTime{}, errSessionNotFound
+		return nil, nil, sql.NullTime{}, errSessionNotFound
 	}
 	if err != nil {
-		return nil, sql.NullTime{}, fmt.Errorf("get session state failed: %w", err)
+		return nil, nil, sql.NullTime{}, fmt.Errorf("get session state failed: %w", err)
 	}
 
 	var sessState SessionState
-	if err := json.Unmarshal(stateBytes, &sessState); err != nil {
-		return nil, sql.NullTime{}, fmt.Errorf("unmarshal session state failed: %w", err)
+	record, err := sessionrevision.DecodeState(stateBytes, &sessState)
+	if err != nil {
+		return nil, nil, sql.NullTime{}, fmt.Errorf("unmarshal session state failed: %w", err)
 	}
-	return &sessState, currentExpiresAt, nil
+	return &sessState, record, currentExpiresAt, nil
 }
 
 // deleteSessionState deletes a session and its related data.

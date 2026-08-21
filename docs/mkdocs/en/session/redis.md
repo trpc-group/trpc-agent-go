@@ -12,6 +12,14 @@ Redis storage is suitable for production environments and distributed applicatio
 - Async session summary generation
 - AppendEvent / GetSession hook extension points
 
+Latest-turn replacement through `Runner.Run` is supported by both HashIdx and
+ZSet/compat storage layouts. The operation drains async event and Track
+persistence for the target session, then atomically archives the discarded
+projection and restores its pre-turn checkpoint before the replacement run.
+Private revision keys share the session hash slot and are not added to user
+session indexes. Their TTL, and the restored projection's TTL, preserve the
+source keys' remaining lifetime rather than refreshing it.
+
 ## Redis Compatibility
 
 The Redis Session service is command-compatible with Redis OSS 4.0 and later. Redis 4.0 is the documented compatibility floor, not a production recommendation; use a release that is still maintained by your Redis vendor in production.

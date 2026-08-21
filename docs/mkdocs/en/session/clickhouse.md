@@ -118,13 +118,22 @@ sessionService, err := clickhouse.NewService(
 )
 ```
 
+## Latest-turn Replacement
+
+ClickHouse returns `runner.ErrLatestTurnReplacementUnsupported`. Its
+ReplacingMergeTree version selection does not provide a cross-node
+compare-and-swap primitive, so concurrent writers cannot safely publish one
+canonical replacement head. The framework does not emulate that guarantee
+with a process-local lock. Use a supported transactional backend when latest-
+turn replacement is required.
+
 ## Storage Structure
 
 The ClickHouse implementation uses the `ReplacingMergeTree` engine for data updates and deduplication.
 
 **Key characteristics:**
 
-1. **ReplacingMergeTree**: Using the `updated_at` field, ClickHouse automatically merges records with the same primary key in the background, keeping the latest version
+1. **ReplacingMergeTree**: ClickHouse groups rows by the sorting key declared in `ORDER BY` and uses `updated_at` as the version column, retaining the latest version during background merges
 2. **FINAL queries**: All read operations use the `FINAL` keyword (e.g., `SELECT ... FINAL`) to ensure data parts are merged at query time for read consistency
 3. **Soft Delete**: Delete operations are implemented by inserting a new record with a `deleted_at` timestamp; queries filter by `deleted_at IS NULL`
 

@@ -56,7 +56,7 @@ func (s *configurableSummarizer) Metadata() map[string]any { return nil }
 
 func TestCreateSessionSummary_PersistsViaUpsert(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *serviceOpts) {
+	s := newRevisionServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "hello"}
 	})
 
@@ -88,7 +88,7 @@ func TestCreateSessionSummary_DuplicateKeyIsNoop(t *testing.T) {
 			return nil, mongo.WriteException{WriteErrors: []mongo.WriteError{{Code: 11000}}}
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *serviceOpts) {
+	s := newRevisionServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "hello"}
 	})
 
@@ -103,7 +103,7 @@ func TestCreateSessionSummary_PropagatesNonDuplicateUpsertError(t *testing.T) {
 			return nil, want
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *serviceOpts) {
+	s := newRevisionServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "hello"}
 	})
 
@@ -115,7 +115,7 @@ func TestCreateSessionSummary_PropagatesNonDuplicateUpsertError(t *testing.T) {
 
 func TestCreateSessionSummary_DoesNotSetExpiresAtWhenSessionTTLConfigured(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *serviceOpts) {
+	s := newRevisionServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "hello"}
 		o.sessionTTL = time.Hour
 	})
@@ -123,7 +123,13 @@ func TestCreateSessionSummary_DoesNotSetExpiresAtWhenSessionTTLConfigured(t *tes
 	sess := newSessionForTest("app", "u", "s")
 	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "", true))
 
-	upd := mc.recorded()[0].update.(bson.M)
+	var upd bson.M
+	for _, op := range mc.recorded() {
+		if op.name == "UpdateOne" && op.coll == "session_summaries" {
+			upd = op.update.(bson.M)
+		}
+	}
+	require.NotNil(t, upd)
 	set := upd["$set"].(bson.M)
 	assert.NotContains(t, set, "expires_at")
 	unset := upd["$unset"].(bson.M)
@@ -290,7 +296,7 @@ func TestGetSessionSummaryText_IgnoresInvalidOrEmptyPersistedSummary(t *testing.
 
 func TestEnqueueSummaryJob_FallsBackWithoutWorker(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *serviceOpts) {
+	s := newRevisionServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "queued"}
 	})
 

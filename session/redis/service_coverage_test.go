@@ -2035,16 +2035,19 @@ func TestAsyncPersist_PersistError(t *testing.T) {
 	sess, err := svc.CreateSession(ctx, key, nil)
 	require.NoError(t, err)
 
-	// Send event via async path
+	// Make both queued writes fail. The runner-completion event acts as a
+	// terminal barrier and must surface the earlier worker error.
+	mr.Close()
+
 	e := createTestEvent("e1", "agent", "content", time.Now(), false)
 	err = svc.AppendEvent(ctx, sess, e)
 	require.NoError(t, err)
-
-	// Close Redis so the async worker's persistEvent call fails (logs error)
-	mr.Close()
-
-	// Give async worker time to process and log the error
-	time.Sleep(50 * time.Millisecond)
+	err = svc.AppendEvent(
+		ctx,
+		sess,
+		redisTestCompletionEvent("request", "invocation"),
+	)
+	require.Error(t, err)
 
 	svc.Close()
 }

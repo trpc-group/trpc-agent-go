@@ -193,6 +193,17 @@ sessionService, err := mysql.NewService(
 )
 ```
 
+## 替换最新一轮
+
+MySQL 支持通过 `Runner.Run` 和 `agent.WithLatestTurnReplacement` 编辑并重发最新一个
+已持久化 turn。操作会先 drain 异步 event 与 Track 写入，再在同一个数据库事务中恢复
+events、Session state、summaries 和 Tracks。
+
+Revision metadata 以带版本的私有 sidecar 保存在现有
+`session_states.state` JSON 中，并与 Session 投影在同一事务内更新；即使使用
+`WithSkipDBInit(true)` 也不需要额外建表或迁移。Runner API、滚动升级要求与回滚边界见
+[替换最新一轮](index.md#replace-latest-turn)。
+
 ## 存储结构
 
 MySQL 使用以下表结构（使用 `{{PREFIX}}` 表示表前缀）：

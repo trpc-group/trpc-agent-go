@@ -42,6 +42,30 @@ type trackEventReader interface {
 	GetTrackEvents(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error)
 }
 
+type requestIDContextKey struct{}
+
+type pendingTrackEvent struct {
+	payload   json.RawMessage
+	requestID string
+}
+
+// ContextWithRequestID associates tracked AG-UI events with the effective
+// core Runner request without changing their protocol RunID.
+func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, requestIDContextKey{}, requestID)
+}
+
+func requestIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	requestID, _ := ctx.Value(requestIDContextKey{}).(string)
+	return requestID
+}
+
 // tracker is the implementation of the Tracker interface.
 type tracker struct {
 	sessionService    session.Service               // sessionService handles session lifecycle.
@@ -57,7 +81,7 @@ type sessionState struct {
 	mu         sync.Mutex            // mu guards the aggregator and pending events.
 	persistMu  sync.Mutex            // persistMu serializes storage writes for the session.
 	aggregator aggregator.Aggregator // aggregator aggregates events.
-	pending    []json.RawMessage     // pending stores immutable payloads waiting for persistence.
+	pending    []pendingTrackEvent   // pending stores immutable events waiting for persistence.
 	session    *session.Session      // session caches the ensured session to avoid repeated lookups.
 	closing    bool                  // closing rejects appends while Close is draining the final batch.
 }
@@ -96,7 +120,10 @@ func (t *tracker) AppendEvent(ctx context.Context, key session.Key, event aguiev
 	if err != nil {
 		return fmt.Errorf("aggregate event: %w", err)
 	}
-	payloads, err := snapshotEvents(aggregated)
+	payloads, err := snapshotEvents(
+		aggregated,
+		requestIDFromContext(ctx),
+	)
 	state.pending = append(state.pending, payloads...)
 	if err != nil {
 		return fmt.Errorf("snapshot aggregated events: %w", err)
@@ -167,9 +194,9 @@ func (t *tracker) persistEvents(
 	ctx context.Context,
 	key session.Key,
 	state *sessionState,
-	payloads []json.RawMessage,
+	events []pendingTrackEvent,
 ) error {
-	if len(payloads) == 0 {
+	if len(events) == 0 {
 		return nil
 	}
 	sess, err := t.ensureSessionExists(ctx, key, state)
@@ -177,10 +204,11 @@ func (t *tracker) persistEvents(
 		return fmt.Errorf("ensure session exists: %w", err)
 	}
 	var overallErr error
-	for _, payload := range payloads {
+	for _, event := range events {
 		trackEvent := &session.TrackEvent{
 			Track:     TrackAGUI,
-			Payload:   json.RawMessage(append([]byte(nil), payload...)),
+			RequestID: event.requestID,
+			Payload:   json.RawMessage(append([]byte(nil), event.payload...)),
 			Timestamp: time.Now(),
 		}
 		if sess == nil {
@@ -200,8 +228,11 @@ func (t *tracker) persistEvents(
 }
 
 // snapshotEvents serializes aggregator outputs before their ownership is returned to the caller.
-func snapshotEvents(events []aguievents.Event) ([]json.RawMessage, error) {
-	payloads := make([]json.RawMessage, 0, len(events))
+func snapshotEvents(
+	events []aguievents.Event,
+	requestID string,
+) ([]pendingTrackEvent, error) {
+	payloads := make([]pendingTrackEvent, 0, len(events))
 	var overallErr error
 	for _, event := range events {
 		payload, err := event.ToJSON()
@@ -209,7 +240,14 @@ func snapshotEvents(events []aguievents.Event) ([]json.RawMessage, error) {
 			multierr.AppendInto(&overallErr, fmt.Errorf("marshal event %v: %w", event, err))
 			continue
 		}
-		payloads = append(payloads, json.RawMessage(append([]byte(nil), payload...)))
+		eventRequestID := requestID
+		if eventRequestID == "" {
+			eventRequestID = event.RunID()
+		}
+		payloads = append(payloads, pendingTrackEvent{
+			payload:   json.RawMessage(append([]byte(nil), payload...)),
+			requestID: eventRequestID,
+		})
 	}
 	return payloads, overallErr
 }
@@ -282,26 +320,29 @@ func (t *tracker) closeState(ctx context.Context, key session.Key, state *sessio
 	return multierr.Combine(drainErr, persistErr)
 }
 
-func (t *tracker) drainPending(ctx context.Context, state *sessionState) ([]json.RawMessage, error) {
+func (t *tracker) drainPending(ctx context.Context, state *sessionState) ([]pendingTrackEvent, error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return t.drainPendingLocked(ctx, state)
 }
 
-func (t *tracker) drainPendingForClose(ctx context.Context, state *sessionState) ([]json.RawMessage, error) {
+func (t *tracker) drainPendingForClose(ctx context.Context, state *sessionState) ([]pendingTrackEvent, error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.closing = true
 	return t.drainPendingLocked(ctx, state)
 }
 
-func (t *tracker) drainPendingLocked(ctx context.Context, state *sessionState) ([]json.RawMessage, error) {
+func (t *tracker) drainPendingLocked(ctx context.Context, state *sessionState) ([]pendingTrackEvent, error) {
 	events, err := state.aggregator.Flush(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("aggregator flush: %w", err)
 	}
-	payloads, snapshotErr := snapshotEvents(events)
-	batch := make([]json.RawMessage, 0, len(state.pending)+len(payloads))
+	payloads, snapshotErr := snapshotEvents(
+		events,
+		requestIDFromContext(ctx),
+	)
+	batch := make([]pendingTrackEvent, 0, len(state.pending)+len(payloads))
 	batch = append(batch, state.pending...)
 	batch = append(batch, payloads...)
 	state.pending = nil

@@ -13,6 +13,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
+	"trpc.group/trpc-go/trpc-agent-go/internal/trpcagentwire"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -22,9 +23,15 @@ type session struct {
 }
 
 type runOptions struct {
-	RequestID             string         `json:"requestID,omitempty"`
-	ExecutionTraceEnabled bool           `json:"executionTraceEnabled,omitempty"`
-	RuntimeState          map[string]any `json:"runtimeState,omitempty"`
+	RequestID             string                 `json:"requestID,omitempty"`
+	ExecutionTraceEnabled bool                   `json:"executionTraceEnabled,omitempty"`
+	RuntimeState          map[string]any         `json:"runtimeState,omitempty"`
+	LatestTurnReplacement *latestTurnReplacement `json:"latestTurnReplacement,omitempty"`
+}
+
+type latestTurnReplacement struct {
+	ExpectedRequestID string `json:"expectedRequestID"`
+	RequestID         string `json:"requestID"`
 }
 
 type runRequest struct {
@@ -36,10 +43,12 @@ type runRequest struct {
 }
 
 type runResponse struct {
-	Status         atrace.TraceStatus `json:"status"`
-	Events         []event.Event      `json:"events,omitempty"`
-	ExecutionTrace *atrace.Trace      `json:"executionTrace,omitempty"`
-	ErrorMessage   string             `json:"errorMessage,omitempty"`
+	Status             atrace.TraceStatus               `json:"status"`
+	Events             []event.Event                    `json:"events,omitempty"`
+	ExecutionTrace     *atrace.Trace                    `json:"executionTrace,omitempty"`
+	ErrorMessage       string                           `json:"errorMessage,omitempty"`
+	DirectRunError     bool                             `json:"directRunError,omitempty"`
+	DirectRunErrorKind trpcagentwire.DirectRunErrorKind `json:"directRunErrorKind,omitempty"`
 }
 
 type structureResponse struct {

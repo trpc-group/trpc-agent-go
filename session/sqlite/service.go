@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
@@ -31,6 +32,10 @@ import (
 
 var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
+
+type sqlExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
 
 // SessionState is the state of a session.
 type SessionState struct {
@@ -68,13 +73,19 @@ type Service struct {
 }
 
 type sessionEventPair struct {
-	key   session.Key
-	event *event.Event
+	key        session.Key
+	event      *event.Event
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 type trackEventPair struct {
-	key   session.Key
-	event *session.TrackEvent
+	key        session.Key
+	event      *session.TrackEvent
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 // NewService creates a new sqlite session service.
@@ -273,16 +284,42 @@ func (s *Service) CreateSession(
 
 	expiresAt := calculateExpiresAt(now, s.opts.sessionTTL)
 
-	exists, existingExpiresAt, err := s.checkSessionExists(ctx, key)
+	s.stateWriteMu.Lock()
+	err = func() error {
+		defer s.stateWriteMu.Unlock()
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin create session: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		exists, existingExpiresAt, err := s.checkSessionExistsWith(
+			ctx,
+			tx,
+			key,
+		)
+		if err != nil {
+			return err
+		}
+		if exists && !isExpired(existingExpiresAt, now) {
+			return fmt.Errorf("session already exists and has not expired")
+		}
+		if err := s.upsertSessionStateWith(
+			ctx,
+			tx,
+			key,
+			stateBytes,
+			now,
+			expiresAt,
+			exists,
+		); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit create session: %w", err)
+		}
+		return nil
+	}()
 	if err != nil {
-		return nil, err
-	}
-	if exists && !isExpired(existingExpiresAt, now) {
-		return nil, fmt.Errorf("session already exists and has not expired")
-	}
-
-	if err := s.upsertSessionState(ctx, key, stateBytes, now, expiresAt,
-		exists); err != nil {
 		return nil, err
 	}
 
@@ -306,16 +343,18 @@ func (s *Service) CreateSession(
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
+	sessionrevision.SetGeneration(sess, 0)
 
 	return mergeState(appState, userState, sess), nil
 }
 
-func (s *Service) checkSessionExists(
+func (s *Service) checkSessionExistsWith(
 	ctx context.Context,
+	query revisionRowQuerier,
 	key session.Key,
 ) (bool, sql.NullInt64, error) {
 	var expiresAt sql.NullInt64
-	err := s.db.QueryRowContext(
+	err := query.QueryRowContext(
 		ctx,
 		fmt.Sprintf(
 			`SELECT expires_at FROM %s
@@ -346,8 +385,9 @@ func isExpired(expiresAt sql.NullInt64, now time.Time) bool {
 	return unixNanoToTime(expiresAt.Int64).Before(now)
 }
 
-func (s *Service) upsertSessionState(
+func (s *Service) upsertSessionStateWith(
 	ctx context.Context,
+	exec sqlExecer,
 	key session.Key,
 	stateBytes []byte,
 	now time.Time,
@@ -355,7 +395,7 @@ func (s *Service) upsertSessionState(
 	exists bool,
 ) error {
 	if exists {
-		_, err := s.db.ExecContext(
+		_, err := exec.ExecContext(
 			ctx,
 			fmt.Sprintf(
 				`UPDATE %s
@@ -379,7 +419,7 @@ AND deleted_at IS NULL`,
 		return nil
 	}
 
-	_, err := s.db.ExecContext(
+	_, err := exec.ExecContext(
 		ctx,
 		fmt.Sprintf(
 			`INSERT INTO %s (
@@ -426,11 +466,19 @@ func (s *Service) GetSession(
 		c *session.GetSessionContext,
 		next func() (*session.Session, error),
 	) (*session.Session, error) {
-		sess, err := s.getSession(
+		sess, err := sessionrevision.LoadStableProjection(
 			c.Context,
-			c.Key,
-			c.Options.EventNum,
-			c.Options.EventTime,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, c.Key)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(
+					ctx,
+					c.Key,
+					c.Options.EventNum,
+					c.Options.EventTime,
+				)
+			},
 		)
 		if err != nil {
 			return nil, err
@@ -456,7 +504,7 @@ func (s *Service) ListSessions(
 	if err := session.ValidateListSessionsOptions(opt); err != nil {
 		return nil, err
 	}
-	return s.listSessions(
+	sessList, err := s.listSessions(
 		ctx,
 		userKey,
 		opt.EventNum,
@@ -464,6 +512,33 @@ func (s *Service) ListSessions(
 		opt.ListSessionOnlyMeta,
 		opt.ListSessionPage,
 	)
+	if err != nil {
+		return nil, err
+	}
+	for i, listed := range sessList {
+		if listed == nil {
+			continue
+		}
+		key := session.Key{
+			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+		}
+		stable, err := sessionrevision.LoadStableListedProjection(
+			ctx,
+			listed,
+			opt.ListSessionOnlyMeta,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, key)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(ctx, key, opt.EventNum, opt.EventTime)
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+		sessList[i] = stable
+	}
+	return sessList, nil
 }
 
 // DeleteSession deletes a session.
@@ -475,6 +550,8 @@ func (s *Service) DeleteSession(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+	s.stateWriteMu.Lock()
+	defer s.stateWriteMu.Unlock()
 	return s.deleteSessionState(ctx, key)
 }
 

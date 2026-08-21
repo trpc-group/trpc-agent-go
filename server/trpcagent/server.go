@@ -26,6 +26,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
+	"trpc.group/trpc-go/trpc-agent-go/internal/trpcagentwire"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -164,6 +165,12 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runOptions = append(runOptions, agent.WithRequestID(req.RunOptions.RequestID))
+	if replacement := req.RunOptions.LatestTurnReplacement; replacement != nil {
+		runOptions = append(runOptions, agent.WithLatestTurnReplacement(
+			replacement.ExpectedRequestID,
+			replacement.RequestID,
+		))
+	}
 	runOptions = append(runOptions, agent.MergeRuntimeState(req.RunOptions.RuntimeState))
 	runOptions = append(runOptions, agent.WithAppName(s.appName))
 	eventCh, err := s.runner.Run(ctx, req.Session.UserID, req.Session.SessionID, req.Input, runOptions...)
@@ -200,9 +207,11 @@ func runErrorResponse(input model.Message, appName string, requestID string, err
 		status = atrace.TraceStatusIncomplete
 	}
 	response := runResponse{
-		Status:       status,
-		Messages:     []model.Message{input},
-		ErrorMessage: err.Error(),
+		Status:             status,
+		Messages:           []model.Message{input},
+		ErrorMessage:       err.Error(),
+		DirectRunError:     true,
+		DirectRunErrorKind: trpcagentwire.DirectRunErrorKindOf(err),
 	}
 	appendRunTerminalEvents(&response, appName, requestID, err)
 	return response
@@ -226,6 +235,30 @@ func validateRunRequest(req *runRequest) error {
 	}
 	if !model.HasPayload(req.Input) && len(req.Input.ToolCalls) == 0 && req.Input.ToolID == "" {
 		return errors.New("input payload is required")
+	}
+	if replacement := req.RunOptions.LatestTurnReplacement; replacement != nil {
+		if replacement.ExpectedRequestID == "" {
+			return errors.New(
+				"runOptions.latestTurnReplacement.expectedRequestID is required",
+			)
+		}
+		if replacement.RequestID == "" {
+			return errors.New(
+				"runOptions.latestTurnReplacement.requestID is required",
+			)
+		}
+		if replacement.ExpectedRequestID == replacement.RequestID {
+			return errors.New(
+				"runOptions.latestTurnReplacement request IDs must differ",
+			)
+		}
+		if req.RunOptions.RequestID != "" &&
+			req.RunOptions.RequestID != replacement.RequestID {
+			return errors.New(
+				"runOptions.requestID conflicts with latest-turn replacement",
+			)
+		}
+		req.RunOptions.RequestID = replacement.RequestID
 	}
 	return nil
 }

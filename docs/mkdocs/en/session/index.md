@@ -224,6 +224,122 @@ The following inputs are not re-hosted by this feature:
 
 Failure behavior is fail-closed: if Artifact storage is required but unavailable, or if artifact save/load fails, the operation returns an error instead of silently dropping content. If externalization fails before the event is handed to the session backend, the framework submits best-effort delete requests for artifacts saved by that attempt. After the append has been handed to the backend, artifacts are retained on ambiguous errors to avoid deleting content that a persisted event may already reference.
 
+### Replacing the Latest Turn
+
+Use `Runner.Run` with `agent.WithLatestTurnReplacement` to edit and resend the
+latest persisted turn, including one interrupted before a final response. The
+logical `SessionID` stays unchanged. The old and new request IDs form one
+guarded transition: the first identifies the turn that must still be latest,
+and the second identifies the replacement run.
+
+```go
+events, err := r.Run(
+    ctx,
+    "user123",
+    "session-001",
+    model.NewUserMessage("edited message"),
+    agent.WithLatestTurnReplacement(
+        "request-before-edit",
+        "request-after-edit",
+    ),
+)
+if err != nil {
+    return err
+}
+for event := range events {
+    if event.Error != nil {
+        return event.Error
+    }
+}
+```
+
+Consume `events` exactly as for an ordinary run. The replacement option supplies
+the new request ID, so a separate `agent.WithRequestID` is unnecessary. If both
+are supplied, the IDs must match. Replacement cannot be combined with resume or
+history seeding through `RunOptions.Messages`, and the replacement message must
+carry a payload.
+
+Retain the exact old/new ID pair until `Run` returns an event channel. A durable
+transition can commit before a later hydration or connection read fails, so an
+error returned directly by `Run` can have an unknown outcome. Retry only when
+the durable transition may have committed before that later failure, using the
+same edited message and ID pair. Validation, conflict, unsupported, and
+unavailable errors have known outcomes and should be handled directly instead
+of blindly retried. Once `Run` returns the channel, the replacement and new
+user-turn boundary are committed. Do not retry the replacement because of a
+later event-stream error.
+
+If a retry finds that the new user-turn boundary was already persisted before
+the earlier error, Runner returns `runner.ErrLatestTurnReplacementConflict`
+instead of appending the edited message twice. The replacement is then known to
+be canonical, but Runner does not automatically repeat an Agent start whose
+outcome may also have been ambiguous.
+
+Before starting the new run, Runner atomically restores session-scoped events,
+state, summaries, and Track events to the complete checkpoint before the old
+request. The backend verifies the checkpointed event and Track prefixes before
+discarding the latest tail; it does not retain a second copy of the discarded
+projection. App state, user state, model/tool calls, artifact writes, and other
+external side effects are intentionally not rolled back.
+
+Safety rules:
+
+- The latest canonical Runner turn can be replaced whether it completed or was
+  interrupted. If it is still active in the same Runner, cancel it and consume
+  its event stream until the channel closes before replacing it. An earlier
+  attempt returns `runner.ErrLatestTurnReplacementUnavailable`.
+- A persisted user turn left unfinished by a process failure remains
+  replaceable after restart. Missing checkpoints, already-replaced turns, and
+  ambiguously attributed history return
+  `runner.ErrLatestTurnReplacementUnavailable`.
+- A latest-request mismatch or conflicting retry returns
+  `runner.ErrLatestTurnReplacementConflict`.
+- Unsupported storage returns `runner.ErrLatestTurnReplacementUnsupported`
+  before the replacement run starts.
+- Session projections loaded before a successful replacement are stale.
+  Supporting backends fence their later event, state, summary, and Track writes.
+- Custom Track producers should populate `TrackEvent.RequestID`. The AG-UI
+  tracker does this automatically and attempts a synchronous Track flush before
+  a terminal Runner event becomes visible. A flush failure is logged but does
+  not suppress the protocol terminal event.
+- A turn that persists routed output into another session is unavailable for
+  replacement because a single-session projection cannot restore it atomically.
+- Replacement preserves the source session's remaining TTL; it does not extend
+  the session lifetime.
+- Checkpoints retain session-scoped state, summaries, timestamps, and compact
+  digests of the event and Track prefixes. They do not copy event or Track
+  payloads and no discarded-projection archive accumulates. If the verified
+  prefix is no longer available, replacement fails closed.
+- Backends advance the prefix digests and counts atomically with event and
+  Track writes. An existing Session performs one authoritative bootstrap read;
+  later turn starts reuse the rolling prefix instead of scanning its full
+  history. Trimming or independent TTL cleanup of Session-owned history
+  invalidates the rolling prefix, so the next turn safely bootstraps it again.
+- Backends retain the 64 most recent replacement idempotency identities for
+  reuse detection. Retry an ambiguous transition promptly with its original
+  ID pair.
+
+The capability does not add a method to `session.Service` or a second
+application entry point. Its storage protocol is private because generation
+fencing and checkpoint metadata must evolve as one contract; applications and
+custom session services continue to call `Runner.Run`. Memory, SQLite, Redis
+HashIdx/ZSet, PostgreSQL, PGVector, MySQL/TDSQL, and MongoDB support
+replacement. The externalization wrapper forwards support from its wrapped
+service. ClickHouse, custom services, and Noop return unsupported.
+
+The protocol requires no new relational tables or migration. PostgreSQL,
+PGVector, MySQL/TDSQL, and SQLite store a versioned private sidecar in the
+existing session-state JSON; it is outside the user-visible `Session.State`.
+MongoDB stores the same private revision metadata in the existing session
+document. Redis uses one expiring private revision key in the Session hash
+slot. No backend creates a revision-archive table or collection.
+
+Upgrade every instance that can write the same Session store before enabling
+replacement. Older writers ignore the private metadata and can overwrite it.
+Existing Sessions need no migration; after an upgraded Runner persists the
+start of a new turn, that turn becomes eligible for replacement. This also
+applies to deployments using `WithSkipDBInit(true)`.
+
 ## Core Concepts
 
 ### Session Structure

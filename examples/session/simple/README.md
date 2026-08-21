@@ -7,7 +7,7 @@ This example demonstrates advanced session management capabilities using the `Ru
 This implementation highlights the power of session management in conversational AI:
 
 - **Multiple Sessions**: Create and switch between multiple independent conversation contexts
-- **Storage Options**: Support for no-op, in-memory, SQLite, Redis, PostgreSQL, pgvector, MySQL, and ClickHouse backends
+- **Storage Options**: Support for no-op, in-memory, SQLite, Redis, PostgreSQL, pgvector, MySQL/TDSQL, ClickHouse, and MongoDB backends
 - **Session Discovery**: List and switch between existing sessions
 
 
@@ -17,8 +17,9 @@ This implementation highlights the power of session management in conversational
 - **Session Switching**: Switch between sessions with `/use <id>`
 - **Session Listing**: View all active sessions with `/sessions`
 - **History Recap**: Ask the agent to summarize conversation with `/history`
+- **Latest-turn Editing**: Replace the latest persisted turn with `/edit <message>`
 - **Semantic Recall**: Use `/search <query>` when the backend implements `session.SearchableService`
-- **Backend Flexibility**: Choose from no-op, in-memory, SQLite, Redis, PostgreSQL, pgvector, MySQL, or ClickHouse storage
+- **Backend Flexibility**: Choose from no-op, in-memory, SQLite, Redis, PostgreSQL, pgvector, MySQL/TDSQL, ClickHouse, or MongoDB storage
 - **Context Preservation**: Each session maintains independent conversation history
 - **Langfuse Tracing**: Optional OpenTelemetry tracing for Redis session operations via Langfuse
 
@@ -26,7 +27,7 @@ This implementation highlights the power of session management in conversational
 
 - Go 1.21 or later
 - Valid OpenAI API key (or compatible API endpoint)
-- Optional: SQLite file, Redis server, PostgreSQL server, PostgreSQL with `pgvector`, MySQL server, or ClickHouse server (depending on backend choice)
+- Optional: SQLite file, Redis server, PostgreSQL server, PostgreSQL with `pgvector`, MySQL/TDSQL server, ClickHouse server, or MongoDB replica set (depending on backend choice)
 
 ## Environment Variables
 
@@ -84,6 +85,30 @@ Optional dedicated embedding credentials:
 | `MYSQL_PASSWORD` | MySQL password     | ``               |
 | `MYSQL_DATABASE` | MySQL database     | `trpc_agent_go`  |
 
+**TDSQL:**
+| Variable         | Description        | Default Value    |
+| ---------------- | ------------------ | ---------------- |
+| `TDSQL_HOST`     | TDSQL proxy host   | `localhost`      |
+| `TDSQL_PORT`     | TDSQL proxy port   | `3306`           |
+| `TDSQL_USER`     | TDSQL user         | `root`           |
+| `TDSQL_PASSWORD` | TDSQL password     | ``               |
+| `TDSQL_DATABASE` | TDSQL database     | `trpc_agent_go`  |
+
+**ClickHouse:**
+| Variable              | Description             | Default Value    |
+| --------------------- | ----------------------- | ---------------- |
+| `CLICKHOUSE_HOST`     | ClickHouse host         | `localhost`      |
+| `CLICKHOUSE_PORT`     | ClickHouse native port  | `9000`           |
+| `CLICKHOUSE_USER`     | ClickHouse user         | `default`        |
+| `CLICKHOUSE_PASSWORD` | ClickHouse password     | ``               |
+| `CLICKHOUSE_DATABASE` | ClickHouse database     | `trpc_agent_go`  |
+
+**MongoDB:**
+| Variable           | Description            | Default Value                   |
+| ------------------ | ---------------------- | ------------------------------- |
+| `MONGODB_URI`      | MongoDB connection URI | `mongodb://localhost:27017`     |
+| `MONGODB_DATABASE` | MongoDB database       | `trpc-agent-go-mongo-session`   |
+
 **Langfuse Tracing (optional):**
 
 | Variable              | Description                                | Default Value     |
@@ -98,7 +123,7 @@ Optional dedicated embedding credentials:
 | Argument           | Description                                         | Default Value    |
 | ------------------ | --------------------------------------------------- | ---------------- |
 | `-model`           | Name of the model to use                            | `MODEL_NAME` env var |
-| `-session`         | Session backend: noop/inmemory/sqlite/redis/postgres/pgvector/mysql/clickhouse | `redis` |
+| `-session`         | Session backend: noop/inmemory/sqlite/redis/postgres/pgvector/mysql/tdsql/clickhouse/mongodb | `redis` |
 | `-streaming`       | Enable streaming mode for responses                 | `true`           |
 | `-event-limit`     | Maximum number of events to store per session       | `1000`           |
 | `-session-ttl`     | Session time-to-live duration                       | `10s`            |
@@ -262,6 +287,7 @@ The example supports the following session management commands:
 | `/sessions`        | List all known session IDs                         |
 | `/use <id>`        | Switch to an existing session or create a new one  |
 | `/history`         | Ask the assistant to recap the conversation        |
+| `/edit <message>`  | Replace the latest persisted turn and run it again  |
 | `/search <query>`  | Recall similar events when supported by backend    |
 | `/exit`            | End the conversation                               |
 
@@ -313,6 +339,32 @@ The `*` indicates the currently active session.
 2. I offered to help with the project
 ...
 ```
+
+### Editing the Latest Turn
+
+After a turn finishes, use `/edit` to replace that turn's user message and run
+the assistant again without changing the Session ID:
+
+```text
+You: Summarize the release notes in one paragraph.
+Assistant: ...
+
+You: /edit Summarize the release notes in three bullets.
+Assistant: ...
+```
+
+The example remembers the request ID for each session and passes the old and
+new IDs together through `agent.WithLatestTurnReplacement`. If you switch to a
+session loaded from persistent storage, it recovers the latest request ID from
+that session's events. The no-op backend returns an unsupported error because
+it does not persist a replaceable turn.
+
+If `Runner.Run` returns an error before yielding an event stream, the example
+keeps the pending ID pair and reuses it on the next `/edit`. This confirms an
+outcome-unknown durable transition idempotently. After an event stream is
+returned, the pending pair is cleared even if streaming later reports an error.
+ClickHouse and custom session services return unsupported; use Memory, SQLite,
+Redis, PostgreSQL, PGVector, MySQL/TDSQL, or MongoDB for this command.
 
 ## Session Storage Backends
 

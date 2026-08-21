@@ -11,6 +11,7 @@ package mysql
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -25,6 +26,41 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
+
+type summaryRevisionStateArg struct {
+	sessionID string
+}
+
+func (a summaryRevisionStateArg) Match(value driver.Value) bool {
+	var raw []byte
+	switch value := value.(type) {
+	case string:
+		raw = []byte(value)
+	case []byte:
+		raw = value
+	default:
+		return false
+	}
+	var envelope struct {
+		ID       string `json:"id"`
+		Metadata struct {
+			Version  int `json:"version"`
+			Revision struct {
+				Generation uint64          `json:"generation"`
+				Head       uint64          `json:"head"`
+				Checkpoint json.RawMessage `json:"checkpoint"`
+			} `json:"latestTurnRevision"`
+		} `json:"_trpcAgent"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return false
+	}
+	return envelope.ID == a.sessionID && envelope.Metadata.Version == 1 &&
+		envelope.Metadata.Revision.Generation == 0 &&
+		envelope.Metadata.Revision.Head == 1 &&
+		(len(envelope.Metadata.Revision.Checkpoint) == 0 ||
+			string(envelope.Metadata.Revision.Checkpoint) == "null")
+}
 
 // mockSummarizerImpl is a mock summarizer for testing
 type mockSummarizerImpl struct {
@@ -52,6 +88,37 @@ func (m *mockSummarizerImpl) Metadata() map[string]any {
 	return map[string]any{}
 }
 
+func summaryStateRaw(sess *session.Session) string {
+	stateRaw, err := json.Marshal(SessionState{
+		ID: sess.ID, State: session.StateMap{},
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(stateRaw)
+}
+
+func expectSummaryRevisionLock(
+	mock sqlmock.Sqlmock,
+	sess *session.Session,
+) {
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs(sess.AppName, sess.UserID, sess.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
+			AddRow(summaryStateRaw(sess), nil))
+}
+
+func expectSummaryRevisionWrite(
+	mock sqlmock.Sqlmock,
+	sess *session.Session,
+) {
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(summaryRevisionStateArg{sessionID: sess.ID},
+			sess.AppName, sess.UserID, sess.ID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
 func expectSummaryWrite(
 	mock sqlmock.Sqlmock,
 	sess *session.Session,
@@ -60,9 +127,7 @@ func expectSummaryWrite(
 	writeErr error,
 ) {
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM session_states")).
-		WithArgs(sess.AppName, sess.UserID, sess.ID).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+	expectSummaryRevisionLock(mock, sess)
 
 	summaryRows := sqlmock.NewRows([]string{"updated_at"})
 	if active {
@@ -71,6 +136,7 @@ func expectSummaryWrite(
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT updated_at FROM session_summaries")).
 		WithArgs(sess.AppName, sess.UserID, sess.ID, filterKey).
 		WillReturnRows(summaryRows)
+	expectSummaryRevisionWrite(mock, sess)
 
 	var write *sqlmock.ExpectedExec
 	if active {
@@ -113,11 +179,10 @@ func TestUpsertSessionSummarySkipsOlderCutoff(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
 	incomingUpdatedAt := time.Date(2026, time.August, 14, 8, 0, 0, 0, time.UTC)
 	persistedUpdatedAt := incomingUpdatedAt.Add(time.Minute)
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM session_states")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+	expectSummaryRevisionLock(mock, sess)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT updated_at FROM session_summaries")).
 		WithArgs(key.AppName, key.UserID, key.SessionID, "").
 		WillReturnRows(sqlmock.NewRows([]string{"updated_at"}).AddRow(persistedUpdatedAt))
@@ -139,14 +204,14 @@ func TestUpsertSessionSummaryEqualCutoffLastWriteWins(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
 	updatedAt := time.Date(2026, time.August, 14, 8, 0, 0, 0, time.UTC)
 	summaryBytes := []byte(`{"summary":"regenerated"}`)
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM session_states")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+	expectSummaryRevisionLock(mock, sess)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT updated_at FROM session_summaries")).
 		WithArgs(key.AppName, key.UserID, key.SessionID, "").
 		WillReturnRows(sqlmock.NewRows([]string{"updated_at"}).AddRow(updatedAt))
+	expectSummaryRevisionWrite(mock, sess)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries")).
 		WithArgs(
 			string(summaryBytes), updatedAt,
@@ -197,9 +262,9 @@ func TestCreateSessionSummary_MissingSession(t *testing.T) {
 	}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM session_states")).
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
 		WithArgs(sess.AppName, sess.UserID, sess.ID).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}))
 	mock.ExpectRollback()
 
 	err = s.CreateSessionSummary(context.Background(), sess, "", true)

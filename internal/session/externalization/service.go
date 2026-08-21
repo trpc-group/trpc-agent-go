@@ -28,6 +28,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -69,6 +70,36 @@ type Service struct {
 	session.Service
 	artifactService artifact.Service
 	cfg             Config
+}
+
+// SupportsLatestTurnReplacement reports the capability of the wrapped service.
+func (s *Service) SupportsLatestTurnReplacement() bool {
+	return s != nil && sessionrevision.SupportsLatestTurnReplacement(s.Service)
+}
+
+// ReplaceLatestTurn forwards the optional mutation to the wrapped service and
+// hydrates the authoritative active projection returned by the backend.
+func (s *Service) ReplaceLatestTurn(
+	ctx context.Context,
+	req sessionrevision.LatestTurnReplacementRequest,
+) (*sessionrevision.LatestTurnReplacementResult, error) {
+	result, err := sessionrevision.ReplaceLatestTurn(ctx, s.Service, req)
+	if err != nil || result == nil || result.ActiveSession == nil || !s.cfg.Enabled {
+		return result, err
+	}
+	hydrated, err := hydrateSession(
+		ctx,
+		result.ActiveSession,
+		sessionInfoFromKey(req.Key),
+		s.artifactService,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &sessionrevision.LatestTurnReplacementResult{
+		ActiveSession: hydrated,
+		Applied:       result.Applied,
+	}, nil
 }
 
 // The following wrapper types intentionally enumerate optional session service

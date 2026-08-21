@@ -12,10 +12,13 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -103,6 +106,48 @@ func TestSessionSQLite_EnqueueSummaryJob_NoWorker_Sync(t *testing.T) {
 	)
 	require.True(t, ok)
 	require.Equal(t, "summary", text)
+}
+
+func TestSessionSQLite_SummaryExpirationFollowsSessionLifecycle(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithSessionTTL(time.Hour),
+		WithSummarizer(&fakeSummarizer{}),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, svc.AppendEvent(ctx, sess, newUserEvent("hello")))
+	require.NoError(t, svc.CreateSessionSummary(
+		ctx, sess, session.SummaryFilterKeyAllContents, true,
+	))
+
+	var count int
+	require.NoError(t, svc.db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT COUNT(*) FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND filter_key = ? AND deleted_at IS NULL AND expires_at IS NULL`,
+		svc.tableSessionSummaries,
+	), key.AppName, key.UserID, key.SessionID,
+		session.SummaryFilterKeyAllContents).Scan(&count))
+	require.Equal(t, 1, count)
+
+	require.NoError(t, svc.DeleteSession(ctx, key))
+	require.NoError(t, svc.db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT COUNT(*) FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND filter_key = ? AND deleted_at IS NULL`,
+		svc.tableSessionSummaries,
+	), key.AppName, key.UserID, key.SessionID,
+		session.SummaryFilterKeyAllContents).Scan(&count))
+	require.Zero(t, count)
 }
 
 func TestSessionSQLite_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {
@@ -535,4 +580,138 @@ func TestSessionSQLite_GetSessionSummaryText_InvalidInput(t *testing.T) {
 	invalid := session.NewSession("", "", "s1")
 	_, ok = svc.GetSessionSummaryText(context.Background(), invalid)
 	require.False(t, ok)
+}
+
+func TestSessionSQLite_CreateSessionSummaryRevisionFailures(t *testing.T) {
+	newService := func(t *testing.T) *Service {
+		t.Helper()
+		db, _, cleanup := openTempSQLiteDB(t)
+		t.Cleanup(cleanup)
+		service, err := NewService(db, WithSummarizer(&fakeSummarizer{}))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		return service
+	}
+	newSession := func(t *testing.T, service *Service) (*session.Session, session.Key) {
+		t.Helper()
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: t.Name()}
+		sess, err := service.CreateSession(ctx, key, nil)
+		require.NoError(t, err)
+		require.NoError(t, service.AppendEvent(ctx, sess, newUserEvent("hello")))
+		return sess, key
+	}
+
+	t.Run("session not found", func(t *testing.T) {
+		service := newService(t)
+		sess := session.NewSession("app", "user", "missing")
+		sess.UpdateUserSession(newUserEvent("hello"))
+		err := service.CreateSessionSummary(
+			context.Background(),
+			sess,
+			session.SummaryFilterKeyAllContents,
+			true,
+		)
+		require.ErrorContains(t, err, "session not found")
+	})
+
+	t.Run("cancelled transaction", func(t *testing.T) {
+		service := newService(t)
+		sess, _ := newSession(t, service)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := service.CreateSessionSummary(
+			ctx,
+			sess,
+			session.SummaryFilterKeyAllContents,
+			true,
+		)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("corrupt revision metadata", func(t *testing.T) {
+		service := newService(t)
+		sess, key := newSession(t, service)
+		var raw []byte
+		require.NoError(t, service.db.QueryRowContext(
+			context.Background(),
+			"SELECT state FROM "+service.tableSessionStates+" "+
+				"WHERE app_name = ? AND user_id = ? AND session_id = ?",
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).Scan(&raw))
+		var envelope map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &envelope))
+		envelope["_trpcAgent"] = json.RawMessage(`"invalid"`)
+		raw, err := json.Marshal(envelope)
+		require.NoError(t, err)
+		_, err = service.db.ExecContext(
+			context.Background(),
+			"UPDATE "+service.tableSessionStates+" SET state = ? "+
+				"WHERE app_name = ? AND user_id = ? AND session_id = ?",
+			raw,
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		)
+		require.NoError(t, err)
+		err = service.CreateSessionSummary(
+			context.Background(),
+			sess,
+			session.SummaryFilterKeyAllContents,
+			true,
+		)
+		require.ErrorContains(t, err, "decode session revision metadata")
+	})
+
+	t.Run("stale generation", func(t *testing.T) {
+		service := newService(t)
+		sess, key := newSession(t, service)
+		ctx := context.Background()
+		turnCtx := sessionrevision.ContextWithTurnStart(ctx, sessionrevision.TurnStart{
+			RequestID: "request", InvocationID: "invocation",
+		})
+		require.NoError(t, service.AppendEvent(
+			turnCtx,
+			sess,
+			sqliteTestMessageEvent("turn", "request", "invocation", "latest"),
+		))
+		require.NoError(t, service.AppendEvent(
+			ctx,
+			sess,
+			sqliteTestCompletionEvent("request", "invocation"),
+		))
+		_, err := service.ReplaceLatestTurn(
+			ctx,
+			sessionrevision.LatestTurnReplacementRequest{
+				Key: key, ExpectedRequestID: "request", IdempotencyKey: "replacement",
+			},
+		)
+		require.NoError(t, err)
+		err = service.CreateSessionSummary(
+			ctx,
+			sess,
+			session.SummaryFilterKeyAllContents,
+			true,
+		)
+		require.ErrorIs(t, err, sessionrevision.ErrStaleGeneration)
+	})
+
+	t.Run("revision state update failure", func(t *testing.T) {
+		service := newService(t)
+		sess, _ := newSession(t, service)
+		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
+			`CREATE TRIGGER fail_revision_state BEFORE UPDATE ON %s
+BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionStates,
+		))
+		require.NoError(t, err)
+		err = service.CreateSessionSummary(
+			context.Background(),
+			sess,
+			session.SummaryFilterKeyAllContents,
+			true,
+		)
+		require.ErrorContains(t, err, "update session revision for summary")
+	})
 }

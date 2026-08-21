@@ -11,6 +11,7 @@ package hashidx
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
@@ -360,6 +362,17 @@ func (c *Client) loadAndAttachTrackEvents(
 //   - StateDelta is always applied to session state (regardless of event content)
 //   - Event is only stored in event list if: Response != nil && !IsPartial && IsValidContent()
 func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Event) error {
+	return c.AppendEventWithRevision(ctx, key, evt, sessionrevision.Write{})
+}
+
+// AppendEventWithRevision persists an event and its private revision metadata
+// in one Redis script.
+func (c *Client) AppendEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	evt *event.Event,
+	write sessionrevision.Write,
+) error {
 	evtJSON, err := json.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
@@ -376,23 +389,64 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Ev
 		c.keys.SessionMetaKey(key),
 		c.keys.EventDataKey(key),
 		c.keys.EventTimeIndexKey(key),
+		c.keys.RevisionKey(key),
 	}
-	args := []any{
-		evt.ID,
-		string(evtJSON),
-		evt.Timestamp.UnixNano(),
-		ttlSeconds,
-		boolToInt(shouldStoreEvent),
+	startRequestID := ""
+	startInvocationID := ""
+	if write.Start != nil {
+		startRequestID = write.Start.RequestID
+		startInvocationID = write.Start.InvocationID
 	}
+	callerExpectedHead := write.HasExpectedHead || write.Start != nil
+	for attempt := 0; attempt < revisionWriteAttempts; attempt++ {
+		preparedWrite, projectionJSON, projectionPrepared, err :=
+			c.prepareProjectionWrite(ctx, key, write,
+				func(record *sessionrevision.PersistedRecord) error {
+					if !shouldStoreEvent {
+						return nil
+					}
+					return sessionrevision.AppendProjectionEvent(record, evt)
+				})
+		if err != nil {
+			return fmt.Errorf("append event: prepare revision projection: %w", err)
+		}
+		args := []any{
+			evt.ID,
+			string(evtJSON),
+			evt.Timestamp.UnixNano(),
+			ttlSeconds,
+			boolToInt(shouldStoreEvent),
+			boolToInt(preparedWrite.HasExpectedGeneration),
+			preparedWrite.ExpectedGeneration,
+			startRequestID,
+			startInvocationID,
+			base64.StdEncoding.EncodeToString(preparedWrite.Boundary),
+			boolToInt(evt != nil && evt.IsRunnerCompletion()),
+			boolToInt(preparedWrite.HasExpectedHead),
+			preparedWrite.ExpectedHead,
+			boolToInt(projectionPrepared),
+			projectionJSON,
+		}
 
-	result, err := c.runScript(ctx, luaAppendEvent, keys, args...).Int()
-	if err != nil {
-		return fmt.Errorf("append event: %w", err)
+		result, err := c.runScript(ctx, luaAppendEvent, keys, args...).Int()
+		if err != nil {
+			return fmt.Errorf("append event: %w", err)
+		}
+		switch result {
+		case 0:
+			return fmt.Errorf("session not found")
+		case -1:
+			return sessionrevision.ErrStaleGeneration
+		case -2:
+			if callerExpectedHead {
+				return sessionrevision.ErrStaleProjection
+			}
+			continue
+		default:
+			return nil
+		}
 	}
-	if result == 0 {
-		return fmt.Errorf("session not found")
-	}
-	return nil
+	return fmt.Errorf("append event contention: %w", sessionrevision.ErrStaleProjection)
 }
 
 // shouldStoreEventInList checks if an event should be stored in the event list.
@@ -479,6 +533,8 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 	keys := []string{
 		c.keys.EventDataKey(key),
 		c.keys.EventTimeIndexKey(key),
+		c.keys.SessionMetaKey(key),
+		c.keys.RevisionKey(key),
 	}
 
 	result, err := c.runScript(ctx, luaTrimConversations, keys, count).StringSlice()
@@ -502,6 +558,8 @@ func (c *Client) DeleteEvent(ctx context.Context, key session.Key, eventID strin
 	keys := []string{
 		c.keys.EventDataKey(key),
 		c.keys.EventTimeIndexKey(key),
+		c.keys.SessionMetaKey(key),
+		c.keys.RevisionKey(key),
 	}
 
 	if _, err := c.runScript(ctx, luaDeleteEvent, keys, eventID).Result(); err != nil {

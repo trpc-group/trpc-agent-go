@@ -70,12 +70,18 @@ func (r *runner) Run(
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
 	options := agent.NewRunOptions(runOpts...)
-	if options.RequestID == "" {
-		options.RequestID = uuid.NewString()
+	if err := normalizeRunIdentity(&options); err != nil {
+		return nil, err
 	}
 	request := r.newRunRequest(userID, sessionID, message, options)
 	response, err := r.postRun(ctx, request, options)
 	if err != nil {
+		return nil, err
+	}
+	if err := directRunError(
+		response,
+		options.LatestTurnReplacement != nil,
+	); err != nil {
 		return nil, err
 	}
 	if err := validateRunResponse(options, response); err != nil {
@@ -88,6 +94,52 @@ func (r *runner) Run(
 	}
 	close(ch)
 	return ch, nil
+}
+
+type remoteDirectRunError struct {
+	message  string
+	sentinel error
+}
+
+func (e *remoteDirectRunError) Error() string {
+	if e.message == "" {
+		return "trpcagent runner: remote run failed: " + e.sentinel.Error()
+	}
+	return "trpcagent runner: remote run failed: " + e.message
+}
+
+func (e *remoteDirectRunError) Unwrap() error {
+	return e.sentinel
+}
+
+func directRunError(response *runResponse, replacement bool) error {
+	if response == nil {
+		return nil
+	}
+	if response.DirectRunErrorKind == "" {
+		if !replacement || !response.DirectRunError {
+			return nil
+		}
+		if response.ErrorMessage == "" {
+			return errors.New("trpcagent runner: remote run failed")
+		}
+		return fmt.Errorf(
+			"trpcagent runner: remote run failed: %s",
+			response.ErrorMessage,
+		)
+	}
+	sentinel := response.DirectRunErrorKind.Sentinel()
+	if sentinel == nil {
+		return fmt.Errorf(
+			"trpcagent runner: remote run failed with unknown error kind %q: %s",
+			response.DirectRunErrorKind,
+			response.ErrorMessage,
+		)
+	}
+	return &remoteDirectRunError{
+		message:  response.ErrorMessage,
+		sentinel: sentinel,
+	}
 }
 
 // Describe fetches the remote app structure.
@@ -138,10 +190,51 @@ func (r *runner) newRunRequest(
 			RuntimeState:          options.RuntimeState,
 		},
 	}
+	if replacement := options.LatestTurnReplacement; replacement != nil {
+		request.RunOptions.LatestTurnReplacement = &latestTurnReplacement{
+			ExpectedRequestID: replacement.ExpectedRequestID,
+			RequestID:         replacement.RequestID,
+		}
+	}
 	if profile := profilecompiler.ProfileFromRunOptions(options); profile != nil {
 		request.Profile = profile
 	}
 	return request
+}
+
+func normalizeRunIdentity(options *agent.RunOptions) error {
+	if options == nil {
+		return errors.New("trpcagent runner: run options are nil")
+	}
+	replacement := options.LatestTurnReplacement
+	if replacement == nil {
+		if options.RequestID == "" {
+			options.RequestID = uuid.NewString()
+		}
+		return nil
+	}
+	if replacement.ExpectedRequestID == "" {
+		return errors.New(
+			"trpcagent runner: latest-turn replacement expected request id is empty",
+		)
+	}
+	if replacement.RequestID == "" {
+		return errors.New(
+			"trpcagent runner: latest-turn replacement request id is empty",
+		)
+	}
+	if replacement.ExpectedRequestID == replacement.RequestID {
+		return errors.New(
+			"trpcagent runner: latest-turn replacement request ids must differ",
+		)
+	}
+	if options.RequestID != "" && options.RequestID != replacement.RequestID {
+		return errors.New(
+			"trpcagent runner: request id conflicts with latest-turn replacement",
+		)
+	}
+	options.RequestID = replacement.RequestID
+	return nil
 }
 
 func (r *runner) postRun(

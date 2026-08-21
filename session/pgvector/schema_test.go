@@ -68,13 +68,11 @@ func TestBuildCreateIndexSQL_WithSchemaPrefix(
 // --- Tests for tableDefs and indexDefs ---
 
 func TestTableDefs_Count(t *testing.T) {
-	// Should have 6 tables.
 	const expectedTableCount = 6
 	assert.Len(t, tableDefs, expectedTableCount)
 }
 
 func TestIndexDefs_Count(t *testing.T) {
-	// Should have 12 indexes.
 	const expectedIndexCount = 12
 	assert.Len(t, indexDefs, expectedIndexCount)
 }

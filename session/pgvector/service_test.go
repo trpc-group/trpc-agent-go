@@ -115,20 +115,13 @@ func (c *mockPostgresClient) Close() error {
 }
 
 type recordingPostgresClient struct {
-	mu         sync.Mutex
-	filterKeys []string
+	mu               sync.Mutex
+	transactionCalls int
 }
 
 func (c *recordingPostgresClient) ExecContext(
-	_ context.Context, _ string, args ...any,
+	_ context.Context, _ string, _ ...any,
 ) (sql.Result, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(args) > 3 {
-		if filterKey, ok := args[3].(string); ok {
-			c.filterKeys = append(c.filterKeys, filterKey)
-		}
-	}
 	return sqlmock.NewResult(0, 1), nil
 }
 
@@ -144,6 +137,9 @@ func (c *recordingPostgresClient) Transaction(
 	_ context.Context,
 	_ storage.TxFunc,
 ) error {
+	c.mu.Lock()
+	c.transactionCalls++
+	c.mu.Unlock()
 	return nil
 }
 
@@ -151,12 +147,10 @@ func (c *recordingPostgresClient) Close() error {
 	return nil
 }
 
-func (c *recordingPostgresClient) persistedFilterKeys() []string {
+func (c *recordingPostgresClient) transactionCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	keys := make([]string, len(c.filterKeys))
-	copy(keys, c.filterKeys)
-	return keys
+	return c.transactionCalls
 }
 
 // anyVectorArg matches pgvector.Vector arguments in
@@ -298,6 +292,38 @@ func newTestService(
 	return s, mock, db
 }
 
+func expectPGVectorSessionCleanup(
+	mock sqlmock.Sqlmock,
+	operation string,
+	userKey *session.UserKey,
+) {
+	execPattern := "DELETE FROM"
+	if operation == "UPDATE" {
+		execPattern = "UPDATE .* SET deleted_at"
+	}
+	mock.ExpectExec(execPattern).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	for _, table := range []string{
+		"session_events", "session_track_events", "session_summaries",
+	} {
+		query := mock.ExpectQuery(
+			"SELECT DISTINCT app_name, user_id, session_id FROM " + table,
+		)
+		if userKey == nil {
+			query.WithArgs(sqlmock.AnyArg())
+		} else {
+			query.WithArgs(
+				sqlmock.AnyArg(), userKey.AppName, userKey.UserID,
+			)
+		}
+		query.WillReturnRows(sqlmock.NewRows(
+			[]string{"app_name", "user_id", "session_id"},
+		))
+		mock.ExpectExec(execPattern).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+}
+
 // mockSummarizer satisfies summary.SessionSummarizer.
 type mockSummarizer struct{}
 
@@ -427,16 +453,18 @@ func TestNewService_AsyncSummaryWorkerHonorsDispatchPolicy(
 		return recordingClient, nil
 	})
 
+	summarizer := &activeSummarizer{text: "worker summary"}
 	svc, err := NewService(
 		WithEmbedder(&mockEmbedder{dimensions: defaultIndexDimension}),
-		WithSummarizer(&activeSummarizer{text: "worker summary"}),
+		WithSummarizer(summarizer),
 		WithAsyncSummaryNum(1),
 		WithSkipDBInit(true),
 		WithCascadeFullSessionSummary(false),
 		WithSummaryFilterAllowlist("tool-usage"),
 	)
 	require.NoError(t, err)
-
+	// This test isolates summary dispatch. Its recording client intentionally
+	// counts, but does not execute, transaction callbacks.
 	sess := session.NewSession("app", "user", "sess")
 	sess.Events = []event.Event{
 		{
@@ -460,9 +488,15 @@ func TestNewService_AsyncSummaryWorkerHonorsDispatchPolicy(
 	require.NoError(t, svc.EnqueueSummaryJob(
 		context.Background(), sess, "tool-usage", true,
 	))
+	require.Eventually(t, func() bool {
+		sess.SummariesMu.RLock()
+		defer sess.SummariesMu.RUnlock()
+		_, allowed := sess.Summaries["tool-usage"]
+		_, blocked := sess.Summaries["blocked"]
+		return recordingClient.transactionCount() == 1 && allowed && !blocked
+	}, time.Second, time.Millisecond)
 	require.NoError(t, svc.Close())
-	require.Equal(t, []string{"tool-usage"},
-		recordingClient.persistedFilterKeys())
+	require.Equal(t, 1, recordingClient.transactionCount())
 }
 
 func TestValidateEmbedderDimensions_UnknownDimension(t *testing.T) {
@@ -1958,10 +1992,12 @@ func TestUpdateSessionState_SessionNotFound(
 	}
 
 	// Return no rows => session not found.
-	mock.ExpectQuery("SELECT state FROM").
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(
-			sqlmock.NewRows([]string{"state"}),
+			sqlmock.NewRows([]string{"state", "expires_at"}),
 		)
+	mock.ExpectRollback()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -1985,13 +2021,15 @@ func TestUpdateSessionState_Success(t *testing.T) {
 	}
 	stateBytes, _ := json.Marshal(sessState)
 
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow(stateBytes)
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2009,8 +2047,10 @@ func TestUpdateSessionState_QueryError(t *testing.T) {
 		AppName: "app", UserID: "user", SessionID: "sess",
 	}
 
-	mock.ExpectQuery("SELECT state FROM").
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnError(fmt.Errorf("db error"))
+	mock.ExpectRollback()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2034,13 +2074,15 @@ func TestUpdateSessionState_UpdateError(t *testing.T) {
 	}
 	stateBytes, _ := json.Marshal(sessState)
 
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow(stateBytes)
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnError(fmt.Errorf("update fail"))
+	mock.ExpectRollback()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2057,10 +2099,12 @@ func TestUpdateSessionState_InvalidJSON(t *testing.T) {
 		AppName: "app", UserID: "user", SessionID: "sess",
 	}
 
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow([]byte(`{invalid json`))
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow([]byte(`{invalid json`), nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
+	mock.ExpectRollback()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2211,12 +2255,7 @@ func TestCleanupExpiredData_SoftDelete(t *testing.T) {
 	s.opts.softDelete = true
 
 	mock.ExpectBegin()
-	// 4 tables with sessionTTL: states, events, tracks,
-	// summaries.
-	for i := 0; i < 4; i++ {
-		mock.ExpectExec("UPDATE .* SET deleted_at").
-			WillReturnResult(sqlmock.NewResult(0, 0))
-	}
+	expectPGVectorSessionCleanup(mock, "UPDATE", nil)
 	mock.ExpectCommit()
 
 	s.cleanupExpiredData(context.Background(), nil)
@@ -2233,10 +2272,7 @@ func TestCleanupExpiredData_HardDelete(t *testing.T) {
 	s.opts.softDelete = false
 
 	mock.ExpectBegin()
-	for i := 0; i < 4; i++ {
-		mock.ExpectExec("DELETE FROM").
-			WillReturnResult(sqlmock.NewResult(0, 0))
-	}
+	expectPGVectorSessionCleanup(mock, "DELETE", nil)
 	mock.ExpectCommit()
 
 	s.cleanupExpiredData(context.Background(), nil)
@@ -2257,12 +2293,7 @@ func TestCleanupExpiredData_WithUserKey(t *testing.T) {
 	}
 
 	mock.ExpectBegin()
-	// 4 tables with sessionTTL (app_states excluded
-	// for user-scoped cleanup).
-	for i := 0; i < 4; i++ {
-		mock.ExpectExec("UPDATE .* SET deleted_at").
-			WillReturnResult(sqlmock.NewResult(0, 0))
-	}
+	expectPGVectorSessionCleanup(mock, "UPDATE", userKey)
 	mock.ExpectCommit()
 
 	s.cleanupExpiredData(
@@ -2321,13 +2352,15 @@ func TestUpdateSessionState_WithTTL(t *testing.T) {
 	}
 	stateBytes, _ := json.Marshal(sessState)
 
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow(stateBytes)
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2431,13 +2464,15 @@ func TestUpdateSessionState_NilValueInState(
 	}
 	stateBytes, _ := json.Marshal(sessState)
 
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow(stateBytes)
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow(stateBytes, nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -2459,10 +2494,7 @@ func TestCleanupExpired_CallsCleanupExpiredData(
 	s.opts.softDelete = true
 
 	mock.ExpectBegin()
-	for i := 0; i < 4; i++ {
-		mock.ExpectExec("UPDATE .* SET deleted_at").
-			WillReturnResult(sqlmock.NewResult(0, 0))
-	}
+	expectPGVectorSessionCleanup(mock, "UPDATE", nil)
 	mock.ExpectCommit()
 
 	s.cleanupExpired()
@@ -2479,10 +2511,9 @@ func TestCleanupExpiredForUser(t *testing.T) {
 	s.opts.softDelete = true
 
 	mock.ExpectBegin()
-	for i := 0; i < 4; i++ {
-		mock.ExpectExec("UPDATE .* SET deleted_at").
-			WillReturnResult(sqlmock.NewResult(0, 0))
-	}
+	expectPGVectorSessionCleanup(mock, "UPDATE", &session.UserKey{
+		AppName: "app", UserID: "user",
+	})
 	mock.ExpectCommit()
 
 	s.cleanupExpiredForUser(
@@ -2503,13 +2534,15 @@ func TestUpdateSessionState_EmptyState(t *testing.T) {
 	}
 
 	// Return empty state bytes.
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow([]byte("{}"))
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow([]byte("{}"), nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
@@ -4530,10 +4563,7 @@ func TestCleanupExpiredData_HardDelete_UserScoped(
 	}
 
 	mock.ExpectBegin()
-	for i := 0; i < 4; i++ {
-		mock.ExpectExec("DELETE FROM").
-			WillReturnResult(sqlmock.NewResult(0, 0))
-	}
+	expectPGVectorSessionCleanup(mock, "DELETE", userKey)
 	mock.ExpectCommit()
 
 	s.cleanupExpiredData(
@@ -4554,8 +4584,8 @@ func TestCleanupExpiredData_AllTTLs(t *testing.T) {
 	s.opts.softDelete = true
 
 	mock.ExpectBegin()
-	// 4 session tables + app_states + user_states = 6.
-	for i := 0; i < 6; i++ {
+	expectPGVectorSessionCleanup(mock, "UPDATE", nil)
+	for i := 0; i < 2; i++ {
 		mock.ExpectExec("UPDATE .* SET deleted_at").
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -4896,13 +4926,15 @@ func TestUpdateSessionState_EmptyStateBytes(
 	}
 
 	// Return empty state bytes (not nil, not JSON).
-	rows := sqlmock.NewRows([]string{"state"}).
-		AddRow([]byte{})
-	mock.ExpectQuery("SELECT state FROM").
+	rows := sqlmock.NewRows([]string{"state", "expires_at"}).
+		AddRow([]byte{}, nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
 		WillReturnRows(rows)
 
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	err := s.UpdateSessionState(
 		context.Background(), key,
