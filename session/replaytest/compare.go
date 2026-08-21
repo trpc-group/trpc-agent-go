@@ -74,6 +74,9 @@ func CompareSnapshots(input CompareInput) ([]Difference, error) {
 
 func compareSnapshots(input CompareInput, rules *allowedDiffTracker) ([]Difference, error) {
 	options := input.Options
+	if math.IsNaN(options.ScoreTolerance) || math.IsInf(options.ScoreTolerance, 0) {
+		return nil, fmt.Errorf("score tolerance must be finite")
+	}
 	if options.ScoreTolerance <= 0 {
 		options.ScoreTolerance = defaultScoreTolerance
 	}

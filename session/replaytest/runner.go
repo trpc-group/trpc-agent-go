@@ -472,6 +472,9 @@ func parallelDependencies(operations []Operation) (map[string]chan struct{}, err
 	if err := validateParallelStateMutations(operations, dependencies); err != nil {
 		return nil, err
 	}
+	if err := validateParallelOrderedSessionAppends(operations, dependencies); err != nil {
+		return nil, err
+	}
 	return done, nil
 }
 
@@ -545,6 +548,82 @@ func collectStateMutations(operation Operation, mutations map[stateMutationRef]s
 			collectStateMutations(child, mutations)
 		}
 	}
+}
+
+type orderedSessionAppendRef struct {
+	sessionID  string
+	collection string
+}
+
+func validateParallelOrderedSessionAppends(
+	operations []Operation,
+	dependencies map[string][]string,
+) error {
+	appends := make([]map[orderedSessionAppendRef]struct{}, len(operations))
+	for i, operation := range operations {
+		appends[i] = operationOrderedSessionAppends(operation)
+	}
+	for i := 0; i < len(operations); i++ {
+		for j := i + 1; j < len(operations); j++ {
+			if parallelOperationsOrdered(operations[i], operations[j], dependencies) {
+				continue
+			}
+			overlap := overlappingOrderedSessionAppends(appends[i], appends[j])
+			if len(overlap) > 0 {
+				ref := overlap[0]
+				return fmt.Errorf(
+					"parallel append operations for session %q collection %q must be ordered with dependencies",
+					ref.sessionID, ref.collection,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func operationOrderedSessionAppends(operation Operation) map[orderedSessionAppendRef]struct{} {
+	appends := make(map[orderedSessionAppendRef]struct{})
+	collectOrderedSessionAppends(operation, appends)
+	return appends
+}
+
+func collectOrderedSessionAppends(
+	operation Operation,
+	appends map[orderedSessionAppendRef]struct{},
+) {
+	switch operation.Kind {
+	case OperationAppendEvent:
+		appends[orderedSessionAppendRef{
+			sessionID: operation.SessionID, collection: "events",
+		}] = struct{}{}
+	case OperationAppendTrack:
+		appends[orderedSessionAppendRef{
+			sessionID: operation.SessionID, collection: "track:" + operation.TrackName,
+		}] = struct{}{}
+	case OperationParallel:
+		for _, child := range operation.Parallel {
+			collectOrderedSessionAppends(child, appends)
+		}
+	}
+}
+
+func overlappingOrderedSessionAppends(
+	left map[orderedSessionAppendRef]struct{},
+	right map[orderedSessionAppendRef]struct{},
+) []orderedSessionAppendRef {
+	refs := make([]orderedSessionAppendRef, 0)
+	for ref := range left {
+		if _, exists := right[ref]; exists {
+			refs = append(refs, ref)
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].sessionID != refs[j].sessionID {
+			return refs[i].sessionID < refs[j].sessionID
+		}
+		return refs[i].collection < refs[j].collection
+	})
+	return refs
 }
 
 func parallelOperationsOrdered(

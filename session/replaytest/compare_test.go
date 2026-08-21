@@ -11,6 +11,7 @@ package replaytest
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -642,6 +643,27 @@ func TestCompareSnapshotsUsesAbsoluteScoreTolerance(t *testing.T) {
 	}
 	if len(differences) == 0 {
 		t.Fatal("score difference beyond tolerance was not detected")
+	}
+}
+
+func TestCompareSnapshotsRejectsNonFiniteScoreTolerance(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		tolerance float64
+	}{
+		{name: "positive infinity", tolerance: math.Inf(1)},
+		{name: "negative infinity", tolerance: math.Inf(-1)},
+		{name: "nan", tolerance: math.NaN()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := CompareSnapshots(CompareInput{
+				Case: "score", Backend: "sqlite",
+				Options: CompareOptions{ScoreTolerance: test.tolerance},
+			})
+			if err == nil || !strings.Contains(err.Error(), "score tolerance must be finite") {
+				t.Fatalf("CompareSnapshots() error = %v, want finite tolerance rejection", err)
+			}
+		})
 	}
 }
 

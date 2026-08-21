@@ -424,6 +424,34 @@ func TestRunnerRejectsInvalidCasesBeforeCreatingFixtures(t *testing.T) {
 			want: `parallel state operations for session "session" key "status" must be ordered`,
 		},
 		{
+			name: "parallel unordered event appends",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					appendEvent("event-1", "user", "one", 1),
+					appendEvent("event-2", "assistant", "two", 2),
+				},
+			}}}},
+			want: `parallel append operations for session "session-1" collection "events" must be ordered`,
+		},
+		{
+			name: "parallel unordered track appends",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					{
+						Kind: OperationAppendTrack, SessionID: "session",
+						TrackName: "tools", TrackEvent: &TrackEventSnapshot{EventType: "started"},
+					},
+					{
+						Kind: OperationAppendTrack, SessionID: "session",
+						TrackName: "tools", TrackEvent: &TrackEventSnapshot{EventType: "completed"},
+					},
+				},
+			}}}},
+			want: `parallel append operations for session "session" collection "track:tools" must be ordered`,
+		},
+		{
 			name: "reserved state prefix",
 			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
 				Kind: OperationUpdateState, SessionID: "session",
@@ -512,6 +540,38 @@ func TestRunnerAllowsOrderedParallelStateMutations(t *testing.T) {
 	}
 }
 
+func TestRunnerAllowsIndependentParallelSessionAppends(t *testing.T) {
+	fixture := &fakeFixture{name: "inmemory", capabilities: allCapabilities()}
+	runner := Runner{Backends: []Backend{fakeBackend("inmemory", fixture)}}
+	report, err := runner.Run(context.Background(), []ReplayCase{{
+		Name: "independent-appends",
+		Operations: []Operation{{
+			Kind: OperationParallel,
+			Parallel: []Operation{
+				appendEventForSession("session-1", "event-1", "user", "one", 1),
+				appendEventForSession("session-2", "event-2", "assistant", "two", 2),
+				{
+					Kind: OperationAppendTrack, SessionID: "session-1",
+					TrackName: "tool-a", TrackEvent: &TrackEventSnapshot{EventType: "started"},
+				},
+				{
+					Kind: OperationAppendTrack, SessionID: "session-1",
+					TrackName: "tool-b", TrackEvent: &TrackEventSnapshot{EventType: "completed"},
+				},
+			},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+	if len(report.Differences) != 0 {
+		t.Fatalf("Runner.Run() differences = %#v", report.Differences)
+	}
+	if got := fixture.operationCount(); got != 4 {
+		t.Fatalf("operation count = %d, want 4", got)
+	}
+}
+
 func TestRunnerContinuesAfterExpectedFailure(t *testing.T) {
 	const expectedAppliedOperations = 1
 	fixture := &fakeFixture{name: "inmemory", capabilities: allCapabilities()}
@@ -546,7 +606,7 @@ func TestExecuteOperationIsolatesFixtureInput(t *testing.T) {
 	fault.ExpectFailure = true
 	faultAfter := fault
 	faultAfter.FailurePoint = FailureAfterWrite
-	second := appendEvent("event-2", "assistant", "second", 2)
+	second := appendEventForSession("session-2", "event-2", "assistant", "second", 2)
 	second.Event.Extensions = map[string]any{"nested": map[string]any{"value": "second"}}
 	parallel := Operation{Kind: OperationParallel, Parallel: []Operation{normal, second}}
 	for _, test := range []struct {
@@ -624,8 +684,8 @@ func TestExecuteParallelCancellationReleasesReadyBarrier(t *testing.T) {
 	cancel()
 	fixture := &fakeFixture{name: "inmemory", capabilities: allCapabilities()}
 	operations := []Operation{
-		namedOperation(appendEvent("event-1", "user", "one", 1), "one"),
-		namedOperation(appendEvent("event-2", "assistant", "two", 2), "two"),
+		namedOperation(appendEventForSession("session-1", "event-1", "user", "one", 1), "one"),
+		namedOperation(appendEventForSession("session-2", "event-2", "assistant", "two", 2), "two"),
 	}
 	err := executeParallel(ctx, fixture, operations)
 	if !errors.Is(err, context.Canceled) {
