@@ -10,6 +10,7 @@
 package mysql
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -208,6 +209,17 @@ func TestWithSkipDBInit(t *testing.T) {
 	assert.False(t, opts.skipDBInit)
 }
 
+func TestWithStateInitialization(t *testing.T) {
+	opts := defaultOptions
+	assert.True(t, opts.stateInitializationEnabled)
+
+	WithStateInitialization(false)(&opts)
+	assert.False(t, opts.stateInitializationEnabled)
+
+	WithStateInitialization(true)(&opts)
+	assert.True(t, opts.stateInitializationEnabled)
+}
+
 func TestWithTablePrefix(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -248,6 +260,20 @@ func TestWithTablePrefix_Invalid(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestValidateMySQLTableNames(t *testing.T) {
+	t.Run("28-character prefix remains valid", func(t *testing.T) {
+		opts := defaultOptions
+		opts.tablePrefix = strings.Repeat("a", 28)
+		require.NoError(t, validateMySQLTableNames(opts))
+	})
+
+	t.Run("expanded table name over 64 characters is rejected", func(t *testing.T) {
+		opts := defaultOptions
+		opts.tablePrefix = strings.Repeat("a", 50)
+		require.ErrorContains(t, validateMySQLTableNames(opts), "table name too long")
+	})
 }
 
 func TestMultipleOptions(t *testing.T) {

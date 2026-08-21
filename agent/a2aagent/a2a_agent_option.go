@@ -349,9 +349,9 @@ func WithEnableStreaming(enable bool) Option {
 
 // WithRequireAnonymousIdentityCoordination controls fail-closed anonymous
 // identity initialization. When enabled, a first anonymous request requires a
-// stable persistent session key and a session service that implements
-// session.StateInitializationService. Existing valid cookie state can still be
-// used without coordination. The default is false.
+// stable persistent session key and a session service that provides an
+// available session.StateInitializationService. Existing valid cookie state
+// can still be used without coordination. The default is false.
 func WithRequireAnonymousIdentityCoordination(enabled bool) Option {
 	return func(a *A2AAgent) {
 		a.requireAnonymousIdentityCoordination = enabled

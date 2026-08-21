@@ -33,7 +33,20 @@ const (
 			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
-			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
+			deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+			state_initialization_active TINYINT NULL DEFAULT NULL
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+
+	sqlCreateStateInitializationLeasesTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+			coordination_key BINARY(32) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			owner_token CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+			session_row_id BIGINT NOT NULL,
+			session_created_at TIMESTAMP(6) NOT NULL,
+			expires_at TIMESTAMP(6) NOT NULL,
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 
 	sqlCreateSessionEventsTable = `
@@ -116,6 +129,21 @@ const (
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
+	// session_states: enforce one active row while coordinated initialization is enabled.
+	sqlCreateSessionStatesStateInitializationActiveIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(app_name, user_id, session_id, state_initialization_active)`
+
+	// state_initialization_leases: unique index on (coordination_key, user_id)
+	sqlCreateStateInitializationLeasesUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(coordination_key, user_id)`
+
+	// state_initialization_leases: TTL index on (expires_at)
+	sqlCreateStateInitializationLeasesExpiresIndex = `
+		CREATE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(expires_at)`
+
 	// session_events: lookup index on (app_name, user_id, session_id, created_at)
 	sqlCreateSessionEventsLookupIndex = `
 		CREATE INDEX {{INDEX_NAME}}
@@ -171,6 +199,26 @@ const (
 //   - Using 192 would be 4 * 192 * 4 = 3072 bytes, which is exactly on the
 //     boundary and may cause issues in some MySQL versions.
 const mysqlVarCharIndexPrefixLen = 191
+
+// mysqlMaxIdentifierLength is the maximum length of a MySQL index identifier.
+// Index names are scoped to their table, so an overlong prefixed name can be
+// replaced with the same short name derived from the base table without
+// colliding with indexes on another prefixed table.
+const mysqlMaxIdentifierLength = 64
+
+// buildMySQLIndexName preserves the canonical prefixed index name whenever it
+// fits MySQL's identifier limit. For longer prefixes, it falls back to a
+// deterministic table-scoped name instead of truncating or hashing the prefix.
+// The fallback keeps the table and suffix, so different indexes on the same
+// table remain distinct while indexes on different prefixed tables remain
+// isolated by MySQL's table-local index namespace.
+func buildMySQLIndexName(prefix, tableName, suffix string) string {
+	indexName := sqldb.BuildIndexName(prefix, tableName, suffix)
+	if len(indexName) <= mysqlMaxIdentifierLength {
+		return indexName
+	}
+	return sqldb.BuildIndexName("", tableName, suffix)
+}
 
 // session_summaries: unique index on (app_name, user_id, session_id, filter_key).
 // Note: This index does NOT include deleted_at because MySQL treats NULL != NULL,
@@ -234,6 +282,27 @@ type tableSchema struct {
 	indexes []tableIndex
 }
 
+// validateMySQLTableNames checks the fully expanded table names before any
+// client is created or schema SQL is executed. The prefix itself may be valid
+// while a prefixed table exceeds MySQL's 64-character table-name limit.
+func validateMySQLTableNames(opts ServiceOpts) error {
+	tables := tableDefs
+	if opts.tdsqlSharding {
+		tables = tdsqlTableDefs
+	}
+	if !opts.stateInitializationEnabled {
+		tables = withoutStateInitializationLeaseTable(tables)
+	}
+
+	for _, tableDef := range tables {
+		fullTableName := sqldb.BuildTableName(opts.tablePrefix, tableDef.name)
+		if err := sqldb.ValidateTableName(fullTableName); err != nil {
+			return fmt.Errorf("invalid expanded table name %q: %w", fullTableName, err)
+		}
+	}
+	return nil
+}
+
 // expectedSchema defines the expected schema for each table.
 var expectedSchema = map[string]tableSchema{
 	sqldb.TableNameSessionStates: {
@@ -247,10 +316,28 @@ var expectedSchema = map[string]tableSchema{
 			{"updated_at", "timestamp", false},
 			{"expires_at", "timestamp", true},
 			{"deleted_at", "timestamp", true},
+			{stateInitializationActiveColumn, "tinyint", true},
 		},
 		indexes: []tableIndex{
 			{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, []string{"app_name", "user_id", "session_id", "deleted_at"}, true},
+			{sqldb.TableNameSessionStates, stateInitializationActiveIndex, []string{"app_name", "user_id", "session_id", stateInitializationActiveColumn}, true},
 			{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
+		},
+	},
+	tableNameStateInitializationLeases: {
+		columns: []tableColumn{
+			{"id", "bigint", false},
+			{"coordination_key", "binary", false},
+			{"user_id", "varchar", false},
+			{"owner_token", "char", false},
+			{"session_row_id", "bigint", false},
+			{"session_created_at", "timestamp", false},
+			{"expires_at", "timestamp", false},
+			{"updated_at", "timestamp", false},
+		},
+		indexes: []tableIndex{
+			{tableNameStateInitializationLeases, stateInitializationLeaseIndexUniq, []string{"coordination_key", "user_id"}, true},
+			{tableNameStateInitializationLeases, stateInitializationLeaseIndexExp, []string{"expires_at"}, false},
 		},
 	},
 	sqldb.TableNameSessionEvents: {
@@ -363,6 +450,7 @@ var tdsqlExpectedSchema = func() map[string]tableSchema {
 // Global table definitions
 var tableDefs = []tableDefinition{
 	{sqldb.TableNameSessionStates, sqlCreateSessionStatesTable},
+	{tableNameStateInitializationLeases, sqlCreateStateInitializationLeasesTable},
 	{sqldb.TableNameSessionEvents, sqlCreateSessionEventsTable},
 	{sqldb.TableNameSessionTrackEvents, sqlCreateSessionTrackEventsTable},
 	{sqldb.TableNameSessionSummaries, sqlCreateSessionSummariesTable},
@@ -374,6 +462,8 @@ var tableDefs = []tableDefinition{
 var indexDefs = []indexDefinition{
 	// Unique indexes
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, sqlCreateSessionStatesUniqueIndex},
+	{sqldb.TableNameSessionStates, stateInitializationActiveIndex, sqlCreateSessionStatesStateInitializationActiveIndex},
+	{tableNameStateInitializationLeases, stateInitializationLeaseIndexUniq, sqlCreateStateInitializationLeasesUniqueIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, sqlCreateSessionSummariesUniqueIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, sqlCreateAppStatesUniqueIndex},
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
@@ -384,6 +474,7 @@ var indexDefs = []indexDefinition{
 
 	// TTL indexes
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, sqlCreateSessionStatesExpiresIndex},
+	{tableNameStateInitializationLeases, stateInitializationLeaseIndexExp, sqlCreateStateInitializationLeasesExpiresIndex},
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
 	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, sqlCreateSessionTracksExpiresIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, sqlCreateSessionSummariesExpiresIndex},
@@ -404,6 +495,20 @@ const (
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
 			deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+			state_initialization_active TINYINT NULL DEFAULT NULL,
+			PRIMARY KEY (id, user_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
+
+	tdsqlCreateStateInitializationLeasesTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			id BIGINT NOT NULL AUTO_INCREMENT,
+			coordination_key BINARY(32) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			owner_token CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+			session_row_id BIGINT NOT NULL,
+			session_created_at TIMESTAMP(6) NOT NULL,
+			expires_at TIMESTAMP(6) NOT NULL,
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 			PRIMARY KEY (id, user_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
 
@@ -492,6 +597,7 @@ const (
 
 var tdsqlTableDefs = []tableDefinition{
 	{sqldb.TableNameSessionStates, tdsqlCreateSessionStatesTable},
+	{tableNameStateInitializationLeases, tdsqlCreateStateInitializationLeasesTable},
 	{sqldb.TableNameSessionEvents, tdsqlCreateSessionEventsTable},
 	{sqldb.TableNameSessionTrackEvents, tdsqlCreateSessionTrackEventsTable},
 	{sqldb.TableNameSessionSummaries, tdsqlCreateSessionSummariesTable},
@@ -502,6 +608,8 @@ var tdsqlTableDefs = []tableDefinition{
 var tdsqlIndexDefs = []indexDefinition{
 	// Unique indexes (same as MySQL, shardkey already in UNIQUE KEYs)
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, sqlCreateSessionStatesUniqueIndex},
+	{sqldb.TableNameSessionStates, stateInitializationActiveIndex, sqlCreateSessionStatesStateInitializationActiveIndex},
+	{tableNameStateInitializationLeases, stateInitializationLeaseIndexUniq, sqlCreateStateInitializationLeasesUniqueIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, tdsqlCreateSessionSummariesUniqueIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, sqlCreateAppStatesUniqueIndex},
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
@@ -515,6 +623,7 @@ var tdsqlIndexDefs = []indexDefinition{
 
 	// TTL indexes (same as MySQL)
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, sqlCreateSessionStatesExpiresIndex},
+	{tableNameStateInitializationLeases, stateInitializationLeaseIndexExp, sqlCreateStateInitializationLeasesExpiresIndex},
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
 	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, sqlCreateSessionTracksExpiresIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, sqlCreateSessionSummariesExpiresIndex},
@@ -549,6 +658,10 @@ func (s *Service) initDB(ctx context.Context) error {
 		tables = tdsqlTableDefs
 		indexes = tdsqlIndexDefs
 		log.InfoContext(ctx, "TDSQL sharding mode enabled, using TDSQL schema")
+	}
+	if !s.opts.stateInitializationEnabled {
+		tables = withoutStateInitializationLeaseTable(tables)
+		indexes = withoutStateInitializationIndexes(indexes)
 	}
 
 	// Group index definitions by their table so a freshly created table can be
@@ -608,7 +721,7 @@ func (s *Service) createTableWithIndexes(
 
 	// Create the table's indexes as part of the same first-time bootstrap.
 	for _, indexDef := range indexes {
-		indexName := sqldb.BuildIndexName(s.opts.tablePrefix, indexDef.table, indexDef.suffix)
+		indexName := buildMySQLIndexName(s.opts.tablePrefix, indexDef.table, indexDef.suffix)
 		indexSQL := strings.ReplaceAll(indexDef.template, "{{TABLE_NAME}}", fullTableName)
 		indexSQL = strings.ReplaceAll(indexSQL, "{{INDEX_NAME}}", indexName)
 
@@ -640,11 +753,18 @@ func (s *Service) verifySchema(ctx context.Context) error {
 		tables = tdsqlTableDefs
 		schemas = tdsqlExpectedSchema
 	}
+	if !s.opts.stateInitializationEnabled {
+		tables = withoutStateInitializationLeaseTable(tables)
+	}
 	for _, tableDef := range tables {
 		tableName := tableDef.name
 		schema, ok := schemas[tableName]
 		if !ok {
 			continue
+		}
+		if tableName == sqldb.TableNameSessionStates &&
+			!s.opts.stateInitializationEnabled {
+			schema = withoutStateInitializationSessionRequirements(schema)
 		}
 		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableName)
 
@@ -670,6 +790,156 @@ func (s *Service) verifySchema(ctx context.Context) error {
 		}
 	}
 
+	if s.opts.stateInitializationEnabled {
+		if err := s.verifyStateInitializationActiveRows(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func withoutStateInitializationSessionRequirements(schema tableSchema) tableSchema {
+	filtered := tableSchema{
+		columns: make([]tableColumn, 0, len(schema.columns)),
+		indexes: make([]tableIndex, 0, len(schema.indexes)),
+	}
+	for _, column := range schema.columns {
+		if column.name != stateInitializationActiveColumn {
+			filtered.columns = append(filtered.columns, column)
+		}
+	}
+	for _, index := range schema.indexes {
+		if index.suffix != stateInitializationActiveIndex {
+			filtered.indexes = append(filtered.indexes, index)
+		}
+	}
+	return filtered
+}
+
+func withoutStateInitializationLeaseTable(
+	tables []tableDefinition,
+) []tableDefinition {
+	filtered := make([]tableDefinition, 0, len(tables))
+	for _, table := range tables {
+		if table.name != tableNameStateInitializationLeases {
+			filtered = append(filtered, table)
+		}
+	}
+	return filtered
+}
+
+func withoutStateInitializationIndexes(
+	indexes []indexDefinition,
+) []indexDefinition {
+	filtered := make([]indexDefinition, 0, len(indexes))
+	for _, index := range indexes {
+		if index.table != tableNameStateInitializationLeases &&
+			!(index.table == sqldb.TableNameSessionStates &&
+				index.suffix == stateInitializationActiveIndex) {
+			filtered = append(filtered, index)
+		}
+	}
+	return filtered
+}
+
+func (s *Service) verifyStateInitializationSchema(ctx context.Context) error {
+	schemas := expectedSchema
+	if s.opts.tdsqlSharding {
+		schemas = tdsqlExpectedSchema
+	}
+	leaseSchema := schemas[tableNameStateInitializationLeases]
+	requirements := []struct {
+		table   string
+		columns []tableColumn
+		indexes []tableIndex
+	}{
+		{
+			table: s.tableSessionStates,
+			columns: []tableColumn{
+				{"created_at", "timestamp", false},
+				{stateInitializationActiveColumn, "tinyint", true},
+			},
+			indexes: []tableIndex{
+				{
+					table:  sqldb.TableNameSessionStates,
+					suffix: stateInitializationActiveIndex,
+					columns: []string{
+						"app_name", "user_id", "session_id",
+						stateInitializationActiveColumn,
+					},
+					unique: true,
+				},
+			},
+		},
+		{
+			table:   s.tableStateInitializationLeases,
+			columns: leaseSchema.columns,
+			indexes: leaseSchema.indexes,
+		},
+	}
+	for _, requirement := range requirements {
+		exists, err := s.tableExists(ctx, requirement.table)
+		if err != nil {
+			return fmt.Errorf(
+				"check table %s existence failed: %w",
+				requirement.table,
+				err,
+			)
+		}
+		if !exists {
+			return fmt.Errorf("table %s does not exist", requirement.table)
+		}
+		if err := s.verifyColumns(
+			ctx,
+			requirement.table,
+			requirement.columns,
+		); err != nil {
+			return fmt.Errorf(
+				"verify columns for table %s failed: %w",
+				requirement.table,
+				err,
+			)
+		}
+		if len(requirement.indexes) > 0 {
+			if err := s.verifyIndexes(
+				ctx,
+				requirement.table,
+				requirement.indexes,
+			); err != nil {
+				return fmt.Errorf(
+					"verify indexes for table %s failed: %w",
+					requirement.table,
+					err,
+				)
+			}
+		}
+	}
+	return s.verifyStateInitializationActiveRows(ctx)
+}
+
+func (s *Service) verifyStateInitializationActiveRows(ctx context.Context) error {
+	var inconsistent bool
+	err := s.mysqlClient.QueryRow(
+		ctx,
+		[]any{&inconsistent},
+		fmt.Sprintf(`SELECT EXISTS (
+			SELECT 1 FROM %s
+			WHERE (deleted_at IS NULL AND
+				(state_initialization_active IS NULL OR state_initialization_active <> 1))
+			OR (deleted_at IS NOT NULL AND state_initialization_active IS NOT NULL)
+		)`,
+			s.tableSessionStates,
+		),
+	)
+	if err != nil {
+		return fmt.Errorf("verify state initialization active rows: %w", err)
+	}
+	if inconsistent {
+		return fmt.Errorf(
+			"state initialization requires a consistent active-row marker; found inconsistent rows in %s",
+			s.tableSessionStates,
+		)
+	}
 	return nil
 }
 
@@ -734,6 +1004,7 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 
 	var timestampMismatches []string
 	var timestampAlterClauses []string
+	var stateInitializationTimestampMismatches []string
 
 	// Check each expected column
 	for _, expected := range expectedColumns {
@@ -756,6 +1027,14 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 				}
 				timestampMismatches = append(timestampMismatches, fmt.Sprintf("%s uses %s", expected.name, actualType))
 				timestampAlterClauses = append(timestampAlterClauses, alterTimestampPrecisionClause(expected))
+				if s.opts.stateInitializationEnabled &&
+					((tableName == s.tableSessionStates && expected.name == "created_at") ||
+						tableName == s.tableStateInitializationLeases) {
+					stateInitializationTimestampMismatches = append(
+						stateInitializationTimestampMismatches,
+						fmt.Sprintf("%s.%s uses %s", tableName, expected.name, actualType),
+					)
+				}
 			}
 		}
 
@@ -779,6 +1058,12 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 			strings.Join(timestampAlterClauses, ", "),
 		)
 	}
+	if len(stateInitializationTimestampMismatches) > 0 {
+		return fmt.Errorf(
+			"state initialization requires TIMESTAMP(6): %s",
+			strings.Join(stateInitializationTimestampMismatches, ", "),
+		)
+	}
 
 	return nil
 }
@@ -788,7 +1073,7 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 	// Build map of expected index names
 	expectedIndexNames := make(map[string]bool)
 	for _, expected := range expectedIndexes {
-		expectedIndexName := sqldb.BuildIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
+		expectedIndexName := buildMySQLIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
 		expectedIndexNames[expectedIndexName] = true
 	}
 
@@ -842,7 +1127,7 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		if summaryUniqueCompatible && isSummaryUniqueIndex(expected) {
 			continue
 		}
-		expectedIndexName := sqldb.BuildIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
+		expectedIndexName := buildMySQLIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
 		actualColumns, exists := actualIndexes[expectedIndexName]
 		if !exists {
 			// Build CREATE INDEX statement for user reference.
@@ -955,7 +1240,7 @@ func (s *Service) compatibleSummaryIndex(
 		return "", false, nil
 	}
 
-	canonicalName := sqldb.BuildIndexName(
+	canonicalName := buildMySQLIndexName(
 		s.opts.tablePrefix,
 		sqldb.TableNameSessionSummaries,
 		sqldb.IndexSuffixUniqueActive,

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,8 @@ import (
 
 var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
+var _ session.StateInitializationService = (*Service)(nil)
+var _ session.StateInitializationAvailability = (*Service)(nil)
 
 var errSessionNotFound = errors.New("session not found")
 
@@ -53,17 +56,25 @@ type Service struct {
 	asyncWorker     *isummary.AsyncSummaryWorker // async summary worker
 	cleanupTicker   *time.Ticker                 // ticker for automatic cleanup
 	cleanupDone     chan struct{}                // signal to stop cleanup routine
+	cleanupCancel   context.CancelFunc           // cancel in-flight cleanup work
 	cleanupOnce     sync.Once                    // ensure cleanup routine is stopped only once
+	cleanupWg       sync.WaitGroup               // wait for cleanup routine to exit
 	persistWg       sync.WaitGroup               // wait group for persist workers
 	once            sync.Once
 
+	stateInitializationLeaseTTL      time.Duration
+	stateInitializationRenewInterval time.Duration
+	stateInitializationPollMin       time.Duration
+	stateInitializationPollMax       time.Duration
+
 	// Table names with prefix applied
-	tableSessionStates    string
-	tableSessionEvents    string
-	tableSessionTracks    string
-	tableSessionSummaries string
-	tableAppStates        string
-	tableUserStates       string
+	tableSessionStates             string
+	tableSessionEvents             string
+	tableSessionTracks             string
+	tableSessionSummaries          string
+	tableAppStates                 string
+	tableUserStates                string
+	tableStateInitializationLeases string
 }
 
 type sessionEventPair struct {
@@ -83,6 +94,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := defaultOptions
 	for _, option := range options {
 		option(&opts)
+	}
+	if err := validateMySQLTableNames(opts); err != nil {
+		return nil, err
 	}
 
 	// Create MySQL client
@@ -110,26 +124,45 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	tableSessionSummaries := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionSummaries)
 	tableAppStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameAppStates)
 	tableUserStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameUserStates)
+	tableStateInitializationLeases := sqldb.BuildTableName(
+		opts.tablePrefix,
+		tableNameStateInitializationLeases,
+	)
 
 	// Create service
 	s := &Service{
-		opts:                  opts,
-		mysqlClient:           mysqlClient,
-		tableSessionStates:    tableSessionStates,
-		tableSessionEvents:    tableSessionEvents,
-		tableSessionTracks:    tableSessionTracks,
-		tableSessionSummaries: tableSessionSummaries,
-		tableAppStates:        tableAppStates,
-		tableUserStates:       tableUserStates,
+		opts:                             opts,
+		mysqlClient:                      mysqlClient,
+		stateInitializationLeaseTTL:      defaultStateInitializationLeaseTTL,
+		stateInitializationRenewInterval: defaultStateInitializationRenewInterval,
+		stateInitializationPollMin:       defaultStateInitializationPollMin,
+		stateInitializationPollMax:       defaultStateInitializationPollMax,
+		tableSessionStates:               tableSessionStates,
+		tableSessionEvents:               tableSessionEvents,
+		tableSessionTracks:               tableSessionTracks,
+		tableSessionSummaries:            tableSessionSummaries,
+		tableAppStates:                   tableAppStates,
+		tableUserStates:                  tableUserStates,
+		tableStateInitializationLeases:   tableStateInitializationLeases,
 	}
 
-	// Initialize database if needed
+	// Initialize or verify the database schema as configured.
 	if !opts.skipDBInit {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := s.initDB(ctx); err != nil {
 			_ = mysqlClient.Close()
 			return nil, fmt.Errorf("init database failed: %w", err)
+		}
+	} else if opts.stateInitializationEnabled {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s.verifyStateInitializationSchema(ctx); err != nil {
+			_ = mysqlClient.Close()
+			return nil, fmt.Errorf(
+				"verify state initialization schema failed: %w",
+				err,
+			)
 		}
 	}
 
@@ -154,9 +187,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		s.asyncWorker.Start()
 	}
 
-	// Start cleanup routine if any TTL is configured
+	// Start cleanup for TTL data and abandoned initialization leases.
 	if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 ||
-		opts.effectiveTrackEventTTL() > 0 {
+		opts.effectiveTrackEventTTL() > 0 || opts.stateInitializationEnabled {
 		s.startCleanupRoutine()
 	}
 
@@ -296,22 +329,40 @@ func (s *Service) CreateSession(
 	// Insert or update session state
 	// If expired session exists, overwrite it; events/summaries will be filtered by created_at when reading
 	if sessionExists {
-		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(
-				`UPDATE %s SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL
+		updateSQL := fmt.Sprintf(
+			`UPDATE %s SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+			s.tableSessionStates,
+		)
+		if s.opts.stateInitializationEnabled {
+			updateSQL = fmt.Sprintf(
+				`UPDATE %s SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL,
+				state_initialization_active = 1
 				WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 				s.tableSessionStates,
-			),
+			)
+		}
+		_, err = s.mysqlClient.Exec(ctx,
+			updateSQL,
 			string(sessBytes), sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID,
 		)
 	} else {
-		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(
-				`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		insertSQL := fmt.Sprintf(
+			`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			s.tableSessionStates,
+		)
+		if s.opts.stateInitializationEnabled {
+			insertSQL = fmt.Sprintf(
+				`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at,
+				state_initialization_active)
+				VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
 				s.tableSessionStates,
-			),
+			)
+		}
+		_, err = s.mysqlClient.Exec(ctx,
+			insertSQL,
 			key.AppName, key.UserID, key.SessionID, string(sessBytes),
 			sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
 		)
@@ -862,7 +913,7 @@ func (s *Service) startAsyncPersistWorker() {
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
 					log.ErrorfContext(
 						ctx,
-						"async persist event failed: %w",
+						"async persist event failed: %v",
 						err,
 					)
 				}
@@ -894,7 +945,7 @@ func (s *Service) startAsyncPersistWorker() {
 				if err := s.addTrackEvent(ctx, trackEventPair.key, trackEventPair.event); err != nil {
 					log.ErrorfContext(
 						ctx,
-						"async persist event failed: %w",
+						"async persist event failed: %v",
 						err,
 					)
 				}
@@ -914,8 +965,12 @@ func (s *Service) startCleanupRoutine() {
 
 	s.cleanupTicker = time.NewTicker(interval)
 	s.cleanupDone = make(chan struct{})
+	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
+	s.cleanupCancel = cleanupCancel
+	s.cleanupWg.Add(1)
 
 	go func() {
+		defer s.cleanupWg.Done()
 		log.InfofContext(
 			context.Background(),
 			"started cleanup routine for mysql session service "+
@@ -925,7 +980,10 @@ func (s *Service) startCleanupRoutine() {
 		for {
 			select {
 			case <-s.cleanupTicker.C:
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				if cleanupCtx.Err() != nil {
+					return
+				}
+				ctx, cancel := context.WithTimeout(cleanupCtx, 5*time.Minute)
 				s.cleanupExpiredData(ctx)
 				cancel()
 			case <-s.cleanupDone:
@@ -945,15 +1003,26 @@ func (s *Service) stopCleanupRoutine() {
 		if s.cleanupTicker != nil {
 			s.cleanupTicker.Stop()
 		}
+		if s.cleanupCancel != nil {
+			s.cleanupCancel()
+		}
 		if s.cleanupDone != nil {
 			close(s.cleanupDone)
 		}
 	})
+	s.cleanupWg.Wait()
 }
 
 // cleanupExpiredData cleans up expired session states, events, summaries, and app/user states.
 func (s *Service) cleanupExpiredData(ctx context.Context) {
 	now := time.Now()
+	if s.opts.stateInitializationEnabled {
+		if s.opts.tdsqlSharding {
+			s.tdsqlCleanupExpiredStateInitializationLeases(ctx)
+		} else {
+			s.cleanupExpiredStateInitializationLeases(ctx)
+		}
+	}
 
 	// Clean up expired sessions
 	if s.opts.sessionTTL > 0 {
@@ -982,6 +1051,101 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 			s.tdsqlCleanupExpiredUserStates(ctx, now)
 		} else {
 			s.cleanupExpiredUserStates(ctx, now)
+		}
+	}
+}
+
+func (s *Service) cleanupExpiredStateInitializationLeases(
+	ctx context.Context,
+) {
+	result, err := s.mysqlClient.Exec(
+		ctx,
+		fmt.Sprintf(`DELETE FROM %s
+			WHERE expires_at <= CURRENT_TIMESTAMP(6)
+			LIMIT 1000`, s.tableStateInitializationLeases),
+	)
+	if err != nil {
+		log.ErrorfContext(
+			ctx,
+			"cleanup expired state initialization leases failed: %v",
+			err,
+		)
+		return
+	}
+	deleted, err := result.RowsAffected()
+	if err == nil && deleted > 0 {
+		log.InfofContext(
+			ctx,
+			"cleaned up %d expired state initialization leases",
+			deleted,
+		)
+	}
+}
+
+func (s *Service) tdsqlCleanupExpiredStateInitializationLeases(
+	ctx context.Context,
+) {
+	type leaseID struct {
+		id     int64
+		userID string
+	}
+	var leases []leaseID
+	err := s.mysqlClient.Query(
+		ctx,
+		func(rows *sql.Rows) error {
+			var lease leaseID
+			if err := rows.Scan(&lease.id, &lease.userID); err != nil {
+				return err
+			}
+			leases = append(leases, lease)
+			return nil
+		},
+		fmt.Sprintf(`SELECT id, user_id FROM %s
+			WHERE expires_at <= CURRENT_TIMESTAMP(6)
+			LIMIT 1000`, s.tableStateInitializationLeases),
+	)
+	if err != nil {
+		log.ErrorfContext(
+			ctx,
+			"tdsql cleanup: scan expired state initialization leases failed: %v",
+			err,
+		)
+		return
+	}
+	grouped := make(map[string][]int64)
+	for _, lease := range leases {
+		grouped[lease.userID] = append(grouped[lease.userID], lease.id)
+	}
+	userIDs := make([]string, 0, len(grouped))
+	for userID := range grouped {
+		userIDs = append(userIDs, userID)
+	}
+	sort.Strings(userIDs)
+	for _, userID := range userIDs {
+		ids := grouped[userID]
+		placeholders := make([]string, len(ids))
+		args := make([]any, 0, len(ids)+1)
+		for i, id := range ids {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		args = append(args, userID)
+		_, err := s.mysqlClient.Exec(
+			ctx,
+			fmt.Sprintf(`DELETE FROM %s
+				WHERE id IN (%s) AND user_id = ?
+				AND expires_at <= CURRENT_TIMESTAMP(6)`,
+				s.tableStateInitializationLeases,
+				strings.Join(placeholders, ","),
+			),
+			args...,
+		)
+		if err != nil {
+			log.ErrorfContext(
+				ctx,
+				"tdsql cleanup: delete expired state initialization leases failed: %v",
+				err,
+			)
 		}
 	}
 }
@@ -1133,8 +1297,12 @@ func (s *Service) softDeleteSessions(
 	now time.Time,
 ) error {
 	// Soft delete session states
+	stateSetClause := "deleted_at = ?"
+	if s.opts.stateInitializationEnabled {
+		stateSetClause += ", state_initialization_active = NULL"
+	}
 	_, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionStates, stateWhereClause),
+		fmt.Sprintf(`UPDATE %s SET %s WHERE %s`, s.tableSessionStates, stateSetClause, stateWhereClause),
 		append([]any{now}, stateArgs...)...)
 	if err != nil {
 		return fmt.Errorf("soft delete sessions: %w", err)
