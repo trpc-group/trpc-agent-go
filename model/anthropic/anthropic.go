@@ -471,6 +471,8 @@ func modelNameMatches(modelName string, targets ...string) bool {
 //   - System prompt: always cached when cacheSystemPrompt is true (stable across turns)
 //   - Tools: always cached when cacheTools is true (stable across turns)
 //   - Last assistant message: cached when cacheMessages is true (opt-in, benefits multi-turn)
+//   - Last tool-result message: cached when cacheMessages is true, so a turn's tool
+//     output enters the cache in the request that carries it rather than the next one
 func (m *Model) applyCacheControl(
 	systemPrompts []anthropic.TextBlockParam,
 	tools []anthropic.ToolUnionParam,
@@ -483,7 +485,11 @@ func (m *Model) applyCacheControl(
 		tools = m.applyCacheControlToTools(tools)
 	}
 	if m.cacheMessages && len(messages) > 1 {
-		if idx := m.findLastAssistantMessageIndex(messages); idx >= 0 {
+		lastAssistant := m.findLastAssistantMessageIndex(messages)
+		if lastAssistant >= 0 {
+			messages = m.applyCacheControlToMessages(messages, lastAssistant)
+		}
+		if idx := m.findLastToolResultMessageIndex(messages, lastAssistant); idx >= 0 {
 			messages = m.applyCacheControlToMessages(messages, idx)
 		}
 	}
@@ -502,6 +508,46 @@ func (m *Model) findLastAssistantMessageIndex(messages []anthropic.MessageParam)
 		}
 	}
 	return -1
+}
+
+// findLastToolResultMessageIndex finds the newest message that carries nothing but
+// tool results, searching only past minIndex (the last-assistant breakpoint, or -1
+// when there is none). convertMessages merges contiguous tool results into a single
+// user message, so the match is the whole of the latest turn's tool output.
+//
+// It exists because the last-assistant breakpoint alone makes every tool result
+// cross the cache boundary twice: it is sent uncached in the request that carries
+// it, then written to the cache in the following request once the breakpoint moves
+// past it. Marking it here writes it once, in the request that first sends it.
+// Anything after this point — a trailing note the caller appends per request — is
+// still left outside the cached prefix.
+//
+// The second breakpoint also halves the distance between consecutive cache entries,
+// which matters because a breakpoint only looks back a bounded number of content
+// blocks to find the previous one: one wide parallel-tool turn can otherwise put
+// the previous entry out of range and silently re-write the whole conversation.
+func (m *Model) findLastToolResultMessageIndex(messages []anthropic.MessageParam, minIndex int) int {
+	for i := len(messages) - 1; i > minIndex; i-- {
+		if isToolResultMessage(messages[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+// isToolResultMessage reports whether every content block of a message is a tool
+// result, which is the shape convertMessages produces when it merges a turn's tool
+// results together.
+func isToolResultMessage(message anthropic.MessageParam) bool {
+	if len(message.Content) == 0 {
+		return false
+	}
+	for _, block := range message.Content {
+		if block.OfToolResult == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // applyCacheControlToMessages adds cache control to a specific message.
