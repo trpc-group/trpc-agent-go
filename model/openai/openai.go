@@ -71,6 +71,10 @@ const (
 	defaultKimiBaseURL string = "https://api.moonshot.ai/v1"
 	kimiAPIHost        string = "api.moonshot.ai"
 	kimiCNAPIHost      string = "api.moonshot.cn"
+
+	//nolint:gosec
+	litellmAPIKeyName     string = "LITELLM_API_KEY"
+	defaultLiteLLMBaseURL string = "http://localhost:4000/v1"
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -95,6 +99,12 @@ const (
 	VariantMiniMax Variant = "minimax"
 	// VariantKimi is the Kimi OpenAI-compatible variant.
 	VariantKimi Variant = "kimi"
+	// VariantLiteLLM is the LiteLLM OpenAI-compatible variant. LiteLLM is an AI
+	// gateway that exposes 100+ LLM providers behind a single OpenAI-compatible
+	// API. It defaults to the local LiteLLM proxy endpoint and reads the
+	// LITELLM_API_KEY environment variable; override WithBaseURL to target a
+	// remote proxy.
+	VariantLiteLLM Variant = "litellm"
 )
 
 // thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
@@ -397,6 +407,21 @@ var variantConfigs = map[Variant]variantConfig{
 		thinkingEnabledKey:        thinkingKey,
 		thinkingValueConvertor:    thinkingTypeValueConvertor,
 	},
+	// LiteLLM is an OpenAI-compatible gateway, so it reuses the default OpenAI
+	// request/response behavior and only overrides the credential env var and
+	// the default (local proxy) base URL.
+	VariantLiteLLM: {
+		fileUploadPath:            "/openapi/v1/files",
+		filePurpose:               openai.FilePurposeUserData,
+		fileDeletionMethod:        http.MethodDelete,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		apiKeyName:                litellmAPIKeyName,
+		defaultBaseURL:            defaultLiteLLMBaseURL,
+		thinkingEnabledKey:        model.ThinkingEnabledKey,
+		thinkingValueConvertor:    defaultThinkingValueConvertor,
+		defaultOptimizeForCache:   true,
+	},
 }
 
 // Model implements the model.Model interface for OpenAI API.
@@ -574,6 +599,32 @@ func (m *Model) Info() model.Info {
 		Name:          m.name,
 		ContextWindow: m.contextWindow,
 	}
+}
+
+// ListModels returns the model IDs advertised by the configured
+// OpenAI-compatible endpoint via GET /v1/models. This is primarily useful for
+// gateways such as a LiteLLM proxy, where the served models are defined by the
+// proxy's own config rather than known ahead of time. When discovery fails or
+// returns nothing, the configured model name is returned as a single-element
+// fallback so callers always have something usable.
+func (m *Model) ListModels(ctx context.Context) ([]string, error) {
+	page, err := m.client.Models.List(ctx)
+	if err != nil {
+		if m.name != "" {
+			return []string{m.name}, nil
+		}
+		return nil, fmt.Errorf("openai: list models: %w", err)
+	}
+	ids := make([]string, 0, len(page.Data))
+	for _, md := range page.Data {
+		if md.ID != "" {
+			ids = append(ids, md.ID)
+		}
+	}
+	if len(ids) == 0 && m.name != "" {
+		return []string{m.name}, nil
+	}
+	return ids, nil
 }
 
 func (m *Model) runChatRequestCallback(
