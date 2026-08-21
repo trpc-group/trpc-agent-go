@@ -283,6 +283,9 @@ func TestDefaultEventConverterStreamingBranches(t *testing.T) {
 			update.Artifact.Parts[1].TextContent() != "answer" {
 			t.Fatalf("text update = %#v", update)
 		}
+		if update.Append == nil || !*update.Append {
+			t.Fatalf("partial update append = %v, want true", update.Append)
+		}
 	})
 
 	t.Run("final message", func(t *testing.T) {
@@ -303,6 +306,9 @@ func TestDefaultEventConverterStreamingBranches(t *testing.T) {
 		if len(update.Artifact.Parts) != 1 ||
 			update.Artifact.Parts[0].TextContent() != "final" {
 			t.Fatalf("final update = %#v", update)
+		}
+		if update.Append == nil || *update.Append {
+			t.Fatalf("final update append = %v, want false", update.Append)
 		}
 	})
 }
