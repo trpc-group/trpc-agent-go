@@ -2,7 +2,7 @@
 
 > **说明**
 >
-> 本文档定义了 trpc-agent-go 框架内部对 A2A 协议的扩展实现规范。普通用户在使用 A2A Client/Server 时无需关注此文档内容，框架已自动处理所有协议转换细节。仅当您需要开发非 trpc-agent-go 的 A2A Client/Server 对接本框架时，才需参考此规范。
+> 本文档定义 tRPC-Agent-Go 旧版与 v1 A2A 包共享的扩展实现规范。普通用户无需关注，框架会自动完成转换；只有开发非 tRPC-Agent-Go 的 Client 或 Server 并需要与这些扩展互通时才需参考，具体版本的承载方式见下文。
 
 ## 背景
 
@@ -31,7 +31,22 @@
 
 > 完整的 A2A 协议规范请参考：https://a2a-protocol.org/latest/specification/
 >
-> 框架使用指南请参考：[A2A 集成指南](a2a.md)
+> 框架使用请参考 [A2A v0.2.x 集成指南](a2a.md) 或 [A2A v1.0 接入与迁移指南](a2a_v1.md)。
+
+---
+
+## 协议版本适用范围
+
+`trpc-a2a-version` extension、交互规范版本 `0.1`，以及 `interaction_spec_version`、`type`、`thought`、`object_type`、`llm_response_id`、`state_delta` 等共享 metadata key 会同时用于两代包，但 wire carrier 不同：
+
+| 契约范围 | A2A v0.2.x 包 | A2A v1.0 包 |
+|---|---|---|
+| Agent Card 声明 | `AgentCard.capabilities.extensions` | `AgentCard.capabilities.extensions` |
+| 请求版本 | Message metadata | Message metadata |
+| 扩展事件数据 | 旧版 `TextPart`、`DataPart` 和流式 envelope | 统一 Part metadata，以及 Message、Artifact 和 Task update event metadata |
+| operation 名称 | `message/send` 等小写斜杠形式 method | `SendMessage`、`SubscribeToTask` 等 v1 operation |
+
+除非章节明确说明 v1，本文后续的 JSON 结构、具体 Part 类型、method 名和流式 envelope 都是 v0.2.x wire 示例；metadata key 定义仍是两代包共享的互操作契约。
 
 ---
 
