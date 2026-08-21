@@ -62,6 +62,7 @@ const (
 type usageDetails struct {
 	Input              int64 `json:"input,omitempty"`
 	Output             int64 `json:"output,omitempty"`
+	Total              int64 `json:"total,omitempty"`
 	InputCached        int64 `json:"input_cached,omitempty"`
 	InputCacheRead     int64 `json:"input_cache_read,omitempty"`
 	InputCacheCreation int64 `json:"input_cache_creation,omitempty"`
@@ -73,6 +74,8 @@ func (u *usageDetails) empty() bool {
 }
 
 // normalized returns mutually exclusive usage buckets as required by Langfuse.
+// Provider total semantics differ once cache usage is split into separate
+// buckets, so omit total in that case and let Langfuse derive it.
 //
 // OpenAI-compatible and Gemini providers report cached tokens as a subset of
 // input tokens. Anthropic and Bedrock report cache reads and cache creation as
@@ -82,11 +85,15 @@ func (u usageDetails) normalized() usageDetails {
 	if u.InputCacheRead != 0 || u.InputCacheCreation != 0 {
 		// Prefer provider-specific buckets and drop the duplicate compatibility alias.
 		u.InputCached = 0
+		u.Total = 0
 		return u
 	}
 
 	// Langfuse flat usage details must not overlap. Keep cached input in its own
 	// bucket and convert the inclusive provider input count to the uncached remainder.
+	if u.InputCached != 0 {
+		u.Total = 0
+	}
 	u.Input = max(u.Input-u.InputCached, 0)
 	return u
 }
