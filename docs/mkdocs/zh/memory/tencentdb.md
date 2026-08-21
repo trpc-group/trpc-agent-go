@@ -277,9 +277,11 @@ Service、Team、Agent、User 隔离；L2/L3 在相同 Service、Team、Agent
 和云端服务仍需提供 API key。
 
 启用 V3 后，`memSvc.Tools()` 会包含 `tdai_read_scenario`，用于读取 scene
-navigation 选中的 L2 文件。Recall 最多注入 100 个非空路径和 8 KiB navigation
-文本；场景文件最多返回 16 KiB，截断时内容以 `...[truncated]` 结尾，且
-`truncated` 为 `true`。
+navigation 选中的 L2 文件。L1/L2/L3 自动 recall 的完整载荷最多为 24 KiB，
+其中 L1 atomic 和 L3 core 各自最多占 8 KiB；scene navigation 最多注入
+100 个非空路径和 8 KiB 文本。Recall 某一段被截断时会保留闭合标签，并以
+`...[truncated]` 标记省略内容。场景文件最多返回 16 KiB，截断时也会包含该标记，
+且 `truncated` 为 `true`。
 
 `ContextOffloadConfig` 只控制 Go adapter 的 gateway 对接。offload 层级、
 状态、存储、TTL 和隔离由 TencentDB Agent Memory gateway 负责。Go adapter

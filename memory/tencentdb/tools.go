@@ -13,7 +13,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	memorypkg "trpc.group/trpc-go/trpc-agent-go/memory"
@@ -344,21 +343,7 @@ func formatV3ScenarioEntries(items []v3ScenarioEntry) (string, int) {
 }
 
 func truncateV3ScenarioContent(content string) (string, bool) {
-	if len(content) <= maxV3ScenarioContentBytes {
-		return content, false
-	}
-	limit := maxV3ScenarioContentBytes - len(v3TruncationMarker)
-	end := 0
-	for offset := 0; offset < len(content); {
-		_, size := utf8.DecodeRuneInString(content[offset:])
-		next := offset + size
-		if next > limit {
-			break
-		}
-		end = next
-		offset = next
-	}
-	return content[:end] + v3TruncationMarker, true
+	return truncateV3UTF8Bytes(content, maxV3ScenarioContentBytes)
 }
 
 func (s *Service) newReadOffloadRefTool(name string) tool.CallableTool {

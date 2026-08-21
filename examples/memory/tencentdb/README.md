@@ -307,10 +307,12 @@ Key points:
   isolation fields; use distinct service, team, or agent identities when
   applications must not share memory.
 - V3 adds `tdai_read_scenario` to `memSvc.Tools()` so the agent can read L2
-  content in the configured service/team/agent scope. Recall injects at most
-  100 non-empty scenario paths and 8 KiB of navigation text. Scenario reads
-  return at most 16 KiB and mark shortened content with `...[truncated]` and
-  `truncated: true`.
+  content in the configured service/team/agent scope. The complete L1/L2/L3
+  automatic recall payload is capped at 24 KiB, with 8 KiB caps for both the
+  L1 atomic and L3 core sections. Recall injects at most 100 non-empty scenario
+  paths and 8 KiB of navigation text. Shortened recall sections preserve their
+  closing tags and include `...[truncated]`. Scenario reads return at most 16 KiB
+  and mark shortened content with `...[truncated]` and `truncated: true`.
 - `EndSession` waits for queued capture in both modes. It additionally calls
   `/session/end` only for Legacy gateways because V3 has no remote equivalent.
   It is not a V3 long-term extraction barrier; use an explicit delay or gateway

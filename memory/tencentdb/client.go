@@ -715,32 +715,48 @@ func buildV3RecallResponse(
 	systemParts := make([]string, 0, 2)
 	var prependContext string
 	memoryCount := 0
+	remaining := maxV3RecallContextBytes
 	if atomicData != nil && len(atomicData.Items) > 0 {
-		prependContext = "<relevant-memories>\n" +
-			formatV3AtomicItems(atomicData.Items) +
-			"\n</relevant-memories>"
-		memoryCount += len(atomicData.Items)
+		prependContext = formatV3RecallSection(
+			"relevant-memories",
+			formatV3AtomicItems(atomicData.Items),
+			min(maxV3AtomicRecallSectionBytes, remaining),
+		)
+		if prependContext != "" {
+			remaining -= len(prependContext)
+			memoryCount += len(atomicData.Items)
+		}
 	}
 	if coreData != nil {
 		if content := strings.TrimSpace(coreData.Content); content != "" {
 			// L3 core is shared by the service/team/agent, not a per-user profile.
-			systemParts = append(
+			var added bool
+			systemParts, remaining, added = appendV3RecallSystemSection(
 				systemParts,
-				"<agent-core>\n"+content+"\n</agent-core>",
+				remaining,
+				"agent-core",
+				content,
+				maxV3CoreRecallSectionBytes,
 			)
-			memoryCount++
+			if added {
+				memoryCount++
+			}
 		}
 	}
 	if scenarioData != nil && len(scenarioData.Entries) > 0 {
 		context, count := formatV3ScenarioEntries(scenarioData.Entries)
 		if context != "" {
-			systemParts = append(
+			var added bool
+			systemParts, remaining, added = appendV3RecallSystemSection(
 				systemParts,
-				"<scene-navigation>\n"+
-					context+
-					"\n</scene-navigation>",
+				remaining,
+				"scene-navigation",
+				context,
+				remaining,
 			)
-			memoryCount += count
+			if added {
+				memoryCount += count
+			}
 		}
 	}
 	return &recallResponse{

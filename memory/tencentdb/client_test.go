@@ -1055,3 +1055,45 @@ func TestV3FormattingSkipsEmptyValues(t *testing.T) {
 	assert.Empty(t, formatV3Timestamp(0))
 	assert.True(t, strings.Contains(formatV3Timestamp(1), "1970-01-01"))
 }
+
+func TestBuildV3RecallResponseBoundsCompleteContext(t *testing.T) {
+	t.Run("oversized core", func(t *testing.T) {
+		rsp := buildV3RecallResponse(nil, nil, &v3CoreFile{
+			Content: strings.Repeat("界", maxV3CoreRecallSectionBytes),
+		})
+		assert.LessOrEqual(t, len(rsp.AppendSystemContext), maxV3CoreRecallSectionBytes)
+		assert.True(t, utf8.ValidString(rsp.AppendSystemContext))
+		assert.Contains(t, rsp.AppendSystemContext, v3TruncationMarker)
+		assert.Contains(t, rsp.AppendSystemContext, "</agent-core>")
+	})
+
+	t.Run("combined sources", func(t *testing.T) {
+		scenarioSectionBytes := maxV3RecallContextBytes -
+			maxV3AtomicRecallSectionBytes -
+			maxV3CoreRecallSectionBytes - 2
+		scenarioContentBytes := scenarioSectionBytes -
+			len("<scene-navigation>\n") -
+			len("\n</scene-navigation>")
+		firstPathBytes := scenarioContentBytes -
+			len(v3TruncationMarker) - len("- ")
+		require.Positive(t, firstPathBytes)
+
+		rsp := buildV3RecallResponse(
+			&v3AtomicSearchData{Items: []v3AtomicSearchHit{{
+				Content: strings.Repeat("a", maxV3RecallContextBytes),
+			}}},
+			&v3ScenarioListData{Entries: []v3ScenarioEntry{
+				{Path: strings.Repeat("s", firstPathBytes)},
+				{Path: strings.Repeat("overflow", maxV3ScenarioNavigationBytes)},
+			}},
+			&v3CoreFile{Content: strings.Repeat("c", maxV3RecallContextBytes)},
+		)
+		combined := rsp.PrependContext + rsp.AppendSystemContext
+		assert.Len(t, combined, maxV3RecallContextBytes)
+		assert.Equal(t, 3, strings.Count(combined, v3TruncationMarker))
+		assert.Contains(t, rsp.PrependContext, "</relevant-memories>")
+		assert.Contains(t, rsp.AppendSystemContext, "</agent-core>")
+		assert.Contains(t, rsp.AppendSystemContext, "</scene-navigation>")
+		assert.Equal(t, 3, rsp.MemoryCount)
+	})
+}
