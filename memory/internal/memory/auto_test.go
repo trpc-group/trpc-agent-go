@@ -739,14 +739,14 @@ func TestAutoMemoryWorker_ExecuteOperation_Errors(t *testing.T) {
 		op.addErr = errors.New("add error")
 		worker := &AutoMemoryWorker{operator: op}
 
-		// Should not panic.
-		worker.executeOperation(context.Background(), memory.UserKey{
+		err := worker.executeOperation(context.Background(), memory.UserKey{
 			AppName: "test-app",
 			UserID:  "user-1",
 		}, &extractor.Operation{
 			Type:   extractor.OperationAdd,
 			Memory: "Test memory.",
 		})
+		require.ErrorContains(t, err, "add error")
 	})
 
 	t.Run("update error", func(t *testing.T) {
@@ -754,8 +754,7 @@ func TestAutoMemoryWorker_ExecuteOperation_Errors(t *testing.T) {
 		op.updateErr = errors.New("update error")
 		worker := &AutoMemoryWorker{operator: op}
 
-		// Should not panic.
-		worker.executeOperation(context.Background(), memory.UserKey{
+		err := worker.executeOperation(context.Background(), memory.UserKey{
 			AppName: "test-app",
 			UserID:  "user-1",
 		}, &extractor.Operation{
@@ -763,6 +762,7 @@ func TestAutoMemoryWorker_ExecuteOperation_Errors(t *testing.T) {
 			MemoryID: "mem-123",
 			Memory:   "Updated memory.",
 		})
+		require.ErrorContains(t, err, "update error")
 	})
 
 	t.Run("delete error", func(t *testing.T) {
@@ -770,15 +770,31 @@ func TestAutoMemoryWorker_ExecuteOperation_Errors(t *testing.T) {
 		op.deleteErr = errors.New("delete error")
 		worker := &AutoMemoryWorker{operator: op}
 
-		// Should not panic.
-		worker.executeOperation(context.Background(), memory.UserKey{
+		err := worker.executeOperation(context.Background(), memory.UserKey{
 			AppName: "test-app",
 			UserID:  "user-1",
 		}, &extractor.Operation{
 			Type:     extractor.OperationDelete,
 			MemoryID: "mem-456",
 		})
+		require.ErrorContains(t, err, "delete error")
 	})
+
+	t.Run("clear error", func(t *testing.T) {
+		op := newMockOperator()
+		op.clearErr = errors.New("clear error")
+		worker := &AutoMemoryWorker{operator: op}
+
+		err := worker.executeOperation(context.Background(), memory.UserKey{
+			AppName: "test-app",
+			UserID:  "user-1",
+		}, &extractor.Operation{Type: extractor.OperationClear})
+		require.ErrorContains(t, err, "clear error")
+	})
+
+	require.Error(t, (&AutoMemoryWorker{}).executeOperation(
+		context.Background(), memory.UserKey{}, nil,
+	))
 }
 
 func TestAutoMemoryWorker_ExecuteOperation_DisabledByEnabledTools(t *testing.T) {
@@ -2280,7 +2296,7 @@ func TestCreateAutoMemory_AssistantPrefixDoesNotBypassReconcile(t *testing.T) {
 	assert.Equal(t, 0, op.updateCalls)
 }
 
-func TestReconcileOps_AssistantPrefixUsesNormalCandidateOrdering(t *testing.T) {
+func TestReconcileOps_DoesNotOverwriteAssistantEpisode(t *testing.T) {
 	ext := &mockAssistantExtractor{mockExtractor: &mockExtractor{}}
 	op := newMockOperator()
 	op.searchResults = []*memory.Entry{
@@ -2307,9 +2323,7 @@ func TestReconcileOps_AssistantPrefixUsesNormalCandidateOrdering(t *testing.T) {
 		Topics: []string{"work"},
 	}})
 
-	require.Len(t, out, 1)
-	assert.Equal(t, extractor.OperationUpdate, out[0].Type)
-	assert.Equal(t, "assistant-existing", out[0].MemoryID)
+	assert.Empty(t, out)
 }
 
 func TestAutoMemoryWorker_DoesNotUseMetadataAsAssistantConfiguration(t *testing.T) {
@@ -2604,6 +2618,81 @@ func TestReconcileOps_RewriteAsUpdateOnMidSignal(t *testing.T) {
 	assert.Equal(t, "Lives in Portland Oregon", out[0].Memory)
 }
 
+func TestReconcileOps_KeepsLossyCriticalValueRewrite(t *testing.T) {
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID: "reservation",
+		Memory: &memory.Memory{
+			Memory: "Dinner reservation is for 8 people at 7 PM.",
+		},
+		Score: 0.97,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(),
+		[]*extractor.Operation{{
+			Type:   extractor.OperationAdd,
+			Memory: "Dinner reservation is at 7 PM.",
+		}},
+	)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+}
+
+func TestReconcileOps_KeepsChangedRelationships(t *testing.T) {
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID: "material-choice",
+		Memory: &memory.Memory{
+			Memory: "Uses steel for strength and wood for cost.",
+		},
+		Score: 0.97,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(),
+		[]*extractor.Operation{{
+			Type:   extractor.OperationAdd,
+			Memory: "Uses steel for cost and wood for strength.",
+		}},
+	)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+}
+
+func TestReconcileOps_KeepsEpisodesWithDifferentEventTimes(t *testing.T) {
+	storedTime := time.Date(2023, 6, 17, 0, 0, 0, 0, time.UTC)
+	freshTime := time.Date(2023, 6, 3, 0, 0, 0, 0, time.UTC)
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID: "mem-bbq",
+		Memory: &memory.Memory{
+			Memory:    "Attended a BBQ at a friend's house on June 17",
+			Kind:      memory.KindEpisode,
+			EventTime: &storedTime,
+		},
+		Score: 0.95,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(),
+		[]*extractor.Operation{{
+			Type:       extractor.OperationAdd,
+			Memory:     "Attended a BBQ at a colleague's house on June 3",
+			MemoryKind: memory.KindEpisode,
+			EventTime:  &freshTime,
+		}},
+	)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+}
+
 // TestReconcileOps_KeepsOpWhenNotSimilar verifies that unrelated facts
 // are passed through unchanged so reconcile never collapses distinct
 // memories into a single row.
@@ -2865,7 +2954,7 @@ func TestReconcileOps_PrefersHigherTierCandidate(t *testing.T) {
 			ID:      "mem-strong",
 			AppName: "app", UserID: "u1",
 			Memory: &memory.Memory{
-				Memory: "completely different wording here",
+				Memory: "foo bar baz quux",
 				Topics: []string{"x"},
 			},
 			Score: 0.95,

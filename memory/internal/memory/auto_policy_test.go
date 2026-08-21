@@ -300,7 +300,7 @@ func TestCooperatingDecoratorPreservesUpdatePolicy(t *testing.T) {
 	}
 }
 
-func TestUpdatePolicies_KeepOperationFailuresBestEffort(t *testing.T) {
+func TestUpdatePolicies_ReportOperationFailuresAfterBestEffort(t *testing.T) {
 	for _, policy := range []extractor.UpdatePolicy{
 		extractor.UpdatePolicyMergeSimilar,
 		extractor.UpdatePolicyPreserveHistory,
@@ -323,14 +323,14 @@ func TestUpdatePolicies_KeepOperationFailuresBestEffort(t *testing.T) {
 				[]model.Message{model.NewUserMessage("I like tea and coffee.")},
 			)
 
-			require.NoError(t, err)
+			require.ErrorIs(t, err, assert.AnError)
 			assert.Equal(t, 2, operator.attempts)
 			assert.Equal(t, 1, operator.addCalls)
 		})
 	}
 }
 
-func TestUpdatePolicies_PersistenceFailureAdvancesWatermark(t *testing.T) {
+func TestUpdatePolicies_PersistenceFailureRetriesWithoutAdvancingWatermark(t *testing.T) {
 	for _, policy := range []extractor.UpdatePolicy{
 		extractor.UpdatePolicyMergeSimilar,
 		extractor.UpdatePolicyPreserveHistory,
@@ -350,14 +350,16 @@ func TestUpdatePolicies_PersistenceFailureAdvancesWatermark(t *testing.T) {
 			first := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
 			appendSessionMessage(sess, first, model.NewUserMessage("I like tea and coffee."))
 
-			require.NoError(t, worker.EnqueueJob(context.Background(), sess))
-			assert.True(t, readLastExtractAt(sess).Equal(first))
+			require.ErrorIs(t,
+				worker.EnqueueJob(context.Background(), sess), assert.AnError)
+			assert.True(t, readLastExtractAt(sess).IsZero())
 			assert.Equal(t, 2, operator.attempts)
 			assert.Equal(t, 1, operator.addCalls)
 
 			require.NoError(t, worker.EnqueueJob(context.Background(), sess))
-			assert.Equal(t, 2, operator.attempts)
-			assert.Equal(t, 1, operator.addCalls)
+			assert.True(t, readLastExtractAt(sess).Equal(first))
+			assert.Equal(t, 4, operator.attempts)
+			assert.Equal(t, 3, operator.addCalls)
 		})
 	}
 }

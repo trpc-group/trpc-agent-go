@@ -32,9 +32,6 @@ const (
 )
 
 var (
-	criticalValuePattern = regexp.MustCompile(
-		`(?i)\b[0-9]+(?:[.:/-][0-9]+)*\b|(?:\bnot\b|\bno\b|\bnever\b|\bwithout\b|n't|不再|不是|没有|从未|未|无)`,
-	)
 	changeMarkerPattern = regexp.MustCompile(
 		`(?i)(?:\bnow\b|\bcurrently\b|\bno longer\b|\binstead\b|\bchanged?\b|\bused to\b|现在|目前|不再|改为|变成|而是|曾经)`,
 	)
@@ -284,26 +281,11 @@ func classifyPreserveHistoryCandidate(
 			newCoverage: 1,
 		}
 	}
-	if !metadataIdentityCompatible(op, entry.Memory) {
+	if !memoryReplacementPreservesStored(op, entry.Memory) {
 		return nil
 	}
 	oldCoverage, newCoverage := directionalTokenCoverage(entry.Memory.Memory, op.Memory)
 	if oldCoverage < preserveHistoryOldCoverage || newCoverage < preserveHistoryNewCoverage {
-		return nil
-	}
-	if !materialTokensPreserved(entry.Memory.Memory, op.Memory) {
-		return nil
-	}
-	if !criticalValuesPreserved(entry.Memory.Memory, op.Memory) {
-		return nil
-	}
-	if negationSignature(entry.Memory.Memory) != negationSignature(op.Memory) {
-		return nil
-	}
-	if changeMarkerPattern.MatchString(op.Memory) && !changeMarkerPattern.MatchString(entry.Memory.Memory) {
-		return nil
-	}
-	if !preservesMaterialTokenOrder(entry.Memory.Memory, op.Memory) {
 		return nil
 	}
 	return &preserveHistoryCandidate{
@@ -311,6 +293,32 @@ func classifyPreserveHistoryCandidate(
 		oldCoverage: oldCoverage,
 		newCoverage: newCoverage,
 	}
+}
+
+func memoryReplacementPreservesStored(
+	op *extractor.Operation,
+	stored *memory.Memory,
+) bool {
+	if op == nil || stored == nil || !metadataIdentityCompatible(op, stored) {
+		return false
+	}
+	if !materialTokensPreserved(stored.Memory, op.Memory) {
+		return false
+	}
+	if !criticalValuesPreserved(stored.Memory, op.Memory) {
+		return false
+	}
+	if negationSignature(stored.Memory) != negationSignature(op.Memory) {
+		return false
+	}
+	if changeMarkerPattern.MatchString(op.Memory) &&
+		!changeMarkerPattern.MatchString(stored.Memory) {
+		return false
+	}
+	if !preservesMaterialTokenOrder(stored.Memory, op.Memory) {
+		return false
+	}
+	return true
 }
 
 func preservesMaterialTokenOrder(oldText, newText string) bool {
@@ -333,13 +341,15 @@ func preservesMaterialTokenOrder(oldText, newText string) bool {
 }
 
 func buildOrderedSearchTokens(text string) []string {
-	return tokenizePrimarySearchText(text, tokenOptions{
+	return tokenizePrimarySearchText(stripMemorySubjectPrefix(text), tokenOptions{
 		deduplicate:       false,
 		keepSingleCJKRune: shouldKeepSingleCJKToken(text),
 	})
 }
 
 func materialTokensPreserved(oldText, newText string) bool {
+	oldText = stripMemorySubjectPrefix(oldText)
+	newText = stripMemorySubjectPrefix(newText)
 	oldTokens := append(
 		BuildSearchTokens(oldText),
 		capitalizedTokenPattern.FindAllString(oldText, -1)...,
@@ -416,6 +426,8 @@ func isMidnight(value time.Time) bool {
 }
 
 func directionalTokenCoverage(oldText, newText string) (float64, float64) {
+	oldText = stripMemorySubjectPrefix(oldText)
+	newText = stripMemorySubjectPrefix(newText)
 	oldTokens := textTokenSet(oldText)
 	newTokens := textTokenSet(newText)
 	if len(oldTokens) == 0 || len(newTokens) == 0 {
@@ -431,9 +443,26 @@ func directionalTokenCoverage(oldText, newText string) (float64, float64) {
 		float64(intersection) / float64(len(newTokens))
 }
 
+func stripMemorySubjectPrefix(text string) string {
+	trimmed := strings.TrimSpace(text)
+	for _, prefix := range []string{"user", "assistant"} {
+		if len(trimmed) <= len(prefix) ||
+			!strings.EqualFold(trimmed[:len(prefix)], prefix) {
+			continue
+		}
+		switch trimmed[len(prefix)] {
+		case ' ', ':', '-', '\t', '\n', '\r':
+			return strings.TrimLeft(
+				trimmed[len(prefix)+1:], " \t\n\r:-",
+			)
+		}
+	}
+	return trimmed
+}
+
 func criticalValuesPreserved(oldText, newText string) bool {
-	newValues := stringSet(criticalValuePattern.FindAllString(strings.ToLower(newText), -1))
-	for value := range stringSet(criticalValuePattern.FindAllString(strings.ToLower(oldText), -1)) {
+	newValues := stringSet(criticalValues(newText))
+	for value := range stringSet(criticalValues(oldText)) {
 		if _, ok := newValues[value]; !ok {
 			return false
 		}

@@ -883,7 +883,7 @@ func (s *Service) SearchMemories(
 		}
 	}
 	if searchOpts.Deduplicate && len(results) > 1 {
-		results = imemory.DeduplicateResults(results)
+		results = imemory.DeduplicateResultsPreservingConflicts(results)
 	}
 	if limit > 0 && len(results) > limit {
 		results = results[:limit]

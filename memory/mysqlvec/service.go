@@ -779,7 +779,7 @@ func (s *Service) applyPostSearchFilters(
 	}
 
 	if opts.Deduplicate && len(results) > 1 {
-		results = imemory.DeduplicateResults(results)
+		results = imemory.DeduplicateResultsPreservingConflicts(results)
 	}
 	if maxResults > 0 && len(results) > maxResults {
 		results = results[:maxResults]
