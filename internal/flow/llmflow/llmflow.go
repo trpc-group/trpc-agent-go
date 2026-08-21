@@ -77,6 +77,7 @@ const (
 	contextCompactionOutcomeSummaryError       = "summary_error"
 	contextCompactionOutcomeRebuildUnavailable = "rebuild_unavailable"
 	contextCompactionOutcomePersistenceError   = "persistence_error"
+	contextCompactionOutcomePostCountError     = "post_count_error"
 )
 
 // InvocationHasFilteredUserTools reports whether the cached filtered tool
@@ -1834,6 +1835,7 @@ func (f *Flow) runContextCompaction(
 		f.contextCompactionThresholdRatio,
 		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
 	)
+	postRequestTokens := postDecision.tokenCount
 	if postDecision.err == nil {
 		summaryview.Finalize(
 			invocation,
@@ -1847,22 +1849,23 @@ func (f *Flow) runContextCompaction(
 			invocation.AgentName,
 			postDecision.err,
 		)
+		postRequestTokens = -1
 	}
 
 	if err != nil {
 		logResult(
 			contextCompactionOutcomePersistenceError,
 			postDecisionRequest,
-			postDecision.tokenCount,
+			postRequestTokens,
 		)
 		return rebuilt
 	}
 
-	logResult(
-		contextCompactionOutcomeSuccess,
-		postDecisionRequest,
-		postDecision.tokenCount,
-	)
+	outcome := contextCompactionOutcomeSuccess
+	if postDecision.err != nil {
+		outcome = contextCompactionOutcomePostCountError
+	}
+	logResult(outcome, postDecisionRequest, postRequestTokens)
 	return rebuilt
 }
 

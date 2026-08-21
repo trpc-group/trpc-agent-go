@@ -170,6 +170,30 @@ func (s *summaryPartialFailureService) Calls() int {
 	return s.calls
 }
 
+type postRebuildFailingTokenCounter struct {
+	rangeCalls int
+}
+
+func (c *postRebuildFailingTokenCounter) CountTokens(
+	context.Context,
+	model.Message,
+) (int, error) {
+	return 1, nil
+}
+
+func (c *postRebuildFailingTokenCounter) CountTokensRange(
+	context.Context,
+	[]model.Message,
+	int,
+	int,
+) (int, error) {
+	c.rangeCalls++
+	if c.rangeCalls == 1 {
+		return 3000, nil
+	}
+	return 0, errors.New("post-rebuild token count failed")
+}
+
 func captureWarningLogs(t *testing.T) func() string {
 	t.Helper()
 	var warnings []string
@@ -532,6 +556,60 @@ func TestMaybeCompactContextBeforeLLM_RebuildsRequestWithSummary(t *testing.T) {
 	require.Equal(t, "completed", doneDiagnostic.Status)
 	require.NotNil(t, doneDiagnostic.Updated)
 	require.True(t, *doneDiagnostic.Updated)
+}
+
+func TestMaybeCompactContextBeforeLLM_LogsPostCountError(t *testing.T) {
+	modelName := "compact-retry-post-count-error"
+	model.RegisterModelContextWindow(modelName, 10000)
+	warningLogs := captureWarningLogs(t)
+	service := &summaryInjectingService{}
+	sess := &session.Session{Events: []event.Event{{
+		RequestID: "req-old",
+		Timestamp: time.Now().Add(-time.Hour),
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("history"),
+			}},
+		},
+	}}}
+	counter := &postRebuildFailingTokenCounter{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(service),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+		agent.WithInvocationModel(&compactingModel{name: modelName}),
+	)
+	f := New(
+		[]flow.RequestProcessor{
+			processor.NewContentRequestProcessor(
+				processor.WithAddSessionSummary(true),
+				processor.WithContextCompactionTokenCounter(counter),
+			),
+		},
+		nil,
+		Options{
+			EnableContextCompaction:         true,
+			ContextCompactionThresholdRatio: 0.2,
+		},
+	)
+	req := &model.Request{}
+	rebuildPlan := f.preprocess(context.Background(), inv, req, nil)
+
+	rebuilt := f.maybeCompactContextBeforeLLM(
+		context.Background(),
+		inv,
+		nil,
+		req,
+		rebuildPlan,
+	)
+
+	require.NotSame(t, req, rebuilt)
+	require.Equal(t, 2, counter.rangeCalls)
+	logged := warningLogs()
+	require.Contains(t, logged, "outcome=post_count_error")
+	require.Contains(t, logged, "post_request_tokens=-1")
+	require.NotContains(t, logged, "outcome=success")
 }
 
 func TestMaybeCompactContextBeforeLLM_SummarizesSanitizedOrphanToolCall(
