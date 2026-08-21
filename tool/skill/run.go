@@ -483,23 +483,13 @@ func (t *RunTool) Call(
 		ctx,
 		in,
 	)
-	prepared, err := t.prepareWorkspaceForRun(ctx, in)
-	if err != nil {
+	// Fail closed before prepare/run on a pinned engine so preflight and
+	// prepare/run share one capability snapshot.
+	eng := t.ensureEngine()
+	if err := preflightSkillExecution(eng, t, in); err != nil {
 		return nil, err
 	}
-	rr, err := t.runPrepared(prepared, in)
-	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-		t.invalidateWorkspaceHandle(prepared.handle)
-		if codeexecutor.IsWorkspaceRetrySafe(err) {
-			prepared, err = t.prepareWorkspaceForRun(ctx, in)
-			if err == nil {
-				rr, err = t.runPrepared(prepared, in)
-			}
-			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-				t.invalidateWorkspaceHandle(prepared.handle)
-			}
-		}
-	}
+	prepared, rr, err := t.prepareAndRun(ctx, eng, in)
 	if err != nil {
 		return nil, err
 	}
@@ -655,11 +645,50 @@ func (t *RunTool) applyArtifactSaveOverrides(
 	return in, saveRequested, outputsSaveSkipReason
 }
 
+func (t *RunTool) prepareAndRun(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	in runInput,
+) (workspaceRunPreparation, codeexecutor.RunResult, error) {
+	prepared, err := t.prepareWorkspaceForRunWithEngine(ctx, eng, in)
+	if err != nil {
+		return prepared, codeexecutor.RunResult{}, err
+	}
+	rr, err := t.runPrepared(prepared, in)
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		t.invalidateWorkspaceHandle(prepared.handle)
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			prepared, err = t.prepareWorkspaceForRunWithEngine(ctx, eng, in)
+			if err == nil {
+				rr, err = t.runPrepared(prepared, in)
+			}
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+				t.invalidateWorkspaceHandle(prepared.handle)
+			}
+		}
+	}
+	if err != nil {
+		return prepared, codeexecutor.RunResult{}, err
+	}
+	return prepared, rr, nil
+}
+
 func (t *RunTool) prepareWorkspaceForRun(
 	ctx context.Context,
 	in runInput,
 ) (workspaceRunPreparation, error) {
-	eng := t.ensureEngine()
+	return t.prepareWorkspaceForRunWithEngine(ctx, t.ensureEngine(), in)
+}
+
+func (t *RunTool) prepareWorkspaceForRunWithEngine(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	in runInput,
+) (workspaceRunPreparation, error) {
+	// skill_exec also enters here so StreamableCall cannot bypass Call preflight.
+	if err := preflightSkillExecution(eng, t, in); err != nil {
+		return workspaceRunPreparation{}, err
+	}
 	prepared, acquired, err := t.prepareWorkspaceAttempt(ctx, eng, in)
 	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
 		if acquired {
@@ -973,15 +1002,21 @@ func normalizeInputTo(to string) string {
 
 // ensureEngine gets engine from executor or builds a local one.
 func (t *RunTool) ensureEngine() codeexecutor.Engine {
-	if t.wsr == nil {
-		log.Warnf(
-			"skill_run: falling back to local engine; " +
-				"workspace resolver is not configured",
-		)
-		rt := localexec.NewRuntime("")
-		return codeexecutor.NewEngine(rt, rt, rt)
+	if t != nil {
+		if ep, ok := t.exec.(codeexecutor.EngineProvider); ok && ep != nil {
+			if e := ep.Engine(); e != nil {
+				return e
+			}
+		}
+		if t.wsr != nil {
+			return t.wsr.EnsureEngine()
+		}
 	}
-	return t.wsr.EnsureEngine()
+	log.Warnf(
+		"skill_run: falling back to local engine; " +
+			"workspace resolver is not configured",
+	)
+	return localexec.New().Engine()
 }
 
 func (t *RunTool) createWorkspace(
@@ -1224,6 +1259,13 @@ func (t *RunTool) buildRunProgramSpec(
 	cwd string,
 	in runInput,
 ) (codeexecutor.RunProgramSpec, error) {
+	// Policy mode requires CleanEnv before any PutFiles/editor staging.
+	// Full allow/deny matching needs skill-local path context and runs below.
+	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
+		if err := checkSkillRunnerSupportsPolicy(eng); err != nil {
+			return codeexecutor.RunProgramSpec{}, err
+		}
+	}
 	timeout := time.Duration(in.Timeout) * time.Second
 	if in.Timeout <= 0 {
 		timeout = defaultSkillRunTimeout
@@ -1879,6 +1921,129 @@ func withArtifactContext(ctx context.Context) context.Context {
 // output_files patterns. The bool result reports a non-fatal partial commit
 // that also carried ErrWorkspaceStale, allowing callers to invalidate the
 // exact handle while preserving the partial output result.
+
+// preflightDeclarativeOutputs fails closed before prepare/run when the
+// engine has audited SupportsDeclarativeIO=false and the request needs
+// StageInputs/CollectOutputs features that cannot be emulated.
+
+// outputSpecAllowsGlobsOnlyFallback reports whether an OutputSpec can be
+// safely honoured by Collect(globs) alone when CollectOutputs is not
+// supported. Only zero-valued extras (no Save, no NameTemplate, no
+// limits, no Inline) are allowed.
+func outputSpecAllowsGlobsOnlyFallback(spec codeexecutor.OutputSpec) bool {
+	if spec.Save {
+		return false
+	}
+	if strings.TrimSpace(spec.NameTemplate) != "" {
+		return false
+	}
+	if spec.MaxFiles != 0 || spec.MaxFileBytes != 0 || spec.MaxTotalBytes != 0 {
+		return false
+	}
+	if spec.Inline {
+		return false
+	}
+	return true
+}
+
+func preflightSkillExecution(eng codeexecutor.Engine, t *RunTool, in runInput) error {
+	if err := preflightDeclarativeOutputs(eng, in); err != nil {
+		return err
+	}
+	if t != nil && (len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0) {
+		if err := checkSkillRunnerSupportsPolicy(eng); err != nil {
+			return err
+		}
+		// Pre-authorize the command before workspace acquisition/staging
+		// so a denied command does not mutate a persistent workspace.
+		// The full skill-path-aware check in buildRunProgramSpec still
+		// runs later; this is a conservative early gate using only the
+		// command name (without venv/skill bin paths).
+		if err := preauthorizeSkillCommand(t, in.Command); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func preauthorizeSkillCommand(t *RunTool, command string) error {
+	if t == nil {
+		return nil
+	}
+	argv, err := splitCommandLine(command)
+	if err != nil {
+		return err
+	}
+	if len(argv) == 0 {
+		return errors.New("skill_run: empty command")
+	}
+	cmd := argv[0]
+	if cmdInList(t.deniedCmds, cmd) {
+		return fmt.Errorf("skill_run: command %q is denied by denied_commands", cmd)
+	}
+	if _, ok := matchSkillLocalCommand(t.deniedCmds, cmd, "", ""); ok {
+		return fmt.Errorf("skill_run: command %q is denied by denied_commands", cmd)
+	}
+	if len(t.allowedCmds) == 0 {
+		return nil
+	}
+	if cmdInList(t.allowedCmds, cmd) {
+		return nil
+	}
+	if _, ok := matchSkillLocalCommand(t.allowedCmds, cmd, "", ""); ok {
+		return nil
+	}
+	for allowed := range t.allowedCmds {
+		base := allowed
+		if k := strings.LastIndexAny(allowed, `/\`); k >= 0 {
+			base = allowed[k+1:]
+		}
+		if base == cmd {
+			return nil
+		}
+	}
+	return fmt.Errorf("skill_run: command %q is not allowed by allowed_commands", cmd)
+}
+
+func preflightDeclarativeOutputs(
+	eng codeexecutor.Engine, in runInput,
+) error {
+	if eng == nil {
+		return nil
+	}
+	cap := eng.Describe().SupportsDeclarativeIO
+	if cap == nil || *cap {
+		return nil
+	}
+	if len(in.Inputs) > 0 {
+		return codeexecutor.ErrDeclarativeIONotSupported
+	}
+	if in.Outputs == nil || len(in.OutputFiles) > 0 {
+		return nil
+	}
+	if outputSpecAllowsGlobsOnlyFallback(*in.Outputs) {
+		return nil
+	}
+	return codeexecutor.ErrDeclarativeIONotSupported
+}
+
+// checkSkillRunnerSupportsPolicy fails closed when skill_run is configured
+// with allowed/denied command lists but the engine cannot honor CleanEnv.
+func checkSkillRunnerSupportsPolicy(eng codeexecutor.Engine) error {
+	if eng == nil {
+		return nil
+	}
+	if eng.Describe().SupportsCleanEnv {
+		return nil
+	}
+	return errors.New(
+		"skill_run: command allow/deny policy requires a runtime that " +
+			"supports RunProgramSpec.CleanEnv, but the configured runtime " +
+			"does not advertise it. Either run on a CleanEnv-capable " +
+			"backend (e.g. codeexecutor/local) or drop the policy lists",
+	)
+}
+
 func (t *RunTool) prepareOutputs(
 	ctx context.Context,
 	eng codeexecutor.Engine,
@@ -1897,8 +2062,19 @@ func (t *RunTool) prepareOutputs(
 		m, err := eng.FS().CollectOutputs(ctx, ws, *in.Outputs)
 		stale := errors.Is(err, codeexecutor.ErrWorkspaceStale)
 		if err != nil &&
-			!errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
+			!errors.Is(err, codeexecutor.ErrPartialOutputCommit) &&
+			!errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) {
 			return nil, nil, nil, false, err
+		}
+		if errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) {
+			if !outputSpecAllowsGlobsOnlyFallback(*in.Outputs) {
+				return nil, nil, nil, false, err
+			}
+			fs, ferr := t.collectFiles(ctx, eng, ws, in.Outputs.Globs)
+			if ferr != nil {
+				return nil, nil, nil, false, ferr
+			}
+			return fs, nil, nil, false, nil
 		}
 		manifest = &m
 		if in.Outputs.Inline {
