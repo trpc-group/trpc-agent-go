@@ -376,10 +376,10 @@ func gitNetworkDestinations(args []string) ([]string, bool) {
 	if invocation := parseGitSubmoduleInvocation(args); invocation.matched {
 		return gitSubmoduleNetworkDestinations(invocation)
 	}
-	globalValues := map[string]struct{}{
-		"-C": {}, "-c": {}, "--config-env": {}, "--git-dir": {}, "--work-tree": {},
+	subcommand, rest, ok, commandUnresolved := gitCommandAndRest(args)
+	if commandUnresolved {
+		return nil, true
 	}
-	subcommand, rest, ok := commandAndRest(args, globalValues)
 	if !ok {
 		return nil, false
 	}
@@ -416,9 +416,60 @@ func gitNetworkDestinations(args []string) ([]string, bool) {
 			return []string{remote}, false
 		}
 		return nil, true
+	case "archive":
+		return gitArchiveNetworkDestinations(rest)
 	default:
 		return nil, false
 	}
+}
+
+func gitArchiveNetworkDestinations(args []string) ([]string, bool) {
+	var repositories []string
+	unresolved := false
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			break
+		}
+		repository, consumesNext, remoteOption := gitArchiveRemoteOption(arg)
+		if !remoteOption {
+			continue
+		}
+		if consumesNext {
+			if index+1 == len(args) {
+				unresolved = true
+				continue
+			}
+			repository = args[index+1]
+			index++
+		}
+		repositories = append(repositories, repository)
+	}
+	var destinations []string
+	for _, repository := range repositories {
+		matched, repositoryUnresolved :=
+			gitSubmoduleRepositoryNetworkDestinations(repository, false)
+		destinations = append(destinations, matched...)
+		unresolved = unresolved || repositoryUnresolved
+	}
+	return destinations, unresolved
+}
+
+func gitArchiveRemoteOption(arg string) (string, bool, bool) {
+	name, value, attached := strings.Cut(arg, "=")
+	if len(name) < len("--r") || !strings.HasPrefix("--remote", name) {
+		return "", false, false
+	}
+	if attached {
+		return value, false, true
+	}
+	return "", true, true
+}
+
+type gitURLRewriteRule struct {
+	base     string
+	prefix   string
+	pushOnly bool
 }
 
 func scanGitURLRewrites(
@@ -428,22 +479,27 @@ func scanGitURLRewrites(
 	destinations []string,
 ) ([]Finding, []string) {
 	var findings []Finding
-	var prefixes []string
+	var rules []gitURLRewriteRule
+	push := false
+	if subcommand, _, ok, _ := gitCommandAndRest(argv[1:]); ok {
+		push = subcommand == "push"
+	}
 	for _, config := range gitConfigValues(argv[1:]) {
-		configFindings, prefix, matched := scanGitURLRewriteConfig(
-			policy, config, destinations,
-		)
+		rule, configFindings, matched := parseGitURLRewriteConfig(config, push)
 		if !matched {
 			continue
 		}
 		findings = append(findings, configFindings...)
-		if prefix != "" {
-			prefixes = append(prefixes, prefix)
+		if rule.prefix != "" {
+			rules = append(rules, rule)
 		}
 	}
 	for _, config := range gitConfigEnvironmentValues(argv[1:]) {
 		key, envName, ok := strings.Cut(config, "=")
-		if !ok || !gitURLRewriteConfigKey(key) {
+		if !ok {
+			continue
+		}
+		if _, _, matched := gitURLRewriteConfigBase(key, push); !matched {
 			continue
 		}
 		value, exists := environment[envName]
@@ -451,70 +507,131 @@ func scanGitURLRewrites(
 			findings = append(findings, gitRewriteUnparsedFinding())
 			continue
 		}
-		configFindings, prefix, matched := scanGitURLRewriteConfig(
-			policy, key+"="+value, destinations,
+		rule, configFindings, matched := parseGitURLRewriteConfig(
+			key+"="+value, push,
 		)
 		if !matched {
 			continue
 		}
 		findings = append(findings, configFindings...)
-		if prefix != "" {
-			prefixes = append(prefixes, prefix)
+		if rule.prefix != "" {
+			rules = append(rules, rule)
+		}
+	}
+	var prefixes []string
+	for _, destination := range destinations {
+		matched := effectiveGitURLRewriteRules(rules, destination, push)
+		if len(matched) == 0 {
+			continue
+		}
+		prefixes = append(prefixes, matched[0].prefix)
+		for _, rule := range matched {
+			findings = append(findings, scanGitURLRewriteRule(policy, rule)...)
 		}
 	}
 	return findings, prefixes
 }
 
-func scanGitURLRewriteConfig(
-	policy Policy,
+func parseGitURLRewriteConfig(
 	config string,
-	destinations []string,
-) ([]Finding, string, bool) {
+	push bool,
+) (gitURLRewriteRule, []Finding, bool) {
 	key, prefix, ok := strings.Cut(config, "=")
-	if !ok || !gitURLRewriteConfigKey(key) {
-		return nil, "", false
+	base, pushOnly, matched := gitURLRewriteConfigBase(key, push)
+	if !matched {
+		return gitURLRewriteRule{}, nil, false
 	}
-	key = strings.TrimSpace(key)
-	if prefix == "" {
-		return []Finding{gitRewriteUnparsedFinding()}, "", true
+	if !ok || prefix == "" {
+		return gitURLRewriteRule{}, []Finding{gitRewriteUnparsedFinding()}, true
 	}
-	if !destinationUsesRewriteList(destinations, prefix) {
-		return nil, "", false
+	return gitURLRewriteRule{
+		base: base, prefix: prefix, pushOnly: pushOnly,
+	}, nil, true
+}
+
+func scanGitURLRewriteRule(
+	policy Policy,
+	rule gitURLRewriteRule,
+) []Finding {
+	if rule.base == "" || isFileURL(rule.base) {
+		return []Finding{gitRewriteUnparsedFinding()}
 	}
-	base := key[len("url.") : len(key)-len(".insteadOf")]
-	if base == "" || isFileURL(base) {
-		return []Finding{gitRewriteUnparsedFinding()}, prefix, true
-	}
-	host, parsed := knownDestinationHost(base)
+	host, parsed := knownDestinationHost(rule.base)
 	if !parsed {
-		return []Finding{gitRewriteUnparsedFinding()}, prefix, true
+		return []Finding{gitRewriteUnparsedFinding()}
 	}
 	if !networkHostAllowed(host, policy.NetworkAllowlist) {
 		return []Finding{newFinding(
 			DecisionDeny, RiskHigh, "network.destination_override",
 			"Git URL rewrite changes the effective destination to a non-allowlisted host",
 			"remove the rewrite or use an allowlisted remote directly",
-		)}, prefix, true
+		)}
 	}
 	return []Finding{newFinding(
 		DecisionNeedsHumanReview, RiskHigh, "network.destination_override",
 		"Git URL rewrite changes the effective destination",
 		"review the rewrite and use the allowlisted remote directly",
-	)}, prefix, true
+	)}
 }
 
-func gitURLRewriteConfigKey(key string) bool {
-	key = strings.ToLower(strings.TrimSpace(key))
-	return strings.HasPrefix(key, "url.") && strings.HasSuffix(key, ".insteadof")
+func gitURLRewriteConfigBase(key string, push bool) (string, bool, bool) {
+	key = strings.TrimSpace(key)
+	lower := strings.ToLower(key)
+	if !strings.HasPrefix(lower, "url.") {
+		return "", false, false
+	}
+	suffix := ".insteadof"
+	pushOnly := false
+	if strings.HasSuffix(lower, ".pushinsteadof") {
+		if !push {
+			return "", false, false
+		}
+		suffix = ".pushinsteadof"
+		pushOnly = true
+	} else if !strings.HasSuffix(lower, suffix) {
+		return "", false, false
+	}
+	baseEnd := len(key) - len(suffix)
+	if baseEnd < len("url.") {
+		return "", pushOnly, true
+	}
+	return key[len("url."):baseEnd], pushOnly, true
 }
 
-func destinationUsesRewriteList(destinations []string, prefix string) bool {
-	for _, destination := range destinations {
-		if strings.HasPrefix(destination, prefix) {
-			return true
+func effectiveGitURLRewriteRules(
+	rules []gitURLRewriteRule,
+	destination string,
+	push bool,
+) []gitURLRewriteRule {
+	// Git gives pushInsteadOf priority over insteadOf for push URLs.
+	if push {
+		if matched := longestGitURLRewriteRules(rules, destination, true); len(matched) > 0 {
+			return matched
 		}
 	}
-	return false
+	return longestGitURLRewriteRules(rules, destination, false)
+}
+
+func longestGitURLRewriteRules(
+	rules []gitURLRewriteRule,
+	destination string,
+	pushOnly bool,
+) []gitURLRewriteRule {
+	longest := -1
+	var matched []gitURLRewriteRule
+	for _, rule := range rules {
+		if rule.pushOnly != pushOnly || !strings.HasPrefix(destination, rule.prefix) {
+			continue
+		}
+		if len(rule.prefix) > longest {
+			longest = len(rule.prefix)
+			matched = matched[:0]
+		}
+		if len(rule.prefix) == longest {
+			matched = append(matched, rule)
+		}
+	}
+	return matched
 }
 
 func gitConfigValues(args []string) []string {
@@ -552,18 +669,57 @@ func gitRewriteUnparsedFinding() Finding {
 	)
 }
 
-func commandAndRest(args []string, valueOptions map[string]struct{}) (string, []string, bool) {
+func gitCommandAndRest(args []string) (string, []string, bool, bool) {
+	valueOptions := map[string]struct{}{
+		"-C": {}, "-c": {}, "--attr-source": {}, "--config-env": {},
+		"--git-dir": {}, "--namespace": {}, "--shallow-file": {},
+		"--work-tree": {},
+	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if strings.HasPrefix(arg, "-") && arg != "-" {
-			if _, consumes := valueOptions[arg]; consumes && i+1 < len(args) {
+			if _, consumes := valueOptions[arg]; consumes {
+				if i+1 == len(args) {
+					return "", nil, false, true
+				}
 				i++
+				continue
 			}
-			continue
+			if gitRecognizedGlobalOption(arg) {
+				continue
+			}
+			return "", nil, false, true
 		}
-		return strings.ToLower(arg), args[i+1:], true
+		return strings.ToLower(arg), args[i+1:], true, false
 	}
-	return "", nil, false
+	return "", nil, false, false
+}
+
+func gitRecognizedGlobalOption(arg string) bool {
+	if len(arg) > 2 && (strings.HasPrefix(arg, "-C") || strings.HasPrefix(arg, "-c")) {
+		return true
+	}
+	for _, name := range []string{
+		"--attr-source", "--config-env", "--exec-path", "--git-dir",
+		"--namespace", "--shallow-file", "--work-tree",
+	} {
+		if strings.HasPrefix(arg, name+"=") {
+			return true
+		}
+	}
+	if strings.HasPrefix(arg, "--list-cmds=") {
+		return true
+	}
+	switch arg {
+	case "-h", "--help", "-v", "--version", "--exec-path", "--html-path",
+		"--man-path", "--info-path", "-p", "--paginate", "-P", "--no-pager",
+		"--no-replace-objects", "--no-lazy-fetch", "--no-optional-locks",
+		"--no-advice", "--bare", "--literal-pathspecs", "--glob-pathspecs",
+		"--noglob-pathspecs", "--icase-pathspecs":
+		return true
+	default:
+		return false
+	}
 }
 
 func netcatDestination(args []string) []string {

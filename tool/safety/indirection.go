@@ -354,12 +354,19 @@ func gitExecutionNamespaceKey(key string) bool {
 	if strings.HasPrefix(key, "gpg.") && strings.HasSuffix(key, ".program") {
 		return true
 	}
-	if strings.HasPrefix(key, "filter.") &&
-		(strings.HasSuffix(key, ".clean") || strings.HasSuffix(key, ".smudge") ||
-			strings.HasSuffix(key, ".process")) {
+	if strings.HasPrefix(key, "tar.") && strings.HasSuffix(key, ".command") {
+		return true
+	}
+	if gitExecutionFilterKey(key) {
 		return true
 	}
 	return false
+}
+
+func gitExecutionFilterKey(key string) bool {
+	return strings.HasPrefix(key, "filter.") &&
+		(strings.HasSuffix(key, ".clean") || strings.HasSuffix(key, ".smudge") ||
+			strings.HasSuffix(key, ".process"))
 }
 
 func gitExecutionExactKey(key string) bool {

