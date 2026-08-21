@@ -672,6 +672,52 @@ func TestNormalizeSnapshotFlagsInvalidSessionMetadataOrder(t *testing.T) {
 	}
 }
 
+func TestNormalizeSnapshotNormalizesBackendGeneratedSessionUpdateTimes(t *testing.T) {
+	base := time.Unix(100, 0)
+	createdOnly := Snapshot{Sessions: []SessionSnapshot{{
+		CreatedAt: base,
+		UpdatedAt: base,
+	}}}
+	subPrecisionUpdate := Snapshot{Sessions: []SessionSnapshot{{
+		CreatedAt: base.Add(time.Second),
+		UpdatedAt: base.Add(time.Second).Add(500 * time.Microsecond),
+	}}}
+	backendLatencyUpdate := Snapshot{Sessions: []SessionSnapshot{{
+		CreatedAt: base.Add(2 * time.Second),
+		UpdatedAt: base.Add(2*time.Second + 50*time.Millisecond),
+	}}}
+	summaryUpdate := Snapshot{Sessions: []SessionSnapshot{{
+		CreatedAt: base.Add(3 * time.Second),
+		UpdatedAt: base.Add(3*time.Second + 200*time.Millisecond),
+		Summaries: []SummarySnapshot{{
+			UpdatedAt: base.Add(3*time.Second + 200*time.Millisecond),
+		}},
+	}}}
+	createdOnly = NormalizeSnapshot(createdOnly, DefaultNormalizeOptions())
+	subPrecisionUpdate = NormalizeSnapshot(subPrecisionUpdate, DefaultNormalizeOptions())
+	backendLatencyUpdate = NormalizeSnapshot(backendLatencyUpdate, DefaultNormalizeOptions())
+	summaryUpdate = NormalizeSnapshot(summaryUpdate, DefaultNormalizeOptions())
+	if !reflect.DeepEqual(createdOnly, subPrecisionUpdate) {
+		t.Fatalf(
+			"sub-precision session update lifecycle differs:\ncreated: %#v\nupdated: %#v",
+			createdOnly, subPrecisionUpdate,
+		)
+	}
+	if !reflect.DeepEqual(createdOnly, backendLatencyUpdate) {
+		t.Fatalf(
+			"backend latency session update lifecycle differs:\ncreated: %#v\nupdated: %#v",
+			createdOnly, backendLatencyUpdate,
+		)
+	}
+	createdOnly.Sessions[0].Summaries = summaryUpdate.Sessions[0].Summaries
+	if !reflect.DeepEqual(createdOnly, summaryUpdate) {
+		t.Fatalf(
+			"summary session update lifecycle differs:\ncreated: %#v\nupdated: %#v",
+			createdOnly, summaryUpdate,
+		)
+	}
+}
+
 func TestNormalizeSnapshotPreservesTemporalSemantics(t *testing.T) {
 	base := time.Unix(100, 0)
 	baseline := Snapshot{Sessions: []SessionSnapshot{{
@@ -892,6 +938,27 @@ func TestNormalizeSnapshotNormalizesSummaryBoundaryCutoffPrecision(t *testing.T)
 	if got, want := NormalizeSnapshot(actual, DefaultNormalizeOptions()),
 		NormalizeSnapshot(baseline, DefaultNormalizeOptions()); reflect.DeepEqual(got, want) {
 		t.Fatalf("material cutoff shift was normalized away:\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestNormalizeSnapshotNormalizesGeneratedSummaryUpdateTimesRelatively(t *testing.T) {
+	base := time.Unix(100, 0).UTC()
+	baseline := summaryCutoffSnapshot(base, base)
+	actual := summaryCutoffSnapshot(base, base)
+	baseline.Sessions[0].CreatedAt = base
+	actual.Sessions[0].CreatedAt = base
+	baseline.Sessions[0].Summaries[0].UpdatedAt = base.Add(time.Second)
+	actual.Sessions[0].Summaries[0].UpdatedAt = base.Add(10 * time.Second)
+	got := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	want := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("generated summary update time differs:\ngot:  %#v\nwant: %#v", got, want)
+	}
+
+	actual.Sessions[0].Events[0].Timestamp = base.Add(10 * time.Second)
+	got = NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	if reflect.DeepEqual(got, want) {
+		t.Fatalf("caller-supplied event timestamp shift was normalized away: %#v", got)
 	}
 }
 

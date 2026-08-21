@@ -475,6 +475,9 @@ func parallelDependencies(operations []Operation) (map[string]chan struct{}, err
 	if err := validateParallelOrderedSessionAppends(operations, dependencies); err != nil {
 		return nil, err
 	}
+	if err := validateParallelSummaryUpdates(operations, dependencies); err != nil {
+		return nil, err
+	}
 	return done, nil
 }
 
@@ -622,6 +625,79 @@ func overlappingOrderedSessionAppends(
 			return refs[i].sessionID < refs[j].sessionID
 		}
 		return refs[i].collection < refs[j].collection
+	})
+	return refs
+}
+
+type summaryUpdateRef struct {
+	sessionID string
+	filterKey string
+}
+
+func validateParallelSummaryUpdates(
+	operations []Operation,
+	dependencies map[string][]string,
+) error {
+	updates := make([]map[summaryUpdateRef]struct{}, len(operations))
+	for i, operation := range operations {
+		updates[i] = operationSummaryUpdates(operation)
+	}
+	for i := 0; i < len(operations); i++ {
+		for j := i + 1; j < len(operations); j++ {
+			if parallelOperationsOrdered(operations[i], operations[j], dependencies) {
+				continue
+			}
+			overlap := overlappingSummaryUpdates(updates[i], updates[j])
+			if len(overlap) > 0 {
+				ref := overlap[0]
+				return fmt.Errorf(
+					"parallel summary updates for session %q filter %q must be ordered with dependencies",
+					ref.sessionID, ref.filterKey,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func operationSummaryUpdates(operation Operation) map[summaryUpdateRef]struct{} {
+	updates := make(map[summaryUpdateRef]struct{})
+	collectSummaryUpdates(operation, updates)
+	return updates
+}
+
+func collectSummaryUpdates(operation Operation, updates map[summaryUpdateRef]struct{}) {
+	switch operation.Kind {
+	case OperationUpdateSummary:
+		if operation.Summary == nil {
+			return
+		}
+		updates[summaryUpdateRef{
+			sessionID: operation.SessionID,
+			filterKey: operation.Summary.FilterKey,
+		}] = struct{}{}
+	case OperationParallel:
+		for _, child := range operation.Parallel {
+			collectSummaryUpdates(child, updates)
+		}
+	}
+}
+
+func overlappingSummaryUpdates(
+	left map[summaryUpdateRef]struct{},
+	right map[summaryUpdateRef]struct{},
+) []summaryUpdateRef {
+	refs := make([]summaryUpdateRef, 0)
+	for ref := range left {
+		if _, exists := right[ref]; exists {
+			refs = append(refs, ref)
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].sessionID != refs[j].sessionID {
+			return refs[i].sessionID < refs[j].sessionID
+		}
+		return refs[i].filterKey < refs[j].filterKey
 	})
 	return refs
 }

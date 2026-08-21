@@ -452,6 +452,17 @@ func TestRunnerRejectsInvalidCasesBeforeCreatingFixtures(t *testing.T) {
 			want: `parallel append operations for session "session" collection "track:tools" must be ordered`,
 		},
 		{
+			name: "parallel unordered summary updates",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					updateSummaryForSession("session", "one"),
+					updateSummaryForSession("session", "two"),
+				},
+			}}}},
+			want: `parallel summary updates for session "session" filter "branch/main" must be ordered`,
+		},
+		{
 			name: "reserved state prefix",
 			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
 				Kind: OperationUpdateState, SessionID: "session",
@@ -537,6 +548,39 @@ func TestRunnerAllowsOrderedParallelStateMutations(t *testing.T) {
 	}
 	if got := fixture.operationNames(); strings.Join(got, ",") != "write,delete" {
 		t.Fatalf("parallel state operation order = %v, want [write delete]", got)
+	}
+}
+
+func TestRunnerAllowsIndependentParallelSummaryUpdates(t *testing.T) {
+	fixture := &fakeFixture{name: "inmemory", capabilities: allCapabilities()}
+	runner := Runner{Backends: []Backend{fakeBackend("inmemory", fixture)}}
+	report, err := runner.Run(context.Background(), []ReplayCase{{
+		Name: "independent-summaries",
+		Operations: []Operation{{
+			Kind: OperationParallel,
+			Parallel: []Operation{
+				updateSummaryForSession("session-1", "one"),
+				updateSummaryForSession("session-2", "two"),
+				{
+					Kind:      OperationUpdateSummary,
+					SessionID: "session-1",
+					Summary: &SummarySnapshot{
+						SessionID: "session-1",
+						FilterKey: "branch/other",
+						Text:      "other",
+					},
+				},
+			},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+	if len(report.Differences) != 0 {
+		t.Fatalf("Runner.Run() differences = %#v", report.Differences)
+	}
+	if got := fixture.operationCount(); got != 3 {
+		t.Fatalf("operation count = %d, want 3", got)
 	}
 }
 
