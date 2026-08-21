@@ -398,18 +398,28 @@ func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS st
 }
 
 func (s *Saver) getCheckpointScore(ctx context.Context, lineageID, checkpointNS, checkpointID string) (int64, error) {
-	if checkpointNS == "" {
-		var err error
-		checkpointNS, err = s.findCheckpointNamespace(ctx, lineageID, checkpointID)
-		if err != nil {
-			return 0, err
-		}
-		if checkpointNS == "" {
-			return 0, nil
-		}
-	}
 	key := checkpointTSKey(lineageID, checkpointNS)
 	score, err := s.client.ZScore(ctx, key, checkpointID).Result()
+	if err == nil {
+		return int64(score), nil
+	}
+	if !errors.Is(err, redis.Nil) {
+		return 0, err
+	}
+	if checkpointNS != "" {
+		return 0, nil
+	}
+
+	// If not found in default namespace, search other namespaces in the lineage
+	actualNS, err := s.findCheckpointNamespace(ctx, lineageID, checkpointID)
+	if err != nil {
+		return 0, err
+	}
+	if actualNS == "" {
+		return 0, nil
+	}
+
+	score, err = s.client.ZScore(ctx, checkpointTSKey(lineageID, actualNS), checkpointID).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return 0, nil
