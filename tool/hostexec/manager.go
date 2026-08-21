@@ -178,8 +178,12 @@ func runForeground(
 	maxLines int,
 ) (string, int, error) {
 	// A foreground session is never registered with the manager, so write_stdin
-	// can never reach it: detach its stdin rather than hand the command a pipe
-	// nothing can write to or close.
+	// can never reach it and no caller can answer a prompt it raises. Detach it
+	// rather than leave it looking answerable: stdin becomes the null device
+	// instead of a pipe nothing can write to or close, and preparePipeCommand
+	// puts the child in its own session so it cannot reach the host's terminal
+	// behind fd 0 either. A prompting command then fails promptly instead of
+	// waiting out the run timeout.
 	sess, err := startSession(
 		"",
 		params,
@@ -357,7 +361,7 @@ func startSession(
 			cancel()
 			return nil, err
 		}
-		preparePipeCommand(cmd)
+		preparePipeCommand(cmd, detach)
 		sess.stdin = stdin
 		sess.closeIO = func() error {
 			if stdin != nil {
@@ -443,7 +447,12 @@ func waitDone(
 
 // startPipes wires the command's standard streams. A detached stdin is left nil,
 // which os/exec backs with the null device, so a command that prompts reads EOF
-// and fails instead of blocking on a pipe that never delivers.
+// instead of blocking on a pipe that never delivers.
+//
+// That covers fd 0 only. Prompts that open /dev/tty directly are kept away by
+// preparePipeCommand, which gives the same detached child a session with no
+// controlling terminal; the two together are what make a prompt fail rather
+// than hang.
 func startPipes(
 	cmd *exec.Cmd,
 	detach bool,
