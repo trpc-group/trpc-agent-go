@@ -366,9 +366,9 @@ func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS st
 				return nil, err
 			}
 			if beforeScore > 0 {
-				members, err = s.client.ZRangeByScore(ctx, key, &redis.ZRangeBy{
-					Min: "0",
+				members, err = s.client.ZRevRangeByScore(ctx, key, &redis.ZRangeBy{
 					Max: fmt.Sprintf("(%d", beforeScore),
+					Min: "0",
 				}).Result()
 			}
 		}
@@ -400,7 +400,30 @@ func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS st
 func (s *Saver) getCheckpointScore(ctx context.Context, lineageID, checkpointNS, checkpointID string) (int64, error) {
 	key := checkpointTSKey(lineageID, checkpointNS)
 	score, err := s.client.ZScore(ctx, key, checkpointID).Result()
+	if err == nil {
+		return int64(score), nil
+	}
+	if !errors.Is(err, redis.Nil) {
+		return 0, err
+	}
+	if checkpointNS != "" {
+		return 0, nil
+	}
+
+	// If not found in default namespace, search other namespaces in the lineage
+	actualNS, err := s.findCheckpointNamespace(ctx, lineageID, checkpointID)
 	if err != nil {
+		return 0, err
+	}
+	if actualNS == "" {
+		return 0, nil
+	}
+
+	score, err = s.client.ZScore(ctx, checkpointTSKey(lineageID, actualNS), checkpointID).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return 0, nil
+		}
 		return 0, err
 	}
 	return int64(score), nil
@@ -666,7 +689,7 @@ func (s *Saver) findCheckpointNamespace(ctx context.Context, lineageID, checkpoi
 	for _, ns := range namespaces {
 		exists, err := s.client.Exists(ctx, checkpointKey(lineageID, ns, checkpointID)).Result()
 		if err != nil {
-			continue
+			return "", err
 		}
 		if exists > 0 {
 			return ns, nil

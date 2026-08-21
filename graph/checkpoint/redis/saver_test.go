@@ -866,22 +866,29 @@ func TestRedis_List_WithBeforeAndCrossNamespace(t *testing.T) {
 
 	ctx := context.Background()
 	lineageID := "ln-before"
-
-	// Create three checkpoints across two namespaces
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Create checkpoints across two namespaces (nsA and nsB)
 	ck1 := graph.NewCheckpoint(map[string]any{"i": 1}, map[string]int64{"i": 1}, map[string]map[string]int64{})
+	ck1.Timestamp = baseTime.Add(10 * time.Millisecond)
 	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", "nsA"), Checkpoint: ck1, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0), NewVersions: map[string]int64{"i": 1}})
 	require.NoError(t, err)
-	time.Sleep(5 * time.Millisecond)
+
 	ck2 := graph.NewCheckpoint(map[string]any{"i": 2}, map[string]int64{"i": 2}, map[string]map[string]int64{})
+	ck2.Timestamp = baseTime.Add(20 * time.Millisecond)
 	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", "nsA"), Checkpoint: ck2, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 1), NewVersions: map[string]int64{"i": 2}})
 	require.NoError(t, err)
-	time.Sleep(5 * time.Millisecond)
-	ck3 := graph.NewCheckpoint(map[string]any{"i": 3}, map[string]int64{"i": 3}, map[string]map[string]int64{})
-	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", "nsA"), Checkpoint: ck3, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 2), NewVersions: map[string]int64{"i": 3}})
+
+	ckB := graph.NewCheckpoint(map[string]any{"i": 99}, map[string]int64{"i": 99}, map[string]map[string]int64{})
+	ckB.Timestamp = baseTime.Add(25 * time.Millisecond)
+	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", "nsB"), Checkpoint: ckB, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 2), NewVersions: map[string]int64{"i": 99}})
 	require.NoError(t, err)
 
-	// Cross-namespace list with Before(ck3) should exclude ck3.
-	// Be tolerant on size/order across platforms; just ensure ck3 is excluded and ck1/ck2 appear if any.
+	ck3 := graph.NewCheckpoint(map[string]any{"i": 3}, map[string]int64{"i": 3}, map[string]map[string]int64{})
+	ck3.Timestamp = baseTime.Add(30 * time.Millisecond)
+	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", "nsA"), Checkpoint: ck3, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 3), NewVersions: map[string]int64{"i": 3}})
+	require.NoError(t, err)
+
+	// List in nsA with Before(ck3) should exclude ck3 and ckB (from nsB)
 	cfgAll := graph.CreateCheckpointConfig(lineageID, "", "nsA")
 	filter := graph.NewCheckpointFilter().WithBefore(graph.CreateCheckpointConfig(lineageID, ck3.ID, "")).WithLimit(10)
 	tuples, err := saver.List(ctx, cfgAll, filter)
@@ -893,23 +900,34 @@ func TestRedis_List_WithBeforeAndCrossNamespace(t *testing.T) {
 		}
 	}
 	assert.False(t, have3, "ck3 should be excluded by Before filter")
-	// If results present, they must be among {ck1, ck2}
+	// If results present, they must be among {ck1, ck2} and not ckB
 	for _, tu := range tuples {
 		assert.True(t, tu.Checkpoint.ID == ck1.ID || tu.Checkpoint.ID == ck2.ID)
+		assert.NotEqual(t, ckB.ID, tu.Checkpoint.ID)
 	}
 
-	// Namespace-specific list with Before(ck3) in nsA should return only ck1
+	// List in nsB should return ckB
+	cfgNsB := graph.CreateCheckpointConfig(lineageID, "", "nsB")
+	tuplesB, err := saver.List(ctx, cfgNsB, nil)
+	require.NoError(t, err)
+	require.Len(t, tuplesB, 1)
+	assert.Equal(t, ckB.ID, tuplesB[0].Checkpoint.ID)
+
+	// Namespace-specific list with Before(ck3) in nsA should return [ck2, ck1] in newest-first descending order (excluding ckB from nsB)
 	cfgNsA := graph.CreateCheckpointConfig(lineageID, "", "nsA")
 	filter2 := graph.NewCheckpointFilter().WithBefore(graph.CreateCheckpointConfig(lineageID, ck3.ID, "nsA"))
 	tuples2, err := saver.List(ctx, cfgNsA, filter2)
 	require.NoError(t, err)
-	// Should not include ck3
-	for _, tu := range tuples2 {
-		assert.NotEqual(t, tu.Checkpoint.ID, ck3.ID)
-	}
-	if len(tuples2) > 0 {
-		assert.Equal(t, ck1.ID, tuples2[0].Checkpoint.ID)
-	}
+	require.Len(t, tuples2, 2)
+	assert.Equal(t, ck2.ID, tuples2[0].Checkpoint.ID, "expected newest checkpoint before ck3 to be first (ck2)")
+	assert.Equal(t, ck1.ID, tuples2[1].Checkpoint.ID, "expected older checkpoint before ck3 to be second (ck1)")
+
+	// With Limit 1 in nsA, should get ck2 (the newest one before ck3 in nsA), NOT ck1 (the oldest one)
+	filterLimit := graph.NewCheckpointFilter().WithBefore(graph.CreateCheckpointConfig(lineageID, ck3.ID, "nsA")).WithLimit(1)
+	tuplesLimit, err := saver.List(ctx, cfgNsA, filterLimit)
+	require.NoError(t, err)
+	require.Len(t, tuplesLimit, 1)
+	assert.Equal(t, ck2.ID, tuplesLimit[0].Checkpoint.ID, "expected limit=1 to return newest checkpoint before ck3 (ck2)")
 }
 
 func TestRedis_List_CrossNamespace_Limit1(t *testing.T) {
@@ -935,6 +953,51 @@ func TestRedis_List_CrossNamespace_Limit1(t *testing.T) {
 	tuples, err := saver.List(ctx, cfgAll, &graph.CheckpointFilter{Limit: 1})
 	require.NoError(t, err)
 	require.Equal(t, 1, len(tuples))
+}
+
+func TestRedis_List_DefaultNamespace_WithBeforeAndLimit(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	lineageID := "ln-default-ns"
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Create checkpoints in default namespace (empty string)
+	ck1 := graph.NewCheckpoint(map[string]any{"i": 1}, map[string]int64{"i": 1}, nil)
+	ck1.Timestamp = baseTime.Add(10 * time.Millisecond)
+	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", ""), Checkpoint: ck1, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0), NewVersions: map[string]int64{"i": 1}})
+	require.NoError(t, err)
+
+	ck2 := graph.NewCheckpoint(map[string]any{"i": 2}, map[string]int64{"i": 2}, nil)
+	ck2.Timestamp = baseTime.Add(20 * time.Millisecond)
+	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", ""), Checkpoint: ck2, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 1), NewVersions: map[string]int64{"i": 2}})
+	require.NoError(t, err)
+
+	ck3 := graph.NewCheckpoint(map[string]any{"i": 3}, map[string]int64{"i": 3}, nil)
+	ck3.Timestamp = baseTime.Add(30 * time.Millisecond)
+	_, err = saver.Put(ctx, graph.PutRequest{Config: graph.CreateCheckpointConfig(lineageID, "", ""), Checkpoint: ck3, Metadata: graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 2), NewVersions: map[string]int64{"i": 3}})
+	require.NoError(t, err)
+
+	// List in default namespace with Before(ck3)
+	cfgDefault := graph.CreateCheckpointConfig(lineageID, "", "")
+	filter := graph.NewCheckpointFilter().WithBefore(graph.CreateCheckpointConfig(lineageID, ck3.ID, ""))
+	tuples, err := saver.List(ctx, cfgDefault, filter)
+	require.NoError(t, err)
+	require.Len(t, tuples, 2)
+	assert.Equal(t, ck2.ID, tuples[0].Checkpoint.ID, "expected ck2 to be first in descending order")
+	assert.Equal(t, ck1.ID, tuples[1].Checkpoint.ID, "expected ck1 to be second in descending order")
+
+	// List in default namespace with Before(ck3) and Limit: 1
+	filterLimit := graph.NewCheckpointFilter().WithBefore(graph.CreateCheckpointConfig(lineageID, ck3.ID, "")).WithLimit(1)
+	tuplesLimit, err := saver.List(ctx, cfgDefault, filterLimit)
+	require.NoError(t, err)
+	require.Len(t, tuplesLimit, 1)
+	assert.Equal(t, ck2.ID, tuplesLimit[0].Checkpoint.ID, "expected limit=1 to return ck2 (newest before ck3)")
 }
 
 func TestRedis_List_NamespaceNotExists_ReturnsEmpty(t *testing.T) {

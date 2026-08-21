@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -452,6 +453,8 @@ func TestInMemoryCheckpointSaverGetLatest(t *testing.T) {
 			Metadata:    metadata,
 			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
+		baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		checkpoint.Timestamp = baseTime.Add(time.Duration(i) * time.Millisecond)
 		lastConfig, err = saver.Put(ctx, req)
 		require.NoError(t, err)
 	}
@@ -483,6 +486,7 @@ func TestInMemoryCheckpointSaverFilters(t *testing.T) {
 
 	// Create checkpoints with different metadata.
 	var checkpointConfigs []map[string]any
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 5; i++ {
 		checkpoint := graph.NewCheckpoint(
 			map[string]any{"step": i},
@@ -512,6 +516,8 @@ func TestInMemoryCheckpointSaverFilters(t *testing.T) {
 			Metadata:    metadata,
 			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
+		// Set distinct timestamps to avoid identical clock ticks in rapid loop
+		checkpoint.Timestamp = baseTime.Add(time.Duration(i) * time.Millisecond)
 		cfg, err := saver.Put(ctx, req)
 		require.NoError(t, err)
 		checkpointConfigs = append(checkpointConfigs, cfg)
@@ -530,13 +536,15 @@ func TestInMemoryCheckpointSaverFilters(t *testing.T) {
 		assert.Equal(t, "even", tuple.Metadata.Extra["type"])
 	}
 
-	// Test Before filter - get checkpoints before the 3rd one.
+	// Test Before filter - get checkpoints before the 3rd one (index 2).
 	beforeFilter := &graph.CheckpointFilter{
 		Before: checkpointConfigs[2], // Before index 2
 	}
 	beforeCheckpoints, err := saver.List(ctx, config, beforeFilter)
 	require.NoError(t, err)
-	assert.Len(t, beforeCheckpoints, 2) // Should have 0 and 1
+	assert.Len(t, beforeCheckpoints, 2) // Should have 1 and 0 in newest-first descending order
+	assert.Equal(t, graph.GetCheckpointID(checkpointConfigs[1]), beforeCheckpoints[0].Checkpoint.ID)
+	assert.Equal(t, graph.GetCheckpointID(checkpointConfigs[0]), beforeCheckpoints[1].Checkpoint.ID)
 
 	// Test combined filters.
 	combinedFilter := &graph.CheckpointFilter{
