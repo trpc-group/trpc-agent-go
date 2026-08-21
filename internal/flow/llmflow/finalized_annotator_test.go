@@ -10,6 +10,7 @@ package llmflow
 
 import (
 	"context"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,4 +84,97 @@ func TestFinalizedRequestAnnotatorsAbsent(t *testing.T) {
 	req := &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}}
 	f.annotateFinalizedRequest(context.Background(), nil, req)
 	require.Len(t, req.Messages, 1)
+}
+
+// Retries are requests too.
+//
+// contextWithModelRetryCallbacks binds another runBeforeModelCallbacks pass that
+// runs after callLLM's single annotateFinalizedRequest call, and that pass can
+// change the request — the call-limit finalization retry drops Tools entirely
+// before asking again. Annotators that ran only on the first attempt would leave
+// the retry carrying an annotation describing a tool surface it no longer has.
+func TestFinalizedRequestAnnotatorsRunAfterRetryCallbacks(t *testing.T) {
+	callbacks := model.NewCallbacks().RegisterBeforeModel(func(
+		_ context.Context,
+		args *model.BeforeModelArgs,
+	) (*model.BeforeModelResult, error) {
+		delete(args.Request.Tools, "dropped_by_retry")
+		return nil, nil
+	})
+
+	var seen [][]string
+	f := New(nil, nil, Options{
+		ModelCallbacks: callbacks,
+		FinalizedRequestAnnotators: []FinalizedRequestAnnotator{
+			func(_ context.Context, _ *agent.Invocation, req *model.Request) {
+				names := make([]string, 0, len(req.Tools))
+				for name := range req.Tools {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				seen = append(seen, names)
+			},
+		},
+	})
+
+	ctx := contextWithModelRetryCallbacks(
+		context.Background(),
+		f,
+		agent.NewInvocation(),
+		modelRetryTestBinder{},
+	)
+	bound, ok := ctx.Value(modelRetryTestCallbacksKey{}).(modelRetryTestCallbacks)
+	require.True(t, ok)
+
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("retry")},
+		Tools: map[string]tool.Tool{
+			"kept":             &mockLongRunnerTool{name: "kept"},
+			"dropped_by_retry": &mockLongRunnerTool{name: "dropped_by_retry"},
+		},
+	}
+	_, customResponse, err := bound.before(ctx, req)
+	require.NoError(t, err)
+	require.Nil(t, customResponse)
+
+	require.Equal(t, [][]string{{"kept"}}, seen,
+		"the retry's annotators must see the surface its callbacks left")
+}
+
+// A callback that answers the request itself means nothing reaches the model, so
+// there is no finalized request to annotate.
+func TestFinalizedRequestAnnotatorsSkipShortCircuitedRetries(t *testing.T) {
+	callbacks := model.NewCallbacks().RegisterBeforeModel(func(
+		_ context.Context,
+		_ *model.BeforeModelArgs,
+	) (*model.BeforeModelResult, error) {
+		return &model.BeforeModelResult{
+			CustomResponse: &model.Response{ID: "short-circuit"},
+		}, nil
+	})
+
+	var annotated int
+	f := New(nil, nil, Options{
+		ModelCallbacks: callbacks,
+		FinalizedRequestAnnotators: []FinalizedRequestAnnotator{
+			func(context.Context, *agent.Invocation, *model.Request) { annotated++ },
+		},
+	})
+
+	ctx := contextWithModelRetryCallbacks(
+		context.Background(),
+		f,
+		agent.NewInvocation(),
+		modelRetryTestBinder{},
+	)
+	bound, ok := ctx.Value(modelRetryTestCallbacksKey{}).(modelRetryTestCallbacks)
+	require.True(t, ok)
+
+	_, customResponse, err := bound.before(
+		ctx,
+		&model.Request{Messages: []model.Message{model.NewUserMessage("retry")}},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, customResponse)
+	require.Zero(t, annotated)
 }

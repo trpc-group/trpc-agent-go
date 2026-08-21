@@ -119,9 +119,9 @@ func TestParallelToolsStaysSilent(t *testing.T) {
 			},
 		},
 		{
-			// One tool has nothing to be batched with.
-			name:  "single tool",
-			tools: map[string]tool.Tool{"agent": unsafeStubTool{name: "agent"}},
+			// One admissible tool has no exception to announce.
+			name:  "single safe tool",
+			tools: map[string]tool.Tool{"read": safeStubTool{name: "read"}},
 		},
 		{
 			name:  "no tools",
@@ -260,5 +260,116 @@ func TestParallelToolsSeesThroughDeclarationOverlays(t *testing.T) {
 
 	if got := systemContent(req); !strings.Contains(got, "`agent`") {
 		t.Errorf("a patched declaration must not hide the tool from the notice, got %q", got)
+	}
+}
+
+// A request offering one exclusive tool still needs the notice.
+//
+// A turn is a batch of calls, not of definitions: a model can call the same
+// function several times in one turn, and hasConcurrentBatch will correctly
+// serialize those calls. Suppressing the notice because only one definition was
+// offered would withhold exactly the guidance that keeps the model from paying
+// for that serialization.
+func TestParallelToolsNamesASoleExclusiveTool(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("base")},
+		Tools:    map[string]tool.Tool{"agent": unsafeStubTool{name: "agent"}},
+	}
+	processParallelTools(req)
+
+	got := systemContent(req)
+	if !strings.Contains(got, "`agent`") {
+		t.Errorf("a sole exclusive tool must still be named, got %q", got)
+	}
+}
+
+// The same request can reach the model more than once: a model retry re-runs the
+// before-model callbacks over it and the annotators run again afterwards. The
+// notice must describe the request as it stands, not accumulate.
+func TestParallelToolsIsIdempotent(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("base")},
+		Tools: map[string]tool.Tool{
+			"read":  safeStubTool{name: "read"},
+			"agent": unsafeStubTool{name: "agent"},
+		},
+	}
+	processParallelTools(req)
+	once := systemContent(req)
+
+	processParallelTools(req)
+	if got := systemContent(req); got != once {
+		t.Fatalf("annotating twice must not change the prompt:\n%q\n%q", once, got)
+	}
+	if n := strings.Count(systemContent(req), noticePrefix); n != 1 {
+		t.Errorf("expected exactly one notice, got %d", n)
+	}
+}
+
+// A retry that changes the tool surface must change the notice with it.
+func TestParallelToolsFollowsTheToolSurface(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("base")},
+		Tools: map[string]tool.Tool{
+			"read":  safeStubTool{name: "read"},
+			"agent": unsafeStubTool{name: "agent"},
+		},
+	}
+	processParallelTools(req)
+	if got := systemContent(req); !strings.Contains(got, "`agent`") {
+		t.Fatalf("precondition: the first pass must name agent, got %q", got)
+	}
+
+	// The final retry drops tools before asking again.
+	req.Tools = map[string]tool.Tool{"transfer": unsafeStubTool{name: "transfer"}}
+	processParallelTools(req)
+
+	got := systemContent(req)
+	if strings.Contains(got, "`agent`") {
+		t.Errorf("the notice must not name a tool the request no longer carries, got %q", got)
+	}
+	if !strings.Contains(got, "`transfer`") {
+		t.Errorf("the notice must name the tool the request now carries, got %q", got)
+	}
+	if !strings.HasPrefix(got, "base\n\n") {
+		t.Errorf("the caller's own system message must survive, got %q", got)
+	}
+}
+
+// A retry that drops every exclusive tool must leave no notice behind.
+func TestParallelToolsWithdrawsTheNotice(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("base")},
+		Tools: map[string]tool.Tool{
+			"read":  safeStubTool{name: "read"},
+			"agent": unsafeStubTool{name: "agent"},
+		},
+	}
+	processParallelTools(req)
+	req.Tools = map[string]tool.Tool{"read": safeStubTool{name: "read"}}
+	processParallelTools(req)
+
+	if got := systemContent(req); got != "base" {
+		t.Fatalf("the prompt must return to the caller's own, got %q", got)
+	}
+}
+
+// The notice creates a system message when the request has none, so withdrawing
+// it must take that message away rather than leave an empty one.
+func TestParallelToolsRemovesTheSystemMessageItCreated(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		Tools:    map[string]tool.Tool{"agent": unsafeStubTool{name: "agent"}},
+	}
+	processParallelTools(req)
+	if len(req.Messages) != 2 {
+		t.Fatalf("precondition: the notice must create a system message, got %d", len(req.Messages))
+	}
+
+	req.Tools = map[string]tool.Tool{"read": safeStubTool{name: "read"}}
+	processParallelTools(req)
+
+	if len(req.Messages) != 1 || req.Messages[0].Content != "hello" {
+		t.Fatalf("expected only the user message to remain, got %+v", req.Messages)
 	}
 }

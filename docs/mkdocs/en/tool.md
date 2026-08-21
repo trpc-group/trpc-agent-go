@@ -2916,6 +2916,12 @@ objection: it is the default, and it promises nothing about any specific
 sibling. The framework never infers an objection from `ToolMetadata`, so an
 existing tool that publishes metadata keeps the scheduling it has today.
 
+When parallel tools are enabled and any available tool objects, the framework
+also tells the model, appending a short notice to the system prompt that names
+those tools and explains that a turn including one of them runs every call in
+it one after another. Without that, a model batching an exclusive tool with
+three cheap reads would quietly serialize all four with no way to see why.
+
 **Parallel execution effect:**
 
 ```bash
