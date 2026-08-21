@@ -1726,7 +1726,6 @@ func (f *Flow) runContextCompaction(
 		outcome string,
 		result *model.Request,
 		postRequestTokens int,
-		err error,
 	) {
 		var viewBound bool
 		var viewItems int
@@ -1734,15 +1733,11 @@ func (f *Flow) runContextCompaction(
 			viewBound = view.Bound
 			viewItems = len(view.Items)
 		}
-		var errText string
-		if err != nil {
-			errText = err.Error()
-		}
 		format := "Pre-LLM context compaction result: outcome=%s, agent=%s, " +
 			"filter_key=%q, request_tokens=%d, threshold=%d, " +
 			"context_window=%d, messages=%d->%d, post_request_tokens=%d, " +
 			"summary_view_present=%t, summary_view_bound=%t, " +
-			"summary_view_items=%d, duration_ms=%d, error=%q"
+			"summary_view_items=%d, duration_ms=%d"
 		args := []any{
 			outcome,
 			invocation.AgentName,
@@ -1757,7 +1752,6 @@ func (f *Flow) runContextCompaction(
 			viewBound,
 			viewItems,
 			time.Since(startedAt).Milliseconds(),
-			errText,
 		}
 		if outcome == contextCompactionOutcomeSuccess {
 			log.InfofContext(ctx, format, args...)
@@ -1803,7 +1797,7 @@ func (f *Flow) runContextCompaction(
 		if err != nil {
 			outcome = contextCompactionOutcomeSummaryError
 		}
-		logResult(outcome, decisionRequest, 0, err)
+		logResult(outcome, decisionRequest, decision.tokenCount)
 		return req
 	}
 
@@ -1825,8 +1819,7 @@ func (f *Flow) runContextCompaction(
 		logResult(
 			contextCompactionOutcomeRebuildUnavailable,
 			decisionRequest,
-			0,
-			nil,
+			decision.tokenCount,
 		)
 		return req
 	}
@@ -1861,7 +1854,6 @@ func (f *Flow) runContextCompaction(
 			contextCompactionOutcomePersistenceError,
 			postDecisionRequest,
 			postDecision.tokenCount,
-			err,
 		)
 		return rebuilt
 	}
@@ -1870,7 +1862,6 @@ func (f *Flow) runContextCompaction(
 		contextCompactionOutcomeSuccess,
 		postDecisionRequest,
 		postDecision.tokenCount,
-		nil,
 	)
 	return rebuilt
 }

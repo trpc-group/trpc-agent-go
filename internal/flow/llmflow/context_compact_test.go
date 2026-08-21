@@ -11,6 +11,7 @@ package llmflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -906,6 +908,15 @@ func TestMaybeCompactContextBeforeLLM_SkipsWhenSummaryInjectionDisabled(t *testi
 func TestMaybeCompactContextBeforeLLM_SkipsWhenSummaryRefreshFails(t *testing.T) {
 	modelName := "compact-retry-summary-error"
 	model.RegisterModelContextWindow(modelName, 10000)
+	const sensitiveErrorText = "sensitive summary provider content"
+	var warnings []string
+	oldWarnfContext := log.WarnfContext
+	log.WarnfContext = func(_ context.Context, format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	}
+	t.Cleanup(func() {
+		log.WarnfContext = oldWarnfContext
+	})
 
 	baseSvc := inmemory.NewSessionService()
 	t.Cleanup(func() {
@@ -914,7 +925,7 @@ func TestMaybeCompactContextBeforeLLM_SkipsWhenSummaryRefreshFails(t *testing.T)
 
 	service := &summaryFailingService{
 		Service: baseSvc,
-		err:     context.DeadlineExceeded,
+		err:     errors.New(sensitiveErrorText),
 	}
 	longContent := strings.Repeat("history ", 2000)
 	sess := &session.Session{
@@ -967,6 +978,10 @@ func TestMaybeCompactContextBeforeLLM_SkipsWhenSummaryRefreshFails(t *testing.T)
 
 	require.Equal(t, 1, service.Calls())
 	require.Same(t, req, rebuilt)
+	logged := strings.Join(warnings, "\n")
+	require.Contains(t, logged, "outcome=summary_error")
+	require.NotContains(t, logged, sensitiveErrorText)
+	require.NotContains(t, logged, "post_request_tokens=0")
 }
 
 func TestMaybeCompactContextBeforeLLM_RebuildsWithoutReplayingEarlierProcessors(t *testing.T) {

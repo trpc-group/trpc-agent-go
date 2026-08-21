@@ -1095,6 +1095,7 @@ func TestTokenTailoringCollapsedHistory(t *testing.T) {
 	}{
 		{name: "many messages collapse to two", before: 16, after: 2, want: true},
 		{name: "many messages collapse to one", before: 16, after: 1, want: true},
+		{name: "three messages collapse to two", before: 3, after: 2, want: true},
 		{name: "two messages remain one", before: 2, after: 1, want: false},
 		{name: "history remains", before: 16, after: 3, want: false},
 	}
