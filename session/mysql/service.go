@@ -1253,7 +1253,9 @@ func (s *Service) tombstoneDuplicateSessionStates(
 	}
 
 	for i, row := range duplicateRows {
-		deletedAt := now.Add(-time.Duration(i+1) * time.Microsecond)
+		// Use whole-second spacing so legacy TIMESTAMP/DATETIME columns without
+		// fractional precision keep tombstones distinct from the canonical row.
+		deletedAt := now.Add(-time.Duration(i+1) * time.Second)
 		if _, err := tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
 				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
@@ -1285,11 +1287,9 @@ func (s *Service) softDeleteSessions(
 	childArgs []any,
 	now time.Time,
 ) error {
-	// Soft delete session states
-	_, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionStates, stateWhereClause),
-		append([]any{now}, stateArgs...)...)
-	if err != nil {
+	// Soft delete session states. Legacy schemas may contain duplicate active rows
+	// that collide when assigned the same deleted_at value.
+	if err := s.softDeleteSessionStates(ctx, tx, stateWhereClause, stateArgs, now); err != nil {
 		return fmt.Errorf("soft delete sessions: %w", err)
 	}
 
@@ -1316,6 +1316,43 @@ func (s *Service) softDeleteSessions(
 	}
 
 	return nil
+}
+
+func (s *Service) softDeleteSessionStates(
+	ctx context.Context,
+	tx *sql.Tx,
+	whereClause string,
+	args []any,
+	now time.Time,
+) error {
+	activeWhereClause := fmt.Sprintf("(%s) AND deleted_at IS NULL", whereClause)
+	_, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionStates, activeWhereClause),
+		append([]any{now}, args...)...)
+	if err == nil {
+		return nil
+	}
+	if !isDuplicateEntryError(err) {
+		return err
+	}
+
+	// MySQL rolls back the failed UPDATE statement without aborting the
+	// transaction. Retry each row so healthy states retain their soft-delete
+	// history and only a row that still conflicts is physically removed.
+	log.WarnfContext(ctx, "soft deleting session states hit duplicate legacy rows; "+
+		"retrying the affected active session states individually: %v", err)
+	return s.softDeleteSessionStatesIndividually(ctx, tx, activeWhereClause, args, now)
+}
+
+func (s *Service) softDeleteSessionStatesIndividually(
+	ctx context.Context,
+	tx *sql.Tx,
+	activeWhereClause string,
+	args []any,
+	now time.Time,
+) error {
+	return s.softDeleteRowsIndividually(ctx, tx, s.tableSessionStates,
+		"session state", "session states", activeWhereClause, args, now)
 }
 
 func (s *Service) softDeleteSummaries(
@@ -1351,54 +1388,68 @@ func (s *Service) softDeleteSummariesIndividually(
 	args []any,
 	now time.Time,
 ) error {
-	type summaryRowKey struct {
+	return s.softDeleteRowsIndividually(ctx, tx, s.tableSessionSummaries,
+		"summary", "summaries", activeWhereClause, args, now)
+}
+
+func (s *Service) softDeleteRowsIndividually(
+	ctx context.Context,
+	tx *sql.Tx,
+	tableName string,
+	rowName string,
+	rowNamePlural string,
+	activeWhereClause string,
+	args []any,
+	now time.Time,
+) error {
+	type rowKey struct {
 		id     int64
 		userID string
 	}
 
 	rows, err := tx.QueryContext(ctx,
 		fmt.Sprintf(`SELECT id, user_id FROM %s WHERE %s ORDER BY id ASC FOR UPDATE`,
-			s.tableSessionSummaries, activeWhereClause),
+			tableName, activeWhereClause),
 		args...)
 	if err != nil {
-		return fmt.Errorf("query active summaries after soft-delete conflict: %w", err)
+		return fmt.Errorf("query active %s after soft-delete conflict: %w", rowNamePlural, err)
 	}
-	var keys []summaryRowKey
+	var keys []rowKey
 	for rows.Next() {
-		var key summaryRowKey
+		var key rowKey
 		if err := rows.Scan(&key.id, &key.userID); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("scan active summary after soft-delete conflict: %w", err)
+			return fmt.Errorf("scan active %s after soft-delete conflict: %w", rowName, err)
 		}
 		keys = append(keys, key)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return fmt.Errorf("iterate active summaries after soft-delete conflict: %w", err)
+		return fmt.Errorf("iterate active %s after soft-delete conflict: %w", rowNamePlural, err)
 	}
 	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close active summaries after soft-delete conflict: %w", err)
+		return fmt.Errorf("close active %s after soft-delete conflict: %w", rowNamePlural, err)
 	}
 
 	for _, key := range keys {
 		_, err := tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionSummaries),
+				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, tableName),
 			now, key.id, key.userID)
 		if err == nil {
 			continue
 		}
 		if !isDuplicateEntryError(err) {
-			return fmt.Errorf("soft delete summary %d individually: %w", key.id, err)
+			return fmt.Errorf("soft delete %s %d individually: %w", rowName, key.id, err)
 		}
 
-		log.WarnfContext(ctx, "soft deleting summary %d still hit a duplicate legacy row; "+
-			"deleting only that active row: %v", key.id, err)
+		log.WarnfContext(ctx, "soft deleting %s %d still hit a duplicate legacy row; "+
+			"deleting only that active row: %v", rowName, key.id, err)
 		if _, deleteErr := tx.ExecContext(ctx,
 			fmt.Sprintf(`DELETE FROM %s
-				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionSummaries),
+				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, tableName),
 			key.id, key.userID); deleteErr != nil {
-			return fmt.Errorf("delete duplicate active summary %d: %w", key.id, deleteErr)
+			return fmt.Errorf("delete duplicate active %s %d: %w", rowName, key.id, deleteErr)
 		}
 	}
 	return nil
