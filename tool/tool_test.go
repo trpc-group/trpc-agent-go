@@ -65,3 +65,32 @@ func TestSchemaPatternJSON(t *testing.T) {
 		t.Fatalf("pattern = %q, want %q", roundTrip.Pattern, schema.Pattern)
 	}
 }
+
+func TestSchemaNumericBoundsJSON(t *testing.T) {
+	schema := &Schema{
+		Type:             "number",
+		Minimum:          json.Number("1.5"),
+		Maximum:          json.Number("10"),
+		ExclusiveMinimum: json.Number("1"),
+		ExclusiveMaximum: json.Number("11"),
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	want := `{"type":"number","minimum":1.5,"maximum":10,"exclusiveMinimum":1,"exclusiveMaximum":11}`
+	if string(data) != want {
+		t.Fatalf("schema JSON = %s, want %s", string(data), want)
+	}
+
+	var roundTrip Schema
+	if err := json.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+	if roundTrip.Minimum != schema.Minimum ||
+		roundTrip.Maximum != schema.Maximum ||
+		roundTrip.ExclusiveMinimum != schema.ExclusiveMinimum ||
+		roundTrip.ExclusiveMaximum != schema.ExclusiveMaximum {
+		t.Fatalf("numeric bounds changed after round trip: got %+v, want %+v", roundTrip, schema)
+	}
+}

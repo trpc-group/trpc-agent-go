@@ -10,6 +10,7 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -25,7 +26,9 @@ func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 	}
 
 	var schemaMap map[string]any
-	if err := json.Unmarshal(schemaBytes, &schemaMap); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(schemaBytes))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schemaMap); err != nil {
 		return &tool.Schema{
 			Type: "object",
 		}
@@ -41,6 +44,10 @@ func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 	if patternVal, ok := schemaMap["pattern"].(string); ok {
 		schema.Pattern = patternVal
 	}
+	schema.Minimum = schemaNumber(schemaMap, "minimum")
+	schema.Maximum = schemaNumber(schemaMap, "maximum")
+	schema.ExclusiveMinimum = schemaNumber(schemaMap, "exclusiveMinimum")
+	schema.ExclusiveMaximum = schemaNumber(schemaMap, "exclusiveMaximum")
 	if propsVal, ok := schemaMap["properties"].(map[string]any); ok {
 		schema.Properties = convertProperties(propsVal)
 	}
@@ -93,6 +100,10 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 			if patternVal, ok := propMap["pattern"].(string); ok {
 				propSchema.Pattern = patternVal
 			}
+			propSchema.Minimum = schemaNumber(propMap, "minimum")
+			propSchema.Maximum = schemaNumber(propMap, "maximum")
+			propSchema.ExclusiveMinimum = schemaNumber(propMap, "exclusiveMinimum")
+			propSchema.ExclusiveMaximum = schemaNumber(propMap, "exclusiveMaximum")
 			if defaultVal, exists := propMap["default"]; exists {
 				propSchema.Default = defaultVal
 			}
@@ -135,4 +146,23 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 		}
 	}
 	return result
+}
+
+// schemaNumber converts a generic numeric JSON Schema keyword to json.Number.
+// The surrounding MCP schema is decoded into map[string]any, so a JSON round
+// trip avoids lossy type assertions while preserving integer and decimal forms.
+func schemaNumber(schema map[string]any, keyword string) json.Number {
+	value, ok := schema[keyword]
+	if !ok {
+		return ""
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	var number json.Number
+	if err := json.Unmarshal(encoded, &number); err != nil {
+		return ""
+	}
+	return number
 }
