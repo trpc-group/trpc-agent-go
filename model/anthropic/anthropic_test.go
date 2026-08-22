@@ -3683,3 +3683,161 @@ func TestChatRequestCallbackSynchronous(t *testing.T) {
 		})
 	}
 }
+
+// TestFindLastToolResultMessageIndex tests the findLastToolResultMessageIndex method.
+func TestFindLastToolResultMessageIndex(t *testing.T) {
+	m := New("claude-3-5-sonnet")
+
+	toolResults := func(ids ...string) anthropic.MessageParam {
+		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(ids))
+		for _, id := range ids {
+			blocks = append(blocks, anthropic.NewToolResultBlock(id, "ok", false))
+		}
+		return anthropic.NewUserMessage(blocks...)
+	}
+	text := func(role string, s string) anthropic.MessageParam {
+		return anthropic.MessageParam{Role: anthropic.MessageParamRole(role), Content: []anthropic.ContentBlockParamUnion{
+			{OfText: &anthropic.TextBlockParam{Text: s}},
+		}}
+	}
+	toolResultWithText := func(id string, s string) anthropic.MessageParam {
+		return anthropic.NewUserMessage(
+			anthropic.NewToolResultBlock(id, "ok", false),
+			anthropic.ContentBlockParamUnion{OfText: &anthropic.TextBlockParam{Text: s}},
+		)
+	}
+
+	tests := []struct {
+		name     string
+		messages []anthropic.MessageParam
+		minIndex int
+		expected int
+	}{
+		{
+			name:     "no messages",
+			messages: []anthropic.MessageParam{},
+			minIndex: -1,
+			expected: -1,
+		},
+		{
+			name:     "no tool results",
+			messages: []anthropic.MessageParam{text("user", "hi"), text("assistant", "hello")},
+			minIndex: -1,
+			expected: -1,
+		},
+		{
+			name: "tool results are the final message",
+			messages: []anthropic.MessageParam{
+				text("user", "task"),
+				text("assistant", "calling"),
+				toolResults("a", "b"),
+			},
+			minIndex: 1,
+			expected: 2,
+		},
+		{
+			name: "tool results followed by a trailing note",
+			messages: []anthropic.MessageParam{
+				text("user", "task"),
+				text("assistant", "calling"),
+				toolResults("a"),
+				text("user", "[Turn 3/40]"),
+			},
+			minIndex: 1,
+			expected: 2,
+		},
+		{
+			name: "tool results at or before minIndex are skipped",
+			messages: []anthropic.MessageParam{
+				text("user", "task"),
+				toolResults("a"),
+				text("assistant", "done"),
+				text("user", "[Turn 4/40]"),
+			},
+			minIndex: 2,
+			expected: -1,
+		},
+		{
+			name: "newest of several tool-result messages wins",
+			messages: []anthropic.MessageParam{
+				text("user", "task"),
+				text("assistant", "calling"),
+				toolResults("a"),
+				text("assistant", "calling again"),
+				toolResults("b"),
+				text("user", "[Turn 5/40]"),
+			},
+			minIndex: 3,
+			expected: 4,
+		},
+		{
+			// isToolResultMessage requires EVERY block to be a tool result,
+			// because that is the shape convertMessages produces when it merges a
+			// turn's results. A message that carries a result alongside text is
+			// not that shape, and the text beside it is the part that changes
+			// between requests — caching there would move the breakpoint onto
+			// content that invalidates the prefix it was meant to protect.
+			name: "trailing mixed-content message is not a tool-result message",
+			messages: []anthropic.MessageParam{
+				text("user", "task"),
+				text("assistant", "calling"),
+				toolResults("a"),
+				toolResultWithText("b", "[Turn 3/40]"),
+			},
+			minIndex: 1,
+			expected: 2,
+		},
+		{
+			// The same shape with nothing valid behind it must select nothing
+			// rather than fall back to it.
+			name: "mixed-content message alone is never selected",
+			messages: []anthropic.MessageParam{
+				text("user", "task"),
+				text("assistant", "calling"),
+				toolResultWithText("a", "[Turn 3/40]"),
+			},
+			minIndex: 1,
+			expected: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, m.findLastToolResultMessageIndex(tt.messages, tt.minIndex))
+		})
+	}
+}
+
+// TestApplyCacheControl_ToolResultBreakpoint verifies that a turn's tool output is
+// marked in the request that carries it, alongside the last-assistant breakpoint,
+// and that a trailing per-request note is left outside the cached prefix.
+func TestApplyCacheControl_ToolResultBreakpoint(t *testing.T) {
+	m := New("claude-3-5-sonnet", WithCacheMessages(true))
+
+	messages := []anthropic.MessageParam{
+		{Role: "user", Content: []anthropic.ContentBlockParamUnion{
+			{OfText: &anthropic.TextBlockParam{Text: "task"}},
+		}},
+		{Role: "assistant", Content: []anthropic.ContentBlockParamUnion{
+			{OfText: &anthropic.TextBlockParam{Text: "reading files"}},
+		}},
+		anthropic.NewUserMessage(
+			anthropic.NewToolResultBlock("call_1", "file one", false),
+			anthropic.NewToolResultBlock("call_2", "file two", false),
+		),
+		{Role: "user", Content: []anthropic.ContentBlockParamUnion{
+			{OfText: &anthropic.TextBlockParam{Text: "[Turn 3/40]"}},
+		}},
+	}
+
+	_, _, got := m.applyCacheControl(nil, nil, messages)
+
+	assert.Equal(t, "ephemeral", string(got[1].Content[0].OfText.CacheControl.Type),
+		"last assistant message should be marked")
+	assert.Equal(t, "ephemeral", string(got[2].Content[1].OfToolResult.CacheControl.Type),
+		"last tool result block should be marked")
+	assert.Empty(t, string(got[2].Content[0].OfToolResult.CacheControl.Type),
+		"only the final tool result block is marked")
+	assert.Empty(t, string(got[3].Content[0].OfText.CacheControl.Type),
+		"the trailing per-request note stays outside the prefix")
+}
