@@ -151,6 +151,159 @@ func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs(t *testing.T) {
 	)
 }
 
+func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_SkipsNonStaticChildInvocation(t *testing.T) {
+	agt := New(
+		"router_intent_parser",
+		WithModel(newDummyModel()),
+		WithInstruction("route intent"),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("workflow/classify"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	agent.SetInvocationSurfaceRootNodeID(parent, "workflow/classify")
+	child := parent.Clone()
+	agt.setupInvocation(child)
+	require.Equal(t, "workflow/classify", agent.InvocationSurfaceRootNodeID(child))
+	require.Nil(t, agt.ExecutionTraceAppliedSurfaceIDs(child))
+}
+
+func TestLLMAgent_Run_NonStaticChildInvocationDoesNotCreateTraceStep(t *testing.T) {
+	m := &captureModel{}
+	agt := New(
+		"router_intent_parser",
+		WithModel(m),
+		WithInstruction("route intent"),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("workflow/classify"),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	child := parent.Clone(
+		agent.WithInvocationMessage(model.NewUserMessage("route")),
+	)
+	ch, err := agt.Run(context.Background(), child)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.NotNil(t, m.got)
+	trace := agent.BuildExecutionTrace(parent, atrace.TraceStatusCompleted)
+	require.NotNil(t, trace)
+	require.Empty(t, trace.Steps)
+}
+
+func TestLLMAgent_Run_ChildWithOwnTraceCaptureReportsTraceStep(t *testing.T) {
+	m := &captureModel{}
+	agt := New(
+		"router_intent_parser",
+		WithModel(m),
+		WithInstruction("route intent"),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("workflow/classify"),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	child := parent.Clone(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+		agent.WithInvocationMessage(model.NewUserMessage("route")),
+	)
+	ch, err := agt.Run(context.Background(), child)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.NotNil(t, m.got)
+	require.Nil(t, agent.BuildExecutionTrace(parent, atrace.TraceStatusCompleted))
+	trace := agent.BuildExecutionTrace(child, atrace.TraceStatusCompleted)
+	require.NotNil(t, trace)
+	require.Len(t, trace.Steps, 1)
+	require.Equal(t, "router_intent_parser", trace.Steps[0].NodeID)
+	require.Contains(t, trace.Steps[0].AppliedSurfaceIDs, "router_intent_parser#instruction")
+}
+
+func TestLLMAgent_Run_StaticChildInvocationReportsTraceStep(t *testing.T) {
+	m := &captureModel{}
+	agt := New(
+		"router_intent_parser",
+		WithModel(m),
+		WithInstruction("route intent"),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("workflow/classify"),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	child := parent.Clone(
+		agent.WithInvocationTraceNodeID("workflow/classify/router"),
+		agent.WithInvocationMessage(model.NewUserMessage("route")),
+	)
+	ch, err := agt.Run(context.Background(), child)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.NotNil(t, m.got)
+	trace := agent.BuildExecutionTrace(parent, atrace.TraceStatusCompleted)
+	require.NotNil(t, trace)
+	require.Len(t, trace.Steps, 1)
+	require.Equal(t, "workflow/classify/router", trace.Steps[0].NodeID)
+	require.Contains(t, trace.Steps[0].AppliedSurfaceIDs, "workflow/classify/router#instruction")
+}
+
+func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesStaticChildInvocation(t *testing.T) {
+	agt := New(
+		"router_intent_parser",
+		WithModel(newDummyModel()),
+		WithInstruction("route intent"),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("workflow/classify"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	child := parent.Clone(
+		agent.WithInvocationTraceNodeID("workflow/classify/router"),
+	)
+	agt.setupInvocation(child)
+	require.Contains(
+		t,
+		agt.ExecutionTraceAppliedSurfaceIDs(child),
+		"workflow/classify/router#instruction",
+	)
+}
+
+func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesTeamMemberStaticInvocation(t *testing.T) {
+	agt := New(
+		"beta",
+		WithModel(newDummyModel()),
+		WithInstruction("member instruction"),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("swarm/alpha"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	agent.SetInvocationTeamMemberTraceRoot(parent, "swarm")
+	child := parent.Clone(
+		agent.WithInvocationTraceNodeID("swarm/beta"),
+	)
+	agt.setupInvocation(child)
+	require.Contains(
+		t,
+		agt.ExecutionTraceAppliedSurfaceIDs(child),
+		"swarm/beta#instruction",
+	)
+}
+
 func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesFilteredToolNames(t *testing.T) {
 	agt := New(
 		"test-agent",

@@ -895,7 +895,7 @@ func TestTeam_RunCoordinator_MemberToolUsesMemberSurfaceRootNodeID(t *testing.T)
 	}
 	require.Equal(t, "workflow/team", coordinator.gotTraceNodeID)
 	require.Equal(t, "workflow/team/coordinator", coordinator.gotSurfaceRootNodeID)
-	require.Equal(t, testMemberNameOne, member.gotTraceNodeID)
+	require.Equal(t, "workflow/team/member_one", member.gotTraceNodeID)
 	require.Equal(t, "workflow/team/member_one", member.gotSurfaceRootNodeID)
 }
 
@@ -2182,6 +2182,7 @@ func TestRunnerRun_WithSurfacePatchForNode_AppliesCoordinatorAndMemberPatches(
 		"user-team",
 		"session-team",
 		model.NewUserMessage("team input"),
+		agent.WithExecutionTraceEnabled(true),
 		agent.WithSurfacePatchForNode(coordinatorNodeID, coordinatorPatch),
 		agent.WithSurfacePatchForNode(memberNodeID, memberPatch),
 	)
@@ -2202,6 +2203,21 @@ func TestRunnerRun_WithSurfacePatchForNode_AppliesCoordinatorAndMemberPatches(
 		t,
 		teamFirstSystemMessageContent(memberPatched.LatestRequest().messages),
 		"member patched instruction",
+	)
+	require.NotNil(t, completion.ExecutionTrace)
+	var memberStepSurfaces []string
+	for _, step := range completion.ExecutionTrace.Steps {
+		if step.NodeID != memberNodeID {
+			continue
+		}
+		memberStepSurfaces = step.AppliedSurfaceIDs
+		break
+	}
+	require.NotNil(t, memberStepSurfaces)
+	require.Contains(
+		t,
+		memberStepSurfaces,
+		structure.SurfaceID(memberNodeID, structure.SurfaceTypeInstruction),
 	)
 }
 

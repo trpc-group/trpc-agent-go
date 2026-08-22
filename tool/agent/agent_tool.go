@@ -565,7 +565,7 @@ func parentInvocationWithLiveSession(
 	return view
 }
 
-func (at *Tool) surfaceRootNodeIDForParentInvocation(
+func (at *Tool) memberNodeIDForParentInvocation(
 	parentInv *agent.Invocation,
 ) string {
 	if parentInv == nil || at.agent == nil {
@@ -638,11 +638,12 @@ func (at *Tool) childInvocationOptions(
 			inv.RunOptions = runOptions
 		})
 	}
-	if surfaceRootNodeID := at.surfaceRootNodeIDForParentInvocation(parentInv); surfaceRootNodeID != "" {
+	if memberNodeID := at.memberNodeIDForParentInvocation(parentInv); memberNodeID != "" {
 		invocationOpts = append(
 			invocationOpts,
+			agent.WithInvocationTraceNodeID(memberNodeID),
 			func(inv *agent.Invocation) {
-				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
+				agent.SetInvocationSurfaceRootNodeID(inv, memberNodeID)
 			},
 		)
 	}
