@@ -427,7 +427,9 @@ func TestCreateSession_RetriesLockErrors(t *testing.T) {
 			}
 
 			mock.ExpectBegin()
-			mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT expires_at FROM session_states
+		WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL
+		FOR UPDATE`)).
 				WithArgs(key.AppName, key.UserID, key.SessionID).
 				WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
 			mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
@@ -438,7 +440,9 @@ func TestCreateSession_RetriesLockErrors(t *testing.T) {
 			mock.ExpectRollback()
 
 			mock.ExpectBegin()
-			mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT expires_at FROM session_states
+		WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL
+		FOR UPDATE`)).
 				WithArgs(key.AppName, key.UserID, key.SessionID).
 				WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
 			mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
