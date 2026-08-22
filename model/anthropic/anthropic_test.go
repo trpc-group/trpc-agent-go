@@ -10,6 +10,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -368,9 +369,11 @@ func Test_convertTools_NumericBoundsRemainJSONNumbers(t *testing.T) {
 				Type: "object",
 				Properties: map[string]*tool.Schema{
 					"page_size": {
-						Type:    "integer",
-						Minimum: json.Number("1"),
-						Maximum: json.Number("100"),
+						Type:             "integer",
+						Minimum:          json.Number("1"),
+						Maximum:          json.Number("9007199254740993"),
+						ExclusiveMinimum: json.Number("0"),
+						ExclusiveMaximum: json.Number("9007199254740994"),
 					},
 				},
 			},
@@ -382,16 +385,49 @@ func Test_convertTools_NumericBoundsRemainJSONNumbers(t *testing.T) {
 
 	wireJSON, err := json.Marshal(params[0])
 	require.NoError(t, err)
+	decoder := json.NewDecoder(bytes.NewReader(wireJSON))
+	decoder.UseNumber()
 	var wireTool struct {
 		InputSchema struct {
 			Properties map[string]map[string]any `json:"properties"`
 		} `json:"input_schema"`
 	}
-	require.NoError(t, json.Unmarshal(wireJSON, &wireTool))
+	require.NoError(t, decoder.Decode(&wireTool))
 
 	pageSize := wireTool.InputSchema.Properties["page_size"]
-	assert.Equal(t, float64(1), pageSize["minimum"])
-	assert.Equal(t, float64(100), pageSize["maximum"])
+	assert.Equal(t, json.Number("1"), pageSize["minimum"])
+	assert.Equal(t, json.Number("9007199254740993"), pageSize["maximum"])
+	assert.Equal(t, json.Number("0"), pageSize["exclusiveMinimum"])
+	assert.Equal(t, json.Number("9007199254740994"), pageSize["exclusiveMaximum"])
+}
+
+func Test_convertTools_PropertiesMarshalErrorFallsBack(t *testing.T) {
+	logger := &stubLogger{}
+	original := agentlog.Default
+	agentlog.Default = logger
+	defer func() { agentlog.Default = original }()
+
+	toolsMap := map[string]tool.Tool{
+		"bounded_search": stubTool{decl: &tool.Declaration{
+			Name: "bounded_search",
+			InputSchema: &tool.Schema{
+				Type: "object",
+				Properties: map[string]*tool.Schema{
+					"page_size": {
+						Type:                 "integer",
+						AdditionalProperties: func() {},
+					},
+				},
+			},
+		}},
+	}
+
+	params := convertTools(toolsMap)
+	require.Len(t, params, 1)
+	assert.True(t, logger.debugfCalled)
+	assert.Contains(t, logger.debugfMsg, "marshal Anthropic tool properties")
+	_, propertiesOK := params[0].OfTool.InputSchema.Properties.(map[string]*tool.Schema)
+	assert.True(t, propertiesOK)
 }
 
 func Test_convertTools_NoArgObjectSchemaUsesEmptyProperties(t *testing.T) {

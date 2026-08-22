@@ -70,6 +70,36 @@ func TestConvertMCPSchema_InvalidJSON(t *testing.T) {
 	require.Equal(t, &tool.Schema{Type: "object"}, schema)
 }
 
+func TestConvertMCPSchema_NonObjectJSON(t *testing.T) {
+	schema := convertMCPSchemaToSchema("not-an-object")
+	require.Equal(t, &tool.Schema{Type: "object"}, schema)
+}
+
+func TestConvertMCPSchema_NonNumericBoundsAreDropped(t *testing.T) {
+	schema := convertMCPSchemaToSchema(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"page_size": map[string]any{
+				"type":             "integer",
+				"minimum":          true,
+				"maximum":          "unbounded",
+				"exclusiveMinimum": []any{1},
+				"exclusiveMaximum": map[string]any{"value": 2},
+			},
+		},
+	})
+	pageSize := schema.Properties["page_size"]
+	require.Empty(t, pageSize.Minimum)
+	require.Empty(t, pageSize.Maximum)
+	require.Empty(t, pageSize.ExclusiveMinimum)
+	require.Empty(t, pageSize.ExclusiveMaximum)
+}
+
+func TestSchemaNumber_MissingAndUnmarshalable(t *testing.T) {
+	require.Empty(t, schemaNumber(map[string]any{}, "minimum"))
+	require.Empty(t, schemaNumber(map[string]any{"minimum": make(chan int)}, "minimum"))
+}
+
 func TestConvertMCPSchema_RootPattern(t *testing.T) {
 	mcpSchema := map[string]any{
 		"type":    "string",

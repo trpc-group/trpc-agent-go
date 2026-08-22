@@ -1115,24 +1115,19 @@ func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 	return result
 }
 
-// normalizeToolProperties converts schema properties into plain JSON values
+// normalizeToolProperties converts schema properties into stdlib JSON tokens
 // before the Anthropic SDK serializes them. The SDK's encoder treats
 // encoding/json.Number as a string alias, which turns numeric JSON Schema
 // bounds into quoted strings and causes Anthropic to reject the whole tool
-// declaration. A standard-library JSON round trip preserves their JSON number
-// representation while retaining nested constraints.
+// declaration. Returning json.RawMessage keeps integer literals that do not
+// fit in float64 (for example 9007199254740993) instead of rounding them.
 func normalizeToolProperties(properties map[string]*tool.Schema) any {
 	schemaJSON, err := json.Marshal(properties)
 	if err != nil {
 		log.Debugf("marshal Anthropic tool properties: %v", err)
 		return properties
 	}
-	var normalized map[string]any
-	if err := json.Unmarshal(schemaJSON, &normalized); err != nil {
-		log.Debugf("unmarshal Anthropic tool properties: %v", err)
-		return properties
-	}
-	return normalized
+	return json.RawMessage(schemaJSON)
 }
 
 // buildToolDescription builds the description for a tool.
