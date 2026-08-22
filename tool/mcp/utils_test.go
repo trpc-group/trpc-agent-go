@@ -10,6 +10,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,6 +36,28 @@ func TestConvertMCPSchema_Basic(t *testing.T) {
 	require.Equal(t, "^[a-z]+$", s.Properties["a"].Pattern)
 	require.Equal(t, "number", s.Properties["b"].Type)
 	require.Equal(t, "bbb", s.Properties["b"].Description)
+}
+
+func TestConvertMCPSchema_NumericBounds(t *testing.T) {
+	mcpSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"page_size": map[string]any{
+				"type":             "integer",
+				"minimum":          1,
+				"maximum":          json.Number("9007199254740993"),
+				"exclusiveMinimum": 0,
+				"exclusiveMaximum": json.Number("9007199254740994"),
+			},
+		},
+	}
+
+	schema := convertMCPSchemaToSchema(mcpSchema)
+	pageSize := schema.Properties["page_size"]
+	require.Equal(t, json.Number("1"), pageSize.Minimum)
+	require.Equal(t, json.Number("9007199254740993"), pageSize.Maximum)
+	require.Equal(t, json.Number("0"), pageSize.ExclusiveMinimum)
+	require.Equal(t, json.Number("9007199254740994"), pageSize.ExclusiveMaximum)
 }
 
 func TestConvertProperties_Nil(t *testing.T) {

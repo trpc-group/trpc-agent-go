@@ -359,6 +359,41 @@ func Test_convertTools(t *testing.T) {
 	assert.Equal(t, "t1", params[0].OfTool.Name)
 }
 
+func Test_convertTools_NumericBoundsRemainJSONNumbers(t *testing.T) {
+	toolsMap := map[string]tool.Tool{
+		"bounded_search": stubTool{decl: &tool.Declaration{
+			Name:        "bounded_search",
+			Description: "search with a bounded page size",
+			InputSchema: &tool.Schema{
+				Type: "object",
+				Properties: map[string]*tool.Schema{
+					"page_size": {
+						Type:    "integer",
+						Minimum: json.Number("1"),
+						Maximum: json.Number("100"),
+					},
+				},
+			},
+		}},
+	}
+
+	params := convertTools(toolsMap)
+	require.Len(t, params, 1)
+
+	wireJSON, err := json.Marshal(params[0])
+	require.NoError(t, err)
+	var wireTool struct {
+		InputSchema struct {
+			Properties map[string]map[string]any `json:"properties"`
+		} `json:"input_schema"`
+	}
+	require.NoError(t, json.Unmarshal(wireJSON, &wireTool))
+
+	pageSize := wireTool.InputSchema.Properties["page_size"]
+	assert.Equal(t, float64(1), pageSize["minimum"])
+	assert.Equal(t, float64(100), pageSize["maximum"])
+}
+
 func Test_convertTools_NoArgObjectSchemaUsesEmptyProperties(t *testing.T) {
 	tests := []struct {
 		name                string
