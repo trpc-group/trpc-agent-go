@@ -284,6 +284,18 @@ func New(name string, opts ...Option) *LLMAgent {
 	if len(options.toolActivationRules) > 0 {
 		flowOpts.ToolActivationApplier = a.applyToolActivation
 	}
+	// Name the tools that must run alone, so the model can form batches that
+	// actually run concurrently. Only meaningful when parallel tool execution is
+	// on, and it annotates the finalized request rather than joining the request
+	// processors: before-model callbacks still add to and replace Request.Tools
+	// after preprocessing, and the notice has to describe the surface the model is
+	// really shown.
+	if options.EnableParallelTools {
+		flowOpts.FinalizedRequestAnnotators = append(
+			flowOpts.FinalizedRequestAnnotators,
+			processor.NewToolBatchingNotice(options.ToolConcurrencyConfig).Annotate,
+		)
+	}
 
 	a.flow = llmflow.New(
 		requestProcessors, responseProcessors,

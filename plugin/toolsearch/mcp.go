@@ -375,6 +375,12 @@ func (t *renamedTool) ToolMetadata() tool.ToolMetadata {
 	return tool.MetadataOf(t.original)
 }
 
+// IsConcurrencySafe delegates to the original tool. Without this, renaming a
+// tool would hide an objection it raised and put it back on the parallel path.
+func (t *renamedTool) IsConcurrencySafe() bool {
+	return tool.IsConcurrencySafe(t.original)
+}
+
 // StreamableCall delegates to the original streamable tool.
 func (t *streamableRenamedTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
 	return t.streamable.StreamableCall(ctx, jsonArgs)

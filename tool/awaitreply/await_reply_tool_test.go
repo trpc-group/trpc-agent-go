@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestTool_Declaration(t *testing.T) {
@@ -88,4 +89,30 @@ func TestTool_CallInvalidInvocation(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, resp.Success)
 	require.Contains(t, resp.Message, "non-empty agent target")
+}
+
+// await_user_reply must never be batched with other tool calls.
+//
+// Call stages the resume route with agent.MarkAwaitingUserReply, which writes to
+// the invocation's own state. Parallel execution hands each call a separate
+// invocation view whose state is cloned and never synced back, so a batched call
+// would report success while the route was discarded with the view. Asserted
+// through tool.ConcurrencyAware as the scheduler resolves it, not only on the
+// concrete type.
+func TestTool_IsConcurrencySafe(t *testing.T) {
+	tl := New()
+
+	require.False(
+		t,
+		tl.IsConcurrencySafe(),
+		"await_user_reply must not run on the parallel path",
+	)
+	aware, ok := tool.Tool(tl).(tool.ConcurrencyAware)
+	require.True(t, ok, "await_user_reply must publish tool.ConcurrencyAware")
+	require.False(t, aware.IsConcurrencySafe(), "the objection must resolve through the interface")
+	require.False(
+		t,
+		tool.IsConcurrencySafe(tl),
+		"tool.IsConcurrencySafe must report await_user_reply as objecting",
+	)
 }
