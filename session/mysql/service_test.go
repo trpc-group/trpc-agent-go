@@ -4140,12 +4140,14 @@ func TestConcurrentCreateSessionSerializesAndCleanupTombstonesDuplicates(t *test
 
 	dbs := make([]*sql.DB, 2)
 	services := make([]*Service, 2)
+	connectionIDs := make([]int64, 2)
 	for i := range dbs {
 		dbs[i], err = sql.Open("mysql", dsn)
 		require.NoError(t, err)
 		dbs[i].SetMaxOpenConns(1)
 		dbs[i].SetMaxIdleConns(1)
 		require.NoError(t, dbs[i].PingContext(ctx))
+		require.NoError(t, dbs[i].QueryRowContext(ctx, "SELECT CONNECTION_ID()").Scan(&connectionIDs[i]))
 		services[i] = &Service{
 			opts:                  bootstrap.opts,
 			mysqlClient:           storage.WrapSQLDB(dbs[i]),
@@ -4164,19 +4166,64 @@ func TestConcurrentCreateSessionSerializesAndCleanupTombstonesDuplicates(t *test
 	})
 
 	key := session.Key{AppName: "test-app", UserID: "test-user", SessionID: "same-session"}
-	start := make(chan struct{})
+	seedExpired := time.Now().Add(-time.Minute)
+	_, err = rawDB.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s
+		(app_name, user_id, session_id, state, created_at, updated_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, bootstrap.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID,
+		`{"id":"same-session","state":{}}`, seedExpired, seedExpired, seedExpired)
+	require.NoError(t, err)
+
+	lockTx, err := rawDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer lockTx.Rollback()
+	var lockedID int64
+	err = lockTx.QueryRowContext(ctx, fmt.Sprintf(`SELECT id FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND deleted_at IS NULL
+		FOR UPDATE`, bootstrap.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID).Scan(&lockedID)
+	require.NoError(t, err)
+
+	started := make(chan struct{}, len(services))
 	results := make(chan error, len(services))
 	var wg sync.WaitGroup
 	for _, svc := range services {
 		wg.Add(1)
 		go func(service *Service) {
 			defer wg.Done()
-			<-start
+			started <- struct{}{}
 			_, createErr := service.CreateSession(ctx, key, nil)
 			results <- createErr
 		}(svc)
 	}
-	close(start)
+	for i := 0; i < len(services); i++ {
+		<-started
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	var lockWaits int
+	var lastErr error
+	for lockWaits != len(services) {
+		lastErr = rawDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM INFORMATION_SCHEMA.INNODB_TRX
+			WHERE trx_mysql_thread_id IN (?, ?) AND trx_state = 'LOCK WAIT'`,
+			connectionIDs[0], connectionIDs[1]).Scan(&lockWaits)
+		if lastErr == nil && lockWaits == len(services) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			require.NoError(t, ctx.Err())
+		case <-deadline.C:
+			require.NoError(t, lastErr)
+			require.Equal(t, len(services), lockWaits)
+		case <-ticker.C:
+		}
+	}
+	require.NoError(t, lockTx.Commit())
+
 	wg.Wait()
 	close(results)
 
