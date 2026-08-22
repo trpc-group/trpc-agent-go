@@ -611,6 +611,54 @@ func (p *FunctionCallResponseProcessor) shouldEmitToolResultEventPerToolCall(
 	return true
 }
 
+// hasConcurrentBatch reports whether this turn's tool calls may run on the
+// parallel path.
+//
+// A batch qualifies only when NO call objects to running beside its siblings.
+// The parallel path hands each worker its own invocation view, cloned before any
+// of them start; a tool whose observable effect is a mutation of that invocation
+// rather than its returned result loses that mutation when the view is discarded
+// (see tool.ConcurrencyAware). Running the whole turn sequentially is the
+// behavior such a tool already relies on.
+//
+// Requiring the WHOLE batch to be admissible — rather than splitting it into
+// runs of objecting and non-objecting calls — keeps the model's requested
+// ordering intact without introducing a second execution schedule. A mixed turn
+// therefore falls back to the sequential path it would have taken before
+// parallel tools were enabled.
+//
+// Admission resolves each name the way execution does, through
+// resolveToolCallTarget's compatibility mapping: a call naming a sub-agent
+// directly is really a transfer_to_agent call, and checking the raw name would
+// miss the objection the mapped tool raises. A name that resolves to nothing is
+// admissible — it never executes, it produces a terminal error result, so it
+// cannot constrain its siblings.
+//
+// The check goes through itool.IsConcurrencySafe so a host that patched a tool's
+// declaration cannot hide the objection behind an overlay wrapper.
+func hasConcurrentBatch(
+	toolCalls []model.ToolCall,
+	tools map[string]tool.Tool,
+	invocation *agent.Invocation,
+) bool {
+	if len(toolCalls) <= 1 {
+		return false
+	}
+	for _, tc := range toolCalls {
+		tl, ok := tools[tc.Function.Name]
+		if !ok {
+			tl = findCompatibleTool(tc.Function.Name, tools, invocation)
+		}
+		if tl == nil {
+			continue
+		}
+		if !itool.IsConcurrencySafe(tl) {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultEventsWithRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -627,7 +675,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 	}
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 	execute := p.executeToolCallsSequentiallyAndEmitPerCallResultEvents
-	if p.enableParallelTools {
+	if p.enableParallelTools && hasConcurrentBatch(toolCalls, tools, invocation) {
 		execute = p.executeToolCallsInParallelAndEmitPerCallResultEvents
 	}
 	lastEvent, err := execute(
@@ -820,8 +868,13 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 	}
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 
-	// If parallel tools are enabled AND multiple tool calls, execute concurrently
-	if p.enableParallelTools && len(toolCalls) > 1 {
+	// Parallel execution is admitted only when parallel tools are enabled AND NO
+	// call in the batch objects to running beside its siblings. Admission is
+	// all-or-nothing by design: a single objecting call keeps the WHOLE turn
+	// sequential rather than being split out of it, because partitioning would
+	// still run the objecting call concurrently with the rest of the batch — see
+	// hasConcurrentBatch.
+	if p.enableParallelTools && hasConcurrentBatch(toolCalls, tools, invocation) {
 		mergedEvent, toolResults, err := p.executeToolCallsInParallel(
 			ctx,
 			invocation,

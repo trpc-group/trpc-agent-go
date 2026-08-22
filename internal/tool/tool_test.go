@@ -277,7 +277,10 @@ func TestNamedTool_MetadataAndPermissionDelegation(t *testing.T) {
 		tools: []tool.Tool{&simpleTool{name: "plain"}},
 	}).Tools(ctx)[0].(*NamedTool)
 	require.Equal(t, tool.ToolMetadata{}, plain.ToolMetadata())
-	require.False(t, plain.IsConcurrencySafe())
+	// IsConcurrencySafe does not read the metadata above: a tool that publishes
+	// nothing raises no objection to running beside its siblings, and this wrapper
+	// must not raise one on its behalf.
+	require.True(t, plain.IsConcurrencySafe())
 	require.False(t, plain.ShouldDefer(ctx))
 	decision, err = plain.CheckPermission(ctx, &tool.PermissionRequest{})
 	require.NoError(t, err)
