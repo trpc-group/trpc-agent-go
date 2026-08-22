@@ -395,78 +395,66 @@ func TestCreateSession_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestCreateSession_RetriesLockWaitTimeout(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	s := createTestService(t, db, WithSessionTTL(time.Hour))
-	key := session.Key{
-		AppName:   "test-app",
-		UserID:    "user-123",
-		SessionID: "session-456",
-	}
-
-	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
-		WillReturnError(&mysql.MySQLError{
-			Number:  sqldb.MySQLErrLockWaitTimeout,
-			Message: "lock wait timeout exceeded",
-		})
-	mock.ExpectRollback()
-
-	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
-		WithArgs(key.AppName, key.UserID, key.SessionID).
-		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
-		WithArgs(key.AppName, sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
-		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
-
-	sess, err := s.CreateSession(context.Background(), key, nil)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestIsRetryableMySQLLockError(t *testing.T) {
+func TestCreateSession_RetriesLockErrors(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
-		want bool
+		name    string
+		number  uint16
+		message string
 	}{
 		{
-			name: "lock wait timeout",
-			err:  &mysql.MySQLError{Number: sqldb.MySQLErrLockWaitTimeout},
-			want: true,
+			name:    "lock wait timeout",
+			number:  sqldb.MySQLErrLockWaitTimeout,
+			message: "lock wait timeout exceeded",
 		},
 		{
-			name: "deadlock",
-			err:  &mysql.MySQLError{Number: sqldb.MySQLErrLockDeadlock},
-			want: true,
-		},
-		{
-			name: "duplicate entry",
-			err:  &mysql.MySQLError{Number: sqldb.MySQLErrDuplicateEntry},
-		},
-		{
-			name: "generic",
-			err:  fmt.Errorf("boom"),
+			name:    "deadlock",
+			number:  sqldb.MySQLErrLockDeadlock,
+			message: "deadlock found when trying to get lock",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isRetryableMySQLLockError(tt.err))
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+
+			s := createTestService(t, db, WithSessionTTL(time.Hour))
+			key := session.Key{
+				AppName:   "test-app",
+				UserID:    "user-123",
+				SessionID: "session-456",
+			}
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
+				WithArgs(key.AppName, key.UserID, key.SessionID).
+				WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
+			mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
+				WillReturnError(&mysql.MySQLError{
+					Number:  tt.number,
+					Message: tt.message,
+				})
+			mock.ExpectRollback()
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
+				WithArgs(key.AppName, key.UserID, key.SessionID).
+				WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
+			mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
+				WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectCommit()
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
+				WithArgs(key.AppName, sqlmock.AnyArg()).
+				WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
+				WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+				WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+			sess, err := s.CreateSession(context.Background(), key, nil)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
 }

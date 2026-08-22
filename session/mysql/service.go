@@ -291,37 +291,8 @@ func (s *Service) createSessionTransaction(
 	now time.Time,
 ) error {
 	return s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
-		var sessionExists bool
-		var existingExpiresAt sql.NullTime
-		var nonExpiredExists bool
-		if err := func() error {
-			rows, err := tx.QueryContext(ctx, fmt.Sprintf(
-				`SELECT expires_at FROM %s
-				WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL
-				FOR UPDATE`,
-				s.tableSessionStates,
-			), key.AppName, key.UserID, key.SessionID)
-			if err != nil {
-				return fmt.Errorf("check existing session failed: %w", err)
-			}
-			defer rows.Close()
-
-			for rows.Next() {
-				var rowExpiresAt sql.NullTime
-				sessionExists = true
-				if err := rows.Scan(&rowExpiresAt); err != nil {
-					return fmt.Errorf("check existing session failed: %w", err)
-				}
-				if !rowExpiresAt.Valid || rowExpiresAt.Time.After(now) {
-					existingExpiresAt = rowExpiresAt
-					nonExpiredExists = true
-				}
-			}
-			if err := rows.Err(); err != nil {
-				return fmt.Errorf("check existing session failed: %w", err)
-			}
-			return nil
-		}(); err != nil {
+		sessionExists, existingExpiresAt, nonExpiredExists, err := s.lockActiveSessionStates(ctx, tx, key, now)
+		if err != nil {
 			return err
 		}
 
@@ -357,9 +328,9 @@ func (s *Service) createSessionTransaction(
 			key.SessionID,
 		)
 
-		var err error
+		var writeErr error
 		if sessionExists {
-			_, err = tx.ExecContext(ctx,
+			_, writeErr = tx.ExecContext(ctx,
 				fmt.Sprintf(
 					`UPDATE %s SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL
 					WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
@@ -369,7 +340,7 @@ func (s *Service) createSessionTransaction(
 				key.AppName, key.UserID, key.SessionID,
 			)
 		} else {
-			_, err = tx.ExecContext(ctx,
+			_, writeErr = tx.ExecContext(ctx,
 				fmt.Sprintf(
 					`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at)
 					VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -379,8 +350,8 @@ func (s *Service) createSessionTransaction(
 				sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
 			)
 		}
-		if err != nil {
-			return fmt.Errorf("create session failed: %w", err)
+		if writeErr != nil {
+			return fmt.Errorf("create session failed: %w", writeErr)
 		}
 		return nil
 	}, func(options *sql.TxOptions) {
@@ -388,6 +359,43 @@ func (s *Service) createSessionTransaction(
 		// absent-key locking between the existence check and insert.
 		options.Isolation = sql.LevelSerializable
 	})
+}
+
+func (s *Service) lockActiveSessionStates(
+	ctx context.Context,
+	tx *sql.Tx,
+	key session.Key,
+	now time.Time,
+) (bool, sql.NullTime, bool, error) {
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf(
+		`SELECT expires_at FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL
+		FOR UPDATE`,
+		s.tableSessionStates,
+	), key.AppName, key.UserID, key.SessionID)
+	if err != nil {
+		return false, sql.NullTime{}, false, fmt.Errorf("check existing session failed: %w", err)
+	}
+	defer rows.Close()
+
+	var sessionExists bool
+	var existingExpiresAt sql.NullTime
+	var nonExpiredExists bool
+	for rows.Next() {
+		var rowExpiresAt sql.NullTime
+		sessionExists = true
+		if err := rows.Scan(&rowExpiresAt); err != nil {
+			return false, sql.NullTime{}, false, fmt.Errorf("check existing session failed: %w", err)
+		}
+		if !rowExpiresAt.Valid || rowExpiresAt.Time.After(now) {
+			existingExpiresAt = rowExpiresAt
+			nonExpiredExists = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, sql.NullTime{}, false, fmt.Errorf("check existing session failed: %w", err)
+	}
+	return sessionExists, existingExpiresAt, nonExpiredExists, nil
 }
 
 // GetSession gets a session.
