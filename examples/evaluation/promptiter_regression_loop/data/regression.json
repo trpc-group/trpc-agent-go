@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "1.0",
+  "reportId": "issue-2003-deterministic-loop",
+  "generatedAt": "2026-07-24T00:00:00Z",
+  "gate": {
+    "primaryMetric": "quality",
+    "metricDirections": {
+      "quality": "higher_is_better"
+    },
+    "epsilon": 0.000000001,
+    "minValidationGain": 0.05,
+    "noNewHardFailures": true,
+    "noCriticalRegressions": true,
+    "modelCallStopThreshold": 200
+  },
+  "criticalCaseIds": [
+    "validation-wrong-route",
+    "validation-direct-no-tool",
+    "validation-private-order"
+  ],
+  "hardFailureCaseIds": [
+    "validation-wrong-route",
+    "validation-direct-no-tool",
+    "validation-private-order"
+  ],
+  "evidenceLimit": 20,
+  "output": {
+    "json": "optimization_report.json",
+    "markdown": "optimization_report.md"
+  }
+}

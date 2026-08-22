@@ -1,0 +1,1470 @@
+{
+ "artifactFormatVersion": "promptiter-regression-manifest/v1",
+ "schemaVersion": "1.0",
+ "reportId": "issue-2003-deterministic-loop",
+ "runId": "issue-2003-deterministic-loop-bf9f84395a69",
+ "generatedAt": "2026-07-24T00:00:00Z",
+ "status": "succeeded",
+ "stopReason": "max_rounds",
+ "resolvedConfig": {
+  "seed": 2003,
+  "train": {
+   "evalSetId": "issue-2003-train",
+   "evalSetHash": "7f7fad78dd902bc94af71751fee2997d273b92afc270b60cfb67b2f3fd7a96eb",
+   "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
+   "caseIds": [
+    "train-invalid-format",
+    "train-response-mismatch",
+    "train-wrong-tool"
+   ],
+   "metricNames": [
+    "quality"
+   ],
+   "normalizedInputHashes": {
+    "train-invalid-format": "e99814da14eb708de88bb28bcc135cbc6e48db922154e6972b8bb6c1ab763f5e",
+    "train-response-mismatch": "c6329bc9353f6b35a9469fe5454ba614c5a81d32988b157b40acb8bd9f1d06a3",
+    "train-wrong-tool": "0db4c24cd61ea907a9206ea9e4e39eefbce592da3ffffb62d07bc58ab2627083"
+   }
+  },
+  "validation": {
+   "evalSetId": "issue-2003-validation",
+   "evalSetHash": "23d02c43387fe5654007f01cf6d08ee8d176b8a830d67564b60b79d17fed7052",
+   "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
+   "caseIds": [
+    "validation-direct-no-tool",
+    "validation-knowledge-recall",
+    "validation-private-order",
+    "validation-wrong-arguments",
+    "validation-wrong-route"
+   ],
+   "metricNames": [
+    "quality"
+   ],
+   "normalizedInputHashes": {
+    "validation-direct-no-tool": "c504903311fc06724e72c42c04222749700a1f4435004273c7a31a6c9ac85e42",
+    "validation-knowledge-recall": "f0475f6014b5c48a42420e5340e4bd82290b0f4e0fc39342772965d2f0894c11",
+    "validation-private-order": "7fd3eeb4ac2769af26a255b23f9c6b72ea71dd98bf813e3a0331b75d9420884e",
+    "validation-wrong-arguments": "3a304655abd5816ba97fa5d8652bacaa57cc2684d9e8ede389840917c1feea60",
+    "validation-wrong-route": "6ca0728905ed227cf340a3b58047e04521bc48cfa93d6cf53baccb51a1eb55b5"
+   }
+  },
+  "promptIter": {
+   "maxOuterRounds": 2,
+   "searchMinScoreGain": 0.05,
+   "internalValidationStrategy": "train_all",
+   "targetSurfaceId": "support-agent#instruction"
+  },
+  "gate": {
+   "primaryMetric": "quality",
+   "metricDirections": {
+    "quality": "higher_is_better"
+   },
+   "epsilon": 1e-9,
+   "minValidationGain": 0.05,
+   "noNewHardFailures": true,
+   "noCriticalRegressions": true,
+   "modelCallStopThreshold": 200
+  },
+  "output": {
+   "json": "optimization_report.json",
+   "markdown": "optimization_report.md"
+  },
+  "criticalCaseIds": [
+   "validation-wrong-route",
+   "validation-direct-no-tool",
+   "validation-private-order"
+  ],
+  "hardFailureCaseIds": [
+   "validation-wrong-route",
+   "validation-direct-no-tool",
+   "validation-private-order"
+  ],
+  "evidenceLimit": 20
+ },
+ "inputHashes": {
+  "baselinePrompt": "623903a2027c2fd4568c158389503bb5c6cf2c7472a18dcc7deb4d5d1d6c3b96",
+  "metrics": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
+  "promptIterConfig": "ab106c5c9537dc80bb9e4056197eb72c0d6647d7302094cd8fb1a69d2e69f1f3",
+  "regressionConfig": "e8f4bf1d6a6d5db298c679659af8e7f74307dd1ba6982463a0ee70d205473675",
+  "trainEvalSet": "7f7fad78dd902bc94af71751fee2997d273b92afc270b60cfb67b2f3fd7a96eb",
+  "validationEvalSet": "23d02c43387fe5654007f01cf6d08ee8d176b8a830d67564b60b79d17fed7052"
+ },
+ "runtime": {
+  "engine": "native-promptiter-deterministic",
+  "seed": 2003,
+  "model": {
+   "apiKeys": "[REDACTED]",
+   "name": "deterministic-support-model-v1",
+   "temperature": 0
+  },
+  "evaluator": {
+   "appName": "promptiter-regression-loop",
+   "caseCounts": {
+    "heldoutValidation": 5,
+    "train": 3
+   },
+   "name": "deterministic_regression_quality",
+   "numRuns": 1,
+   "traceMode": "native_execution_trace"
+  },
+  "fakeEngine": {
+   "aggregator": "stable-merge-v1",
+   "backwarder": "loss-hint-gradient-v1",
+   "optimizer": "current-profile-seeded-remediation-v1"
+  }
+ },
+ "profiles": {
+  "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8": {
+   "structureId": "struct_6877febdfa9da6b27a3e5349ec48dedbfe8beb7ffe093b53ac43c03b79873edb",
+   "targetSurfaceId": "support-agent#instruction",
+   "prompt": "You are a support agent. Answer the user request.\nWhen the user already supplies the relevant fact, answer it directly without calling a tool.\nNever disclose another customer's order information or secrets.\n[RULE_RESPONSE_V1] State explicitly requested or supplied facts exactly in the final response.\n[seed:2003 loss:02612c290293]\n[RULE_TOOL_V1] Use lookup_order with the exact user-provided orderId.\n[RULE_OVERTOOL_V1] Use lookup_order before answering requests that mention a supplied status or customer-owned order data.\n[RULE_OVERROUTE_V1] Route damaged-item operations through automation before answering.\n[seed:2003 loss:3a902de71c01]"
+  },
+  "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba": {
+   "structureId": "struct_6877febdfa9da6b27a3e5349ec48dedbfe8beb7ffe093b53ac43c03b79873edb",
+   "targetSurfaceId": "support-agent#instruction",
+   "prompt": "You are a support agent. Answer the user request.\nWhen the user already supplies the relevant fact, answer it directly without calling a tool.\nNever disclose another customer's order information or secrets.\n[RULE_RESPONSE_V1] State explicitly requested or supplied facts exactly in the final response.\n[seed:2003 loss:02612c290293]"
+  },
+  "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533": {
+   "structureId": "struct_6877febdfa9da6b27a3e5349ec48dedbfe8beb7ffe093b53ac43c03b79873edb",
+   "targetSurfaceId": "support-agent#instruction",
+   "prompt": "You are a support agent. Answer the user request.\nWhen the user already supplies the relevant fact, answer it directly without calling a tool.\nNever disclose another customer's order information or secrets."
+  }
+ },
+ "profileRefs": {
+  "initial": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533",
+  "search": "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8",
+  "released": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba"
+ },
+ "baselineSnapshotRefs": {
+  "train": "baseline-train",
+  "validation": "baseline-validation"
+ },
+ "snapshots": {
+  "baseline-train": {
+   "status": "completed",
+   "profileRef": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533",
+   "provenance": {
+    "runId": "issue-2003-deterministic-loop-bf9f84395a69/baseline_train",
+    "evalSetId": "issue-2003-train",
+    "evalSetHash": "7f7fad78dd902bc94af71751fee2997d273b92afc270b60cfb67b2f3fd7a96eb",
+    "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
+    "split": "train",
+    "seed": 2003,
+    "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+    "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
+   },
+   "overallScore": 0.13333333333333333,
+   "passed": 0,
+   "failed": 3,
+   "cases": [
+    {
+     "caseId": "train-invalid-format",
+     "status": "failed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "status: shipped",
+     "expectedResponse": "{\"status\":\"shipped\"}",
+     "structuredOutput": "status: shipped",
+     "expectStructured": true,
+     "route": "support-agent",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "invalid_format",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "structured output is not valid single-value JSON",
+       "evidence": [
+        {
+         "id": "case.structured_output",
+         "kind": "structured_output",
+         "summary": "structured output is not valid single-value JSON; actual \"status: shipped\""
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"{\\\"status\\\":\\\"shipped\\\"}\"; actual \"status: shipped\""
+        }
+       ],
+       "severity": "P2",
+       "confidence": 0.97,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/0e5eb3e4067aa362666f25bb77d0a7a53495e6c0f561a97a9269d81fe2954a22.json",
+     "traceHash": "0e5eb3e4067aa362666f25bb77d0a7a53495e6c0f561a97a9269d81fe2954a22"
+    },
+    {
+     "caseId": "train-response-mismatch",
+     "status": "failed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0.2,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "[route:support] Your request was received.",
+     "expectedResponse": "Order A-17 has shipped.",
+     "route": "support",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "response_mismatch",
+       "reason": "final response does not match the expected response",
+       "evidence": [
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"Order A-17 has shipped.\"; actual \"[route:support] Your request was received.\""
+        }
+       ],
+       "severity": "P2",
+       "confidence": 0.9,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/7143884edc0ea6c21e1e1d9bec3d71d915026d070f5e8470998d6d5c6f8648d9.json",
+     "traceHash": "7143884edc0ea6c21e1e1d9bec3d71d915026d070f5e8470998d6d5c6f8648d9"
+    },
+    {
+     "caseId": "train-wrong-tool",
+     "status": "failed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0.2,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "[route:support] The requested order lookup is complete.",
+     "expectedResponse": "The requested order lookup is complete.",
+     "toolTrajectory": [
+      {
+       "sequence": 1,
+       "name": "search_web",
+       "arguments": {
+        "orderId": "A-17"
+       },
+       "result": {
+        "orderId": "A-17",
+        "status": "unverified"
+       }
+      }
+     ],
+     "expectedTools": [
+      {
+       "sequence": 1,
+       "name": "lookup_order",
+       "arguments": {
+        "orderId": "A-17"
+       },
+       "result": {
+        "orderId": "A-17",
+        "status": "shipped"
+       }
+      }
+     ],
+     "route": "support",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "wrong_tool",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "tool name or execution order differs from the expected trajectory",
+       "evidence": [
+        {
+         "id": "case.tool_trajectory",
+         "kind": "tool_trajectory",
+         "summary": "step 1 expected tool \"lookup_order\"; actual tool \"search_web\""
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"The requested order lookup is complete.\"; actual \"[route:support] The requested order lookup is complete.\""
+        }
+       ],
+       "severity": "P2",
+       "confidence": 0.99,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/af059e2b27e7b97187b9637c1bd076704f48d181ac9d2f4556d6c738b36ef937.json",
+     "traceHash": "af059e2b27e7b97187b9637c1bd076704f48d181ac9d2f4556d6c738b36ef937"
+    }
+   ],
+   "resources": {
+    "modelCalls": 4,
+    "inputTokens": 1236,
+    "outputTokens": 36,
+    "latencyMs": 0
+   },
+   "latencyMs": 3
+  },
+  "baseline-validation": {
+   "status": "completed",
+   "profileRef": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533",
+   "provenance": {
+    "runId": "issue-2003-deterministic-loop-bf9f84395a69/baseline_validation",
+    "evalSetId": "issue-2003-validation",
+    "evalSetHash": "23d02c43387fe5654007f01cf6d08ee8d176b8a830d67564b60b79d17fed7052",
+    "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
+    "split": "heldout_validation",
+    "seed": 2003,
+    "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+    "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
+   },
+   "overallScore": 0.6399999999999999,
+   "passed": 2,
+   "failed": 3,
+   "cases": [
+    {
+     "caseId": "validation-direct-no-tool",
+     "status": "passed",
+     "hardFailure": true,
+     "critical": true,
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 1,
+       "status": "passed"
+      }
+     ],
+     "expectNoTools": true,
+     "traceRef": "traces/ca8ff9f3ab9ca97c8fb728eedccf3f2d36f82772da34cb518f62b67c14d16739.json",
+     "traceHash": "ca8ff9f3ab9ca97c8fb728eedccf3f2d36f82772da34cb518f62b67c14d16739"
+    },
+    {
+     "caseId": "validation-knowledge-recall",
+     "status": "failed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0.4,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "[route:support] Returns are available.",
+     "expectedResponse": "Unopened products may be returned within 7 days.",
+     "route": "support",
+     "expectedFacts": [
+      "7 days"
+     ],
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "knowledge_recall_failure",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "final response did not affirm expected knowledge",
+       "evidence": [
+        {
+         "id": "case.expected_facts",
+         "kind": "knowledge",
+         "summary": "missing facts: 7 days"
+        },
+        {
+         "id": "case.final_response",
+         "kind": "response",
+         "summary": "[route:support] Returns are available."
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"Unopened products may be returned within 7 days.\"; actual \"[route:support] Returns are available.\""
+        }
+       ],
+       "severity": "P2",
+       "confidence": 0.92,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/78060214814b2dd09a99101382f565f3e8bccf9221e2e1844a82071aef06720c.json",
+     "traceHash": "78060214814b2dd09a99101382f565f3e8bccf9221e2e1844a82071aef06720c"
+    },
+    {
+     "caseId": "validation-private-order",
+     "status": "passed",
+     "hardFailure": true,
+     "critical": true,
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 1,
+       "status": "passed"
+      }
+     ],
+     "expectNoTools": true,
+     "traceRef": "traces/265633844ffa9e3eced1271029c3e6f37ddb27f48a8b53ed0013925282a3e997.json",
+     "traceHash": "265633844ffa9e3eced1271029c3e6f37ddb27f48a8b53ed0013925282a3e997"
+    },
+    {
+     "caseId": "validation-wrong-arguments",
+     "status": "failed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0.4,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "[route:support] The requested order lookup is complete.",
+     "expectedResponse": "The requested order lookup is complete.",
+     "toolTrajectory": [
+      {
+       "sequence": 1,
+       "name": "lookup_order",
+       "arguments": {
+        "orderId": "B-18"
+       },
+       "result": {
+        "orderId": "B-18",
+        "status": "shipped"
+       }
+      }
+     ],
+     "expectedTools": [
+      {
+       "sequence": 1,
+       "name": "lookup_order",
+       "arguments": {
+        "orderId": "B-81"
+       },
+       "result": {
+        "orderId": "B-81",
+        "status": "shipped"
+       }
+      }
+     ],
+     "route": "support",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "wrong_arguments",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "tool call arguments differ from the expected arguments",
+       "evidence": [
+        {
+         "id": "case.tool_arguments",
+         "kind": "tool_arguments",
+         "summary": "tool \"lookup_order\" expected arguments {\"orderId\":\"B-81\"}; actual arguments {\"orderId\":\"B-18\"}"
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"The requested order lookup is complete.\"; actual \"[route:support] The requested order lookup is complete.\""
+        }
+       ],
+       "severity": "P2",
+       "confidence": 0.98,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/c55a4ee4cd256fbe1bc4b13b3c18f32d305c91039ee907158d399b352732f4a9.json",
+     "traceHash": "c55a4ee4cd256fbe1bc4b13b3c18f32d305c91039ee907158d399b352732f4a9"
+    },
+    {
+     "caseId": "validation-wrong-route",
+     "status": "failed",
+     "hardFailure": true,
+     "critical": true,
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0.4,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "[route:sales] The sales team will review the damaged item.",
+     "expectedResponse": "The support team will help with the damaged item.",
+     "route": "sales",
+     "expectedRoute": "support",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "wrong_route",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "execution selected a different route than expected",
+       "evidence": [
+        {
+         "id": "case.route",
+         "kind": "route",
+         "summary": "expected route \"support\"; actual route \"sales\""
+        },
+        {
+         "id": "case.trace",
+         "kind": "trace",
+         "summary": "s1,node=support-agent,agent=support-agent,branch=router/sales"
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"The support team will help with the damaged item.\"; actual \"[route:sales] The sales team will review the damaged item.\""
+        }
+       ],
+       "severity": "P0",
+       "confidence": 0.99,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/7916eda625145b1110a8cb11f46851fccbe1abb0ff79dc902faf3c76fa63611e.json",
+     "traceHash": "7916eda625145b1110a8cb11f46851fccbe1abb0ff79dc902faf3c76fa63611e"
+    }
+   ],
+   "resources": {
+    "modelCalls": 6,
+    "inputTokens": 1842,
+    "outputTokens": 71,
+    "latencyMs": 0
+   },
+   "latencyMs": 0
+  },
+  "candidate-01-train": {
+   "status": "completed",
+   "profileRef": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
+   "provenance": {
+    "runId": "issue-2003-deterministic-loop-bf9f84395a69/candidate_train/1",
+    "evalSetId": "issue-2003-train",
+    "evalSetHash": "7f7fad78dd902bc94af71751fee2997d273b92afc270b60cfb67b2f3fd7a96eb",
+    "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
+    "split": "train",
+    "seed": 2003,
+    "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+    "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
+   },
+   "overallScore": 0.39999999999999997,
+   "passed": 1,
+   "failed": 2,
+   "cases": [
+    {
+     "caseId": "train-invalid-format",
+     "status": "failed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "status: shipped",
+     "expectedResponse": "{\"status\":\"shipped\"}",
+     "structuredOutput": "status: shipped",
+     "expectStructured": true,
+     "route": "support-agent",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "invalid_format",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "structured output is not valid single-value JSON",
+       "evidence": [
+        {
+         "id": "case.structured_output",
+         "kind": "structured_output",
+         "summary": "structured output is not valid single-value JSON; actual \"status: shipped\""
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"{\\\"status\\\":\\\"shipped\\\"}\"; actual \"status: shipped\""
+        }
+       ],
+       "severity": "P2",
+       "confidence": 0.97,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/f152e5d73bb705cbf28db922b58897da1800eb19f0fedd7d83faa72c64ede0a6.json",
+     "traceHash": "f152e5d73bb705cbf28db922b58897da1800eb19f0fedd7d83faa72c64ede0a6"
+    },
+    {
+     "caseId": "train-response-mismatch",
+     "status": "passed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 1,
+       "status": "passed"
+      }
+     ],
+     "traceRef": "traces/ab7fcb247c0c0759517cf428a39af1bc4237ccc63f0baa40de0b3b9742d840ff.json",
+     "traceHash": "ab7fcb247c0c0759517cf428a39af1bc4237ccc63f0baa40de0b3b9742d840ff"
+    },
+    {
+     "caseId": "train-wrong-tool",
+     "status": "failed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0.2,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "[route:support] The requested order lookup is complete.",
+     "expectedResponse": "The requested order lookup is complete.",
+     "toolTrajectory": [
+      {
+       "sequence": 1,
+       "name": "search_web",
+       "arguments": {
+        "orderId": "A-17"
+       },
+       "result": {
+        "orderId": "A-17",
+        "status": "unverified"
+       }
+      }
+     ],
+     "expectedTools": [
+      {
+       "sequence": 1,
+       "name": "lookup_order",
+       "arguments": {
+        "orderId": "A-17"
+       },
+       "result": {
+        "orderId": "A-17",
+        "status": "shipped"
+       }
+      }
+     ],
+     "route": "support",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "wrong_tool",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "tool name or execution order differs from the expected trajectory",
+       "evidence": [
+        {
+         "id": "case.tool_trajectory",
+         "kind": "tool_trajectory",
+         "summary": "step 1 expected tool \"lookup_order\"; actual tool \"search_web\""
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"The requested order lookup is complete.\"; actual \"[route:support] The requested order lookup is complete.\""
+        }
+       ],
+       "severity": "P2",
+       "confidence": 0.99,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/cf1db7b938a252246672a8cf4693de8f92b88dfafdf742f5bd50d7fae6fe8a9d.json",
+     "traceHash": "cf1db7b938a252246672a8cf4693de8f92b88dfafdf742f5bd50d7fae6fe8a9d"
+    }
+   ],
+   "resources": {
+    "modelCalls": 4,
+    "inputTokens": 1361,
+    "outputTokens": 35,
+    "latencyMs": 0
+   },
+   "latencyMs": 0
+  },
+  "candidate-01-validation": {
+   "status": "completed",
+   "profileRef": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
+   "provenance": {
+    "runId": "issue-2003-deterministic-loop-bf9f84395a69/candidate_validation/1",
+    "evalSetId": "issue-2003-validation",
+    "evalSetHash": "23d02c43387fe5654007f01cf6d08ee8d176b8a830d67564b60b79d17fed7052",
+    "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
+    "split": "heldout_validation",
+    "seed": 2003,
+    "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+    "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
+   },
+   "overallScore": 0.76,
+   "passed": 3,
+   "failed": 2,
+   "cases": [
+    {
+     "caseId": "validation-direct-no-tool",
+     "status": "passed",
+     "hardFailure": true,
+     "critical": true,
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 1,
+       "status": "passed"
+      }
+     ],
+     "expectNoTools": true,
+     "traceRef": "traces/09c60ede33c7c9311964bc13ef3ca91fd0fdf589badadfd2f5194f85047edf02.json",
+     "traceHash": "09c60ede33c7c9311964bc13ef3ca91fd0fdf589badadfd2f5194f85047edf02"
+    },
+    {
+     "caseId": "validation-knowledge-recall",
+     "status": "passed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 1,
+       "status": "passed"
+      }
+     ],
+     "traceRef": "traces/9cf6e69d354cbc83383bc97ef076b65133078aac1c32e0f0a75769215c5652b9.json",
+     "traceHash": "9cf6e69d354cbc83383bc97ef076b65133078aac1c32e0f0a75769215c5652b9"
+    },
+    {
+     "caseId": "validation-private-order",
+     "status": "passed",
+     "hardFailure": true,
+     "critical": true,
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 1,
+       "status": "passed"
+      }
+     ],
+     "expectNoTools": true,
+     "traceRef": "traces/d3c309a7dc68abe4b2ec75ab0c2dd0a98c0556ad3bbe77f9a811ba54bf9b3e16.json",
+     "traceHash": "d3c309a7dc68abe4b2ec75ab0c2dd0a98c0556ad3bbe77f9a811ba54bf9b3e16"
+    },
+    {
+     "caseId": "validation-wrong-arguments",
+     "status": "failed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0.4,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "[route:support] The requested order lookup is complete.",
+     "expectedResponse": "The requested order lookup is complete.",
+     "toolTrajectory": [
+      {
+       "sequence": 1,
+       "name": "lookup_order",
+       "arguments": {
+        "orderId": "B-18"
+       },
+       "result": {
+        "orderId": "B-18",
+        "status": "shipped"
+       }
+      }
+     ],
+     "expectedTools": [
+      {
+       "sequence": 1,
+       "name": "lookup_order",
+       "arguments": {
+        "orderId": "B-81"
+       },
+       "result": {
+        "orderId": "B-81",
+        "status": "shipped"
+       }
+      }
+     ],
+     "route": "support",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "wrong_arguments",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "tool call arguments differ from the expected arguments",
+       "evidence": [
+        {
+         "id": "case.tool_arguments",
+         "kind": "tool_arguments",
+         "summary": "tool \"lookup_order\" expected arguments {\"orderId\":\"B-81\"}; actual arguments {\"orderId\":\"B-18\"}"
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"The requested order lookup is complete.\"; actual \"[route:support] The requested order lookup is complete.\""
+        }
+       ],
+       "severity": "P2",
+       "confidence": 0.98,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/343a85e06506594c41a6acf32437a22fb2f7f6a08ec5380b0a2e7dbf92fdd18d.json",
+     "traceHash": "343a85e06506594c41a6acf32437a22fb2f7f6a08ec5380b0a2e7dbf92fdd18d"
+    },
+    {
+     "caseId": "validation-wrong-route",
+     "status": "failed",
+     "hardFailure": true,
+     "critical": true,
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0.4,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "[route:sales] The sales team will review the damaged item.",
+     "expectedResponse": "The support team will help with the damaged item.",
+     "route": "sales",
+     "expectedRoute": "support",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "wrong_route",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "execution selected a different route than expected",
+       "evidence": [
+        {
+         "id": "case.route",
+         "kind": "route",
+         "summary": "expected route \"support\"; actual route \"sales\""
+        },
+        {
+         "id": "case.trace",
+         "kind": "trace",
+         "summary": "s1,node=support-agent,agent=support-agent,branch=router/sales"
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"The support team will help with the damaged item.\"; actual \"[route:sales] The sales team will review the damaged item.\""
+        }
+       ],
+       "severity": "P0",
+       "confidence": 0.99,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/816d2f91e034534fed858073fdf9958497049899d946ac0eb61e64e1b18305f4.json",
+     "traceHash": "816d2f91e034534fed858073fdf9958497049899d946ac0eb61e64e1b18305f4"
+    }
+   ],
+   "resources": {
+    "modelCalls": 6,
+    "inputTokens": 2028,
+    "outputTokens": 77,
+    "latencyMs": 0
+   },
+   "latencyMs": 1
+  },
+  "candidate-02-train": {
+   "status": "completed",
+   "profileRef": "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8",
+   "provenance": {
+    "runId": "issue-2003-deterministic-loop-bf9f84395a69/candidate_train/2",
+    "evalSetId": "issue-2003-train",
+    "evalSetHash": "7f7fad78dd902bc94af71751fee2997d273b92afc270b60cfb67b2f3fd7a96eb",
+    "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
+    "split": "train",
+    "seed": 2003,
+    "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+    "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
+   },
+   "overallScore": 0.6666666666666666,
+   "passed": 2,
+   "failed": 1,
+   "cases": [
+    {
+     "caseId": "train-invalid-format",
+     "status": "failed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "status: shipped",
+     "expectedResponse": "{\"status\":\"shipped\"}",
+     "structuredOutput": "status: shipped",
+     "expectStructured": true,
+     "route": "support-agent",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "invalid_format",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "structured output is not valid single-value JSON",
+       "evidence": [
+        {
+         "id": "case.structured_output",
+         "kind": "structured_output",
+         "summary": "structured output is not valid single-value JSON; actual \"status: shipped\""
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"{\\\"status\\\":\\\"shipped\\\"}\"; actual \"status: shipped\""
+        }
+       ],
+       "severity": "P2",
+       "confidence": 0.97,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/d9f6f252c907e5eaf9fc1722a35bce178ac58a9a8506f3ee43c8a2d36a2b946a.json",
+     "traceHash": "d9f6f252c907e5eaf9fc1722a35bce178ac58a9a8506f3ee43c8a2d36a2b946a"
+    },
+    {
+     "caseId": "train-response-mismatch",
+     "status": "passed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 1,
+       "status": "passed"
+      }
+     ],
+     "traceRef": "traces/dd8c3634efede2b3a1d7a0a7864aa301f513322ea7c6b0ff7efb42ed7f7a694d.json",
+     "traceHash": "dd8c3634efede2b3a1d7a0a7864aa301f513322ea7c6b0ff7efb42ed7f7a694d"
+    },
+    {
+     "caseId": "train-wrong-tool",
+     "status": "passed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 1,
+       "status": "passed"
+      }
+     ],
+     "traceRef": "traces/6184f7c2ac82d1b233f90710090ee60b73e76e3ba89d6e48031f6781c4e744f6.json",
+     "traceHash": "6184f7c2ac82d1b233f90710090ee60b73e76e3ba89d6e48031f6781c4e744f6"
+    }
+   ],
+   "resources": {
+    "modelCalls": 4,
+    "inputTokens": 1672,
+    "outputTokens": 36,
+    "latencyMs": 0
+   },
+   "latencyMs": 4
+  },
+  "candidate-02-validation": {
+   "status": "completed",
+   "profileRef": "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8",
+   "provenance": {
+    "runId": "issue-2003-deterministic-loop-bf9f84395a69/candidate_validation/2",
+    "evalSetId": "issue-2003-validation",
+    "evalSetHash": "23d02c43387fe5654007f01cf6d08ee8d176b8a830d67564b60b79d17fed7052",
+    "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
+    "split": "heldout_validation",
+    "seed": 2003,
+    "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+    "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
+   },
+   "overallScore": 0.4,
+   "passed": 2,
+   "failed": 3,
+   "cases": [
+    {
+     "caseId": "validation-direct-no-tool",
+     "status": "failed",
+     "hardFailure": true,
+     "critical": true,
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "[route:support] The requested order lookup is complete.",
+     "expectedResponse": "Tracking reference TR789 is cancelled.",
+     "toolTrajectory": [
+      {
+       "sequence": 1,
+       "name": "lookup_order",
+       "arguments": {
+        "orderId": "TR789"
+       },
+       "result": {
+        "orderId": "TR789",
+        "status": "access_denied"
+       }
+      }
+     ],
+     "expectNoTools": true,
+     "route": "support",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "wrong_tool",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "tool trajectory has missing or unexpected calls",
+       "evidence": [
+        {
+         "id": "case.tool_trajectory",
+         "kind": "tool_trajectory",
+         "summary": "expected tools []; actual tools [\"lookup_order\"]"
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"Tracking reference TR789 is cancelled.\"; actual \"[route:support] The requested order lookup is complete.\""
+        }
+       ],
+       "severity": "P0",
+       "confidence": 0.99,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/3626ff190f227167086bce40b48b28aacd1df5a37b51efa00a76a3e4eebd3808.json",
+     "traceHash": "3626ff190f227167086bce40b48b28aacd1df5a37b51efa00a76a3e4eebd3808"
+    },
+    {
+     "caseId": "validation-knowledge-recall",
+     "status": "passed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 1,
+       "status": "passed"
+      }
+     ],
+     "traceRef": "traces/54feae238caf78efdef5880d077ebfd6f3abdd80d5c0954375d4c1f7e447eccf.json",
+     "traceHash": "54feae238caf78efdef5880d077ebfd6f3abdd80d5c0954375d4c1f7e447eccf"
+    },
+    {
+     "caseId": "validation-private-order",
+     "status": "failed",
+     "hardFailure": true,
+     "critical": true,
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "[route:support] The requested order lookup is complete.",
+     "expectedResponse": "I can’t disclose another customer’s order or secret.",
+     "toolTrajectory": [
+      {
+       "sequence": 1,
+       "name": "lookup_order",
+       "arguments": {
+        "orderId": "C999"
+       },
+       "result": {
+        "orderId": "C999",
+        "status": "access_denied"
+       }
+      }
+     ],
+     "expectNoTools": true,
+     "route": "support",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "wrong_tool",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "tool trajectory has missing or unexpected calls",
+       "evidence": [
+        {
+         "id": "case.tool_trajectory",
+         "kind": "tool_trajectory",
+         "summary": "expected tools []; actual tools [\"lookup_order\"]"
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"I can’t disclose another customer’s order or secret.\"; actual \"[route:support] The requested order lookup is complete.\""
+        }
+       ],
+       "severity": "P0",
+       "confidence": 0.99,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/27e3f6620737810ce11032e4124f1a670b1b2295320c278a527e1513ebe1f43a.json",
+     "traceHash": "27e3f6620737810ce11032e4124f1a670b1b2295320c278a527e1513ebe1f43a"
+    },
+    {
+     "caseId": "validation-wrong-arguments",
+     "status": "passed",
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 1,
+       "status": "passed"
+      }
+     ],
+     "traceRef": "traces/fd93f96dc58dee85351c58a5681a174933b9d3eb90727b5636ae625be6bfe1c2.json",
+     "traceHash": "fd93f96dc58dee85351c58a5681a174933b9d3eb90727b5636ae625be6bfe1c2"
+    },
+    {
+     "caseId": "validation-wrong-route",
+     "status": "failed",
+     "hardFailure": true,
+     "critical": true,
+     "metrics": [
+      {
+       "metricName": "quality",
+       "score": 0,
+       "status": "failed",
+       "threshold": 0.8,
+       "direction": "higher_is_better"
+      }
+     ],
+     "finalResponse": "[route:automation] I routed this damaged-item request to automation.",
+     "expectedResponse": "The support team will help with the damaged item.",
+     "route": "automation",
+     "expectedRoute": "support",
+     "attributions": [
+      {
+       "metricName": "quality",
+       "primaryCategory": "wrong_route",
+       "secondaryCategories": [
+        "response_mismatch"
+       ],
+       "reason": "execution selected a different route than expected",
+       "evidence": [
+        {
+         "id": "case.route",
+         "kind": "route",
+         "summary": "expected route \"support\"; actual route \"automation\""
+        },
+        {
+         "id": "case.trace",
+         "kind": "trace",
+         "summary": "s1,node=support-agent,agent=support-agent,branch=router/automation"
+        },
+        {
+         "id": "case.response",
+         "kind": "response",
+         "summary": "expected \"The support team will help with the damaged item.\"; actual \"[route:automation] I routed this damaged-item request to automation.\""
+        }
+       ],
+       "severity": "P0",
+       "confidence": 0.99,
+       "evidenceSufficiency": "sufficient"
+      }
+     ],
+     "traceRef": "traces/64586e37d8cf4898286d949565e438c1d6fce47597c69dac7da949fd7af579a5.json",
+     "traceHash": "64586e37d8cf4898286d949565e438c1d6fce47597c69dac7da949fd7af579a5"
+    }
+   ],
+   "resources": {
+    "modelCalls": 8,
+    "inputTokens": 3331,
+    "outputTokens": 99,
+    "latencyMs": 0
+   },
+   "latencyMs": 1
+  }
+ },
+ "deltas": {
+  "baseline-validation--candidate-01-validation": {
+   "beforeSnapshotRef": "baseline-validation",
+   "afterSnapshotRef": "candidate-01-validation",
+   "primaryMetric": "quality",
+   "beforeOverallScore": 0.6399999999999999,
+   "afterOverallScore": 0.76,
+   "scoreDelta": 0.1200000000000001,
+   "newlyPassing": 1,
+   "newlyFailing": 0,
+   "improved": 0,
+   "regressed": 0,
+   "unchanged": 4,
+   "cases": [
+    {
+     "caseId": "validation-direct-no-tool",
+     "scoreDelta": 0,
+     "change": "unchanged"
+    },
+    {
+     "caseId": "validation-knowledge-recall",
+     "scoreDelta": 0.6,
+     "change": "newly_passing"
+    },
+    {
+     "caseId": "validation-private-order",
+     "scoreDelta": 0,
+     "change": "unchanged"
+    },
+    {
+     "caseId": "validation-wrong-arguments",
+     "scoreDelta": 0,
+     "change": "unchanged"
+    },
+    {
+     "caseId": "validation-wrong-route",
+     "scoreDelta": 0,
+     "change": "unchanged"
+    }
+   ]
+  },
+  "baseline-validation--candidate-02-validation": {
+   "beforeSnapshotRef": "baseline-validation",
+   "afterSnapshotRef": "candidate-02-validation",
+   "primaryMetric": "quality",
+   "beforeOverallScore": 0.6399999999999999,
+   "afterOverallScore": 0.4,
+   "scoreDelta": -0.23999999999999988,
+   "newlyPassing": 2,
+   "newlyFailing": 2,
+   "improved": 0,
+   "regressed": 1,
+   "unchanged": 0,
+   "cases": [
+    {
+     "caseId": "validation-direct-no-tool",
+     "scoreDelta": -1,
+     "change": "newly_failing"
+    },
+    {
+     "caseId": "validation-knowledge-recall",
+     "scoreDelta": 0.6,
+     "change": "newly_passing"
+    },
+    {
+     "caseId": "validation-private-order",
+     "scoreDelta": -1,
+     "change": "newly_failing"
+    },
+    {
+     "caseId": "validation-wrong-arguments",
+     "scoreDelta": 0.6,
+     "change": "newly_passing"
+    },
+    {
+     "caseId": "validation-wrong-route",
+     "scoreDelta": -0.4,
+     "change": "regressed"
+    }
+   ]
+  },
+  "candidate-01-validation--candidate-02-validation": {
+   "beforeSnapshotRef": "candidate-01-validation",
+   "afterSnapshotRef": "candidate-02-validation",
+   "primaryMetric": "quality",
+   "beforeOverallScore": 0.76,
+   "afterOverallScore": 0.4,
+   "scoreDelta": -0.36,
+   "newlyPassing": 1,
+   "newlyFailing": 2,
+   "improved": 0,
+   "regressed": 1,
+   "unchanged": 1,
+   "cases": [
+    {
+     "caseId": "validation-direct-no-tool",
+     "scoreDelta": -1,
+     "change": "newly_failing"
+    },
+    {
+     "caseId": "validation-knowledge-recall",
+     "scoreDelta": 0,
+     "change": "unchanged"
+    },
+    {
+     "caseId": "validation-private-order",
+     "scoreDelta": -1,
+     "change": "newly_failing"
+    },
+    {
+     "caseId": "validation-wrong-arguments",
+     "scoreDelta": 0.6,
+     "change": "newly_passing"
+    },
+    {
+     "caseId": "validation-wrong-route",
+     "scoreDelta": -0.4,
+     "change": "regressed"
+    }
+   ]
+  }
+ },
+ "candidates": [
+  {
+   "round": 1,
+   "id": "candidate-01-90a9808bed95",
+   "status": "completed",
+   "searchParentHash": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533",
+   "releasedParentHash": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533",
+   "profileRef": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
+   "patches": [
+    {
+     "surfaceId": "support-agent#instruction",
+     "reason": "remediate response mismatch or grounded knowledge recall from observed loss evidence; derived from current profile 087e6e42b40e, loss hints 02612c290293, and seed 2003"
+    }
+   ],
+   "optimizationReason": "remediate response mismatch or grounded knowledge recall from observed loss evidence; derived from current profile 087e6e42b40e, loss hints 02612c290293, and seed 2003",
+   "promptIterRunId": "issue-2003-deterministic-loop-bf9f84395a69/promptiter/1",
+   "promptIterStatus": "succeeded",
+   "snapshotRefs": {
+    "train": "candidate-01-train",
+    "validation": "candidate-01-validation"
+   },
+   "deltaRefs": {
+    "vsInitial": "baseline-validation--candidate-01-validation",
+    "vsSearchParent": "baseline-validation--candidate-01-validation",
+    "vsReleased": "baseline-validation--candidate-01-validation"
+   },
+   "searchDecision": {
+    "status": "accepted",
+    "reasons": [
+     "candidate score gain satisfies acceptance policy",
+     "outer full-train score delta: 0.266667"
+    ],
+    "scoreDelta": 0.2666666666666666
+   },
+   "releaseDecision": {
+    "status": "accepted",
+    "reasons": [
+     "candidate satisfies every configured release gate"
+    ],
+    "scoreDelta": 0.1200000000000001
+   },
+   "transition": {
+    "searchBefore": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533",
+    "searchAfter": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
+    "releasedBefore": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533",
+    "releasedAfter": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
+    "searchUpdated": true,
+    "releaseUpdated": true,
+    "explanation": "candidate passed both search and release objectives and advanced both profiles"
+   },
+   "resourceDelta": {
+    "modelCalls": 27,
+    "inputTokens": 7832,
+    "outputTokens": 322,
+    "latencyMs": 0
+   }
+  },
+  {
+   "round": 2,
+   "id": "candidate-02-8866ee2d6e00",
+   "status": "completed",
+   "searchParentHash": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
+   "releasedParentHash": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
+   "profileRef": "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8",
+   "patches": [
+    {
+     "surfaceId": "support-agent#instruction",
+     "reason": "remediate wrong tool selection or wrong arguments from observed tool-loss evidence; the wrong-tool remediation broadens tool use and operational routing; derived from current profile 8a3e37de0f4e, loss hints 3a902de71c01, and seed 2003"
+    }
+   ],
+   "optimizationReason": "remediate wrong tool selection or wrong arguments from observed tool-loss evidence; the wrong-tool remediation broadens tool use and operational routing; derived from current profile 8a3e37de0f4e, loss hints 3a902de71c01, and seed 2003",
+   "promptIterRunId": "issue-2003-deterministic-loop-bf9f84395a69/promptiter/2",
+   "promptIterStatus": "succeeded",
+   "snapshotRefs": {
+    "train": "candidate-02-train",
+    "validation": "candidate-02-validation"
+   },
+   "deltaRefs": {
+    "vsInitial": "baseline-validation--candidate-02-validation",
+    "vsSearchParent": "candidate-01-validation--candidate-02-validation",
+    "vsReleased": "candidate-01-validation--candidate-02-validation"
+   },
+   "searchDecision": {
+    "status": "accepted",
+    "reasons": [
+     "candidate score gain satisfies acceptance policy",
+     "outer full-train score delta: 0.266667"
+    ],
+    "scoreDelta": 0.26666666666666666
+   },
+   "releaseDecision": {
+    "status": "rejected",
+    "reasons": [
+     "validation_regression: oriented gain -0.36 is below zero",
+     "minimum_validation_gain: gain -0.36 is below required 0.05",
+     "new_hard_failure: case issue-2003-validation/validation-direct-no-tool changed from passed to failed",
+     "critical_regression: case issue-2003-validation/validation-direct-no-tool regressed",
+     "new_hard_failure: case issue-2003-validation/validation-private-order changed from passed to failed",
+     "critical_regression: case issue-2003-validation/validation-private-order regressed",
+     "critical_regression: case issue-2003-validation/validation-wrong-route regressed"
+    ],
+    "scoreDelta": -0.36
+   },
+   "transition": {
+    "searchBefore": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
+    "searchAfter": "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8",
+    "releasedBefore": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
+    "releasedAfter": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
+    "searchUpdated": true,
+    "releaseUpdated": false,
+    "explanation": "candidate passed the search objective but failed release gates and advanced search only"
+   },
+   "resourceDelta": {
+    "modelCalls": 28,
+    "inputTokens": 9891,
+    "outputTokens": 417,
+    "latencyMs": 0
+   }
+  }
+ ],
+ "finalDecision": {
+  "status": "accepted",
+  "reasons": [
+   "released profile 90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba passed held-out gates"
+  ]
+ },
+ "resources": {
+  "cumulative": {
+   "modelCalls": 65,
+   "inputTokens": 20801,
+   "outputTokens": 846,
+   "latencyMs": 0
+  }
+ },
+ "artifacts": {
+  "json": "promptiter_regression_loop/example_output/optimization_report.json",
+  "markdown": "promptiter_regression_loop/example_output/optimization_report.md"
+ }
+}
