@@ -57,13 +57,24 @@ func waitForProcessExit(
 }
 
 func TestPrepareCommands(t *testing.T) {
-	preparePipeCommand(nil)
+	preparePipeCommand(nil, keepStdin)
+	preparePipeCommand(nil, detachStdin)
 	preparePTYCommand(nil)
 
 	pipeCmd := &exec.Cmd{}
-	preparePipeCommand(pipeCmd)
+	preparePipeCommand(pipeCmd, keepStdin)
 	require.NotNil(t, pipeCmd.SysProcAttr)
 	require.True(t, pipeCmd.SysProcAttr.Setpgid)
+	require.False(t, pipeCmd.SysProcAttr.Setsid)
+
+	// The detached child gives up the controlling terminal instead. Setsid makes
+	// it a process-group leader too, so terminateProcessTree still reaches the
+	// tree; setting Setpgid alongside it would make the exec fail with EPERM.
+	detachedCmd := &exec.Cmd{}
+	preparePipeCommand(detachedCmd, detachStdin)
+	require.NotNil(t, detachedCmd.SysProcAttr)
+	require.True(t, detachedCmd.SysProcAttr.Setsid)
+	require.False(t, detachedCmd.SysProcAttr.Setpgid)
 
 	ptyCmd := &exec.Cmd{}
 	preparePTYCommand(ptyCmd)

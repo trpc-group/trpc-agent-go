@@ -18,7 +18,10 @@ import (
 	"time"
 )
 
-func preparePipeCommand(_ *exec.Cmd) {}
+// preparePipeCommand takes the detach disposition for parity with the Unix
+// build. Windows has no controlling-terminal device a child can open behind the
+// standard handles, so there is nothing to detach from.
+func preparePipeCommand(_ *exec.Cmd, _ bool) {}
 
 func preparePTYCommand(_ *exec.Cmd) {}
 

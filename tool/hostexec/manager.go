@@ -177,12 +177,20 @@ func runForeground(
 	baseEnv map[string]string,
 	maxLines int,
 ) (string, int, error) {
+	// A foreground session is never registered with the manager, so write_stdin
+	// can never reach it and no caller can answer a prompt it raises. Detach it
+	// rather than leave it looking answerable: stdin becomes the null device
+	// instead of a pipe nothing can write to or close, and preparePipeCommand
+	// puts the child in its own session so it cannot reach the host's terminal
+	// behind fd 0 either. A prompting command then fails promptly instead of
+	// waiting out the run timeout.
 	sess, err := startSession(
 		"",
 		params,
 		timeout,
 		baseEnv,
 		maxLines,
+		detachStdin,
 	)
 	if err != nil {
 		return "", 0, err
@@ -290,6 +298,7 @@ func (m *manager) startBackground(
 		timeout,
 		m.baseEnv,
 		m.maxLines,
+		keepStdin,
 	)
 	if err != nil {
 		return nil, err
@@ -301,12 +310,20 @@ func (m *manager) startBackground(
 	return sess, nil
 }
 
+// startSession's stdin dispositions, named at the call site so the two paths
+// read as a deliberate choice rather than a bare boolean.
+const (
+	keepStdin   = false
+	detachStdin = true
+)
+
 func startSession(
 	id string,
 	params execParams,
 	timeout time.Duration,
 	baseEnv map[string]string,
 	maxLines int,
+	detach bool,
 ) (*session, error) {
 	runCtx, cancel := context.WithTimeout(
 		context.Background(),
@@ -339,15 +356,17 @@ func startSession(
 			sess.readFrom(master)
 		}()
 	} else {
-		stdin, stdout, stderr, err := startPipes(cmd)
+		stdin, stdout, stderr, err := startPipes(cmd, detach)
 		if err != nil {
 			cancel()
 			return nil, err
 		}
-		preparePipeCommand(cmd)
+		preparePipeCommand(cmd, detach)
 		sess.stdin = stdin
 		sess.closeIO = func() error {
-			_ = stdin.Close()
+			if stdin != nil {
+				_ = stdin.Close()
+			}
 			_ = stdout.Close()
 			_ = stderr.Close()
 			return nil
@@ -426,21 +445,39 @@ func waitDone(
 	}
 }
 
+// startPipes wires the command's standard streams. A detached stdin is left nil,
+// which os/exec backs with the null device, so a command that prompts reads EOF
+// instead of blocking on a pipe that never delivers.
+//
+// That covers fd 0 only. Prompts that open /dev/tty directly are kept away by
+// preparePipeCommand, which gives the same detached child a session with no
+// controlling terminal; the two together are what make a prompt fail rather
+// than hang.
 func startPipes(
 	cmd *exec.Cmd,
+	detach bool,
 ) (io.WriteCloser, io.ReadCloser, io.ReadCloser, error) {
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, nil, nil, err
+	var stdin io.WriteCloser
+	closeStdin := func() {
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+	}
+	if !detach {
+		pipe, err := cmd.StdinPipe()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		stdin = pipe
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		_ = stdin.Close()
+		closeStdin()
 		return nil, nil, nil, err
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		_ = stdin.Close()
+		closeStdin()
 		_ = stdout.Close()
 		return nil, nil, nil, err
 	}
