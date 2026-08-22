@@ -39,6 +39,8 @@ const (
 
 	// MetricGenAIClientOperationDuration represents the duration of client operation.
 	MetricGenAIClientOperationDuration = "gen_ai.client.operation.duration"
+	// MetricGenAIRequestCnt represents the request count for GenAI operations.
+	MetricGenAIRequestCnt = "gen_ai.request_cnt"
 	// MetricGenAIWorkflowElapsedTime represents workflow elapsed time between two lifecycle points.
 	MetricGenAIWorkflowElapsedTime = "gen_ai.workflow.elapsed_time"
 	// KeyGenAIWorkflowElapsedFrom represents the lifecycle point elapsed time is measured from.
@@ -79,4 +81,6 @@ const (
 	MeterNameWorkflow = "trpc_agent_go.internal.workflow"
 	// MeterNameInvokeAgent is the meter name for invoke agent operations.
 	MeterNameInvokeAgent = "trpc_agent_go.internal.invoke_agent"
+	// MeterNameInvokeSkill is the meter name for invoke skill operations.
+	MeterNameInvokeSkill = "trpc_agent_go.internal.invoke_skill"
 )
