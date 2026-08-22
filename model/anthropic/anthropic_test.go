@@ -3700,6 +3700,12 @@ func TestFindLastToolResultMessageIndex(t *testing.T) {
 			{OfText: &anthropic.TextBlockParam{Text: s}},
 		}}
 	}
+	toolResultWithText := func(id string, s string) anthropic.MessageParam {
+		return anthropic.NewUserMessage(
+			anthropic.NewToolResultBlock(id, "ok", false),
+			anthropic.ContentBlockParamUnion{OfText: &anthropic.TextBlockParam{Text: s}},
+		)
+	}
 
 	tests := []struct {
 		name     string
@@ -3763,6 +3769,35 @@ func TestFindLastToolResultMessageIndex(t *testing.T) {
 			},
 			minIndex: 3,
 			expected: 4,
+		},
+		{
+			// isToolResultMessage requires EVERY block to be a tool result,
+			// because that is the shape convertMessages produces when it merges a
+			// turn's results. A message that carries a result alongside text is
+			// not that shape, and the text beside it is the part that changes
+			// between requests — caching there would move the breakpoint onto
+			// content that invalidates the prefix it was meant to protect.
+			name: "trailing mixed-content message is not a tool-result message",
+			messages: []anthropic.MessageParam{
+				text("user", "task"),
+				text("assistant", "calling"),
+				toolResults("a"),
+				toolResultWithText("b", "[Turn 3/40]"),
+			},
+			minIndex: 1,
+			expected: 2,
+		},
+		{
+			// The same shape with nothing valid behind it must select nothing
+			// rather than fall back to it.
+			name: "mixed-content message alone is never selected",
+			messages: []anthropic.MessageParam{
+				text("user", "task"),
+				text("assistant", "calling"),
+				toolResultWithText("a", "[Turn 3/40]"),
+			},
+			minIndex: 1,
+			expected: -1,
 		},
 	}
 
