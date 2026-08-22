@@ -413,7 +413,7 @@ func TestCreateSession_RetriesLockWaitTimeout(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
 		WillReturnError(&mysql.MySQLError{
-			Number:  mySQLErrLockWaitTimeout,
+			Number:  sqldb.MySQLErrLockWaitTimeout,
 			Message: "lock wait timeout exceeded",
 		})
 	mock.ExpectRollback()
@@ -446,12 +446,12 @@ func TestIsRetryableMySQLLockError(t *testing.T) {
 	}{
 		{
 			name: "lock wait timeout",
-			err:  &mysql.MySQLError{Number: mySQLErrLockWaitTimeout},
+			err:  &mysql.MySQLError{Number: sqldb.MySQLErrLockWaitTimeout},
 			want: true,
 		},
 		{
 			name: "deadlock",
-			err:  &mysql.MySQLError{Number: mySQLErrLockDeadlock},
+			err:  &mysql.MySQLError{Number: sqldb.MySQLErrLockDeadlock},
 			want: true,
 		},
 		{
@@ -1377,6 +1377,46 @@ func TestCleanupExpiredSessions_TombstonesDuplicateActiveStates(t *testing.T) {
 	mock.ExpectCommit()
 
 	s.cleanupExpiredSessions(ctx, now)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTombstoneDuplicateSessionStatesDeletesDuplicateOnLegacyPrecisionConflict(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+	now := time.Now()
+	key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT DISTINCT duplicate.id, duplicate.user_id FROM session_states AS duplicate",
+	)).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).
+			AddRow(int64(12), key.UserID).
+			AddRow(int64(13), key.UserID))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), int64(12), key.UserID).
+		WillReturnError(&mysql.MySQLError{
+			Number:  sqldb.MySQLErrDuplicateEntry,
+			Message: "duplicate active session state",
+		})
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
+		WithArgs(int64(12), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), int64(13), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	err = s.tombstoneDuplicateSessionStates(ctx, tx, []session.Key{key}, now)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -3990,6 +4030,7 @@ func TestConcurrentCreateSessionSerializesAndCleanupTombstonesDuplicates(t *test
 		WithMySQLClientDSN(dsn),
 		WithTablePrefix(prefix),
 		WithSessionTTL(time.Hour),
+		WithCleanupInterval(10*time.Minute),
 	)
 	require.NoError(t, err)
 

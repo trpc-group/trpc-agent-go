@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -38,8 +39,6 @@ var errSessionNotFound = errors.New("session not found")
 
 const (
 	createSessionTransactionAttempts = 3
-	mySQLErrLockWaitTimeout          = 1205
-	mySQLErrLockDeadlock             = 1213
 )
 
 // SessionState is the state of a session.
@@ -224,12 +223,9 @@ func (s *Service) CreateSession(
 		key.SessionID = uuid.New().String()
 	}
 
-	now := time.Now()
 	sessState := &SessionState{
-		ID:        key.SessionID,
-		State:     make(session.StateMap),
-		UpdatedAt: now,
-		CreatedAt: now,
+		ID:    key.SessionID,
+		State: make(session.StateMap),
 	}
 	for k, v := range state {
 		if v == nil {
@@ -241,20 +237,27 @@ func (s *Service) CreateSession(
 		sessState.State[k] = copiedValue
 	}
 
-	sessBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return nil, fmt.Errorf("marshal session failed: %w", err)
-	}
-
-	// Calculate expires_at based on TTL
-	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
-
 	for attempt := 0; attempt < createSessionTransactionAttempts; attempt++ {
+		now := time.Now()
+		sessState.CreatedAt = now
+		sessState.UpdatedAt = now
+
+		sessBytes, err := json.Marshal(sessState)
+		if err != nil {
+			return nil, fmt.Errorf("marshal session failed: %w", err)
+		}
+
+		// Calculate expires_at based on TTL for this attempt so lock retries do
+		// not shorten the effective lifetime.
+		expiresAt := calculateExpiresAt(s.opts.sessionTTL)
 		err = s.createSessionTransaction(ctx, key, sessState, sessBytes, expiresAt, now)
 		if err == nil {
 			break
 		}
 		if !isRetryableMySQLLockError(err) || attempt+1 == createSessionTransactionAttempts {
+			return nil, err
+		}
+		if err := sleepBeforeCreateSessionRetry(ctx, attempt); err != nil {
 			return nil, err
 		}
 	}
@@ -1255,7 +1258,18 @@ func (s *Service) tombstoneDuplicateSessionStates(
 			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
 				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
 			deletedAt, row.id, row.userID); err != nil {
-			return fmt.Errorf("tombstone duplicate session state %d: %w", row.id, err)
+			if !isDuplicateEntryError(err) {
+				return fmt.Errorf("tombstone duplicate session state %d: %w", row.id, err)
+			}
+
+			log.WarnfContext(ctx, "tombstoning session state %d hit a duplicate legacy row; "+
+				"deleting only that active duplicate row: %v", row.id, err)
+			if _, deleteErr := tx.ExecContext(ctx,
+				fmt.Sprintf(`DELETE FROM %s
+					WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
+				row.id, row.userID); deleteErr != nil {
+				return fmt.Errorf("delete duplicate active session state %d: %w", row.id, deleteErr)
+			}
 		}
 	}
 	return nil
@@ -1398,7 +1412,21 @@ func isDuplicateEntryError(err error) bool {
 func isRetryableMySQLLockError(err error) bool {
 	var mysqlErr *drivermysql.MySQLError
 	return errors.As(err, &mysqlErr) &&
-		(mysqlErr.Number == mySQLErrLockWaitTimeout || mysqlErr.Number == mySQLErrLockDeadlock)
+		(mysqlErr.Number == sqldb.MySQLErrLockWaitTimeout || mysqlErr.Number == sqldb.MySQLErrLockDeadlock)
+}
+
+func sleepBeforeCreateSessionRetry(ctx context.Context, attempt int) error {
+	const base = 10 * time.Millisecond
+	jitter := time.Duration(rand.Int63n(int64(base)))
+	delay := time.Duration(attempt+1)*base + jitter
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // hardDeleteSessions performs hard delete on session tables.

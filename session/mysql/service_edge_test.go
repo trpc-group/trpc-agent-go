@@ -1052,6 +1052,7 @@ func TestCreateSession(t *testing.T) {
 		_, err = s.CreateSession(context.Background(), key, session.StateMap{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "check existing session failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("InsertError", func(t *testing.T) {
@@ -1078,6 +1079,7 @@ func TestCreateSession(t *testing.T) {
 		_, err = s.CreateSession(context.Background(), key, session.StateMap{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "create session failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("ListAppStatesError", func(t *testing.T) {
@@ -1108,6 +1110,7 @@ func TestCreateSession(t *testing.T) {
 		_, err = s.CreateSession(context.Background(), key, session.StateMap{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "list app states failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("ListUserStatesError", func(t *testing.T) {
@@ -1142,6 +1145,7 @@ func TestCreateSession(t *testing.T) {
 		_, err = s.CreateSession(context.Background(), key, session.StateMap{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "list user states failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
