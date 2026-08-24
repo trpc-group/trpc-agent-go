@@ -40,6 +40,11 @@ const (
 // the outer run reads the probe's verdict rather than scraping test output.
 const ttyProbeResultPrefix = "hostexec-tty-probe:"
 
+// ttyProbeSkipPrefix labels an unmet precondition in the inner run. Without it
+// the outer run sees only a missing verdict and reports a failure, when what
+// happened is that the probe never ran.
+const ttyProbeSkipPrefix = "hostexec-tty-skip:"
+
 // A nil stdin is not enough to keep a prompt away from a foreground command.
 //
 // Leaving cmd.Stdin nil points fd 0 at the null device, but the child still
@@ -86,6 +91,10 @@ func TestForegroundDetachesControllingTerminal(t *testing.T) {
 
 	output := readUntilExit(t, master, inner, 60*time.Second)
 
+	if idx := strings.Index(output, ttyProbeSkipPrefix); idx >= 0 {
+		t.Skipf("inner run could not run the probe: %s",
+			strings.SplitN(output[idx:], "\n", 2)[0])
+	}
 	require.Contains(t, output, ttyProbeResultPrefix,
 		"the inner run never reported a verdict; output:\n%s", output)
 	require.Contains(t, output, ttyProbeResultPrefix+ttyDetachedMarker,
@@ -99,13 +108,13 @@ func TestForegroundDetachesControllingTerminal(t *testing.T) {
 // passes that terminal on to the command it runs.
 func runControllingTerminalProbe(t *testing.T) {
 	if _, _, err := shellSpec(); err != nil {
-		t.Skip(err.Error())
+		skipProbe(t, err.Error())
 	}
 	// Without a controlling terminal of its own there is nothing for the child to
 	// inherit, so the probe would pass for the wrong reason.
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		t.Skipf("inner run has no controlling terminal: %v", err)
+		skipProbe(t, fmt.Sprintf("inner run has no controlling terminal: %v", err))
 	}
 	_ = tty.Close()
 
@@ -135,6 +144,15 @@ func runControllingTerminalProbe(t *testing.T) {
 
 	require.Equal(t, programStatusExited, res["status"])
 	require.Contains(t, outputField(res), ttyDetachedMarker)
+}
+
+// skipProbe tells the outer run over the PTY why the probe did not run, then
+// skips. The marker is what keeps an unmet precondition from surfacing as a
+// missing verdict.
+func skipProbe(t *testing.T, reason string) {
+	t.Helper()
+	fmt.Printf("%s%s\n", ttyProbeSkipPrefix, reason)
+	t.Skip(reason)
 }
 
 // readUntilExit drains the PTY until the inner run exits. A PTY read returns

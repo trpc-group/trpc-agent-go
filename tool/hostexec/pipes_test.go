@@ -70,17 +70,37 @@ func TestStartPipesDetachLeavesStdinNil(t *testing.T) {
 	cmd := &exec.Cmd{}
 	stdin, stdout, stderr, err := startPipes(cmd, detachStdin)
 	require.NoError(t, err)
+	// Registered before the assertions, and holding this call's pipes rather
+	// than the variables, so a failing assertion still closes them.
+	closePipes(t, stdin, stdout, stderr)
 	require.Nil(t, stdin)
 	require.NotNil(t, stdout)
 	require.NotNil(t, stderr)
-	_ = stdout.Close()
-	_ = stderr.Close()
 
 	cmd = &exec.Cmd{}
 	stdin, stdout, stderr, err = startPipes(cmd, keepStdin)
 	require.NoError(t, err)
+	closePipes(t, stdin, stdout, stderr)
 	require.NotNil(t, stdin, "the background path keeps a writable stdin")
-	_ = stdin.Close()
-	_ = stdout.Close()
-	_ = stderr.Close()
+}
+
+// closePipes closes one startPipes call's streams when the test ends.
+func closePipes(
+	t *testing.T,
+	stdin io.WriteCloser,
+	stdout io.ReadCloser,
+	stderr io.ReadCloser,
+) {
+	t.Helper()
+	t.Cleanup(func() {
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+		if stdout != nil {
+			_ = stdout.Close()
+		}
+		if stderr != nil {
+			_ = stderr.Close()
+		}
+	})
 }
