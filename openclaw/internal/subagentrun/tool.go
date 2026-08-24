@@ -243,6 +243,23 @@ func (t *spawnTool) Declaration() *tool.Declaration {
 	}
 }
 
+// IsConcurrencySafe reports false: a spawn must not run on the parallel tool
+// path.
+//
+// mode=review finishes by calling agent.MarkAwaitingUserReply, which writes the
+// resume route to the invocation the tool was handed. Parallel execution hands
+// each call its own invocation view, and views are never synced back, so the
+// route lands on a copy that is discarded when the worker returns — the spawn
+// reports success and the next user turn does not come back to this agent.
+//
+// The objection covers every mode because the mode is an argument, decided after
+// admission has already chosen a path. Little is lost: mode=async returns as soon
+// as the run starts, so serializing those calls serializes the requests rather
+// than the subagents, which still run concurrently.
+//
+// Declaring it here covers the alias too — both registrations are this type.
+func (t *spawnTool) IsConcurrencySafe() bool { return false }
+
 func (t *spawnTool) Call(
 	ctx context.Context,
 	args []byte,
