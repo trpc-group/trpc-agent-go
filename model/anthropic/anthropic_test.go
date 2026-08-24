@@ -3727,6 +3727,19 @@ func TestFindLastToolResultMessageIndex(t *testing.T) {
 			expected: -1,
 		},
 		{
+			// A message with no content blocks is not a tool-result message.
+			// Marking it would put the breakpoint on nothing, and the block
+			// loop would vacuously agree that every block is a tool result.
+			name: "empty message is not a tool-result message",
+			messages: []anthropic.MessageParam{
+				text("user", "task"),
+				text("assistant", "calling"),
+				{Role: "user"},
+			},
+			minIndex: 1,
+			expected: -1,
+		},
+		{
 			name: "tool results are the final message",
 			messages: []anthropic.MessageParam{
 				text("user", "task"),
@@ -4050,4 +4063,152 @@ func TestGenerateContent_CallerOverSubscribesBreakpoints(t *testing.T) {
 		"the caller's explicit marker is untouched")
 	assert.NotEmpty(t, captured.System[0].CacheControl.Type,
 		"the system breakpoint is not sacrificed to force a fit")
+}
+
+// TestClearCacheControlFromMessage covers the inverse of
+// applyCacheControlToMessages: it must clear the marker on the same block that
+// function would have marked — the last one able to carry one — whichever kind
+// that is, and leave a message it cannot address alone.
+func TestClearCacheControlFromMessage(t *testing.T) {
+	marked := anthropic.NewCacheControlEphemeralParam()
+
+	textBlock := func() anthropic.ContentBlockParamUnion {
+		return anthropic.ContentBlockParamUnion{
+			OfText: &anthropic.TextBlockParam{Text: "note", CacheControl: marked},
+		}
+	}
+	toolResultBlock := func() anthropic.ContentBlockParamUnion {
+		return anthropic.ContentBlockParamUnion{
+			OfToolResult: &anthropic.ToolResultBlockParam{ToolUseID: "call_1", CacheControl: marked},
+		}
+	}
+	toolUseBlock := func() anthropic.ContentBlockParamUnion {
+		return anthropic.ContentBlockParamUnion{
+			OfToolUse: &anthropic.ToolUseBlockParam{ID: "call_1", Name: "read", CacheControl: marked},
+		}
+	}
+	// Thinking blocks carry no cache control, so the loop has to walk past this
+	// one rather than stop at it.
+	thinkingBlock := func() anthropic.ContentBlockParamUnion {
+		return anthropic.ContentBlockParamUnion{
+			OfThinking: &anthropic.ThinkingBlockParam{Thinking: "considering", Signature: "sig"},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		content []anthropic.ContentBlockParamUnion
+		// cleared is the index whose marker must be gone.
+		cleared int
+	}{
+		{name: "text block", content: []anthropic.ContentBlockParamUnion{textBlock()}, cleared: 0},
+		{name: "tool result block", content: []anthropic.ContentBlockParamUnion{toolResultBlock()}, cleared: 0},
+		{name: "tool use block", content: []anthropic.ContentBlockParamUnion{toolUseBlock()}, cleared: 0},
+		{
+			// The marker sits on the last block that can hold one, so a trailing
+			// block that cannot is walked past rather than treated as the end.
+			name:    "block that cannot carry a marker is skipped",
+			content: []anthropic.ContentBlockParamUnion{toolResultBlock(), thinkingBlock()},
+			cleared: 0,
+		},
+		{
+			// Only the last markable block is cleared: the earlier one was never
+			// this function's to remove.
+			name:    "only the last markable block is cleared",
+			content: []anthropic.ContentBlockParamUnion{textBlock(), toolResultBlock()},
+			cleared: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			messages := []anthropic.MessageParam{{Role: "user", Content: tt.content}}
+			got := clearCacheControlFromMessage(messages, 0)
+			require.Len(t, got, 1)
+
+			for i, block := range got[0].Content {
+				cc := block.GetCacheControl()
+				if cc == nil {
+					continue // the block kind carries no marker at all
+				}
+				if i == tt.cleared {
+					assert.True(t, param.IsOmitted(*cc), "block %d must be cleared", i)
+					continue
+				}
+				assert.False(t, param.IsOmitted(*cc), "block %d must keep its marker", i)
+			}
+		})
+	}
+
+	t.Run("index outside the message list is a no-op", func(t *testing.T) {
+		messages := []anthropic.MessageParam{{Role: "user", Content: []anthropic.ContentBlockParamUnion{textBlock()}}}
+		for _, idx := range []int{-1, 1, 99} {
+			got := clearCacheControlFromMessage(messages, idx)
+			require.Len(t, got, 1)
+			assert.False(t, param.IsOmitted(got[0].Content[0].OfText.CacheControl),
+				"index %d must leave the marker alone", idx)
+		}
+	})
+}
+
+// An over-budget request with no tool-result message has no slot to give back.
+// The model leaves it as it is rather than clearing something else.
+func TestYieldToolResultCacheBreakpoint_NothingToYield(t *testing.T) {
+	m := New("claude-3-5-sonnet", WithCacheMessages(true))
+	marked := anthropic.NewCacheControlEphemeralParam()
+
+	req := &anthropic.MessageNewParams{
+		CacheControl: marked,
+		System: []anthropic.TextBlockParam{
+			{Text: "system", CacheControl: marked},
+		},
+		Tools: []anthropic.ToolUnionParam{
+			{OfTool: &anthropic.ToolParam{Name: "read", CacheControl: marked}},
+		},
+		Messages: []anthropic.MessageParam{
+			{Role: "user", Content: []anthropic.ContentBlockParamUnion{
+				{OfText: &anthropic.TextBlockParam{Text: "task", CacheControl: marked}},
+			}},
+			{Role: "assistant", Content: []anthropic.ContentBlockParamUnion{
+				{OfText: &anthropic.TextBlockParam{Text: "reply", CacheControl: marked}},
+			}},
+		},
+	}
+	require.Equal(t, 5, countCacheBreakpoints(req), "precondition: the request is over budget")
+
+	m.yieldToolResultCacheBreakpoint(req)
+
+	assert.Equal(t, 5, countCacheBreakpoints(req),
+		"with no tool-result breakpoint to release, nothing else is taken")
+}
+
+// Message caching off means this model never placed a tool-result breakpoint, so
+// there is none of its own to give back.
+func TestYieldToolResultCacheBreakpoint_MessageCachingOff(t *testing.T) {
+	m := New("claude-3-5-sonnet", WithCacheMessages(false))
+	marked := anthropic.NewCacheControlEphemeralParam()
+
+	req := &anthropic.MessageNewParams{
+		CacheControl: marked,
+		System:       []anthropic.TextBlockParam{{Text: "system", CacheControl: marked}},
+		Tools: []anthropic.ToolUnionParam{
+			{OfTool: &anthropic.ToolParam{Name: "read", CacheControl: marked}},
+		},
+		Messages: []anthropic.MessageParam{
+			{Role: "assistant", Content: []anthropic.ContentBlockParamUnion{
+				{OfText: &anthropic.TextBlockParam{Text: "reply", CacheControl: marked}},
+			}},
+			anthropic.NewUserMessage(anthropic.NewToolResultBlock("call_1", "ok", false)),
+		},
+	}
+	req.Messages[1].Content[0].OfToolResult.CacheControl = marked
+	require.Equal(t, 5, countCacheBreakpoints(req))
+
+	m.yieldToolResultCacheBreakpoint(req)
+
+	assert.Equal(t, 5, countCacheBreakpoints(req),
+		"a marker this model did not place is not this model's to remove")
+
+	// A nil request must not panic: GenerateContent is not the only caller path.
+	m.yieldToolResultCacheBreakpoint(nil)
 }
