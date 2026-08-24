@@ -206,3 +206,45 @@ func TestProcessTreeAlive(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, processTreeAlive(cmd.Process, 0))
 }
+
+// The probe reads with POSIX `read` and branches with `then`/`fi`, which cmd.exe
+// does not parse, so it lives here rather than in the cross-platform file: on
+// Windows shellSpec succeeds and the test would fail on syntax before reaching
+// the behaviour it is checking.
+//
+// A foreground session is never registered with the manager, so write_stdin can
+// never reach it. Holding a stdin pipe open for it only lets a command that
+// prompts block until the run timeout kills it; detached, the read hits EOF and
+// the command returns. Without the detach this test fails by timing out.
+func TestNewToolSet_ForegroundDetachesStdin(t *testing.T) {
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet()
+	require.NoError(t, err)
+	defer set.Close()
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		15*time.Second,
+	)
+	defer cancel()
+
+	execTool, _, _, _ := toolSetTools(t, set)
+	out, err := execTool.Call(
+		ctx,
+		mustJSON(t, map[string]any{
+			"command": `if read -r line; ` +
+				`then echo prompted:$line; ` +
+				`else echo reached-eof; fi`,
+			"yieldMs": 0,
+		}),
+	)
+	require.NoError(t, err)
+
+	res := out.(map[string]any)
+	require.Equal(t, programStatusExited, res["status"])
+	require.Contains(t, outputField(res), "reached-eof")
+	require.EqualValues(t, 0, res["exit_code"])
+}
