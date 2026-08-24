@@ -171,9 +171,16 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 }
 
 // WithEnableParallelTools enables parallel tool execution for a Tools node.
-// When enabled, if the last assistant message contains multiple tool calls,
-// they will be executed concurrently and their responses will be merged in
-// the original order. By default, tools run serially for compatibility.
+// When enabled, a last assistant message containing multiple tool calls is
+// executed concurrently and the responses are merged in the original order. By
+// default, tools run serially for compatibility.
+//
+// Concurrency is attempted, not guaranteed. Every resolved tool in the batch has
+// to raise no objection: one tool.ConcurrencyAware returning false keeps that
+// whole batch on the serial path, responses and ordering unchanged. Tools that
+// implement neither concurrency interface raise no objection, so this only
+// changes turns containing a tool that opted out. See tool.ConcurrencyAware and
+// tool.IsConcurrencySafe.
 func WithEnableParallelTools(enable bool) Option {
 	return func(node *Node) {
 		node.enableParallelTools = enable
