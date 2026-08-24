@@ -1533,6 +1533,43 @@ func TestDeleteSessionsRecheckError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestDeleteSessionsReturnsTombstoneUpdateError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+	now := time.Now()
+	deletedAtBase := now.Truncate(time.Second)
+	key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+			AddRow(key.AppName, key.UserID, key.SessionID))
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT DISTINCT duplicate.id, duplicate.user_id FROM session_states AS duplicate",
+	)).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).
+			AddRow(int64(12), key.UserID))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-time.Second), int64(12), key.UserID).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	n, err := s.deleteSessions(ctx, tx, []session.Key{key}, now)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "soft delete session state 12 with distinct tombstone")
+	assert.Zero(t, n)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSoftDeleteSessionsChildErrors(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -1661,6 +1698,49 @@ func TestSoftDeleteSessionsFallsBackForLegacyStateDuplicates(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSoftDeleteSessionsReturnsStateFallbackTombstoneUpdateError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	now := time.Now()
+	deletedAtBase := now.Truncate(time.Second)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(now, "app-1", now).
+		WillReturnError(&mysql.MySQLError{
+			Number:  sqldb.MySQLErrDuplicateEntry,
+			Message: "duplicate active session state",
+		})
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT id, user_id FROM session_states WHERE (app_name = ? AND expires_at IS NOT NULL AND expires_at <= ?) AND deleted_at IS NULL ORDER BY id ASC FOR UPDATE",
+	)).
+		WithArgs("app-1", now).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).
+			AddRow(int64(101), "user-1"))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-time.Second), int64(101), "user-1").
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	err = s.softDeleteSessions(
+		context.Background(),
+		tx,
+		"app_name = ? AND expires_at IS NOT NULL AND expires_at <= ?",
+		[]any{"app-1", now},
+		"app_name = ?",
+		[]any{"app-1"},
+		now,
+	)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "soft delete session state 101 with distinct tombstone")
+	require.NoError(t, tx.Rollback())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
