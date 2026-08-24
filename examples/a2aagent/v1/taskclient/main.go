@@ -51,23 +51,19 @@ var (
 		2*time.Minute,
 		"Overall request timeout",
 	)
-	apiKey = flag.String(
-		"api-key",
-		os.Getenv("A2A_TASK_API_KEY"),
-		"API key for retained task requests (default: A2A_TASK_API_KEY env var)",
-	)
 )
 
 func main() {
 	flag.Parse()
+	apiKey := os.Getenv("A2A_TASK_API_KEY")
 	if *pollInterval <= 0 {
 		log.Fatal("poll-interval must be greater than zero")
 	}
 	if *timeout <= 0 {
 		log.Fatal("timeout must be greater than zero")
 	}
-	if *apiKey == "" {
-		log.Fatal("api-key is required (prefer setting A2A_TASK_API_KEY)")
+	if apiKey == "" {
+		log.Fatal("A2A_TASK_API_KEY is required")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
@@ -79,7 +75,7 @@ func main() {
 	}
 	a2aClient, err := client.NewA2AClient(
 		*serverURL,
-		client.WithAPIKeyAuth(*apiKey, taskAuthHeader),
+		client.WithAPIKeyAuth(apiKey, taskAuthHeader),
 	)
 	if err != nil {
 		log.Fatalf("create A2A client: %v", err)

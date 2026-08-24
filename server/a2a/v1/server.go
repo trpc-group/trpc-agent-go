@@ -30,7 +30,6 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -143,15 +142,6 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		agentCard.SupportedInterfaces = interfaces
 	}
 	agentCard.NormalizeInterfaces()
-	if len(agentCard.SupportedInterfaces) > 0 &&
-		strings.EqualFold(agentCard.SupportedInterfaces[0].ProtocolBinding, "JSONRPC") {
-		primaryURL := agentCard.SupportedInterfaces[0].URL
-		exactEndpoint := normalizeJSONRPCEndpoint(primaryURL)
-		agentCard.SupportedInterfaces[0].URL = exactEndpoint
-		if agentCard.URL == primaryURL {
-			agentCard.URL = exactEndpoint
-		}
-	}
 	if len(agentCard.Signatures) > 0 && !reflect.DeepEqual(originalAgentCard, agentCard) {
 		return nil, errors.New(
 			"signed agent card requires normalization; provide a card signed with the final served URL",
@@ -195,10 +185,15 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	// If the URL contains a path component (e.g., "http://example.com/api/v1"),
 	// it will be extracted and used as the base path for routing incoming requests.
 	basePath := extractBasePath(ia2a.NormalizeURL(agentCard.PrimaryURL()))
+	jsonRPCEndpoint := basePath
+	if jsonRPCEndpoint == "" {
+		jsonRPCEndpoint = "/"
+	}
 
 	opts := []a2a.Option{
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
 		a2a.WithBasePath(basePath),
+		a2a.WithJSONRPCEndpoint(jsonRPCEndpoint),
 		a2a.WithMiddleware(&traceContextMiddleware{}),
 	}
 	if options.v0Compatibility {

@@ -84,6 +84,8 @@ go run ./a2aagent/v1/taskclient \
   -prompt "Explain the A2A task lifecycle."
 ```
 
+The server and task client read retained-task credentials only from these environment variables; command-line credential flags are intentionally not provided.
+
 The task client sends `message/send` with `returnImmediately=true`, receives an
 immediate Task snapshot, polls it with `tasks/get`, and finally verifies it with
 `tasks/list`. The memory TaskManager also enables retained lookup, cancellation,

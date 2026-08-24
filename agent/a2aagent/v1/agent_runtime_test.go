@@ -253,9 +253,15 @@ func TestNewSelectsFirstSupportedInterface(t *testing.T) {
 				Tenant:          "grpc-tenant",
 			},
 			{
+				URL:             server.URL + "/legacy-jsonrpc",
+				ProtocolBinding: protocol.ProtocolBindingJSONRPC,
+				ProtocolVersion: "0.3",
+				Tenant:          "legacy-tenant",
+			},
+			{
 				URL:             server.URL + "/jsonrpc",
 				ProtocolBinding: protocol.ProtocolBindingJSONRPC,
-				ProtocolVersion: protocol.ProtocolVersionV1,
+				ProtocolVersion: protocol.ProtocolVersionV1 + ".7",
 				Tenant:          "json-tenant",
 			},
 		},
@@ -291,6 +297,38 @@ func TestNewExplicitClientOptionsOverrideAgentCardBinding(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
+	}
+}
+
+func TestNewRejectsIncompatibleProtocolVersions(t *testing.T) {
+	_, err := New(WithAgentCard(&protocolserver.AgentCard{
+		Name: "remote",
+		SupportedInterfaces: []protocolserver.AgentInterface{{
+			URL:             "http://localhost:8080",
+			ProtocolBinding: protocol.ProtocolBindingJSONRPC,
+			ProtocolVersion: "0.3",
+		}},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "no interface compatible with A2A protocol 1.0") {
+		t.Fatalf("New error = %v, want incompatible protocol version", err)
+	}
+}
+
+func TestCompatibleProtocolVersion(t *testing.T) {
+	tests := map[string]bool{
+		"":        true,
+		"1.0":     true,
+		"1.0.0":   true,
+		"1.0.7":   true,
+		"0.3":     false,
+		"1.1":     false,
+		"1.0.x":   false,
+		"1.0.0.0": false,
+	}
+	for version, want := range tests {
+		if got := isCompatibleProtocolVersion(version); got != want {
+			t.Errorf("isCompatibleProtocolVersion(%q) = %v, want %v", version, got, want)
+		}
 	}
 }
 

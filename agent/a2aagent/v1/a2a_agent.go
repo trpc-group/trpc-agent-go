@@ -29,6 +29,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -136,6 +138,7 @@ func New(opts ...Option) (*A2AAgent, error) {
 		agent.agentCard = agentCard
 	} else {
 		card := *agent.agentCard
+		card.SupportedInterfaces = slices.Clone(card.SupportedInterfaces)
 		agent.agentCard = &card
 	}
 	agent.agentCard.NormalizeInterfaces()
@@ -146,11 +149,14 @@ func New(opts ...Option) (*A2AAgent, error) {
 	if agent.description == "" {
 		agent.description = agent.agentCard.Description
 	}
-	resolvedURL, clientOptions := resolveClientConfig(
+	resolvedURL, clientOptions, err := resolveClientConfig(
 		agent.agentCard,
 		agentURL,
 		agent.extraA2AOptions,
 	)
+	if err != nil {
+		return nil, err
+	}
 	agent.agentCard.URL = resolvedURL
 	a2aClient, err := client.NewA2AClient(resolvedURL, clientOptions...)
 	if err != nil {
@@ -165,13 +171,20 @@ func resolveClientConfig(
 	card *server.AgentCard,
 	fallbackURL string,
 	explicitOptions []client.Option,
-) (string, []client.Option) {
+) (string, []client.Option, error) {
 	selectedInterface := firstSupportedInterface(card.SupportedInterfaces)
 	resolvedURL := card.PrimaryURL()
 	if selectedInterface != nil {
 		resolvedURL = selectedInterface.URL
 	} else if len(card.SupportedInterfaces) > 0 {
-		selectedInterface = &card.SupportedInterfaces[0]
+		selectedInterface = firstCompatibleVersionInterface(card.SupportedInterfaces)
+		if selectedInterface == nil {
+			return "", nil, fmt.Errorf(
+				"agent card has no interface compatible with A2A protocol %s",
+				protocol.ProtocolVersionV1,
+			)
+		}
+		resolvedURL = selectedInterface.URL
 	}
 	if resolvedURL == "" {
 		resolvedURL = fallbackURL
@@ -189,18 +202,66 @@ func resolveClientConfig(
 	// Explicit client options take precedence over values discovered from the
 	// Agent Card.
 	clientOptions = append(clientOptions, explicitOptions...)
-	return ia2a.NormalizeURL(resolvedURL), clientOptions
+	return ia2a.NormalizeURL(resolvedURL), clientOptions, nil
 }
 
 func firstSupportedInterface(interfaces []protocol.AgentInterface) *protocol.AgentInterface {
+	var legacy *protocol.AgentInterface
 	for i := range interfaces {
 		binding := interfaces[i].ProtocolBinding
-		if strings.EqualFold(binding, protocol.ProtocolBindingJSONRPC) ||
-			strings.EqualFold(binding, protocol.ProtocolBindingHTTPJSON) {
+		if !strings.EqualFold(binding, protocol.ProtocolBindingJSONRPC) &&
+			!strings.EqualFold(binding, protocol.ProtocolBindingHTTPJSON) {
+			continue
+		}
+		if interfaces[i].ProtocolVersion == "" {
+			if legacy == nil {
+				legacy = &interfaces[i]
+			}
+			continue
+		}
+		if isCompatibleProtocolVersion(interfaces[i].ProtocolVersion) {
 			return &interfaces[i]
 		}
 	}
-	return nil
+	return legacy
+}
+
+func firstCompatibleVersionInterface(interfaces []protocol.AgentInterface) *protocol.AgentInterface {
+	var legacy *protocol.AgentInterface
+	for i := range interfaces {
+		if interfaces[i].ProtocolVersion == "" {
+			if legacy == nil {
+				legacy = &interfaces[i]
+			}
+			continue
+		}
+		if isCompatibleProtocolVersion(interfaces[i].ProtocolVersion) {
+			return &interfaces[i]
+		}
+	}
+	return legacy
+}
+
+func isCompatibleProtocolVersion(version string) bool {
+	if version == "" {
+		return true
+	}
+	parts := strings.Split(version, ".")
+	if len(parts) != 2 && len(parts) != 3 {
+		return false
+	}
+	values := make([]uint64, len(parts))
+	for i, part := range parts {
+		value, err := strconv.ParseUint(part, 10, 32)
+		if err != nil {
+			return false
+		}
+		values[i] = value
+	}
+	supported := strings.Split(protocol.ProtocolVersionV1, ".")
+	return len(supported) == 2 &&
+		strconv.FormatUint(values[0], 10) == supported[0] &&
+		strconv.FormatUint(values[1], 10) == supported[1]
 }
 
 // sendErrorEvent sends an error event to the event channel.

@@ -669,3 +669,28 @@ func TestNewUsesSuppliedAgentCardIdentityAndPrimaryURL(t *testing.T) {
 		t.Fatalf("caller-owned card URL was mutated to %q", card.URL)
 	}
 }
+
+func TestNewDoesNotMutateSuppliedAgentCardInterfaceBackingArray(t *testing.T) {
+	backing := []protocolserver.AgentInterface{{
+		URL:             "https://sentinel.example.com",
+		ProtocolBinding: "sentinel",
+	}}
+	card := &protocolserver.AgentCard{
+		Name:                "remote",
+		URL:                 "https://legacy.example.com",
+		SupportedInterfaces: backing[:0],
+	}
+	remote, err := New(WithAgentCard(card))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if got := backing[0].URL; got != "https://sentinel.example.com" {
+		t.Fatalf("caller-owned backing URL = %q, want sentinel unchanged", got)
+	}
+	if len(card.SupportedInterfaces) != 0 {
+		t.Fatalf("caller-owned interfaces length = %d, want 0", len(card.SupportedInterfaces))
+	}
+	if got := remote.agentCard.PrimaryURL(); got != "https://legacy.example.com" {
+		t.Fatalf("normalized primary URL = %q, want legacy URL", got)
+	}
+}
