@@ -444,6 +444,7 @@ func TestRunToolResultInputTranslationReusesTrackedSourceMetadata(
 		),
 		want,
 	)))
+	require.NoError(t, tracker.Flush(ctx, key))
 
 	rr, ok := New(
 		&fakeRunner{

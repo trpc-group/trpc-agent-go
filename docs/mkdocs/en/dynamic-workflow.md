@@ -122,6 +122,56 @@ tools are not automatically available inside the workflow. This keeps the
 workflow boundary explicit and avoids accidental access to writes,
 credentials, shell execution, or control-plane tools.
 
+## Use Skills as workflow recipes
+
+An Agent Skill can hold reusable process knowledge while Dynamic Workflow
+makes the current request's control flow explicit. For example, one Skill can
+describe a bounded draft/review/revise loop and another can describe parallel
+analysis followed by synthesis. After loading the matching text, the root
+Agent compiles it into one request-specific workflow with real loops, branches,
+or parallel stages rather than relying on a long Agent loop to remember every
+step.
+
+Keep both capabilities available on the root Agent:
+
+```go
+root := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithSkills(repo),
+    // This example loads process knowledge, not Skill commands or scripts.
+    llmagent.WithAllowedSkillTools(llmagent.SkillToolLoad),
+    // run_workflow is visible from the first request.
+    llmagent.WithTools([]tool.Tool{workflow}),
+)
+```
+
+The first model request can see the compact Skill summaries, `skill_load`, and
+the standard `run_workflow` tool. When a recipe matches, the model normally
+loads it first, waits for the `skill_load` result in the next model request,
+and then calls `run_workflow` once; it should not issue both calls in one
+response. Loading a Skill adds its body to subsequent requests in the current
+turn; it does not turn Markdown into an executable script or gate the workflow
+tool. If a recipe has optional Markdown or text references, `skill_load` can
+request them with `docs` or `include_all_docs`; keep summaries short so
+unrelated requests do not pay for large references.
+
+The complete [Dynamic Workflow with Skills example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/skills)
+includes a code-shaped bounded loop and a prose-only fan-out recipe. The
+workflow remains request-specific: the Skill contributes reusable decisions
+and guardrails, while the model adapts roles, inputs, criteria, and output.
+
+This root workflow recipe is distinct from child Agent Skills. A base Agent
+registered with Dynamic Workflow may have its own domain Skills; an
+`agent(...)` call can inherit them, disable them with `skills=[]`, or narrow
+them with `skills=["name"]`. Narrowing selects available capabilities but does
+not implicitly load a Skill. If the child template exposes `skill_load` and the
+role needs a Skill body, the child can load it; its Agent-scoped Skill state
+remains separate from the root.
+
+Child Agent model and tool events continue through the parent Runner event
+stream; the linked example also prints these events while the workflow runs.
+
 ## `agent(...)` in the current Python workflow
 
 Think of `agent(...)` as: run one Go-registered base Agent once.

@@ -64,22 +64,37 @@ var (
 	gatewayAPIKey = flag.String(
 		"gateway-api-key",
 		os.Getenv("TDAI_GATEWAY_API_KEY"),
-		"Gateway API key sent as Authorization: Bearer; context offload v2 requires a non-empty value",
+		"Optional gateway API key sent as Authorization: Bearer; context offload v2 requires a non-empty value",
+	)
+	serviceID = flag.String(
+		"service-id",
+		os.Getenv("TDAI_SERVICE_ID"),
+		"TencentDB Agent Memory service ID; setting any identity ID enables the identity-scoped data plane",
+	)
+	teamID = flag.String(
+		"team-id",
+		os.Getenv("TDAI_TEAM_ID"),
+		"TencentDB Agent Memory team ID; setting any identity ID enables the identity-scoped data plane",
+	)
+	agentID = flag.String(
+		"agent-id",
+		os.Getenv("TDAI_AGENT_ID"),
+		"TencentDB Agent Memory agent ID; setting any identity ID enables the identity-scoped data plane",
 	)
 	offloadServiceID = flag.String(
 		"offload-service-id",
-		os.Getenv("TDAI_SERVICE_ID"),
+		os.Getenv("TDAI_OFFLOAD_SERVICE_ID"),
 		"TencentDB Agent Memory service ID; enables context offload v2 when a gateway API key is also configured",
 	)
-	waitBeforeRecall = flag.Duration(
+	turnWait = flag.Duration(
 		"turn-wait",
 		0,
-		"Delay after each user turn to wait for gateway capture/extraction",
+		"Fixed delay after each completed turn to allow asynchronous gateway extraction before cross-session recall",
 	)
 	endSession = flag.Bool(
 		"end-session",
 		false,
-		"Call TencentDB Agent Memory /session/end before exit",
+		"End the current session before exit; V3 waits for capture and Legacy calls /session/end",
 	)
 )
 
@@ -97,10 +112,19 @@ func main() {
 	if offloadEnabled && strings.TrimSpace(*gatewayAPIKey) == "" {
 		log.Fatal("-gateway-api-key is required when -offload-service-id enables context offload v2")
 	}
+	identityEnabled := strings.TrimSpace(*serviceID) != "" ||
+		strings.TrimSpace(*teamID) != "" ||
+		strings.TrimSpace(*agentID) != ""
+	if identityEnabled && (strings.TrimSpace(*serviceID) == "" ||
+		strings.TrimSpace(*teamID) == "" ||
+		strings.TrimSpace(*agentID) == "") {
+		log.Fatal("-service-id, -team-id, and -agent-id are all required for the identity-scoped data plane; if TDAI_SERVICE_ID was previously used only for context offload, move it to TDAI_OFFLOAD_SERVICE_ID")
+	}
 
-	// Recall and the long-term memory_search tool are opt-in because the gateway
-	// does not enforce per-user/session scoping on those paths; enable them here
-	// for the demo, which runs a single trusted local sidecar.
+	// Recall and the long-term memory_search tool remain opt-in. The current
+	// identity-scoped data plane scopes L0/L1 by service/team/agent/user and
+	// L2/L3 by service/team/agent; legacy gateways should still be treated as
+	// trusted sidecars.
 	memoryOptions := []memorytencentdb.Option{
 		memorytencentdb.WithGatewayURL(*gatewayURL),
 		memorytencentdb.WithTimeout(*gatewayTimeout),
@@ -121,7 +145,23 @@ func main() {
 			),
 		)
 	}
-	memSvc, err := memorytencentdb.NewService(memoryOptions...)
+	var (
+		memSvc *memorytencentdb.Service
+		err    error
+	)
+	if identityEnabled {
+		identity := memorytencentdb.NewServiceIdentity(
+			*serviceID,
+			*teamID,
+			*agentID,
+		)
+		memSvc, err = memorytencentdb.NewServiceWithIdentity(
+			identity,
+			memoryOptions...,
+		)
+	} else {
+		memSvc, err = memorytencentdb.NewService(memoryOptions...)
+	}
 	if err != nil {
 		log.Fatalf("create TencentDB Agent Memory service: %v", err)
 	}
@@ -158,6 +198,14 @@ func main() {
 	if offloadEnabled {
 		fmt.Printf("Context offload: enabled (service=%s)\n", *offloadServiceID)
 	}
+	if identityEnabled {
+		fmt.Printf("Identity-scoped data plane: enabled (service=%s team=%s agent=%s)\n", *serviceID, *teamID, *agentID)
+		if *turnWait > 0 {
+			fmt.Printf("Post-turn extraction delay: %s\n", *turnWait)
+		} else {
+			fmt.Println("Post-turn extraction delay: disabled; V3 cross-session recall may not be ready immediately")
+		}
+	}
 	fmt.Printf("App: %s\nUser: %s\nSession: %s\n", *appName, *userID, sid)
 	fmt.Println(strings.Repeat("=", 60))
 
@@ -167,6 +215,7 @@ func main() {
 		memSvc:     memSvc,
 		userID:     *userID,
 		sessionID:  sid,
+		v3Enabled:  identityEnabled,
 	}
 	if err := chat.start(ctx); err != nil {
 		log.Fatalf("chat failed: %v", err)
@@ -179,6 +228,7 @@ type memoryChat struct {
 	memSvc     *memorytencentdb.Service
 	userID     string
 	sessionID  string
+	v3Enabled  bool
 }
 
 func (c *memoryChat) start(ctx context.Context) error {
@@ -187,16 +237,16 @@ func (c *memoryChat) start(ctx context.Context) error {
 			if err := c.endCurrentSession(ctx); err != nil {
 				fmt.Printf("End session failed: %v\n", err)
 			} else {
-				fmt.Println("Session flushed through TencentDB Agent Memory gateway.")
+				c.printEndSessionSuccess()
 			}
 		}()
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("Special commands:")
-	fmt.Println("  /new      - flush current session and start a new session for the same user")
+	fmt.Println("  /new      - finish pending capture and start a new session for the same user")
 	fmt.Println("  /session  - show current session")
-	fmt.Println("  /end      - call TencentDB Agent Memory /session/end for current session")
+	fmt.Println("  /end      - end current session")
 	fmt.Println("  /exit     - end the conversation")
 	fmt.Println()
 
@@ -225,7 +275,7 @@ func (c *memoryChat) start(ctx context.Context) error {
 			if err := c.endCurrentSession(ctx); err != nil {
 				fmt.Printf("End session failed: %v\n\n", err)
 			} else {
-				fmt.Println("Session flushed through TencentDB Agent Memory gateway.")
+				c.printEndSessionSuccess()
 				fmt.Println()
 			}
 			continue
@@ -248,9 +298,9 @@ func (c *memoryChat) processMessage(ctx context.Context, input string) error {
 		return err
 	}
 	printRunResult(result)
-	if *waitBeforeRecall > 0 {
-		fmt.Printf("Waiting %s for gateway capture/extraction...\n", *waitBeforeRecall)
-		time.Sleep(*waitBeforeRecall)
+	if *turnWait > 0 {
+		fmt.Printf("Waiting %s to allow asynchronous gateway extraction...\n", *turnWait)
+		time.Sleep(*turnWait)
 	}
 	return nil
 }
@@ -264,7 +314,11 @@ func (c *memoryChat) startNewSession(ctx context.Context) error {
 	fmt.Println("Started new session.")
 	fmt.Printf("  Previous: %s\n", oldSessionID)
 	fmt.Printf("  Current:  %s\n", c.sessionID)
-	fmt.Println("  Long-term memories are preserved for the same user.")
+	if c.v3Enabled {
+		fmt.Println("  V3 capture is complete; asynchronous long-term extraction may still be running.")
+	} else {
+		fmt.Println("  Long-term memories remain available for the same user.")
+	}
 	fmt.Println()
 	return nil
 }
@@ -278,6 +332,14 @@ func (c *memoryChat) endCurrentSession(ctx context.Context) error {
 		return fmt.Errorf("session %s not found", c.sessionID)
 	}
 	return c.memSvc.EndSession(ctx, sess)
+}
+
+func (c *memoryChat) printEndSessionSuccess() {
+	if c.v3Enabled {
+		fmt.Println("Pending TencentDB Agent Memory V3 capture completed.")
+		return
+	}
+	fmt.Println("Session flushed through TencentDB Agent Memory gateway.")
 }
 
 type runResult struct {

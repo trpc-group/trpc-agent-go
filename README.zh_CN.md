@@ -508,7 +508,6 @@ _ = mr.Cancel(requestID)
 - [examples/agenttool](examples/agenttool) – 将 agent 封装为可调用的 tool。
 - [examples/multitools](examples/multitools) – 多工具编排。
 - [examples/duckduckgo](examples/duckduckgo) – Web 搜索工具集成。
-- [examples/filetoolset](examples/filetoolset) – 文件操作作为工具。
 - [examples/fileinput](examples/fileinput) – 以文件作为输入。
 - [examples/agenttool](examples/agenttool) 展示了流式与非流式模式。
 

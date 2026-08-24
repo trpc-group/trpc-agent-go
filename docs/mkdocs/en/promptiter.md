@@ -1138,17 +1138,20 @@ type StopPolicy struct {
 	MaxRoundsWithoutAcceptance int
 	// TargetScore is the target validation score after which the run can stop. nil means disabled.
 	TargetScore *float64
+	// StopOnNoTrainLosses stops after training-set evaluation produces no extracted losses.
+	StopOnNoTrainLosses bool
 }
 ```
 
 Stop decisions are executed in the following order.
 
-1. Stop when the current round reaches `MaxRounds`.
-2. Stop when consecutive non-accepted rounds reach `MaxRoundsWithoutAcceptance`.
-3. Stop when the current baseline validation score reaches `TargetScore`.
-4. Otherwise, continue to the next round.
+1. Stop before Backward when `StopOnNoTrainLosses` is enabled and the current training-set evaluation produces no extracted losses.
+2. Stop when the current round reaches `MaxRounds`.
+3. Stop when consecutive non-accepted rounds reach `MaxRoundsWithoutAcceptance`.
+4. Stop when the current baseline validation score reaches `TargetScore`.
+5. Otherwise, continue to the next round.
 
-`MaxRounds` itself is a required constraint in `RunRequest` and must be greater than 0. When `TargetScore` is `nil`, the target-score stop condition is not enabled.
+`MaxRounds` itself is a required constraint in `RunRequest` and must be greater than 0. When `TargetScore` is `nil`, the target-score stop condition is not enabled. `StopOnNoTrainLosses` defaults to `false`, preserving the historical behavior where empty-loss rounds continue through no-op candidate validation.
 
 ### RunRequest
 
@@ -1258,6 +1261,8 @@ type OptimizerOptions struct {
 ```
 
 `RunRequest` first specifies training sets and validation sets. `Train` is used to produce optimization signals, and `Validation` is used for acceptance decisions. Both must be non-empty. Each `EvalSetInput` can point to a complete evaluation set or use `EvalCaseIDs` to run only part of its evaluation cases. `LossHints` and `LossTargets` only serve the training set. They respectively supplement known business-side problem reasons and specify trace nodes where failed metric losses start backward propagation.
+
+`StopPolicy.StopOnNoTrainLosses` ends a run early when training-set evaluation no longer produces usable optimization signals. When it triggers, the round result keeps `Train`, `Losses`, and `Stop`, but does not write `Backward`, `Aggregation`, `Patches`, `OutputProfile`, `Validation`, or `Acceptance`.
 
 `InitialProfile` specifies the starting Profile of this iteration. If it is not passed, PromptIter uses the original surface values in the structure snapshot as the initial baseline. If `InitialProfile` is passed and `StructureID` is non-empty, it must match the current structure snapshot ID.
 
