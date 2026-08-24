@@ -437,6 +437,8 @@ Common A2AAgent options are:
 | `WithA2AClientExtraOptions` | Pass options to the underlying A2A client |
 | `WithBuildMessageHook` | Rewrite the outbound A2A Message before sending |
 
+Inbound Message metadata is caller-controlled input. On the Server, use a custom processor installed with `WithProcessMessageHook` to filter it before calling the built-in processor; on the Client, limit `WithTransferStateKey` to non-security-sensitive keys. Tenant, role, policy, and other authorization state must come from authenticated or immutable server-side context.
+
 Use custom converters, Part mappers, hooks, or response rewriters only when the built-in text, multimodal, tool, code-execution, and metadata mappings are insufficient.
 
 ## Legacy protocol v0.2.x integration
@@ -712,6 +714,10 @@ server, err := a2aserver.New(
     a2aserver.WithAgentCard(card),
     a2aserver.WithV0Compatibility(),
 )
+if err != nil {
+    return err
+}
+return server.Start(":8888")
 ```
 
 The `"1.0.0"` argument to `NewAgentCard` is the Agent implementation version, not the A2A protocol version. The Agent Card address is the client-reachable address and determines the Server base path; the address passed to `Start` only determines where the current process listens.
@@ -823,7 +829,7 @@ Migration still needs to account for these observable differences:
 - Only the first authentication scheme from a multi-scheme v0 push-notification configuration is retained in v1.
 - Message IDs, Task IDs, timestamps, enum values, and raw JSON shapes are not guaranteed to be field-for-field equal across protocol generations.
 
-The compatibility layer targets the v0.2.x wire protocol used by tRPC-Agent-Go, and the current automated direct-protocol compatibility baseline is `trpc-a2a-go v0.2.5`. Historical tRPC-Agent-Go legacy A2AAgent releases, other v0.2.x versions, custom converters or hooks, gateway authentication, real push delivery, continuation, Redis restart, and cross-node execution must be tested end to end with the application's own dependency versions and deployment topology.
+The compatibility layer targets the v0.2.x wire protocol used by tRPC-Agent-Go, and the automated direct-protocol suite runs against the current `trpc-a2a-go` v0.2.x dependency selected by this repository. Historical tRPC-Agent-Go legacy A2AAgent releases, other v0.2.x versions, custom converters or hooks, gateway authentication, real push delivery, continuation, Redis restart, and cross-node execution must be tested end to end with the application's own dependency versions and deployment topology.
 
 ### Migration checklist
 

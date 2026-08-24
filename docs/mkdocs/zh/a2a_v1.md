@@ -403,6 +403,8 @@ A2AAgent 的常用配置如下：
 | `WithA2AClientExtraOptions` | 向底层 A2A 客户端传递配置 |
 | `WithBuildMessageHook` | 在发送前改写 A2A Message |
 
+入站 Message metadata 属于调用方可控输入。服务端应通过 `WithProcessMessageHook` 安装自定义 processor，并在调用内置 processor 前过滤 metadata；客户端应将 `WithTransferStateKey` 限制为非安全敏感键。tenant、role、policy 等授权状态必须来自已认证或不可变的服务端上下文。
+
 只有内置的文本、多模态内容、工具、代码执行和 metadata 映射无法满足需求时，才需要使用自定义 converter、Part mapper、hook 或 response rewriter。
 
 ## 旧版协议 v0.2.x 接入
@@ -678,6 +680,10 @@ server, err := a2aserver.New(
     a2aserver.WithAgentCard(card),
     a2aserver.WithV0Compatibility(),
 )
+if err != nil {
+    return err
+}
+return server.Start(":8888")
 ```
 
 `NewAgentCard` 的 `"1.0.0"` 是 Agent 实现版本，不是 A2A 协议版本。Agent Card 中的地址是发布给客户端的可达地址，并决定 Server 的 base path；传给 `Start` 的地址只决定当前进程监听的位置。
@@ -789,7 +795,7 @@ stateless TaskManager 会拒绝显式非阻塞请求，因为 request-bound exec
 - v0 push notification 配置中的多个 authentication scheme 转换为 v1 时只能保留第一个。
 - Message ID、Task ID、时间戳、枚举值和原始 JSON 结构不属于跨协议逐字段相等的保证。
 
-兼容层面向 tRPC-Agent-Go 使用的 v0.2.x wire，当前直接协议客户端的自动化兼容回归基线为 `trpc-a2a-go v0.2.5`。历史 tRPC-Agent-Go 版本中的 legacy `A2AAgent`、其他 v0.2.x 版本、自定义 converter/hook、网关鉴权、真实 push 投递、continuation、Redis 重启和跨节点执行等场景，应使用应用自身的依赖版本和部署拓扑做端到端回归。
+兼容层面向 tRPC-Agent-Go 使用的 v0.2.x wire，自动化直接协议测试使用仓库当前选定的 `trpc-a2a-go` v0.2.x 依赖。历史 tRPC-Agent-Go 版本中的 legacy `A2AAgent`、其他 v0.2.x 版本、自定义 converter/hook、网关鉴权、真实 push 投递、continuation、Redis 重启和跨节点执行等场景，应使用应用自身的依赖版本和部署拓扑做端到端回归。
 
 ## 协议使用指南
 
