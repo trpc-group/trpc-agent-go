@@ -12,7 +12,6 @@ package workspacesession
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -119,7 +118,7 @@ func (r *Resolver) CreateWorkspaceHandle(
 			if suffix == "" {
 				suffix = uuid.NewString()
 			}
-			sid = fmt.Sprintf("ephemeral-invocation-%s", suffix)
+			sid = ephemeralKeyPrefix + suffix
 		}
 	}
 	return reg.AcquireHandle(ctx, eng.Manager(), sid)
@@ -143,6 +142,35 @@ func (r *Resolver) ReleaseWorkspaceHandle(
 		return nil
 	}
 	return r.reg.ReleaseHandle(ctx, handle)
+}
+
+// ephemeralKeyPrefix marks registry keys derived from an invocation but not
+// owned by any session lifecycle. Handles under these keys must be released
+// after the invocation finishes.
+const ephemeralKeyPrefix = "ephemeral-invocation-"
+
+// IsEphemeralHandle reports whether handle was acquired for an invalid
+// (empty-ID) session and therefore has no session-level lifecycle owning it.
+// Such handles must be released with ReleaseWorkspaceHandle after the
+// invocation finishes, or the backend workspace will leak for the life of the
+// process.
+func (r *Resolver) IsEphemeralHandle(handle codeexecutor.WorkspaceHandle) bool {
+	return strings.HasPrefix(handle.RegistryID(), ephemeralKeyPrefix)
+}
+
+// ReleaseEphemeralHandle releases handle only when it is an ephemeral
+// (invalid-session) workspace. Session-scoped handles are left cached and
+// untouched. This is the recommended teardown hook for production callers that
+// want to reclaim ephemeral workspaces after a single invocation without
+// discarding valid session workspaces.
+func (r *Resolver) ReleaseEphemeralHandle(
+	ctx context.Context,
+	handle codeexecutor.WorkspaceHandle,
+) error {
+	if !r.IsEphemeralHandle(handle) {
+		return nil
+	}
+	return r.ReleaseWorkspaceHandle(ctx, handle)
 }
 
 // InvalidateWorkspaceHandle conditionally removes the exact registry entry

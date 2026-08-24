@@ -420,3 +420,61 @@ func TestResolver_ReleaseWorkspaceHandle_CleansEphemeralWorkspace(t *testing.T) 
 	_, ok := r.reg.Get(handle.Workspace.ID)
 	require.False(t, ok, "released workspace must not remain in registry cache")
 }
+
+// TestResolver_IsEphemeralHandle_RoundTrip verifies that the resolver can
+// identify ephemeral (invalid empty-ID session) handles and that
+// ReleaseEphemeralHandle cleans them up, while leaving session-scoped
+// workspaces cached and reusable. This is the lifecycle contract the
+// production skill_run path relies on to avoid leaking one backend workspace
+// per invalid-session invocation.
+func TestResolver_IsEphemeralHandle_RoundTrip(t *testing.T) {
+	mgr := &resolverStubMgr{}
+	eng := newResolverStubEngine(mgr)
+	r := NewResolver(nil, nil)
+
+	// Valid session -> session-scoped key, NOT ephemeral.
+	vInv := agent.NewInvocation()
+	vInv.Session = &session.Session{ID: "sess-1"}
+	vCtx := agent.NewInvocationContext(context.Background(), vInv)
+	vHandle, err := r.CreateWorkspaceHandle(vCtx, eng, "skill-name")
+	require.NoError(t, err)
+	require.False(t, r.IsEphemeralHandle(vHandle),
+		"valid session handles must not be ephemeral")
+
+	// Empty session -> ephemeral-invocation key.
+	eInv := agent.NewInvocation()
+	eInv.Session = &session.Session{}
+	eCtx := agent.NewInvocationContext(context.Background(), eInv)
+	eHandle, err := r.CreateWorkspaceHandle(eCtx, eng, "skill-name")
+	require.NoError(t, err)
+	require.True(t, r.IsEphemeralHandle(eHandle),
+		"empty-session handles must be ephemeral")
+	require.True(t, strings.HasPrefix(eHandle.RegistryID(), "ephemeral-invocation-"))
+	require.Len(t, mgr.cleans, 0, "no cleanup before release")
+
+	// ReleaseEphemeralHandle must clean the ephemeral workspace and remove
+	// its registry entry.
+	require.NoError(t, r.ReleaseEphemeralHandle(eCtx, eHandle))
+	require.Len(t, mgr.cleans, 1, "ephemeral release must call Cleanup exactly once")
+	require.Equal(t, eHandle.Workspace.ID, mgr.cleans[0])
+	_, ok := r.reg.Get(eHandle.Workspace.ID)
+	require.False(t, ok, "released ephemeral workspace must not remain in registry cache")
+
+	// The session-scoped handle must NOT be released by ReleaseEphemeralHandle:
+	// it stays cached and reusable.
+	require.NoError(t, r.ReleaseEphemeralHandle(vCtx, vHandle))
+	require.Len(t, mgr.cleans, 1, "session-scoped handle must not be released as ephemeral")
+	vHandle2, err := r.CreateWorkspaceHandle(vCtx, eng, "skill-name")
+	require.NoError(t, err)
+	require.Equal(t, vHandle.Workspace.ID, vHandle2.Workspace.ID,
+		"session-scoped workspace must still be cached and reused")
+	// created has exactly two entries: the valid-session key and the
+	// ephemeral key. The valid-session key must not be created twice.
+	validCreated := 0
+	for _, id := range mgr.created {
+		if id == vHandle.Workspace.ID {
+			validCreated++
+		}
+	}
+	require.Equal(t, 1, validCreated, "valid session must not recreate its workspace")
+}

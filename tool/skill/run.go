@@ -493,6 +493,12 @@ func (t *RunTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	// Ephemeral (invalid empty-ID session) workspaces have no session-level
+	// lifecycle owning them; release them at the end of this invocation so a
+	// long-lived process does not retain one backend workspace per such call.
+	// Session-scoped handles stay cached, so no cleanup happens for valid
+	// sessions and they keep being reused.
+	defer t.releaseEphemeralWorkspace(ctx, prepared.handle)
 
 	ws := prepared.handle.Workspace
 	autoFiles, err := t.autoExportWorkspaceOut(
@@ -769,6 +775,23 @@ func (t *RunTool) invalidateWorkspaceHandle(
 ) {
 	if t != nil && t.wsr != nil {
 		t.wsr.InvalidateWorkspaceHandle(handle)
+	}
+}
+
+// releaseEphemeralWorkspace cleans up a workspace that was acquired for an
+// invalid (empty-ID) session, which has no session-level lifecycle owning it.
+func (t *RunTool) releaseEphemeralWorkspace(
+	ctx context.Context,
+	handle codeexecutor.WorkspaceHandle,
+) {
+	if t == nil || t.wsr == nil {
+		return
+	}
+	if err := t.wsr.ReleaseEphemeralHandle(ctx, handle); err != nil {
+		log.Warnf(
+			"skill_run: releasing ephemeral workspace %q: %v",
+			handle.Workspace.ID, err,
+		)
 	}
 }
 

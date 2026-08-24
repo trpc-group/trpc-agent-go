@@ -120,6 +120,12 @@ type WorkspaceHandle struct {
 	entryToken uint64
 }
 
+// RegistryID returns the cache key this handle was acquired under. It is the
+// same logical id the caller passed to AcquireHandle, exposed for lifecycle
+// decisions (e.g. distinguishing ephemeral keys from session-scoped ones).
+// The registry-owned entryToken remains private.
+func (h WorkspaceHandle) RegistryID() string { return h.registryID }
+
 // WorkspaceInstanceProvider is an optional [WorkspaceManager] capability for
 // backends whose physical execution environment can be replaced while logical
 // workspace IDs remain stable.
