@@ -3100,6 +3100,61 @@ func TestCreateSession_ExistingExpiredDuplicateActiveRows(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestCreateSession_ExistingExpiredDuplicateActiveRowsHardDeletesDuplicates(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour), WithSoftDelete(false))
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+	expiredTime := time.Now().Add(-2 * time.Hour)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).
+			AddRow(expiredTime).
+			AddRow(expiredTime))
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT DISTINCT duplicate.id, duplicate.user_id FROM session_states AS duplicate",
+	)).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).AddRow(int64(12), key.UserID))
+	mock.ExpectExec(regexp.QuoteMeta(
+		"DELETE FROM session_states WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+	)).
+		WithArgs(int64(12), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
+		WithArgs(key.AppName, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
+		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	sess, err := s.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestCreateSession_ExistingExpiredDuplicateTombstoneError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

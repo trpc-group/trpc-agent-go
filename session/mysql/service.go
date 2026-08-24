@@ -316,8 +316,14 @@ func (s *Service) createSessionTransaction(
 				key.UserID,
 				key.SessionID,
 			)
-			if err := s.tombstoneDuplicateSessionStates(ctx, tx, []session.Key{key}, now); err != nil {
-				return err
+			if s.opts.softDelete {
+				if err := s.tombstoneDuplicateSessionStates(ctx, tx, []session.Key{key}, now); err != nil {
+					return err
+				}
+			} else {
+				if err := s.deleteDuplicateSessionStates(ctx, tx, []session.Key{key}, now); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -1212,9 +1218,56 @@ func (s *Service) tombstoneDuplicateSessionStates(
 	keys []session.Key,
 	now time.Time,
 ) error {
+	duplicateRows, err := s.lockDuplicateExpiredSessionStates(ctx, tx, keys, now)
+	if err != nil {
+		return err
+	}
+
+	nextTombstoneOffset := 1
+	for _, row := range duplicateRows {
+		if err := s.softDeleteSessionStateWithDistinctTombstone(
+			ctx, tx, row.id, row.userID, now, &nextTombstoneOffset,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) deleteDuplicateSessionStates(
+	ctx context.Context,
+	tx *sql.Tx,
+	keys []session.Key,
+	now time.Time,
+) error {
+	duplicateRows, err := s.lockDuplicateExpiredSessionStates(ctx, tx, keys, now)
+	if err != nil {
+		return err
+	}
+	for _, row := range duplicateRows {
+		if _, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
+			row.id, row.userID); err != nil {
+			return fmt.Errorf("delete duplicate session state %d: %w", row.id, err)
+		}
+	}
+	return nil
+}
+
+type duplicateSessionStateRow struct {
+	id     int64
+	userID string
+}
+
+func (s *Service) lockDuplicateExpiredSessionStates(
+	ctx context.Context,
+	tx *sql.Tx,
+	keys []session.Key,
+	now time.Time,
+) ([]duplicateSessionStateRow, error) {
 	whereClause, args := s.sessionKeysWhereClauseFor("duplicate.", keys)
 	if whereClause == "" {
-		return nil
+		return nil, nil
 	}
 
 	query := fmt.Sprintf(`SELECT DISTINCT duplicate.id, duplicate.user_id FROM %s AS duplicate
@@ -1236,40 +1289,27 @@ func (s *Service) tombstoneDuplicateSessionStates(
 	queryArgs = append(queryArgs, args...)
 	queryArgs = append(queryArgs, now)
 
-	type stateRow struct {
-		id     int64
-		userID string
-	}
 	rows, err := tx.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
-		return fmt.Errorf("query duplicate session states: %w", err)
+		return nil, fmt.Errorf("query duplicate session states: %w", err)
 	}
-	var duplicateRows []stateRow
+	var duplicateRows []duplicateSessionStateRow
 	for rows.Next() {
-		var row stateRow
+		var row duplicateSessionStateRow
 		if err := rows.Scan(&row.id, &row.userID); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("scan duplicate session state: %w", err)
+			return nil, fmt.Errorf("scan duplicate session state: %w", err)
 		}
 		duplicateRows = append(duplicateRows, row)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return fmt.Errorf("iterate duplicate session states: %w", err)
+		return nil, fmt.Errorf("iterate duplicate session states: %w", err)
 	}
 	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close duplicate session states: %w", err)
+		return nil, fmt.Errorf("close duplicate session states: %w", err)
 	}
-
-	nextTombstoneOffset := 1
-	for _, row := range duplicateRows {
-		if err := s.softDeleteSessionStateWithDistinctTombstone(
-			ctx, tx, row.id, row.userID, now, &nextTombstoneOffset,
-		); err != nil {
-			return err
-		}
-	}
-	return nil
+	return duplicateRows, nil
 }
 
 // softDeleteSessions performs soft delete on session tables.
