@@ -141,11 +141,8 @@ func (m *anonymousA2AClientInitMiddleware) needsInitialization(
 			return false
 		}
 	}
-	m.jarMu.Lock()
-	if m.initializedCookieValue == initializedCookieValue {
-		m.initializedCookieValue = ""
-	}
-	m.jarMu.Unlock()
+	// A request outside the cookie's URL scope must not invalidate the
+	// client-wide confirmation. Requests in scope still recheck the jar above.
 	return true
 }
 

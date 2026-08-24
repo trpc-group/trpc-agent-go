@@ -533,9 +533,15 @@ func TestAnonymousA2AClientInitializationStateBoundaries(t *testing.T) {
 	validCookie := &http.Cookie{
 		Name:  anonymousUserIDCookieName,
 		Value: anonymousTestCookieValue(11),
+		Path:  "/a2a",
 	}
 	requestJar.SetCookies(req.URL, []*http.Cookie{validCookie})
 	middleware.markInitialized(req.URL, requestJar)
+	require.False(t, middleware.needsInitialization(req))
+	outOfScopeReq := req.Clone(context.Background())
+	outOfScopeReq.URL.Path = "/agent-card"
+	require.True(t, middleware.needsInitialization(outOfScopeReq))
+	require.Equal(t, validCookie.Value, middleware.initializedCookieValue)
 	require.False(t, middleware.needsInitialization(req))
 
 	middleware.jarMu.Lock()
@@ -553,11 +559,33 @@ func TestAnonymousA2AClientInitializationStateBoundaries(t *testing.T) {
 	requestJar.SetCookies(req.URL, []*http.Cookie{{
 		Name:   anonymousUserIDCookieName,
 		Value:  validCookie.Value,
+		Path:   "/a2a",
 		MaxAge: -1,
 	}})
 	middleware.markInitialized(req.URL, requestJar)
 	require.True(t, middleware.needsInitialization(req))
-	require.Empty(t, middleware.initializedCookieValue)
+	require.Equal(t, validCookie.Value, middleware.initializedCookieValue)
+
+	middleware.captureResponseCookies(nil, nil, nil)
+	var nilRequestJar *anonymousA2AClientRequestCookieJar
+	require.Nil(t, nilRequestJar.Cookies(req.URL))
+	nilRequestJar.SetCookies(req.URL, nil)
+	require.Empty(t, nilRequestJar.acceptedAnonymousCookieValue(req.URL))
+	require.False(t, nilRequestJar.storedResponseCookies(req.URL, []*http.Cookie{{
+		Name: "ignored",
+	}}))
+	require.Empty(t, cookieJarURLKey(nil))
+
+	unmatchedBaseJar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	unmatchedRequestJar := newAnonymousA2AClientRequestCookieJar(unmatchedBaseJar)
+	unmatchedRequestJar.SetCookies(req.URL, nil)
+	unmatchedRequestJar.SetCookies(req.URL, []*http.Cookie{{
+		Name:  "other",
+		Value: "cookie",
+	}})
+	unmatchedRequestJar.observedJar.SetCookies(req.URL, []*http.Cookie{validCookie})
+	require.Empty(t, unmatchedRequestJar.acceptedAnonymousCookieValue(req.URL))
 }
 
 func TestAnonymousA2AClientRejectedCookieDoesNotInitialize(t *testing.T) {
