@@ -4184,6 +4184,160 @@ func TestConcurrentSessionStateUpdates_PreserveEventDeltaAndTrack(t *testing.T) 
 	require.Len(t, sess.Tracks[session.Track("agui")].Events, 1)
 }
 
+func TestConcurrentCreateSessionSerializesAbsentKey(t *testing.T) {
+	dsn := os.Getenv("TRPC_AGENT_GO_MYSQL_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set TRPC_AGENT_GO_MYSQL_TEST_DSN to run MySQL integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	prefix := fmt.Sprintf("it_%d_", time.Now().UnixNano())
+	bootstrap, err := NewService(
+		WithMySQLClientDSN(dsn),
+		WithTablePrefix(prefix),
+		WithSessionTTL(time.Hour),
+		WithCleanupInterval(10*time.Minute),
+	)
+	require.NoError(t, err)
+
+	rawDB, err := sql.Open("mysql", dsn)
+	require.NoError(t, err)
+	require.NoError(t, rawDB.PingContext(ctx))
+	t.Cleanup(func() {
+		require.NoError(t, bootstrap.Close())
+		for _, table := range []string{
+			bootstrap.tableSessionTracks,
+			bootstrap.tableSessionEvents,
+			bootstrap.tableSessionSummaries,
+			bootstrap.tableSessionStates,
+			bootstrap.tableAppStates,
+			bootstrap.tableUserStates,
+		} {
+			_, _ = rawDB.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", table))
+		}
+		_ = rawDB.Close()
+	})
+
+	dbs := make([]*sql.DB, 2)
+	services := make([]*Service, 2)
+	connectionIDs := make([]int64, 2)
+	for i := range dbs {
+		dbs[i], err = sql.Open("mysql", dsn)
+		require.NoError(t, err)
+		dbs[i].SetMaxOpenConns(1)
+		dbs[i].SetMaxIdleConns(1)
+		require.NoError(t, dbs[i].PingContext(ctx))
+		require.NoError(t, dbs[i].QueryRowContext(ctx, "SELECT CONNECTION_ID()").Scan(&connectionIDs[i]))
+		services[i] = &Service{
+			opts:                  bootstrap.opts,
+			mysqlClient:           storage.WrapSQLDB(dbs[i]),
+			tableSessionStates:    bootstrap.tableSessionStates,
+			tableSessionEvents:    bootstrap.tableSessionEvents,
+			tableSessionTracks:    bootstrap.tableSessionTracks,
+			tableSessionSummaries: bootstrap.tableSessionSummaries,
+			tableAppStates:        bootstrap.tableAppStates,
+			tableUserStates:       bootstrap.tableUserStates,
+		}
+	}
+	t.Cleanup(func() {
+		for _, db := range dbs {
+			assert.NoError(t, db.Close())
+		}
+	})
+
+	key := session.Key{AppName: "absent-app", UserID: "absent-user", SessionID: "absent-session"}
+	var existing int
+	err = rawDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?`,
+		bootstrap.tableSessionStates,
+	), key.AppName, key.UserID, key.SessionID).Scan(&existing)
+	require.NoError(t, err)
+	require.Zero(t, existing)
+
+	lockTx, err := rawDB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	require.NoError(t, err)
+	defer lockTx.Rollback()
+	rows, err := lockTx.QueryContext(ctx, fmt.Sprintf(`SELECT id FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND deleted_at IS NULL
+		FOR UPDATE`, bootstrap.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID)
+	require.NoError(t, err)
+	require.False(t, rows.Next())
+	require.NoError(t, rows.Close())
+
+	started := make(chan struct{}, len(services))
+	results := make(chan error, len(services))
+	var wg sync.WaitGroup
+	for _, svc := range services {
+		wg.Add(1)
+		go func(service *Service) {
+			defer wg.Done()
+			started <- struct{}{}
+			_, createErr := service.CreateSession(ctx, key, nil)
+			results <- createErr
+		}(svc)
+	}
+	for i := 0; i < len(services); i++ {
+		<-started
+	}
+
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	var lockWaits int
+	var lastErr error
+	for lockWaits == 0 {
+		lastErr = rawDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM INFORMATION_SCHEMA.INNODB_TRX
+			WHERE trx_mysql_thread_id IN (?, ?) AND trx_state = 'LOCK WAIT'`,
+			connectionIDs[0], connectionIDs[1]).Scan(&lockWaits)
+		if lastErr == nil && lockWaits > 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			require.NoError(t, ctx.Err())
+		case <-deadline.C:
+			require.NoError(t, lastErr)
+			require.Positive(t, lockWaits)
+		case <-ticker.C:
+		}
+	}
+	require.NoError(t, lockTx.Commit())
+
+	wg.Wait()
+	close(results)
+
+	var successes int
+	var alreadyExists int
+	for createErr := range results {
+		switch {
+		case createErr == nil:
+			successes++
+		case createErr.Error() == "session already exists and has not expired":
+			alreadyExists++
+		default:
+			require.NoError(t, createErr)
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, alreadyExists)
+
+	var total int
+	var active int
+	err = rawDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*),
+		SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?`,
+		bootstrap.tableSessionStates,
+	), key.AppName, key.UserID, key.SessionID).Scan(&total, &active)
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	assert.Equal(t, 1, active)
+}
+
 func TestConcurrentCreateSessionSerializesAndCleanupTombstonesDuplicates(t *testing.T) {
 	dsn := os.Getenv("TRPC_AGENT_GO_MYSQL_TEST_DSN")
 	if dsn == "" {
