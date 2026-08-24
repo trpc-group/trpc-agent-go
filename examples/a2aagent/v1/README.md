@@ -69,22 +69,30 @@ Start the same server with the memory TaskManager enabled:
 
 ```bash
 cd examples
+export A2A_TASK_API_KEYS='{"<api-key>":"example-user"}'
 go run ./a2aagent/v1/server -retain-tasks
 ```
+
+`A2A_TASK_API_KEYS` is a JSON object whose keys are API keys and whose values are trusted user IDs. Replace the placeholder with a secret value; for production, load credentials from a secret manager and rotate them instead of putting them in source control or command history.
 
 Then run the direct A2A task client:
 
 ```bash
 cd examples
+export A2A_TASK_API_KEY="<same-api-key>"
 go run ./a2aagent/v1/taskclient \
   -prompt "Explain the A2A task lifecycle."
 ```
+
+The server and task client read retained-task credentials only from these environment variables; command-line credential flags are intentionally not provided.
 
 The task client sends `message/send` with `returnImmediately=true`, receives an
 immediate Task snapshot, polls it with `tasks/get`, and finally verifies it with
 `tasks/list`. The memory TaskManager also enables retained lookup, cancellation,
 and resubscription. Continuation still requires a processor that emits an
 interrupted state, and push delivery requires additional push configuration.
+
+The retained example authenticates `X-API-Key`, maps it to a trusted user ID on the server, and scopes Tasks to that identity. All send, lookup, list, cancel, and resubscribe requests for one Task must use a key mapped to the same user; a caller-supplied `X-User-ID` does not grant access.
 
 Session state and A2A Task state remain independent: the Runner's session
 service owns conversation context, while the memory TaskManager retains A2A

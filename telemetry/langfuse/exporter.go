@@ -120,7 +120,7 @@ func transformSpan(span *tracepb.Span) {
 
 func transformInvokeAgent(span *tracepb.Span) {
 	var newAttributes []*commonpb.KeyValue
-	var inputMessagesOTel, outputMessagesOTel *string
+	var inputMessages, inputMessagesOTel, outputMessages, outputMessagesOTel *string
 
 	newAttributes = append(newAttributes, &commonpb.KeyValue{
 		Key: observationType,
@@ -132,9 +132,11 @@ func transformInvokeAgent(span *tracepb.Span) {
 	for _, attr := range span.Attributes {
 		switch attr.Key {
 		case semconvtrace.KeyGenAIInputMessages:
+			inputMessages = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIInputMessagesOTel:
 			inputMessagesOTel = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIOutputMessages:
+			outputMessages = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIOutputMessagesOTel:
 			outputMessagesOTel = getStringPtr(attr.Value)
 			// Skip token usage attributes for InvokeAgent observations.
@@ -151,10 +153,10 @@ func transformInvokeAgent(span *tracepb.Span) {
 			newAttributes = append(newAttributes, attr)
 		}
 	}
-	if input := otelObservationInput(inputMessagesOTel); input != nil {
+	if input := preferredObservationInput(inputMessagesOTel, inputMessages); input != nil {
 		newAttributes = append(newAttributes, stringKV(observationInput, *input))
 	}
-	if output := otelObservationOutput(outputMessagesOTel); output != nil {
+	if output := preferredObservationOutput(outputMessagesOTel, outputMessages, nil); output != nil {
 		newAttributes = append(newAttributes, stringKV(observationOutput, *output))
 	}
 	span.Attributes = newAttributes
@@ -166,7 +168,9 @@ type llmSpanCollected struct {
 	sessionID          *commonpb.AnyValue
 	llmRequest         *string
 	llmResponse        *string
+	inputMessages      *string
 	inputMessagesOTel  *string
+	outputMessages     *string
 	outputMessagesOTel *string
 	toolDefinitions    *string
 	usage              usageDetails
@@ -222,9 +226,11 @@ func collectLLMSpanAttributes(attrs []*commonpb.KeyValue) llmSpanCollected {
 		case semconvtrace.KeyLLMRequest:
 			c.llmRequest = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIInputMessages:
+			c.inputMessages = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIInputMessagesOTel:
 			c.inputMessagesOTel = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIOutputMessages:
+			c.outputMessages = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIOutputMessagesOTel:
 			c.outputMessagesOTel = getStringPtr(attr.Value)
 		case semconvtrace.KeyGenAIRequestToolDefinitions:
@@ -254,6 +260,9 @@ func buildLLMObservationInput(c llmSpanCollected) string {
 	if c.inputMessagesOTel != nil && *c.inputMessagesOTel != "" {
 		return truncateObservationLLMInput(wrapWithToolsIfPresent(*c.inputMessagesOTel, c.toolDefinitions))
 	}
+	if c.inputMessages != nil && *c.inputMessages != "" {
+		return truncateObservationLLMInput(wrapWithToolsIfPresent(*c.inputMessages, c.toolDefinitions))
+	}
 	if c.llmRequest != nil && *c.llmRequest != "" {
 		if messagesJSON, ok := extractMessagesJSONFromRequestJSON(*c.llmRequest); ok && messagesJSON != "" {
 			return truncateObservationLLMInput(wrapWithToolsIfPresent(messagesJSON, c.toolDefinitions))
@@ -264,10 +273,37 @@ func buildLLMObservationInput(c llmSpanCollected) string {
 }
 
 func buildLLMObservationOutput(c llmSpanCollected) string {
-	if output := otelObservationOutput(c.outputMessagesOTel); output != nil {
+	if output := preferredObservationOutput(c.outputMessagesOTel, c.outputMessages, c.llmResponse); output != nil {
 		return *output
 	}
-	return truncateObservationLLMResponse(stringPtrValueOrNA(c.llmResponse))
+	return truncateObservationLLMResponse("N/A")
+}
+
+func preferredObservationInput(otelMessages, legacyMessages *string) *string {
+	if otelMessages != nil && *otelMessages != "" {
+		return otelObservationInput(otelMessages)
+	}
+	if legacyMessages != nil && *legacyMessages != "" {
+		value := truncateObservationLLMInput(*legacyMessages)
+		return &value
+	}
+	return nil
+}
+
+func preferredObservationOutput(otelMessages, legacyMessages, llmResponse *string) *string {
+	if otelMessages != nil && *otelMessages != "" {
+		return otelObservationOutput(otelMessages)
+	}
+	// Prefer conversation-shaped legacy output over the raw llm_response dump.
+	if legacyMessages != nil && *legacyMessages != "" {
+		value := truncateObservationLLMResponse(*legacyMessages)
+		return &value
+	}
+	if llmResponse != nil && *llmResponse != "" {
+		value := truncateObservationLLMResponse(*llmResponse)
+		return &value
+	}
+	return nil
 }
 
 func otelObservationInput(otelMessages *string) *string {
@@ -329,13 +365,6 @@ func getStringPtr(v *commonpb.AnyValue) *string {
 	}
 	s := v.GetStringValue()
 	return &s
-}
-
-func stringPtrValueOrNA(v *string) string {
-	if v == nil {
-		return "N/A"
-	}
-	return *v
 }
 
 func truncateObservationInputMessages(raw string) string {

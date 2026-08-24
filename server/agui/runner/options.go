@@ -34,7 +34,7 @@ const (
 	defaultToolResultInputTranslationEnabled      = false
 	defaultToolCallDeltaStreamingEnabled          = false
 	defaultStreamingToolResultActivityEnabled     = false
-	defaultConcurrentMessageStreamsEnabled        = false
+	defaultConcurrentMessageStreamsEnabled        = true
 	defaultDistributedCancelEnabled               = false
 	defaultDistributedCancelPollInterval          = time.Second
 )
@@ -207,7 +207,8 @@ func WithAggregatorFactory(factory aggregator.Factory) Option {
 	}
 }
 
-// WithFlushInterval sets how often buffered AG-UI events are flushed for a session.
+// WithFlushInterval configures startup and periodic history flushes. A positive duration enables both;
+// zero disables both and leaves buffered history for finalization.
 func WithFlushInterval(d time.Duration) Option {
 	return func(o *Options) {
 		o.FlushInterval = d
@@ -345,8 +346,9 @@ func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	}
 }
 
-// WithConcurrentMessageStreamsEnabled controls whether multiple text and reasoning
-// message streams with different message IDs may stay open concurrently.
+// WithConcurrentMessageStreamsEnabled controls whether text and reasoning
+// message streams are scoped by message ID. It is enabled by default; pass false
+// to preserve the previous legacy serial message-stream boundaries.
 func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.ConcurrentMessageStreamsEnabled = enabled

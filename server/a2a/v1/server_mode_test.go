@@ -10,11 +10,13 @@ package a2a
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	a2aclient "trpc.group/trpc-go/trpc-a2a-go/v2/client"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
 	a2aserver "trpc.group/trpc-go/trpc-a2a-go/v2/server"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
@@ -562,6 +564,198 @@ func TestServerRoutesPrimarySupportedInterface(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("primary interface status = %d, want %d", recorder.Code, http.StatusOK)
 	}
+	var servedCard a2aserver.AgentCard
+	if err := json.Unmarshal(recorder.Body.Bytes(), &servedCard); err != nil {
+		t.Fatalf("agent card unmarshal failed: %v", err)
+	}
+	if got, want := servedCard.PrimaryURL(), "http://example.com/primary"; got != want {
+		t.Fatalf("served primary URL = %q, want %q", got, want)
+	}
+}
+
+func TestServerDoesNotMutateInputAgentCardInterfaces(t *testing.T) {
+	card := a2aserver.AgentCard{
+		Name: "agent",
+		SupportedInterfaces: []a2aserver.AgentInterface{{
+			URL:             "http://example.com/agent",
+			ProtocolBinding: "JSONRPC",
+			ProtocolVersion: protocol.ProtocolVersionV1,
+		}},
+	}
+	if _, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(card),
+	); err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if got, want := card.SupportedInterfaces[0].URL, "http://example.com/agent"; got != want {
+		t.Fatalf("input card URL = %q, want unchanged %q", got, want)
+	}
+}
+
+func TestServerRejectsSignedAgentCardRequiringNormalization(t *testing.T) {
+	card := a2aserver.AgentCard{
+		Name: "agent",
+		URL:  "http://example.com/agent/",
+		Signatures: []a2aserver.AgentCardSignature{{
+			Protected: "header",
+			Signature: "signature",
+		}},
+	}
+	_, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(card),
+	)
+	const want = "signed agent card requires normalization; provide a card signed with the final served URL"
+	if err == nil || err.Error() != want {
+		t.Fatalf("New error = %v, want %q", err, want)
+	}
+}
+
+func TestServerAcceptsExactSignedAgentCard(t *testing.T) {
+	card := a2aserver.AgentCard{
+		Name: "agent",
+		URL:  "http://example.com/agent",
+		SupportedInterfaces: []a2aserver.AgentInterface{{
+			URL:             "http://example.com/agent",
+			ProtocolBinding: "JSONRPC",
+			ProtocolVersion: protocol.ProtocolVersionV1,
+		}},
+		Signatures: []a2aserver.AgentCardSignature{{
+			Protected: "header",
+			Signature: "signature",
+		}},
+	}
+	if _, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(card),
+	); err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+}
+
+func TestServerKeepsAdvertisedAndMountedJSONRPCEndpointAligned(t *testing.T) {
+	tests := []struct {
+		name             string
+		path             string
+		explicitEndpoint bool
+	}{
+		{name: "explicit endpoint", path: "/rpc", explicitEndpoint: true},
+		{name: "escaped slash", path: "/a%2Fb"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			httpServer := httptest.NewUnstartedServer(nil)
+			endpoint := "http://" + httpServer.Listener.Addr().String() + test.path
+			card := a2aserver.AgentCard{
+				Name: "agent",
+				URL:  endpoint,
+				SupportedInterfaces: []a2aserver.AgentInterface{{
+					URL:             endpoint,
+					ProtocolBinding: protocol.ProtocolBindingJSONRPC,
+					ProtocolVersion: protocol.ProtocolVersionV1,
+				}},
+			}
+			options := []Option{
+				WithRunner(&modeTestRunner{events: legacyResponseEvents("answer")}),
+				WithAgentCard(card),
+			}
+			if test.explicitEndpoint {
+				options = append(options, WithExtraA2AOptions(
+					a2aserver.WithJSONRPCEndpoint(test.path),
+				))
+			}
+			server, err := New(options...)
+			if err != nil {
+				t.Fatalf("New failed: %v", err)
+			}
+			httpServer.Config.Handler = server.Handler()
+			httpServer.Start()
+			t.Cleanup(httpServer.Close)
+
+			cardResponse, err := httpServer.Client().Get(endpoint + protocol.AgentCardPath)
+			if err != nil {
+				t.Fatalf("Get Agent Card failed: %v", err)
+			}
+			defer cardResponse.Body.Close()
+			if cardResponse.StatusCode != http.StatusOK {
+				t.Fatalf("Agent Card status = %d, want %d", cardResponse.StatusCode, http.StatusOK)
+			}
+			var servedCard a2aserver.AgentCard
+			if err := json.NewDecoder(cardResponse.Body).Decode(&servedCard); err != nil {
+				t.Fatalf("decode Agent Card failed: %v", err)
+			}
+			if got := servedCard.PrimaryURL(); got != endpoint {
+				t.Fatalf("served endpoint = %q, want %q", got, endpoint)
+			}
+
+			client, err := a2aclient.NewA2AClient(servedCard.PrimaryURL())
+			if err != nil {
+				t.Fatalf("NewA2AClient failed: %v", err)
+			}
+			message := protocol.NewMessage(
+				protocol.MessageRoleUser,
+				[]*protocol.Part{protocol.NewTextPart("hello")},
+			)
+			response, err := client.SendMessage(context.Background(), protocol.SendMessageParams{
+				Message: message,
+			})
+			if err != nil {
+				t.Fatalf("SendMessage failed: %v", err)
+			}
+			if task := response.GetTask(); task == nil || task.Status.State != protocol.TaskStateCompleted {
+				t.Fatalf("response task = %#v, want completed", task)
+			}
+		})
+	}
+}
+
+func TestNewAgentCardAdvertisesExactSubpathEndpoint(t *testing.T) {
+	httpServer := httptest.NewUnstartedServer(nil)
+	endpoint := "http://" + httpServer.Listener.Addr().String() + "/api/v1/agent"
+	card, err := NewAgentCard(
+		"agent",
+		"description",
+		"1.0.0",
+		endpoint,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("NewAgentCard failed: %v", err)
+	}
+	if got, want := card.PrimaryURL(), endpoint+"/"; got != want {
+		t.Fatalf("primary URL = %q, want %q", got, want)
+	}
+
+	server, err := New(
+		WithRunner(&modeTestRunner{events: legacyResponseEvents("answer")}),
+		WithAgentCard(card),
+	)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	httpServer.Config.Handler = server.Handler()
+	httpServer.Start()
+	t.Cleanup(httpServer.Close)
+
+	client, err := a2aclient.NewA2AClient(card.PrimaryURL())
+	if err != nil {
+		t.Fatalf("NewA2AClient failed: %v", err)
+	}
+	message := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]*protocol.Part{protocol.NewTextPart("hello")},
+	)
+	response, err := client.SendMessage(context.Background(), protocol.SendMessageParams{
+		Message: message,
+	})
+	if err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil || task.Status.State != protocol.TaskStateCompleted {
+		t.Fatalf("response task = %#v, want completed", task)
+	}
 }
 
 func TestDataPartUsesJSONRepresentation(t *testing.T) {
@@ -675,7 +869,7 @@ func TestNewAgentCardAdvertisesV1JSONRPCInterface(t *testing.T) {
 		t.Fatalf("supported interface count = %d, want 1", len(card.SupportedInterfaces))
 	}
 	iface := card.SupportedInterfaces[0]
-	if iface.URL != "http://127.0.0.1:8888" ||
+	if iface.URL != "http://127.0.0.1:8888/" ||
 		iface.ProtocolBinding != "JSONRPC" ||
 		iface.ProtocolVersion != protocol.ProtocolVersionV1 {
 		t.Fatalf("supported interface = %#v", iface)

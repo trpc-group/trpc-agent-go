@@ -7,8 +7,9 @@ agent-loop|.|./event|^BenchmarkEmitEventWithTimeout
 agent-loop|.|./internal/flow/llmflow|^BenchmarkGenerateContentSeq$
 agent-loop|.|./internal/flow/processor|^Benchmark(ContentRequestProcessorProcessRequest|ContextCompaction|ParallelInvocationViewBatch|ParallelInvocationViewBatchWithSession|ParallelInvocationViewWithSession)$
 agent-loop|.|./internal/state/summaryfork|^Benchmark(Attach|Request)$
-agent-loop|.|./internal/state/summaryview|^Benchmark(Finalize|Snapshot)$
+agent-loop|.|./internal/state/summaryview|^Benchmark(Finalize|RebaseAfterTransform|RebaseItems|Snapshot)$
 agent-loop|.|./internal/telemetry|^BenchmarkTraceChatStreamingRequestAttributes
+agent-loop|.|./internal/toolcall|^BenchmarkSanitizeMessagesWithTools$
 agent-loop|.|./model|^BenchmarkCallbacksRunBeforeModel$
 agent-loop|.|./runner|^BenchmarkRunnerAgentLoop$
 agent-loop|.|./session/inmemory|^BenchmarkAppendEvent$

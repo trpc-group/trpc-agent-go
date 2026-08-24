@@ -127,6 +127,9 @@ func (r *Runtime) StartProcess(
 		prepared.cleanup()
 		return nil, backendError(ErrSetupFailed, prepared.backend, err)
 	}
+	// Drop parent ExtraFiles promptly; Wait still runs backend cleanup for
+	// synthetic deny-read targets and other release hooks.
+	releaseCmdExtraFiles(prepared.cmd)
 	return &Process{
 		prepared: prepared,
 		stdin:    stdin,

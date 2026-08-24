@@ -44,13 +44,20 @@ type Runtime struct {
 	mu       sync.Mutex
 	runLocks map[string]*workspaceRunLock
 
-	preflightOnce  sync.Once
 	preflightGate  chan struct{}
 	preflightDone  bool
+	preflightMu    sync.Mutex
+	preflightWait  chan struct{}
+	preflightReady bool
 	preflightErr   error
 	bwrapPath      string
 	bwrapMountProc bool
 	seatbeltPath   string
+
+	restrictedPreflightMu    sync.Mutex
+	restrictedPreflightDone  chan struct{}
+	restrictedPreflightReady bool
+	restrictedPreflightErr   error
 }
 
 // NewRuntime constructs a sandbox runtime.

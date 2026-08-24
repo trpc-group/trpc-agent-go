@@ -16,7 +16,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 
@@ -610,7 +612,7 @@ func TestFileTool_ReadFile_FromRef_InvalidUTF8(t *testing.T) {
 	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
 		{
 			Name:     outATxt,
-			Content:  string([]byte{invalidByte}),
+			Content:  "before" + string([]byte{invalidByte}) + "after",
 			MIMEType: mimeTextPlain,
 		},
 	})
@@ -618,10 +620,16 @@ func TestFileTool_ReadFile_FromRef_InvalidUTF8(t *testing.T) {
 	rsp, err := fileToolSet.readFile(ctx, &readFileRequest{
 		FileName: refATxt,
 	})
-	assert.Error(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, rsp)
-	assert.Empty(t, rsp.Contents)
-	assert.Contains(t, rsp.Message, mimeTextPlain)
+	assert.Equal(t, "before\uFFFDafter", rsp.Contents)
+	assert.Contains(
+		t,
+		rsp.Message,
+		"Successfully read workspace://out/a.txt from workspace://, "+
+			"start line: 1, end line: 1, total lines: 1"+
+			" (invalid UTF-8 replaced with U+FFFD)",
+	)
 }
 
 func TestFileTool_ReadFile_InvalidUTF8FromDisk(t *testing.T) {
@@ -634,7 +642,6 @@ func TestFileTool_ReadFile_InvalidUTF8FromDisk(t *testing.T) {
 		fileName    = "invalid.txt"
 		sniffLen    = 512
 		invalidByte = byte(0xff)
-		mimeText    = "text/plain"
 	)
 
 	prefix := make([]byte, sniffLen)
@@ -653,10 +660,15 @@ func TestFileTool_ReadFile_InvalidUTF8FromDisk(t *testing.T) {
 		context.Background(),
 		&readFileRequest{FileName: fileName},
 	)
-	assert.Error(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, rsp)
-	assert.Empty(t, rsp.Contents)
-	assert.Contains(t, rsp.Message, mimeText)
+	assert.Equal(t, string(prefix)+"\uFFFD", rsp.Contents)
+	assert.Equal(
+		t,
+		"Successfully read invalid.txt, start line: 1, end line: 1, "+
+			"total lines: 1 (invalid UTF-8 replaced with U+FFFD)",
+		rsp.Message,
+	)
 }
 
 func TestFileTool_ReadFile_FromCache_EmptyFile(t *testing.T) {
@@ -700,7 +712,7 @@ func TestFileTool_ReadFile_FromCache_InvalidUTF8(t *testing.T) {
 	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
 		{
 			Name:     outATxt,
-			Content:  string([]byte{invalidByte}),
+			Content:  "line one" + string([]byte{invalidByte}) + "\nline two",
 			MIMEType: mimeTextPlain,
 		},
 	})
@@ -708,10 +720,17 @@ func TestFileTool_ReadFile_FromCache_InvalidUTF8(t *testing.T) {
 	rsp, err := fileToolSet.readFile(ctx, &readFileRequest{
 		FileName: outATxt,
 	})
-	assert.Error(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, rsp)
-	assert.Empty(t, rsp.Contents)
-	assert.Contains(t, rsp.Message, mimeTextPlain)
+	assert.Equal(t, "line one\uFFFD\nline two", rsp.Contents)
+	assert.Equal(
+		t,
+		"Loaded out/a.txt from a prior skill_run output_files cache, "+
+			"start line: 1, end line: 2, total lines: 2 "+
+			"(mime: text/plain)"+
+			" (invalid UTF-8 replaced with U+FFFD)",
+		rsp.Message,
+	)
 }
 
 func TestFileTool_ReadFile_FromRef_ParseError(t *testing.T) {
@@ -807,4 +826,249 @@ func TestFileTool_ReadFile_ArtifactRef(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, "hi", rsp.Contents)
+}
+
+func TestRejectNonText(t *testing.T) {
+	const (
+		mimeTextPlain = "text/plain"
+		mimePNG       = "image/png"
+	)
+	tests := []struct {
+		name     string
+		content  string
+		mimeType string
+		wantErr  string
+	}{
+		{
+			name:     "plain text is accepted",
+			content:  "hello",
+			mimeType: mimeTextPlain,
+		},
+		{
+			name:     "invalid utf8 alone is not a rejection",
+			content:  "before" + string([]byte{0xd1}) + "after",
+			mimeType: mimeTextPlain,
+		},
+		{
+			name:     "an empty mime type skips the mime check",
+			content:  "hello",
+			mimeType: "",
+		},
+		{
+			name:     "empty content is accepted whatever the mime type",
+			content:  "",
+			mimeType: mimePNG,
+		},
+		{
+			name:     "an embedded NUL byte is rejected",
+			content:  "text" + string([]byte{0x00}) + "more",
+			mimeType: mimeTextPlain,
+			wantErr:  "file is not a UTF-8 text file (mime: text/plain)",
+		},
+		{
+			name:     "a non-text mime type is rejected",
+			content:  "\x89PNG\r\n\x1a\n",
+			mimeType: mimePNG,
+			wantErr:  "file is not a UTF-8 text file (mime: image/png)",
+		},
+		{
+			name:     "an embedded NUL byte with no mime type is rejected",
+			content:  "text" + string([]byte{0x00}) + "more",
+			mimeType: "",
+			wantErr:  "file is not a UTF-8 text file",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := rejectNonText(tt.content, tt.mimeType)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestSanitizeText(t *testing.T) {
+	tests := []struct {
+		name         string
+		content      string
+		wantContent  string
+		wantReplaced bool
+	}{
+		{
+			name:    "empty content is left alone",
+			content: "",
+		},
+		{
+			name:        "valid utf8 passes through untouched",
+			content:     "héllo wörld",
+			wantContent: "héllo wörld",
+		},
+		{
+			name:         "a stray byte is replaced",
+			content:      "before" + string([]byte{0xd1}) + "after",
+			wantContent:  "before\uFFFDafter",
+			wantReplaced: true,
+		},
+		{
+			name:         "a truncated multi-byte rune is replaced",
+			content:      "prefix" + string([]byte{0xe4, 0xb8}),
+			wantContent:  "prefix\uFFFD",
+			wantReplaced: true,
+		},
+		{
+			name:         "a run of invalid bytes collapses to one replacement",
+			content:      string([]byte{0xff, 0xfe, 0xfd}) + "tail",
+			wantContent:  "\uFFFDtail",
+			wantReplaced: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, replaced := sanitizeText(tt.content)
+			assert.Equal(t, tt.wantContent, got)
+			assert.Equal(t, tt.wantReplaced, replaced)
+			assert.True(t, utf8.ValidString(got))
+		})
+	}
+}
+
+func TestFileTool_ReadFile_InvalidUTF8ScriptKeepsSurroundingLines(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	const fileName = "cloud-init.sh"
+	script := "#!/usr/bin/env bash\n" +
+		"# run as" + string([]byte{0xd1}) + "root\n" +
+		"set -o pipefail\n" +
+		"export HOME=/root\n"
+	err = os.WriteFile(
+		filepath.Join(tempDir, fileName),
+		[]byte(script),
+		0644,
+	)
+	assert.NoError(t, err)
+
+	startLine, numLines := 2, 2
+	rsp, err := fileToolSet.readFile(context.Background(), &readFileRequest{
+		FileName:  fileName,
+		StartLine: &startLine,
+		NumLines:  &numLines,
+	})
+
+	assert.NoError(t, err)
+	assert.NotEmpty(t, rsp.Contents)
+	assert.Equal(t, "# run as�root\nset -o pipefail", rsp.Contents)
+	assert.Equal(
+		t,
+		"Successfully read cloud-init.sh, start line: 2, end line: 3, "+
+			"total lines: 5 (invalid UTF-8 replaced with U+FFFD)",
+		rsp.Message,
+	)
+}
+
+func TestFileTool_ReadFile_ValidUTF8IsNotAnnotated(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	const fileName = "valid.txt"
+	err = os.WriteFile(
+		filepath.Join(tempDir, fileName),
+		[]byte("héllo\nwörld\n"),
+		0644,
+	)
+	assert.NoError(t, err)
+
+	rsp, err := fileToolSet.readFile(
+		context.Background(),
+		&readFileRequest{FileName: fileName},
+	)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "héllo\nwörld\n", rsp.Contents)
+	assert.Equal(
+		t,
+		"Successfully read valid.txt, start line: 1, end line: 3, "+
+			"total lines: 3",
+		rsp.Message,
+	)
+}
+
+func TestFileTool_ReadFile_FromCache_NULByteRejected(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	const (
+		outABin       = "out/a.bin"
+		mimeTextPlain = "text/plain"
+	)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     outABin,
+			Content:  "text" + string([]byte{0x00}) + "more",
+			MIMEType: mimeTextPlain,
+		},
+	})
+
+	rsp, err := fileToolSet.readFile(ctx, &readFileRequest{
+		FileName: outABin,
+	})
+
+	assert.Error(t, err)
+	assert.Empty(t, rsp.Contents)
+	assert.Equal(
+		t,
+		"Error: file is not a UTF-8 text file (mime: text/plain)",
+		rsp.Message,
+	)
+}
+
+func TestFileTool_ReadFile_InvalidUTF8AtMaxFileSize(t *testing.T) {
+	tempDir := t.TempDir()
+	const (
+		fileName    = "atlimit.txt"
+		maxFileSize = 16
+	)
+	toolSet, err := NewToolSet(
+		WithBaseDir(tempDir),
+		WithMaxFileSize(maxFileSize),
+	)
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	// Exactly maxFileSize source bytes, one of them invalid. U+FFFD is three
+	// bytes wide, so measuring the size after substitution would reject a file
+	// that is within the configured limit.
+	content := append(
+		[]byte(strings.Repeat("a", maxFileSize-1)),
+		byte(0xd1),
+	)
+	assert.Len(t, content, maxFileSize)
+	err = os.WriteFile(filepath.Join(tempDir, fileName), content, 0644)
+	assert.NoError(t, err)
+
+	rsp, err := fileToolSet.readFile(
+		context.Background(),
+		&readFileRequest{FileName: fileName},
+	)
+
+	assert.NoError(t, err)
+	assert.Equal(t, strings.Repeat("a", maxFileSize-1)+"�", rsp.Contents)
+	assert.Equal(
+		t,
+		"Successfully read atlimit.txt, start line: 1, end line: 1, "+
+			"total lines: 1 (invalid UTF-8 replaced with U+FFFD)",
+		rsp.Message,
+	)
 }

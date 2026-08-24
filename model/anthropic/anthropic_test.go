@@ -359,6 +359,57 @@ func Test_convertTools(t *testing.T) {
 	assert.Equal(t, "t1", params[0].OfTool.Name)
 }
 
+func Test_convertTools_NoArgObjectSchemaUsesEmptyProperties(t *testing.T) {
+	tests := []struct {
+		name                string
+		inputSchema         *tool.Schema
+		wantEmptyProperties bool
+		wantSerializedType  string
+	}{
+		{
+			name:                "explicit object type",
+			inputSchema:         &tool.Schema{Type: "object"},
+			wantEmptyProperties: true,
+			wantSerializedType:  "object",
+		},
+		{
+			name:                "implicit SDK object type",
+			inputSchema:         &tool.Schema{},
+			wantEmptyProperties: true,
+			wantSerializedType:  "object",
+		},
+		{
+			name:               "non-object type",
+			inputSchema:        &tool.Schema{Type: "array"},
+			wantSerializedType: "array",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			params := convertTools(map[string]tool.Tool{
+				"no_arg_tool": stubTool{decl: &tool.Declaration{
+					Name:        "no_arg_tool",
+					InputSchema: tt.inputSchema,
+				}},
+			})
+
+			body, err := json.Marshal(params)
+			require.NoError(t, err)
+			if tt.wantEmptyProperties {
+				require.Contains(t, string(body), `"properties":{}`)
+				require.NotContains(t, string(body), `"properties":null`)
+			} else {
+				require.Contains(t, string(body), `"properties":null`)
+				require.NotContains(t, string(body), `"properties":{}`)
+			}
+			require.Contains(t, string(body), `"type":"`+tt.wantSerializedType+`"`)
+			require.Equal(t, tt.inputSchema.Type, string(params[0].OfTool.InputSchema.Type))
+			require.Nil(t, tt.inputSchema.Properties)
+		})
+	}
+}
+
 func Test_buildToolDescription_AppendsOutputSchema(t *testing.T) {
 	schema := &tool.Schema{
 		Type: "object",
