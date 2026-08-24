@@ -191,6 +191,13 @@ func TestStreamEventPartsAndSnapshotSuppression(t *testing.T) {
 	if got := len(suppressed.(*protocol.TaskArtifactUpdateEvent).Artifact.Parts); got != 0 {
 		t.Fatalf("suppressed artifact part count = %d", got)
 	}
+	replace := false
+	replacement := artifact
+	replacement.Append = &replace
+	suppressed = suppressRepeatedPartialSnapshot(&replacement, accumulated)
+	if got := len(suppressed.(*protocol.TaskArtifactUpdateEvent).Artifact.Parts); got != len(textParts) {
+		t.Fatalf("replacement artifact part count = %d, want %d", got, len(textParts))
+	}
 	if got := suppressRepeatedPartialSnapshot(
 		&message,
 		[]*protocol.Part{protocol.NewTextPart("different")},

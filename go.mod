@@ -85,5 +85,5 @@ require (
 	golang.org/x/oauth2 v0.26.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240822170219-fc7c04adadcd // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240822170219-fc7c04adadcd // indirect
-	trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.3.0.20260728070620-f4f0b6dd56ad
+	trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.3.0.20260813112030-aed2c1f02f9c
 )

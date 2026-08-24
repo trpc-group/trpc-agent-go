@@ -6240,6 +6240,456 @@ func TestA2AAgentRunStreamingPreservesResponseID(t *testing.T) {
 	})
 }
 
+func TestA2AAgentProcessStreamingEventsUsesBufferedResponseIDWhenFlushing(t *testing.T) {
+	textEvent := func(responseID string) protocol.StreamingMessageEvent {
+		return protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+			Kind:      protocol.KindTaskArtifactUpdate,
+			TaskID:    "task-1",
+			ContextID: "ctx-1",
+			Artifact: protocol.Artifact{
+				ArtifactID: responseID,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Kind: protocol.KindText, Text: "preface"},
+				},
+			},
+		}}
+	}
+	toolCallEvent := func(responseID, callID string) protocol.StreamingMessageEvent {
+		return protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+			Kind:      protocol.KindTaskArtifactUpdate,
+			TaskID:    "task-1",
+			ContextID: "ctx-1",
+			Artifact: protocol.Artifact{
+				ArtifactID: responseID,
+				Parts: []protocol.Part{
+					buildToolCallDataPart(callID, "lookup", `{}`),
+				},
+			},
+		}}
+	}
+	tests := []struct {
+		name                 string
+		streamEvents         []protocol.StreamingMessageEvent
+		wantResponseID       string
+		wantFlushedID        string
+		wantToolCallEventIDs []string
+	}{
+		{
+			name: "preserves buffered response ID",
+			streamEvents: []protocol.StreamingMessageEvent{
+				textEvent("resp-text"),
+				toolCallEvent("resp-tool", "call-1"),
+			},
+			wantResponseID:       "resp-tool",
+			wantFlushedID:        "resp-text",
+			wantToolCallEventIDs: []string{"resp-tool"},
+		},
+		{
+			name: "falls back to trigger ID when buffered text has no ID",
+			streamEvents: []protocol.StreamingMessageEvent{
+				toolCallEvent("resp-old", "call-old"),
+				textEvent(""),
+				toolCallEvent("resp-tool", "call-1"),
+			},
+			wantResponseID:       "resp-tool",
+			wantFlushedID:        "resp-tool",
+			wantToolCallEventIDs: []string{"resp-old", "resp-tool"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			streamChan := make(chan protocol.StreamingMessageEvent, len(tc.streamEvents))
+			for _, streamEvent := range tc.streamEvents {
+				streamChan <- streamEvent
+			}
+			close(streamChan)
+
+			a := &A2AAgent{
+				name:           "test-agent",
+				eventConverter: &defaultA2AEventConverter{},
+			}
+			invocation := &agent.Invocation{InvocationID: "inv-test"}
+			eventChan := make(chan *event.Event, len(tc.streamEvents)+1)
+			result := a.processStreamingEvents(
+				context.Background(),
+				invocation,
+				eventChan,
+				streamChan,
+				nil,
+			)
+			close(eventChan)
+
+			var flushedResponseID string
+			var toolCallResponseIDs []string
+			for evt := range eventChan {
+				if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
+					continue
+				}
+				choice := evt.Response.Choices[0]
+				if !evt.Response.IsPartial &&
+					choice.Message.Content == "preface" &&
+					len(choice.Message.ToolCalls) == 0 {
+					flushedResponseID = evt.Response.ID
+				}
+				if len(choice.Message.ToolCalls) == 1 {
+					toolCallResponseIDs = append(toolCallResponseIDs, evt.Response.ID)
+				}
+			}
+			require.Equal(t, tc.wantResponseID, result.responseID)
+			require.Equal(t, tc.wantFlushedID, flushedResponseID)
+			require.Equal(t, tc.wantToolCallEventIDs, toolCallResponseIDs)
+		})
+	}
+}
+
+func TestA2AAgentProcessStreamingEventsBuffersV0ArtifactUpdates(t *testing.T) {
+	textEvent := func(
+		responseID string,
+		content string,
+		object string,
+		appendChunk *bool,
+	) protocol.StreamingMessageEvent {
+		var metadata map[string]any
+		if object != "" {
+			metadata = map[string]any{
+				ia2a.MessageMetadataObjectTypeKey: object,
+			}
+		}
+		return protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+			Kind:      protocol.KindTaskArtifactUpdate,
+			TaskID:    "task-1",
+			ContextID: "ctx-1",
+			Artifact: protocol.Artifact{
+				ArtifactID: responseID,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Kind: protocol.KindText, Text: content},
+				},
+			},
+			Append:   appendChunk,
+			Metadata: metadata,
+		}}
+	}
+	toolCallEvent := protocol.StreamingMessageEvent{
+		Result: &protocol.TaskArtifactUpdateEvent{
+			Kind:      protocol.KindTaskArtifactUpdate,
+			TaskID:    "task-1",
+			ContextID: "ctx-1",
+			Artifact: protocol.Artifact{
+				ArtifactID: "tool-response",
+				Parts: []protocol.Part{
+					buildToolCallDataPart("call-1", "lookup", `{}`),
+				},
+			},
+		},
+	}
+	appendChunk := true
+	replaceChunk := false
+	tests := []struct {
+		name       string
+		textEvents []protocol.StreamingMessageEvent
+		want       string
+	}{
+		{
+			name: "replaces current server aggregate snapshot",
+			textEvents: []protocol.StreamingMessageEvent{
+				textEvent(
+					"text-response",
+					"hello",
+					model.ObjectTypeChatCompletionChunk,
+					nil,
+				),
+				textEvent(
+					"text-response",
+					"hello world",
+					model.ObjectTypeChatCompletion,
+					nil,
+				),
+			},
+			want: "hello world",
+		},
+		{
+			name: "appends legacy metadata-free chunks",
+			textEvents: []protocol.StreamingMessageEvent{
+				textEvent("text-response", "hello", "", nil),
+				textEvent("text-response", " world", "", nil),
+			},
+			want: "hello world",
+		},
+		{
+			name: "honors explicit append",
+			textEvents: []protocol.StreamingMessageEvent{
+				textEvent("text-response", "hello", "", nil),
+				textEvent("text-response", " world", "", &appendChunk),
+			},
+			want: "hello world",
+		},
+		{
+			name: "honors explicit replacement",
+			textEvents: []protocol.StreamingMessageEvent{
+				textEvent("text-response", "stale", "", nil),
+				textEvent("text-response", "replacement", "", &replaceChunk),
+			},
+			want: "replacement",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			streamChan := make(
+				chan protocol.StreamingMessageEvent,
+				len(tc.textEvents)+1,
+			)
+			for _, streamEvent := range tc.textEvents {
+				streamChan <- streamEvent
+			}
+			streamChan <- toolCallEvent
+			close(streamChan)
+
+			remote := &A2AAgent{
+				name:           "remote",
+				eventConverter: &defaultA2AEventConverter{},
+			}
+			eventChan := make(chan *event.Event, len(tc.textEvents)+2)
+			result := remote.processStreamingEvents(
+				context.Background(),
+				&agent.Invocation{InvocationID: "invocation"},
+				eventChan,
+				streamChan,
+				nil,
+			)
+			close(eventChan)
+			require.Nil(t, result.terminalError)
+
+			var flushed *model.Response
+			for evt := range eventChan {
+				if evt == nil || evt.Response == nil ||
+					evt.Response.IsPartial || len(evt.Response.Choices) == 0 {
+					continue
+				}
+				message := evt.Response.Choices[0].Message
+				if message.Role == model.RoleAssistant &&
+					len(message.ToolCalls) == 0 && message.Content != "" {
+					flushed = evt.Response
+				}
+			}
+			require.NotNil(t, flushed)
+			require.Equal(t, "text-response", flushed.ID)
+			require.Equal(t, tc.want, flushed.Choices[0].Message.Content)
+		})
+	}
+}
+
+func TestA2AAgentProcessStreamingEventsSnapshotToolCallOwnsText(t *testing.T) {
+	appendChunk := true
+	replaceChunk := false
+	stream := make(chan protocol.StreamingMessageEvent, 2)
+	stream <- protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+		Kind:      protocol.KindTaskArtifactUpdate,
+		TaskID:    "task",
+		ContextID: "context",
+		Artifact: protocol.Artifact{
+			ArtifactID: "response",
+			Parts: []protocol.Part{
+				&protocol.TextPart{Kind: protocol.KindText, Text: "stale"},
+			},
+		},
+		Append: &appendChunk,
+	}}
+	stream <- protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+		Kind:      protocol.KindTaskArtifactUpdate,
+		TaskID:    "task",
+		ContextID: "context",
+		Artifact: protocol.Artifact{
+			ArtifactID: "response",
+			Parts: []protocol.Part{
+				&protocol.TextPart{Kind: protocol.KindText, Text: "replacement"},
+				buildToolCallDataPart("call-1", "lookup", `{}`),
+			},
+		},
+		Append: &replaceChunk,
+	}}
+	close(stream)
+
+	remote := &A2AAgent{name: "remote", eventConverter: &defaultA2AEventConverter{}}
+	out := make(chan *event.Event, 4)
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		out,
+		stream,
+		nil,
+	)
+	close(out)
+	require.Nil(t, result.terminalError)
+
+	var standaloneText []string
+	var toolCallMessage *model.Message
+	for evt := range out {
+		if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
+			continue
+		}
+		choice := evt.Response.Choices[0]
+		if !evt.Response.IsPartial && len(choice.Message.ToolCalls) == 0 &&
+			choice.Message.Content != "" {
+			standaloneText = append(standaloneText, choice.Message.Content)
+		}
+		if len(choice.Message.ToolCalls) > 0 {
+			message := choice.Message
+			toolCallMessage = &message
+		}
+	}
+	require.Empty(t, standaloneText)
+	require.NotNil(t, toolCallMessage)
+	require.Equal(t, "replacement", toolCallMessage.Content)
+	require.Len(t, toolCallMessage.ToolCalls, 1)
+}
+
+func TestA2AAgentProcessStreamingEventsReplacesV0ArtifactContentParts(t *testing.T) {
+	staleFile := protocol.NewFilePartWithURI(
+		"stale.pdf",
+		"application/pdf",
+		"https://example.com/stale.pdf",
+	)
+	replacementFile := protocol.NewFilePartWithURI(
+		"replacement.pdf",
+		"application/pdf",
+		"https://example.com/replacement.pdf",
+	)
+	appendChunk := true
+	replaceChunk := false
+	stream := make(chan protocol.StreamingMessageEvent, 2)
+	stream <- protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+		Kind:   protocol.KindTaskArtifactUpdate,
+		TaskID: "task",
+		Artifact: protocol.Artifact{
+			ArtifactID: "response",
+			Parts: []protocol.Part{
+				&protocol.TextPart{Kind: protocol.KindText, Text: "stale"},
+				&staleFile,
+			},
+		},
+		Append: &appendChunk,
+	}}
+	stream <- protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+		Kind:   protocol.KindTaskArtifactUpdate,
+		TaskID: "task",
+		Artifact: protocol.Artifact{
+			ArtifactID: "response",
+			Parts: []protocol.Part{
+				&protocol.TextPart{Kind: protocol.KindText, Text: "replacement"},
+				&replacementFile,
+			},
+		},
+		Append: &replaceChunk,
+	}}
+	close(stream)
+
+	remote := &A2AAgent{name: "remote", eventConverter: &defaultA2AEventConverter{}}
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		make(chan *event.Event, 2),
+		stream,
+		nil,
+	)
+	require.Nil(t, result.terminalError)
+	require.Equal(t, "replacement", result.aggregatedContent)
+	require.Len(t, result.aggregatedContentParts, 1)
+	require.NotNil(t, result.aggregatedContentParts[0].File)
+	require.Equal(
+		t,
+		"https://example.com/replacement.pdf",
+		result.aggregatedContentParts[0].File.URL,
+	)
+}
+
+func TestA2AAgentProcessStreamingEventsPreservesCompleteArtifactHandlerContent(
+	t *testing.T,
+) {
+	stream := make(chan protocol.StreamingMessageEvent, 1)
+	stream <- protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+		Kind:   protocol.KindTaskArtifactUpdate,
+		TaskID: "task",
+		Artifact: protocol.Artifact{
+			ArtifactID: "response",
+			Parts: []protocol.Part{
+				buildToolCallDataPart("call-1", "lookup", `{}`),
+			},
+		},
+	}}
+	close(stream)
+
+	remote := &A2AAgent{
+		name:           "remote",
+		eventConverter: &defaultA2AEventConverter{},
+		streamingRespHandler: func(*model.Response) (string, error) {
+			return "handler-content", nil
+		},
+	}
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		make(chan *event.Event, 1),
+		stream,
+		nil,
+	)
+
+	require.Nil(t, result.terminalError)
+	require.Equal(t, "handler-content", result.aggregatedContent)
+}
+
+func TestA2AAgentProcessStreamingEventsPreservesMixedContentPartOrder(t *testing.T) {
+	artifactFile := protocol.NewFilePartWithURI(
+		"artifact.pdf",
+		"application/pdf",
+		"https://example.com/artifact.pdf",
+	)
+	messageFile := protocol.NewFilePartWithURI(
+		"message.pdf",
+		"application/pdf",
+		"https://example.com/message.pdf",
+	)
+	stream := make(chan protocol.StreamingMessageEvent, 2)
+	stream <- protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+		Kind:   protocol.KindTaskArtifactUpdate,
+		TaskID: "task",
+		Artifact: protocol.Artifact{
+			ArtifactID: "artifact",
+			Parts:      []protocol.Part{&artifactFile},
+		},
+	}}
+	stream <- protocol.StreamingMessageEvent{Result: &protocol.Message{
+		Kind:      protocol.KindMessage,
+		Role:      protocol.MessageRoleAgent,
+		MessageID: "message",
+		Parts:     []protocol.Part{&messageFile},
+	}}
+	close(stream)
+
+	remote := &A2AAgent{name: "remote", eventConverter: &defaultA2AEventConverter{}}
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		make(chan *event.Event, 2),
+		stream,
+		nil,
+	)
+
+	require.Nil(t, result.terminalError)
+	require.Len(t, result.aggregatedContentParts, 2)
+	require.NotNil(t, result.aggregatedContentParts[0].File)
+	require.NotNil(t, result.aggregatedContentParts[1].File)
+	require.Equal(
+		t,
+		"https://example.com/artifact.pdf",
+		result.aggregatedContentParts[0].File.URL,
+	)
+	require.Equal(
+		t,
+		"https://example.com/message.pdf",
+		result.aggregatedContentParts[1].File.URL,
+	)
+}
+
 func TestA2AAgentRunStreamingPreservesTerminalMessageContentParts(
 	t *testing.T,
 ) {

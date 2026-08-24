@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -57,6 +58,291 @@ func TestProcessRequest_IgnoresRunOptionsMessages_UsesSessionOnly(t *testing.T) 
 	require.True(t, model.MessagesEqual(model.NewUserMessage("hello"), req.Messages[0]))
 	require.True(t, model.MessagesEqual(model.NewAssistantMessage("hi"), req.Messages[1]))
 	require.True(t, model.MessagesEqual(model.NewAssistantMessage("latest from session"), req.Messages[2]))
+}
+
+func TestProcessRequest_MergesNonTerminalAssistantTextIntoFollowingToolCall(t *testing.T) {
+	const (
+		requestID    = "request-1"
+		invocationID = "invocation-1"
+		agentName    = "test-agent"
+		toolCallID   = "call-1"
+	)
+	newEvent := func(responseID string, msg model.Message) event.Event {
+		return event.Event{
+			ID:           responseID + "-event",
+			RequestID:    requestID,
+			InvocationID: invocationID,
+			Author:       agentName,
+			Response: &model.Response{
+				ID:      responseID,
+				Object:  model.ObjectTypeChatCompletion,
+				Done:    false,
+				Choices: []model.Choice{{Message: msg}},
+			},
+		}
+	}
+	userMessage := model.NewUserMessage("hello")
+	userEvent := newSessionEvent("user", userMessage)
+	userEvent.RequestID = requestID
+	userEvent.InvocationID = invocationID
+	sess := &session.Session{Events: []event.Event{
+		userEvent,
+		newEvent("stream-response-id", model.NewAssistantMessage("hello world")),
+		newEvent("tool-call-response-id", model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: toolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      "test_tool",
+					Arguments: []byte(`{}`),
+				},
+			}},
+		}),
+		newEvent("tool-result-response-id", model.Message{
+			Role:    model.RoleTool,
+			ToolID:  toolCallID,
+			Content: "result",
+		}),
+	}}
+	inv := &agent.Invocation{
+		InvocationID: invocationID,
+		AgentName:    agentName,
+		Session:      sess,
+		Message:      userMessage,
+		RunOptions:   agent.RunOptions{RequestID: requestID},
+	}
+	req := &model.Request{}
+	var projectedAssistantResponseIDs []string
+	processor := NewContentRequestProcessor(
+		WithEventMessageProjector(func(
+			_ *agent.Invocation,
+			evt event.Event,
+			msg model.Message,
+		) model.Message {
+			if msg.Role == model.RoleAssistant {
+				projectedAssistantResponseIDs = append(
+					projectedAssistantResponseIDs,
+					evt.Response.ID,
+				)
+			}
+			return msg
+		}),
+	)
+
+	processor.ProcessRequest(
+		context.Background(),
+		inv,
+		req,
+		nil,
+	)
+
+	require.Len(t, req.Messages, 3)
+	require.Equal(t, model.RoleUser, req.Messages[0].Role)
+	require.Equal(t, model.RoleAssistant, req.Messages[1].Role)
+	require.Equal(t, "hello world", req.Messages[1].Content)
+	require.Len(t, req.Messages[1].ToolCalls, 1)
+	require.Equal(t, toolCallID, req.Messages[1].ToolCalls[0].ID)
+	require.Equal(t, model.RoleTool, req.Messages[2].Role)
+	require.Equal(t, "result", req.Messages[2].Content)
+
+	require.Len(t, sess.Events, 4)
+	require.Equal(t, "stream-response-id", sess.Events[1].Response.ID)
+	require.Equal(t, "hello world", sess.Events[1].Choices[0].Message.Content)
+	require.Equal(t, "tool-call-response-id", sess.Events[2].Response.ID)
+	require.Empty(t, sess.Events[2].Choices[0].Message.Content)
+	require.Len(t, sess.Events[2].Choices[0].Message.ToolCalls, 1)
+	require.Equal(t, []string{
+		"stream-response-id",
+		"tool-call-response-id",
+	}, projectedAssistantResponseIDs)
+}
+
+func TestProjectCurrentInvocationMessages_NormalizesAssistantToolTurnAfterProjection(t *testing.T) {
+	const (
+		requestID    = "request-1"
+		invocationID = "invocation-1"
+	)
+	newEvent := func(eventID, responseID string, msg model.Message) event.Event {
+		return event.Event{
+			ID:           eventID,
+			RequestID:    requestID,
+			InvocationID: invocationID,
+			Author:       "test-agent",
+			Response: &model.Response{
+				ID:      responseID,
+				Object:  model.ObjectTypeChatCompletion,
+				Choices: []model.Choice{{Message: msg}},
+			},
+		}
+	}
+	events := []event.Event{
+		newEvent("text-event", "text-response", model.NewAssistantMessage("hello world")),
+		newEvent("tool-call-event", "tool-call-response", model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "lookup",
+					Arguments: []byte(`{}`),
+				},
+			}},
+		}),
+	}
+	inv := &agent.Invocation{
+		InvocationID: invocationID,
+		AgentName:    "test-agent",
+		RunOptions:   agent.RunOptions{RequestID: requestID},
+	}
+
+	t.Run("merges current invocation events", func(t *testing.T) {
+		inv.Session = &session.Session{Events: events}
+		messages := NewContentRequestProcessor().getCurrentInvocationMessages(inv)
+
+		require.Len(t, messages, 1)
+		require.Equal(t, "hello world", messages[0].Content)
+		require.Len(t, messages[0].ToolCalls, 1)
+	})
+
+	t.Run("appends tool call text verbatim", func(t *testing.T) {
+		eventsWithToolText := []event.Event{
+			cloneEventForContentSnapshot(events[0]),
+			cloneEventForContentSnapshot(events[1]),
+		}
+		eventsWithToolText[1].Choices[0].Message.Content = " checking"
+
+		inv.Session = &session.Session{Events: eventsWithToolText}
+		messages := NewContentRequestProcessor().getCurrentInvocationMessages(inv)
+
+		require.Len(t, messages, 1)
+		require.Equal(t, "hello world checking", messages[0].Content)
+		require.Len(t, messages[0].ToolCalls, 1)
+	})
+
+	t.Run("refuses unsafe projector output", func(t *testing.T) {
+		processor := NewContentRequestProcessor(
+			WithEventMessageProjector(func(
+				_ *agent.Invocation,
+				evt event.Event,
+				msg model.Message,
+			) model.Message {
+				if evt.ID == "text-event" {
+					msg.ReasoningSignature = "signature"
+				}
+				return msg
+			}),
+		)
+
+		inv.Session = &session.Session{Events: events}
+		messages := processor.getCurrentInvocationMessages(inv)
+
+		require.Len(t, messages, 2)
+		require.Equal(t, "signature", messages[0].ReasoningSignature)
+		require.Len(t, messages[1].ToolCalls, 1)
+	})
+}
+
+func TestNonTerminalAssistantToolCallPairs_PreservesBoundaries(t *testing.T) {
+	newEvents := func() []event.Event {
+		return []event.Event{
+			{
+				ID:        "text-event",
+				RequestID: "request-1", InvocationID: "invocation-1", Author: "agent",
+				Response: &model.Response{ID: "text-response", Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("text"),
+				}}},
+			},
+			{
+				ID:        "tool-call-event",
+				RequestID: "request-1", InvocationID: "invocation-1", Author: "agent",
+				Response: &model.Response{ID: "tool-call-response", Choices: []model.Choice{{Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID: "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "test_tool",
+							Arguments: []byte(`{}`),
+						},
+					}},
+				}}}},
+			},
+		}
+	}
+	partText := "part"
+	toolCallIndex := 0
+	tests := []struct {
+		name   string
+		mutate func([]event.Event)
+		mark   func(*agent.Invocation)
+	}{
+		{name: "completed text", mutate: func(events []event.Event) {
+			events[0].Done = true
+		}},
+		{name: "completed tool call", mutate: func(events []event.Event) {
+			events[1].Done = true
+		}},
+		{name: "different request", mutate: func(events []event.Event) {
+			events[1].RequestID = "request-2"
+		}},
+		{name: "different invocation", mutate: func(events []event.Event) {
+			events[1].InvocationID = "invocation-2"
+		}},
+		{name: "missing request", mutate: func(events []event.Event) {
+			events[0].RequestID = ""
+		}},
+		{name: "missing invocation", mutate: func(events []event.Event) {
+			events[0].InvocationID = ""
+		}},
+		{name: "missing event ID", mutate: func(events []event.Event) {
+			events[0].ID = ""
+		}},
+		{name: "missing response ID", mutate: func(events []event.Event) {
+			events[0].Response.ID = ""
+		}},
+		{name: "signed text", mutate: func(events []event.Event) {
+			events[0].Choices[0].Message.ReasoningSignature = "signature"
+		}},
+		{name: "signed tool call", mutate: func(events []event.Event) {
+			events[1].Choices[0].Message.ReasoningSignature = "signature"
+		}},
+		{name: "multimodal tool call", mutate: func(events []event.Event) {
+			events[1].Choices[0].Message.ContentParts = []model.ContentPart{{
+				Type: model.ContentTypeText,
+				Text: &partText,
+			}}
+		}},
+		{name: "provider-specific tool call", mutate: func(events []event.Event) {
+			events[1].Choices[0].Message.ToolCalls[0].ExtraFields = map[string]any{
+				"thought_signature": "signature",
+			}
+		}},
+		{name: "streaming tool call", mutate: func(events []event.Event) {
+			events[1].Choices[0].Message.ToolCalls[0].Index = &toolCallIndex
+		}},
+		{name: "different seed origin", mutate: func([]event.Event) {}, mark: func(inv *agent.Invocation) {
+			messageorigin.MarkSeedHistory(inv, "text-event")
+		}},
+		{name: "different current turn origin", mutate: func([]event.Event) {}, mark: func(inv *agent.Invocation) {
+			messageorigin.MarkCurrentTurn(inv, "text-event")
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events := newEvents()
+			tt.mutate(events)
+			inv := &agent.Invocation{}
+			if tt.mark != nil {
+				tt.mark(inv)
+			}
+
+			result := nonTerminalAssistantToolCallPairs(
+				inv,
+				events,
+			)
+
+			require.Empty(t, result)
+		})
+	}
 }
 
 func TestProcessRequest_FiltersEmptyAssistantMessages(t *testing.T) {
@@ -763,6 +1049,61 @@ func TestProcessRequest_PreserveForeignMessagesKeepsOriginalTranscript(t *testin
 	require.Equal(t, "正在为你搜索武汉大学。", req.Messages[3].Content)
 	require.Equal(t, model.RoleUser, req.Messages[4].Role)
 	require.Equal(t, "ask", req.Messages[4].Content)
+}
+
+func TestProcessRequest_ProjectsForeignAssistantEventsBeforeToolTurnMerge(t *testing.T) {
+	const (
+		requestID    = "request-1"
+		invocationID = "invocation-1"
+	)
+	newEvent := func(eventID, responseID string, msg model.Message) event.Event {
+		return event.Event{
+			ID:           eventID,
+			RequestID:    requestID,
+			InvocationID: invocationID,
+			Author:       "other-agent",
+			Response: &model.Response{
+				ID:      responseID,
+				Object:  model.ObjectTypeChatCompletion,
+				Choices: []model.Choice{{Message: msg}},
+			},
+		}
+	}
+	sess := &session.Session{Events: []event.Event{
+		newEvent("text-event", "text-response", model.NewAssistantMessage("preface")),
+		newEvent("tool-call-event", "tool-call-response", model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "lookup",
+					Arguments: []byte(`{}`),
+				},
+			}},
+		}),
+	}}
+	inv := &agent.Invocation{
+		InvocationID: invocationID,
+		AgentName:    "test-agent",
+		Session:      sess,
+		Message:      model.NewUserMessage("ask"),
+		RunOptions:   agent.RunOptions{RequestID: requestID},
+	}
+	req := &model.Request{}
+
+	NewContentRequestProcessor().ProcessRequest(
+		context.Background(),
+		inv,
+		req,
+		nil,
+	)
+
+	require.Len(t, req.Messages, 2)
+	require.Equal(t, model.NewUserMessage("ask"), req.Messages[0])
+	require.Equal(t, model.RoleUser, req.Messages[1].Role)
+	require.Contains(t, req.Messages[1].Content, "preface")
+	require.Contains(t, req.Messages[1].Content, "lookup")
+	require.Empty(t, req.Messages[1].ToolCalls)
 }
 
 func newSessionEvent(author string, msg model.Message) event.Event {
