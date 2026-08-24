@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -256,23 +255,31 @@ func (r *workspaceRuntime) PutDirectory(
 // UploadFiles returns, before the next batch is opened.
 const uploadBatchSize = 64
 
-// walkAndUpload walks hostRoot with filepath.WalkDir and uploads files
-// to destRoot in batches of uploadBatchSize. Empty subdirectories are
-// created explicitly via sb.CreateDirectory so they survive in the
-// sandbox even when they contain no files (matches the e2b adapter's
-// tar TypeDir behaviour).
+// walkAndUpload walks hostRoot and uploads files to destRoot in
+// batches of uploadBatchSize. Empty subdirectories are created
+// explicitly via sb.CreateDirectory so they survive in the sandbox
+// even when they contain no files (matches the e2b adapter's tar
+// TypeDir behaviour).
 //
-// Non-regular entries (symlinks, devices, sockets, fifos) are skipped:
-// d.Info() reports Lstat semantics (it does not follow symlinks), so
-// a symlink inside hostRoot cannot cause files outside hostRoot to be
-// uploaded. This matches the e2b adapter's behaviour.
+// Traversal descends from pinned directory handles (walkDir +
+// openChildNoFollow) rather than filepath.WalkDir: WalkDir reopens each
+// directory by pathname after its callback returns, so a writable
+// staging tree could replace an accepted directory with a symlink to an
+// external directory in that window, and the walk would then follow it
+// and upload external files whose per-leaf os.SameFile check still
+// passes. openChildNoFollow resolves every child relative to the pinned
+// parent handle with O_NOFOLLOW (openat), so neither a swapped ancestor
+// nor a swapped child can redirect the traversal outside hostRoot.
 //
-// Files are opened with os.Open and streamed via the io.Reader
-// interface rather than buffered in memory with os.ReadFile, so
-// staging a directory with large files does not materialize the full
-// tree in the agent process. File handles are closed after each batch
-// is uploaded, keeping the open-fd count bounded by uploadBatchSize
-// rather than the total file count in the tree.
+// Non-regular entries (symlinks, devices, sockets, fifos) are skipped,
+// matching the e2b adapter's behaviour.
+//
+// Files are streamed via the io.Reader interface rather than buffered
+// in memory with os.ReadFile, so staging a directory with large files
+// does not materialize the full tree in the agent process. File handles
+// are closed after each batch is uploaded, keeping the open-fd count
+// bounded by uploadBatchSize rather than the total file count in the
+// tree.
 //
 // wsBase is the workspace root used for symlink-escape checks. Every
 // destination parent is resolved with resolveSandboxAncestor before
@@ -285,12 +292,19 @@ func (r *workspaceRuntime) walkAndUpload(
 	hostRoot, destRoot, wsBase string,
 ) error {
 	uploader := &batchUploader{r: r, sb: sb, destRoot: destRoot, wsBase: wsBase}
-	walkErr := filepath.WalkDir(hostRoot, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		return uploader.visit(ctx, hostRoot, destRoot, p, d)
-	})
+	rootF, err := os.Open(hostRoot)
+	if err != nil {
+		return fmt.Errorf("opensandbox: walk and upload %s: %w", hostRoot, err)
+	}
+	defer rootF.Close()
+	info, err := rootF.Stat()
+	if err != nil {
+		return fmt.Errorf("opensandbox: walk and upload %s: %w", hostRoot, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("opensandbox: walk and upload %s: not a directory", hostRoot)
+	}
+	walkErr := walkDir(ctx, uploader, rootF, hostRoot, destRoot)
 	if walkErr != nil {
 		uploader.closePending()
 		return fmt.Errorf("opensandbox: walk and upload %s: %w", hostRoot, walkErr)
@@ -299,7 +313,88 @@ func (r *workspaceRuntime) walkAndUpload(
 	return uploader.flush(ctx)
 }
 
-// batchUploader accumulates files opened during a WalkDir and uploads
+// walkDir recursively uploads the directory tree reachable from the
+// pinned handle dirF. Every child is opened with openChildNoFollow —
+// relative to dirF's file descriptor, without following symlinks — so
+// the traversal can never leave the tree that was pinned at the root,
+// regardless of what a concurrent writer swaps into any pathname. A
+// child that fails to open (vanished, or replaced by a symlink →
+// ELOOP) is skipped, matching the "skip non-regular entries" contract.
+//
+// As strictness on top of that confinement, an entry whose enumerated
+// metadata (lstat by name) no longer matches the opened handle
+// (os.SameFile) makes the whole staging run fail closed with
+// "changed during staging" — preserving the historical TOCTOU
+// contract for regular-file swaps.
+func walkDir(
+	ctx context.Context,
+	u *batchUploader,
+	dirF *os.File,
+	hostRoot, destRoot string,
+) error {
+	dirPath := dirF.Name()
+	entries, err := dirF.ReadDir(-1)
+	if err != nil {
+		return err
+	}
+	for _, d := range entries {
+		name := d.Name()
+		p := filepath.Join(dirPath, name)
+		// Skip entries whose enumerated metadata says non-regular and
+		// non-directory (symlinks, fifos, sockets, devices) without
+		// opening them. When Info fails (entry raced away or the
+		// filesystem reports DT_UNKNOWN) fall through: the opened
+		// handle's own Stat decides.
+		var entInfo os.FileInfo
+		if ei, ierr := d.Info(); ierr == nil {
+			if !shouldUploadFile(ei) && !ei.IsDir() {
+				continue
+			}
+			entInfo = ei
+		}
+		child, info, err := openChildNoFollow(dirF, name)
+		if err != nil {
+			// Vanished or replaced by a symlink between enumeration and
+			// the no-follow open: skip rather than fail the staging run.
+			continue
+		}
+		// Strict TOCTOU contract: refuse when the entry changed between
+		// the lstat above and this open (e.g. one regular file swapped
+		// for another). openChildNoFollow already confines the handle
+		// to the pinned parent, so this is strictness, not the escape
+		// boundary itself.
+		if entInfo != nil && !os.SameFile(entInfo, info) {
+			child.Close()
+			return fmt.Errorf(
+				"opensandbox: %s changed during staging (replaced by a different file or symlink); refusing upload",
+				p,
+			)
+		}
+		switch {
+		case info.IsDir():
+			if err := u.visitDir(ctx, hostRoot, destRoot, p); err != nil {
+				child.Close()
+				return err
+			}
+			err := walkDir(ctx, u, child, hostRoot, destRoot)
+			child.Close()
+			if err != nil {
+				return err
+			}
+		case info.Mode().IsRegular():
+			// Ownership of child transfers to the uploader batch; it is
+			// closed by flush/closePending.
+			if err := u.visitFile(ctx, hostRoot, destRoot, p, child, info); err != nil {
+				return err
+			}
+		default:
+			child.Close() // fifo/socket/device: skip
+		}
+	}
+	return nil
+}
+
+// batchUploader accumulates files opened during the walk and uploads
 // them in batches of uploadBatchSize. Each flush re-validates target
 // parents, removes pre-existing leaf symlinks in a single bash call,
 // then closes all file handles in the batch.
@@ -312,58 +407,63 @@ type batchUploader struct {
 	openFiles []*os.File
 }
 
-// visit handles one WalkDir entry: creates directories, skips
-// non-regular files, opens regular files, and flushes a batch when it
-// reaches uploadBatchSize.
-func (u *batchUploader) visit(
+// visitDir creates the remote directory for a host directory entry p.
+func (u *batchUploader) visitDir(
 	ctx context.Context,
 	hostRoot, destRoot, p string,
-	d fs.DirEntry,
 ) error {
 	rel, err := filepath.Rel(hostRoot, p)
 	if err != nil {
 		return err
 	}
-	if rel == "." {
-		return nil
-	}
 	remotePath := path.Join(destRoot, filepath.ToSlash(rel))
-
-	if d.IsDir() {
-		// Resolve intermediate destination components so a pre-existing
-		// directory symlink under destRoot cannot redirect CreateDirectory
-		// (or later nested uploads) outside the workspace.
-		resolved, err := u.r.resolveSandboxAncestor(ctx, remotePath, u.wsBase)
-		if err != nil {
-			return err
-		}
-		if err := u.sb.CreateDirectory(ctx, resolved, osb.OctalMode(0o755)); err != nil {
-			return fmt.Errorf("create directory %s: %w", resolved, err)
-		}
-		return nil
-	}
-
-	info, err := d.Info()
+	// Resolve intermediate destination components so a pre-existing
+	// directory symlink under destRoot cannot redirect CreateDirectory
+	// (or later nested uploads) outside the workspace.
+	resolved, err := u.r.resolveSandboxAncestor(ctx, remotePath, u.wsBase)
 	if err != nil {
 		return err
 	}
-	if !shouldUploadFile(info) {
-		return nil
+	if err := u.sb.CreateDirectory(ctx, resolved, osb.OctalMode(0o755)); err != nil {
+		return fmt.Errorf("create directory %s: %w", resolved, err)
 	}
+	return nil
+}
+
+// visitFile queues the already-opened, no-follow-validated file handle
+// opened for the host entry p. info is the Stat of the opened handle;
+// its mode is used for the remote file. Ownership of opened transfers
+// to the batch (closed by flush/closePending) unless an error is
+// returned, in which case visitFile closes it.
+func (u *batchUploader) visitFile(
+	ctx context.Context,
+	hostRoot, destRoot, p string,
+	opened *os.File,
+	info os.FileInfo,
+) error {
+	rel, err := filepath.Rel(hostRoot, p)
+	if err != nil {
+		opened.Close()
+		return err
+	}
+	remotePath := path.Join(destRoot, filepath.ToSlash(rel))
 	// Resolve the parent of the leaf so intermediate directory symlinks
 	// (e.g. dest/hijack -> /tmp/outside with leaf file.txt) are rejected
 	// before CreateDirectory/UploadFiles. Mirrors PutFiles.
 	resolvedParent, err := u.r.resolveSandboxAncestor(ctx, path.Dir(remotePath), u.wsBase)
 	if err != nil {
+		opened.Close()
 		return err
 	}
 	remotePath = path.Join(resolvedParent, path.Base(remotePath))
 	if !pathUnder(remotePath, u.wsBase) {
+		opened.Close()
 		return fmt.Errorf("opensandbox: path %q escapes workspace", remotePath)
 	}
 	parent := resolvedParent
 	if parent != "." && parent != "/" && parent != destRoot && parent != u.wsBase {
 		if err := u.sb.CreateDirectory(ctx, parent, osb.OctalMode(0o755)); err != nil {
+			opened.Close()
 			return fmt.Errorf("create directory %s: %w", parent, err)
 		}
 	}
@@ -371,32 +471,9 @@ func (u *batchUploader) visit(
 	if mode == 0 {
 		mode = 0o644
 	}
-	f, err := os.Open(p)
-	if err != nil {
-		return err
-	}
-	// TOCTOU guard: between the DirEntry.Info inspection above and this
-	// reopen by pathname, a concurrent writer could swap the checked
-	// regular file for a symlink (or another file) pointing outside the
-	// source root. Re-stat the just-opened handle and require it to be
-	// the same file we inspected before queuing it for upload; otherwise
-	// we would read and ship an arbitrary host path outside hostRoot.
-	//
-	// Executing processes substitute symlinks on open, so the handle we
-	// hold is already the final target; that is why we trust Stat here
-	// rather than re-probing the pathname.
-	openedInfo, statErr := f.Stat()
-	if statErr != nil {
-		f.Close()
-		return statErr
-	}
-	if !os.SameFile(info, openedInfo) {
-		f.Close()
-		return fmt.Errorf("opensandbox: %s changed during staging (replaced by a different file or symlink); refusing upload", p)
-	}
-	u.openFiles = append(u.openFiles, f)
+	u.openFiles = append(u.openFiles, opened)
 	u.entries = append(u.entries, osb.UploadFileEntry{
-		File: f,
+		File: opened,
 		Options: osb.UploadFileOptions{
 			FileName: path.Base(remotePath),
 			Metadata: osb.FileMetadata{

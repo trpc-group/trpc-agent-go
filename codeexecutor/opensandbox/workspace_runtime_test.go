@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1435,7 +1434,11 @@ func TestWorkspace_Collect_FilenamesWithDelimiters(t *testing.T) {
 
 	tabName := "report\t2026.txt"
 	newlineName := "line1\nline2.txt"
-	trailingNewlineName := "trailing\n.txt" // final byte of basename is \n
+	// The final byte of this basename must be a newline (not a letter
+	// after it) so the test truly exercises the trailing-newline
+	// boundary: a "$(readlink...)" / TrimRight implementation that
+	// strips it would make this file fail collection.
+	trailingNewlineName := "trailing.txt\n"
 	m.setSearchResults([]string{tabName, newlineName, trailingNewlineName})
 
 	ws, err := exec.CreateWorkspace(context.Background(), "exec-delim", codeexecutor.WorkspacePolicy{})
@@ -1450,7 +1453,10 @@ func TestWorkspace_Collect_FilenamesWithDelimiters(t *testing.T) {
 	trailingNewlinePath := filepath.ToSlash(filepath.Join(ws.Path, trailingNewlineName))
 	m.setDownloadData(trailingNewlinePath, []byte("trailing-content"))
 
-	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
+	// "trailing.txt\n" ends in a newline, so "*.txt" cannot match it;
+	// use the wildcard that matches every basename regardless of the
+	// final byte.
+	files, err := exec.Collect(context.Background(), ws, []string{"*"})
 	require.NoError(t, err)
 	require.Len(t, files, 3)
 
@@ -1696,6 +1702,50 @@ func TestWorkspace_PutDirectory_SkipsSymlinks(t *testing.T) {
 	assert.Contains(t, m.files, "real.txt", "regular file should be uploaded")
 	assert.NotContains(t, m.files, "link.txt", "symlink should be skipped")
 	assert.NotContains(t, m.files, "outside.txt", "outside file must NOT be uploaded via symlink")
+}
+
+// TestWorkspace_PutDirectory_SkipsSymlinkedDirectory is the directory
+// analogue of TestWorkspace_PutDirectory_SkipsSymlinks: a subdirectory
+// inside hostRoot that is itself a symlink to an external directory
+// must not be descended into, so none of the external directory's
+// children are uploaded. This pins the no-follow descent semantics that
+// walkDir relies on when guarding against a directory being replaced by
+// a symlink after it was accepted (TOCTOU): if a directory can no
+// longer be trusted to be a real directory under hostRoot, its contents
+// must not enter the sandbox.
+//
+// Requires symlink support (skipped on platforms where creation fails).
+func TestWorkspace_PutDirectory_SkipsSymlinkedDirectory(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "keep.txt"), []byte("keep"), 0o644))
+
+	outsideDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outsideDir, "leak.txt"), []byte("leak"), 0o644))
+
+	extLink := filepath.Join(tmpDir, "ext")
+	if err := os.Symlink(outsideDir, extLink); err != nil {
+		t.Skipf("symlink creation failed (Windows needs admin/developer mode): %v", err)
+	}
+	fi, err := os.Lstat(extLink)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Skipf("symlink not supported on this platform (lstat err: %v, mode: %v)", err, fi)
+	}
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	err = exec.PutDirectory(context.Background(), ws, tmpDir, "subdir")
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	assert.Contains(t, m.files, "keep.txt", "regular file should be uploaded")
+	assert.NotContains(t, m.files, "leak.txt", "external directory child must NOT be uploaded via a symlinked subdirectory")
 }
 
 // TestWorkspace_ListFilesByGlob_SkipsDirectories verifies that
@@ -2022,17 +2072,14 @@ func TestWorkspace_WalkAndUpload_StreamsFiles(t *testing.T) {
 	sb, err := exec.rt.sandbox()
 	require.NoError(t, err)
 
-	// Drive one visit without flushing so we can inspect the pending
+	// Drive one visitFile without flushing so we can inspect the pending
 	// entry types before UploadFiles consumes them.
 	u := &batchUploader{r: exec.rt, sb: sb, destRoot: ws.Path, wsBase: ws.Path}
-	info, err := os.Stat(hostFile)
+	f, err := os.Open(hostFile)
 	require.NoError(t, err)
-	// DirEntry for the file via WalkDir semantics: use a synthetic entry.
-	de, err := os.ReadDir(dir)
+	info, err := f.Stat()
 	require.NoError(t, err)
-	require.Len(t, de, 1)
-	require.NoError(t, u.visit(context.Background(), dir, ws.Path, hostFile, de[0]))
-	_ = info
+	require.NoError(t, u.visitFile(context.Background(), dir, ws.Path, hostFile, f, info))
 
 	require.Len(t, u.openFiles, 1, "streaming path must keep one open *os.File")
 	require.Len(t, u.entries, 1)
@@ -2058,62 +2105,77 @@ func TestWorkspace_WalkAndUpload_StreamsFiles(t *testing.T) {
 	require.NoError(t, exec.rt.walkAndUpload(context.Background(), sb, dir, ws.Path, ws.Path))
 }
 
-// mockDirEntry is a synthetic fs.DirEntry whose Info() always returns the
-// fixed entry, regardless of the on-disk state of the pathname. It lets
-// tests deterministically reproduce the TOCTOU window in batchUploader.visit:
-// the inspected entry claims a regular file while the pathname on disk has
-// been swapped to a symlink.
-type mockDirEntry struct {
-	info os.FileInfo
-}
+// TestOpenChildNoFollow_RejectsSwappedDirectory is the deterministic
+// regression for Rememorio's P1 (directory pinning): a subdirectory
+// that was accepted — enumerated from the pinned parent handle — is
+// replaced by a symlink to an external directory before the walk
+// descends into it. openChildNoFollow must refuse the descent, so no
+// external child can ever be uploaded. This reproduces the exact
+// TOCTOU window of filepath.WalkDir (directory reopened by pathname
+// after its callback) without needing to interpose inside the walk.
+func TestOpenChildNoFollow_RejectsSwappedDirectory(t *testing.T) {
+	host := t.TempDir()
+	sub := filepath.Join(host, "sub")
+	require.NoError(t, os.Mkdir(sub, 0o755))
+	// External tree the attacker wants smuggled into the sandbox.
+	ext := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(ext, "leak.txt"), []byte("secret"), 0o600))
 
-func (m mockDirEntry) Name() string               { return m.info.Name() }
-func (m mockDirEntry) IsDir() bool                { return m.info.IsDir() }
-func (m mockDirEntry) Type() fs.FileMode          { return m.info.Mode().Type() }
-func (m mockDirEntry) Info() (os.FileInfo, error) { return m.info, nil }
+	rootF, err := os.Open(host)
+	require.NoError(t, err)
+	defer rootF.Close()
 
-// TestWorkspace_WalkAndUpload_SwapToSymlinkRejected is the TOCTOU regression
-// for batchUploader: after an entry was inspected as a regular file, a
-// concurrent writer swaps the pathname for a symlink pointing outside
-// hostRoot. The uploader must detect the mismatch (os.SameFile) and refuse
-// to stage the arbitrary outside file instead of shipping it into the
-// sandbox.
-func TestWorkspace_WalkAndUpload_SwapToSymlinkRejected(t *testing.T) {
-	dir := t.TempDir()
-	outside := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0o600))
-	victim := filepath.Join(dir, "victim.txt")
-	require.NoError(t, os.WriteFile(victim, []byte("original"), 0o644))
-
-	// The inspected entry (used for the type/same-file check) describes a
-	// regular file with a distinct identity (nil Sys). On disk it is then
-	// replaced by a symlink to a path outside hostRoot.
-	inspected := mockFileInfo{mode: 0o644}
-
-	if err := os.Remove(victim); err != nil {
-		t.Fatal(err)
+	// The sub directory is accepted here: enumerated from the pinned
+	// parent handle, exactly as walkDir does before descending.
+	entries, err := rootF.ReadDir(-1)
+	require.NoError(t, err)
+	found := false
+	for _, e := range entries {
+		if e.Name() == "sub" {
+			found = true
+		}
 	}
-	if err := os.Symlink(filepath.Join(outside, "secret.txt"), victim); err != nil {
+	require.True(t, found, "sub must be enumerated before the swap")
+
+	// Swap AFTER enumeration, BEFORE descent — the attack window.
+	require.NoError(t, os.Remove(sub))
+	if err := os.Symlink(ext, sub); err != nil {
 		t.Skipf("symlink creation failed (Windows needs admin/developer mode): %v", err)
 	}
 
-	m := newMockServer(t)
-	defer m.close()
-	exec := newTestExecutor(t, m)
-	defer exec.Close()
+	_, _, err = openChildNoFollow(rootF, "sub")
+	require.Error(t, err,
+		"descent into a directory swapped for a symlink must be refused")
+}
 
-	ws, err := exec.CreateWorkspace(context.Background(), "exec-toctou-swap", codeexecutor.WorkspacePolicy{})
-	require.NoError(t, err)
-	sb, err := exec.rt.sandbox()
-	require.NoError(t, err)
+// TestOpenChildNoFollow_RejectsSwappedFile is the leaf-file variant of
+// the same TOCTOU window: a regular file enumerated from the pinned
+// parent is swapped for a symlink to an external file before it is
+// opened. The no-follow open must refuse it.
+func TestOpenChildNoFollow_RejectsSwappedFile(t *testing.T) {
+	host := t.TempDir()
+	victim := filepath.Join(host, "victim.txt")
+	require.NoError(t, os.WriteFile(victim, []byte("original"), 0o644))
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	require.NoError(t, os.WriteFile(secret, []byte("secret"), 0o600))
 
-	u := &batchUploader{r: exec.rt, sb: sb, destRoot: ws.Path, wsBase: ws.Path}
-	err = u.visit(context.Background(), dir, ws.Path, victim, mockDirEntry{info: inspected})
-	require.Error(t, err, "visit must reject a source swapped to a symlink")
-	require.Contains(t, err.Error(), "changed during staging",
-		"error message should identify the refused upload")
-	require.Empty(t, u.openFiles, "no file handle should remain open after rejection")
-	require.Empty(t, u.entries, "no upload entry should be queued for the swapped file")
+	rootF, err := os.Open(host)
+	require.NoError(t, err)
+	defer rootF.Close()
+
+	entries, err := rootF.ReadDir(-1)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "victim must be enumerated before the swap")
+
+	require.NoError(t, os.Remove(victim))
+	if err := os.Symlink(secret, victim); err != nil {
+		t.Skipf("symlink creation failed (Windows needs admin/developer mode): %v", err)
+	}
+
+	_, _, err = openChildNoFollow(rootF, "victim.txt")
+	require.Error(t, err,
+		"a file swapped for a symlink must not be opened through the symlink")
 }
 
 // TestWorkspace_WalkAndUpload_BatchedBySize verifies that walkAndUpload
