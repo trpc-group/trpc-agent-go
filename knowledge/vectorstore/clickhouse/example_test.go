@@ -79,7 +79,7 @@ func Example_search() {
 		clickhouse.WithFilterFields(clickhouse.FilterFieldSpec{Name: "category", Type: clickhouse.FilterFieldString}),
 	)
 	if err != nil {
-		return
+		panic(err)
 	}
 	defer vs.Close()
 
@@ -91,7 +91,9 @@ func Example_search() {
 			FilterCondition: searchfilter.Equal("category", "news"),
 		},
 	}
-	_, _ = vs.Search(context.Background(), query)
+	if _, err := vs.Search(context.Background(), query); err != nil {
+		panic(err)
+	}
 }
 
 // Example_add demonstrates adding a document with its embedding.
@@ -102,7 +104,7 @@ func Example_add() {
 		clickhouse.WithVectorDimension(3),
 	)
 	if err != nil {
-		return
+		panic(err)
 	}
 	defer vs.Close()
 
@@ -112,5 +114,7 @@ func Example_add() {
 		Content:  "This is a sample document.",
 		Metadata: map[string]any{"category": "news"},
 	}
-	_ = vs.Add(context.Background(), doc, []float64{0.1, 0.2, 0.3})
+	if err := vs.Add(context.Background(), doc, []float64{0.1, 0.2, 0.3}); err != nil {
+		panic(err)
+	}
 }
