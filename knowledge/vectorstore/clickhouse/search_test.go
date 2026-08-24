@@ -248,7 +248,7 @@ func TestCount(t *testing.T) {
 	n, err = vs.Count(context.Background(), vectorstore.WithCountFilter(map[string]any{"category": "news"}))
 	require.NoError(t, err)
 	assert.Equal(t, 42, n)
-	assert.Contains(t, c.queryCalls[1].query, "WHERE category = 'news'")
+	assert.Contains(t, c.queryCalls[1].query, "WHERE (category = 'news')")
 }
 
 func TestGetMetadata(t *testing.T) {
@@ -351,8 +351,24 @@ func TestBuildWhereClause(t *testing.T) {
 	// IDs only.
 	where, args, err = vs.buildWhereClause(&vectorstore.SearchFilter{IDs: []string{"a", "b"}})
 	require.NoError(t, err)
-	assert.Equal(t, " WHERE id IN (?, ?)", where)
+	assert.Equal(t, " WHERE (id IN (?, ?))", where)
 	assert.Equal(t, []any{"a", "b"}, args)
+
+	// A top-level OR combined with an ID set must stay grouped, otherwise AND
+	// would bind tighter than OR and match rows outside the ID set.
+	where, args, err = vs.buildWhereClause(&vectorstore.SearchFilter{
+		IDs: []string{"a"},
+		FilterCondition: searchfilter.Or(
+			searchfilter.Equal("category", "news"),
+			searchfilter.GreaterThan("score", 5),
+		),
+	})
+	require.NoError(t, err)
+	assert.Equal(t,
+		" WHERE (id IN (?)) AND (((category = 'news') OR (score > 5)))",
+		where,
+	)
+	assert.Equal(t, []any{"a"}, args)
 
 	// Metadata + condition + IDs.
 	where, args, err = vs.buildWhereClause(&vectorstore.SearchFilter{

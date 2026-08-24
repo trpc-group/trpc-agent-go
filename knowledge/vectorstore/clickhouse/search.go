@@ -78,7 +78,7 @@ func (vs *VectorStore) buildWhereClause(f *vectorstore.SearchFilter) (string, []
 	if len(parts) == 0 {
 		return "", args, nil
 	}
-	return " WHERE " + strings.Join(parts, " AND "), args, nil
+	return " WHERE " + joinAnd(parts...), args, nil
 }
 
 // searchByVector performs KNN vector search with optional expression prefiltering.
@@ -266,12 +266,14 @@ func (vs *VectorStore) searchByHybrid(
 }
 
 // combineWhere joins a keyword predicate with an existing " WHERE ..." clause.
+// Both sides are parenthesized so a top-level OR in either one cannot escape
+// its scope when the two are AND-combined.
 func combineWhere(keywordCond, where string) string {
 	if where == "" {
 		return " WHERE " + keywordCond
 	}
 	// Strip the leading " WHERE " and AND-combine.
-	return " WHERE " + keywordCond + " AND " + strings.TrimPrefix(where, " WHERE ")
+	return " WHERE " + joinAnd(keywordCond, strings.TrimPrefix(where, " WHERE "))
 }
 
 // applyMinScore retains documents whose score is at least minScore.

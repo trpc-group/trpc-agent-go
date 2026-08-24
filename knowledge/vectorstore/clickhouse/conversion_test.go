@@ -132,12 +132,13 @@ func TestFormatBetweenEdgeCases(t *testing.T) {
 func TestFormatLogicalEdgeCases(t *testing.T) {
 	allowed := map[string]struct{}{"f": {}}
 
-	// Single subcondition strips outer parens.
+	// A single subcondition keeps its parentheses so an inner OR cannot escape
+	// its scope when the result is AND-combined by a caller.
 	got, err := formatLogical([]*searchfilter.UniversalFilterCondition{
 		searchfilter.Equal("f", 1),
 	}, "AND", allowed)
 	require.NoError(t, err)
-	assert.Equal(t, "f = 1", got)
+	assert.Equal(t, "(f = 1)", got)
 
 	// Empty conditions.
 	_, err = formatLogical([]*searchfilter.UniversalFilterCondition{}, "AND", allowed)
@@ -150,7 +151,12 @@ func TestFormatLogicalEdgeCases(t *testing.T) {
 
 func TestCombineWhere(t *testing.T) {
 	assert.Equal(t, " WHERE a > 0", combineWhere("a > 0", ""))
-	assert.Equal(t, " WHERE a > 0 AND b = 1", combineWhere("a > 0", " WHERE b = 1"))
+	assert.Equal(t, " WHERE (a > 0) AND (b = 1)", combineWhere("a > 0", " WHERE b = 1"))
+	// The existing clause may contain a top-level OR, which must stay grouped.
+	assert.Equal(t,
+		" WHERE (a > 0) AND (b = 1 OR c = 2)",
+		combineWhere("a > 0", " WHERE b = 1 OR c = 2"),
+	)
 }
 
 func TestToFloat64AllTypes(t *testing.T) {
@@ -190,7 +196,7 @@ func TestScanMetadataRow(t *testing.T) {
 	vs := vsWithClient(&mockClient{}, WithFilterFields(
 		FilterFieldSpec{Name: "category", Type: FilterFieldString},
 	))
-	rows := newMockRows([][]any{{"doc1", `{"x":1}`, "news"}})
+	rows := newMockRows([][]any{{"doc1", `{"x":1,"category":"news"}`, "news"}})
 	require.True(t, rows.Next())
 	id, md, err := vs.scanMetadataRow(rows)
 	require.NoError(t, err)

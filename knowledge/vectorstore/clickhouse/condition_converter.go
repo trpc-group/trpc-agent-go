@@ -169,9 +169,6 @@ func formatLogical(value any, op string, allowedFields map[string]struct{}) (str
 	if len(parts) == 0 {
 		return "", nil
 	}
-	if len(parts) == 1 {
-		return strings.TrimSuffix(strings.TrimPrefix(parts[0], "("), ")"), nil
-	}
 	return strings.Join(parts, " "+op+" "), nil
 }
 
@@ -360,7 +357,10 @@ func (vs *VectorStore) buildFilterFromSearch(f *vectorstore.SearchFilter) (strin
 	return joinAnd(parts...), nil
 }
 
-// joinAnd joins non-empty expression clauses with AND.
+// joinAnd joins non-empty expression clauses with AND. Each clause keeps its
+// surrounding parentheses, including when only one clause remains, so callers
+// can safely AND-append the result to another predicate even if the clause
+// contains a top-level OR.
 func joinAnd(exprs ...string) string {
 	parts := make([]string, 0, len(exprs))
 	for _, e := range exprs {
@@ -370,9 +370,6 @@ func joinAnd(exprs ...string) string {
 	}
 	if len(parts) == 0 {
 		return ""
-	}
-	if len(parts) == 1 {
-		return strings.TrimSuffix(strings.TrimPrefix(parts[0], "("), ")")
 	}
 	return strings.Join(parts, " AND ")
 }

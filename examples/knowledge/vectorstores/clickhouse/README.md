@@ -15,12 +15,18 @@ docker run -d --name clickhouse \
 ```
 
 Optionally override the connection DSN and table name (defaults are
-`clickhouse://default:@localhost:9000/default` and `documents`):
+`clickhouse://default:@localhost:9000/default` and
+`clickhouse_vectorstore_example`):
 
 ```bash
 export CLICKHOUSE_DSN=clickhouse://user:password@host:9000/database
-export CLICKHOUSE_TABLE=documents
+export CLICKHOUSE_TABLE=clickhouse_vectorstore_example
 ```
+
+> The example creates the table if it does not exist and reuses it otherwise. It
+> upserts `doc1`, `doc2`, and `doc3`, updates `doc1`, then deletes `doc3`, so
+> `doc1` and `doc2` remain in the table after a run. Point `CLICKHOUSE_TABLE` at
+> a throwaway table if you do not want those rows written.
 
 ## Run
 

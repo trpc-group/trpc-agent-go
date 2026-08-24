@@ -201,6 +201,18 @@ func TestNumericConversions(t *testing.T) {
 	require.Error(t, err)
 	_, err = toInt64(math.NaN())
 	require.Error(t, err)
+	_, err = toInt64(math.Inf(1))
+	require.Error(t, err)
+	// 2^63 is not representable as int64. Comparing against math.MaxInt64 would
+	// let it through, because that constant rounds up to 2^63 in float64.
+	_, err = toInt64(float64(1) * (1 << 63))
+	require.Error(t, err)
+	_, err = toInt64(-float64(1) * (1 << 63) * 1.5)
+	require.Error(t, err)
+	// -2^63 is exactly representable and must be accepted.
+	got, err := toInt64(-float64(1) * (1 << 63))
+	require.NoError(t, err)
+	assert.Equal(t, int64(math.MinInt64), got)
 
 	// toFloat64.
 	f, err := toFloat64(int64(3))

@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -45,7 +46,7 @@ func main() {
 	ctx := context.Background()
 
 	dsn := util.GetEnvOrDefault("CLICKHOUSE_DSN", "clickhouse://default:@localhost:9000/default")
-	table := util.GetEnvOrDefault("CLICKHOUSE_TABLE", "documents")
+	table := util.GetEnvOrDefault("CLICKHOUSE_TABLE", "clickhouse_vectorstore_example")
 
 	fmt.Println("🏠 ClickHouse Vector Store Demo")
 	fmt.Println("===============================")
@@ -205,13 +206,35 @@ func main() {
 	if err := vs.Delete(ctx, "doc3"); err != nil {
 		log.Fatalf("Delete failed: %v", err)
 	}
-	n, err = vs.Count(ctx)
+	// ClickHouse deletes run as asynchronous mutations, so the row can still be
+	// counted right after Delete returns. Poll until the expected count shows up.
+	n, err = waitForCount(ctx, vs, 2)
 	if err != nil {
 		log.Fatalf("Count after delete failed: %v", err)
 	}
 	fmt.Printf("  ✓ total after delete = %d\n", n)
 
 	fmt.Println("\n✅ ClickHouse vector store verification passed.")
+}
+
+// waitForCount polls Count until it reports want, or the deadline elapses. It
+// exists because Delete is implemented as an asynchronous ClickHouse mutation.
+func waitForCount(ctx context.Context, vs *clickhouse.VectorStore, want int) (int, error) {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		n, err := vs.Count(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if n == want || time.Now().After(deadline) {
+			return n, nil
+		}
+		select {
+		case <-ctx.Done():
+			return n, ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }
 
 func printResults(results *vectorstore.SearchResult) {

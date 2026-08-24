@@ -75,6 +75,37 @@ func TestNewWithInstance(t *testing.T) {
 	defer vs.Close()
 }
 
+// TestNewInstanceHonorsExtraOptions asserts that WithExtraOptions reaches the
+// client builder on the named-instance path, not only on the DSN path.
+func TestNewInstanceHonorsExtraOptions(t *testing.T) {
+	c := &mockClient{}
+	registered := []storage.ClientBuilderOpt{storage.WithClientBuilderDSN("clickhouse://mock:9000/db")}
+	storage.RegisterClickHouseInstance("test-extra-options", registered...)
+	original := storage.GetClientBuilder()
+	var seen storage.ClientBuilderOpts
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		for _, o := range opts {
+			o(&seen)
+		}
+		return c, nil
+	})
+	defer storage.SetClientBuilder(original)
+
+	vs, err := New(
+		WithInstanceName("test-extra-options"),
+		WithTableName("docs"),
+		WithVectorDimension(3),
+		WithExtraOptions("extra-1"),
+	)
+	require.NoError(t, err)
+	defer vs.Close()
+
+	assert.Equal(t, "clickhouse://mock:9000/db", seen.DSN)
+	assert.Contains(t, seen.ExtraOptions, "extra-1")
+	// The registered instance options must not be mutated by appending.
+	assert.Len(t, registered, 1)
+}
+
 func TestNewErrors(t *testing.T) {
 	// No DSN / instance.
 	_, err := New(WithTableName("docs"), WithVectorDimension(3))
@@ -345,15 +376,25 @@ func TestScanRow(t *testing.T) {
 	vs := vsWithClient(&mockClient{}, WithFilterFields(
 		FilterFieldSpec{Name: "category", Type: FilterFieldString},
 	))
-	rows := newMockRows([][]any{{"doc1", "n", "c", []float64{1, 2, 3}, `{"x":1}`, now, now, "news"}})
+	// The metadata JSON always carries the declared filter fields, because
+	// insertArgs writes them into both the JSON blob and the typed column.
+	rows := newMockRows([][]any{{"doc1", "n", "c", []float64{1, 2, 3}, `{"x":1,"category":"news"}`, now, now, "news"}})
 	require.True(t, rows.Next())
 	r, err := vs.scanRow(rows, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "doc1", r.id)
 	assert.Equal(t, float64(1), r.metadata["x"])
-	// filter field merged back into metadata.
+	// filter field restored from the typed column.
 	assert.Equal(t, "news", r.metadata["category"])
 	assert.Equal(t, now, r.createdAt)
+
+	// A filter field absent from the metadata is not invented from the column
+	// zero value.
+	rowsNoKey := newMockRows([][]any{{"doc2", "n", "c", []float64{1, 2, 3}, `{"x":1}`, now, now, ""}})
+	require.True(t, rowsNoKey.Next())
+	rNoKey, err := vs.scanRow(rowsNoKey, nil)
+	require.NoError(t, err)
+	assert.NotContains(t, rNoKey.metadata, "category")
 
 	// With score pointer.
 	rows = newMockRows([][]any{{"doc1", "n", "c", []float64{1, 2, 3}, "{}", now, now, "news", 0.25}})

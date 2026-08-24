@@ -68,15 +68,18 @@ func New(opts ...Option) (*VectorStore, error) {
 	var builderOpts []storage.ClientBuilderOpt
 	if opt.dsn != "" {
 		builderOpts = append(builderOpts, storage.WithClientBuilderDSN(opt.dsn))
-		builderOpts = append(builderOpts, storage.WithExtraOptions(opt.extraOptions...))
 	} else if opt.instanceName != "" {
 		bo, ok := storage.GetClickHouseInstance(opt.instanceName)
 		if !ok {
 			return nil, fmt.Errorf("clickhouse: instance %q not registered", opt.instanceName)
 		}
-		builderOpts = bo
+		// Copy so appending cannot mutate the registered instance options.
+		builderOpts = append(builderOpts, bo...)
 	} else {
 		return nil, errors.New("clickhouse: must specify one of WithDSN / WithInstanceName")
+	}
+	if len(opt.extraOptions) > 0 {
+		builderOpts = append(builderOpts, storage.WithExtraOptions(opt.extraOptions...))
 	}
 
 	c, err := storage.GetClientBuilder()(builderOpts...)
@@ -323,12 +326,20 @@ func (vs *VectorStore) newFilterDests() []any {
 	return dests
 }
 
-// mergeFilterDests copies scanned filter-column values back into the metadata
-// map, so callers observe them alongside the JSON-encoded metadata.
+// mergeFilterDests restores the declared column type for filter values that are
+// present in the decoded metadata. JSON decoding turns every number into
+// float64, so an Int64 column would otherwise come back as float64.
+//
+// Keys absent from the metadata are left untouched: insertArgs writes the column
+// zero value for missing fields, and copying that back would invent a key the
+// caller never set.
 func (vs *VectorStore) mergeFilterDests(md map[string]any, dests []any) {
 	for i, spec := range vs.option.filterFields {
 		if i >= len(dests) {
 			return
+		}
+		if _, ok := md[spec.Name]; !ok {
+			continue
 		}
 		switch dest := dests[i].(type) {
 		case *int64:

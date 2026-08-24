@@ -50,7 +50,17 @@ func TestBuildFilterExprOperators(t *testing.T) {
 		{
 			"and single",
 			searchfilter.And(searchfilter.Equal("category", "news")),
-			"category = 'news'",
+			"(category = 'news')",
+		},
+		{
+			// A nested OR must stay grouped when it is the only subcondition,
+			// otherwise an AND-appending caller would widen the row set.
+			"and single nested or",
+			searchfilter.And(searchfilter.Or(
+				searchfilter.Equal("category", "news"),
+				searchfilter.Equal("category", "sports"),
+			)),
+			"((category = 'news') OR (category = 'sports'))",
 		},
 	}
 	for _, tt := range tests {
@@ -206,6 +216,14 @@ func TestBuildFilterFromSearch(t *testing.T) {
 func TestJoinAnd(t *testing.T) {
 	assert.Equal(t, "", joinAnd())
 	assert.Equal(t, "", joinAnd("", "  "))
-	assert.Equal(t, "a = 1", joinAnd("a = 1"))
+	// A single clause keeps its parentheses so callers can AND-append safely.
+	assert.Equal(t, "(a = 1)", joinAnd("a = 1"))
 	assert.Equal(t, "(a = 1) AND (b = 2)", joinAnd("a = 1", "b = 2"))
+	// A top-level OR must stay parenthesized, otherwise AND would bind tighter
+	// and widen the matched row set.
+	assert.Equal(t, "(a = 1 OR b = 2)", joinAnd("a = 1 OR b = 2"))
+	assert.Equal(t,
+		"(id IN ('x')) AND (a = 1 OR b = 2)",
+		joinAnd("id IN ('x')", "a = 1 OR b = 2"),
+	)
 }

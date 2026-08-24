@@ -203,7 +203,10 @@ func floatToInt64(f float64) (int64, error) {
 	if f != math.Trunc(f) {
 		return 0, fmt.Errorf("float %v is not an integer", f)
 	}
-	if f < math.MinInt64 || f > math.MaxInt64 {
+	// math.MaxInt64 is not representable in float64 and rounds up to 2^63, so
+	// comparing against it would let 2^63 pass and make int64(f) overflow.
+	// Compare against 2^63 exclusively instead. math.MinInt64 (-2^63) is exact.
+	if f < math.MinInt64 || f >= math.Exp2(63) {
 		return 0, fmt.Errorf("float %v out of int64 range", f)
 	}
 	return int64(f), nil
