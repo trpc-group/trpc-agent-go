@@ -3843,10 +3843,11 @@ func TestApplyCacheControl_ToolResultBreakpoint(t *testing.T) {
 		"the trailing per-request note stays outside the prefix")
 }
 
-// TestGenerateContent_CacheBreakpointBudget verifies that a request leaves the
-// model with no more than the four cache_control markers Anthropic accepts, and
-// that the tool-result breakpoint is the one given up when a caller's top-level
-// CacheControl claims the fourth slot from inside the request callback.
+// TestGenerateContent_CacheBreakpointBudget verifies that this model's own
+// breakpoints never push a request past the four cache_control markers Anthropic
+// accepts, and that the tool-result breakpoint is the one given up when a
+// caller's top-level CacheControl claims the fourth slot from inside the request
+// callback.
 func TestGenerateContent_CacheBreakpointBudget(t *testing.T) {
 	toolResultTurn := []model.Message{
 		{Role: model.RoleSystem, Content: "system policy"},
@@ -3958,4 +3959,95 @@ func TestGenerateContent_CacheBreakpointBudget(t *testing.T) {
 			assert.LessOrEqual(t, countCacheBreakpoints(captured), cacheBreakpointLimit)
 		})
 	}
+}
+
+// TestGenerateContent_CallerOverSubscribesBreakpoints pins the edge of that
+// guarantee: it is bounded, and the boundary is deliberate.
+//
+// A callback that adds two markers of its own — top-level CacheControl and an
+// explicit marker on a message block — is over the limit on its own arithmetic:
+// three built-in breakpoints plus two is five, which was already a 400 before the
+// tool-result breakpoint existed. Releasing the tool-result slot returns the
+// count to exactly that pre-existing number and stops there.
+//
+// Going further would mean discarding either the caller's own placement or the
+// system and tools breakpoints. That trades an error naming the problem for a
+// silent cache regression, so the model leaves the caller's configuration alone
+// and lets the API reject it.
+func TestGenerateContent_CallerOverSubscribesBreakpoints(t *testing.T) {
+	var captured *anthropic.MessageNewParams
+
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			h := make(http.Header)
+			h.Set("Content-Type", "application/json")
+			return &http.Response{
+				StatusCode: 200,
+				Body: io.NopCloser(strings.NewReader(`{"id":"m1","model":"claude",` +
+					`"role":"assistant","type":"message","stop_reason":"end_turn",` +
+					`"usage":{"input_tokens":1,"output_tokens":1},` +
+					`"content":[{"type":"text","text":"done"}]}`)),
+				Header: h,
+			}, nil
+		})}
+	}
+
+	m := New("claude-3-5-sonnet",
+		WithCacheSystemPrompt(true),
+		WithCacheTools(true),
+		WithCacheMessages(true),
+		WithChatRequestCallback(func(_ context.Context, req *anthropic.MessageNewParams) {
+			captured = req
+			// Two markers of the caller's own: automatic placement, plus an
+			// explicit one on the first user turn.
+			req.CacheControl = anthropic.NewCacheControlEphemeralParam()
+			first := req.Messages[0].Content[0].OfText
+			require.NotNil(t, first)
+			first.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		}),
+	)
+
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleSystem, Content: "system policy"},
+			{Role: model.RoleUser, Content: "read both files"},
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{ID: "call_1", Function: model.FunctionDefinitionParam{Name: "read", Arguments: []byte(`{}`)}},
+				},
+			},
+			{Role: model.RoleTool, ToolID: "call_1", Content: "file one"},
+			{Role: model.RoleUser, Content: "[Turn 3/40]"},
+		},
+		Tools: map[string]tool.Tool{
+			"read": stubTool{decl: &tool.Declaration{
+				Name:        "read",
+				Description: "read a file",
+				InputSchema: &tool.Schema{Type: "object"},
+			}},
+		},
+	})
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.NotNil(t, captured)
+
+	toolResult := captured.Messages[2]
+	assert.True(t,
+		param.IsOmitted(toolResult.Content[len(toolResult.Content)-1].OfToolResult.CacheControl),
+		"the tool-result slot is released even though releasing it is not enough")
+
+	// Three built-in breakpoints plus the caller's two: the count this request
+	// would have had before the tool-result breakpoint existed.
+	assert.Equal(t, 5, countCacheBreakpoints(captured),
+		"the model gives back its own slot and leaves the caller's markers alone")
+	assert.False(t, param.IsOmitted(captured.CacheControl),
+		"the caller's top-level CacheControl is untouched")
+	assert.False(t, param.IsOmitted(*captured.Messages[0].Content[0].GetCacheControl()),
+		"the caller's explicit marker is untouched")
+	assert.NotEmpty(t, captured.System[0].CacheControl.Type,
+		"the system breakpoint is not sacrificed to force a fit")
 }

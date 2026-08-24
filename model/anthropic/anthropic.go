@@ -252,7 +252,7 @@ func (m *Model) GenerateContent(
 	if imodelrequest.ToolsDisabled(ctx) {
 		disableChatRequestTools(chatRequest)
 	}
-	m.enforceCacheBreakpointBudget(chatRequest)
+	m.yieldToolResultCacheBreakpoint(chatRequest)
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
@@ -481,7 +481,7 @@ func modelNameMatches(modelName string, targets ...string) bool {
 //     output enters the cache in the request that carries it rather than the next one
 //
 // All four together spend the whole breakpoint budget, which leaves a caller that
-// adds one of its own over the limit. enforceCacheBreakpointBudget settles that
+// adds one of its own over the limit. yieldToolResultCacheBreakpoint settles that
 // after the request callback has run, by giving the tool-result slot back.
 func (m *Model) applyCacheControl(
 	systemPrompts []anthropic.TextBlockParam,
@@ -560,19 +560,33 @@ func isToolResultMessage(message anthropic.MessageParam) bool {
 	return true
 }
 
-// enforceCacheBreakpointBudget keeps the finalized request inside
-// cacheBreakpointLimit. It runs after the request callback because that is where a
-// caller adds markers of its own, including the top-level CacheControl the SDK
-// exposes: the API places that one on the last cacheable block, so it occupies a
-// slot alongside the explicit markers, and it lands on a block of its own whenever
-// anything trails the tool results.
+// yieldToolResultCacheBreakpoint gives the tool-result slot back when the
+// finalized request is over cacheBreakpointLimit. It runs after the request
+// callback because that is where a caller adds markers of its own, including the
+// top-level CacheControl the SDK exposes: the API answers that one by placing a
+// marker on the last cacheable block, so it occupies a slot alongside the explicit
+// markers, and it lands on a block of its own whenever anything trails the tool
+// results.
 //
-// The tool-result breakpoint is the one this gives up. Losing it costs a delay
-// rather than a cache entry — the next request's last-assistant breakpoint moves
-// past those tool results and writes them anyway, which is what happened before
-// this breakpoint existed. The system, tools, and last-assistant markers, and
-// anything the caller placed, are left where they are.
-func (m *Model) enforceCacheBreakpointBudget(chatRequest *anthropic.MessageNewParams) {
+// The guarantee is bounded, deliberately: this model's own breakpoints never push
+// a request over on their own. It is not a general budget enforcer. One marker is
+// released — the tool-result one — which returns the count to what it was before
+// that breakpoint existed. A caller that spends more than the remaining budget is
+// still over, and stays over.
+//
+// Stripping further markers to force a fit would mean discarding either the
+// caller's explicit placement or the system and tools breakpoints, and trading a
+// 400 that names the problem for a silent, expensive cache regression is the worse
+// failure — a cache that quietly stops being read reports nothing at all. An
+// over-subscribed request is a caller configuration error, and it was one before
+// the tool-result breakpoint existed too.
+//
+// The tool-result breakpoint is the one released because it is the only one whose
+// loss costs a delay rather than a cache entry: the next request's last-assistant
+// breakpoint moves past those tool results and writes them anyway. The system,
+// tools, and last-assistant markers, and anything the caller placed, are left
+// where they are.
+func (m *Model) yieldToolResultCacheBreakpoint(chatRequest *anthropic.MessageNewParams) {
 	if chatRequest == nil || !m.cacheMessages {
 		return
 	}
