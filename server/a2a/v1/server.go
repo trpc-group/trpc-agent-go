@@ -135,6 +135,18 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	if agentCard.Name == "" {
 		return nil, errors.New("agent card name is required")
 	}
+	originalAgentCard := agentCard
+	if agentCard.SupportedInterfaces != nil {
+		interfaces := make([]protocol.AgentInterface, len(agentCard.SupportedInterfaces))
+		copy(interfaces, agentCard.SupportedInterfaces)
+		agentCard.SupportedInterfaces = interfaces
+	}
+	agentCard.NormalizeInterfaces()
+	if len(agentCard.Signatures) > 0 && !reflect.DeepEqual(originalAgentCard, agentCard) {
+		return nil, errors.New(
+			"signed agent card requires normalization; provide a card signed with the final served URL",
+		)
+	}
 
 	builtInProcessor, err := buildProcessor(agentCard.Name, options)
 	if err != nil {
@@ -173,10 +185,15 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	// If the URL contains a path component (e.g., "http://example.com/api/v1"),
 	// it will be extracted and used as the base path for routing incoming requests.
 	basePath := extractBasePath(ia2a.NormalizeURL(agentCard.PrimaryURL()))
+	jsonRPCEndpoint := basePath
+	if jsonRPCEndpoint == "" {
+		jsonRPCEndpoint = "/"
+	}
 
 	opts := []a2a.Option{
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
 		a2a.WithBasePath(basePath),
+		a2a.WithJSONRPCEndpoint(jsonRPCEndpoint),
 		a2a.WithMiddleware(&traceContextMiddleware{}),
 	}
 	if options.v0Compatibility {

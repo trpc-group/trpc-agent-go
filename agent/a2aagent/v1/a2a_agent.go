@@ -29,6 +29,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,25 +124,33 @@ func New(opts ...Option) (*A2AAgent, error) {
 	// Normalize the URL to ensure it has a proper scheme
 	agentURL = ia2a.NormalizeURL(agentURL)
 
-	// Create A2A client first
-	a2aClient, err := client.NewA2AClient(agentURL, agent.extraA2AOptions...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentURL, err)
-	}
-	agent.a2aClient = a2aClient
-
 	// If agent card is not set, fetch it using A2A client's GetAgentCard method
 	if agent.agentCard == nil {
-		agentCard, err := a2aClient.GetAgentCard(context.Background(), "")
+		discoveryClient, err := client.NewA2AClient(agentURL, agent.extraA2AOptions...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentURL, err)
+		}
+		agentCard, err := discoveryClient.GetAgentCard(context.Background(), "")
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch agent card from %s: %w", agentURL, err)
 		}
 
 		agent.agentCard = agentCard
-	} else {
-		card := *agent.agentCard
-		agent.agentCard = &card
 	}
+	card := *agent.agentCard
+	card.SupportedInterfaces = slices.Clone(card.SupportedInterfaces)
+	agent.agentCard = &card
+
+	selectionCard := agent.agentCard
+	if len(agent.agentCard.Signatures) > 0 {
+		normalizedCard := *agent.agentCard
+		normalizedCard.SupportedInterfaces = slices.Clone(normalizedCard.SupportedInterfaces)
+		normalizedCard.AdditionalInterfaces = slices.Clone(normalizedCard.AdditionalInterfaces)
+		normalizedCard.SecurityRequirements = slices.Clone(normalizedCard.SecurityRequirements)
+		normalizedCard.Security = slices.Clone(normalizedCard.Security)
+		selectionCard = &normalizedCard
+	}
+	selectionCard.NormalizeInterfaces()
 
 	if agent.name == "" {
 		agent.name = agent.agentCard.Name
@@ -148,21 +158,121 @@ func New(opts ...Option) (*A2AAgent, error) {
 	if agent.description == "" {
 		agent.description = agent.agentCard.Description
 	}
-	resolvedURL := agent.agentCard.PrimaryURL()
-	if resolvedURL == "" {
-		resolvedURL = agentURL
+	resolvedURL, clientOptions, err := resolveClientConfig(
+		selectionCard,
+		agentURL,
+		agent.extraA2AOptions,
+	)
+	if err != nil {
+		return nil, err
 	}
-	resolvedURL = ia2a.NormalizeURL(resolvedURL)
-	agent.agentCard.URL = resolvedURL
-	if resolvedURL != agentURL {
-		a2aClient, err := client.NewA2AClient(resolvedURL, agent.extraA2AOptions...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create A2A client for %s: %w", resolvedURL, err)
-		}
-		agent.a2aClient = a2aClient
+	if len(agent.agentCard.Signatures) == 0 {
+		agent.agentCard.URL = resolvedURL
 	}
+	a2aClient, err := client.NewA2AClient(resolvedURL, clientOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create A2A client for %s: %w", resolvedURL, err)
+	}
+	agent.a2aClient = a2aClient
 
 	return agent, nil
+}
+
+func resolveClientConfig(
+	card *server.AgentCard,
+	fallbackURL string,
+	explicitOptions []client.Option,
+) (string, []client.Option, error) {
+	selectedInterface := firstSupportedInterface(card.SupportedInterfaces)
+	resolvedURL := card.PrimaryURL()
+	if selectedInterface != nil {
+		resolvedURL = selectedInterface.URL
+	} else if len(card.SupportedInterfaces) > 0 {
+		selectedInterface = firstCompatibleVersionInterface(card.SupportedInterfaces)
+		if selectedInterface == nil {
+			return "", nil, fmt.Errorf(
+				"agent card has no interface compatible with A2A protocol %s",
+				protocol.ProtocolVersionV1,
+			)
+		}
+		resolvedURL = selectedInterface.URL
+	}
+	if resolvedURL == "" {
+		resolvedURL = fallbackURL
+	}
+
+	clientOptions := make([]client.Option, 0, len(explicitOptions)+2)
+	if selectedInterface != nil {
+		if selectedInterface.ProtocolBinding != "" {
+			clientOptions = append(clientOptions, client.WithProtocolBinding(selectedInterface.ProtocolBinding))
+		}
+		if selectedInterface.Tenant != "" {
+			clientOptions = append(clientOptions, client.WithTenant(selectedInterface.Tenant))
+		}
+	}
+	// Explicit client options take precedence over values discovered from the
+	// Agent Card.
+	clientOptions = append(clientOptions, explicitOptions...)
+	return ia2a.NormalizeURL(resolvedURL), clientOptions, nil
+}
+
+func firstSupportedInterface(interfaces []protocol.AgentInterface) *protocol.AgentInterface {
+	var legacy *protocol.AgentInterface
+	for i := range interfaces {
+		binding := interfaces[i].ProtocolBinding
+		if !strings.EqualFold(binding, protocol.ProtocolBindingJSONRPC) &&
+			!strings.EqualFold(binding, protocol.ProtocolBindingHTTPJSON) {
+			continue
+		}
+		if interfaces[i].ProtocolVersion == "" {
+			if legacy == nil {
+				legacy = &interfaces[i]
+			}
+			continue
+		}
+		if isCompatibleProtocolVersion(interfaces[i].ProtocolVersion) {
+			return &interfaces[i]
+		}
+	}
+	return legacy
+}
+
+func firstCompatibleVersionInterface(interfaces []protocol.AgentInterface) *protocol.AgentInterface {
+	var legacy *protocol.AgentInterface
+	for i := range interfaces {
+		if interfaces[i].ProtocolVersion == "" {
+			if legacy == nil {
+				legacy = &interfaces[i]
+			}
+			continue
+		}
+		if isCompatibleProtocolVersion(interfaces[i].ProtocolVersion) {
+			return &interfaces[i]
+		}
+	}
+	return legacy
+}
+
+func isCompatibleProtocolVersion(version string) bool {
+	if version == "" {
+		return true
+	}
+	parts := strings.Split(version, ".")
+	if len(parts) != 2 && len(parts) != 3 {
+		return false
+	}
+	values := make([]uint64, len(parts))
+	for i, part := range parts {
+		value, err := strconv.ParseUint(part, 10, 32)
+		if err != nil {
+			return false
+		}
+		values[i] = value
+	}
+	supported := strings.Split(protocol.ProtocolVersionV1, ".")
+	return len(supported) == 2 &&
+		strconv.FormatUint(values[0], 10) == supported[0] &&
+		strconv.FormatUint(values[1], 10) == supported[1]
 }
 
 // sendErrorEvent sends an error event to the event channel.
@@ -1044,7 +1154,7 @@ func (r *A2AAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
-// GetAgentCard returns the resolved agent card
+// GetAgentCard returns the agent card.
 func (r *A2AAgent) GetAgentCard() *server.AgentCard {
 	return r.agentCard
 }
