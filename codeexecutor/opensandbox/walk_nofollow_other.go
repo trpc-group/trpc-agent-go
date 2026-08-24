@@ -13,11 +13,28 @@
 package opensandbox
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 )
+
+// errSymlinkRefused is the sentinel wrapped by this fallback when an
+// entry turns out to be a symlink; walkDir treats it as a skippable
+// symlink race, like ELOOP from the openat implementation.
+var errSymlinkRefused = errors.New("symlink refused")
+
+// isSkippableOpenErr reports whether err conclusively represents an
+// entry that vanished or was swapped for a symlink during the walk —
+// the only conditions under which walkDir may skip an entry. All other
+// failures (permission denied, descriptor exhaustion, filesystem I/O
+// errors) must propagate so a partial staging run is never reported as
+// success.
+func isSkippableOpenErr(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) ||
+		errors.Is(err, errSymlinkRefused)
+}
 
 // openChildNoFollow is the fallback for platforms without openat(2)
 // (notably Windows). It opens the child by pathname and cannot pin the
@@ -45,7 +62,7 @@ func openChildNoFollow(dirF *os.File, name string) (*os.File, fs.FileInfo, error
 	if li, lierr := os.Lstat(p); lierr == nil && li.Mode()&os.ModeSymlink != 0 {
 		f.Close()
 		return nil, nil, fmt.Errorf(
-			"opensandbox: %s is a symlink; refusing to follow", p,
+			"opensandbox: %s is a symlink; refusing to follow: %w", p, errSymlinkRefused,
 		)
 	}
 	return f, info, nil

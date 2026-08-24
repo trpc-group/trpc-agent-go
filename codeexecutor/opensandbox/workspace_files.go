@@ -318,8 +318,11 @@ func (r *workspaceRuntime) walkAndUpload(
 // relative to dirF's file descriptor, without following symlinks — so
 // the traversal can never leave the tree that was pinned at the root,
 // regardless of what a concurrent writer swaps into any pathname. A
-// child that fails to open (vanished, or replaced by a symlink →
-// ELOOP) is skipped, matching the "skip non-regular entries" contract.
+// child whose open failed with a conclusive race error (vanished, or
+// replaced by a symlink → ELOOP) is skipped, matching the "skip
+// non-regular entries" contract; every other open failure (permission,
+// descriptor exhaustion, I/O) propagates so an incomplete staging run
+// is never reported as success.
 //
 // As strictness on top of that confinement, an entry whose enumerated
 // metadata (lstat by name) no longer matches the opened handle
@@ -354,9 +357,17 @@ func walkDir(
 		}
 		child, info, err := openChildNoFollow(dirF, name)
 		if err != nil {
-			// Vanished or replaced by a symlink between enumeration and
-			// the no-follow open: skip rather than fail the staging run.
-			continue
+			// Only conclusive race outcomes — the entry vanished, or
+			// was replaced by a symlink that the no-follow open
+			// rejected — are skipped. Permission failures, descriptor
+			// exhaustion, and filesystem I/O errors propagate so a
+			// partial staging run is never reported as success.
+			if isSkippableOpenErr(err) {
+				continue
+			}
+			return fmt.Errorf(
+				"opensandbox: open %s during staging: %w", p, err,
+			)
 		}
 		// Strict TOCTOU contract: refuse when the entry changed between
 		// the lstat above and this open (e.g. one regular file swapped

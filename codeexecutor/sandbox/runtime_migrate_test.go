@@ -564,6 +564,78 @@ func TestMigrateLegacyWorkspace_NonDirectoryLegacyRootFails(t *testing.T) {
 	assertPathExists(t, legacyPath)
 }
 
+// TestMigrateLegacyWorkspace_PreexistingSymlinkedDestinationRejected guards
+// the already-completed-migration branch: when the deterministic sess-*
+// destination already exists as a symlink pointing outside the configured
+// root, migration must not treat it (via a following Stat) as a completed
+// upgrade and return success — CreateWorkspace would then run MkdirAll and
+// EnsureLayout through the link, writing outside the root. The destination
+// must be validated with Lstat and rejected.
+func TestMigrateLegacyWorkspace_PreexistingSymlinkedDestinationRejected(t *testing.T) {
+	root := t.TempDir()
+	newKey, legacyKey := migrateKeyPair(t)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "sensitive.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seedLegacyWorkspace(t, root, legacyKey)
+
+	newPath, _ := workspacePathForID(root, newKey)
+	if err := os.MkdirAll(filepath.Dir(newPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, newPath); err != nil {
+		t.Skipf("cannot create symlink in this environment: %v", err)
+	}
+
+	rt := NewRuntime(WithWorkspaceRoot(root))
+	err := rt.migrateLegacyWorkspace(newKey, []string{legacyKey})
+	if err == nil {
+		t.Fatal("migrateLegacyWorkspace with symlinked destination = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("error should identify the symlinked destination: %v", err)
+	}
+
+	// The legacy workspace must be preserved untouched (no rename onto
+	// the symlink) and nothing must be written outside the root.
+	legacyPath, _ := workspacePathForID(root, legacyKey)
+	assertPathExists(t, legacyPath)
+	if data, err := os.ReadFile(filepath.Join(outside, "sensitive.txt")); err != nil || string(data) != "secret" {
+		t.Fatalf("outside file altered: content=%q err=%v", data, err)
+	}
+}
+
+// TestMigrateLegacyWorkspace_PreexistingNonDirectoryDestinationFails
+// verifies that a pre-existing destination that is a regular file (not a
+// directory) is rejected rather than accepted as a completed migration.
+func TestMigrateLegacyWorkspace_PreexistingNonDirectoryDestinationFails(t *testing.T) {
+	root := t.TempDir()
+	newKey, legacyKey := migrateKeyPair(t)
+	seedLegacyWorkspace(t, root, legacyKey)
+
+	newPath, _ := workspacePathForID(root, newKey)
+	if err := os.MkdirAll(filepath.Dir(newPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newPath, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := NewRuntime(WithWorkspaceRoot(root))
+	err := rt.migrateLegacyWorkspace(newKey, []string{legacyKey})
+	if err == nil {
+		t.Fatal("migrateLegacyWorkspace with non-directory destination = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("error should identify the non-directory destination: %v", err)
+	}
+
+	// The legacy workspace must be preserved, not renamed over the file.
+	legacyPath, _ := workspacePathForID(root, legacyKey)
+	assertPathExists(t, legacyPath)
+}
+
 // TestMigrateLegacyWorkspace_AmbiguousLegacyFormsFail covers sessions whose
 // identity is partially populated: the pre-change sandbox executor joined
 // each non-empty field ("app/id"), while the processor/resolver path used

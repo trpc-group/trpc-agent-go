@@ -153,18 +153,25 @@ func (r *Runtime) migrateLegacyWorkspace(newKey string, legacyKeys []string) err
 	if found == "" {
 		return nil
 	}
-	if _, err := os.Stat(newPath); err == nil {
+	exists, err := validateMigrationDestination(newPath)
+	if err != nil {
+		return err
+	}
+	if exists {
 		// Destination already present (already migrated, or the session
 		// already created a new-style workspace): keep the legacy
 		// directory untouched rather than overwrite newer data.
 		return nil
-	} else if !os.IsNotExist(err) {
-		return err
 	}
 	if err := os.Rename(found, newPath); err != nil {
 		// A concurrent goroutine may have won the rename; if the
-		// destination now exists the upgrade already happened.
-		if _, statErr := os.Stat(newPath); statErr == nil {
+		// destination now exists (as a valid plain directory) the
+		// upgrade already happened.
+		exists, statErr := validateMigrationDestination(newPath)
+		if statErr != nil {
+			return statErr
+		}
+		if exists {
 			return nil
 		}
 		return err
@@ -179,6 +186,31 @@ func (r *Runtime) migrateLegacyWorkspace(newKey string, legacyKeys []string) err
 			"sandbox: legacy workspace %s changed during migration: %w", found, err)
 	}
 	return nil
+}
+
+// validateMigrationDestination reports whether an already-present
+// migration destination is a plain directory, using Lstat so a symlink
+// planted at the deterministic sess-* path is never followed: accepting
+// it would let the subsequent MkdirAll/EnsureLayout in CreateWorkspace
+// write outside the configured root. Symlinks and non-directories are
+// rejected; a missing destination returns exists=false, nil.
+func validateMigrationDestination(newPath string) (bool, error) {
+	info, err := os.Lstat(newPath)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf(
+			"sandbox: migration destination %s is a symlink; refusing migration", newPath)
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf(
+			"sandbox: migration destination %s is not a directory; refusing migration", newPath)
+	}
+	return true, nil
 }
 
 // probeLegacyWorkspace scans the historical key forms for an existing

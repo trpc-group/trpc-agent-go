@@ -12,8 +12,12 @@ package opensandbox
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -507,4 +511,55 @@ func TestFlush_RemoveSymlinksFails(t *testing.T) {
 	err := u.flush(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "batch remove symlinks")
+}
+
+// --- walkDir: only conclusive race errors are skippable
+
+func TestIsSkippableOpenErr_Classification(t *testing.T) {
+	// Entry vanished: skippable.
+	assert.True(t, isSkippableOpenErr(fs.ErrNotExist))
+	assert.True(t, isSkippableOpenErr(
+		fmt.Errorf("open child: %w", fs.ErrNotExist),
+	))
+	// Permission / descriptor exhaustion / I/O failures must never be
+	// silently skipped.
+	assert.False(t, isSkippableOpenErr(fs.ErrPermission))
+	assert.False(t, isSkippableOpenErr(errors.New("too many open files")))
+}
+
+// TestPutDirectory_UnreadableFileFailsStaging is the injected-permission
+// regression: an entry that cannot be opened must fail the whole
+// staging run instead of being silently omitted while PutDirectory
+// reports success.
+func TestPutDirectory_UnreadableFileFailsStaging(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mode bits do not deny opens on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permission bits")
+	}
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "ws-unreadable-staging", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	// A sibling readable file proves the failure comes from the
+	// unreadable entry rather than the whole tree.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, "readable.txt"), []byte("x"), 0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, "secret.txt"), []byte("x"), 0o000,
+	))
+
+	err = exec.rt.PutDirectory(context.Background(), ws, tmpDir, "staged")
+	require.Error(t, err,
+		"an unreadable file must fail staging, not be silently skipped")
+	assert.Contains(t, err.Error(), "during staging")
 }
