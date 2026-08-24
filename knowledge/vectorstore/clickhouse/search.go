@@ -282,7 +282,9 @@ func applyMinScore(docs []*vectorstore.ScoredDocument, minScore float64) []*vect
 	if minScore <= 0 {
 		return docs
 	}
-	out := docs[:0]
+	// A fresh slice is allocated instead of reusing docs[:0], which would
+	// overwrite the caller's backing array.
+	out := make([]*vectorstore.ScoredDocument, 0, len(docs))
 	for _, d := range docs {
 		if d.Score >= minScore {
 			out = append(out, d)
@@ -406,7 +408,7 @@ func (vs *VectorStore) GetMetadata(
 
 	out := map[string]vectorstore.DocumentMetadata{}
 	if cfg.Limit > 0 {
-		idMap, err := vs.queryMetadataOnce(ctx, cfg.IDs, cfg.Filter, cfg.Limit, cfg.Offset)
+		idMap, _, err := vs.queryMetadataOnce(ctx, cfg.IDs, cfg.Filter, cfg.Limit, cfg.Offset)
 		if err != nil {
 			return nil, err
 		}
@@ -416,58 +418,69 @@ func (vs *VectorStore) GetMetadata(
 		return out, nil
 	}
 
-	// Limit == -1 retrieves all pages.
+	// Limit == -1 retrieves all pages. Pagination advances by the number of rows
+	// scanned, not by len(idMap): a page may contain duplicate IDs, and using the
+	// deduplicated size would both under-advance the offset and end the loop
+	// early, silently dropping the remaining rows.
 	var offset int
 	for {
-		idMap, err := vs.queryMetadataOnce(ctx, cfg.IDs, cfg.Filter, defaultBatchSize, offset)
+		idMap, scanned, err := vs.queryMetadataOnce(ctx, cfg.IDs, cfg.Filter, defaultBatchSize, offset)
 		if err != nil {
 			return nil, err
 		}
-		if len(idMap) == 0 {
+		if scanned == 0 {
 			break
 		}
 		for id, md := range idMap {
 			out[id] = vectorstore.DocumentMetadata{Metadata: md}
 		}
-		if len(idMap) < defaultBatchSize {
+		if scanned < defaultBatchSize {
 			break
 		}
-		offset += len(idMap)
+		offset += scanned
 	}
 	return out, nil
 }
 
-// queryMetadataOnce retrieves one page of (id, metadata) pairs.
+// queryMetadataOnce retrieves one page of (id, metadata) pairs. It also returns
+// the number of rows actually scanned, which can exceed len(map) when a page
+// contains duplicate IDs. Callers must page on the row count, not the map size.
 func (vs *VectorStore) queryMetadataOnce(
 	ctx context.Context,
 	ids []string,
 	filter map[string]any,
 	limit, offset int,
-) (map[string]map[string]any, error) {
+) (map[string]map[string]any, int, error) {
 	where, args, err := vs.buildMetadataWhere(ids, filter)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	sql := fmt.Sprintf("%s%s LIMIT ? OFFSET ?", vs.buildMetadataSelectSQL(), where)
+	// ORDER BY must follow WHERE, and it is required for stable LIMIT/OFFSET
+	// pagination: without it ClickHouse returns rows in an arbitrary order, so
+	// successive pages can overlap or skip IDs.
+	sql := fmt.Sprintf("%s%s ORDER BY %s LIMIT ? OFFSET ?",
+		vs.buildMetadataSelectSQL(), where, vs.option.idFieldName)
 	args = append(args, limit, offset)
 
 	rows, err := vs.client.Query(ctx, sql, args...)
 	if err != nil {
-		return nil, fmt.Errorf("clickhouse: get metadata: %w", err)
+		return nil, 0, fmt.Errorf("clickhouse: get metadata: %w", err)
 	}
 	defer rows.Close()
 	out := map[string]map[string]any{}
+	var scanned int
 	for rows.Next() {
 		id, md, err := vs.scanMetadataRow(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out[id] = md
+		scanned++
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("clickhouse: get metadata: %w", err)
+		return nil, 0, fmt.Errorf("clickhouse: get metadata: %w", err)
 	}
-	return out, nil
+	return out, scanned, nil
 }
 
 // metadataColumns returns the ordered column list for metadata-only queries.
@@ -481,14 +494,13 @@ func (vs *VectorStore) metadataColumns() []string {
 }
 
 // buildMetadataSelectSQL builds
-// "SELECT id, metadata [, filter fields] FROM <table> FINAL ORDER BY id".
+// "SELECT id, metadata [, filter fields] FROM <table> FINAL".
 //
-// The ORDER BY is required for the LIMIT/OFFSET pagination in GetMetadata:
-// without it ClickHouse returns rows in an arbitrary, non-deterministic order,
-// so successive pages can overlap or skip IDs.
+// The ORDER BY is appended separately by queryMetadataOnce, after the WHERE
+// clause, so the two cannot end up in the wrong order.
 func (vs *VectorStore) buildMetadataSelectSQL() string {
-	return fmt.Sprintf("SELECT %s FROM %s FINAL ORDER BY %s",
-		strings.Join(vs.metadataColumns(), ", "), vs.option.tableName, vs.option.idFieldName)
+	return fmt.Sprintf("SELECT %s FROM %s FINAL",
+		strings.Join(vs.metadataColumns(), ", "), vs.option.tableName)
 }
 
 // buildMetadataWhere builds a " WHERE ..." clause for metadata queries.

@@ -267,6 +267,59 @@ func TestGetMetadata(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestGetMetadataClauseOrder asserts the generated SQL keeps WHERE before
+// ORDER BY. Appending the filter after ORDER BY is a syntax error that
+// ClickHouse rejects outright.
+func TestGetMetadataClauseOrder(t *testing.T) {
+	c := &mockClient{}
+	c.queryFunc = func(ctx context.Context, q string, a ...any) (driver.Rows, error) {
+		return newMockRows([][]any{{"doc1", `{"category":"news"}`}}), nil
+	}
+	vs := vsWithClient(c)
+	_, err := vs.GetMetadata(context.Background(),
+		vectorstore.WithGetMetadataIDs([]string{"doc1"}),
+		vectorstore.WithGetMetadataLimit(10),
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, c.queryCalls)
+	q := c.queryCalls[0].query
+	whereIdx := strings.Index(q, "WHERE")
+	orderIdx := strings.Index(q, "ORDER BY")
+	require.NotEqual(t, -1, whereIdx, "query must contain WHERE: %s", q)
+	require.NotEqual(t, -1, orderIdx, "query must contain ORDER BY: %s", q)
+	assert.Less(t, whereIdx, orderIdx, "WHERE must precede ORDER BY: %s", q)
+	assert.Less(t, orderIdx, strings.Index(q, "LIMIT"), "ORDER BY must precede LIMIT: %s", q)
+}
+
+// TestGetMetadataPaginationDuplicateIDs asserts pagination advances by the
+// number of rows scanned. Paging on the deduplicated map size would stop early
+// and silently drop later pages.
+func TestGetMetadataPaginationDuplicateIDs(t *testing.T) {
+	c := &mockClient{}
+	page := 0
+	c.queryFunc = func(ctx context.Context, q string, a ...any) (driver.Rows, error) {
+		page++
+		if page == 1 {
+			// A full page whose rows collapse into a single unique ID.
+			rows := make([][]any, defaultBatchSize)
+			for i := range rows {
+				rows[i] = []any{"dup", "{}"}
+			}
+			return newMockRows(rows), nil
+		}
+		if page == 2 {
+			return newMockRows([][]any{{"doc2", "{}"}}), nil
+		}
+		return newMockRows(nil), nil
+	}
+	vs := vsWithClient(c)
+	out, err := vs.GetMetadata(context.Background())
+	require.NoError(t, err)
+	// Without row-count paging the loop would end after page 1 and miss doc2.
+	assert.Contains(t, out, "dup")
+	assert.Contains(t, out, "doc2")
+}
+
 func TestGetMetadataPagination(t *testing.T) {
 	c := &mockClient{}
 	page := 0

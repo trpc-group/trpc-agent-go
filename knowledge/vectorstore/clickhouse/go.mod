@@ -10,7 +10,7 @@ replace (
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.34.0
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v1.11.2
 	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.1.2-0.20260108033914-7a20241f1ad5
 )
 

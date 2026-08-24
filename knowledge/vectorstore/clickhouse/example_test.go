@@ -61,12 +61,15 @@ func Example_connectByInstance() {
 
 // Example_search demonstrates vector search with a metadata filter.
 func Example_search() {
-	vs, _ := clickhouse.New(
+	vs, err := clickhouse.New(
 		clickhouse.WithDSN("clickhouse://user:password@localhost:9000/default"),
 		clickhouse.WithTableName("documents"),
 		clickhouse.WithVectorDimension(3),
 		clickhouse.WithFilterFields(clickhouse.FilterFieldSpec{Name: "category", Type: clickhouse.FilterFieldString}),
 	)
+	if err != nil {
+		return
+	}
 	defer vs.Close()
 
 	query := &vectorstore.SearchQuery{
@@ -82,11 +85,14 @@ func Example_search() {
 
 // Example_add demonstrates adding a document with its embedding.
 func Example_add() {
-	vs, _ := clickhouse.New(
+	vs, err := clickhouse.New(
 		clickhouse.WithDSN("clickhouse://user:password@localhost:9000/default"),
 		clickhouse.WithTableName("documents"),
 		clickhouse.WithVectorDimension(3),
 	)
+	if err != nil {
+		return
+	}
 	defer vs.Close()
 
 	doc := &document.Document{

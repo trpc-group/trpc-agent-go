@@ -84,7 +84,7 @@ func buildFilterExpr(cond *searchfilter.UniversalFilterCondition, allowedFields 
 	case searchfilter.OperatorOr:
 		return formatLogical(cond.Value, "OR", allowedFields)
 	default:
-		return "", fmt.Errorf("clickhouse: unknown filter operator %q", cond.Operator)
+		return "", fmt.Errorf("%w: %q", ErrUnsupportedOperator, cond.Operator)
 	}
 }
 
