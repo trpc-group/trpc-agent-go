@@ -775,11 +775,16 @@ func (r *runner) Run(
 	barrier.Enable(invocation)
 
 	// Run the agent and get the event channel.
+	// Snapshot the invocation telemetry attributes before the agent starts:
+	// agents mutate the invocation from their own goroutine (for example
+	// setupInvocation writes AgentName), so the event loop goroutine must not
+	// read those fields after agent.Run.
+	invocationAttrs := runnerInvocationAttrs(invocation)
 	startCtx, startSpan, startStarted := startRunnerLatencySpan(
 		execCtx,
 		invocation,
 		runnerLatencySpanStartAgent,
-		runnerInvocationAttrs(invocation)...,
+		invocationAttrs...,
 	)
 	agentEventCh, err := agent.RunWithPlugins(startCtx, invocation, ag)
 	finishRunnerLatencySpan(startSpan, startStarted, err)
@@ -803,6 +808,7 @@ func (r *runner) Run(
 		handle,
 		executionTraceInput,
 		globalAfterRun,
+		invocationAttrs,
 	), nil
 }
 
@@ -1324,22 +1330,25 @@ func (r *runner) getOrCreateSession(
 
 // eventLoopContext bundles all channels and state required by the event loop.
 type eventLoopContext struct {
-	sess                               *session.Session
-	invocation                         *agent.Invocation
-	agentEventCh                       <-chan *event.Event
-	flushChan                          chan *flush.FlushRequest
-	processedEventCh                   chan *event.Event
-	runHandle                          *runHandle
-	baselineFinalResponseID            string
-	priorAssistantResponseIDs          map[string]struct{}
-	finalStateDelta                    map[string][]byte
-	finalChoices                       []model.Choice
-	fallbackChoices                    []model.Choice
-	fallbackResponseID                 string
-	fallbackStateDelta                 map[string][]byte
-	finalError                         *model.ResponseError
-	executionTraceInput                *trace.Snapshot
-	globalAfterRun                     *globalAfterRunState
+	sess                      *session.Session
+	invocation                *agent.Invocation
+	agentEventCh              <-chan *event.Event
+	flushChan                 chan *flush.FlushRequest
+	processedEventCh          chan *event.Event
+	runHandle                 *runHandle
+	baselineFinalResponseID   string
+	priorAssistantResponseIDs map[string]struct{}
+	finalStateDelta           map[string][]byte
+	finalChoices              []model.Choice
+	fallbackChoices           []model.Choice
+	fallbackResponseID        string
+	fallbackStateDelta        map[string][]byte
+	finalError                *model.ResponseError
+	executionTraceInput       *trace.Snapshot
+	globalAfterRun            *globalAfterRunState
+	// invocationAttrs is a snapshot of the invocation telemetry attributes
+	// captured before the agent goroutine starts mutating the invocation.
+	invocationAttrs                    []attribute.KeyValue
 	graphCompletionSeen                bool
 	freshAssistantContentProduced      bool
 	persistedAssistantResponseIDs      map[string]struct{}
@@ -1467,6 +1476,7 @@ func (r *runner) processAgentEvents(
 	handle *runHandle,
 	executionTraceInput *trace.Snapshot,
 	globalAfterRun *globalAfterRunState,
+	invocationAttrs []attribute.KeyValue,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	loop := &eventLoopContext{
@@ -1478,6 +1488,7 @@ func (r *runner) processAgentEvents(
 		runHandle:                 handle,
 		executionTraceInput:       executionTraceInput,
 		globalAfterRun:            globalAfterRun,
+		invocationAttrs:           invocationAttrs,
 		baselineFinalResponseID:   baselineFinalResponseID(sess, invocation.RunOptions.RuntimeState),
 		priorAssistantResponseIDs: collectPriorAssistantResponseIDs(sess),
 		streamFilter: graph.NewStreamModeFilter(
@@ -1496,7 +1507,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		ctx,
 		loop.invocation,
 		runnerLatencySpanEventLoop,
-		runnerInvocationAttrs(loop.invocation)...,
+		loop.invocationAttrs...,
 	)
 	defer func() {
 		if started {
@@ -3826,7 +3837,14 @@ func baselineFinalResponseID(sess *session.Session, runtimeState map[string]any)
 }
 
 func collectPriorAssistantResponseIDs(sess *session.Session) map[string]struct{} {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return nil
+	}
+	// The agent goroutine appends to sess.Events concurrently during a run,
+	// so reads must hold EventMu like every other Events access.
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	if len(sess.Events) == 0 {
 		return nil
 	}
 	var responseIDs map[string]struct{}
@@ -3863,7 +3881,12 @@ func collectPriorAssistantResponseIDsForLineage(
 	sess *session.Session,
 	lineageKey string,
 ) map[string]struct{} {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return nil
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	if len(sess.Events) == 0 {
 		return nil
 	}
 	var responseIDs map[string]struct{}
@@ -3899,7 +3922,12 @@ func collectPriorAssistantResponseIDsForLineage(
 }
 
 func collectPriorAssistantChoiceSignatures(sess *session.Session) map[string]struct{} {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return nil
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	if len(sess.Events) == 0 {
 		return nil
 	}
 	var signatures map[string]struct{}
@@ -3932,7 +3960,12 @@ func collectPriorAssistantChoiceSignaturesForLineage(
 	sess *session.Session,
 	lineageKey string,
 ) map[string]struct{} {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return nil
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	if len(sess.Events) == 0 {
 		return nil
 	}
 	var signatures map[string]struct{}
