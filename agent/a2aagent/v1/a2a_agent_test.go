@@ -389,6 +389,57 @@ func TestProcessStreamingEventsAggregatesFileParts(t *testing.T) {
 	}
 }
 
+func TestProcessStreamingEventsPreservesMixedContentPartOrder(t *testing.T) {
+	remote := &A2AAgent{
+		name:           "remote",
+		eventConverter: &defaultA2AEventConverter{},
+	}
+	stream := make(chan protocol.StreamResponse, 3)
+	stream <- protocol.NewStreamResponseArtifactUpdate(&protocol.TaskArtifactUpdateEvent{
+		TaskID: "task",
+		Artifact: protocol.Artifact{
+			ArtifactID: "artifact",
+			Parts: []*protocol.Part{
+				protocol.NewRawPart([]byte("artifact"), "image/png"),
+			},
+		},
+	})
+	message := protocol.NewMessage(protocol.MessageRoleAgent, []*protocol.Part{
+		protocol.NewRawPart([]byte("message"), "image/png"),
+	})
+	stream <- protocol.NewStreamResponseMessage(&message)
+	completed := protocol.NewTaskStatusUpdateEvent(
+		"task",
+		"context",
+		protocol.TaskStatus{State: protocol.TaskStateCompleted},
+		true,
+	)
+	stream <- protocol.NewStreamResponseStatusUpdate(&completed)
+	close(stream)
+
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		make(chan *event.Event, 3),
+		stream,
+	)
+	if result.terminalError != nil {
+		t.Fatalf("terminal error = %v, want nil", result.terminalError)
+	}
+	if len(result.aggregatedContentParts) != 2 {
+		t.Fatalf(
+			"aggregated content parts = %#v, want two images",
+			result.aggregatedContentParts,
+		)
+	}
+	if got := string(result.aggregatedContentParts[0].Image.Data); got != "artifact" {
+		t.Fatalf("first content part = %q, want artifact", got)
+	}
+	if got := string(result.aggregatedContentParts[1].Image.Data); got != "message" {
+		t.Fatalf("second content part = %q, want message", got)
+	}
+}
+
 func TestProcessStreamingEventsReplacesArtifactSnapshot(t *testing.T) {
 	remote := &A2AAgent{
 		name:           "remote",
