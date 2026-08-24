@@ -278,6 +278,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			maxInputTokens,
 		)
 	}
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "anthropic.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
@@ -288,7 +292,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in anthropic.Model",
 				err,
 			)
-			modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "anthropic.Model", request, tailored,
+			)
 			return
 		}
 		log.WarnContext(
@@ -299,7 +305,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "anthropic.Model", request, tailored,
+	)
 }
 
 // InputTokenBudget returns the same input budget used by token tailoring.
@@ -1079,13 +1087,25 @@ func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 	var result []anthropic.ToolUnionParam
 	for _, t := range toolorder.SortedTools(tools) {
 		declaration := t.Declaration()
+		effectiveSchemaType := declaration.InputSchema.Type
+		// The Anthropic SDK marshals an empty type as "object". Use that
+		// effective type when normalizing properties so a typed nil map does
+		// not become JSON null for an implicit object schema.
+		if effectiveSchemaType == "" {
+			effectiveSchemaType = "object"
+		}
+		properties := declaration.InputSchema.Properties
+		// Some Anthropic-compatible endpoints reject null properties for object schemas.
+		if effectiveSchemaType == "object" && properties == nil {
+			properties = map[string]*tool.Schema{}
+		}
 		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        declaration.Name,
 				Description: anthropic.String(buildToolDescription(declaration)),
 				InputSchema: anthropic.ToolInputSchemaParam{
 					Type:       constant.Object(declaration.InputSchema.Type),
-					Properties: declaration.InputSchema.Properties,
+					Properties: properties,
 					Required:   declaration.InputSchema.Required,
 				},
 			},

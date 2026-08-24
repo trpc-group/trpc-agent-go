@@ -10,6 +10,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -18,9 +19,11 @@ import (
 	"github.com/stretchr/testify/require"
 	legacyclient "trpc.group/trpc-go/trpc-a2a-go/client"
 	legacyprotocol "trpc.group/trpc-go/trpc-a2a-go/protocol"
+	v1auth "trpc.group/trpc-go/trpc-a2a-go/v2/auth"
 	v1client "trpc.group/trpc-go/trpc-a2a-go/v2/client"
 	v1protocol "trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/push"
+	v1server "trpc.group/trpc-go/trpc-a2a-go/v2/server"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/memory"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -378,6 +381,103 @@ func TestA2ARetainingTaskManagerE2E(t *testing.T) {
 		)
 		require.Equal(t, legacyprotocol.TaskStateCanceled, legacyView.Status.State)
 	})
+}
+
+func TestA2ARetainedTasksAreScopedByUser(t *testing.T) {
+	const apiKeyHeader = "X-API-Key"
+	server := newV1A2AE2EServer(
+		t,
+		&a2aE2ERunner{},
+		false,
+		a2aserver.WithTaskManagerBuilder(func(
+			processor taskmanager.MessageProcessor,
+		) (taskmanager.TaskManager, error) {
+			return memory.NewTaskManager(
+				processor,
+				memory.WithOwnerResolver(func(ctx context.Context) (string, error) {
+					userID, ok := a2aserver.UserIDFromContext(ctx)
+					if !ok || userID == "" {
+						return "", errors.New("authenticated user ID is required")
+					}
+					return userID, nil
+				}),
+			)
+		}),
+		a2aserver.WithExtraA2AOptions(v1server.WithAuthProvider(
+			v1auth.NewAPIKeyAuthProvider(map[string]string{
+				"owner-a-key": "owner-a",
+				"owner-b-key": "owner-b",
+			}, apiKeyHeader),
+		)),
+	)
+	unauthenticatedClient, err := v1client.NewA2AClient(server.URL)
+	require.NoError(t, err)
+	invalidClient, err := v1client.NewA2AClient(
+		server.URL,
+		v1client.WithAPIKeyAuth("invalid-key", apiKeyHeader),
+	)
+	require.NoError(t, err)
+	ownerAClient, err := v1client.NewA2AClient(
+		server.URL,
+		v1client.WithAPIKeyAuth("owner-a-key", apiKeyHeader),
+	)
+	require.NoError(t, err)
+	ownerBClient, err := v1client.NewA2AClient(
+		server.URL,
+		v1client.WithAPIKeyAuth("owner-b-key", apiKeyHeader),
+	)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err = unauthenticatedClient.ListTasks(ctx, v1protocol.ListTasksParams{})
+	require.ErrorContains(t, err, "unexpected http status 401")
+	_, err = invalidClient.ListTasks(ctx, v1protocol.ListTasksParams{})
+	require.ErrorContains(t, err, "unexpected http status 401")
+
+	returnImmediately := true
+	response, err := ownerAClient.SendMessage(
+		ctx,
+		v1protocol.SendMessageParams{
+			Message: v1protocol.NewMessage(
+				v1protocol.MessageRoleUser,
+				[]*v1protocol.Part{v1protocol.NewTextPart("owner-scoped")},
+			),
+			Configuration: &v1protocol.SendMessageConfiguration{
+				ReturnImmediately: &returnImmediately,
+			},
+		},
+	)
+	require.NoError(t, err)
+	task := response.GetTask()
+	require.NotNil(t, task)
+
+	_, err = ownerAClient.GetTasks(
+		ctx,
+		v1protocol.TaskQueryParams{ID: task.ID},
+		v1client.WithRequestHeader("X-User-ID", "owner-b"),
+	)
+	require.NoError(t, err)
+	_, err = ownerBClient.GetTasks(
+		ctx,
+		v1protocol.TaskQueryParams{ID: task.ID},
+		v1client.WithRequestHeader("X-User-ID", "owner-a"),
+	)
+	require.Error(t, err)
+
+	ownerATasks, err := ownerAClient.ListTasks(
+		ctx,
+		v1protocol.ListTasksParams{},
+	)
+	require.NoError(t, err)
+	require.Len(t, ownerATasks.Tasks, 1)
+	require.Equal(t, task.ID, ownerATasks.Tasks[0].ID)
+	ownerBTasks, err := ownerBClient.ListTasks(
+		ctx,
+		v1protocol.ListTasksParams{},
+	)
+	require.NoError(t, err)
+	require.Empty(t, ownerBTasks.Tasks)
 }
 
 func TestA2AStatelessTaskAPIBoundariesE2E(t *testing.T) {

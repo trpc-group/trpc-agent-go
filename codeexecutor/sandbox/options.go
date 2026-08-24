@@ -108,10 +108,11 @@ func normalizeProfile(profile PermissionProfile) PermissionProfile {
 		profile.typ = profileManaged
 	}
 	if profile.network.Mode == "" {
-		profile.network.Mode = NetworkRestricted
-	}
-	if profile.typ == profileDisabled {
-		profile.network.Mode = NetworkEnabled
+		if profile.typ == profileDisabled {
+			profile.network.Mode = NetworkEnabled
+		} else {
+			profile.network.Mode = NetworkRestricted
+		}
 	}
 	if profile.fileSystem.ProtectedMetadata == nil {
 		profile.fileSystem.ProtectedMetadata = defaultProtectedMetadata()

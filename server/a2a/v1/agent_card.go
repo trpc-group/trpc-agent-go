@@ -14,6 +14,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
 	a2aprotocolserver "trpc.group/trpc-go/trpc-a2a-go/v2/server"
@@ -67,17 +69,17 @@ func NewAgentCard(
 		opt(o)
 	}
 
-	url := ia2a.NormalizeURL(host)
+	endpoint := normalizeJSONRPCEndpoint(host)
 	skills := buildSkillsFromCardTools(o.tools, name, description)
 
 	return a2aprotocolserver.AgentCard{
 		Name:        name,
 		Description: description,
 		Version:     version,
-		URL:         url,
+		URL:         endpoint,
 		SupportedInterfaces: []a2aprotocolserver.AgentInterface{
 			{
-				URL:             url,
+				URL:             endpoint,
 				ProtocolBinding: "JSONRPC",
 				ProtocolVersion: protocol.ProtocolVersionV1,
 			},
@@ -97,6 +99,25 @@ func NewAgentCard(
 		DefaultInputModes:  []string{"text"},
 		DefaultOutputModes: []string{"text"},
 	}, nil
+}
+
+// normalizeJSONRPCEndpoint returns the exact endpoint mounted by
+// trpc-a2a-go's JSON-RPC server. A non-root base path is served with a trailing
+// slash, so the Agent Card must advertise that slash to prevent POST requests
+// from being redirected as GET requests.
+func normalizeJSONRPCEndpoint(host string) string {
+	endpoint := ia2a.NormalizeURL(host)
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	if !strings.HasSuffix(parsed.EscapedPath(), "/") {
+		parsed.Path += "/"
+		if parsed.RawPath != "" {
+			parsed.RawPath += "/"
+		}
+	}
+	return parsed.String()
 }
 
 // buildSkillsFromCardTools converts tool declarations to AgentSkills.

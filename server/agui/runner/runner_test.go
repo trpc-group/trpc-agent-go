@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -3364,7 +3365,291 @@ func TestRunFlushesTracker(t *testing.T) {
 	assert.NoError(t, err)
 	collectEvents(t, ch)
 	assert.GreaterOrEqual(t, recorder.appendCount, 1)
+	assert.Equal(t, 0, recorder.flushCount)
 	assert.Equal(t, 1, recorder.closeCount)
+}
+
+func TestRunFlushesInitialTrackBeforePublishingRunStarted(t *testing.T) {
+	for _, role := range []types.Role{types.RoleUser, types.RoleTool} {
+		t.Run(string(role), func(t *testing.T) {
+			tracker := newBlockingInitialFlushTracker()
+			baseStarted := make(chan struct{}, 1)
+			underlying := &fakeRunner{run: func(context.Context, string, string, model.Message,
+				...agent.RunOption) (<-chan *agentevent.Event, error) {
+				baseStarted <- struct{}{}
+				ch := make(chan *agentevent.Event)
+				close(ch)
+				return ch, nil
+			}}
+			r := &runner{
+				runner:            underlying,
+				translatorFactory: defaultTranslatorFactory,
+				userIDResolver:    defaultUserIDResolver,
+				stateResolver:     defaultStateResolver,
+				runOptionResolver: defaultRunOptionResolver,
+				tracker:           tracker,
+				startSpan:         defaultStartSpan,
+				flushInterval:     time.Hour,
+			}
+			message := types.Message{Role: role, Content: "input"}
+			if role == types.RoleTool {
+				message.ToolCallID = "call"
+			}
+			events, err := r.Run(context.Background(), &adapter.RunAgentInput{
+				ThreadID: "thread", RunID: "run", Messages: []types.Message{message},
+			})
+			require.NoError(t, err)
+			select {
+			case <-tracker.flushStarted:
+			case <-time.After(time.Second):
+				require.FailNow(t, "timeout waiting for initial track flush")
+			}
+			select {
+			case evt := <-events:
+				require.FailNowf(t, "RUN_STARTED published before initial flush", "%T", evt)
+			case <-baseStarted:
+				require.FailNow(t, "base runner started before initial RUN_STARTED was published")
+			default:
+			}
+
+			gotTypes := tracker.eventTypes()
+			if role == types.RoleUser {
+				require.Equal(t, []aguievents.EventType{
+					aguievents.EventTypeCustom,
+					aguievents.EventTypeRunStarted,
+				}, gotTypes)
+			} else {
+				require.Equal(t, []aguievents.EventType{aguievents.EventTypeRunStarted}, gotTypes)
+			}
+			close(tracker.releaseFlush)
+			started, ok := waitForNextEvent(t, events).(*aguievents.RunStartedEvent)
+			require.True(t, ok)
+			require.Equal(t, "run", started.RunID())
+			collectEvents(t, events)
+			require.Equal(t, 1, tracker.flushCalls())
+			require.Equal(t, 1, tracker.countType(aguievents.EventTypeRunStarted))
+			require.Equal(t, 1, underlying.calls)
+		})
+	}
+}
+
+func TestRunSkipsInitialTrackFlushWhenPeriodicFlushDisabled(t *testing.T) {
+	for _, follow := range []bool{false, true} {
+		t.Run(fmt.Sprintf("follow_%t", follow), func(t *testing.T) {
+			recorder := &flushRecorder{}
+			underlying := &fakeRunner{run: func(context.Context, string, string, model.Message,
+				...agent.RunOption) (<-chan *agentevent.Event, error) {
+				ch := make(chan *agentevent.Event)
+				close(ch)
+				return ch, nil
+			}}
+			r := &runner{
+				runner:                        underlying,
+				translatorFactory:             defaultTranslatorFactory,
+				userIDResolver:                defaultUserIDResolver,
+				stateResolver:                 defaultStateResolver,
+				runOptionResolver:             defaultRunOptionResolver,
+				tracker:                       recorder,
+				startSpan:                     defaultStartSpan,
+				flushInterval:                 0,
+				messagesSnapshotFollowEnabled: follow,
+			}
+			events, err := r.Run(context.Background(), &adapter.RunAgentInput{
+				ThreadID: "thread", RunID: "run",
+				Messages: []types.Message{{Role: types.RoleUser, Content: "input"}},
+			})
+			require.NoError(t, err)
+			collectEvents(t, events)
+			require.Equal(t, 0, recorder.flushCount)
+			require.Equal(t, 1, recorder.closeCount)
+		})
+	}
+}
+
+func TestRunFlushesHookEventsWhileWrappedRunnerInitializes(t *testing.T) {
+	tracker := &blockingInitialFlushTracker{flushCallsCh: make(chan int, 16)}
+	wrappedRunStarted := make(chan struct{})
+	releaseWrappedRun := make(chan struct{})
+	agentEvents := make(chan *agentevent.Event)
+	var releaseWrappedRunOnce sync.Once
+	var closeAgentEventsOnce sync.Once
+	t.Cleanup(func() {
+		releaseWrappedRunOnce.Do(func() { close(releaseWrappedRun) })
+		closeAgentEventsOnce.Do(func() { close(agentEvents) })
+	})
+	underlying := &fakeRunner{run: func(context.Context, string, string, model.Message,
+		...agent.RunOption) (<-chan *agentevent.Event, error) {
+		close(wrappedRunStarted)
+		<-releaseWrappedRun
+		return agentEvents, nil
+	}}
+	hookEmitted := make(chan struct{})
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		tracker:           tracker,
+		startSpan:         defaultStartSpan,
+		flushInterval:     5 * time.Millisecond,
+		runHooks: []RunHook{func(ctx context.Context, run *Run) error {
+			err := run.Emit(ctx, aguievents.NewCustomEvent("initializing"))
+			close(hookEmitted)
+			return err
+		}},
+	}
+	events, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread", RunID: "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "input"}},
+	})
+	require.NoError(t, err)
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for range events {
+		}
+	}()
+	waitForFlushCall(t, tracker.flushCallsCh, 1)
+	select {
+	case <-wrappedRunStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for wrapped runner to start")
+	}
+	select {
+	case <-hookEmitted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for hook event")
+	}
+	waitForFlushCall(t, tracker.flushCallsCh, tracker.flushCalls()+1)
+	require.Equal(t, 1, tracker.countCustomEventName("initializing"))
+
+	releaseWrappedRunOnce.Do(func() { close(releaseWrappedRun) })
+	closeAgentEventsOnce.Do(func() { close(agentEvents) })
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for run to finish")
+	}
+	require.Equal(t, 1, underlying.calls)
+}
+
+func TestRunInitialTrackFlushFailureDoesNotAbortRun(t *testing.T) {
+	tracker := &blockingInitialFlushTracker{
+		flushCallsCh: make(chan int, 16),
+		flushErrFn: func(call int) error {
+			if call == 1 {
+				return errors.New("flush failed")
+			}
+			return nil
+		},
+	}
+	wrappedRunStarted := make(chan struct{})
+	releaseWrappedRun := make(chan struct{})
+	agentEvents := make(chan *agentevent.Event)
+	var releaseWrappedRunOnce sync.Once
+	var closeAgentEventsOnce sync.Once
+	t.Cleanup(func() {
+		releaseWrappedRunOnce.Do(func() { close(releaseWrappedRun) })
+		closeAgentEventsOnce.Do(func() { close(agentEvents) })
+	})
+	underlying := &fakeRunner{run: func(context.Context, string, string, model.Message,
+		...agent.RunOption) (<-chan *agentevent.Event, error) {
+		close(wrappedRunStarted)
+		<-releaseWrappedRun
+		return agentEvents, nil
+	}}
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    defaultUserIDResolver,
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		tracker:           tracker,
+		startSpan:         defaultStartSpan,
+		flushInterval:     5 * time.Millisecond,
+	}
+	events, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread", RunID: "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "input"}},
+	})
+	require.NoError(t, err)
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, events))
+	waitForFlushCall(t, tracker.flushCallsCh, 1)
+	select {
+	case <-wrappedRunStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for wrapped runner to start")
+	}
+	select {
+	case call := <-tracker.flushCallsCh:
+		require.FailNowf(t, "periodic flush started after failed startup flush", "call %d", call)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	releaseWrappedRunOnce.Do(func() { close(releaseWrappedRun) })
+	waitForFlushCall(t, tracker.flushCallsCh, 2)
+	closeAgentEventsOnce.Do(func() { close(agentEvents) })
+	collectEvents(t, events)
+	require.GreaterOrEqual(t, tracker.flushCalls(), 2)
+	require.Equal(t, 1, underlying.calls)
+}
+
+func TestRunConsumerMutationDoesNotChangeBufferedHistory(t *testing.T) {
+	ctx := context.Background()
+	svc := inmemory.NewSessionService()
+	underlying := &fakeRunner{run: func(context.Context, string, string, model.Message,
+		...agent.RunOption) (<-chan *agentevent.Event, error) {
+		ch := make(chan *agentevent.Event)
+		close(ch)
+		return ch, nil
+	}}
+	value := map[string]any{"state": "original"}
+	hookEvent := aguievents.NewCustomEvent("original", aguievents.WithValue(value))
+	releaseHook := make(chan struct{})
+	var releaseHookOnce sync.Once
+	t.Cleanup(func() { releaseHookOnce.Do(func() { close(releaseHook) }) })
+	r := New(
+		underlying,
+		WithAppName("app"),
+		WithSessionService(svc),
+		WithFlushInterval(time.Hour),
+		WithRunHook(func(ctx context.Context, run *Run) error {
+			err := run.Emit(ctx, hookEvent)
+			<-releaseHook
+			return err
+		}),
+	)
+	events, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread", RunID: "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "input"}},
+	})
+	require.NoError(t, err)
+
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, events))
+	received, ok := waitForNextEvent(t, events).(*aguievents.CustomEvent)
+	require.True(t, ok)
+	require.Equal(t, "original", received.Name)
+	received.Name = "mutated"
+	value["state"] = "changed"
+	releaseHookOnce.Do(func() { close(releaseHook) })
+	collectEvents(t, events)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	trackEvents, err := svc.GetTrackEvents(ctx, key, aguitrack.TrackAGUI)
+	require.NoError(t, err)
+	found := false
+	for _, trackEvent := range trackEvents.Events {
+		parsed, parseErr := aguievents.EventFromJSON(trackEvent.Payload)
+		require.NoError(t, parseErr)
+		custom, ok := parsed.(*aguievents.CustomEvent)
+		if !ok || custom.Name != "original" {
+			continue
+		}
+		found = true
+		require.Equal(t, map[string]any{"state": "original"}, custom.Value)
+	}
+	require.True(t, found)
 }
 
 func TestRecordTrackEventUsesDetachedPersistenceContext(t *testing.T) {
@@ -3402,6 +3687,76 @@ func TestRecordTrackEventTimeoutBoundsDetachedPersistence(t *testing.T) {
 	)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, time.Since(start), time.Second)
+}
+
+func TestRunSSEDoesNotWaitForInFlightTrackFlushPersistence(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 2)
+	underlying := &fakeRunner{
+		run: func(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	appendStarted := make(chan struct{})
+	releaseAppend := make(chan struct{})
+	var appendOnce sync.Once
+	svc := &testSessionService{
+		appendTrackFn: func(_ context.Context, _ *session.Session, trackEvent *session.TrackEvent,
+			_ ...session.Option) error {
+			parsed, err := aguievents.EventFromJSON(trackEvent.Payload)
+			if err != nil {
+				return err
+			}
+			if _, ok := parsed.(*aguievents.TextMessageContentEvent); ok {
+				appendOnce.Do(func() { close(appendStarted) })
+				<-releaseAppend
+			}
+			return nil
+		},
+	}
+	r := New(
+		underlying,
+		WithAppName("demo"),
+		WithSessionService(svc),
+		WithFlushInterval(time.Millisecond),
+		WithTrackPersistenceTimeout(time.Second),
+	).(*runner)
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	waitForAGUIEventType(t, eventsCh, (*aguievents.RunStartedEvent)(nil))
+	agentEvents <- &agentevent.Event{Response: &model.Response{
+		ID:        "assistant-1",
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "hello"},
+		}},
+	}}
+	content := waitForTextMessageContent(t, eventsCh)
+	assert.Equal(t, "assistant-1", content.MessageID)
+	assert.Equal(t, "hello", content.Delta)
+	select {
+	case <-appendStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for track flush persistence")
+	}
+	agentEvents <- &agentevent.Event{Response: &model.Response{
+		ID:        "assistant-1",
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "world"},
+		}},
+	}}
+	content = waitForTextMessageContent(t, eventsCh)
+	assert.Equal(t, "assistant-1", content.MessageID)
+	assert.Equal(t, "world", content.Delta)
+	close(releaseAppend)
+	close(agentEvents)
+	collectEvents(t, eventsCh)
 }
 
 func TestNewWithSessionServiceEnablesTracker(t *testing.T) {
@@ -4203,6 +4558,128 @@ func (f *flushRecorder) Close(ctx context.Context, key session.Key) error {
 	return nil
 }
 
+type blockingInitialFlushTracker struct {
+	mu           sync.Mutex
+	events       []aguievents.Event
+	flushCount   int
+	flushStarted chan struct{}
+	flushCallsCh chan int
+	releaseFlush chan struct{}
+	flushErr     error
+	flushErrFn   func(int) error
+	flushOnce    sync.Once
+}
+
+func newBlockingInitialFlushTracker() *blockingInitialFlushTracker {
+	release := make(chan struct{})
+	return &blockingInitialFlushTracker{
+		flushStarted: make(chan struct{}),
+		releaseFlush: release,
+	}
+}
+
+func (t *blockingInitialFlushTracker) AppendEvent(
+	_ context.Context,
+	_ session.Key,
+	event aguievents.Event,
+) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.events = append(t.events, event)
+	return nil
+}
+
+func (t *blockingInitialFlushTracker) GetEvents(
+	context.Context,
+	session.Key,
+	...session.Option,
+) (*session.TrackEvents, error) {
+	return nil, nil
+}
+
+func (t *blockingInitialFlushTracker) Flush(ctx context.Context, _ session.Key) error {
+	t.mu.Lock()
+	t.flushCount++
+	flushCount := t.flushCount
+	t.mu.Unlock()
+	if t.flushCallsCh != nil {
+		t.flushCallsCh <- flushCount
+	}
+	if t.flushStarted != nil {
+		t.flushOnce.Do(func() { close(t.flushStarted) })
+	}
+	if t.releaseFlush != nil {
+		select {
+		case <-t.releaseFlush:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if t.flushErrFn != nil {
+		return t.flushErrFn(flushCount)
+	}
+	return t.flushErr
+}
+
+func waitForFlushCall(t *testing.T, calls <-chan int, want int) {
+	t.Helper()
+	for {
+		select {
+		case got := <-calls:
+			if got >= want {
+				return
+			}
+		case <-time.After(time.Second):
+			require.FailNowf(t, "timeout waiting for track flush", "want call %d", want)
+		}
+	}
+}
+
+func (t *blockingInitialFlushTracker) Close(context.Context, session.Key) error {
+	return nil
+}
+
+func (t *blockingInitialFlushTracker) eventTypes() []aguievents.EventType {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	types := make([]aguievents.EventType, 0, len(t.events))
+	for _, event := range t.events {
+		types = append(types, event.Type())
+	}
+	return types
+}
+
+func (t *blockingInitialFlushTracker) countType(eventType aguievents.EventType) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	count := 0
+	for _, event := range t.events {
+		if event.Type() == eventType {
+			count++
+		}
+	}
+	return count
+}
+
+func (t *blockingInitialFlushTracker) countCustomEventName(name string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	count := 0
+	for _, event := range t.events {
+		custom, ok := event.(*aguievents.CustomEvent)
+		if ok && custom.Name == name {
+			count++
+		}
+	}
+	return count
+}
+
+func (t *blockingInitialFlushTracker) flushCalls() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.flushCount
+}
+
 type contextRecorderTracker struct {
 	ctxErr      error
 	deadline    time.Time
@@ -4333,8 +4810,9 @@ type runContextObservation struct {
 }
 
 type errorTracker struct {
-	appendErr error
-	flushErr  error
+	appendErr  error
+	flushErr   error
+	flushCalls int
 }
 
 func (e *errorTracker) AppendEvent(ctx context.Context,
@@ -4349,6 +4827,7 @@ func (e *errorTracker) GetEvents(ctx context.Context,
 
 func (e *errorTracker) Flush(ctx context.Context,
 	_ session.Key) error {
+	e.flushCalls++
 	return e.flushErr
 }
 
@@ -4417,6 +4896,7 @@ func (f *fakeRunner) Close() error {
 func TestRunTrackingErrorsAreIgnored(t *testing.T) {
 	appendErr := errors.New("append failed")
 	flushErr := errors.New("flush failed")
+	tracker := &errorTracker{appendErr: appendErr, flushErr: flushErr}
 	underlying := &fakeRunner{
 		run: func(ctx context.Context,
 			userID, sessionID string,
@@ -4428,16 +4908,15 @@ func TestRunTrackingErrorsAreIgnored(t *testing.T) {
 		},
 	}
 	r := &runner{
-		runner:            underlying,
-		translatorFactory: defaultTranslatorFactory,
-		userIDResolver:    defaultUserIDResolver,
-		stateResolver:     defaultStateResolver,
-		runOptionResolver: defaultRunOptionResolver,
-		tracker: &errorTracker{
-			appendErr: appendErr,
-			flushErr:  flushErr,
-		},
-		startSpan: defaultStartSpan,
+		runner:                        underlying,
+		translatorFactory:             defaultTranslatorFactory,
+		userIDResolver:                defaultUserIDResolver,
+		stateResolver:                 defaultStateResolver,
+		runOptionResolver:             defaultRunOptionResolver,
+		tracker:                       tracker,
+		startSpan:                     defaultStartSpan,
+		flushInterval:                 time.Hour,
+		messagesSnapshotFollowEnabled: true,
 	}
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
@@ -4455,6 +4934,7 @@ func TestRunTrackingErrorsAreIgnored(t *testing.T) {
 	evts := collectEvents(t, eventsCh)
 	assert.Len(t, evts, 1)
 	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	assert.Equal(t, 1, tracker.flushCalls)
 }
 
 func TestRunUsesCanonicalToolCallIDFromInstalledPlugin(t *testing.T) {

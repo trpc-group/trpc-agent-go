@@ -123,8 +123,7 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 		return
 	}
 
-	if r.messagesSnapshotFollowEnabled && trackEvents != nil && len(trackEvents.Events) > 0 &&
-		!trackEndsWithTerminalRunEvent(trackEvents.Events) {
+	if r.messagesSnapshotFollowEnabled && r.shouldFollowMessagesSnapshot(input.key, trackEvents) {
 		r.messagesSnapshotFollow(ctx, input, events, trackEvents)
 		return
 	}
@@ -244,6 +243,19 @@ func (r *runner) messagesSnapshotFollow(
 			}
 		}
 	}
+}
+
+func (r *runner) shouldFollowMessagesSnapshot(key session.Key, trackEvents *session.TrackEvents) bool {
+	if trackEvents == nil || trackEndsWithTerminalRunEvent(trackEvents.Events) {
+		return false
+	}
+	if r.flushInterval <= 0 {
+		return false
+	}
+	if len(trackEvents.Events) > 0 {
+		return true
+	}
+	return r.isRunning(key)
 }
 
 func (r *runner) handleMessagesSnapshotFollowTick(
