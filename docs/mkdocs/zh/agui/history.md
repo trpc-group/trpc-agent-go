@@ -283,11 +283,13 @@ server, err := agui.New(
 
 默认情况下，`/history` 会一次性还原当前会话中全部已持久化的 AG-UI 历史。对于较长的对话，这会增加会话存储读取、服务端事件还原以及网络传输的成本。此时可以配置 `agui.WithMessagesSnapshotSessionPageResolver`，让每次消息快照请求只读取一页已持久化事件。
 
-分页能力由 session 层提供。AG-UI 服务端不会额外定义顶层 cursor 字段，也不约定固定的请求参数名称；resolver 会拿到原始 `RunAgentInput` 和已经解析出的 `session.Key`，再返回一次 session 分页请求。业务可以自行决定 cursor 和 limit 的来源，例如从 `forwardedProps`、网关映射后的请求元数据，或其它业务输入中读取。
+分页能力由 session 层提供。AG-UI 服务端不会额外定义顶层 cursor 字段，也不约定固定的请求参数名称；resolver 会拿到 `RunAgentInput` 和已经解析出的 `session.Key`，再返回一次 session 分页请求。业务可以自行决定 cursor 和 limit 的来源，例如从 `forwardedProps`、网关映射后的请求元数据，或其它业务输入中读取。
 
 resolver 返回 `*aguirunner.MessagesSnapshotPageRequest`。`Cursor` 是上一页返回的 opaque cursor，空 cursor 表示读取最新一页。`EventLimit` 表示从会话存储中读取的 AG-UI track event 数量；它限制的是事件数，不是消息数或对话轮数，因为一条最终展示的消息可能由多条已持久化 AG-UI 事件还原而来。
 
 只有配置的 session service 实现了 `session.TrackEventPageService` 时，消息快照路由才会使用分页读取。若当前 session service 不支持该能力，`/history` 会保持原有的全量快照行为。
+
+只要 resolver 返回非空 page request，本次消息快照就是一次性的。即使启用了 message snapshot follow 模式，`/history` 也会在发送分页 `MESSAGES_SNAPSHOT` 后结束流。
 
 ```go
 import (

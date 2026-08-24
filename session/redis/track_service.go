@@ -16,7 +16,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/internal/trackpage"
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/hashidx"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/zset"
 )
 
 // AppendTrackEvent appends a protocol-specific track event to a session.
@@ -105,6 +107,9 @@ func (s *Service) GetTrackEventPage(
 	if err := trackpage.ValidateRequest(req); err != nil {
 		return nil, err
 	}
+	if req.Cursor != "" {
+		return s.getTrackEventPageForCursor(ctx, req)
+	}
 	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, req.Key)
 	if err != nil {
 		return nil, fmt.Errorf("check session exists: %w", err)
@@ -123,7 +128,42 @@ func (s *Service) GetTrackEventPage(
 		}
 		return page, nil
 	}
+	if s.compatEnabled() {
+		page, err := s.zsetClient.GetTrackEventPage(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("get track event page (zset): %w", err)
+		}
+		if len(page.Entries) > 0 || page.HasMore {
+			return page, nil
+		}
+	}
 	return &session.TrackEventPage{Track: req.Track}, nil
+}
+
+func (s *Service) getTrackEventPageForCursor(
+	ctx context.Context,
+	req session.TrackEventPageRequest,
+) (*session.TrackEventPage, error) {
+	cursor, err := trackpage.Decode(req.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	switch cursor.Kind {
+	case zset.TrackEventPageCursorKind:
+		page, err := s.zsetClient.GetTrackEventPage(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("get track event page (zset): %w", err)
+		}
+		return page, nil
+	case hashidx.TrackEventPageCursorKind:
+		page, err := s.hashidxClient.GetTrackEventPage(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("get track event page (hashidx): %w", err)
+		}
+		return page, nil
+	default:
+		return nil, fmt.Errorf("cursor kind mismatch")
+	}
 }
 
 func (s *Service) getZSetTrackEvents(

@@ -98,18 +98,16 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 		return
 	}
 
-	pageReq, err := r.resolveMessagesSnapshotSessionPage(ctx, input)
-	if err != nil {
-		log.ErrorfContext(ctx, "agui messages snapshot: threadID: %s, runID: %s, resolve page: %v",
-			threadID, runID, err)
-		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("resolve page: %v", err),
-			aguievents.WithRunID(runID)), input)
-		return
-	}
-	// Unsupported session pagers keep the existing full snapshot behavior.
-	if pageReq != nil {
-		if _, ok := r.sessionService.(session.TrackEventPageService); !ok {
-			pageReq = nil
+	var pageReq *MessagesSnapshotPageRequest
+	if _, ok := r.sessionService.(session.TrackEventPageService); ok {
+		var err error
+		pageReq, err = r.resolveMessagesSnapshotSessionPage(ctx, input)
+		if err != nil {
+			log.ErrorfContext(ctx, "agui messages snapshot: threadID: %s, runID: %s, resolve page: %v",
+				threadID, runID, err)
+			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("resolve page: %v", err),
+				aguievents.WithRunID(runID)), input)
+			return
 		}
 	}
 	input.messagesSnapshotPage = pageReq

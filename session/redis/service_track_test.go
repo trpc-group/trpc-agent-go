@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/trackpage"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/hashidx"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/zset"
 )
@@ -186,6 +187,54 @@ func TestService_GetTrackEvents_ReadsTrackStorageWithoutSessionState(t *testing.
 			require.JSONEq(t, `"persisted"`, string(got.Events[0].Payload))
 		})
 	}
+}
+
+func TestService_GetTrackEventPage_ReadsLegacyZSetWithoutSessionState(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+	trackTTL := time.Duration(0)
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithCompatMode(CompatModeTransition),
+		WithTrackEventTTL(trackTTL),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "testapp", UserID: "user123", SessionID: "session-page-track-only"}
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+	baseTime := time.Now().Add(-time.Minute)
+	require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"older"`),
+		Timestamp: baseTime,
+	}))
+	require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"secret-newer"`),
+		Timestamp: baseTime.Add(time.Second),
+	}))
+
+	client := buildRedisClient(t, redisURL)
+	defer client.Close()
+	require.NoError(t, client.HDel(ctx, zset.GetSessionStateKey(key), key.SessionID).Err())
+
+	page, err := service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		EventLimit: 1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, session.Track("alpha"), page.Track)
+	require.Len(t, page.Entries, 1)
+	require.JSONEq(t, `"secret-newer"`, string(page.Entries[0].Event.Payload))
+	assert.True(t, page.HasMore)
+
+	cursor, err := trackpage.Decode(page.Entries[0].Cursor)
+	require.NoError(t, err)
+	assert.NotContains(t, cursor.ID, "secret-newer")
 }
 
 func TestService_GetTrackEvents_EmptyAndErrors(t *testing.T) {

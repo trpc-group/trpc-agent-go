@@ -11,6 +11,8 @@ package zset
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -20,7 +22,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/internal/trackpage"
 )
 
-const trackEventPageCursorKindZSet = "redis-zset"
+// TrackEventPageCursorKind is the cursor kind emitted by zset track pages.
+const TrackEventPageCursorKind = "redis-zset"
 
 type trackEventPageRow struct {
 	member string
@@ -45,8 +48,9 @@ func (c *Client) GetTrackEventPage(
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return &session.TrackEventPage{Track: req.Track}, nil
+	var sessionCreatedAt time.Time
+	if ok {
+		sessionCreatedAt = sessState.CreatedAt
 	}
 	var cursor trackpage.Cursor
 	hasCursor := req.Cursor != ""
@@ -55,7 +59,7 @@ func (c *Client) GetTrackEventPage(
 		if err != nil {
 			return nil, err
 		}
-		if err := trackpage.ValidateBinding(cursor, trackEventPageCursorKindZSet, req.Key, req.Track, sessState.CreatedAt); err != nil {
+		if err := validateTrackEventPageCursorBinding(cursor, req.Key, req.Track, sessionCreatedAt, ok); err != nil {
 			return nil, err
 		}
 	}
@@ -63,7 +67,7 @@ func (c *Client) GetTrackEventPage(
 	if err != nil {
 		return nil, err
 	}
-	entries, err := zsetTrackEventPageEntries(req, sessState.CreatedAt, rows)
+	entries, err := zsetTrackEventPageEntries(req, sessionCreatedAt, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -98,31 +102,42 @@ func (c *Client) queryTrackEventPageRows(
 	cursor trackpage.Cursor,
 	hasCursor bool,
 ) ([]trackEventPageRow, bool, error) {
-	rangeBy := &redis.ZRangeBy{
-		Min: "-inf",
-		Max: "+inf",
-	}
-	if hasCursor {
-		rangeBy.Max = fmt.Sprintf("%d", cursor.CreatedAt)
-	} else {
-		rangeBy.Offset = 0
-		rangeBy.Count = int64(req.EventLimit + 1)
-	}
-	zs, err := c.client.ZRevRangeByScoreWithScores(ctx, c.trackKey(req.Key, req.Track), rangeBy).Result()
-	if err != nil {
-		return nil, false, fmt.Errorf("query track event page index: %w", err)
-	}
 	selected := make([]scoredTrackEventMember, 0, req.EventLimit+1)
-	for _, z := range zs {
-		member := fmt.Sprint(z.Member)
-		score := int64(z.Score)
-		if hasCursor && !redisTrackPageOlder(score, member, cursor.CreatedAt, cursor.ID) {
-			continue
+	batchLimit := int64(req.EventLimit + 1)
+	var offset int64
+	cursorSeen := false
+	for {
+		rangeBy := &redis.ZRangeBy{
+			Min:    "-inf",
+			Max:    "+inf",
+			Offset: offset,
+			Count:  batchLimit,
 		}
-		selected = append(selected, scoredTrackEventMember{member: member, score: score})
+		if hasCursor {
+			rangeBy.Max = fmt.Sprintf("%d", cursor.CreatedAt)
+		}
+		zs, err := c.client.ZRevRangeByScoreWithScores(ctx, c.trackKey(req.Key, req.Track), rangeBy).Result()
+		if err != nil {
+			return nil, false, fmt.Errorf("query track event page index: %w", err)
+		}
+		for _, z := range zs {
+			member := fmt.Sprint(z.Member)
+			score := int64(z.Score)
+			if hasCursor && !zsetTrackPageOlder(score, member, cursor, &cursorSeen) {
+				continue
+			}
+			selected = append(selected, scoredTrackEventMember{member: member, score: score})
+			if len(selected) >= req.EventLimit+1 {
+				break
+			}
+		}
 		if len(selected) >= req.EventLimit+1 {
 			break
 		}
+		if !hasCursor || int64(len(zs)) < batchLimit {
+			break
+		}
+		offset += int64(len(zs))
 	}
 	hasMore := len(selected) > req.EventLimit
 	if hasMore {
@@ -154,12 +169,12 @@ func zsetTrackEventPageEntries(
 	entries := make([]session.TrackEventPageEntry, 0, len(rows))
 	for _, row := range rows {
 		cursor, err := trackpage.CursorForUnixNano(
-			trackEventPageCursorKindZSet,
+			TrackEventPageCursorKind,
 			req.Key,
 			req.Track,
 			sessionCreatedAt,
 			row.score,
-			row.member,
+			zsetTrackPageCursorID(row.member),
 		)
 		if err != nil {
 			return nil, err
@@ -172,9 +187,45 @@ func zsetTrackEventPageEntries(
 	return entries, nil
 }
 
-func redisTrackPageOlder(score int64, id string, cursorScore int64, cursorID string) bool {
-	if score < cursorScore {
+func validateTrackEventPageCursorBinding(
+	c trackpage.Cursor,
+	key session.Key,
+	track session.Track,
+	sessionCreatedAt time.Time,
+	hasSessionState bool,
+) error {
+	if hasSessionState {
+		return trackpage.ValidateBinding(c, TrackEventPageCursorKind, key, track, sessionCreatedAt)
+	}
+	if c.Kind != TrackEventPageCursorKind {
+		return fmt.Errorf("cursor kind mismatch")
+	}
+	if c.AppName != key.AppName || c.UserID != key.UserID || c.SessionID != key.SessionID {
+		return fmt.Errorf("cursor session mismatch")
+	}
+	if c.Track != string(track) {
+		return fmt.Errorf("cursor track mismatch")
+	}
+	return nil
+}
+
+func zsetTrackPageOlder(score int64, member string, cursor trackpage.Cursor, cursorSeen *bool) bool {
+	if score < cursor.CreatedAt {
 		return true
 	}
-	return score == cursorScore && id < cursorID
+	if score != cursor.CreatedAt {
+		return false
+	}
+	if *cursorSeen {
+		return true
+	}
+	if zsetTrackPageCursorID(member) == cursor.ID {
+		*cursorSeen = true
+	}
+	return false
+}
+
+func zsetTrackPageCursorID(member string) string {
+	sum := sha256.Sum256([]byte(member))
+	return hex.EncodeToString(sum[:])
 }

@@ -248,7 +248,9 @@ type MessagesSnapshotPageRequest struct {
 //
 // Returning nil uses the existing full-history snapshot behavior. Returning a
 // non-nil request asks the session service for a cursor page of AG-UI track
-// events before AG-UI reduces those events into messages.
+// events before AG-UI reduces those events into messages. A non-nil request
+// disables snapshot follow mode for that request, so the stream finishes after
+// the paginated snapshot. The input has already passed through RunAgentInputHook.
 type MessagesSnapshotSessionPageResolver func(
 	ctx context.Context,
 	input *adapter.RunAgentInput,

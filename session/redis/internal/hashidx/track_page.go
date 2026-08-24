@@ -20,7 +20,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/internal/trackpage"
 )
 
-const trackEventPageCursorKindHashIdx = "redis-hashidx"
+// TrackEventPageCursorKind is the cursor kind emitted by hash-index track pages.
+const TrackEventPageCursorKind = "redis-hashidx"
 
 type trackEventPageRow struct {
 	id    string
@@ -55,7 +56,7 @@ func (c *Client) GetTrackEventPage(
 		if err != nil {
 			return nil, err
 		}
-		if err := trackpage.ValidateBinding(cursor, trackEventPageCursorKindHashIdx, req.Key, req.Track, meta.CreatedAt); err != nil {
+		if err := trackpage.ValidateBinding(cursor, TrackEventPageCursorKind, req.Key, req.Track, meta.CreatedAt); err != nil {
 			return nil, err
 		}
 	}
@@ -98,31 +99,41 @@ func (c *Client) queryTrackEventPageRows(
 	cursor trackpage.Cursor,
 	hasCursor bool,
 ) ([]trackEventPageRow, bool, error) {
-	rangeBy := &redis.ZRangeBy{
-		Min: "-inf",
-		Max: "+inf",
-	}
-	if hasCursor {
-		rangeBy.Max = fmt.Sprintf("%d", cursor.CreatedAt)
-	} else {
-		rangeBy.Offset = 0
-		rangeBy.Count = int64(req.EventLimit + 1)
-	}
-	zs, err := c.client.ZRevRangeByScoreWithScores(ctx, c.keys.TrackTimeIndexKey(req.Key, req.Track), rangeBy).Result()
-	if err != nil {
-		return nil, false, fmt.Errorf("query track event page index: %w", err)
-	}
 	selected := make([]scoredTrackEventID, 0, req.EventLimit+1)
-	for _, z := range zs {
-		id := fmt.Sprint(z.Member)
-		score := int64(z.Score)
-		if hasCursor && !redisTrackPageOlder(score, id, cursor.CreatedAt, cursor.ID) {
-			continue
+	batchLimit := int64(req.EventLimit + 1)
+	var offset int64
+	for {
+		rangeBy := &redis.ZRangeBy{
+			Min:    "-inf",
+			Max:    "+inf",
+			Offset: offset,
+			Count:  batchLimit,
 		}
-		selected = append(selected, scoredTrackEventID{id: id, score: score})
+		if hasCursor {
+			rangeBy.Max = fmt.Sprintf("%d", cursor.CreatedAt)
+		}
+		zs, err := c.client.ZRevRangeByScoreWithScores(ctx, c.keys.TrackTimeIndexKey(req.Key, req.Track), rangeBy).Result()
+		if err != nil {
+			return nil, false, fmt.Errorf("query track event page index: %w", err)
+		}
+		for _, z := range zs {
+			id := fmt.Sprint(z.Member)
+			score := int64(z.Score)
+			if hasCursor && !redisTrackPageOlder(score, id, cursor.CreatedAt, cursor.ID) {
+				continue
+			}
+			selected = append(selected, scoredTrackEventID{id: id, score: score})
+			if len(selected) >= req.EventLimit+1 {
+				break
+			}
+		}
 		if len(selected) >= req.EventLimit+1 {
 			break
 		}
+		if !hasCursor || int64(len(zs)) < batchLimit {
+			break
+		}
+		offset += int64(len(zs))
 	}
 	hasMore := len(selected) > req.EventLimit
 	if hasMore {
@@ -169,7 +180,7 @@ func hashIdxTrackEventPageEntries(
 	entries := make([]session.TrackEventPageEntry, 0, len(rows))
 	for _, row := range rows {
 		cursor, err := trackpage.CursorForUnixNano(
-			trackEventPageCursorKindHashIdx,
+			TrackEventPageCursorKind,
 			req.Key,
 			req.Track,
 			sessionCreatedAt,

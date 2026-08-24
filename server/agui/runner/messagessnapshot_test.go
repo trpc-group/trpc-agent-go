@@ -558,6 +558,7 @@ func TestMessagesSnapshotPageResolverErrorEmitsRunError(t *testing.T) {
 
 func TestMessagesSnapshotPageFallsBackToFullSnapshotWhenUnsupported(t *testing.T) {
 	baseTime := time.Now().Add(-time.Second)
+	resolverCalled := false
 	tracker := &sequenceTracker{
 		first: &session.TrackEvents{
 			Track: track.TrackAGUI,
@@ -582,7 +583,8 @@ func TestMessagesSnapshotPageFallsBackToFullSnapshotWhenUnsupported(t *testing.T
 		messagesSnapshotFollowEnabled:     true,
 		messagesSnapshotFollowMaxDuration: 100 * time.Millisecond,
 		messagesSnapshotSessionPageResolver: func(ctx context.Context, input *adapter.RunAgentInput, key session.Key) (*MessagesSnapshotPageRequest, error) {
-			return &MessagesSnapshotPageRequest{Cursor: "request-cursor", EventLimit: 1}, nil
+			resolverCalled = true
+			return nil, errors.New("resolver should be skipped")
 		},
 	}
 	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
@@ -598,6 +600,7 @@ func TestMessagesSnapshotPageFallsBackToFullSnapshotWhenUnsupported(t *testing.T
 	calls := tracker.calls
 	tracker.mu.Unlock()
 	assert.Equal(t, 2, calls)
+	assert.False(t, resolverCalled)
 }
 
 func TestMessagesSnapshotUsesResolvedAppName(t *testing.T) {

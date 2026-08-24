@@ -283,11 +283,13 @@ For the complete example, see [examples/agui/server/follow](https://github.com/t
 
 By default, `/history` restores the complete persisted AG-UI history for the requested session. For long-running conversations, returning the whole history in one response can increase storage reads, server-side reduction work, and network traffic. In that case, configure `agui.WithMessagesSnapshotSessionPageResolver` to let each snapshot request load one page of persisted events.
 
-Pagination is resolved at the session layer. The AG-UI server does not define its own public cursor field or fixed request parameter names. Instead, the resolver receives the original `RunAgentInput` and the resolved `session.Key`, then returns a session page request. Applications can choose where the cursor and limit come from, such as `forwardedProps`, request metadata mapped by the gateway, or another application-specific input source.
+Pagination is resolved at the session layer. The AG-UI server does not define its own public cursor field or fixed request parameter names. Instead, the resolver receives the `RunAgentInput` and the resolved `session.Key`, then returns a session page request. Applications can choose where the cursor and limit come from, such as `forwardedProps`, request metadata mapped by the gateway, or another application-specific input source.
 
 The resolver returns `*aguirunner.MessagesSnapshotPageRequest`. `Cursor` is an opaque value returned by a previous snapshot page; an empty cursor asks the session service for the latest page. `EventLimit` limits the number of persisted AG-UI track events read from session storage. It is an event limit, not a message or turn limit, because a single displayed message may be restored from several persisted AG-UI events.
 
 Pagination is used only when the configured session service implements `session.TrackEventPageService`. If the service does not provide that capability, `/history` keeps the existing full-snapshot behavior.
+
+A non-nil page request makes the snapshot response one-shot. Even when message snapshot follow mode is enabled, `/history` emits the paginated `MESSAGES_SNAPSHOT` and then finishes the stream.
 
 ```go
 import (
