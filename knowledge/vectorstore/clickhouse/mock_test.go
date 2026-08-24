@@ -11,6 +11,7 @@ package clickhouse
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -127,10 +128,13 @@ func (m *mockRows) Err() error { return m.err }
 
 // setDest assigns a source value to a destination pointer via reflection. It
 // supports *string, *int64, *uint64, *float64, *[]float64, *time.Time and *any.
+//
+// A non-convertible pair is reported as an error rather than silently skipped,
+// so tests cannot pass with scan destinations the real driver would reject.
 func setDest(dest, src any) error {
 	dv := reflect.ValueOf(dest)
 	if dv.Kind() != reflect.Ptr {
-		return nil
+		return fmt.Errorf("mock: scan destination %T is not a pointer", dest)
 	}
 	elem := dv.Elem()
 	if src == nil {
@@ -148,5 +152,5 @@ func setDest(dest, src any) error {
 		elem.Set(sv.Convert(elem.Type()))
 		return nil
 	}
-	return nil
+	return fmt.Errorf("mock: converting %s to %s is unsupported", sv.Type(), elem.Type())
 }
