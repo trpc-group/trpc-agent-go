@@ -5534,6 +5534,104 @@ func TestRunTool_WorkspacePersistsAcrossCalls(t *testing.T) {
 	require.Contains(t, o2.OutputFiles[0].Content, "hi")
 }
 
+// ephemeralProbeManager records workspace creation and cleanup so tests
+// can assert the production lifecycle of invocation-scoped workspaces.
+type ephemeralProbeManager struct {
+	creates []string
+	cleans  []string
+}
+
+func (m *ephemeralProbeManager) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.creates = append(m.creates, id)
+	return codeexecutor.Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (m *ephemeralProbeManager) Cleanup(
+	_ context.Context,
+	ws codeexecutor.Workspace,
+) error {
+	m.cleans = append(m.cleans, ws.ID)
+	return nil
+}
+
+// TestRunTool_EphemeralWorkspaceReleasedAfterInvocation verifies the
+// production skill_run path releases ephemeral (empty-ID session)
+// workspaces after each invocation: the manager cleanup runs and the
+// registry entry is removed, while valid session-scoped handles stay
+// cached and reusable.
+func TestRunTool_EphemeralWorkspaceReleasedAfterInvocation(t *testing.T) {
+	manager := &ephemeralProbeManager{}
+	eng := &managedEngine{
+		m: manager,
+		f: &stubFS{},
+		r: &stubRunner{res: codeexecutor.RunResult{ExitCode: 0}},
+	}
+	rt := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: eng},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{
+				WorkspaceSkillDir: path.Join(
+					codeexecutor.DirSkills,
+					testSkillName,
+				),
+			}, nil
+		})),
+	)
+	args, err := jsonMarshal(runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+	})
+	require.NoError(t, err)
+
+	// Empty session ID -> ephemeral invocation workspace.
+	eInv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+	)
+	eCtx := agent.NewInvocationContext(context.Background(), eInv)
+
+	_, err = rt.Call(eCtx, args)
+	require.NoError(t, err)
+	require.Len(t, manager.creates, 1,
+		"one ephemeral workspace must be created per invocation")
+	require.Len(t, manager.cleans, 1,
+		"ephemeral workspace must be cleaned up after the invocation")
+	require.Equal(t, manager.creates[0], manager.cleans[0])
+
+	// Registry removal: re-acquiring the same ephemeral key must create
+	// a fresh workspace instead of reusing the released entry.
+	reHandle, err := rt.wsr.CreateWorkspaceHandle(eCtx, eng, testSkillName)
+	require.NoError(t, err)
+	require.True(t, rt.wsr.IsEphemeralHandle(reHandle))
+	require.Len(t, manager.creates, 2,
+		"released registry entry must not be reused")
+	defer func() {
+		require.NoError(t, rt.wsr.ReleaseEphemeralHandle(eCtx, reHandle))
+	}()
+
+	// Valid sessions keep their workspace cached across calls: only one
+	// create, and the ephemeral cleanup above must not be repeated.
+	vInv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "sess-1"}),
+	)
+	vCtx := agent.NewInvocationContext(context.Background(), vInv)
+	for i := 0; i < 2; i++ {
+		_, err = rt.Call(vCtx, args)
+		require.NoError(t, err)
+	}
+	require.Len(t, manager.creates, 3,
+		"session-scoped workspace must be created once and reused")
+	require.Len(t, manager.cleans, 1,
+		"session-scoped workspace must not be released after each call")
+}
+
 func TestSkillStagingHelpers_EarlyReturns(t *testing.T) {
 	rt := &RunTool{}
 	ctx := context.Background()
