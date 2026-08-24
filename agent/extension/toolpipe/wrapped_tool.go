@@ -24,7 +24,7 @@ import (
 
 // declaredCallableTool is a request-local tool wrapper that returns
 // an augmented Declaration while delegating Call and optional interfaces
-// (SkipSummarization, IsConcurrencySafe) to the original.
+// (SkipSummarization, IsConcurrencySafe, ToolMetadata) to the original.
 // It is NOT a persistent wrapper — it only lives within one
 // BeforeModel callback's Request.Tools replacement. The original
 // tool object is never mutated.
@@ -133,6 +133,24 @@ func (t *declaredCallableTool) SkipSummarization() bool {
 // wrapper and the objecting tool does not hide the objection either.
 func (t *declaredCallableTool) IsConcurrencySafe() bool {
 	return itool.IsConcurrencySafe(t.inner)
+}
+
+// ToolMetadata delegates the inner tool's descriptive metadata.
+//
+// It exists because of IsConcurrencySafe above. Without a ToolMetadata method
+// tool.MetadataOf falls back to the ConcurrencyAware interface and reports
+// ToolMetadata{ConcurrencySafe: true} for every wrapped tool, including one that
+// implements neither interface. That would turn "raises no scheduling objection"
+// — all IsConcurrencySafe promises — into the same-tool reentrancy guarantee
+// ToolMetadata.ConcurrencySafe documents, which the inner tool never made. The
+// LLMAgent permission path builds PermissionRequest.Metadata from whatever sits
+// in Request.Tools, so a policy would read that guarantee off this wrapper.
+//
+// Delegating also stops the wrapper from dropping the rest of what the inner
+// tool publishes — ReadOnly, Destructive, OpenWorld — which it did before it
+// answered metadata at all.
+func (t *declaredCallableTool) ToolMetadata() tool.ToolMetadata {
+	return tool.MetadataOf(t.inner)
 }
 
 // StreamableCall implements tool.StreamableTool — only on the streamable wrapper.
@@ -456,6 +474,7 @@ var (
 	_ tool.Tool             = (*declaredCallableTool)(nil)
 	_ tool.CallableTool     = (*declaredCallableTool)(nil)
 	_ tool.ConcurrencyAware = (*declaredCallableTool)(nil)
+	_ tool.MetadataProvider = (*declaredCallableTool)(nil)
 	_ tool.Tool             = (*declaredStreamableCallableTool)(nil)
 	_ tool.CallableTool     = (*declaredStreamableCallableTool)(nil)
 	_ tool.StreamableTool   = (*declaredStreamableCallableTool)(nil)

@@ -85,3 +85,70 @@ func TestBeforeModelResolvesNestedWrappers(t *testing.T) {
 
 	assert.False(t, itool.IsConcurrencySafe(req.Tools["exclusive_tool"]))
 }
+
+// metadataTool publishes ToolMetadata and nothing else. It is the shape that
+// separates the two channels: MetadataOf reads the provider, and
+// IsConcurrencySafe deliberately ignores it.
+type metadataTool struct {
+	*mockTool
+	metadata tool.ToolMetadata
+}
+
+func (t metadataTool) ToolMetadata() tool.ToolMetadata { return t.metadata }
+
+// TestBeforeModelPreservesDescriptiveMetadata pins that the wrapper reports what
+// the inner tool publishes rather than a guarantee synthesized from its own
+// IsConcurrencySafe.
+//
+// tool.MetadataOf falls back to ConcurrencyAware for a tool that publishes no
+// metadata, so once the wrapper implemented that interface it would have
+// answered ToolMetadata{ConcurrencySafe: true} for every tool ToolPipe touched —
+// including one, like mockTool here, that implements neither interface. That
+// turns "raises no scheduling objection", all IsConcurrencySafe promises, into
+// the same-tool reentrancy guarantee the field documents. The LLMAgent
+// permission path builds PermissionRequest.Metadata from whatever sits in
+// Request.Tools, so a policy would read the invented guarantee off this wrapper.
+func TestBeforeModelPreservesDescriptiveMetadata(t *testing.T) {
+	plain := &mockTool{decl: &tool.Declaration{
+		Name:        "plain_tool",
+		Description: "implements neither concurrency interface",
+	}}
+	published := tool.ToolMetadata{
+		ReadOnly:        true,
+		OpenWorld:       true,
+		ConcurrencySafe: false,
+	}
+	describing := metadataTool{
+		mockTool: &mockTool{decl: &tool.Declaration{
+			Name:        "describing_tool",
+			Description: "publishes metadata only",
+		}},
+		metadata: published,
+	}
+
+	require.Equal(t, tool.ToolMetadata{}, tool.MetadataOf(plain),
+		"precondition: the inner tool publishes nothing")
+
+	tp := New(WithToolNames("plain_tool", "describing_tool"))
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"plain_tool":      plain,
+			"describing_tool": describing,
+		},
+	}
+	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	require.NotSame(t, tool.Tool(plain), req.Tools["plain_tool"],
+		"precondition: ToolPipe replaced the entry with its own wrapper")
+
+	assert.Equal(t, tool.ToolMetadata{}, tool.MetadataOf(req.Tools["plain_tool"]),
+		"the wrapper must not invent a reentrancy guarantee for a tool that made none")
+	assert.Equal(t, published, tool.MetadataOf(req.Tools["describing_tool"]),
+		"the wrapper must report what the inner tool publishes, unchanged")
+
+	// The two channels stay independent: a metadata-only ConcurrencySafe:false
+	// is still admitted, exactly as tool.MetadataOf and tool.IsConcurrencySafe
+	// document.
+	assert.True(t, itool.IsConcurrencySafe(req.Tools["describing_tool"]),
+		"metadata alone is not a scheduling objection")
+}
