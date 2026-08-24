@@ -29,9 +29,13 @@ func scanGitClean(args []string) []Finding {
 }
 
 func gitCleanCommandArguments(args []string) ([]string, bool, bool) {
+	return gitCommandArguments(args, "clean")
+}
+
+func gitCommandArguments(args []string, subcommand string) ([]string, bool, bool) {
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
-		if arg == "clean" {
+		if arg == subcommand {
 			return args[index+1:], true, false
 		}
 		if arg == "" || arg == "-" || !strings.HasPrefix(arg, "-") {
@@ -48,7 +52,7 @@ func gitCleanCommandArguments(args []string) ([]string, bool, bool) {
 		case gitGlobalOptionHasAttachedValue(arg), gitGlobalFlag(arg):
 			continue
 		default:
-			return ambiguousGitCleanArguments(args[index+1:])
+			return ambiguousGitCommandArguments(args[index+1:], subcommand)
 		}
 	}
 	return nil, false, false
@@ -102,9 +106,12 @@ func gitGlobalFlag(arg string) bool {
 	}
 }
 
-func ambiguousGitCleanArguments(args []string) ([]string, bool, bool) {
+func ambiguousGitCommandArguments(
+	args []string,
+	subcommand string,
+) ([]string, bool, bool) {
 	for index, arg := range args {
-		if arg == "clean" {
+		if arg == subcommand {
 			return args[index+1:], true, true
 		}
 	}

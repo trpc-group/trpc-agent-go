@@ -269,7 +269,8 @@ func proxyDestinationHost(value string) (string, bool) {
 
 func proxyEnvironmentVariable(key string) bool {
 	switch strings.ToUpper(strings.TrimSpace(key)) {
-	case "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "FTPS_PROXY", "ALL_PROXY":
+	case "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "FTPS_PROXY", "ALL_PROXY",
+		"RSYNC_PROXY":
 		return true
 	default:
 		return false
@@ -302,7 +303,8 @@ func executionEnvironmentClass(key string, gitInvocation bool) environmentClass 
 		"PERL5OPT", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH",
 		"GIT_SSH_COMMAND", "GIT_SSH", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR",
 		"GIT_PAGER", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS",
-		"GIT_EXEC_PATH", "GIT_PROXY_COMMAND":
+		"GIT_EXEC_PATH", "GIT_PROXY_COMMAND", "RSYNC_RSH",
+		"RSYNC_CONNECT_PROG", "RSYNC_SHELL":
 		return environmentCodeInjection
 	case "HOME":
 		return environmentExecutionContext

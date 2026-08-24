@@ -25,7 +25,7 @@ var networkCommands = map[string]struct{}{
 	"curl": {}, "wget": {}, "nc": {}, "netcat": {}, "ssh": {},
 	"scp": {}, "sftp": {}, "ftp": {}, "git": {}, "ssh.exe": {},
 	"scp.exe": {}, "sftp.exe": {}, "git.exe": {}, "git-submodule": {},
-	"git-submodule.exe": {},
+	"git-submodule.exe": {}, "rsync": {}, "rsync.exe": {},
 }
 
 var nonNetworkCommands = map[string]struct{}{
@@ -120,6 +120,8 @@ func networkDestinations(argv []string) ([]string, bool) {
 		return gitSubmoduleNetworkDestinations(
 			parseDirectGitSubmoduleInvocation(argv[1:]),
 		)
+	case "rsync", "rsync.exe":
+		return rsyncNetworkDestinations(argv[1:])
 	case "nc", "netcat":
 		return netcatDestination(argv[1:]), false
 	case "ftp":

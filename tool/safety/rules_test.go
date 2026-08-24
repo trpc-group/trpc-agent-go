@@ -200,6 +200,75 @@ func TestGuardClassifiesDestructiveGitClean(t *testing.T) {
 	}
 }
 
+func TestGuardClassifiesDestructiveGitReset(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = []string{
+		"git", "git-reset", "git.exe", "git-reset.exe",
+	}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			name:     "hard reset",
+			command:  "git reset --hard HEAD",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_reset",
+		},
+		{
+			name:     "hard reset after global option",
+			command:  "git -C work reset --hard HEAD",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_reset",
+		},
+		{
+			name:     "abbreviated hard reset",
+			command:  "git reset --har HEAD",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_reset",
+		},
+		{
+			name:     "direct reset helper",
+			command:  "git-reset --hard HEAD",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_reset",
+		},
+		{
+			name:     "Windows direct reset helper",
+			command:  "git-reset.exe --hard HEAD",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.git_reset",
+		},
+		{
+			name:     "soft reset",
+			command:  "git reset --soft HEAD",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "mixed reset",
+			command:  "git reset HEAD",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "global option operand named reset",
+			command:  "git -C reset status --hard",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision, "%+v", report)
+			require.Equal(t, tc.rule, report.RuleID, "%+v", report)
+		})
+	}
+}
+
 func TestGuardScansGitSubmoduleForeachCommands(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.AllowedCommands = []string{

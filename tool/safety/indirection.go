@@ -9,7 +9,10 @@
 
 package safety
 
-import "strings"
+import (
+	"path"
+	"strings"
+)
 
 const maxCommandIndirectionDepth = 16
 
@@ -34,6 +37,7 @@ func scanCommandIndirectionAtDepth(
 		switch base := commandBase(argv[0]); base {
 		case "git", "git.exe":
 			findings = append(findings, scanGitClean(argv[1:])...)
+			findings = append(findings, scanGitReset(argv[1:])...)
 			findings = append(findings, scanGitSubmoduleForeach(
 				policy, argv[1:], depth+1,
 			)...)
@@ -45,6 +49,8 @@ func scanCommandIndirectionAtDepth(
 			)...)
 		case "git-clean", "git-clean.exe":
 			findings = append(findings, scanGitCleanArguments(argv[1:], false)...)
+		case "git-reset", "git-reset.exe":
+			findings = append(findings, scanGitResetArguments(argv[1:], false)...)
 		case "git-submodule", "git-submodule.exe":
 			findings = append(findings, scanGitSubmoduleForeachInvocation(
 				policy, parseDirectGitSubmoduleInvocation(argv[1:]), depth+1,
@@ -66,51 +72,6 @@ func scanCommandIndirectionAtDepth(
 				policy, strings.TrimSuffix(base, ".exe"), argv[1:], depth+1,
 			)...)
 		}
-	}
-	return findings
-}
-
-func scanRsyncExecutionOptions(
-	policy Policy,
-	args []string,
-	depth int,
-) []Finding {
-	var findings []Finding
-	for index := 0; index < len(args); index++ {
-		arg := args[index]
-		if arg == "--" {
-			break
-		}
-		value := ""
-		matched := false
-		missing := false
-		switch {
-		case arg == "--rsync-path":
-			matched = true
-			if index+1 < len(args) {
-				value = args[index+1]
-				index++
-			} else {
-				missing = true
-			}
-		case strings.HasPrefix(arg, "--rsync-path="):
-			matched = true
-			value = strings.TrimPrefix(arg, "--rsync-path=")
-		}
-		if !matched {
-			continue
-		}
-		findings = append(findings, newFinding(
-			DecisionNeedsHumanReview, RiskHigh, "command.indirect_execution",
-			"rsync --rsync-path executes an embedded remote command",
-			"remove --rsync-path or review the complete remote command",
-		))
-		if missing || strings.TrimSpace(value) == "" {
-			continue
-		}
-		findings = append(findings, scanNestedCommandAtDepth(
-			policy, value, depth,
-		)...)
 	}
 	return findings
 }
@@ -585,7 +546,7 @@ func scanFindExecutionActions(
 	args []string,
 	depth int,
 ) []Finding {
-	var findings []Finding
+	findings := scanFindDelete(args)
 	for index := 0; index < len(args); index++ {
 		action := strings.ToLower(args[index])
 		if action != "-exec" && action != "-execdir" &&
@@ -615,6 +576,119 @@ func scanFindExecutionActions(
 		index = end
 	}
 	return findings
+}
+
+func scanFindDelete(args []string) []Finding {
+	deleteIndex := findDeleteActionIndex(args)
+	if deleteIndex < 0 {
+		return nil
+	}
+	startingPoints := findStartingPoints(args[:deleteIndex])
+	if len(startingPoints) == 0 {
+		return []Finding{findDeleteFinding(true)}
+	}
+	for _, startingPoint := range startingPoints {
+		cleaned := path.Clean(strings.TrimSpace(startingPoint))
+		if cleaned == "." || cleaned == "/" {
+			return []Finding{findDeleteFinding(true)}
+		}
+	}
+	return []Finding{findDeleteFinding(false)}
+}
+
+func findDeleteActionIndex(args []string) int {
+	for index := 0; index < len(args); index++ {
+		action := strings.ToLower(args[index])
+		if argumentCount := findPrimaryArgumentCount(args[index]); argumentCount > 0 {
+			index += min(argumentCount, len(args)-index-1)
+			continue
+		}
+		if action == "-delete" {
+			return index
+		}
+		if action != "-exec" && action != "-execdir" &&
+			action != "-ok" && action != "-okdir" {
+			continue
+		}
+		for index+1 < len(args) && !findActionTerminator(args[index+1]) {
+			index++
+		}
+	}
+	return -1
+}
+
+// findPrimaryArgumentCount prevents action-shaped predicate values from being
+// classified as active find actions.
+func findPrimaryArgumentCount(primary string) int {
+	if primary == "-D" {
+		return 1
+	}
+	primary = strings.ToLower(primary)
+	if strings.HasPrefix(primary, "-newer") {
+		return 1
+	}
+	switch primary {
+	case "-f", "-amin", "-anewer", "-atime", "-bmin", "-bnewer",
+		"-btime", "-cmin", "-cnewer", "-ctime", "-flags", "-fls",
+		"-fprint", "-fprint0", "-fstype", "-gid", "-group", "-ilname",
+		"-iname", "-inum", "-ipath", "-iregex", "-links", "-lname",
+		"-maxdepth", "-mindepth", "-mmin", "-mnewer", "-mtime", "-name",
+		"-path", "-perm", "-printf", "-regex", "-regextype", "-samefile",
+		"-size", "-type", "-uid", "-used", "-user", "-wholename", "-xattrname",
+		"-xtype":
+		return 1
+	case "-fprintf":
+		return 2
+	default:
+		return 0
+	}
+}
+
+func findStartingPoints(args []string) []string {
+	var startingPoints []string
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch {
+		case arg == "--":
+			continue
+		case arg == "-D":
+			if index+1 < len(args) {
+				index++
+			}
+			continue
+		case strings.HasPrefix(arg, "-O"):
+			continue
+		case arg == "-f":
+			if index+1 < len(args) {
+				startingPoints = append(startingPoints, args[index+1])
+				index++
+			}
+			continue
+		case arg == "-E" || arg == "-H" || arg == "-L" || arg == "-P" ||
+			arg == "-X" || arg == "-d" || arg == "-s" || arg == "-x":
+			continue
+		case strings.HasPrefix(arg, "-") || arg == "!" || arg == "(":
+			return startingPoints
+		default:
+			startingPoints = append(startingPoints, arg)
+		}
+	}
+	return startingPoints
+}
+
+func findDeleteFinding(broad bool) Finding {
+	if broad {
+		return newFinding(
+			DecisionDeny, RiskCritical, "dangerous.find_delete",
+			"find -delete recursively targets the current directory or filesystem root",
+			"remove -delete or use a narrowly scoped starting point after review",
+		)
+	}
+	return newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "dangerous.find_delete",
+		"find -delete removes every matching file beneath its starting point",
+		"review the starting point and predicates before deleting matched files",
+	)
 }
 
 func findActionTerminator(value string) bool {
