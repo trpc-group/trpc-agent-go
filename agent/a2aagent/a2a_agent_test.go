@@ -5380,6 +5380,94 @@ func TestA2AAgentProcessStreamingEventsReplacesV0ArtifactContentParts(t *testing
 	)
 }
 
+func TestA2AAgentProcessStreamingEventsPreservesCompleteArtifactHandlerContent(
+	t *testing.T,
+) {
+	stream := make(chan protocol.StreamingMessageEvent, 1)
+	stream <- protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+		Kind:   protocol.KindTaskArtifactUpdate,
+		TaskID: "task",
+		Artifact: protocol.Artifact{
+			ArtifactID: "response",
+			Parts: []protocol.Part{
+				buildToolCallDataPart("call-1", "lookup", `{}`),
+			},
+		},
+	}}
+	close(stream)
+
+	remote := &A2AAgent{
+		name:           "remote",
+		eventConverter: &defaultA2AEventConverter{},
+		streamingRespHandler: func(*model.Response) (string, error) {
+			return "handler-content", nil
+		},
+	}
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		make(chan *event.Event, 1),
+		stream,
+		nil,
+	)
+
+	require.Nil(t, result.terminalError)
+	require.Equal(t, "handler-content", result.aggregatedContent)
+}
+
+func TestA2AAgentProcessStreamingEventsPreservesMixedContentPartOrder(t *testing.T) {
+	artifactFile := protocol.NewFilePartWithURI(
+		"artifact.pdf",
+		"application/pdf",
+		"https://example.com/artifact.pdf",
+	)
+	messageFile := protocol.NewFilePartWithURI(
+		"message.pdf",
+		"application/pdf",
+		"https://example.com/message.pdf",
+	)
+	stream := make(chan protocol.StreamingMessageEvent, 2)
+	stream <- protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+		Kind:   protocol.KindTaskArtifactUpdate,
+		TaskID: "task",
+		Artifact: protocol.Artifact{
+			ArtifactID: "artifact",
+			Parts:      []protocol.Part{&artifactFile},
+		},
+	}}
+	stream <- protocol.StreamingMessageEvent{Result: &protocol.Message{
+		Kind:      protocol.KindMessage,
+		Role:      protocol.MessageRoleAgent,
+		MessageID: "message",
+		Parts:     []protocol.Part{&messageFile},
+	}}
+	close(stream)
+
+	remote := &A2AAgent{name: "remote", eventConverter: &defaultA2AEventConverter{}}
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		make(chan *event.Event, 2),
+		stream,
+		nil,
+	)
+
+	require.Nil(t, result.terminalError)
+	require.Len(t, result.aggregatedContentParts, 2)
+	require.NotNil(t, result.aggregatedContentParts[0].File)
+	require.NotNil(t, result.aggregatedContentParts[1].File)
+	require.Equal(
+		t,
+		"https://example.com/artifact.pdf",
+		result.aggregatedContentParts[0].File.URL,
+	)
+	require.Equal(
+		t,
+		"https://example.com/message.pdf",
+		result.aggregatedContentParts[1].File.URL,
+	)
+}
+
 func TestA2AAgentRunStreamingPreservesTerminalMessageContentParts(
 	t *testing.T,
 ) {

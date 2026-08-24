@@ -495,17 +495,11 @@ func (r *A2AAgent) processStreamingEvents(
 	streamChan <-chan protocol.StreamResponse,
 ) (result streamingEventResult) {
 	var contentBuffer ia2a.StreamingTextBuffer
+	var contentPartsBuffer ia2a.StreamingTextBuffer
 	seenArtifactIDs := make(map[string]struct{})
-	artifactContentParts := make(map[string][]model.ContentPart)
-	var artifactOrder []string
 	defer func() {
 		result.aggregatedContent = contentBuffer.Content()
-		for _, artifactID := range artifactOrder {
-			result.aggregatedContentParts = append(
-				result.aggregatedContentParts,
-				artifactContentParts[artifactID]...,
-			)
-		}
+		result.aggregatedContentParts = contentPartsBuffer.ContentParts()
 	}()
 
 	for streamEvent := range streamChan {
@@ -520,7 +514,6 @@ func (r *A2AAgent) processStreamingEvents(
 			artifactUpdate,
 			seenArtifactIDs,
 		)
-		var artifactChunkParts []model.ContentPart
 		artifactContentRecorded := false
 
 		events, err := r.eventConverter.ConvertStreamingToEvents(streamEvent, r.name, invocation)
@@ -538,30 +531,16 @@ func (r *A2AAgent) processStreamingEvents(
 			if evt == nil {
 				continue
 			}
-			currentResponseID := result.responseID
-			if evt.Response != nil && evt.Response.ID != "" {
-				currentResponseID = evt.Response.ID
-			}
-			if evt.Response != nil && !evt.Response.IsPartial {
-				if artifactUpdate != nil && replacesArtifact {
-					// The complete event owns this artifact snapshot. Remove its
-					// stale partial text before flushing unrelated pending text.
-					contentBuffer.UpdateArtifact(
-						"",
-						artifactUpdate.Artifact.ArtifactID,
-						"",
-						true,
-					)
-				}
-				r.flushBufferedContent(
-					ctx,
-					invocation,
-					eventChan,
-					currentResponseID,
-					evt.Timestamp,
-					&contentBuffer,
-				)
-			}
+			r.flushPendingContentBeforeEvent(
+				ctx,
+				invocation,
+				eventChan,
+				evt,
+				result.responseID,
+				artifactUpdate,
+				replacesArtifact,
+				&contentBuffer,
+			)
 			var eventContent strings.Builder
 			var eventContentParts []model.ContentPart
 			result.responseID = r.aggregateEventContent(
@@ -580,9 +559,10 @@ func (r *A2AAgent) processStreamingEvents(
 					eventContent.String(),
 					eventContentParts,
 				)
-				result.aggregatedContentParts = append(
-					result.aggregatedContentParts,
-					eventContentParts...,
+				contentPartsBuffer.AppendContent(
+					responseID,
+					"",
+					eventContentParts,
 				)
 			} else {
 				r.aggregateArtifactMessageContent(
@@ -591,19 +571,23 @@ func (r *A2AAgent) processStreamingEvents(
 					&eventContentParts,
 				)
 				content := eventContent.String()
-				artifactChunkParts = append(
-					artifactChunkParts,
-					eventContentParts...,
-				)
+				replace := replacesArtifact && !artifactContentRecorded
 				if evt.Response == nil || evt.Response.IsPartial {
 					contentBuffer.UpdateArtifactContent(
 						responseID,
 						artifactUpdate.Artifact.ArtifactID,
 						content,
 						eventContentParts,
-						replacesArtifact && !artifactContentRecorded,
+						replace,
 					)
 				}
+				contentPartsBuffer.UpdateArtifactContent(
+					responseID,
+					artifactUpdate.Artifact.ArtifactID,
+					content,
+					eventContentParts,
+					replace,
+				)
 				artifactContentRecorded = true
 			}
 			// A repeated append=false update replaces the previous artifact
@@ -620,17 +604,12 @@ func (r *A2AAgent) processStreamingEvents(
 		}
 		clearFilteredArtifactReplacement(
 			&contentBuffer,
+			&contentPartsBuffer,
 			artifactUpdate,
 			replacesArtifact,
 			artifactContentRecorded,
 		)
 		if artifactUpdate != nil {
-			recordArtifactContentParts(
-				artifactUpdate,
-				artifactChunkParts,
-				artifactContentParts,
-				&artifactOrder,
-			)
 			seenArtifactIDs[artifactUpdate.Artifact.ArtifactID] = struct{}{}
 		}
 	}
@@ -645,8 +624,46 @@ func (r *A2AAgent) processStreamingEvents(
 	return result
 }
 
+func (r *A2AAgent) flushPendingContentBeforeEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	evt *event.Event,
+	fallbackResponseID string,
+	artifactUpdate *protocol.TaskArtifactUpdateEvent,
+	replacesArtifact bool,
+	contentBuffer *ia2a.StreamingTextBuffer,
+) {
+	if evt.Response == nil || evt.Response.IsPartial {
+		return
+	}
+	responseID := fallbackResponseID
+	if evt.Response.ID != "" {
+		responseID = evt.Response.ID
+	}
+	if artifactUpdate != nil && replacesArtifact {
+		// The complete event owns this artifact snapshot. Remove its stale
+		// partial text before flushing unrelated pending text.
+		contentBuffer.UpdateArtifact(
+			"",
+			artifactUpdate.Artifact.ArtifactID,
+			"",
+			true,
+		)
+	}
+	r.flushBufferedContent(
+		ctx,
+		invocation,
+		eventChan,
+		responseID,
+		evt.Timestamp,
+		contentBuffer,
+	)
+}
+
 func clearFilteredArtifactReplacement(
 	contentBuffer *ia2a.StreamingTextBuffer,
+	contentPartsBuffer *ia2a.StreamingTextBuffer,
 	update *protocol.TaskArtifactUpdateEvent,
 	replacesArtifact bool,
 	artifactContentRecorded bool,
@@ -654,12 +671,9 @@ func clearFilteredArtifactReplacement(
 	if update == nil || !replacesArtifact || artifactContentRecorded {
 		return
 	}
-	contentBuffer.UpdateArtifact(
-		"",
-		update.Artifact.ArtifactID,
-		"",
-		true,
-	)
+	artifactID := update.Artifact.ArtifactID
+	contentBuffer.UpdateArtifact("", artifactID, "", true)
+	contentPartsBuffer.UpdateArtifact("", artifactID, "", true)
 }
 
 func artifactUpdateReplacesSnapshot(
@@ -672,33 +686,6 @@ func artifactUpdateReplacesSnapshot(
 	_, seen := seenArtifactIDs[update.Artifact.ArtifactID]
 	appendChunk := update.Append != nil && *update.Append
 	return seen && !appendChunk
-}
-
-func recordArtifactContentParts(
-	update *protocol.TaskArtifactUpdateEvent,
-	contentParts []model.ContentPart,
-	artifactContentParts map[string][]model.ContentPart,
-	artifactOrder *[]string,
-) {
-	if update == nil {
-		return
-	}
-	artifactID := update.Artifact.ArtifactID
-	if _, ok := artifactContentParts[artifactID]; !ok {
-		*artifactOrder = append(*artifactOrder, artifactID)
-	}
-	appendChunk := update.Append != nil && *update.Append
-	if appendChunk {
-		artifactContentParts[artifactID] = append(
-			artifactContentParts[artifactID],
-			contentParts...,
-		)
-		return
-	}
-	artifactContentParts[artifactID] = append(
-		[]model.ContentPart(nil),
-		contentParts...,
-	)
 }
 
 func markArtifactReplacementSnapshot(evt *event.Event, replacement bool) {

@@ -1727,16 +1727,10 @@ func (r *A2AAgent) processStreamingEvents(
 	anonymousCookie *anonymousCookieState,
 ) (result streamingEventResult) {
 	var contentBuffer ia2a.StreamingTextBuffer
-	artifactContentParts := make(map[string][]model.ContentPart)
-	var artifactOrder []string
+	var contentPartsBuffer ia2a.StreamingTextBuffer
 	defer func() {
 		result.aggregatedContent = contentBuffer.Content()
-		for _, artifactID := range artifactOrder {
-			result.aggregatedContentParts = append(
-				result.aggregatedContentParts,
-				artifactContentParts[artifactID]...,
-			)
-		}
+		result.aggregatedContentParts = contentPartsBuffer.ContentParts()
 	}()
 
 	for streamEvent := range streamChan {
@@ -1745,7 +1739,6 @@ func (r *A2AAgent) processStreamingEvents(
 			return result
 		}
 		artifactUpdate, _ := streamEvent.Result.(*protocol.TaskArtifactUpdateEvent)
-		var artifactChunkParts []model.ContentPart
 		artifactContentRecorded := false
 
 		events, err := r.eventConverter.ConvertStreamingToEvents(streamEvent, r.name, invocation)
@@ -1769,31 +1762,17 @@ func (r *A2AAgent) processStreamingEvents(
 			if evt == nil {
 				continue
 			}
-			currentResponseID := result.responseID
-			if evt.Response != nil && evt.Response.ID != "" {
-				currentResponseID = evt.Response.ID
-			}
-			if evt.Response != nil && !evt.Response.IsPartial {
-				if artifactUpdate != nil && replacesArtifact {
-					// The complete event owns this artifact snapshot. Remove its
-					// stale partial text before flushing unrelated pending text.
-					contentBuffer.UpdateArtifact(
-						"",
-						artifactUpdate.Artifact.ArtifactID,
-						"",
-						true,
-					)
-				}
-				r.flushBufferedContent(
-					ctx,
-					invocation,
-					eventChan,
-					currentResponseID,
-					evt.Timestamp,
-					&contentBuffer,
-					anonymousCookie,
-				)
-			}
+			r.flushPendingContentBeforeEvent(
+				ctx,
+				invocation,
+				eventChan,
+				evt,
+				result.responseID,
+				artifactUpdate,
+				replacesArtifact,
+				&contentBuffer,
+				anonymousCookie,
+			)
 			var eventContent strings.Builder
 			var eventContentParts []model.ContentPart
 			var terminalError *model.ResponseError
@@ -1817,18 +1796,15 @@ func (r *A2AAgent) processStreamingEvents(
 					eventContent.String(),
 					eventContentParts,
 				)
-				result.aggregatedContentParts = append(
-					result.aggregatedContentParts,
-					eventContentParts...,
+				contentPartsBuffer.AppendContent(
+					responseID,
+					"",
+					eventContentParts,
 				)
 			} else {
 				content := eventContent.String()
-				artifactChunkParts = append(
-					artifactChunkParts,
-					eventContentParts...,
-				)
+				replace := !artifactContentRecorded && replacesArtifact
 				if evt.Response == nil || evt.Response.IsPartial {
-					replace := !artifactContentRecorded && replacesArtifact
 					contentBuffer.UpdateArtifactContent(
 						responseID,
 						artifactUpdate.Artifact.ArtifactID,
@@ -1836,7 +1812,19 @@ func (r *A2AAgent) processStreamingEvents(
 						eventContentParts,
 						replace,
 					)
+				} else if content != "" {
+					// A complete artifact Message owns its raw snapshot, but text
+					// explicitly aggregated from the event still belongs in the final
+					// result. This includes public streaming handler output.
+					contentBuffer.Append(responseID, content)
 				}
+				contentPartsBuffer.UpdateArtifactContent(
+					responseID,
+					artifactUpdate.Artifact.ArtifactID,
+					content,
+					eventContentParts,
+					replace,
+				)
 				artifactContentRecorded = true
 			}
 			if terminalError != nil {
@@ -1853,51 +1841,69 @@ func (r *A2AAgent) processStreamingEvents(
 				return result
 			}
 		}
-		if artifactUpdate != nil && replacesArtifact &&
-			!artifactContentRecorded {
-			contentBuffer.UpdateArtifact(
-				"",
-				artifactUpdate.Artifact.ArtifactID,
-				"",
-				true,
-			)
-		}
-		recordV0ArtifactContentParts(
+		clearFilteredArtifactReplacement(
+			&contentBuffer,
+			&contentPartsBuffer,
 			artifactUpdate,
-			artifactChunkParts,
 			replacesArtifact,
-			artifactContentParts,
-			&artifactOrder,
+			artifactContentRecorded,
 		)
 	}
 	return result
 }
 
-func recordV0ArtifactContentParts(
-	update *protocol.TaskArtifactUpdateEvent,
-	contentParts []model.ContentPart,
-	replace bool,
-	artifactContentParts map[string][]model.ContentPart,
-	artifactOrder *[]string,
+func (r *A2AAgent) flushPendingContentBeforeEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	evt *event.Event,
+	fallbackResponseID string,
+	artifactUpdate *protocol.TaskArtifactUpdateEvent,
+	replacesArtifact bool,
+	contentBuffer *ia2a.StreamingTextBuffer,
+	anonymousCookie *anonymousCookieState,
 ) {
-	if update == nil {
+	if evt.Response == nil || evt.Response.IsPartial {
+		return
+	}
+	responseID := fallbackResponseID
+	if evt.Response.ID != "" {
+		responseID = evt.Response.ID
+	}
+	if artifactUpdate != nil && replacesArtifact {
+		// The complete event owns this artifact snapshot. Remove its stale
+		// partial text before flushing unrelated pending text.
+		contentBuffer.UpdateArtifact(
+			"",
+			artifactUpdate.Artifact.ArtifactID,
+			"",
+			true,
+		)
+	}
+	r.flushBufferedContent(
+		ctx,
+		invocation,
+		eventChan,
+		responseID,
+		evt.Timestamp,
+		contentBuffer,
+		anonymousCookie,
+	)
+}
+
+func clearFilteredArtifactReplacement(
+	contentBuffer *ia2a.StreamingTextBuffer,
+	contentPartsBuffer *ia2a.StreamingTextBuffer,
+	update *protocol.TaskArtifactUpdateEvent,
+	replacesArtifact bool,
+	artifactContentRecorded bool,
+) {
+	if update == nil || !replacesArtifact || artifactContentRecorded {
 		return
 	}
 	artifactID := update.Artifact.ArtifactID
-	if _, ok := artifactContentParts[artifactID]; !ok {
-		*artifactOrder = append(*artifactOrder, artifactID)
-	}
-	if replace {
-		artifactContentParts[artifactID] = append(
-			[]model.ContentPart(nil),
-			contentParts...,
-		)
-		return
-	}
-	artifactContentParts[artifactID] = append(
-		artifactContentParts[artifactID],
-		contentParts...,
-	)
+	contentBuffer.UpdateArtifact("", artifactID, "", true)
+	contentPartsBuffer.UpdateArtifact("", artifactID, "", true)
 }
 
 func v0ArtifactUpdateReplacesBufferedContent(
