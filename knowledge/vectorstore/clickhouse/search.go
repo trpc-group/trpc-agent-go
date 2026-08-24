@@ -418,10 +418,13 @@ func (vs *VectorStore) GetMetadata(
 		return out, nil
 	}
 
-	// Limit == -1 retrieves all pages. Pagination advances by the number of rows
-	// scanned, not by len(idMap): a page may contain duplicate IDs, and using the
-	// deduplicated size would both under-advance the offset and end the loop
-	// early, silently dropping the remaining rows.
+	// Limit < 0 retrieves all pages. ApplyGetMetadataOptions rejects a negative
+	// limit combined with a positive offset, so paging always starts at zero here.
+	//
+	// Pagination advances by the number of rows scanned, not by len(idMap): a
+	// page may contain duplicate IDs, and using the deduplicated size would both
+	// under-advance the offset and end the loop early, silently dropping the
+	// remaining rows.
 	var offset int
 	for {
 		idMap, scanned, err := vs.queryMetadataOnce(ctx, cfg.IDs, cfg.Filter, defaultBatchSize, offset)

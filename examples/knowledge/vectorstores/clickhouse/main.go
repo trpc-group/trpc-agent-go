@@ -217,21 +217,27 @@ func main() {
 	fmt.Println("\n✅ ClickHouse vector store verification passed.")
 }
 
-// waitForCount polls Count until it reports want, or the deadline elapses. It
-// exists because Delete is implemented as an asynchronous ClickHouse mutation.
+// waitForCount polls Count until it reports want, and fails if that does not
+// happen before the deadline. It exists because Delete is implemented as an
+// asynchronous ClickHouse mutation, so the row can still be counted right after
+// Delete returns.
 func waitForCount(ctx context.Context, vs *clickhouse.VectorStore, want int) (int, error) {
-	deadline := time.Now().Add(10 * time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var last int
 	for {
 		n, err := vs.Count(ctx)
 		if err != nil {
 			return 0, err
 		}
-		if n == want || time.Now().After(deadline) {
+		if n == want {
 			return n, nil
 		}
+		last = n
 		select {
 		case <-ctx.Done():
-			return n, ctx.Err()
+			return last, fmt.Errorf(
+				"timed out waiting for count to reach %d, last observed %d: %w", want, last, ctx.Err())
 		case <-time.After(200 * time.Millisecond):
 		}
 	}

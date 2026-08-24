@@ -11,6 +11,7 @@ package clickhouse_test
 
 import (
 	"context"
+	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -20,12 +21,22 @@ import (
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 )
 
+// exampleDSN returns the ClickHouse DSN from the CLICKHOUSE_DSN environment
+// variable, falling back to a local credential-free address. Keeping the DSN out
+// of the source avoids suggesting that credentials belong in code.
+func exampleDSN() string {
+	if dsn := os.Getenv("CLICKHOUSE_DSN"); dsn != "" {
+		return dsn
+	}
+	return "clickhouse://default:@localhost:9000/default"
+}
+
 // Example_connectByDSN demonstrates constructing a ClickHouse vector store from
 // a DSN connection string. It is compiled but not executed (no output), because
 // it requires a live ClickHouse instance.
 func Example_connectByDSN() {
 	vs, err := clickhouse.New(
-		clickhouse.WithDSN("clickhouse://user:password@localhost:9000/default"),
+		clickhouse.WithDSN(exampleDSN()),
 		clickhouse.WithTableName("documents"),
 		clickhouse.WithVectorDimension(1536),
 		clickhouse.WithMetric(clickhouse.MetricCosine),
@@ -45,7 +56,7 @@ func Example_connectByDSN() {
 func Example_connectByInstance() {
 	storage.RegisterClickHouseInstance(
 		"my-clickhouse",
-		storage.WithClientBuilderDSN("clickhouse://user:password@localhost:9000/default"),
+		storage.WithClientBuilderDSN(exampleDSN()),
 	)
 
 	vs, err := clickhouse.New(
@@ -62,7 +73,7 @@ func Example_connectByInstance() {
 // Example_search demonstrates vector search with a metadata filter.
 func Example_search() {
 	vs, err := clickhouse.New(
-		clickhouse.WithDSN("clickhouse://user:password@localhost:9000/default"),
+		clickhouse.WithDSN(exampleDSN()),
 		clickhouse.WithTableName("documents"),
 		clickhouse.WithVectorDimension(3),
 		clickhouse.WithFilterFields(clickhouse.FilterFieldSpec{Name: "category", Type: clickhouse.FilterFieldString}),
@@ -86,7 +97,7 @@ func Example_search() {
 // Example_add demonstrates adding a document with its embedding.
 func Example_add() {
 	vs, err := clickhouse.New(
-		clickhouse.WithDSN("clickhouse://user:password@localhost:9000/default"),
+		clickhouse.WithDSN(exampleDSN()),
 		clickhouse.WithTableName("documents"),
 		clickhouse.WithVectorDimension(3),
 	)

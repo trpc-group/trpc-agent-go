@@ -291,6 +291,35 @@ func TestGetMetadataClauseOrder(t *testing.T) {
 	assert.Less(t, orderIdx, strings.Index(q, "LIMIT"), "ORDER BY must precede LIMIT: %s", q)
 }
 
+// TestGetMetadataOffsetConstraints documents how offset interacts with limit.
+// A negative limit combined with a positive offset is rejected upstream, which
+// is why the unbounded path always starts paging at zero.
+func TestGetMetadataOffsetConstraints(t *testing.T) {
+	c := &mockClient{}
+	c.queryFunc = func(ctx context.Context, q string, a ...any) (driver.Rows, error) {
+		return newMockRows([][]any{{"doc1", "{}"}}), nil
+	}
+	vs := vsWithClient(c)
+
+	// Unbounded retrieval with an offset is not a valid combination.
+	_, err := vs.GetMetadata(context.Background(),
+		vectorstore.WithGetMetadataLimit(-1),
+		vectorstore.WithGetMetadataOffset(25),
+	)
+	require.Error(t, err)
+
+	// A positive limit does honor the offset, which is bound as the last argument.
+	_, err = vs.GetMetadata(context.Background(),
+		vectorstore.WithGetMetadataLimit(10),
+		vectorstore.WithGetMetadataOffset(25),
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, c.queryCalls)
+	args := c.queryCalls[0].args
+	require.NotEmpty(t, args)
+	assert.Equal(t, 25, args[len(args)-1])
+}
+
 // TestGetMetadataPaginationDuplicateIDs asserts pagination advances by the
 // number of rows scanned. Paging on the deduplicated map size would stop early
 // and silently drop later pages.
