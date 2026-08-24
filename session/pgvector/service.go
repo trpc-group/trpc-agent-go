@@ -32,6 +32,7 @@ import (
 // Compile-time interface checks.
 var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
+var _ session.TrackEventPageService = (*Service)(nil)
 var _ session.SearchableService = (*Service)(nil)
 
 var errServiceClosing = errors.New("service is closing")

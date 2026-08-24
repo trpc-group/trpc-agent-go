@@ -31,6 +31,7 @@ import (
 
 var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
+var _ session.TrackEventPageService = (*Service)(nil)
 
 // SessionState is the state of a session.
 type SessionState struct {

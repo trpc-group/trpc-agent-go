@@ -27,8 +27,10 @@ const (
 
 // Metadata is the compact source metadata exposed to AG-UI consumers.
 type Metadata struct {
-	EventID            string `json:"eventId,omitempty"`
-	Author             string `json:"author,omitempty"`
+	EventID string `json:"eventId,omitempty"`
+	Author  string `json:"author,omitempty"`
+	// RunID identifies the AG-UI run associated with this metadata.
+	RunID              string `json:"runId,omitempty"`
 	InvocationID       string `json:"invocationId,omitempty"`
 	ParentInvocationID string `json:"parentInvocationId,omitempty"`
 	// ParentMetadata describes how the invocation was triggered by its
@@ -48,7 +50,14 @@ type SnapshotMetadata struct {
 	// Runs stores run-scoped metadata keyed by run ID. It is populated from
 	// persisted user-input forwardedProps metadata and is not a general run
 	// event source index.
-	Runs map[string]Metadata `json:"runs,omitempty"`
+	Runs map[string]Metadata   `json:"runs,omitempty"`
+	Page *SnapshotPageMetadata `json:"page,omitempty"`
+}
+
+// SnapshotPageMetadata describes the loaded message snapshot page.
+type SnapshotPageMetadata struct {
+	Cursor  string `json:"cursor"`  // Cursor is the opaque cursor for loading older history.
+	HasMore bool   `json:"hasMore"` // HasMore reports whether the client is missing older history.
 }
 
 // SnapshotMetadataOption configures how snapshot metadata is built.
@@ -70,6 +79,7 @@ func WithRunLifecycleEvents(include bool) SnapshotMetadataOption {
 func (m Metadata) IsZero() bool {
 	return m.EventID == "" &&
 		m.Author == "" &&
+		m.RunID == "" &&
 		m.InvocationID == "" &&
 		m.ParentInvocationID == "" &&
 		m.ParentMetadata == nil &&
@@ -80,7 +90,7 @@ func (m Metadata) IsZero() bool {
 
 // IsZero reports whether the snapshot metadata is empty.
 func (m SnapshotMetadata) IsZero() bool {
-	return len(m.Messages) == 0 && len(m.ToolCalls) == 0 && len(m.Runs) == 0
+	return len(m.Messages) == 0 && len(m.ToolCalls) == 0 && len(m.Runs) == 0 && m.Page == nil
 }
 
 // FromEvent resolves source metadata from an agent event.
@@ -140,6 +150,7 @@ func FromRawEvent(raw any) (Metadata, bool) {
 		metadata := Metadata{
 			EventID:            stringFromMap(v, "eventId"),
 			Author:             stringFromMap(v, "author"),
+			RunID:              stringFromMap(v, "runId"),
 			InvocationID:       stringFromMap(v, "invocationId"),
 			ParentInvocationID: stringFromMap(v, "parentInvocationId"),
 			Branch:             stringFromMap(v, "branch"),
@@ -184,6 +195,7 @@ func BuildSnapshotMetadata(
 		ToolCalls: make(map[string]Metadata),
 		Runs:      make(map[string]Metadata),
 	}
+	currentRunID := ""
 	for _, trackEvent := range events {
 		if len(trackEvent.Payload) == 0 {
 			continue
@@ -196,7 +208,14 @@ func BuildSnapshotMetadata(
 		if base == nil {
 			continue
 		}
+		lifecycleRunID, lifecycleStarted, lifecycleTerminal := runLifecycleRunInfo(evt)
+		if lifecycleStarted {
+			currentRunID = lifecycleRunID
+		}
 		if !options.includeRunLifecycleEvents && isRunLifecycleEvent(evt) {
+			if lifecycleTerminal {
+				currentRunID = ""
+			}
 			continue
 		}
 		sourceMetadata, ok := FromRawEvent(base.RawEvent)
@@ -210,14 +229,31 @@ func BuildSnapshotMetadata(
 		if !ok && sourceMetadata.Timestamp == nil {
 			continue
 		}
-		runID := runIDFromRawEvent(base.RawEvent)
-		recordRunMetadata(metadata.Runs, runID, sourceMetadata)
+		if sourceMetadata.RunID == "" {
+			sourceMetadata.RunID = lifecycleRunID
+		}
+		if sourceMetadata.RunID == "" {
+			sourceMetadata.RunID = currentRunID
+		}
+		if sourceMetadata.RunID == "" {
+			sourceMetadata.RunID = runIDFromRawEvent(base.RawEvent)
+		}
+		runID := sourceMetadata.RunID
+		runMetadata := sourceMetadata
+		runMetadata.RunID = ""
+		recordRunMetadata(metadata.Runs, runID, runMetadata)
 		sourceMetadata.ForwardedProps = nil
 		if sourceMetadata.IsZero() {
+			if lifecycleTerminal {
+				currentRunID = ""
+			}
 			continue
 		}
 		recordSnapshotMetadata(metadata.Messages, metadata.ToolCalls,
 			evt, sourceMetadata)
+		if lifecycleTerminal {
+			currentRunID = ""
+		}
 	}
 	if len(metadata.Messages) == 0 {
 		metadata.Messages = nil
@@ -229,6 +265,19 @@ func BuildSnapshotMetadata(
 		metadata.Runs = nil
 	}
 	return metadata
+}
+
+func runLifecycleRunInfo(evt aguievents.Event) (runID string, started bool, terminal bool) {
+	switch e := evt.(type) {
+	case *aguievents.RunStartedEvent:
+		return e.RunID(), true, false
+	case *aguievents.RunFinishedEvent:
+		return e.RunID(), false, true
+	case *aguievents.RunErrorEvent:
+		return e.RunID(), false, true
+	default:
+		return "", false, false
+	}
 }
 
 func isRunLifecycleEvent(evt aguievents.Event) bool {
@@ -433,6 +482,9 @@ func mergeMetadata(existing Metadata, incoming Metadata) Metadata {
 	}
 	if incoming.Author != "" {
 		merged.Author = incoming.Author
+	}
+	if incoming.RunID != "" {
+		merged.RunID = incoming.RunID
 	}
 	if incoming.InvocationID != "" {
 		merged.InvocationID = incoming.InvocationID

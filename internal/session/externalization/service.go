@@ -104,6 +104,11 @@ type trackService struct {
 	session.TrackService
 }
 
+type trackPageService struct {
+	*trackService
+	session.TrackEventPageService
+}
+
 type trackEventReader interface {
 	GetTrackEvents(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error)
 }
@@ -134,6 +139,11 @@ type searchableTrackService struct {
 	session.TrackService
 }
 
+type searchableTrackPageService struct {
+	*searchableTrackService
+	session.TrackEventPageService
+}
+
 func (s *searchableTrackService) SearchEvents(
 	ctx context.Context,
 	req session.EventSearchRequest,
@@ -145,6 +155,11 @@ type windowTrackService struct {
 	*Service
 	session.WindowService
 	session.TrackService
+}
+
+type windowTrackPageService struct {
+	*windowTrackService
+	session.TrackEventPageService
 }
 
 func (s *windowTrackService) GetEventWindow(
@@ -160,11 +175,21 @@ type trackReaderService struct {
 	trackEventReader
 }
 
+type trackReaderPageService struct {
+	*trackReaderService
+	session.TrackEventPageService
+}
+
 type searchableWindowTrackService struct {
 	*Service
 	session.SearchableService
 	session.WindowService
 	session.TrackService
+}
+
+type searchableWindowTrackPageService struct {
+	*searchableWindowTrackService
+	session.TrackEventPageService
 }
 
 func (s *searchableWindowTrackService) SearchEvents(
@@ -189,6 +214,11 @@ type searchableWindowTrackReaderService struct {
 	trackEventReader
 }
 
+type searchableWindowTrackReaderPageService struct {
+	*searchableWindowTrackReaderService
+	session.TrackEventPageService
+}
+
 func (s *searchableWindowTrackReaderService) SearchEvents(
 	ctx context.Context,
 	req session.EventSearchRequest,
@@ -210,6 +240,11 @@ type searchableTrackReaderService struct {
 	trackEventReader
 }
 
+type searchableTrackReaderPageService struct {
+	*searchableTrackReaderService
+	session.TrackEventPageService
+}
+
 func (s *searchableTrackReaderService) SearchEvents(
 	ctx context.Context,
 	req session.EventSearchRequest,
@@ -222,6 +257,11 @@ type windowTrackReaderService struct {
 	session.WindowService
 	session.TrackService
 	trackEventReader
+}
+
+type windowTrackReaderPageService struct {
+	*windowTrackReaderService
+	session.TrackEventPageService
 }
 
 func (s *windowTrackReaderService) GetEventWindow(
@@ -251,6 +291,11 @@ type stateInitializingTrackService struct {
 	session.StateInitializationService
 }
 
+type stateInitializingTrackPageService struct {
+	*trackPageService
+	session.StateInitializationService
+}
+
 type stateInitializingSearchableWindowService struct {
 	*searchableWindowService
 	session.StateInitializationService
@@ -261,8 +306,18 @@ type stateInitializingSearchableTrackService struct {
 	session.StateInitializationService
 }
 
+type stateInitializingSearchableTrackPageService struct {
+	*searchableTrackPageService
+	session.StateInitializationService
+}
+
 type stateInitializingWindowTrackService struct {
 	*windowTrackService
+	session.StateInitializationService
+}
+
+type stateInitializingWindowTrackPageService struct {
+	*windowTrackPageService
 	session.StateInitializationService
 }
 
@@ -271,8 +326,18 @@ type stateInitializingTrackReaderService struct {
 	session.StateInitializationService
 }
 
+type stateInitializingTrackReaderPageService struct {
+	*trackReaderPageService
+	session.StateInitializationService
+}
+
 type stateInitializingSearchableWindowTrackService struct {
 	*searchableWindowTrackService
+	session.StateInitializationService
+}
+
+type stateInitializingSearchableWindowTrackPageService struct {
+	*searchableWindowTrackPageService
 	session.StateInitializationService
 }
 
@@ -281,13 +346,28 @@ type stateInitializingSearchableWindowTrackReaderService struct {
 	session.StateInitializationService
 }
 
+type stateInitializingSearchableWindowTrackReaderPageService struct {
+	*searchableWindowTrackReaderPageService
+	session.StateInitializationService
+}
+
 type stateInitializingSearchableTrackReaderService struct {
 	*searchableTrackReaderService
 	session.StateInitializationService
 }
 
+type stateInitializingSearchableTrackReaderPageService struct {
+	*searchableTrackReaderPageService
+	session.StateInitializationService
+}
+
 type stateInitializingWindowTrackReaderService struct {
 	*windowTrackReaderService
+	session.StateInitializationService
+}
+
+type stateInitializingWindowTrackReaderPageService struct {
+	*windowTrackReaderPageService
 	session.StateInitializationService
 }
 
@@ -305,8 +385,9 @@ func wrapExistingOptionalInterfaces(base *Service, inner session.Service) sessio
 	window, hasWindow := inner.(session.WindowService)
 	track, hasTrack := inner.(session.TrackService)
 	reader, hasReader := inner.(trackEventReader)
+	pager, hasPager := inner.(session.TrackEventPageService)
 	if hasTrack {
-		return wrapTrackOptionalInterfaces(base, searchable, hasSearch, window, hasWindow, track, reader, hasReader)
+		return wrapTrackOptionalInterfaces(base, searchable, hasSearch, window, hasWindow, track, reader, hasReader, pager, hasPager)
 	}
 	switch {
 	case hasSearch && hasWindow:
@@ -335,6 +416,46 @@ func wrapStateInitializationInterface(
 	initializer session.StateInitializationService,
 ) session.Service {
 	switch service := wrapped.(type) {
+	case *searchableWindowTrackReaderPageService:
+		return &stateInitializingSearchableWindowTrackReaderPageService{
+			searchableWindowTrackReaderPageService: service,
+			StateInitializationService:             initializer,
+		}
+	case *searchableWindowTrackPageService:
+		return &stateInitializingSearchableWindowTrackPageService{
+			searchableWindowTrackPageService: service,
+			StateInitializationService:       initializer,
+		}
+	case *searchableTrackReaderPageService:
+		return &stateInitializingSearchableTrackReaderPageService{
+			searchableTrackReaderPageService: service,
+			StateInitializationService:       initializer,
+		}
+	case *windowTrackReaderPageService:
+		return &stateInitializingWindowTrackReaderPageService{
+			windowTrackReaderPageService: service,
+			StateInitializationService:   initializer,
+		}
+	case *trackReaderPageService:
+		return &stateInitializingTrackReaderPageService{
+			trackReaderPageService:     service,
+			StateInitializationService: initializer,
+		}
+	case *searchableTrackPageService:
+		return &stateInitializingSearchableTrackPageService{
+			searchableTrackPageService: service,
+			StateInitializationService: initializer,
+		}
+	case *windowTrackPageService:
+		return &stateInitializingWindowTrackPageService{
+			windowTrackPageService:     service,
+			StateInitializationService: initializer,
+		}
+	case *trackPageService:
+		return &stateInitializingTrackPageService{
+			trackPageService:           service,
+			StateInitializationService: initializer,
+		}
 	case *searchableWindowTrackReaderService:
 		return &stateInitializingSearchableWindowTrackReaderService{
 			searchableWindowTrackReaderService: service,
@@ -409,8 +530,21 @@ func wrapTrackOptionalInterfaces(
 	track session.TrackService,
 	reader trackEventReader,
 	hasReader bool,
+	pager session.TrackEventPageService,
+	hasPager bool,
 ) session.Service {
 	switch {
+	case hasSearch && hasWindow && hasReader && hasPager:
+		return &searchableWindowTrackReaderPageService{
+			searchableWindowTrackReaderService: &searchableWindowTrackReaderService{
+				Service:           base,
+				SearchableService: searchable,
+				WindowService:     window,
+				TrackService:      track,
+				trackEventReader:  reader,
+			},
+			TrackEventPageService: pager,
+		}
 	case hasSearch && hasWindow && hasReader:
 		return &searchableWindowTrackReaderService{
 			Service:           base,
@@ -419,12 +553,32 @@ func wrapTrackOptionalInterfaces(
 			TrackService:      track,
 			trackEventReader:  reader,
 		}
+	case hasSearch && hasWindow && hasPager:
+		return &searchableWindowTrackPageService{
+			searchableWindowTrackService: &searchableWindowTrackService{
+				Service:           base,
+				SearchableService: searchable,
+				WindowService:     window,
+				TrackService:      track,
+			},
+			TrackEventPageService: pager,
+		}
 	case hasSearch && hasWindow:
 		return &searchableWindowTrackService{
 			Service:           base,
 			SearchableService: searchable,
 			WindowService:     window,
 			TrackService:      track,
+		}
+	case hasSearch && hasReader && hasPager:
+		return &searchableTrackReaderPageService{
+			searchableTrackReaderService: &searchableTrackReaderService{
+				Service:           base,
+				SearchableService: searchable,
+				TrackService:      track,
+				trackEventReader:  reader,
+			},
+			TrackEventPageService: pager,
 		}
 	case hasSearch && hasReader:
 		return &searchableTrackReaderService{
@@ -433,11 +587,30 @@ func wrapTrackOptionalInterfaces(
 			TrackService:      track,
 			trackEventReader:  reader,
 		}
+	case hasSearch && hasPager:
+		return &searchableTrackPageService{
+			searchableTrackService: &searchableTrackService{
+				Service:           base,
+				SearchableService: searchable,
+				TrackService:      track,
+			},
+			TrackEventPageService: pager,
+		}
 	case hasSearch:
 		return &searchableTrackService{
 			Service:           base,
 			SearchableService: searchable,
 			TrackService:      track,
+		}
+	case hasWindow && hasReader && hasPager:
+		return &windowTrackReaderPageService{
+			windowTrackReaderService: &windowTrackReaderService{
+				Service:          base,
+				WindowService:    window,
+				TrackService:     track,
+				trackEventReader: reader,
+			},
+			TrackEventPageService: pager,
 		}
 	case hasWindow && hasReader:
 		return &windowTrackReaderService{
@@ -446,17 +619,43 @@ func wrapTrackOptionalInterfaces(
 			TrackService:     track,
 			trackEventReader: reader,
 		}
+	case hasWindow && hasPager:
+		return &windowTrackPageService{
+			windowTrackService: &windowTrackService{
+				Service:       base,
+				WindowService: window,
+				TrackService:  track,
+			},
+			TrackEventPageService: pager,
+		}
 	case hasWindow:
 		return &windowTrackService{
 			Service:       base,
 			WindowService: window,
 			TrackService:  track,
 		}
+	case hasReader && hasPager:
+		return &trackReaderPageService{
+			trackReaderService: &trackReaderService{
+				Service:          base,
+				TrackService:     track,
+				trackEventReader: reader,
+			},
+			TrackEventPageService: pager,
+		}
 	case hasReader:
 		return &trackReaderService{
 			Service:          base,
 			TrackService:     track,
 			trackEventReader: reader,
+		}
+	case hasPager:
+		return &trackPageService{
+			trackService: &trackService{
+				Service:      base,
+				TrackService: track,
+			},
+			TrackEventPageService: pager,
 		}
 	default:
 		return &trackService{

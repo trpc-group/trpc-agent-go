@@ -201,7 +201,7 @@ server, err := agui.New(
 )
 ```
 
-开启后，实时对话请求在持久化用户输入事件时，会把 AG-UI 请求体中的 `forwardedProps` 字段写入该用户输入事件的 `rawEvent.forwardedProps`；在 Go API 中，该字段对应 `RunAgentInput.ForwardedProps`。读取历史时，消息快照路由会把它聚合到 `MESSAGES_SNAPSHOT.rawEvent.runs[runId].forwardedProps`：
+开启后，实时对话请求在持久化用户输入事件时，会把 AG-UI 请求体中的 `forwardedProps` 字段写入该用户输入事件的 `rawEvent.forwardedProps`；在 Go API 中，该字段对应 `RunAgentInput.ForwardedProps`。读取历史时，消息快照路由会把它聚合到 `MESSAGES_SNAPSHOT.rawEvent.runs[runId].forwardedProps`，并在可关联到运行的消息元数据中写入 `runId`：
 
 ```json
 {
@@ -232,6 +232,7 @@ server, err := agui.New(
     "messages": {
       "user-1": {
         "author": "demo-user",
+        "runId": "run-1",
         "timestamp": 1781258400000
       }
     }
@@ -277,3 +278,71 @@ server, err := agui.New(
 ```
 
 完整示例可参考 [examples/agui/server/follow](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/follow)，前端可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
+
+## 分页消息快照
+
+默认情况下，`/history` 会一次性还原当前会话中全部已持久化的 AG-UI 历史。对于较长的对话，这会增加会话存储读取、服务端事件还原以及网络传输的成本。此时可以配置 `agui.WithMessagesSnapshotSessionPageResolver`，让每次消息快照请求只读取一页已持久化事件。
+
+分页能力由 session 层提供。AG-UI 服务端不会额外定义顶层 cursor 字段，也不约定固定的请求参数名称；resolver 会拿到原始 `RunAgentInput` 和已经解析出的 `session.Key`，再返回一次 session 分页请求。业务可以自行决定 cursor 和 limit 的来源，例如从 `forwardedProps`、网关映射后的请求元数据，或其它业务输入中读取。
+
+resolver 返回 `*aguirunner.MessagesSnapshotPageRequest`。`Cursor` 是上一页返回的 opaque cursor，空 cursor 表示读取最新一页。`EventLimit` 表示从会话存储中读取的 AG-UI track event 数量；它限制的是事件数，不是消息数或对话轮数，因为一条最终展示的消息可能由多条已持久化 AG-UI 事件还原而来。
+
+只有配置的 session service 实现了 `session.TrackEventPageService` 时，消息快照路由才会使用分页读取。若当前 session service 不支持该能力，`/history` 会保持原有的全量快照行为。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName("demo-app"),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotSessionPageResolver(
+        func(ctx context.Context, input *adapter.RunAgentInput, key session.Key) (*aguirunner.MessagesSnapshotPageRequest, error) {
+            forwardedProps, _ := input.ForwardedProps.(map[string]any)
+            cursor, _ := forwardedProps["cursor"].(string)
+            return &aguirunner.MessagesSnapshotPageRequest{
+                Cursor:     cursor,
+                EventLimit: 200,
+            }, nil
+        },
+    ),
+)
+```
+
+分页快照的响应仍然使用标准的 `MESSAGES_SNAPSHOT` 事件。分页信息会写入 `MESSAGES_SNAPSHOT.rawEvent.page`：
+
+```json
+{
+  "type": "MESSAGES_SNAPSHOT",
+  "messages": [
+    {
+      "id": "user-1",
+      "role": "user",
+      "content": "你好"
+    },
+    {
+      "id": "assistant-1",
+      "role": "assistant",
+      "content": "你好，有什么可以帮你？"
+    }
+  ],
+  "rawEvent": {
+    "page": {
+      "cursor": "opaque-cursor-for-the-page-boundary",
+      "hasMore": true
+    }
+  }
+}
+```
+
+下一次请求更早历史时，客户端应把返回的 `cursor` 原样传回 resolver 所读取的位置。cursor 是 opaque token，业务代码不应解析、比较或自行构造。
+
+`hasMore=true` 表示客户端还没有收到全部更早历史。原因可能是 session 存储中仍有更早事件，也可能是 AG-UI 层在返回前裁剪了当前页。这个裁剪是有意的：消息快照会从 user message 边界开始返回，避免前端收到上一轮对话的后半段。
+
+如果本次读取到的事件页中找不到 user message 边界，`/history` 会返回空 `messages`，并在 `rawEvent.page.cursor` 中保留本次请求传入的 cursor，同时设置 `hasMore=true`。客户端可以使用同一个 cursor，并调大 `EventLimit` 后重试，从 session 层请求更大的事件窗口。

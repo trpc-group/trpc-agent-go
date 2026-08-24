@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/internal/sessionopt"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/trackpage"
 	sessionwindow "trpc.group/trpc-go/trpc-agent-go/session/internal/window"
 )
 
@@ -40,9 +42,10 @@ type sessionWithTTL struct {
 }
 
 var (
-	_ session.Service       = (*SessionService)(nil)
-	_ session.TrackService  = (*SessionService)(nil)
-	_ session.WindowService = (*SessionService)(nil)
+	_ session.Service               = (*SessionService)(nil)
+	_ session.TrackService          = (*SessionService)(nil)
+	_ session.TrackEventPageService = (*SessionService)(nil)
+	_ session.WindowService         = (*SessionService)(nil)
 
 	_ session.StateInitializationService = (*SessionService)(nil)
 )
@@ -438,6 +441,82 @@ func (s *SessionService) GetEventWindow(
 		return sessionwindow.EventWindowFromOrderedEvents(req.Key, nil, req)
 	}
 	return sessionwindow.EventWindowFromOrderedEvents(req.Key, sess.Events, req)
+}
+
+// GetTrackEventPage returns a cursor page of persisted track events.
+func (s *SessionService) GetTrackEventPage(
+	_ context.Context,
+	req session.TrackEventPageRequest,
+) (*session.TrackEventPage, error) {
+	if err := trackpage.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+	sess, err := s.getRawSession(req.Key)
+	if err != nil {
+		return nil, err
+	}
+	if sess == nil || sess.Tracks == nil {
+		return &session.TrackEventPage{Track: req.Track}, nil
+	}
+	history := sess.Tracks[req.Track]
+	if history == nil || len(history.Events) == 0 {
+		return &session.TrackEventPage{Track: req.Track}, nil
+	}
+	return inMemoryTrackEventPage(req, sess.CreatedAt, history.Events)
+}
+
+func inMemoryTrackEventPage(
+	req session.TrackEventPageRequest,
+	sessionCreatedAt time.Time,
+	events []session.TrackEvent,
+) (*session.TrackEventPage, error) {
+	end := len(events)
+	if req.Cursor != "" {
+		cursor, err := trackpage.Decode(req.Cursor)
+		if err != nil {
+			return nil, err
+		}
+		if err := trackpage.ValidateBinding(cursor, "inmemory", req.Key, req.Track, sessionCreatedAt); err != nil {
+			return nil, err
+		}
+		index, err := strconv.Atoi(cursor.ID)
+		if err != nil || index < 0 || index > len(events) {
+			return nil, fmt.Errorf("invalid track event page cursor")
+		}
+		end = index
+	}
+	start := 0
+	scanned := end
+	if scanned > req.EventLimit+1 {
+		start = scanned - req.EventLimit - 1
+	}
+	hasMore := end-start > req.EventLimit
+	if hasMore {
+		start++
+	}
+	entries := make([]session.TrackEventPageEntry, 0, end-start)
+	for i := start; i < end; i++ {
+		cursor, err := trackpage.CursorForUnixNano(
+			"inmemory",
+			req.Key,
+			req.Track,
+			sessionCreatedAt,
+			trackpage.TimeToUnixNano(events[i].Timestamp),
+			strconv.Itoa(i),
+		)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, session.TrackEventPageEntry{
+			Event:  events[i],
+			Cursor: cursor,
+		})
+	}
+	return &session.TrackEventPage{
+		Track:   req.Track,
+		Entries: entries,
+		HasMore: hasMore,
+	}, nil
 }
 
 // ListSessions returns all sessions for a given app and user.

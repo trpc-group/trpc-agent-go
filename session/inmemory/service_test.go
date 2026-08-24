@@ -1529,6 +1529,63 @@ func TestSessionServiceGetTrackEvents(t *testing.T) {
 	require.Empty(t, missing.Events)
 }
 
+func TestSessionServiceGetTrackEventPage(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "track-app",
+		UserID:    "track-user",
+		SessionID: "track-session",
+	}
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+	base := time.Now().Add(-time.Hour)
+	for i := 1; i <= 4; i++ {
+		require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+			Track:     "alpha",
+			Payload:   json.RawMessage(fmt.Sprintf(`"a%d"`, i)),
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+		}))
+	}
+	latest, err := service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		EventLimit: 2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, session.Track("alpha"), latest.Track)
+	require.Len(t, latest.Entries, 2)
+	assert.Equal(t, json.RawMessage(`"a3"`), latest.Entries[0].Event.Payload)
+	assert.Equal(t, json.RawMessage(`"a4"`), latest.Entries[1].Event.Payload)
+	assert.True(t, latest.HasMore)
+	older, err := service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		Cursor:     latest.Entries[0].Cursor,
+		EventLimit: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, older.Entries, 2)
+	assert.Equal(t, json.RawMessage(`"a1"`), older.Entries[0].Event.Payload)
+	assert.Equal(t, json.RawMessage(`"a2"`), older.Entries[1].Event.Payload)
+	assert.False(t, older.HasMore)
+	missing, err := service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "missing",
+		EventLimit: 2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, session.Track("missing"), missing.Track)
+	require.Empty(t, missing.Entries)
+	_, err = service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:   key,
+		Track: "alpha",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "eventLimit")
+}
+
 func TestSessionServiceGetTrackEventsEmptyAndErrors(t *testing.T) {
 	service := NewSessionService()
 	defer service.Close()

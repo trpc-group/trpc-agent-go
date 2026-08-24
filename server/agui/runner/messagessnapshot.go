@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/reduce"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -75,10 +76,11 @@ func (r *runner) MessagesSnapshot(ctx context.Context,
 			UserID:    userID,
 			SessionID: runAgentInput.ThreadID,
 		},
-		threadID:    runAgentInput.ThreadID,
-		runID:       runAgentInput.RunID,
-		userID:      userID,
-		enableTrack: false,
+		threadID:      runAgentInput.ThreadID,
+		runID:         runAgentInput.RunID,
+		userID:        userID,
+		enableTrack:   false,
+		runAgentInput: runAgentInput,
 	}
 	events := make(chan aguievents.Event)
 	runCtx := agent.CloneContext(ctx)
@@ -96,7 +98,22 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 		return
 	}
 
-	messagesSnapshotEvent, trackEvents, err := r.getMessagesSnapshotEvent(ctx, input.key)
+	pageReq, err := r.resolveMessagesSnapshotSessionPage(ctx, input)
+	if err != nil {
+		log.ErrorfContext(ctx, "agui messages snapshot: threadID: %s, runID: %s, resolve page: %v",
+			threadID, runID, err)
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("resolve page: %v", err),
+			aguievents.WithRunID(runID)), input)
+		return
+	}
+	// Unsupported session pagers keep the existing full snapshot behavior.
+	if pageReq != nil {
+		if _, ok := r.sessionService.(session.TrackEventPageService); !ok {
+			pageReq = nil
+		}
+	}
+	input.messagesSnapshotPage = pageReq
+	messagesSnapshotEvent, trackEvents, err := r.getMessagesSnapshotEvent(ctx, input.key, input.messagesSnapshotPage)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -123,7 +140,7 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 		return
 	}
 
-	if r.messagesSnapshotFollowEnabled && r.shouldFollowMessagesSnapshot(input.key, trackEvents) {
+	if input.messagesSnapshotPage == nil && r.messagesSnapshotFollowEnabled && r.shouldFollowMessagesSnapshot(input.key, trackEvents) {
 		r.messagesSnapshotFollow(ctx, input, events, trackEvents)
 		return
 	}
@@ -133,10 +150,46 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 	}
 }
 
+func (r *runner) resolveMessagesSnapshotSessionPage(
+	ctx context.Context,
+	input *runInput,
+) (*MessagesSnapshotPageRequest, error) {
+	if r.messagesSnapshotSessionPageResolver == nil {
+		return nil, nil
+	}
+	req, err := r.messagesSnapshotSessionPageResolver(ctx, input.runAgentInput, input.key)
+	if err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, nil
+	}
+	if req.EventLimit <= 0 {
+		return nil, errors.New("messages snapshot session page requires eventLimit > 0")
+	}
+	copied := *req
+	return &copied, nil
+}
+
 // getMessagesSnapshotEvent loads AG-UI track events and converts them to an AG-UI MessagesSnapshotEvent.
 // In order to fetch the history messages as much as possible, still return the messages even if there is an error.
-func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
-	sessionKey session.Key) (*aguievents.MessagesSnapshotEvent, *session.TrackEvents, error) {
+func (r *runner) getMessagesSnapshotEvent(
+	ctx context.Context,
+	sessionKey session.Key,
+	pageReq *MessagesSnapshotPageRequest,
+) (*aguievents.MessagesSnapshotEvent, *session.TrackEvents, error) {
+	if pageReq != nil {
+		if pager, ok := r.sessionService.(session.TrackEventPageService); ok {
+			return r.getMessagesSnapshotPageEvent(ctx, sessionKey, pageReq, pager)
+		}
+	}
+	return r.getMessagesSnapshotFullEvent(ctx, sessionKey)
+}
+
+func (r *runner) getMessagesSnapshotFullEvent(
+	ctx context.Context,
+	sessionKey session.Key,
+) (*aguievents.MessagesSnapshotEvent, *session.TrackEvents, error) {
 	trackEvents, err := r.tracker.GetEvents(ctx, sessionKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get track events: %w", err)
@@ -158,19 +211,95 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	log.DebugfContext(ctx, "agui messages snapshot: app=%s, user=%s, session=%s, trackEvents=%d, eventsForReduce=%d, safeForFollow=%t, messages=%d, reduceErr=%v",
 		sessionKey.AppName, sessionKey.UserID, sessionKey.SessionID, len(trackEvents.Events), len(eventsForReduce), safeForFollow, len(messages), err)
 	event := aguievents.NewMessagesSnapshotEvent(messages)
-	if r.eventSourceMetadataEnabled {
-		metadata := source.BuildSnapshotMetadata(
-			eventsForReduce,
-			source.WithRunLifecycleEvents(r.messagesSnapshotRunLifecycleEventsEnabled),
-		)
-		if !metadata.IsZero() {
-			event.GetBaseEvent().RawEvent = metadata
-		}
-	}
+	r.attachMessagesSnapshotRawEvent(event, eventsForReduce, nil)
 	if !safeForFollow {
 		trackEvents = nil
 	}
 	return event, trackEvents, err
+}
+
+func (r *runner) getMessagesSnapshotPageEvent(
+	ctx context.Context,
+	sessionKey session.Key,
+	pageReq *MessagesSnapshotPageRequest,
+	pager session.TrackEventPageService,
+) (*aguievents.MessagesSnapshotEvent, *session.TrackEvents, error) {
+	page, err := pager.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        sessionKey,
+		Track:      track.TrackAGUI,
+		Cursor:     pageReq.Cursor,
+		EventLimit: pageReq.EventLimit,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("get track event page: %w", err)
+	}
+	eventsForReduce, pageMetadata := trimTrackEventPageEntriesToHistoryStart(
+		page.Entries,
+		pageReq.Cursor,
+		page.HasMore,
+	)
+	messages, err := reduce.Reduce(
+		sessionKey.AppName,
+		sessionKey.UserID,
+		eventsForReduce,
+		reduce.WithRunLifecycleEvents(r.messagesSnapshotRunLifecycleEventsEnabled),
+	)
+	if err != nil {
+		err = fmt.Errorf("reduce track events: %w", err)
+	}
+	log.DebugfContext(ctx, "agui messages snapshot page: app=%s, user=%s, session=%s, pageEntries=%d, eventsForReduce=%d, hasMore=%t, messages=%d, reduceErr=%v",
+		sessionKey.AppName, sessionKey.UserID, sessionKey.SessionID, len(page.Entries), len(eventsForReduce), pageMetadata.HasMore, len(messages), err)
+	event := aguievents.NewMessagesSnapshotEvent(messages)
+	r.attachMessagesSnapshotRawEvent(event, eventsForReduce, &pageMetadata)
+	return event, nil, err
+}
+
+func (r *runner) attachMessagesSnapshotRawEvent(
+	event *aguievents.MessagesSnapshotEvent,
+	events []session.TrackEvent,
+	page *source.SnapshotPageMetadata,
+) {
+	metadata := source.SnapshotMetadata{}
+	if r.eventSourceMetadataEnabled {
+		metadata = source.BuildSnapshotMetadata(
+			events,
+			source.WithRunLifecycleEvents(r.messagesSnapshotRunLifecycleEventsEnabled),
+		)
+	}
+	if page != nil {
+		pageCopy := *page
+		metadata.Page = &pageCopy
+	}
+	if !metadata.IsZero() {
+		event.GetBaseEvent().RawEvent = metadata
+	}
+}
+
+func trimTrackEventPageEntriesToHistoryStart(
+	entries []session.TrackEventPageEntry,
+	requestCursor string,
+	sessionHasMore bool,
+) ([]session.TrackEvent, source.SnapshotPageMetadata) {
+	page := source.SnapshotPageMetadata{
+		Cursor:  requestCursor,
+		HasMore: sessionHasMore,
+	}
+	if len(entries) == 0 {
+		return nil, page
+	}
+	for i, entry := range entries {
+		if isUserMessageTrackEvent(entry.Event) {
+			page.Cursor = entry.Cursor
+			page.HasMore = sessionHasMore || i > 0
+			events := make([]session.TrackEvent, 0, len(entries)-i)
+			for _, kept := range entries[i:] {
+				events = append(events, kept.Event)
+			}
+			return events, page
+		}
+	}
+	page.HasMore = true
+	return nil, page
 }
 
 func trimTrackEventsToHistoryStart(events []session.TrackEvent) ([]session.TrackEvent, bool) {

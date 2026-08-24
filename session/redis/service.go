@@ -34,8 +34,9 @@ import (
 )
 
 var (
-	_ session.Service      = (*Service)(nil)
-	_ session.TrackService = (*Service)(nil)
+	_ session.Service               = (*Service)(nil)
+	_ session.TrackService          = (*Service)(nil)
+	_ session.TrackEventPageService = (*Service)(nil)
 
 	_ session.StateInitializationService = (*Service)(nil)
 )

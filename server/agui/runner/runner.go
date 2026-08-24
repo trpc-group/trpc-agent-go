@@ -102,6 +102,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		messagesSnapshotFollowEnabled:          opts.MessagesSnapshotFollowEnabled,
 		messagesSnapshotFollowMaxDuration:      opts.MessagesSnapshotFollowMaxDuration,
 		messagesSnapshotRunLifecycleEventsEnabled: opts.MessagesSnapshotRunLifecycleEventsEnabled,
+		messagesSnapshotSessionPageResolver:       opts.MessagesSnapshotSessionPageResolver,
 		toolResultInputTranslationEnabled:         opts.ToolResultInputTranslationEnabled,
 		toolCallDeltaStreamingEnabled:             opts.ToolCallDeltaStreamingEnabled,
 		streamingToolResultActivityEnabled:        opts.StreamingToolResultActivityEnabled,
@@ -142,6 +143,7 @@ type runner struct {
 	messagesSnapshotFollowEnabled             bool
 	messagesSnapshotFollowMaxDuration         time.Duration
 	messagesSnapshotRunLifecycleEventsEnabled bool
+	messagesSnapshotSessionPageResolver       MessagesSnapshotSessionPageResolver
 	toolResultInputTranslationEnabled         bool
 	toolCallDeltaStreamingEnabled             bool
 	streamingToolResultActivityEnabled        bool
@@ -158,21 +160,22 @@ type sessionContext struct {
 }
 
 type runInput struct {
-	key             session.Key
-	threadID        string
-	runID           string
-	userID          string
-	messages        *runAgentMessages
-	runOption       []agent.RunOption
-	translator      translator.Translator
-	enableTrack     bool
-	startTrackFlush func()
-	span            trace.Span
-	resume          *resumeInfo
-	terminalEmitted bool
-	runAgentInput   *adapter.RunAgentInput
-	done            chan struct{}
-	consumerDone    <-chan struct{}
+	key                  session.Key
+	threadID             string
+	runID                string
+	userID               string
+	messages             *runAgentMessages
+	runOption            []agent.RunOption
+	translator           translator.Translator
+	enableTrack          bool
+	startTrackFlush      func()
+	span                 trace.Span
+	resume               *resumeInfo
+	terminalEmitted      bool
+	runAgentInput        *adapter.RunAgentInput
+	messagesSnapshotPage *MessagesSnapshotPageRequest
+	done                 chan struct{}
+	consumerDone         <-chan struct{}
 }
 
 type runAgentResult struct {

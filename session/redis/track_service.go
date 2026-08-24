@@ -15,6 +15,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/trackpage"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
 
@@ -92,6 +93,37 @@ func (s *Service) GetTrackEvents(
 		}
 	}
 	return s.getHashIdxTrackEvents(ctx, key, track, opt)
+}
+
+// GetTrackEventPage returns a cursor page of persisted track events.
+func (s *Service) GetTrackEventPage(
+	ctx context.Context,
+	req session.TrackEventPageRequest,
+) (*session.TrackEventPage, error) {
+	ctx, span := s.startSpan(ctx, "get_track_event_page", req.Key)
+	defer span.End()
+	if err := trackpage.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, req.Key)
+	if err != nil {
+		return nil, fmt.Errorf("check session exists: %w", err)
+	}
+	if s.compatEnabled() && zsetExists {
+		page, err := s.zsetClient.GetTrackEventPage(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("get track event page (zset): %w", err)
+		}
+		return page, nil
+	}
+	if hashidxExists {
+		page, err := s.hashidxClient.GetTrackEventPage(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("get track event page (hashidx): %w", err)
+		}
+		return page, nil
+	}
+	return &session.TrackEventPage{Track: req.Track}, nil
 }
 
 func (s *Service) getZSetTrackEvents(
