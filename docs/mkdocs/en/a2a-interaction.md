@@ -6,7 +6,7 @@
 
 ## Background
 
-The [A2A (Agent-to-Agent) protocol](https://a2a-protocol.org/latest/specification/) defines the basic data models (Message, Task, Part, etc.) and operation interfaces (SendMessage, StreamMessage, etc.) for inter-Agent communication. The A2A specification states its design goals at the very beginning:
+The [A2A (Agent-to-Agent) protocol](https://a2a-protocol.org/latest/specification/) defines the basic data models (Message, Task, Part, etc.) and wire operations for inter-Agent communication. Operation names depend on the protocol generation: v0.2.x uses methods such as `message/send` and `message/stream`, while v1 uses operations such as `SendMessage` and `SendStreamingMessage`. The A2A specification states its design goals at the very beginning:
 
 > *The Agent2Agent (A2A) Protocol is an open standard designed to facilitate communication and interoperability between independent, potentially opaque AI agent systems.*
 >
@@ -44,7 +44,7 @@ The `trpc-a2a-version` extension, interaction version `0.1`, and shared metadata
 | Agent Card declaration | `AgentCard.capabilities.extensions` | `AgentCard.capabilities.extensions` |
 | Request version | Message metadata | Message metadata |
 | Extended event data | Legacy `TextPart`, `DataPart`, and streaming envelopes | Unified Part metadata plus Message, Artifact, and Task update event metadata |
-| Operation names | Lowercase slash-delimited methods such as `message/send` | v1 operations such as `SendMessage` and `SubscribeToTask` |
+| Operation names | Lowercase slash-delimited methods such as `message/send` and `message/stream` | v1 operations such as `SendMessage` and `SendStreamingMessage` |
 
 Unless a section explicitly describes v1, the JSON shapes, concrete Part types, method names, and streaming envelopes in the remainder of this document are v0.2.x wire examples. The metadata key definitions remain the shared interoperability contract.
 
@@ -159,7 +159,7 @@ sequenceDiagram
     S-->>C: SSE: TaskStatusUpdateEvent (completed)
 ```
 
-`SendMessage` waits for the complete response before returning it all at once, while `StreamMessage` pushes incremental events in real-time via SSE. The framework automatically handles format conversion on both ends.
+The `trpc-a2a-go` client methods `SendMessage` and `StreamMessage` wait for a complete response and push incremental SSE events, respectively. In this v0.2.x flow they map to the wire methods `message/send` and `message/stream`; the corresponding v1 streaming operation is `SendStreamingMessage`. The framework automatically handles format conversion on both ends.
 
 ---
 

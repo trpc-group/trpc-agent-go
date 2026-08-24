@@ -630,7 +630,11 @@ The v0 wire protocol defaults `blocking` to false for `message/send`, but the bu
 
 These examples support maintenance of v0.2.x applications. Do not copy their legacy-specific configuration directly into a v1 integration.
 
-## v1.0 and v0.2.x integration differences
+## Migrate from v0.2.x to v1.0
+
+Migrating to v1.0 requires more than changing import paths. The wire model, Server construction, Runner ownership, Agent Card, TaskManager defaults, and several extension interfaces changed. Upgrade the Server first and expose the v0 compatibility path, then migrate Clients incrementally.
+
+### v1.0 and v0.2.x integration differences
 
 | Area | v0.2.x | v1.0 |
 |---|---|---|
@@ -644,6 +648,132 @@ These examples support maintenance of v0.2.x applications. Do not copy their leg
 | Wire method names | Slash-delimited, such as `message/send` | PascalCase, such as `SendMessage` |
 | Task listing | Not provided | `ListTasks` |
 | Multi-node Task storage | The default path does not retain Tasks; applications must supply their own processor and backend | Explicit stateless, memory, or Redis strategy |
+
+### Compatibility matrix
+
+For the built-in tRPC-Agent-Go `server/a2a/v1` and `agent/a2aagent/v1` packages, v0 compatibility is one-way: a v1 Server can accept v0.2.x Client requests through the compatibility layer, but a v1 Client cannot call a legacy v0.2.x Server directly.
+
+| Client | v0.2.x Server | v1 Server | v1 Server + `WithV0Compatibility` |
+|---|---:|---:|---:|
+| v0.2.x Client | Supported | Not supported | Supported |
+| v1 Client | Not supported | Supported | Supported |
+
+Here, "Supported" means blocking and streaming message calls can enter the corresponding protocol path. Non-blocking calls and Task control operations additionally require the v1 Server to use a retaining TaskManager.
+
+Enable `WithV0Compatibility()` on the v1 Server while v0.2.x Clients remain, and remove it after that traffic is retired. A v1 Client cannot call a legacy v0.2.x Server, so mixed-version deployment and rollback routing must send v1 Clients only to v1 Servers.
+
+### Migrate the Server
+
+The legacy Server can accept an Agent directly and create its Runner internally:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+)
+
+server, err := a2aserver.New(
+    a2aserver.WithHost("agent.example.com:8888"),
+    a2aserver.WithAgent(llmAgent, true),
+    a2aserver.WithSessionService(inmemory.NewSessionService()),
+)
+```
+
+A v1 Server requires the application to construct the Runner and Agent Card explicitly:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a/v1"
+)
+
+agentRunner := runner.NewRunner(
+    llmAgent.Info().Name,
+    llmAgent,
+    runner.WithSessionService(inmemory.NewSessionService()),
+)
+defer agentRunner.Close()
+
+card, err := a2aserver.NewAgentCard(
+    llmAgent.Info().Name,
+    llmAgent.Info().Description,
+    "1.0.0",
+    "agent.example.com:8888",
+    true,
+    a2aserver.WithCardTools(llmAgent.Tools()...),
+)
+if err != nil {
+    return err
+}
+
+server, err := a2aserver.New(
+    a2aserver.WithRunner(agentRunner),
+    a2aserver.WithAgentCard(card),
+    a2aserver.WithV0Compatibility(),
+)
+```
+
+The `"1.0.0"` argument to `NewAgentCard` is the Agent implementation version, not the A2A protocol version. The Agent Card address is the client-reachable address and determines the Server base path; the address passed to `Start` only determines where the current process listens.
+
+The application now owns the Runner session service, memory, and shutdown. Keep `WithV0Compatibility()` during migration, then remove it after all v0.2.x Clients are retired.
+
+The legacy `WithAgent` path uses the Agent Card name as the Runner app name. When using persistent session storage, pass the same app name to the migrated `runner.NewRunner`; changing it changes storage keys and prevents existing sessions from being read.
+
+### Migrate the A2AAgent Client
+
+Clients that only use the default `A2AAgent` behavior usually need only an import-path change:
+
+```diff
+- a2aagent "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
++ a2aagent "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent/v1"
+```
+
+`WithAgentCardURL`, `WithEnableStreaming`, `WithTransferStateKey`, and `WithUserIDHeader` retain their purpose. Code that uses `WithAgentCard`, underlying client options, custom converters, mappers, or hooks must also migrate the related types and imports to `trpc-a2a-go/v2` and update signatures as described below.
+
+### Migrate configuration and extension interfaces
+
+Users of the default Server and A2AAgent behavior only need the regular configuration changes below. Skip the advanced extension table when the application has no custom converters, mappers, hooks, or legacy branch configuration.
+
+#### Regular configuration
+
+| v0.2.x configuration | v1 migration |
+|---|---|
+| `WithAgent` | Remove it; construct the Runner and configure `WithRunner` plus `WithAgentCard` |
+| `WithSessionService` | Remove it; use `runner.WithSessionService` |
+| `WithHost` | Remove it; publish the public address and base path in the Agent Card |
+| `NewAgentCard(name, description, host, streaming)` | Add the required Agent implementation version argument |
+| `WithTaskManagerBuilder` | Return `(taskmanager.TaskManager, error)` and migrate related types to `trpc-a2a-go/v2` |
+
+#### Advanced extensions
+
+| v0.2.x interface | v1 migration |
+|---|---|
+| `WithProcessorBuilder` | No one-to-one replacement; wrap the built-in processor with `WithProcessMessageHook`, or use `trpc-a2a-go/v2/server.NewA2AServer(customTaskManager, ...)` for a fully custom execution path |
+| `WithStreamingEventType` | Remove it; the built-in v1 converter uses artifact/status events, so Clients that consumed Message-shaped streams must consume those events or install a custom `EventToA2AConverter` |
+| `WithStructuredTaskErrors` | Remove it; v1 uses unified Task failure and structured-error semantics, and generated failures can be rewritten through `WithResponseRewriter` or a processor hook |
+| `WithStreamingRespHandler` | Remove it; the unified `A2AEventConverter` converts remote responses and the application continues to consume tRPC-Agent-Go events |
+| `EventToA2AMessage` | Remove the unary conversion method; retain only `ConvertStreamingToA2AMessage`, which returns `protocol.StreamEvent` |
+| `EventToA2APartMapper` | Change the return type from `[]protocol.Part` to `[]*protocol.Part` |
+| `A2AEventConverter` | Change inputs from v0 `MessageResult`/`StreamingMessageEvent` to v1 `SendMessageResponse`/`StreamResponse` |
+| `ResponseRewriter` | Change from separate unary/streaming methods to a function that handles each `StreamEvent` |
+| `BuildMessageHook`, `InvocationA2AConverter` | Remove the `isStream` argument; message construction is independent of transport selection |
+| `A2ADataPartMapper` | Change the input from v0 `*DataPart` to the unified v1 `*Part` |
+| Underlying `client`, `server`, `protocol`, and `taskmanager` imports | Migrate all of them to `trpc.group/trpc-go/trpc-a2a-go/v2/...` |
+
+`agent.WithA2ARequestOptions` accepts `...any`, so passing a legacy `trpc-a2a-go/client.RequestOption` can still compile while the v1 A2AAgent rejects the type at runtime. Check indirectly supplied options during migration instead of relying on compilation alone.
+
+### Choose a TaskManager during migration
+
+Do not configure the v1 memory TaskManager solely because the legacy Server created one internally. Choose the simplest implementation based on whether Clients need Task operations after the request ends.
+
+| Usage | Recommended TaskManager | Migration note |
+|---|---|---|
+| Ordinary blocking and streaming calls | Default stateless | Conversation context remains in the Runner session service |
+| Single-instance non-blocking calls, lookup, cancellation, resubscription, or continuation | Memory | Restarting the process loses Tasks |
+| Multi-node lookup, listing, and cross-node resubscription | Redis | Configure the Runner session store separately as shared storage; live cancellation must still reach the execution owner |
+
+A retaining TaskManager is required when a legacy Client explicitly sends `blocking=false` or depends on `tasks/get`, cancellation, resubscription, push notifications, `input-required`, or `auth-required`.
 
 ### Serve v0 clients from a v1 Server
 
@@ -676,16 +806,34 @@ The raw `compat/v0` converter preserves the v0 default: an omitted `blocking` me
 
 The stateless TaskManager rejects an explicit non-blocking request because request-bound execution cannot continue reliably after the HTTP response ends. A streaming request must also reach a terminal state within the current request; `input-required` and `auth-required` states that need a later continuation require a retaining TaskManager.
 
-The compatibility layer lets a legacy wire request enter the new execution path, but it does not guarantee lossless field-by-field conversion between the two data models. For example, `filename` and `mediaType` on v1 text/data Parts cannot be preserved in v0, the v0 `final` value in a streaming response is derived from v1 events, and only the first authentication scheme from a multi-scheme v0 push-notification configuration is retained in v1. Migration tests should cover real text, multimodal, tool-call, error, and Task workflows rather than checking only whether a request succeeds.
+With a retaining TaskManager, both protocol generations connected through the same compatible Server see the same Tasks: a Task created through v0.2.x can be queried through v1, a Task created through v1 can be queried through v0.2.x, and both observe the same cancellation state. This applies only to one v1 Server and its TaskManager; it does not mean a legacy v0.2.x Server can read the v1 TaskManager's internal storage.
+
+### Compatibility guarantees and known differences
+
+The compatibility layer preserves business semantics when legacy requests enter the new execution path; it does not reproduce every legacy Server wire response byte for byte.
+
+Integration tests with the current tRPC-Agent-Go legacy and v1 A2AAgent cover Agent Card discovery, blocking and streaming text, user and context/session IDs, RuntimeState, reasoning, tool calls and results, code execution, `state_delta`, files, and multimodal content. Both A2AAgent generations convert protocol results into common tRPC-Agent-Go events, so the parent Agent usually does not need to distinguish the underlying result type.
+
+Migration still needs to account for these observable differences:
+
+- The legacy built-in Server can return a direct `Message` when a unary call has one result, while the v1 Server's v0 compatibility path returns a request-local completed `Task`; code that type-asserts `MessageResult.Result` must handle both.
+- `filename` and `mediaType` on v1 text/data Parts cannot be preserved completely when converted to v0.
+- File references can be normalized between `FileID` and URL, and the compatibility Server can return more complete `ContentParts` than the legacy Server.
+- The v0 `final` value in a streaming response is derived from v1 events, so frame boundaries are not guaranteed to match the legacy Server.
+- Only the first authentication scheme from a multi-scheme v0 push-notification configuration is retained in v1.
+- Message IDs, Task IDs, timestamps, enum values, and raw JSON shapes are not guaranteed to be field-for-field equal across protocol generations.
+
+The compatibility layer targets the v0.2.x wire protocol used by tRPC-Agent-Go, and the current automated direct-protocol compatibility baseline is `trpc-a2a-go v0.2.5`. Historical tRPC-Agent-Go legacy A2AAgent releases, other v0.2.x versions, custom converters or hooks, gateway authentication, real push delivery, continuation, Redis restart, and cross-node execution must be tested end to end with the application's own dependency versions and deployment topology.
 
 ### Migration checklist
 
-- [ ] Change server and remote Agent imports to the `/v1` packages.
-- [ ] Construct and own the Runner explicitly.
+- [ ] Upgrade the Server first and enable `WithV0Compatibility()` while v0.2.x Clients remain.
+- [ ] Change Server and remote Agent imports to the `/v1` packages.
+- [ ] Construct and own the Runner explicitly, preserving its previous app name when sessions are persistent.
 - [ ] Publish a reachable Agent Card address and implementation version.
 - [ ] Keep conversation state in the Runner's session service.
 - [ ] Choose stateless, memory, or Redis Task management based on client needs.
-- [ ] Enable `WithV0Compatibility` while v0.2.x clients remain.
+- [ ] Migrate underlying client options and custom extension types to `trpc-a2a-go/v2`.
 - [ ] Test blocking, streaming, asynchronous, and retained Task flows separately.
 
 ## Protocol usage guide

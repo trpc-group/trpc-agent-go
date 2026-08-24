@@ -200,5 +200,5 @@ Once the boundary is clear, the API choice becomes much less ambiguous.
 - [Team documentation](../team.md)
 - [TaskRun documentation](../taskrun.md)
 - [Graph documentation](../graph.md)
-- [A2A documentation](../a2a.md)
+- [A2A v1.0 documentation](../a2a_v1.md)
 - [Tool documentation](../tool.md)
