@@ -24,6 +24,7 @@ import (
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -3840,4 +3841,121 @@ func TestApplyCacheControl_ToolResultBreakpoint(t *testing.T) {
 		"only the final tool result block is marked")
 	assert.Empty(t, string(got[3].Content[0].OfText.CacheControl.Type),
 		"the trailing per-request note stays outside the prefix")
+}
+
+// TestGenerateContent_CacheBreakpointBudget verifies that a request leaves the
+// model with no more than the four cache_control markers Anthropic accepts, and
+// that the tool-result breakpoint is the one given up when a caller's top-level
+// CacheControl claims the fourth slot from inside the request callback.
+func TestGenerateContent_CacheBreakpointBudget(t *testing.T) {
+	toolResultTurn := []model.Message{
+		{Role: model.RoleSystem, Content: "system policy"},
+		{Role: model.RoleUser, Content: "read both files"},
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{ID: "call_1", Function: model.FunctionDefinitionParam{Name: "read", Arguments: []byte(`{}`)}},
+				{ID: "call_2", Function: model.FunctionDefinitionParam{Name: "read", Arguments: []byte(`{}`)}},
+			},
+		},
+		{Role: model.RoleTool, ToolID: "call_1", Content: "file one"},
+		{Role: model.RoleTool, ToolID: "call_2", Content: "file two"},
+		// A per-request note after the tool results: this is the block the
+		// API's automatic marker lands on, so it is a fifth breakpoint rather
+		// than a duplicate of the one on the tool results.
+		{Role: model.RoleUser, Content: "[Turn 3/40]"},
+	}
+
+	tests := []struct {
+		name             string
+		topLevel         bool
+		wantToolResult   bool
+		wantBreakpoints  int
+		wantLastAssistCC bool
+	}{
+		{
+			name:             "without top-level cache control the tool result is marked",
+			topLevel:         false,
+			wantToolResult:   true,
+			wantBreakpoints:  4,
+			wantLastAssistCC: true,
+		},
+		{
+			name:             "top-level cache control reclaims the tool-result slot",
+			topLevel:         true,
+			wantToolResult:   false,
+			wantBreakpoints:  4,
+			wantLastAssistCC: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured *anthropic.MessageNewParams
+
+			orig := model.DefaultNewHTTPClient
+			t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+			model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+				return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+					h := make(http.Header)
+					h.Set("Content-Type", "application/json")
+					return &http.Response{
+						StatusCode: 200,
+						Body: io.NopCloser(strings.NewReader(`{"id":"m1","model":"claude",` +
+							`"role":"assistant","type":"message","stop_reason":"end_turn",` +
+							`"usage":{"input_tokens":1,"output_tokens":1},` +
+							`"content":[{"type":"text","text":"done"}]}`)),
+						Header: h,
+					}, nil
+				})}
+			}
+
+			m := New("claude-3-5-sonnet",
+				WithCacheSystemPrompt(true),
+				WithCacheTools(true),
+				WithCacheMessages(true),
+				WithChatRequestCallback(func(_ context.Context, req *anthropic.MessageNewParams) {
+					captured = req
+					if tt.topLevel {
+						req.CacheControl = anthropic.NewCacheControlEphemeralParam()
+					}
+				}),
+			)
+
+			ch, err := m.GenerateContent(context.Background(), &model.Request{
+				Messages: toolResultTurn,
+				Tools: map[string]tool.Tool{
+					"read": stubTool{decl: &tool.Declaration{
+						Name:        "read",
+						Description: "read a file",
+						InputSchema: &tool.Schema{Type: "object"},
+					}},
+				},
+			})
+			require.NoError(t, err)
+			for range ch {
+			}
+			require.NotNil(t, captured)
+
+			// convertMessages merges the two tool results into one user message,
+			// so the assembled request is [user, assistant, tool results, note].
+			require.Len(t, captured.Messages, 4)
+			toolResultMsg := captured.Messages[2]
+			require.NotNil(t, toolResultMsg.Content[len(toolResultMsg.Content)-1].OfToolResult)
+
+			marked := !param.IsOmitted(
+				toolResultMsg.Content[len(toolResultMsg.Content)-1].OfToolResult.CacheControl)
+			assert.Equal(t, tt.wantToolResult, marked,
+				"tool-result breakpoint presence")
+			assistant := captured.Messages[1].Content
+			assert.Equal(t, tt.wantLastAssistCC,
+				!param.IsOmitted(*assistant[len(assistant)-1].GetCacheControl()),
+				"the last-assistant breakpoint is kept either way")
+			assert.NotEmpty(t, captured.System[0].CacheControl.Type,
+				"the system breakpoint is kept either way")
+			assert.Equal(t, tt.wantBreakpoints, countCacheBreakpoints(captured),
+				"the request must never exceed the four breakpoints Anthropic accepts")
+			assert.LessOrEqual(t, countCacheBreakpoints(captured), cacheBreakpointLimit)
+		})
+	}
 }
