@@ -312,16 +312,16 @@ func TestApplyUpdatesToDoc(t *testing.T) {
 		"content":     "new content",
 		"metadata.k2": 123,
 	}
-	nd, emb, err := applyUpdatesToDoc(doc, []float64{1, 2}, updates)
+	updated, emb, err := applyUpdatesToDoc(doc, []float64{1, 2}, updates)
 	require.NoError(t, err)
-	assert.Equal(t, "new", nd.Name)
-	assert.Equal(t, "new content", nd.Content)
-	assert.Equal(t, 123, nd.Metadata["k2"])
-	assert.Equal(t, "v", nd.Metadata["k"])
+	assert.Equal(t, "new", updated.Name)
+	assert.Equal(t, "new content", updated.Content)
+	assert.Equal(t, 123, updated.Metadata["k2"])
+	assert.Equal(t, "v", updated.Metadata["k"])
 	assert.Equal(t, []float64{1, 2}, emb)
 
 	// embedding update.
-	nd, emb, err = applyUpdatesToDoc(doc, nil, map[string]any{"embedding": []float64{3, 4}})
+	updated, emb, err = applyUpdatesToDoc(doc, nil, map[string]any{"embedding": []float64{3, 4}})
 	require.NoError(t, err)
 	assert.Equal(t, []float64{3, 4}, emb)
 
