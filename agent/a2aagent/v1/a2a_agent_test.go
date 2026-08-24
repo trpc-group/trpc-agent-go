@@ -717,11 +717,22 @@ func TestNewPreservesSignedAgentCardPayload(t *testing.T) {
 			Signature: "signature",
 		}},
 	}
+	snapshotJSON, err := json.Marshal(card)
+	if err != nil {
+		t.Fatalf("marshal Agent Card snapshot failed: %v", err)
+	}
+	var snapshot protocolserver.AgentCard
+	if err := json.Unmarshal(snapshotJSON, &snapshot); err != nil {
+		t.Fatalf("unmarshal Agent Card snapshot failed: %v", err)
+	}
 	remote, err := New(WithAgentCard(card))
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
-	if got := remote.GetAgentCard(); !reflect.DeepEqual(got, card) {
-		t.Fatalf("stored signed Agent Card = %#v, want original payload %#v", got, card)
+	if !reflect.DeepEqual(card, &snapshot) {
+		t.Fatalf("input signed Agent Card = %#v, want original payload %#v", card, &snapshot)
+	}
+	if got := remote.GetAgentCard(); !reflect.DeepEqual(got, &snapshot) {
+		t.Fatalf("stored signed Agent Card = %#v, want original payload %#v", got, &snapshot)
 	}
 }
