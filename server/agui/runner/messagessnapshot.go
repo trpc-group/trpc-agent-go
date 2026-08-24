@@ -288,7 +288,7 @@ func trimTrackEventPageEntriesToHistoryStart(
 	for i, entry := range entries {
 		if isUserMessageTrackEvent(entry.Event) {
 			page.Cursor = entry.Cursor
-			page.HasMore = sessionHasMore
+			page.HasMore = sessionHasMore || i > 0
 			events := make([]session.TrackEvent, 0, len(entries)-i)
 			for _, kept := range entries[i:] {
 				events = append(events, kept.Event)
@@ -296,8 +296,7 @@ func trimTrackEventPageEntriesToHistoryStart(
 			return events, page
 		}
 	}
-	page.Cursor = entries[0].Cursor
-	page.HasMore = sessionHasMore
+	page.HasMore = true
 	return nil, page
 }
 
