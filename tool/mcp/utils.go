@@ -18,7 +18,7 @@ import (
 
 // convertMCPSchemaToSchema converts MCP's JSON schema to our Schema format.
 func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
-	schemaBytes, err := json.Marshal(mcpSchema)
+	schemaBytes, err := schemaJSONBytes(mcpSchema)
 	if err != nil {
 		return &tool.Schema{
 			Type: "object",
@@ -146,6 +146,16 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 		}
 	}
 	return result
+}
+
+// schemaJSONBytes returns the JSON encoding of mcpSchema.
+// json.RawMessage is returned as-is so MCP RawInputSchema/RawOutputSchema
+// keep exact number tokens without a re-marshal through float64.
+func schemaJSONBytes(mcpSchema any) ([]byte, error) {
+	if raw, ok := mcpSchema.(json.RawMessage); ok {
+		return raw, nil
+	}
+	return json.Marshal(mcpSchema)
 }
 
 // schemaNumber converts a generic numeric JSON Schema keyword to json.Number.

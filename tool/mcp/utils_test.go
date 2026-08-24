@@ -60,6 +60,23 @@ func TestConvertMCPSchema_NumericBounds(t *testing.T) {
 	require.Equal(t, json.Number("9007199254740994"), pageSize.ExclusiveMaximum)
 }
 
+func TestConvertMCPSchema_RawMessagePreservesLargeIntegers(t *testing.T) {
+	raw := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"page_size": {
+				"type": "integer",
+				"maximum": 9007199254740993,
+				"exclusiveMinimum": 0
+			}
+		}
+	}`)
+	schema := convertMCPSchemaToSchema(raw)
+	pageSize := schema.Properties["page_size"]
+	require.Equal(t, json.Number("9007199254740993"), pageSize.Maximum)
+	require.Equal(t, json.Number("0"), pageSize.ExclusiveMinimum)
+}
+
 func TestConvertProperties_Nil(t *testing.T) {
 	require.Nil(t, convertProperties(nil))
 }
