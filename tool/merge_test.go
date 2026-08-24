@@ -596,6 +596,50 @@ func TestMerge_NilHandling(t *testing.T) {
 	}
 }
 
+func TestMerge_NilInterfaceElement(t *testing.T) {
+	require.NotPanics(t, func() {
+		if got := Merge([]any{nil, "str"}); got != nil {
+			t.Errorf("Leading nil: Expected nil, got %v", got)
+		}
+	}, "Merge should not panic when the first element is a nil interface")
+
+	// Trailing nil already returned the first value; keep it as a regression guard.
+	if got := Merge([]any{"str", nil}); got != "str" {
+		t.Errorf("Trailing nil: Expected \"str\", got %v", got)
+	}
+
+	require.NotPanics(t, func() {
+		if got := Merge([]any{nil, nil}); got != nil {
+			t.Errorf("All nil: Expected nil, got %v", got)
+		}
+	}, "Merge should not panic when every element is a nil interface")
+}
+
+func TestMerge_Structs_NilInterfaceField(t *testing.T) {
+	type structWithAny struct {
+		Meta  any
+		Score int
+	}
+
+	structs := []structWithAny{
+		{Meta: nil, Score: 10},
+		{Meta: "second", Score: 20},
+	}
+
+	var result structWithAny
+	require.NotPanics(t, func() {
+		result = Merge(structs)
+	}, "Merge should not panic on a nil interface field")
+
+	if result.Score != 30 {
+		t.Errorf("Score: Expected 30, got %d", result.Score)
+	}
+	// Consistent with TestMerge_Structs_PointerField: the first value is kept.
+	if result.Meta != nil {
+		t.Errorf("Interface field: Expected nil (first value retained), got %+v", result.Meta)
+	}
+}
+
 // Helper function for floating point comparison
 func abs64(x float64) float64 {
 	if x < 0 {
