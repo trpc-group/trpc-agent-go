@@ -10,11 +10,13 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini => ../../knowledge/embedder/gemini
 	trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age => ../../knowledge/graphstore/age
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract => ../../knowledge/ocr/tesseract
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/clickhouse => ../../knowledge/vectorstore/clickhouse
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch => ../../knowledge/vectorstore/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus => ../../knowledge/vectorstore/milvus
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/sqlitevec => ../../knowledge/vectorstore/sqlitevec
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../../knowledge/vectorstore/tcvector
+	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse => ../../storage/clickhouse
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch => ../../storage/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/storage/milvus => ../../storage/milvus
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
@@ -30,6 +32,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python v1.11.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age v0.0.0-20260602121024-664ebd0ab56d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-20251203120347-0b4d62cb115d
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/clickhouse v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus v0.8.1-0.20251222024650-ea147adf3d21
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
@@ -42,6 +45,9 @@ require (
 require github.com/google/uuid v1.6.0 // indirect
 
 require (
+	github.com/ClickHouse/ch-go v0.65.1 // indirect
+	github.com/ClickHouse/clickhouse-go/v2 v2.34.0 // indirect
+	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
@@ -70,6 +76,8 @@ require (
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/go-ego/gse v1.0.0 // indirect
+	github.com/go-faster/city v1.0.1 // indirect
+	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -94,7 +102,7 @@ require (
 	github.com/jonboulle/clockwork v0.2.2 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.17.9 // indirect
+	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
@@ -119,9 +127,11 @@ require (
 	github.com/opencontainers/runtime-spec v1.0.2 // indirect
 	github.com/otiai10/gosseract/v2 v2.4.1 // indirect
 	github.com/panjf2000/ants/v2 v2.11.3 // indirect
+	github.com/paulmach/orb v0.11.1 // indirect
 	github.com/pdfcpu/pdfcpu v0.11.1 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/pgvector/pgvector-go v0.3.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
@@ -131,8 +141,10 @@ require (
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/samber/lo v1.27.0 // indirect
+	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/shirou/gopsutil/v3 v3.23.12 // indirect
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
+	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/soheilhy/cmux v0.1.5 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
@@ -200,6 +212,7 @@ require (
 	k8s.io/apimachinery v0.32.3 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v0.0.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.2.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/milvus v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.4 // indirect
