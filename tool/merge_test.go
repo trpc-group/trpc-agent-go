@@ -597,22 +597,23 @@ func TestMerge_NilHandling(t *testing.T) {
 }
 
 func TestMerge_NilInterfaceElement(t *testing.T) {
-	require.NotPanics(t, func() {
-		if got := Merge([]any{nil, "str"}); got != nil {
-			t.Errorf("Leading nil: Expected nil, got %v", got)
-		}
-	}, "Merge should not panic when the first element is a nil interface")
-
-	// Trailing nil already returned the first value; keep it as a regression guard.
-	if got := Merge([]any{"str", nil}); got != "str" {
-		t.Errorf("Trailing nil: Expected \"str\", got %v", got)
+	for _, tt := range []struct {
+		name  string
+		input []any
+		want  any
+	}{
+		{name: "leading nil", input: []any{nil, "str"}, want: nil},
+		{name: "trailing nil", input: []any{"str", nil}, want: "str"},
+		{name: "all nil", input: []any{nil, nil}, want: nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got any
+			require.NotPanics(t, func() {
+				got = Merge(tt.input)
+			}, "Merge should not panic on a nil interface element")
+			require.Equal(t, tt.want, got)
+		})
 	}
-
-	require.NotPanics(t, func() {
-		if got := Merge([]any{nil, nil}); got != nil {
-			t.Errorf("All nil: Expected nil, got %v", got)
-		}
-	}, "Merge should not panic when every element is a nil interface")
 }
 
 func TestMerge_Structs_NilInterfaceField(t *testing.T) {
