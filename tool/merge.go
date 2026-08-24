@@ -101,6 +101,11 @@ func mergeInts[T any](ts []T) T {
 	var sum int64
 	for _, t := range ts {
 		val := reflect.ValueOf(t)
+		// Skip nil interface elements: they carry no numeric value to merge,
+		// and reflecting on them would panic.
+		if !val.IsValid() {
+			continue
+		}
 		sum += val.Int()
 	}
 
@@ -114,6 +119,11 @@ func mergeUints[T any](ts []T) T {
 	var sum uint64
 	for _, t := range ts {
 		val := reflect.ValueOf(t)
+		// Skip nil interface elements: they carry no numeric value to merge,
+		// and reflecting on them would panic.
+		if !val.IsValid() {
+			continue
+		}
 		sum += val.Uint()
 	}
 
@@ -127,6 +137,11 @@ func mergeFloats[T any](ts []T) T {
 	var sum float64
 	for _, t := range ts {
 		val := reflect.ValueOf(t)
+		// Skip nil interface elements: they carry no numeric value to merge,
+		// and reflecting on them would panic.
+		if !val.IsValid() {
+			continue
+		}
 		sum += val.Float()
 	}
 
