@@ -29,6 +29,7 @@ import (
 	openai "github.com/openai/openai-go"
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
+	openaiparam "github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/packages/ssestream"
 	"go.opentelemetry.io/otel/attribute"
@@ -36,6 +37,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -652,6 +654,80 @@ func TestModel_GenerateContentIter_Streaming(t *testing.T) {
 	require.True(t, sawHello)
 }
 
+func TestModel_GenerateContentIter_ToolsDisabledAfterCallback(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"iter-tools-disabled",
+			"object":"chat.completion",
+			"created":123,
+			"model":"gpt-3.5-turbo",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`))
+	}))
+	defer server.Close()
+
+	m := New(
+		"gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithOpenAIOptions(
+			openaiopt.WithJSONSet("tools", []any{}),
+			openaiopt.WithJSONSet("tool_choice", "required"),
+			openaiopt.WithJSONSet("parallel_tool_calls", true),
+			openaiopt.WithJSONSet("function_call", "auto"),
+			openaiopt.WithJSONSet("functions", []any{}),
+			openaiopt.WithJSONSet("client_option_field", "preserved"),
+		),
+		WithChatRequestCallback(func(
+			_ context.Context,
+			request *openaigo.ChatCompletionNewParams,
+		) {
+			request.Tools = []openaigo.ChatCompletionToolParam{{}}
+			request.ToolChoice =
+				openaigo.ChatCompletionToolChoiceOptionUnionParam{
+					OfAuto: openaigo.String("required"),
+				}
+			request.ParallelToolCalls = openaigo.Bool(true)
+			request.Functions = []openaigo.ChatCompletionNewParamsFunction{{
+				Name: "callback_function",
+			}}
+			request.SetExtraFields(map[string]any{
+				"tools":               []any{},
+				"tool_choice":         "required",
+				"parallel_tool_calls": true,
+				"function_call":       "auto",
+				"functions":           []any{},
+				"callback_field":      "preserved",
+			})
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+	}
+	ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+	seq, err := m.GenerateContentIter(ctx, req)
+	require.NoError(t, err)
+	seq(func(*model.Response) bool {
+		return true
+	})
+
+	require.NotNil(t, captured)
+	require.NotContains(t, captured, "tool_choice")
+	require.NotContains(t, captured, "parallel_tool_calls")
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "function_call")
+	require.NotContains(t, captured, "functions")
+	require.Equal(t, "preserved", captured["callback_field"])
+	require.Equal(t, "preserved", captured["client_option_field"])
+}
+
 func TestModel_ChatTelemetry_DefaultDisabledAndExplicitFalse(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -711,6 +787,7 @@ func TestModel_ChatTelemetry_OptInNonStreamingTraceAndMetrics(t *testing.T) {
 	require.Equal(t, "telemetry-non-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
 	require.Equal(t, int64(3), attrs[semconvtrace.KeyGenAIUsageInputTokens].AsInt64())
 	require.Equal(t, int64(2), attrs[semconvtrace.KeyGenAIUsageOutputTokens].AsInt64())
+	require.Equal(t, int64(5), attrs[semconvtrace.KeyGenAIUsageTotalTokens].AsInt64())
 
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(context.Background(), &rm))
@@ -5425,7 +5502,55 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 		chatReq, _ := m.buildChatRequest(req)
 		require.NotNil(t, chatReq.MaxCompletionTokens)
 		assert.Equal(t, int64(16384), chatReq.MaxCompletionTokens.Value)
+		assert.False(t, chatReq.MaxTokens.Valid())
+
+		raw, err := chatReq.MarshalJSON()
+		require.NoError(t, err)
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(raw, &body))
+		assert.Equal(t, float64(16384), body["max_completion_tokens"])
+		assert.NotContains(t, body, "max_tokens")
 	})
+
+	for _, tt := range []struct {
+		name string
+		opts []Option
+	}{
+		{
+			name: "official base URL",
+			opts: []Option{WithBaseURL(defaultDeepSeekBaseURL)},
+		},
+		{
+			name: "custom proxy with explicit variant",
+			opts: []Option{
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+		},
+	} {
+		t.Run("DeepSeek uses max_tokens with "+tt.name, func(t *testing.T) {
+			m := New("deepseek-v4-flash", tt.opts...)
+			maxTokens := 2048
+			req := &model.Request{
+				Messages: []model.Message{model.NewUserMessage("hi")},
+				GenerationConfig: model.GenerationConfig{
+					MaxTokens: &maxTokens,
+				},
+			}
+
+			chatReq, _ := m.buildChatRequest(req)
+			require.True(t, chatReq.MaxTokens.Valid())
+			assert.Equal(t, int64(maxTokens), chatReq.MaxTokens.Value)
+			assert.False(t, chatReq.MaxCompletionTokens.Valid())
+
+			raw, err := chatReq.MarshalJSON()
+			require.NoError(t, err)
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(raw, &body))
+			assert.Equal(t, float64(maxTokens), body["max_tokens"])
+			assert.NotContains(t, body, "max_completion_tokens")
+		})
+	}
 
 	t.Run("empty messages", func(t *testing.T) {
 		req := &model.Request{
@@ -5435,6 +5560,8 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 
 		chatReq, _ := m.buildChatRequest(req)
 		assert.Empty(t, chatReq.Messages, "expected empty messages")
+		assert.False(t, chatReq.MaxTokens.Valid())
+		assert.False(t, chatReq.MaxCompletionTokens.Valid())
 	})
 
 	t.Run("with all generation config options", func(t *testing.T) {
@@ -6147,6 +6274,117 @@ func TestModel_GenerateContent_RequestExtraFieldsOverrideModelExtraFields(t *tes
 	require.NotNil(t, captured)
 	assert.Equal(t, "model_value", captured["model_field"])
 	assert.Equal(t, "request-cache", captured["prompt_cache_key"])
+}
+
+func TestModel_GenerateContent_ToolsDisabledFiltersExtraFields(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"gpt-3.5-turbo",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`))
+	}))
+	defer server.Close()
+
+	m := New(
+		"gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithOpenAIOptions(
+			openaiopt.WithJSONSet("tools", []any{}),
+			openaiopt.WithJSONSet("tool_choice", "required"),
+			openaiopt.WithJSONSet("parallel_tool_calls", true),
+			openaiopt.WithJSONSet("function_call", "auto"),
+			openaiopt.WithJSONSet("functions", []any{}),
+			openaiopt.WithJSONSet("client_option_field", "preserved"),
+		),
+		WithExtraFields(map[string]any{
+			"tool_choice":         "required",
+			"parallel_tool_calls": true,
+			"functions":           []any{},
+			"model_field":         "model-value",
+		}),
+		WithChatRequestCallback(func(
+			_ context.Context,
+			request *openaigo.ChatCompletionNewParams,
+		) {
+			request.ParallelToolCalls = openaigo.Bool(true)
+			request.Functions = []openaigo.ChatCompletionNewParamsFunction{{
+				Name: "callback_function",
+			}}
+			request.SetExtraFields(map[string]any{
+				"tools":               []any{},
+				"tool_choice":         "required",
+				"parallel_tool_calls": true,
+				"function_call":       "auto",
+				"functions":           []any{},
+				"callback_field":      "preserved",
+			})
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		Tools: map[string]tool.Tool{
+			"echo": stubTool{decl: &tool.Declaration{Name: "echo"}},
+		},
+		ExtraFields: map[string]any{
+			"tools":         []any{},
+			"function_call": "auto",
+			"request_field": "request-value",
+		},
+	}
+	ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+	responseChan, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+	for range responseChan {
+	}
+
+	require.NotNil(t, captured)
+	require.NotContains(t, captured, "tool_choice")
+	require.NotContains(t, captured, "parallel_tool_calls")
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "function_call")
+	require.NotContains(t, captured, "functions")
+	require.Equal(t, "model-value", captured["model_field"])
+	require.Equal(t, "request-value", captured["request_field"])
+	require.Equal(t, "preserved", captured["callback_field"])
+	require.Equal(t, "preserved", captured["client_option_field"])
+}
+
+func TestDisableChatRequestTools_WholeObjectOverride(t *testing.T) {
+	request := openaiparam.Override[openaigo.ChatCompletionNewParams](
+		map[string]any{
+			"model": "gpt-3.5-turbo",
+			"messages": []any{
+				map[string]any{"role": "user", "content": "test"},
+			},
+			"tools":               []any{},
+			"tool_choice":         "required",
+			"parallel_tool_calls": true,
+			"function_call":       "auto",
+			"functions":           []any{},
+			"custom":              "preserved",
+		},
+	)
+
+	disableChatRequestTools(&request)
+
+	data, err := json.Marshal(request)
+	require.NoError(t, err)
+	var captured map[string]any
+	require.NoError(t, json.Unmarshal(data, &captured))
+	require.NotContains(t, captured, "tool_choice")
+	require.NotContains(t, captured, "parallel_tool_calls")
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "function_call")
+	require.NotContains(t, captured, "functions")
+	require.Equal(t, "preserved", captured["custom"])
 }
 
 func TestModel_GenerateContent_RequestHeadersOverrideModelHeaders(t *testing.T) {

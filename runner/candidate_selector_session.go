@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/privatestate"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -30,6 +31,7 @@ type attemptSessionService struct {
 	sessions         map[session.Key]*session.Session
 	deletedSessions  map[session.Key]bool
 	directStateDelta session.StateMap
+	privateState     map[session.Key]session.StateMap
 }
 
 func newAttemptSessionService(
@@ -41,6 +43,7 @@ func newAttemptSessionService(
 		sessions:         make(map[session.Key]*session.Session),
 		deletedSessions:  make(map[session.Key]bool),
 		directStateDelta: make(session.StateMap),
+		privateState:     make(map[session.Key]session.StateMap),
 	}
 	if root != nil {
 		s.sessions[keyFromSession(root)] = root
@@ -243,6 +246,24 @@ func (s *attemptSessionService) UpdateSessionState(
 	key session.Key,
 	state session.StateMap,
 ) error {
+	return s.updateSessionState(ctx, key, state, false)
+}
+
+// UpdatePrivateSessionState records an attempt-local state update without
+// exposing it through the candidate event delta.
+func (s *attemptSessionService) UpdatePrivateSessionState(
+	ctx context.Context,
+	req privatestate.UpdateRequest,
+) error {
+	return s.updateSessionState(ctx, req.Key, req.State, true)
+}
+
+func (s *attemptSessionService) updateSessionState(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	private bool,
+) error {
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
@@ -263,8 +284,21 @@ func (s *attemptSessionService) UpdateSessionState(
 	if sess == nil {
 		return fmt.Errorf("attempt session service update session state failed: session not found")
 	}
+	var privateDelta session.StateMap
+	if private {
+		privateDelta = s.privateState[key]
+		if privateDelta == nil {
+			privateDelta = make(session.StateMap)
+			s.privateState[key] = privateDelta
+		}
+	}
 	for stateKey, value := range state {
 		sess.SetState(stateKey, value)
+		if private {
+			privateDelta[stateKey] = cloneBytes(value)
+			delete(s.directStateDelta, stateKey)
+			continue
+		}
 		s.directStateDelta[stateKey] = cloneBytes(value)
 	}
 	return nil
@@ -343,6 +377,19 @@ func (s *attemptSessionService) DirectStateDelta() session.StateMap {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneStateMap(s.directStateDelta)
+}
+
+func (s *attemptSessionService) privateStateUpdates() []privatestate.UpdateRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	updates := make([]privatestate.UpdateRequest, 0, len(s.privateState))
+	for key, state := range s.privateState {
+		updates = append(updates, privatestate.UpdateRequest{
+			Key:   key,
+			State: cloneStateMap(state),
+		})
+	}
+	return updates
 }
 
 func (s *attemptSessionService) getSessionLocked(

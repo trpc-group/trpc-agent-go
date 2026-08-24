@@ -90,6 +90,8 @@ func (r *Run) Input() *adapter.RunAgentInput {
 }
 
 // Emit queues an AG-UI event to the same serialized stream as translated agent events.
+// The caller must not mutate the event while Emit is in progress. On success, ownership transfers
+// to the stream consumer and the caller must not mutate the event afterward.
 func (r *Run) Emit(ctx context.Context, event aguievents.Event) error {
 	if r == nil || r.emit == nil || r.done == nil {
 		return errRunClosed

@@ -7,8 +7,8 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package tencentdb integrates with TencentDB Agent Memory through its
-// local gateway sidecar.
+// Package tencentdb integrates with TencentDB Agent Memory through its gateway
+// API.
 package tencentdb
 
 import (
@@ -80,7 +80,8 @@ type Options struct {
 
 	// APIKey is sent as an "Authorization: Bearer <key>" header on gateway
 	// requests. It is required when the gateway is started with
-	// TDAI_GATEWAY_API_KEY.
+	// TDAI_GATEWAY_API_KEY. Identity-scoped V3 requests use a non-secret local
+	// placeholder when APIKey is empty to satisfy the self-hosted gateway parser.
 	APIKey string
 
 	SessionKeyFunc SessionKeyFunc
@@ -98,10 +99,9 @@ type Options struct {
 type Option func(*Options)
 
 // defaultOptions returns conservative defaults. Cross-session/user reads are
-// opt-in: automatic recall and the long-term memory_search tool stay disabled
-// because the shared gateway sidecar does not currently enforce user/session
-// scoping on those paths. Only session-scoped surfaces (capture and
-// conversation search) are enabled by default.
+// opt-in so existing legacy gateways do not begin reading from a shared store
+// unexpectedly. Identity-scoped gateways enforce service/team/agent/user
+// isolation but retain the same opt-in defaults for compatibility.
 func defaultOptions() Options {
 	return Options{
 		GatewayURL:                   defaultGatewayURL,
@@ -210,7 +210,9 @@ func WithIngestJobTimeout(timeout time.Duration) Option {
 	}
 }
 
-// WithSessionKeyFunc overrides the session_key mapping.
+// WithSessionKeyFunc overrides the Legacy session_key mapping and the local
+// key used to serialize capture jobs. V3 still sends Session.ID as session_id;
+// this option does not add an application isolation field to the V3 protocol.
 func WithSessionKeyFunc(fn SessionKeyFunc) Option {
 	return func(o *Options) {
 		if fn != nil {
@@ -221,10 +223,11 @@ func WithSessionKeyFunc(fn SessionKeyFunc) Option {
 
 // WithRecallEnabled controls whether Plugin performs automatic recall.
 //
-// It is off by default: the gateway currently recalls from a shared long-term
-// store without enforcing the request's user/session scope, so on a shared
-// sidecar automatic recall can surface another user's or session's memories.
-// Only enable it when the gateway guarantees per-tenant isolation.
+// It is off by default. Legacy gateways may recall from a shared long-term
+// store without enforcing the request's user/session scope. The
+// identity-scoped data plane selected by NewServiceWithIdentity scopes L0/L1
+// by service/team/agent/user and L2/L3 by service/team/agent. Recall remains
+// opt-in to preserve existing defaults.
 func WithRecallEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.RecallEnabled = enabled
@@ -234,10 +237,10 @@ func WithRecallEnabled(enabled bool) Option {
 // WithMemorySearchTool controls whether the long-term memory_search tool
 // (tdai_memory_search, plus the standard alias when enabled) is exposed.
 //
-// It is off by default for the same reason as recall: the gateway memory search
-// does not enforce user/session scoping, so the tool can read a shared
-// long-term store. Only enable it when the gateway guarantees per-tenant
-// isolation. The session-scoped conversation search tool stays available.
+// It is off by default to preserve existing behavior. Legacy gateway memory
+// search can read a shared long-term store without user/session scoping; the V3
+// data plane scopes L1 search by service/team/agent/user. The session-scoped
+// conversation search tool stays available.
 func WithMemorySearchTool(enabled bool) Option {
 	return func(o *Options) {
 		o.EnableMemorySearchTool = enabled
@@ -263,7 +266,7 @@ func WithStandardAliases(enabled bool) Option {
 }
 
 // WithToolPrefix changes the native tool name prefix. The default prefix "tdai"
-// yields tdai_memory_search and tdai_conversation_search.
+// yields names such as tdai_memory_search and tdai_conversation_search.
 func WithToolPrefix(prefix string) Option {
 	return func(o *Options) {
 		if prefix != "" {

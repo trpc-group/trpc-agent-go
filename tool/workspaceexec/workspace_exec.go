@@ -704,7 +704,26 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	}
 	req.workspaceHandle = handle
 	req.ws = handle.Workspace
-	if err := t.reconcileWorkspace(ctx, req.eng, req.ws); err != nil {
+	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
+		return execOutput{}, true, err
+	}
+	commandMayHaveStarted, err := t.reconcileWorkspace(
+		ctx,
+		req.eng,
+		req.ws,
+		req.workspaceHandle.InstanceID,
+	)
+	if err != nil {
+		return execOutput{}, true, err
+	}
+	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) &&
+			commandMayHaveStarted {
+			// Reconcile may have started an arbitrary bootstrap command,
+			// so a post-reconcile generation change is invalidation-only
+			// and must not replay automatically.
+			err = errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
+		}
 		return execOutput{}, true, err
 	}
 	if t.sessional {
@@ -713,6 +732,49 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	}
 	out, err := t.callNonSessional(ctx, *req)
 	return out, true, err
+}
+
+func validateWorkspaceHandle(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	handle codeexecutor.WorkspaceHandle,
+) error {
+	if handle.InstanceID == "" {
+		return nil
+	}
+	if eng == nil {
+		return errors.New("workspaceexec: workspace manager is unavailable")
+	}
+	manager := eng.Manager()
+	if manager == nil {
+		return errors.New("workspaceexec: workspace manager is unavailable")
+	}
+	provider, ok := manager.(codeexecutor.WorkspaceInstanceProvider)
+	if !ok {
+		return errors.New(
+			"workspaceexec: workspace manager lost instance identity capability",
+		)
+	}
+	current, err := provider.InstanceID(ctx)
+	if err != nil {
+		return fmt.Errorf("workspaceexec: validate workspace instance: %w", err)
+	}
+	if current == "" {
+		return errors.New(
+			"workspaceexec: workspace instance provider returned an empty instance ID",
+		)
+	}
+	if current == handle.InstanceID {
+		return nil
+	}
+	return errors.Join(
+		codeexecutor.ErrWorkspaceStale,
+		fmt.Errorf(
+			"workspaceexec: workspace instance changed from %q to %q",
+			handle.InstanceID,
+			current,
+		),
+	)
 }
 
 // checkCommandPolicy enforces the optional allow/deny lists. When no
@@ -1004,12 +1066,14 @@ func (t *KillSessionTool) Call(_ context.Context, args []byte) (any, error) {
 // the function preserves the legacy behavior of staging conversation
 // files inline; otherwise it delegates to the reconciler which
 // collects Requirements from every provider and applies them in
-// phase order (file -> skill -> command).
+// phase order (file -> skill -> command). The returned boolean reports
+// whether a bootstrap command may have started.
 func (t *ExecTool) reconcileWorkspace(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
-) error {
+	instanceID codeexecutor.WorkspaceInstanceID,
+) (bool, error) {
 	if t == nil || len(t.providers) == 0 {
 		_, warnings, err := workspaceinput.StageConversationFiles(ctx, eng, ws)
 		for _, warning := range warnings {
@@ -1019,20 +1083,22 @@ func (t *ExecTool) reconcileWorkspace(
 				warning,
 			)
 		}
-		return err
+		return false, err
 	}
 	inv, _ := agent.InvocationFromContext(ctx)
 	var all []workspaceprep.Requirement
 	for _, p := range t.providers {
 		reqs, err := p.Requirements(ctx, inv)
 		if err != nil {
-			return fmt.Errorf(
+			return false, fmt.Errorf(
 				"workspace_exec provider %s: %w", p.Name(), err,
 			)
 		}
 		all = append(all, reqs...)
 	}
-	warnings, err := t.reconciler.Reconcile(ctx, eng, ws, all)
+	warnings, commandMayHaveStarted, err := t.reconciler.Reconcile(
+		ctx, eng, ws, instanceID, all,
+	)
 	for _, warning := range warnings {
 		log.WarnfContext(
 			ctx,
@@ -1041,9 +1107,11 @@ func (t *ExecTool) reconcileWorkspace(
 		)
 	}
 	if err != nil {
-		return fmt.Errorf("workspace_exec reconcile: %w", err)
+		return commandMayHaveStarted, fmt.Errorf(
+			"workspace_exec reconcile: %w", err,
+		)
 	}
-	return nil
+	return commandMayHaveStarted, nil
 }
 
 func (t *ExecTool) liveEngine() (codeexecutor.Engine, error) {

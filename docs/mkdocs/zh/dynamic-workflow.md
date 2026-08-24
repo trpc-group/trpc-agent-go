@@ -111,6 +111,50 @@ root := llmagent.New(
 这段代码只把 `run_workflow` 暴露给根 Agent。根 Agent 的其他工具不会自动进入
 workflow。这样可以避免 workflow 意外获得写操作、凭证、shell 执行或控制面工具。
 
+## 用 Skills 描述 workflow 经验
+
+Agent Skill 可以保存可复用的流程经验，Dynamic Workflow 则把它编译成当前请求的
+显式控制流。例如，一个 Skill 可以用文字描述有上限的“撰写-审核-修订”循环，另一个
+Skill 可以描述并行分析再汇总。根 Agent 加载匹配的内容后，可以为当前请求生成带真实
+循环、分支或并行阶段的一次性 workflow，而不必依赖一个长程 Agent loop 始终记住每一步。
+
+根 Agent 同时配置这两种能力：
+
+```go
+root := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithSkills(repo),
+    // 这个示例只加载流程知识，不执行 Skill 内的命令或脚本。
+    llmagent.WithAllowedSkillTools(llmagent.SkillToolLoad),
+    // 第一轮请求就能看到标准 run_workflow。
+    llmagent.WithTools([]tool.Tool{workflow}),
+)
+```
+
+第一次模型请求可以同时看到简短的 Skill 概览、`skill_load` 和标准的
+`run_workflow`。如果匹配到某个流程，模型通常先加载它，等待 `skill_load` 的结果进入
+下一次模型请求，再单独调用一次 `run_workflow`；不要在同一次响应中同时发起两个调用。
+加载 Skill 会把正文加入当前 turn 后续的请求，但不会把 Markdown 变成可执行脚本，也不会
+把 workflow 工具变成某个 Skill 的开关。如果 Skill 有可选的 Markdown 或文本参考资料，
+可以通过 `skill_load` 的 `docs` 或 `include_all_docs` 请求；应保持概览简短，避免无关请求
+承担完整参考资料的 context 成本。
+
+[Dynamic Workflow 与 Skills 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/skills)
+同时展示了一个带代码形状的有界循环和一个只有流程文字的并行分析配方。workflow
+仍然是面向当前请求生成的：Skill 贡献可复用的判断和约束，模型负责适配角色、输入、
+标准和输出。
+
+这里根 Agent 使用的是“workflow 流程 Skill”，不要和子 Agent 自己的领域 Skill
+混为一谈。Dynamic Workflow 注册的基础 Agent 仍可以拥有自己的 Skill；
+`agent(...)` 可以省略 `skills` 以继承、用 `skills=[]` 禁用，或用
+`skills=["name"]` 在已有能力中收窄。收窄只是在选择可用能力，不会隐式加载正文；如果子
+Agent 模板暴露了 `skill_load` 且角色需要正文，子 Agent 可以再加载它，而且它的 Agent 级
+Skill 状态与根 Agent 隔离。
+
+子 Agent 的模型输出和工具事件仍会通过父 Runner 的事件流向外传递；上面的示例也会
+在 workflow 运行时打印这些事件。
+
 ## 当前 Python workflow 里的 `agent(...)`
 
 `agent(...)` 可以理解成：运行一次 Go 侧已注册的基础 Agent。
@@ -156,9 +200,56 @@ review = await agent(
 常用选项只有几个：
 
 - `instruction`：这次子 Agent 的临时角色说明。
+- `model`：宿主通过 `WithAgentModelProfile` 注册 profile 后可选的模型别名；
+  省略则继承模板模型。
 - `tools` / `skills`：省略表示继承基础 Agent；`[]` 表示这次禁用；非空列表表示在基础 Agent 已有能力上收窄。
 - `structured_output` / `schema`：要求这次子 Agent 返回结构化 JSON。
 - `instance_id`：同一个 workflow 内多次调用复用同一个子 Agent 历史。
+
+### 宿主授权的模型 profile
+
+默认情况下，每次子 Agent 调用使用模板 Agent 已注册的模型。若要让 workflow
+在少数宿主持有模型之间选择，可注册 profile 别名：
+
+```go
+fast := openai.New("gpt-5-mini")
+deep := openai.New("gpt-5")
+
+workflow, err := dynamicworkflow.NewTool(
+    dynamicworkflow.LocalRunner{},
+    []agent.Agent{general},
+    dynamicworkflow.WithAgentModelProfile(
+        "fast",
+        "Low-latency drafting and simple extraction.",
+        fast,
+    ),
+    dynamicworkflow.WithAgentModelProfile(
+        "deep",
+        "Careful review and multi-step reasoning.",
+        deep,
+    ),
+)
+```
+
+workflow 可在单次子 Agent 调用中选择 profile：
+
+```python
+draft = await agent(
+    "Write a short draft.",
+    instruction="Draft quickly.",
+    model="fast",
+)
+review = await agent(
+    {"draft": draft["text"]},
+    instruction="Review carefully.",
+    model="deep",
+)
+```
+
+profile 是白名单。每个 `model.Model` 实例由宿主持有；workflow 代码不能传入
+提供商模型标识符，也不能自行构造模型。省略 `model` 会完整保留模板模型。只有
+在有明确任务原因时才应选择覆盖。选中的 profile 对 `LLMAgent` 模板，以及会遵守
+invocation surface patch 的自定义 Agent 生效；其他 Agent 仍使用各自已配置的模型。
 
 默认不传 `instance_id` 时，每次 `agent(...)` 调用都会创建独立的子 Agent
 历史，适合并发分支。对于 `LLMAgent` 模板，如果临时角色不应继承根分支对话，
@@ -169,8 +260,9 @@ review = await agent(
 复用的历史包含子 Agent 的输入和产生的事件。动态 `instruction` 只配置当前这次
 调用，不会作为对话消息持久化；后续调用必须记住的事实应放在 `input` 中。
 
-这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变模型、权限策略，
-也不能新增基础 Agent 本来没有的宿主能力。
+这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变权限策略、发明模型
+接入点，也不能新增基础 Agent 本来没有的宿主能力。模型选择仅限于宿主通过
+`WithAgentModelProfile` 注册的别名。
 
 `agent(...)` 返回的 envelope 包含 `text`、可选的 `structured` 结果和执行元数据。
 下游需要普通文本时应传 `result["text"]`，需要稳定字段时传

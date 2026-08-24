@@ -78,11 +78,13 @@ func WithCacheSafeForking(enable bool) Option {
 	}
 }
 
-// WithCacheSafeForkPrompt sets the user message appended to a parent request
-// when cache-safe forking is enabled. The prompt may include
-// {max_summary_words}, but it must not include {conversation_text} or
-// {previous_summary}; the parent request already contains the conversation
-// prefix, including any injected summary.
+// WithCacheSafeForkPrompt sets the final summary instruction used when
+// cache-safe forking is enabled. It is appended as a user message to a cloned
+// parent request. When cache-safe forking falls back to a standalone request,
+// it is appended after a source boundary in the standalone user message. The
+// prompt may include {max_summary_words}, but it must not include
+// {conversation_text} or {previous_summary}; the request already contains the
+// conversation prefix, including any injected summary.
 func WithCacheSafeForkPrompt(prompt string) Option {
 	return func(s *sessionSummarizer) {
 		if prompt != "" {
@@ -220,7 +222,11 @@ func WithPreSummaryHook(h PreSummaryHook) Option {
 	}
 }
 
-// WithPostSummaryHook sets a post-summary hook to modify the summary before returning.
+// WithPostSummaryHook sets a post-summary hook to modify the summary before
+// returning. The hook observes the provisional boundary for the summarized
+// source. A successful or non-aborting hook keeps that exact boundary, replacing
+// any hook changes to the summary boundary state. An aborting or panicking hook
+// restores the boundary that existed before the summary attempt.
 func WithPostSummaryHook(h PostSummaryHook) Option {
 	return func(s *sessionSummarizer) {
 		s.postHook = h

@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,11 +29,13 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
@@ -137,9 +140,10 @@ type contextCompactionTailProcessor interface {
 }
 
 type contextCompactionRebuildPlan struct {
-	beforeContent    *model.Request
-	contentProcessor *processor.ContentRequestProcessor
-	tailProcessors   []contextCompactionTailProcessor
+	beforeContent                *model.Request
+	contentProcessor             *processor.ContentRequestProcessor
+	tailProcessors               []contextCompactionTailProcessor
+	callLimitFinalizationMessage *model.Message
 }
 
 type summarySnapshot struct {
@@ -671,6 +675,12 @@ func (f *Flow) runOneStep(
 		}
 		finishLatencySpan(stepSpan, stepStarted, err)
 	}()
+	defer func() {
+		if calllimit.Active(invocation) {
+			invocation.EndInvocation = true
+			calllimit.Finish(invocation)
+		}
+	}()
 	// Initialize empty LLM request.
 	llmRequest := &model.Request{
 		Tools: make(map[string]tool.Tool), // Initialize tools map
@@ -691,6 +701,13 @@ func (f *Flow) runOneStep(
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
+	if instruction, ok := calllimit.PreviewForLLM(
+		invocation,
+		invocation.MaxLLMCalls,
+	); ok && rebuildPlan != nil {
+		message := model.NewUserMessage(instruction)
+		rebuildPlan.callLimitFinalizationMessage = &message
+	}
 	llmRequest = f.maybeCompactContextBeforeLLM(
 		ctx,
 		invocation,
@@ -701,7 +718,7 @@ func (f *Flow) runOneStep(
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
-	observabilityInvocation := invocationViewForModel(invocation, callModel)
+	observabilityInvocation := observabilityInvocationForModel(invocation, callModel)
 	var span oteltrace.Span
 	var modelName string
 	if callModel != nil {
@@ -1055,10 +1072,7 @@ func (p *streamingResponseProcessor) updateMetricsState() {
 		return
 	}
 	p.tracker.SetInvocationState(
-		metricsInvocationForCurrent(
-			p.currentInvocation,
-			p.observabilityInvocation,
-		),
+		p.currentInvocation,
 		p.timingInfo,
 	)
 }
@@ -1327,24 +1341,18 @@ func invocationFromContextOrDefault(
 	return invocation
 }
 
-func invocationViewForModel(
+func observabilityInvocationForModel(
 	invocation *agent.Invocation,
 	callModel model.Model,
 ) *agent.Invocation {
 	if invocation == nil {
 		return nil
 	}
-	return invocation.View(agent.WithInvocationModel(callModel))
-}
-
-func metricsInvocationForCurrent(
-	current *agent.Invocation,
-	base *agent.Invocation,
-) *agent.Invocation {
-	if base == nil {
-		return current
-	}
-	return observabilityInvocationForCurrent(current, base)
+	return newObservabilityInvocation(
+		invocation,
+		invocation.Session,
+		callModel,
+	)
 }
 
 func observabilityInvocationForCurrent(
@@ -1354,13 +1362,27 @@ func observabilityInvocationForCurrent(
 	if base == nil {
 		return current
 	}
-	if current == nil || current.Session == nil {
+	if current == nil || current.Session == nil ||
+		current.Session == base.Session {
 		return base
 	}
-	return base.View(
-		agent.WithInvocationSession(current.Session),
-		agent.WithInvocationModel(base.Model),
-	)
+	return newObservabilityInvocation(base, current.Session, base.Model)
+}
+
+// newObservabilityInvocation intentionally excludes invocation state: metrics
+// and tracing consume only identity, session, and model metadata, while state
+// can contain large model-visible history snapshots.
+func newObservabilityInvocation(
+	base *agent.Invocation,
+	sess *session.Session,
+	callModel model.Model,
+) *agent.Invocation {
+	return &agent.Invocation{
+		AgentName:    base.AgentName,
+		InvocationID: base.InvocationID,
+		Session:      sess,
+		Model:        callModel,
+	}
 }
 
 func trackModelResponseTelemetry(
@@ -1552,8 +1574,31 @@ func (f *Flow) preprocess(
 		finishLatencySpan(stageSpan, stageStarted, nil)
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
-	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(ctx, llmRequest.Messages, llmRequest.Tools)
+	sanitizeRequestMessages(ctx, invocation, llmRequest)
 	return rebuildPlan
+}
+
+func sanitizeRequestMessages(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) {
+	if req == nil {
+		return
+	}
+	before := req.Messages
+	result := toolcall.SanitizeMessagesWithToolsResult(
+		ctx,
+		before,
+		req.Tools,
+	)
+	req.Messages = result.Messages
+	summaryview.RebaseAfterTransform(
+		invocation,
+		before,
+		result.Messages,
+		result.SourceIndexes,
+	)
 }
 
 func normalizeContextCompactionThresholdRatio(ratio float64) float64 {
@@ -1593,18 +1638,22 @@ func (f *Flow) maybeCompactContextBeforeLLM(
 		}
 		return req
 	}
+	decisionRequest := requestWithCallLimitFinalizationMessage(
+		req,
+		rebuildPlan.callLimitFinalizationMessage,
+	)
 	decision := syncCompactContextDecision(
 		ctx,
 		invocation,
-		req,
+		decisionRequest,
 		f.contextCompactionThresholdRatio,
 		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
 	)
 	if decision.err == nil {
-		summaryview.Finalize(invocation, req, decision.tokenCount)
+		summaryview.Finalize(invocation, decisionRequest, decision.tokenCount)
 	}
 	if started {
-		span.SetAttributes(contextCompactionAttrs(decision, req)...)
+		span.SetAttributes(contextCompactionAttrs(decision, decisionRequest)...)
 	}
 	if decision.err != nil {
 		if started {
@@ -1633,6 +1682,10 @@ func (f *Flow) runContextCompaction(
 	rebuildPlan *contextCompactionRebuildPlan,
 	decision contextCompactionDecision,
 ) *model.Request {
+	decisionRequest := requestWithCallLimitFinalizationMessage(
+		req,
+		rebuildPlan.callLimitFinalizationMessage,
+	)
 	filterKey := invocation.GetEventFilterKey()
 	before := snapshotSummary(invocation.Session, filterKey)
 	emitLatencyDiagnosticEvent(
@@ -1646,8 +1699,8 @@ func (f *Flow) runContextCompaction(
 			TokenCount:    decision.tokenCount,
 			Threshold:     decision.threshold,
 			ContextWindow: decision.contextWindow,
-			MessageCount:  len(req.Messages),
-			ToolCount:     len(req.Tools),
+			MessageCount:  len(decisionRequest.Messages),
+			ToolCount:     len(decisionRequest.Tools),
 			FilterKey:     filterKey,
 		},
 	)
@@ -1655,7 +1708,7 @@ func (f *Flow) runContextCompaction(
 		ctx,
 		invocation,
 		latencySpanContextSummary,
-		contextCompactionAttrs(decision, req)...,
+		contextCompactionAttrs(decision, decisionRequest)...,
 	)
 	summaryCtx = summary.ContextWithCacheSafeForkRequest(summaryCtx, req)
 	if view, ok := summaryview.Snapshot(invocation); ok {
@@ -1688,8 +1741,8 @@ func (f *Flow) runContextCompaction(
 			TokenCount:    decision.tokenCount,
 			Threshold:     decision.threshold,
 			ContextWindow: decision.contextWindow,
-			MessageCount:  len(req.Messages),
-			ToolCount:     len(req.Tools),
+			MessageCount:  len(decisionRequest.Messages),
+			ToolCount:     len(decisionRequest.Tools),
 			FilterKey:     filterKey,
 			Updated:       &updated,
 		},
@@ -1728,15 +1781,23 @@ func (f *Flow) runContextCompaction(
 		)
 		return req
 	}
+	postDecisionRequest := requestWithCallLimitFinalizationMessage(
+		rebuilt,
+		rebuildPlan.callLimitFinalizationMessage,
+	)
 	postDecision := syncCompactContextDecision(
 		rebuildCtx,
 		invocation,
-		rebuilt,
+		postDecisionRequest,
 		f.contextCompactionThresholdRatio,
 		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
 	)
 	if postDecision.err == nil {
-		summaryview.Finalize(invocation, rebuilt, postDecision.tokenCount)
+		summaryview.Finalize(
+			invocation,
+			postDecisionRequest,
+			postDecision.tokenCount,
+		)
 	} else {
 		log.DebugfContext(
 			ctx,
@@ -1789,11 +1850,7 @@ func (f *Flow) rebuildRequestForContextCompaction(
 			rebuilt,
 		)
 	}
-	rebuilt.Messages = toolcall.SanitizeMessagesWithTools(
-		ctx,
-		rebuilt.Messages,
-		rebuilt.Tools,
-	)
+	sanitizeRequestMessages(ctx, invocation, rebuilt)
 	return rebuilt
 }
 
@@ -1831,6 +1888,21 @@ func cloneRequestForContextCompaction(req *model.Request) *model.Request {
 			cloned.Tools[name] = t
 		}
 	}
+	return &cloned
+}
+
+func requestWithCallLimitFinalizationMessage(
+	req *model.Request,
+	message *model.Message,
+) *model.Request {
+	if req == nil || message == nil {
+		return req
+	}
+	cloned := *req
+	cloned.Messages = append(
+		append([]model.Message(nil), req.Messages...),
+		*message,
+	)
 	return &cloned
 }
 
@@ -2043,8 +2115,11 @@ func syncCompactContextDecision(
 		return decision
 	}
 
-	decision.threshold = contextCompactionThreshold(inv, ratio)
 	decision.contextWindow = contextCompactionWindow(inv)
+	decision.threshold, decision.thresholdBasis = contextCompactionThresholdForWindow(
+		decision.contextWindow,
+		ratio,
+	)
 	if counter == nil {
 		counter = model.NewSimpleTokenCounter()
 	}
@@ -2081,14 +2156,25 @@ func contextCompactionWindow(inv *agent.Invocation) int {
 
 func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
 	contextWindow := contextCompactionWindow(inv)
+	threshold, _ := contextCompactionThresholdForWindow(contextWindow, ratio)
+	return threshold
+}
+
+func contextCompactionThresholdForWindow(
+	contextWindow int,
+	ratio float64,
+) (int, string) {
 	threshold := int(float64(contextWindow) * normalizeContextCompactionThresholdRatio(ratio))
+	basis := contextCompactionThresholdBasisContextWindow
 	if threshold < contextCompactionMinTokens {
 		threshold = contextCompactionMinTokens
+		basis = contextCompactionThresholdBasisMinimumTokens
 	}
 	if threshold > contextWindow {
 		threshold = contextWindow
+		basis = contextCompactionThresholdBasisContextWindow
 	}
-	return threshold
+	return threshold, basis
 }
 
 // getFilteredTools returns the list of tools for this invocation after applying the filter.
@@ -2344,13 +2430,19 @@ func (f *Flow) callLLM(
 		latencyRequestAttrs(llmRequest)...,
 	)
 	var err error
-	defer func() {
+	finishSpanOnReturn := true
+	finishCallSpan := func(finishErr error) {
 		if started && callModel != nil {
 			span.SetAttributes(
 				attribute.String("llmflow.model", callModel.Info().Name),
 			)
 		}
-		finishLatencySpan(span, started, err)
+		finishLatencySpan(span, started, finishErr)
+	}
+	defer func() {
+		if finishSpanOnReturn {
+			finishCallSpan(err)
+		}
 	}()
 	if callModel == nil {
 		err = errors.New("no model available for LLM call")
@@ -2366,6 +2458,21 @@ func (f *Flow) callLLM(
 	if err = invocation.IncLLMCallCount(); err != nil {
 		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
 		return ctx, nil, false, err
+	}
+	llmLimitReached := calllimit.RecordLLMCall(
+		invocation,
+		invocation.MaxLLMCalls,
+	)
+	finalizationInstruction, finalizing := calllimit.ActivateForLLM(
+		invocation,
+		llmLimitReached,
+	)
+	var finalizationMessage *callLimitFinalizationMessage
+	if finalizing {
+		finalizationMessage = appendCallLimitFinalizationMessage(
+			llmRequest,
+			finalizationInstruction,
+		)
 	}
 	// Run before model callbacks if they exist.
 	ctx, customResp, err := f.runBeforeModelCallbacks(ctx, invocation, llmRequest)
@@ -2399,12 +2506,167 @@ func (f *Flow) callLLM(
 		llmRequest,
 		f.summaryViewTokenCounter(),
 	)
-	summaryfork.Attach(invocation, llmRequest)
+	summaryfork.Attach(
+		invocation,
+		requestWithoutCallLimitFinalizationMessage(
+			llmRequest,
+			finalizationMessage,
+		),
+	)
+	ctx, tailoringObserver := imodelrequest.ObserveTokenTailoring(
+		ctx,
+		func(record imodelrequest.TokenTailoringRecord) {
+			summaryview.InvalidateBinding(invocation)
+			summaryfork.Invalidate(invocation)
+			log.DebugfContext(
+				ctx,
+				"Model request token tailoring applied: provider=%s, "+
+					"max_input_tokens=%d, messages=%d->%d",
+				record.Provider,
+				record.MaxInputTokens,
+				record.BeforeMessages,
+				record.AfterMessages,
+			)
+		},
+	)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
 		return ctx, nil, true, err
 	}
+	if started {
+		finishSpanOnReturn = false
+		seq = withResponseSeqFinalizer(seq, func() {
+			span.SetAttributes(
+				tokenTailoringAttrs(tailoringObserver.Snapshot())...,
+			)
+			finishCallSpan(nil)
+		})
+	}
 	return ctx, seq, true, nil
+}
+
+func withResponseSeqFinalizer(
+	seq model.Seq[*model.Response],
+	finalize func(),
+) model.Seq[*model.Response] {
+	var once sync.Once
+	return func(yield func(*model.Response) bool) {
+		defer once.Do(finalize)
+		seq(yield)
+	}
+}
+
+type callLimitFinalizationMessage struct {
+	instruction  string
+	index        int
+	messageCount int
+	priorMatches int
+}
+
+// appendCallLimitFinalizationMessage adds the request-scoped instruction as
+// the final user message and returns its cache-safe exclusion marker. The
+// request is not the session event history, so this does not create or persist
+// a user event.
+func appendCallLimitFinalizationMessage(
+	req *model.Request,
+	instruction string,
+) *callLimitFinalizationMessage {
+	if req == nil {
+		return nil
+	}
+	marker := &callLimitFinalizationMessage{
+		instruction:  instruction,
+		index:        len(req.Messages),
+		messageCount: len(req.Messages) + 1,
+	}
+	for _, message := range req.Messages {
+		if isCallLimitFinalizationMessage(message, instruction) {
+			marker.priorMatches++
+		}
+	}
+	req.Messages = append(
+		req.Messages,
+		model.NewUserMessage(instruction),
+	)
+	return marker
+}
+
+// requestWithoutCallLimitFinalizationMessage returns a request view for
+// cache-safe summarization without the transient finalization instruction.
+// The provider request remains unchanged.
+func requestWithoutCallLimitFinalizationMessage(
+	req *model.Request,
+	marker *callLimitFinalizationMessage,
+) *model.Request {
+	if req == nil || marker == nil {
+		return req
+	}
+	index := -1
+	if marker.index < len(req.Messages) && isCallLimitFinalizationMessage(
+		req.Messages[marker.index],
+		marker.instruction,
+	) {
+		index = marker.index
+	} else {
+		remainingPriorMatches := marker.priorMatches
+		for i, message := range req.Messages {
+			if !isCallLimitFinalizationMessage(message, marker.instruction) {
+				continue
+			}
+			if remainingPriorMatches == 0 {
+				index = i
+				break
+			}
+			remainingPriorMatches--
+		}
+	}
+	// A callback may rewrite fields on the synthetic message while leaving the
+	// message slice structurally unchanged. In that case its original slot is
+	// the provenance marker even though its payload no longer matches.
+	if index < 0 && len(req.Messages) == marker.messageCount &&
+		marker.index < len(req.Messages) {
+		index = marker.index
+	}
+	if index < 0 {
+		return req
+	}
+	cloned := *req
+	cloned.Messages = make([]model.Message, 0, len(req.Messages)-1)
+	cloned.Messages = append(cloned.Messages, req.Messages[:index]...)
+	cloned.Messages = append(cloned.Messages, req.Messages[index+1:]...)
+	return &cloned
+}
+
+func isCallLimitFinalizationMessage(
+	message model.Message,
+	instruction string,
+) bool {
+	return message.Role == model.RoleUser &&
+		message.Content == instruction &&
+		len(message.ContentParts) == 0 &&
+		message.ToolID == "" &&
+		message.ToolName == "" &&
+		len(message.ToolCalls) == 0 &&
+		message.ReasoningContent == "" &&
+		message.ReasoningSignature == ""
+}
+
+// enforceCallLimitFinalizationToolFree keeps finalization requests tool-free
+// across callback groups and retry callbacks. It is intentionally idempotent.
+func enforceCallLimitFinalizationToolFree(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) context.Context {
+	if !calllimit.Active(invocation) {
+		return ctx
+	}
+	if req == nil {
+		return imodelrequest.WithToolsDisabled(ctx)
+	}
+	req.Tools = nil
+	imodelrequest.DeleteToolControlFields(req.ExtraFields)
+	return imodelrequest.WithToolsDisabled(ctx)
 }
 
 func finalizeSummaryView(
@@ -2447,6 +2709,11 @@ func (f *Flow) runBeforeModelCallbacks(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 ) (context.Context, *model.Response, error) {
+	ctx = enforceCallLimitFinalizationToolFree(
+		ctx,
+		invocation,
+		llmRequest,
+	)
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,
@@ -2546,15 +2813,30 @@ func wrapBeforeModelCallbacksWithInvocation(
 			args *model.BeforeModelArgs,
 		) (*model.BeforeModelResult, error) {
 			ctx = withInvocationContextIfMissing(ctx, invocation)
+			ctx = enforceCallLimitFinalizationToolFree(
+				ctx,
+				invocation,
+				args.Request,
+			)
 			result, err := callback(ctx, args)
 			if result != nil && result.Context != nil {
 				clonedResult := *result
-				clonedResult.Context = withInvocationContextIfMissing(
+				resultCtx := withInvocationContextIfMissing(
 					result.Context,
 					invocationFromContextOrFallback(ctx, invocation),
 				)
+				clonedResult.Context = enforceCallLimitFinalizationToolFree(
+					resultCtx,
+					invocation,
+					args.Request,
+				)
 				return &clonedResult, err
 			}
+			enforceCallLimitFinalizationToolFree(
+				ctx,
+				invocation,
+				args.Request,
+			)
 			return result, err
 		}
 	}

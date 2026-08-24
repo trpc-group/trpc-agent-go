@@ -234,6 +234,24 @@ For Function Tools, the input `req` is automatically converted into a JSON Schem
 - **Compatibility**: `description:"..."` is also supported for legacy code. If both `jsonschema:"description=..."` and `description:"..."` are present, the `jsonschema` description wins.
 - **More flexible schema**: if you need full control over the input schema (e.g. complex JSON Schema constraints), use `function.WithInputSchema(customInputSchema)` to bypass auto-generation.
 
+### Output Schema
+
+`FunctionTool` and `StreamableFunctionTool` automatically derive `Declaration.OutputSchema` from the output type by default. Model adapters with native tool output-schema support can use it directly, while adapters without a native field may append the serialized schema to the tool description. For agents with many tools or large repeated output structures, this can add significant input tokens to every model request that includes those tools.
+
+If the model does not need the return structure, disable automatic generation:
+
+```go
+documentTool := function.NewFunctionTool(
+    getDocument,
+    function.WithDisableOutputSchemaGen(),
+)
+```
+
+- This disables only automatic output schema generation; input schema generation is unchanged.
+- An explicit schema supplied with `function.WithOutputSchema(customOutputSchema)` always takes precedence, including when `WithDisableOutputSchemaGen()` is also present.
+- Without an explicit schema, disabling generation makes `Declaration.OutputSchema` nil, so model adapters neither send it through a native field nor append it to the tool description.
+- Components that reuse `Declaration.OutputSchema` are also affected: Gemini function declarations will not receive `responseJsonSchema`, and CodeAct will skip output validation. Keep automatic generation enabled or provide an explicit schema when those behaviors are required.
+
 ### Streaming Tool Example
 
 ```go
@@ -1798,11 +1816,12 @@ including its model, tools, skills, permissions, and runtime policy, then expose
 that Agent as a tool to the parent.
 
 Use `agenttool.NewDynamicTool()` when the application cannot predefine every
-specialist role, and the parent Agent should choose a tool subset or per-call
-instruction for each task. It exposes a model-facing tool named `dynamic_agent`
-by default. Calling this tool does not create arbitrary Go objects and does not
-select one pre-registered Agent by name; it runs one short-lived child Agent
-invocation within a boundary defined by application code.
+specialist role, and the parent Agent should choose a tool subset, per-call
+instruction, or an explicitly registered model profile for each task. It
+exposes a model-facing tool named `dynamic_agent` by default. Calling this tool
+does not create arbitrary Go objects and does not select one pre-registered
+Agent by name; it runs one short-lived child Agent invocation within a boundary
+defined by application code.
 
 Typical setup:
 
@@ -1842,6 +1861,9 @@ The default model-facing arguments are:
   child invocation.
 - `tools`: Optional exact tool names allowed for this invocation. An empty array
   means the child receives no user tools.
+- `model`: Present only when the host registers model profiles. It selects one
+  allowlisted profile for this invocation; omission keeps the existing
+  base/template model behavior.
 
 If the default parent-derived boundary is not the right business boundary, set a
 template Agent or explicit maximum capability surface in code:
@@ -1854,8 +1876,8 @@ workerTemplate := llmagent.New(
 )
 
 dynamicAgent := agenttool.NewDynamicTool(
-    // Optional: define the child Agent execution boundary: model, executor,
-    // callbacks, permission policy, and similar runtime settings.
+    // Optional: define the child Agent execution boundary: default model,
+    // executor, callbacks, permission policy, and similar runtime settings.
     agenttool.WithTemplateAgent(workerTemplate),
     // Optional: restrict the maximum tool set the model can choose from.
     agenttool.WithCapabilityTools([]tool.Tool{readFileTool, searchCodeTool}),
@@ -1863,9 +1885,55 @@ dynamicAgent := agenttool.NewDynamicTool(
 ```
 
 `WithTemplateAgent` is a code-side boundary, not a model parameter. The model
-cannot use `dynamic_agent` to choose arbitrary Agents, models, or executors. It
-can only fill `request`, optionally set `instruction`, and optionally narrow the
-tools/skills subset inside the boundary configured by the developer.
+cannot use `dynamic_agent` to choose arbitrary Agents, provider model names, or
+executors. It can only fill `request`, optionally set `instruction`, optionally
+narrow the tools/skills subset, and select an explicitly registered model
+profile inside the boundary configured by the developer.
+
+To let the parent choose among host-approved model roles, register stable
+aliases with descriptions:
+
+```go
+dynamicAgent := agenttool.NewDynamicTool(
+    agenttool.WithTemplateAgent(workerTemplate),
+    agenttool.WithAgentModelProfile(
+        "fast",
+        "Low-latency model for extraction and first drafts.",
+        fastModel,
+    ),
+    agenttool.WithAgentModelProfile(
+        "deep",
+        "Higher-capability model for synthesis and strict review.",
+        deepModel,
+    ),
+)
+```
+
+The option adds an enum-backed `model` field to the tool schema. A call may use
+`"model": "fast"` or `"model": "deep"`; an unknown alias fails before the
+child runs. The selected model is attached through an invocation-scoped surface
+patch, so it does not mutate the shared template and concurrent calls may choose
+different profiles safely. Omission keeps the template default when a template
+is configured, or the parent's effective model selection when it is not.
+Profile names and descriptions are visible to the parent model; do not put
+credentials or private provider configuration in them.
+
+An explicit profile selection starts a new model request boundary. It does not
+inherit the parent's `ModelContextWindow`, `ModelRequestExtraFields`, or
+`ModelRequestHeaders`; configure provider-specific settings on the registered
+model instead. Calls that omit `model` retain the existing inheritance behavior.
+
+`llmagent.WithModels` remains useful for host-controlled model switching, but
+its registry is not automatically exposed through `dynamic_agent`. This is
+intentional: model-visible aliases need task-oriented descriptions and an
+explicit allowlist. A profile may point to a model already present in that
+registry, but the two configurations have different boundaries. With a template,
+the existing template boundary still prevents parent RunOptions model overrides
+from leaking into the child; set its default in host code or register profiles.
+Without a template, omitting `model` preserves the inherited RunOptions behavior.
+Profile selection is consumed by LLMAgent. Other Agent implementations retain
+their own model semantics, so use an LLMAgent base or template when model routing
+is required.
 
 Common options:
 
@@ -1873,8 +1941,12 @@ Common options:
   `NewDynamicTool`; regular `NewTool(agent)` always uses the wrapped Agent's
   `Info().Name`.
 - `WithTemplateAgent(agent)`: set the dynamic child Agent template, commonly used
-  to fix the model, executor, callbacks, permission policy, and other runtime
-  boundaries.
+  to fix the default model, executor, callbacks, permission policy, and other
+  runtime boundaries.
+- `WithAgentModelProfile(name, description, model)`: register one
+  host-authorized model alias that may override the model for one child call.
+  Repeat the option to add profiles. No `model` field is exposed when no profile
+  is registered.
 - `WithCapabilityTools(tools)`: set the maximum tool surface the model may choose
   from. When omitted, it is derived from the parent Agent's effective user tools
   for the current run. When set, the tool names are enumerated in the `tools`
@@ -1911,7 +1983,7 @@ Dynamic AgentTool has a different boundary from the other multi-Agent mechanisms
 | --- | --- | --- | --- |
 | `agenttool.NewTool(agent)` | one fixed tool entrypoint | per tool call | returns a tool result to the parent Agent |
 | `transfer_to_agent` | one registered sub-agent | target Agent continues the current turn | hands off control |
-| `agenttool.NewDynamicTool()` | `request`, `instruction`, and a tools/skills subset for this call | per tool call | returns a tool result to the parent Agent |
+| `agenttool.NewDynamicTool()` | `request`, `instruction`, a tools/skills subset, and optionally one registered model profile for this call | per tool call | returns a tool result to the parent Agent |
 
 If the same specialist Agent is exposed through both `WithSubAgents` and
 `agenttool.NewTool(agent)`, the parent model sees two different paths:
@@ -2551,13 +2623,34 @@ execute tools instead. You can interrupt tool execution with
 
 **Key idea:**
 
-- `agent.WithToolFilter(...)` controls **tool visibility** (what the model can
-  see and call).
-- `agent.WithToolExecutionFilter(...)` controls **tool execution** (what the
-  framework will auto-run after the model requests it).
-- `agent.WithAdditionalTools(...)` appends temporary tools for one run.
-- `agent.WithExternalTools(...)` appends temporary tools and marks them as
-  caller-executed.
+| Option | Model visibility | Adds a tool for this run | Execution owner |
+| --- | --- | --- | --- |
+| `WithToolFilter` | Filters user tools; framework tools remain visible | No | Does not change execution ownership |
+| `WithToolExecutionFilter` | Does not change visibility | No | The framework when the filter returns `true`; the caller when it returns `false` |
+| `WithAdditionalTools` | Visible unless hidden by `WithToolFilter` | Yes | The framework by default |
+| `WithExternalTools` | Visible unless hidden by `WithToolFilter` | Yes | Always the caller |
+
+Choose the option based on where the tool declaration comes from and who owns
+execution:
+
+- Use `WithToolExecutionFilter` when the tool is already registered on the
+  Agent, or was added with `WithAdditionalTools`, and only its execution policy
+  should change for this run.
+- Use `WithExternalTools` when the caller dynamically supplies a tool
+  declaration that is not already present on the Agent.
+- Use `WithToolFilter` when the model must not see a user tool at all.
+- Use `WithAdditionalTools` for a temporary tool that the framework should
+  execute by default.
+
+For example, the following keeps `client_search` visible but leaves its tool
+calls for the caller. `NewExcludeToolNamesFilter` returns `false` for the named
+tool, and `WithToolExecutionFilter` interprets `false` as "do not execute":
+
+```go
+agent.WithToolExecutionFilter(
+    tool.NewExcludeToolNamesFilter("client_search"),
+)
+```
 
 #### Basic Flow
 
@@ -2618,6 +2711,41 @@ messages. If an external tool has the same name as an existing tool, the
 existing tool wins; the external declaration does not override or intercept it.
 This includes tools registered on the Agent and tools added with
 `WithAdditionalTools`.
+
+#### Frequently Asked Questions
+
+**Does `WithToolExecutionFilter` hide tools from the model?**
+
+No. It is evaluated only after the model requests a visible tool. A `false`
+result prevents framework execution and ends the current invocation after the
+assistant `tool_calls` response. The caller then executes the tool and starts a
+continuation with a matching `role=tool` message. Use `WithToolFilter` to
+control visibility.
+
+**Can `WithToolExecutionFilter` and `WithExternalTools` be used together?**
+
+Yes, for different tools in the same run. External tools are always
+caller-executed. The execution filter is evaluated only for non-external tools.
+In a mixed tool-call response, the framework can execute allowed tools, but the
+invocation still ends when any call is external or deferred so the caller can
+complete the remaining calls.
+
+**Can `WithExternalTools` make an already registered tool caller-executed?**
+
+No. Existing Agent tools and `WithAdditionalTools` take precedence by name. An
+external declaration with the same name neither replaces the existing tool nor
+marks it external. Use `WithToolExecutionFilter` to defer an existing tool.
+
+**Is this interruption the same as `graph.Interrupt`?**
+
+No. Caller-executed tool handling ends the current invocation after emitting
+the assistant tool call; no framework tool execution is suspended. The caller
+executes the tool and continues with `model.NewToolMessage(...)` in another
+`Run`. `graph.Interrupt` is a graph checkpoint and resume mechanism.
+
+These options route tool execution; they are not authorization boundaries.
+Framework-executed tools must enforce permissions in their implementations,
+and caller-executed tools must do so in the caller's tool runtime.
 
 The `server/openai` adapter only implements `tool_choice: "none"` (skip
 exposing tools to the model) and `tool_choice: "auto"` or an omitted value

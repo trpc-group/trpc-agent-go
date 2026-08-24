@@ -13,6 +13,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // OutputFormat is the Claude Code CLI transcript output format.
@@ -25,17 +28,42 @@ const (
 	OutputFormatStreamJSON OutputFormat = "stream-json"
 )
 
+// MessageBuilderArgs provides read-only context for building a Claude Code CLI prompt.
+type MessageBuilderArgs struct {
+	// InvocationID is the invocation identifier associated with this CLI execution.
+	InvocationID string
+	// AppName is the framework application name from the invocation session.
+	AppName string
+	// UserID is the framework user identifier from the invocation session.
+	UserID string
+	// SessionID is the framework session identifier from the invocation session.
+	SessionID string
+	// Message is the current invocation message.
+	Message model.Message
+	// Events is a shallow snapshot of session events and must not be mutated.
+	Events []event.Event
+}
+
+// MessageBuilder builds the complete user prompt string passed to the Claude Code CLI.
+//
+// When the agent is run through runner.Run, Events already includes the
+// current turn user message because the runner persists it before invoking the
+// agent. The builder must return the full prompt to pass to the CLI.
+type MessageBuilder func(ctx context.Context, args *MessageBuilderArgs) (string, error)
+
 // options stores ClaudeCodeAgent configuration.
 type options struct {
-	name          string
-	description   string
-	bin           string
-	args          []string
-	outputFormat  OutputFormat
-	env           []string
-	workDir       string
-	commandRunner commandRunner
-	rawOutputHook RawOutputHook
+	name           string
+	description    string
+	bin            string
+	args           []string
+	outputFormat   OutputFormat
+	env            []string
+	workDir        string
+	commandRunner  commandRunner
+	rawOutputHook  RawOutputHook
+	messageBuilder MessageBuilder
+	resumeEnabled  bool
 }
 
 // Option configures a ClaudeCodeAgent.
@@ -114,6 +142,23 @@ func WithRawOutputHook(hook RawOutputHook) Option {
 	}
 }
 
+// WithMessageBuilder sets a callback that builds the complete Claude Code CLI prompt.
+// If builder is nil, the agent uses invocation.Message.Content directly.
+func WithMessageBuilder(builder MessageBuilder) Option {
+	return func(o *options) {
+		o.messageBuilder = builder
+	}
+}
+
+// WithResumeEnabled controls whether the agent uses Claude Code CLI session resume.
+// Resume is enabled by default. When disabled, the agent runs with
+// --no-session-persistence instead of --resume or --session-id.
+func WithResumeEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.resumeEnabled = enabled
+	}
+}
+
 // newOptions applies options and validates the resulting configuration.
 func newOptions(opt ...Option) (*options, error) {
 	opts := &options{
@@ -126,6 +171,7 @@ func newOptions(opt ...Option) (*options, error) {
 		},
 		outputFormat:  OutputFormatJSON,
 		commandRunner: execCommandRunner{},
+		resumeEnabled: true,
 	}
 	for _, o := range opt {
 		o(opts)

@@ -454,7 +454,7 @@ tRPC-Agent-Go brings Evaluation results into the online Agent running path, allo
 ## References
 
 - [tRPC-Agent-Go Runner: Online Best-of-N candidate selection](../runner.md#online-best-of-n-candidate-selection)
-- [tRPC-Agent-Go Evaluation: LLM Verifier](../evaluation.md#llm-verifier)
+- [tRPC-Agent-Go Evaluation: LLM Verifier](../evaluation/methods.md#llm-verifier)
 - [examples/evaluation/llmverifier](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llmverifier)
 - [tRPC-Agent-Go-Benchmark: GAIA](https://github.com/trpc-group/trpc-agent-go-benchmark/tree/main/gaia)
 - [LLM-as-a-Verifier](https://llm-as-a-verifier.notion.site/)

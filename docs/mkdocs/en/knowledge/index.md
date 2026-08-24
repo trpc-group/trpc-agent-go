@@ -327,6 +327,33 @@ err := kb.Load(ctx,
 > - Adjust `WithSourceConcurrency()` and `WithDocConcurrency()` according to throughput, cost, and rate limits.
 > - Default values are balanced for most scenarios; increase for speed if needed, decrease if rate limiting occurs.
 
+### Batch Embedding
+
+By default each document is embedded with its own request, so loading a source of `N` documents issues `N` embedding requests. `WithEmbeddingBatchSize(B)` groups documents into a single multi-input request, reducing the request count for that source to `ceil(N/B)`:
+
+```go
+err := kb.Load(ctx,
+    knowledge.WithDocConcurrency(4),       // Up to 4 batches in flight
+    knowledge.WithEmbeddingBatchSize(32),  // Up to 32 documents per request
+)
+```
+
+Batching is off by default and only applies when the configured embedder implements `embedder.BatchEmbedder`. The built-in OpenAI-compatible embedder (`knowledge/embedder/openai`) implements it and sends the texts as an input array. When the embedder does not support batching, when no embedder is configured (vector stores that embed remotely), or when source sync is enabled via `WithEnableSourceSync(true)`, loading keeps the unchanged per-document path and logs that the configured batch size was ignored, so an ineffective configuration is visible.
+
+The two options compose: `WithDocConcurrency(n)` bounds the number of concurrent batches, so up to `n * B` documents may be in flight at once.
+
+> **About Correctness and Limits**:
+>
+> - A batch never spans sources, because each source is loaded as an independent unit of work. Loading `k` sources issues the sum of `ceil(Ni/B)` requests over all sources, so splitting the same documents across many small sources reduces the benefit; `k` sources of one document each still issue `k` requests.
+> - A batch is embedded and validated as a whole. If the provider returns the wrong number of vectors, an empty vector, an inconsistent dimension, or a non-finite value, the whole batch fails and none of its documents are written.
+> - A failed batch is not retried as individual requests, so it never silently multiplies the request count. An embedder may still retry the batch as a whole, exactly as it may retry a per-document request, so `N` and `ceil(N/B)` count the requests loading issues rather than the attempts that reach the provider.
+> - If a vector store write fails part-way through a batch, the documents already written are kept and `Load` returns the error, matching the existing non-transactional behavior.
+> - Choose `B` within the provider's per-request limits on input count, total tokens, and payload size. The framework does not split a batch to satisfy those limits.
+> - Each input still receives exactly one vector, matched back to it by response index. Whether a provider returns identical vectors for a text embedded alone and in a batch is a property of that provider, not a framework guarantee.
+> - Batching reduces the number of embedding requests. It does not change the input text or the model, and it does not reduce the number of vector store writes; measure your own workload before assuming an end-to-end throughput gain.
+
+The [batch embedding example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/batch-embedding) loads the same file with and without a batch size and prints how many embedding requests each load issued.
+
 ### Load Progress Callback
 
 Use `WithLoadProgressCallback` to register a structured progress callback for driving custom UIs, metrics collection, or other observability integrations without parsing log output:
@@ -396,6 +423,12 @@ To ensure fair comparison, all four systems use identical configurations:
 | **Embedding Model** | server:274214 (1024 dims) |
 | **Vector Store** | PGVector (CrewAI uses ChromaDB) |
 | **Agent Model** | DeepSeek-V3.2 |
+
+### Corpus-Specific Contextual Retrieval Trial
+
+The [contextual retrieval example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/contextual-retrieval) uses the existing public `source.Source` and `document.Document.EmbeddingText` contracts to compare original and contextualized index text while returning the original chunk content to the Agent.
+
+This is an opt-in, corpus-specific evaluation recipe, not a default Knowledge behavior or a claim of general benefit. Keep the model, embedder, chunking, vector store, retrieval settings, query set, and evaluation protocol identical between variants, and review the example's data-handling and cost notes before sending parent documents to the configured context model.
 
 
 ## More Content

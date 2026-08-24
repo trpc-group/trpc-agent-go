@@ -427,6 +427,13 @@ type Options struct {
 	//   - > 0: the limit is enforced per invocation.
 	//   - <= 0: no limit is applied (default, preserves existing behavior).
 	MaxToolIterations int
+	// llmCallLimitFinalizationInstruction enables proactive finalization at
+	// MaxLLMCalls when non-nil. An empty value selects the framework default.
+	llmCallLimitFinalizationInstruction *string
+	// toolIterationLimitFinalizationInstruction enables proactive finalization
+	// at MaxToolIterations when non-nil. An empty value selects the framework
+	// default.
+	toolIterationLimitFinalizationInstruction *string
 
 	// PreserveSameBranch controls whether the content request processor
 	// should preserve original roles (assistant/tool) for events that
@@ -817,6 +824,45 @@ func WithMaxLLMCalls(limit int) Option {
 func WithMaxToolIterations(limit int) Option {
 	return func(opts *Options) {
 		opts.MaxToolIterations = limit
+	}
+}
+
+// WithLLMCallLimitFinalization uses the last call allowed by WithMaxLLMCalls
+// to request one tool-free final model response. The finalization call counts
+// toward the configured limit. An empty instruction uses the framework
+// default. This option has no effect when the LLM call limit is not positive.
+// The instruction is appended as a transient tail user message for the final
+// model request; it is not emitted or persisted as a user event. Before-model
+// callbacks observe the tool-free finalization request.
+//
+// When this option is not set, exceeding MaxLLMCalls preserves the default
+// terminal StopError behavior.
+func WithLLMCallLimitFinalization(instruction string) Option {
+	return func(opts *Options) {
+		opts.llmCallLimitFinalizationInstruction = &instruction
+	}
+}
+
+// WithToolIterationLimitFinalization requests one tool-free final model
+// response after the last fully framework-executed iteration allowed by
+// WithMaxToolIterations, when normal flow can continue to another LLM call.
+// The finalization call counts toward MaxLLMCalls when that limit is configured,
+// and is not attempted if that budget is exhausted.
+// If the limit-reaching response contains any caller-executed tool, including
+// an external tool or one deferred by the execution filter, the existing
+// deferred-tool lifecycle ends the current invocation without a finalization
+// call. That response still counts toward MaxToolIterations. An empty
+// instruction uses the framework default. This option has no effect when the
+// tool iteration limit is not positive.
+// The instruction is appended as a transient tail user message for the final
+// model request; it is not emitted or persisted as a user event. Before-model
+// callbacks observe the tool-free finalization request.
+//
+// When this option is not set, exceeding MaxToolIterations preserves the
+// default terminal flow_error behavior.
+func WithToolIterationLimitFinalization(instruction string) Option {
+	return func(opts *Options) {
+		opts.toolIterationLimitFinalizationInstruction = &instruction
 	}
 }
 

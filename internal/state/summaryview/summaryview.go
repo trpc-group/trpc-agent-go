@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/statecopy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -26,7 +27,16 @@ const stateKey = "trpc_agent.summary.model_visible_view"
 
 type contextKey struct{}
 
-// Boundary identifies the latest stored event represented by an item.
+// invocationState keeps an immutable snapshot opaque to Invocation.View's
+// generic state cloner. Mutations must replace the holder instead of changing
+// the stored view in place.
+type invocationState struct {
+	view               *View
+	bindingInvalidated bool
+}
+
+// Boundary identifies the latest stored event completely represented by the
+// model request prefix ending at an item.
 type Boundary struct {
 	EventID   string
 	Timestamp time.Time
@@ -65,7 +75,7 @@ func AttachProjection(inv *agent.Invocation, view *View) {
 	if inv == nil || view == nil {
 		return
 	}
-	inv.SetState(stateKey, cloneView(view))
+	inv.SetState(stateKey, &invocationState{view: cloneView(view)})
 }
 
 // Clear removes the current projection and finalized view.
@@ -84,23 +94,250 @@ func Finalize(inv *agent.Invocation, req *model.Request, requestTokens int) {
 	if inv == nil || req == nil {
 		return
 	}
-	view, ok := agent.GetStateValue[*View](inv, stateKey)
-	if !ok || view == nil {
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.view == nil {
 		return
 	}
+	view := state.view
 	next := cloneView(view)
 	next.RequestTokens = requestTokens
-	next.Bound = bindItems(next, req.Messages)
-	inv.SetState(stateKey, next)
+	next.Bound = !state.bindingInvalidated && bindItems(next, req.Messages)
+	inv.SetState(stateKey, &invocationState{
+		view:               next,
+		bindingInvalidated: state.bindingInvalidated,
+	})
+}
+
+// RebaseAfterTransform maps a projected view through a message transform.
+// When non-nil, sourceIndexes must contain one input-message index for every
+// output message. A nil slice means output message i came from input message i.
+// The view remains unbound when the provenance does not completely represent
+// every projected history item.
+func RebaseAfterTransform(
+	inv *agent.Invocation,
+	before []model.Message,
+	after []model.Message,
+	sourceIndexes []int,
+) bool {
+	if inv == nil {
+		return false
+	}
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.view == nil {
+		return false
+	}
+	if state.bindingInvalidated {
+		return false
+	}
+	boundItems, boundBefore := bindItemsForTransform(state.view, before)
+	boundBefore = boundBefore && sourceIndexesMatch(
+		sourceIndexes,
+		len(after),
+		len(before),
+	)
+	if !boundBefore {
+		next := cloneView(state.view)
+		next.Bound = false
+		next.ContentRequestLength = len(after)
+		storeInvalidated(inv, next)
+		return false
+	}
+	transformed, ok := rebaseItems(
+		boundItems,
+		after,
+		sourceIndexes,
+		len(before),
+	)
+	if !ok {
+		next := cloneView(state.view)
+		next.Bound = false
+		next.ContentRequestLength = len(after)
+		storeInvalidated(inv, next)
+		return false
+	}
+	next := *state.view
+	next.Items = transformed
+	next.ContentRequestLength = len(after)
+	next.Bound = true
+	inv.SetState(stateKey, &invocationState{view: &next})
+	return true
+}
+
+func bindItemsForTransform(view *View, messages []model.Message) ([]Item, bool) {
+	if view == nil || len(view.Items) == 0 || len(messages) == 0 {
+		return nil, false
+	}
+	items := make([]Item, len(view.Items))
+	shift := len(messages) - view.ContentRequestLength
+	previous := -1
+	for i := range view.Items {
+		index := findItem(
+			messages,
+			view.Items[i].Message,
+			view.Items[i].RequestIndex,
+			shift,
+			previous+1,
+		)
+		if index < 0 {
+			return nil, false
+		}
+		items[i] = view.Items[i]
+		items[i].RequestIndex = index
+		previous = index
+	}
+	return items, true
+}
+
+func rebaseItems(
+	items []Item,
+	after []model.Message,
+	sourceIndexes []int,
+	beforeLength int,
+) ([]Item, bool) {
+	itemBySource, ok := indexItemsBySource(items)
+	if !ok {
+		return nil, false
+	}
+	remaining, ok := countOutputsByItem(
+		sourceIndexes,
+		len(after),
+		beforeLength,
+		itemBySource,
+		len(items),
+	)
+	if !ok {
+		return nil, false
+	}
+
+	transformed := make([]Item, 0, len(after))
+	completed := make([]bool, len(items))
+	frontier := 0
+	for outputIndex := range after {
+		sourceIndex := sourceIndexForOutput(sourceIndexes, outputIndex)
+		itemIndex, exists := itemBySource[sourceIndex]
+		if !exists {
+			continue
+		}
+		item := items[itemIndex]
+		item.Message = statecopy.Message(after[outputIndex])
+		item.EffectiveEvent = cloneEvent(item.EffectiveEvent)
+		setEffectiveMessage(&item.EffectiveEvent, item.Message)
+		item.RequestIndex = outputIndex
+		item.Boundary = Boundary{}
+		transformed = append(transformed, item)
+
+		remaining[itemIndex]--
+		completed[itemIndex] = remaining[itemIndex] == 0
+		safeBoundary := advanceCompletedFrontier(items, completed, &frontier)
+		if !safeBoundary.IsZero() {
+			transformed[len(transformed)-1].Boundary = safeBoundary
+		}
+	}
+	return transformed, frontier == len(items) && len(transformed) > 0
+}
+
+func indexItemsBySource(items []Item) (map[int]int, bool) {
+	itemBySource := make(map[int]int, len(items))
+	for i := range items {
+		requestIndex := items[i].RequestIndex
+		if _, exists := itemBySource[requestIndex]; exists {
+			return nil, false
+		}
+		itemBySource[requestIndex] = i
+	}
+	return itemBySource, true
+}
+
+func countOutputsByItem(
+	sourceIndexes []int,
+	outputCount int,
+	beforeLength int,
+	itemBySource map[int]int,
+	itemCount int,
+) ([]int, bool) {
+	if !sourceIndexesMatch(sourceIndexes, outputCount, beforeLength) {
+		return nil, false
+	}
+	remaining := make([]int, itemCount)
+	for outputIndex := 0; outputIndex < outputCount; outputIndex++ {
+		sourceIndex := sourceIndexForOutput(sourceIndexes, outputIndex)
+		if sourceIndex < 0 || sourceIndex >= beforeLength {
+			return nil, false
+		}
+		if itemIndex, exists := itemBySource[sourceIndex]; exists {
+			remaining[itemIndex]++
+		}
+	}
+	for _, count := range remaining {
+		if count == 0 {
+			return nil, false
+		}
+	}
+	return remaining, true
+}
+
+func sourceIndexesMatch(
+	sourceIndexes []int,
+	outputCount int,
+	inputCount int,
+) bool {
+	if sourceIndexes == nil {
+		return outputCount == inputCount
+	}
+	return len(sourceIndexes) == outputCount
+}
+
+func sourceIndexForOutput(sourceIndexes []int, outputIndex int) int {
+	if sourceIndexes == nil {
+		return outputIndex
+	}
+	return sourceIndexes[outputIndex]
+}
+
+func advanceCompletedFrontier(
+	items []Item,
+	completed []bool,
+	frontier *int,
+) Boundary {
+	var safeBoundary Boundary
+	for *frontier < len(items) && completed[*frontier] {
+		if !items[*frontier].Boundary.IsZero() {
+			safeBoundary = items[*frontier].Boundary
+		}
+		*frontier++
+	}
+	return safeBoundary
+}
+
+// InvalidateBinding prevents the current projected view from being used as
+// proof of model-visible history.
+func InvalidateBinding(inv *agent.Invocation) {
+	if inv == nil {
+		return
+	}
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.view == nil {
+		return
+	}
+	next := cloneView(state.view)
+	next.Bound = false
+	storeInvalidated(inv, next)
+}
+
+func storeInvalidated(inv *agent.Invocation, view *View) {
+	inv.SetState(stateKey, &invocationState{
+		view:               view,
+		bindingInvalidated: true,
+	})
 }
 
 // Snapshot returns an isolated copy of the latest model-visible view.
 func Snapshot(inv *agent.Invocation) (*View, bool) {
-	view, ok := agent.GetStateValue[*View](inv, stateKey)
-	if !ok || view == nil {
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.view == nil {
 		return nil, false
 	}
-	return cloneView(view), true
+	return cloneView(state.view), true
 }
 
 // ContextWithView attaches an isolated model-visible view to ctx.
@@ -232,7 +469,7 @@ func bindItems(view *View, messages []model.Message) bool {
 			return false
 		}
 		item.RequestIndex = index
-		item.Message = cloneMessage(messages[index])
+		item.Message = statecopy.Message(messages[index])
 		setEffectiveMessage(&item.EffectiveEvent, item.Message)
 		previous = index
 	}
@@ -299,7 +536,7 @@ func cloneView(view *View) *View {
 	cloned.Items = make([]Item, len(view.Items))
 	for i := range view.Items {
 		cloned.Items[i] = view.Items[i]
-		cloned.Items[i].Message = cloneMessage(view.Items[i].Message)
+		cloned.Items[i].Message = statecopy.Message(view.Items[i].Message)
 		cloned.Items[i].EffectiveEvent = cloneEvent(view.Items[i].EffectiveEvent)
 	}
 	return &cloned
@@ -309,6 +546,29 @@ func cloneEvent(evt event.Event) event.Event {
 	cloned := evt
 	if evt.Response != nil {
 		cloned.Response = evt.Response.Clone()
+		for i := range cloned.Response.Choices {
+			choice := &cloned.Response.Choices[i]
+			choice.Message = statecopy.Message(evt.Response.Choices[i].Message)
+			choice.Delta = statecopy.Message(evt.Response.Choices[i].Delta)
+			if evt.Response.Choices[i].FinishReason != nil {
+				finishReason := *evt.Response.Choices[i].FinishReason
+				choice.FinishReason = &finishReason
+			}
+		}
+		if evt.Response.Error != nil {
+			if evt.Response.Error.Param != nil {
+				param := *evt.Response.Error.Param
+				cloned.Response.Error.Param = &param
+			}
+			if evt.Response.Error.Code != nil {
+				code := *evt.Response.Error.Code
+				cloned.Response.Error.Code = &code
+			}
+		}
+	}
+	if evt.ParentMetadata != nil {
+		parentMetadata := *evt.ParentMetadata
+		cloned.ParentMetadata = &parentMetadata
 	}
 	if evt.LongRunningToolIDs != nil {
 		cloned.LongRunningToolIDs = make(map[string]struct{}, len(evt.LongRunningToolIDs))
@@ -335,11 +595,6 @@ func cloneEvent(evt event.Event) event.Event {
 	return cloned
 }
 
-func cloneMessage(message model.Message) model.Message {
-	response := (&model.Response{Choices: []model.Choice{{Message: message}}}).Clone()
-	return response.Choices[0].Message
-}
-
 func setEffectiveMessage(evt *event.Event, message model.Message) {
 	if evt == nil {
 		return
@@ -349,5 +604,5 @@ func setEffectiveMessage(evt *event.Event, message model.Message) {
 	} else {
 		evt.Response = evt.Response.Clone()
 	}
-	evt.Response.Choices = []model.Choice{{Message: cloneMessage(message)}}
+	evt.Response.Choices = []model.Choice{{Message: statecopy.Message(message)}}
 }

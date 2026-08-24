@@ -65,6 +65,33 @@ func TestRunnerEnqueuesModelVisibleSummaryView(t *testing.T) {
 	require.Equal(t, 13_310, view.RequestTokens)
 }
 
+func TestRunnerPersistsErrorEventWithoutEnqueuingSummary(t *testing.T) {
+	service := &mockSessionService{}
+	r := NewRunner(
+		"test-app",
+		&mockAgent{name: "test-agent"},
+		WithSessionService(service),
+	).(*runner)
+	sess := &session.Session{ID: "session"}
+	invocation := agent.NewInvocation(agent.WithInvocationSession(sess))
+	errorEvent := errorEventWithContent(event.NewErrorEvent(
+		invocation.InvocationID,
+		"test-agent",
+		agent.ErrorTypeStopAgentError,
+		"cancelled",
+	))
+
+	require.True(t, r.handleEventPersistence(
+		context.Background(),
+		invocation,
+		sess,
+		sess,
+		errorEvent,
+	))
+	require.Len(t, service.appendEventCalls, 1)
+	require.Empty(t, service.enqueueSummaryJobCalls)
+}
+
 func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 	t.Run("calls EnqueueSummaryJob for qualifying events", func(t *testing.T) {
 		// Create mock session service

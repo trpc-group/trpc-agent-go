@@ -28,10 +28,12 @@ import (
 
 	openai "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modeltelemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -649,7 +651,10 @@ func (m *Model) prepareChatRequest(
 	}
 	// Apply token tailoring if configured.
 	m.applyTokenTailoring(ctx, request)
-	chatRequest, opts := m.buildChatRequest(request)
+	chatRequest, opts := m.buildChatRequestWithToolControl(
+		request,
+		imodelrequest.ToolsDisabled(ctx),
+	)
 	return chatRequest, opts, nil
 }
 
@@ -677,6 +682,9 @@ func (m *Model) GenerateContent(
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
+	if imodelrequest.ToolsDisabled(ctx) {
+		disableChatRequestTools(chatRequest)
+	}
 	m.runChatRequestJSONCallback(ctx, chatRequest)
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
@@ -713,6 +721,9 @@ func (m *Model) GenerateContentIter(
 		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
 		defer reporter.End()
 		m.runChatRequestCallback(ctx, chatRequest)
+		if imodelrequest.ToolsDisabled(ctx) {
+			disableChatRequestTools(chatRequest)
+		}
 		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {
@@ -773,6 +784,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			maxInputTokens,
 		)
 	}
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "openai.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
@@ -783,7 +798,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in openai.Model",
 				err,
 			)
-			modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "openai.Model", request, tailored,
+			)
 			return
 		}
 		log.WarnContext(
@@ -794,7 +811,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "openai.Model", request, tailored,
+	)
 }
 
 // InputTokenBudget returns the same input budget used by token tailoring.
@@ -906,6 +925,13 @@ func (m *Model) estimateToolsTokens(
 
 // buildChatRequest converts our Request to OpenAI request params and options.
 func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletionNewParams, []openaiopt.RequestOption) {
+	return m.buildChatRequestWithToolControl(request, false)
+}
+
+func (m *Model) buildChatRequestWithToolControl(
+	request *model.Request,
+	disableToolFields bool,
+) (*openai.ChatCompletionNewParams, []openaiopt.RequestOption) {
 	chatRequest := &openai.ChatCompletionNewParams{
 		Model:    shared.ChatModel(m.name),
 		Messages: m.convertMessages(request.Messages),
@@ -941,10 +967,16 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 		}
 	}
 
-	// MaxTokens is deprecated and not compatible with o-series models.
-	// Use MaxCompletionTokens instead.
 	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
-		chatRequest.MaxCompletionTokens = openai.Int(int64(*mt))
+		if m.variant == VariantDeepSeek {
+			// DeepSeek's Chat Completions API documents max_tokens as the
+			// output limit: https://api-docs.deepseek.com/api/create-chat-completion.
+			chatRequest.MaxTokens = openai.Int(int64(*mt))
+		} else {
+			// max_tokens is deprecated and incompatible with OpenAI o-series
+			// models. Use max_completion_tokens for other variants.
+			chatRequest.MaxCompletionTokens = openai.Int(int64(*mt))
+		}
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = openai.Float(*request.Temperature)
@@ -975,11 +1007,17 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 	}
 	opts := m.buildThinkingOption(request)
 	// Add model-level extra fields to the request.
-	for key, value := range m.extraFields {
+	for key, value := range imodelrequest.FilterToolControlFields(
+		m.extraFields,
+		disableToolFields,
+	) {
 		opts = append(opts, openaiopt.WithJSONSet(key, value))
 	}
 	// Add request-level extra fields after model-level fields so they take precedence.
-	for key, value := range request.ExtraFields {
+	for key, value := range imodelrequest.FilterToolControlFields(
+		request.ExtraFields,
+		disableToolFields,
+	) {
 		opts = append(opts, openaiopt.WithJSONSet(key, value))
 	}
 	// Add request-level headers after model-level client options so they take precedence.
@@ -993,7 +1031,51 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 			IncludeUsage: openai.Bool(true),
 		}
 	}
-	return chatRequest, opts
+	return chatRequest, appendToolControlDeleteOptions(
+		opts,
+		disableToolFields,
+	)
+}
+
+func appendToolControlDeleteOptions(
+	opts []openaiopt.RequestOption,
+	enabled bool,
+) []openaiopt.RequestOption {
+	if !enabled {
+		return opts
+	}
+	for _, key := range []string{
+		"tools",
+		"tool_choice",
+		"parallel_tool_calls",
+		"function_call",
+		"functions",
+	} {
+		opts = append(opts, openaiopt.WithJSONDel(key))
+	}
+	return opts
+}
+
+func disableChatRequestTools(request *openai.ChatCompletionNewParams) {
+	if request == nil {
+		return
+	}
+	request.Tools = nil
+	request.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{}
+	request.ParallelToolCalls = param.Opt[bool]{}
+	request.FunctionCall = openai.ChatCompletionNewParamsFunctionCallUnion{}
+	request.Functions = nil
+	if override, ok := request.Overrides(); ok {
+		if filtered, ok := imodelrequest.FilterToolControlObject(override); ok {
+			request.SetExtraFields(filtered)
+		}
+		return
+	}
+	if fields := request.ExtraFields(); len(fields) > 0 {
+		request.SetExtraFields(
+			imodelrequest.FilterToolControlFields(fields, true),
+		)
+	}
 }
 
 // buildThinkingOption converts our Request to OpenAI request RequestOption.

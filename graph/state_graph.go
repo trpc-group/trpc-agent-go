@@ -4230,6 +4230,12 @@ func runAfterToolPluginCallbacks(
 	if afterResult != nil && afterResult.Context != nil {
 		ctx = afterResult.Context
 	}
+	// A graph interrupt is resumable control flow, not an execution failure
+	// that an after-tool callback may replace with an ordinary result.
+	var interruptErr *InterruptError
+	if errors.As(runErr, &interruptErr) {
+		return ctx, nil, runErr
+	}
 	if afterResult != nil && afterResult.CustomResult != nil {
 		if err != nil {
 			return ctx, afterResult.CustomResult,
@@ -5587,6 +5593,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		return out, nil
 	}
 	results := make(chan result, len(pendingCalls))
+	traceRecorder := &graphToolTraceRecorder{}
 	var wg sync.WaitGroup
 	wg.Add(len(pendingCalls))
 
@@ -5606,6 +5613,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				State:         config.State,
 				RetryPolicy:   config.RetryPolicy,
 				Concurrency:   config.Concurrency,
+				TraceRecorder: traceRecorder,
 			})
 			// On error, cancel siblings but still report result so collector can exit cleanly.
 			if err != nil {
@@ -5639,6 +5647,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			completedThisRun[completedKey] = r.msg
 		}
 	}
+	traceRecorder.flush(ctx)
 	cancelCause, _ := context.Cause(ctx).(*parallelToolCallCancelCause)
 	var causalError error
 	if cancelCause != nil && cancelCause.owner == cancelOwner {
@@ -5797,24 +5806,54 @@ type singleToolCallConfig struct {
 	State         State
 	RetryPolicy   *tool.RetryPolicy
 	Concurrency   *toolcall.Limiter
+	TraceRecorder *graphToolTraceRecorder
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
 func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (model.Message, error) {
 	id, name := config.ToolCall.ID, config.ToolCall.Function.Name
+	originalInvocation, traceStepID := graphToolTraceContext(ctx, config.State)
 	t := config.Tools[name]
 	if t == nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s not found", name)))
-		return model.Message{}, fmt.Errorf("tool %s not found", name)
+		err := fmt.Errorf("tool %s not found", name)
+		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		recordGraphToolExecutionTrace(
+			ctx,
+			originalInvocation,
+			traceStepID,
+			config.TraceRecorder,
+			config.ToolCallIndex,
+			name,
+			id,
+			config.ToolCall.Function.Arguments,
+			nil,
+			nil,
+			err,
+		)
+		return model.Message{}, err
 	}
 	if config.Concurrency != nil {
 		release, err := config.Concurrency.Acquire(ctx, name)
 		if err != nil {
-			return model.Message{}, fmt.Errorf(
+			traceErr := fmt.Errorf(
 				"wait for tool %s concurrency: %w",
 				name,
 				err,
 			)
+			recordGraphToolExecutionTrace(
+				ctx,
+				originalInvocation,
+				traceStepID,
+				config.TraceRecorder,
+				config.ToolCallIndex,
+				name,
+				id,
+				config.ToolCall.Function.Arguments,
+				nil,
+				nil,
+				traceErr,
+			)
+			return model.Message{}, traceErr
 		}
 		defer release()
 	}
@@ -5844,7 +5883,6 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	}
 
 	// Keep the original invocation as a fallback when callbacks return a bare context.
-	originalInvocation, _ := agent.InvocationFromContext(ctx)
 	ctx, span, startedSpan := startNodeSpan(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
 	_, startEventInvocation, finalCtx, completeEventInvocation, result, modifiedArgs, err := runToolWithEventContexts(
 		ctx,
@@ -5920,12 +5958,39 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		span.End()
 	}
 
+	traceInvocation := invocationOrFallback(originalInvocation, eventInvocation)
 	if err != nil {
 		if interruptErr != nil {
+			recordGraphToolExecutionTrace(
+				finalCtx,
+				traceInvocation,
+				traceStepID,
+				config.TraceRecorder,
+				config.ToolCallIndex,
+				name,
+				id,
+				modifiedArgs,
+				result,
+				nil,
+				nil,
+			)
 			return model.Message{}, err
 		}
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
+		recordGraphToolExecutionTrace(
+			finalCtx,
+			traceInvocation,
+			traceStepID,
+			config.TraceRecorder,
+			config.ToolCallIndex,
+			name,
+			id,
+			modifiedArgs,
+			nil,
+			nil,
+			err,
+		)
 		return model.Message{}, fmt.Errorf("tool %s call failed: %w", name, err)
 	}
 
@@ -5934,10 +5999,48 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	if err != nil {
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
-		return model.Message{}, fmt.Errorf("failed to marshal tool result: %w", err)
+		traceErr := fmt.Errorf("failed to marshal tool result: %w", err)
+		recordGraphToolExecutionTrace(
+			finalCtx,
+			traceInvocation,
+			traceStepID,
+			config.TraceRecorder,
+			config.ToolCallIndex,
+			name,
+			id,
+			modifiedArgs,
+			nil,
+			nil,
+			traceErr,
+		)
+		return model.Message{}, traceErr
 	}
-
+	recordGraphToolExecutionTrace(
+		finalCtx,
+		traceInvocation,
+		traceStepID,
+		config.TraceRecorder,
+		config.ToolCallIndex,
+		name,
+		id,
+		modifiedArgs,
+		nil,
+		content,
+		nil,
+	)
 	return model.NewToolMessage(id, name, string(content)), nil
+}
+
+func graphToolTraceContext(ctx context.Context, state State) (*agent.Invocation, string) {
+	var invocation *agent.Invocation
+	if ctx != nil {
+		invocation, _ = agent.InvocationFromContext(ctx)
+	}
+	if state == nil {
+		return invocation, ""
+	}
+	stepID, _ := state[currentTraceStepIDStateKey].(string)
+	return invocation, stepID
 }
 
 func setAgentToolInterruptStateFromError(state State, err error) {
