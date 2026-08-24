@@ -11,7 +11,6 @@
 package file
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -93,9 +92,25 @@ func validateReadFileRequest(req *readFileRequest) error {
 const (
 	errNotTextFile     = "file is not a UTF-8 text file"
 	errNotTextFileTmpl = "file is not a UTF-8 text file (mime: %s)"
+
+	// utf8Replacement stands in for byte sequences that are not valid UTF-8.
+	utf8Replacement = "\uFFFD"
+
+	// invalidUTF8Note marks a read whose returned contents differ from the
+	// source content because invalid UTF-8 was substituted.
+	invalidUTF8Note = " (invalid UTF-8 replaced with U+FFFD)"
 )
 
-func validateTextString(content string, mimeType string) error {
+// rejectNonText reports content that is not a text file at all, and so cannot
+// be repaired by substitution: a non-text MIME type, or an embedded NUL byte.
+//
+// Invalid UTF-8 on its own is not rejected. A handful of malformed bytes, such
+// as a stray byte left by a non-UTF-8 editor or a truncated multi-byte rune,
+// would otherwise make an entire readable file unreadable through this tool and
+// leave a caller with no way to inspect it; sanitizeText repairs those instead.
+//
+// Empty content is accepted whatever the MIME type, as it always has been.
+func rejectNonText(content string, mimeType string) error {
 	if content == "" {
 		return nil
 	}
@@ -103,25 +118,23 @@ func validateTextString(content string, mimeType string) error {
 		!codeexecutor.IsTextMIME(mimeType) {
 		return notTextFileErr(mimeType)
 	}
-	if strings.IndexByte(content, 0) >= 0 ||
-		!utf8.ValidString(content) {
+	if strings.IndexByte(content, 0) >= 0 {
 		return notTextFileErr(mimeType)
 	}
 	return nil
 }
 
-func validateTextBytes(data []byte, mimeType string) error {
-	if len(data) == 0 {
-		return nil
+// sanitizeText returns content with each run of invalid UTF-8 bytes replaced by
+// U+FFFD, reporting whether any substitution was made.
+//
+// Callers run this on the slice they are about to return rather than on the
+// whole file, so that size limits and line numbering stay measured in source
+// bytes: U+FFFD is three bytes wide and so can be wider than what it replaces.
+func sanitizeText(content string) (string, bool) {
+	if utf8.ValidString(content) {
+		return content, false
 	}
-	if strings.TrimSpace(mimeType) != "" &&
-		!codeexecutor.IsTextMIME(mimeType) {
-		return notTextFileErr(mimeType)
-	}
-	if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
-		return notTextFileErr(mimeType)
-	}
-	return nil
+	return strings.ToValidUTF8(content, utf8Replacement), true
 }
 
 func notTextFileErr(mimeType string) error {
@@ -146,7 +159,7 @@ func (f *fileToolSet) readFileFromRef(
 		return true, err
 	}
 
-	if err := validateTextString(content, mimeType); err != nil {
+	if err := rejectNonText(content, mimeType); err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return true, err
 	}
@@ -165,6 +178,7 @@ func (f *fileToolSet) readFileFromRef(
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return true, err
 	}
+	chunk, replaced := sanitizeText(chunk)
 	rsp.Contents = chunk
 	if empty {
 		rsp.Message = fmt.Sprintf(
@@ -183,6 +197,9 @@ func (f *fileToolSet) readFileFromRef(
 		end,
 		total,
 	)
+	if replaced {
+		rsp.Message += invalidUTF8Note
+	}
 	return true, nil
 }
 
@@ -245,7 +262,7 @@ func (f *fileToolSet) readFileFromDiskOrCache(
 		return fmt.Errorf("reading file: %w", err)
 	}
 	mimeType := http.DetectContentType(contents)
-	if err := validateTextBytes(contents, mimeType); err != nil {
+	if err := rejectNonText(string(contents), mimeType); err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return err
 	}
@@ -257,6 +274,7 @@ func (f *fileToolSet) readFileFromDiskOrCache(
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return err
 	}
+	chunk, replaced := sanitizeText(chunk)
 	rsp.Contents = chunk
 	if empty {
 		rsp.Message = fmt.Sprintf(
@@ -273,6 +291,9 @@ func (f *fileToolSet) readFileFromDiskOrCache(
 		endLine,
 		total,
 	)
+	if replaced {
+		rsp.Message += invalidUTF8Note
+	}
 	return nil
 }
 
@@ -289,7 +310,7 @@ func (f *fileToolSet) readFileFromCache(
 		return false, nil
 	}
 
-	if err := validateTextString(content, mime); err != nil {
+	if err := rejectNonText(content, mime); err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return true, err
 	}
@@ -299,6 +320,7 @@ func (f *fileToolSet) readFileFromCache(
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return true, err
 	}
+	chunk, replaced := sanitizeText(chunk)
 	rsp.Contents = chunk
 	if empty {
 		rsp.Message = fmt.Sprintf(
@@ -317,6 +339,9 @@ func (f *fileToolSet) readFileFromCache(
 		total,
 		mime,
 	)
+	if replaced {
+		rsp.Message += invalidUTF8Note
+	}
 	return true, nil
 }
 

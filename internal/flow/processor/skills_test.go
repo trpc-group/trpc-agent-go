@@ -137,6 +137,164 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev.Object)
 }
 
+func TestSkillsRequestProcessor_AppliesDeclaredLoadsAfterTurnClear(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "review"}},
+		full: map[string]*skill.Skill{
+			"review": {
+				Summary: skill.Summary{Name: "review"},
+				Body:    "Review body",
+				Docs: []skill.Doc{{
+					Path:    "guide.md",
+					Content: "Guide body",
+				}},
+			},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv",
+		AgentName:    "tester",
+		Session: &session.Session{State: session.StateMap{
+			skill.LoadedKey("tester", "old"): []byte("1"),
+		}},
+		RunOptions: agent.RunOptions{
+			SkillLoads: []skill.LoadRequest{{
+				Name: "review",
+				Docs: []string{"guide.md"},
+			}},
+		},
+	}
+	req := &model.Request{}
+	ch := make(chan *event.Event, 8)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeTurn),
+	)
+
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	oldLoaded, _ := inv.Session.GetState(skill.LoadedKey("tester", "old"))
+	require.Empty(t, oldLoaded)
+	loaded, ok := inv.Session.GetState(skill.LoadedKey("tester", "review"))
+	require.True(t, ok)
+	require.Equal(t, []byte("1"), loaded)
+	docs, ok := inv.Session.GetState(skill.DocsKey("tester", "review"))
+	require.True(t, ok)
+	require.JSONEq(t, `["guide.md"]`, string(docs))
+	require.Contains(t, req.Messages[0].Content, "Review body")
+	require.Contains(t, req.Messages[0].Content, "Guide body")
+	require.Len(t, ch, 2)
+	stateUpdate := <-ch
+	require.Contains(
+		t,
+		stateUpdate.StateDelta,
+		skill.LoadedKey("tester", "old"),
+	)
+	require.Empty(
+		t,
+		stateUpdate.StateDelta[skill.LoadedKey("tester", "old")],
+	)
+	require.Equal(
+		t,
+		[]byte("1"),
+		stateUpdate.StateDelta[skill.LoadedKey("tester", "review")],
+	)
+	require.JSONEq(
+		t,
+		`["guide.md"]`,
+		string(stateUpdate.StateDelta[skill.DocsKey("tester", "review")]),
+	)
+
+	p.ProcessRequest(context.Background(), inv, req, ch)
+	require.Len(t, ch, 2, "declared loads must be committed only once")
+}
+
+func TestSkillsRequestProcessor_DeclaredLoadPreservesSessionDocs(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "review"}},
+		full: map[string]*skill.Skill{
+			"review": {
+				Summary: skill.Summary{Name: "review"},
+				Body:    "Review body",
+				Docs: []skill.Doc{{
+					Path:    "old.md",
+					Content: "Old doc body",
+				}},
+			},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv",
+		AgentName:    "tester",
+		Session: &session.Session{State: session.StateMap{
+			skill.DocsKey("tester", "review"): []byte(`["old.md"]`),
+		}},
+		RunOptions: agent.RunOptions{
+			SkillLoads: []skill.LoadRequest{{Name: "review"}},
+		},
+	}
+	req := &model.Request{}
+	ch := make(chan *event.Event, 4)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+	)
+
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	docs, ok := inv.Session.GetState(skill.DocsKey("tester", "review"))
+	require.True(t, ok)
+	require.JSONEq(t, `["old.md"]`, string(docs))
+	require.Contains(t, req.Messages[0].Content, "Old doc body")
+}
+
+func TestSkillsRequestProcessor_DeclaredLoadStaysWithinMaxLoadedSkills(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "a"}, {Name: "b"}, {Name: "c"}},
+		full: map[string]*skill.Skill{
+			"a": {Summary: skill.Summary{Name: "a"}, Body: "Body A"},
+			"b": {Summary: skill.Summary{Name: "b"}, Body: "Body B"},
+			"c": {Summary: skill.Summary{Name: "c"}, Body: "Body C"},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv",
+		AgentName:    "tester",
+		Session: &session.Session{State: session.StateMap{
+			skill.LoadedKey("tester", "a"): []byte("1"),
+			skill.LoadedKey("tester", "b"): []byte("1"),
+			skill.LoadedOrderKey("tester"): []byte(`["a","b"]`),
+		}},
+		RunOptions: agent.RunOptions{
+			SkillLoads: []skill.LoadRequest{{Name: "c"}},
+		},
+	}
+	req := &model.Request{}
+	ch := make(chan *event.Event, 4)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+		WithMaxLoadedSkills(2),
+	)
+
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	aLoaded, _ := inv.Session.GetState(skill.LoadedKey("tester", "a"))
+	require.Empty(t, aLoaded)
+	bLoaded, _ := inv.Session.GetState(skill.LoadedKey("tester", "b"))
+	require.NotEmpty(t, bLoaded)
+	cLoaded, _ := inv.Session.GetState(skill.LoadedKey("tester", "c"))
+	require.NotEmpty(t, cLoaded)
+	require.Contains(t, req.Messages[0].Content, "Body C")
+	require.NotContains(t, req.Messages[0].Content, "Body A")
+}
+
 func TestSkillsRequestProcessor_ProcessRequest_PrioritizesRelevantSkillsBeforeOverviewCap(
 	t *testing.T,
 ) {
@@ -2613,6 +2771,49 @@ func TestSkillsToolResultRequestProcessor_SessionSummary_DisablesFallbackWithout
 		}
 		require.NotContains(t, m.Content, skillsLoadedContextHeader)
 	}
+}
+
+func TestSkillsToolResultRequestProcessor_DeclaredLoadOverridesSummaryFallbackSkip(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{State: session.StateMap{
+			skill.LoadedKey("tester", "calc"): []byte("1"),
+		}},
+		RunOptions: agent.RunOptions{
+			SkillLoads: []skill.LoadRequest{{Name: "calc"}},
+		},
+	}
+	inv.SetState(contentHasSessionSummaryStateKey, true)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("u"),
+	}}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	var found bool
+	for _, message := range req.Messages {
+		if message.Role == model.RoleSystem &&
+			strings.Contains(message.Content, skillsLoadedContextHeader) {
+			found = true
+			require.Contains(t, message.Content, "[Loaded] calc")
+			require.Contains(t, message.Content, "B")
+		}
+	}
+	require.True(t, found)
 }
 
 func TestSkillsToolResultRequestProcessor_SessionSummary_SkipsFallbackWhenMaterialized(

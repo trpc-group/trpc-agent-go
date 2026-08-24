@@ -430,6 +430,148 @@ func TestCodexAgent_Run_ResumeFromSessionState(t *testing.T) {
 	require.Equal(t, "Hi.", string(calls[0].stdin))
 }
 
+func TestCodexAgent_Run_MessageBuilderBuildsPromptAndRawHook(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-builder-1")
+	sess.Events = []event.Event{{InvocationID: "history-event"}}
+	inv := newTestInvocation("inv-builder-1", sess, "current prompt")
+	runner := &scriptedRunner{
+		run: func(cmd command) ([]byte, []byte, error) {
+			return []byte(`{"type":"thread.started","thread_id":"thread-builder"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"built ok"}}`), nil, nil
+		},
+	}
+	var gotBuilder *MessageBuilderArgs
+	var gotHook RawOutputHookArgs
+	ag, err := New(
+		withCommandRunner(runner),
+		WithMessageBuilder(func(_ context.Context, args *MessageBuilderArgs) (string, error) {
+			got := *args
+			gotBuilder = &got
+			return "built prompt", nil
+		}),
+		WithRawOutputHook(func(_ context.Context, args *RawOutputHookArgs) error {
+			gotHook = *args
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	events := drainEvents(ch)
+	require.Len(t, events, 2)
+	require.Equal(t, "built ok", events[1].Choices[0].Message.Content)
+	require.NotNil(t, gotBuilder)
+	require.Equal(t, "inv-builder-1", gotBuilder.InvocationID)
+	require.Equal(t, "app", gotBuilder.AppName)
+	require.Equal(t, "user", gotBuilder.UserID)
+	require.Equal(t, "sess-builder-1", gotBuilder.SessionID)
+	require.Equal(t, "current prompt", gotBuilder.Message.Content)
+	require.Len(t, gotBuilder.Events, 1)
+	require.Equal(t, "history-event", gotBuilder.Events[0].InvocationID)
+	require.Equal(t, "built prompt", gotHook.Prompt)
+	calls := runner.Calls()
+	require.Len(t, calls, 1)
+	require.Equal(t, []string{"exec", "--json"}, calls[0].args)
+	require.Equal(t, "built prompt", string(calls[0].stdin))
+}
+
+func TestCodexAgent_Run_MessageBuilderError(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-builder-error")
+	inv := newTestInvocation("inv-builder-error", sess, "current prompt")
+	runner := &scriptedRunner{}
+	builderErr := errors.New("builder failed")
+	ag, err := New(
+		withCommandRunner(runner),
+		WithMessageBuilder(func(context.Context, *MessageBuilderArgs) (string, error) {
+			return "", builderErr
+		}),
+	)
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.ErrorIs(t, err, builderErr)
+	require.ErrorContains(t, err, "build message")
+	require.Nil(t, ch)
+	require.Empty(t, runner.Calls())
+}
+
+func TestCodexAgent_Run_MessageBuilderEmpty(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-builder-empty")
+	inv := newTestInvocation("inv-builder-empty", sess, "current prompt")
+	runner := &scriptedRunner{}
+	ag, err := New(
+		withCommandRunner(runner),
+		WithMessageBuilder(func(context.Context, *MessageBuilderArgs) (string, error) {
+			return "", nil
+		}),
+	)
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.ErrorContains(t, err, "built prompt is empty")
+	require.Nil(t, ch)
+	require.Empty(t, runner.Calls())
+}
+
+func TestCodexAgent_Run_MessageBuilderKeepsResumeEnabled(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-builder-resume")
+	sess.SetState(StateKeyThreadID, []byte("thread-resume"))
+	inv := newTestInvocation("inv-builder-resume", sess, "current prompt")
+	runner := &scriptedRunner{
+		run: func(cmd command) ([]byte, []byte, error) {
+			return []byte(`{"type":"thread.started","thread_id":"thread-resume"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"resumed"}}`), nil, nil
+		},
+	}
+	ag, err := New(
+		withCommandRunner(runner),
+		WithMessageBuilder(func(context.Context, *MessageBuilderArgs) (string, error) {
+			return "built resume prompt", nil
+		}),
+	)
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	events := drainEvents(ch)
+	require.Len(t, events, 2)
+	require.Empty(t, events[1].StateDelta)
+	calls := runner.Calls()
+	require.Len(t, calls, 1)
+	require.Equal(t, []string{"exec", "resume", "--json", "thread-resume"}, calls[0].args)
+	require.Equal(t, "built resume prompt", string(calls[0].stdin))
+}
+
+func TestCodexAgent_Run_ResumeDisabledUsesCreateWithoutPersistingThread(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-resume-disabled")
+	sess.SetState(StateKeyThreadID, []byte("stale-thread"))
+	inv := newTestInvocation("inv-resume-disabled", sess, "Hi.")
+	runner := &scriptedRunner{
+		run: func(cmd command) ([]byte, []byte, error) {
+			return []byte(`{"type":"thread.started","thread_id":"thread-new"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"fresh"}}`), nil, nil
+		},
+	}
+	ag, err := New(
+		withCommandRunner(runner),
+		WithResumeEnabled(false),
+	)
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	events := drainEvents(ch)
+	require.Len(t, events, 2)
+	require.True(t, events[1].IsFinalResponse())
+	require.Equal(t, "fresh", events[1].Choices[0].Message.Content)
+	require.Empty(t, events[1].StateDelta)
+	calls := runner.Calls()
+	require.Len(t, calls, 1)
+	require.Equal(t, []string{"exec", "--json"}, calls[0].args)
+	require.Equal(t, "Hi.", string(calls[0].stdin))
+}
+
 func TestCodexAgent_Run_ResumeErrorFallsBackToCreate(t *testing.T) {
 	ctx := context.Background()
 	sess := session.NewSession("app", "user", "sess-3")

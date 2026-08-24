@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	itransfer "trpc.group/trpc-go/trpc-agent-go/internal/transfer"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -80,6 +81,23 @@ func (p *parentAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *e
 	ch := make(chan *event.Event)
 	close(ch)
 	return ch, nil
+}
+
+type runErrorAgent struct {
+	name  string
+	calls int
+}
+
+func (a *runErrorAgent) Info() agent.Info                { return agent.Info{Name: a.name} }
+func (a *runErrorAgent) SubAgents() []agent.Agent        { return nil }
+func (a *runErrorAgent) FindSubAgent(string) agent.Agent { return nil }
+func (a *runErrorAgent) Tools() []tool.Tool              { return nil }
+func (a *runErrorAgent) Run(
+	context.Context,
+	*agent.Invocation,
+) (<-chan *event.Event, error) {
+	a.calls++
+	return nil, errors.New("target run failed")
 }
 
 func TestTransferResponseProc_Successful(t *testing.T) {
@@ -177,6 +195,54 @@ func TestTransferResponseProc_Target404(t *testing.T) {
 	require.NotNil(t, evt.Error)
 	require.Equal(t, model.ErrorTypeFlowError, evt.Error.Type)
 	require.Nil(t, inv.TransferInfo)
+}
+
+func TestTransferResponseProc_FinalizationDoesNotRetryFailedTransfer(t *testing.T) {
+	target := &runErrorAgent{name: "child"}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv-finalize-transfer",
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child"},
+	}
+	instruction := "finish without tools"
+	calllimit.Configure(inv, nil, &instruction)
+	require.True(t, calllimit.RecordToolIteration(inv, 1))
+	calllimit.ScheduleToolFinalization(inv)
+
+	proc := NewTransferResponseProcessor(true)
+	firstOut := make(chan *event.Event, 2)
+	proc.ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		&model.Response{ID: "r-transfer"},
+		firstOut,
+	)
+	close(firstOut)
+	for range firstOut {
+	}
+	require.Equal(t, 1, target.calls)
+	require.NotNil(t, inv.TransferInfo)
+	require.False(t, inv.EndInvocation)
+
+	_, active := calllimit.ActivateForLLM(inv, false)
+	require.True(t, active)
+	finalOut := make(chan *event.Event, 1)
+	proc.ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		&model.Response{ID: "r-final"},
+		finalOut,
+	)
+	close(finalOut)
+
+	require.Equal(t, 1, target.calls)
+	require.Nil(t, inv.TransferInfo)
+	require.True(t, inv.EndInvocation)
+	require.Empty(t, finalOut)
 }
 
 type rejectTransferController struct{}

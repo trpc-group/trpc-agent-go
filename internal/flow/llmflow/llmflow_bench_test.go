@@ -15,7 +15,11 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 var (
@@ -88,7 +92,9 @@ func BenchmarkGenerateContentSeq(b *testing.B) {
 	ctx := context.Background()
 	f := new(Flow)
 	invocation := &agent.Invocation{AgentName: "bench"}
-	request := &model.Request{}
+	request := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("benchmark request")},
+	}
 
 	for _, n := range []int{1, 16, 256, 1024} {
 		b.Run(fmt.Sprintf("Channel/n=%d", n), func(b *testing.B) {
@@ -116,6 +122,67 @@ func BenchmarkGenerateContentSeq(b *testing.B) {
 					b.Fatal(err)
 				}
 				benchCountSink, benchRespSink = consumeSeq(seq)
+			}
+		})
+	}
+}
+
+func BenchmarkStreamingResponseProcessorUpdateMetricsState(b *testing.B) {
+	for _, itemCount := range []int{16, 256} {
+		b.Run(fmt.Sprintf("SummaryItems/%d", itemCount), func(b *testing.B) {
+			base := &agent.Invocation{
+				InvocationID: "invocation-id",
+				AgentName:    "bench-agent",
+				Session: &session.Session{
+					ID:      "session-id",
+					UserID:  "user-id",
+					AppName: "app-name",
+				},
+			}
+			items := make([]summaryview.Item, itemCount)
+			for i := range items {
+				items[i] = summaryview.Item{
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: "benchmark model-visible history",
+					},
+					EffectiveEvent: event.Event{
+						ID: fmt.Sprintf("event-%d", i),
+						StateDelta: map[string][]byte{
+							"benchmark": make([]byte, 1024),
+						},
+					},
+					RequestIndex: i,
+				}
+			}
+			summaryview.AttachProjection(base, &summaryview.View{
+				SessionID: "session-id",
+				Items:     items,
+			})
+			current := &agent.Invocation{
+				Session: &session.Session{
+					ID:      "updated-session-id",
+					UserID:  "updated-user-id",
+					AppName: "updated-app-name",
+				},
+			}
+			processor := &streamingResponseProcessor{
+				currentInvocation:       current,
+				observabilityInvocation: base,
+				tracker: itelemetry.NewChatMetricsTracker(
+					context.Background(),
+					base,
+					&model.Request{},
+					nil,
+					nil,
+					nil,
+				),
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				processor.updateMetricsState()
 			}
 		})
 	}

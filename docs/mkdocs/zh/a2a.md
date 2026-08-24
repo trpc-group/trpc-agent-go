@@ -965,6 +965,50 @@ subAgent, _ := a2aagent.New(
 | `WithPreAuthA2AMiddleware(middlewares...)` | 添加必须在匿名 Cookie 认证前执行的请求 middleware |
 | `WithDebugLogging(enabled)` | 开启调试日志 |
 
+### A2AAgent 匿名身份协调
+
+对于使用持久化 session 的匿名 `A2AAgent` 调用，如果配置的
+`SessionService` 实现了 `session.StateInitializationService`，agent 会自动
+使用该能力。它会在共享同一后端的多个 agent 实例之间协调首次匿名 Cookie
+初始化。in-memory session service 只协调共享同一个 service 实例的调用方；
+Redis session service 可以跨 service 实例协调。
+
+如果后端不支持该能力，agent 会保留现有的单 agent 初始化锁和持久化行为。
+如果业务必须保证跨实例协调，可以开启 fail-closed 模式：
+
+```go
+a2aAgent, err := a2aagent.New(
+    a2aagent.WithAgentCardURL("http://remote:8888"),
+    a2aagent.WithRequireAnonymousIdentityCoordination(true),
+)
+```
+
+该选项默认为 `false`。启用后，strict 模式在缺少稳定持久化 session key，或
+`SessionService` 不支持协调能力时，会在联系远端 agent 前使调用失败。该能力检查
+无法判断不同 service 实例是否实际共享协调状态。需要跨进程协调的部署必须使用
+Redis 等共享后端，而不能使用相互独立的 in-memory service。
+
+在支持协调的路径中，规范 `.record.v1` 值和 legacy 投影会一起提交，因此新版本
+写入的状态仍可被变更前的旧版本读取。这种兼容性是有意设计为单向的：规范记录
+存在后，旧版本只能更新或删除 legacy key，而新版本仍会把规范记录视为权威值。
+因此，对于同一个可能被两个版本写入的逻辑 session，不支持混合版本滚动部署；
+应先排空旧版本的写入流量并完成升级，再继续复用这些 session。
+
+启用 Runner candidate selector 时，每个 speculative attempt 都使用隔离的
+attempt-scoped session state，不会暴露 `session.StateInitializationService`。首次使用
+匿名 Cookie 时，lenient 模式可能让每个 attempt 独立初始化并创建多个远端 principal；
+strict 模式则会在联系远端 agent 前让每个 attempt 失败，即使底层后端支持协调。
+已经存在的有效 Cookie 不受此限制。在 candidate-aware 集成完成前，不要将 candidate
+selector 与首次匿名 Cookie 协调初始化组合使用；可以先预热并持久化 Cookie，或等待
+后续的专门集成。
+
+Cookie record 仍然是私有 session state，不会出现在 event state delta 中。
+lease fencing 可以阻止过期 owner 覆盖新的 owner，但如果进程在远端返回后、
+持久化前退出，远端 principal 仍可能成为孤儿。
+
+这条基于 session 的路径与 `NewAnonymousA2AClient` 相互独立；后者没有框架级
+session service，只在自身 client 和 Cookie Jar 范围内生效。
+
 ### A2AAgent 完整配置项一览
 
 | 配置项 | 说明 |
@@ -977,3 +1021,4 @@ subAgent, _ := a2aagent.New(
 | `WithUserIDHeader(header)` | 自定义 UserID HTTP Header |
 | `WithCustomA2AConverter(conv)` | 自定义 Invocation→A2A 消息转换 |
 | `WithCustomEventConverter(conv)` | 自定义 A2A Response→Event 转换 |
+| `WithRequireAnonymousIdentityCoordination(enabled)` | 要求持久化 session 的匿名身份初始化必须经过协调 |

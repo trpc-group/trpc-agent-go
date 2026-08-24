@@ -41,6 +41,48 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
      仅把文本内容物化到提示词；脚本不会被内联，而是在工作区中
      执行，并回传结果与输出文件。
 
+### 调用方声明必加载 Skill
+
+如果业务在收到请求时已经确定要使用哪个 Skill，可以直接声明必加载，
+无需再让模型判断或调用 `skill_load`：
+
+```go
+events, err := runner.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("审查这个改动"),
+    agent.WithSkillLoads(skill.LoadRequest{
+        Name: "code-review",
+        Docs: []string{"references/security.md"},
+    }),
+)
+```
+
+框架会基于本次 invocation 的有效 repository（包括上下文可见性过滤）
+对整批声明做原子校验，并在本次 invocation 的工具构建与请求处理过程中
+复用预检选中的 repository 以及声明 Skill 的已验证内容。`SKILL.md` 始终
+加载；`Docs` 选择额外的 Skill 相对路径文档，`IncludeAllDocs` 选择全部辅助
+文档，二者不能同时
+设置。非空 `Docs` 会替换当前文档选择；二者都未设置时，声明本身不会改写
+当前选择，与 `skill_load` 保持一致。在默认 `turn` 模式下，框架会将本轮
+重置与声明合并为同一个原子更新；重置会移除上一轮选择，因此不会继承该
+选择。不执行 `turn` 重置的模式（包括 `session`）会保留仍然存在的选择。
+同一 Skill 的等价声明会在规范化后合并，包括由多个 `WithSkillLoads` 追加的
+声明；等价要求规范化后的 `Docs` 集合与 `IncludeAllDocs` 值相同。同一
+Skill 的选择冲突则视为无效，`MaxLoadedSkills` 按合并后的 Skill 数量计算。
+任一声明失败都会阻止第一次模型请求，业务可通过
+`skill.ErrInvalidLoadRequest` 或 `skill.ErrSkillUnavailable` 识别直接返回的
+初始化错误。Candidate Selector、Ralph Loop 等异步执行 inner Agent 的
+Runner wrapper 仍沿用既有错误事件语义，但同样不会发起模型请求。
+
+声明式加载复用 `skill_load` 的状态、内容物化、load mode、workspace
+和工具激活语义，但不会伪造模型 tool call/tool result。声明只作用于
+Runner 选中的入口 invocation，不会被克隆出的子 Agent invocation 继承。
+如果选中的 Agent 未实现 `agent.InvocationSkillLoadSupport`（或返回
+false），Runner 返回 `agent.ErrSkillLoadingUnsupported`。自定义 Agent
+一旦声明支持，就必须在第一次模型请求前原子消费这些声明。
+
 ### Token 成本
 
 如果把一个技能仓库的全部内容（所有 `SKILL.md` 正文与 docs）

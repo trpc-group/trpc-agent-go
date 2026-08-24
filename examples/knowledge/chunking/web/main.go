@@ -406,14 +406,9 @@ func strategyDisplayName(strategyName string) string {
 }
 
 func normalizeSource(content string) string {
-	content = strings.TrimSpace(content)
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	content = strings.ReplaceAll(content, "\r", "\n")
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimSpace(line)
-	}
-	return strings.Join(lines, "\n")
+	return content
 }
 
 func mapSourceRanges(
@@ -431,18 +426,29 @@ func mapSourceRanges(
 	for i := range chunks {
 		chunkRunes := []rune(chunks[i].Content)
 		coreOffset := min(chunks[i].ActualOverlap, len(chunkRunes))
-		if chunks[i].ActualOverlap > 0 {
-			for coreOffset < len(chunkRunes) &&
-				unicode.IsSpace(chunkRunes[coreOffset]) {
-				coreOffset++
-			}
-		}
 		coreRunes := chunkRunes[coreOffset:]
 		sourceStart, sourceEnd := findRuneRange(
 			sourceRunes,
 			coreRunes,
 			cursor,
 		)
+		if sourceStart < 0 && chunks[i].ActualOverlap > 0 {
+			for _, separator := range []string{"\n\n", "\n", " "} {
+				separatorRunes := []rune(separator)
+				if len(coreRunes) < len(separatorRunes) ||
+					!equalRunes(coreRunes[:len(separatorRunes)], separatorRunes) {
+					continue
+				}
+				sourceStart, sourceEnd = findRuneRange(
+					sourceRunes,
+					coreRunes[len(separatorRunes):],
+					cursor,
+				)
+				if sourceStart >= 0 {
+					break
+				}
+			}
+		}
 		if sourceStart < 0 {
 			continue
 		}

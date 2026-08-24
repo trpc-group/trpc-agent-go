@@ -13,22 +13,24 @@ The integration works in three parts:
 1. **Session ingestion** — After each conversation turn the Runner sends the
    new session transcript to the gateway via `runner.WithSessionIngestor(...)`.
 2. **Automatic recall** — Before each model call, `runner.WithPlugins(...)`
-   invokes the TencentDB recall endpoint and injects the returned context into
-   the model request. Recall is opt-in (`WithRecallEnabled(true)`).
+   performs TencentDB recall and injects the returned context into the model
+   request. Legacy calls `/recall`; V3 composes L1/L2/L3 reads. Recall is opt-in
+   (`WithRecallEnabled(true)`).
 3. **Read-only tools** — The agent can explicitly search memory through
    `tdai_memory_search` (opt-in via `WithMemorySearchTool(true)`) and
-   conversation history through `tdai_conversation_search`.
+   conversation history through `tdai_conversation_search`. V3 integrations
+   also expose `tdai_read_scenario` to read bounded L2 content selected from
+   scene navigation.
 4. **Context offload v2 (optional)** — Tool results are sent to
    `/v2/offload/ingest`; model context is compacted through
    `/v2/offload/compact`; and the agent can recover archived details with
    `tdai_read_offload_ref`, backed by `/v2/offload/read-ref`.
 
-> **Multi-tenant note:** automatic recall and `tdai_memory_search` read from the
-> gateway's shared long-term store, which does not currently enforce
-> user/session scoping. They are therefore disabled by default. Only the
-> session-scoped capture and `tdai_conversation_search` surfaces are on by
-> default. This demo enables recall and memory search explicitly because it runs
-> a single trusted local sidecar.
+> **Multi-tenant note:** automatic recall and `tdai_memory_search` remain
+> disabled by default for compatibility with legacy gateways. New cloud and
+> self-hosted integrations should use `NewServiceWithIdentity`; the current data
+> plane then scopes L0/L1 by service, team, agent, and user. L2/L3 are
+> intentionally shared at the team-and-agent level.
 
 ### Architecture
 
@@ -44,22 +46,28 @@ User message
       ▼
    Agent ──► LLM ──► Response
       │        │
-      │   (may call tdai_memory_search
-      │    or tdai_conversation_search)
+      │   (may call tdai_memory_search,
+      │    tdai_conversation_search, or
+      │    tdai_read_scenario)
       │
       ▼  (after turn completes)
- session.Ingestor ──► /capture
+ session.Ingestor ──► Legacy /capture or V3 /v3/conversation/add
 ```
 
 ### What This Example Does
 
 The program starts an interactive chat loop:
 
-1. Send a few messages that contain stable facts or preferences.
-2. Use `/new` to flush the current session and start a fresh session for the
-   same user.
-3. Ask related questions in the new session. The recall plugin and native
-   search tools can retrieve memories extracted by the gateway.
+1. Start the walkthrough with `-turn-wait` and send a message that contains
+   stable facts or preferences.
+2. Wait until the configured post-turn delay finishes and the next prompt
+   appears. This gives the gateway time for asynchronous extraction but is not
+   a readiness guarantee.
+3. Use `/new` to finish pending local capture work and start a fresh session for
+   the same user. Legacy gateways also receive `/session/end`; V3 has no remote
+   session-end or extraction-barrier endpoint.
+4. Ask related questions in the new session. V3 cross-session recall succeeds
+   after the gateway has extracted the previous turn into long-term memory.
 
 ## Prerequisites
 
@@ -78,8 +86,8 @@ pipeline.
 Clone the TencentDB Agent Memory repository and start the standalone gateway:
 
 ```bash
-git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
-cd TencentDB-Agent-Memory
+git clone --branch feat/server_team --single-branch https://github.com/TencentCloud/TencentDB-Agent-Memory.git
+cd TencentDB-Agent-Memory/MemoryCore
 npm install
 
 export TDAI_LLM_API_KEY="your-openai-compatible-api-key"
@@ -100,8 +108,15 @@ example at another gateway URL with `-gateway`.
 | `OPENAI_API_KEY`                 | Yes      | API key for the chat model          |                          |
 | `OPENAI_BASE_URL`                | No       | Base URL for the model API endpoint | `https://api.openai.com/v1` |
 | `TENCENTDB_AGENT_MEMORY_GATEWAY` | No       | TencentDB Agent Memory gateway URL  | `http://127.0.0.1:8420`  |
-| `TDAI_GATEWAY_API_KEY`           | For offload | Gateway API key sent as `Authorization: Bearer`; required by context offload v2 | |
-| `TDAI_SERVICE_ID`                | For offload | Service ID sent as `X-TDAI-Service-Id`; setting it together with the gateway API key enables context offload v2 | |
+| `TDAI_GATEWAY_API_KEY`           | For authenticated gateway/offload | Gateway API key sent as `Authorization: Bearer`; V3 uses a non-secret `local` placeholder when omitted for a self-hosted gateway with authentication disabled | |
+| `TDAI_SERVICE_ID`                | For identity | Memory service ID sent as `X-TDAI-Service-Id` for V3 | |
+| `TDAI_TEAM_ID`                   | For identity | Team isolation ID | |
+| `TDAI_AGENT_ID`                  | For identity | Agent isolation ID | |
+| `TDAI_OFFLOAD_SERVICE_ID`        | For offload | Service ID for the optional context offload v2 integration | |
+
+`TDAI_SERVICE_ID` now selects the V3 memory identity path. Existing offload
+setups that previously reused that variable should move the offload value to
+`TDAI_OFFLOAD_SERVICE_ID`; the two integrations may use different service IDs.
 
 ## Command Line Arguments
 
@@ -112,11 +127,14 @@ example at another gateway URL with `-gateway`.
 | `-user`              | User ID used for session ownership               | `demo-user`                |
 | `-session`           | Session ID (auto-generated if empty)             | `tencentdb-<unix-time>`    |
 | `-gateway`           | TencentDB Agent Memory gateway URL               | env or `http://127.0.0.1:8420` |
-| `-gateway-timeout`   | Timeout for gateway calls, including session flush | `60s`                   |
-| `-gateway-api-key`   | Gateway API key sent as `Authorization: Bearer`  | env `TDAI_GATEWAY_API_KEY`  |
-| `-offload-service-id` | Service ID for context offload v2; requires `-gateway-api-key` | env `TDAI_SERVICE_ID` |
-| `-turn-wait`         | Delay after each turn for gateway capture/extraction | `0s`                   |
-| `-end-session`       | Call `/session/end` before exit                  | `false`                    |
+| `-gateway-timeout`   | Timeout for gateway calls                          | `60s`                   |
+| `-gateway-api-key`   | Optional gateway API key sent as `Authorization: Bearer`; required by context offload v2 | env `TDAI_GATEWAY_API_KEY`  |
+| `-service-id`        | Service ID; setting any service/team/agent ID requests the identity-scoped data plane | env `TDAI_SERVICE_ID` |
+| `-team-id`           | Team ID; setting any service/team/agent ID requests the identity-scoped data plane | env `TDAI_TEAM_ID` |
+| `-agent-id`          | Agent ID; setting any service/team/agent ID requests the identity-scoped data plane | env `TDAI_AGENT_ID` |
+| `-offload-service-id` | Service ID for context offload v2; requires `-gateway-api-key` | env `TDAI_OFFLOAD_SERVICE_ID` |
+| `-turn-wait`         | Fixed delay after each completed turn to allow asynchronous extraction before cross-session recall; not a readiness guarantee | `0s` |
+| `-end-session`       | End before exit: call Legacy `/session/end`, or wait for pending V3 capture | `false` |
 
 ## Usage
 
@@ -125,19 +143,30 @@ example at another gateway URL with `-gateway`.
 ```bash
 export OPENAI_API_KEY="your-openai-api-key"
 export TENCENTDB_AGENT_MEMORY_GATEWAY="http://127.0.0.1:8420"
+export TDAI_GATEWAY_API_KEY="your-gateway-api-key"
+export TDAI_SERVICE_ID="your-memory-service-id"
+export TDAI_TEAM_ID="your-team-id"
+export TDAI_AGENT_ID="your-agent-id"
 
 cd examples/memory/tencentdb
-go run .
+go run . -turn-wait 10s
 ```
 
-Then try:
+Then try the following flow. Wait until the delay finishes and the next `You:`
+prompt appears before entering `/new`:
 
 ```text
 You: Remember this profile: my project code name is Apollo Lake, my deployment window is Friday night, and I prefer concise answers.
+Waiting 10s to allow asynchronous gateway extraction...
 You: /new
 You: What is my project code name, deployment window, and answer preference?
 You: /exit
 ```
+
+The delay is an allowance rather than a server readiness check. Increase it or
+verify extraction through gateway observability when the deployment needs more
+time. `/new` itself waits only for local capture; it does not wait for V3 L1
+extraction to finish.
 
 ### Custom Model
 
@@ -162,8 +191,10 @@ go run . \
   -offload-service-id default
 ```
 
-For a managed service, use the API key and service ID assigned to that memory
-instance. The example never needs direct COS credentials.
+For a managed service or an authenticated self-hosted gateway, use the assigned
+API key. A self-hosted gateway that keeps authentication disabled can omit
+`-gateway-api-key` for V3 memory calls. Context offload v2 still requires a key.
+The example never needs direct COS credentials.
 
 ### Expected Output
 
@@ -175,17 +206,19 @@ User: demo-user
 Session: tencentdb-1713012345
 ============================================================
 Special commands:
-  /new      - flush current session and start a new session for the same user
+  /new      - finish pending capture and start a new session for the same user
   /session  - show current session
-  /end      - call TencentDB Agent Memory /session/end for current session
+  /end      - end current session
   /exit     - end the conversation
 
 You: My project code name is Apollo Lake. I prefer concise answers.
 Tool calls: tdai_memory_search, tdai_conversation_search
 Assistant: Noted.
+Waiting 10s to allow asynchronous gateway extraction...
 
 You: /new
 Started new session.
+  V3 capture is complete; asynchronous long-term extraction may still be running.
 
 You: What is my project code name?
 Tool calls: tdai_memory_search
@@ -205,17 +238,22 @@ import (
 )
 
 // 1. Create the TencentDB Agent Memory service.
-//    Recall and the long-term memory_search tool are opt-in; enable them only
-//    when the gateway enforces per-user/session isolation (e.g. a trusted local
-//    sidecar). Pass WithAPIKey when the gateway sets TDAI_GATEWAY_API_KEY.
-memSvc, err := memorytencentdb.NewService(
+//    New cloud and self-hosted integrations use the same identity-scoped API.
+identity := memorytencentdb.NewServiceIdentity(
+    os.Getenv("TDAI_SERVICE_ID"),
+    os.Getenv("TDAI_TEAM_ID"),
+    os.Getenv("TDAI_AGENT_ID"),
+)
+memSvc, err := memorytencentdb.NewServiceWithIdentity(
+    identity,
     memorytencentdb.WithGatewayURL("http://127.0.0.1:8420"),
+    // Optional only for a self-hosted gateway with authentication disabled.
+    memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
-    // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     //     Enabled:   true,
-    //     ServiceID: os.Getenv("TDAI_SERVICE_ID"),
+    //     ServiceID: os.Getenv("TDAI_OFFLOAD_SERVICE_ID"),
     // }),
 )
 if err != nil {
@@ -248,19 +286,44 @@ Key points:
 
 - `memSvc.Tools()` returns `tdai_conversation_search` by default;
   `tdai_memory_search` is added only when `WithMemorySearchTool(true)` is set.
-- `runner.WithSessionIngestor(memSvc)` sends timestamped session transcript
-  messages to the gateway after each turn.
+- `runner.WithSessionIngestor(memSvc)` sends session transcript messages to the
+  gateway after each turn. V3 preserves event timestamps and sends the
+  documented conversation-add request in ordered batches of at most 100. It
+  truncates individual L0 messages beyond the gateway's 8192-character limit,
+  marks them with `...[truncated]`, and continues with later messages. Legacy
+  keeps its compatibility timestamps. Capture is at-least-once: the checkpoint
+  advances only after the complete capture is acknowledged, so an ambiguous
+  transport failure can replay L0 messages.
 - `runner.WithPlugins(memSvc.Plugin())` performs automatic recall before model
   calls and injects returned context into the request, but only when
   `WithRecallEnabled(true)` is set.
 - `runner.WithPlugins(memSvc.ContextOffloadPlugin())` activates only when
   `ContextOffloadConfig.Enabled` is true. The companion
   `tdai_read_offload_ref` tool is then included in `memSvc.Tools()`.
-- The adapter forwards app/user/session identifiers, but hard multi-tenant
-  isolation depends on the gateway and SDK honoring those fields end-to-end, so
-  cross-session/user reads (recall and memory search) are opt-in.
+- `NewServiceWithIdentity` selects the current identity-scoped API. L0/L1
+  memory is isolated by service, team, agent, and framework user; L2/L3 memory
+  is shared by users of the same team and agent. `NewService` preserves the
+  legacy gateway routes. `AppName` and `WithSessionKeyFunc` are not sent as V3
+  isolation fields; use distinct service, team, or agent identities when
+  applications must not share memory.
+- V3 adds `tdai_read_scenario` to `memSvc.Tools()` so the agent can read L2
+  content in the configured service/team/agent scope. The complete L1/L2/L3
+  automatic recall payload is capped at 24 KiB, with 8 KiB caps for both the
+  L1 atomic and L3 core sections. Recall injects at most 100 non-empty scenario
+  paths and 8 KiB of navigation text. Shortened recall sections preserve their
+  closing tags and include `...[truncated]`. Scenario reads return at most 16 KiB
+  and mark shortened content with `...[truncated]` and `truncated: true`.
+- `EndSession` waits for queued capture in both modes. It additionally calls
+  `/session/end` only for Legacy gateways because V3 has no remote equivalent.
+  It is not a V3 long-term extraction barrier; use an explicit delay or gateway
+  readiness signal before demonstrating cross-session recall.
 
 ## Configuration Options
+
+Use `NewService` for the Legacy gateway API. For the V3 data plane shared by
+cloud and self-hosted gateways, create a `ServiceIdentity` with
+`NewServiceIdentity(serviceID, teamID, agentID)`, then pass it to
+`NewServiceWithIdentity(identity, opts...)`. All three IDs are required.
 
 | Option                         | Description                                         | Default                 |
 | ------------------------------ | --------------------------------------------------- | ----------------------- |
@@ -271,8 +334,8 @@ Key points:
 | `WithIngestJobTimeout(d)`      | Timeout for queued capture jobs                     | `30s`                   |
 | `WithSessionKeyFunc(fn)`       | Custom framework session to gateway `session_key` mapping | base64url(app):base64url(user):base64url(session) |
 | `WithAPIKey(key)`              | Send `Authorization: Bearer <key>` (gateway `TDAI_GATEWAY_API_KEY`) | none      |
-| `WithRecallEnabled(bool)`      | Enable automatic recall plugin behavior (opt-in; shared-store reads) | `false`        |
-| `WithMemorySearchTool(bool)`   | Expose `tdai_memory_search` (opt-in; shared-store reads) | `false`              |
+| `WithRecallEnabled(bool)`      | Enable automatic recall; Legacy may read a shared store, while V3 scopes L1 by user and L2/L3 by team/agent | `false` |
+| `WithMemorySearchTool(bool)`   | Expose `tdai_memory_search`; Legacy may read a shared store, while V3 scopes L1 by user | `false` |
 | `WithConversationSearchTool(bool)` | Expose `tdai_conversation_search`               | `true`                  |
 | `WithStandardAliases(bool)`    | Also expose standard `memory_search` alias (needs memory search enabled) | `false` |
 | `WithToolPrefix(prefix)`       | Change native tool prefix                           | `tdai`                  |
@@ -284,5 +347,5 @@ Key points:
 - [Simple Memory Example](../simple/) — Agentic mode with manual tool calling
 - [Auto Memory Example](../auto/) — Automatic background extraction using a
   local LLM extractor
-- [Memory Documentation](../../../docs/mkdocs/en/memory.md)
+- [Memory Documentation](../../../docs/mkdocs/en/memory/index.md)
 - [Ecosystem Integration Guide](../../../docs/mkdocs/en/ecosystem.md)

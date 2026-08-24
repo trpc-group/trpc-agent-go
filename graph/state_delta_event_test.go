@@ -11,17 +11,28 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 func TestEmitCustomStateDelta_EmitsEvent(t *testing.T) {
 	eventCh := make(chan *event.Event, 1)
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-from-invocation"),
+		agent.WithInvocationBranch("branch"),
+		agent.WithInvocationEventFilterKey("filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req",
+		}),
+	)
 	state := State{
 		StateKeyExecContext: &ExecutionContext{
-			InvocationID: "inv",
+			InvocationID: "stale-invocation",
+			Invocation:   inv,
 			EventChan:    eventCh,
 		},
 		StateKeyCurrentNodeID: "step",
@@ -36,11 +47,54 @@ func TestEmitCustomStateDelta_EmitsEvent(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	evt := <-eventCh
+	evt := requireEmitterEvent(t, eventCh)
 	require.NotNil(t, evt)
+	require.Equal(t, "req", evt.RequestID)
+	require.Equal(t, "inv-from-invocation", evt.InvocationID)
+	require.Equal(t, "branch", evt.Branch)
+	require.Equal(t, "filter", evt.FilterKey)
 	require.Equal(t, ObjectTypeGraphNodeCustom, evt.Object)
 	require.Contains(t, evt.StateDelta, "result")
 	require.Contains(t, evt.StateDelta, MetadataKeyNodeCustom)
+	var metadata NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(evt.StateDelta[MetadataKeyNodeCustom], &metadata))
+	require.Equal(t, "inv-from-invocation", metadata.InvocationID)
+}
+
+func TestEmitCustomStateDelta_PreservesFallbackInvocationID(t *testing.T) {
+	eventCh := make(chan *event.Event, 1)
+	inv := agent.NewInvocation(
+		agent.WithInvocationID(""),
+		agent.WithInvocationBranch("branch"),
+		agent.WithInvocationEventFilterKey("filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req",
+		}),
+	)
+	state := State{
+		StateKeyExecContext: &ExecutionContext{
+			InvocationID: "fallback-invocation",
+			Invocation:   inv,
+			EventChan:    eventCh,
+		},
+		StateKeyCurrentNodeID: "step",
+	}
+
+	err := EmitCustomStateDelta(
+		context.Background(),
+		state,
+		State{"result": true},
+	)
+	require.NoError(t, err)
+
+	evt := requireEmitterEvent(t, eventCh)
+	require.Equal(t, "fallback-invocation", evt.InvocationID)
+	require.Equal(t, "req", evt.RequestID)
+	require.Equal(t, "branch", evt.Branch)
+	require.Equal(t, "filter", evt.FilterKey)
+	var metadata NodeCustomEventMetadata
+	require.NoError(t, json.Unmarshal(evt.StateDelta[MetadataKeyNodeCustom], &metadata))
+	require.Equal(t, "fallback-invocation", metadata.InvocationID)
 }
 
 func TestEmitCustomStateDelta_NoExecutionContextIsNoop(t *testing.T) {

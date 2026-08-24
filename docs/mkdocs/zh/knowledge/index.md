@@ -348,6 +348,33 @@ err := kb.Load(ctx,
 > - 请根据吞吐、成本与限流情况调节 `WithSourceConcurrency()`、`WithDocConcurrency()`
 > - 默认值在多数场景下较为均衡；需要更快速度可适当上调，遇到限流则下调
 
+### 批量 Embedding
+
+默认情况下每个文档单独发起一次 embedding 请求，加载一个包含 `N` 个文档的 source 就会产生 `N` 次请求。`WithEmbeddingBatchSize(B)` 会把多个文档合并为一次多输入请求，把该 source 的请求数降为 `ceil(N/B)`：
+
+```go
+err := kb.Load(ctx,
+    knowledge.WithDocConcurrency(4),       // 最多 4 个批次同时在途
+    knowledge.WithEmbeddingBatchSize(32),  // 每次请求最多 32 个文档
+)
+```
+
+批量默认关闭，且仅在所配置的 embedder 实现了 `embedder.BatchEmbedder` 时生效。内置的 OpenAI 兼容 embedder（`knowledge/embedder/openai`）已实现该接口，会以字符串数组的形式发送输入。当 embedder 不支持批量、未配置 embedder（由向量库远程生成 embedding），或通过 `WithEnableSourceSync(true)` 开启了 source sync 时，加载会继续走原有的逐文档路径，行为不变，并会打印日志说明所配置的批量大小被忽略，便于发现无效配置。
+
+两个选项可以组合使用：`WithDocConcurrency(n)` 限制并发批次数，因此在途文档数最多为 `n * B`。
+
+> **关于正确性与限制**：
+>
+> - 批次不会跨 source 合并，因为每个 source 是独立的处理单元。加载 `k` 个 source 时的总请求数是各 source `ceil(Ni/B)` 之和；把相同数量的文档拆成很多个小 source 会削弱收益，`k` 个各含 1 个文档的 source 仍然会发出 `k` 次请求
+> - 一个批次会被整体校验。若 provider 返回的向量数量不符、存在空向量、批内维度不一致或包含非有限值，整个批次失败，其中的文档一个都不会写入
+> - 失败的批次不会自动拆成多次单条请求，因此不会意外放大请求量。embedder 仍可能整批重试，这与它重试一次逐文档请求是同样的行为，因此 `N` 与 `ceil(N/B)` 统计的是加载发出的请求数，而不是最终到达 provider 的尝试次数
+> - 若批次写入向量库时中途失败，此前已成功写入的文档会保留，`Load` 返回错误，与现有的非事务语义一致
+> - 请在 provider 的单请求输入数、总 token 数和 payload 大小限制内选择 `B`，框架不会为满足这些限制而自动切分批次
+> - 每个输入仍然对应且只对应一个向量，并按响应索引还原到原输入。同一段文本单独 embedding 与放在批次中 embedding 是否得到完全相同的向量，取决于具体 provider，框架不做这个保证
+> - 批量的确定收益是减少 embedding 请求数。它不改变输入文本和模型，也不减少向量库的写入次数；端到端吞吐是否提升需要在自己的负载上实测
+
+[批量 Embedding 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/batch-embedding)会对同一个文件分别在不带和带批量大小的情况下各加载一次，并打印两次加载各自发出的 embedding 请求数。
+
 ### 加载进度回调
 
 通过 `WithLoadProgressCallback` 可以注册一个结构化的进度回调函数，用于驱动自定义 UI、指标采集或其他可观测性集成，无需解析日志输出：
@@ -418,6 +445,12 @@ err := kb.Load(ctx,
 | **Embedding Model** | server:274214 (1024 维) |
 | **Vector Store** | PGVector (CrewAI 使用 ChromaDB) |
 | **Agent 模型** | DeepSeek-V3.2 |
+
+### 面向特定语料的 Contextual Retrieval 试验
+
+[Contextual Retrieval 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/contextual-retrieval)基于现有公开的 `source.Source` 和 `document.Document.EmbeddingText` 契约，对比原始索引文本与加入上下文后的索引文本，同时仍向 Agent 返回原始 chunk 内容。
+
+这是按语料选择启用的评估方案，不是 Knowledge 的默认行为，也不代表对所有任务均有收益。配对试验需保持模型、Embedder、分块方式、向量存储、检索设置、查询集和评测协议一致；在将父文档发送给配置的上下文模型前，请先阅读示例中的数据处理和成本说明。
 
 
 ## 更多内容

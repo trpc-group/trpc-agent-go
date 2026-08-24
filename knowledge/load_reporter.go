@@ -68,8 +68,12 @@ func (lr *loadReporter) RecordStat(size int) {
 	lr.mu.Unlock()
 }
 
-func (lr *loadReporter) Progress(ctx context.Context, ev LoadProgressEvent) {
-	if ev.SourceProcessed%lr.cfg.progressStepSize != 0 && ev.SourceProcessed != ev.SourceTotal {
+// Progress reports one progress update for a source. prevProcessed is that
+// source's processed count before the update, which is what lets the reporter
+// honour progressStepSize when a single update advances the count by a whole
+// embedding batch instead of by one document.
+func (lr *loadReporter) Progress(ctx context.Context, prevProcessed int, ev LoadProgressEvent) {
+	if !lr.shouldReport(prevProcessed, ev) {
 		return
 	}
 	if lr.cfg.showProgress {
@@ -90,6 +94,26 @@ func (lr *loadReporter) Progress(ctx context.Context, ev LoadProgressEvent) {
 	ev.Total = lr.totalFunc()
 	ev.TotalElapsed = time.Since(lr.startTime)
 	lr.cfg.progressCallback(ctx, ev)
+}
+
+// shouldReport reports whether an update crossed a progressStepSize boundary
+// or completed the source.
+//
+// An update that advances the count by one document crosses a boundary
+// exactly when the new count is a multiple of the step size, so the
+// per-document path keeps reporting the same updates as before. An update that
+// advances the count by a whole batch is reported when it moves the count into
+// a later step, so one batch yields at most one update however many boundaries
+// it crossed, and that update carries the real document count.
+func (lr *loadReporter) shouldReport(prevProcessed int, ev LoadProgressEvent) bool {
+	if ev.SourceProcessed == ev.SourceTotal {
+		return true
+	}
+	step := lr.cfg.progressStepSize
+	if step <= 0 {
+		return true
+	}
+	return prevProcessed/step != ev.SourceProcessed/step
 }
 
 func (lr *loadReporter) Error(ctx context.Context, ev LoadProgressEvent, err error) {

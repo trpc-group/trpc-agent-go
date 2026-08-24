@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/eventstream"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
 	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
@@ -55,6 +56,7 @@ const (
 // Runner executes AG-UI runs and emits AG-UI events.
 type Runner interface {
 	// Run starts processing one AG-UI run request and returns a channel of AG-UI events.
+	// The receiver owns each event after receiving it from the channel and may mutate it.
 	Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan aguievents.Event, error)
 }
 
@@ -170,6 +172,7 @@ type runInput struct {
 	terminalEmitted bool
 	runAgentInput   *adapter.RunAgentInput
 	done            chan struct{}
+	consumerDone    <-chan struct{}
 }
 
 type runAgentResult struct {
@@ -355,6 +358,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if runAgentInput == nil {
 		return nil, errors.New("run input cannot be nil")
 	}
+	consumerDone := eventstream.ConsumerDone(ctx)
 	runAgentInput, err := r.applyRunAgentInputHook(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("run input hook: %w", err)
@@ -386,7 +390,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		return nil, fmt.Errorf("resolve state: %w", err)
 	}
 	if runtimeState != nil {
-		runOption = append(runOption, agent.WithRuntimeState(runtimeState))
+		runOption = append(runOption, agent.MergeRuntimeState(runtimeState))
 	}
 	if len(messages.toolMessages) > 0 {
 		runOption = append(runOption, withToolResultMessageRewriter(messages.toolMessages))
@@ -431,6 +435,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		resume:        parseResumeInfo(runOption),
 		runAgentInput: runAgentInput,
 		done:          make(chan struct{}),
+		consumerDone:  consumerDone,
 	}
 	events := make(chan aguievents.Event)
 	ctx, cancel := r.newExecutionContext(ctx, r.timeout)
@@ -504,12 +509,10 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 					runID,
 					err,
 				)
-			} else {
-				input.startTrackFlush()
 			}
 		}
 	}
-	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
+	if !r.emitStartupEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
 		return
 	}
 	if input.messages.inputMessage.Role == model.RoleTool {
@@ -572,6 +575,9 @@ func (r *runner) runEventLoop(
 			return hookDone, hookRemaining
 		case result := <-agentRun:
 			agentRun = nil
+			if input.startTrackFlush != nil {
+				input.startTrackFlush()
+			}
 			if result.err != nil {
 				if ctx.Err() != nil {
 					r.emitPostRunTerminalEvent(ctx, events, input)
@@ -1126,11 +1132,22 @@ func (r *runner) handleAfterTranslate(ctx context.Context, event aguievents.Even
 
 func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
 	input *runInput) bool {
+	return r.emitEventWithStartupFlush(ctx, events, event, input, false)
+}
+
+func (r *runner) emitStartupEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
+	input *runInput) bool {
+	flushStartup := input.enableTrack && r.flushInterval > 0
+	return r.emitEventWithStartupFlush(ctx, events, event, input, flushStartup)
+}
+
+func (r *runner) emitEventWithStartupFlush(ctx context.Context, events chan<- aguievents.Event,
+	event aguievents.Event, input *runInput, flushStartup bool) bool {
 	if input != nil && input.terminalEmitted {
 		return false
 	}
 	event, ok := r.afterTranslateEvent(ctx, event, input)
-	written := r.writeEvent(ctx, events, event, input)
+	written := r.writeEventWithStartupFlush(ctx, events, event, input, flushStartup)
 	return ok && written
 }
 
@@ -1154,6 +1171,11 @@ func (r *runner) afterTranslateEvent(ctx context.Context, event aguievents.Event
 
 func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
 	input *runInput) bool {
+	return r.writeEventWithStartupFlush(ctx, events, event, input, false)
+}
+
+func (r *runner) writeEventWithStartupFlush(ctx context.Context, events chan<- aguievents.Event,
+	event aguievents.Event, input *runInput, flushStartup bool) bool {
 	if input != nil && input.terminalEmitted {
 		return false
 	}
@@ -1175,6 +1197,17 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 				input.runID,
 				err,
 			)
+		}
+	}
+	if flushStartup {
+		if err := r.flushTrack(ctx, input.key); err != nil {
+			log.WarnfContext(
+				ctx,
+				"agui run: threadID: %s, runID: %s, flush startup track events: %v",
+				input.threadID,
+				input.runID,
+				err,
+			)
 		} else if input.startTrackFlush != nil {
 			input.startTrackFlush()
 		}
@@ -1182,6 +1215,23 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 	select {
 	case events <- event:
 		if input != nil && isTerminal {
+			input.terminalEmitted = true
+		}
+		return true
+	case <-input.consumerDone:
+		if ctx.Err() != nil {
+			log.ErrorfContext(ctx, "agui emit event: context done, threadID: %s, runID: %s, err: %v",
+				input.threadID, input.runID, ctx.Err())
+			return false
+		}
+		// A proxy may close its outer stream without draining this one. Once
+		// the transport has finished that outer stream, delivery is no longer
+		// guaranteed; avoid blocking run cleanup on the abandoned reader.
+		select {
+		case events <- event:
+		default:
+		}
+		if isTerminal {
 			input.terminalEmitted = true
 		}
 		return true
@@ -1322,6 +1372,13 @@ func (r *runner) distributedCancelSnapshot(key session.Key) (bool, context.Cance
 		return entry.distributedCancelStarted, entry.stopDistributedCancel
 	}
 	return false, nil
+}
+
+func (r *runner) isRunning(key session.Key) bool {
+	r.runningMu.Lock()
+	defer r.runningMu.Unlock()
+	_, ok := r.running[key]
+	return ok
 }
 
 func (r *runner) unregister(key session.Key) {

@@ -34,7 +34,7 @@ const (
 	defaultToolResultInputTranslationEnabled      = false
 	defaultToolCallDeltaStreamingEnabled          = false
 	defaultStreamingToolResultActivityEnabled     = false
-	defaultConcurrentMessageStreamsEnabled        = false
+	defaultConcurrentMessageStreamsEnabled        = true
 	defaultDistributedCancelEnabled               = false
 	defaultDistributedCancelPollInterval          = time.Second
 )
@@ -180,10 +180,13 @@ func WithSessionService(s session.Service) Option {
 	}
 }
 
-// StateResolver is a function that derives runtime state for an AG-UI run.
+// StateResolver derives runtime state for an AG-UI run.
 type StateResolver func(ctx context.Context, input *adapter.RunAgentInput) (map[string]any, error)
 
-// WithStateResolver sets the runtime state resolver.
+// WithStateResolver sets a custom runtime state resolver.
+//
+// By default, object-shaped AG-UI state is merged into runtime state. A custom
+// resolver can filter, rename, or convert the client-provided state.
 func WithStateResolver(r StateResolver) Option {
 	return func(o *Options) {
 		o.StateResolver = r
@@ -204,7 +207,8 @@ func WithAggregatorFactory(factory aggregator.Factory) Option {
 	}
 }
 
-// WithFlushInterval sets how often buffered AG-UI events are flushed for a session.
+// WithFlushInterval configures startup and periodic history flushes. A positive duration enables both;
+// zero disables both and leaves buffered history for finalization.
 func WithFlushInterval(d time.Duration) Option {
 	return func(o *Options) {
 		o.FlushInterval = d
@@ -342,8 +346,9 @@ func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	}
 }
 
-// WithConcurrentMessageStreamsEnabled controls whether multiple text and reasoning
-// message streams with different message IDs may stay open concurrently.
+// WithConcurrentMessageStreamsEnabled controls whether text and reasoning
+// message streams are scoped by message ID. It is enabled by default; pass false
+// to preserve the previous legacy serial message-stream boundaries.
 func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.ConcurrentMessageStreamsEnabled = enabled
@@ -390,9 +395,13 @@ func defaultRunOptionResolver(ctx context.Context, input *adapter.RunAgentInput)
 	return nil, nil
 }
 
-// defaultStateResolver returns no runtime state.
-func defaultStateResolver(ctx context.Context, input *adapter.RunAgentInput) (map[string]any, error) {
-	return nil, nil
+// defaultStateResolver forwards object-shaped AG-UI state as runtime state.
+func defaultStateResolver(_ context.Context, input *adapter.RunAgentInput) (map[string]any, error) {
+	if input == nil {
+		return nil, nil
+	}
+	state, _ := input.State.(map[string]any)
+	return state, nil
 }
 
 // defaultStartSpan returns the original context and a non-recording span.

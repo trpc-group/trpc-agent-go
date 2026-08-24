@@ -18,6 +18,10 @@ On macOS, managed sandbox profiles use `/usr/bin/sandbox-exec`. Managed
 execution fails closed if the tool is unavailable or the host rejects Seatbelt
 profiles.
 
+macOS runs can optionally collect Seatbelt denial diagnostics from the unified
+log. See [`SANDBOX_DENIAL_DIAGNOSTICS.md`](SANDBOX_DENIAL_DIAGNOSTICS.md) for
+the opt-in API and output format.
+
 When the runtime itself runs inside Docker, Kubernetes, or a managed container
 platform, the outer container must allow the namespace and mount operations
 needed by `bwrap`. See
@@ -33,10 +37,14 @@ profiles default to restricted networking unless the caller explicitly enables
 host network access:
 
 - `NetworkRestricted` asks the backend to block outbound networking when it can
-  enforce that boundary.
+  enforce that boundary. On Linux this also denies pathname and abstract AF_UNIX
+  sockets and AF_VSOCK through seccomp; anonymous stream and seqpacket
+  socketpairs remain available. Pathname or abstract Unix IPC, or AF_VSOCK,
+  requires `NetworkEnabled`.
 - `NetworkEnabled` allows the command to use the host network. On Linux this
-  means the command is launched without network namespace isolation. On macOS
-  this means the generated Seatbelt profile includes broad network allow rules.
+  means the command is launched without network namespace isolation and without
+  the AF_UNIX/AF_VSOCK seccomp filter. On macOS this means the generated Seatbelt
+  profile includes broad network allow rules.
 
 ## File System
 

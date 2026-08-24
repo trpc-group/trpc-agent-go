@@ -11,6 +11,9 @@ package workspaceprep
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
@@ -39,16 +42,28 @@ var ErrReconcileRetryUnsafe = codeexecutor.ErrWorkspaceRetryUnsafe
 // through the shared skillstage helpers, and enforces a fixed phase
 // order (PhaseFile -> PhaseSkill -> PhaseCommand).
 type defaultReconciler struct {
-	locker *keyedLocker
-	stager *skillstage.Stager
+	locker          *keyedLocker
+	stager          *skillstage.Stager
+	generationEpoch string
+	generationErr   error
 }
+
+// processGenerationEpoch keeps persisted prepared records within the lifetime
+// in which WorkspaceInstanceID uniqueness is guaranteed by its provider.
+var processGenerationEpoch, processGenerationErr = newProcessGenerationEpoch()
 
 // NewReconciler returns the default Reconciler used by workspace_exec
 // and other workspace-aware tools.
 func NewReconciler() Reconciler {
+	return newReconciler(processGenerationEpoch, processGenerationErr)
+}
+
+func newReconciler(epoch string, epochErr error) *defaultReconciler {
 	return &defaultReconciler{
-		locker: newKeyedLocker(),
-		stager: skillstage.New(),
+		locker:          newKeyedLocker(),
+		stager:          skillstage.New(),
+		generationEpoch: epoch,
+		generationErr:   epochErr,
 	}
 }
 
@@ -57,13 +72,18 @@ func (r *defaultReconciler) Reconcile(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
+	instanceID codeexecutor.WorkspaceInstanceID,
 	reqs []Requirement,
-) ([]string, error) {
+) ([]string, bool, error) {
 	if len(reqs) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	if eng == nil {
-		return nil, fmt.Errorf("workspaceprep: engine is required")
+		return nil, false, fmt.Errorf("workspaceprep: engine is required")
+	}
+	generation, err := r.preparationGeneration(instanceID)
+	if err != nil {
+		return nil, false, err
 	}
 
 	reqs = dedupeRequirements(reqs)
@@ -74,7 +94,7 @@ func (r *defaultReconciler) Reconcile(
 
 	md, err := r.stager.LoadWorkspaceMetadata(ctx, eng, ws)
 	if err != nil {
-		return nil, fmt.Errorf("workspaceprep: load metadata: %w", err)
+		return nil, false, fmt.Errorf("workspaceprep: load metadata: %w", err)
 	}
 	if md.Prepared == nil {
 		md.Prepared = map[string]codeexecutor.PreparedRecord{}
@@ -90,78 +110,133 @@ func (r *defaultReconciler) Reconcile(
 		rctx.Invocation = inv
 	}
 
-	var warnings []string
-	changed := false
-	commandMayHaveStarted := false
-	var changedKeys []string
+	run, err := r.runReconcileRequirements(
+		ctx, eng, ws, baseMD, rctx, generation, reqs,
+	)
+	if err != nil {
+		return run.warnings, run.commandMayHaveStarted, err
+	}
+	if run.changed {
+		if err := r.saveReconcileMetadata(
+			ctx, eng, ws, baseMD, md, run.changedKeys,
+		); err != nil {
+			if staleErr := staleRetryError(
+				err,
+				run.commandMayHaveStarted,
+			); staleErr != nil {
+				return run.warnings, run.commandMayHaveStarted, staleErr
+			}
+			run.warnings = append(run.warnings, fmt.Sprintf(
+				"save metadata: %v", err,
+			))
+		}
+	}
+	return run.warnings, run.commandMayHaveStarted, nil
+}
+
+type reconcileRunResult struct {
+	warnings              []string
+	changed               bool
+	changedKeys           []string
+	commandMayHaveStarted bool
+}
+
+func (r *defaultReconciler) runReconcileRequirements(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	baseMD codeexecutor.WorkspaceMetadata,
+	rctx ApplyContext,
+	generation string,
+	reqs []Requirement,
+) (reconcileRunResult, error) {
+	var run reconcileRunResult
 	for _, req := range reqs {
-		applied, applyAttempted, warn, err := r.runOne(ctx, rctx, req)
+		applied, applyAttempted, warn, err := r.runOne(
+			ctx, rctx, generation, req,
+		)
 		if warn != "" {
-			warnings = append(warnings, warn)
+			run.warnings = append(run.warnings, warn)
 		}
 		if staleErr := staleRetryError(
 			err,
-			commandMayHaveStarted,
+			run.commandMayHaveStarted,
 		); staleErr != nil {
-			return warnings, staleErr
+			return run, staleErr
 		}
 		if applyAttempted && req.Kind() == KindCommand {
 			// A non-stale command result does not prove that the command
 			// avoided side effects. This includes optional timeouts,
 			// non-zero exits, and failures after successful execution.
-			commandMayHaveStarted = true
+			run.commandMayHaveStarted = true
 		}
 		if err != nil {
 			if !req.Required() {
-				warnings = append(warnings, fmt.Sprintf(
+				run.warnings = append(run.warnings, fmt.Sprintf(
 					"optional requirement %q failed: %v",
 					req.Key(), err,
 				))
 				continue
 			}
-			if changed {
+			if run.changed {
 				if saveErr := r.saveReconcileMetadata(
-					ctx, eng, ws, baseMD, md, changedKeys,
+					ctx, eng, ws, baseMD, *rctx.Metadata, run.changedKeys,
 				); saveErr != nil {
 					if staleErr := staleRetryError(
 						saveErr,
-						commandMayHaveStarted,
+						run.commandMayHaveStarted,
 					); staleErr != nil {
-						return warnings, staleErr
+						return run, staleErr
 					}
-					return warnings, fmt.Errorf(
+					return run, fmt.Errorf(
 						"workspaceprep: save metadata after "+
 							"partial apply: %w",
 						saveErr,
 					)
 				}
 			}
-			return warnings, fmt.Errorf(
+			return run, fmt.Errorf(
 				"workspaceprep: required requirement %q failed: %w",
 				req.Key(), err,
 			)
 		}
 		if applied {
-			changed = true
-			changedKeys = append(changedKeys, req.Key())
+			run.changed = true
+			run.changedKeys = append(run.changedKeys, req.Key())
 		}
 	}
-	if changed {
-		if err := r.saveReconcileMetadata(
-			ctx, eng, ws, baseMD, md, changedKeys,
-		); err != nil {
-			if staleErr := staleRetryError(
-				err,
-				commandMayHaveStarted,
-			); staleErr != nil {
-				return warnings, staleErr
-			}
-			warnings = append(warnings, fmt.Sprintf(
-				"save metadata: %v", err,
-			))
-		}
+	return run, nil
+}
+
+func (r *defaultReconciler) preparationGeneration(
+	instanceID codeexecutor.WorkspaceInstanceID,
+) (string, error) {
+	if instanceID == "" {
+		return "", nil
 	}
-	return warnings, nil
+	if r.generationErr != nil {
+		return "", fmt.Errorf(
+			"workspaceprep: create process generation epoch: %w",
+			r.generationErr,
+		)
+	}
+	if r.generationEpoch == "" {
+		return "", errors.New(
+			"workspaceprep: process generation epoch is empty",
+		)
+	}
+	sum := sha256.Sum256([]byte(
+		r.generationEpoch + "\x00" + string(instanceID),
+	))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func newProcessGenerationEpoch() (string, error) {
+	var epoch [16]byte
+	if _, err := rand.Read(epoch[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(epoch[:]), nil
 }
 
 func staleRetryError(err error, unsafe bool) error {
@@ -292,6 +367,7 @@ func cloneReconcileMetadata(
 func (r *defaultReconciler) runOne(
 	ctx context.Context,
 	rctx ApplyContext,
+	generation string,
 	req Requirement,
 ) (bool, bool, string, error) {
 	key := req.Key()
@@ -300,7 +376,8 @@ func (r *defaultReconciler) runOne(
 		return false, false, "", fmt.Errorf("fingerprint: %w", err)
 	}
 	prev, hasPrev := rctx.Metadata.Prepared[key]
-	if hasPrev && prev.Fingerprint == expected {
+	if hasPrev && prev.Generation == generation &&
+		prev.Fingerprint == expected {
 		ok, err := req.SentinelExists(ctx, rctx)
 		if err != nil {
 			return false, false, "", fmt.Errorf("sentinel: %w", err)
@@ -318,6 +395,7 @@ func (r *defaultReconciler) runOne(
 		Fingerprint: expected,
 		Target:      req.Target(),
 		PreparedAt:  time.Now(),
+		Generation:  generation,
 	}
 	return true, true, "", nil
 }

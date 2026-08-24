@@ -53,9 +53,7 @@ func (t *translator) closeTextStreamsBeforeQueuedUserMessage() []aguievents.Even
 
 func (t *translator) closeTextStreamsBeforeToolEvent() []aguievents.Event {
 	if t.concurrentMessageStreamsEnabled {
-		events := t.closeOpenTextStreams()
-		t.clearGraphTextAppendTarget()
-		return events
+		return nil
 	}
 	return t.closeCurrentTextStream()
 }
@@ -245,9 +243,6 @@ func (t *translator) concurrentReasoningEvents(rsp *model.Response) ([]aguievent
 		if t.reasoningStreams.isOpen(reasoningID) {
 			shouldEnd := false
 			if contentDelta != "" {
-				shouldEnd = true
-			}
-			if rsp.IsToolCallResponse() {
 				shouldEnd = true
 			}
 			if choice.FinishReason != nil && *choice.FinishReason != "" {

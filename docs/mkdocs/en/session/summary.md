@@ -184,19 +184,40 @@ request by:
 The request prefix remains the same as the parent request prefix, so providers
 with prompt caching can reuse more cached input. If no parent request is
 available, for example in manual or external summary calls, the summarizer
-falls back to the standalone request path.
+falls back to the standalone request path. With cache-safe forking enabled,
+that standalone user message contains the rendered `WithPrompt(...)` output,
+followed by a fixed source-data boundary and the instruction rendered from
+`WithCacheSafeForkPrompt(...)`. The boundary tells the model to treat the
+preceding conversation as source data rather than as a task to continue. The
+same construction is used for other standalone fallbacks, including bounded
+and retry requests.
 
 Before sending either form of request, the summarizer admits it against the
 summary model's effective input budget. The framework uses the smaller of the
 provider-specific input budget, when the model exposes one, and a conservative
 ceiling of 70% of the model context window. An oversized fork is reduced without
-mutating the parent request: unused tool schemas are removed first, older
-complete source rounds can be dropped while the latest round is protected, and
-large tool argument/result payloads are replaced as needed. If the fork still
-cannot fit, the summarizer rebuilds a bounded standalone request. This fallback
-truncates the `{conversation_text}` and `{previous_summary}` payloads with
-head-and-tail preservation; the fixed system prompt and user-prompt template
+mutating the parent request: unused tool schemas are removed first, and large
+tool argument/result payloads are replaced with explicit omission markers as
+needed. Source conversation turns are not dropped. The complete rendered fork
+prompt, including a custom one, counts against this input budget in both fork
+and standalone forms. If the fork still cannot fit, the summarizer rebuilds a
+bounded standalone request. When that request can fit all newly uncovered
+conversation, the standalone path preserves it in full and, when
+`{previous_summary}` is used, may bound only that previous rolling summary; the
+fixed system prompt, user-prompt template, source boundary, and fork prompt
 remain intact.
+
+If all newly uncovered conversation cannot fit in one standalone request, the
+summarizer can process a complete older prefix and leave the remaining events
+uncovered for a later summary pass. A prefix must end at a stable event boundary
+and cannot split response chunks or an open tool call/result round. The summary
+boundary advances only through the selected prefix after model generation and
+post-summary processing are complete. If even the smallest complete prefix does
+not fit, the request fails before calling the model and the existing boundary
+remains unchanged. Partial-prefix fallback is disabled when
+`WithPreSummaryHook(...)` is configured because hook-rewritten text cannot be
+mapped safely back to an event boundary. Prefix summaries always use a
+standalone request; they do not reuse the cache-safe fork.
 
 Budget fitting and the fork-to-standalone decision happen before the
 `BeforeModel` callback. The callback therefore receives the actual request that
@@ -205,7 +226,8 @@ callback makes it exceed the budget, the call fails explicitly instead of
 silently replacing the callback-modified request. If a provider still returns a
 context-length error, or a non-custom model call returns an empty summary, the
 summarizer makes one bounded standalone retry at half of the first attempt's
-input budget.
+input budget. That retry may select a smaller complete prefix under the same
+boundary rules.
 
 One important branch-summary behavior: after `WithCacheSafeForking(true)` is
 enabled, a non-empty branch trigger may fork the current parent request for the
@@ -228,10 +250,14 @@ Prompt rules:
 - `WithSystemPrompt(...)` configures the optional standalone system message. It
   must not include `{conversation_text}` or `{previous_summary}`. It may include
   `{max_summary_words}`.
-- `WithCacheSafeForkPrompt(...)` configures only the user message appended in
-  fork mode. It must not include `{conversation_text}` or
-  `{previous_summary}` because the cloned parent request already contains the
-  conversation and any injected summary. It may include `{max_summary_words}`.
+- `WithCacheSafeForkPrompt(...)` configures the final summary instruction used
+  when cache-safe forking is enabled. In fork mode it is appended as a user
+  message to the cloned parent request. In standalone fallback it is appended
+  after a fixed source-data boundary in the standalone user message. It must
+  not include `{conversation_text}` or `{previous_summary}` because the source
+  conversation is already present before it in either request form. It may
+  include `{max_summary_words}`, and its complete rendered text counts against
+  the summary model's input budget.
 
 Keep the standalone prompt valid even when cache-safe forking is enabled,
 because fallback paths still use it. When writing a custom fork prompt, ask the
@@ -616,7 +642,7 @@ summary.WithChecksAny(
 | `WithPrompt(prompt string)` | Custom summary prompt; must contain `{conversation_text}` and may contain `{previous_summary}` |
 | `WithSystemPrompt(prompt string)` | Add a separate system message for summarization instructions; must not contain `{conversation_text}` or `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | Opt in to cache-safe summary request forking when a parent request is available. Disabled by default |
-| `WithCacheSafeForkPrompt(prompt string)` | Customize the compacting user message appended in cache-safe fork mode. May include `{max_summary_words}`, but not `{conversation_text}` or `{previous_summary}` |
+| `WithCacheSafeForkPrompt(prompt string)` | Customize the final instruction used by cache-safe fork requests and appended after a source-data boundary in standalone fallbacks. Its rendered text counts against the input budget. May include `{max_summary_words}`, but not `{conversation_text}` or `{previous_summary}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | Custom function to skip recent events |
 
 ### Hook Options
@@ -954,6 +980,12 @@ type PostSummaryHookContext struct {
 
 type PostSummaryHook func(in *PostSummaryHookContext) error
 ```
+
+The hook observes the provisional boundary for the source used to generate the
+summary. When the hook succeeds, or when its error is configured as non-aborting,
+the summarizer restores that exact source boundary after the hook; hook writes to
+the summary boundary state therefore do not persist. An aborting error or panic
+restores the boundary that existed before the summary attempt.
 
 ### Usage Example
 

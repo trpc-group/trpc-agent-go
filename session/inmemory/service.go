@@ -43,6 +43,8 @@ var (
 	_ session.Service       = (*SessionService)(nil)
 	_ session.TrackService  = (*SessionService)(nil)
 	_ session.WindowService = (*SessionService)(nil)
+
+	_ session.StateInitializationService = (*SessionService)(nil)
 )
 
 // isExpired checks if the given time has passed.
@@ -188,6 +190,10 @@ type SessionService struct {
 	cleanupOnce   sync.Once
 	asyncWorker   *isummary.AsyncSummaryWorker
 	once          sync.Once // ensure Close is called only once
+
+	stateInitializationMu     sync.Mutex
+	stateInitializationGates  map[stateInitializationKey]*stateInitializationGate
+	stateInitializationClosed chan struct{}
 }
 
 // NewSessionService creates a new in-memory session service.
@@ -205,9 +211,11 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 	}
 
 	s := &SessionService{
-		apps:        make(map[string]*appSessions),
-		opts:        opts,
-		cleanupDone: make(chan struct{}),
+		apps:                      make(map[string]*appSessions),
+		opts:                      opts,
+		cleanupDone:               make(chan struct{}),
+		stateInitializationGates:  make(map[stateInitializationKey]*stateInitializationGate),
+		stateInitializationClosed: make(chan struct{}),
 	}
 
 	// Start automatic cleanup if cleanup interval is configured and auto cleanup is not disabled
@@ -977,6 +985,7 @@ func (s *SessionService) stopCleanupRoutine() {
 // Close closes the service.
 func (s *SessionService) Close() error {
 	s.once.Do(func() {
+		s.closeStateInitialization()
 		s.stopCleanupRoutine()
 		if s.asyncWorker != nil {
 			s.asyncWorker.Stop()

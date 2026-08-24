@@ -56,6 +56,9 @@ func cloneContentParts(src []model.ContentPart) []model.ContentPart {
 		if part.Audio != nil {
 			part.Audio = cloneAudio(part.Audio)
 		}
+		if part.Video != nil {
+			part.Video = cloneVideo(part.Video)
+		}
 		if part.File != nil {
 			part.File = cloneFile(part.File)
 		}
@@ -74,6 +77,15 @@ func cloneImage(src *model.Image) *model.Image {
 }
 
 func cloneAudio(src *model.Audio) *model.Audio {
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	copied.Data = cloneBytes(src.Data)
+	return &copied
+}
+
+func cloneVideo(src *model.Video) *model.Video {
 	if src == nil {
 		return nil
 	}
