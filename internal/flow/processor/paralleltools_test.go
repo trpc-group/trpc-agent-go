@@ -301,7 +301,7 @@ func TestParallelToolsIsIdempotent(t *testing.T) {
 	if got := systemContent(req); got != once {
 		t.Fatalf("annotating twice must not change the prompt:\n%q\n%q", once, got)
 	}
-	if n := strings.Count(systemContent(req), noticePrefix); n != 1 {
+	if n := strings.Count(systemContent(req), noticeMarker); n != 1 {
 		t.Errorf("expected exactly one notice, got %d", n)
 	}
 }
@@ -371,5 +371,125 @@ func TestParallelToolsRemovesTheSystemMessageItCreated(t *testing.T) {
 
 	if len(req.Messages) != 1 || req.Messages[0].Content != "hello" {
 		t.Fatalf("expected only the user message to remain, got %+v", req.Messages)
+	}
+}
+
+// A caller's own system content is not framework state, however it reads. An
+// earlier version identified the notice by the words it opens with, so a system
+// policy that happened to start the same way was deleted on the first pass —
+// before this annotator had written anything at all.
+func TestParallelToolsKeepsCallerContentThatReadsLikeTheNotice(t *testing.T) {
+	const callerPolicy = "Tool-call batching: preserve this caller-authored policy."
+
+	t.Run("first pass, nothing to remove", func(t *testing.T) {
+		req := &model.Request{
+			Messages: []model.Message{model.NewSystemMessage(callerPolicy)},
+			Tools:    map[string]tool.Tool{"read": safeStubTool{name: "read"}},
+		}
+		processParallelTools(req)
+
+		if got := systemContent(req); got != callerPolicy {
+			t.Fatalf("the caller's policy must survive untouched, got %q", got)
+		}
+	})
+
+	t.Run("the notice is added and withdrawn around it", func(t *testing.T) {
+		req := &model.Request{
+			Messages: []model.Message{model.NewSystemMessage(callerPolicy)},
+			Tools: map[string]tool.Tool{
+				"read":  safeStubTool{name: "read"},
+				"agent": unsafeStubTool{name: "agent"},
+			},
+		}
+		processParallelTools(req)
+		if got := systemContent(req); !strings.Contains(got, callerPolicy) ||
+			!strings.Contains(got, noticeMarker) {
+			t.Fatalf("precondition: both paragraphs must be present, got %q", got)
+		}
+
+		req.Tools = map[string]tool.Tool{"read": safeStubTool{name: "read"}}
+		processParallelTools(req)
+
+		if got := systemContent(req); got != callerPolicy {
+			t.Fatalf("withdrawing the notice must leave the caller's policy, got %q", got)
+		}
+	})
+}
+
+// A before-model callback may prepend a system message, so on a retry the notice
+// written last pass is no longer the first one. Sweeping only the first message
+// left the stale notice in place and added the current one beside it.
+func TestParallelToolsRemovesTheNoticeFromALaterSystemMessage(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("base")},
+		Tools: map[string]tool.Tool{
+			"read":  safeStubTool{name: "read"},
+			"agent": unsafeStubTool{name: "agent"},
+		},
+	}
+	processParallelTools(req)
+	if !strings.Contains(req.Messages[0].Content, "`agent`") {
+		t.Fatalf("precondition: the first pass must name agent, got %q", req.Messages[0].Content)
+	}
+
+	// The retry's callback prepends its own system message and leaves only safe
+	// tools behind.
+	req.Messages = append(
+		[]model.Message{model.NewSystemMessage("prepended by a retry callback")},
+		req.Messages...,
+	)
+	req.Tools = map[string]tool.Tool{"read": safeStubTool{name: "read"}}
+	processParallelTools(req)
+
+	for i, msg := range req.Messages {
+		if strings.Contains(msg.Content, noticeMarker) {
+			t.Fatalf("a stale notice survived in message %d: %q", i, msg.Content)
+		}
+	}
+	if len(req.Messages) != 2 ||
+		req.Messages[0].Content != "prepended by a retry callback" ||
+		req.Messages[1].Content != "base" {
+		t.Fatalf("expected both callers' messages, unchanged, got %+v", req.Messages)
+	}
+}
+
+// The same shape with an exclusive tool still present: the stale notice goes and
+// exactly one current notice remains, rather than two accumulating.
+func TestParallelToolsDoesNotAccumulateAcrossSystemMessages(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("base")},
+		Tools: map[string]tool.Tool{
+			"read":  safeStubTool{name: "read"},
+			"agent": unsafeStubTool{name: "agent"},
+		},
+	}
+	processParallelTools(req)
+
+	req.Messages = append(
+		[]model.Message{model.NewSystemMessage("prepended by a retry callback")},
+		req.Messages...,
+	)
+	req.Tools = map[string]tool.Tool{
+		"read":  safeStubTool{name: "read"},
+		"other": unsafeStubTool{name: "other"},
+	}
+	processParallelTools(req)
+
+	var notices int
+	for _, msg := range req.Messages {
+		notices += strings.Count(msg.Content, noticeMarker)
+	}
+	if notices != 1 {
+		t.Fatalf("expected exactly one notice across the request, got %d: %+v", notices, req.Messages)
+	}
+	var all strings.Builder
+	for _, msg := range req.Messages {
+		all.WriteString(msg.Content)
+	}
+	if strings.Contains(all.String(), "`agent`") {
+		t.Errorf("the obsolete exclusive tool must not still be named: %q", all.String())
+	}
+	if !strings.Contains(all.String(), "`other`") {
+		t.Errorf("the current exclusive tool must be named: %q", all.String())
 	}
 }

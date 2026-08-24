@@ -26,14 +26,22 @@ import (
 // makes the choice worth reasoning about: batching an exclusive tool with others
 // does not fail, it silently costs the parallelism the rest of the batch would
 // have had.
-const exclusiveToolsNotice = noticePrefix + "independent tool calls issued in the same turn %s, so a " +
-	"turn of several calls can cost about as much as its slowest one. These tools are the exception and must " +
-	"be the only call in their turn: %s. A turn that includes one of them runs every call in it one after " +
-	"another."
+const exclusiveToolsNotice = noticeMarker + "\nTool-call batching: independent tool calls issued in the " +
+	"same turn %s, so a turn of several calls can cost about as much as its slowest one. These tools are the " +
+	"exception and must be the only call in their turn: %s. A turn that includes one of them runs every call " +
+	"in it one after another."
 
-// noticePrefix identifies a notice this annotator wrote. It is spliced into
-// exclusiveToolsNotice rather than compared against it so the two cannot drift.
-const noticePrefix = "Tool-call batching: "
+// noticeMarker identifies a paragraph this annotator wrote, so a later pass can
+// take back its own text and nothing else.
+//
+// Ownership cannot be inferred from how the notice reads. An earlier version
+// matched the paragraph's opening words, which made any caller-authored
+// paragraph that happened to start the same way framework state: a system policy
+// beginning "Tool-call batching: " was silently deleted on the first pass, before
+// this annotator had written anything at all. The marker is a line no prompt
+// author writes by accident, and it is spliced into exclusiveToolsNotice rather
+// than compared against it so the two cannot drift.
+const noticeMarker = "<!-- trpc-agent-go:tool-batching-notice -->"
 
 // The clause describing what a turn's calls actually do depends on the run's
 // concurrency configuration, which can withhold parallelism the scheduler would
@@ -111,32 +119,54 @@ func (n *ToolBatchingNotice) Annotate(
 	appendToSystemMessage(req, n.notice(exclusive))
 }
 
-// removeToolBatchingNotice deletes a notice a previous Annotate wrote, leaving
-// the rest of the system message — including whatever the caller put there —
+// removeToolBatchingNotice deletes the notice a previous Annotate wrote, leaving
+// the rest of the system content — including whatever the caller put there —
 // untouched.
+//
+// It sweeps every system message rather than the first. A before-model callback
+// may prepend a system message of its own, so on a retry the notice written last
+// pass is no longer where appendToSystemMessage put it; looking only at the first
+// message would find no marker there, leave the stale notice in place, and add
+// the current one beside it.
 //
 // appendToSystemMessage joins with a blank line and the notice is a single
 // paragraph, so paragraph boundaries are exactly its edges. A system message the
 // notice created has no other paragraph left afterwards, and is dropped rather
 // than left empty.
 func removeToolBatchingNotice(req *model.Request) {
-	idx := findSystemMessageIndex(req.Messages)
-	if idx < 0 || !strings.Contains(req.Messages[idx].Content, noticePrefix) {
-		return
+	kept := req.Messages[:0]
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem ||
+			!strings.Contains(msg.Content, noticeMarker) {
+			kept = append(kept, msg)
+			continue
+		}
+		content, ok := withoutNoticeParagraphs(msg.Content)
+		if !ok {
+			continue
+		}
+		msg.Content = content
+		kept = append(kept, msg)
 	}
-	paragraphs := strings.Split(req.Messages[idx].Content, "\n\n")
+	req.Messages = kept
+}
+
+// withoutNoticeParagraphs drops the marked paragraphs from a system message's
+// content. The second result is false when nothing else is left, meaning the
+// message existed only to carry the notice.
+func withoutNoticeParagraphs(content string) (string, bool) {
+	paragraphs := strings.Split(content, "\n\n")
 	kept := paragraphs[:0]
 	for _, paragraph := range paragraphs {
-		if strings.HasPrefix(paragraph, noticePrefix) {
+		if strings.HasPrefix(paragraph, noticeMarker) {
 			continue
 		}
 		kept = append(kept, paragraph)
 	}
 	if len(kept) == 0 {
-		req.Messages = append(req.Messages[:idx], req.Messages[idx+1:]...)
-		return
+		return "", false
 	}
-	req.Messages[idx].Content = strings.Join(kept, "\n\n")
+	return strings.Join(kept, "\n\n"), true
 }
 
 func (n *ToolBatchingNotice) notice(names []string) string {
