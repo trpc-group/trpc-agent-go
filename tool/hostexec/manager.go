@@ -181,9 +181,9 @@ func runForeground(
 	// can never reach it and no caller can answer a prompt it raises. Detach it
 	// rather than leave it looking answerable: stdin becomes the null device
 	// instead of a pipe nothing can write to or close, and preparePipeCommand
-	// puts the child in its own session so it cannot reach the host's terminal
-	// behind fd 0 either. A prompting command then fails promptly instead of
-	// waiting out the run timeout.
+	// takes away the terminal the child would otherwise reach around it — a new
+	// session on Unix, no console on Windows. A prompting command then fails
+	// promptly instead of waiting out the run timeout.
 	sess, err := startSession(
 		"",
 		params,
@@ -449,10 +449,10 @@ func waitDone(
 // which os/exec backs with the null device, so a command that prompts reads EOF
 // instead of blocking on a pipe that never delivers.
 //
-// That covers fd 0 only. Prompts that open /dev/tty directly are kept away by
-// preparePipeCommand, which gives the same detached child a session with no
-// controlling terminal; the two together are what make a prompt fail rather
-// than hang.
+// That covers fd 0 only. Prompts reach the terminal around it — /dev/tty on
+// Unix, CONIN$ on Windows — and preparePipeCommand is what takes that terminal
+// away from the same detached child; the two together are what make a prompt
+// fail rather than hang.
 func startPipes(
 	cmd *exec.Cmd,
 	detach bool,
