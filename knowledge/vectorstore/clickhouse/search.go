@@ -498,11 +498,9 @@ func (vs *VectorStore) buildMetadataWhere(ids []string, filter map[string]any) (
 func (vs *VectorStore) scanMetadataRow(rows interface{ Scan(dest ...any) error }) (string, map[string]any, error) {
 	var id string
 	var metadataStr string
-	filterVals := make([]any, len(vs.option.filterFields))
+	filterDests := vs.newFilterDests()
 	targets := []any{&id, &metadataStr}
-	for i := range vs.option.filterFields {
-		targets = append(targets, &filterVals[i])
-	}
+	targets = append(targets, filterDests...)
 	if err := rows.Scan(targets...); err != nil {
 		return "", nil, fmt.Errorf("clickhouse: scan metadata row: %w", err)
 	}
@@ -510,11 +508,7 @@ func (vs *VectorStore) scanMetadataRow(rows interface{ Scan(dest ...any) error }
 	if err != nil {
 		return "", nil, fmt.Errorf("clickhouse: decode metadata: %w", err)
 	}
-	for i, spec := range vs.option.filterFields {
-		if filterVals[i] != nil {
-			md[spec.Name] = filterVals[i]
-		}
-	}
+	vs.mergeFilterDests(md, filterDests)
 	return id, md, nil
 }
 

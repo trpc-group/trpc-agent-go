@@ -305,14 +305,48 @@ func (vs *VectorStore) insertArgs(r *row) ([]any, error) {
 // When scorePtr is non-nil, an additional trailing Float64 column (the vector
 // distance/product) is scanned into it. This is used by vector search, which
 // appends the distance expression as the final SELECT column.
+// newFilterDests allocates one scan destination per declared filter field,
+// typed according to the column type in the table schema. The ClickHouse driver
+// rejects *interface{} destinations, so concrete pointers are required.
+func (vs *VectorStore) newFilterDests() []any {
+	dests := make([]any, len(vs.option.filterFields))
+	for i, spec := range vs.option.filterFields {
+		switch spec.Type {
+		case FilterFieldInt64:
+			dests[i] = new(int64)
+		case FilterFieldFloat64:
+			dests[i] = new(float64)
+		default:
+			dests[i] = new(string)
+		}
+	}
+	return dests
+}
+
+// mergeFilterDests copies scanned filter-column values back into the metadata
+// map, so callers observe them alongside the JSON-encoded metadata.
+func (vs *VectorStore) mergeFilterDests(md map[string]any, dests []any) {
+	for i, spec := range vs.option.filterFields {
+		if i >= len(dests) {
+			return
+		}
+		switch dest := dests[i].(type) {
+		case *int64:
+			md[spec.Name] = *dest
+		case *float64:
+			md[spec.Name] = *dest
+		case *string:
+			md[spec.Name] = *dest
+		}
+	}
+}
+
 func (vs *VectorStore) scanRow(rows driver.Rows, scorePtr *float64) (*row, error) {
 	r := &row{}
 	var metadataStr string
-	filterVals := make([]any, len(vs.option.filterFields))
+	filterDests := vs.newFilterDests()
 	targets := []any{&r.id, &r.name, &r.content, &r.embedding, &metadataStr, &r.createdAt, &r.updatedAt}
-	for i := range vs.option.filterFields {
-		targets = append(targets, &filterVals[i])
-	}
+	targets = append(targets, filterDests...)
 	if scorePtr != nil {
 		targets = append(targets, scorePtr)
 	}
@@ -324,10 +358,6 @@ func (vs *VectorStore) scanRow(rows driver.Rows, scorePtr *float64) (*row, error
 		return nil, fmt.Errorf("clickhouse: decode metadata: %w", err)
 	}
 	r.metadata = md
-	for i, spec := range vs.option.filterFields {
-		if filterVals[i] != nil {
-			r.metadata[spec.Name] = filterVals[i]
-		}
-	}
+	vs.mergeFilterDests(r.metadata, filterDests)
 	return r, nil
 }
