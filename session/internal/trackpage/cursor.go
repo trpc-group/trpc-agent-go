@@ -24,15 +24,14 @@ const version = 1
 
 // Cursor is the internal wire shape for backend-generated track page cursors.
 type Cursor struct {
-	Version          int    `json:"v"`
-	Kind             string `json:"kind"`
-	AppName          string `json:"appName"`
-	UserID           string `json:"userID"`
-	SessionID        string `json:"sessionID"`
-	Track            string `json:"track"`
-	SessionCreatedAt int64  `json:"sessionCreatedAt"`
-	CreatedAt        int64  `json:"createdAt"`
-	ID               string `json:"id"`
+	Version   int    `json:"v"`
+	Kind      string `json:"kind"`
+	AppName   string `json:"appName"`
+	UserID    string `json:"userID"`
+	SessionID string `json:"sessionID"`
+	Track     string `json:"track"`
+	CreatedAt int64  `json:"createdAt"`
+	ID        string `json:"id"`
 }
 
 // ValidateRequest validates a track event page request.
@@ -78,7 +77,6 @@ func ValidateBinding(
 	kind string,
 	key session.Key,
 	track session.Track,
-	sessionCreatedAt time.Time,
 ) error {
 	if c.Kind != kind {
 		return fmt.Errorf("cursor kind mismatch")
@@ -88,9 +86,6 @@ func ValidateBinding(
 	}
 	if c.Track != string(track) {
 		return fmt.Errorf("cursor track mismatch")
-	}
-	if c.SessionCreatedAt != TimeToUnixNano(sessionCreatedAt) {
-		return fmt.Errorf("cursor session generation mismatch")
 	}
 	return nil
 }
@@ -108,19 +103,17 @@ func CursorFor(
 	kind string,
 	key session.Key,
 	track session.Track,
-	sessionCreatedAt time.Time,
 	createdAt time.Time,
 	id string,
 ) (string, error) {
 	return Encode(Cursor{
-		Kind:             kind,
-		AppName:          key.AppName,
-		UserID:           key.UserID,
-		SessionID:        key.SessionID,
-		Track:            string(track),
-		SessionCreatedAt: TimeToUnixNano(sessionCreatedAt),
-		CreatedAt:        TimeToUnixNano(createdAt),
-		ID:               id,
+		Kind:      kind,
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		SessionID: key.SessionID,
+		Track:     string(track),
+		CreatedAt: TimeToUnixNano(createdAt),
+		ID:        id,
 	})
 }
 
@@ -129,19 +122,17 @@ func CursorForUnixNano(
 	kind string,
 	key session.Key,
 	track session.Track,
-	sessionCreatedAt time.Time,
 	createdAt int64,
 	id string,
 ) (string, error) {
 	return Encode(Cursor{
-		Kind:             kind,
-		AppName:          key.AppName,
-		UserID:           key.UserID,
-		SessionID:        key.SessionID,
-		Track:            string(track),
-		SessionCreatedAt: TimeToUnixNano(sessionCreatedAt),
-		CreatedAt:        createdAt,
-		ID:               id,
+		Kind:      kind,
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		SessionID: key.SessionID,
+		Track:     string(track),
+		CreatedAt: createdAt,
+		ID:        id,
 	})
 }
 

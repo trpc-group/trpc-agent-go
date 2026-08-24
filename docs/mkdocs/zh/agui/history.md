@@ -347,4 +347,4 @@ server, err := agui.New(
 
 `hasMore=true` 表示客户端还没有收到全部更早历史。原因可能是 session 存储中仍有更早事件，也可能是 AG-UI 层在返回前裁剪了当前页。这个裁剪是有意的：消息快照会从 user message 边界开始返回，避免前端收到上一轮对话的后半段。
 
-如果本次读取到的事件页中找不到 user message 边界，`/history` 会返回空 `messages`，并在 `rawEvent.page.cursor` 中保留本次请求传入的 cursor，同时设置 `hasMore=true`。客户端可以使用同一个 cursor，并调大 `EventLimit` 后重试，从 session 层请求更大的事件窗口。
+如果本次读取到的事件页中找不到 user message 边界，`/history` 会返回空 `messages`，并把 `rawEvent.page.cursor` 推进到本页已检查到的最老事件。`hasMore` 保持 session service 返回的结果，因此客户端可以继续请求更早分页，而不会重复请求同一个空页。

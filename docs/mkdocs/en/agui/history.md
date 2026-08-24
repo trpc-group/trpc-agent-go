@@ -347,4 +347,4 @@ The returned `cursor` should be sent with the next snapshot request to load olde
 
 `hasMore=true` means the client has not received all older history yet. This can be because the session store still has older events, or because the AG-UI layer trimmed part of the fetched page before returning it. The trimming is intentional: message snapshots are returned from a user-message boundary, so the frontend does not receive the trailing half of an earlier turn.
 
-If the fetched page does not contain a user-message boundary, `/history` returns an empty `messages` array, keeps the requested cursor in `rawEvent.page.cursor`, and sets `hasMore=true`. The client can then retry with the same cursor and a larger `EventLimit` to ask the session service for a wider event window.
+If the fetched page does not contain a user-message boundary, `/history` returns an empty `messages` array and advances `rawEvent.page.cursor` to the oldest event inspected in that page. `hasMore` follows the session service result, so the client can keep loading older pages without repeating the same empty page.

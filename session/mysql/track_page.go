@@ -13,7 +13,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -38,18 +37,11 @@ func (s *Service) GetTrackEventPage(
 	if err := trackpage.ValidateRequest(req); err != nil {
 		return nil, err
 	}
-	sessionCreatedAt, ok, err := s.getTrackEventPageSessionCreatedAt(ctx, req.Key)
+	rows, hasMore, err := s.queryTrackEventPageRows(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("mysql session service get track event page failed: %w", err)
 	}
-	if !ok {
-		return &session.TrackEventPage{Track: req.Track}, nil
-	}
-	rows, hasMore, err := s.queryTrackEventPageRows(ctx, req, sessionCreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("mysql session service get track event page failed: %w", err)
-	}
-	entries, err := mysqlTrackEventPageEntries(req, sessionCreatedAt, rows)
+	entries, err := mysqlTrackEventPageEntries(req, rows)
 	if err != nil {
 		return nil, fmt.Errorf("mysql session service get track event page failed: %w", err)
 	}
@@ -60,36 +52,9 @@ func (s *Service) GetTrackEventPage(
 	}, nil
 }
 
-func (s *Service) getTrackEventPageSessionCreatedAt(
-	ctx context.Context,
-	key session.Key,
-) (time.Time, bool, error) {
-	var createdAt time.Time
-	err := s.mysqlClient.QueryRow(
-		ctx,
-		[]any{&createdAt},
-		fmt.Sprintf(`SELECT created_at FROM %s
-			WHERE app_name = ? AND user_id = ? AND session_id = ?
-			AND (expires_at IS NULL OR expires_at > ?)
-			AND deleted_at IS NULL`, s.tableSessionStates),
-		key.AppName,
-		key.UserID,
-		key.SessionID,
-		time.Now(),
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return time.Time{}, false, nil
-	}
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("query session created_at: %w", err)
-	}
-	return createdAt, true, nil
-}
-
 func (s *Service) queryTrackEventPageRows(
 	ctx context.Context,
 	req session.TrackEventPageRequest,
-	sessionCreatedAt time.Time,
 ) ([]trackEventPageRow, bool, error) {
 	query := fmt.Sprintf(`SELECT id, event, created_at FROM %s
 		WHERE app_name = ? AND user_id = ? AND session_id = ? AND track = ?
@@ -101,7 +66,7 @@ func (s *Service) queryTrackEventPageRows(
 		if err != nil {
 			return nil, false, err
 		}
-		if err := trackpage.ValidateBinding(cursor, trackEventPageCursorKindMySQL, req.Key, req.Track, sessionCreatedAt); err != nil {
+		if err := trackpage.ValidateBinding(cursor, trackEventPageCursorKindMySQL, req.Key, req.Track); err != nil {
 			return nil, false, err
 		}
 		cursorID, err := trackpage.ParseIntID(cursor.ID)
@@ -145,7 +110,6 @@ func (s *Service) queryTrackEventPageRows(
 
 func mysqlTrackEventPageEntries(
 	req session.TrackEventPageRequest,
-	sessionCreatedAt time.Time,
 	rows []trackEventPageRow,
 ) ([]session.TrackEventPageEntry, error) {
 	entries := make([]session.TrackEventPageEntry, 0, len(rows))
@@ -154,7 +118,6 @@ func mysqlTrackEventPageEntries(
 			trackEventPageCursorKindMySQL,
 			req.Key,
 			req.Track,
-			sessionCreatedAt,
 			row.createdAt,
 			strconv.FormatInt(row.id, 10),
 		)

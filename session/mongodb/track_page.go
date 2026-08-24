@@ -12,13 +12,11 @@ package mongodb
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/internal/trackpage"
@@ -34,18 +32,11 @@ func (s *Service) GetTrackEventPage(
 	if err := trackpage.ValidateRequest(req); err != nil {
 		return nil, err
 	}
-	sessionCreatedAt, ok, err := s.getTrackEventPageSessionCreatedAt(ctx, req.Key)
+	docs, hasMore, err := s.queryTrackEventPageDocs(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("mongodb session service get track event page failed: %w", err)
 	}
-	if !ok {
-		return &session.TrackEventPage{Track: req.Track}, nil
-	}
-	docs, hasMore, err := s.queryTrackEventPageDocs(ctx, req, sessionCreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("mongodb session service get track event page failed: %w", err)
-	}
-	entries, err := mongoTrackEventPageEntries(req, sessionCreatedAt, docs)
+	entries, err := mongoTrackEventPageEntries(req, docs)
 	if err != nil {
 		return nil, fmt.Errorf("mongodb session service get track event page failed: %w", err)
 	}
@@ -56,26 +47,9 @@ func (s *Service) GetTrackEventPage(
 	}, nil
 }
 
-func (s *Service) getTrackEventPageSessionCreatedAt(
-	ctx context.Context,
-	key session.Key,
-) (time.Time, bool, error) {
-	var doc sessionStateDoc
-	err := s.client.FindOne(ctx, s.database, s.collSessionStates,
-		activeFilter(time.Now(), sessionKeyFilter(key))).Decode(&doc)
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		return time.Time{}, false, nil
-	}
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("query session created_at: %w", err)
-	}
-	return doc.CreatedAt, true, nil
-}
-
 func (s *Service) queryTrackEventPageDocs(
 	ctx context.Context,
 	req session.TrackEventPageRequest,
-	sessionCreatedAt time.Time,
 ) ([]sessionTrackDoc, bool, error) {
 	now := time.Now()
 	filter := sessionKeyFilter(req.Key)
@@ -90,7 +64,7 @@ func (s *Service) queryTrackEventPageDocs(
 		if err != nil {
 			return nil, false, err
 		}
-		if err := trackpage.ValidateBinding(cursor, trackEventPageCursorKindMongoDB, req.Key, req.Track, sessionCreatedAt); err != nil {
+		if err := trackpage.ValidateBinding(cursor, trackEventPageCursorKindMongoDB, req.Key, req.Track); err != nil {
 			return nil, false, err
 		}
 		oid, err := primitive.ObjectIDFromHex(cursor.ID)
@@ -135,7 +109,6 @@ func (s *Service) queryTrackEventPageDocs(
 
 func mongoTrackEventPageEntries(
 	req session.TrackEventPageRequest,
-	sessionCreatedAt time.Time,
 	docs []sessionTrackDoc,
 ) ([]session.TrackEventPageEntry, error) {
 	entries := make([]session.TrackEventPageEntry, 0, len(docs))
@@ -148,7 +121,6 @@ func mongoTrackEventPageEntries(
 			trackEventPageCursorKindMongoDB,
 			req.Key,
 			req.Track,
-			sessionCreatedAt,
 			doc.CreatedAt,
 			doc.ID.Hex(),
 		)

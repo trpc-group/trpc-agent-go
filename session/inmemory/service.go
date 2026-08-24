@@ -462,12 +462,11 @@ func (s *SessionService) GetTrackEventPage(
 	if history == nil || len(history.Events) == 0 {
 		return &session.TrackEventPage{Track: req.Track}, nil
 	}
-	return inMemoryTrackEventPage(req, sess.CreatedAt, history.Events)
+	return inMemoryTrackEventPage(req, history.Events)
 }
 
 func inMemoryTrackEventPage(
 	req session.TrackEventPageRequest,
-	sessionCreatedAt time.Time,
 	events []session.TrackEvent,
 ) (*session.TrackEventPage, error) {
 	end := len(events)
@@ -476,7 +475,7 @@ func inMemoryTrackEventPage(
 		if err != nil {
 			return nil, err
 		}
-		if err := trackpage.ValidateBinding(cursor, "inmemory", req.Key, req.Track, sessionCreatedAt); err != nil {
+		if err := trackpage.ValidateBinding(cursor, "inmemory", req.Key, req.Track); err != nil {
 			return nil, err
 		}
 		index, err := strconv.Atoi(cursor.ID)
@@ -500,7 +499,6 @@ func inMemoryTrackEventPage(
 			"inmemory",
 			req.Key,
 			req.Track,
-			sessionCreatedAt,
 			trackpage.TimeToUnixNano(events[i].Timestamp),
 			strconv.Itoa(i),
 		)

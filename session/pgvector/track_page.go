@@ -37,18 +37,11 @@ func (s *Service) GetTrackEventPage(
 	if err := trackpage.ValidateRequest(req); err != nil {
 		return nil, err
 	}
-	sessionCreatedAt, ok, err := s.getTrackEventPageSessionCreatedAt(ctx, req.Key)
+	rows, hasMore, err := s.queryTrackEventPageRows(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("pgvector session service get track event page failed: %w", err)
 	}
-	if !ok {
-		return &session.TrackEventPage{Track: req.Track}, nil
-	}
-	rows, hasMore, err := s.queryTrackEventPageRows(ctx, req, sessionCreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("pgvector session service get track event page failed: %w", err)
-	}
-	entries, err := pgvectorTrackEventPageEntries(req, sessionCreatedAt, rows)
+	entries, err := pgvectorTrackEventPageEntries(req, rows)
 	if err != nil {
 		return nil, fmt.Errorf("pgvector session service get track event page failed: %w", err)
 	}
@@ -59,30 +52,9 @@ func (s *Service) GetTrackEventPage(
 	}, nil
 }
 
-func (s *Service) getTrackEventPageSessionCreatedAt(
-	ctx context.Context,
-	key session.Key,
-) (time.Time, bool, error) {
-	var createdAt time.Time
-	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
-		if !rows.Next() {
-			return nil
-		}
-		return rows.Scan(&createdAt)
-	}, fmt.Sprintf(`SELECT created_at FROM %s
-		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
-		AND (expires_at IS NULL OR expires_at > $4)
-		AND deleted_at IS NULL`, s.tableSessionStates), key.AppName, key.UserID, key.SessionID, time.Now())
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("query session created_at: %w", err)
-	}
-	return createdAt, !createdAt.IsZero(), nil
-}
-
 func (s *Service) queryTrackEventPageRows(
 	ctx context.Context,
 	req session.TrackEventPageRequest,
-	sessionCreatedAt time.Time,
 ) ([]trackEventPageRow, bool, error) {
 	query := fmt.Sprintf(`SELECT id, event, created_at FROM %s
 		WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND track = $4
@@ -94,7 +66,7 @@ func (s *Service) queryTrackEventPageRows(
 		if err != nil {
 			return nil, false, err
 		}
-		if err := trackpage.ValidateBinding(cursor, trackEventPageCursorKindPGVector, req.Key, req.Track, sessionCreatedAt); err != nil {
+		if err := trackpage.ValidateBinding(cursor, trackEventPageCursorKindPGVector, req.Key, req.Track); err != nil {
 			return nil, false, err
 		}
 		cursorID, err := trackpage.ParseIntID(cursor.ID)
@@ -144,7 +116,6 @@ func (s *Service) queryTrackEventPageRows(
 
 func pgvectorTrackEventPageEntries(
 	req session.TrackEventPageRequest,
-	sessionCreatedAt time.Time,
 	rows []trackEventPageRow,
 ) ([]session.TrackEventPageEntry, error) {
 	entries := make([]session.TrackEventPageEntry, 0, len(rows))
@@ -153,7 +124,6 @@ func pgvectorTrackEventPageEntries(
 			trackEventPageCursorKindPGVector,
 			req.Key,
 			req.Track,
-			sessionCreatedAt,
 			row.createdAt,
 			strconv.FormatInt(row.id, 10),
 		)

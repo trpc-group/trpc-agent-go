@@ -15,7 +15,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -44,22 +43,15 @@ func (c *Client) GetTrackEventPage(
 	if err := trackpage.ValidateRequest(req); err != nil {
 		return nil, err
 	}
-	sessState, ok, err := c.getTrackEventPageSessionState(ctx, req.Key)
-	if err != nil {
-		return nil, err
-	}
-	var sessionCreatedAt time.Time
-	if ok {
-		sessionCreatedAt = sessState.CreatedAt
-	}
 	var cursor trackpage.Cursor
 	hasCursor := req.Cursor != ""
 	if hasCursor {
+		var err error
 		cursor, err = trackpage.Decode(req.Cursor)
 		if err != nil {
 			return nil, err
 		}
-		if err := validateTrackEventPageCursorBinding(cursor, req.Key, req.Track, sessionCreatedAt, ok); err != nil {
+		if err := trackpage.ValidateBinding(cursor, TrackEventPageCursorKind, req.Key, req.Track); err != nil {
 			return nil, err
 		}
 	}
@@ -67,7 +59,7 @@ func (c *Client) GetTrackEventPage(
 	if err != nil {
 		return nil, err
 	}
-	entries, err := zsetTrackEventPageEntries(req, sessionCreatedAt, rows)
+	entries, err := zsetTrackEventPageEntries(req, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -76,24 +68,6 @@ func (c *Client) GetTrackEventPage(
 		Entries: entries,
 		HasMore: hasMore,
 	}, nil
-}
-
-func (c *Client) getTrackEventPageSessionState(
-	ctx context.Context,
-	key session.Key,
-) (*SessionState, bool, error) {
-	raw, err := c.client.HGet(ctx, c.sessionStateKey(key), key.SessionID).Bytes()
-	if err == redis.Nil {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("get session state: %w", err)
-	}
-	var sessState SessionState
-	if err := json.Unmarshal(raw, &sessState); err != nil {
-		return nil, false, fmt.Errorf("unmarshal session state: %w", err)
-	}
-	return &sessState, true, nil
 }
 
 func (c *Client) queryTrackEventPageRows(
@@ -163,7 +137,6 @@ func (c *Client) queryTrackEventPageRows(
 
 func zsetTrackEventPageEntries(
 	req session.TrackEventPageRequest,
-	sessionCreatedAt time.Time,
 	rows []trackEventPageRow,
 ) ([]session.TrackEventPageEntry, error) {
 	entries := make([]session.TrackEventPageEntry, 0, len(rows))
@@ -172,7 +145,6 @@ func zsetTrackEventPageEntries(
 			TrackEventPageCursorKind,
 			req.Key,
 			req.Track,
-			sessionCreatedAt,
 			row.score,
 			zsetTrackPageCursorID(row.member),
 		)
@@ -185,28 +157,6 @@ func zsetTrackEventPageEntries(
 		})
 	}
 	return entries, nil
-}
-
-func validateTrackEventPageCursorBinding(
-	c trackpage.Cursor,
-	key session.Key,
-	track session.Track,
-	sessionCreatedAt time.Time,
-	hasSessionState bool,
-) error {
-	if hasSessionState {
-		return trackpage.ValidateBinding(c, TrackEventPageCursorKind, key, track, sessionCreatedAt)
-	}
-	if c.Kind != TrackEventPageCursorKind {
-		return fmt.Errorf("cursor kind mismatch")
-	}
-	if c.AppName != key.AppName || c.UserID != key.UserID || c.SessionID != key.SessionID {
-		return fmt.Errorf("cursor session mismatch")
-	}
-	if c.Track != string(track) {
-		return fmt.Errorf("cursor track mismatch")
-	}
-	return nil
 }
 
 func zsetTrackPageOlder(score int64, member string, cursor trackpage.Cursor, cursorSeen *bool) bool {

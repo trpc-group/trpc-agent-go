@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -42,21 +41,15 @@ func (c *Client) GetTrackEventPage(
 	if err := trackpage.ValidateRequest(req); err != nil {
 		return nil, err
 	}
-	meta, ok, err := c.getTrackEventPageSessionMeta(ctx, req.Key)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return &session.TrackEventPage{Track: req.Track}, nil
-	}
 	var cursor trackpage.Cursor
 	hasCursor := req.Cursor != ""
 	if hasCursor {
+		var err error
 		cursor, err = trackpage.Decode(req.Cursor)
 		if err != nil {
 			return nil, err
 		}
-		if err := trackpage.ValidateBinding(cursor, TrackEventPageCursorKind, req.Key, req.Track, meta.CreatedAt); err != nil {
+		if err := trackpage.ValidateBinding(cursor, TrackEventPageCursorKind, req.Key, req.Track); err != nil {
 			return nil, err
 		}
 	}
@@ -64,7 +57,7 @@ func (c *Client) GetTrackEventPage(
 	if err != nil {
 		return nil, err
 	}
-	entries, err := hashIdxTrackEventPageEntries(req, meta.CreatedAt, rows)
+	entries, err := hashIdxTrackEventPageEntries(req, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -73,24 +66,6 @@ func (c *Client) GetTrackEventPage(
 		Entries: entries,
 		HasMore: hasMore,
 	}, nil
-}
-
-func (c *Client) getTrackEventPageSessionMeta(
-	ctx context.Context,
-	key session.Key,
-) (sessionMeta, bool, error) {
-	metaJSON, err := c.client.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
-	if err == redis.Nil {
-		return sessionMeta{}, false, nil
-	}
-	if err != nil {
-		return sessionMeta{}, false, fmt.Errorf("get session meta: %w", err)
-	}
-	var meta sessionMeta
-	if err := json.Unmarshal(metaJSON, &meta); err != nil {
-		return sessionMeta{}, false, fmt.Errorf("unmarshal session meta: %w", err)
-	}
-	return meta, true, nil
 }
 
 func (c *Client) queryTrackEventPageRows(
@@ -174,7 +149,6 @@ func (c *Client) queryTrackEventPageRows(
 
 func hashIdxTrackEventPageEntries(
 	req session.TrackEventPageRequest,
-	sessionCreatedAt time.Time,
 	rows []trackEventPageRow,
 ) ([]session.TrackEventPageEntry, error) {
 	entries := make([]session.TrackEventPageEntry, 0, len(rows))
@@ -183,7 +157,6 @@ func hashIdxTrackEventPageEntries(
 			TrackEventPageCursorKind,
 			req.Key,
 			req.Track,
-			sessionCreatedAt,
 			row.score,
 			row.id,
 		)

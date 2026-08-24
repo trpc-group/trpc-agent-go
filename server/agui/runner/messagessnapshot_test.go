@@ -453,6 +453,7 @@ func TestMessagesSnapshotPageAttachesMetadataAndTrimsToUserBoundary(t *testing.T
 				newTrackPageEntry(t, newTrackEvent(t, aguievents.NewTextMessageContentEvent("assistant-1", "hello")), "assistant-content-cursor"),
 				newTrackPageEntry(t, newTrackEvent(t, aguievents.NewTextMessageEndEvent("assistant-1")), "assistant-end-cursor"),
 			},
+			HasMore: true,
 		},
 	}
 	tracker, err := track.New(svc)
@@ -494,7 +495,7 @@ func TestMessagesSnapshotPageAttachesMetadataAndTrimsToUserBoundary(t *testing.T
 	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
 }
 
-func TestMessagesSnapshotPageWithoutUserBoundaryKeepsCursor(t *testing.T) {
+func TestMessagesSnapshotPageWithoutUserBoundaryAdvancesCursor(t *testing.T) {
 	svc := &testSessionService{
 		trackPage: &session.TrackEventPage{
 			Track: track.TrackAGUI,
@@ -527,8 +528,47 @@ func TestMessagesSnapshotPageWithoutUserBoundaryKeepsCursor(t *testing.T) {
 	raw, ok := snapshot.GetBaseEvent().RawEvent.(source.SnapshotMetadata)
 	require.True(t, ok)
 	require.NotNil(t, raw.Page)
-	assert.Equal(t, "request-cursor", raw.Page.Cursor)
-	assert.True(t, raw.Page.HasMore)
+	assert.Equal(t, "assistant-start-cursor", raw.Page.Cursor)
+	assert.False(t, raw.Page.HasMore)
+}
+
+func TestMessagesSnapshotPageOldestUserBoundaryDoesNotForceHasMore(t *testing.T) {
+	svc := &testSessionService{
+		trackPage: &session.TrackEventPage{
+			Track: track.TrackAGUI,
+			Entries: []session.TrackEventPageEntry{
+				newTrackPageEntry(t, newTrackEvent(t, aguievents.NewTextMessageContentEvent("old-assistant", "orphan")), "orphan-cursor"),
+				newTrackPageEntry(t, newUserMessageTrackEvent(t, "user-1", "hi"), "user-cursor"),
+				newTrackPageEntry(t, newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))), "assistant-start-cursor"),
+				newTrackPageEntry(t, newTrackEvent(t, aguievents.NewTextMessageContentEvent("assistant-1", "hello")), "assistant-content-cursor"),
+			},
+		},
+	}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner:            noopBaseRunner{},
+		userIDResolver:    NewOptions().UserIDResolver,
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		sessionService:    svc,
+		tracker:           tracker,
+		messagesSnapshotSessionPageResolver: func(ctx context.Context, input *adapter.RunAgentInput, key session.Key) (*MessagesSnapshotPageRequest, error) {
+			return &MessagesSnapshotPageRequest{Cursor: "request-cursor", EventLimit: 4}, nil
+		},
+	}
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Len(t, snapshot.Messages, 2)
+	raw, ok := snapshot.GetBaseEvent().RawEvent.(source.SnapshotMetadata)
+	require.True(t, ok)
+	require.NotNil(t, raw.Page)
+	assert.Equal(t, "user-cursor", raw.Page.Cursor)
+	assert.False(t, raw.Page.HasMore)
 }
 
 func TestMessagesSnapshotPageResolverErrorEmitsRunError(t *testing.T) {
