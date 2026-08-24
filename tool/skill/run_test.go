@@ -5632,6 +5632,64 @@ func TestRunTool_EphemeralWorkspaceReleasedAfterInvocation(t *testing.T) {
 		"session-scoped workspace must not be released after each call")
 }
 
+// TestRunTool_EphemeralWorkspaceReleasedOnFailure is the production-path
+// failure regression: when workspace acquisition succeeds but the program
+// run (or staging) fails, the ephemeral workspace acquired for the empty-ID
+// session must still be cleaned up and removed from the registry instead
+// of leaking behind the failed invocation.
+func TestRunTool_EphemeralWorkspaceReleasedOnFailure(t *testing.T) {
+	manager := &ephemeralProbeManager{}
+	eng := &managedEngine{
+		m: manager,
+		f: &stubFS{},
+		r: &stubRunner{err: fmt.Errorf("program failed")},
+	}
+	rt := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: eng},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{
+				WorkspaceSkillDir: path.Join(
+					codeexecutor.DirSkills,
+					testSkillName,
+				),
+			}, nil
+		})),
+	)
+	args, err := jsonMarshal(runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+	})
+	require.NoError(t, err)
+
+	eInv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+	)
+	eCtx := agent.NewInvocationContext(context.Background(), eInv)
+
+	_, err = rt.Call(eCtx, args)
+	require.Error(t, err, "the failing runner must surface an error")
+	require.Len(t, manager.creates, 1,
+		"the ephemeral workspace is acquired before the failure")
+	require.Len(t, manager.cleans, 1,
+		"ephemeral workspace must be released when the invocation fails")
+	require.Equal(t, manager.creates[0], manager.cleans[0])
+
+	// Registry removal: re-acquiring the same ephemeral key must create
+	// a fresh workspace instead of reusing the released entry.
+	reHandle, err := rt.wsr.CreateWorkspaceHandle(eCtx, eng, testSkillName)
+	require.NoError(t, err)
+	require.True(t, rt.wsr.IsEphemeralHandle(reHandle))
+	require.Len(t, manager.creates, 2,
+		"released registry entry must not be reused")
+	defer func() {
+		require.NoError(t, rt.wsr.ReleaseEphemeralHandle(eCtx, reHandle))
+	}()
+}
+
 // failCleanupManager records cleanup attempts but always fails, so
 // tests can exercise releaseEphemeralWorkspace's warn branch.
 type failCleanupManager struct {

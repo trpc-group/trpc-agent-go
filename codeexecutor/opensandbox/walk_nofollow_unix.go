@@ -36,6 +36,21 @@ func isSkippableOpenErr(err error) bool {
 		errors.Is(err, syscall.ENOTDIR)
 }
 
+// openDirNoFollow opens the directory at path without following a
+// symlink at the final component, mirroring openChildNoFollow's
+// semantics for the walk root: a root swapped for a symlink after the
+// caller's Stat fails closed (ELOOP) instead of being traversed.
+// Intermediate path components are resolved normally by the kernel,
+// so legitimately symlinked ancestors keep working.
+func openDirNoFollow(path string) (*os.File, error) {
+	fd, err := syscall.Open(path,
+		syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), path), nil
+}
+
 // openChildNoFollow opens the entry name relative to the pinned parent
 // directory handle dirF without following symlinks, and returns the
 // handle together with a Stat of the opened file.

@@ -36,6 +36,24 @@ func isSkippableOpenErr(err error) bool {
 		errors.Is(err, errSymlinkRefused)
 }
 
+// openDirNoFollow is the fallback root open for platforms without
+// openat(2): it opens path and then refuses when the final component
+// turned out to be a symlink, mirroring the unix O_NOFOLLOW semantics
+// for the walk root.
+func openDirNoFollow(path string) (*os.File, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if li, lierr := os.Lstat(path); lierr == nil && li.Mode()&os.ModeSymlink != 0 {
+		f.Close()
+		return nil, fmt.Errorf(
+			"opensandbox: %s is a symlink; refusing to follow: %w", path, errSymlinkRefused,
+		)
+	}
+	return f, nil
+}
+
 // openChildNoFollow is the fallback for platforms without openat(2)
 // (notably Windows). It opens the child by pathname and cannot pin the
 // parent, so it re-checks with Lstat after the open and refuses when

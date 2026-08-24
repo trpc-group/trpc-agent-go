@@ -491,6 +491,13 @@ func (t *RunTool) Call(
 	}
 	prepared, rr, err := t.prepareAndRun(ctx, eng, in)
 	if err != nil {
+		// The workspace may have been acquired before the failure
+		// (skill staging, input staging, or the program run itself);
+		// release the ephemeral one so a failed invocation does not
+		// leak a backend workspace. Invalidated (stale) handles were
+		// zeroed inside prepareAndRun; session-scoped handles are
+		// untouched by releaseEphemeralWorkspace.
+		t.releaseEphemeralWorkspace(ctx, prepared.handle)
 		return nil, err
 	}
 	// Ephemeral (invalid empty-ID session) workspaces have no session-level
@@ -663,6 +670,9 @@ func (t *RunTool) prepareAndRun(
 	rr, err := t.runPrepared(prepared, in)
 	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
 		t.invalidateWorkspaceHandle(prepared.handle)
+		// The invalidated handle is dead: zero it so callers do not
+		// release (or reuse) a registry entry that no longer exists.
+		prepared.handle = codeexecutor.WorkspaceHandle{}
 		if codeexecutor.IsWorkspaceRetrySafe(err) {
 			prepared, err = t.prepareWorkspaceForRunWithEngine(ctx, eng, in)
 			if err == nil {
@@ -670,6 +680,7 @@ func (t *RunTool) prepareAndRun(
 			}
 			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
 				t.invalidateWorkspaceHandle(prepared.handle)
+				prepared.handle = codeexecutor.WorkspaceHandle{}
 			}
 		}
 	}
@@ -699,16 +710,23 @@ func (t *RunTool) prepareWorkspaceForRunWithEngine(
 	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
 		if acquired {
 			t.wsr.InvalidateWorkspaceHandle(prepared.handle)
+			// The invalidated handle is dead: zero it so callers do not
+			// release (or reuse) a registry entry that no longer exists.
+			prepared.handle = codeexecutor.WorkspaceHandle{}
 		}
 		if codeexecutor.IsWorkspaceRetrySafe(err) {
 			prepared, acquired, err = t.prepareWorkspaceAttempt(ctx, eng, in)
 			if errors.Is(err, codeexecutor.ErrWorkspaceStale) && acquired {
 				t.wsr.InvalidateWorkspaceHandle(prepared.handle)
+				prepared.handle = codeexecutor.WorkspaceHandle{}
 			}
 		}
 	}
 	if err != nil {
-		return workspaceRunPreparation{}, err
+		// Preserve the acquired (still-registered) handle so the caller
+		// can release the ephemeral workspace on the failure path; only
+		// invalidated handles were zeroed above.
+		return prepared, err
 	}
 	return prepared, nil
 }

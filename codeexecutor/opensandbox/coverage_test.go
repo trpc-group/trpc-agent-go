@@ -563,3 +563,39 @@ func TestPutDirectory_UnreadableFileFailsStaging(t *testing.T) {
 		"an unreadable file must fail staging, not be silently skipped")
 	assert.Contains(t, err.Error(), "during staging")
 }
+
+// TestPutDirectory_SymlinkedRootRejected is the root-entry variant of the
+// pinned-handle traversal regression: a staging root that is itself a
+// symlink to an external directory must fail closed instead of being
+// followed, so no external file is uploaded.
+func TestPutDirectory_SymlinkedRootRejected(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "ws-symlinked-root", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	ext := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ext, "leak.txt"), []byte("secret"), 0o600,
+	))
+	host := filepath.Join(t.TempDir(), "staging-root")
+	if err := os.Symlink(ext, host); err != nil {
+		t.Skipf("cannot create symlink in this environment: %v", err)
+	}
+
+	err = exec.rt.PutDirectory(context.Background(), ws, host, "staged")
+	require.Error(t, err,
+		"a symlinked staging root must be rejected, not followed")
+	assert.Contains(t, err.Error(), "walk and upload")
+
+	// No external file may have been uploaded through the link.
+	m.mu.Lock()
+	_, leaked := m.files["leak.txt"]
+	m.mu.Unlock()
+	assert.False(t, leaked, "external file must not be uploaded through the symlinked root")
+}

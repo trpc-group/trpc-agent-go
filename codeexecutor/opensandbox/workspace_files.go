@@ -292,7 +292,14 @@ func (r *workspaceRuntime) walkAndUpload(
 	hostRoot, destRoot, wsBase string,
 ) error {
 	uploader := &batchUploader{r: r, sb: sb, destRoot: destRoot, wsBase: wsBase}
-	rootF, err := os.Open(hostRoot)
+	// Open the root itself with no-follow semantics: a root pathname
+	// swapped for a symlink to an external directory between the
+	// caller's Stat and this open must fail closed instead of being
+	// traversed. Intermediate path components are still resolved by
+	// the kernel (matching the pinned-handle child opens), so
+	// legitimately symlinked ancestors keep working; only a symlink at
+	// the final component — hostRoot itself — is rejected.
+	rootF, err := openDirNoFollow(hostRoot)
 	if err != nil {
 		return fmt.Errorf("opensandbox: walk and upload %s: %w", hostRoot, err)
 	}
