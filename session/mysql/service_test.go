@@ -1372,7 +1372,7 @@ func TestCleanupExpiredSessions_TombstonesDuplicateActiveStates(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestTombstoneDuplicateSessionStatesDeletesDuplicateOnLegacyPrecisionConflict(t *testing.T) {
+func TestTombstoneDuplicateSessionStatesRetriesDistinctTombstoneOnLegacyPrecisionConflict(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -1380,6 +1380,7 @@ func TestTombstoneDuplicateSessionStatesDeletesDuplicateOnLegacyPrecisionConflic
 	s := createTestService(t, db)
 	ctx := context.Background()
 	now := time.Now()
+	deletedAtBase := now.Truncate(time.Second)
 	key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
 
 	mock.ExpectBegin()
@@ -1391,16 +1392,16 @@ func TestTombstoneDuplicateSessionStatesDeletesDuplicateOnLegacyPrecisionConflic
 			AddRow(int64(12), key.UserID).
 			AddRow(int64(13), key.UserID))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
-		WithArgs(now.Add(-time.Second), int64(12), key.UserID).
+		WithArgs(deletedAtBase.Add(-time.Second), int64(12), key.UserID).
 		WillReturnError(&mysql.MySQLError{
 			Number:  sqldb.MySQLErrDuplicateEntry,
 			Message: "duplicate active session state",
 		})
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
-		WithArgs(int64(12), key.UserID).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-2*time.Second), int64(12), key.UserID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
-		WithArgs(now.Add(-2*time.Second), int64(13), key.UserID).
+		WithArgs(deletedAtBase.Add(-3*time.Second), int64(13), key.UserID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -1608,6 +1609,7 @@ func TestSoftDeleteSessionsFallsBackForLegacyStateDuplicates(t *testing.T) {
 
 	s := createTestService(t, db)
 	now := time.Now()
+	deletedAtBase := now.Truncate(time.Second)
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
 		WithArgs(now, "app-1", now).
@@ -1624,19 +1626,19 @@ func TestSoftDeleteSessionsFallsBackForLegacyStateDuplicates(t *testing.T) {
 			AddRow(int64(102), "user-1").
 			AddRow(int64(201), "user-2"))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
-		WithArgs(now, int64(101), "user-1").
+		WithArgs(deletedAtBase.Add(-time.Second), int64(101), "user-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
-		WithArgs(now, int64(102), "user-1").
+		WithArgs(deletedAtBase.Add(-2*time.Second), int64(102), "user-1").
 		WillReturnError(&mysql.MySQLError{
 			Number:  sqldb.MySQLErrDuplicateEntry,
 			Message: "duplicate active session state",
 		})
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
-		WithArgs(int64(102), "user-1").
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-3*time.Second), int64(102), "user-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
-		WithArgs(now, int64(201), "user-2").
+		WithArgs(deletedAtBase.Add(-4*time.Second), int64(201), "user-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
