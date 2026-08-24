@@ -136,12 +136,21 @@ func New(opts ...Option) (*A2AAgent, error) {
 		}
 
 		agent.agentCard = agentCard
-	} else {
-		card := *agent.agentCard
-		card.SupportedInterfaces = slices.Clone(card.SupportedInterfaces)
-		agent.agentCard = &card
 	}
-	agent.agentCard.NormalizeInterfaces()
+	card := *agent.agentCard
+	card.SupportedInterfaces = slices.Clone(card.SupportedInterfaces)
+	agent.agentCard = &card
+
+	selectionCard := agent.agentCard
+	if len(agent.agentCard.Signatures) > 0 {
+		normalizedCard := *agent.agentCard
+		normalizedCard.SupportedInterfaces = slices.Clone(normalizedCard.SupportedInterfaces)
+		normalizedCard.AdditionalInterfaces = slices.Clone(normalizedCard.AdditionalInterfaces)
+		normalizedCard.SecurityRequirements = slices.Clone(normalizedCard.SecurityRequirements)
+		normalizedCard.Security = slices.Clone(normalizedCard.Security)
+		selectionCard = &normalizedCard
+	}
+	selectionCard.NormalizeInterfaces()
 
 	if agent.name == "" {
 		agent.name = agent.agentCard.Name
@@ -150,14 +159,16 @@ func New(opts ...Option) (*A2AAgent, error) {
 		agent.description = agent.agentCard.Description
 	}
 	resolvedURL, clientOptions, err := resolveClientConfig(
-		agent.agentCard,
+		selectionCard,
 		agentURL,
 		agent.extraA2AOptions,
 	)
 	if err != nil {
 		return nil, err
 	}
-	agent.agentCard.URL = resolvedURL
+	if len(agent.agentCard.Signatures) == 0 {
+		agent.agentCard.URL = resolvedURL
+	}
 	a2aClient, err := client.NewA2AClient(resolvedURL, clientOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create A2A client for %s: %w", resolvedURL, err)
@@ -1106,7 +1117,7 @@ func (r *A2AAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
-// GetAgentCard returns the resolved agent card
+// GetAgentCard returns the agent card.
 func (r *A2AAgent) GetAgentCard() *server.AgentCard {
 	return r.agentCard
 }

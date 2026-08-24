@@ -694,3 +694,34 @@ func TestNewDoesNotMutateSuppliedAgentCardInterfaceBackingArray(t *testing.T) {
 		t.Fatalf("normalized primary URL = %q, want legacy URL", got)
 	}
 }
+
+func TestNewPreservesSignedAgentCardPayload(t *testing.T) {
+	card := &protocolserver.AgentCard{
+		Name: "remote",
+		URL:  "https://legacy.example.com",
+		SupportedInterfaces: []protocolserver.AgentInterface{
+			{
+				URL:             "https://grpc.example.com",
+				ProtocolBinding: "GRPC",
+				ProtocolVersion: protocol.ProtocolVersionV1,
+			},
+			{
+				URL:             "https://jsonrpc.example.com",
+				ProtocolBinding: protocol.ProtocolBindingJSONRPC,
+				ProtocolVersion: protocol.ProtocolVersionV1,
+			},
+		},
+		SecurityRequirements: protocol.SecurityRequirements{{"taskApiKey": {}}},
+		Signatures: []protocolserver.AgentCardSignature{{
+			Protected: "header",
+			Signature: "signature",
+		}},
+	}
+	remote, err := New(WithAgentCard(card))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if got := remote.GetAgentCard(); !reflect.DeepEqual(got, card) {
+		t.Fatalf("stored signed Agent Card = %#v, want original payload %#v", got, card)
+	}
+}

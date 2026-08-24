@@ -62,7 +62,7 @@ func main() {
 	if *timeout <= 0 {
 		log.Fatal("timeout must be greater than zero")
 	}
-	if apiKey == "" {
+	if strings.TrimSpace(apiKey) == "" {
 		log.Fatal("A2A_TASK_API_KEY is required")
 	}
 
