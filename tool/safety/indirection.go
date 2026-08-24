@@ -57,11 +57,60 @@ func scanCommandIndirectionAtDepth(
 			findings = append(findings, scanFindExecutionActions(
 				policy, argv[1:], depth+1,
 			)...)
+		case "rsync", "rsync.exe":
+			findings = append(findings, scanRsyncExecutionOptions(
+				policy, argv[1:], depth+1,
+			)...)
 		case "ssh", "scp", "sftp", "ssh.exe", "scp.exe", "sftp.exe":
 			findings = append(findings, scanSSHExecutionOptions(
 				policy, strings.TrimSuffix(base, ".exe"), argv[1:], depth+1,
 			)...)
 		}
+	}
+	return findings
+}
+
+func scanRsyncExecutionOptions(
+	policy Policy,
+	args []string,
+	depth int,
+) []Finding {
+	var findings []Finding
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			break
+		}
+		value := ""
+		matched := false
+		missing := false
+		switch {
+		case arg == "--rsync-path":
+			matched = true
+			if index+1 < len(args) {
+				value = args[index+1]
+				index++
+			} else {
+				missing = true
+			}
+		case strings.HasPrefix(arg, "--rsync-path="):
+			matched = true
+			value = strings.TrimPrefix(arg, "--rsync-path=")
+		}
+		if !matched {
+			continue
+		}
+		findings = append(findings, newFinding(
+			DecisionNeedsHumanReview, RiskHigh, "command.indirect_execution",
+			"rsync --rsync-path executes an embedded remote command",
+			"remove --rsync-path or review the complete remote command",
+		))
+		if missing || strings.TrimSpace(value) == "" {
+			continue
+		}
+		findings = append(findings, scanNestedCommandAtDepth(
+			policy, value, depth,
+		)...)
 	}
 	return findings
 }

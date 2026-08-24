@@ -916,10 +916,13 @@ func schemaHasExecutionPropertyAt(
 		if pathKey(name) {
 			return true, true
 		}
+		if networkKey(name) {
+			return true, true
+		}
 		switch strings.ToLower(name) {
 		case "command", "commands", "cmd", "script", "scripts", "shell",
-			"args", "argv", "code", "code_blocks", "url", "uri", "endpoint",
-			"destination", "cwd", "workdir", "working_directory", "env", "environment":
+			"args", "argv", "code", "code_blocks", "cwd", "workdir",
+			"working_directory", "env", "environment":
 			return true, true
 		}
 		if hasExecution, safe := schemaHasExecutionPropertyAt(

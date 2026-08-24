@@ -1961,12 +1961,24 @@ func commandKey(key string) bool {
 }
 
 func networkKey(key string) bool {
-	switch strings.ToLower(key) {
-	case "url", "uri", "endpoint", "destination":
-		return true
-	default:
-		return false
+	candidates := []string{
+		strings.ToLower(strings.TrimSpace(strings.ReplaceAll(key, "-", "_"))),
+		normalizedArgumentKey(key),
 	}
+	for _, candidate := range candidates {
+		switch candidate {
+		case "url", "uri", "endpoint", "destination", "host", "hostname",
+			"host_name", "server", "server_name", "servername":
+			return true
+		default:
+			if strings.HasSuffix(candidate, "_host") ||
+				strings.HasSuffix(candidate, "_hostname") ||
+				strings.HasSuffix(candidate, "_server") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func pathKey(key string) bool {

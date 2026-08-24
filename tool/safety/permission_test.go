@@ -1487,6 +1487,146 @@ func TestPermissionPolicyScansSecretsInOpaqueArguments(t *testing.T) {
 	})
 }
 
+func TestPermissionPolicyScansHostNetworkProperties(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	closedDeclaration := &tool.Declaration{
+		Name: "read_host",
+		InputSchema: &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: false,
+			Required:             []string{"hostname"},
+			Properties: map[string]*tool.Schema{
+				"hostname": {Type: "string"},
+			},
+		},
+	}
+	for _, tc := range []struct {
+		name        string
+		declaration *tool.Declaration
+		metadata    tool.ToolMetadata
+		arguments   string
+		want        tool.PermissionAction
+		wantRule    string
+	}{
+		{
+			name: "open world host",
+			declaration: &tool.Declaration{
+				Name: "remote_lookup", InputSchema: &tool.Schema{
+					Type:                 "object",
+					AdditionalProperties: true,
+					Properties: map[string]*tool.Schema{
+						"host": {Type: "string"},
+					},
+				},
+			},
+			metadata:  tool.ToolMetadata{OpenWorld: true},
+			arguments: `{"host":"evil.example"}`,
+			want:      tool.PermissionActionDeny,
+			wantRule:  "network.destination",
+		},
+		{
+			name:        "closed read only hostname",
+			declaration: closedDeclaration,
+			metadata:    tool.ToolMetadata{ReadOnly: true},
+			arguments:   `{"hostname":"evil.example"}`,
+			want:        tool.PermissionActionDeny,
+			wantRule:    "network.destination",
+		},
+		{
+			name: "open world server allowlisted",
+			declaration: &tool.Declaration{
+				Name: "remote_lookup", InputSchema: &tool.Schema{
+					Type:                 "object",
+					AdditionalProperties: true,
+				},
+			},
+			metadata:  tool.ToolMetadata{OpenWorld: true},
+			arguments: `{"server":"api.github.com"}`,
+			want:      tool.PermissionActionAllow,
+		},
+		{
+			name: "open world camel host",
+			declaration: &tool.Declaration{
+				Name: "remote_lookup", InputSchema: &tool.Schema{
+					Type:                 "object",
+					AdditionalProperties: true,
+				},
+			},
+			metadata:  tool.ToolMetadata{OpenWorld: true},
+			arguments: `{"remoteHost":"evil.example"}`,
+			want:      tool.PermissionActionDeny,
+			wantRule:  "network.destination",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+				Tool:      &decodeDeclarationTool{declaration: tc.declaration},
+				ToolName:  tc.declaration.Name,
+				Arguments: []byte(tc.arguments),
+				Metadata:  tc.metadata,
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyScansRsyncRemoteProgram(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"rsync"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	for _, tc := range []struct {
+		name     string
+		command  string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "attached destructive remote program",
+			command:  `rsync --rsync-path='rm -rf .' api.github.com:/src out`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:     "separate destructive remote program",
+			command:  `rsync --rsync-path "rm -rf ." api.github.com:/src out`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.rm_rf",
+		},
+		{
+			name:     "missing remote program",
+			command:  `rsync --rsync-path`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "command.indirect_execution",
+		},
+		{
+			name:    "safe remote program still reviewed",
+			command: `rsync --rsync-path='rsync' api.github.com:/src out`,
+			want:    tool.PermissionActionAsk,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments := mustJSON(t, map[string]string{"command": tc.command})
+			decision, err := policy.CheckToolPermission(
+				context.Background(), workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
 func TestPermissionPolicyMarksAdditionalOpaqueSecretsRedacted(t *testing.T) {
 	const token = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
 	sink := &recordingAuditSink{}

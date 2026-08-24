@@ -683,6 +683,10 @@ func TestGuardScansCommandExecutionIndirection(t *testing.T) {
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
 		{
+			"rsync remote program", safety.Request{Command: `rsync --rsync-path='rm -rf .' api.github.com:/src out`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
 			"tar separate checkpoint exec", safety.Request{Command: `tar --checkpoint=1 --checkpoint-action 'exec=rm -rf .' -cf out.tar .`},
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
