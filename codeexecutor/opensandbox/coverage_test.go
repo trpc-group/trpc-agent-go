@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	osb "github.com/alibaba/OpenSandbox/sdks/sandbox/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -309,4 +310,201 @@ func TestRunBash_ExecNilFailsClosed(t *testing.T) {
 
 	_, err := exec.rt.runBash(context.Background(), "echo hi", 0)
 	require.Error(t, err)
+}
+
+// --- walkDir: ReadDir failure on a non-directory handle
+
+func TestWalkDir_ReadDirError(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "plain.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o644))
+
+	f, err := os.Open(filePath)
+	require.NoError(t, err)
+	defer f.Close()
+
+	// A regular-file handle cannot be enumerated; walkDir must
+	// surface the ReadDir error instead of silently uploading.
+	err = walkDir(context.Background(), &batchUploader{}, f, tmpDir, "/tmp/dest")
+	require.Error(t, err)
+}
+
+// --- walkDir: nested visitDir CreateDirectory failure fails closed
+
+func TestPutDirectory_NestedVisitDirFails(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	// Fail CreateDirectory calls after the first success so the
+	// destination root is created but the nested "sub" directory
+	// visit fails during the walk.
+	m.createDirFailAfter = 1
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "ws-nested-visitdir", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "sub")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(subDir, "f.txt"), []byte("x"), 0o644))
+
+	err = exec.rt.PutDirectory(context.Background(), ws, tmpDir, "staged")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create directory")
+}
+
+// --- visitFile: ancestor resolution failure
+
+func TestVisitFile_AncestorResolveFails(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	// Every /command fails, so resolveSandboxAncestor's bash probe
+	// errors inside visitFile.
+	m.commandShouldFail = true
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	rt := exec.ensureRuntime()
+
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "f.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o644))
+	opened, err := os.Open(filePath)
+	require.NoError(t, err)
+	defer opened.Close()
+	info, err := opened.Stat()
+	require.NoError(t, err)
+
+	u := &batchUploader{r: rt, destRoot: "/tmp/run/ws-visitfile", wsBase: "/tmp/run/ws-visitfile"}
+	err = u.visitFile(context.Background(), tmpDir, "/tmp/run/ws-visitfile", filePath, opened, info)
+	require.Error(t, err)
+}
+
+// --- visitFile: parent directory creation failure
+
+func TestVisitFile_ParentCreateFails(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	// /directories fails; the readlink/test -e probes used by
+	// resolveSandboxAncestor still succeed.
+	m.createDirShouldFail = true
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	rt := exec.ensureRuntime()
+	sb, err := rt.sandbox()
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "sub")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+	filePath := filepath.Join(subDir, "f.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o644))
+	opened, err := os.Open(filePath)
+	require.NoError(t, err)
+	defer opened.Close()
+	info, err := opened.Stat()
+	require.NoError(t, err)
+
+	// rel = sub/f.txt, so the remote parent is destRoot/sub, which is
+	// neither destRoot nor wsBase and must be created — and fails.
+	u := &batchUploader{r: rt, sb: sb, destRoot: "/tmp/run/ws-visitfile", wsBase: "/tmp/run/ws-visitfile"}
+	err = u.visitFile(context.Background(), tmpDir, "/tmp/run/ws-visitfile", filePath, opened, info)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create directory")
+}
+
+// zeroModeFileInfo delegates to the wrapped FileInfo but reports mode
+// 0, so visitFile's 0o644 default can be exercised without creating a
+// file whose permissions would forbid opening it.
+type zeroModeFileInfo struct{ os.FileInfo }
+
+func (zeroModeFileInfo) Mode() os.FileMode { return 0 }
+
+// --- visitFile: zero file mode falls back to 0o644
+
+func TestVisitFile_ZeroModeDefaultsTo0644(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	rt := exec.ensureRuntime()
+
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "f.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o644))
+	opened, err := os.Open(filePath)
+	require.NoError(t, err)
+	defer opened.Close()
+	realInfo, err := opened.Stat()
+	require.NoError(t, err)
+
+	// File directly under destRoot == wsBase: no parent CreateDirectory
+	// is attempted, so no sandbox call is needed and the entry is just
+	// queued with the default mode.
+	wsBase := "/tmp/run/ws-zeromode"
+	u := &batchUploader{r: rt, destRoot: wsBase, wsBase: wsBase}
+	err = u.visitFile(
+		context.Background(), tmpDir, wsBase, filePath,
+		opened, zeroModeFileInfo{realInfo},
+	)
+	require.NoError(t, err)
+	require.Len(t, u.entries, 1)
+	assert.Equal(t, osb.OctalMode(0o644), u.entries[0].Options.Metadata.Mode)
+	u.closePending()
+}
+
+// --- flush: empty batch is a no-op
+
+func TestFlush_EmptyBatchNoop(t *testing.T) {
+	u := &batchUploader{}
+	require.NoError(t, u.flush(context.Background()))
+}
+
+// --- flush: re-validation (ancestor resolution) failure
+
+func TestFlush_RevalidationFails(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	// Every /command fails, so the ancestor resolution performed
+	// right before upload errors and flush must abort.
+	m.commandShouldFail = true
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	rt := exec.ensureRuntime()
+	u := &batchUploader{r: rt, wsBase: "/tmp/run/ws-flush"}
+	u.entries = append(u.entries, osb.UploadFileEntry{
+		Options: osb.UploadFileOptions{
+			Metadata: osb.FileMetadata{Path: "/tmp/run/ws-flush/f.txt"},
+		},
+	})
+	err := u.flush(context.Background())
+	require.Error(t, err)
+}
+
+// --- flush: batch symlink removal failure
+
+func TestFlush_RemoveSymlinksFails(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	// Fail only the symlink-removal script; the ancestor-resolution
+	// probes keep succeeding so the failure is attributed to the
+	// removal step.
+	m.commandFailContains = "rm -f"
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	rt := exec.ensureRuntime()
+	u := &batchUploader{r: rt, wsBase: "/tmp/run/ws-flush-rm"}
+	u.entries = append(u.entries, osb.UploadFileEntry{
+		Options: osb.UploadFileOptions{
+			Metadata: osb.FileMetadata{Path: "/tmp/run/ws-flush-rm/f.txt"},
+		},
+	})
+	err := u.flush(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "batch remove symlinks")
 }

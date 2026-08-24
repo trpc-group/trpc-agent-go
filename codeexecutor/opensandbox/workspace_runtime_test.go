@@ -120,6 +120,20 @@ type mockOpenSandboxServer struct {
 	// generic error (not "timeout") so runBash returns a non-timeout
 	// error. Used to test removeSymlinksBatch / chmod error paths.
 	commandShouldFail bool
+	// commandFailContains, when non-empty, makes /command return a 500
+	// with a generic error when the request command contains the
+	// substring. Used to fail one specific infrastructure command (for
+	// example the batch symlink removal) while readlink/test -e probes
+	// keep succeeding.
+	commandFailContains string
+	// createDirFailAfter, when > 0, makes POST /directories return 500
+	// once that many successful CreateDirectory calls have been served.
+	// Used to fail only the nested directory creation during directory
+	// staging while the destination root itself is created fine.
+	createDirFailAfter int
+	// createDirOK counts successful CreateDirectory calls served so
+	// createDirFailAfter can fail later calls only.
+	createDirOK int
 }
 
 func newMockServer(t *testing.T) *mockOpenSandboxServer {
@@ -469,6 +483,7 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	runErr := m.runError
 	forceInfraExit := m.forceInfraExit
 	commandShouldFail := m.commandShouldFail
+	commandFailContains := m.commandFailContains
 	m.mu.Unlock()
 
 	// runBash calls (CreateWorkspace mkdir, Cleanup rm, StageDirectory
@@ -484,6 +499,16 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	// non-timeout error. Used to test removeSymlinksBatch, chmod, and
 	// readlink error paths.
 	if commandShouldFail {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"code":"internal_error","message":"injected failure"}`)
+		return
+	}
+
+	// commandFailContains fails only the commands whose body contains
+	// the configured substring, so a single infrastructure command can
+	// be broken while the rest of the flow keeps working.
+	if commandFailContains != "" && strings.Contains(req.Command, commandFailContains) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `{"code":"internal_error","message":"injected failure"}`)
@@ -740,6 +765,12 @@ func (m *mockOpenSandboxServer) handleCreateDirectory(w http.ResponseWriter, r *
 	_ = json.Unmarshal(body, &dirs)
 	m.mu.Lock()
 	shouldFail := m.createDirShouldFail
+	if !shouldFail && m.createDirFailAfter > 0 && m.createDirOK >= m.createDirFailAfter {
+		shouldFail = true
+	}
+	if !shouldFail {
+		m.createDirOK++
+	}
 	for p := range dirs {
 		m.dirsCreated = append(m.dirsCreated, p)
 		m.existingPaths[p] = true

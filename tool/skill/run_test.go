@@ -5632,6 +5632,58 @@ func TestRunTool_EphemeralWorkspaceReleasedAfterInvocation(t *testing.T) {
 		"session-scoped workspace must not be released after each call")
 }
 
+// failCleanupManager records cleanup attempts but always fails, so
+// tests can exercise releaseEphemeralWorkspace's warn branch.
+type failCleanupManager struct {
+	cleans []string
+}
+
+func (m *failCleanupManager) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	return codeexecutor.Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (m *failCleanupManager) Cleanup(
+	_ context.Context,
+	ws codeexecutor.Workspace,
+) error {
+	m.cleans = append(m.cleans, ws.ID)
+	return fmt.Errorf("cleanup failed")
+}
+
+// TestRunTool_ReleaseEphemeralWorkspace_NilGuardAndWarnOnFailure covers
+// the nil-receiver guard and the warning branch when the underlying
+// release fails: the error must be logged, not propagated or panicked.
+func TestRunTool_ReleaseEphemeralWorkspace_NilGuardAndWarnOnFailure(t *testing.T) {
+	// Nil receiver and nil resolver must be safe no-ops.
+	var rt *RunTool
+	rt.releaseEphemeralWorkspace(context.Background(), codeexecutor.WorkspaceHandle{})
+	rt = &RunTool{}
+	rt.releaseEphemeralWorkspace(context.Background(), codeexecutor.WorkspaceHandle{})
+
+	// A failing cleanup surfaces as a logged warning only.
+	manager := &failCleanupManager{}
+	eng := &managedEngine{
+		m: manager,
+		f: &stubFS{},
+		r: &stubRunner{res: codeexecutor.RunResult{ExitCode: 0}},
+	}
+	rt = NewRunTool(&mockRepo{}, &engineExec{eng: eng})
+
+	inv := agent.NewInvocation(agent.WithInvocationSession(&session.Session{}))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	handle, err := rt.wsr.CreateWorkspaceHandle(ctx, eng, testSkillName)
+	require.NoError(t, err)
+	require.True(t, rt.wsr.IsEphemeralHandle(handle))
+
+	rt.releaseEphemeralWorkspace(ctx, handle)
+	require.Len(t, manager.cleans, 1,
+		"release must still attempt cleanup when it fails")
+}
+
 func TestSkillStagingHelpers_EarlyReturns(t *testing.T) {
 	rt := &RunTool{}
 	ctx := context.Background()
