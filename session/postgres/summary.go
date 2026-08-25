@@ -147,26 +147,7 @@ func (s *Service) GetSessionSummaryText(
 	// Query database with specified filterKey.
 	filterKey := isummary.GetFilterKeyFromOptions(opts...)
 
-	var summaryText string
-	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
-		if rows.Next() {
-			var summaryBytes []byte
-			if err := rows.Scan(&summaryBytes); err != nil {
-				return err
-			}
-			var sum session.Summary
-			if err := json.Unmarshal(summaryBytes, &sum); err != nil {
-				return fmt.Errorf("unmarshal summary failed: %w", err)
-			}
-			summaryText = sum.Summary
-		}
-		return nil
-	}, fmt.Sprintf(`SELECT summary FROM %s
-		WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
-		AND (expires_at IS NULL OR expires_at > $5)
-		AND updated_at >= $6
-		AND deleted_at IS NULL`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, filterKey, time.Now(), sess.CreatedAt)
+	summaryText, err := s.getSessionSummaryText(ctx, key, filterKey, sess.CreatedAt)
 
 	if err == nil && summaryText != "" {
 		return summaryText, true
@@ -174,29 +155,65 @@ func (s *Service) GetSessionSummaryText(
 
 	// If requested filterKey not found, try fallback to full-session summary.
 	if filterKey != session.SummaryFilterKeyAllContents {
-		err = s.pgClient.Query(ctx, func(rows *sql.Rows) error {
-			if rows.Next() {
-				var summaryBytes []byte
-				if err := rows.Scan(&summaryBytes); err != nil {
-					return err
-				}
-				var sum session.Summary
-				if err := json.Unmarshal(summaryBytes, &sum); err != nil {
-					return fmt.Errorf("unmarshal summary failed: %w", err)
-				}
-				summaryText = sum.Summary
-			}
-			return nil
-		}, fmt.Sprintf(`SELECT summary FROM %s
-			WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
-			AND (expires_at IS NULL OR expires_at > $5)
-			AND updated_at >= $6
-			AND deleted_at IS NULL`, s.tableSessionSummaries),
-			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now(), sess.CreatedAt)
+		summaryText, err = s.getSessionSummaryText(
+			ctx,
+			key,
+			session.SummaryFilterKeyAllContents,
+			sess.CreatedAt,
+		)
 		if err == nil && summaryText != "" {
 			return summaryText, true
 		}
 	}
 
 	return "", false
+}
+
+func (s *Service) getSessionSummaryText(
+	ctx context.Context,
+	key session.Key,
+	filterKey string,
+	sessionCreatedAt time.Time,
+) (string, error) {
+	var summaryText string
+	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
+		if !rows.Next() {
+			return nil
+		}
+
+		var summaryBytes []byte
+		var updatedAt time.Time
+		if err := rows.Scan(&summaryBytes, &updatedAt); err != nil {
+			return err
+		}
+		var sum session.Summary
+		if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+			return fmt.Errorf("unmarshal summary failed: %w", err)
+		}
+		if !summaryIsCurrentForSession(&sum, updatedAt, sessionCreatedAt) {
+			return nil
+		}
+		summaryText = sum.Summary
+		return nil
+	}, fmt.Sprintf(`SELECT summary, updated_at FROM %s
+		WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND filter_key = $4
+		AND (expires_at IS NULL OR expires_at > $5)
+		AND deleted_at IS NULL`, s.tableSessionSummaries),
+		key.AppName, key.UserID, key.SessionID, filterKey, time.Now())
+	return summaryText, err
+}
+
+func summaryIsCurrentForSession(
+	sum *session.Summary,
+	storedUpdatedAt time.Time,
+	sessionCreatedAt time.Time,
+) bool {
+	if sessionCreatedAt.IsZero() {
+		return true
+	}
+	updatedAt := sum.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = storedUpdatedAt
+	}
+	return !updatedAt.Before(sessionCreatedAt)
 }

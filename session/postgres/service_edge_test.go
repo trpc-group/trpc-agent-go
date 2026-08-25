@@ -1087,7 +1087,7 @@ func TestGetSummariesList_FiltersStaleAndPreservesBoundary(t *testing.T) {
 		"updated_at",
 	}).
 		AddRow("sess1", "filter1", freshBytes, cutoffAt).
-		AddRow("sess1", "filter2", staleBytes, createdAt.Add(-time.Minute))
+		AddRow("sess1", "filter2", staleBytes, createdAt.Add(time.Hour))
 
 	mock.ExpectQuery(
 		"SELECT session_id, filter_key, summary, updated_at FROM session_summaries",

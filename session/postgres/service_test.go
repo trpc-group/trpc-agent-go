@@ -641,14 +641,23 @@ func TestGetSession_Success(t *testing.T) {
 		SessionID: "test-session",
 	}
 
-	// Mock session state
+	location := time.FixedZone("UTC+8", 8*60*60)
+	createdAt := time.Date(2026, 8, 25, 17, 0, 0, 0, location)
+	updatedAt := createdAt.Add(time.Minute)
+	databaseCreatedAt := time.Date(2026, 8, 25, 17, 0, 0, 0, time.UTC)
+	databaseUpdatedAt := databaseCreatedAt.Add(time.Minute)
+
+	// Mock session state. PostgreSQL TIMESTAMP scans the original wall-clock
+	// fields as UTC, while the JSON envelope preserves the original offset.
 	sessState := &SessionState{
-		ID:    "test-session",
-		State: session.StateMap{"key1": []byte("value1")},
+		ID:        "test-session",
+		State:     session.StateMap{"key1": []byte("value1")},
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
 	}
 	stateBytes, _ := json.Marshal(sessState)
 	stateRows := sqlmock.NewRows([]string{"state", "created_at", "updated_at"}).
-		AddRow(stateBytes, time.Now(), time.Now())
+		AddRow(stateBytes, databaseCreatedAt, databaseUpdatedAt)
 
 	mock.ExpectQuery("SELECT state, created_at, updated_at FROM session_states").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg()).
@@ -696,6 +705,8 @@ func TestGetSession_Success(t *testing.T) {
 	assert.Equal(t, []byte("value1"), sess.State["key1"])
 	assert.Equal(t, 1, len(sess.Events))
 	assert.Equal(t, "Hello, world!", sess.Events[0].Response.Choices[0].Message.Content)
+	assert.True(t, sess.CreatedAt.Equal(createdAt))
+	assert.True(t, sess.UpdatedAt.Equal(databaseUpdatedAt))
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
