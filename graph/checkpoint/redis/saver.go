@@ -366,7 +366,10 @@ func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS st
 				return nil, err
 			}
 			if beforeScore > 0 {
-				members, err = s.client.ZRangeByScore(ctx, key, &redis.ZRangeBy{
+				// Reverse order (newest first) keeps List consistent with the
+				// CheckpointSaver contract and the inmemory/sqlite savers when
+				// combined with filter.Limit; see issue #2503.
+				members, err = s.client.ZRevRangeByScore(ctx, key, &redis.ZRangeBy{
 					Min: "0",
 					Max: fmt.Sprintf("(%d", beforeScore),
 				}).Result()

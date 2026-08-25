@@ -898,7 +898,8 @@ func TestRedis_List_WithBeforeAndCrossNamespace(t *testing.T) {
 		assert.True(t, tu.Checkpoint.ID == ck1.ID || tu.Checkpoint.ID == ck2.ID)
 	}
 
-	// Namespace-specific list with Before(ck3) in nsA should return only ck1
+	// Namespace-specific list with Before(ck3) in nsA should return
+	// checkpoints older than ck3, newest first (CheckpointSaver contract).
 	cfgNsA := graph.CreateCheckpointConfig(lineageID, "", "nsA")
 	filter2 := graph.NewCheckpointFilter().WithBefore(graph.CreateCheckpointConfig(lineageID, ck3.ID, "nsA"))
 	tuples2, err := saver.List(ctx, cfgNsA, filter2)
@@ -908,7 +909,7 @@ func TestRedis_List_WithBeforeAndCrossNamespace(t *testing.T) {
 		assert.NotEqual(t, tu.Checkpoint.ID, ck3.ID)
 	}
 	if len(tuples2) > 0 {
-		assert.Equal(t, ck1.ID, tuples2[0].Checkpoint.ID)
+		assert.Equal(t, ck2.ID, tuples2[0].Checkpoint.ID)
 	}
 }
 
@@ -1391,4 +1392,70 @@ func TestRedis_DeleteLineage_SecondExecError(t *testing.T) {
 	// Drop writes table to force second delete to fail
 	err = saver.DeleteLineage(ctx, "ln-del2")
 	require.NoError(t, err)
+}
+
+func TestRedisCheckpointSaverListBeforeFilterOrder(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	lineageID := "test-lineage-before-order"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
+
+	// Create 3 checkpoints with strictly increasing timestamps.
+	base := time.Now().Add(-time.Hour)
+	var configs []map[string]any
+	for i := 0; i < 3; i++ {
+		checkpoint := graph.NewCheckpoint(
+			map[string]any{"step": i},
+			map[string]int64{"step": int64(i + 1)},
+			map[string]map[string]int64{},
+		)
+		checkpoint.Timestamp = base.Add(time.Duration(i) * time.Minute)
+		metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, i)
+
+		req := graph.PutRequest{
+			Config:      config,
+			Checkpoint:  checkpoint,
+			Metadata:    metadata,
+			NewVersions: map[string]int64{"step": int64(i + 1)},
+		}
+		updatedConfig, err := saver.Put(ctx, req)
+		require.NoError(t, err)
+		configs = append(configs, updatedConfig)
+	}
+
+	idOf := func(idx int) string {
+		return graph.GetCheckpointID(configs[idx])
+	}
+
+	t.Run("before filter with limit returns newest checkpoint before the cursor", func(t *testing.T) {
+		// Cursor at ck3: the newest checkpoint before it is ck2, not the
+		// oldest one (ck1). See issue #2503.
+		filter := &graph.CheckpointFilter{Before: configs[2], Limit: 1}
+		got, err := saver.List(ctx, config, filter)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, idOf(1), got[0].Checkpoint.ID)
+	})
+
+	t.Run("before filter without limit returns descending order", func(t *testing.T) {
+		filter := &graph.CheckpointFilter{Before: configs[2]}
+		got, err := saver.List(ctx, config, filter)
+		require.NoError(t, err)
+		require.Len(t, got, 2)
+		assert.Equal(t, idOf(1), got[0].Checkpoint.ID)
+		assert.Equal(t, idOf(0), got[1].Checkpoint.ID)
+	})
+
+	t.Run("before filter at oldest checkpoint returns empty", func(t *testing.T) {
+		filter := &graph.CheckpointFilter{Before: configs[0]}
+		got, err := saver.List(ctx, config, filter)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
 }
