@@ -44,10 +44,20 @@ type mockAgent struct {
 	invoked           bool
 }
 
-func (m *mockAgent) Info() agent.Info                { return agent.Info{Name: m.name} }
-func (m *mockAgent) SubAgents() []agent.Agent        { return nil }
+// Info returns the mock agent's configured name.
+func (m *mockAgent) Info() agent.Info { return agent.Info{Name: m.name} }
+
+// SubAgents reports no sub-agents; transfer targets are resolved through
+// the parent agent instead.
+func (m *mockAgent) SubAgents() []agent.Agent { return nil }
+
+// FindSubAgent always reports no match, as expected for a leaf agent.
 func (m *mockAgent) FindSubAgent(string) agent.Agent { return nil }
-func (m *mockAgent) Tools() []tool.Tool              { return m.tools }
+
+// Tools returns the mock agent's registered tools.
+func (m *mockAgent) Tools() []tool.Tool { return m.tools }
+
+// Run records invocation observations and optionally emits a single event.
 func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
 	ch := make(chan *event.Event, 1)
 	go func() {
@@ -69,30 +79,50 @@ func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 // parentAgent implements FindSubAgent
 type parentAgent struct{ child agent.Agent }
 
-func (p *parentAgent) Info() agent.Info         { return agent.Info{Name: "parent"} }
+// Info returns the fixed parent agent name.
+func (p *parentAgent) Info() agent.Info { return agent.Info{Name: "parent"} }
+
+// SubAgents reports the single configured child agent.
 func (p *parentAgent) SubAgents() []agent.Agent { return []agent.Agent{p.child} }
+
+// FindSubAgent returns the child agent when its name matches.
 func (p *parentAgent) FindSubAgent(name string) agent.Agent {
 	if p.child != nil && p.child.Info().Name == name {
 		return p.child
 	}
 	return nil
 }
+
+// Tools returns no tools for the parent agent.
 func (p *parentAgent) Tools() []tool.Tool { return nil }
+
+// Run completes immediately without emitting any events.
 func (p *parentAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
 	ch := make(chan *event.Event)
 	close(ch)
 	return ch, nil
 }
 
+// runErrorAgent is an agent whose Run always fails, used to exercise the
+// target-run error path of transfer handling.
 type runErrorAgent struct {
 	name  string
 	calls int
 }
 
-func (a *runErrorAgent) Info() agent.Info                { return agent.Info{Name: a.name} }
-func (a *runErrorAgent) SubAgents() []agent.Agent        { return nil }
+// Info returns the agent's configured name.
+func (a *runErrorAgent) Info() agent.Info { return agent.Info{Name: a.name} }
+
+// SubAgents reports no sub-agents.
+func (a *runErrorAgent) SubAgents() []agent.Agent { return nil }
+
+// FindSubAgent always reports no match.
 func (a *runErrorAgent) FindSubAgent(string) agent.Agent { return nil }
-func (a *runErrorAgent) Tools() []tool.Tool              { return nil }
+
+// Tools returns no tools.
+func (a *runErrorAgent) Tools() []tool.Tool { return nil }
+
+// Run counts the call and returns a fixed error.
 func (a *runErrorAgent) Run(
 	context.Context,
 	*agent.Invocation,

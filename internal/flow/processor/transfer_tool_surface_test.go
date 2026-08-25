@@ -103,6 +103,9 @@ func TestTransferTargetToolSurfaceAppliesInheritedFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, child, targetInv.Agent)
 
+	// Effective's second return value classifies user tools (nil for
+	// mockAgent, which does not implement user-tool tracking); it is not
+	// an error, so there is no error to assert here.
 	surface, _ := toolsurface.Effective(context.Background(), targetInv)
 	names := make([]string, 0, len(surface))
 	for _, tl := range surface {
