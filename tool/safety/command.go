@@ -153,8 +153,18 @@ func isLongOptionAbbreviation(value, full string) bool {
 		strings.HasPrefix(full, value)
 }
 
+// commandBase returns a platform-neutral name for semantic dispatch. Tool
+// requests can reference Windows executables regardless of the guard host, so
+// it strips the executable suffixes that shellsafe recognizes on Windows.
 func commandBase(command string) string {
-	return strings.ToLower(path.Base(strings.ReplaceAll(command, "\\", "/")))
+	base := strings.ToLower(path.Base(strings.ReplaceAll(command, "\\", "/")))
+	extension := path.Ext(base)
+	switch extension {
+	case ".exe", ".cmd", ".bat", ".com", ".ps1":
+		return strings.TrimSuffix(base, extension)
+	default:
+		return base
+	}
 }
 
 func matchesReviewCommand(segments [][]string, configured []string) bool {

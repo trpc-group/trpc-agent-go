@@ -1047,6 +1047,77 @@ func TestPermissionPolicyInspectsAllowlistedGoFlags(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyScansWindowsExecutableNames(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		command  string
+		allowed  string
+		envKey   string
+		envValue string
+		wantRule string
+	}{
+		{
+			name:     "python inline program",
+			command:  `python.exe -c 'import os; os.system("rm -rf .")'`,
+			allowed:  "python.exe",
+			wantRule: "code.process_bridge",
+		},
+		{
+			name:     "go tool wrapper",
+			command:  "go.exe test ./...",
+			allowed:  "go.exe",
+			envKey:   "GOFLAGS",
+			envValue: "-toolexec=./work/runner",
+			wantRule: "environment.code_injection",
+		},
+		{
+			name:     "git editor",
+			command:  "git.exe status",
+			allowed:  "git.exe",
+			envKey:   "EDITOR",
+			envValue: "./helper",
+			wantRule: "environment.code_injection",
+		},
+		{
+			name:     "git visual editor",
+			command:  "git.exe status",
+			allowed:  "git.exe",
+			envKey:   "VISUAL",
+			envValue: "./helper",
+			wantRule: "environment.code_injection",
+		},
+		{
+			name:     "git pager",
+			command:  "git.exe status",
+			allowed:  "git.exe",
+			envKey:   "PAGER",
+			envValue: "./helper",
+			wantRule: "environment.code_injection",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			guardPolicy := DefaultPolicy()
+			guardPolicy.AllowedCommands = []string{tc.allowed}
+			arguments := map[string]any{"command": tc.command}
+			if tc.envKey != "" {
+				guardPolicy.EnvAllowlist = append(
+					guardPolicy.EnvAllowlist, tc.envKey,
+				)
+				arguments["env"] = map[string]string{tc.envKey: tc.envValue}
+			}
+			policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(mustJSON(t, arguments))),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, tc.wantRule)
+		})
+	}
+}
+
 func TestPermissionPolicyScansGitConfigEnvURLRewrites(t *testing.T) {
 	guardPolicy := DefaultPolicy()
 	guardPolicy.AllowedCommands = []string{"git"}
