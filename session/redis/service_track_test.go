@@ -237,6 +237,94 @@ func TestService_GetTrackEventPage_ReadsLegacyZSetWithoutSessionState(t *testing
 	assert.NotContains(t, cursor.ID, "secret-newer")
 }
 
+func TestService_GetTrackEventPageRoutesCursorByKind(t *testing.T) {
+	tests := []struct {
+		name string
+		mode CompatMode
+	}{
+		{name: "hashidx", mode: CompatModeNone},
+		{name: "zset", mode: CompatModeTransition},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			defer cleanup()
+			service, err := NewService(
+				WithRedisClientURL(redisURL),
+				WithCompatMode(tt.mode),
+			)
+			require.NoError(t, err)
+			defer service.Close()
+
+			ctx := context.Background()
+			key := session.Key{AppName: "testapp", UserID: "user123", SessionID: "session-page-route"}
+			sess, err := service.CreateSession(ctx, key, session.StateMap{})
+			require.NoError(t, err)
+			baseTime := time.Now().Add(-time.Minute)
+			require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+				Track:     "alpha",
+				Payload:   json.RawMessage(`"older"`),
+				Timestamp: baseTime,
+			}))
+			require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+				Track:     "alpha",
+				Payload:   json.RawMessage(`"newer"`),
+				Timestamp: baseTime.Add(time.Second),
+			}))
+
+			page, err := service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+				Key:        key,
+				Track:      "alpha",
+				EventLimit: 1,
+			})
+			require.NoError(t, err)
+			require.Len(t, page.Entries, 1)
+			assert.True(t, page.HasMore)
+			require.JSONEq(t, `"newer"`, string(page.Entries[0].Event.Payload))
+
+			next, err := service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+				Key:        key,
+				Track:      "alpha",
+				Cursor:     page.Entries[0].Cursor,
+				EventLimit: 1,
+			})
+			require.NoError(t, err)
+			require.Len(t, next.Entries, 1)
+			assert.False(t, next.HasMore)
+			require.JSONEq(t, `"older"`, string(next.Entries[0].Event.Payload))
+		})
+	}
+}
+
+func TestService_GetTrackEventPageRejectsUnknownCursorKind(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	key := session.Key{AppName: "testapp", UserID: "user123", SessionID: "session-page-route"}
+	cursor, err := trackpage.Encode(trackpage.Cursor{
+		Kind:      "unknown",
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		SessionID: key.SessionID,
+		Track:     "alpha",
+		CreatedAt: time.Now().UnixNano(),
+		ID:        "1",
+	})
+	require.NoError(t, err)
+
+	_, err = service.GetTrackEventPage(context.Background(), session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		Cursor:     cursor,
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cursor kind mismatch")
+}
+
 func TestService_GetTrackEvents_EmptyAndErrors(t *testing.T) {
 	t.Run("invalid key", func(t *testing.T) {
 		redisURL, cleanup := setupTestRedis(t)
