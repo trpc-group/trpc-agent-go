@@ -101,6 +101,7 @@ func TestClient_GetTrackEventPageOrdersDoubleDigitSameScore(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NotEmpty(t, page.Entries)
+		require.LessOrEqual(t, len(page.Entries), 5)
 
 		payloads := make([]string, 0, len(page.Entries))
 		for _, entry := range page.Entries {
