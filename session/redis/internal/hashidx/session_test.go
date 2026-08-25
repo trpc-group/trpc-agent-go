@@ -842,6 +842,87 @@ func TestClient_GetSession_EventLimitBackfillsMissingPayload(t *testing.T) {
 	assert.Equal(t, []string{"e0", "e2"}, []string{sess.Events[0].ID, sess.Events[1].ID})
 }
 
+func TestClient_GetSession_EventLimitWithoutUserAnchor(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "no-user-anchor"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	baseTime := time.Now()
+	for i := 0; i < 3; i++ {
+		evt := makeTestEvent(fmt.Sprintf("e%d", i), baseTime.Add(time.Duration(i)*time.Second))
+		evt.Response.Choices[0].Message.Role = model.RoleAssistant
+		require.NoError(t, c.AppendEvent(ctx, key, evt))
+	}
+
+	sess, err := c.GetSession(ctx, key, 2, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Empty(t, sess.Events)
+}
+
+func TestClient_GetSession_EventLimitSkipsCorruptedAnchorPayload(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "bad-anchor"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	baseTime := time.Now()
+	require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent("e0", baseTime)))
+	require.NoError(t, rdb.HSet(ctx, c.keys.EventDataKey(key), "bad", "not-json").Err())
+	require.NoError(t, rdb.ZAdd(ctx, c.keys.EventTimeIndexKey(key), redis.Z{
+		Score:  float64(baseTime.Add(time.Second).UnixNano()),
+		Member: "bad",
+	}).Err())
+	for i := 2; i < 4; i++ {
+		evt := makeTestEvent(fmt.Sprintf("e%d", i), baseTime.Add(time.Duration(i)*time.Second))
+		evt.Response.Choices[0].Message.Role = model.RoleAssistant
+		require.NoError(t, c.AppendEvent(ctx, key, evt))
+	}
+
+	sess, err := c.GetSession(ctx, key, 2, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 3)
+	assert.Equal(t, []string{"e0", "e2", "e3"}, []string{
+		sess.Events[0].ID, sess.Events[1].ID, sess.Events[2].ID,
+	})
+}
+
+func TestClient_GetSession_AfterTimeBackfillsScoreCandidate(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "after-time-backfill"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	baseTime := time.Unix(1_700_000_000, 0)
+	afterTime := baseTime.Add(time.Second)
+	valid := makeTestEvent("valid", afterTime)
+	stale := makeTestEvent("stale", baseTime)
+	validJSON, err := json.Marshal(valid)
+	require.NoError(t, err)
+	staleJSON, err := json.Marshal(stale)
+	require.NoError(t, err)
+	require.NoError(t, rdb.HSet(ctx, c.keys.EventDataKey(key),
+		valid.ID, validJSON, stale.ID, staleJSON).Err())
+	require.NoError(t, rdb.ZAdd(ctx, c.keys.EventTimeIndexKey(key),
+		redis.Z{Score: float64(afterTime.UnixNano()), Member: valid.ID},
+		redis.Z{Score: float64(afterTime.Add(time.Second).UnixNano()), Member: stale.ID},
+	).Err())
+
+	sess, err := c.GetSession(ctx, key, 1, afterTime)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 1)
+	assert.Equal(t, valid.ID, sess.Events[0].ID)
+}
+
 func TestClient_GetSession_EventLimitBeyondLuaStackLimit(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())
@@ -1131,6 +1212,30 @@ func TestLoadSessionComplete_LuaError(t *testing.T) {
 	_, err = c.loadSessionComplete(ctx, key, metaJSON, 0, time.Time{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "load session data")
+}
+
+func TestLoadSessionDataViaLua_RedisError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "state-lua-err"}
+
+	mr.Close()
+
+	_, err := c.loadSessionDataViaLua(ctx, key)
+	require.Error(t, err)
+}
+
+func TestLoadLatestUserEvent_RedisError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "anchor-lua-err"}
+
+	mr.Close()
+
+	_, _, err := c.loadLatestUserEvent(ctx, key)
+	require.Error(t, err)
 }
 
 func TestGetSession_WithUserState(t *testing.T) {
