@@ -83,6 +83,15 @@ MCP annotations do not have matching fields for `SearchOrRead` or
 `ConcurrencySafe`. The framework also does not treat `readOnlyHint` or
 `idempotentHint` as a concurrency-safety signal.
 
+`ToolMetadata.ConcurrencySafe` is descriptive and does not affect scheduling.
+It says that independent calls to the *same* tool can overlap, and setting it
+to `false` does **not** keep a tool off the parallel path — `ToolMetadata` uses
+plain `bool` fields, so the framework cannot distinguish "set to false" from
+"never set", and acting on it would take every tool that publishes unrelated
+metadata off that path too. To influence scheduling, implement
+`tool.ConcurrencyAware`; see
+[Declining to share a turn](#declining-to-share-a-turn).
+
 Permission policy is checked after the model requests a tool, after JSON repair
 and before-tool callbacks have finalized arguments, and immediately before the
 framework executes it:
@@ -2865,6 +2874,47 @@ The configuration has no effect unless parallel tool execution is enabled.
 Non-positive group limits are ignored. Each tool name may appear in only one
 positive-limit group; duplicate membership causes
 `WithToolConcurrencyConfig` to panic.
+
+#### Declining to share a turn
+
+Some tools cannot run beside other calls at all. The parallel path hands each
+call its own invocation view, cloned before any of them start, so a tool whose
+observable effect is a mutation of that invocation rather than its returned
+result loses that mutation when the view is discarded. A tool contending for a
+shared working directory or an external process has the same problem for a
+different reason.
+
+Such a tool implements `tool.ConcurrencyAware`:
+
+```go
+type ConcurrencyAware interface {
+    IsConcurrencySafe() bool
+}
+```
+
+A Function Tool declares it with an option:
+
+```go
+exclusive := function.NewFunctionTool(
+    applyPatch,
+    function.WithName("apply_patch"),
+    function.WithDescription("Apply a patch to the workspace."),
+    function.WithConcurrencySafe(false),
+)
+```
+
+Returning `false` is an **objection**, and it applies to the whole turn: both
+parallel schedulers — the LLMAgent function-call processor and the Graph Tools
+node — admit a turn's calls to the parallel path only when *no* call in it
+objects. A single objecting call therefore keeps every call in that turn
+sequential, rather than splitting the turn into parallel and serial runs. This
+preserves the ordering the model asked for without introducing a second
+execution schedule.
+
+Returning `true`, or not implementing the interface at all, raises no
+objection: it is the default, and it promises nothing about any specific
+sibling. The framework never infers an objection from `ToolMetadata`, so an
+existing tool that publishes metadata keeps the scheduling it has today.
 
 **Parallel execution effect:**
 
