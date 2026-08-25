@@ -3822,178 +3822,26 @@ func TestFindLastToolResultMessageIndex(t *testing.T) {
 	}
 }
 
-// TestApplyCacheControl_ToolResultBreakpoint verifies that a turn's tool output is
-// marked in the request that carries it, alongside the last-assistant breakpoint,
-// and that a trailing per-request note is left outside the cached prefix.
-func TestApplyCacheControl_ToolResultBreakpoint(t *testing.T) {
-	m := New("claude-3-5-sonnet", WithCacheMessages(true))
-
-	messages := []anthropic.MessageParam{
-		{Role: "user", Content: []anthropic.ContentBlockParamUnion{
-			{OfText: &anthropic.TextBlockParam{Text: "task"}},
-		}},
-		{Role: "assistant", Content: []anthropic.ContentBlockParamUnion{
-			{OfText: &anthropic.TextBlockParam{Text: "reading files"}},
-		}},
-		anthropic.NewUserMessage(
-			anthropic.NewToolResultBlock("call_1", "file one", false),
-			anthropic.NewToolResultBlock("call_2", "file two", false),
-		),
-		{Role: "user", Content: []anthropic.ContentBlockParamUnion{
-			{OfText: &anthropic.TextBlockParam{Text: "[Turn 3/40]"}},
-		}},
-	}
-
-	_, _, got := m.applyCacheControl(nil, nil, messages)
-
-	assert.Equal(t, "ephemeral", string(got[1].Content[0].OfText.CacheControl.Type),
-		"last assistant message should be marked")
-	assert.Equal(t, "ephemeral", string(got[2].Content[1].OfToolResult.CacheControl.Type),
-		"last tool result block should be marked")
-	assert.Empty(t, string(got[2].Content[0].OfToolResult.CacheControl.Type),
-		"only the final tool result block is marked")
-	assert.Empty(t, string(got[3].Content[0].OfText.CacheControl.Type),
-		"the trailing per-request note stays outside the prefix")
-}
-
-// TestGenerateContent_CacheBreakpointBudget verifies that this model's own
-// breakpoints never push a request past the four cache_control markers Anthropic
-// accepts, and that the tool-result breakpoint is the one given up when a
-// caller's top-level CacheControl claims the fourth slot from inside the request
-// callback.
-func TestGenerateContent_CacheBreakpointBudget(t *testing.T) {
-	toolResultTurn := []model.Message{
-		{Role: model.RoleSystem, Content: "system policy"},
-		{Role: model.RoleUser, Content: "read both files"},
-		{
-			Role: model.RoleAssistant,
-			ToolCalls: []model.ToolCall{
-				{ID: "call_1", Function: model.FunctionDefinitionParam{Name: "read", Arguments: []byte(`{}`)}},
-				{ID: "call_2", Function: model.FunctionDefinitionParam{Name: "read", Arguments: []byte(`{}`)}},
-			},
-		},
-		{Role: model.RoleTool, ToolID: "call_1", Content: "file one"},
-		{Role: model.RoleTool, ToolID: "call_2", Content: "file two"},
-		// A per-request note after the tool results: this is the block the
-		// API's automatic marker lands on, so it is a fifth breakpoint rather
-		// than a duplicate of the one on the tool results.
-		{Role: model.RoleUser, Content: "[Turn 3/40]"},
-	}
-
-	tests := []struct {
-		name             string
-		topLevel         bool
-		wantToolResult   bool
-		wantBreakpoints  int
-		wantLastAssistCC bool
-	}{
-		{
-			name:             "without top-level cache control the tool result is marked",
-			topLevel:         false,
-			wantToolResult:   true,
-			wantBreakpoints:  4,
-			wantLastAssistCC: true,
-		},
-		{
-			name:             "top-level cache control reclaims the tool-result slot",
-			topLevel:         true,
-			wantToolResult:   false,
-			wantBreakpoints:  4,
-			wantLastAssistCC: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var captured *anthropic.MessageNewParams
-
-			orig := model.DefaultNewHTTPClient
-			t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
-			model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
-				return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
-					h := make(http.Header)
-					h.Set("Content-Type", "application/json")
-					return &http.Response{
-						StatusCode: 200,
-						Body: io.NopCloser(strings.NewReader(`{"id":"m1","model":"claude",` +
-							`"role":"assistant","type":"message","stop_reason":"end_turn",` +
-							`"usage":{"input_tokens":1,"output_tokens":1},` +
-							`"content":[{"type":"text","text":"done"}]}`)),
-						Header: h,
-					}, nil
-				})}
-			}
-
-			m := New("claude-3-5-sonnet",
-				WithCacheSystemPrompt(true),
-				WithCacheTools(true),
-				WithCacheMessages(true),
-				WithChatRequestCallback(func(_ context.Context, req *anthropic.MessageNewParams) {
-					captured = req
-					if tt.topLevel {
-						req.CacheControl = anthropic.NewCacheControlEphemeralParam()
-					}
-				}),
-			)
-
-			ch, err := m.GenerateContent(context.Background(), &model.Request{
-				Messages: toolResultTurn,
-				Tools: map[string]tool.Tool{
-					"read": stubTool{decl: &tool.Declaration{
-						Name:        "read",
-						Description: "read a file",
-						InputSchema: &tool.Schema{Type: "object"},
-					}},
-				},
-			})
-			require.NoError(t, err)
-			for range ch {
-			}
-			require.NotNil(t, captured)
-
-			// convertMessages merges the two tool results into one user message,
-			// so the assembled request is [user, assistant, tool results, note].
-			require.Len(t, captured.Messages, 4)
-			toolResultMsg := captured.Messages[2]
-			require.NotNil(t, toolResultMsg.Content[len(toolResultMsg.Content)-1].OfToolResult)
-
-			marked := !param.IsOmitted(
-				toolResultMsg.Content[len(toolResultMsg.Content)-1].OfToolResult.CacheControl)
-			assert.Equal(t, tt.wantToolResult, marked,
-				"tool-result breakpoint presence")
-			assistant := captured.Messages[1].Content
-			assert.Equal(t, tt.wantLastAssistCC,
-				!param.IsOmitted(*assistant[len(assistant)-1].GetCacheControl()),
-				"the last-assistant breakpoint is kept either way")
-			assert.NotEmpty(t, captured.System[0].CacheControl.Type,
-				"the system breakpoint is kept either way")
-			assert.Equal(t, tt.wantBreakpoints, countCacheBreakpoints(captured),
-				"the request must never exceed the four breakpoints Anthropic accepts")
-			assert.LessOrEqual(t, countCacheBreakpoints(captured), cacheBreakpointLimit)
-		})
-	}
-}
-
-// TestGenerateContent_CallerOverSubscribesBreakpoints pins the edge of that
-// guarantee: it is bounded, and the boundary is deliberate.
+// captureFinalizedRequest builds a model from opts, runs GenerateContent against
+// a stub transport, and returns the Anthropic request as the model finished with
+// it — the request callback's edits included, and everything the model applies
+// after that callback included too.
 //
-// A callback that adds two markers of its own — top-level CacheControl and an
-// explicit marker on a message block — is over the limit on its own arithmetic:
-// three built-in breakpoints plus two is five, which was already a 400 before the
-// tool-result breakpoint existed. Releasing the tool-result slot returns the
-// count to exactly that pre-existing number and stops there.
-//
-// Going further would mean discarding either the caller's own placement or the
-// system and tools breakpoints. That trades an error naming the problem for a
-// silent cache regression, so the model leaves the caller's configuration alone
-// and lets the API reject it.
-func TestGenerateContent_CallerOverSubscribesBreakpoints(t *testing.T) {
-	var captured *anthropic.MessageNewParams
+// mutate stands in for a caller's own request callback and may be nil. It is
+// installed as the model's callback, so it must not be supplied through opts as
+// well: the model keeps one callback, and the last option wins.
+func captureFinalizedRequest(
+	t *testing.T,
+	request *model.Request,
+	mutate func(*anthropic.MessageNewParams),
+	opts ...Option,
+) *anthropic.MessageNewParams {
+	t.Helper()
 
 	orig := model.DefaultNewHTTPClient
 	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
 	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
-		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Client{Transport: rtFunc(func(*http.Request) (*http.Response, error) {
 			h := make(http.Header)
 			h.Set("Content-Type", "application/json")
 			return &http.Response{
@@ -4007,56 +3855,266 @@ func TestGenerateContent_CallerOverSubscribesBreakpoints(t *testing.T) {
 		})}
 	}
 
-	m := New("claude-3-5-sonnet",
-		WithCacheSystemPrompt(true),
-		WithCacheTools(true),
-		WithCacheMessages(true),
-		WithChatRequestCallback(func(_ context.Context, req *anthropic.MessageNewParams) {
-			captured = req
+	var captured *anthropic.MessageNewParams
+	opts = append(opts, WithChatRequestCallback(func(_ context.Context, req *anthropic.MessageNewParams) {
+		captured = req
+		if mutate != nil {
+			mutate(req)
+		}
+	}))
+
+	ch, err := New("claude-3-5-sonnet", opts...).GenerateContent(context.Background(), request)
+	require.NoError(t, err)
+	for range ch { //revive:disable-line:empty-block
+	}
+	require.NotNil(t, captured, "the request callback must have run")
+	return captured
+}
+
+// toolResultTurnMessages is a turn whose tool output is followed by a per-request
+// note. convertMessages merges the two tool results into one user message, so the
+// assembled request is [user, assistant, tool results, note].
+//
+// The trailing note is what makes this shape worth testing: it is the last
+// cacheable block, so it is where the API places the marker it adds in answer to
+// top-level CacheControl. That marker is therefore a breakpoint of its own rather
+// than a duplicate of the one on the tool results.
+func toolResultTurnMessages() []model.Message {
+	return []model.Message{
+		{Role: model.RoleSystem, Content: "system policy"},
+		{Role: model.RoleUser, Content: "read both files"},
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{ID: "call_1", Function: model.FunctionDefinitionParam{Name: "read", Arguments: []byte(`{}`)}},
+				{ID: "call_2", Function: model.FunctionDefinitionParam{Name: "read", Arguments: []byte(`{}`)}},
+			},
+		},
+		{Role: model.RoleTool, ToolID: "call_1", Content: "file one"},
+		{Role: model.RoleTool, ToolID: "call_2", Content: "file two"},
+		{Role: model.RoleUser, Content: "[Turn 3/40]"},
+	}
+}
+
+// readTool is the single tool the breakpoint tests declare, so that the tools
+// breakpoint has something to land on.
+func readTool() map[string]tool.Tool {
+	return map[string]tool.Tool{
+		"read": stubTool{decl: &tool.Declaration{
+			Name:        "read",
+			Description: "read a file",
+			InputSchema: &tool.Schema{Type: "object"},
+		}},
+	}
+}
+
+// TestGenerateContent_ToolResultBreakpoint verifies that a turn's tool output is
+// marked in the request that carries it, alongside the last-assistant breakpoint,
+// and that a trailing per-request note is left outside the cached prefix.
+//
+// It runs through GenerateContent rather than applyCacheControl because the
+// tool-result breakpoint is placed on the finalized request, after the request
+// callback has had its say about both the budget and the message list.
+func TestGenerateContent_ToolResultBreakpoint(t *testing.T) {
+	got := captureFinalizedRequest(t,
+		&model.Request{Messages: toolResultTurnMessages(), Tools: readTool()},
+		nil, WithCacheMessages(true))
+
+	require.Len(t, got.Messages, 4)
+	assistant := got.Messages[1].Content
+	assert.False(t, param.IsOmitted(*assistant[len(assistant)-1].GetCacheControl()),
+		"last assistant message should be marked")
+	assert.Equal(t, "ephemeral", string(got.Messages[2].Content[1].OfToolResult.CacheControl.Type),
+		"last tool result block should be marked")
+	assert.Empty(t, string(got.Messages[2].Content[0].OfToolResult.CacheControl.Type),
+		"only the final tool result block is marked")
+	assert.Empty(t, string(got.Messages[3].Content[0].OfText.CacheControl.Type),
+		"the trailing per-request note stays outside the prefix")
+	assert.Equal(t, 2, countCacheBreakpoints(got),
+		"system and tools caching are off, so these are the only two markers")
+}
+
+// TestGenerateContent_CacheBreakpointBudget verifies that this model's own
+// breakpoints never push a request past the cache_control markers Anthropic
+// accepts, and that the tool-result breakpoint is the one left unplaced when a
+// caller's top-level CacheControl claims the fourth slot from inside the request
+// callback.
+func TestGenerateContent_CacheBreakpointBudget(t *testing.T) {
+	tests := []struct {
+		name string
+		// topLevel is whether the callback turns on automatic caching, which
+		// costs a slot because the API answers it with a marker of its own.
+		topLevel        bool
+		wantToolResult  bool
+		wantBreakpoints int
+	}{
+		{
+			name:            "without top-level cache control the tool result is marked",
+			topLevel:        false,
+			wantToolResult:  true,
+			wantBreakpoints: 4,
+		},
+		{
+			name:            "top-level cache control claims the tool-result slot",
+			topLevel:        true,
+			wantToolResult:  false,
+			wantBreakpoints: 4,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			captured := captureFinalizedRequest(t,
+				&model.Request{Messages: toolResultTurnMessages(), Tools: readTool()},
+				func(req *anthropic.MessageNewParams) {
+					if tt.topLevel {
+						req.CacheControl = anthropic.NewCacheControlEphemeralParam()
+					}
+				},
+				WithCacheSystemPrompt(true), WithCacheTools(true), WithCacheMessages(true),
+			)
+
+			require.Len(t, captured.Messages, 4)
+			toolResultMsg := captured.Messages[2]
+			require.NotNil(t, toolResultMsg.Content[len(toolResultMsg.Content)-1].OfToolResult)
+
+			marked := !param.IsOmitted(
+				toolResultMsg.Content[len(toolResultMsg.Content)-1].OfToolResult.CacheControl)
+			assert.Equal(t, tt.wantToolResult, marked, "tool-result breakpoint presence")
+			assistant := captured.Messages[1].Content
+			assert.False(t, param.IsOmitted(*assistant[len(assistant)-1].GetCacheControl()),
+				"the last-assistant breakpoint is unconditional")
+			assert.NotEmpty(t, captured.System[0].CacheControl.Type,
+				"the system breakpoint is unconditional")
+			assert.Equal(t, tt.wantBreakpoints, countCacheBreakpoints(captured),
+				"the request must never exceed the breakpoints Anthropic accepts")
+			assert.LessOrEqual(t, countCacheBreakpoints(captured), cacheBreakpointLimit)
+		})
+	}
+}
+
+// TestGenerateContent_ToolResultBreakpointFollowsTheCallback covers a request
+// callback that rewrites the message list, on its own and together with spending
+// the last free slot.
+//
+// A marker placed during request construction survives neither move. A callback
+// that appends a tool result of its own leaves that marker on a message which is
+// no longer the newest tool output; a callback that turns on top-level
+// CacheControl claims the slot the marker was already occupying, putting the
+// request one over the limit and earning a 400. Choosing the message from the
+// finalized list, and only when a slot is still free, settles both.
+func TestGenerateContent_ToolResultBreakpointFollowsTheCallback(t *testing.T) {
+	// appendToolResult splices in a second tool-result message, unmarked, the
+	// way a caller adding tool output of its own would.
+	appendToolResult := func(req *anthropic.MessageNewParams) {
+		req.Messages = append(req.Messages,
+			anthropic.NewUserMessage(anthropic.NewToolResultBlock("call_3", "file three", false)))
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*anthropic.MessageNewParams)
+		// wantMarked is the message index that must carry the tool-result
+		// marker, or -1 when no slot was left for one.
+		wantMarked      int
+		wantBreakpoints int
+	}{
+		{
+			name:            "the marker follows the appended tool result",
+			mutate:          appendToolResult,
+			wantMarked:      4,
+			wantBreakpoints: 4,
+		},
+		{
+			name: "no marker at all once the callback spends the last slot",
+			mutate: func(req *anthropic.MessageNewParams) {
+				appendToolResult(req)
+				req.CacheControl = anthropic.NewCacheControlEphemeralParam()
+			},
+			wantMarked:      -1,
+			wantBreakpoints: 4,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := captureFinalizedRequest(t,
+				&model.Request{Messages: toolResultTurnMessages(), Tools: readTool()},
+				tt.mutate,
+				WithCacheSystemPrompt(true), WithCacheTools(true), WithCacheMessages(true),
+			)
+
+			// [user, assistant, tool results, note, appended tool result].
+			require.Len(t, got.Messages, 5)
+			for i, message := range got.Messages {
+				last := message.Content[len(message.Content)-1]
+				marked := !param.IsOmitted(*last.GetCacheControl())
+				switch i {
+				case 1:
+					assert.True(t, marked, "the last-assistant breakpoint is unconditional")
+				case tt.wantMarked:
+					assert.True(t, marked, "the newest tool result carries the marker")
+				default:
+					assert.False(t, marked, "message %d must not be marked", i)
+				}
+			}
+			assert.Equal(t, tt.wantBreakpoints, countCacheBreakpoints(got))
+			assert.LessOrEqual(t, countCacheBreakpoints(got), cacheBreakpointLimit,
+				"the request must never exceed the breakpoints Anthropic accepts")
+		})
+	}
+}
+
+// TestGenerateContent_CallerOverSubscribesBreakpoints pins the edge of that
+// guarantee: it is bounded, and the boundary is deliberate.
+//
+// A callback that adds two markers of its own — top-level CacheControl and an
+// explicit marker on a message block — is over the limit on its own arithmetic:
+// three unconditional breakpoints plus two is five, which was already a 400
+// before the tool-result breakpoint existed. Withholding the tool-result marker
+// returns the count to exactly that pre-existing number and stops there.
+//
+// Going further would mean discarding either the caller's own placement or the
+// system and tools breakpoints. That trades an error naming the problem for a
+// silent cache regression, so the model leaves the caller's configuration alone
+// and lets the API reject it.
+func TestGenerateContent_CallerOverSubscribesBreakpoints(t *testing.T) {
+	captured := captureFinalizedRequest(t,
+		&model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleSystem, Content: "system policy"},
+				{Role: model.RoleUser, Content: "read both files"},
+				{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{ID: "call_1", Function: model.FunctionDefinitionParam{Name: "read", Arguments: []byte(`{}`)}},
+					},
+				},
+				{Role: model.RoleTool, ToolID: "call_1", Content: "file one"},
+				{Role: model.RoleUser, Content: "[Turn 3/40]"},
+			},
+			Tools: readTool(),
+		},
+		func(req *anthropic.MessageNewParams) {
 			// Two markers of the caller's own: automatic placement, plus an
 			// explicit one on the first user turn.
 			req.CacheControl = anthropic.NewCacheControlEphemeralParam()
 			first := req.Messages[0].Content[0].OfText
 			require.NotNil(t, first)
 			first.CacheControl = anthropic.NewCacheControlEphemeralParam()
-		}),
+		},
+		WithCacheSystemPrompt(true), WithCacheTools(true), WithCacheMessages(true),
 	)
-
-	ch, err := m.GenerateContent(context.Background(), &model.Request{
-		Messages: []model.Message{
-			{Role: model.RoleSystem, Content: "system policy"},
-			{Role: model.RoleUser, Content: "read both files"},
-			{
-				Role: model.RoleAssistant,
-				ToolCalls: []model.ToolCall{
-					{ID: "call_1", Function: model.FunctionDefinitionParam{Name: "read", Arguments: []byte(`{}`)}},
-				},
-			},
-			{Role: model.RoleTool, ToolID: "call_1", Content: "file one"},
-			{Role: model.RoleUser, Content: "[Turn 3/40]"},
-		},
-		Tools: map[string]tool.Tool{
-			"read": stubTool{decl: &tool.Declaration{
-				Name:        "read",
-				Description: "read a file",
-				InputSchema: &tool.Schema{Type: "object"},
-			}},
-		},
-	})
-	require.NoError(t, err)
-	for range ch {
-	}
-	require.NotNil(t, captured)
 
 	toolResult := captured.Messages[2]
 	assert.True(t,
 		param.IsOmitted(toolResult.Content[len(toolResult.Content)-1].OfToolResult.CacheControl),
-		"the tool-result slot is released even though releasing it is not enough")
+		"the tool-result slot is left alone even though leaving it is not enough")
 
-	// Three built-in breakpoints plus the caller's two: the count this request
-	// would have had before the tool-result breakpoint existed.
+	// Three unconditional breakpoints plus the caller's two: the count this
+	// request would have had before the tool-result breakpoint existed.
 	assert.Equal(t, 5, countCacheBreakpoints(captured),
-		"the model gives back its own slot and leaves the caller's markers alone")
+		"the model withholds its own marker and leaves the caller's alone")
 	assert.False(t, param.IsOmitted(captured.CacheControl),
 		"the caller's top-level CacheControl is untouched")
 	assert.False(t, param.IsOmitted(*captured.Messages[0].Content[0].GetCacheControl()),
@@ -4065,150 +4123,66 @@ func TestGenerateContent_CallerOverSubscribesBreakpoints(t *testing.T) {
 		"the system breakpoint is not sacrificed to force a fit")
 }
 
-// TestClearCacheControlFromMessage covers the inverse of
-// applyCacheControlToMessages: it must clear the marker on the same block that
-// function would have marked — the last one able to carry one — whichever kind
-// that is, and leave a message it cannot address alone.
-func TestClearCacheControlFromMessage(t *testing.T) {
-	marked := anthropic.NewCacheControlEphemeralParam()
-
-	textBlock := func() anthropic.ContentBlockParamUnion {
-		return anthropic.ContentBlockParamUnion{
-			OfText: &anthropic.TextBlockParam{Text: "note", CacheControl: marked},
-		}
-	}
-	toolResultBlock := func() anthropic.ContentBlockParamUnion {
-		return anthropic.ContentBlockParamUnion{
-			OfToolResult: &anthropic.ToolResultBlockParam{ToolUseID: "call_1", CacheControl: marked},
-		}
-	}
-	toolUseBlock := func() anthropic.ContentBlockParamUnion {
-		return anthropic.ContentBlockParamUnion{
-			OfToolUse: &anthropic.ToolUseBlockParam{ID: "call_1", Name: "read", CacheControl: marked},
-		}
-	}
-	// Thinking blocks carry no cache control, so the loop has to walk past this
-	// one rather than stop at it.
-	thinkingBlock := func() anthropic.ContentBlockParamUnion {
-		return anthropic.ContentBlockParamUnion{
-			OfThinking: &anthropic.ThinkingBlockParam{Thinking: "considering", Signature: "sig"},
-		}
-	}
-
-	tests := []struct {
-		name    string
-		content []anthropic.ContentBlockParamUnion
-		// cleared is the index whose marker must be gone.
-		cleared int
-	}{
-		{name: "text block", content: []anthropic.ContentBlockParamUnion{textBlock()}, cleared: 0},
-		{name: "tool result block", content: []anthropic.ContentBlockParamUnion{toolResultBlock()}, cleared: 0},
-		{name: "tool use block", content: []anthropic.ContentBlockParamUnion{toolUseBlock()}, cleared: 0},
-		{
-			// The marker sits on the last block that can hold one, so a trailing
-			// block that cannot is walked past rather than treated as the end.
-			name:    "block that cannot carry a marker is skipped",
-			content: []anthropic.ContentBlockParamUnion{toolResultBlock(), thinkingBlock()},
-			cleared: 0,
-		},
-		{
-			// Only the last markable block is cleared: the earlier one was never
-			// this function's to remove.
-			name:    "only the last markable block is cleared",
-			content: []anthropic.ContentBlockParamUnion{textBlock(), toolResultBlock()},
-			cleared: 1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			messages := []anthropic.MessageParam{{Role: "user", Content: tt.content}}
-			got := clearCacheControlFromMessage(messages, 0)
-			require.Len(t, got, 1)
-
-			for i, block := range got[0].Content {
-				cc := block.GetCacheControl()
-				if cc == nil {
-					continue // the block kind carries no marker at all
-				}
-				if i == tt.cleared {
-					assert.True(t, param.IsOmitted(*cc), "block %d must be cleared", i)
-					continue
-				}
-				assert.False(t, param.IsOmitted(*cc), "block %d must keep its marker", i)
-			}
-		})
-	}
-
-	t.Run("index outside the message list is a no-op", func(t *testing.T) {
-		messages := []anthropic.MessageParam{{Role: "user", Content: []anthropic.ContentBlockParamUnion{textBlock()}}}
-		for _, idx := range []int{-1, 1, 99} {
-			got := clearCacheControlFromMessage(messages, idx)
-			require.Len(t, got, 1)
-			assert.False(t, param.IsOmitted(got[0].Content[0].OfText.CacheControl),
-				"index %d must leave the marker alone", idx)
-		}
-	})
-}
-
-// An over-budget request with no tool-result message has no slot to give back.
-// The model leaves it as it is rather than clearing something else.
-func TestYieldToolResultCacheBreakpoint_NothingToYield(t *testing.T) {
+// A request with no tool-result message has nothing to mark. The model leaves the
+// budget it did not spend rather than marking something else.
+func TestApplyToolResultCacheBreakpoint_NothingToMark(t *testing.T) {
 	m := New("claude-3-5-sonnet", WithCacheMessages(true))
 	marked := anthropic.NewCacheControlEphemeralParam()
 
 	req := &anthropic.MessageNewParams{
-		CacheControl: marked,
-		System: []anthropic.TextBlockParam{
-			{Text: "system", CacheControl: marked},
-		},
-		Tools: []anthropic.ToolUnionParam{
-			{OfTool: &anthropic.ToolParam{Name: "read", CacheControl: marked}},
-		},
+		System: []anthropic.TextBlockParam{{Text: "system", CacheControl: marked}},
 		Messages: []anthropic.MessageParam{
 			{Role: "user", Content: []anthropic.ContentBlockParamUnion{
-				{OfText: &anthropic.TextBlockParam{Text: "task", CacheControl: marked}},
+				{OfText: &anthropic.TextBlockParam{Text: "task"}},
 			}},
 			{Role: "assistant", Content: []anthropic.ContentBlockParamUnion{
 				{OfText: &anthropic.TextBlockParam{Text: "reply", CacheControl: marked}},
 			}},
 		},
 	}
-	require.Equal(t, 5, countCacheBreakpoints(req), "precondition: the request is over budget")
+	require.Equal(t, 2, countCacheBreakpoints(req), "precondition: slots are still free")
 
-	m.yieldToolResultCacheBreakpoint(req)
+	m.applyToolResultCacheBreakpoint(req)
 
-	assert.Equal(t, 5, countCacheBreakpoints(req),
-		"with no tool-result breakpoint to release, nothing else is taken")
+	assert.Equal(t, 2, countCacheBreakpoints(req),
+		"with no tool result to mark, nothing else is marked in its place")
 }
 
-// Message caching off means this model never placed a tool-result breakpoint, so
-// there is none of its own to give back.
-func TestYieldToolResultCacheBreakpoint_MessageCachingOff(t *testing.T) {
-	m := New("claude-3-5-sonnet", WithCacheMessages(false))
-	marked := anthropic.NewCacheControlEphemeralParam()
+// A single-message request is not a turn that carries tool output, so there is no
+// tool-result breakpoint to place even when that one message is a tool result.
+func TestApplyToolResultCacheBreakpoint_SingleMessage(t *testing.T) {
+	m := New("claude-3-5-sonnet", WithCacheMessages(true))
 
 	req := &anthropic.MessageNewParams{
-		CacheControl: marked,
-		System:       []anthropic.TextBlockParam{{Text: "system", CacheControl: marked}},
-		Tools: []anthropic.ToolUnionParam{
-			{OfTool: &anthropic.ToolParam{Name: "read", CacheControl: marked}},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewToolResultBlock("call_1", "ok", false)),
 		},
+	}
+
+	m.applyToolResultCacheBreakpoint(req)
+
+	assert.Zero(t, countCacheBreakpoints(req))
+}
+
+// Message caching off means this model places no message breakpoints at all, so
+// the tool-result one is not placed either.
+func TestApplyToolResultCacheBreakpoint_MessageCachingOff(t *testing.T) {
+	m := New("claude-3-5-sonnet", WithCacheMessages(false))
+
+	req := &anthropic.MessageNewParams{
 		Messages: []anthropic.MessageParam{
 			{Role: "assistant", Content: []anthropic.ContentBlockParamUnion{
-				{OfText: &anthropic.TextBlockParam{Text: "reply", CacheControl: marked}},
+				{OfText: &anthropic.TextBlockParam{Text: "reply"}},
 			}},
 			anthropic.NewUserMessage(anthropic.NewToolResultBlock("call_1", "ok", false)),
 		},
 	}
-	req.Messages[1].Content[0].OfToolResult.CacheControl = marked
-	require.Equal(t, 5, countCacheBreakpoints(req))
 
-	m.yieldToolResultCacheBreakpoint(req)
+	m.applyToolResultCacheBreakpoint(req)
 
-	assert.Equal(t, 5, countCacheBreakpoints(req),
-		"a marker this model did not place is not this model's to remove")
+	assert.Zero(t, countCacheBreakpoints(req),
+		"message caching is off, so no message breakpoint is placed")
 
 	// A nil request must not panic: GenerateContent is not the only caller path.
-	m.yieldToolResultCacheBreakpoint(nil)
+	m.applyToolResultCacheBreakpoint(nil)
 }

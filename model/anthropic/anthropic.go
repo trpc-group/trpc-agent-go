@@ -252,7 +252,7 @@ func (m *Model) GenerateContent(
 	if imodelrequest.ToolsDisabled(ctx) {
 		disableChatRequestTools(chatRequest)
 	}
-	m.yieldToolResultCacheBreakpoint(chatRequest)
+	m.applyToolResultCacheBreakpoint(chatRequest)
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
@@ -477,12 +477,11 @@ func modelNameMatches(modelName string, targets ...string) bool {
 //   - System prompt: always cached when cacheSystemPrompt is true (stable across turns)
 //   - Tools: always cached when cacheTools is true (stable across turns)
 //   - Last assistant message: cached when cacheMessages is true (opt-in, benefits multi-turn)
-//   - Last tool-result message: cached when cacheMessages is true, so a turn's tool
-//     output enters the cache in the request that carries it rather than the next one
 //
-// All four together spend the whole breakpoint budget, which leaves a caller that
-// adds one of its own over the limit. yieldToolResultCacheBreakpoint settles that
-// after the request callback has run, by giving the tool-result slot back.
+// A fourth breakpoint, on the last tool-result message, is added later by
+// applyToolResultCacheBreakpoint. It is deferred until the request callback has
+// run because it is the only one of the four that is conditional on the budget
+// the callback leaves behind, and on the message list the callback leaves behind.
 func (m *Model) applyCacheControl(
 	systemPrompts []anthropic.TextBlockParam,
 	tools []anthropic.ToolUnionParam,
@@ -498,9 +497,6 @@ func (m *Model) applyCacheControl(
 		lastAssistant := m.findLastAssistantMessageIndex(messages)
 		if lastAssistant >= 0 {
 			messages = m.applyCacheControlToMessages(messages, lastAssistant)
-		}
-		if idx := m.findLastToolResultMessageIndex(messages, lastAssistant); idx >= 0 {
-			messages = m.applyCacheControlToMessages(messages, idx)
 		}
 	}
 	return systemPrompts, tools, messages
@@ -560,37 +556,44 @@ func isToolResultMessage(message anthropic.MessageParam) bool {
 	return true
 }
 
-// yieldToolResultCacheBreakpoint gives the tool-result slot back when the
-// finalized request is over cacheBreakpointLimit. It runs after the request
-// callback because that is where a caller adds markers of its own, including the
-// top-level CacheControl the SDK exposes: the API answers that one by placing a
-// marker on the last cacheable block, so it occupies a slot alongside the explicit
-// markers, and it lands on a block of its own whenever anything trails the tool
-// results.
+// applyToolResultCacheBreakpoint marks the newest tool-result message, so a turn's
+// tool output enters the cache in the request that carries it rather than the next
+// one. It is the fourth and last of the model's breakpoints, and the only one
+// added after buildChatRequest.
 //
-// The guarantee is bounded, deliberately: this model's own breakpoints never push
-// a request over on their own. It is not a general budget enforcer. One marker is
-// released — the tool-result one — which returns the count to what it was before
-// that breakpoint existed. A caller that spends more than the remaining budget is
-// still over, and stays over.
+// It runs late for two reasons, both of which come from the request callback
+// sitting between request construction and the wire.
 //
-// Stripping further markers to force a fit would mean discarding either the
-// caller's explicit placement or the system and tools breakpoints, and trading a
-// 400 that names the problem for a silent, expensive cache regression is the worse
-// failure — a cache that quietly stops being read reports nothing at all. An
-// over-subscribed request is a caller configuration error, and it was one before
-// the tool-result breakpoint existed too.
+// The budget is one. Anthropic accepts cacheBreakpointLimit markers and rejects
+// the next one outright, and the callback is where a caller adds markers of its
+// own — including the top-level CacheControl the SDK exposes, which the API
+// answers by placing a marker of its own on the last cacheable block, so it
+// occupies a slot just like an explicit one. Claiming the fourth slot during
+// construction would leave any caller that adds one over the limit. Claiming it
+// here means it is taken only if it is still free, so this breakpoint never
+// pushes a request over on its own.
 //
-// The tool-result breakpoint is the one released because it is the only one whose
-// loss costs a delay rather than a cache entry: the next request's last-assistant
-// breakpoint moves past those tool results and writes them anyway. The system,
-// tools, and last-assistant markers, and anything the caller placed, are left
-// where they are.
-func (m *Model) yieldToolResultCacheBreakpoint(chatRequest *anthropic.MessageNewParams) {
-	if chatRequest == nil || !m.cacheMessages {
+// The message list is the other. The callback may rewrite Messages, and a marker
+// placed before it ran can end up on a block that is no longer the newest tool
+// result, or no longer present at all. Choosing the message from the finalized
+// list is what makes the marker land where it is meant to; there is no earlier
+// placement to track across the callback because there is no earlier placement.
+//
+// The tool-result breakpoint is the one made conditional because it is the only
+// one whose loss costs a delay rather than a cache entry: the next request's
+// last-assistant breakpoint moves past those tool results and writes them anyway.
+// The system, tools, and last-assistant markers are unconditional.
+//
+// The guarantee is bounded, deliberately. A caller that spends the whole budget
+// itself is still over it, and stays over: forcing a fit would mean removing the
+// caller's own placement or the system and tools breakpoints, and trading a 400
+// that names the problem for a silent, expensive cache regression is the worse
+// failure — a cache that quietly stops being read reports nothing at all.
+func (m *Model) applyToolResultCacheBreakpoint(chatRequest *anthropic.MessageNewParams) {
+	if chatRequest == nil || !m.cacheMessages || len(chatRequest.Messages) <= 1 {
 		return
 	}
-	if countCacheBreakpoints(chatRequest) <= cacheBreakpointLimit {
+	if countCacheBreakpoints(chatRequest) >= cacheBreakpointLimit {
 		return
 	}
 	lastAssistant := m.findLastAssistantMessageIndex(chatRequest.Messages)
@@ -598,7 +601,7 @@ func (m *Model) yieldToolResultCacheBreakpoint(chatRequest *anthropic.MessageNew
 	if idx < 0 {
 		return
 	}
-	chatRequest.Messages = clearCacheControlFromMessage(chatRequest.Messages, idx)
+	chatRequest.Messages = m.applyCacheControlToMessages(chatRequest.Messages, idx)
 }
 
 // countCacheBreakpoints counts the cache_control markers the request will be sent
@@ -627,43 +630,6 @@ func countCacheBreakpoints(chatRequest *anthropic.MessageNewParams) int {
 		}
 	}
 	return count
-}
-
-// clearCacheControlFromMessage removes the marker applyCacheControlToMessages
-// placed on a message: the last block of the message that can carry one.
-func clearCacheControlFromMessage(
-	messages []anthropic.MessageParam,
-	index int,
-) []anthropic.MessageParam {
-	if index < 0 || index >= len(messages) {
-		return messages
-	}
-	result := make([]anthropic.MessageParam, len(messages))
-	copy(result, messages)
-
-	msg := result[index]
-	for i := len(msg.Content) - 1; i >= 0; i-- {
-		content := msg.Content[i]
-		if content.OfText != nil {
-			newContent := *content.OfText
-			newContent.CacheControl = anthropic.CacheControlEphemeralParam{}
-			msg.Content[i] = anthropic.ContentBlockParamUnion{OfText: &newContent}
-		} else if content.OfToolResult != nil {
-			newContent := *content.OfToolResult
-			newContent.CacheControl = anthropic.CacheControlEphemeralParam{}
-			msg.Content[i] = anthropic.ContentBlockParamUnion{OfToolResult: &newContent}
-		} else if content.OfToolUse != nil {
-			newContent := *content.OfToolUse
-			newContent.CacheControl = anthropic.CacheControlEphemeralParam{}
-			msg.Content[i] = anthropic.ContentBlockParamUnion{OfToolUse: &newContent}
-		} else {
-			continue
-		}
-		break
-	}
-	result[index] = msg
-
-	return result
 }
 
 // applyCacheControlToMessages adds cache control to a specific message.
