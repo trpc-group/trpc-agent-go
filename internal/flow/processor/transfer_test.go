@@ -40,13 +40,14 @@ type mockAgent struct {
 	gotSurfaceRoot    string
 	gotMessage        model.Message
 	gotParentMetadata *agent.ParentInvocationMetadata
+	tools             []tool.Tool
 	invoked           bool
 }
 
 func (m *mockAgent) Info() agent.Info                { return agent.Info{Name: m.name} }
 func (m *mockAgent) SubAgents() []agent.Agent        { return nil }
 func (m *mockAgent) FindSubAgent(string) agent.Agent { return nil }
-func (m *mockAgent) Tools() []tool.Tool              { return nil }
+func (m *mockAgent) Tools() []tool.Tool              { return m.tools }
 func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
 	ch := make(chan *event.Event, 1)
 	go func() {

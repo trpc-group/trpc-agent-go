@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolsurface"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -71,6 +72,43 @@ func TestTransferTargetInvocationIsolatesRunScopedToolSurface(t *testing.T) {
 		require.True(t, targetInv.RunOptions.ToolFilter(
 			context.Background(), surfaceTool{name: "allowed"}))
 	})
+}
+
+// TestTransferTargetToolSurfaceAppliesInheritedFilter exercises the tool
+// surface construction path (the same one the LLM flow uses to build model
+// requests) to prove the preserved ToolFilter is actually consumed, not
+// merely stored on RunOptions.
+func TestTransferTargetToolSurfaceAppliesInheritedFilter(t *testing.T) {
+	inv := &agent.Invocation{
+		Agent:        &parentAgent{child: &mockAgent{name: "child"}},
+		AgentName:    "parent",
+		InvocationID: "inv",
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", Message: "hi"},
+		RunOptions: agent.RunOptions{
+			ToolFilter: func(ctx context.Context, t tool.Tool) bool {
+				return t.Declaration().Name != "blocked"
+			},
+		},
+	}
+
+	child := &mockAgent{
+		name: "child",
+		tools: []tool.Tool{
+			surfaceTool{name: "blocked"},
+			surfaceTool{name: "allowed"},
+		},
+	}
+	targetInv, _, err := prepareTransferTargetInvocation(
+		context.Background(), inv, child, inv.TransferInfo, nil)
+	require.NoError(t, err)
+	require.Equal(t, child, targetInv.Agent)
+
+	surface, _ := toolsurface.Effective(context.Background(), targetInv)
+	names := make([]string, 0, len(surface))
+	for _, tl := range surface {
+		names = append(names, tl.Declaration().Name)
+	}
+	require.ElementsMatch(t, []string{"allowed"}, names)
 }
 
 // TestTransferTargetInvocationKeepsCustomizerLastWord verifies that the
