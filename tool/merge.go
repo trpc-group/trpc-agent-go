@@ -35,6 +35,12 @@ func Merge[T any](ts []T) T {
 	// Handle the first element to determine the type and operation
 	first := ts[0]
 	firstValue := reflect.ValueOf(first)
+	if !firstValue.IsValid() {
+		// A nil value (e.g. a nil interface) carries no reflect type to
+		// drive merging, so keep the first value. This matches the
+		// nil-retention semantics already established for nil pointer fields.
+		return first
+	}
 	firstType := firstValue.Type()
 
 	// Check if type implements Mergeable interface

@@ -596,6 +596,56 @@ func TestMerge_NilHandling(t *testing.T) {
 	}
 }
 
+func TestMerge_NilInterface(t *testing.T) {
+	// Direct call: a nil interface as the first element carries no reflect
+	// type to drive merging. It must not panic and the first (nil) value is
+	// kept, matching the nil-retention semantics for nil pointer fields.
+	result := Merge([]any{nil, "str"})
+	if result != nil {
+		t.Errorf("Nil interface first value: Expected nil (first value kept), got %v", result)
+	}
+
+	// A trailing nil is skipped as before.
+	result2 := Merge([]any{"str", nil})
+	if result2 != "str" {
+		t.Errorf("Trailing nil: Expected 'str', got %v", result2)
+	}
+
+	// Reachable through a struct with an interface-typed field whose first
+	// value is nil: mergeStructs recurses into Merge via a []any, so the
+	// same path must not panic either.
+	type payload struct {
+		Meta any
+		N    int
+	}
+
+	structs := []payload{
+		{Meta: nil, N: 1},
+		{Meta: "x", N: 2},
+	}
+	merged := Merge(structs)
+	if merged.Meta != nil {
+		t.Errorf("Struct interface field: Expected nil (first value kept), got %v", merged.Meta)
+	}
+	if merged.N != 3 {
+		t.Errorf("Struct interface field: Expected N=3, got %d", merged.N)
+	}
+
+	// A non-nil first interface value still merges normally, skipping the
+	// trailing nil.
+	structs2 := []payload{
+		{Meta: "x", N: 1},
+		{Meta: nil, N: 2},
+	}
+	merged2 := Merge(structs2)
+	if merged2.Meta != "x" {
+		t.Errorf("Struct interface field: Expected 'x', got %v", merged2.Meta)
+	}
+	if merged2.N != 3 {
+		t.Errorf("Struct interface field: Expected N=3, got %d", merged2.N)
+	}
+}
+
 // Helper function for floating point comparison
 func abs64(x float64) float64 {
 	if x < 0 {
