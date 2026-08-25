@@ -1129,17 +1129,48 @@ func (s *Service) deleteSessions(ctx context.Context, tx *sql.Tx, keys []session
 	}
 
 	uniqueKeys := deduplicateSessionKeys(verifiedKeys)
-	childWhereClause, childArgs := s.sessionKeysWhereClause(uniqueKeys)
-	stateWhereClause = childWhereClause + " AND expires_at IS NOT NULL AND expires_at <= ?"
-	stateArgs = append(append([]any(nil), childArgs...), now)
+	liveKeys, err := s.lockUnexpiredSessionKeys(ctx, tx, uniqueKeys, now)
+	if err != nil {
+		return 0, err
+	}
 
-	if s.opts.softDelete {
-		if err := s.tombstoneDuplicateSessionStates(ctx, tx, uniqueKeys, now); err != nil {
+	var stateOnlyKeys []session.Key
+	var completeKeys []session.Key
+	for _, key := range uniqueKeys {
+		if _, ok := liveKeys[key]; ok {
+			stateOnlyKeys = append(stateOnlyKeys, key)
+			continue
+		}
+		completeKeys = append(completeKeys, key)
+	}
+
+	if len(stateOnlyKeys) > 0 {
+		if s.opts.softDelete {
+			if err := s.tombstoneDuplicateSessionStates(ctx, tx, stateOnlyKeys, now); err != nil {
+				return 0, err
+			}
+		}
+		if err := s.retireExpiredSessionStates(ctx, tx, stateOnlyKeys, now); err != nil {
 			return 0, err
 		}
-		return len(uniqueKeys), s.softDeleteSessions(ctx, tx, stateWhereClause, stateArgs, childWhereClause, childArgs, now)
 	}
-	return len(uniqueKeys), s.hardDeleteSessions(ctx, tx, stateWhereClause, stateArgs, childWhereClause, childArgs)
+	if len(completeKeys) > 0 {
+		childWhereClause, childArgs := s.sessionKeysWhereClause(completeKeys)
+		stateWhereClause = childWhereClause + " AND expires_at IS NOT NULL AND expires_at <= ?"
+		stateArgs = append(append([]any(nil), childArgs...), now)
+
+		if s.opts.softDelete {
+			if err := s.tombstoneDuplicateSessionStates(ctx, tx, completeKeys, now); err != nil {
+				return 0, err
+			}
+			if err := s.softDeleteSessions(ctx, tx, stateWhereClause, stateArgs, childWhereClause, childArgs, now); err != nil {
+				return 0, err
+			}
+		} else if err := s.hardDeleteSessions(ctx, tx, stateWhereClause, stateArgs, childWhereClause, childArgs); err != nil {
+			return 0, err
+		}
+	}
+	return len(uniqueKeys), nil
 }
 
 func (s *Service) sessionKeysWhereClause(keys []session.Key) (string, []any) {
@@ -1210,6 +1241,61 @@ func (s *Service) lockExpiredSessionKeys(
 		return nil, err
 	}
 	return keys, nil
+}
+
+func (s *Service) lockUnexpiredSessionKeys(
+	ctx context.Context,
+	tx *sql.Tx,
+	keys []session.Key,
+	now time.Time,
+) (map[session.Key]struct{}, error) {
+	whereClause, args := s.sessionKeysWhereClause(keys)
+	if whereClause == "" {
+		return nil, nil
+	}
+
+	args = append(args, now)
+	rows, err := tx.QueryContext(ctx,
+		fmt.Sprintf(`SELECT app_name, user_id, session_id FROM %s
+			WHERE %s AND (expires_at IS NULL OR expires_at > ?)
+			FOR UPDATE`, s.tableSessionStates, whereClause),
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("recheck unexpired sessions failed: %w", err)
+	}
+	defer rows.Close()
+
+	liveKeys := make(map[session.Key]struct{})
+	for rows.Next() {
+		var key session.Key
+		if err := rows.Scan(&key.AppName, &key.UserID, &key.SessionID); err != nil {
+			return nil, err
+		}
+		liveKeys[key] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return liveKeys, nil
+}
+
+func (s *Service) retireExpiredSessionStates(
+	ctx context.Context,
+	tx *sql.Tx,
+	keys []session.Key,
+	now time.Time,
+) error {
+	whereClause, args := s.sessionKeysWhereClause(keys)
+	if whereClause == "" {
+		return nil
+	}
+
+	stateWhereClause := whereClause + " AND expires_at IS NOT NULL AND expires_at <= ?"
+	stateArgs := append(append([]any(nil), args...), now)
+	if s.opts.softDelete {
+		return s.softDeleteSessionStates(ctx, tx, stateWhereClause, stateArgs, now)
+	}
+	return s.hardDeleteSessionStates(ctx, tx, stateWhereClause, stateArgs)
 }
 
 func (s *Service) tombstoneDuplicateSessionStates(
@@ -1577,10 +1663,7 @@ func (s *Service) hardDeleteSessions(
 	childArgs []any,
 ) error {
 	// Hard delete session states
-	_, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionStates, stateWhereClause),
-		stateArgs...)
-	if err != nil {
+	if err := s.hardDeleteSessionStates(ctx, tx, stateWhereClause, stateArgs); err != nil {
 		return fmt.Errorf("hard delete sessions: %w", err)
 	}
 
@@ -1608,6 +1691,18 @@ func (s *Service) hardDeleteSessions(
 	}
 
 	return nil
+}
+
+func (s *Service) hardDeleteSessionStates(
+	ctx context.Context,
+	tx *sql.Tx,
+	stateWhereClause string,
+	stateArgs []any,
+) error {
+	_, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE %s`, s.tableSessionStates, stateWhereClause),
+		stateArgs...)
+	return err
 }
 
 func (s *Service) cleanupExpiredTrackEvents(ctx context.Context, now time.Time) {

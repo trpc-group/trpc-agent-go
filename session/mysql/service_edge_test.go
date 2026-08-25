@@ -1199,6 +1199,7 @@ func TestCleanupExpired(t *testing.T) {
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
 			WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 				AddRow("app-1", "user-1", "session-1"))
+		expectNoUnexpiredSessionStates(mock, "app-1", "user-1", "session-1", sqlmock.AnyArg())
 
 		// Mock: Soft delete session states
 		expectNoDuplicateSessionStateTombstones(mock)
@@ -1722,6 +1723,7 @@ func TestCleanupExpiredSessions_DeleteError(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 			AddRow("app", "user", "sess"))
+	expectNoUnexpiredSessionStates(mock, "app", "user", "sess", sqlmock.AnyArg())
 
 	expectNoDuplicateSessionStateTombstones(mock)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
