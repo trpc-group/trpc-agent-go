@@ -774,19 +774,20 @@ func isSingleFilterKey(sess *session.Session, targetKey string) bool {
 
 // copySummaryToKey copies a summary from srcKey to dstKey within the session.
 // This avoids duplicate LLM calls when the summaries would be identical.
-// Sets UpdatedAt to zero to mark the summary as needing persistence.
-func copySummaryToKey(sess *session.Session, srcKey, dstKey string) {
+// Sets UpdatedAt to zero to mark the summary as needing persistence and reports
+// whether a source summary was available to copy.
+func copySummaryToKey(sess *session.Session, srcKey, dstKey string) bool {
 	if sess == nil {
-		return
+		return false
 	}
 	sess.SummariesMu.Lock()
 	defer sess.SummariesMu.Unlock()
 	if sess.Summaries == nil {
-		return
+		return false
 	}
 	src, ok := sess.Summaries[srcKey]
 	if !ok || src == nil {
-		return
+		return false
 	}
 	copied := src.Clone()
 	if boundary := copied.CutoffBoundary(); boundary != nil {
@@ -800,6 +801,7 @@ func copySummaryToKey(sess *session.Session, srcKey, dstKey string) {
 		copied.Topics = nil
 	}
 	sess.Summaries[dstKey] = copied
+	return true
 }
 
 // CreateSessionSummaryWithCascade creates one or more session summaries for the
@@ -837,8 +839,18 @@ func CreateSessionSummaryWithCascade(
 			return fmt.Errorf("create session summary for filterKey %q failed: %w",
 				filterKey, err)
 		}
-		// Copy to in-memory session for immediate access.
-		copySummaryToKey(sess, filterKey, session.SummaryFilterKeyAllContents)
+		// Copy to in-memory session for immediate access. A nil error from the
+		// backend may mean the branch summary was intentionally not updated. In
+		// that case there is no source to copy, so stop the cascade instead of
+		// independently generating a full-session summary that branch readers
+		// cannot consume.
+		if !copySummaryToKey(
+			sess,
+			filterKey,
+			session.SummaryFilterKeyAllContents,
+		) {
+			return nil
+		}
 		// Persist the full-session key to storage. SummarizeSession detects
 		// existing in-memory summary with empty delta and returns updated=true.
 		if err := createSummaryFunc(ctx, sess, session.SummaryFilterKeyAllContents, false); err != nil {
