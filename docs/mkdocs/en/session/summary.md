@@ -1567,6 +1567,11 @@ evt.FilterKey = "my-app/user-messages"
 evt.FilterKey = "user-messages"
 ```
 
+`EventFilterKey` / `filter_key` is a caller-supplied scope identifier. Do not
+put credentials, secrets, or user-private data in it. Diagnostic logs may
+include the original value, subject to the length limit described in
+[Diagnosing Summaries in Production](#diagnosing-summaries-in-production).
+
 ### Generating Summaries by Type
 
 ```go
@@ -1674,6 +1679,188 @@ sessionService, err := mysql.NewService(
 4. **Customize prompts**: Tailor summary prompts to your application needs. For example, if building a customer support Agent, focus on key issues and solutions
 5. **Balance word limits**: Set `WithMaxSummaryWords` to balance context preservation and token usage. Typical range is 100-300 words
 6. **Test trigger conditions**: Experiment with different `WithChecksAny` and `WithChecksAll` combinations to find the optimal balance between summary frequency and cost
+
+## Diagnosing Summaries in Production
+
+Summary generation and persistence diagnostics are not returned as the
+user-visible model response. Generation may run in a background async worker
+or synchronously inside a request, for example pre-LLM context compaction.
+The framework emits four stable log records that let you follow one session
+summary from generation to injection. All of them are emitted on the request
+or job context, so they share your existing trace correlation.
+
+**No record contains prompt text, summary text, event content, model output,
+raw error text, connection strings, or credentials.** User and session
+identifiers are never logged.
+
+`EventFilterKey` / `filter_key` is a caller-supplied scope identifier. It must
+not contain credentials, secrets, or user-private data. Diagnostic records log
+the original value (never hashed). The displayed value is at most 255 Unicode
+code points, matching the common `session_summaries.filter_key VARCHAR(255)`
+schema, and that budget includes the truncation marker. Keys within the limit
+are logged unchanged. Oversize keys keep a leading prefix so that prefix plus
+the `...` marker still totals 255 code points, and the record sets
+`filter_key_truncated=true` (or `trigger_filter_key_truncated=true` on cascade
+records). Empty keys stay visible as `filter_key=""`. Truncation affects
+diagnostic display only; stored keys and queries are unchanged.
+
+Every record starts with `schema_version=1` immediately after the record name
+so collectors can detect a later incompatible field change. The version stays
+at 1 until this diagnostic schema is formally published.
+
+These records observe generation, persistence, cascade, injection, and pre-LLM
+compaction. They do not add a public SessionService API and they do not add a
+diagnostics enable switch.
+
+Proven return contracts against the pre-diagnostics Redis path:
+
+- `CreateSessionSummary` still returns a nil error when the set-if-newer Lua
+  script itself succeeds, including when the reply is not `int64` 0 or 1. An
+  unrecognized reply is classified as `persist_result=unknown` /
+  `outcome=unknown_write` at Debug. It is not stored, stale, `success`, or
+  `persistence_error`, and it does not change the method's return value.
+- A real script, marshal, or expire failure still returns an error and is
+  reported as `persist_result=error` / `outcome=persistence_error`.
+
+Summary selection, cutoff, cascade call order, `force` values, error wrapping,
+injection text, and compaction decisions stay on their existing code paths.
+
+### Diagnostic cost
+
+- An ordinary summary-attempt record is constant-size metadata: counts, enums,
+  timings, and a truncated filter-key display. It does not copy events,
+  prompts, or summary text.
+- Checking whether a selected injection block is still present is
+  `O(total request message bytes)`. That scan runs only when session-summary
+  injection is enabled for the request. The request is not copied.
+
+### Record names and key fields
+
+| Record | Emitted when | Key fields |
+| --- | --- | --- |
+| `Session summary result` | Once per summary target, after generation and persistence | `schema_version`, `outcome`, `dispatch`, `target_kind`, `filter_key`, `filter_key_truncated`, `triggered`, `trigger`, `trigger_metric`, `trigger_value`, `trigger_threshold`, `threshold_ratio`, `context_window`, `summary_view_present`, `summary_view_bound`, `binding_reason`, `input_source`, `selection_reason`, `eligible_events`, `skip_recent_requested`, `skip_recent_applied`, `selected_events`, `model_call_status`, `updated`, `boundary_advanced`, `persist_result` |
+| `Session summary cascade result` | Once per cascade dispatch that fans a branch trigger out to the full-session target | `schema_version`, `outcome`, `mode`, `trigger_filter_key`, `trigger_filter_key_truncated`, `targets`, `source_materialized`, `action`, `invariant` |
+| `Session summary injection result` | Once per model request that uses session summaries, after `GenerateContent` returns | `schema_version`, `outcome`, `agent`, `filter_key`, `filter_key_truncated`, `lookup_strategy`, `lookup_result`, `selected`, `selected_block_present`, `stored_summaries`, `matching_candidates`, `full_session_summary`, `session_events`, `history_messages`, `request_messages` |
+| `Pre-LLM context compaction result` | Once per synchronous compaction attempt before an LLM call | `schema_version`, `outcome`, `filter_key`, `filter_key_truncated`, `request_tokens`, `threshold`, `context_window`, `messages`, `summary_view_bound`, `binding_reason` |
+
+`Session summary result` outcomes:
+
+| Outcome | Level | Meaning |
+| --- | --- | --- |
+| `success` | Info | A new summary was generated and the backend confirmed the write |
+| `copied` | Debug | A cascade reused an existing summary for this target without a model call |
+| `below_threshold` | Debug | A trigger check ran and stayed below its threshold |
+| `no_delta` | Debug | No event was appended after the recorded summary boundary |
+| `no_content` | Debug | No eligible content reached the summary model |
+| `cascade_suppressed` | Debug | A full-session target was skipped because it was only requested as a branch cascade |
+| `unsafe_view` | Warn | Content existed, but the model-visible view was not bound to the request the model answered, so nothing could be summarized safely |
+| `summary_error` | Warn | The summarization stage failed. `model_call_status` separates a failed model call from a pre-model build, a custom response, or an unobserved custom summarizer |
+| `context_error` | Warn | The summary context was canceled or expired |
+| `persistence_error` | Warn | The backend write failed |
+| `stale_write` | Debug | The backend skipped the write because a newer summary is already persisted. This is a successful set-if-newer no-op and can happen under normal concurrency |
+| `unknown_write` | Debug | The backend write finished without error, but the set-if-newer reply could not be classified as stored or stale. This is diagnostic uncertainty, not a business failure |
+| `not_stored` | Warn | A summary was generated but the backend neither stored nor rejected it |
+| `no_update` | Warn | A triggered attempt produced no summary to store |
+
+`model_call_status` is a closed three-state field. Do not treat
+`unobserved` as "the model was not called":
+
+| `model_call_status` | Meaning |
+| --- | --- |
+| `called` | The built-in summarizer reached the summary model (`standalone` or `cache_safe_fork`) |
+| `custom_response` | A before-model callback supplied the summary response, so the provider was not called |
+| `unobserved` | No `Report.Call.Mode` was published, so a model call cannot be proven. Typical of a custom summarizer that does not fill `summary.Report` |
+
+`Session summary injection result` outcomes:
+
+| Outcome | Level | Meaning |
+| --- | --- | --- |
+| `injected` | Debug | The original summary block is still present in the same framework `model.Request` after `GenerateContent` returns (`selected_block_present=true`). This does not describe a provider payload |
+| `not_selected` | Debug | The session stores no summary yet |
+| `lookup_miss` | Debug | Summaries exist for other branches, but none in this request's scope |
+| `scope_mismatch` | Debug | A branch-scoped request found nothing in scope while a full-session summary exists outside it. Because no in-scope summary was selected, this request's summary cutoff stays zero, so the raw scoped history is kept at this stage. That does not depend on whether the unused full-session summary has a boundary |
+| `selected_block_missing` | Warn | A summary was selected (`selected=true`), but the original summary block is not observable in the same framework `model.Request` after `GenerateContent` returns. This does not claim the provider's final payload, and it does not mean the summary was never written into the request. For built-in providers that mutate the shared request in place, including OpenAI, this is usually in-place token tailoring |
+
+### How much history reached the summary model
+
+When `outcome` is `no_content` or `unsafe_view`, `selection_reason` names the
+exact stage that emptied the input, which is otherwise indistinguishable from
+an idle session:
+
+| `selection_reason` | Meaning |
+| --- | --- |
+| `selected` | Events reached the summary model |
+| `no_candidates` | The stage had no candidate event to consider at all |
+| `skip_recent_all` | The `WithSkipRecent` callback asked to skip at least as many events as were available |
+| `unsafe_prefix` | Events remained after skip-recent, but the retained prefix had neither a user message nor a prepended previous summary to anchor the summary, so it was dropped |
+| `session_filter_empty` | Candidates survived skip-recent and were then all removed by the summary's branch scoping |
+| `unbound_view` | A model-visible view existed but was not bound to the request the model answered |
+| `boundary_unmapped` | Selected items had no structural mapping to a stored event, so the summary was dropped rather than advance the boundary past content that cannot be located again |
+| `custom` | The summary call did not publish the built-in event selection, so counts are unknown |
+| `none` | No summarizer ran, so no selection was observed |
+
+The accompanying counts describe the stage that receives the `WithSkipRecent`
+callback:
+
+- `eligible_events` is the number of candidate events handed to that stage,
+  counted before skip-recent runs. For a bound model-visible view it includes a
+  prepended previous summary; for an unbound view it is the number of view items
+  that were not considered.
+- `skip_recent_requested` is the raw count your callback returned, so a callback
+  returning a nonsensical value stays visible. It is `0` when no callback is
+  configured.
+- `skip_recent_applied` is how many events skip-recent itself removed:
+  `clamp(skip_recent_requested, 0, eligible_events)`. An unsafe retained prefix,
+  session scoping, or an unmapped boundary is named by `selection_reason` and
+  `selected_events`, not counted here. For example `eligible_events=3`,
+  `skip_recent_requested=1`, `unsafe_prefix` reports `skip_recent_applied=1` and
+  `selected_events=0`.
+- `selected_events` is what finally reached the summary model, after skip-recent,
+  branch scoping, and boundary mapping.
+
+All four counts are `-1` when `selection_reason` is `custom` or `none`.
+
+`trigger` and `trigger_metric` are normalized to the framework's own vocabulary.
+Any other value, including one set by a custom summarizer or by a caller-supplied
+`summary.Report`, is reported as `custom`, so these fields stay bounded and never
+carry application strings. `trigger_value`, `trigger_threshold`,
+`threshold_ratio`, and `context_window` are reported unchanged.
+
+### Tracing one incident
+
+Follow the records in this order for a single request or session:
+
+1. **`Session summary result`** answers whether a summary was produced at all.
+   `triggered` plus the `trigger*` fields explain the gate decision;
+   `input_source`, `selection_reason`, and the event counts explain how much
+   history reached the model and which stage removed the rest;
+   `binding_reason` explains an `unsafe_view`; `persist_result` distinguishes a
+   backend-confirmed store from a stale skip, an unclassified write, or a
+   failed write.
+2. **`Session summary cascade result`** explains how a branch trigger reached
+   the full-session target. A branch that is not updated in this pass stops the
+   cascade (`action=skipped`, `invariant=ok`). `mode=dependent` is a sequential
+   multi-filter cascade, not concurrent generation. `invariant=violation` is
+   reserved for a full-session target that advanced without this-pass branch
+   materialization.
+3. **`Session summary injection result`** answers whether a later request
+   still carries the stored summary in the framework `model.Request` after
+   `GenerateContent` returns. Compare `lookup_strategy` (the scope you
+   configured, driven by `WithBranchFilterMode`) with `lookup_result` (what
+   that scope found) and `full_session_summary`. `scope_mismatch` means a
+   full-session summary was unused, not that scoped history was dropped:
+   because nothing in scope was selected, this request's summary cutoff stays
+   zero and the raw scoped history is kept at this stage.
+4. **`Pre-LLM context compaction result`** and the token tailoring records
+   explain what happened to the request after injection. A
+   `selected_block_missing` record next to a tailoring record, for a built-in
+   provider that mutates the shared request in place, means the original
+   summary block is no longer observable in the framework `model.Request`. A
+   custom `Model` that copies the request may leave the framework copy
+   unchanged, so this record still does not describe the provider payload.
+
+Set the framework log level to `debug` to see the routine records; at the
+default level only the Warn and Info records above are emitted.
 
 ## Performance Considerations
 

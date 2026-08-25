@@ -1066,6 +1066,9 @@ func TestMaybeCompactContextBeforeLLM_SkipsWhenSummaryRefreshFails(t *testing.T)
 	require.Same(t, req, rebuilt)
 	logged := warningLogs()
 	require.Contains(t, logged, "outcome=summary_error")
+	require.Contains(t, logged, "schema_version=1")
+	require.Contains(t, logged, `filter_key="branch/test"`)
+	require.Contains(t, logged, "filter_key_truncated=false")
 	require.NotContains(t, logged, sensitiveErrorText)
 	require.NotContains(t, logged, "post_request_tokens=0")
 }
@@ -1101,7 +1104,58 @@ func TestRunContextCompactionLogsRebuildUnavailable(t *testing.T) {
 	require.Same(t, req, rebuilt)
 	logged := warningLogs()
 	require.Contains(t, logged, "outcome=rebuild_unavailable")
+	require.Contains(t, logged, "schema_version=1")
+	require.Contains(t, logged, `filter_key=""`)
+	require.Contains(t, logged, "filter_key_truncated=false")
 	require.Contains(t, logged, "post_request_tokens=3000")
+	require.Contains(t, logged, "binding_reason=absent")
+}
+
+// TestRunContextCompactionReportsBindingReason proves the compaction record
+// names the stage that broke the model-visible binding. A bare
+// summary_view_bound=false cannot be traced back to a cause after the fact.
+func TestRunContextCompactionReportsBindingReason(t *testing.T) {
+	warningLogs := captureWarningLogs(t)
+	service := &summaryInjectingService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(service),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		model.NewUserMessage("history"),
+	}}
+	summaryview.AttachProjection(inv, &summaryview.View{
+		SessionID:            "session",
+		ContentRequestLength: 2,
+		Items: []summaryview.Item{{
+			Message:      model.NewUserMessage("history"),
+			RequestIndex: 1,
+		}},
+	})
+	// Provider-side token tailoring rewrote the request for the previous
+	// model call, so the projection is no longer proof of visibility.
+	summaryview.InvalidateBinding(inv)
+
+	new(Flow).runContextCompaction(
+		context.Background(),
+		inv,
+		nil,
+		req,
+		&contextCompactionRebuildPlan{},
+		contextCompactionDecision{
+			shouldCompact: true,
+			tokenCount:    3000,
+			threshold:     2000,
+			contextWindow: 4000,
+		},
+	)
+
+	logged := warningLogs()
+	require.Contains(t, logged, "summary_view_present=true")
+	require.Contains(t, logged, "summary_view_bound=false")
+	require.Contains(t, logged,
+		"binding_reason="+summaryview.BindingReasonInvalidated)
 }
 
 func TestMaybeCompactContextBeforeLLM_RebuildsWithoutReplayingEarlierProcessors(t *testing.T) {

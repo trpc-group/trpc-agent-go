@@ -49,6 +49,9 @@ func (s *Service) CreateSessionSummary(
 		return nil
 	}
 
+	ctx, att := isummary.BeginAttempt(ctx, sess, filterKey)
+	defer att.Report()
+
 	updated, err := isummary.SummarizeSession(
 		ctx,
 		s.opts.summarizer,
@@ -56,6 +59,7 @@ func (s *Service) CreateSessionSummary(
 		filterKey,
 		force,
 	)
+	att.Summarized(updated, err)
 	if err != nil || !updated {
 		return err
 	}
@@ -64,12 +68,13 @@ func (s *Service) CreateSessionSummary(
 	sum := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
 	if sum == nil {
+		att.Persisted(isummary.PersistNoSummary)
 		return nil
 	}
 
 	summaryBytes, err := json.Marshal(sum)
 	if err != nil {
-		return fmt.Errorf("marshal summary: %w", err)
+		return att.RecordWrite(fmt.Errorf("marshal summary: %w", err))
 	}
 
 	const insertSQL = `INSERT INTO %s (
@@ -94,8 +99,9 @@ ON CONFLICT(app_name, user_id, session_id, filter_key) DO UPDATE SET
 		nil,
 	)
 	if err != nil {
-		return fmt.Errorf("upsert summary: %w", err)
+		return att.RecordWrite(fmt.Errorf("upsert summary: %w", err))
 	}
+	att.Persisted(isummary.PersistStored)
 	return nil
 }
 

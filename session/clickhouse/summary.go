@@ -45,7 +45,11 @@ func (s *Service) CreateSessionSummary(
 		return nil
 	}
 
+	ctx, att := isummary.BeginAttempt(ctx, sess, filterKey)
+	defer att.Report()
+
 	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	att.Summarized(updated, err)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}
@@ -59,7 +63,7 @@ func (s *Service) CreateSessionSummary(
 	sess.SummariesMu.RUnlock()
 	summaryBytes, err := json.Marshal(summary)
 	if err != nil {
-		return fmt.Errorf("marshal summary failed: %w", err)
+		return att.RecordWrite(fmt.Errorf("marshal summary failed: %w", err))
 	}
 	stale, err := s.summaryWriteIsStale(
 		ctx,
@@ -70,9 +74,10 @@ func (s *Service) CreateSessionSummary(
 		sess.Events,
 	)
 	if err != nil {
-		return fmt.Errorf("check existing summary failed: %w", err)
+		return att.RecordWrite(fmt.Errorf("check existing summary failed: %w", err))
 	}
 	if stale {
+		att.Persisted(isummary.PersistStale)
 		return nil
 	}
 
@@ -86,9 +91,10 @@ func (s *Service) CreateSessionSummary(
 		key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), now, updatedAt, now, nil)
 
 	if err != nil {
-		return fmt.Errorf("upsert summary failed: %w", err)
+		return att.RecordWrite(fmt.Errorf("upsert summary failed: %w", err))
 	}
 
+	att.Persisted(isummary.PersistStored)
 	return nil
 }
 

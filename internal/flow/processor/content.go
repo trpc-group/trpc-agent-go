@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
@@ -694,6 +695,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 	invocation.DeleteState(contentHasCompactedToolResultsStateKey)
 	summaryview.Clear(invocation)
+	summaryinject.Clear(invocation)
 
 	cfg := p.runtimeConfigFromInvocation(invocation)
 	skipHistory := cfg.includeMode == "none"
@@ -783,14 +785,16 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	}
 
 	var userContextBlocks []string
-	summaryText, summaryCutoff := p.sessionSummaryForRequest(invocation, skipHistory)
+	summarySelection := p.sessionSummaryForRequest(invocation, skipHistory)
+	summaryText := summarySelection.text
+	summaryCutoff := summarySelection.cutoff
 	userContextBlocks = p.appendPreloadMemoryContext(
 		ctx,
 		invocation,
 		req,
 		userContextBlocks,
 	)
-	userContextBlocks = p.appendSummaryContext(
+	userContextBlocks, summarySelection.block = p.appendSummaryContext(
 		invocation,
 		req,
 		summaryText,
@@ -829,6 +833,8 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 
 	messageStart := len(req.Messages)
 	req.Messages = append(req.Messages, messages...)
+	summarySelection.historyMessages = len(messages)
+	summarySelection.record(invocation)
 	view := modelVisibleHistoryView(
 		invocation,
 		history,
@@ -883,18 +889,69 @@ func modelVisibleHistoryView(
 	}
 }
 
+// requestSummarySelection is the per-request session summary selection and the
+// diagnostics needed to explain it at the final request boundary.
+type requestSummarySelection struct {
+	enabled         bool
+	text            string
+	cutoff          summaryHistoryCutoff
+	diagnostics     summarySelectionDiagnostics
+	block           string
+	historyMessages int
+	sessionEvents   int
+}
+
+// record publishes the selection so the final request boundary can report
+// whether the selected summary reached the model. Requests that do not use
+// session summaries publish nothing and stay silent.
+func (s requestSummarySelection) record(invocation *agent.Invocation) {
+	if !s.enabled {
+		return
+	}
+	summaryinject.Record(invocation, summaryinject.Selection{
+		LookupStrategy:     s.diagnostics.strategy,
+		LookupResult:       s.diagnostics.result,
+		Selected:           s.text != "",
+		BoundaryPresent:    !s.cutoff.IsZero(),
+		StoredSummaries:    s.diagnostics.storedSummaries,
+		MatchingCandidates: s.diagnostics.matchingCandidates,
+		FullSessionPresent: s.diagnostics.fullSessionPresent,
+		ScopedRequest:      s.diagnostics.scopedRequest,
+		SessionEvents:      s.sessionEvents,
+		HistoryMessages:    s.historyMessages,
+		Block:              s.block,
+	})
+}
+
 func (p *ContentRequestProcessor) sessionSummaryForRequest(
 	invocation *agent.Invocation,
 	skipHistory bool,
-) (string, summaryHistoryCutoff) {
+) requestSummarySelection {
 	// Skip session summary when include_contents=none, but still get current
 	// invocation's events (tool calls/results) to maintain ReAct loop context.
 	if skipHistory || !p.AddSessionSummary || p.TimelineFilterMode != TimelineFilterAll {
-		return "", summaryHistoryCutoff{}
+		return requestSummarySelection{}
 	}
 	// Fetch session summary early so we can insert it after other semi-stable
 	// system blocks (for example, preloaded memories).
-	return p.getSessionSummaryText(invocation)
+	text, cutoff, diagnostics := p.lookUpSessionSummary(invocation)
+	return requestSummarySelection{
+		enabled:       true,
+		text:          text,
+		cutoff:        cutoff,
+		diagnostics:   diagnostics,
+		sessionEvents: sessionEventCount(invocation),
+	}
+}
+
+// sessionEventCount reports how many events the session currently stores.
+func sessionEventCount(invocation *agent.Invocation) int {
+	if invocation == nil || invocation.Session == nil {
+		return 0
+	}
+	invocation.Session.EventMu.RLock()
+	defer invocation.Session.EventMu.RUnlock()
+	return len(invocation.Session.Events)
 }
 
 func (p *ContentRequestProcessor) appendPreloadMemoryContext(
@@ -918,28 +975,28 @@ func (p *ContentRequestProcessor) appendPreloadMemoryContext(
 	return userContextBlocks
 }
 
+// appendSummaryContext injects the selected summary and returns the formatted
+// block that was written into the request.
 func (p *ContentRequestProcessor) appendSummaryContext(
 	invocation *agent.Invocation,
 	req *model.Request,
 	summaryText string,
 	userContextBlocks []string,
-) []string {
+) ([]string, string) {
 	if summaryText == "" {
-		return userContextBlocks
+		return userContextBlocks, ""
 	}
 	invocation.SetState(contentHasSessionSummaryStateKey, true)
 	if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
-		return appendUserContextBlock(
-			userContextBlocks,
-			p.formatSummaryForUser(summaryText),
-		)
+		block := p.formatSummaryForUser(summaryText)
+		return appendUserContextBlock(userContextBlocks, block), block
 	}
 	summaryMsg := model.Message{
 		Role:    model.RoleSystem,
 		Content: p.formatSummary(summaryText),
 	}
 	p.injectSystemContextMessage(req, summaryMsg)
-	return userContextBlocks
+	return userContextBlocks, summaryMsg.Content
 }
 
 func (p *ContentRequestProcessor) appendPreloadSessionRecallContext(
@@ -1138,8 +1195,33 @@ func (c eventHistoryCutoff) excludesEvent(index int, evt event.Event) bool {
 // cutoff for the current branch. It does not format or assign
 // a role — callers decide how to inject the text into the request.
 func (p *ContentRequestProcessor) getSessionSummaryText(inv *agent.Invocation) (string, summaryHistoryCutoff) {
+	text, cutoff, _ := p.lookUpSessionSummary(inv)
+	return text, cutoff
+}
+
+// summarySelectionDiagnostics reports how a stored summary lookup resolved. It
+// separates the configured scope from what that scope found, and carries only
+// counts and stable enum values, never summary text or filter keys.
+type summarySelectionDiagnostics struct {
+	strategy           string
+	result             string
+	storedSummaries    int
+	matchingCandidates int
+	fullSessionPresent bool
+	scopedRequest      bool
+}
+
+// lookUpSessionSummary selects the stored summary for the current request and
+// reports how the lookup resolved.
+func (p *ContentRequestProcessor) lookUpSessionSummary(
+	inv *agent.Invocation,
+) (string, summaryHistoryCutoff, summarySelectionDiagnostics) {
+	diagnostics := summarySelectionDiagnostics{
+		strategy: p.summaryLookupStrategy(),
+		result:   summaryinject.LookupResultNone,
+	}
 	if inv.Session == nil {
-		return "", summaryHistoryCutoff{}
+		return "", summaryHistoryCutoff{}, diagnostics
 	}
 
 	// Acquire read lock to protect Summaries access.
@@ -1147,25 +1229,99 @@ func (p *ContentRequestProcessor) getSessionSummaryText(inv *agent.Invocation) (
 	defer inv.Session.SummariesMu.RUnlock()
 
 	if inv.Session.Summaries == nil {
-		return "", summaryHistoryCutoff{}
+		return "", summaryHistoryCutoff{}, diagnostics
 	}
 	filter := inv.GetEventFilterKey()
 	// For BranchFilterModeAll, prefer the full-session summary under empty filter key.
 	if p.BranchFilterMode == BranchFilterModeAll {
 		filter = ""
 	}
+	diagnostics.scopedRequest = filter != ""
+	diagnostics.storedSummaries = countStoredSummaries(inv.Session.Summaries)
+	diagnostics.matchingCandidates = p.countMatchingSummaries(
+		inv.Session.Summaries, filter,
+	)
+	diagnostics.fullSessionPresent = hasStoredSummary(
+		inv.Session.Summaries, session.SummaryFilterKeyAllContents,
+	)
 
 	// Try exact match first.
 	sum := inv.Session.Summaries[filter]
 	if sum != nil && sum.Summary != "" {
-		return sum.Summary, summaryHistoryCutoffFromBoundary(sum.CutoffBoundary())
+		diagnostics.result = summaryinject.LookupResultExact
+		return sum.Summary,
+			summaryHistoryCutoffFromBoundary(sum.CutoffBoundary()),
+			diagnostics
 	}
 
 	// For BranchFilterModePrefix, aggregate summaries with matching prefix.
 	if p.BranchFilterMode == BranchFilterModePrefix && filter != "" {
-		return p.aggregatePrefixSummaries(inv.Session.Summaries, filter)
+		text, cutoff := p.aggregatePrefixSummaries(inv.Session.Summaries, filter)
+		if text != "" {
+			diagnostics.result = summaryinject.LookupResultPrefix
+		}
+		return text, cutoff, diagnostics
 	}
-	return "", summaryHistoryCutoff{}
+	return "", summaryHistoryCutoff{}, diagnostics
+}
+
+// summaryLookupStrategy reports the summary scope this processor searches.
+// Subtree and exact branch modes both look up only the request's own key.
+func (p *ContentRequestProcessor) summaryLookupStrategy() string {
+	switch p.BranchFilterMode {
+	case BranchFilterModeAll:
+		return summaryinject.LookupStrategyAll
+	case BranchFilterModePrefix:
+		return summaryinject.LookupStrategyPrefix
+	default:
+		return summaryinject.LookupStrategyExact
+	}
+}
+
+// countMatchingSummaries counts the non-empty summaries inside the configured
+// lookup scope. Callers must hold the session summaries read lock.
+func (p *ContentRequestProcessor) countMatchingSummaries(
+	summaries map[string]*session.Summary,
+	filter string,
+) int {
+	if p.BranchFilterMode == BranchFilterModePrefix && filter != "" {
+		count := 0
+		for key, sum := range summaries {
+			if sum == nil || sum.Summary == "" {
+				continue
+			}
+			if session.SummaryFilterKeyMatchesPrefix(key, filter) {
+				count++
+			}
+		}
+		return count
+	}
+	if hasStoredSummary(summaries, filter) {
+		return 1
+	}
+	return 0
+}
+
+// hasStoredSummary reports whether a non-empty summary is stored under key.
+// Callers must hold the session summaries read lock.
+func hasStoredSummary(
+	summaries map[string]*session.Summary,
+	key string,
+) bool {
+	sum := summaries[key]
+	return sum != nil && sum.Summary != ""
+}
+
+// countStoredSummaries counts non-empty summaries across all filter keys.
+// Callers must hold the session summaries read lock.
+func countStoredSummaries(summaries map[string]*session.Summary) int {
+	count := 0
+	for _, sum := range summaries {
+		if sum != nil && sum.Summary != "" {
+			count++
+		}
+	}
+	return count
 }
 
 // getSessionSummaryMessage returns the current-branch session summary as a
