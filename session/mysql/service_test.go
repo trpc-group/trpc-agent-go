@@ -469,6 +469,14 @@ func TestCreateSession_RetriesLockErrors(t *testing.T) {
 	}
 }
 
+func TestSleepBeforeCreateSessionRetryCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := sleepBeforeCreateSessionRetry(ctx, 0)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestGetSession_EventPageValidation(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
@@ -1467,6 +1475,40 @@ func TestDeleteSessionsReturnsStateOnlyTombstoneError(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestDeleteSessionsReturnsStateOnlyRetireError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSoftDelete(true), WithSessionTTL(time.Hour))
+	ctx := context.Background()
+	now := time.Now()
+	key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+			AddRow(key.AppName, key.UserID, key.SessionID))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+			AddRow(key.AppName, key.UserID, key.SessionID))
+	expectNoDuplicateSessionStateTombstones(mock)
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID, now).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	n, err := s.deleteSessions(ctx, tx, []session.Key{key}, now)
+	require.Error(t, err)
+	assert.Zero(t, n)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestTombstoneDuplicateSessionStatesRetriesDistinctTombstoneOnLegacyPrecisionConflict(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -1602,6 +1644,60 @@ func TestLockExpiredSessionKeysQueryError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestLockUnexpiredSessionKeysErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		rows *sqlmock.Rows
+	}{
+		{
+			name: "ScanError",
+			rows: sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+				AddRow(nil, "user-1", "session-1"),
+		},
+		{
+			name: "RowsError",
+			rows: sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+				AddRow("app-1", "user-1", "session-1").
+				RowError(0, assert.AnError),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+
+			s := createTestService(t, db)
+			now := time.Now()
+			key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+				WithArgs(key.AppName, key.UserID, key.SessionID, now).
+				WillReturnRows(tt.rows)
+			mock.ExpectRollback()
+
+			tx, err := db.Begin()
+			require.NoError(t, err)
+			liveKeys, err := s.lockUnexpiredSessionKeys(context.Background(), tx, []session.Key{key}, now)
+			require.Error(t, err)
+			assert.Nil(t, liveKeys)
+			require.NoError(t, tx.Rollback())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestLockUnexpiredSessionKeysNoKeys(t *testing.T) {
+	s := &Service{}
+	liveKeys, err := s.lockUnexpiredSessionKeys(context.Background(), nil, nil, time.Now())
+	require.NoError(t, err)
+	assert.Nil(t, liveKeys)
+
+	err = s.retireExpiredSessionStates(context.Background(), nil, nil, time.Now())
+	require.NoError(t, err)
+}
+
 func TestDeleteSessionsRecheckError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -1626,6 +1722,35 @@ func TestDeleteSessionsRecheckError(t *testing.T) {
 	assert.Zero(t, n)
 	assert.NoError(t, tx.Rollback())
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionsReturnsUnexpiredRecheckError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+	now := time.Now()
+	key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+			AddRow(key.AppName, key.UserID, key.SessionID))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, now).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	n, err := s.deleteSessions(ctx, tx, []session.Key{key}, now)
+	require.ErrorContains(t, err, "recheck unexpired sessions failed")
+	assert.Zero(t, n)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestDeleteSessionsReturnsTombstoneUpdateError(t *testing.T) {
