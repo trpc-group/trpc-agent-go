@@ -23,10 +23,9 @@ import (
 // Annotators must see the request as the provider will, not as preprocessing left
 // it.
 //
-// A before-model callback receives a mutable Request and does replace entries in
-// Tools — the toolsearch plugin injects its own tools there. An annotator that ran
-// during preprocessing would compute from a tool surface that is neither what the
-// model is shown nor what the function-call processor later executes.
+// Before-model callbacks replace entries in Tools — the toolsearch plugin injects
+// its own there — so an annotator running during preprocessing would compute from
+// a surface that is neither shown to the model nor executed afterwards.
 func TestFinalizedRequestAnnotatorsSeeCallbackChanges(t *testing.T) {
 	callbacks := model.NewCallbacks()
 	callbacks.RegisterBeforeModel(func(
@@ -88,11 +87,10 @@ func TestFinalizedRequestAnnotatorsAbsent(t *testing.T) {
 
 // Retries are requests too.
 //
-// contextWithModelRetryCallbacks binds another runBeforeModelCallbacks pass that
-// runs after callLLM's single annotateFinalizedRequest call, and that pass can
-// change the request — the call-limit finalization retry drops Tools entirely
-// before asking again. Annotators that ran only on the first attempt would leave
-// the retry carrying an annotation describing a tool surface it no longer has.
+// contextWithModelRetryCallbacks binds another before-model pass that runs after
+// callLLM's single annotate call and can change the request — the call-limit
+// finalization retry drops Tools entirely before asking again — so annotating
+// only the first attempt would describe a surface the retry no longer has.
 func TestFinalizedRequestAnnotatorsRunAfterRetryCallbacks(t *testing.T) {
 	callbacks := model.NewCallbacks().RegisterBeforeModel(func(
 		_ context.Context,

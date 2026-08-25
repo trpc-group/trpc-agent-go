@@ -100,12 +100,10 @@ type Options struct {
 // FinalizedRequestAnnotator adjusts a request after every before-model callback
 // has finished with it, immediately before it reaches the model.
 //
-// Request processors run during preprocessing, which is earlier: plugin and model
-// before-model callbacks receive a mutable Request afterwards and do replace
-// entries in Tools. An annotator that must describe the tool surface the model is
-// actually shown — and that the function-call processor will then execute — has
-// to run here instead. It is called where no event channel exists, so it may only
-// mutate the request.
+// Request processors run earlier, during preprocessing, and before-model
+// callbacks replace entries in Tools afterwards. An annotator that must describe
+// the tool surface the model is actually shown has to run here instead. There is
+// no event channel at this point, so it may only mutate the request.
 type FinalizedRequestAnnotator func(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -2521,9 +2519,8 @@ func (f *Flow) callLLM(
 		err = errors.New(errMsgNoLLMMessages)
 		return ctx, nil, false, err
 	}
-	// The request is final here: every before-model callback has run, so Tools and
-	// Messages are what the provider will receive and what the function-call
-	// processor will later execute.
+	// Final here: every before-model callback has run, so Tools and Messages are
+	// what the provider receives and what the processor later executes.
 	f.annotateFinalizedRequest(ctx, invocation, llmRequest)
 	if invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
 		traceCtx := agent.NewInvocationContext(ctx, invocation)

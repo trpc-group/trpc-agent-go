@@ -55,11 +55,10 @@ func contextWithModelRetryCallbacks(
 			if err != nil || resp != nil {
 				return updatedCtx, resp, err
 			}
-			// A retry re-runs the callbacks over the same request, and they can
-			// change what it carries — a final retry drops tools before asking
-			// again. The request is only final once they have returned, so the
-			// annotators run here too; skipping them would send the retry with an
-			// annotation describing the surface of the attempt before it.
+			// A retry re-runs the callbacks and they can change what the request
+			// carries — a final retry drops tools before asking again — so the
+			// annotators run here too. Skipping them would send the retry
+			// describing the previous attempt's surface.
 			flow.annotateFinalizedRequest(updatedCtx, invocation, req)
 			return updatedCtx, resp, err
 		},

@@ -167,11 +167,9 @@ func TestParallelToolsNilRequest(t *testing.T) {
 	processParallelTools(nil)
 }
 
-// The notice must describe the concurrency this run actually grants.
-//
-// Run-scoped tool concurrency limits can withhold parallelism the scheduler would
-// otherwise allow, so an unconditional promise that a turn's calls run
-// concurrently is not generally true.
+// The notice must describe the concurrency this run actually grants: run-scoped
+// limits can withhold parallelism the scheduler would otherwise allow, so an
+// unconditional promise is not generally true.
 func TestParallelToolsReflectsConcurrencyLimits(t *testing.T) {
 	newRequest := func() *model.Request {
 		return &model.Request{
@@ -217,9 +215,8 @@ func TestParallelToolsReflectsConcurrencyLimits(t *testing.T) {
 		}
 	})
 
-	// With an overall limit of one, nothing in the run ever runs beside anything
-	// else. There is no parallelism for an exclusive tool to cost, so describing
-	// the exception would only advertise a capability every tool is denied.
+	// An overall limit of one leaves no parallelism for an exclusive tool to
+	// cost, so the exception would advertise a capability every tool is denied.
 	t.Run("an overall limit of one says nothing", func(t *testing.T) {
 		req := newRequest()
 		annotateParallelTools(req, tool.ConcurrencyConfig{MaxConcurrency: 1})
@@ -263,13 +260,10 @@ func TestParallelToolsSeesThroughDeclarationOverlays(t *testing.T) {
 	}
 }
 
-// A request offering one exclusive tool still needs the notice.
-//
-// A turn is a batch of calls, not of definitions: a model can call the same
-// function several times in one turn, and hasConcurrentBatch will correctly
-// serialize those calls. Suppressing the notice because only one definition was
-// offered would withhold exactly the guidance that keeps the model from paying
-// for that serialization.
+// A request offering one exclusive tool still needs the notice: a turn is a batch
+// of calls, not of definitions, and a model calling the same function several
+// times gets those calls serialized. Suppressing the notice would withhold
+// exactly the guidance that keeps it from paying for that.
 func TestParallelToolsNamesASoleExclusiveTool(t *testing.T) {
 	req := &model.Request{
 		Messages: []model.Message{model.NewSystemMessage("base")},
@@ -283,17 +277,15 @@ func TestParallelToolsNamesASoleExclusiveTool(t *testing.T) {
 	}
 }
 
-// The same request can reach the model more than once: a model retry re-runs the
-// before-model callbacks over it and the annotators run again afterwards. The
-// notice must describe the request as it stands, not accumulate.
-// A model retry runs the annotator again over a request that already carries the
-// notice, so a second pass has to land on the same prompt as the first.
+// A retry re-runs the before-model callbacks over the same request and the
+// annotators run again afterwards, so the notice must describe the request as it
+// stands rather than accumulate.
+// A second pass has to land on the same prompt as the first.
 //
-// The trailing-newline cases are the ones that broke. Appending to content that
-// already ends in a newline puts three in a row at the seam, and splitting on the
-// blank line then yields a notice paragraph that starts with the leftover newline
-// rather than with the marker. The removal pass no longer recognized its own
-// text, so every retry left the stale notice in place and added another copy.
+// The trailing-newline cases are the ones that broke: content already ending in a
+// newline puts three at the seam, so the notice's paragraph starts with the
+// leftover one rather than the marker. Removal stopped recognizing its own text,
+// and every retry left the stale notice and added another copy.
 func TestParallelToolsIsIdempotent(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -400,9 +392,8 @@ func TestParallelToolsRemovesTheSystemMessageItCreated(t *testing.T) {
 }
 
 // A caller's own system content is not framework state, however it reads. An
-// earlier version identified the notice by the words it opens with, so a system
-// policy that happened to start the same way was deleted on the first pass —
-// before this annotator had written anything at all.
+// earlier version identified the notice by its opening words, so a system policy
+// starting the same way was deleted on the first pass.
 func TestParallelToolsKeepsCallerContentThatReadsLikeTheNotice(t *testing.T) {
 	const callerPolicy = "Tool-call batching: preserve this caller-authored policy."
 
@@ -441,9 +432,8 @@ func TestParallelToolsKeepsCallerContentThatReadsLikeTheNotice(t *testing.T) {
 	})
 }
 
-// A before-model callback may prepend a system message, so on a retry the notice
-// written last pass is no longer the first one. Sweeping only the first message
-// left the stale notice in place and added the current one beside it.
+// A callback may prepend a system message, so on a retry the notice is no longer
+// in the first one. Sweeping only the first left it in place and added another.
 func TestParallelToolsRemovesTheNoticeFromALaterSystemMessage(t *testing.T) {
 	req := &model.Request{
 		Messages: []model.Message{model.NewSystemMessage("base")},
