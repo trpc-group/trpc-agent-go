@@ -8,7 +8,7 @@
 //
 //
 
-//go:build linux || darwin || ios || freebsd || netbsd || openbsd || dragonfly
+//go:build linux || freebsd || netbsd || openbsd || dragonfly
 
 package opensandbox
 
@@ -42,9 +42,16 @@ func isSkippableOpenErr(err error) bool {
 // caller's Stat fails closed (ELOOP) instead of being traversed.
 // Intermediate path components are resolved normally by the kernel,
 // so legitimately symlinked ancestors keep working.
+//
+// O_DIRECTORY makes the kernel reject the open when path is not a
+// directory (ENOTDIR), and O_NONBLOCK prevents a root swapped for a
+// FIFO from blocking the open indefinitely — together they guarantee
+// the root open fails promptly instead of hanging when the checked
+// root is replaced between Stat and this open.
 func openDirNoFollow(path string) (*os.File, error) {
 	fd, err := syscall.Open(path,
-		syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+		syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|
+			syscall.O_NONBLOCK|dirOpenFlag, 0)
 	if err != nil {
 		return nil, err
 	}

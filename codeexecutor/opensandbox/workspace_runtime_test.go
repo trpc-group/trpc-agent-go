@@ -134,6 +134,12 @@ type mockOpenSandboxServer struct {
 	// createDirOK counts successful CreateDirectory calls served so
 	// createDirFailAfter can fail later calls only.
 	createDirOK int
+	// commandHook, when non-nil, is invoked with each /command body
+	// outside the server lock before the command is processed. Tests
+	// use it to mutate host state mid-flight (TOCTOU simulations such
+	// as swapping the staging root for a FIFO between PutDirectory's
+	// Stat and the staging walk).
+	commandHook func(command string)
 }
 
 func newMockServer(t *testing.T) *mockOpenSandboxServer {
@@ -484,7 +490,16 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	forceInfraExit := m.forceInfraExit
 	commandShouldFail := m.commandShouldFail
 	commandFailContains := m.commandFailContains
+	hook := m.commandHook
 	m.mu.Unlock()
+
+	// Invoke the test hook outside m.mu (it may take the lock itself)
+	// before any failure injection or response, so mid-flight host
+	// mutations land between the client's earlier checks and the
+	// operation under test.
+	if hook != nil {
+		hook(req.Command)
+	}
 
 	// runBash calls (CreateWorkspace mkdir, Cleanup rm, StageDirectory
 	// chmod) and RunProgram calls are both wrapped in `bash -c '...'`.

@@ -8,7 +8,7 @@
 //
 //
 
-//go:build !(linux || darwin || ios || freebsd || netbsd || openbsd || dragonfly)
+//go:build !(linux || freebsd || netbsd || openbsd || dragonfly)
 
 package opensandbox
 
@@ -54,11 +54,12 @@ func openDirNoFollow(path string) (*os.File, error) {
 	return f, nil
 }
 
-// openChildNoFollow is the fallback for platforms without openat(2)
-// (notably Windows). It opens the child by pathname and cannot pin the
-// parent, so it re-checks with Lstat after the open and refuses when
-// the entry is (or has become) a symlink, which os.Open would otherwise
-// silently follow.
+// openChildNoFollow is the fallback for platforms without a usable
+// syscall.Openat (Windows, and darwin/ios whose syscall package does
+// not export Openat). It opens the child by pathname and cannot pin
+// the parent, so it re-checks with Lstat after the open and refuses
+// when the entry is (or has become) a symlink, which os.Open would
+// otherwise silently follow.
 //
 // The caller pre-filters entries whose enumerated metadata is already
 // non-regular (symlinks included), so this check only fires for entries

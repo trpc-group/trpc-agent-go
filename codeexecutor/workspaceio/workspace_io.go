@@ -37,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacesession"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // File is an in-memory snapshot of a workspace file produced by
@@ -183,6 +184,7 @@ func (w *Workspace) Collect(
 	if err != nil {
 		return nil, err
 	}
+	defer w.releaseEphemeralHandle(ctx, handle)
 	raw, err := eng.FS().Collect(ctx, handle.Workspace, patterns)
 	w.invalidateWorkspaceHandleIfStale(handle, err)
 	if err != nil {
@@ -218,6 +220,7 @@ func (w *Workspace) PutFiles(
 	if err != nil {
 		return err
 	}
+	defer w.releaseEphemeralHandle(ctx, handle)
 	err = eng.FS().PutFiles(ctx, handle.Workspace, files)
 	w.invalidateWorkspaceHandleIfStale(handle, err)
 	return err
@@ -259,6 +262,7 @@ func (w *Workspace) SaveArtifact(
 	if err != nil {
 		return nil, err
 	}
+	defer w.releaseEphemeralHandle(ctxIO, handle)
 	ws := handle.Workspace
 	manifest, err := eng.FS().CollectOutputs(ctxIO, ws, codeexecutor.OutputSpec{
 		Globs:         []string{rel},
@@ -326,6 +330,7 @@ func (w *Workspace) StageInputs(
 	if err != nil {
 		return err
 	}
+	defer w.releaseEphemeralHandle(ctxIO, handle)
 	err = eng.FS().StageInputs(ctxIO, handle.Workspace, specs)
 	w.invalidateWorkspaceHandleIfStale(handle, err)
 	return err
@@ -367,6 +372,7 @@ func (w *Workspace) RunProgram(
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
+	defer w.releaseEphemeralHandle(ctx, handle)
 	runner := eng.Runner()
 	if runner == nil {
 		return codeexecutor.RunResult{}, errors.New(
@@ -403,9 +409,38 @@ func (w *Workspace) invalidateWorkspaceHandleIfStale(
 	handle codeexecutor.WorkspaceHandle,
 	err error,
 ) {
-	if w != nil && w.resolver != nil &&
-		errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-		w.resolver.InvalidateWorkspaceHandle(handle)
+	if w == nil || w.resolver == nil ||
+		!errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		return
+	}
+	if w.resolver.IsEphemeralHandle(handle) {
+		// Ephemeral workspaces are not reused after this call, so
+		// destroy the backend workspace rather than only dropping the
+		// cache entry (Invalidate alone would leave it behind).
+		w.releaseEphemeralHandle(context.Background(), handle)
+		return
+	}
+	w.resolver.InvalidateWorkspaceHandle(handle)
+}
+
+// releaseEphemeralHandle cleans up a workspace that was acquired for an
+// invalid (empty-ID) session, which has no session-level lifecycle
+// owning it; without this, every call through this facade would retain
+// the registry entry and the backend workspace for the life of the
+// process. Session-scoped handles are left cached and untouched so
+// valid sessions keep reusing their workspace.
+func (w *Workspace) releaseEphemeralHandle(
+	ctx context.Context,
+	handle codeexecutor.WorkspaceHandle,
+) {
+	if w == nil || w.resolver == nil {
+		return
+	}
+	if err := w.resolver.ReleaseEphemeralHandle(ctx, handle); err != nil {
+		log.Warnf(
+			"workspaceio: releasing ephemeral workspace %q: %v",
+			handle.Workspace.ID, err,
+		)
 	}
 }
 

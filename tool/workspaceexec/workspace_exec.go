@@ -705,6 +705,7 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	req.workspaceHandle = handle
 	req.ws = handle.Workspace
 	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
+		t.releaseEphemeralWorkspace(ctx, handle)
 		return execOutput{}, true, err
 	}
 	commandMayHaveStarted, err := t.reconcileWorkspace(
@@ -714,6 +715,7 @@ func (t *ExecTool) executeWorkspaceAttempt(
 		req.workspaceHandle.InstanceID,
 	)
 	if err != nil {
+		t.releaseEphemeralWorkspace(ctx, handle)
 		return execOutput{}, true, err
 	}
 	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
@@ -724,6 +726,7 @@ func (t *ExecTool) executeWorkspaceAttempt(
 			// and must not replay automatically.
 			err = errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
 		}
+		t.releaseEphemeralWorkspace(ctx, handle)
 		return execOutput{}, true, err
 	}
 	if t.sessional {
@@ -732,6 +735,25 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	}
 	out, err := t.callNonSessional(ctx, *req)
 	return out, true, err
+}
+
+// releaseEphemeralWorkspace cleans up a workspace that was acquired for
+// an invalid (empty-ID) session, which has no session-level lifecycle
+// owning it. Session-scoped handles are left cached and untouched so
+// valid sessions keep reusing their workspace.
+func (t *ExecTool) releaseEphemeralWorkspace(
+	ctx context.Context,
+	handle codeexecutor.WorkspaceHandle,
+) {
+	if t == nil || t.resolver == nil {
+		return
+	}
+	if err := t.resolver.ReleaseEphemeralHandle(ctx, handle); err != nil {
+		log.Warnf(
+			"workspace_exec: releasing ephemeral workspace %q: %v",
+			handle.Workspace.ID, err,
+		)
+	}
 }
 
 func validateWorkspaceHandle(
@@ -893,6 +915,11 @@ func (t *ExecTool) callNonSessional(
 		)
 	}
 	out, err := runOneShot(ctx, req.eng, req.ws, req.spec)
+	// Ephemeral (invalid empty-ID session) workspaces have no
+	// session-level lifecycle owning them; release them at the end of
+	// this call so a long-lived process does not retain one backend
+	// workspace per such call. Session-scoped handles stay cached.
+	t.releaseEphemeralWorkspace(ctx, req.workspaceHandle)
 	if err != nil {
 		return execOutput{}, err
 	}
@@ -905,6 +932,8 @@ func (t *ExecTool) callSessional(
 ) (execOutput, error) {
 	if !req.background && !req.tty && (req.yield == nil || *req.yield == 0) {
 		out, err := runOneShot(ctx, req.eng, req.ws, req.spec)
+		// Same ephemeral-release contract as callNonSessional.
+		t.releaseEphemeralWorkspace(ctx, req.workspaceHandle)
 		if err != nil {
 			return execOutput{}, err
 		}
@@ -938,6 +967,7 @@ func (t *ExecTool) startInteractive(
 ) (execOutput, error) {
 	runner, ok := req.eng.Runner().(codeexecutor.InteractiveProgramRunner)
 	if !ok {
+		t.releaseEphemeralWorkspace(ctx, req.workspaceHandle)
 		return execOutput{}, errors.New(
 			"workspace_exec interactive sessions are not supported by the current executor",
 		)
@@ -951,8 +981,12 @@ func (t *ExecTool) startInteractive(
 		},
 	)
 	if err != nil {
+		t.releaseEphemeralWorkspace(ctx, req.workspaceHandle)
 		return execOutput{}, err
 	}
+	// The session now owns the workspace handle; the ephemeral variant
+	// is released when the session finalizes (finalizeAndRemoveSession
+	// / cleanupExpiredLocked), not here.
 	t.putSession(proc.ID(), &execSession{
 		proc:   proc,
 		handle: req.workspaceHandle,
@@ -1173,8 +1207,13 @@ func (t *ExecTool) finalizeAndRemoveSession(id string) error {
 		t.invalidateSessionWorkspaceIfStale(sess, err)
 		return err
 	}
-	_, err = t.removeSession(id)
-	return err
+	if _, err := t.removeSession(id); err != nil {
+		return err
+	}
+	// The session is gone, so its ephemeral (invalid-session) workspace
+	// must go with it. Session-scoped handles stay cached.
+	t.releaseEphemeralWorkspace(context.Background(), sess.handle)
+	return nil
 }
 
 func (t *ExecTool) cleanupExpiredLocked() {
@@ -1196,6 +1235,10 @@ func (t *ExecTool) cleanupExpiredLocked() {
 		if expired {
 			if err := sess.proc.Close(); err == nil {
 				delete(t.sessions, id)
+				// Release the session's ephemeral workspace off the
+				// critical path: this runs under t.mu and release waits
+				// for the backend cleanup to finish.
+				go t.releaseEphemeralWorkspace(context.Background(), sess.handle)
 			} else {
 				t.invalidateSessionWorkspaceIfStale(sess, err)
 			}
@@ -1207,10 +1250,18 @@ func (t *ExecTool) invalidateSessionWorkspaceIfStale(
 	sess *execSession,
 	err error,
 ) {
-	if t != nil && t.resolver != nil &&
-		errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-		t.resolver.InvalidateWorkspaceHandle(sess.handle)
+	if t == nil || t.resolver == nil ||
+		!errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		return
 	}
+	if t.resolver.IsEphemeralHandle(sess.handle) {
+		// Ephemeral workspaces are not reused across invocations, so
+		// destroy the backend workspace instead of only dropping the
+		// cache entry. Asynchronous because callers may hold t.mu.
+		go t.releaseEphemeralWorkspace(context.Background(), sess.handle)
+		return
+	}
+	t.resolver.InvalidateWorkspaceHandle(sess.handle)
 }
 
 func (t *ExecTool) markSessionFinalized(sess *execSession) {
