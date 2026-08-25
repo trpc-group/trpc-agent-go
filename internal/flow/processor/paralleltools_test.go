@@ -286,23 +286,48 @@ func TestParallelToolsNamesASoleExclusiveTool(t *testing.T) {
 // The same request can reach the model more than once: a model retry re-runs the
 // before-model callbacks over it and the annotators run again afterwards. The
 // notice must describe the request as it stands, not accumulate.
+// A model retry runs the annotator again over a request that already carries the
+// notice, so a second pass has to land on the same prompt as the first.
+//
+// The trailing-newline cases are the ones that broke. Appending to content that
+// already ends in a newline puts three in a row at the seam, and splitting on the
+// blank line then yields a notice paragraph that starts with the leftover newline
+// rather than with the marker. The removal pass no longer recognized its own
+// text, so every retry left the stale notice in place and added another copy.
 func TestParallelToolsIsIdempotent(t *testing.T) {
-	req := &model.Request{
-		Messages: []model.Message{model.NewSystemMessage("base")},
-		Tools: map[string]tool.Tool{
-			"read":  safeStubTool{name: "read"},
-			"agent": unsafeStubTool{name: "agent"},
-		},
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "no trailing newline", content: "base"},
+		{name: "one trailing newline", content: "base\n"},
+		{name: "trailing blank line", content: "base\n\n"},
+		{name: "several paragraphs ending in a newline", content: "base\n\nmore policy\n"},
 	}
-	processParallelTools(req)
-	once := systemContent(req)
 
-	processParallelTools(req)
-	if got := systemContent(req); got != once {
-		t.Fatalf("annotating twice must not change the prompt:\n%q\n%q", once, got)
-	}
-	if n := strings.Count(systemContent(req), noticeMarker); n != 1 {
-		t.Errorf("expected exactly one notice, got %d", n)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &model.Request{
+				Messages: []model.Message{model.NewSystemMessage(tt.content)},
+				Tools: map[string]tool.Tool{
+					"read":  safeStubTool{name: "read"},
+					"agent": unsafeStubTool{name: "agent"},
+				},
+			}
+			processParallelTools(req)
+			once := systemContent(req)
+
+			processParallelTools(req)
+			if got := systemContent(req); got != once {
+				t.Fatalf("annotating twice must not change the prompt:\n%q\n%q", once, got)
+			}
+			if n := strings.Count(systemContent(req), noticeMarker); n != 1 {
+				t.Errorf("expected exactly one notice, got %d: %q", n, systemContent(req))
+			}
+			if !strings.HasPrefix(systemContent(req), strings.TrimRight(tt.content, "\n")) {
+				t.Errorf("the caller's own system content must survive: %q", systemContent(req))
+			}
+		})
 	}
 }
 

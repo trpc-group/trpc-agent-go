@@ -154,11 +154,18 @@ func removeToolBatchingNotice(req *model.Request) {
 // withoutNoticeParagraphs drops the marked paragraphs from a system message's
 // content. The second result is false when nothing else is left, meaning the
 // message existed only to carry the notice.
+//
+// A paragraph is matched past any leading newlines. Content that already ended
+// in a newline before the notice was appended has three in a row at the seam, so
+// splitting on the blank line leaves the notice's paragraph starting with the
+// leftover one; an exact prefix test misses it, keeps the stale notice, and lets
+// the next pass add a second copy beside it. appendToSystemMessage no longer
+// writes that seam, but content written by an earlier build still carries it.
 func withoutNoticeParagraphs(content string) (string, bool) {
 	paragraphs := strings.Split(content, "\n\n")
 	kept := paragraphs[:0]
 	for _, paragraph := range paragraphs {
-		if strings.HasPrefix(paragraph, noticeMarker) {
+		if strings.HasPrefix(strings.TrimLeft(paragraph, "\n"), noticeMarker) {
 			continue
 		}
 		kept = append(kept, paragraph)
@@ -166,7 +173,7 @@ func withoutNoticeParagraphs(content string) (string, bool) {
 	if len(kept) == 0 {
 		return "", false
 	}
-	return strings.Join(kept, "\n\n"), true
+	return strings.TrimRight(strings.Join(kept, "\n\n"), "\n"), true
 }
 
 func (n *ToolBatchingNotice) notice(names []string) string {
@@ -217,9 +224,17 @@ func exclusiveToolNames(tools map[string]tool.Tool) []string {
 
 // appendToSystemMessage adds content to the request's system message, creating
 // one if the request has none.
+//
+// Trailing newlines on the existing content are dropped so the join produces one
+// blank line exactly. Existing content ending in a newline would otherwise leave
+// three in a row, which is not a paragraph boundary followed by the notice but a
+// boundary followed by a paragraph that begins with a newline — enough to hide
+// the marker from a later removal pass and let notices accumulate across model
+// retries.
 func appendToSystemMessage(req *model.Request, content string) {
 	if idx := findSystemMessageIndex(req.Messages); idx >= 0 {
-		req.Messages[idx].Content += "\n\n" + content
+		req.Messages[idx].Content = strings.TrimRight(req.Messages[idx].Content, "\n") +
+			"\n\n" + content
 		return
 	}
 	req.Messages = append(
