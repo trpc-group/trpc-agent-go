@@ -231,6 +231,12 @@ func TestGuardClassifiesDestructiveGitReset(t *testing.T) {
 			rule:     "dangerous.git_reset",
 		},
 		{
+			name:     "unknown global option requires review",
+			command:  "git --future-option reset --hard HEAD",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "dangerous.git_reset",
+		},
+		{
 			name:     "direct reset helper",
 			command:  "git-reset --hard HEAD",
 			decision: safety.DecisionDeny,
@@ -251,6 +257,12 @@ func TestGuardClassifiesDestructiveGitReset(t *testing.T) {
 		{
 			name:     "mixed reset",
 			command:  "git reset HEAD",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "hard shaped pathspec",
+			command:  "git reset -- --hard",
 			decision: safety.DecisionAllow,
 			rule:     "safety.no_findings",
 		},

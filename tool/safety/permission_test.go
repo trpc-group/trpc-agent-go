@@ -502,6 +502,34 @@ func TestPermissionPolicyClassifiesFindDelete(t *testing.T) {
 			command: "find . -name -delete -print",
 			want:    tool.PermissionActionAllow,
 		},
+		{
+			name:    "delete-shaped fprintf format",
+			command: "find . -fprintf out -delete -print",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:    "delete-shaped newer value",
+			command: "find . -newermt -delete -print",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:     "debug option and current directory delete",
+			command:  "find -D search . -delete",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.find_delete",
+		},
+		{
+			name:     "optimization option and current directory delete",
+			command:  "find -O3 . -delete",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.find_delete",
+		},
+		{
+			name:     "BSD file starting point delete",
+			command:  "find -f out -delete",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.find_delete",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			arguments := mustJSON(t, map[string]string{"command": tc.command})
@@ -1766,6 +1794,24 @@ func TestPermissionPolicyScansRsyncRemoteProgram(t *testing.T) {
 			wantRule: "command.indirect_execution",
 		},
 		{
+			name:     "missing short remote shell",
+			command:  `rsync -e`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "command.indirect_execution",
+		},
+		{
+			name:     "missing short remote option",
+			command:  `rsync -M`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "command.indirect_execution",
+		},
+		{
+			name:     "missing long remote option",
+			command:  `rsync --remote-option`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "command.indirect_execution",
+		},
+		{
 			name:    "safe remote program still reviewed",
 			command: `rsync --rsync-path='rsync' api.github.com:/src out`,
 			want:    tool.PermissionActionAsk,
@@ -1879,6 +1925,12 @@ func TestPermissionPolicyClassifiesRsyncDelete(t *testing.T) {
 			want:    tool.PermissionActionAllow,
 		},
 		{
+			name:     "remote delete disabled",
+			command:  "rsync --delete -M--no-delete src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "command.indirect_execution",
+		},
+		{
 			name:     "delete reenabled",
 			command:  "rsync --no-delete --delete-during src/ out/",
 			want:     tool.PermissionActionAsk,
@@ -1948,6 +2000,52 @@ func TestPermissionPolicyAppliesNetworkAllowlistToRsync(t *testing.T) {
 		{
 			name:    "local copy",
 			command: "rsync -a src/ out/",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:    "recognized long options",
+			command: "rsync --archive --exclude=tmp src/ out/",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:     "missing long option value",
+			command:  "rsync --exclude",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.destination_unparsed",
+		},
+		{
+			name:     "unknown long option",
+			command:  "rsync --future-option src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.destination_unparsed",
+		},
+		{
+			name:     "unknown short option",
+			command:  "rsync -j src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.destination_unparsed",
+		},
+		{
+			name:     "remote after option terminator",
+			command:  "rsync -- evil.example:/src out/",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:     "abbreviated source before remote host",
+			command:  "rsync :/src out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.destination_unparsed",
+		},
+		{
+			name:     "unsupported URL scheme",
+			command:  "rsync https://evil.example/src out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.destination_unparsed",
+		},
+		{
+			name:    "local colon after directory separator",
+			command: "rsync src/dir:name out/",
 			want:    tool.PermissionActionAllow,
 		},
 		{
