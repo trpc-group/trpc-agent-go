@@ -526,6 +526,8 @@ func (vs *VectorStore) scanMetadataRow(rows interface{ Scan(dest ...any) error }
 		return "", nil, fmt.Errorf("clickhouse: decode metadata: %w", err)
 	}
 	vs.mergeFilterDests(md, filterDests)
+	// Drop the internal embedding-text key so it never reaches callers.
+	md, _ = splitEmbeddingText(md)
 	return id, md, nil
 }
 

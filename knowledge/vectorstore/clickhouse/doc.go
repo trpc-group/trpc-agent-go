@@ -18,6 +18,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
 
+// internalEmbeddingTextKey stores document.EmbeddingText inside the metadata
+// column. It is stripped from the metadata map on every read path, so callers
+// never see it.
+const internalEmbeddingTextKey = "__clickhouse_embedding_text"
+
 // Document mapping between trpc-agent-go document.Document and the ClickHouse row.
 //
 //	trpc-agent-go Document          ClickHouse column
@@ -61,10 +66,25 @@ func (vs *VectorStore) docToRow(doc *document.Document, embedding []float64, now
 		name:      doc.Name,
 		content:   doc.Content,
 		embedding: embedding,
-		metadata:  doc.Metadata,
+		metadata:  withEmbeddingText(doc.Metadata, doc.EmbeddingText),
 		createdAt: now,
 		updatedAt: now,
 	}, nil
+}
+
+// withEmbeddingText returns a copy of metadata carrying embeddingText under an
+// internal key, so the field survives a round trip through the metadata column.
+// The caller's map is never mutated.
+func withEmbeddingText(metadata map[string]any, embeddingText string) map[string]any {
+	if embeddingText == "" {
+		return metadata
+	}
+	stored := make(map[string]any, len(metadata)+1)
+	for k, v := range metadata {
+		stored[k] = v
+	}
+	stored[internalEmbeddingTextKey] = embeddingText
+	return stored
 }
 
 // rowToDoc converts an internal row back into a trpc-agent-go document.
@@ -72,15 +92,35 @@ func (vs *VectorStore) rowToDoc(r *row) (*document.Document, []float64, error) {
 	if r == nil {
 		return nil, nil, fmt.Errorf("clickhouse: row is nil")
 	}
+	metadata, embeddingText := splitEmbeddingText(r.metadata)
 	doc := &document.Document{
-		ID:        r.id,
-		Name:      r.name,
-		Content:   r.content,
-		Metadata:  r.metadata,
-		CreatedAt: r.createdAt,
-		UpdatedAt: r.updatedAt,
+		ID:            r.id,
+		Name:          r.name,
+		Content:       r.content,
+		Metadata:      metadata,
+		EmbeddingText: embeddingText,
+		CreatedAt:     r.createdAt,
+		UpdatedAt:     r.updatedAt,
 	}
 	return doc, r.embedding, nil
+}
+
+// splitEmbeddingText extracts the internally stored embedding text and returns
+// the metadata without that key, so callers never observe it.
+func splitEmbeddingText(metadata map[string]any) (map[string]any, string) {
+	raw, ok := metadata[internalEmbeddingTextKey]
+	if !ok {
+		return metadata, ""
+	}
+	text, _ := raw.(string)
+	out := make(map[string]any, len(metadata)-1)
+	for k, v := range metadata {
+		if k == internalEmbeddingTextKey {
+			continue
+		}
+		out[k] = v
+	}
+	return out, text
 }
 
 // marshalMetadata JSON-encodes the document metadata map into a string suitable

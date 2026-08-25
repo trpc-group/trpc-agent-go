@@ -14,6 +14,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 )
 
 var errBackend = errors.New("backend failure")
@@ -483,6 +485,74 @@ func TestBuildUpdateWhereErrors(t *testing.T) {
 	where, _, err = vs.buildUpdateWhere(nil, nil)
 	require.NoError(t, err)
 	assert.Empty(t, where)
+}
+
+// TestNewRejectsUnsupportedMetric asserts an unknown Metric is rejected instead
+// of silently ranking by cosine distance.
+func TestNewRejectsUnsupportedMetric(t *testing.T) {
+	original := storage.GetClientBuilder()
+	storage.SetClientBuilder(func(opts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockClient{}, nil
+	})
+	defer storage.SetClientBuilder(original)
+
+	_, err := New(
+		WithDSN("clickhouse://mock:9000/db"),
+		WithTableName("docs"),
+		WithVectorDimension(3),
+		WithMetric(Metric(99)),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a supported Metric")
+
+	// The three supported metrics are accepted.
+	for _, m := range []Metric{MetricCosine, MetricL2, MetricInnerProduct} {
+		vs, err := New(
+			WithDSN("clickhouse://mock:9000/db"),
+			WithTableName("docs"),
+			WithVectorDimension(3),
+			WithMetric(m),
+		)
+		require.NoError(t, err, "metric %v must be accepted", m)
+		require.NoError(t, vs.Close())
+	}
+}
+
+// TestEmbeddingTextRoundTrip asserts document.EmbeddingText survives the row
+// mapping and that the internal storage key is never exposed to callers.
+func TestEmbeddingTextRoundTrip(t *testing.T) {
+	vs := vsWithClient(&mockClient{})
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	doc := &document.Document{
+		ID:            "doc1",
+		Name:          "n",
+		Content:       "c",
+		EmbeddingText: "text used for embedding",
+		Metadata:      map[string]any{"category": "news"},
+	}
+	r, err := vs.docToRow(doc, []float64{1, 2, 3}, now)
+	require.NoError(t, err)
+	// The caller's map must not be mutated.
+	assert.NotContains(t, doc.Metadata, internalEmbeddingTextKey)
+	assert.Equal(t, "text used for embedding", r.metadata[internalEmbeddingTextKey])
+
+	got, emb, err := vs.rowToDoc(r)
+	require.NoError(t, err)
+	assert.Equal(t, "text used for embedding", got.EmbeddingText)
+	assert.Equal(t, "news", got.Metadata["category"])
+	assert.NotContains(t, got.Metadata, internalEmbeddingTextKey)
+	assert.Equal(t, []float64{1, 2, 3}, emb)
+
+	// A document without EmbeddingText keeps the metadata map untouched.
+	plain := &document.Document{ID: "doc2", Metadata: map[string]any{"k": "v"}}
+	r2, err := vs.docToRow(plain, []float64{1, 2, 3}, now)
+	require.NoError(t, err)
+	assert.NotContains(t, r2.metadata, internalEmbeddingTextKey)
+	got2, _, err := vs.rowToDoc(r2)
+	require.NoError(t, err)
+	assert.Empty(t, got2.EmbeddingText)
+	assert.Equal(t, "v", got2.Metadata["k"])
 }
 
 // TestCloseError covers Close propagating a backend failure.

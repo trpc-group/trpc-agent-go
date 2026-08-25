@@ -12,6 +12,7 @@ package clickhouse
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 )
 
@@ -58,15 +59,20 @@ func (m Metric) distanceFunction() string {
 	}
 }
 
-// toScore converts a raw distance/product value to a higher-is-more-similar score.
+// toScore converts a raw distance/product value to a higher-is-more-similar
+// score in [0, 1], matching the vectorstore.ScoredDocument.Score contract.
+//
+// SQL still orders by the raw value, so ranking is unaffected by this mapping.
 func (m Metric) toScore(raw float64) float64 {
 	switch m {
 	case MetricL2:
 		// L2 distance d in [0, +inf); convert to (0, 1] similarity.
 		return 1.0 / (1.0 + raw)
 	case MetricInnerProduct:
-		// Inner product is already a similarity, unbounded.
-		return raw
+		// The dot product is unbounded in both directions, so it is squashed
+		// with a logistic curve. The mapping is strictly increasing, which keeps
+		// the ordering intact, and sends 0 to 0.5.
+		return 1.0 / (1.0 + math.Exp(-raw))
 	default:
 		// cosineDistance is in [0, 2]; map to [0, 1] similarity.
 		return 1.0 - raw/2
@@ -262,6 +268,13 @@ func validateOptions(o *options) error {
 	}
 	if o.maxResults <= 0 {
 		return fmt.Errorf("clickhouse: maxResults must be > 0, got %d", o.maxResults)
+	}
+	// Reject unknown metrics instead of silently falling back to cosine, which
+	// would rank results by a metric the caller did not ask for.
+	switch o.metric {
+	case MetricCosine, MetricL2, MetricInnerProduct:
+	default:
+		return fmt.Errorf("clickhouse: metric %d is not a supported Metric", o.metric)
 	}
 
 	// Validate built-in column names.

@@ -69,7 +69,20 @@ func TestMetricHelpers(t *testing.T) {
 	assert.Equal(t, 0.5, MetricCosine.toScore(1.0))
 	assert.Equal(t, 0.0, MetricCosine.toScore(2.0))
 	assert.Equal(t, 0.5, MetricL2.toScore(1.0))
-	assert.Equal(t, 2.0, MetricInnerProduct.toScore(2.0))
+
+	// Inner product is squashed into [0, 1]: a zero product maps to the
+	// midpoint, and negative or large products stay inside the range while
+	// preserving order.
+	assert.InDelta(t, 0.5, MetricInnerProduct.toScore(0.0), 1e-9)
+	assert.Greater(t, MetricInnerProduct.toScore(2.0), 0.5)
+	assert.Less(t, MetricInnerProduct.toScore(-2.0), 0.5)
+	for _, raw := range []float64{-100, -1, 0, 1, 100} {
+		got := MetricInnerProduct.toScore(raw)
+		assert.GreaterOrEqual(t, got, 0.0, "raw=%v", raw)
+		assert.LessOrEqual(t, got, 1.0, "raw=%v", raw)
+	}
+	// The mapping must stay strictly increasing so SQL ordering is preserved.
+	assert.Less(t, MetricInnerProduct.toScore(1.0), MetricInnerProduct.toScore(1.5))
 
 	assert.Equal(t, "ASC", MetricCosine.orderByDirection())
 	assert.Equal(t, "ASC", MetricL2.orderByDirection())
