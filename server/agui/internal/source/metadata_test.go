@@ -713,6 +713,31 @@ func TestBuildSnapshotMetadataIndexesCurrentRunID(t *testing.T) {
 	assert.Empty(t, metadata.Messages["assistant-2"].RunID)
 }
 
+func TestBuildSnapshotMetadataRunErrorClearsCurrentRunID(t *testing.T) {
+	runStarted := aguievents.NewRunStartedEvent("thread", "run-1")
+	inRun := aguievents.NewTextMessageStartEvent(
+		"assistant-1",
+		aguievents.WithRole("assistant"),
+	)
+	runError := aguievents.NewRunErrorEvent("boom", aguievents.WithRunID("run-1"))
+	afterRun := aguievents.NewTextMessageStartEvent(
+		"assistant-2",
+		aguievents.WithRole("assistant"),
+	)
+
+	metadata := BuildSnapshotMetadata([]session.TrackEvent{
+		newTrackEvent(t, runStarted),
+		newTrackEvent(t, inRun),
+		newTrackEvent(t, runError),
+		newTrackEvent(t, afterRun),
+	})
+
+	require.Contains(t, metadata.Messages, "assistant-1")
+	assert.Equal(t, "run-1", metadata.Messages["assistant-1"].RunID)
+	require.Contains(t, metadata.Messages, "assistant-2")
+	assert.Empty(t, metadata.Messages["assistant-2"].RunID)
+}
+
 func TestBuildSnapshotMetadataFallsBackToToolResultSource(t *testing.T) {
 	timestampTime := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
 	toolMetadata := Metadata{

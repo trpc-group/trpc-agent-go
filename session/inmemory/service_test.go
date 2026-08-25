@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/trackpage"
 )
 
 func TestNewSessionService(t *testing.T) {
@@ -1584,6 +1585,81 @@ func TestSessionServiceGetTrackEventPage(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "eventLimit")
+}
+
+func TestSessionServiceGetTrackEventPageErrorPaths(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "track-app",
+		UserID:    "track-user",
+		SessionID: "track-session-errors",
+	}
+
+	missing, err := service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		EventLimit: 1,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, session.Track("alpha"), missing.Track)
+	assert.Empty(t, missing.Entries)
+
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+	empty, err := service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		EventLimit: 1,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, session.Track("alpha"), empty.Track)
+	assert.Empty(t, empty.Entries)
+
+	require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"a1"`),
+		Timestamp: time.Now(),
+	}))
+
+	_, err = service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		Cursor:     "bad cursor",
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+
+	wrongTrack, err := trackpage.CursorForUnixNano("inmemory", key, "beta", 1, "0")
+	require.NoError(t, err)
+	_, err = service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		Cursor:     wrongTrack,
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+
+	badIndex, err := trackpage.CursorForUnixNano("inmemory", key, "alpha", 1, "bad")
+	require.NoError(t, err)
+	_, err = service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		Cursor:     badIndex,
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+
+	outOfRange, err := trackpage.CursorForUnixNano("inmemory", key, "alpha", 1, "2")
+	require.NoError(t, err)
+	_, err = service.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		Cursor:     outOfRange,
+		EventLimit: 1,
+	})
+	require.Error(t, err)
 }
 
 func TestSessionServiceGetTrackEventsEmptyAndErrors(t *testing.T) {

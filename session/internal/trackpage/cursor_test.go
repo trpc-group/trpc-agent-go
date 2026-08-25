@@ -61,3 +61,58 @@ func TestValidateBindingRejectsWrongRequestBinding(t *testing.T) {
 	}, "alpha"))
 	assert.Error(t, ValidateBinding(cursor, "test", key, "beta"))
 }
+
+func TestValidateRequest(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+
+	assert.NoError(t, ValidateRequest(session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		EventLimit: 1,
+	}))
+	assert.Error(t, ValidateRequest(session.TrackEventPageRequest{
+		Key:        session.Key{UserID: key.UserID, SessionID: key.SessionID},
+		Track:      "alpha",
+		EventLimit: 1,
+	}))
+	assert.Error(t, ValidateRequest(session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		EventLimit: 0,
+	}))
+}
+
+func TestDecodeRejectsMalformedCursor(t *testing.T) {
+	_, err := Decode("not base64!")
+	assert.Error(t, err)
+
+	_, err = Decode(base64.RawURLEncoding.EncodeToString([]byte("{")))
+	assert.Error(t, err)
+
+	raw, err := json.Marshal(Cursor{Version: 2})
+	require.NoError(t, err)
+	_, err = Decode(base64.RawURLEncoding.EncodeToString(raw))
+	assert.Error(t, err)
+}
+
+func TestCursorForUnixNanoAndParseIntID(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	raw, err := CursorForUnixNano("test", key, "alpha", 123, "42")
+	require.NoError(t, err)
+
+	cursor, err := Decode(raw)
+	require.NoError(t, err)
+	assert.Equal(t, int64(123), cursor.CreatedAt)
+	assert.Equal(t, "42", cursor.ID)
+
+	id, err := ParseIntID(cursor.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), id)
+
+	_, err = ParseIntID("bad")
+	assert.Error(t, err)
+}
+
+func TestTimeToUnixNanoZero(t *testing.T) {
+	assert.Equal(t, int64(0), TimeToUnixNano(time.Time{}))
+}

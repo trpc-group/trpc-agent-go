@@ -12,6 +12,7 @@ package mongodb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -112,6 +113,86 @@ func TestGetTrackEventPageRejectsWrongCursorBinding(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Empty(t, mc.recorded())
+}
+
+func TestGetTrackEventPageRejectsInvalidRequest(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc)
+	_, err := s.GetTrackEventPage(context.Background(), session.TrackEventPageRequest{
+		Key:   session.Key{AppName: "app", UserID: "user", SessionID: "session"},
+		Track: "alpha",
+	})
+	require.Error(t, err)
+	assert.Empty(t, mc.recorded())
+}
+
+func TestGetTrackEventPageRejectsInvalidCursorID(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc)
+	cursor, err := trackpage.CursorFor(
+		trackEventPageCursorKindMongoDB,
+		key,
+		"alpha",
+		time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC),
+		"bad",
+	)
+	require.NoError(t, err)
+
+	_, err = s.GetTrackEventPage(context.Background(), session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		Cursor:     cursor,
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+	assert.Empty(t, mc.recorded())
+}
+
+func TestGetTrackEventPageWrapsQueryError(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	mc := &mockClient{
+		findFn: func(_ any) (*mongo.Cursor, error) {
+			return nil, errors.New("find failed")
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	_, err := s.GetTrackEventPage(context.Background(), session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mongodb session service get track event page failed")
+}
+
+func TestGetTrackEventPageRejectsMalformedEvent(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	mc := &mockClient{
+		findFn: func(_ any) (*mongo.Cursor, error) {
+			return docsCursor([]any{
+				sessionTrackDoc{
+					ID:        primitive.NewObjectID(),
+					AppName:   key.AppName,
+					UserID:    key.UserID,
+					SessionID: key.SessionID,
+					Track:     "alpha",
+					Event:     []byte("{"),
+					CreatedAt: time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC),
+				},
+			})
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	_, err := s.GetTrackEventPage(context.Background(), session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal track event")
 }
 
 func mongoTrackPageDoc(

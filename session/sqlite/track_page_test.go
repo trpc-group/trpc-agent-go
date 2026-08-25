@@ -95,6 +95,73 @@ func TestSessionSQLite_GetTrackEventPageRejectsWrongCursorBinding(t *testing.T) 
 	require.Error(t, err)
 }
 
+func TestSessionSQLite_GetTrackEventPageRejectsInvalidRequest(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	_, err = svc.GetTrackEventPage(context.Background(), session.TrackEventPageRequest{
+		Key:   session.Key{AppName: "app", UserID: "user", SessionID: "session"},
+		Track: "alpha",
+	})
+	require.Error(t, err)
+}
+
+func TestSessionSQLite_GetTrackEventPageRejectsNonNumericCursorID(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	cursor, err := trackpage.CursorForUnixNano(
+		trackEventPageCursorKindSQLite,
+		key,
+		"alpha",
+		trackpage.TimeToUnixNano(time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)),
+		"bad",
+	)
+	require.NoError(t, err)
+
+	_, err = svc.GetTrackEventPage(context.Background(), session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		Cursor:     cursor,
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+}
+
+func TestSessionSQLite_GetTrackEventPageRejectsMalformedEvent(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, svc.AppendTrackEvent(ctx, sess, sqliteTrackPageEvent("bad", time.Now())))
+
+	_, err = svc.db.ExecContext(ctx, "UPDATE "+svc.tableSessionTracks+" SET event = ?", []byte("{"))
+	require.NoError(t, err)
+
+	_, err = svc.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+}
+
 func sqliteTrackPageEvent(payload string, ts time.Time) *session.TrackEvent {
 	return &session.TrackEvent{
 		Track:     "alpha",

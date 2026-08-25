@@ -107,6 +107,91 @@ func TestGetTrackEventPageRejectsWrongCursorBinding(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetTrackEventPageRejectsInvalidRequest(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	_, err = s.GetTrackEventPage(context.Background(), session.TrackEventPageRequest{
+		Key:   session.Key{AppName: "app", UserID: "user", SessionID: "session"},
+		Track: "alpha",
+	})
+	require.Error(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetTrackEventPageRejectsNonNumericCursorID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	cursor, err := trackpage.CursorFor(
+		trackEventPageCursorKindPostgres,
+		key,
+		"alpha",
+		time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC),
+		"bad",
+	)
+	require.NoError(t, err)
+
+	_, err = s.GetTrackEventPage(context.Background(), session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		Cursor:     cursor,
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetTrackEventPageWrapsQueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event, created_at FROM session_track_events")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, session.Track("alpha"), sqlmock.AnyArg(), 2).
+		WillReturnError(assert.AnError)
+
+	_, err = s.GetTrackEventPage(context.Background(), session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "postgres session service get track event page failed")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetTrackEventPageRejectsMalformedEvent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	createdAt := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	rows := sqlmock.NewRows([]string{"id", "event", "created_at"}).
+		AddRow(int64(1), []byte("{"), createdAt)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, event, created_at FROM session_track_events")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, session.Track("alpha"), sqlmock.AnyArg(), 2).
+		WillReturnRows(rows)
+
+	_, err = s.GetTrackEventPage(context.Background(), session.TrackEventPageRequest{
+		Key:        key,
+		Track:      "alpha",
+		EventLimit: 1,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal track event")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func postgresTrackPageEventBytes(t *testing.T, payload string, ts time.Time) []byte {
 	t.Helper()
 	event := session.TrackEvent{

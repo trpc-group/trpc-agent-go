@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
@@ -203,6 +204,25 @@ func TestWithConcurrentMessageStreamsEnabled(t *testing.T) {
 func TestWithMessagesSnapshotRunLifecycleEventsEnabled(t *testing.T) {
 	opts := NewOptions(WithMessagesSnapshotRunLifecycleEventsEnabled(true))
 	assert.True(t, opts.MessagesSnapshotRunLifecycleEventsEnabled)
+}
+
+func TestWithMessagesSnapshotSessionPageResolver(t *testing.T) {
+	called := false
+	resolver := func(
+		context.Context,
+		*adapter.RunAgentInput,
+		session.Key,
+	) (*MessagesSnapshotPageRequest, error) {
+		called = true
+		return &MessagesSnapshotPageRequest{Cursor: "cursor", EventLimit: 3}, nil
+	}
+
+	opts := NewOptions(WithMessagesSnapshotSessionPageResolver(resolver))
+	require.NotNil(t, opts.MessagesSnapshotSessionPageResolver)
+	req, err := opts.MessagesSnapshotSessionPageResolver(context.Background(), &adapter.RunAgentInput{}, session.Key{})
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, &MessagesSnapshotPageRequest{Cursor: "cursor", EventLimit: 3}, req)
 }
 
 func TestWithPostRunFinalizationTimeout(t *testing.T) {
