@@ -373,6 +373,18 @@ func prepareTransferTargetInvocation(
 				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
 			}
 		},
+		// Isolate the target invocation from the source run's tool surface.
+		// Invocation.Clone copies RunOptions verbatim, so run-scoped tool
+		// fields (ExternalTools, AdditionalTools, ExternalToolNames,
+		// ToolFilter) would otherwise leak into the target agent's model
+		// requests, mirroring the AgentTool boundary fix for #2219. The
+		// TransferController customizer runs after Clone and keeps the last
+		// word, so controllers can still re-attach a scoped tool surface.
+		func(inv *agent.Invocation) {
+			runOptions := inv.RunOptions
+			clearInheritedToolRunOptions(&runOptions)
+			inv.RunOptions = runOptions
+		},
 	}
 	// Override the inherited ParentMetadata: target invocation came from a
 	// transfer, so its ParentMetadata must describe the transfer (not
@@ -414,6 +426,20 @@ func prepareTransferTargetInvocation(
 		return nil, model.Message{}, err
 	}
 	return targetInvocation, beforeCustomize, nil
+}
+
+// clearInheritedToolRunOptions removes run-scoped tool surface fields from
+// the given RunOptions. These fields describe the source run's tool surface
+// and must not cross an agent boundary into a child/target invocation; the
+// target agent should only see its own registered tools by default.
+func clearInheritedToolRunOptions(runOptions *agent.RunOptions) {
+	if runOptions == nil {
+		return
+	}
+	runOptions.ToolFilter = nil
+	runOptions.AdditionalTools = nil
+	runOptions.ExternalTools = nil
+	runOptions.ExternalToolNames = nil
 }
 
 func shouldEmitTransferMessageEcho(
