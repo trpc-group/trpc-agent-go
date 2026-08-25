@@ -71,6 +71,66 @@ func TestClient_GetTrackEventPageContinuesSameScore(t *testing.T) {
 	}
 }
 
+func TestClient_GetTrackEventPageOrdersDoubleDigitSameScore(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "page-hashidx-double-digit"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	tracksJSON, err := json.Marshal([]session.Track{"alpha"})
+	require.NoError(t, err)
+	baseTime := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	for i := 0; i < 12; i++ {
+		require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+			Track:     "alpha",
+			Payload:   json.RawMessage(fmt.Sprintf(`"payload-%02d"`, i)),
+			Timestamp: baseTime,
+		}, tracksJSON))
+	}
+
+	var cursor string
+	var all []string
+	for {
+		page, err := c.GetTrackEventPage(ctx, session.TrackEventPageRequest{
+			Key:        key,
+			Track:      "alpha",
+			Cursor:     cursor,
+			EventLimit: 5,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, page.Entries)
+
+		payloads := make([]string, 0, len(page.Entries))
+		for _, entry := range page.Entries {
+			var payload string
+			require.NoError(t, json.Unmarshal(entry.Event.Payload, &payload))
+			payloads = append(payloads, payload)
+		}
+		all = append(payloads, all...)
+		if !page.HasMore {
+			break
+		}
+		cursor = page.Entries[0].Cursor
+	}
+
+	require.Equal(t, []string{
+		"payload-00",
+		"payload-01",
+		"payload-02",
+		"payload-03",
+		"payload-04",
+		"payload-05",
+		"payload-06",
+		"payload-07",
+		"payload-08",
+		"payload-09",
+		"payload-10",
+		"payload-11",
+	}, all)
+}
+
 func TestClient_GetTrackEventPageRejectsWrongCursorBinding(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())

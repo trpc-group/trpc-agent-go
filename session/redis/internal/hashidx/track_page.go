@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -30,6 +31,7 @@ type trackEventPageRow struct {
 
 type scoredTrackEventID struct {
 	id    string
+	seq   int64
 	score int64
 }
 
@@ -74,8 +76,16 @@ func (c *Client) queryTrackEventPageRows(
 	cursor trackpage.Cursor,
 	hasCursor bool,
 ) ([]trackEventPageRow, bool, error) {
-	selected := make([]scoredTrackEventID, 0, req.EventLimit+1)
+	candidates := make([]scoredTrackEventID, 0, req.EventLimit+1)
 	batchLimit := int64(req.EventLimit + 1)
+	var cursorSeq int64
+	if hasCursor {
+		var err error
+		cursorSeq, err = trackpage.ParseIntID(cursor.ID)
+		if err != nil {
+			return nil, false, err
+		}
+	}
 	var offset int64
 	for {
 		rangeBy := &redis.ZRangeBy{
@@ -91,25 +101,31 @@ func (c *Client) queryTrackEventPageRows(
 		if err != nil {
 			return nil, false, fmt.Errorf("query track event page index: %w", err)
 		}
-		for _, z := range zs {
-			id := fmt.Sprint(z.Member)
-			score := int64(z.Score)
-			if hasCursor && !redisTrackPageOlder(score, id, cursor.CreatedAt, cursor.ID) {
-				continue
-			}
-			selected = append(selected, scoredTrackEventID{id: id, score: score})
-			if len(selected) >= req.EventLimit+1 {
-				break
-			}
-		}
-		if len(selected) >= req.EventLimit+1 {
+		if len(zs) == 0 {
 			break
 		}
-		if !hasCursor || int64(len(zs)) < batchLimit {
+		for _, z := range zs {
+			id := fmt.Sprint(z.Member)
+			seq, err := trackpage.ParseIntID(id)
+			if err != nil {
+				return nil, false, err
+			}
+			score := int64(z.Score)
+			if hasCursor && !redisTrackPageOlder(score, seq, cursor.CreatedAt, cursorSeq) {
+				continue
+			}
+			candidates = append(candidates, scoredTrackEventID{id: id, seq: seq, score: score})
+		}
+		sortScoredTrackEventIDs(candidates)
+		if len(candidates) >= req.EventLimit+1 && int64(zs[len(zs)-1].Score) < candidates[req.EventLimit].score {
+			break
+		}
+		if int64(len(zs)) < batchLimit {
 			break
 		}
 		offset += int64(len(zs))
 	}
+	selected := candidates
 	hasMore := len(selected) > req.EventLimit
 	if hasMore {
 		selected = selected[:req.EventLimit]
@@ -171,9 +187,18 @@ func hashIdxTrackEventPageEntries(
 	return entries, nil
 }
 
-func redisTrackPageOlder(score int64, id string, cursorScore int64, cursorID string) bool {
+func sortScoredTrackEventIDs(items []scoredTrackEventID) {
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].score != items[j].score {
+			return items[i].score > items[j].score
+		}
+		return items[i].seq > items[j].seq
+	})
+}
+
+func redisTrackPageOlder(score int64, seq int64, cursorScore int64, cursorSeq int64) bool {
 	if score < cursorScore {
 		return true
 	}
-	return score == cursorScore && id < cursorID
+	return score == cursorScore && seq < cursorSeq
 }
