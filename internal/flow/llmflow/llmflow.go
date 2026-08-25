@@ -71,6 +71,13 @@ const (
 	defaultContextCompactionThresholdRatio = 0.7
 	contextCompactionFallbackWindow        = 8192
 	contextCompactionMinTokens             = 2000
+
+	contextCompactionOutcomeSuccess            = "success"
+	contextCompactionOutcomeNoUpdate           = "no_update"
+	contextCompactionOutcomeSummaryError       = "summary_error"
+	contextCompactionOutcomeRebuildUnavailable = "rebuild_unavailable"
+	contextCompactionOutcomePersistenceError   = "persistence_error"
+	contextCompactionOutcomePostCountError     = "post_count_error"
 )
 
 // InvocationHasFilteredUserTools reports whether the cached filtered tool
@@ -1682,6 +1689,7 @@ func (f *Flow) runContextCompaction(
 	rebuildPlan *contextCompactionRebuildPlan,
 	decision contextCompactionDecision,
 ) *model.Request {
+	startedAt := time.Now()
 	decisionRequest := requestWithCallLimitFinalizationMessage(
 		req,
 		rebuildPlan.callLimitFinalizationMessage,
@@ -1711,8 +1719,46 @@ func (f *Flow) runContextCompaction(
 		contextCompactionAttrs(decision, decisionRequest)...,
 	)
 	summaryCtx = summary.ContextWithCacheSafeForkRequest(summaryCtx, req)
-	if view, ok := summaryview.Snapshot(invocation); ok {
+	view, viewPresent := summaryview.Snapshot(invocation)
+	if viewPresent {
 		summaryCtx = summaryview.ContextWithView(summaryCtx, view)
+	}
+	logResult := func(
+		outcome string,
+		result *model.Request,
+		postRequestTokens int,
+	) {
+		var viewBound bool
+		var viewItems int
+		if viewPresent && view != nil {
+			viewBound = view.Bound
+			viewItems = len(view.Items)
+		}
+		format := "Pre-LLM context compaction result: outcome=%s, agent=%s, " +
+			"filter_key=%q, request_tokens=%d, threshold=%d, " +
+			"context_window=%d, messages=%d->%d, post_request_tokens=%d, " +
+			"summary_view_present=%t, summary_view_bound=%t, " +
+			"summary_view_items=%d, duration_ms=%d"
+		args := []any{
+			outcome,
+			invocation.AgentName,
+			filterKey,
+			decision.tokenCount,
+			decision.threshold,
+			decision.contextWindow,
+			len(decisionRequest.Messages),
+			len(result.Messages),
+			postRequestTokens,
+			viewPresent,
+			viewBound,
+			viewItems,
+			time.Since(startedAt).Milliseconds(),
+		}
+		if outcome == contextCompactionOutcomeSuccess {
+			log.InfofContext(ctx, format, args...)
+			return
+		}
+		log.WarnfContext(ctx, format, args...)
 	}
 	err := invocation.SessionService.CreateSessionSummary(
 		summaryCtx,
@@ -1748,14 +1794,11 @@ func (f *Flow) runContextCompaction(
 		},
 	)
 	if !updated {
+		outcome := contextCompactionOutcomeNoUpdate
 		if err != nil {
-			log.DebugfContext(
-				ctx,
-				"Pre-LLM context compaction skipped for agent %s: %v",
-				invocation.AgentName,
-				err,
-			)
+			outcome = contextCompactionOutcomeSummaryError
 		}
+		logResult(outcome, decisionRequest, decision.tokenCount)
 		return req
 	}
 
@@ -1774,10 +1817,10 @@ func (f *Flow) runContextCompaction(
 	}
 	finishLatencySpan(rebuildSpan, rebuildStarted, nil)
 	if rebuilt == nil {
-		log.DebugfContext(
-			ctx,
-			"Pre-LLM context compaction skipped for agent %s: safe rebuild unavailable",
-			invocation.AgentName,
+		logResult(
+			contextCompactionOutcomeRebuildUnavailable,
+			decisionRequest,
+			decision.tokenCount,
 		)
 		return req
 	}
@@ -1792,6 +1835,7 @@ func (f *Flow) runContextCompaction(
 		f.contextCompactionThresholdRatio,
 		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
 	)
+	postRequestTokens := postDecision.tokenCount
 	if postDecision.err == nil {
 		summaryview.Finalize(
 			invocation,
@@ -1805,23 +1849,23 @@ func (f *Flow) runContextCompaction(
 			invocation.AgentName,
 			postDecision.err,
 		)
+		postRequestTokens = -1
 	}
 
 	if err != nil {
-		log.WarnfContext(
-			ctx,
-			"Pre-LLM context compaction rebuilt request for agent %s after in-memory summary update; persistence failed: %v",
-			invocation.AgentName,
-			err,
+		logResult(
+			contextCompactionOutcomePersistenceError,
+			postDecisionRequest,
+			postRequestTokens,
 		)
 		return rebuilt
 	}
 
-	log.DebugfContext(
-		ctx,
-		"Pre-LLM context compaction rebuilt request for agent %s",
-		invocation.AgentName,
-	)
+	outcome := contextCompactionOutcomeSuccess
+	if postDecision.err != nil {
+		outcome = contextCompactionOutcomePostCountError
+	}
+	logResult(outcome, postDecisionRequest, postRequestTokens)
 	return rebuilt
 }
 
@@ -2518,6 +2562,18 @@ func (f *Flow) callLLM(
 		func(record imodelrequest.TokenTailoringRecord) {
 			summaryview.InvalidateBinding(invocation)
 			summaryfork.Invalidate(invocation)
+			if tokenTailoringCollapsedHistory(record) {
+				log.WarnfContext(
+					ctx,
+					"Model request token tailoring collapsed history: "+
+						"provider=%s, max_input_tokens=%d, messages=%d->%d",
+					record.Provider,
+					record.MaxInputTokens,
+					record.BeforeMessages,
+					record.AfterMessages,
+				)
+				return
+			}
 			log.DebugfContext(
 				ctx,
 				"Model request token tailoring applied: provider=%s, "+
@@ -2543,6 +2599,12 @@ func (f *Flow) callLLM(
 		})
 	}
 	return ctx, seq, true, nil
+}
+
+func tokenTailoringCollapsedHistory(
+	record imodelrequest.TokenTailoringRecord,
+) bool {
+	return record.BeforeMessages > 2 && record.AfterMessages <= 2
 }
 
 func withResponseSeqFinalizer(
