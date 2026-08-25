@@ -31,7 +31,10 @@ func (st surfaceTool) Declaration() *tool.Declaration {
 // transfer_to_agent target invocation does not inherit the source run's
 // tool surface fields (refs #2219). Invocation.Clone copies RunOptions
 // verbatim, so without boundary cleanup the target agent would see the
-// parent run's external tools, additional tools, and tool filter.
+// parent run's external tools and additional tools. The run-scoped
+// ToolFilter is deliberately preserved: it is a visibility predicate over
+// whichever agent builds the surface, so user/session/tenant policies keep
+// applying after the transfer.
 func TestTransferTargetInvocationIsolatesRunScopedToolSurface(t *testing.T) {
 	inv := &agent.Invocation{
 		Agent:        &parentAgent{child: &mockAgent{name: "child"}},
@@ -43,7 +46,7 @@ func TestTransferTargetInvocationIsolatesRunScopedToolSurface(t *testing.T) {
 			AdditionalTools:   []tool.Tool{surfaceTool{name: "additional"}},
 			ExternalToolNames: map[string]bool{"external": true},
 			ToolFilter: func(ctx context.Context, t tool.Tool) bool {
-				return true
+				return t.Declaration().Name != "blocked"
 			},
 		},
 	}
@@ -61,8 +64,12 @@ func TestTransferTargetInvocationIsolatesRunScopedToolSurface(t *testing.T) {
 	t.Run("external tool names should not leak into target", func(t *testing.T) {
 		require.Empty(t, targetInv.RunOptions.ExternalToolNames)
 	})
-	t.Run("tool filter should not leak into target", func(t *testing.T) {
-		require.Nil(t, targetInv.RunOptions.ToolFilter)
+	t.Run("tool filter persists and applies to target tools", func(t *testing.T) {
+		require.NotNil(t, targetInv.RunOptions.ToolFilter)
+		require.False(t, targetInv.RunOptions.ToolFilter(
+			context.Background(), surfaceTool{name: "blocked"}))
+		require.True(t, targetInv.RunOptions.ToolFilter(
+			context.Background(), surfaceTool{name: "allowed"}))
 	})
 }
 

@@ -375,11 +375,16 @@ func prepareTransferTargetInvocation(
 		},
 		// Isolate the target invocation from the source run's tool surface.
 		// Invocation.Clone copies RunOptions verbatim, so run-scoped tool
-		// fields (ExternalTools, AdditionalTools, ExternalToolNames,
-		// ToolFilter) would otherwise leak into the target agent's model
-		// requests, mirroring the AgentTool boundary fix for #2219. The
+		// surface fields (ExternalTools, AdditionalTools,
+		// ExternalToolNames) would otherwise leak into the target agent's
+		// model requests. ToolFilter is deliberately NOT cleared: it is a
+		// run-scoped visibility predicate applied against whichever agent
+		// builds the surface, not a description of the source run's tool
+		// surface, so user/session/tenant-level visibility policies keep
+		// applying across the transfer boundary (fail-closed). The
 		// TransferController customizer runs after Clone and keeps the last
-		// word, so controllers can still re-attach a scoped tool surface.
+		// word, so controllers can still re-scope or clear the filter for
+		// the target invocation.
 		func(inv *agent.Invocation) {
 			runOptions := inv.RunOptions
 			clearInheritedToolRunOptions(&runOptions)
@@ -432,11 +437,18 @@ func prepareTransferTargetInvocation(
 // the given RunOptions. These fields describe the source run's tool surface
 // and must not cross an agent boundary into a child/target invocation; the
 // target agent should only see its own registered tools by default.
+//
+// ToolFilter is intentionally preserved: unlike the other fields it is a
+// run-scoped predicate applied against whichever agent builds the surface,
+// not a description of the source agent's tools. Clearing it would silently
+// widen visibility after a transfer (fail-open), dropping user/session/tenant
+// visibility policies the run started with. Transfer controllers that want a
+// target-scoped filter can re-attach one in their customizer, which runs
+// after this cleanup and keeps the last word.
 func clearInheritedToolRunOptions(runOptions *agent.RunOptions) {
 	if runOptions == nil {
 		return
 	}
-	runOptions.ToolFilter = nil
 	runOptions.AdditionalTools = nil
 	runOptions.ExternalTools = nil
 	runOptions.ExternalToolNames = nil
