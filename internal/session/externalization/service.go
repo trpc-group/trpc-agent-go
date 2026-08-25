@@ -415,6 +415,19 @@ func wrapStateInitializationInterface(
 	wrapped session.Service,
 	initializer session.StateInitializationService,
 ) session.Service {
+	if service := wrapPageStateInitializationInterface(wrapped, initializer); service != nil {
+		return service
+	}
+	if service := wrapReaderStateInitializationInterface(wrapped, initializer); service != nil {
+		return service
+	}
+	return wrapBaseStateInitializationInterface(wrapped, initializer)
+}
+
+func wrapPageStateInitializationInterface(
+	wrapped session.Service,
+	initializer session.StateInitializationService,
+) session.Service {
 	switch service := wrapped.(type) {
 	case *searchableWindowTrackReaderPageService:
 		return &stateInitializingSearchableWindowTrackReaderPageService{
@@ -456,6 +469,16 @@ func wrapStateInitializationInterface(
 			trackPageService:           service,
 			StateInitializationService: initializer,
 		}
+	default:
+		return nil
+	}
+}
+
+func wrapReaderStateInitializationInterface(
+	wrapped session.Service,
+	initializer session.StateInitializationService,
+) session.Service {
+	switch service := wrapped.(type) {
 	case *searchableWindowTrackReaderService:
 		return &stateInitializingSearchableWindowTrackReaderService{
 			searchableWindowTrackReaderService: service,
@@ -476,6 +499,16 @@ func wrapStateInitializationInterface(
 			windowTrackReaderService:   service,
 			StateInitializationService: initializer,
 		}
+	default:
+		return nil
+	}
+}
+
+func wrapBaseStateInitializationInterface(
+	wrapped session.Service,
+	initializer session.StateInitializationService,
+) session.Service {
+	switch service := wrapped.(type) {
 	case *searchableWindowService:
 		return &stateInitializingSearchableWindowService{
 			searchableWindowService:    service,
@@ -521,6 +554,18 @@ func wrapStateInitializationInterface(
 	}
 }
 
+type trackOptionalInterfaces struct {
+	base       *Service
+	searchable session.SearchableService
+	window     session.WindowService
+	track      session.TrackService
+	reader     trackEventReader
+	pager      session.TrackEventPageService
+	hasWindow  bool
+	hasReader  bool
+	hasPager   bool
+}
+
 func wrapTrackOptionalInterfaces(
 	base *Service,
 	searchable session.SearchableService,
@@ -533,135 +578,174 @@ func wrapTrackOptionalInterfaces(
 	pager session.TrackEventPageService,
 	hasPager bool,
 ) session.Service {
-	switch {
-	case hasSearch && hasWindow && hasReader && hasPager:
-		return &searchableWindowTrackReaderPageService{
-			searchableWindowTrackReaderService: &searchableWindowTrackReaderService{
-				Service:           base,
-				SearchableService: searchable,
-				WindowService:     window,
-				TrackService:      track,
-				trackEventReader:  reader,
-			},
-			TrackEventPageService: pager,
+	opts := trackOptionalInterfaces{
+		base:       base,
+		searchable: searchable,
+		window:     window,
+		track:      track,
+		reader:     reader,
+		pager:      pager,
+		hasWindow:  hasWindow,
+		hasReader:  hasReader,
+		hasPager:   hasPager,
+	}
+	if hasSearch {
+		return wrapSearchTrackOptionalInterfaces(opts)
+	}
+	if hasWindow {
+		return wrapWindowTrackOptionalInterfaces(opts)
+	}
+	return wrapBaseTrackOptionalInterfaces(opts)
+}
+
+func wrapSearchTrackOptionalInterfaces(opts trackOptionalInterfaces) session.Service {
+	if opts.hasWindow {
+		return wrapSearchWindowTrackOptionalInterfaces(opts)
+	}
+	if opts.hasReader {
+		if opts.hasPager {
+			return &searchableTrackReaderPageService{
+				searchableTrackReaderService: &searchableTrackReaderService{
+					Service:           opts.base,
+					SearchableService: opts.searchable,
+					TrackService:      opts.track,
+					trackEventReader:  opts.reader,
+				},
+				TrackEventPageService: opts.pager,
+			}
 		}
-	case hasSearch && hasWindow && hasReader:
-		return &searchableWindowTrackReaderService{
-			Service:           base,
-			SearchableService: searchable,
-			WindowService:     window,
-			TrackService:      track,
-			trackEventReader:  reader,
-		}
-	case hasSearch && hasWindow && hasPager:
-		return &searchableWindowTrackPageService{
-			searchableWindowTrackService: &searchableWindowTrackService{
-				Service:           base,
-				SearchableService: searchable,
-				WindowService:     window,
-				TrackService:      track,
-			},
-			TrackEventPageService: pager,
-		}
-	case hasSearch && hasWindow:
-		return &searchableWindowTrackService{
-			Service:           base,
-			SearchableService: searchable,
-			WindowService:     window,
-			TrackService:      track,
-		}
-	case hasSearch && hasReader && hasPager:
-		return &searchableTrackReaderPageService{
-			searchableTrackReaderService: &searchableTrackReaderService{
-				Service:           base,
-				SearchableService: searchable,
-				TrackService:      track,
-				trackEventReader:  reader,
-			},
-			TrackEventPageService: pager,
-		}
-	case hasSearch && hasReader:
 		return &searchableTrackReaderService{
-			Service:           base,
-			SearchableService: searchable,
-			TrackService:      track,
-			trackEventReader:  reader,
+			Service:           opts.base,
+			SearchableService: opts.searchable,
+			TrackService:      opts.track,
+			trackEventReader:  opts.reader,
 		}
-	case hasSearch && hasPager:
+	}
+	if opts.hasPager {
 		return &searchableTrackPageService{
 			searchableTrackService: &searchableTrackService{
-				Service:           base,
-				SearchableService: searchable,
-				TrackService:      track,
+				Service:           opts.base,
+				SearchableService: opts.searchable,
+				TrackService:      opts.track,
 			},
-			TrackEventPageService: pager,
+			TrackEventPageService: opts.pager,
 		}
-	case hasSearch:
-		return &searchableTrackService{
-			Service:           base,
-			SearchableService: searchable,
-			TrackService:      track,
+	}
+	return &searchableTrackService{
+		Service:           opts.base,
+		SearchableService: opts.searchable,
+		TrackService:      opts.track,
+	}
+}
+
+func wrapSearchWindowTrackOptionalInterfaces(opts trackOptionalInterfaces) session.Service {
+	if opts.hasReader {
+		if opts.hasPager {
+			return &searchableWindowTrackReaderPageService{
+				searchableWindowTrackReaderService: &searchableWindowTrackReaderService{
+					Service:           opts.base,
+					SearchableService: opts.searchable,
+					WindowService:     opts.window,
+					TrackService:      opts.track,
+					trackEventReader:  opts.reader,
+				},
+				TrackEventPageService: opts.pager,
+			}
 		}
-	case hasWindow && hasReader && hasPager:
-		return &windowTrackReaderPageService{
-			windowTrackReaderService: &windowTrackReaderService{
-				Service:          base,
-				WindowService:    window,
-				TrackService:     track,
-				trackEventReader: reader,
+		return &searchableWindowTrackReaderService{
+			Service:           opts.base,
+			SearchableService: opts.searchable,
+			WindowService:     opts.window,
+			TrackService:      opts.track,
+			trackEventReader:  opts.reader,
+		}
+	}
+	if opts.hasPager {
+		return &searchableWindowTrackPageService{
+			searchableWindowTrackService: &searchableWindowTrackService{
+				Service:           opts.base,
+				SearchableService: opts.searchable,
+				WindowService:     opts.window,
+				TrackService:      opts.track,
 			},
-			TrackEventPageService: pager,
+			TrackEventPageService: opts.pager,
 		}
-	case hasWindow && hasReader:
+	}
+	return &searchableWindowTrackService{
+		Service:           opts.base,
+		SearchableService: opts.searchable,
+		WindowService:     opts.window,
+		TrackService:      opts.track,
+	}
+}
+
+func wrapWindowTrackOptionalInterfaces(opts trackOptionalInterfaces) session.Service {
+	if opts.hasReader {
+		if opts.hasPager {
+			return &windowTrackReaderPageService{
+				windowTrackReaderService: &windowTrackReaderService{
+					Service:          opts.base,
+					WindowService:    opts.window,
+					TrackService:     opts.track,
+					trackEventReader: opts.reader,
+				},
+				TrackEventPageService: opts.pager,
+			}
+		}
 		return &windowTrackReaderService{
-			Service:          base,
-			WindowService:    window,
-			TrackService:     track,
-			trackEventReader: reader,
+			Service:          opts.base,
+			WindowService:    opts.window,
+			TrackService:     opts.track,
+			trackEventReader: opts.reader,
 		}
-	case hasWindow && hasPager:
+	}
+	if opts.hasPager {
 		return &windowTrackPageService{
 			windowTrackService: &windowTrackService{
-				Service:       base,
-				WindowService: window,
-				TrackService:  track,
+				Service:       opts.base,
+				WindowService: opts.window,
+				TrackService:  opts.track,
 			},
-			TrackEventPageService: pager,
+			TrackEventPageService: opts.pager,
 		}
-	case hasWindow:
-		return &windowTrackService{
-			Service:       base,
-			WindowService: window,
-			TrackService:  track,
+	}
+	return &windowTrackService{
+		Service:       opts.base,
+		WindowService: opts.window,
+		TrackService:  opts.track,
+	}
+}
+
+func wrapBaseTrackOptionalInterfaces(opts trackOptionalInterfaces) session.Service {
+	if opts.hasReader {
+		if opts.hasPager {
+			return &trackReaderPageService{
+				trackReaderService: &trackReaderService{
+					Service:          opts.base,
+					TrackService:     opts.track,
+					trackEventReader: opts.reader,
+				},
+				TrackEventPageService: opts.pager,
+			}
 		}
-	case hasReader && hasPager:
-		return &trackReaderPageService{
-			trackReaderService: &trackReaderService{
-				Service:          base,
-				TrackService:     track,
-				trackEventReader: reader,
-			},
-			TrackEventPageService: pager,
-		}
-	case hasReader:
 		return &trackReaderService{
-			Service:          base,
-			TrackService:     track,
-			trackEventReader: reader,
+			Service:          opts.base,
+			TrackService:     opts.track,
+			trackEventReader: opts.reader,
 		}
-	case hasPager:
+	}
+	if opts.hasPager {
 		return &trackPageService{
 			trackService: &trackService{
-				Service:      base,
-				TrackService: track,
+				Service:      opts.base,
+				TrackService: opts.track,
 			},
-			TrackEventPageService: pager,
+			TrackEventPageService: opts.pager,
 		}
-	default:
-		return &trackService{
-			Service:      base,
-			TrackService: track,
-		}
+	}
+	return &trackService{
+		Service:      opts.base,
+		TrackService: opts.track,
 	}
 }
 
