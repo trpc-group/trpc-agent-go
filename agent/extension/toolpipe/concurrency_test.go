@@ -22,14 +22,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// TestBeforeModelPreservesConcurrencyObjection pins that augmenting a tool's
-// schema does not readmit it to the parallel path.
+// Augmenting a tool's schema must not readmit it to the parallel path.
 //
-// itool.IsConcurrencySafe is the question both parallel schedulers ask of every
-// entry in Request.Tools — the LLMAgent function-call processor and the graph
-// Tools node — and a single false keeps their whole batch sequential. Before the
-// wrapper delegated it, an objecting tool that ToolPipe had replaced read as
-// raising no objection, so a mixed turn ran it beside its siblings.
+// Both schedulers ask itool.IsConcurrencySafe of every entry in Request.Tools,
+// and one false keeps their whole batch sequential. Before the wrapper delegated
+// it, an objecting tool ToolPipe had replaced raised no objection.
 func TestBeforeModelPreservesConcurrencyObjection(t *testing.T) {
 	exclusive := function.NewFunctionTool(
 		func(ctx context.Context, _ struct{}) (string, error) { return "", nil },
@@ -65,10 +62,9 @@ func TestBeforeModelPreservesConcurrencyObjection(t *testing.T) {
 		"the wrapper must not manufacture an objection for a tool that raised none")
 }
 
-// TestBeforeModelResolvesNestedWrappers pins that the delegation resolves
-// through the wrappers between ToolPipe and the semantic tool rather than
-// stopping at the first one. A ToolSet's tools reach Request.Tools as
-// *itool.NamedTool, so this is the shape most objecting toolset tools have.
+// The delegation must resolve through the wrappers between ToolPipe and the
+// semantic tool rather than stopping at the first. A ToolSet's tools reach
+// Request.Tools as *itool.NamedTool, so this is the common shape.
 func TestBeforeModelResolvesNestedWrappers(t *testing.T) {
 	exclusive := function.NewFunctionTool(
 		func(ctx context.Context, _ struct{}) (string, error) { return "", nil },
@@ -96,18 +92,14 @@ type metadataTool struct {
 
 func (t metadataTool) ToolMetadata() tool.ToolMetadata { return t.metadata }
 
-// TestBeforeModelPreservesDescriptiveMetadata pins that the wrapper reports what
-// the inner tool publishes rather than a guarantee synthesized from its own
-// IsConcurrencySafe.
+// The wrapper must report what the inner tool publishes, not a guarantee
+// synthesized from its own IsConcurrencySafe.
 //
-// tool.MetadataOf falls back to ConcurrencyAware for a tool that publishes no
-// metadata, so once the wrapper implemented that interface it would have
-// answered ToolMetadata{ConcurrencySafe: true} for every tool ToolPipe touched —
-// including one, like mockTool here, that implements neither interface. That
-// turns "raises no scheduling objection", all IsConcurrencySafe promises, into
-// the same-tool reentrancy guarantee the field documents. The LLMAgent
-// permission path builds PermissionRequest.Metadata from whatever sits in
-// Request.Tools, so a policy would read the invented guarantee off this wrapper.
+// tool.MetadataOf falls back to ConcurrencyAware for a tool publishing no
+// metadata, so once the wrapper implemented that interface it answered
+// ConcurrencySafe: true for every tool ToolPipe touched — including one, like
+// mockTool, implementing neither. Permission policies read that off this
+// wrapper.
 func TestBeforeModelPreservesDescriptiveMetadata(t *testing.T) {
 	plain := &mockTool{decl: &tool.Declaration{
 		Name:        "plain_tool",

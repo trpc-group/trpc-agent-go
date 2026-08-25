@@ -465,10 +465,9 @@ func TestRenamedTool_ToolMetadata(t *testing.T) {
 
 // Renaming must not change how a tool is scheduled.
 //
-// The wrapper answers on behalf of the tool it renames, so it has to carry a
-// concurrency objection through — otherwise a tool that declared it cannot share
-// a turn would be silently readmitted to the parallel path just by being exposed
-// through a toolbox — and it must not invent one for a tool that raised none.
+// The wrapper answers on behalf of the tool it renames, so it must carry an
+// objection through — otherwise exposure through a toolbox alone would readmit an
+// objecting tool — and must not invent one for a tool that raised none.
 func TestRenamedTool_IsConcurrencySafe(t *testing.T) {
 	plain := newRenamedTool(newTestTool("echo", "echo input"), "tools")
 	assert.True(t, plain.(*renamedTool).IsConcurrencySafe())

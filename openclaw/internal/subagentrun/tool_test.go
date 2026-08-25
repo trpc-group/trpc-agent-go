@@ -148,19 +148,14 @@ func TestSpawnToolSyncAndReviewModesWait(t *testing.T) {
 	require.Equal(t, testParentAgentName, route.AgentName)
 }
 
-// TestSpawnToolKeepsReviewModeOffTheParallelPath pins the objection that keeps a
-// review-mode spawn's resume route on the invocation the flow reads back.
+// The objection keeps a review-mode spawn's resume route on the invocation the
+// flow reads back.
 //
-// The first half runs the spawn against the invocation view a parallel worker
-// would hand it — agent.Invocation.View(), the same shape the function-call
-// processor builds per call — and shows the route landing on that view and not on
-// the base. Views are never synced back, so on the parallel path the route is
-// discarded while the spawn still reports success.
-//
-// The second half is what prevents it: both spawn registrations object through
-// tool.ConcurrencyAware, so neither scheduler ever hands this tool a view. The
-// batch it appears in stays sequential and Call runs against the base invocation,
-// which the last assertion checks end to end.
+// The first half runs the spawn against the view a parallel worker would hand it
+// and shows the route landing there rather than on the base; views are never
+// synced back, so it would be discarded while the spawn reported success. The
+// second half shows both registrations objecting, which is what keeps the batch
+// sequential so Call receives the base invocation.
 func TestSpawnToolKeepsReviewModeOffTheParallelPath(t *testing.T) {
 	t.Parallel()
 
@@ -195,15 +190,13 @@ func TestSpawnToolKeepsReviewModeOffTheParallelPath(t *testing.T) {
 	require.False(t, leaked,
 		"precondition: a parallel worker's view never reaches the base invocation")
 
-	// The objection is what keeps the framework from handing it that view. Both
-	// registrations are *spawnTool, so the alias is covered by the same method.
+	// Both registrations are *spawnTool, so the alias is covered too.
 	require.False(t, tool.IsConcurrencySafe(tools.spawn),
 		"a spawn must not be admitted to the parallel path")
 	require.False(t, tool.IsConcurrencySafe(tools.spawnAlias),
 		"the compatibility alias must object too")
 
-	// Sequential execution is what the objection buys: Call receives the base
-	// invocation, so the route is where the flow reads it back.
+	// Sequential execution puts the route where the flow reads it back.
 	sequential := newInvocation("telegram:user", "telegram:dm:988", runtimeState)
 	_, err = tools.spawn.Call(
 		agent.NewInvocationContext(context.Background(), sequential),

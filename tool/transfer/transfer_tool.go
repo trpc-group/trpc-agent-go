@@ -111,17 +111,13 @@ func (t *Tool) Declaration() *tool.Declaration {
 	}
 }
 
-// IsConcurrencySafe reports false: a transfer must not run on the parallel tool
-// path.
+// IsConcurrencySafe reports false: a transfer must not run on the parallel path.
 //
-// Call records the handoff by assigning Invocation.TransferInfo, and the
-// transfer response processor later reads that field off the base invocation.
-// Parallel execution hands each call its own invocation view, and views are
-// never synced back, so the assignment is discarded — the tool returns a success
-// result while the handoff silently never happens.
-//
-// Objecting here keeps a turn containing a transfer sequential, which is where
-// the tool's one channel back to the flow still exists.
+// Call records the handoff by assigning Invocation.TransferInfo, which the
+// transfer response processor reads off the base invocation. Parallel execution
+// gives each call its own view, and views are never synced back, so the
+// assignment is discarded: the tool returns success and the handoff never
+// happens.
 func (t *Tool) IsConcurrencySafe() bool { return false }
 
 // Call implements the tool.CallableTool interface.

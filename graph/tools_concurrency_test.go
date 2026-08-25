@@ -23,13 +23,9 @@ type objectingTool struct{ *blockingTool }
 
 func (objectingTool) IsConcurrencySafe() bool { return false }
 
-// WithEnableParallelTools must honor tool.ConcurrencyAware.
-//
-// tool.IsConcurrencySafe is a framework-wide contract, and a Tools node is the
-// second scheduler that can run a tool concurrently. Without this check the
-// exported guarantee would hold only on the LLMAgent path, and a tool that
-// declared it cannot share a turn would still be launched in its own goroutine
-// here.
+// WithEnableParallelTools must honor tool.ConcurrencyAware: a Tools node is the
+// second scheduler that can run a tool concurrently, so without this check the
+// guarantee would hold only on the LLMAgent path.
 func TestProcessToolCallsHonorsConcurrencyObjection(t *testing.T) {
 	started := make(chan string, 2)
 	allowA := make(chan struct{})

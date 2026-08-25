@@ -175,13 +175,11 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 // executed concurrently; the responses are merged in the original order either
 // way. By default, tools run serially for compatibility.
 //
-// It allows rather than enables because concurrency is decided per batch, and
-// every resolved tool in the batch has to raise no objection: one
+// It allows rather than enables because concurrency is decided per batch: one
 // tool.ConcurrencyAware returning false keeps that whole batch on the serial
-// path, responses and ordering unchanged. Tools that implement neither
-// concurrency interface raise no objection, so this only changes turns
-// containing a tool that opted out. See tool.ConcurrencyAware and
-// tool.IsConcurrencySafe.
+// path, responses and ordering unchanged. Tools implementing neither interface
+// raise no objection, so this only changes turns containing a tool that opted
+// out. See tool.ConcurrencyAware and tool.IsConcurrencySafe.
 func WithEnableParallelTools(enable bool) Option {
 	return func(node *Node) {
 		node.enableParallelTools = enable
@@ -5536,13 +5534,10 @@ func admitsParallelToolCalls(config toolCallsConfig) bool {
 // admitsConcurrentToolCalls reports whether no tool in the batch objects to
 // running beside its siblings.
 //
-// tool.ConcurrencyAware is a framework-wide contract, so WithEnableParallelTools
-// honors it for the same reason the LLMAgent function-call processor does: a tool
-// that declares it cannot share a turn would otherwise still be launched in its
-// own goroutine here, and the exported guarantee would hold on only one of the
-// two schedulers that can run it. A name this node cannot resolve is admissible —
-// it produces a terminal error result instead of executing.
-//
+// tool.ConcurrencyAware is framework-wide, so this node honors it for the same
+// reason the LLMAgent function-call processor does: otherwise the guarantee would
+// hold on only one of the two schedulers that can run a tool. An unresolvable
+// name is admissible — it produces a terminal error result instead of executing.
 // The check goes through itool.IsConcurrencySafe so a declaration overlay cannot
 // hide the objection.
 func admitsConcurrentToolCalls(

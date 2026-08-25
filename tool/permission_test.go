@@ -103,14 +103,11 @@ func TestMetadataOf_UsesConcurrencyAwareFallback(t *testing.T) {
 	}
 }
 
-// Admission is objection-based: only ConcurrencyAware is consulted, and every
-// other tool is admitted.
-//
-// The alternative — reading ToolMetadata.ConcurrencySafe — cannot work, because a
-// struct field's zero value is indistinguishable from an unset one. It would read
-// a tool that publishes a single ReadOnly hint as objecting, and it would also
-// reinterpret an existing true (documented as same-tool reentrancy) as a promise
-// about arbitrary siblings that no external tool ever made.
+// Admission is objection-based: only ConcurrencyAware is consulted, everything
+// else is admitted. Reading ToolMetadata.ConcurrencySafe instead cannot work — a
+// zero value is indistinguishable from an unset one, so a lone ReadOnly hint
+// would read as an objection, and an existing true (same-tool reentrancy) would
+// become a promise about arbitrary siblings that no tool ever made.
 func TestIsConcurrencySafe(t *testing.T) {
 	tests := []struct {
 		name string
@@ -130,14 +127,13 @@ func TestIsConcurrencySafe(t *testing.T) {
 		{"provider false does not object", &metadataTool{
 			metadata: ToolMetadata{ConcurrencySafe: false},
 		}, true},
-		// The regression that matters: an external tool written against the
-		// descriptive metadata contract publishes an unrelated hint and never
-		// considered concurrency at all. It keeps the admission it has today.
+		// The regression that matters: a tool publishing an unrelated hint,
+		// having never considered concurrency, keeps today's admission.
 		{"provider of unrelated metadata keeps the default", &metadataTool{
 			metadata: ToolMetadata{ReadOnly: true},
 		}, true},
-		// A tool publishing both is answered by the narrow interface, which is the
-		// only one that can express an objection.
+		// Publishing both, the narrow interface answers: it is the only one that
+		// can express an objection.
 		{"the narrow interface decides, overriding metadata", &conflictingTool{
 			metadata: ToolMetadata{ConcurrencySafe: true},
 			aware:    false,

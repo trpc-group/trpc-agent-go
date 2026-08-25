@@ -123,26 +123,23 @@ func TestHasConcurrentBatch(t *testing.T) {
 			want:      true,
 		},
 		{
-			// ToolMetadata is descriptive and its zero value is indistinguishable
-			// from an unset one, so a tool publishing only metadata never objects —
-			// otherwise every external tool that publishes a ReadOnly hint would
-			// silently take its turn off the parallel path.
+			// A metadata zero value cannot be told from an unset one, so a tool
+			// publishing only metadata never objects — otherwise a ReadOnly hint
+			// would take its turn off the parallel path.
 			name:      "metadata alone never objects",
 			toolCalls: callsFor("meta", "metaX"),
 			want:      true,
 		},
 		{
-			// An exact transfer_to_agent call must be caught even though a host
-			// surface patched its declaration: the overlay wrapper implements no
-			// optional interfaces of its own.
+			// Caught even though a host patched the declaration: the overlay
+			// wrapper implements no optional interfaces of its own.
 			name:      "patched transfer tool still objects",
 			toolCalls: callsFor("read", transfer.TransferToolName),
 			want:      false,
 		},
 		{
-			// The model may name a sub-agent directly. Execution maps that onto
-			// transfer_to_agent, so admission has to resolve the same mapping or it
-			// checks a name no tool answers to.
+			// Execution maps a bare sub-agent name onto transfer_to_agent, so
+			// admission has to resolve the same mapping.
 			name:      "sub-agent name resolves to the transfer tool",
 			toolCalls: callsFor("read", "child"),
 			want:      false,
@@ -169,14 +166,11 @@ func TestHasConcurrentBatch(t *testing.T) {
 	}
 }
 
-// A batched transfer must still hand off.
-//
-// The transfer tool records the handoff by assigning Invocation.TransferInfo, and
-// TransferResponseProcessor reads that field off the base invocation afterwards.
-// The parallel path gives each call its own invocation view and never syncs one
-// back, so admitting a transfer there loses the assignment: the tool returns
-// Success: true and the conversation stays with the current agent. Admission has
-// to keep the turn sequential for the field to survive.
+// A batched transfer must still hand off. The tool records it by assigning
+// Invocation.TransferInfo, which TransferResponseProcessor reads off the base
+// invocation; the parallel path gives each call its own view and never syncs it
+// back, so admitting a transfer there returns Success: true and hands off to
+// nobody.
 func TestBatchedTransferReachesBaseInvocation(t *testing.T) {
 	const (
 		agentName  = "tester"
@@ -262,7 +256,7 @@ func TestBatchedTransferReachesBaseInvocation(t *testing.T) {
 
 // A batched await_user_reply must still stage its resume route, for the same
 // reason: MarkAwaitingUserReply writes to the invocation's own state, and a
-// worker's cloned state is discarded when the worker finishes.
+// worker's clone is discarded when it finishes.
 func TestBatchedAwaitUserReplyReachesBaseInvocation(t *testing.T) {
 	const (
 		agentName = "tester"

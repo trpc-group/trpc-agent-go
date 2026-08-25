@@ -244,15 +244,11 @@ func TestTransferTool_NoToolCallIDLeavesTransferInfoIDEmpty(t *testing.T) {
 	}
 }
 
-// A transfer must never be batched with other tool calls.
-//
-// Call records the handoff by assigning Invocation.TransferInfo, and the
-// transfer response processor reads that field off the base invocation. Parallel
-// execution hands each call its own invocation view and never syncs one back, so
-// a batched transfer would return Success: true while the handoff was discarded
-// with the view. The objection is what keeps such a turn sequential, so it is
-// asserted through tool.ConcurrencyAware as the scheduler resolves it, not only
-// on the concrete type.
+// A transfer must never be batched. Call records the handoff by assigning
+// Invocation.TransferInfo, which the response processor reads off the base
+// invocation; parallel execution gives each call its own view and never syncs it
+// back, so a batched transfer returns Success: true and hands off to nobody.
+// Asserted through tool.ConcurrencyAware, the way a scheduler resolves it.
 func TestTool_IsConcurrencySafe(t *testing.T) {
 	tl := New([]agent.Info{{Name: "target"}})
 

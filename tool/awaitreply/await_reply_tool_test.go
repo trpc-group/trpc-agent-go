@@ -91,14 +91,11 @@ func TestTool_CallInvalidInvocation(t *testing.T) {
 	require.Contains(t, resp.Message, "non-empty agent target")
 }
 
-// await_user_reply must never be batched with other tool calls.
-//
-// Call stages the resume route with agent.MarkAwaitingUserReply, which writes to
-// the invocation's own state. Parallel execution hands each call a separate
-// invocation view whose state is cloned and never synced back, so a batched call
-// would report success while the route was discarded with the view. Asserted
-// through tool.ConcurrencyAware as the scheduler resolves it, not only on the
-// concrete type.
+// await_user_reply must never be batched. Call stages the resume route with
+// agent.MarkAwaitingUserReply, which writes to the invocation's own state;
+// parallel execution gives each call a view whose state is cloned and never
+// synced back, so a batched call reports success and resumes nothing. Asserted
+// through tool.ConcurrencyAware, the way a scheduler resolves it.
 func TestTool_IsConcurrencySafe(t *testing.T) {
 	tl := New()
 

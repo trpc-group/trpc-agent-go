@@ -121,34 +121,22 @@ func (t *declaredCallableTool) SkipSummarization() bool {
 
 // IsConcurrencySafe delegates the inner tool's concurrency objection.
 //
-// The framework's parallel tool paths ask this of whatever sits in
-// Request.Tools, and this wrapper is what sits there once BeforeModel has run.
-// Without the delegation a tool that explicitly declined to share its turn —
-// function.WithConcurrencySafe(false), or any tool.ConcurrencyAware
-// implementation — would read as raising no objection purely because ToolPipe
-// augmented its schema, and would be readmitted to the parallel path.
-//
-// Resolution goes through itool.IsConcurrencySafe rather than
-// tool.IsConcurrencySafe so a NamedTool or declaration overlay between this
-// wrapper and the objecting tool does not hide the objection either.
+// The parallel paths ask this of whatever sits in Request.Tools, which is this
+// wrapper once BeforeModel has run. Without the delegation, a tool that declined
+// to share its turn would be readmitted to the parallel path purely because
+// ToolPipe augmented its schema. Resolution goes through itool.IsConcurrencySafe
+// so a NamedTool or declaration overlay in between cannot hide it either.
 func (t *declaredCallableTool) IsConcurrencySafe() bool {
 	return itool.IsConcurrencySafe(t.inner)
 }
 
 // ToolMetadata delegates the inner tool's descriptive metadata.
 //
-// It exists because of IsConcurrencySafe above. Without a ToolMetadata method
-// tool.MetadataOf falls back to the ConcurrencyAware interface and reports
-// ToolMetadata{ConcurrencySafe: true} for every wrapped tool, including one that
-// implements neither interface. That would turn "raises no scheduling objection"
-// — all IsConcurrencySafe promises — into the same-tool reentrancy guarantee
-// ToolMetadata.ConcurrencySafe documents, which the inner tool never made. The
-// LLMAgent permission path builds PermissionRequest.Metadata from whatever sits
-// in Request.Tools, so a policy would read that guarantee off this wrapper.
-//
-// Delegating also stops the wrapper from dropping the rest of what the inner
-// tool publishes — ReadOnly, Destructive, OpenWorld — which it did before it
-// answered metadata at all.
+// It exists because of IsConcurrencySafe above: without a ToolMetadata method,
+// tool.MetadataOf falls back to ConcurrencyAware and reports ConcurrencySafe:
+// true for every wrapped tool, promising the same-tool reentrancy the inner tool
+// never claimed. Permission policies read that off this wrapper. Delegating also
+// stops it dropping ReadOnly, Destructive, and OpenWorld.
 func (t *declaredCallableTool) ToolMetadata() tool.ToolMetadata {
 	return tool.MetadataOf(t.inner)
 }
