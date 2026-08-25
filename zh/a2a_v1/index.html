@@ -1,0 +1,5807 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/a2a_v1/">
+      
+      
+        <link rel="prev" href="../agui/cancel/">
+      
+      
+        <link rel="next" href="../a2a/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
+    
+    
+      
+        <title>A2A v1.0 - tRPC-Agent-Go</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+  
+
+
+  
+  
+
+<script id="__analytics">function __md_analytics(){function e(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],e("js",new Date),e("config",""),document.addEventListener("DOMContentLoaded",(function(){document.forms.search&&document.forms.search.query.addEventListener("blur",(function(){this.value&&e("event","search",{search_term:this.value})}));document$.subscribe((function(){var t=document.forms.feedback;if(void 0!==t)for(var a of t.querySelectorAll("[type=submit]"))a.addEventListener("click",(function(a){a.preventDefault();var n=document.location.pathname,d=this.getAttribute("data-md-value");e("event","feedback",{page:n,data:d}),t.firstElementChild.disabled=!0;var r=t.querySelector(".md-feedback__note [data-md-value='"+d+"']");r&&(r.hidden=!1)})),t.hidden=!1})),location$.subscribe((function(t){e("config","",{page_path:t.pathname})}))}));var t=document.createElement("script");t.async=!0,t.src="https://www.googletagmanager.com/gtag/js?id=",document.getElementById("__analytics").insertAdjacentElement("afterEnd",t)}</script>
+  
+    <script>"undefined"!=typeof __md_analytics&&__md_analytics()</script>
+  
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#trpc-agent-go-a2a-v10" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../assets/img/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            tRPC-Agent-Go
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              A2A v1.0
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../a2a_v1/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  概览
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../agent/" class="md-tabs__link">
+          
+  
+  
+  组件
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../gateway/" class="md-tabs__link">
+          
+  
+  
+  服务
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../observability/" class="md-tabs__link">
+          
+  
+  
+  可观测
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../ecosystem/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  生态
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../blog/trpcagentgo/" class="md-tabs__link">
+          
+  
+  
+  博客
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../assets/img/logo.png" alt="logo">
+
+    </a>
+    tRPC-Agent-Go
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    组件
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            组件
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            Agent
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Goal 扩展
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multiagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dynamic-workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    动态工作流
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../taskrun/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Task Run 运行时
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../team/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Team
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../custom-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    自定义 Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dify Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../claudecode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Claude Code Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../codex/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Codex Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Runner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Code Executor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../codeact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    CodeAct
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    错误处理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Model
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../prompt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Prompt Template
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../callbacks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Callbacks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plugin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Plugins
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_10" id="__nav_2_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_10">
+            <span class="md-nav__icon md-icon"></span>
+            Memory
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    使用与配置
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    内存存储
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/sqlitevec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLiteVec
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/mysqlvec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Vector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pgvector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/chromadb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ChromaDB
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/mem0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    mem0 集成
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/tencentdb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TencentDB Agent Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Artifact
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Skill
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evolution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evolution
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tool
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Session
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_15">
+            <span class="md-nav__icon md-icon"></span>
+            Session
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/noop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Noop Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Session Summary
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/tdsql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TDSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ClickHouse Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/mongodb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MongoDB Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16" id="__nav_2_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Knowledge
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16">
+            <span class="md-nav__icon md-icon"></span>
+            Knowledge
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/embedder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embedder
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/reranker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reranker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/query-enhancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query Enhancer
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    数据源
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/code-rag/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    代码知识库（Code RAG, Beta）
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    内容提取器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    过滤器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    知识库管理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/ocr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16_11" id="__nav_2_16_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    向量存储
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_16_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16_11">
+            <span class="md-nav__icon md-icon"></span>
+            向量存储
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/vectorstore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/vectorstore/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/vectorstore/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/vectorstore/tcvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TcVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Elasticsearch
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/vectorstore/qdrant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qdrant
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/vectorstore/milvus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Milvus
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    故障排除
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../planner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Planner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../event/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Event
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_19" id="__nav_2_19_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Evaluation
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_19">
+            <span class="md-nav__icon md-icon"></span>
+            Evaluation
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/evalset/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估集
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/metric/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估指标
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/evaluator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/evalresult/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估结果
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/service/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估服务
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/agentevaluator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估入口
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/methods/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    评估方法
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    在线评估服务
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PromptIter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    服务
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            服务
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Gateway
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trpcagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    tRPC-Agent API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    AG-UI
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            AG-UI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    总览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    实时对话路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    消息快照路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/cancel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    取消路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    A2A v1.0
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A v1.0
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#a2a" class="md-nav__link">
+    <span class="md-ellipsis">
+      A2A 协议介绍
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A2A 协议介绍">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v0x-v10" class="md-nav__link">
+    <span class="md-ellipsis">
+      从 v0.x 到 v1.0
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trpc-a2a-go" class="md-nav__link">
+    <span class="md-ellipsis">
+      trpc-a2a-go 介绍
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trpc-agent-go-a2a" class="md-nav__link">
+    <span class="md-ellipsis">
+      tRPC-Agent-Go 的 A2A 接入架构
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="tRPC-Agent-Go 的 A2A 接入架构">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a2a_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      A2A 接入提供的能力
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llmagentgraphagent" class="md-nav__link">
+    <span class="md-ellipsis">
+      与 LLMAgent、GraphAgent 的区别
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      状态边界
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a2a-v10" class="md-nav__link">
+    <span class="md-ellipsis">
+      A2A v1.0 接入
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A2A v1.0 接入">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v1-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      创建 v1 Server
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a2a-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      调用远程 A2A Agent
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      运行普通 Agent 调用示例
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      请求生命周期
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stateless-taskmanager" class="md-nav__link">
+    <span class="md-ellipsis">
+      默认 stateless TaskManager
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task" class="md-nav__link">
+    <span class="md-ellipsis">
+      保留型 Task 管理
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      多节点部署
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v1" class="md-nav__link">
+    <span class="md-ellipsis">
+      v1 常用配置
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v02x" class="md-nav__link">
+    <span class="md-ellipsis">
+      旧版协议 v0.2.x 接入
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="旧版协议 v0.2.x 接入">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v02x_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      v0.2.x 能力范围
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a2a-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      创建旧版 A2A Server
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a2a_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      调用旧版 A2A 服务
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      状态、身份和请求扩展
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v0-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      v0 Task 管理边界
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      旧版示例
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v02x-v10" class="md-nav__link">
+    <span class="md-ellipsis">
+      从 v0.2.x 迁移到 v1.0
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="从 v0.2.x 迁移到 v1.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v10-v02x" class="md-nav__link">
+    <span class="md-ellipsis">
+      v1.0 与 v0.2.x 的接入差异
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      兼容矩阵
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#server" class="md-nav__link">
+    <span class="md-ellipsis">
+      迁移 Server
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a2aagent-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      迁移 A2AAgent Client
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置和扩展接口迁移
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="配置和扩展接口迁移">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      常规配置
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      高级扩展
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#taskmanager" class="md-nav__link">
+    <span class="md-ellipsis">
+      迁移时选择 TaskManager
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v1-server-v0" class="md-nav__link">
+    <span class="md-ellipsis">
+      在 v1 Server 上兼容 v0 客户端
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      兼容保证和已知差异
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      协议使用指南
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      更多示例
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../a2a/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A v0.2.x（旧版）
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../a2ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2UI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openclaw-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    可观测
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            可观测
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry-multimodal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    多模态遥测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    生态
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    博客
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            博客
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/trpcagentgo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    构建智能 AI 应用的 Go 语言 Agent 框架
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    长任务 Agent 上下文管理的设计与评测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/evolution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    tRPC-Agent-Go Evolution：Agent 自进化的在线学习、离线优化与评测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/promptcache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    从对话到执行：tRPC-Agent-Go Code Executor 如何为 Agent 构建可控运行环境
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/graphagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    GraphAgent 让 AI 工作流与 Agent 无缝融合
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    快速构建基于 AG-UI 的 Agent 服务
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Anthropic Agent Skills 规范的 Go 原生实现
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 自动化评估范式与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/llmverifier/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 高质量稳定性提升方法
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/openclaw/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    打造企业级安全可控的 OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 提示词自动迭代与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../blog/multiagent-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    把工作放到合适边界：tRPC-Agent-Go Multi-Agent 设计与选型
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#a2a" class="md-nav__link">
+    <span class="md-ellipsis">
+      A2A 协议介绍
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A2A 协议介绍">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v0x-v10" class="md-nav__link">
+    <span class="md-ellipsis">
+      从 v0.x 到 v1.0
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trpc-a2a-go" class="md-nav__link">
+    <span class="md-ellipsis">
+      trpc-a2a-go 介绍
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trpc-agent-go-a2a" class="md-nav__link">
+    <span class="md-ellipsis">
+      tRPC-Agent-Go 的 A2A 接入架构
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="tRPC-Agent-Go 的 A2A 接入架构">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a2a_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      A2A 接入提供的能力
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llmagentgraphagent" class="md-nav__link">
+    <span class="md-ellipsis">
+      与 LLMAgent、GraphAgent 的区别
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      状态边界
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a2a-v10" class="md-nav__link">
+    <span class="md-ellipsis">
+      A2A v1.0 接入
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A2A v1.0 接入">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v1-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      创建 v1 Server
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a2a-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      调用远程 A2A Agent
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      运行普通 Agent 调用示例
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      请求生命周期
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stateless-taskmanager" class="md-nav__link">
+    <span class="md-ellipsis">
+      默认 stateless TaskManager
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task" class="md-nav__link">
+    <span class="md-ellipsis">
+      保留型 Task 管理
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      多节点部署
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v1" class="md-nav__link">
+    <span class="md-ellipsis">
+      v1 常用配置
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v02x" class="md-nav__link">
+    <span class="md-ellipsis">
+      旧版协议 v0.2.x 接入
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="旧版协议 v0.2.x 接入">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v02x_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      v0.2.x 能力范围
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a2a-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      创建旧版 A2A Server
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a2a_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      调用旧版 A2A 服务
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      状态、身份和请求扩展
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v0-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      v0 Task 管理边界
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      旧版示例
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v02x-v10" class="md-nav__link">
+    <span class="md-ellipsis">
+      从 v0.2.x 迁移到 v1.0
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="从 v0.2.x 迁移到 v1.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v10-v02x" class="md-nav__link">
+    <span class="md-ellipsis">
+      v1.0 与 v0.2.x 的接入差异
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      兼容矩阵
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#server" class="md-nav__link">
+    <span class="md-ellipsis">
+      迁移 Server
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a2aagent-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      迁移 A2AAgent Client
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置和扩展接口迁移
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="配置和扩展接口迁移">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      常规配置
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      高级扩展
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#taskmanager" class="md-nav__link">
+    <span class="md-ellipsis">
+      迁移时选择 TaskManager
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v1-server-v0" class="md-nav__link">
+    <span class="md-ellipsis">
+      在 v1 Server 上兼容 v0 客户端
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      兼容保证和已知差异
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      协议使用指南
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      更多示例
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/a2a_v1.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/a2a_v1.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="trpc-agent-go-a2a-v10">tRPC-Agent-Go A2A v1.0 接入与迁移指南</h1>
+<p>本文从使用者的角度介绍 A2A 协议、<code>trpc-a2a-go</code> 与 tRPC-Agent-Go 的接入架构，然后给出推荐使用的 A2A v1.0 接入方式、Task 与多节点部署边界、旧版 A2A v0.2.x 接入和迁移指南。现有 v0.2.x 接入说明请参考 <a href="../a2a/">A2A 集成指南</a>。</p>
+<h2 id="a2a">A2A 协议介绍</h2>
+<p>A2A（Agent-to-Agent）是用于发现和调用远程 AI Agent 的协议。调用方不需要了解远程 Agent 使用了什么框架、模型或工具。</p>
+<p>主要协议概念如下：</p>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent Card</td>
+<td>描述 Agent 身份、能力和调用方式的公开信息</td>
+</tr>
+<tr>
+<td>Message</td>
+<td>用户与 Agent 之间的一轮消息</td>
+</tr>
+<tr>
+<td>Part</td>
+<td>Message 或 Artifact 携带的文本、文件或结构化数据</td>
+</tr>
+<tr>
+<td>Task</td>
+<td>具有生命周期、可以观察和继续操作的一次工作</td>
+</tr>
+<tr>
+<td>Artifact</td>
+<td>Task 产生的交付物</td>
+</tr>
+<tr>
+<td>Context ID</td>
+<td>多个 Message 或 Task 共享的会话标识</td>
+</tr>
+<tr>
+<td>Task ID</td>
+<td>一次 Task 生命周期的标识</td>
+</tr>
+</tbody>
+</table>
+<p>一次典型的 A2A v1.0 调用分为两步：</p>
+<ol>
+<li>获取远程 <strong>Agent Card</strong>，了解服务地址、身份、技能、输入输出类型、流式能力和鉴权要求。</li>
+<li>向 Agent Card 声明的端点发送消息，接收直接 <code>Message</code> 或可跟踪的 <code>Task</code>。</li>
+</ol>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Client
+    participant Card as A2A v1 Agent Card endpoint
+    participant Server as A2A v1 endpoint
+
+    Client-&gt;&gt;Card: GET /.well-known/agent-card.json
+    Card--&gt;&gt;Client: v1 Agent Card
+    Client-&gt;&gt;Server: SendMessage / SendStreamingMessage
+    alt 简单消息结果
+        Server--&gt;&gt;Client: Message
+    else Task 工作流
+        Server--&gt;&gt;Client: Task 或 Task 更新事件
+        opt 服务端保留 Task
+            Client-&gt;&gt;Server: GetTask / ListTasks / CancelTask / SubscribeToTask
+            Server--&gt;&gt;Client: Task 快照或后续事件流
+        end
+    end</code></pre>
+<p>简单问答可以直接返回 <code>Message</code>；需要进度、Artifact、中断、取消或后续查询的工作可以使用 <code>Task</code>。两者都属于协议结果，Task 也不是对话 session 的替代品。</p>
+<p>A2A v1.0 支持阻塞 <code>SendMessage</code>、实时 <code>SendStreamingMessage</code>，以及发起后通过 Task API 查询、取消或重新订阅的交互方式；继续挂起的 Task 则需要携带原 Task ID 再次发送 Message。具体选择取决于服务端是否在请求结束后保留 Task，后文会给出选择方式。</p>
+<h3 id="v0x-v10">从 v0.x 到 v1.0</h3>
+<p>A2A 协议已经从 v0.x 演进到 v1.0。<a href="https://a2a-protocol.org/latest/announcing-1.0/">官方 v1.0 公告</a>明确说明 interaction protocol 包含破坏性变更；<a href="https://a2a-protocol.org/latest/whats-new-v1/">官方迁移指南</a>以 v0.3.0 为对比基线，列出了下面这些核心变化。tRPC-Agent-Go 的旧版接入实现更早的 v0.2.x，它与 v0.3.0 同属需要迁移的 v0.x 协议线，但具体字段仍应以各自版本的协议定义为准。</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>v0.3.0（官方迁移基线）</th>
+<th>v1.0</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Part 内容模型</td>
+<td><code>TextPart</code>、<code>FilePart</code> 和 <code>DataPart</code> 是不同类型，通过 <code>kind</code> 区分</td>
+<td>统一为一个 <code>Part</code>，通过 <code>text</code>、<code>raw</code>、<code>url</code> 或 <code>data</code> 成员表达内容</td>
+</tr>
+<tr>
+<td>流式事件</td>
+<td>事件自身携带 <code>kind</code>，<code>TaskStatusUpdateEvent</code> 使用 <code>final</code> 表示结束</td>
+<td>事件使用成员名区分具体类型，移除 <code>kind</code> 和 <code>final</code>，由 stream 关闭表达结束</td>
+</tr>
+<tr>
+<td>枚举值</td>
+<td><code>user</code>、<code>completed</code> 等小写值</td>
+<td><code>ROLE_USER</code>、<code>TASK_STATE_COMPLETED</code> 等带类型前缀的枚举值</td>
+</tr>
+<tr>
+<td>Agent Card</td>
+<td>端点、传输和协议版本主要由顶层字段表达</td>
+<td>使用 <code>supportedInterfaces</code> 声明 URL、binding 和协议版本，可以同时公布多种接口</td>
+</tr>
+<tr>
+<td>操作和 Task</td>
+<td><code>message/send</code>、<code>tasks/get</code> 等斜杠形式 method，没有 <code>ListTasks</code>，部分 Task 行为定义较宽松</td>
+<td>使用 <code>SendMessage</code>、<code>GetTask</code> 等 operation，增加 <code>ListTasks</code>，并明确 Message/Task 返回、订阅和取消语义</td>
+</tr>
+<tr>
+<td>协议 binding</td>
+<td><code>a2a.proto</code> 更接近 gRPC 实现定义，不同 binding 的等价性约束较弱</td>
+<td>以 <code>a2a.proto</code> 作为协议无关的规范来源，正式定义 JSON-RPC、HTTP+JSON/REST 与 gRPC 的等价映射</td>
+</tr>
+</tbody>
+</table>
+<p>因此，A2A v1.0 并非只调整 method 名称，而是同时改变了序列化模型、事件判别方式、Agent 发现结构和 Task 交互语义。在没有兼容层时，v0.x 客户端的请求不能直接由 v1.0 服务端处理。</p>
+<h2 id="trpc-a2a-go">trpc-a2a-go 介绍</h2>
+<p><a href="https://github.com/trpc-group/trpc-a2a-go"><code>trpc-a2a-go</code></a> 是 tRPC 的 A2A 协议 Go 实现，提供协议类型以及客户端和服务端两侧的基础能力。</p>
+<p>为了让应用渐进迁移，<code>trpc-a2a-go</code> 使用新的 <code>/v2</code> Go module 实现 A2A v1.0，原有 module 继续承载 v0.2.x；tRPC-Agent-Go 相应新增 <code>server/a2a/v1</code> 和 <code>agent/a2aagent/v1</code>，原有 <code>server/a2a</code> 和 <code>agent/a2aagent</code> 将继续维护，直到大部分用户迁移至 v1。</p>
+<p>对于迁移期间仍需服务的旧版客户端，<code>trpc-a2a-go/v2</code> 提供 <code>compat/v0</code> 转换层，tRPC-Agent-Go 可以在新的 v1 服务端上显式启用该兼容能力。</p>
+<p>包和协议版本的对应关系如下：</p>
+<table>
+<thead>
+<tr>
+<th>A2A 协议</th>
+<th>tRPC-Agent-Go Server</th>
+<th>tRPC-Agent-Go 远程 Agent</th>
+<th><code>trpc-a2a-go</code> module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>v1.0</td>
+<td><code>server/a2a/v1</code></td>
+<td><code>agent/a2aagent/v1</code></td>
+<td><code>trpc-a2a-go/v2</code></td>
+</tr>
+<tr>
+<td>v0.2.x</td>
+<td><code>server/a2a</code></td>
+<td><code>agent/a2aagent</code></td>
+<td><code>trpc-a2a-go</code></td>
+</tr>
+</tbody>
+</table>
+<p>tRPC-Agent-Go 的 <code>/v1</code> 后缀表示 A2A 协议 v1.0；<code>trpc-a2a-go/v2</code> 中的 <code>/v2</code> 是 Go module major version。两者属于不同仓库的版本命名，不要把 <code>/v2</code> 理解为 A2A 协议 v2。</p>
+<p><code>trpc-a2a-go/v2</code> 的主要层次如下：</p>
+<table>
+<thead>
+<tr>
+<th>层次</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>protocol</code></td>
+<td>Agent Card、Message、Task、Artifact、事件和请求类型</td>
+</tr>
+<tr>
+<td><code>client</code></td>
+<td>Agent 发现、JSON-RPC 调用和 SSE 事件流</td>
+</tr>
+<tr>
+<td><code>server</code></td>
+<td>Agent Card 端点、鉴权、JSON-RPC 分发和 SSE</td>
+</tr>
+<tr>
+<td><code>taskmanager</code></td>
+<td>请求执行策略、Task 生命周期、保留和事件分发</td>
+</tr>
+<tr>
+<td><code>compat/v0</code></td>
+<td>在 v0.2.x wire 协议与 v1.0 核心模型之间转换</td>
+</tr>
+</tbody>
+</table>
+<p>服务端把具体工作交给 <code>MessageProcessor</code>，后者读取 <code>ExecContext</code> 并产生一条协议事件流。<code>TaskManager</code> 消费同一条事件流，决定当前调用是请求内执行还是需要保留 Task，并生成阻塞、流式、查询和订阅等协议行为；服务端本身负责 Agent Card、wire 协议、路由和中间件。tRPC-Agent-Go 接入使用的正是这些扩展边界。</p>
+<p><code>trpc-a2a-go</code> 使用 lazy Task 机制：<code>MessageProcessor</code> 只产生 Message 时不会创建 Task；首次产生 status 或 artifact 事件时，TaskManager 才创建本次执行使用的 Task。保留型 TaskManager 会在请求结束后继续保存这个 Task，stateless TaskManager 则只在当前请求内处理它。</p>
+<h2 id="trpc-agent-go-a2a">tRPC-Agent-Go 的 A2A 接入架构</h2>
+<p>tRPC-Agent-Go 在 <code>trpc-a2a-go</code> 之上提供适配器，并没有重新实现另一套 A2A 传输或 Task 系统。这套接入是连接本地 Agent 与远程服务的协议边界，不是与 LLMAgent、GraphAgent 并列的第三种本地执行引擎。</p>
+<p>服务端适配器把 A2A 请求转换为 Runner invocation，再把 Runner event 转换回 A2A event，因此 Runner 后面可以是 LLMAgent、GraphAgent 或任何其他 Agent。客户端 <code>A2AAgent</code> 把远程 A2A 服务封装为标准的 tRPC-Agent-Go Agent，Runner、父 Agent 或 Graph 节点可以像调用本地 Agent 一样调用它。</p>
+<pre class="mermaid"><code>flowchart LR
+    subgraph Remote["远程服务"]
+        SA["server/a2a/v1"]
+        MP["MessageProcessor adapter"]
+        TM["A2A TaskManager&lt;br/&gt;默认 stateless / 可配置保留型 TaskManager"]
+        R1["Runner&lt;br/&gt;服务端 session"]
+        LA["LLMAgent / GraphAgent / 其他 Agent"]
+        SA &lt;--&gt; TM
+        TM &lt;--&gt; MP
+        MP &lt;--&gt; R1
+        R1 &lt;--&gt; LA
+    end
+
+    subgraph Caller["调用方应用"]
+        CA["agent/a2aagent/v1"]
+        CA &lt;--&gt; R2["Runner&lt;br/&gt;调用方 session"]
+        R2 &lt;--&gt; APP["应用 / 上层 Agent"]
+        TC["trpc-a2a-go/v2/client&lt;br/&gt;完整 Task API"]
+    end
+
+    CA --&gt;|"SendMessage / SendStreamingMessage"| SA
+    SA --&gt;|"Task / 事件流"| CA
+    TC --&gt;|"Task API（仅保留型 TaskManager 可跨请求使用）"| SA
+    SA --&gt;|"Task 快照 / 事件流"| TC</code></pre>
+<h3 id="a2a_1">A2A 接入提供的能力</h3>
+<p>这套接入提供三类能力：</p>
+<ul>
+<li><strong>把本地 Agent 发布为 A2A 服务：</strong> <code>server/a2a/v1</code> 发布 Agent Card，把 A2A Message、context ID、用户身份和 metadata 转换为 Runner invocation，再把 Runner 产生的文本、多模态内容、工具调用、状态和错误转换为 A2A 事件。W3C trace context 则通过 HTTP 请求头跨越协议边界传播。LLMAgent、GraphAgent 和自定义 Agent 都可以通过同一个 Runner 接入。</li>
+<li><strong>像本地 Agent 一样调用远程服务：</strong> <code>agent/a2aagent/v1</code> 发现远程 Agent Card 并实现统一的 <code>agent.Agent</code> 接口，把本地 invocation 转换为阻塞或流式 A2A 请求，再把远程 Message、Task、Artifact、工具调用和错误转换回 tRPC-Agent-Go 事件。</li>
+<li><strong>按需使用完整 A2A Task API：</strong> <code>A2AAgent</code> 只封装普通 Agent invocation；需要 Task 查询、列表、取消、重新订阅或 push notification 时，直接使用 <code>trpc-a2a-go/v2/client</code>：<code>GetTasks</code> 调用 v1 <code>GetTask</code> operation，<code>ListTasks</code> 调用 <code>ListTasks</code>，<code>CancelTasks</code> 调用 <code>CancelTask</code>，<code>ResubscribeTask</code> 调用 <code>SubscribeToTask</code>。</li>
+</ul>
+<p>服务端适配器会接入 <code>trpc-a2a-go</code> 的中间件链，并默认从 <code>X-User-ID</code> 请求头解析 Runner user ID；这个默认行为只是身份传递，不等于业务鉴权。生产服务仍需要通过网关或底层 A2A 服务端中间件完成认证、授权和 Task 归属校验。</p>
+<p>当前 <code>server/a2a/v1</code> 实例绑定一个 Agent Card 和一个 Runner。底层 <code>trpc-a2a-go</code> 即使配置了 tenant Agent Card，也不会让这个适配器自动按 tenant 分发到不同 Runner；需要多 Agent 托管时，应用应在适配器外路由到不同服务实例，或者让固定 Runner 后面的 Agent 完成应用级业务路由。后一种方式不会读取或保留 A2A <code>tenant</code> 的协议分发语义。</p>
+<h3 id="llmagentgraphagent">与 LLMAgent、GraphAgent 的区别</h3>
+<p>A2AAgent 与本地 Agent 的区别如下：</p>
+<table>
+<thead>
+<tr>
+<th>Agent 类型</th>
+<th>核心职责</th>
+<th>实际执行位置</th>
+<th>主要状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LLMAgent</td>
+<td>基于模型进行推理、选择工具和多轮交互</td>
+<td>当前进程</td>
+<td>Runner session</td>
+</tr>
+<tr>
+<td>GraphAgent</td>
+<td>按节点、边和状态转换执行可控工作流</td>
+<td>当前进程</td>
+<td>Runner session 和 Graph state/checkpoint</td>
+</tr>
+<tr>
+<td>A2AAgent</td>
+<td>把 Agent invocation 转发给远程 A2A 服务</td>
+<td>远程服务</td>
+<td>调用方 Runner session；其他状态由远端实现管理</td>
+</tr>
+</tbody>
+</table>
+<p>LLMAgent 直接持有 Model、Tool 和 SubAgent 配置；GraphAgent 持有工作流结构并支持 checkpoint、中断和恢复；A2AAgent 本地不持有远端的模型或工具配置，其 <code>Tools()</code> 和 <code>SubAgents()</code> 为空，远端能力由 Agent Card 声明，远端是否保留 A2A Task 则取决于其实现，使用 <code>trpc-a2a-go</code> 时由 TaskManager 决定。这些类型可以组合使用：LLMAgent 或 GraphAgent 可以通过 Runner 暴露为 A2A 服务，A2AAgent 也可以作为父 Agent 的 SubAgent 或 Graph 中的 Agent 节点。</p>
+<p>它们的主要区别不是能力强弱，而是执行逻辑位于本地还是远端，以及调用是否跨越 A2A 协议边界。A2A 解决的是远程发现和互操作问题；LLMAgent 与 GraphAgent 解决的是本地推理和编排问题。</p>
+<h3 id="_1">状态边界</h3>
+<p>从服务端接入点看，默认 stateless TaskManager 不会跨请求保留 A2A Task，因此默认只有 Runner session 这一类跨请求状态。只有配置 memory、Redis 或自定义保留型 TaskManager，开启完整 A2A Task 管理能力后，服务端才会同时存在 Runner session 和 A2A Task 两类相互独立的状态。</p>
+<p>在 tRPC-Agent-Go 调用另一套 tRPC-Agent-Go 服务的完整链路中，调用方和服务端通常各自拥有独立的 Runner session store；A2A context ID 用于关联两端调用，但不会合并这两个存储。后文会继续说明可选的 A2A Task 状态和多节点部署要求。</p>
+<h2 id="a2a-v10">A2A v1.0 接入</h2>
+<p>新应用应使用 v1 包。</p>
+<h3 id="v1-server">创建 v1 Server</h3>
+<p>v1 服务端接收由调用方持有的 Runner 和显式 Agent Card。这样可以在创建服务端时明确 Runner 所有权、session 配置和对外发布的 A2A 身份。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-0-10">10</a></span>
+<span class="normal"><a href="#__codelineno-0-11">11</a></span>
+<span class="normal"><a href="#__codelineno-0-12">12</a></span>
+<span class="normal"><a href="#__codelineno-0-13">13</a></span>
+<span class="normal"><a href="#__codelineno-0-14">14</a></span>
+<span class="normal"><a href="#__codelineno-0-15">15</a></span>
+<span class="normal"><a href="#__codelineno-0-16">16</a></span>
+<span class="normal"><a href="#__codelineno-0-17">17</a></span>
+<span class="normal"><a href="#__codelineno-0-18">18</a></span>
+<span class="normal"><a href="#__codelineno-0-19">19</a></span>
+<span class="normal"><a href="#__codelineno-0-20">20</a></span>
+<span class="normal"><a href="#__codelineno-0-21">21</a></span>
+<span class="normal"><a href="#__codelineno-0-22">22</a></span>
+<span class="normal"><a href="#__codelineno-0-23">23</a></span>
+<span class="normal"><a href="#__codelineno-0-24">24</a></span>
+<span class="normal"><a href="#__codelineno-0-25">25</a></span>
+<span class="normal"><a href="#__codelineno-0-26">26</a></span>
+<span class="normal"><a href="#__codelineno-0-27">27</a></span>
+<span class="normal"><a href="#__codelineno-0-28">28</a></span>
+<span class="normal"><a href="#__codelineno-0-29">29</a></span>
+<span class="normal"><a href="#__codelineno-0-30">30</a></span>
+<span class="normal"><a href="#__codelineno-0-31">31</a></span>
+<span class="normal"><a href="#__codelineno-0-32">32</a></span>
+<span class="normal"><a href="#__codelineno-0-33">33</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/runner"</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/session/inmemory"</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/server/a2a/v1"</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="p">)</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="nx">agentRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="s">"my-app"</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">llmAgent</span><span class="p">,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()),</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="p">)</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="k">defer</span><span class="w"> </span><span class="nx">agentRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="nx">card</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">NewAgentCard</span><span class="p">(</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Description</span><span class="p">,</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="s">"1.0.0"</span><span class="p">,</span><span class="w">                  </span><span class="c1">// Agent 实现版本。</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="w">    </span><span class="s">"agent.example.com:8888"</span><span class="p">,</span><span class="w"> </span><span class="c1">// 对客户端发布的可达地址。</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="w">    </span><span class="kc">true</span><span class="p">,</span><span class="w">                     </span><span class="c1">// 声明支持流式响应。</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithCardTools</span><span class="p">(</span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()...),</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="p">)</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="p">}</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithRunner</span><span class="p">(</span><span class="nx">agentRunner</span><span class="p">),</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithAgentCard</span><span class="p">(</span><span class="nx">card</span><span class="p">),</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="p">)</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="p">}</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a><span class="k">return</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">Start</span><span class="p">(</span><span class="s">"0.0.0.0:8888"</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Agent Card 地址用于服务发现和路由，可以与传给 <code>Start</code> 的监听地址不同。</p>
+<p>内置 converter 可以映射 image、audio 和 file 等多模态内容，但 <code>NewAgentCard</code> 默认只声明 <code>text</code> 输入输出模式。服务需要让客户端发现多模态能力时，应在传给 <code>WithAgentCard</code> 的 Agent Card 中显式声明对应的 input/output modes。</p>
+<p>Runner 生命周期归调用方所有。服务端创建失败或者停止后，调用方都需要关闭 Runner。</p>
+<h3 id="a2a-agent">调用远程 A2A Agent</h3>
+<p><code>agent/a2aagent/v1</code> 会发现远程 Agent Card，并实现普通的 tRPC-Agent-Go Agent 接口：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-1-10">10</a></span>
+<span class="normal"><a href="#__codelineno-1-11">11</a></span>
+<span class="normal"><a href="#__codelineno-1-12">12</a></span>
+<span class="normal"><a href="#__codelineno-1-13">13</a></span>
+<span class="normal"><a href="#__codelineno-1-14">14</a></span>
+<span class="normal"><a href="#__codelineno-1-15">15</a></span>
+<span class="normal"><a href="#__codelineno-1-16">16</a></span>
+<span class="normal"><a href="#__codelineno-1-17">17</a></span>
+<span class="normal"><a href="#__codelineno-1-18">18</a></span>
+<span class="normal"><a href="#__codelineno-1-19">19</a></span>
+<span class="normal"><a href="#__codelineno-1-20">20</a></span>
+<span class="normal"><a href="#__codelineno-1-21">21</a></span>
+<span class="normal"><a href="#__codelineno-1-22">22</a></span>
+<span class="normal"><a href="#__codelineno-1-23">23</a></span>
+<span class="normal"><a href="#__codelineno-1-24">24</a></span>
+<span class="normal"><a href="#__codelineno-1-25">25</a></span>
+<span class="normal"><a href="#__codelineno-1-26">26</a></span>
+<span class="normal"><a href="#__codelineno-1-27">27</a></span>
+<span class="normal"><a href="#__codelineno-1-28">28</a></span>
+<span class="normal"><a href="#__codelineno-1-29">29</a></span>
+<span class="normal"><a href="#__codelineno-1-30">30</a></span>
+<span class="normal"><a href="#__codelineno-1-31">31</a></span>
+<span class="normal"><a href="#__codelineno-1-32">32</a></span>
+<span class="normal"><a href="#__codelineno-1-33">33</a></span>
+<span class="normal"><a href="#__codelineno-1-34">34</a></span>
+<span class="normal"><a href="#__codelineno-1-35">35</a></span>
+<span class="normal"><a href="#__codelineno-1-36">36</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="s">"context"</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent/v1"</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/model"</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/runner"</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/session/inmemory"</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="p">)</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="nx">remoteAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">"https://agent.example.com"</span><span class="p">),</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="p">)</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15"></a><span class="p">}</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16"></a>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17"></a><span class="nx">remoteRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18"></a><span class="w">    </span><span class="s">"a2a-client"</span><span class="p">,</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19"></a><span class="w">    </span><span class="nx">remoteAgent</span><span class="p">,</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()),</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21"></a><span class="p">)</span>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22"></a><span class="k">defer</span><span class="w"> </span><span class="nx">remoteRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23"></a>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">remoteRunner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25"></a><span class="w">    </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span>
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26"></a><span class="w">    </span><span class="s">"user-1"</span><span class="p">,</span>
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27"></a><span class="w">    </span><span class="s">"session-1"</span><span class="p">,</span>
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">"What time is it?"</span><span class="p">),</span>
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29"></a><span class="p">)</span>
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32"></a><span class="p">}</span>
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34"></a><span class="w">    </span><span class="c1">// 与本地 Agent 一样消费 tRPC-Agent-Go 事件。</span>
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">event</span>
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>适配器会进行以下映射：</p>
+<ul>
+<li>本地 session ID → A2A context ID；</li>
+<li>本地 user ID → <code>X-User-ID</code> 请求头；</li>
+<li>本地输入的 text 和多模态 <code>ContentPart</code> → A2A Part；</li>
+<li>远端 Runner 产生的工具调用和工具结果 → 服务端编码的结构化 data Part → A2AAgent 恢复的本地事件；</li>
+<li>远程 A2A Message、Task 和事件 → tRPC-Agent-Go event。</li>
+</ul>
+<p>除非业务显式覆盖，否则 A2AAgent 会根据 Agent Card 自动选择流式或阻塞调用。它处理的是一次普通 Agent invocation；需要 Task 查询、取消或重新订阅时，应直接使用底层 <code>trpc-a2a-go/v2/client</code>。</p>
+<h3 id="agent">运行普通 Agent 调用示例</h3>
+<p>示例使用支持 session 的 LLMAgent，并配置了 <code>current_time</code> 工具。先设置模型配置：</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
+<span class="normal"><a href="#__codelineno-2-2">2</a></span>
+<span class="normal"><a href="#__codelineno-2-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">"&lt;your-api-key&gt;"</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MODEL_NAME</span><span class="o">=</span><span class="s2">"&lt;your-model&gt;"</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="c1"># 使用 OpenAI 兼容服务时再设置 OPENAI_BASE_URL。</span>
+</span></code></pre></div></td></tr></table></div>
+<p>启动服务端：</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nb">cd</span><span class="w"> </span>examples
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>go<span class="w"> </span>run<span class="w"> </span>./a2aagent/v1/server
+</span></code></pre></div></td></tr></table></div>
+<p>在另一个终端启动客户端：</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nb">cd</span><span class="w"> </span>examples
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>go<span class="w"> </span>run<span class="w"> </span>./a2aagent/v1/client
+</span></code></pre></div></td></tr></table></div>
+<p>询问当前时间可以观察工具调用和工具结果通过 A2A 传递。客户端保留同一个 session ID 时，远端 Runner session 会继续同一段对话；使用 <code>/new</code> 或 <code>/use</code> 可以切换 session。服务端增加 <code>-streaming=false</code> 可以验证阻塞 <code>SendMessage</code>。</p>
+<h3 id="_2">请求生命周期</h3>
+<p>内置适配器实现 <code>trpc-a2a-go</code> 的 <code>MessageProcessor</code> 接口。非流式和流式请求都经过同一条链路：</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Client
+    participant Server as A2A server
+    participant TM as TaskManager
+    participant Adapter as tRPC-Agent-Go processor
+    participant Runner
+
+    Client-&gt;&gt;Server: SendMessage / SendStreamingMessage
+    Server-&gt;&gt;TM: 执行请求
+    TM-&gt;&gt;Adapter: ProcessMessage(ExecContext)
+    Adapter-&gt;&gt;Runner: Run(userID, contextID, message)
+    Runner--&gt;&gt;Adapter: Agent events
+    Adapter--&gt;&gt;TM: status / artifact events
+    TM--&gt;&gt;Server: Task 或事件流
+    Server--&gt;&gt;Client: JSON-RPC response 或 SSE</code></pre>
+<p>适配器始终通过同一条事件链转换 Runner 输出，不再为流式和非流式请求分别实现 <code>MessageProcessor</code>。成功执行通常经历 <code>submitted → 输出 → completed</code>；失败会进入 <code>failed</code>，<code>input-required</code> 或 <code>auth-required</code> 等挂起状态也通过同一条事件流表达。</p>
+<h3 id="stateless-taskmanager">默认 stateless TaskManager</h3>
+<p>v1 服务端默认使用 <code>taskmanager/stateless</code>。准确地说，<strong>stateless 的是 TaskManager</strong>；<code>MessageProcessor</code> 仍负责执行 Runner 并产生完整 Task 生命周期。</p>
+<p>默认 TaskManager 会：</p>
+<ul>
+<li>在当前 HTTP 请求生命周期内运行 <code>MessageProcessor</code>；</li>
+<li>根据 status 和 artifact 事件构造本次执行使用的 Task；</li>
+<li>返回终态 Task 或实时转发事件；</li>
+<li>请求结束后丢弃 Task、事件日志和协议 history；</li>
+<li>拒绝需要脱离当前 HTTP 请求继续执行、需要跨请求读取 Task 状态，或者进入 <code>input-required</code>、<code>auth-required</code> 等等待后续请求继续执行的操作。</li>
+</ul>
+<p>底层 stateless TaskManager 允许自定义 <code>MessageProcessor</code> 直接返回 Message，但 tRPC-Agent-Go 内置适配器会从 <code>submitted</code> 开始为 Runner 调用产生 Task 生命周期，成功时以 <code>completed</code> 结束。因此，默认服务端的阻塞调用返回的是仅在本次请求内存在的终态 Task；stateless 表示不跨请求保留 Task，并不表示只返回 Message。</p>
+<p>这个默认值适合普通的请求/响应 Agent 调用：没有 Task 清理成本、没有存储依赖，也不需要跨请求保持 Task 亲和性。<code>returnImmediately=true</code> 会被拒绝，不是因为 A2A 不能立即返回 Message，而是 stateless TaskManager 将执行绑定在当前请求，无法在 HTTP 响应结束后继续可靠执行。对话连续性仍由 Runner session service 提供。</p>
+<h3 id="task">保留型 Task 管理</h3>
+<p>客户端需要异步执行、Task 查询，或者对未结束 Task 进行取消、重新订阅和 continuation 时，再配置保留型 TaskManager。push notification 还需要在所选 TaskManager 上单独启用，不能仅靠“保留 Task”自动获得。</p>
+<p>单进程服务可以使用 memory TaskManager：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-5-10">10</a></span>
+<span class="normal"><a href="#__codelineno-5-11">11</a></span>
+<span class="normal"><a href="#__codelineno-5-12">12</a></span>
+<span class="normal"><a href="#__codelineno-5-13">13</a></span>
+<span class="normal"><a href="#__codelineno-5-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="nx">memorytaskmanager</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/memory"</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="p">)</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithRunner</span><span class="p">(</span><span class="nx">agentRunner</span><span class="p">),</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithAgentCard</span><span class="p">(</span><span class="nx">card</span><span class="p">),</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithTaskManagerBuilder</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="w">        </span><span class="nx">processor</span><span class="w"> </span><span class="nx">taskmanager</span><span class="p">.</span><span class="nx">MessageProcessor</span><span class="p">,</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">taskmanager</span><span class="p">.</span><span class="nx">TaskManager</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">memorytaskmanager</span><span class="p">.</span><span class="nx">NewTaskManager</span><span class="p">(</span><span class="nx">processor</span><span class="p">)</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>memory Task 状态只存在于当前进程，重启后会丢失，并且默认不会自动清理终态 Task。生产服务应根据需要通过 <code>memorytaskmanager.WithTaskTTL(...)</code> 配置留存时间。</p>
+<p>开启保留型 TaskManager 后，系统中会同时存在两套相互独立的状态：</p>
+<table>
+<thead>
+<tr>
+<th>状态系统</th>
+<th>所有者</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Runner session</td>
+<td>每个 tRPC-Agent-Go 应用自己的 session service</td>
+<td>对话历史、应用状态和多轮 Agent 上下文</td>
+</tr>
+<tr>
+<td>A2A Task</td>
+<td><code>trpc-a2a-go</code> TaskManager</td>
+<td>协议 Task 状态、Artifact、查询、取消、重新订阅和 push 配置</td>
+</tr>
+</tbody>
+</table>
+<p>保留 A2A Task 不会替代 Runner session；同样，Runner session 可以持久化也不代表原请求结束后还能调用 <code>GetTask</code>。应用需要根据对话连续性和协议 Task 操作两个维度分别选择存储。</p>
+<h3 id="_3">多节点部署</h3>
+<p>v1 adapter 可以部署在负载均衡器后面，但正确拓扑取决于应用实际使用的状态能力。</p>
+<table>
+<thead>
+<tr>
+<th>部署方式</th>
+<th>可跨副本工作的能力</th>
+<th>额外要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stateless TaskManager</td>
+<td>阻塞和流式请求</td>
+<td>对话上下文需要跨节点连续时，共享 Runner session store 或使用会话亲和性</td>
+</tr>
+<tr>
+<td>Memory TaskManager</td>
+<td>Task 操作均不能跨副本</td>
+<td>同一 Task 的所有操作必须路由到持有它的节点</td>
+</tr>
+<tr>
+<td>Redis TaskManager</td>
+<td>共享 Task 快照、协议历史、查询和列表</td>
+<td>使用独立的 Redis TaskManager module，并让所有副本连接同一套 Redis</td>
+</tr>
+<tr>
+<td>Redis + 跨节点 resubscribe</td>
+<td><code>SubscribeToTask</code> 可以通过其他副本重新连接</td>
+<td>每个副本都启用 <code>WithCrossNodeResubscribe(true)</code></td>
+</tr>
+</tbody>
+</table>
+<p>Redis TaskManager 只解决 Task 状态共享，跨节点重新订阅也不等于分布式执行。它不提供跨副本 exactly-once 协调、全局实时执行注册表或实时取消路由；需要这些保证时，应用仍需使用粘性路由或独立的执行协调方案。</p>
+<p>A2A Task 与 Runner session 是两套独立状态。如果对话也需要跨节点连续，Runner 仍需使用共享 session service 或配置会话亲和性。</p>
+<h3 id="v1">v1 常用配置</h3>
+<p>服务端适配器的常用配置如下：</p>
+<table>
+<thead>
+<tr>
+<th>配置</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithRunner</code></td>
+<td>设置由调用方持有的 Runner</td>
+</tr>
+<tr>
+<td><code>WithAgentCard</code></td>
+<td>设置对外发布的 Agent 身份和能力</td>
+</tr>
+<tr>
+<td><code>WithTaskManagerBuilder</code></td>
+<td>替换默认 stateless TaskManager</td>
+</tr>
+<tr>
+<td><code>WithV0Compatibility</code></td>
+<td>在 v1 端点上处理 v0.2.x method</td>
+</tr>
+<tr>
+<td><code>WithUserIDHeader</code></td>
+<td>修改用户身份请求头</td>
+</tr>
+<tr>
+<td><code>WithRunOptions</code></td>
+<td>为每次 Runner invocation 增加 option</td>
+</tr>
+<tr>
+<td><code>WithProcessMessageHook</code></td>
+<td>包装入站 A2A 消息处理</td>
+</tr>
+<tr>
+<td><code>WithResponseRewriter</code></td>
+<td>改写出站 A2A 事件</td>
+</tr>
+<tr>
+<td><code>WithExtraA2AOptions</code></td>
+<td>向底层 A2A 服务端传递鉴权、中间件等配置</td>
+</tr>
+</tbody>
+</table>
+<p>A2AAgent 的常用配置如下：</p>
+<table>
+<thead>
+<tr>
+<th>配置</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithAgentCardURL</code>、<code>WithAgentCard</code></td>
+<td>通过 URL 发现或直接提供远程 Agent Card</td>
+</tr>
+<tr>
+<td><code>WithEnableStreaming</code></td>
+<td>覆盖 Agent Card 声明的流式能力选择</td>
+</tr>
+<tr>
+<td><code>WithUserIDHeader</code></td>
+<td>修改传递用户身份的请求头</td>
+</tr>
+<tr>
+<td><code>WithTransferStateKey</code></td>
+<td>选择需要通过 Message metadata 传递的 invocation <code>RuntimeState</code></td>
+</tr>
+<tr>
+<td><code>WithA2AClientExtraOptions</code></td>
+<td>向底层 A2A 客户端传递配置</td>
+</tr>
+<tr>
+<td><code>WithBuildMessageHook</code></td>
+<td>在发送前改写 A2A Message</td>
+</tr>
+</tbody>
+</table>
+<p>入站 Message metadata 属于调用方可控输入。服务端应通过 <code>WithProcessMessageHook</code> 安装自定义 processor，并在调用内置 processor 前过滤 metadata；客户端应将 <code>WithTransferStateKey</code> 限制为非安全敏感键。tenant、role、policy 等授权状态必须来自已认证或不可变的服务端上下文。</p>
+<p>只有内置的文本、多模态内容、工具、代码执行和 metadata 映射无法满足需求时，才需要使用自定义 converter、Part mapper、hook 或 response rewriter。</p>
+<h2 id="v02x">旧版协议 v0.2.x 接入</h2>
+<p>已有应用可以继续使用不带 <code>/v1</code> 后缀的 <code>server/a2a</code> 和 <code>agent/a2aagent</code>，它们依赖 <code>trpc-a2a-go</code> 根 module 并实现 A2A v0.2.x。</p>
+<p>这些包处于兼容维护阶段，但仍然是可以独立使用的 A2A 适配器，而不只是指向 v1 的兼容别名。新应用应该直接使用 v1 包；仍在维护 v0.2.x 服务或客户端的用户可以继续使用下面的能力。</p>
+<h3 id="v02x_1">v0.2.x 能力范围</h3>
+<table>
+<thead>
+<tr>
+<th>能力</th>
+<th>旧版接入行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>发布本地 Agent</td>
+<td><code>server/a2a</code> 发布旧版 Agent Card，处理 JSON-RPC 与 SSE，并把 A2A 请求交给 Runner</td>
+</tr>
+<tr>
+<td>调用远程 Agent</td>
+<td><code>agent/a2aagent</code> 自动发现旧版 Agent Card，并以标准 <code>agent.Agent</code> 接口提供阻塞或流式调用</td>
+</tr>
+<tr>
+<td>Runner 与 session</td>
+<td>可以使用隐式 Runner，也可以传入应用持有的 Runner；A2A context ID 成为服务端 Runner session ID</td>
+</tr>
+<tr>
+<td>身份、状态和追踪</td>
+<td>通过 HTTP header 传递 user ID 和 W3C trace context，通过 Message metadata 传递 invocation <code>RuntimeState</code></td>
+</tr>
+<tr>
+<td>内容和事件转换</td>
+<td>支持文本、图片、音频、文件输入，以及文本、reasoning、工具调用、工具结果、代码执行和状态增量等扩展事件</td>
+</tr>
+<tr>
+<td>扩展能力</td>
+<td>支持 hook、自定义 converter、Part mapper、响应改写、Graph event allowlist、ADK metadata、动态 Agent Card 和底层 A2A 选项</td>
+</tr>
+</tbody>
+</table>
+<p><code>A2AAgent</code> 本地不持有远端 Model、Tool 或 SubAgent，其 <code>Tools()</code> 和 <code>SubAgents()</code> 为空；远端能力仍由 Agent Card 描述。它可以放在 Runner 后面，也可以作为父 Agent 的 SubAgent 或 Graph 中的 Agent 节点。</p>
+<p><code>NewAgentCard</code> 默认只声明 <code>text</code> 输入输出模式，即使内置 converter 可以处理图片、音频和文件。旧版服务确实接收这些类型时，应用应提供准确的自定义 Agent Card，避免客户端只根据默认 Card 得出错误的能力判断。</p>
+<h3 id="a2a-server">创建旧版 A2A Server</h3>
+<p>旧版服务端保留了直接接收 Agent 的便捷入口。调用方没有提供 Runner 和 session service 时，服务端会自动创建默认 Runner 和 in-memory session service：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-6-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kn">import</span><span class="w"> </span><span class="nx">a2aserver</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/server/a2a"</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">"127.0.0.1:8888"</span><span class="p">),</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">llmAgent</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="p">)</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="p">}</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="k">return</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">Start</span><span class="p">(</span><span class="s">"127.0.0.1:8888"</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>WithAgent(llmAgent, true)</code> 中的布尔值只用于声明自动生成的 Agent Card 支持 streaming，不是 Runner 的执行开关。服务端是否处理流式请求由客户端调用的 <code>message/stream</code> 决定。</p>
+<p>需要自行配置 session service、memory service 或 Runner 生命周期时，可以改用显式 Runner 和 Agent Card：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-7-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-7-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-7-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-7-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-7-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-7-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-7-10">10</a></span>
+<span class="normal"><a href="#__codelineno-7-11">11</a></span>
+<span class="normal"><a href="#__codelineno-7-12">12</a></span>
+<span class="normal"><a href="#__codelineno-7-13">13</a></span>
+<span class="normal"><a href="#__codelineno-7-14">14</a></span>
+<span class="normal"><a href="#__codelineno-7-15">15</a></span>
+<span class="normal"><a href="#__codelineno-7-16">16</a></span>
+<span class="normal"><a href="#__codelineno-7-17">17</a></span>
+<span class="normal"><a href="#__codelineno-7-18">18</a></span>
+<span class="normal"><a href="#__codelineno-7-19">19</a></span>
+<span class="normal"><a href="#__codelineno-7-20">20</a></span>
+<span class="normal"><a href="#__codelineno-7-21">21</a></span>
+<span class="normal"><a href="#__codelineno-7-22">22</a></span>
+<span class="normal"><a href="#__codelineno-7-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="nx">agentRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="nx">llmAgent</span><span class="p">,</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="p">)</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="k">defer</span><span class="w"> </span><span class="nx">agentRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="nx">card</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">NewAgentCard</span><span class="p">(</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">    </span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">    </span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Description</span><span class="p">,</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="s">"127.0.0.1:8888"</span><span class="p">,</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">    </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithCardTools</span><span class="p">(</span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()...),</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="p">)</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="p">}</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithRunner</span><span class="p">(</span><span class="nx">agentRunner</span><span class="p">),</span>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithAgentCard</span><span class="p">(</span><span class="nx">card</span><span class="p">),</span>
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>WithAgent</code> 与 <code>WithRunner</code> 互斥。使用显式 Runner 时，Runner 的关闭、session 和 memory 由应用管理，Agent Card 中的地址、streaming capability 和 skills 也由应用维护；<code>WithSessionService</code> 只用于旧版服务端隐式创建 Runner 的路径。</p>
+<p><code>WithHost</code> 支持带 path 的 URL，path 会成为这个 A2A Server 的 base path。需要在一个端口托管多个旧版 Agent 时，可以为每个 Runner 创建独立的 Server 和 Agent Card，再通过各自的 <code>Handler()</code> 挂到同一个 HTTP mux。</p>
+<h3 id="a2a_2">调用旧版 A2A 服务</h3>
+<p>旧版远程 Agent 使用不带 <code>/v1</code> 的包，并可以通过 URL 自动发现 Agent Card：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span>
+<span class="normal"><a href="#__codelineno-8-2">2</a></span>
+<span class="normal"><a href="#__codelineno-8-3">3</a></span>
+<span class="normal"><a href="#__codelineno-8-4">4</a></span>
+<span class="normal"><a href="#__codelineno-8-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="kn">import</span><span class="w"> </span><span class="nx">a2aagent</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="nx">remoteAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">"http://127.0.0.1:8888"</span><span class="p">),</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>创建完成后，它与其他 Agent 一样通过 Runner 调用：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-9-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-9-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-9-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-9-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-9-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-9-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-9-10">10</a></span>
+<span class="normal"><a href="#__codelineno-9-11">11</a></span>
+<span class="normal"><a href="#__codelineno-9-12">12</a></span>
+<span class="normal"><a href="#__codelineno-9-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="nx">clientRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="s">"caller-app"</span><span class="p">,</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="nx">remoteAgent</span><span class="p">,</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()),</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="p">)</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="k">defer</span><span class="w"> </span><span class="nx">clientRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">clientRunner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="s">"user-1"</span><span class="p">,</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">    </span><span class="s">"session-1"</span><span class="p">,</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">"请介绍一下你能完成的任务"</span><span class="p">),</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>旧版 <code>A2AAgent</code> 按下面的优先级决定使用 <code>message/send</code> 还是 <code>message/stream</code>：</p>
+<ol>
+<li>单次 Runner 调用传入的 <code>agent.WithStream(...)</code>。</li>
+<li>创建 A2AAgent 时传入的 <code>WithEnableStreaming(...)</code>。</li>
+<li>远端 Agent Card 的 streaming capability。</li>
+<li>都没有声明时使用非流式调用。</li>
+</ol>
+<p>Agent Card 声明的是服务端能力，调用方仍可以通过前两级配置覆盖本次选择；覆盖为 streaming 时，远端服务必须实际支持 <code>message/stream</code>。</p>
+<h3 id="_4">状态、身份和请求扩展</h3>
+<p>旧版调用链会把调用方 session ID 写入 A2A context ID，服务端再使用这个 context ID 作为自己的 Runner session ID。调用方与服务端仍然拥有相互独立的 session store，协议只传递标识，不会合并两端的对话历史。</p>
+<p>调用方 session 中的 user ID 默认通过 <code>X-User-ID</code> 发送，服务端将其作为 Runner user ID；两端都可以使用 <code>WithUserIDHeader</code> 修改 header 名。缺少该 header 时，当前旧版服务端会创建随机的 <code>A2A_ANONYMOUS_...</code> principal，并通过 HttpOnly <code>trpc_agent_a2a_anon</code> Cookie 返回；A2A context ID 仍作为 Runner session ID，不再用于生成匿名身份。Cookie Jar 复用和跨实例初始化细节见 <a href="../a2a/">旧版 A2A 指南</a>。身份传递本身不等于认证和授权。</p>
+<p><code>WithTransferStateKey</code> 可以选择需要从当前 invocation <code>RuntimeState</code> 写入 Message metadata 的键，支持精确键、<code>*</code>、前缀和后缀通配。服务端会把 Message metadata 合入新的 invocation <code>RuntimeState</code>，并让 metadata 中的同名值覆盖 <code>WithRunOptions</code> 设置的值。</p>
+<p>所有传入的 Message metadata 都必须视为客户端可控输入。tenant、role、policy 等鉴权状态必须来自已认证或不可变的服务端上下文，不能通过这条状态传递路径接收。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-10-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-10-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-10-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-10-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-10-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-10-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-10-10">10</a></span>
+<span class="normal"><a href="#__codelineno-10-11">11</a></span>
+<span class="normal"><a href="#__codelineno-10-12">12</a></span>
+<span class="normal"><a href="#__codelineno-10-13">13</a></span>
+<span class="normal"><a href="#__codelineno-10-14">14</a></span>
+<span class="normal"><a href="#__codelineno-10-15">15</a></span>
+<span class="normal"><a href="#__codelineno-10-16">16</a></span>
+<span class="normal"><a href="#__codelineno-10-17">17</a></span>
+<span class="normal"><a href="#__codelineno-10-18">18</a></span>
+<span class="normal"><a href="#__codelineno-10-19">19</a></span>
+<span class="normal"><a href="#__codelineno-10-20">20</a></span>
+<span class="normal"><a href="#__codelineno-10-21">21</a></span>
+<span class="normal"><a href="#__codelineno-10-22">22</a></span>
+<span class="normal"><a href="#__codelineno-10-23">23</a></span>
+<span class="normal"><a href="#__codelineno-10-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="nx">token</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">"A2A_TOKEN"</span><span class="p">)</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="nx">remoteAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">"https://agent.example.com:8888"</span><span class="p">),</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithEnableStreaming</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithTransferStateKey</span><span class="p">(</span><span class="s">"tenant_id"</span><span class="p">,</span><span class="w"> </span><span class="s">"workflow.*"</span><span class="p">),</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithA2AClientExtraOptions</span><span class="p">(</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a><span class="w">        </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithTimeout</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="p">)</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">clientRunner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="w">    </span><span class="nx">message</span><span class="p">,</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithRuntimeState</span><span class="p">(</span><span class="kt">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a><span class="w">        </span><span class="s">"tenant_id"</span><span class="p">:</span><span class="w">      </span><span class="s">"tenant-a"</span><span class="p">,</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="w">        </span><span class="s">"workflow.stage"</span><span class="p">:</span><span class="w"> </span><span class="s">"review"</span><span class="p">,</span>
+</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithA2ARequestOptions</span><span class="p">(</span>
+</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22"></a><span class="w">        </span><span class="nx">client</span><span class="p">.</span><span class="nx">WithRequestHeader</span><span class="p">(</span><span class="s">"Authorization"</span><span class="p">,</span><span class="w"> </span><span class="s">"Bearer "</span><span class="o">+</span><span class="nx">token</span><span class="p">),</span>
+</span><span id="__span-10-23"><a id="__codelineno-10-23" name="__codelineno-10-23"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-10-24"><a id="__codelineno-10-24" name="__codelineno-10-24"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>W3C trace context 会自动通过 HTTP header 传播。生产环境仍应通过底层客户端和服务端的鉴权配置或网关完成认证、授权和资源归属校验；不要把 <code>X-User-ID</code> 当作可信凭证。</p>
+<p>旧版常用扩展入口如下：</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>配置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>入站与出站 metadata</td>
+<td><code>WithProcessMessageHook</code>、<code>WithBuildMessageHook</code></td>
+</tr>
+<tr>
+<td>每次服务端 Runner 调用</td>
+<td><code>WithRunOptions</code></td>
+</tr>
+<tr>
+<td>请求 header、超时和底层认证</td>
+<td><code>agent.WithA2ARequestOptions</code>、<code>WithA2AClientExtraOptions</code></td>
+</tr>
+<tr>
+<td>自定义消息和事件转换</td>
+<td><code>WithA2AToAgentConverter</code>、<code>WithEventToA2AConverter</code>、<code>WithCustomA2AConverter</code>、<code>WithCustomEventConverter</code></td>
+</tr>
+<tr>
+<td>扩展 DataPart 或 Event Part</td>
+<td><code>WithA2ADataPartMapper</code>、<code>WithEventToA2APartMapper</code></td>
+</tr>
+<tr>
+<td>出站过滤或改写</td>
+<td><code>WithResponseRewriter</code>、<code>WithErrorHandler</code></td>
+</tr>
+<tr>
+<td>Graph 和 ADK 兼容</td>
+<td><code>WithGraphEventObjectAllowlist</code>、<code>WithADKCompatibility</code></td>
+</tr>
+<tr>
+<td>动态 Agent Card、鉴权和中间件</td>
+<td><code>WithExtraA2AOptions</code></td>
+</tr>
+</tbody>
+</table>
+<p>旧版包还保留 <code>WithProcessorBuilder</code>、<code>WithTaskManagerBuilder</code>、<code>WithStreamingEventType</code>、<code>WithStreamingRespHandler</code> 和 <code>WithStructuredTaskErrors</code> 等兼容扩展点。它们用于维持既有 v0 应用行为，不代表 v1 的推荐设计；新代码应优先使用 v1 的统一 MessageProcessor、TaskManager 和 converter 扩展边界。</p>
+<p>工具调用、代码执行、reasoning 和 <code>state_delta</code> 使用的共享 metadata extension 见 <a href="../a2a-interaction/">A2A 协议交互规范</a>。其中的 metadata key 与交互规范版本同时适用于旧版和 v1 包；<code>TextPart</code>、<code>DataPart</code>、小写 method 和流式 envelope 示例描述的是 v0.2.x wire model，v1 则通过统一 Part、Message、Artifact 和 Task update event 承载这些共享 metadata。</p>
+<h3 id="v0-task">v0 Task 管理边界</h3>
+<p>旧版服务端内部默认创建 memory TaskManager，但这不等于 v1 的保留型 Task 管理。内置非流式适配器会等待 Runner event channel 关闭：只有一个结果时直接返回 Message，有多个结果时合成一个 completed Task；这个 completed Task 没有登记为可供后续 <code>tasks/get</code> 查询的保留型 Task。</p>
+<p>流式适配器会在当前 <code>message/stream</code> 请求期间创建 Task，发送 submitted、artifact 和 completed 事件，并在事件流结束时清理 Task。因此它主要是本次 SSE 的 Task envelope，不能承诺请求结束后仍可查询、取消或重新订阅。</p>
+<p><code>trpc-a2a-go</code> 根 module 的协议客户端仍提供 <code>GetTasks</code>、<code>CancelTasks</code>、<code>ResubscribeTask</code> 和 push notification 方法，但这些操作只有在服务端的 processor 和 TaskManager 实际保留并管理对应 Task 时才有意义；v0.2.x 不提供 <code>ListTasks</code>。需要稳定的跨请求查询、continuation、多节点存储或取消能力时，优先迁移到 v1，并配置 memory、Redis 或自定义保留型 TaskManager。</p>
+<p>v0 wire protocol 中 <code>message/send</code> 的 <code>blocking</code> 缺省值是 false，但 tRPC-Agent-Go 内置 v0 adapter 的 unary 路径仍会在当前请求中等待 Runner 完成。直接使用底层 v0 protocol client 调用其他实现时，不要依赖这个 adapter 行为；需要等待最终结果应显式设置 <code>blocking=true</code>。</p>
+<h3 id="_5">旧版示例</h3>
+<table>
+<thead>
+<tr>
+<th>示例</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>examples/a2aagent</code></td>
+<td>完整 Server/A2AAgent、隐式或显式 Runner、session 和工具调用</td>
+</tr>
+<tr>
+<td><code>examples/a2aagent/customdatapart</code></td>
+<td>自定义 DataPart 与 Event extension</td>
+</tr>
+<tr>
+<td><code>examples/a2amultipath</code></td>
+<td>使用 base path 在一个端口托管多个 Agent</td>
+</tr>
+<tr>
+<td><code>examples/a2asubagent</code></td>
+<td>把远程 A2AAgent 用作协调 Agent 的 SubAgent</td>
+</tr>
+<tr>
+<td><code>examples/a2aadk</code></td>
+<td>与 ADK 的工具和代码执行事件互通</td>
+</tr>
+<tr>
+<td><code>examples/a2acodeexecution</code></td>
+<td>通过旧版扩展传递代码执行事件</td>
+</tr>
+<tr>
+<td><code>examples/graph/a2a_agent</code></td>
+<td>远程 Graph Agent 与 <code>state_delta</code></td>
+</tr>
+</tbody>
+</table>
+<p>这些示例用于维护 v0.2.x 应用，其中的旧版专有配置不应直接复制到 v1 接入。</p>
+<h2 id="v02x-v10">从 v0.2.x 迁移到 v1.0</h2>
+<p>迁移到 v1.0 不只是替换 import path。协议 wire model、Server 创建方式、Runner 所有权、Agent Card、TaskManager 默认值以及部分扩展接口都发生了变化，因此应先升级 Server 并提供 v0 兼容入口，再逐步升级 Client。</p>
+<h3 id="v10-v02x">v1.0 与 v0.2.x 的接入差异</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>v0.2.x</th>
+<th>v1.0</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Server 输入</td>
+<td>Agent 或 Runner</td>
+<td>显式、由调用方持有的 Runner</td>
+</tr>
+<tr>
+<td>Runner 生命周期</td>
+<td>使用 Agent 时由服务端隐式创建，调用方无法直接管理</td>
+<td>由调用方创建和关闭</td>
+</tr>
+<tr>
+<td>Agent Card</td>
+<td>通常根据 Agent 和 host 生成</td>
+<td>显式对外身份和实现版本</td>
+</tr>
+<tr>
+<td>事件处理</td>
+<td>多种 result shape 和 callback 风格 <code>TaskHandler</code></td>
+<td>一个 <code>ExecContext</code> 对应一条事件 channel</td>
+</tr>
+<tr>
+<td>流式选择</td>
+<td><code>MessageProcessor</code>/API 分支可以选择响应形态</td>
+<td>TaskManager 从同一事件流生成非流式和流式响应</td>
+</tr>
+<tr>
+<td>Task 生命周期</td>
+<td>内置适配器创建请求内 Task envelope，不提供默认的跨请求保留</td>
+<td>TaskManager 负责 lazy creation、保留和事件分发</td>
+</tr>
+<tr>
+<td><code>message/send</code> 缺省时序</td>
+<td>wire <code>blocking</code> 缺省 false；内置 adapter 的 unary 路径仍等待 Runner 完成</td>
+<td><code>returnImmediately</code> 缺省 false，因此阻塞</td>
+</tr>
+<tr>
+<td>wire method 名</td>
+<td>斜杠分隔，例如 <code>message/send</code></td>
+<td>PascalCase，例如 <code>SendMessage</code></td>
+</tr>
+<tr>
+<td>Task 列表</td>
+<td>不提供</td>
+<td><code>ListTasks</code></td>
+</tr>
+<tr>
+<td>多节点 Task 存储</td>
+<td>默认链路不保留 Task，需要自行实现 processor 和 backend</td>
+<td>显式选择 stateless、memory 或 Redis</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_6">兼容矩阵</h3>
+<p>在 tRPC-Agent-Go 内置的 <code>server/a2a/v1</code> 与 <code>agent/a2aagent/v1</code> 之间，v0 兼容是单向的：v1 Server 可以通过兼容层接收 v0.2.x Client 请求，但 v1 Client 不能直接调用旧版 v0.2.x Server。</p>
+<table>
+<thead>
+<tr>
+<th>Client</th>
+<th style="text-align: right;">v0.2.x Server</th>
+<th style="text-align: right;">v1 Server</th>
+<th style="text-align: right;">v1 Server + <code>WithV0Compatibility</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>v0.2.x Client</td>
+<td style="text-align: right;">支持</td>
+<td style="text-align: right;">不支持</td>
+<td style="text-align: right;">支持</td>
+</tr>
+<tr>
+<td>v1 Client</td>
+<td style="text-align: right;">不支持</td>
+<td style="text-align: right;">支持</td>
+<td style="text-align: right;">支持</td>
+</tr>
+</tbody>
+</table>
+<p>表中的“支持”表示阻塞和流式消息调用能够进入对应协议链路；非阻塞调用和 Task 控制操作还取决于 v1 Server 是否配置保留型 TaskManager。</p>
+<p>仍需服务 v0.2.x Client 时，应在 v1 Server 开启 <code>WithV0Compatibility()</code>；不再存在 v0.2.x 流量后可以移除该配置。v1 Client 不能直接调用旧版 v0.2.x Server，因此混部和回滚期间应确保 v1 Client 只被路由到 v1 Server。</p>
+<h3 id="server">迁移 Server</h3>
+<p>旧版 Server 可以直接接收 Agent，并在内部创建 Runner：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-11-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-11-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-11-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-11-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-11-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-11-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-11-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/session/inmemory"</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/server/a2a"</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="p">)</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithHost</span><span class="p">(</span><span class="s">"agent.example.com:8888"</span><span class="p">),</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">llmAgent</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()),</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>v1 Server 要求应用显式创建 Runner 和 Agent Card：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-12-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-12-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-12-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-12-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-12-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-12-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-12-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-12-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-12-10">10</a></span>
+<span class="normal"><a href="#__codelineno-12-11">11</a></span>
+<span class="normal"><a href="#__codelineno-12-12">12</a></span>
+<span class="normal"><a href="#__codelineno-12-13">13</a></span>
+<span class="normal"><a href="#__codelineno-12-14">14</a></span>
+<span class="normal"><a href="#__codelineno-12-15">15</a></span>
+<span class="normal"><a href="#__codelineno-12-16">16</a></span>
+<span class="normal"><a href="#__codelineno-12-17">17</a></span>
+<span class="normal"><a href="#__codelineno-12-18">18</a></span>
+<span class="normal"><a href="#__codelineno-12-19">19</a></span>
+<span class="normal"><a href="#__codelineno-12-20">20</a></span>
+<span class="normal"><a href="#__codelineno-12-21">21</a></span>
+<span class="normal"><a href="#__codelineno-12-22">22</a></span>
+<span class="normal"><a href="#__codelineno-12-23">23</a></span>
+<span class="normal"><a href="#__codelineno-12-24">24</a></span>
+<span class="normal"><a href="#__codelineno-12-25">25</a></span>
+<span class="normal"><a href="#__codelineno-12-26">26</a></span>
+<span class="normal"><a href="#__codelineno-12-27">27</a></span>
+<span class="normal"><a href="#__codelineno-12-28">28</a></span>
+<span class="normal"><a href="#__codelineno-12-29">29</a></span>
+<span class="normal"><a href="#__codelineno-12-30">30</a></span>
+<span class="normal"><a href="#__codelineno-12-31">31</a></span>
+<span class="normal"><a href="#__codelineno-12-32">32</a></span>
+<span class="normal"><a href="#__codelineno-12-33">33</a></span>
+<span class="normal"><a href="#__codelineno-12-34">34</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/runner"</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/session/inmemory"</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/server/a2a/v1"</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a><span class="p">)</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="nx">agentRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a><span class="w">    </span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="w">    </span><span class="nx">llmAgent</span><span class="p">,</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()),</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="p">)</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="k">defer</span><span class="w"> </span><span class="nx">agentRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a><span class="nx">card</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">NewAgentCard</span><span class="p">(</span>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15"></a><span class="w">    </span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span>
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16"></a><span class="w">    </span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Description</span><span class="p">,</span>
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17"></a><span class="w">    </span><span class="s">"1.0.0"</span><span class="p">,</span>
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18"></a><span class="w">    </span><span class="s">"agent.example.com:8888"</span><span class="p">,</span>
+</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19"></a><span class="w">    </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithCardTools</span><span class="p">(</span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()...),</span>
+</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21"></a><span class="p">)</span>
+</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24"></a><span class="p">}</span>
+</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25"></a>
+</span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithRunner</span><span class="p">(</span><span class="nx">agentRunner</span><span class="p">),</span>
+</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithAgentCard</span><span class="p">(</span><span class="nx">card</span><span class="p">),</span>
+</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithV0Compatibility</span><span class="p">(),</span>
+</span><span id="__span-12-30"><a id="__codelineno-12-30" name="__codelineno-12-30"></a><span class="p">)</span>
+</span><span id="__span-12-31"><a id="__codelineno-12-31" name="__codelineno-12-31"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-12-32"><a id="__codelineno-12-32" name="__codelineno-12-32"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-12-33"><a id="__codelineno-12-33" name="__codelineno-12-33"></a><span class="p">}</span>
+</span><span id="__span-12-34"><a id="__codelineno-12-34" name="__codelineno-12-34"></a><span class="k">return</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">Start</span><span class="p">(</span><span class="s">":8888"</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>NewAgentCard</code> 的 <code>"1.0.0"</code> 是 Agent 实现版本，不是 A2A 协议版本。Agent Card 中的地址是发布给客户端的可达地址，并决定 Server 的 base path；传给 <code>Start</code> 的地址只决定当前进程监听的位置。</p>
+<p>Runner 的 session service、memory 和关闭时机现在都由应用管理。迁移期间保留 <code>WithV0Compatibility()</code>，等 v0.2.x Client 全部下线后再移除。</p>
+<p>旧版 <code>WithAgent</code> 路径使用 Agent Card name 作为 Runner app name。使用持久化 session store 时，迁移后的 <code>runner.NewRunner</code> 应继续使用原来的 app name，否则存储 key 会变化，已有会话将无法继续读取。</p>
+<h3 id="a2aagent-client">迁移 A2AAgent Client</h3>
+<p>只使用 <code>A2AAgent</code> 默认能力的 Client 通常只需要切换 import path：</p>
+<div class="language-diff highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1">1</a></span>
+<span class="normal"><a href="#__codelineno-13-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="gd">- a2aagent "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="gi">+ a2aagent "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent/v1"</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>WithAgentCardURL</code>、<code>WithEnableStreaming</code>、<code>WithTransferStateKey</code> 和 <code>WithUserIDHeader</code> 的用途保持不变。使用 <code>WithAgentCard</code>、底层 client option、自定义 converter、mapper 或 hook 时，还需要把相关类型和 import 切换到 <code>trpc-a2a-go/v2</code>，并按照下一节调整接口签名。</p>
+<h3 id="_7">配置和扩展接口迁移</h3>
+<p>只使用默认 Server 和 A2AAgent 能力的用户完成下面的常规配置迁移即可；没有使用自定义 converter、mapper、hook 或旧版分支配置时，可以跳过高级扩展表。</p>
+<h4 id="_8">常规配置</h4>
+<table>
+<thead>
+<tr>
+<th>v0.2.x 配置</th>
+<th>v1 迁移方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithAgent</code></td>
+<td>删除；应用创建 Runner，并配置 <code>WithRunner</code> 和 <code>WithAgentCard</code></td>
+</tr>
+<tr>
+<td><code>WithSessionService</code></td>
+<td>删除；改用 <code>runner.WithSessionService</code></td>
+</tr>
+<tr>
+<td><code>WithHost</code></td>
+<td>删除；把公开地址和 base path 写入 Agent Card</td>
+</tr>
+<tr>
+<td><code>NewAgentCard(name, description, host, streaming)</code></td>
+<td>增加必填的 Agent 实现版本参数</td>
+</tr>
+<tr>
+<td><code>WithTaskManagerBuilder</code></td>
+<td>builder 改为返回 <code>(taskmanager.TaskManager, error)</code>，相关类型切换到 <code>trpc-a2a-go/v2</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="_9">高级扩展</h4>
+<table>
+<thead>
+<tr>
+<th>v0.2.x 接口</th>
+<th>v1 迁移方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithProcessorBuilder</code></td>
+<td>没有一对一替代；包装内置 processor 使用 <code>WithProcessMessageHook</code>，完全自定义执行链路时使用 <code>trpc-a2a-go/v2/server.NewA2AServer(customTaskManager, ...)</code></td>
+</tr>
+<tr>
+<td><code>WithStreamingEventType</code></td>
+<td>删除；v1 内置 converter 使用 artifact/status 事件，原来消费 Message 模式流的客户端需要改为消费这些事件，确需其他形态时使用自定义 <code>EventToA2AConverter</code></td>
+</tr>
+<tr>
+<td><code>WithStructuredTaskErrors</code></td>
+<td>删除；v1 使用统一的 Task failure 和结构化错误语义，需要改写已生成的 failure 时使用 <code>WithResponseRewriter</code> 或 processor hook</td>
+</tr>
+<tr>
+<td><code>WithStreamingRespHandler</code></td>
+<td>删除；通过统一的 <code>A2AEventConverter</code> 转换远程响应，应用继续消费 tRPC-Agent-Go event</td>
+</tr>
+<tr>
+<td><code>EventToA2AMessage</code></td>
+<td>删除 unary 转换方法，只保留返回 <code>protocol.StreamEvent</code> 的 <code>ConvertStreamingToA2AMessage</code></td>
+</tr>
+<tr>
+<td><code>EventToA2APartMapper</code></td>
+<td>返回值从 <code>[]protocol.Part</code> 改为 <code>[]*protocol.Part</code></td>
+</tr>
+<tr>
+<td><code>A2AEventConverter</code></td>
+<td>输入从 v0 <code>MessageResult</code>/<code>StreamingMessageEvent</code> 改为 v1 <code>SendMessageResponse</code>/<code>StreamResponse</code></td>
+</tr>
+<tr>
+<td><code>ResponseRewriter</code></td>
+<td>从分别处理 unary/streaming 的接口改为处理每个 <code>StreamEvent</code> 的函数</td>
+</tr>
+<tr>
+<td><code>BuildMessageHook</code>、<code>InvocationA2AConverter</code></td>
+<td>不再接收 <code>isStream</code>；消息构建与传输方式解耦</td>
+</tr>
+<tr>
+<td><code>A2ADataPartMapper</code></td>
+<td>输入从 v0 <code>*DataPart</code> 改为 v1 统一的 <code>*Part</code></td>
+</tr>
+<tr>
+<td>底层 <code>client</code>、<code>server</code>、<code>protocol</code>、<code>taskmanager</code> import</td>
+<td>全部切换到 <code>trpc.group/trpc-go/trpc-a2a-go/v2/...</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>agent.WithA2ARequestOptions</code> 接收 <code>...any</code>，因此误传旧版 <code>trpc-a2a-go/client.RequestOption</code> 仍可能编译，但 v1 A2AAgent 会在运行时拒绝该类型。迁移时应检查这些间接传入的 option，而不能只依赖编译是否成功。</p>
+<h3 id="taskmanager">迁移时选择 TaskManager</h3>
+<p>不要因为旧版 Server 内部默认创建 memory TaskManager，就在 v1 中机械地配置 memory。应根据客户端是否需要请求结束后的 Task 操作选择最简单的实现。</p>
+<table>
+<thead>
+<tr>
+<th>使用方式</th>
+<th>推荐 TaskManager</th>
+<th>迁移注意事项</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>普通阻塞调用和流式调用</td>
+<td>默认 stateless</td>
+<td>对话上下文继续由 Runner session service 保存</td>
+</tr>
+<tr>
+<td>单实例上的非阻塞调用、Task 查询、取消、重订阅或 continuation</td>
+<td>memory</td>
+<td>进程重启会丢失 Task</td>
+</tr>
+<tr>
+<td>多节点上的 Task 查询、列表和跨节点重订阅</td>
+<td>Redis</td>
+<td>Runner session store 也要独立配置为共享存储；实时取消仍需路由到执行节点</td>
+</tr>
+</tbody>
+</table>
+<p>旧版 Client 显式发送 <code>blocking=false</code>，或者依赖 <code>tasks/get</code>、取消、重新订阅、push notification、<code>input-required</code> 和 <code>auth-required</code> 时，v1 Server 必须配置保留型 TaskManager。</p>
+<h3 id="v1-server-v0">在 v1 Server 上兼容 v0 客户端</h3>
+<p>v1 <code>trpc-a2a-go</code> module 中的 <code>compat/v0</code> 会解析冻结的 v0.2.x wire type，转换为 v1 request，调用同一个 TaskManager，再把结果转换回 v0。</p>
+<p>tRPC-Agent-Go 通过一个显式配置开启该能力：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
+<span class="normal"><a href="#__codelineno-14-2">2</a></span>
+<span class="normal"><a href="#__codelineno-14-3">3</a></span>
+<span class="normal"><a href="#__codelineno-14-4">4</a></span>
+<span class="normal"><a href="#__codelineno-14-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithRunner</span><span class="p">(</span><span class="nx">agentRunner</span><span class="p">),</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithAgentCard</span><span class="p">(</span><span class="nx">card</span><span class="p">),</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithV0Compatibility</span><span class="p">(),</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>两代协议使用同一个端点、鉴权链、<code>MessageProcessor</code> 和 TaskManager。</p>
+<p>原始 <code>compat/v0</code> converter 保留 v0 默认语义：未设置 <code>blocking</code> 表示非阻塞。tRPC-Agent-Go 的兼容配置只把这个未设置值适配为阻塞，使未修改的 v0 客户端可以使用默认 request-bound TaskManager；显式 <code>blocking=false</code> 仍保持非阻塞。</p>
+<table>
+<thead>
+<tr>
+<th>v0.2.x 客户端操作</th>
+<th style="text-align: right;">默认 stateless TaskManager</th>
+<th style="text-align: right;">保留型 TaskManager</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>获取 Agent Card</td>
+<td style="text-align: right;">支持</td>
+<td style="text-align: right;">支持</td>
+</tr>
+<tr>
+<td><code>message/send</code> 且未设置 <code>blocking</code> 或设置为 true</td>
+<td style="text-align: right;">支持，阻塞执行</td>
+<td style="text-align: right;">支持，阻塞执行</td>
+</tr>
+<tr>
+<td><code>message/stream</code></td>
+<td style="text-align: right;">支持</td>
+<td style="text-align: right;">支持</td>
+</tr>
+<tr>
+<td><code>message/send</code> 且显式设置 <code>blocking=false</code></td>
+<td style="text-align: right;">不支持</td>
+<td style="text-align: right;">支持</td>
+</tr>
+<tr>
+<td>请求结束后查询已保留 Task</td>
+<td style="text-align: right;">不支持</td>
+<td style="text-align: right;">支持</td>
+</tr>
+<tr>
+<td>取消非终态 Task</td>
+<td style="text-align: right;">不支持</td>
+<td style="text-align: right;">支持；实时取消必须路由到执行节点</td>
+</tr>
+<tr>
+<td>重新订阅非终态 Task</td>
+<td style="text-align: right;">不支持</td>
+<td style="text-align: right;">支持；跨节点重连需要 Redis resubscribe 配置</td>
+</tr>
+<tr>
+<td>push notification 配置</td>
+<td style="text-align: right;">不支持</td>
+<td style="text-align: right;">TaskManager 另行开启 push 后支持</td>
+</tr>
+</tbody>
+</table>
+<p>stateless TaskManager 会拒绝显式非阻塞请求，因为 request-bound execution 无法在 HTTP 响应结束后继续可靠执行。流式请求也必须在当前请求内到达终态；<code>input-required</code> 和 <code>auth-required</code> 等需要后续 continuation 的状态仍需要保留型 TaskManager。</p>
+<p>配置保留型 TaskManager 后，两代协议通过同一个兼容 Server 看到的是同一组 Task：v0.2.x 创建的 Task 可以通过 v1 查询，v1 创建的 Task 也可以通过 v0.2.x 查询，两代协议也能观察同一个 Task 的取消状态。这个结论只适用于同一个 v1 Server 和同一个 TaskManager，不表示旧版 v0.2.x Server 可以读取 v1 TaskManager 的内部存储。</p>
+<h3 id="_10">兼容保证和已知差异</h3>
+<p>兼容层的目标是让旧版请求进入新的执行链路并保持业务语义，不是逐字节复刻旧版 Server 的 wire 响应。</p>
+<p>使用当前版本的 tRPC-Agent-Go legacy <code>A2AAgent</code> 和 v1 <code>A2AAgent</code> 调用时，集成测试覆盖了 Agent Card 发现、阻塞和流式文本、user ID、context/session ID、RuntimeState、reasoning、工具调用和结果、代码执行、<code>state_delta</code>、文件和多模态内容。<code>A2AAgent</code> 会把两代协议结果转换为统一的 tRPC-Agent-Go event，因此上层 Agent 通常不需要感知底层结果类型。</p>
+<p>迁移时仍需处理下列可观察差异：</p>
+<ul>
+<li>旧版内置 Server 的 unary 调用在只有一个结果时可能直接返回 <code>Message</code>，而 v1 Server 的 v0 兼容路径会返回 request-local completed <code>Task</code>；直接对 <code>MessageResult.Result</code> 做具体类型断言的代码需要同时处理两种结果。</li>
+<li>v1 text/data Part 上的 <code>filename</code> 和 <code>mediaType</code> 转换为 v0 时无法完整保留。</li>
+<li>文件标识可能在 <code>FileID</code> 和 URL 之间归一化，兼容 Server 也可能返回旧版 Server 没有提供的更完整 <code>ContentParts</code>。</li>
+<li>流式响应中的 v0 <code>final</code> 由 v1 事件流推导，不能假定与旧版每个 frame 的边界完全相同。</li>
+<li>v0 push notification 配置中的多个 authentication scheme 转换为 v1 时只能保留第一个。</li>
+<li>Message ID、Task ID、时间戳、枚举值和原始 JSON 结构不属于跨协议逐字段相等的保证。</li>
+</ul>
+<p>兼容层面向 tRPC-Agent-Go 使用的 v0.2.x wire，自动化直接协议测试使用仓库当前选定的 <code>trpc-a2a-go</code> v0.2.x 依赖。历史 tRPC-Agent-Go 版本中的 legacy <code>A2AAgent</code>、其他 v0.2.x 版本、自定义 converter/hook、网关鉴权、真实 push 投递、continuation、Redis 重启和跨节点执行等场景，应使用应用自身的依赖版本和部署拓扑做端到端回归。</p>
+<h2 id="_11">协议使用指南</h2>
+<p>按照客户端的实际需求选择最简单的交互方式：</p>
+<table>
+<thead>
+<tr>
+<th>客户端需求</th>
+<th>协议操作</th>
+<th>状态要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>等待一次回答</td>
+<td>阻塞 <code>SendMessage</code></td>
+<td>stateless 即可</td>
+</tr>
+<tr>
+<td>实时渲染 token 或进度</td>
+<td><code>SendStreamingMessage</code></td>
+<td>stateless 即可</td>
+</tr>
+<tr>
+<td>发起工作后断开</td>
+<td><code>SendMessage</code> + <code>returnImmediately=true</code></td>
+<td>保留型 TaskManager</td>
+</tr>
+<tr>
+<td>后续轮询</td>
+<td><code>GetTask</code> 或 <code>ListTasks</code></td>
+<td>保留型 TaskManager；终态 Task 也可以查询</td>
+</tr>
+<tr>
+<td>重新连接事件流</td>
+<td><code>SubscribeToTask</code></td>
+<td>非终态 Task；跨节点重连需要 Redis 配置</td>
+</tr>
+<tr>
+<td>停止正在执行的工作</td>
+<td><code>CancelTask</code></td>
+<td>可取消的非终态 Task，并能路由到执行节点</td>
+</tr>
+<tr>
+<td>回答 Agent 的追问</td>
+<td>携带相同 Task ID 发送 Message</td>
+<td>已保留的挂起 Task</td>
+</tr>
+</tbody>
+</table>
+<p>标识符规则：</p>
+<ul>
+<li>A2A context ID 会成为服务端 Runner 的 session ID。</li>
+<li><code>X-User-ID</code> 会成为 Runner user ID；缺省时服务端根据 context ID 生成稳定 user ID。</li>
+<li>Task ID 标识一个 A2A Task 生命周期，不是对话 session；同一个 Task 可以跨越多个 continuation round。</li>
+<li>继续 <code>input-required</code> 或 <code>auth-required</code> 时必须携带原 Task ID。</li>
+</ul>
+<p>仅仅保留 Task 不会让 Agent 自动支持中断。<code>MessageProcessor</code> 或 converter 必须产生 <code>input-required</code> 或 <code>auth-required</code>，应用也要保存继续执行所需的业务状态。</p>
+<h2 id="_12">更多示例</h2>
+<p>前面的 v1 示例使用 A2AAgent 完成普通 Agent invocation。需要观察异步 Task 创建、查询和列表时，可以让服务端改用 Memory TaskManager 并运行 taskclient：</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1">1</a></span>
+<span class="normal"><a href="#__codelineno-15-2">2</a></span>
+<span class="normal"><a href="#__codelineno-15-3">3</a></span>
+<span class="normal"><a href="#__codelineno-15-4">4</a></span>
+<span class="normal"><a href="#__codelineno-15-5">5</a></span>
+<span class="normal"><a href="#__codelineno-15-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="nb">cd</span><span class="w"> </span>examples
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a>go<span class="w"> </span>run<span class="w"> </span>./a2aagent/v1/server<span class="w"> </span>-retain-tasks
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a><span class="c1"># 在另一个终端中执行。</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a><span class="nb">cd</span><span class="w"> </span>examples
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a>go<span class="w"> </span>run<span class="w"> </span>./a2aagent/v1/taskclient
+</span></code></pre></div></td></tr></table></div>
+<p>旧版 v0.2.x 的 Server、A2AAgent、多 Agent 托管和扩展事件示例已经在前面的“旧版示例”章节列出。</p>
+<p>更底层的协议示例，包括 Redis、鉴权、push notification、input-required continuation 和直接实现 <code>MessageProcessor</code>，请参考 <a href="https://github.com/trpc-group/trpc-a2a-go/tree/v2/examples"><code>trpc-a2a-go</code> examples</a>。</p>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="最后更新">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月25日 03:47:39 UTC">2026-08-25 03:47:39</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="创建日期">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月25日 03:47:39 UTC">2026-08-25 03:47:39</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+  
+
+
+
+  <form class="md-feedback" name="feedback" hidden>
+    <fieldset>
+      <legend class="md-feedback__title">
+        Was this page helpful?
+      </legend>
+      <div class="md-feedback__inner">
+        <div class="md-feedback__list">
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page was helpful" data-md-value="1">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m7 0c0 .8-.7 1.5-1.5 1.5S14 10.3 14 9.5 14.7 8 15.5 8s1.5.7 1.5 1.5m-5 7.73c-1.75 0-3.29-.73-4.19-1.81L9.23 14c.45.72 1.52 1.23 2.77 1.23s2.32-.51 2.77-1.23l1.42 1.42c-.9 1.08-2.44 1.81-4.19 1.81"/></svg>
+            </button>
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page could be improved" data-md-value="0">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10m-6.5-4c.8 0 1.5.7 1.5 1.5s-.7 1.5-1.5 1.5-1.5-.7-1.5-1.5.7-1.5 1.5-1.5M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m2 4.5c1.75 0 3.29.72 4.19 1.81l-1.42 1.42C14.32 16.5 13.25 16 12 16s-2.32.5-2.77 1.23l-1.42-1.42C8.71 14.72 10.25 14 12 14"/></svg>
+            </button>
+          
+        </div>
+        <div class="md-feedback__note">
+          
+            <div data-md-value="1" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!
+            </div>
+          
+            <div data-md-value="0" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!<br>Please help us improve by opening an <a href="https://github.com/trpc-group/trpc-agent-go/issues/new" target="_blank" rel="noopener">issue</a>.
+            </div>
+          
+        </div>
+      </div>
+    </fieldset>
+  </form>
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../agui/cancel/" class="md-footer__link md-footer__link--prev" aria-label="上一页: 取消路由">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                取消路由
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../a2a/" class="md-footer__link md-footer__link--next" aria-label="下一页: A2A v0.2.x（旧版）">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                A2A v0.2.x（旧版）
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+        <script src="../../assets/javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

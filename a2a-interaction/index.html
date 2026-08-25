@@ -2818,12 +2818,35 @@
   
   
     <li class="md-nav__item">
+      <a href="../a2a_v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A v1.0
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../a2a/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    A2A
+    A2A v0.2.x (Legacy)
     
   </span>
   
@@ -3409,6 +3432,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#protocol-version-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Protocol Version Scope
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#version-identifier" class="md-nav__link">
     <span class="md-ellipsis">
       Version Identifier
@@ -3680,10 +3712,10 @@
 <h1 id="a2a-protocol-interaction-specification">A2A Protocol Interaction Specification</h1>
 <blockquote>
 <p><strong>Note</strong></p>
-<p>This document defines the extended implementation specification for the A2A protocol within the trpc-agent-go framework. Regular users do not need to read this document when using A2A Client/Server — the framework automatically handles all protocol conversion details. You only need to refer to this specification when developing a non-trpc-agent-go A2A Client/Server that interoperates with this framework.</p>
+<p>This document defines the extended implementation specification shared by the legacy and v1 A2A packages in tRPC-Agent-Go. Regular users do not need to read it because the framework handles the conversions. Refer to it when implementing a non-tRPC-Agent-Go Client or Server that must interoperate with these extensions; version-specific carriers are identified below.</p>
 </blockquote>
 <h2 id="background">Background</h2>
-<p>The <a href="https://a2a-protocol.org/latest/specification/">A2A (Agent-to-Agent) protocol</a> defines the basic data models (Message, Task, Part, etc.) and operation interfaces (SendMessage, StreamMessage, etc.) for inter-Agent communication. The A2A specification states its design goals at the very beginning:</p>
+<p>The <a href="https://a2a-protocol.org/latest/specification/">A2A (Agent-to-Agent) protocol</a> defines the basic data models (Message, Task, Part, etc.) and wire operations for inter-Agent communication. Operation names depend on the protocol generation: v0.2.x uses methods such as <code>message/send</code> and <code>message/stream</code>, while v1 uses operations such as <code>SendMessage</code> and <code>SendStreamingMessage</code>. The A2A specification states its design goals at the very beginning:</p>
 <blockquote>
 <p><em>The Agent2Agent (A2A) Protocol is an open standard designed to facilitate communication and interoperability between independent, potentially opaque AI agent systems.</em></p>
 <p><em>Its primary goal is to enable agents to:</em></p>
@@ -3702,8 +3734,43 @@
 <p><strong>Future Plans</strong></p>
 <p>To better align with the A2A specification's design philosophy, the cross-Agent transmission of execution process data such as tool calls will be designed as an independent <strong>extension</strong>, allowing users to decide whether to enable it through configuration. If you prefer to strictly follow A2A's black-box collaboration model without exposing internal execution details, simply disable it — only final results will be transmitted.</p>
 <p>For the complete A2A protocol specification, see: https://a2a-protocol.org/latest/specification/</p>
-<p>For the framework usage guide, see: <a href="../a2a/">A2A Integration Guide</a></p>
+<p>For framework usage, see the <a href="../a2a/">A2A v0.2.x Integration Guide</a> or <a href="../a2a_v1/">A2A v1.0 Integration and Migration Guide</a>.</p>
 </blockquote>
+<hr />
+<h2 id="protocol-version-scope">Protocol Version Scope</h2>
+<p>The <code>trpc-a2a-version</code> extension, interaction version <code>0.1</code>, and shared metadata keys such as <code>interaction_spec_version</code>, <code>type</code>, <code>thought</code>, <code>object_type</code>, <code>llm_response_id</code>, and <code>state_delta</code> are used by both package generations. Their wire carriers differ:</p>
+<table>
+<thead>
+<tr>
+<th>Contract area</th>
+<th>A2A v0.2.x packages</th>
+<th>A2A v1.0 packages</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent Card declaration</td>
+<td><code>AgentCard.capabilities.extensions</code></td>
+<td><code>AgentCard.capabilities.extensions</code></td>
+</tr>
+<tr>
+<td>Request version</td>
+<td>Message metadata</td>
+<td>Message metadata</td>
+</tr>
+<tr>
+<td>Extended event data</td>
+<td>Legacy <code>TextPart</code>, <code>DataPart</code>, and streaming envelopes</td>
+<td>Unified Part metadata plus Message, Artifact, and Task update event metadata</td>
+</tr>
+<tr>
+<td>Operation names</td>
+<td>Lowercase slash-delimited methods such as <code>message/send</code> and <code>message/stream</code></td>
+<td>v1 operations such as <code>SendMessage</code> and <code>SendStreamingMessage</code></td>
+</tr>
+</tbody>
+</table>
+<p>Unless a section explicitly describes v1, the JSON shapes, concrete Part types, method names, and streaming envelopes in the remainder of this document are v0.2.x wire examples. The metadata key definitions remain the shared interoperability contract.</p>
 <hr />
 <h2 id="version-identifier">Version Identifier</h2>
 <p><strong>Current interaction specification version: <code>0.1</code></strong></p>
@@ -3842,7 +3909,7 @@
     end
     S--&gt;&gt;C: SSE: TaskArtifactUpdateEvent (lastChunk=true)
     S--&gt;&gt;C: SSE: TaskStatusUpdateEvent (completed)</code></pre>
-<p><code>SendMessage</code> waits for the complete response before returning it all at once, while <code>StreamMessage</code> pushes incremental events in real-time via SSE. The framework automatically handles format conversion on both ends.</p>
+<p>The <code>trpc-a2a-go</code> client methods <code>SendMessage</code> and <code>StreamMessage</code> wait for a complete response and push incremental SSE events, respectively. In this v0.2.x flow they map to the wire methods <code>message/send</code> and <code>message/stream</code>; the corresponding v1 streaming operation is <code>SendStreamingMessage</code>. The framework automatically handles format conversion on both ends.</p>
 <hr />
 <h2 id="event-types-and-a2a-mapping">Event Types and A2A Mapping</h2>
 <table>
@@ -4494,7 +4561,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 24, 2026 08:40:45 UTC">2026-04-24 08:40:45</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 25, 2026 03:47:39 UTC">2026-08-25 03:47:39</span>
   </span>
 
     
