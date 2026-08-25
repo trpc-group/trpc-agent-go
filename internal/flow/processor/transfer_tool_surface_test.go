@@ -22,6 +22,7 @@ import (
 // run-scoped tool surface across transfer_to_agent boundaries.
 type surfaceTool struct{ name string }
 
+// Declaration returns the minimal tool declaration for the surface tool.
 func (st surfaceTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{Name: st.name}
 }
@@ -97,12 +98,22 @@ func TestTransferTargetInvocationKeepsCustomizerLastWord(t *testing.T) {
 	require.Equal(t, []tool.Tool{keepExternal}, targetInv.RunOptions.ExternalTools)
 }
 
+// TestClearInheritedToolRunOptionsNil verifies the defensive nil guard: a nil
+// RunOptions pointer is a no-op instead of a panic.
+func TestClearInheritedToolRunOptionsNil(t *testing.T) {
+	require.NotPanics(t, func() {
+		clearInheritedToolRunOptions(nil)
+	})
+}
+
 // invocationCustomizerFunc adapts a function to the internal
 // itransfer.InvocationCustomizer interface. It is kept minimal to avoid
 // leaking the internal interface into test assertions.
 type invocationCustomizerFunc func(
 	ctx context.Context, source, target *agent.Invocation) error
 
+// CustomizeTransferInvocation delegates to the wrapped function so tests can
+// attach scoped run options without importing the internal transfer package.
 func (f invocationCustomizerFunc) CustomizeTransferInvocation(
 	ctx context.Context,
 	source *agent.Invocation,
