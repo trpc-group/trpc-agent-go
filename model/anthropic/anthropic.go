@@ -56,8 +56,7 @@ const (
 )
 
 // cacheBreakpointLimit is the number of cache_control markers Anthropic accepts
-// in one request. A fifth is rejected outright, so the count is a budget rather
-// than a soft limit.
+// in one request. A fifth is rejected outright, so this is a budget, not a hint.
 const cacheBreakpointLimit = 4
 
 // Model implements the model.Model interface for Anthropic API.
@@ -478,10 +477,9 @@ func modelNameMatches(modelName string, targets ...string) bool {
 //   - Tools: always cached when cacheTools is true (stable across turns)
 //   - Last assistant message: cached when cacheMessages is true (opt-in, benefits multi-turn)
 //
-// A fourth breakpoint, on the last tool-result message, is added later by
-// applyToolResultCacheBreakpoint. It is deferred until the request callback has
-// run because it is the only one of the four that is conditional on the budget
-// the callback leaves behind, and on the message list the callback leaves behind.
+// A fourth, on the last tool-result message, is added after the request callback
+// by applyToolResultCacheBreakpoint: it is the only one conditional on what that
+// callback leaves behind.
 func (m *Model) applyCacheControl(
 	systemPrompts []anthropic.TextBlockParam,
 	tools []anthropic.ToolUnionParam,
@@ -521,17 +519,11 @@ func (m *Model) findLastAssistantMessageIndex(messages []anthropic.MessageParam)
 // when there is none). convertMessages merges contiguous tool results into a single
 // user message, so the match is the whole of the latest turn's tool output.
 //
-// It exists because the last-assistant breakpoint alone makes every tool result
-// cross the cache boundary twice: it is sent uncached in the request that carries
-// it, then written to the cache in the following request once the breakpoint moves
-// past it. Marking it here writes it once, in the request that first sends it.
-// Anything after this point — a trailing note the caller appends per request — is
-// still left outside the cached prefix.
-//
-// The second breakpoint also halves the distance between consecutive cache entries,
-// which matters because a breakpoint only looks back a bounded number of content
-// blocks to find the previous one: one wide parallel-tool turn can otherwise put
-// the previous entry out of range and silently re-write the whole conversation.
+// Without it every tool result crosses the cache boundary twice: sent uncached in
+// the request carrying it, then written once the last-assistant breakpoint moves
+// past it. It also halves the distance between cache entries, which matters
+// because a breakpoint looks back a bounded number of blocks to find the previous
+// one — one wide parallel-tool turn can otherwise put it out of range.
 func (m *Model) findLastToolResultMessageIndex(messages []anthropic.MessageParam, minIndex int) int {
 	for i := len(messages) - 1; i > minIndex; i-- {
 		if isToolResultMessage(messages[i]) {
@@ -557,38 +549,18 @@ func isToolResultMessage(message anthropic.MessageParam) bool {
 }
 
 // applyToolResultCacheBreakpoint marks the newest tool-result message, so a turn's
-// tool output enters the cache in the request that carries it rather than the next
-// one. It is the fourth and last of the model's breakpoints, and the only one
-// added after buildChatRequest.
+// tool output is cached in the request that carries it rather than the next one.
 //
-// It runs late for two reasons, both of which come from the request callback
-// sitting between request construction and the wire.
+// It runs after the request callback, which can both spend budget and rewrite
+// Messages. So the marker is placed only while a slot is free — top-level
+// CacheControl costs one, since the API answers it with a marker of its own — and
+// on a message chosen from the finalized list.
 //
-// The budget is one. Anthropic accepts cacheBreakpointLimit markers and rejects
-// the next one outright, and the callback is where a caller adds markers of its
-// own — including the top-level CacheControl the SDK exposes, which the API
-// answers by placing a marker of its own on the last cacheable block, so it
-// occupies a slot just like an explicit one. Claiming the fourth slot during
-// construction would leave any caller that adds one over the limit. Claiming it
-// here means it is taken only if it is still free, so this breakpoint never
-// pushes a request over on its own.
-//
-// The message list is the other. The callback may rewrite Messages, and a marker
-// placed before it ran can end up on a block that is no longer the newest tool
-// result, or no longer present at all. Choosing the message from the finalized
-// list is what makes the marker land where it is meant to; there is no earlier
-// placement to track across the callback because there is no earlier placement.
-//
-// The tool-result breakpoint is the one made conditional because it is the only
-// one whose loss costs a delay rather than a cache entry: the next request's
-// last-assistant breakpoint moves past those tool results and writes them anyway.
-// The system, tools, and last-assistant markers are unconditional.
-//
-// The guarantee is bounded, deliberately. A caller that spends the whole budget
-// itself is still over it, and stays over: forcing a fit would mean removing the
-// caller's own placement or the system and tools breakpoints, and trading a 400
-// that names the problem for a silent, expensive cache regression is the worse
-// failure — a cache that quietly stops being read reports nothing at all.
+// This is the conditional breakpoint because losing it costs a delay, not a cache
+// entry: the next request's last-assistant breakpoint writes these results anyway.
+// A caller that spends the whole budget itself is still over it; forcing a fit
+// would mean dropping its marker or the system and tools ones, trading a 400 that
+// names the problem for a silent cache regression.
 func (m *Model) applyToolResultCacheBreakpoint(chatRequest *anthropic.MessageNewParams) {
 	if chatRequest == nil || !m.cacheMessages || len(chatRequest.Messages) <= 1 {
 		return
@@ -605,8 +577,7 @@ func (m *Model) applyToolResultCacheBreakpoint(chatRequest *anthropic.MessageNew
 }
 
 // countCacheBreakpoints counts the cache_control markers the request will be sent
-// with. Top-level CacheControl counts as one because the API answers it by adding
-// a marker of its own.
+// with. Top-level CacheControl counts as one: the API answers it with a marker.
 func countCacheBreakpoints(chatRequest *anthropic.MessageNewParams) int {
 	count := 0
 	if !param.IsOmitted(chatRequest.CacheControl) {

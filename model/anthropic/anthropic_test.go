@@ -3727,9 +3727,8 @@ func TestFindLastToolResultMessageIndex(t *testing.T) {
 			expected: -1,
 		},
 		{
-			// A message with no content blocks is not a tool-result message.
-			// Marking it would put the breakpoint on nothing, and the block
-			// loop would vacuously agree that every block is a tool result.
+			// The block loop would vacuously agree that an empty message is
+			// all tool results, and mark a breakpoint onto nothing.
 			name: "empty message is not a tool-result message",
 			messages: []anthropic.MessageParam{
 				text("user", "task"),
@@ -3785,12 +3784,10 @@ func TestFindLastToolResultMessageIndex(t *testing.T) {
 			expected: 4,
 		},
 		{
-			// isToolResultMessage requires EVERY block to be a tool result,
-			// because that is the shape convertMessages produces when it merges a
-			// turn's results. A message that carries a result alongside text is
-			// not that shape, and the text beside it is the part that changes
-			// between requests — caching there would move the breakpoint onto
-			// content that invalidates the prefix it was meant to protect.
+			// Every block must be a tool result: that is the shape
+			// convertMessages merges a turn's results into. Text beside a
+			// result is the part that changes between requests, so marking
+			// there invalidates the prefix the breakpoint protects.
 			name: "trailing mixed-content message is not a tool-result message",
 			messages: []anthropic.MessageParam{
 				text("user", "task"),
@@ -3822,14 +3819,13 @@ func TestFindLastToolResultMessageIndex(t *testing.T) {
 	}
 }
 
-// captureFinalizedRequest builds a model from opts, runs GenerateContent against
-// a stub transport, and returns the Anthropic request as the model finished with
-// it — the request callback's edits included, and everything the model applies
-// after that callback included too.
+// captureFinalizedRequest runs GenerateContent against a stub transport and
+// returns the request as the model finished with it, after the callback and
+// everything applied past it.
 //
 // mutate stands in for a caller's own request callback and may be nil. It is
-// installed as the model's callback, so it must not be supplied through opts as
-// well: the model keeps one callback, and the last option wins.
+// installed as the model's callback, so opts must not supply another: the model
+// keeps one, and the last option wins.
 func captureFinalizedRequest(
 	t *testing.T,
 	request *model.Request,
@@ -3875,10 +3871,9 @@ func captureFinalizedRequest(
 // note. convertMessages merges the two tool results into one user message, so the
 // assembled request is [user, assistant, tool results, note].
 //
-// The trailing note is what makes this shape worth testing: it is the last
-// cacheable block, so it is where the API places the marker it adds in answer to
-// top-level CacheControl. That marker is therefore a breakpoint of its own rather
-// than a duplicate of the one on the tool results.
+// The trailing note earns its place: as the last cacheable block it is where the
+// API puts the marker it adds for top-level CacheControl, making that marker a
+// breakpoint of its own rather than a duplicate of the tool-result one.
 func toolResultTurnMessages() []model.Message {
 	return []model.Message{
 		{Role: model.RoleSystem, Content: "system policy"},
@@ -3908,13 +3903,10 @@ func readTool() map[string]tool.Tool {
 	}
 }
 
-// TestGenerateContent_ToolResultBreakpoint verifies that a turn's tool output is
-// marked in the request that carries it, alongside the last-assistant breakpoint,
-// and that a trailing per-request note is left outside the cached prefix.
-//
-// It runs through GenerateContent rather than applyCacheControl because the
-// tool-result breakpoint is placed on the finalized request, after the request
-// callback has had its say about both the budget and the message list.
+// A turn's tool output is marked in the request that carries it, alongside the
+// last-assistant breakpoint, with a trailing note left outside the cached prefix.
+// It goes through GenerateContent because the marker is placed on the finalized
+// request, after the callback.
 func TestGenerateContent_ToolResultBreakpoint(t *testing.T) {
 	got := captureFinalizedRequest(t,
 		&model.Request{Messages: toolResultTurnMessages(), Tools: readTool()},
@@ -3934,16 +3926,14 @@ func TestGenerateContent_ToolResultBreakpoint(t *testing.T) {
 		"system and tools caching are off, so these are the only two markers")
 }
 
-// TestGenerateContent_CacheBreakpointBudget verifies that this model's own
-// breakpoints never push a request past the cache_control markers Anthropic
-// accepts, and that the tool-result breakpoint is the one left unplaced when a
-// caller's top-level CacheControl claims the fourth slot from inside the request
-// callback.
+// The model's own breakpoints never push a request past the limit, and the
+// tool-result one is what goes unplaced when a caller's top-level CacheControl
+// claims the last slot from inside the request callback.
 func TestGenerateContent_CacheBreakpointBudget(t *testing.T) {
 	tests := []struct {
 		name string
-		// topLevel is whether the callback turns on automatic caching, which
-		// costs a slot because the API answers it with a marker of its own.
+		// topLevel turns on automatic caching, which costs a slot: the API
+		// answers it with a marker of its own.
 		topLevel        bool
 		wantToolResult  bool
 		wantBreakpoints int
@@ -3993,16 +3983,13 @@ func TestGenerateContent_CacheBreakpointBudget(t *testing.T) {
 	}
 }
 
-// TestGenerateContent_ToolResultBreakpointFollowsTheCallback covers a request
-// callback that rewrites the message list, on its own and together with spending
-// the last free slot.
+// A request callback that rewrites the message list, alone and together with
+// spending the last free slot.
 //
-// A marker placed during request construction survives neither move. A callback
-// that appends a tool result of its own leaves that marker on a message which is
-// no longer the newest tool output; a callback that turns on top-level
-// CacheControl claims the slot the marker was already occupying, putting the
-// request one over the limit and earning a 400. Choosing the message from the
-// finalized list, and only when a slot is still free, settles both.
+// A marker placed during construction survives neither move: an appended tool
+// result leaves it on a message that is no longer the newest, and top-level
+// CacheControl claims the slot it was occupying, putting the request one over the
+// limit. Choosing from the finalized list, only while a slot is free, settles both.
 func TestGenerateContent_ToolResultBreakpointFollowsTheCallback(t *testing.T) {
 	// appendToolResult splices in a second tool-result message, unmarked, the
 	// way a caller adding tool output of its own would.
@@ -4065,19 +4052,14 @@ func TestGenerateContent_ToolResultBreakpointFollowsTheCallback(t *testing.T) {
 	}
 }
 
-// TestGenerateContent_CallerOverSubscribesBreakpoints pins the edge of that
-// guarantee: it is bounded, and the boundary is deliberate.
+// The edge of that guarantee, and the boundary is deliberate.
 //
-// A callback that adds two markers of its own — top-level CacheControl and an
-// explicit marker on a message block — is over the limit on its own arithmetic:
-// three unconditional breakpoints plus two is five, which was already a 400
-// before the tool-result breakpoint existed. Withholding the tool-result marker
-// returns the count to exactly that pre-existing number and stops there.
-//
-// Going further would mean discarding either the caller's own placement or the
-// system and tools breakpoints. That trades an error naming the problem for a
-// silent cache regression, so the model leaves the caller's configuration alone
-// and lets the API reject it.
+// A callback adding two markers of its own is over the limit on its own
+// arithmetic: three unconditional breakpoints plus two is five, which was already
+// a 400 before the tool-result breakpoint existed. Withholding ours returns the
+// count to that pre-existing number and stops there — going further would discard
+// the caller's placement or the system and tools ones, trading an error that names
+// the problem for a silent cache regression.
 func TestGenerateContent_CallerOverSubscribesBreakpoints(t *testing.T) {
 	captured := captureFinalizedRequest(t,
 		&model.Request{
@@ -4111,8 +4093,7 @@ func TestGenerateContent_CallerOverSubscribesBreakpoints(t *testing.T) {
 		param.IsOmitted(toolResult.Content[len(toolResult.Content)-1].OfToolResult.CacheControl),
 		"the tool-result slot is left alone even though leaving it is not enough")
 
-	// Three unconditional breakpoints plus the caller's two: the count this
-	// request would have had before the tool-result breakpoint existed.
+	// The count this request would have had before this breakpoint existed.
 	assert.Equal(t, 5, countCacheBreakpoints(captured),
 		"the model withholds its own marker and leaves the caller's alone")
 	assert.False(t, param.IsOmitted(captured.CacheControl),
@@ -4123,8 +4104,8 @@ func TestGenerateContent_CallerOverSubscribesBreakpoints(t *testing.T) {
 		"the system breakpoint is not sacrificed to force a fit")
 }
 
-// A request with no tool-result message has nothing to mark. The model leaves the
-// budget it did not spend rather than marking something else.
+// With no tool-result message to mark, the unspent budget is left unspent rather
+// than used on something else.
 func TestApplyToolResultCacheBreakpoint_NothingToMark(t *testing.T) {
 	m := New("claude-3-5-sonnet", WithCacheMessages(true))
 	marked := anthropic.NewCacheControlEphemeralParam()
@@ -4148,8 +4129,8 @@ func TestApplyToolResultCacheBreakpoint_NothingToMark(t *testing.T) {
 		"with no tool result to mark, nothing else is marked in its place")
 }
 
-// A single-message request is not a turn that carries tool output, so there is no
-// tool-result breakpoint to place even when that one message is a tool result.
+// A single-message request is not a turn carrying tool output, even when that one
+// message is a tool result.
 func TestApplyToolResultCacheBreakpoint_SingleMessage(t *testing.T) {
 	m := New("claude-3-5-sonnet", WithCacheMessages(true))
 
@@ -4164,8 +4145,7 @@ func TestApplyToolResultCacheBreakpoint_SingleMessage(t *testing.T) {
 	assert.Zero(t, countCacheBreakpoints(req))
 }
 
-// Message caching off means this model places no message breakpoints at all, so
-// the tool-result one is not placed either.
+// Message caching off means no message breakpoints at all.
 func TestApplyToolResultCacheBreakpoint_MessageCachingOff(t *testing.T) {
 	m := New("claude-3-5-sonnet", WithCacheMessages(false))
 
