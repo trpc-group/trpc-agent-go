@@ -349,7 +349,8 @@ type Options struct {
 	// EnableParallelTools enables parallel tool execution if true.
 	// If false (default), tools will execute serially for safety.
 	EnableParallelTools bool
-	// AddCurrentTime adds the current time to the system prompt if true.
+	// AddCurrentTime adds the current time to the request if true.
+	// TimePromptPlacement selects the message that receives it.
 	AddCurrentTime bool
 	// Timezone specifies the timezone to use for time display.
 	Timezone string
@@ -1720,7 +1721,8 @@ func newStructuredOutput(name string, schema map[string]any, strict bool, descri
 	}
 }
 
-// WithAddCurrentTime adds the current time to the system prompt if true.
+// WithAddCurrentTime adds the current time to the request if true. It goes to
+// the system prompt unless WithTimePromptPlacement selects another placement.
 func WithAddCurrentTime(addCurrentTime bool) Option {
 	return func(opts *Options) {
 		opts.AddCurrentTime = addCurrentTime

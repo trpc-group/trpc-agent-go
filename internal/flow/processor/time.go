@@ -36,7 +36,8 @@ type TimePromptPlacement string
 
 // TimeRequestProcessor implements time processing logic.
 type TimeRequestProcessor struct {
-	// AddCurrentTime controls whether to add current time to the system prompt.
+	// AddCurrentTime controls whether to add current time to the request.
+	// PromptPlacement selects the message that receives it.
 	AddCurrentTime bool
 	// Timezone specifies the timezone to use for time display.
 	Timezone string
@@ -48,7 +49,7 @@ type TimeRequestProcessor struct {
 	// CurrentTimeToolName is the exact-time tool the model should call when it
 	// needs clock-level precision.
 	CurrentTimeToolName string
-	// CurrentTimeToolAvailable controls whether the system prompt should guide
+	// CurrentTimeToolAvailable controls whether the clock context should guide
 	// the model to call CurrentTimeToolName for exact time.
 	CurrentTimeToolAvailable bool
 }
@@ -56,7 +57,7 @@ type TimeRequestProcessor struct {
 // TimeOption is a function that can be used to configure the time request processor.
 type TimeOption func(*TimeRequestProcessor)
 
-// WithAddCurrentTime enables or disables adding current time to the system prompt.
+// WithAddCurrentTime enables or disables adding current time to the request.
 func WithAddCurrentTime(add bool) TimeOption {
 	return func(p *TimeRequestProcessor) {
 		p.AddCurrentTime = add
@@ -78,8 +79,12 @@ func WithTimeFormat(format string) TimeOption {
 }
 
 // WithTimePromptPlacement selects the message role that receives clock context.
+// An empty placement keeps the default system placement.
 func WithTimePromptPlacement(placement TimePromptPlacement) TimeOption {
 	return func(p *TimeRequestProcessor) {
+		if placement == "" {
+			placement = TimePromptPlacementSystem
+		}
 		p.PromptPlacement = placement
 	}
 }
@@ -109,7 +114,8 @@ func NewTimeRequestProcessor(opts ...TimeOption) *TimeRequestProcessor {
 }
 
 // ProcessRequest implements the flow.RequestProcessor interface.
-// It adds current time information to the system prompt if enabled.
+// It adds current time information to the system prompt if enabled, or to the
+// latest user turn when PromptPlacement is TimePromptPlacementUser.
 func (p *TimeRequestProcessor) ProcessRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -245,17 +251,48 @@ func (p *TimeRequestProcessor) addTimeToSystemMessage(req *model.Request, timeCo
 	}
 }
 
+// addTimeToUserMessage adds clock context to the latest user turn.
 func (p *TimeRequestProcessor) addTimeToUserMessage(req *model.Request, timeContent string) {
 	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role != model.RoleUser {
+		msg := &req.Messages[i]
+		if msg.Role != model.RoleUser {
 			continue
 		}
-		if !containsTimeInfo(req.Messages[i].Content, timeContent) {
-			req.Messages[i].Content += "\n\n" + timeContent
+		if messageContainsTimeInfo(msg, timeContent) {
+			return
 		}
+		// Providers serialize either the content parts or the scalar content of
+		// a message, never both, so the clock block has to use the same
+		// representation as the user input it is attached to.
+		if len(msg.ContentParts) > 0 {
+			text := timeContent
+			msg.ContentParts = append(msg.ContentParts, model.ContentPart{
+				Type: model.ContentTypeText,
+				Text: &text,
+			})
+			return
+		}
+		msg.Content += "\n\n" + timeContent
 		return
 	}
 	req.Messages = append(req.Messages, model.NewUserMessage(timeContent))
+}
+
+// messageContainsTimeInfo reports whether the message already carries this
+// request's clock block in its scalar content or in any text content part.
+func messageContainsTimeInfo(msg *model.Message, timeInfo string) bool {
+	if containsTimeInfo(msg.Content, timeInfo) {
+		return true
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText || part.Text == nil {
+			continue
+		}
+		if containsTimeInfo(*part.Text, timeInfo) {
+			return true
+		}
+	}
+	return false
 }
 
 // containsTimeInfo reports whether content already has this request's clock

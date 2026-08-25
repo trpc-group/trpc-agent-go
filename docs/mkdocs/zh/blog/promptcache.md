@@ -338,7 +338,7 @@ agent := llmagent.New(
 | `summary.WithCacheSafeForking(true)` | summary 生成请求 | 克隆父请求并追加 compaction user message，让 summary 生成也复用父会话前缀 |
 | `llmagent.WithSessionSummaryInjectionMode(SessionSummaryInjectionUser)` | history 附近 | Summary 频繁变化时可减少对 request prefix 的改写，但需要接受可能被 token tailoring 裁剪的取舍 |
 | `llmagent.WithAddCurrentTime(true)` 默认 date-only | system message / time tool | 日期级上下文同一天内稳定；工具启用时可通过 `environment_context_current_time` 获取精确时间。遗留的 `WithOutputSchema` 会禁用这个工具 |
-| `llmagent.WithTimePromptPlacement(TimePromptPlacementUser)` | 最新 user turn | 把完整时间戳移出稳定 system prefix；system placement 仍是默认行为 |
+| `llmagent.WithTimePromptPlacement(llmagent.TimePromptPlacementUser)` | 最新 user turn | 把完整时间戳移出稳定 system prefix；system placement 仍是默认行为 |
 | `agent.WithModelRequestExtraFields` 中的 `prompt_cache_key` | request body | 对支持该参数的服务方，稳定 key 可能帮助同类长前缀请求聚合；不要使用 request id / trace id |
 | `llmagent.WithReasoningContentMode` 默认模式 | assistant history | 默认丢弃历史 reasoning content，可减少历史体积，避免无谓增加输入 tokens |
 
@@ -350,7 +350,7 @@ agent := llmagent.New(
 | `llmagent.WithRefreshToolSetsOnRun(true)` | tools schema | 每次 Run 重新拉取 ToolSet，适合动态 MCP，但工具面变化会降低缓存复用 | cache-sensitive 场景尽量固定工具面；动态工具按场景分桶 |
 | `llmagent.WithSkillLoadMode` / `WithMaxLoadedSkills` | loaded Skills context | 影响动态 Skill 内容驻留轮次和体积 | 控制驻留时长和数量，避免无关 Skill 长期污染前缀 |
 | `llmagent.WithPreloadMemory` / `WithPreloadSessionRecall` | system message 或 history | 召回内容随 query 变化，放 system message 会更容易改写 request prefix | cache-sensitive 场景优先评估 user/history injection mode |
-| `llmagent.WithTimeFormat("2006-01-02 15:04:05 MST")` | 默认写在 system message | 完整时间戳会按秒变化，容易破坏 request prefix | 搭配 `WithTimePromptPlacement(TimePromptPlacementUser)`；只有明确需要每轮 system message 内含精确时间时才保留 system placement |
+| `llmagent.WithTimeFormat("2006-01-02 15:04:05 MST")` | 默认写在 system message | 完整时间戳会按秒变化，容易破坏 request prefix | 搭配 `llmagent.WithTimePromptPlacement(llmagent.TimePromptPlacementUser)`；只有明确需要每轮 system message 内含精确时间时才保留 system placement |
 | 动态 `WithPostToolPrompt` | system message | 如果按请求生成，会把本来稳定的 post-tool guidance 变成动态前缀 | 按 Agent/版本固定；请求级临时要求放到 tool result 或后置 user/history |
 | `agent.WithInjectedContextMessages` / `WithLateContextMessages` | history 附近的临时消息 | 前者在 session history 之前，位置更靠前；后者贴近最新用户回合 | 临时上下文优先 late 注入，避免改写稳定前缀 |
 | `BeforeModel` callback / `EventMessageProjector` | 任意 request message | 这是强扩展点，可能重写 system、tools 或 history | 遵守 append-only 思路；尽量只在靠后位置追加动态上下文 |
