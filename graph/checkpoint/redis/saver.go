@@ -480,10 +480,9 @@ func (s *Saver) filterBeforeIDs(ctx context.Context, lineageID, checkpointNS, be
 	}
 	entries := make([]tsEntry, 0, len(ids))
 	for i, id := range ids {
-		cmd, ok := cmds[i].(*redis.StringCmd)
-		if !ok {
-			return nil, fmt.Errorf("unexpected hget result type %T", cmds[i])
-		}
+		// The pipeline only queues HGET commands, so each result is a
+		// *redis.StringCmd.
+		cmd := cmds[i].(*redis.StringCmd)
 		ts := int64(0)
 		if cmd.Err() == nil {
 			if ts, err = strconv.ParseInt(cmd.Val(), 10, 64); err != nil {

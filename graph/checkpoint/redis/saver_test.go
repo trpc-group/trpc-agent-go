@@ -14,6 +14,7 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -40,6 +41,35 @@ func buildRedisClient(t *testing.T, redisURL string) *redis.Client {
 	opts, err := redis.ParseURL(redisURL)
 	require.NoError(t, err)
 	return redis.NewClient(opts)
+}
+
+// errHook is a redis.Hook that injects failures into specific commands or the
+// whole pipeline, exercising error paths that miniredis cannot produce.
+type errHook struct {
+	failCmd      map[string]bool
+	failPipeline bool
+}
+
+func (h *errHook) DialHook(next redis.DialHook) redis.DialHook {
+	return next
+}
+
+func (h *errHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if h.failCmd[cmd.Name()] {
+			return errors.New("injected command error")
+		}
+		return next(ctx, cmd)
+	}
+}
+
+func (h *errHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		if h.failPipeline {
+			return errors.New("injected pipeline error")
+		}
+		return next(ctx, cmds)
+	}
 }
 
 func TestNewSaverWithRedisInstance_buildSuccess(t *testing.T) {
@@ -1656,4 +1686,162 @@ func TestFilterBeforeIDs_DropsCandidatesWithUnknownTS(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, graph.GetCheckpointID(olderCfg), got[0])
+}
+
+// TestGetCheckpointIDs_CommandErrors exercises the Redis error paths of the
+// Before-filtered ID query by injecting command failures.
+func TestGetCheckpointIDs_CommandErrors(t *testing.T) {
+	ctx := context.Background()
+	const (
+		lineageID = "ln-cmd-err"
+		ns        = "nsA"
+	)
+	zkey := checkpointTSKey(lineageID, ns)
+
+	t.Run("zscore error", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+		saver.client.AddHook(&errHook{failCmd: map[string]bool{"zscore": true}})
+
+		before := graph.CreateCheckpointConfig(lineageID, "cursor-id", ns)
+		_, err = saver.getCheckpointIDs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
+		require.Error(t, err)
+	})
+
+	t.Run("zrevrangebyscore error", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+		// A real cursor member so the ZScore lookup succeeds first.
+		require.NoError(t, saver.client.ZAdd(ctx, zkey, redis.Z{Score: 1, Member: "cursor-id"}).Err())
+		saver.client.AddHook(&errHook{failCmd: map[string]bool{"zrevrangebyscore": true}})
+
+		before := graph.CreateCheckpointConfig(lineageID, "cursor-id", ns)
+		_, err = saver.getCheckpointIDs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
+		require.Error(t, err)
+	})
+
+	t.Run("zrevrange error", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+		saver.client.AddHook(&errHook{failCmd: map[string]bool{"zrevrange": true}})
+
+		_, err = saver.getCheckpointIDs(ctx, lineageID, ns, nil)
+		require.Error(t, err)
+	})
+
+	t.Run("before filtering error", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+		require.NoError(t, saver.client.ZAdd(ctx, zkey,
+			redis.Z{Score: 3, Member: "cursor-id"},
+			redis.Z{Score: 2, Member: "real"},
+		).Err())
+		saver.client.AddHook(&errHook{failCmd: map[string]bool{"hget": true}})
+
+		before := graph.CreateCheckpointConfig(lineageID, "cursor-id", ns)
+		_, err = saver.getCheckpointIDs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
+		require.Error(t, err)
+	})
+}
+
+// TestGetCheckpointIDs_EdgeCases exercises the zero-score cursor, empty cursor
+// ID and empty member ID paths of the ID query.
+func TestGetCheckpointIDs_EdgeCases(t *testing.T) {
+	ctx := context.Background()
+	const (
+		lineageID = "ln-edge"
+		ns        = "nsA"
+	)
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	// A zero-score member exercises the beforeScore <= 0 branch; an empty
+	// member exercises the invalid ID skip path.
+	require.NoError(t, saver.client.ZAdd(ctx, checkpointTSKey(lineageID, ns),
+		redis.Z{Score: 0, Member: "zero-score"},
+		redis.Z{Score: 2, Member: "real"},
+		redis.Z{Score: 1, Member: ""},
+	).Err())
+	require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, ns, "real"), tsKey, "2").Err())
+
+	t.Run("zero score cursor falls back to full listing", func(t *testing.T) {
+		before := graph.CreateCheckpointConfig(lineageID, "zero-score", ns)
+		ids, err := saver.getCheckpointIDs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
+		require.NoError(t, err)
+		// Empty member skipped; zero-score cursor retained, matching the
+		// pre-existing fallback behavior.
+		assert.Equal(t, []string{"real", "zero-score"}, ids)
+	})
+
+	t.Run("empty before id falls back to full listing", func(t *testing.T) {
+		before := graph.CreateCheckpointConfig(lineageID, "", ns)
+		ids, err := saver.getCheckpointIDs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"real", "zero-score"}, ids)
+	})
+}
+
+// TestFilterBeforeIDs_RedisErrors exercises the error paths of exact timestamp
+// filtering by injecting failures into the cursor lookup and the pipeline.
+func TestFilterBeforeIDs_RedisErrors(t *testing.T) {
+	ctx := context.Background()
+	const (
+		lineageID = "ln-fbf-err"
+		ns        = "nsA"
+	)
+
+	t.Run("cursor timestamp lookup error", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+		saver.client.AddHook(&errHook{failCmd: map[string]bool{"hget": true}})
+
+		_, err = saver.filterBeforeIDs(ctx, lineageID, ns, "cursor-id", []string{"c1", "c2"})
+		require.Error(t, err)
+	})
+
+	t.Run("pipeline error", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+		// Real cursor data so the exact-timestamp lookup succeeds first.
+		require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, ns, "cursor-id"), tsKey, "100").Err())
+		saver.client.AddHook(&errHook{failPipeline: true})
+
+		_, err = saver.filterBeforeIDs(ctx, lineageID, ns, "cursor-id", []string{"c1", "c2"})
+		require.Error(t, err)
+	})
+}
+
+// TestGetCheckpointTS_RedisError exercises the non-missing error path of the
+// exact timestamp lookup.
+func TestGetCheckpointTS_RedisError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+	saver.client.AddHook(&errHook{failCmd: map[string]bool{"hget": true}})
+
+	_, err = saver.getCheckpointTS(context.Background(), "ln-ts", "nsA", "any-id")
+	require.Error(t, err)
 }
