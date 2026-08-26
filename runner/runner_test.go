@@ -5310,10 +5310,10 @@ func TestRunnerLatencyDiagnosticHelpers(t *testing.T) {
 	require.True(t, runnerHasAttr(runAttrs, "runner.message.has_payload", true))
 	require.True(t, runnerHasAttr(runAttrs, "runner.options.seed_messages", 1))
 
-	invAttrs := runnerInvocationAttrs(inv)
+	invAttrs := runnerInvocationAttrs(inv, "a")
 	require.True(t, runnerHasAttr(invAttrs, "runner.agent", "a"))
 	require.True(t, runnerHasAttr(invAttrs, "runner.request_id", "req-latency"))
-	require.Nil(t, runnerInvocationAttrs(nil))
+	require.Nil(t, runnerInvocationAttrs(nil, ""))
 
 	sess := session.NewSession("app", "user", "sess")
 	sess.SetState("state-key", []byte("value"))
@@ -9788,7 +9788,7 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 
 	agentCh := make(chan *event.Event)
 	flushCh := make(chan *flush.FlushRequest)
-	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil, nil, nil, runnerInvocationAttrs(inv))
+	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil, nil, nil, runnerInvocationAttrs(inv, "a"), "a")
 	// Send one event, then close agentCh
 	go func() {
 		agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("x")}}}}
