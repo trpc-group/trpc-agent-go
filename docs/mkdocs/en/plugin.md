@@ -640,8 +640,8 @@ should apply to all agents managed by a Runner.
 `toolloopwarning.New()` examines the two complete tool-call rounds at the end
 of each model request. When their tool names, canonical JSON arguments, and
 model-visible results are identical, it appends one temporary user-role
-instruction to that request. It does not repeat the warning while the same
-request is processed more than once, but it appends the warning to each new
+instruction to that request. It does not append a duplicate while the warning
+is already present in the same request, but it appends the warning to each new
 eligible request while the repeated loop continues. A changed round or an
 intervening non-tool message does not match. The first model request in each
 invocation is deliberately skipped so a repeated tail restored from an earlier

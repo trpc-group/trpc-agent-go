@@ -32,7 +32,11 @@ type detectorState struct {
 	mu sync.Mutex
 
 	seenFirstRequest bool
-	firstRequest     *model.Request
+	// Flow creates a new request for each LLM cycle, while model retries
+	// re-enter callbacks with the same request pointer. Retaining the first
+	// pointer keeps retries of the initial request inside the initial-request
+	// skip boundary.
+	firstRequest *model.Request
 }
 
 // New returns an opt-in plugin that adds a temporary user-role instruction to
