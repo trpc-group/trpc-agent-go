@@ -118,25 +118,46 @@ func TestBeforeModelPreservesDescriptiveMetadata(t *testing.T) {
 		metadata: published,
 	}
 
+	// A host patched the declaration before ToolPipe saw it. The overlay
+	// exposes none of the tool's optional interfaces, so metadata read off it
+	// directly is the zero value; the wrapper has to look through it.
+	patched := itool.ApplyDeclarations(
+		[]tool.Tool{metadataTool{
+			mockTool: &mockTool{decl: &tool.Declaration{
+				Name:        "patched_tool",
+				Description: "publishes metadata, then gets patched",
+			}},
+			metadata: published,
+		}},
+		[]tool.Declaration{{Name: "patched_tool", Description: "patched by a host surface"}},
+	)[0]
+
 	require.Equal(t, tool.ToolMetadata{}, tool.MetadataOf(plain),
 		"precondition: the inner tool publishes nothing")
+	require.Equal(t, tool.ToolMetadata{}, tool.MetadataOf(patched),
+		"precondition: the overlay hides the metadata the patched tool publishes")
 
-	tp := New(WithToolNames("plain_tool", "describing_tool"))
+	tp := New(WithToolNames("plain_tool", "describing_tool", "patched_tool"))
 	req := &model.Request{
 		Tools: map[string]tool.Tool{
 			"plain_tool":      plain,
 			"describing_tool": describing,
+			"patched_tool":    patched,
 		},
 	}
 	_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
 	require.NoError(t, err)
 	require.NotSame(t, tool.Tool(plain), req.Tools["plain_tool"],
 		"precondition: ToolPipe replaced the entry with its own wrapper")
+	require.NotSame(t, tool.Tool(patched), req.Tools["patched_tool"],
+		"precondition: ToolPipe wrapped the patched tool too")
 
 	assert.Equal(t, tool.ToolMetadata{}, tool.MetadataOf(req.Tools["plain_tool"]),
 		"the wrapper must not invent a reentrancy guarantee for a tool that made none")
 	assert.Equal(t, published, tool.MetadataOf(req.Tools["describing_tool"]),
 		"the wrapper must report what the inner tool publishes, unchanged")
+	assert.Equal(t, published, tool.MetadataOf(req.Tools["patched_tool"]),
+		"the wrapper must resolve a declaration overlay before reading metadata")
 
 	// The two channels stay independent: a metadata-only ConcurrencySafe:false
 	// is still admitted, exactly as tool.MetadataOf and tool.IsConcurrencySafe

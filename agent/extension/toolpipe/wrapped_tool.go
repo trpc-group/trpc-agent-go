@@ -137,8 +137,15 @@ func (t *declaredCallableTool) IsConcurrencySafe() bool {
 // true for every wrapped tool, promising the same-tool reentrancy the inner tool
 // never claimed. Permission policies read that off this wrapper. Delegating also
 // stops it dropping ReadOnly, Destructive, and OpenWorld.
+//
+// The delegation resolves the semantic tool first, as IsConcurrencySafe does.
+// Invocation-scoped declaration patches are applied before BeforeModel runs, and
+// a declaration overlay exposes none of the wrapped tool's optional interfaces,
+// so asking the immediate inner tool would return the zero value for every
+// patched tool. The permission path resolves overlays itself, but only down to
+// the first wrapper that is not one — this wrapper.
 func (t *declaredCallableTool) ToolMetadata() tool.ToolMetadata {
-	return tool.MetadataOf(t.inner)
+	return tool.MetadataOf(itool.ResolveSemantic(t.inner))
 }
 
 // StreamableCall implements tool.StreamableTool — only on the streamable wrapper.
