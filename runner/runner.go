@@ -64,6 +64,12 @@ const (
 	interruptedAssistantFinishReason   = "cancelled"
 	interruptedAssistantExtensionKey   = "trpc_agent.runner.interrupted_assistant"
 	cancelledSessionPersistenceTimeout = time.Second
+
+	// cancelledAgentStreamCloseTimeout bounds how long the event loop waits
+	// for the agent event stream to close before running completion
+	// callbacks after an early cancellation, so agents that ignore
+	// cancellation cannot hang the runner.
+	cancelledAgentStreamCloseTimeout = 5 * time.Second
 )
 
 var (
@@ -1557,6 +1563,13 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 			log.Errorf(log.PanicPrefix+" panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
 		}
 		// Agent event stream completed.
+		//
+		// On cancellation before the first agent event the event loop has no
+		// channel happens-before edge with the agent goroutine. Drain the
+		// stream until it closes so completion callbacks cannot race the
+		// invocation writes the agent performs at setup (e.g.
+		// Invocation.AgentName in setupInvocation).
+		waitForAgentStreamClose(loop)
 		steer.Close(loop.invocation)
 		r.safePersistInterruptedAssistant(ctx, loop)
 		r.safeEmitRunnerCompletion(ctx, loop)
@@ -2687,6 +2700,32 @@ func sessionPersistenceContext(ctx context.Context) (context.Context, context.Ca
 		context.WithoutCancel(ctx),
 		cancelledSessionPersistenceTimeout,
 	)
+}
+
+// waitForAgentStreamClose drains the agent event stream until it closes when
+// the event loop exits without having processed any agent event. On
+// cancellation before the first event there is no channel happens-before edge
+// with the agent goroutine, so the completion path must not hand the live
+// invocation to plugin callbacks while the agent goroutine may still be
+// writing it (setupInvocation writes Invocation.AgentName). Draining until
+// close establishes that edge. The wait is bounded so agents that ignore
+// cancellation cannot hang the runner.
+func waitForAgentStreamClose(loop *eventLoopContext) {
+	if loop.processedEventCount > 0 {
+		// A processed agent event already established a happens-before edge
+		// with the agent goroutine's setup writes.
+		return
+	}
+	streamClosed := make(chan struct{})
+	go func() {
+		for range loop.agentEventCh {
+		}
+		close(streamClosed)
+	}()
+	select {
+	case <-streamClosed:
+	case <-time.After(cancelledAgentStreamCloseTimeout):
+	}
 }
 
 // safeEmitRunnerCompletion guards emitRunnerCompletion against panics from session services.
