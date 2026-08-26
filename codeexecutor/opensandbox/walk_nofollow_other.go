@@ -8,7 +8,7 @@
 //
 //
 
-//go:build !(linux || freebsd || netbsd || openbsd || dragonfly)
+//go:build !(linux || darwin || freebsd || netbsd || openbsd || dragonfly)
 
 package opensandbox
 
@@ -17,72 +17,44 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 )
 
-// errSymlinkRefused is the sentinel wrapped by this fallback when an
-// entry turns out to be a symlink; walkDir treats it as a skippable
-// symlink race, like ELOOP from the openat implementation.
-var errSymlinkRefused = errors.New("symlink refused")
+// pinnedWalkSupported is false on platforms without a usable openat(2)
+// (Windows, and other non-Unix targets). Directory staging fail-closes
+// rather than reopening children by pathname, which cannot close the
+// host-directory swap race.
+const pinnedWalkSupported = false
+
+// errCannotPinWalk is returned when the host tree cannot be traversed
+// from a pinned directory handle. Callers must treat this as a hard
+// failure — never as a skippable race — so a residual swap cannot be
+// reported as a successful upload.
+var errCannotPinWalk = errors.New(
+	"cannot pin staging tree without openat; refusing directory upload",
+)
 
 // isSkippableOpenErr reports whether err conclusively represents an
-// entry that vanished or was swapped for a symlink during the walk —
-// the only conditions under which walkDir may skip an entry. All other
-// failures (permission denied, descriptor exhaustion, filesystem I/O
-// errors) must propagate so a partial staging run is never reported as
-// success.
+// entry that vanished or was swapped for a symlink during the walk.
+// The fail-closed pin error is never skippable.
 func isSkippableOpenErr(err error) bool {
-	return errors.Is(err, fs.ErrNotExist) ||
-		errors.Is(err, errSymlinkRefused)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
-// openDirNoFollow is the fallback root open for platforms without
-// openat(2): it opens path and then refuses when the final component
-// turned out to be a symlink, mirroring the unix O_NOFOLLOW semantics
-// for the walk root.
+// openDirNoFollow fail-closes instead of using a blocking pathname
+// open. A pathname fallback cannot pin the root, swallows Lstat
+// failures when written as `lierr == nil && ...`, and can hang on a
+// FIFO replacement. Refusing the upload is the documented contract
+// when the source tree cannot be pinned.
 func openDirNoFollow(path string) (*os.File, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	if li, lierr := os.Lstat(path); lierr == nil && li.Mode()&os.ModeSymlink != 0 {
-		f.Close()
-		return nil, fmt.Errorf(
-			"opensandbox: %s is a symlink; refusing to follow: %w", path, errSymlinkRefused,
-		)
-	}
-	return f, nil
+	return nil, fmt.Errorf("opensandbox: %s: %w", path, errCannotPinWalk)
 }
 
-// openChildNoFollow is the fallback for platforms without a usable
-// syscall.Openat (Windows, and darwin/ios whose syscall package does
-// not export Openat). It opens the child by pathname and cannot pin
-// the parent, so it re-checks with Lstat after the open and refuses
-// when the entry is (or has become) a symlink, which os.Open would
-// otherwise silently follow.
-//
-// The caller pre-filters entries whose enumerated metadata is already
-// non-regular (symlinks included), so this check only fires for entries
-// swapped between enumeration and open. A residual race (swap back to a
-// regular file after the Lstat) remains on these platforms and cannot
-// be closed without fd-relative opens; note that creating symlinks on
-// Windows itself requires administrator or developer mode.
+// openChildNoFollow fail-closes for the same reason: opening by
+// pathname from dirF.Name() cannot pin the parent, so a swapped
+// ancestor would still be followed.
 func openChildNoFollow(dirF *os.File, name string) (*os.File, fs.FileInfo, error) {
-	p := filepath.Join(dirF.Name(), name)
-	f, err := os.Open(p)
-	if err != nil {
-		return nil, nil, err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, nil, err
-	}
-	if li, lierr := os.Lstat(p); lierr == nil && li.Mode()&os.ModeSymlink != 0 {
-		f.Close()
-		return nil, nil, fmt.Errorf(
-			"opensandbox: %s is a symlink; refusing to follow: %w", p, errSymlinkRefused,
-		)
-	}
-	return f, info, nil
+	return nil, nil, fmt.Errorf(
+		"opensandbox: %s: %w",
+		dirF.Name(), errCannotPinWalk,
+	)
 }

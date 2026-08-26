@@ -20,6 +20,10 @@ import (
 	"syscall"
 )
 
+// pinnedWalkSupported reports that this platform can traverse a host
+// tree from a pinned directory handle with no-follow semantics.
+const pinnedWalkSupported = true
+
 // isSkippableOpenErr reports whether err conclusively represents an
 // entry that vanished or was swapped for a symlink during the walk —
 // the only conditions under which walkDir may skip an entry. All other

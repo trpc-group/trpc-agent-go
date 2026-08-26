@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -146,14 +147,11 @@ func (r *Runtime) migrateLegacyWorkspace(newKey string, legacyKeys []string) err
 	if newPath == "" {
 		return nil
 	}
-	found, err := probeLegacyWorkspace(r.root, newPath, newKey, legacyKeys)
-	if err != nil {
-		return err
-	}
-	if found == "" {
-		return nil
-	}
-	exists, err := validateMigrationDestination(newPath)
+	// Check the destination first. Ambiguous or unexpected legacy
+	// forms are only fatal when a migration would actually run; an
+	// already-upgraded sess-* directory must stay usable even if
+	// several historical directories were preserved beside it.
+	exists, err := validateMigrationDestination(r.root, newPath)
 	if err != nil {
 		return err
 	}
@@ -163,11 +161,27 @@ func (r *Runtime) migrateLegacyWorkspace(newKey string, legacyKeys []string) err
 		// directory untouched rather than overwrite newer data.
 		return nil
 	}
+	found, err := probeLegacyWorkspace(r.root, newPath, newKey, legacyKeys)
+	if err != nil {
+		return err
+	}
+	if found == "" {
+		return nil
+	}
+	// Re-validate immediately before the rename so an intermediate
+	// component swapped for a symlink after the probe cannot redirect
+	// os.Rename onto a directory outside the configured root.
+	if err := inspectContainedPlainDir(r.root, found, "legacy workspace"); err != nil {
+		return err
+	}
+	if err := inspectContainedPlainDir(r.root, filepath.Dir(newPath), "migration destination"); err != nil {
+		return err
+	}
 	if err := os.Rename(found, newPath); err != nil {
 		// A concurrent goroutine may have won the rename; if the
 		// destination now exists (as a valid plain directory) the
 		// upgrade already happened.
-		exists, statErr := validateMigrationDestination(newPath)
+		exists, statErr := validateMigrationDestination(r.root, newPath)
 		if statErr != nil {
 			return statErr
 		}
@@ -189,26 +203,19 @@ func (r *Runtime) migrateLegacyWorkspace(newKey string, legacyKeys []string) err
 }
 
 // validateMigrationDestination reports whether an already-present
-// migration destination is a plain directory, using Lstat so a symlink
-// planted at the deterministic sess-* path is never followed: accepting
-// it would let the subsequent MkdirAll/EnsureLayout in CreateWorkspace
-// write outside the configured root. Symlinks and non-directories are
-// rejected; a missing destination returns exists=false, nil.
-func validateMigrationDestination(newPath string) (bool, error) {
-	info, err := os.Lstat(newPath)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	if err != nil {
+// migration destination is a plain directory contained under root.
+// Every component beneath root is Lstat'ed so a symlink planted at
+// the sess-* leaf or in an ancestor (for example root/sandbox) is
+// never followed: accepting it would let the subsequent
+// MkdirAll/EnsureLayout in CreateWorkspace write outside the
+// configured root. Symlinks and non-directories are rejected; a
+// missing destination returns exists=false, nil.
+func validateMigrationDestination(root, newPath string) (bool, error) {
+	if err := inspectContainedPlainDir(root, newPath, "migration destination"); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
 		return false, err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return false, fmt.Errorf(
-			"sandbox: migration destination %s is a symlink; refusing migration", newPath)
-	}
-	if !info.IsDir() {
-		return false, fmt.Errorf(
-			"sandbox: migration destination %s is not a directory; refusing migration", newPath)
 	}
 	return true, nil
 }
@@ -229,27 +236,21 @@ func probeLegacyWorkspace(root, newPath, newKey string, legacyKeys []string) (st
 		if oldPath == "" || oldPath == newPath {
 			continue
 		}
-		// Lstat (not Stat) so a legacy root that is itself a symlink is
-		// never followed: such a root is an unexpected, untrusted type
-		// and must surface as an error instead of being moved and then
-		// written through on layout creation.
-		info, err := os.Lstat(oldPath)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			// Propagate permission/I/O failures instead of silently
-			// treating them as "nothing to migrate" — that would orphan
-			// persisted state behind a fresh empty workspace.
+		// Inspect every component beneath root with Lstat. Historical
+		// keys such as "app/user/id" become nested paths; a symlink
+		// in a non-final component is followed by pathname resolution
+		// and by os.Rename, so Lstat(oldPath) alone cannot prove the
+		// workspace is contained in root.
+		if err := inspectContainedPlainDir(root, oldPath, "legacy workspace"); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			// Propagate permission/I/O failures and unexpected types
+			// instead of silently treating them as "nothing to
+			// migrate" — that would orphan persisted state behind a
+			// fresh empty workspace, or move a directory reached
+			// through a symlink.
 			return "", err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf(
-				"sandbox: legacy workspace %s is a symlink; refusing migration", oldPath)
-		}
-		if !info.IsDir() {
-			return "", fmt.Errorf(
-				"sandbox: legacy workspace %s is not a directory; refusing migration", oldPath)
 		}
 		if found != "" {
 			return "", fmt.Errorf(
@@ -259,6 +260,62 @@ func probeLegacyWorkspace(root, newPath, newKey string, legacyKeys []string) (st
 		found = oldPath
 	}
 	return found, nil
+}
+
+// inspectContainedPlainDir verifies that target is a plain directory
+// reached from root without following any path component. root is the
+// trust anchor and is not itself required to be a non-symlink; every
+// component beneath it is Lstat'ed and must be a directory, never a
+// symlink. A missing component is returned as the raw Lstat error so
+// callers can treat os.IsNotExist as "nothing here".
+func inspectContainedPlainDir(root, target, kind string) error {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("sandbox: %s %s is outside workspace root %s", kind, target, root)
+	}
+	if rel == "." {
+		return lstatPlainDir(target, target, kind)
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			return fmt.Errorf("sandbox: %s %s is outside workspace root %s", kind, target, root)
+		}
+		current = filepath.Join(current, part)
+		if err := lstatPlainDir(current, target, kind); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func lstatPlainDir(path, display, kind string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if path == display {
+			return fmt.Errorf(
+				"sandbox: %s %s is a symlink; refusing migration", kind, path)
+		}
+		return fmt.Errorf(
+			"sandbox: %s path %s contains a symlink at %s; refusing migration",
+			kind, display, path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf(
+			"sandbox: %s %s is not a directory; refusing migration", kind, path)
+	}
+	return nil
 }
 
 // validateMigratedWorkspace verifies that a freshly migrated workspace path

@@ -1091,6 +1091,7 @@ func TestWorkspace_PutFiles(t *testing.T) {
 }
 
 func TestWorkspace_PutDirectory(t *testing.T) {
+	requirePinnedWalk(t)
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
@@ -1109,6 +1110,7 @@ func TestWorkspace_PutDirectory(t *testing.T) {
 }
 
 func TestWorkspace_StageDirectory_ReadOnly(t *testing.T) {
+	requirePinnedWalk(t)
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
@@ -1402,6 +1404,7 @@ func TestExecuteInline_PerSession_NoAutoCleanup(t *testing.T) {
 }
 
 func TestWorkspace_PutDirectory_WithSubdirs(t *testing.T) {
+	requirePinnedWalk(t)
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
@@ -1709,6 +1712,7 @@ func TestShouldUploadFile(t *testing.T) {
 // developer mode. When symlink creation fails the test is skipped —
 // Linux/macOS CI covers the regression path.
 func TestWorkspace_PutDirectory_SkipsSymlinks(t *testing.T) {
+	requirePinnedWalk(t)
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
@@ -1762,6 +1766,7 @@ func TestWorkspace_PutDirectory_SkipsSymlinks(t *testing.T) {
 //
 // Requires symlink support (skipped on platforms where creation fails).
 func TestWorkspace_PutDirectory_SkipsSymlinkedDirectory(t *testing.T) {
+	requirePinnedWalk(t)
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
@@ -2099,6 +2104,7 @@ func TestWorkspace_ReadFile_ServerIgnoresRange(t *testing.T) {
 // materializing implementation; this test fails if File is not *os.File
 // or if the open file is closed before flush completes.
 func TestWorkspace_WalkAndUpload_StreamsFiles(t *testing.T) {
+	requirePinnedWalk(t)
 	dir := t.TempDir()
 	// Multi-MiB payload so accidental full materialization is more
 	// obvious in memory profiles, and so we can prove the open *os.File
@@ -2160,6 +2166,7 @@ func TestWorkspace_WalkAndUpload_StreamsFiles(t *testing.T) {
 // TOCTOU window of filepath.WalkDir (directory reopened by pathname
 // after its callback) without needing to interpose inside the walk.
 func TestOpenChildNoFollow_RejectsSwappedDirectory(t *testing.T) {
+	requirePinnedWalk(t)
 	host := t.TempDir()
 	sub := filepath.Join(host, "sub")
 	require.NoError(t, os.Mkdir(sub, 0o755))
@@ -2199,6 +2206,7 @@ func TestOpenChildNoFollow_RejectsSwappedDirectory(t *testing.T) {
 // parent is swapped for a symlink to an external file before it is
 // opened. The no-follow open must refuse it.
 func TestOpenChildNoFollow_RejectsSwappedFile(t *testing.T) {
+	requirePinnedWalk(t)
 	host := t.TempDir()
 	victim := filepath.Join(host, "victim.txt")
 	require.NoError(t, os.WriteFile(victim, []byte("original"), 0o644))
@@ -2231,6 +2239,7 @@ func TestOpenChildNoFollow_RejectsSwappedFile(t *testing.T) {
 // ulimit -n must not fail because all fds were held open until the
 // walk finished.
 func TestWorkspace_WalkAndUpload_BatchedBySize(t *testing.T) {
+	requirePinnedWalk(t)
 	// Create a directory with more than uploadBatchSize files.
 	dir := t.TempDir()
 	fileCount := uploadBatchSize + 10
@@ -2258,6 +2267,7 @@ func TestWorkspace_WalkAndUpload_BatchedBySize(t *testing.T) {
 // matching the e2b adapter's behaviour and preventing a symlink
 // inside hostRoot from causing files outside hostRoot to be uploaded.
 func TestWorkspace_WalkAndUpload_SkipsNonRegularFiles(t *testing.T) {
+	requirePinnedWalk(t)
 	dir := t.TempDir()
 	// Create a regular file.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.txt"), []byte("ok"), 0o644))
@@ -2781,6 +2791,7 @@ func TestWorkspace_PutDirectory_RejectsSymlinkEscape(t *testing.T) {
 // verifies that StageDirectory with ReadOnly=true does not chmod a
 // symlink target outside the workspace.
 func TestWorkspace_StageDirectory_ReadOnly_NoChmodOutsideWorkspace(t *testing.T) {
+	requirePinnedWalk(t)
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
@@ -3584,6 +3595,7 @@ func TestBatchRemoveSymlinksScript_OldFormFails(t *testing.T) {
 // an intermediate destination directory that is a symlink outside the
 // workspace is rejected during directory upload (not only the leaf).
 func TestWorkspace_PutDirectory_RejectsIntermediateSymlink(t *testing.T) {
+	requirePinnedWalk(t)
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
@@ -3611,6 +3623,7 @@ func TestWorkspace_PutDirectory_RejectsIntermediateSymlink(t *testing.T) {
 // TestWorkspace_PutDirectory_NoSymlinkBatchSucceeds is the end-to-end
 // counterpart of TestBatchRemoveSymlinksScript_NoSymlinkExitsZero.
 func TestWorkspace_PutDirectory_NoSymlinkBatchSucceeds(t *testing.T) {
+	requirePinnedWalk(t)
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)

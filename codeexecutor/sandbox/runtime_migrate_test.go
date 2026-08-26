@@ -667,6 +667,93 @@ func TestMigrateLegacyWorkspace_AmbiguousLegacyFormsFail(t *testing.T) {
 	assertPathExists(t, idOnlyForm)
 }
 
+// TestMigrateLegacyWorkspace_IntermediateLegacySymlinkRejected guards
+// the non-final-component case: Lstat(oldPath) only describes the last
+// segment, so an intermediate key component such as root/sandbox/app
+// can be a symlink to an outside directory while oldPath still looks
+// like a plain directory. os.Rename would then move that outside
+// directory into sess-*. Every ancestor beneath the workspace root
+// must be a plain directory.
+func TestMigrateLegacyWorkspace_IntermediateLegacySymlinkRejected(t *testing.T) {
+	root := t.TempDir()
+	newKey, legacyKey := migrateKeyPair(t)
+	outside := t.TempDir()
+	escaped := filepath.Join(outside, "test-user", "test-session")
+	if err := os.MkdirAll(filepath.Join(escaped, "work"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "sensitive.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(escaped, "work", "source.txt"),
+		[]byte("legacy-work"), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sandbox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	appComponent := filepath.Join(root, "sandbox", "test-app")
+	if err := os.Symlink(outside, appComponent); err != nil {
+		t.Skipf("cannot create symlink in this environment: %v", err)
+	}
+
+	rt := NewRuntime(WithWorkspaceRoot(root))
+	err := rt.migrateLegacyWorkspace(newKey, []string{legacyKey})
+	if err == nil {
+		t.Fatal("migrateLegacyWorkspace on intermediate legacy symlink = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("error should identify the intermediate symlink: %v", err)
+	}
+
+	newPath, _ := workspacePathForID(root, newKey)
+	assertPathMissing(t, newPath)
+	assertPathExists(t, appComponent)
+	assertPathExists(t, filepath.Join(escaped, "work", "source.txt"))
+	if data, err := os.ReadFile(filepath.Join(outside, "sensitive.txt")); err != nil || string(data) != "secret" {
+		t.Fatalf("outside file altered: content=%q err=%v", data, err)
+	}
+}
+
+// TestMigrateLegacyWorkspace_CompletedDestinationIgnoresLegacyAmbiguity
+// is the destination-first contract: when a valid sess-* directory
+// already exists, coexisting historical key forms must not make the
+// upgraded session unusable. Probe runs only when migration is
+// actually required.
+func TestMigrateLegacyWorkspace_CompletedDestinationIgnoresLegacyAmbiguity(t *testing.T) {
+	root := t.TempDir()
+	newKey := codeexecutor.SessionWorkspaceKey(migrateApp, "", migrateSession)
+	if newKey == "" {
+		t.Fatal("SessionWorkspaceKey returned empty for app-only session")
+	}
+	joinedForm := seedLegacyWorkspace(t, root, migrateApp+"/"+migrateSession)
+	idOnlyForm := seedLegacyWorkspace(t, root, migrateSession)
+
+	newPath, _ := workspacePathForID(root, newKey)
+	if err := os.MkdirAll(filepath.Join(newPath, "work"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(newPath, "work", "source.txt"),
+		[]byte("new-work"), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := NewRuntime(WithWorkspaceRoot(root))
+	if err := rt.migrateLegacyWorkspace(
+		newKey, legacyWorkspaceKeyCandidates(migrateApp, "", migrateSession),
+	); err != nil {
+		t.Fatalf("already-upgraded destination with two legacy forms = %v, want nil", err)
+	}
+
+	assertPathExists(t, joinedForm)
+	assertPathExists(t, idOnlyForm)
+	assertMigratedFileContent(t, filepath.Join(newPath, "work", "source.txt"), "new-work")
+}
+
 // TestValidateMigratedWorkspace_RejectsSymlinkAndNonDirectory unit-tests the
 // post-rename revalidation: a freshly migrated path must be a plain
 // directory. This is the guard for the Lstat→Rename swap window: if the

@@ -125,6 +125,7 @@ func TestVisit_CreateDirectoryFails(t *testing.T) {
 // --- visit skips non-regular files (shouldUploadFile=false branch)
 
 func TestVisit_SkipsNonRegularFile(t *testing.T) {
+	requirePinnedWalk(t)
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
@@ -336,6 +337,7 @@ func TestWalkDir_ReadDirError(t *testing.T) {
 // --- walkDir: nested visitDir CreateDirectory failure fails closed
 
 func TestPutDirectory_NestedVisitDirFails(t *testing.T) {
+	requirePinnedWalk(t)
 	m := newMockServer(t)
 	defer m.close()
 	// Fail CreateDirectory calls after the first success so the

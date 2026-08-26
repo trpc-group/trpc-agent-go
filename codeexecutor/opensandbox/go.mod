@@ -7,6 +7,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../..
 require (
 	github.com/alibaba/OpenSandbox/sdks/sandbox/go v1.0.3
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/sys v0.30.0
 	// Pseudo-version of the commit that introduces the
 	// SupportsDeclarativeIO engine APIs this package compiles against
 	// (a plain v1.11.1 requirement does not compile). The commit becomes

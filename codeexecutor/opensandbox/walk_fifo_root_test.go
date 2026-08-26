@@ -8,7 +8,7 @@
 //
 //
 
-//go:build linux || freebsd || netbsd || openbsd || dragonfly
+//go:build linux || darwin || freebsd || netbsd || openbsd || dragonfly
 
 package opensandbox
 
@@ -33,10 +33,6 @@ import (
 // before the walk opens it. The root open must fail promptly
 // (O_DIRECTORY|O_NONBLOCK reject with ENOTDIR) instead of blocking
 // until a writer appears, and nothing may be uploaded.
-//
-// darwin is excluded because its syscall package has no Openat; the
-// pathname-based fallback there cannot guarantee a non-blocking open
-// of a FIFO.
 func TestPutDirectory_RootSwappedForFIFO(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
