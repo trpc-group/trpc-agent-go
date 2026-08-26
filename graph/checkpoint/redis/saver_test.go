@@ -1661,3 +1661,215 @@ func TestRedis_DeleteLineage_SecondExecError(t *testing.T) {
 	err = saver.DeleteLineage(ctx, "ln-del2")
 	require.NoError(t, err)
 }
+
+func TestRedis_List_ErrorsOnClosedClient(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	// Close saver client to simulate Redis connection/command failures.
+	err = saver.Close()
+	require.NoError(t, err)
+
+	// 1. Trigger SMembers failure on all-namespace list (checkpointNS == "")
+	_, err = saver.List(ctx, graph.CreateCheckpointConfig("ln-err", "", ""), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get lineage namespaces")
+
+	// 2. Trigger ZRevRange failure on namespace-specific list (checkpointNS != "")
+	_, err = saver.List(ctx, graph.CreateCheckpointConfig("ln-err", "", "nsA"), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get checkpoint members")
+
+	// 3. Trigger ZScore failure on list with Before filter
+	filter := graph.NewCheckpointFilter().WithBefore(graph.CreateCheckpointConfig("ln-err", "ck-1", "nsA"))
+	_, err = saver.List(ctx, graph.CreateCheckpointConfig("ln-err", "", "nsA"), filter)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get before cursor score")
+
+	// 4. Trigger Exists failure in findCheckpointNamespace
+	_, err = saver.findCheckpointNamespace(ctx, "ln-err", "ck-1")
+	require.Error(t, err)
+}
+
+func TestRedis_List_EmptyLineage_AllNamespaceQuery(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	// Query an empty lineage with all-namespace selector (checkpointNS == "")
+	tuples, err := saver.List(ctx, graph.CreateCheckpointConfig("ln-no-checkpoints", "", ""), nil)
+	require.NoError(t, err)
+	assert.Empty(t, tuples)
+}
+
+func TestRedis_List_EqualTimestamp_TieBreakerAndEmptyID(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	lineageID := "ln-tie-breaker"
+	ns := "ns"
+	sameTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Create two checkpoints with identical timestamps to trigger the tie-breaker
+	ckA := graph.NewCheckpoint(map[string]any{"v": "A"}, map[string]int64{"v": 1}, nil)
+	ckA.ID = "id-aaa"
+	ckA.Timestamp = sameTime
+	_, err = saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", ns),
+		Checkpoint:  ckA,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0),
+		NewVersions: map[string]int64{"v": 1},
+	})
+	require.NoError(t, err)
+
+	ckB := graph.NewCheckpoint(map[string]any{"v": "B"}, map[string]int64{"v": 1}, nil)
+	ckB.ID = "id-bbb"
+	ckB.Timestamp = sameTime
+	_, err = saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", ns),
+		Checkpoint:  ckB,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 1),
+		NewVersions: map[string]int64{"v": 1},
+	})
+	require.NoError(t, err)
+
+	// Inject an empty string member and an orphan ID into the sorted set to verify defensive checks
+	db := buildRedisClient(t, redisURL)
+	tsKey := checkpointTSKey(lineageID, ns)
+	err = db.ZAdd(ctx, tsKey, redis.Z{Score: float64(sameTime.UnixNano()), Member: ""}).Err()
+	require.NoError(t, err)
+	err = db.ZAdd(ctx, tsKey, redis.Z{Score: float64(sameTime.UnixNano()), Member: "orphan-id"}).Err()
+	require.NoError(t, err)
+
+	cfg := graph.CreateCheckpointConfig(lineageID, "", ns)
+	tuples, err := saver.List(ctx, cfg, nil)
+	require.NoError(t, err)
+	require.Len(t, tuples, 2)
+	// Assert tie-breaker ordering: "id-bbb" > "id-aaa"
+	assert.Equal(t, "id-bbb", tuples[0].Checkpoint.ID)
+	assert.Equal(t, "id-aaa", tuples[1].Checkpoint.ID)
+
+	// Test filter.Before with empty checkpoint ID (beforeID == "")
+	filterEmptyBeforeID := &graph.CheckpointFilter{Before: map[string]any{"configurable": map[string]any{"checkpoint_id": ""}}}
+	tuples2, err := saver.List(ctx, cfg, filterEmptyBeforeID)
+	require.NoError(t, err)
+	require.Len(t, tuples2, 2)
+}
+
+func TestRedis_List_BeforeFilter_ExcludesLaterInSameScoreBucket(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	lineageID := "ln-score-bucket"
+	ns := "ns"
+
+	baseNano := int64(1) << 60
+	// Create three checkpoints sharing the same IEEE-754 double score
+	ck1 := graph.NewCheckpoint(map[string]any{"v": 1}, map[string]int64{"v": 1}, nil)
+	ck1.Timestamp = time.Unix(0, baseNano)
+	_, err = saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", ns),
+		Checkpoint:  ck1,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0),
+		NewVersions: map[string]int64{"v": 1},
+	})
+	require.NoError(t, err)
+
+	ck2 := graph.NewCheckpoint(map[string]any{"v": 2}, map[string]int64{"v": 2}, nil)
+	ck2.Timestamp = time.Unix(0, baseNano+1)
+	_, err = saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", ns),
+		Checkpoint:  ck2,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 1),
+		NewVersions: map[string]int64{"v": 2},
+	})
+	require.NoError(t, err)
+
+	ck3 := graph.NewCheckpoint(map[string]any{"v": 3}, map[string]int64{"v": 3}, nil)
+	ck3.Timestamp = time.Unix(0, baseNano+2)
+	_, err = saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", ns),
+		Checkpoint:  ck3,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 2),
+		NewVersions: map[string]int64{"v": 3},
+	})
+	require.NoError(t, err)
+
+	// List with Before(ck2). Since ck3 has the same float score as ck2 but a later nanosecond timestamp,
+	// it is returned by ZRevRangeByScore but must be excluded by in-memory Timestamp.Before checking.
+	filter := graph.NewCheckpointFilter().WithBefore(graph.CreateCheckpointConfig(lineageID, ck2.ID, ns))
+	tuples, err := saver.List(ctx, graph.CreateCheckpointConfig(lineageID, "", ns), filter)
+	require.NoError(t, err)
+	require.Len(t, tuples, 1)
+	assert.Equal(t, ck1.ID, tuples[0].Checkpoint.ID)
+}
+
+func TestRedis_List_CorruptedCheckpointData_ReturnsError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	lineageID := "ln-corrupted"
+	ns := "ns"
+
+	// 1. Corrupt data for Before cursor to trigger GetTuple error in cursor resolution
+	db := buildRedisClient(t, redisURL)
+	cursorID := "cursor-bad"
+	pipe := db.TxPipeline()
+	pipe.HSet(ctx, checkpointKey(lineageID, ns, cursorID),
+		lingeageIDKey, lineageID,
+		checkpointNSKey, ns,
+		checkpointIDKey, cursorID,
+		tsKey, "100",
+		checkpointJSONKey, "invalid-json",
+		metadataJSONKey, "{}",
+	)
+	pipe.ZAdd(ctx, checkpointTSKey(lineageID, ns), redis.Z{Score: 100, Member: cursorID})
+	pipe.SAdd(ctx, lineageNSKey(lineageID), ns)
+	_, err = pipe.Exec(ctx)
+	require.NoError(t, err)
+
+	filter := graph.NewCheckpointFilter().WithBefore(graph.CreateCheckpointConfig(lineageID, cursorID, ns))
+	_, err = saver.List(ctx, graph.CreateCheckpointConfig(lineageID, "", ns), filter)
+	require.Error(t, err)
+
+	// 2. Corrupt data for member to trigger GetTuple error during listing
+	memberID := "member-bad"
+	pipe2 := db.TxPipeline()
+	pipe2.HSet(ctx, checkpointKey(lineageID, ns, memberID),
+		lingeageIDKey, lineageID,
+		checkpointNSKey, ns,
+		checkpointIDKey, memberID,
+		tsKey, "200",
+		checkpointJSONKey, "invalid-json",
+		metadataJSONKey, "{}",
+	)
+	pipe2.ZAdd(ctx, checkpointTSKey(lineageID, ns), redis.Z{Score: 200, Member: memberID})
+	_, err = pipe2.Exec(ctx)
+	require.NoError(t, err)
+
+	_, err = saver.List(ctx, graph.CreateCheckpointConfig(lineageID, "", ns), nil)
+	require.Error(t, err)
+}
