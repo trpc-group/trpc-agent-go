@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
 )
 
 // TestRunnerCompletionCancelledBeforeFirstEventNoRace guards against a data
@@ -24,23 +25,38 @@ import (
 // runEventLoop returns via ctx.Done() with no channel happens-before edge
 // against the agent goroutine, so the cleanup must not read the live
 // invocation. Run with -race; the previous implementation raced inside
-// agent.EmitEvent's read of inv.AgentName.
+// agent.EmitEvent's read of inv.AgentName, and a second window remained
+// reachable through plugin callbacks (the built-in debug-log event hook reads
+// Invocation.AgentName when an event is emitted).
 func TestRunnerCompletionCancelledBeforeFirstEventNoRace(t *testing.T) {
-	ag := chainagent.New("chain")
-	successful := 0
-	for i := 0; i < 100; i++ {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		r := NewRunner("app", ag)
-		ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("hi"))
-		if err != nil {
-			continue
+	runCancelled := func(t *testing.T, opts ...Option) {
+		t.Helper()
+		ag := chainagent.New("chain")
+		successful := 0
+		for i := 0; i < 100; i++ {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			r := NewRunner("app", ag, opts...)
+			ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("hi"))
+			if err != nil {
+				continue
+			}
+			successful++
+			for range ch {
+			}
 		}
-		successful++
-		for range ch {
-		}
+		// Require at least one run to reach the event loop so the completion
+		// cleanup path is actually exercised.
+		require.NotZero(t, successful)
 	}
-	// Require at least one run to reach the event loop so the completion
-	// cleanup path is actually exercised.
-	require.NotZero(t, successful)
+
+	t.Run("default plugins", func(t *testing.T) {
+		runCancelled(t)
+	})
+	t.Run("debuglog event hook", func(t *testing.T) {
+		// The built-in debug-log event hook reads Invocation.AgentName when
+		// an event is emitted, exercising the plugin-interface path of the
+		// pre-first-event cancellation race.
+		runCancelled(t, WithPlugins(debuglog.New(debuglog.WithEventEnabled(true))))
+	})
 }
