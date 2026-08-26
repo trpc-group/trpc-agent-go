@@ -28,6 +28,7 @@ type scriptedModel struct {
 	calls     int
 	err       error
 	omitUsage bool
+	usage     *model.Usage
 }
 
 func (m *scriptedModel) GenerateContent(
@@ -47,7 +48,12 @@ func (m *scriptedModel) GenerateContent(
 		Done:    true,
 	}
 	if !m.omitUsage {
-		response.Usage = &model.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12}
+		response.Usage = m.usage
+		if response.Usage == nil {
+			response.Usage = &model.Usage{
+				PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12,
+			}
+		}
 	}
 	responses <- response
 	close(responses)
@@ -197,6 +203,77 @@ func TestLiveGeneratorFailsClosedWhenUsageIsMissing(t *testing.T) {
 	assert.ErrorIs(t, err, errMissingModelUsage)
 	assert.Equal(t, 1, client.calls, "missing usage must fail without retries")
 	assert.Equal(t, 1, budget.snapshot("").Calls)
+}
+
+func TestPartialUsageRetainsConservativeReservation(t *testing.T) {
+	tests := []struct {
+		name  string
+		usage *model.Usage
+	}{
+		{
+			name:  "missing input tokens",
+			usage: &model.Usage{CompletionTokens: 2, TotalTokens: 2},
+		},
+		{
+			name:  "missing output tokens",
+			usage: &model.Usage{PromptTokens: 10, TotalTokens: 10},
+		},
+	}
+	for _, test := range tests {
+		t.Run("evaluation "+test.name, func(t *testing.T) {
+			budget := newLiveBudget(
+				gateFileConfig{MaxCalls: 1, MaxTokens: 10_000, MaxCostCNY: 1},
+				optimizerBudgetConfig{},
+			)
+			generator := &liveGenerator{
+				model: &scriptedModel{usage: test.usage},
+				cfg: liveConfig{
+					TimeoutSeconds:     1,
+					InputCNYPerMillion: 1, OutputCNYPerMillion: 2,
+				},
+				budget: budget,
+			}
+
+			result, err := generator.Generate(
+				context.Background(), "prompt", "input",
+			)
+			require.NoError(t, err)
+
+			want := estimateTextRequest("prompt", "input", 512, 1, 2)
+			want.Calls = 1
+			assert.Equal(t, want, result.Usage)
+			assert.Equal(t, want, budget.snapshot(budgetStageEvaluation))
+		})
+
+		t.Run("optimizer "+test.name, func(t *testing.T) {
+			budget := newLiveBudget(
+				gateFileConfig{MaxCalls: 1, MaxTokens: 10_000, MaxCostCNY: 1},
+				optimizerBudgetConfig{MaxCalls: 1, MaxTokens: 10_000, MaxCostCNY: 1},
+			)
+			retrying := &budgetedRetryModel{
+				model:              &scriptedModel{usage: test.usage},
+				timeoutSeconds:     1,
+				inputCNYPerMillion: 1, outputCNYPerMillion: 2,
+				budget: budget,
+			}
+			maxTokens := 32
+			request := &model.Request{
+				Messages:         []model.Message{model.NewUserMessage("optimize")},
+				GenerationConfig: model.GenerationConfig{MaxTokens: &maxTokens},
+			}
+
+			responses, err := retrying.GenerateContent(
+				context.Background(), request,
+			)
+			require.NoError(t, err)
+			for range responses {
+			}
+
+			want := estimateModelRequest(request, 1, 2)
+			want.Calls = 1
+			assert.Equal(t, want, budget.snapshot(budgetStageOptimizer))
+		})
+	}
 }
 
 func TestLiveGeneratorDoesNotRetryAuthenticationFailure(t *testing.T) {

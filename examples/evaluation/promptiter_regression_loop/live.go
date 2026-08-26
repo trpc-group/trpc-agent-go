@@ -228,14 +228,14 @@ func (b *liveBudget) recordUsage(
 }
 
 // accountedAttemptUsage reconciles a conservative preflight reservation with
-// provider usage. Failed attempts commonly omit usage, so they retain the
-// reservation instead of making the same token and cost headroom reusable by a
-// retry.
+// provider usage. Missing or partial usage cannot safely price the absent
+// dimension, so it retains the full reservation instead of understating the
+// ledger or making token and cost headroom reusable by a retry.
 func accountedAttemptUsage(
 	reservation generationUsage,
 	usage generationUsage,
 ) generationUsage {
-	if usage.tokens() <= 0 {
+	if usage.InputTokens <= 0 || usage.OutputTokens <= 0 {
 		return reservation
 	}
 	usage.Calls = reservation.Calls
