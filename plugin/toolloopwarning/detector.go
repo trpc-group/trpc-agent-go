@@ -78,47 +78,80 @@ func parseTrailingToolRound(
 		return toolRound{}, 0, false
 	}
 
-	expected := make(map[string]struct{}, len(assistant.ToolCalls))
-	for _, toolCall := range assistant.ToolCalls {
-		if toolCall.ID == "" || toolCall.Function.Name == "" {
-			return toolRound{}, 0, false
-		}
-		if _, exists := expected[toolCall.ID]; exists {
-			return toolRound{}, 0, false
-		}
-		expected[toolCall.ID] = struct{}{}
-	}
-
-	byID := make(map[string]model.Message, len(assistant.ToolCalls))
-	for _, message := range messages[resultStart:end] {
-		if message.Role != model.RoleTool || message.ToolID == "" ||
-			!model.HasPayload(message) {
-			return toolRound{}, 0, false
-		}
-		if _, exists := expected[message.ToolID]; !exists {
-			return toolRound{}, 0, false
-		}
-		if _, exists := byID[message.ToolID]; exists {
-			return toolRound{}, 0, false
-		}
-		byID[message.ToolID] = message
-	}
-	if len(byID) != len(assistant.ToolCalls) {
+	expected, ok := expectedToolCallIDs(assistant.ToolCalls)
+	if !ok {
 		return toolRound{}, 0, false
 	}
-
-	results := make([]model.Message, 0, len(assistant.ToolCalls))
-	for _, toolCall := range assistant.ToolCalls {
-		result, exists := byID[toolCall.ID]
-		if !exists {
-			return toolRound{}, 0, false
-		}
-		results = append(results, result)
+	results, ok := orderedToolResults(
+		messages[resultStart:end],
+		assistant.ToolCalls,
+		expected,
+	)
+	if !ok {
+		return toolRound{}, 0, false
 	}
 	return toolRound{
 		toolCalls: assistant.ToolCalls,
 		results:   results,
 	}, assistantIndex, true
+}
+
+func expectedToolCallIDs(
+	toolCalls []model.ToolCall,
+) (map[string]struct{}, bool) {
+	expected := make(map[string]struct{}, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		if toolCall.ID == "" || toolCall.Function.Name == "" {
+			return nil, false
+		}
+		if _, exists := expected[toolCall.ID]; exists {
+			return nil, false
+		}
+		expected[toolCall.ID] = struct{}{}
+	}
+	return expected, true
+}
+
+func orderedToolResults(
+	messages []model.Message,
+	toolCalls []model.ToolCall,
+	expected map[string]struct{},
+) ([]model.Message, bool) {
+	byID := make(map[string]model.Message, len(toolCalls))
+	for _, message := range messages {
+		if !validToolResult(message, expected) {
+			return nil, false
+		}
+		if _, exists := byID[message.ToolID]; exists {
+			return nil, false
+		}
+		byID[message.ToolID] = message
+	}
+	if len(byID) != len(toolCalls) {
+		return nil, false
+	}
+
+	results := make([]model.Message, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		result, exists := byID[toolCall.ID]
+		if !exists {
+			return nil, false
+		}
+		results = append(results, result)
+	}
+	return results, true
+}
+
+func validToolResult(
+	message model.Message,
+	expected map[string]struct{},
+) bool {
+	if message.Role != model.RoleTool || message.ToolID == "" ||
+		!model.HasPayload(message) {
+		return false
+	}
+	_, exists := expected[message.ToolID]
+	return exists
 }
 
 func roundContainsExcludedTool(

@@ -24,7 +24,6 @@ const (
 )
 
 type toolLoopWarningPlugin struct {
-	stateInitMu       sync.Mutex
 	warning           string
 	excludedToolNames map[string]struct{}
 }
@@ -32,17 +31,12 @@ type toolLoopWarningPlugin struct {
 type detectorState struct {
 	mu sync.Mutex
 
-	seenFirstRequest  bool
-	warnedFingerprint string
-
-	pendingFingerprint   string
-	pendingRequest       *model.Request
-	pendingMessageIndex  int
-	pendingBaselineCount int
+	seenFirstRequest bool
+	firstRequest     *model.Request
 }
 
 // New returns an opt-in plugin that adds a temporary user-role instruction to
-// the next model request when its two trailing complete tool rounds are
+// each eligible model request when its two trailing complete tool rounds are
 // identical. The instruction is request-local: it is not appended to session
 // history, and the plugin never stops or retries the invocation.
 func New(opts ...Option) plugin.Plugin {
@@ -68,7 +62,6 @@ func (p *toolLoopWarningPlugin) Register(r *plugin.Registry) {
 	}
 	r.BeforeAgent(p.beforeAgent)
 	r.BeforeModel(p.beforeModel)
-	r.AfterModel(p.afterModel)
 	r.AfterAgent(p.afterAgent)
 }
 
@@ -95,73 +88,37 @@ func (p *toolLoopWarningPlugin) beforeModel(
 		return nil, nil
 	}
 
-	state := p.detectorStateFor(invocation)
+	state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
+	if !ok || state == nil {
+		return nil, nil
+	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
 	if !state.seenFirstRequest {
 		state.seenFirstRequest = true
-		state.clearPending()
+		state.firstRequest = args.Request
 		return nil, nil
 	}
+	if state.firstRequest == args.Request {
+		return nil, nil
+	}
+	state.firstRequest = nil
 
-	messages := state.messagesForDetection(args.Request, p.warning)
-	fingerprint, matched := matchingTrailingRoundFingerprint(
-		messages,
+	if hasTrailingWarning(args.Request.Messages, p.warning) {
+		return nil, nil
+	}
+	_, matched := matchingTrailingRoundFingerprint(
+		args.Request.Messages,
 		p.excludedToolNames,
 	)
 	if !matched {
-		state.rearm()
 		return nil, nil
 	}
-	if state.warnedFingerprint == fingerprint {
-		state.clearPending()
-		return nil, nil
-	}
-
-	if state.pendingWarningStillPresent(args.Request, p.warning) {
-		return nil, nil
-	}
-	state.pendingFingerprint = fingerprint
-	state.pendingRequest = args.Request
-	state.pendingMessageIndex = len(args.Request.Messages)
-	state.pendingBaselineCount = countWarningMessages(
-		args.Request.Messages,
-		p.warning,
-	)
 	args.Request.Messages = append(
 		args.Request.Messages,
 		model.NewUserMessage(p.warning),
 	)
-	return nil, nil
-}
-
-func (p *toolLoopWarningPlugin) afterModel(
-	ctx context.Context,
-	args *model.AfterModelArgs,
-) (*model.AfterModelResult, error) {
-	if p == nil || args == nil || args.Request == nil {
-		return nil, nil
-	}
-	invocation, ok := agent.InvocationFromContext(ctx)
-	if !ok || invocation == nil {
-		return nil, nil
-	}
-	state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
-	if !ok || state == nil {
-		return nil, nil
-	}
-
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.pendingRequest != args.Request {
-		return nil, nil
-	}
-	if countWarningMessages(args.Request.Messages, p.warning) >
-		state.pendingBaselineCount {
-		state.warnedFingerprint = state.pendingFingerprint
-	}
-	state.clearPending()
 	return nil, nil
 }
 
@@ -176,74 +133,9 @@ func (p *toolLoopWarningPlugin) afterAgent(
 	return nil, nil
 }
 
-func (p *toolLoopWarningPlugin) detectorStateFor(
-	invocation *agent.Invocation,
-) *detectorState {
-	state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
-	if ok && state != nil {
-		return state
-	}
-	p.stateInitMu.Lock()
-	defer p.stateInitMu.Unlock()
-	state, ok = agent.GetStateValue[*detectorState](invocation, stateKey)
-	if ok && state != nil {
-		return state
-	}
-	state = &detectorState{}
-	invocation.SetState(stateKey, state)
-	return state
-}
-
-func (s *detectorState) messagesForDetection(
-	request *model.Request,
-	warning string,
-) []model.Message {
-	if s == nil || request == nil ||
-		s.pendingRequest != request ||
-		s.pendingMessageIndex < 0 ||
-		s.pendingMessageIndex >= len(request.Messages) {
-		return request.Messages
-	}
-	if !isWarningMessage(request.Messages[s.pendingMessageIndex], warning) {
-		return request.Messages
-	}
-	messages := make([]model.Message, 0, len(request.Messages)-1)
-	messages = append(messages, request.Messages[:s.pendingMessageIndex]...)
-	messages = append(messages, request.Messages[s.pendingMessageIndex+1:]...)
-	return messages
-}
-
-func (s *detectorState) pendingWarningStillPresent(
-	request *model.Request,
-	warning string,
-) bool {
-	return s != nil && request != nil &&
-		s.pendingRequest == request &&
-		s.pendingMessageIndex >= 0 &&
-		s.pendingMessageIndex < len(request.Messages) &&
-		isWarningMessage(request.Messages[s.pendingMessageIndex], warning)
-}
-
-func (s *detectorState) rearm() {
-	s.warnedFingerprint = ""
-	s.clearPending()
-}
-
-func (s *detectorState) clearPending() {
-	s.pendingFingerprint = ""
-	s.pendingRequest = nil
-	s.pendingMessageIndex = -1
-	s.pendingBaselineCount = 0
-}
-
-func countWarningMessages(messages []model.Message, warning string) int {
-	count := 0
-	for _, message := range messages {
-		if isWarningMessage(message, warning) {
-			count++
-		}
-	}
-	return count
+func hasTrailingWarning(messages []model.Message, warning string) bool {
+	return len(messages) > 0 &&
+		isWarningMessage(messages[len(messages)-1], warning)
 }
 
 func isWarningMessage(message model.Message, warning string) bool {

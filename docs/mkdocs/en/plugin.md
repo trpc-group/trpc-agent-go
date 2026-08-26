@@ -641,14 +641,15 @@ should apply to all agents managed by a Runner.
 of each model request. When their tool names, canonical JSON arguments, and
 model-visible results are identical, it appends one temporary user-role
 instruction to that request. It does not repeat the warning while the same
-round remains unchanged; a changed round or an intervening non-tool message
-starts a new streak. The first model request in each invocation is deliberately
-skipped so a repeated tail restored from an earlier run cannot trigger a new
-warning by itself.
+request is processed more than once, but it appends the warning to each new
+eligible request while the repeated loop continues. A changed round or an
+intervening non-tool message does not match. The first model request in each
+invocation is deliberately skipped so a repeated tail restored from an earlier
+run cannot trigger a new warning by itself.
 
 Tool-call IDs are ignored. A complete round requires exactly one trailing
 tool-result message per tool call, matched by ID. An incomplete or malformed
-round resets detection. The plugin is opt-in, makes no additional model or tool
+round does not match. The plugin is opt-in, makes no additional model or tool
 calls, and does not stop or retry the invocation. It must be registered on a
 `Runner`; direct calls to `Agent.Run` do not install Runner plugins.
 
@@ -666,11 +667,10 @@ behavior.
 
 Detection uses the request view available at `BeforeModel`, so history
 projection, result transformation, summary cutoffs, and context compaction are
-already reflected. The plugin confirms the warning at `AfterModel`; if another
-callback removes it before that stage, the streak is not marked as warned and
-may be eligible again. A `BeforeModel` custom response also proceeds through
-`AfterModel`, so this confirmation describes the framework's model stage, not
-proof that an external provider was called.
+already reflected. If a later callback removes the instruction and the
+callback chain is re-entered on the same request, the plugin adds it again only
+when the trailing rounds still match. A warning already present at the end of
+the same request is not duplicated.
 
 Use `WithExcludedToolNames(...)` for polling or other tools whose repeated
 results are expected. Use `WithWarningMessage(...)` to localize or customize

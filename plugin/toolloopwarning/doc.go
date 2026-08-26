@@ -21,12 +21,13 @@
 // an intervening non-tool message, or a changed round breaks adjacency.
 //
 // On a match, the plugin appends one temporary user-role instruction to that
-// model request. It warns once per unchanged streak and rearms after the round
-// changes or adjacency breaks. The instruction is not appended to session
-// events and is not restored from session history. Consumers that deliberately
-// reuse the final model request, such as cache-safe summary forking and
-// execution tracing, can still observe it. WithExcludedToolNames can exclude
-// polling or other tools whose repeated results are expected.
+// model request. It appends the instruction to each eligible request while the
+// repeated loop continues, without duplicating it when callbacks re-enter on
+// the same request. The instruction is not appended to session events and is
+// not restored from session history. Consumers that deliberately reuse the
+// final model request, such as cache-safe summary forking and execution
+// tracing, can still observe it. WithExcludedToolNames can exclude polling or
+// other tools whose repeated results are expected.
 //
 // The plugin makes no additional model or tool calls. It does not stop or
 // retry the invocation.

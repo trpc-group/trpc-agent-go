@@ -28,7 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-func TestPluginWarnsOncePerUnchangedRequestTail(t *testing.T) {
+func TestPluginWarnsOnEachEligibleRequest(t *testing.T) {
 	manager, invocation, ctx := newCallbackHarness(t, New())
 
 	first := &model.Request{Messages: []model.Message{
@@ -36,32 +36,26 @@ func TestPluginWarnsOncePerUnchangedRequestTail(t *testing.T) {
 	}}
 	runBeforeModel(t, manager, ctx, first)
 	require.False(t, hasWarning(first.Messages, defaultWarning))
-	runAfterModel(t, manager, ctx, first)
 
 	oneRound := repeatedRoundsRequest("search", 1)
 	runBeforeModel(t, manager, ctx, oneRound)
 	require.False(t, hasWarning(oneRound.Messages, defaultWarning))
-	runAfterModel(t, manager, ctx, oneRound)
 
 	twoRounds := repeatedRoundsRequest("search", 2)
 	runBeforeModel(t, manager, ctx, twoRounds)
 	require.True(t, hasWarning(twoRounds.Messages, defaultWarning))
-	runAfterModel(t, manager, ctx, twoRounds)
 
 	threeRounds := repeatedRoundsRequest("search", 3)
 	runBeforeModel(t, manager, ctx, threeRounds)
-	require.False(t, hasWarning(threeRounds.Messages, defaultWarning))
-	runAfterModel(t, manager, ctx, threeRounds)
+	require.True(t, hasWarning(threeRounds.Messages, defaultWarning))
 
 	changed := changedTrailingRoundRequest()
 	runBeforeModel(t, manager, ctx, changed)
 	require.False(t, hasWarning(changed.Messages, defaultWarning))
-	runAfterModel(t, manager, ctx, changed)
 
 	changedPair := repeatedRoundsRequest("read", 2)
 	runBeforeModel(t, manager, ctx, changedPair)
 	require.True(t, hasWarning(changedPair.Messages, defaultWarning))
-	runAfterModel(t, manager, ctx, changedPair)
 
 	_, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
 	require.True(t, ok)
@@ -74,30 +68,19 @@ func TestPluginWarnsOncePerUnchangedRequestTail(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestPluginAcknowledgesOnlyWarningsPresentAtAfterModel(t *testing.T) {
+func TestPluginReaddsWarningIfRemovedBeforeRetry(t *testing.T) {
 	manager, _, ctx := newCallbackHarness(t, New())
 	first := &model.Request{Messages: []model.Message{model.NewUserMessage("run")}}
 	runBeforeModel(t, manager, ctx, first)
-	runAfterModel(t, manager, ctx, first)
 
-	withoutAfterModel := repeatedRoundsRequest("search", 2)
-	runBeforeModel(t, manager, ctx, withoutAfterModel)
-	require.True(t, hasWarning(withoutAfterModel.Messages, defaultWarning))
+	request := repeatedRoundsRequest("search", 2)
+	runBeforeModel(t, manager, ctx, request)
+	require.True(t, hasWarning(request.Messages, defaultWarning))
+	removeWarning(request, defaultWarning)
+	require.False(t, hasWarning(request.Messages, defaultWarning))
 
-	retried := repeatedRoundsRequest("search", 2)
-	runBeforeModel(t, manager, ctx, retried)
-	require.True(t, hasWarning(retried.Messages, defaultWarning))
-	removeWarning(retried, defaultWarning)
-	runAfterModel(t, manager, ctx, retried)
-
-	retriedAgain := repeatedRoundsRequest("search", 2)
-	runBeforeModel(t, manager, ctx, retriedAgain)
-	require.True(t, hasWarning(retriedAgain.Messages, defaultWarning))
-	runAfterModel(t, manager, ctx, retriedAgain)
-
-	delivered := repeatedRoundsRequest("search", 3)
-	runBeforeModel(t, manager, ctx, delivered)
-	require.False(t, hasWarning(delivered.Messages, defaultWarning))
+	runBeforeModel(t, manager, ctx, request)
+	require.Equal(t, 1, countWarningMessages(request.Messages, defaultWarning))
 }
 
 func TestPluginDoesNotAppendTwiceWhenBeforeModelReenters(t *testing.T) {
@@ -116,19 +99,17 @@ func TestPluginFirstRequestAndUserBoundaryFailOpen(t *testing.T) {
 
 	historicalLoop := repeatedRoundsRequest("search", 2)
 	runBeforeModel(t, manager, ctx, historicalLoop)
+	runBeforeModel(t, manager, ctx, historicalLoop)
 	require.False(t, hasWarning(historicalLoop.Messages, defaultWarning))
-	runAfterModel(t, manager, ctx, historicalLoop)
 
 	currentLoop := repeatedRoundsRequest("search", 2)
 	runBeforeModel(t, manager, ctx, currentLoop)
 	require.True(t, hasWarning(currentLoop.Messages, defaultWarning))
-	runAfterModel(t, manager, ctx, currentLoop)
 
 	boundary := repeatedRoundsRequest("search", 2)
 	boundary.Messages = append(boundary.Messages, model.NewUserMessage("continue"))
 	runBeforeModel(t, manager, ctx, boundary)
 	require.False(t, hasWarning(boundary.Messages, defaultWarning))
-	runAfterModel(t, manager, ctx, boundary)
 
 	rearmed := repeatedRoundsRequest("search", 2)
 	runBeforeModel(t, manager, ctx, rearmed)
@@ -165,8 +146,6 @@ func TestPluginHandlesNilInputsAndMissingInvocation(t *testing.T) {
 	require.NoError(t, err)
 	_, err = nilPlugin.beforeModel(context.Background(), nil)
 	require.NoError(t, err)
-	_, err = nilPlugin.afterModel(context.Background(), nil)
-	require.NoError(t, err)
 	_, err = nilPlugin.afterAgent(context.Background(), nil)
 	require.NoError(t, err)
 
@@ -178,11 +157,16 @@ func TestPluginHandlesNilInputsAndMissingInvocation(t *testing.T) {
 		&model.BeforeModelArgs{Request: &model.Request{}},
 	)
 	require.NoError(t, err)
-	_, err = plugin.afterModel(
-		context.Background(),
-		&model.AfterModelArgs{Request: &model.Request{}},
+
+	invocation := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
+	request := repeatedRoundsRequest("search", 2)
+	_, err = plugin.beforeModel(
+		ctx,
+		&model.BeforeModelArgs{Request: request},
 	)
 	require.NoError(t, err)
+	require.False(t, hasWarning(request.Messages, defaultWarning))
 }
 
 func TestPluginRunnerIntegrationRequestLocal(t *testing.T) {
@@ -300,23 +284,6 @@ func runBeforeModel(
 	require.NoError(t, err)
 }
 
-func runAfterModel(
-	t *testing.T,
-	manager *pluginbase.Manager,
-	ctx context.Context,
-	request *model.Request,
-) {
-	t.Helper()
-	_, err := manager.ModelCallbacks().RunAfterModel(
-		ctx,
-		&model.AfterModelArgs{
-			Request:  request,
-			Response: &model.Response{Done: true},
-		},
-	)
-	require.NoError(t, err)
-}
-
 func repeatedRoundsRequest(toolName string, count int) *model.Request {
 	messages := []model.Message{model.NewUserMessage("run")}
 	for i := 0; i < count; i++ {
@@ -361,6 +328,16 @@ func removeWarning(request *model.Request, warning string) {
 
 func hasWarning(messages []model.Message, warning string) bool {
 	return countWarningMessages(messages, warning) > 0
+}
+
+func countWarningMessages(messages []model.Message, warning string) int {
+	count := 0
+	for _, message := range messages {
+		if isWarningMessage(message, warning) {
+			count++
+		}
+	}
+	return count
 }
 
 type repeatedRoundModel struct {

@@ -653,12 +653,12 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 
 `toolloopwarning.New()` 会在每次模型调用前，检查请求末尾两个相邻的完整工具轮次。当工具
 名称、规范化后的 JSON 参数以及模型可见结果都相同时，插件会在当前请求末尾临时追加一条
-`user` 角色提醒。同一轮次继续重复时不会反复提醒；轮次内容变化或中间出现非工具消息后，
-才会开始新的连续检测。每个 invocation 的第一次模型请求会被明确跳过，避免仅因恢复了上一
-次 Run 的重复历史尾部就触发新的提醒。
+`user` 角色提醒。同一个 request 被重复处理时不会追加多份提醒；但只要循环继续，每个新的
+匹配 request 都会收到提醒。轮次内容变化或中间出现非工具消息时不会匹配。每个 invocation
+的第一次模型请求会被明确跳过，避免仅因恢复了上一次 Run 的重复历史尾部就触发新的提醒。
 
 检测会忽略工具调用 ID。一个完整轮次要求每个工具调用恰好对应一条末尾工具结果消息，
-并按 ID 匹配；不完整或格式异常的轮次会重置检测状态。该插件默认关闭，不会额外发起模型
+并按 ID 匹配；不完整或格式异常的轮次不会匹配。该插件默认关闭，不会额外发起模型
 调用或工具调用，也不会停止 invocation 或触发重试。插件必须注册到 `Runner`；直接调用
 `Agent.Run` 不会安装 Runner plugin。
 
@@ -670,10 +670,9 @@ summary forking 时，summarizer 会复用最终模型请求，提醒会进入 s
 但不会把它写成 session history。模型基于提醒生成的响应继续遵循正常的 session 行为。
 
 检测基于 `BeforeModel` 时可见的请求，因此 history projection、工具结果转换、summary
-cutoff 和 context compaction 已经反映在待比较内容中。插件在 `AfterModel` 确认提醒；如果
-其他 callback 在此之前移除提醒，本次 streak 不会被记为已提醒，后续仍可再次注入。
-`BeforeModel` 返回的 custom response 同样会进入 `AfterModel`，所以这里确认的是框架的模型
-阶段已经处理该请求，而不是证明一定调用了外部 provider。
+cutoff 和 context compaction 已经反映在待比较内容中。如果后续 callback 移除了提醒，且同
+一个 request 再次进入 callback 链，只有在末尾工具轮次仍然匹配时插件才会重新追加；同一
+request 末尾已有提醒时不会重复追加。
 
 可使用 `WithExcludedToolNames(...)` 排除轮询等预期会重复的工具；可使用
 `WithWarningMessage(...)` 自定义或本地化提醒内容。
