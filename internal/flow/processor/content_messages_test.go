@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -373,6 +374,198 @@ func TestProcessRequest_FiltersEmptyAssistantMessages(t *testing.T) {
 	require.Len(t, req.Messages, 2)
 	require.True(t, model.MessagesEqual(model.NewUserMessage("hello"), req.Messages[0]))
 	require.True(t, model.MessagesEqual(model.NewAssistantMessage("hi"), req.Messages[1]))
+}
+
+func TestProcessRequest_OmitsSyntheticErrorContent(t *testing.T) {
+	newErrorEvent := func(content string, mark bool) event.Event {
+		evt := event.NewErrorEvent("inv", "test-agent", "flow_error", "boom")
+		evt.Response.Choices = []model.Choice{{
+			Message: model.NewAssistantMessage(content),
+		}}
+		if mark {
+			errorcontent.MarkSynthetic(evt)
+		}
+		return *evt
+	}
+	tests := []struct {
+		name      string
+		error     event.Event
+		options   []ContentOption
+		wantRoles []model.Role
+		wantText  []string
+	}{
+		{
+			name:  "marked runner fallback",
+			error: newErrorEvent(errorcontent.FallbackMessage, true),
+			wantRoles: []model.Role{
+				model.RoleUser,
+			},
+			wantText: []string{"first\n\nsecond"},
+		},
+		{
+			name:  "marked customized plugin content",
+			error: newErrorEvent("Please try again later.", true),
+			wantRoles: []model.Role{
+				model.RoleUser,
+			},
+			wantText: []string{"first\n\nsecond"},
+		},
+		{
+			name:  "legacy runner fallback",
+			error: newErrorEvent(errorcontent.FallbackMessage, false),
+			wantRoles: []model.Role{
+				model.RoleUser,
+			},
+			wantText: []string{"first\n\nsecond"},
+		},
+		{
+			name:  "explicit compatibility mode",
+			error: newErrorEvent(errorcontent.FallbackMessage, true),
+			options: []ContentOption{
+				WithIncludeSyntheticErrorMessages(true),
+			},
+			wantRoles: []model.Role{
+				model.RoleUser,
+				model.RoleAssistant,
+				model.RoleUser,
+			},
+			wantText: []string{
+				"first",
+				errorcontent.FallbackMessage,
+				"second",
+			},
+		},
+		{
+			name:  "real assistant error content",
+			error: newErrorEvent("A real partial response.", false),
+			wantRoles: []model.Role{
+				model.RoleUser,
+				model.RoleAssistant,
+				model.RoleUser,
+			},
+			wantText: []string{
+				"first",
+				"A real partial response.",
+				"second",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := &session.Session{Events: []event.Event{
+				newSessionEvent("user", model.NewUserMessage("first")),
+				tt.error,
+				newSessionEvent("user", model.NewUserMessage("second")),
+			}}
+			inv := &agent.Invocation{
+				AgentName: "test-agent",
+				Session:   sess,
+			}
+			req := &model.Request{}
+
+			NewContentRequestProcessor(tt.options...).ProcessRequest(
+				context.Background(),
+				inv,
+				req,
+				nil,
+			)
+
+			require.Len(t, req.Messages, len(tt.wantRoles))
+			for i := range tt.wantRoles {
+				require.Equal(t, tt.wantRoles[i], req.Messages[i].Role)
+				require.Equal(t, tt.wantText[i], req.Messages[i].Content)
+			}
+		})
+	}
+}
+
+func TestProcessRequest_OmitsSyntheticErrorContent_PreservesUserParts(t *testing.T) {
+	firstText := "first part"
+	secondText := "second part"
+	first := model.NewUserMessage("first")
+	first.ContentParts = []model.ContentPart{{
+		Type: model.ContentTypeText,
+		Text: &firstText,
+	}}
+	second := model.NewUserMessage("second")
+	second.ContentParts = []model.ContentPart{{
+		Type: model.ContentTypeText,
+		Text: &secondText,
+	}}
+	errorEvent := event.NewErrorEvent(
+		"inv",
+		"test-agent",
+		"flow_error",
+		"boom",
+	)
+	errorEvent.Response.Choices = []model.Choice{{
+		Message: model.NewAssistantMessage(errorcontent.FallbackMessage),
+	}}
+	errorcontent.MarkSynthetic(errorEvent)
+	sess := &session.Session{Events: []event.Event{
+		newSessionEvent("user", first),
+		*errorEvent,
+		newSessionEvent("user", second),
+	}}
+	inv := &agent.Invocation{AgentName: "test-agent", Session: sess}
+	req := &model.Request{}
+
+	NewContentRequestProcessor().ProcessRequest(
+		context.Background(),
+		inv,
+		req,
+		nil,
+	)
+
+	require.Len(t, req.Messages, 1)
+	require.Equal(t, "first\n\nsecond", req.Messages[0].Content)
+	require.Len(t, req.Messages[0].ContentParts, 2)
+	require.Equal(t, firstText, *req.Messages[0].ContentParts[0].Text)
+	require.Equal(t, secondText, *req.Messages[0].ContentParts[1].Text)
+}
+
+func TestProcessRequest_IncludeContentsNone_OmitsSyntheticErrorContent(t *testing.T) {
+	const invocationID = "inv-synthetic-error"
+	first := newSessionEvent("user", model.NewUserMessage("first"))
+	first.InvocationID = invocationID
+	errorEvent := event.NewErrorEvent(
+		invocationID,
+		"test-agent",
+		"flow_error",
+		"boom",
+	)
+	errorEvent.Response.Choices = []model.Choice{{
+		Message: model.NewAssistantMessage(errorcontent.FallbackMessage),
+	}}
+	errorcontent.MarkSynthetic(errorEvent)
+	second := newSessionEvent("user", model.NewUserMessage("second"))
+	second.InvocationID = invocationID
+	sess := &session.Session{Events: []event.Event{
+		first,
+		*errorEvent,
+		second,
+	}}
+	inv := &agent.Invocation{
+		InvocationID: invocationID,
+		AgentName:    "test-agent",
+		Session:      sess,
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			graph.CfgKeyIncludeContents: "none",
+		}},
+	}
+	req := &model.Request{}
+
+	NewContentRequestProcessor().ProcessRequest(
+		context.Background(),
+		inv,
+		req,
+		nil,
+	)
+
+	require.Len(t, req.Messages, 1)
+	require.Equal(t, model.RoleUser, req.Messages[0].Role)
+	require.Equal(t, "first\n\nsecond", req.Messages[0].Content)
 }
 
 func TestProcessRequest_FiltersEmptyAssistantMessages_ToolCallResponse(t *testing.T) {

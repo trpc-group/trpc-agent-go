@@ -8,6 +8,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -24,10 +26,11 @@ import (
 
 // streamingErrorAgent emits an error event using event.NewErrorEvent (which has no content by default).
 type streamingErrorAgent struct {
-	name      string
-	errorMsg  string
-	errorType string
-	emitted   *event.Event
+	name       string
+	errorMsg   string
+	errorType  string
+	emitted    *event.Event
+	extensions map[string]json.RawMessage
 }
 
 func (m *streamingErrorAgent) Info() agent.Info                     { return agent.Info{Name: m.name} }
@@ -39,6 +42,7 @@ func (m *streamingErrorAgent) Run(ctx context.Context, inv *agent.Invocation) (<
 	// Create an error event. By default, NewErrorEvent does NOT populate Choices/Content.
 	// This simulates the behavior of llmflow/other components emitting raw error events.
 	ev := event.NewErrorEvent(inv.InvocationID, m.name, m.errorType, m.errorMsg)
+	ev.Extensions = m.extensions
 	m.emitted = ev
 	ch <- ev
 	close(ch)
@@ -97,6 +101,7 @@ func TestRunner_FixesStreamingErrorEvent(t *testing.T) {
 	assert.Equal(t, "An error occurred during execution. Please contact the service provider.",
 		errorEvent.Response.Choices[0].Message.Content)
 	assert.Equal(t, "error", *errorEvent.Response.Choices[0].FinishReason)
+	assert.True(t, errorcontent.IsSynthetic(&errorEvent))
 }
 
 func TestRunner_DoesNotMutateStreamingErrorEventWhenAddingContent(t *testing.T) {
@@ -105,6 +110,9 @@ func TestRunner_DoesNotMutateStreamingErrorEventWhenAddingContent(t *testing.T) 
 		name:      "stream-error-agent",
 		errorMsg:  "stream failed",
 		errorType: model.ErrorTypeStreamError,
+		extensions: map[string]json.RawMessage{
+			"example.key": json.RawMessage(`{"value":true}`),
+		},
 	}
 	r := NewRunner("test-app", ag, WithSessionService(svc))
 
@@ -124,6 +132,16 @@ func TestRunner_DoesNotMutateStreamingErrorEventWhenAddingContent(t *testing.T) 
 	assert.Equal(t, ag.emitted.ID, repairedEvent.ID)
 	assert.Empty(t, ag.emitted.Response.Choices)
 	require.NotEmpty(t, repairedEvent.Response.Choices)
+	require.True(t, errorcontent.IsSynthetic(repairedEvent))
+	require.False(t, errorcontent.IsSynthetic(ag.emitted))
+	require.Len(t, ag.emitted.Extensions, 1)
+	require.Len(t, repairedEvent.Extensions, 2)
+	repairedEvent.Extensions["example.key"][0] = '['
+	require.JSONEq(
+		t,
+		`{"value":true}`,
+		string(ag.emitted.Extensions["example.key"]),
+	)
 	assert.Equal(
 		t,
 		"An error occurred during execution. Please contact the service provider.",
@@ -180,6 +198,7 @@ func TestRunner_FixesDirectRunError(t *testing.T) {
 	assert.Equal(t, "An error occurred during execution. Please contact the service provider.",
 		errorEvent.Response.Choices[0].Message.Content)
 	assert.Equal(t, "error", *errorEvent.Response.Choices[0].FinishReason)
+	assert.True(t, errorcontent.IsSynthetic(&errorEvent))
 }
 
 // streamingSuccessThenErrorAgent emits a normal response event followed by an error event.

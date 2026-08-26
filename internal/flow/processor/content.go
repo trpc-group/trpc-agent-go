@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
@@ -228,7 +229,8 @@ type ContentRequestProcessor struct {
 	SummaryFormatter func(summary string) string
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
-	EventMessageProjector EventMessageProjector
+	EventMessageProjector         EventMessageProjector
+	includeSyntheticErrorMessages bool
 	// ContextCompactionConfig controls request-side historical tool-result
 	// compaction before messages are sent to the model.
 	ContextCompactionConfig ContextCompactionConfig
@@ -480,6 +482,14 @@ func WithEventMessageProjector(
 ) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.EventMessageProjector = projector
+	}
+}
+
+// WithIncludeSyntheticErrorMessages controls whether presentation content
+// synthesized for error events is included in model requests.
+func WithIncludeSyntheticErrorMessages(include bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.includeSyntheticErrorMessages = include
 	}
 }
 
@@ -1572,21 +1582,24 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 	}
 
 	var history projectedHistory
-	appendEvent := func(evt event.Event, boundary summaryview.Boundary) {
-		for _, msg := range p.projectMessagesForEvent(
+	appendEvent := func(
+		evt event.Event,
+		boundary summaryview.Boundary,
+		mergeFirstUser bool,
+	) {
+		projected := p.projectMessagesForEvent(
 			inv,
 			evt,
 			currentRequestID,
 			toolCallRequestIDs,
-		) {
-			effective := effectiveEventForMessage(evt, msg)
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effective,
-				Boundary:       boundary,
-			})
-		}
+		)
+		appendProjectedHistory(
+			&history,
+			evt,
+			boundary,
+			projected,
+			mergeFirstUser,
+		)
 	}
 	projectedByEvent := make([][]model.Message, len(retained))
 	for i, evt := range retained {
@@ -1599,6 +1612,7 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 	}
 
 	seenTurns := make(map[historyTurnKey]struct{})
+	mergeNextUser := false
 	for i := 0; i < len(retained); i++ {
 		evt := retained[i]
 		projected := projectedByEvent[i]
@@ -1615,6 +1629,7 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 			}
 		}
 		if len(projected) == 0 {
+			mergeNextUser = p.omitsSyntheticErrorEvent(&evt)
 			continue
 		}
 		key, hasKey := historyTurnKeyForEvent(evt)
@@ -1626,21 +1641,81 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 			}
 			if userEvt, ok := coveredUsers[key]; ok &&
 				(role == model.RoleAssistant || role == model.RoleTool) {
-				appendEvent(userEvt, summaryview.Boundary{})
+				appendEvent(
+					userEvt,
+					summaryview.Boundary{},
+					mergeNextUser,
+				)
+				mergeNextUser = false
 			}
 		}
 		boundary := eligibleBoundaries[evt.ID]
-		for _, msg := range projected {
-			effective := effectiveEventForMessage(evt, msg)
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effective,
-				Boundary:       boundary,
-			})
-		}
+		appendProjectedHistory(
+			&history,
+			evt,
+			boundary,
+			projected,
+			mergeNextUser,
+		)
+		mergeNextUser = false
 	}
 	return history
+}
+
+func appendProjectedHistory(
+	history *projectedHistory,
+	evt event.Event,
+	boundary summaryview.Boundary,
+	messages []model.Message,
+	mergeFirstUser bool,
+) {
+	for i, msg := range messages {
+		if i == 0 && mergeFirstUser &&
+			mergeLastProjectedUser(history, msg, boundary) {
+			continue
+		}
+		history.messages = append(history.messages, msg)
+		history.items = append(history.items, summaryview.Item{
+			Message:        msg,
+			EffectiveEvent: effectiveEventForMessage(evt, msg),
+			Boundary:       boundary,
+		})
+	}
+}
+
+func mergeLastProjectedUser(
+	history *projectedHistory,
+	next model.Message,
+	boundary summaryview.Boundary,
+) bool {
+	if history == nil || len(history.messages) == 0 ||
+		len(history.messages) != len(history.items) ||
+		next.Role != model.RoleUser {
+		return false
+	}
+	lastIndex := len(history.messages) - 1
+	if history.messages[lastIndex].Role != model.RoleUser {
+		return false
+	}
+	last := &history.messages[lastIndex]
+	if next.Content != "" {
+		if last.Content == "" {
+			last.Content = next.Content
+		} else {
+			last.Content += mergedUserSeparator + next.Content
+		}
+	}
+	last.ContentParts = append(last.ContentParts, next.ContentParts...)
+	item := &history.items[lastIndex]
+	item.Message = *last
+	item.EffectiveEvent = effectiveEventForMessage(
+		item.EffectiveEvent,
+		*last,
+	)
+	if !boundary.IsZero() {
+		item.Boundary = boundary
+	}
+	return true
 }
 
 func effectiveEventForMessage(
@@ -2421,6 +2496,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationHistory(
 		)
 	}
 	var history projectedHistory
+	mergeNextUser := false
 	for i := 0; i < len(resultEvents); i++ {
 		evt := resultEvents[i]
 		projected := projectedByEvent[i]
@@ -2436,14 +2512,18 @@ func (p *ContentRequestProcessor) getCurrentInvocationHistory(
 				i++
 			}
 		}
-		for _, msg := range projected {
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effectiveEventForMessage(evt, msg),
-				Boundary:       persistedBoundaries[evt.ID],
-			})
+		if len(projected) == 0 {
+			mergeNextUser = p.omitsSyntheticErrorEvent(&evt)
+			continue
 		}
+		appendProjectedHistory(
+			&history,
+			evt,
+			persistedBoundaries[evt.ID],
+			projected,
+			mergeNextUser,
+		)
+		mergeNextUser = false
 	}
 	history = p.mergeProjectedUserMessages(history)
 	if len(history.items) != len(history.messages) {
@@ -2653,6 +2733,9 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 	currentRequestID string,
 	toolCallRequestIDs map[string]struct{},
 ) []model.Message {
+	if p.omitsSyntheticErrorEvent(&evt) {
+		return nil
+	}
 	ev := evt
 	if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
 		ev = p.convertForeignEvent(&ev)
@@ -2677,6 +2760,13 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 		messages = append(messages, msg)
 	}
 	return messages
+}
+
+func (p *ContentRequestProcessor) omitsSyntheticErrorEvent(
+	evt *event.Event,
+) bool {
+	return p != nil && !p.includeSyntheticErrorMessages &&
+		errorcontent.IsSynthetic(evt)
 }
 
 func requestIDsWithToolCalls(events []event.Event) map[string]struct{} {

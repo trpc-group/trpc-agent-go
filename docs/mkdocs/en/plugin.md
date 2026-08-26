@@ -782,6 +782,16 @@ Full example: [examples/plugin/messagemerger](https://github.com/trpc-group/trpc
 
 When an event carries `Response.Error` but no `Choices[].Message.Content` — for example, the `stop_agent_error` event produced by `llmflow` for `agent.StopError`, or any raw `event.NewErrorEvent(...)` — Runner falls back to a generic English message: `"An error occurred during execution. Please contact the service provider."`. This plugin runs in `OnEvent` before that fallback and fills the content itself, so callers can surface a customised, localised, or tenant-specific message to end users. The structured `Response.Error` is left intact, so debugging and downstream consumers still see the original reason.
 
+Runner and this plugin mark such content as framework-synthesised. By default,
+`LLMAgent` keeps the content in emitted and persisted events but omits it from
+subsequent model requests, preventing presentation-only failure text from being
+repeated as if the model had produced it. If the omission makes two user
+messages adjacent, the request projection merges them locally to preserve a
+provider-valid sequence. Sessions written before the marker was introduced are
+also covered when they contain Runner's exact fallback text. To restore the
+previous model-context behavior, configure the agent with
+`llmagent.WithIncludeSyntheticErrorMessages(true)`.
+
 The plugin only rewrites events where no valid content exists yet, so a partial assistant message produced before the failure is never overwritten.
 
 Static content:
