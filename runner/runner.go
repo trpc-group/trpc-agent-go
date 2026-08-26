@@ -710,11 +710,17 @@ func (r *runner) Run(
 	queuedUserMessages := steer.NewQueue()
 	steer.Attach(invocation, queuedUserMessages)
 
+	// Capture the agent name before agent.Run: agents mutate
+	// invocation.AgentName from their own goroutine (setupInvocation), so
+	// runner-owned paths that run concurrently with the agent must use this
+	// pre-run snapshot instead of reading the live invocation.
+	agentName := ag.Info().Name
+
 	registerCtx, registerSpan, registerStarted := startRunnerLatencySpan(
 		execCtx,
 		invocation,
 		runnerLatencySpanRegisterRun,
-		runnerInvocationAttrs(invocation)...,
+		runnerInvocationAttrs(invocation, agentName)...,
 	)
 	handle, err := r.registerRun(
 		ro.RequestID,
@@ -779,7 +785,7 @@ func (r *runner) Run(
 	// agents mutate the invocation from their own goroutine (for example
 	// setupInvocation writes AgentName), so the event loop goroutine must not
 	// read those fields after agent.Run.
-	invocationAttrs := runnerInvocationAttrs(invocation)
+	invocationAttrs := runnerInvocationAttrs(invocation, agentName)
 	startCtx, startSpan, startStarted := startRunnerLatencySpan(
 		execCtx,
 		invocation,
@@ -809,6 +815,7 @@ func (r *runner) Run(
 		executionTraceInput,
 		globalAfterRun,
 		invocationAttrs,
+		agentName,
 	), nil
 }
 
@@ -1348,7 +1355,12 @@ type eventLoopContext struct {
 	globalAfterRun            *globalAfterRunState
 	// invocationAttrs is a snapshot of the invocation telemetry attributes
 	// captured before the agent goroutine starts mutating the invocation.
-	invocationAttrs                    []attribute.KeyValue
+	invocationAttrs []attribute.KeyValue
+	// agentName is the agent name captured before agent.Run. The runner
+	// completion path uses it instead of reading invocation.AgentName, which
+	// the agent goroutine mutates asynchronously (setupInvocation), so that
+	// cancellation before the first agent event cannot race that write.
+	agentName                          string
 	graphCompletionSeen                bool
 	freshAssistantContentProduced      bool
 	persistedAssistantResponseIDs      map[string]struct{}
@@ -1477,6 +1489,7 @@ func (r *runner) processAgentEvents(
 	executionTraceInput *trace.Snapshot,
 	globalAfterRun *globalAfterRunState,
 	invocationAttrs []attribute.KeyValue,
+	agentName string,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	loop := &eventLoopContext{
@@ -1489,6 +1502,7 @@ func (r *runner) processAgentEvents(
 		executionTraceInput:       executionTraceInput,
 		globalAfterRun:            globalAfterRun,
 		invocationAttrs:           invocationAttrs,
+		agentName:                 agentName,
 		baselineFinalResponseID:   baselineFinalResponseID(sess, invocation.RunOptions.RuntimeState),
 		priorAssistantResponseIDs: collectPriorAssistantResponseIDs(sess),
 		streamFilter: graph.NewStreamModeFilter(
@@ -3170,9 +3184,10 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		)
 	}
 	executionTraceStatus := resolveExecutionTraceStatus(loop, ctx.Err())
-	runnerCompletionEvent.ExecutionTrace = agent.BuildExecutionTrace(
+	runnerCompletionEvent.ExecutionTrace = agent.BuildExecutionTraceWithAgentName(
 		loop.invocation,
 		executionTraceStatus,
+		loop.agentName,
 	)
 	if runnerCompletionEvent.ExecutionTrace != nil {
 		traceSnapshotOnly := graph.CompletionSnapshotOnlyFromStateDelta(
@@ -3237,8 +3252,8 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			time.Second,
 		)
 		defer emitCancel()
-		if err := agent.EmitEvent(
-			emitCtx, loop.invocation, loop.processedEventCh, runnerCompletionEvent,
+		if err := agent.EmitEventWithAgentName(
+			emitCtx, loop.invocation, loop.processedEventCh, runnerCompletionEvent, loop.agentName,
 		); err != nil {
 			log.Errorf("Failed to emit runner completion event: %v", err)
 		}
@@ -3251,7 +3266,7 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	r.enqueueEvolutionLearningJob(ctx, loop.sess)
 
 	// Enqueue external session ingestion if configured.
-	r.enqueueSessionIngest(ctx, loop.sess, loop.invocation)
+	r.enqueueSessionIngest(ctx, loop.sess, loop.agentName)
 }
 
 func graphCompletionSessionStateDelta(stateDelta map[string][]byte) map[string][]byte {
@@ -4488,12 +4503,12 @@ func (r *runner) enqueueEvolutionLearningJob(ctx context.Context, sess *session.
 func (r *runner) enqueueSessionIngest(
 	ctx context.Context,
 	sess *session.Session,
-	inv *agent.Invocation,
+	agentName string,
 ) {
 	if r.ingestor == nil || sess == nil {
 		return
 	}
-	opts := r.defaultIngestOptions(sess, inv)
+	opts := r.defaultIngestOptions(sess, agentName)
 	if err := r.ingestor.IngestSession(ctx, sess, opts...); err != nil {
 		log.DebugfContext(ctx, "Session ingest skipped or failed: %v", err)
 	}
@@ -4504,17 +4519,17 @@ func (r *runner) enqueueSessionIngest(
 // session ID through as run_id and the active invocation's agent name through
 // as agent_id, giving downstream backends (e.g. mem0) natural grouping keys
 // without requiring callers to construct options manually.
+//
+// agentName must be the pre-run snapshot captured before agent.Run; reading
+// invocation.AgentName here would race the agent goroutine's asynchronous
+// invocation setup when the run is cancelled before the first agent event.
 func (r *runner) defaultIngestOptions(
 	sess *session.Session,
-	inv *agent.Invocation,
+	agentName string,
 ) []session.IngestOption {
 	var opts []session.IngestOption
 	if sess != nil && sess.ID != "" {
 		opts = append(opts, session.WithIngestRunID(sess.ID))
-	}
-	agentName := ""
-	if inv != nil {
-		agentName = inv.AgentName
 	}
 	if agentName == "" {
 		agentName = r.defaultAgentName

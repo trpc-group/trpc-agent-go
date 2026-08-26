@@ -162,7 +162,11 @@ func (r AwaitUserReplyRoute) AttachEvent(evt *event.Event) error {
 	)
 }
 
-func attachAwaitUserReplyRoute(inv *Invocation, evt *event.Event) {
+// attachAwaitUserReplyRoute attaches a pending await-user-reply route to the
+// event. agentName is passed explicitly so callers that captured the name
+// before the invocation could be mutated concurrently can avoid reading
+// inv.AgentName.
+func attachAwaitUserReplyRoute(inv *Invocation, evt *event.Event, agentName string) {
 	if inv == nil || evt == nil || evt.Response == nil {
 		return
 	}
@@ -180,7 +184,7 @@ func attachAwaitUserReplyRoute(inv *Invocation, evt *event.Event) {
 	if err := route.AttachEvent(evt); err != nil {
 		log.Warnf(
 			"attach await_user_reply route failed for agent %q: %v",
-			inv.AgentName,
+			agentName,
 			err,
 		)
 	}
