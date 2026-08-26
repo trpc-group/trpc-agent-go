@@ -28,7 +28,9 @@ var (
 // Service implements session.Service without storing sessions or state.
 type Service struct{}
 
-// Rewind reports that a no-op service cannot restore persisted state.
+// Rewind validates the request and reports that a no-op service cannot restore
+// persisted state. Invalid requests return a validation error; valid requests
+// return session.ErrRewindUnsupported.
 func (s *Service) Rewind(
 	_ context.Context,
 	req session.RewindRequest,

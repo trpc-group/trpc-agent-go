@@ -25,6 +25,7 @@ import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/internal/trpcagentwire"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -153,6 +154,12 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		s.respondError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
+	runtimeState, err := normalizeRunRuntimeState(req.RunOptions.RuntimeState)
+	if err != nil {
+		s.respondError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.RunOptions.RuntimeState = runtimeState
 	if req.RunOptions.RequestID == "" {
 		req.RunOptions.RequestID = uuid.NewString()
 	}
@@ -190,6 +197,38 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondJSON(w, r, http.StatusOK, response)
+}
+
+func normalizeRunRuntimeState(state map[string]any) (map[string]any, error) {
+	if len(state) == 0 {
+		return state, nil
+	}
+	raw, ok := state[graph.StateKeyCommand]
+	if !ok || raw == nil {
+		return state, nil
+	}
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"runOptions.runtimeState[%q]: encode graph command: %w",
+			graph.StateKeyCommand,
+			err,
+		)
+	}
+	var command graph.Command
+	if err := json.Unmarshal(payload, &command); err != nil {
+		return nil, fmt.Errorf(
+			"runOptions.runtimeState[%q]: decode graph command: %w",
+			graph.StateKeyCommand,
+			err,
+		)
+	}
+	normalized := make(map[string]any, len(state))
+	for key, value := range state {
+		normalized[key] = value
+	}
+	normalized[graph.StateKeyCommand] = &command
+	return normalized, nil
 }
 
 func (s *Server) exportStructure(ctx context.Context) (*astructure.Snapshot, error) {

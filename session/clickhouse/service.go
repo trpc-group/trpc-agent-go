@@ -62,8 +62,10 @@ type Service struct {
 	tableUserStates       string
 }
 
-// Rewind reports that ClickHouse cannot atomically restore the session-owned
-// projection across its independently persisted tables.
+// Rewind validates the request and reports that ClickHouse cannot atomically
+// restore the session-owned projection across its independently persisted
+// tables. Invalid requests return a validation error; valid requests return
+// session.ErrRewindUnsupported.
 func (s *Service) Rewind(
 	_ context.Context,
 	req session.RewindRequest,

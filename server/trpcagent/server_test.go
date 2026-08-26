@@ -25,6 +25,7 @@ import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
@@ -417,6 +418,73 @@ func TestServerRunForwardsLatestTurnReplacement(t *testing.T) {
 	require.NotNil(t, replacement)
 	assert.Equal(t, "request-old", replacement.ExpectedRequestID)
 	assert.Equal(t, "request-new", backend.runOptions[0].RequestID)
+}
+
+func TestServerRunRejectsReplacementWithJSONGraphResume(t *testing.T) {
+	srv, ag := newTestServer(t, nil)
+	body := encodeJSON(t, runRequest{
+		Session: session{UserID: "user-1", SessionID: "session-1"},
+		Input:   model.NewUserMessage("edited input"),
+		RunOptions: runOptions{
+			RequestID: "request-new",
+			RuntimeState: map[string]any{
+				graph.StateKeyCommand: &graph.ResumeCommand{Resume: "answer"},
+			},
+			LatestTurnReplacement: &latestTurnReplacement{
+				ExpectedRequestID: "request-old",
+			},
+		},
+	})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/trpc-agent/v1/apps/sports-agent/runs",
+		body,
+	)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var response runResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	assert.True(t, response.DirectRunError)
+	assert.Contains(t, response.ErrorMessage, "latest-turn replacement cannot resume")
+	assert.Equal(t, model.Message{}, ag.message)
+}
+
+func TestServerRunNormalizesJSONGraphCommand(t *testing.T) {
+	completion := event.NewResponseEvent("invocation", "sports-agent", &model.Response{
+		Object: model.ObjectTypeRunnerCompletion,
+		Done:   true,
+	})
+	completion.RequestID = "request-resume"
+	eventCh := make(chan *event.Event, 1)
+	eventCh <- completion
+	close(eventCh)
+	backend := &scriptedRunner{events: eventCh}
+	srv, err := New(WithAppName("sports-agent"), WithRunner(backend))
+	require.NoError(t, err)
+	body := encodeJSON(t, runRequest{
+		Session: session{UserID: "user-1", SessionID: "session-1"},
+		Input:   model.NewUserMessage("resume"),
+		RunOptions: runOptions{
+			RequestID: "request-resume",
+			RuntimeState: map[string]any{
+				graph.StateKeyCommand: &graph.ResumeCommand{Resume: "answer"},
+			},
+		},
+	})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/trpc-agent/v1/apps/sports-agent/runs",
+		body,
+	)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, backend.runOptions, 1)
+	command, ok := backend.runOptions[0].RuntimeState[graph.StateKeyCommand].(*graph.Command)
+	require.True(t, ok)
+	require.NotNil(t, command)
+	assert.Equal(t, "answer", command.Resume)
 }
 
 func TestServerRunClassifiesLatestTurnReplacementErrors(t *testing.T) {
