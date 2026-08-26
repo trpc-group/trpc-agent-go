@@ -164,14 +164,18 @@ func mergeSlices[T any](ts []T) T {
 	return result.Interface().(T)
 }
 
-// mergeArrays concatenates array values into a new array
+// mergeArrays returns the first array element. Arrays have a fixed length, so
+// multiple arrays cannot be concatenated into a single array of the same type
+// without changing the result's length; the remaining elements are therefore
+// intentionally discarded. Use slices instead when a variable-length result is
+// required.
 func mergeArrays[T any](ts []T) T {
 	if len(ts) == 0 {
 		var zero T
 		return zero
 	}
 	// Note: Arrays are fixed size, so we assume all arrays in ts are of the same type and size.
-	// Plsease use slices if you need dynamic size.
+	// Please use slices if you need dynamic size.
 	return ts[0]
 }
 
