@@ -786,3 +786,111 @@ func TestValidateMigratedWorkspace_RejectsSymlinkAndNonDirectory(t *testing.T) {
 		t.Fatal("validateMigratedWorkspace on symlink = nil, want error")
 	}
 }
+
+func TestLegacyWorkspaceKeyCandidates_EmptyID(t *testing.T) {
+	if got := legacyWorkspaceKeyCandidates(migrateApp, migrateUser, ""); got != nil {
+		t.Fatalf("empty id candidates = %v, want nil", got)
+	}
+	if got := legacyWorkspaceKeyCandidates(migrateApp, migrateUser, "   "); got != nil {
+		t.Fatalf("whitespace id candidates = %v, want nil", got)
+	}
+}
+
+func TestMigrateLegacyWorkspace_EmptyInputsAreNoop(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if err := rt.migrateLegacyWorkspace("", []string{"legacy"}); err != nil {
+		t.Fatalf("empty newKey error = %v, want nil", err)
+	}
+	if err := rt.migrateLegacyWorkspace("sess-key", nil); err != nil {
+		t.Fatalf("empty legacyKeys error = %v, want nil", err)
+	}
+}
+
+func TestInspectContainedPlainDir_OutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	err := inspectContainedPlainDir(root, outside, "legacy workspace")
+	if err == nil {
+		t.Fatal("inspectContainedPlainDir on a path outside root = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "outside workspace root") {
+		t.Fatalf("error should identify the escape: %v", err)
+	}
+}
+
+func TestInspectContainedPlainDir_RootIsTarget(t *testing.T) {
+	root := t.TempDir()
+	if err := inspectContainedPlainDir(root, root, "legacy workspace"); err != nil {
+		t.Fatalf("inspectContainedPlainDir on the root directory = %v, want nil", err)
+	}
+
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := inspectContainedPlainDir(file, file, "legacy workspace")
+	if err == nil {
+		t.Fatal("inspectContainedPlainDir on a file used as root = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("error should identify the non-directory root: %v", err)
+	}
+}
+
+func TestInspectContainedPlainDir_IntermediateNonDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sandbox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app := filepath.Join(root, "sandbox", "test-app")
+	if err := os.WriteFile(app, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "sandbox", "test-app", "test-user", "test-session")
+	err := inspectContainedPlainDir(root, target, "legacy workspace")
+	if err == nil {
+		t.Fatal("inspectContainedPlainDir on intermediate file = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("error should identify the intermediate file: %v", err)
+	}
+}
+
+func TestValidateMigrationDestination_AncestorNotDirectory(t *testing.T) {
+	root := t.TempDir()
+	newKey, _ := migrateKeyPair(t)
+	if err := os.WriteFile(filepath.Join(root, "sandbox"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newPath, _ := workspacePathForID(root, newKey)
+	exists, err := validateMigrationDestination(root, newPath)
+	if err == nil {
+		t.Fatal("validateMigrationDestination with file ancestor = nil, want error")
+	}
+	if exists {
+		t.Fatal("validateMigrationDestination with file ancestor reported exists=true")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("error should identify the ancestor file: %v", err)
+	}
+}
+
+func TestProbeLegacyWorkspace_SkipsEmptyAndMatchingKeys(t *testing.T) {
+	root := t.TempDir()
+	newKey, legacyKey := migrateKeyPair(t)
+	newPath, _ := workspacePathForID(root, newKey)
+	found, err := probeLegacyWorkspace(root, newPath, newKey, []string{"", newKey, legacyKey})
+	if err != nil {
+		t.Fatalf("probeLegacyWorkspace error = %v, want nil", err)
+	}
+	if found != "" {
+		t.Fatalf("probeLegacyWorkspace found = %q, want empty (legacy dir missing)", found)
+	}
+}
+
+func TestValidateMigratedWorkspace_MissingPath(t *testing.T) {
+	err := validateMigratedWorkspace(filepath.Join(t.TempDir(), "missing"))
+	if err == nil {
+		t.Fatal("validateMigratedWorkspace on missing path = nil, want error")
+	}
+}
