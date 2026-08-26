@@ -1129,33 +1129,8 @@ func (s Store) replaceSummaries(
 	restored *session.Session,
 	activeAt time.Time,
 ) error {
-	rows, err := tx.QueryContext(
-		ctx,
-		fmt.Sprintf(
-			`SELECT filter_key, summary FROM %s WHERE app_name = %s AND user_id = %s AND session_id = %s AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > %s) FOR UPDATE`,
-			s.Tables.Summaries,
-			s.bind(1), s.bind(2), s.bind(3), s.bind(4),
-		),
-		key.AppName, key.UserID, key.SessionID, activeAt,
-	)
+	current, err := s.loadActiveSummaries(ctx, tx, key, activeAt)
 	if err != nil {
-		return fmt.Errorf("lock active summaries: %w", err)
-	}
-	current := make(map[string][]byte)
-	for rows.Next() {
-		var filterKey string
-		var raw []byte
-		if err := rows.Scan(&filterKey, &raw); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		current[filterKey] = append([]byte(nil), raw...)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
 		return err
 	}
 	desired := make(map[string][]byte, len(restored.Summaries))
@@ -1245,4 +1220,42 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, NULL)`,
 		}
 	}
 	return nil
+}
+
+func (s Store) loadActiveSummaries(
+	ctx context.Context,
+	tx *sql.Tx,
+	key session.Key,
+	activeAt time.Time,
+) (map[string][]byte, error) {
+	rows, err := tx.QueryContext(
+		ctx,
+		fmt.Sprintf(
+			`SELECT filter_key, summary FROM %s WHERE app_name = %s AND user_id = %s AND session_id = %s AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > %s) FOR UPDATE`,
+			s.Tables.Summaries,
+			s.bind(1), s.bind(2), s.bind(3), s.bind(4),
+		),
+		key.AppName, key.UserID, key.SessionID, activeAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("lock active summaries: %w", err)
+	}
+	current := make(map[string][]byte)
+	for rows.Next() {
+		var filterKey string
+		var raw []byte
+		if err := rows.Scan(&filterKey, &raw); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		current[filterKey] = append([]byte(nil), raw...)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return current, nil
 }
