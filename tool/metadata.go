@@ -51,8 +51,15 @@ type MetadataProvider interface {
 // publish their concurrency property.
 //
 // Returning false is an objection: the parallel tool paths keep the tool's whole
-// turn sequential. Returning true, or not implementing this at all, raises no
-// objection and promises nothing about specific siblings.
+// turn sequential. Returning true is a guarantee — the tool can run at the same
+// time as any other tool call in its turn, other calls to itself included — which
+// is why MetadataOf reads it as ConcurrencySafe. Not implementing the interface
+// raises no objection and promises nothing: it is the admission default, and
+// MetadataOf reports nothing for it.
+//
+// Framework wrappers forward the answer of the tool they wrap and delegate
+// ToolMetadata the same way, so a wrapper neither adds a guarantee nor hides an
+// objection.
 type ConcurrencyAware interface {
 	IsConcurrencySafe() bool
 }
@@ -68,7 +75,11 @@ type DeferredTool interface {
 // implement MetadataProvider get the zero value, preserving existing behavior.
 //
 // If a tool implements ConcurrencyAware but not MetadataProvider, that value
-// fills ConcurrencySafe.
+// fills ConcurrencySafe. The two agree by contract: a ConcurrencyAware true
+// guarantees the tool can run beside any call in its turn, itself included, so
+// it covers the same-tool reentrancy ConcurrencySafe describes; a false objects
+// to both. A tool implementing neither publishes nothing, and nothing is
+// synthesized for it.
 func MetadataOf(t Tool) ToolMetadata {
 	if t == nil {
 		return ToolMetadata{}

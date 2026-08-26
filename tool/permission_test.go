@@ -96,10 +96,26 @@ func TestMetadataOf_UsesProvider(t *testing.T) {
 	}
 }
 
+// A ConcurrencyAware-only tool is read exactly as its contract says: true is a
+// guarantee that covers running beside itself, so it is ConcurrencySafe; false
+// objects to that too. Nothing else is filled in, and a tool implementing
+// neither interface stays at the zero value rather than being read as safe.
 func TestMetadataOf_UsesConcurrencyAwareFallback(t *testing.T) {
-	got := MetadataOf(&concurrencyTool{safe: true})
-	if !got.ConcurrencySafe {
-		t.Fatalf("expected concurrency-aware tool to be marked safe")
+	tests := []struct {
+		name string
+		tool Tool
+		want ToolMetadata
+	}{
+		{"aware true is the guarantee", &concurrencyTool{safe: true}, ToolMetadata{ConcurrencySafe: true}},
+		{"aware false objects", &concurrencyTool{safe: false}, ToolMetadata{}},
+		{"neither interface publishes nothing", newMockTool(testToolName), ToolMetadata{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MetadataOf(tt.tool); got != tt.want {
+				t.Fatalf("MetadataOf() = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
 
