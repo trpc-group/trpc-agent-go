@@ -116,7 +116,9 @@ const (
 	// prompt. This is the backward-compatible default.
 	TimePromptPlacementSystem = processor.TimePromptPlacementSystem
 	// TimePromptPlacementUser adds request-time clock context to the latest user
-	// turn, preserving a cache-stable system prefix.
+	// turn, preserving a cache-stable system prefix. When the request has no
+	// user message, a user message holding the clock context is appended, which
+	// changes the provider-visible message roles.
 	TimePromptPlacementUser = processor.TimePromptPlacementUser
 )
 
@@ -357,7 +359,7 @@ type Options struct {
 	// TimeFormat specifies the format for time display.
 	TimeFormat string
 	// TimePromptPlacement controls whether clock context is added to the system
-	// prompt or latest user turn.
+	// prompt or latest user turn. The zero value keeps system placement.
 	TimePromptPlacement TimePromptPlacement
 	// OutputKey is the key in session state to store the output of the agent.
 	OutputKey string
@@ -1746,10 +1748,24 @@ func WithTimeFormat(timeFormat string) Option {
 }
 
 // WithTimePromptPlacement selects the message role that receives request-time
-// clock context. User placement keeps the stable system prefix cacheable.
+// clock context.
+//
+// Available placements:
+//   - TimePromptPlacementSystem (default): adds clock context to the system
+//     prompt.
+//   - TimePromptPlacementUser: keeps the stable system prefix cacheable by
+//     appending clock context to the latest user turn, or by appending a user
+//     message holding it when the request has no user message.
+//
+// Unsupported placements fall back to TimePromptPlacementSystem.
 func WithTimePromptPlacement(placement TimePromptPlacement) Option {
 	return func(opts *Options) {
-		opts.TimePromptPlacement = placement
+		switch placement {
+		case TimePromptPlacementUser:
+			opts.TimePromptPlacement = TimePromptPlacementUser
+		default:
+			opts.TimePromptPlacement = TimePromptPlacementSystem
+		}
 	}
 }
 

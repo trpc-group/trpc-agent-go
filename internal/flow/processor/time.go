@@ -27,7 +27,9 @@ const (
 	// context to the last system message.
 	TimePromptPlacementSystem TimePromptPlacement = "system"
 	// TimePromptPlacementUser adds clock context to the latest user turn so the
-	// stable system prefix remains eligible for provider prompt caching.
+	// stable system prefix remains eligible for provider prompt caching. When
+	// the request carries no user message, a user message holding the clock
+	// context is appended instead.
 	TimePromptPlacementUser TimePromptPlacement = "user"
 )
 
@@ -79,13 +81,15 @@ func WithTimeFormat(format string) TimeOption {
 }
 
 // WithTimePromptPlacement selects the message role that receives clock context.
-// An empty placement keeps the default system placement.
+// Empty and unsupported placements keep the default system placement.
 func WithTimePromptPlacement(placement TimePromptPlacement) TimeOption {
 	return func(p *TimeRequestProcessor) {
-		if placement == "" {
-			placement = TimePromptPlacementSystem
+		switch placement {
+		case TimePromptPlacementUser:
+			p.PromptPlacement = TimePromptPlacementUser
+		default:
+			p.PromptPlacement = TimePromptPlacementSystem
 		}
-		p.PromptPlacement = placement
 	}
 }
 
@@ -115,7 +119,9 @@ func NewTimeRequestProcessor(opts ...TimeOption) *TimeRequestProcessor {
 
 // ProcessRequest implements the flow.RequestProcessor interface.
 // It adds current time information to the system prompt if enabled, or to the
-// latest user turn when PromptPlacement is TimePromptPlacementUser.
+// latest user turn when PromptPlacement is TimePromptPlacementUser. User
+// placement appends a user message holding the clock context when the request
+// has no user message.
 func (p *TimeRequestProcessor) ProcessRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -251,7 +257,8 @@ func (p *TimeRequestProcessor) addTimeToSystemMessage(req *model.Request, timeCo
 	}
 }
 
-// addTimeToUserMessage adds clock context to the latest user turn.
+// addTimeToUserMessage adds clock context to the latest user turn, or appends a
+// user message carrying it when the request has no user message.
 func (p *TimeRequestProcessor) addTimeToUserMessage(req *model.Request, timeContent string) {
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		msg := &req.Messages[i]
@@ -265,7 +272,13 @@ func (p *TimeRequestProcessor) addTimeToUserMessage(req *model.Request, timeCont
 		// a message, never both, so the clock block has to use the same
 		// representation as the user input it is attached to.
 		if len(msg.ContentParts) > 0 {
+			// Some providers flatten text parts by concatenation, so the clock
+			// block carries the same separator as the scalar path to keep its
+			// boundary with the caller text.
 			text := timeContent
+			if hasTextContentPart(msg.ContentParts) {
+				text = "\n\n" + timeContent
+			}
 			msg.ContentParts = append(msg.ContentParts, model.ContentPart{
 				Type: model.ContentTypeText,
 				Text: &text,
@@ -276,6 +289,16 @@ func (p *TimeRequestProcessor) addTimeToUserMessage(req *model.Request, timeCont
 		return
 	}
 	req.Messages = append(req.Messages, model.NewUserMessage(timeContent))
+}
+
+// hasTextContentPart reports whether any content part carries non-empty text.
+func hasTextContentPart(parts []model.ContentPart) bool {
+	for _, part := range parts {
+		if part.Type == model.ContentTypeText && part.Text != nil && *part.Text != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // messageContainsTimeInfo reports whether the message already carries this

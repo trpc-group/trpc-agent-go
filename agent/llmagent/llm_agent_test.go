@@ -345,6 +345,24 @@ func TestBuildRequestProcessors_TimePromptPlacementUserWiring(t *testing.T) {
 	require.Contains(t, req.Messages[1].Content, "The current date is:")
 }
 
+func TestWithTimePromptPlacement_NormalizesUnsupportedPlacement(t *testing.T) {
+	for _, placement := range []TimePromptPlacement{"", "assistant"} {
+		opts := &Options{}
+		WithAddCurrentTime(true)(opts)
+		WithTimePromptPlacement(placement)(opts)
+		require.Equal(t, TimePromptPlacementSystem, opts.TimePromptPlacement)
+
+		var timeProc *processor.TimeRequestProcessor
+		for _, p := range buildRequestProcessors("test-agent", opts) {
+			if v, ok := p.(*processor.TimeRequestProcessor); ok {
+				timeProc = v
+			}
+		}
+		require.NotNil(t, timeProc)
+		require.Equal(t, TimePromptPlacementSystem, timeProc.PromptPlacement)
+	}
+}
+
 // Test that buildRequestProcessors wires MaxHistoryRuns into
 // ContentRequestProcessor correctly.
 func TestBuildRequestProcessors_MaxHistoryRunsWiring(t *testing.T) {

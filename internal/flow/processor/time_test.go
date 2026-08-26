@@ -225,6 +225,10 @@ func TestTimeRequestProcessor_ProcessRequest_AppendsTextPartToMultimodalUser(t *
 	if len(got.ContentParts) != 3 {
 		t.Fatalf("expected clock context as an extra text part, got %d parts", len(got.ContentParts))
 	}
+	if got.ContentParts[0].Type != model.ContentTypeText || got.ContentParts[0].Text == nil ||
+		*got.ContentParts[0].Text != userText {
+		t.Fatalf("expected original text part to be preserved, got: %#v", got.ContentParts[0])
+	}
 	if got.ContentParts[1].Type != model.ContentTypeImage || got.ContentParts[1].Image == nil {
 		t.Fatalf("expected image part to be preserved, got: %#v", got.ContentParts[1])
 	}
@@ -232,6 +236,9 @@ func TestTimeRequestProcessor_ProcessRequest_AppendsTextPartToMultimodalUser(t *
 	if clockPart.Type != model.ContentTypeText || clockPart.Text == nil ||
 		!strings.Contains(*clockPart.Text, "The current date is:") {
 		t.Fatalf("expected clock text part on the user turn, got: %#v", clockPart)
+	}
+	if !strings.HasPrefix(*clockPart.Text, "\n\n") {
+		t.Fatalf("expected clock part to keep a boundary after caller text, got: %q", *clockPart.Text)
 	}
 
 	// A replayed request must not append the same clock block twice.
@@ -267,29 +274,31 @@ func TestTimeRequestProcessor_ProcessRequest_CreatesUserForStablePrefix(t *testi
 	}
 }
 
-func TestTimeRequestProcessor_EmptyPlacementKeepsSystemDefault(t *testing.T) {
-	processor := NewTimeRequestProcessor(
-		WithAddCurrentTime(true),
-		WithTimePromptPlacement(""),
-	)
-	if processor.PromptPlacement != TimePromptPlacementSystem {
-		t.Fatalf("expected system placement default, got %q", processor.PromptPlacement)
-	}
+func TestTimeRequestProcessor_UnsupportedPlacementKeepsSystemDefault(t *testing.T) {
+	for _, placement := range []TimePromptPlacement{"", "assistant"} {
+		processor := NewTimeRequestProcessor(
+			WithAddCurrentTime(true),
+			WithTimePromptPlacement(placement),
+		)
+		if processor.PromptPlacement != TimePromptPlacementSystem {
+			t.Fatalf("expected system placement for %q, got %q", placement, processor.PromptPlacement)
+		}
 
-	req := &model.Request{
-		Messages: []model.Message{
-			model.NewSystemMessage("Stable persona and instructions"),
-			model.NewUserMessage("Investigate the alert"),
-		},
-	}
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewSystemMessage("Stable persona and instructions"),
+				model.NewUserMessage("Investigate the alert"),
+			},
+		}
 
-	processor.ProcessRequest(context.Background(), nil, req, nil)
+		processor.ProcessRequest(context.Background(), nil, req, nil)
 
-	if !strings.Contains(req.Messages[0].Content, "The current date is:") {
-		t.Fatalf("expected clock context on the system message, got: %s", req.Messages[0].Content)
-	}
-	if req.Messages[1].Content != "Investigate the alert" {
-		t.Fatalf("expected user turn to stay unchanged, got: %s", req.Messages[1].Content)
+		if !strings.Contains(req.Messages[0].Content, "The current date is:") {
+			t.Fatalf("expected clock context on the system message, got: %s", req.Messages[0].Content)
+		}
+		if req.Messages[1].Content != "Investigate the alert" {
+			t.Fatalf("expected user turn to stay unchanged, got: %s", req.Messages[1].Content)
+		}
 	}
 }
 
