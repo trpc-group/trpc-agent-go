@@ -556,6 +556,25 @@ func TestWrapSessionService_RewritesRewindScope(t *testing.T) {
 	require.Equal(t, "chat-scope", storageSession.UserID)
 }
 
+func TestWrapSessionService_RejectsInvalidRewindBeforeScopeRewrite(t *testing.T) {
+	t.Parallel()
+
+	next := &recordingRewindSessionService{
+		recordingSessionService: &recordingSessionService{},
+	}
+	rewinder, ok := WrapSessionService(next).(session.RewindService)
+	require.True(t, ok)
+	ctx := WithStorageUserID(context.Background(), "chat-scope")
+	result, err := rewinder.Rewind(ctx, session.RewindRequest{
+		Key:             session.Key{AppName: "app", SessionID: "session"},
+		TargetRequestID: "latest", ExpectedHeadRequestID: "latest",
+		IdempotencyKey: "edit",
+	})
+	require.Nil(t, result)
+	require.ErrorIs(t, err, session.ErrInvalidRewindRequest)
+	require.Equal(t, session.RewindRequest{}, next.rewindRequest)
+}
+
 func TestWrapSessionService_RewindUnsupported(t *testing.T) {
 	t.Parallel()
 

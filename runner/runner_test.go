@@ -870,7 +870,7 @@ func TestResolveLatestTurnReplacement(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := resolveLatestTurnReplacement(&tt.opts)
+			err := resolveLatestTurnReplacement(&tt.opts, tt.opts.RequestID != "")
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -879,6 +879,24 @@ func TestResolveLatestTurnReplacement(t *testing.T) {
 			assert.Equal(t, tt.wantID, tt.opts.RequestID)
 		})
 	}
+}
+
+func TestResolveRunOptionsPreservesDefaultRequestIDForOptions(t *testing.T) {
+	r := &runner{}
+	var observedRequestID string
+	ro, err := r.resolveRunOptions([]agent.RunOption{
+		func(opts *agent.RunOptions) {
+			observedRequestID = opts.RequestID
+		},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, observedRequestID)
+	assert.Equal(t, observedRequestID, ro.RequestID)
+
+	_, err = r.resolveRunOptions([]agent.RunOption{
+		agent.WithLatestTurnReplacement("old-request"),
+	})
+	require.ErrorContains(t, err, "requires an explicit request id")
 }
 
 func TestRunnerLatestTurnReplacementUnsupported(t *testing.T) {

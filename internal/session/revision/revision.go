@@ -42,6 +42,8 @@ const maxPendingErrorKeys = 1024
 var (
 	// ErrRewindUnsupported is the public unsupported rewind error.
 	ErrRewindUnsupported = session.ErrRewindUnsupported
+	// ErrInvalidRewindRequest is the public invalid rewind request error.
+	ErrInvalidRewindRequest = session.ErrInvalidRewindRequest
 	// ErrRewindConflict is the public rewind conflict error.
 	ErrRewindConflict = session.ErrRewindConflict
 	// ErrRewindUnavailable is the public unavailable rewind error.
@@ -211,16 +213,16 @@ func Rewind(
 // ValidateRewindRequest validates backend-independent request identity fields.
 func ValidateRewindRequest(req session.RewindRequest) error {
 	if err := req.Key.CheckSessionKey(); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrInvalidRewindRequest, err)
 	}
 	if req.TargetRequestID == "" {
-		return fmt.Errorf("target request id is required")
+		return fmt.Errorf("%w: target request id is required", ErrInvalidRewindRequest)
 	}
 	if req.ExpectedHeadRequestID == "" {
-		return fmt.Errorf("expected head request id is required")
+		return fmt.Errorf("%w: expected head request id is required", ErrInvalidRewindRequest)
 	}
 	if req.IdempotencyKey == "" {
-		return fmt.Errorf("idempotency key is required")
+		return fmt.Errorf("%w: idempotency key is required", ErrInvalidRewindRequest)
 	}
 	return nil
 }

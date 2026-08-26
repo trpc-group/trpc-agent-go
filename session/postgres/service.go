@@ -434,7 +434,13 @@ func (s *Service) ListSessions(
 		}
 		sessList[i] = stable
 	}
-	return sessList, nil
+	stableSessions := sessList[:0]
+	for _, listed := range sessList {
+		if listed != nil {
+			stableSessions = append(stableSessions, listed)
+		}
+	}
+	return stableSessions, nil
 }
 
 // DeleteSession deletes a session.

@@ -127,7 +127,7 @@ return 1
 
 // luaAppendEvent appends an event atomically and applies StateDelta to session state.
 // KEYS[1] = sessionMeta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key,
-// KEYS[4] = private revision metadata key.
+// KEYS[4] = private revision metadata key, KEYS[5] = summary key.
 // ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp,
 // ARGV[4] = TTL (seconds), ARGV[5] = shouldStoreEvent (1 or 0),
 // ARGV[6] = has expected generation, ARGV[7] = expected generation,
@@ -139,7 +139,8 @@ return 1
 // ARGV[17] = explicit turn hazard.
 // (empty JSON clears the projection).
 // Returns: 1 on success, 0 if session not found, -1 for a stale generation,
-// -2 for a stale turn-start projection.
+// -2 for a stale head, -3 when the boundary requires a retained summary
+// carrier that no longer exists.
 var luaAppendEvent = redis.NewScript(`
 local sessionMetaKey = KEYS[1]
 local evtDataKey = KEYS[2]
@@ -209,12 +210,9 @@ if hasPreparedProjection then
         revision.projection = nil
     end
 end
-local revisionChanged = false
 revision.head = head + 1
-revisionChanged = true
 if revision.checkpoint and (not hasExpectedGeneration or explicitHazard) then
     revision.checkpoint.hazard = true
-    revisionChanged = true
 end
 local evt = cjson.decode(eventJSON)
 local evtRequestID = evt.requestID or ''
@@ -234,10 +232,8 @@ if validStart then
             hazard = explicitHazard or
                 (revision.headRequestID and revision.headRequestID == startRequestID)
         }
-        revisionChanged = true
     elseif checkpoint.requestID ~= startRequestID or checkpoint.invocationID ~= startInvocationID then
         checkpoint.hazard = true
-        revisionChanged = true
     end
 end
 if shouldStoreEvent and evtRequestID ~= '' then
@@ -255,7 +251,6 @@ if checkpoint then
     if evtRequestID ~= checkpoint.requestID then
         checkpoint.hazard = true
     end
-    revisionChanged = true
 end
 
 -- 2. Store event data only if shouldStoreEvent is true
@@ -288,15 +283,12 @@ if runnerCompletion and revision.checkpoint then
     else
         checkpoint.hazard = true
     end
-    revisionChanged = true
 end
 
-if revisionChanged or hasExpectedGeneration then
-    if ttl > 0 then
-        redis.call('SET', revisionKey, cjson.encode(revision), 'EX', ttl)
-    else
-        setPreserveTTL(revisionKey, cjson.encode(revision))
-    end
+if ttl > 0 then
+    redis.call('SET', revisionKey, cjson.encode(revision), 'EX', ttl)
+else
+    setPreserveTTL(revisionKey, cjson.encode(revision))
 end
 
 -- 4. Refresh TTL on event data keys

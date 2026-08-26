@@ -161,6 +161,36 @@ func TestRewindUnsupportedWrappedService(t *testing.T) {
 	}
 }
 
+func TestRewindRejectsInvalidRequestBeforeForwarding(t *testing.T) {
+	inner := &recordingRewindService{SessionService: sessionmem.NewSessionService()}
+	t.Cleanup(func() { _ = inner.Close() })
+	svc := Wrap(inner, artifactmem.NewService(), Config{Enabled: true})
+	rewinder, ok := svc.(session.RewindService)
+	if !ok {
+		t.Fatal("wrapped service does not implement RewindService")
+	}
+	result, err := rewinder.Rewind(context.Background(), session.RewindRequest{})
+	if result != nil || !errors.Is(err, session.ErrInvalidRewindRequest) {
+		t.Fatalf("Rewind() = %#v, %v, want ErrInvalidRewindRequest", result, err)
+	}
+	if inner.calls != 0 {
+		t.Fatalf("underlying Rewind() calls = %d, want 0", inner.calls)
+	}
+}
+
+type recordingRewindService struct {
+	*sessionmem.SessionService
+	calls int
+}
+
+func (s *recordingRewindService) Rewind(
+	context.Context,
+	session.RewindRequest,
+) (*session.RewindResult, error) {
+	s.calls++
+	return nil, errors.New("unexpected rewind")
+}
+
 type unsupportedReplacementService struct {
 	session.Service
 }

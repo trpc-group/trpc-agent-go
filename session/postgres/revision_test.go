@@ -259,6 +259,10 @@ func TestRevisionFlushBarriers(t *testing.T) {
 	require.NoError(t, s.flushEventPersistence(context.Background(), key))
 	require.NoError(t, s.flushTrackPersistence(context.Background(), key))
 	s.opts.enableAsyncPersist = true
+	s.eventPairChans = nil
+	s.trackEventChans = nil
+	require.NoError(t, s.flushRevisionPersistence(context.Background(), key))
+	require.NoError(t, s.flushEventPersistence(context.Background(), key))
 
 	eventWaitCtx, cancelEventWait := context.WithCancel(context.Background())
 	s.eventPairChans = []chan *sessionEventPair{make(chan *sessionEventPair)}
@@ -294,6 +298,22 @@ func TestRevisionFlushBarriers(t *testing.T) {
 	s.trackEventChans = []chan *trackEventPair{make(chan *trackEventPair)}
 	assert.ErrorIs(
 		t, s.flushTrackPersistence(trackSendCtx, key), context.Canceled,
+	)
+
+	closedEventCh := make(chan *sessionEventPair)
+	close(closedEventCh)
+	s.eventPairChans = []chan *sessionEventPair{closedEventCh}
+	assert.ErrorIs(
+		t, s.flushEventPersistence(context.Background(), key),
+		errAsyncPersistenceClosed,
+	)
+
+	closedTrackCh := make(chan *trackEventPair)
+	close(closedTrackCh)
+	s.trackEventChans = []chan *trackEventPair{closedTrackCh}
+	assert.ErrorIs(
+		t, s.flushTrackPersistence(context.Background(), key),
+		errAsyncPersistenceClosed,
 	)
 }
 

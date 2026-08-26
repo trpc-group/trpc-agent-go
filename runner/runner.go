@@ -979,8 +979,15 @@ func (r *runner) applyRunnerRunDefaults(ro *agent.RunOptions) {
 }
 
 func (r *runner) resolveRunOptions(runOpts []agent.RunOption) (agent.RunOptions, error) {
-	ro := agent.NewRunOptions(runOpts...)
-	if err := resolveLatestTurnReplacement(&ro); err != nil {
+	defaultRequestID := uuid.NewString()
+	ro := agent.RunOptions{RequestID: defaultRequestID}
+	for _, opt := range runOpts {
+		if opt != nil {
+			opt(&ro)
+		}
+	}
+	requestIDExplicit := ro.RequestID != defaultRequestID
+	if err := resolveLatestTurnReplacement(&ro, requestIDExplicit); err != nil {
 		return agent.RunOptions{}, err
 	}
 	if ro.RequestID == "" {
@@ -990,7 +997,10 @@ func (r *runner) resolveRunOptions(runOpts []agent.RunOption) (agent.RunOptions,
 	return ro, nil
 }
 
-func resolveLatestTurnReplacement(ro *agent.RunOptions) error {
+func resolveLatestTurnReplacement(
+	ro *agent.RunOptions,
+	requestIDExplicit bool,
+) error {
 	if ro == nil || ro.LatestTurnReplacement == nil {
 		return nil
 	}
@@ -1000,7 +1010,7 @@ func resolveLatestTurnReplacement(ro *agent.RunOptions) error {
 			"runner: latest-turn replacement expected request id is empty",
 		)
 	}
-	if ro.RequestID == "" {
+	if !requestIDExplicit || ro.RequestID == "" {
 		return fmt.Errorf(
 			"runner: latest-turn replacement requires an explicit request id",
 		)

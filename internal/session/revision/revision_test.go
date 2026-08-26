@@ -53,6 +53,11 @@ func TestRewindCapability(t *testing.T) {
 	result, err := Rewind(context.Background(), valid, request)
 	require.NoError(t, err)
 	assert.Same(t, active, result.Session)
+	assert.ErrorIs(
+		t,
+		ValidateRewindRequest(RewindRequest{}),
+		session.ErrAppNameRequired,
+	)
 
 	tests := []struct {
 		name    string
@@ -66,12 +71,14 @@ func TestRewindCapability(t *testing.T) {
 			service: valid,
 			request: RewindRequest{},
 			wantErr: "appName is required",
+			is:      ErrInvalidRewindRequest,
 		},
 		{
 			name:    "empty expected request",
 			service: valid,
 			request: RewindRequest{Key: key, IdempotencyKey: "new"},
 			wantErr: "target request id is required",
+			is:      ErrInvalidRewindRequest,
 		},
 		{
 			name:    "empty expected head request",
@@ -80,6 +87,7 @@ func TestRewindCapability(t *testing.T) {
 				Key: key, TargetRequestID: "old", IdempotencyKey: "new",
 			},
 			wantErr: "expected head request id is required",
+			is:      ErrInvalidRewindRequest,
 		},
 		{
 			name:    "empty idempotency key",
@@ -88,6 +96,7 @@ func TestRewindCapability(t *testing.T) {
 				Key: key, TargetRequestID: "old", ExpectedHeadRequestID: "old",
 			},
 			wantErr: "idempotency key is required",
+			is:      ErrInvalidRewindRequest,
 		},
 		{
 			name:    "unsupported",

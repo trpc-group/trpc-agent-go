@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -29,9 +30,12 @@ type Service struct{}
 
 // Rewind reports that a no-op service cannot restore persisted state.
 func (s *Service) Rewind(
-	context.Context,
-	session.RewindRequest,
+	_ context.Context,
+	req session.RewindRequest,
 ) (*session.RewindResult, error) {
+	if err := sessionrevision.ValidateRewindRequest(req); err != nil {
+		return nil, err
+	}
 	return nil, session.ErrRewindUnsupported
 }
 

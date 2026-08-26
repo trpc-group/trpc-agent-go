@@ -819,19 +819,31 @@ func TestAttemptSessionService_DoesNotExposeUnsupportedOptionalInterfaces(t *tes
 	_, window := service.(session.WindowService)
 	_, track := service.(session.TrackService)
 	_, initializesState := service.(session.StateInitializationService)
-	rewinder, rewindable := service.(session.RewindService)
 	assert.False(t, searchable)
 	assert.False(t, window)
 	assert.False(t, track)
 	assert.False(t, initializesState)
-	require.True(t, rewindable)
-	result, err := rewinder.Rewind(context.Background(), session.RewindRequest{})
-	assert.Nil(t, result)
-	assert.ErrorIs(t, err, session.ErrRewindUnsupported)
 
 	unsupported := newAttemptSessionService(nil, nil).Service()
 	_, initializesState = unsupported.(session.StateInitializationService)
 	assert.False(t, initializesState)
+}
+
+func TestAttemptSessionService_RewindIsUnsupported(t *testing.T) {
+	service := newAttemptSessionService(nil, nil).Service()
+	rewinder, ok := service.(session.RewindService)
+	require.True(t, ok)
+	result, err := rewinder.Rewind(context.Background(), session.RewindRequest{})
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, session.ErrInvalidRewindRequest)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	result, err = rewinder.Rewind(context.Background(), session.RewindRequest{
+		Key: key, TargetRequestID: "target",
+		ExpectedHeadRequestID: "head", IdempotencyKey: "operation",
+	})
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, session.ErrRewindUnsupported)
 }
 
 func TestAttemptSessionService_ListSessionsHidesDeletedBaseSession(t *testing.T) {

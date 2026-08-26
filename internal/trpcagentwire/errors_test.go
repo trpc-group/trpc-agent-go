@@ -25,19 +25,24 @@ func TestDirectRunErrorKinds(t *testing.T) {
 		kind DirectRunErrorKind
 	}{
 		{
+			name: "invalid",
+			err:  session.ErrInvalidRewindRequest,
+			kind: directRunErrorLatestTurnReplacementInvalid,
+		},
+		{
 			name: "unsupported",
 			err:  session.ErrRewindUnsupported,
-			kind: DirectRunErrorLatestTurnReplacementUnsupported,
+			kind: directRunErrorLatestTurnReplacementUnsupported,
 		},
 		{
 			name: "conflict",
 			err:  session.ErrRewindConflict,
-			kind: DirectRunErrorLatestTurnReplacementConflict,
+			kind: directRunErrorLatestTurnReplacementConflict,
 		},
 		{
 			name: "unavailable",
 			err:  session.ErrRewindUnavailable,
-			kind: DirectRunErrorLatestTurnReplacementUnavailable,
+			kind: directRunErrorLatestTurnReplacementUnavailable,
 		},
 	}
 	for _, tt := range tests {

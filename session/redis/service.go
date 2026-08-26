@@ -537,9 +537,10 @@ func (s *Service) ListSessions(
 	if err != nil {
 		return nil, fmt.Errorf("list sessions (hashidx): %w", err)
 	}
-	if err := s.stabilizeListedSessions(
+	hashidxSessions, err = s.stabilizeListedSessions(
 		ctx, hashidxSessions, eventLimit, opt, util.StorageTypeHashIdx,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, fmt.Errorf("attach hashidx session revision: %w", err)
 	}
 
@@ -553,9 +554,10 @@ func (s *Service) ListSessions(
 	if err != nil {
 		return nil, fmt.Errorf("list sessions (zset): %w", err)
 	}
-	if err := s.stabilizeListedSessions(
+	zsetSessions, err = s.stabilizeListedSessions(
 		ctx, zsetSessions, eventLimit, opt, util.StorageTypeZset,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, fmt.Errorf("attach zset session revision: %w", err)
 	}
 
@@ -590,7 +592,27 @@ func (s *Service) stabilizeListedSessions(
 	eventLimit int,
 	opt *session.Options,
 	storageType string,
-) error {
+) ([]*session.Session, error) {
+	keys := make([]session.Key, 0, len(sessions))
+	for _, listed := range sessions {
+		if listed != nil {
+			keys = append(keys, session.Key{
+				AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+			})
+		}
+	}
+	var (
+		generations map[session.Key]uint64
+		err         error
+	)
+	if storageType == util.StorageTypeZset {
+		generations, err = s.zsetClient.RevisionGenerations(ctx, keys)
+	} else {
+		generations, err = s.hashidxClient.RevisionGenerations(ctx, keys)
+	}
+	if err != nil {
+		return nil, err
+	}
 	for i, listed := range sessions {
 		if listed == nil {
 			continue
@@ -598,10 +620,11 @@ func (s *Service) stabilizeListedSessions(
 		key := session.Key{
 			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
 		}
-		stable, err := sessionrevision.LoadStableListedProjection(
+		stable, err := sessionrevision.LoadStableListedProjectionAtGeneration(
 			ctx,
 			listed,
 			opt.ListSessionOnlyMeta,
+			generations[key],
 			func(ctx context.Context) (uint64, error) {
 				return s.revisionGeneration(ctx, key, storageType)
 			},
@@ -617,11 +640,17 @@ func (s *Service) stabilizeListedSessions(
 			},
 		)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		sessions[i] = stable
 	}
-	return nil
+	stableSessions := sessions[:0]
+	for _, listed := range sessions {
+		if listed != nil {
+			stableSessions = append(stableSessions, listed)
+		}
+	}
+	return stableSessions, nil
 }
 
 // DeleteSession deletes a session.

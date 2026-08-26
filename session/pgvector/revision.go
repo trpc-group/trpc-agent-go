@@ -107,8 +107,17 @@ func (s *Service) flushRevisionPersistence(
 func (s *Service) flushEventPersistence(
 	ctx context.Context,
 	key session.Key,
-) error {
-	if !s.opts.enableAsyncPersist {
+) (retErr error) {
+	defer func() {
+		if panicValue := recover(); panicValue != nil {
+			retErr = handleClosedChannelPanic(
+				ctx,
+				"pgvector flush event persistence failed: %v",
+				panicValue,
+			)
+		}
+	}()
+	if !s.opts.enableAsyncPersist || len(s.eventPairChans) == 0 {
 		return nil
 	}
 	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
@@ -128,11 +137,25 @@ func (s *Service) flushEventPersistence(
 	}
 }
 
-func (s *Service) flushTrackPersistence(ctx context.Context, key session.Key) error {
+func (s *Service) flushTrackPersistence(
+	ctx context.Context,
+	key session.Key,
+) (flushErr error) {
+	defer func() {
+		if panicValue := recover(); panicValue != nil {
+			flushErr = errors.Join(
+				flushErr,
+				handleClosedChannelPanic(
+					ctx,
+					"pgvector flush track persistence failed: %v",
+					panicValue,
+				),
+			)
+		}
+	}()
 	if !s.opts.enableAsyncPersist {
 		return nil
 	}
-	var flushErr error
 	for _, ch := range s.trackEventChans {
 		barrier := &trackEventPair{
 			key: key, done: make(chan error), barrierCtx: ctx,

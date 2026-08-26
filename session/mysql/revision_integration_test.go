@@ -9,6 +9,8 @@
 package mysql
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"testing"
@@ -25,13 +27,32 @@ func TestLatestTurnReplacementIntegration(t *testing.T) {
 	}
 	for _, async := range []bool{false, true} {
 		t.Run(fmt.Sprintf("async=%t", async), func(t *testing.T) {
+			prefix := fmt.Sprintf("r%x_", time.Now().UnixNano())
 			svc, err := NewService(
 				WithMySQLClientDSN(dsn),
-				WithTablePrefix(fmt.Sprintf("r%x_", time.Now().UnixNano())),
+				WithTablePrefix(prefix),
 				WithEnableAsyncPersist(async),
 			)
 			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, svc.Close()) })
+			rawDB, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, svc.Close())
+				for _, table := range []string{
+					svc.tableSessionTracks,
+					svc.tableSessionEvents,
+					svc.tableSessionSummaries,
+					svc.tableSessionStates,
+					svc.tableAppStates,
+					svc.tableUserStates,
+				} {
+					_, _ = rawDB.ExecContext(
+						context.Background(),
+						fmt.Sprintf("DROP TABLE IF EXISTS `%s`", table),
+					)
+				}
+				require.NoError(t, rawDB.Close())
+			})
 			if async {
 				rewindtest.RunAsync(t, svc)
 			} else {

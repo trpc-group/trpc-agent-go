@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -64,9 +65,12 @@ type Service struct {
 // Rewind reports that ClickHouse cannot atomically restore the session-owned
 // projection across its independently persisted tables.
 func (s *Service) Rewind(
-	context.Context,
-	session.RewindRequest,
+	_ context.Context,
+	req session.RewindRequest,
 ) (*session.RewindResult, error) {
+	if err := sessionrevision.ValidateRewindRequest(req); err != nil {
+		return nil, err
+	}
 	return nil, session.ErrRewindUnsupported
 }
 

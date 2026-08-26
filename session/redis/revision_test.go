@@ -102,11 +102,12 @@ func TestRewindRestoresRedisLayouts(t *testing.T) {
 
 func TestTrimConversationsMakesLatestTurnUnavailable(t *testing.T) {
 	for _, tt := range []struct {
-		name string
-		opts []ServiceOpt
+		name    string
+		useZSet bool
+		opts    []ServiceOpt
 	}{
 		{name: "hashidx", opts: []ServiceOpt{WithCompatMode(CompatModeNone)}},
-		{name: "zset", opts: []ServiceOpt{WithCompatMode(CompatModeTransition)}},
+		{name: "zset", useZSet: true, opts: []ServiceOpt{WithCompatMode(CompatModeTransition)}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			redisURL, cleanup := setupTestRedis(t)
@@ -144,7 +145,7 @@ func TestTrimConversationsMakesLatestTurnUnavailable(t *testing.T) {
 			require.NoError(t, err)
 			require.NotEmpty(t, deleted)
 			var record *sessionrevision.PersistedRecord
-			if tt.name == "zset" {
+			if tt.useZSet {
 				record, err = service.zsetClient.Revision(ctx, key)
 			} else {
 				record, err = service.hashidxClient.Revision(ctx, key)
@@ -166,11 +167,12 @@ func TestTrimConversationsMakesLatestTurnUnavailable(t *testing.T) {
 
 func TestRollingProjectionSupportsSuccessiveTurns(t *testing.T) {
 	for _, tt := range []struct {
-		name string
-		opts []ServiceOpt
+		name    string
+		useZSet bool
+		opts    []ServiceOpt
 	}{
 		{name: "hashidx", opts: []ServiceOpt{WithCompatMode(CompatModeNone)}},
-		{name: "zset", opts: []ServiceOpt{WithCompatMode(CompatModeTransition)}},
+		{name: "zset", useZSet: true, opts: []ServiceOpt{WithCompatMode(CompatModeTransition)}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			redisURL, cleanup := setupTestRedis(t)
@@ -229,7 +231,7 @@ func TestRollingProjectionSupportsSuccessiveTurns(t *testing.T) {
 				record *sessionrevision.PersistedRecord
 				active *session.Session
 			)
-			if tt.name == "zset" {
+			if tt.useZSet {
 				record, err = service.zsetClient.Revision(ctx, key)
 				if err == nil {
 					active, err = service.zsetClient.RevisionProjection(ctx, key)
@@ -337,6 +339,26 @@ func TestRevisionFlushHandlesEmptyChannelSets(t *testing.T) {
 	require.NoError(t, flushTrackPairChannel(ctx, nil, key))
 }
 
+func TestRevisionFlushHandlesClosedChannels(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	eventChannel := make(chan *sessionEventPair)
+	close(eventChannel)
+	assert.ErrorIs(t, flushPairChannel(
+		ctx,
+		[]chan *sessionEventPair{eventChannel},
+		key,
+		&sessionEventPair{},
+	), errAsyncPersistenceClosed)
+	trackChannel := make(chan *trackEventPair)
+	close(trackChannel)
+	assert.ErrorIs(t, flushTrackPairChannel(
+		ctx,
+		[]chan *trackEventPair{trackChannel},
+		key,
+	), errAsyncPersistenceClosed)
+}
+
 func TestRevisionFlushHonorsCancellation(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
 	t.Run("before event barrier is accepted", func(t *testing.T) {
@@ -402,6 +424,7 @@ func TestPrepareTurnStartWriteRejectsMissingOrClosedStorage(t *testing.T) {
 		WithCompatMode(CompatModeNone),
 	)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
 
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}

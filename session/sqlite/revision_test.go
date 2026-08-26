@@ -498,6 +498,62 @@ WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 	assert.ErrorIs(t, err, sessionrevision.ErrRewindUnavailable)
 }
 
+func TestRevisionGenerations(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	t.Cleanup(cleanup)
+	service, err := NewService(db)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	_, err = service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	var raw []byte
+	require.NoError(t, service.db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT state FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+		service.tableSessionStates,
+	), key.AppName, key.UserID, key.SessionID).Scan(&raw))
+	var state SessionState
+	record, err := sessionrevision.DecodeState(raw, &state)
+	require.NoError(t, err)
+	record.Generation = 7
+	raw, err = sessionrevision.EncodeState(state, record)
+	require.NoError(t, err)
+	_, err = service.db.ExecContext(ctx, fmt.Sprintf(
+		`UPDATE %s SET state = ?
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+		service.tableSessionStates,
+	), raw, key.AppName, key.UserID, key.SessionID)
+	require.NoError(t, err)
+
+	keys := []session.Key{key}
+	for i := 0; i <= revisionGenerationBatchSize; i++ {
+		keys = append(keys, session.Key{
+			AppName: "app", UserID: "user", SessionID: fmt.Sprintf("missing-%d", i),
+		})
+	}
+	generations, err := service.revisionGenerations(ctx, keys)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(7), generations[key])
+	assert.Len(t, generations, len(keys))
+	assert.Zero(t, generations[keys[len(keys)-1]])
+
+	generations, err = service.revisionGenerations(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, generations)
+
+	_, err = service.db.ExecContext(ctx, fmt.Sprintf(
+		`UPDATE %s SET state = ?
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+		service.tableSessionStates,
+	), []byte("{"), key.AppName, key.UserID, key.SessionID)
+	require.NoError(t, err)
+	_, err = service.revisionGenerations(ctx, []session.Key{key})
+	assert.Error(t, err)
+}
+
 func TestRewindRejectsInvalidRevisionRecords(t *testing.T) {
 	db, _, cleanup := openTempSQLiteDB(t)
 	t.Cleanup(cleanup)
@@ -582,9 +638,10 @@ WHERE app_name = ? AND user_id = ? AND session_id = ?`,
 	assert.ErrorContains(t, err, "decode session revision metadata")
 
 	tests := []struct {
-		name   string
-		record sessionrevision.PersistedRecord
-		is     error
+		name     string
+		record   sessionrevision.PersistedRecord
+		is       error
+		contains string
 	}{
 		{
 			name: "missing checkpoint",
@@ -612,6 +669,7 @@ WHERE app_name = ? AND user_id = ? AND session_id = ?`,
 			record: sessionrevision.PersistedRecord{Checkpoint: &sessionrevision.PersistedCheckpoint{
 				RequestID: "request", Terminal: true, Boundary: []byte("not-json"),
 			}},
+			contains: "decode session boundary",
 		},
 		{
 			name: "replay identity mismatch",
@@ -645,6 +703,9 @@ WHERE app_name = ? AND user_id = ? AND session_id = ?`,
 			require.Error(t, err)
 			if tt.is != nil {
 				assert.ErrorIs(t, err, tt.is)
+			}
+			if tt.contains != "" {
+				assert.ErrorContains(t, err, tt.contains)
 			}
 		})
 	}
@@ -774,6 +835,28 @@ func TestRevisionFlushHonorsCancellation(t *testing.T) {
 		}()
 		err := service.flushTrackPersistence(ctx, key)
 		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("closed event channel", func(t *testing.T) {
+		eventCh := make(chan *sessionEventPair)
+		close(eventCh)
+		service := &Service{
+			opts:           ServiceOpts{enableAsyncPersist: true},
+			eventPairChans: []chan *sessionEventPair{eventCh},
+		}
+		err := service.flushEventPersistence(context.Background(), key)
+		require.ErrorIs(t, err, errAsyncPersistenceClosed)
+	})
+
+	t.Run("closed track channel", func(t *testing.T) {
+		trackCh := make(chan *trackEventPair)
+		close(trackCh)
+		service := &Service{
+			opts:            ServiceOpts{enableAsyncPersist: true},
+			trackEventChans: []chan *trackEventPair{trackCh},
+		}
+		err := service.flushTrackPersistence(context.Background(), key)
+		require.ErrorIs(t, err, errAsyncPersistenceClosed)
 	})
 }
 

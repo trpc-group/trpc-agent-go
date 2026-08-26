@@ -83,6 +83,9 @@ func (s *rewindForwarder) Rewind(
 	ctx context.Context,
 	req session.RewindRequest,
 ) (*session.RewindResult, error) {
+	if err := sessionrevision.ValidateRewindRequest(req); err != nil {
+		return nil, err
+	}
 	result, err := s.rewinder.Rewind(ctx, req)
 	if err != nil || result == nil || result.Session == nil || !s.service.cfg.Enabled {
 		return result, err
@@ -96,7 +99,9 @@ func (s *rewindForwarder) Rewind(
 	if err != nil {
 		return nil, err
 	}
-	return &session.RewindResult{Session: hydrated}, nil
+	copied := *result
+	copied.Session = hydrated
+	return &copied, nil
 }
 
 // The following wrapper types intentionally enumerate optional session service

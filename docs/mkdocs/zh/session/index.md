@@ -248,6 +248,12 @@ result, err := rewinder.Rewind(ctx, session.RewindRequest{
 })
 ```
 
+请求中的所有字段都必须提供。每个 `session.RewindService` 实现都会在 backend mutation
+或记录幂等结果之前，对无效 Session key，或为空的 target、expected head、idempotency
+key 返回 `session.ErrInvalidRewindRequest`。内建的不支持实现也会先完成校验，再返回
+`session.ErrRewindUnsupported`。无效调用既不会改变 Session projection，也不会占用该
+idempotency key，因此修正后的请求可以继续使用同一个 key。
+
 `TargetRequestID` 选择目标请求之前保留的边界；`ExpectedHeadRequestID` 是独立的 CAS
 条件，要求当前 head 仍等于调用方观察到的 head。将 target 与并发条件分开，可以避免
 后续存储协议演进时混淆两者职责。目前内建存储只保留最新 occurrence，因此两个 ID 现在

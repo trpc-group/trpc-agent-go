@@ -20,27 +20,24 @@ import (
 type DirectRunErrorKind string
 
 const (
-	// DirectRunErrorLatestTurnReplacementUnsupported identifies an unsupported
-	// latest-turn replacement request.
-	DirectRunErrorLatestTurnReplacementUnsupported DirectRunErrorKind = "latest_turn_replacement_unsupported"
-	// DirectRunErrorLatestTurnReplacementConflict identifies a latest-turn
-	// replacement whose expected turn no longer matches.
-	DirectRunErrorLatestTurnReplacementConflict DirectRunErrorKind = "latest_turn_replacement_conflict"
-	// DirectRunErrorLatestTurnReplacementUnavailable identifies a latest turn
-	// that cannot be restored safely.
-	DirectRunErrorLatestTurnReplacementUnavailable DirectRunErrorKind = "latest_turn_replacement_unavailable"
+	directRunErrorLatestTurnReplacementInvalid     DirectRunErrorKind = "latest_turn_replacement_invalid"
+	directRunErrorLatestTurnReplacementUnsupported DirectRunErrorKind = "latest_turn_replacement_unsupported"
+	directRunErrorLatestTurnReplacementConflict    DirectRunErrorKind = "latest_turn_replacement_conflict"
+	directRunErrorLatestTurnReplacementUnavailable DirectRunErrorKind = "latest_turn_replacement_unavailable"
 )
 
 // DirectRunErrorKindOf returns the wire kind for a recognized direct-run
 // error, or the empty kind when the error has no wire representation.
 func DirectRunErrorKindOf(err error) DirectRunErrorKind {
 	switch {
+	case errors.Is(err, session.ErrInvalidRewindRequest):
+		return directRunErrorLatestTurnReplacementInvalid
 	case errors.Is(err, session.ErrRewindUnsupported):
-		return DirectRunErrorLatestTurnReplacementUnsupported
+		return directRunErrorLatestTurnReplacementUnsupported
 	case errors.Is(err, session.ErrRewindConflict):
-		return DirectRunErrorLatestTurnReplacementConflict
+		return directRunErrorLatestTurnReplacementConflict
 	case errors.Is(err, session.ErrRewindUnavailable):
-		return DirectRunErrorLatestTurnReplacementUnavailable
+		return directRunErrorLatestTurnReplacementUnavailable
 	default:
 		return ""
 	}
@@ -50,11 +47,13 @@ func DirectRunErrorKindOf(err error) DirectRunErrorKind {
 // kind is unknown.
 func (k DirectRunErrorKind) Sentinel() error {
 	switch k {
-	case DirectRunErrorLatestTurnReplacementUnsupported:
+	case directRunErrorLatestTurnReplacementInvalid:
+		return session.ErrInvalidRewindRequest
+	case directRunErrorLatestTurnReplacementUnsupported:
 		return session.ErrRewindUnsupported
-	case DirectRunErrorLatestTurnReplacementConflict:
+	case directRunErrorLatestTurnReplacementConflict:
 		return session.ErrRewindConflict
-	case DirectRunErrorLatestTurnReplacementUnavailable:
+	case directRunErrorLatestTurnReplacementUnavailable:
 		return session.ErrRewindUnavailable
 	default:
 		return nil

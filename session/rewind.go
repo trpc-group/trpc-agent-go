@@ -15,6 +15,9 @@ import (
 )
 
 var (
+	// ErrInvalidRewindRequest indicates that Key.CheckSessionKey failed or that
+	// a required rewind request identity field is empty.
+	ErrInvalidRewindRequest = errors.New("invalid session rewind request")
 	// ErrRewindUnsupported indicates that a session service cannot rewind a
 	// session projection.
 	ErrRewindUnsupported = errors.New("session rewind is unsupported")
@@ -69,8 +72,12 @@ type RewindResult struct {
 // Repeating the exact same request after an outcome-unknown error must not
 // apply the rewind twice. Implementations may retain only a bounded set of
 // boundaries and idempotency records; a missing target returns
-// ErrRewindUnavailable. RewindService intentionally does not embed Service so
-// existing custom Service implementations remain source compatible.
+// ErrRewindUnavailable. Before mutation or recording the idempotency key,
+// every implementation must return an error that matches
+// ErrInvalidRewindRequest when Key.CheckSessionKey fails or when
+// TargetRequestID, ExpectedHeadRequestID, or IdempotencyKey is empty.
+// RewindService intentionally does not embed Service so existing custom
+// Service implementations remain source compatible.
 type RewindService interface {
 	Rewind(context.Context, RewindRequest) (*RewindResult, error)
 }

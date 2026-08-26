@@ -19,6 +19,19 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+var errAsyncPersistenceClosed = errors.New("async persistence is closed")
+
+func recoverClosedChannelPanic(result *error) {
+	if recovered := recover(); recovered != nil {
+		if panicErr, ok := recovered.(error); ok &&
+			panicErr.Error() == "send on closed channel" {
+			*result = errors.Join(*result, errAsyncPersistenceClosed)
+			return
+		}
+		panic(recovered)
+	}
+}
+
 func (s *Service) revisionStore() sqlrevision.Store {
 	return sqlrevision.Store{
 		Dialect:          sqlrevision.MySQL,
@@ -107,8 +120,9 @@ func (s *Service) flushRevisionPersistence(
 func (s *Service) flushEventPersistence(
 	ctx context.Context,
 	key session.Key,
-) error {
-	if !s.opts.enableAsyncPersist {
+) (retErr error) {
+	defer recoverClosedChannelPanic(&retErr)
+	if !s.opts.enableAsyncPersist || len(s.eventPairChans) == 0 {
 		return nil
 	}
 	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
@@ -128,11 +142,14 @@ func (s *Service) flushEventPersistence(
 	}
 }
 
-func (s *Service) flushTrackPersistence(ctx context.Context, key session.Key) error {
+func (s *Service) flushTrackPersistence(
+	ctx context.Context,
+	key session.Key,
+) (flushErr error) {
+	defer recoverClosedChannelPanic(&flushErr)
 	if !s.opts.enableAsyncPersist {
 		return nil
 	}
-	var flushErr error
 	for _, ch := range s.trackEventChans {
 		barrier := &trackEventPair{
 			key: key, done: make(chan error), barrierCtx: ctx,

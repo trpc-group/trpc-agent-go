@@ -13,7 +13,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -371,25 +370,38 @@ func (s *Service) invalidateExpiredTrackProjections(
 	rows, err := tx.QueryContext(
 		ctx,
 		fmt.Sprintf(
-			`SELECT DISTINCT app_name, user_id, session_id FROM %s
-WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`,
+			`SELECT DISTINCT tracks.app_name, tracks.user_id,
+tracks.session_id, states.state
+FROM %s AS tracks
+JOIN %s AS states
+ON states.app_name = tracks.app_name
+AND states.user_id = tracks.user_id
+AND states.session_id = tracks.session_id
+AND states.deleted_at IS NULL
+WHERE tracks.expires_at IS NOT NULL AND tracks.expires_at <= ?
+AND tracks.deleted_at IS NULL`,
 			s.tableSessionTracks,
+			s.tableSessionStates,
 		),
 		nowNs,
 	)
 	if err != nil {
 		return err
 	}
-	var keys []session.Key
+	type stateRow struct {
+		key session.Key
+		raw []byte
+	}
+	var states []stateRow
 	for rows.Next() {
-		var key session.Key
+		var row stateRow
 		if err := rows.Scan(
-			&key.AppName, &key.UserID, &key.SessionID,
+			&row.key.AppName, &row.key.UserID, &row.key.SessionID, &row.raw,
 		); err != nil {
 			_ = rows.Close()
 			return err
 		}
-		keys = append(keys, key)
+		states = append(states, row)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -398,26 +410,9 @@ WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`,
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	for _, key := range keys {
-		var raw []byte
-		err := tx.QueryRowContext(
-			ctx,
-			fmt.Sprintf(
-				`SELECT state FROM %s
-WHERE app_name = ? AND user_id = ? AND session_id = ?
-AND deleted_at IS NULL`,
-				s.tableSessionStates,
-			),
-			key.AppName, key.UserID, key.SessionID,
-		).Scan(&raw)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
+	for _, row := range states {
 		var state SessionState
-		record, err := sessionrevision.DecodeState(raw, &state)
+		record, err := sessionrevision.DecodeState(row.raw, &state)
 		if err != nil {
 			return err
 		}
@@ -435,7 +430,7 @@ WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND deleted_at IS NULL`,
 				s.tableSessionStates,
 			),
-			updated, key.AppName, key.UserID, key.SessionID,
+			updated, row.key.AppName, row.key.UserID, row.key.SessionID,
 		); err != nil {
 			return err
 		}

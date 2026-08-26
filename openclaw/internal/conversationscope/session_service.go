@@ -14,6 +14,7 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -284,6 +285,9 @@ func (s *rewindForwarder) Rewind(
 	ctx context.Context,
 	req session.RewindRequest,
 ) (*session.RewindResult, error) {
+	if err := sessionrevision.ValidateRewindRequest(req); err != nil {
+		return nil, err
+	}
 	logicalUserID := req.Key.UserID
 	req.Key = rewriteKeyForStorage(ctx, req.Key)
 	result, err := s.rewinder.Rewind(ctx, req)

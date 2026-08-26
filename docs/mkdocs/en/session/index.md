@@ -249,6 +249,14 @@ result, err := rewinder.Rewind(ctx, session.RewindRequest{
 })
 ```
 
+All request fields are required. Every `session.RewindService` implementation
+returns `session.ErrInvalidRewindRequest` for an invalid session key or an empty
+target, expected head, or idempotency key before backend mutation or recording
+an idempotency outcome. Built-in unsupported implementations also validate
+before returning `session.ErrRewindUnsupported`. The invalid call neither
+changes the session projection nor consumes its idempotency key, so a corrected
+request may reuse that key.
+
 `TargetRequestID` selects the retained boundary immediately before the target
 request. `ExpectedHeadRequestID` is an independent compare-and-swap condition:
 the active head must still be the one observed by the caller. Keeping the

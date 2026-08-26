@@ -25,6 +25,30 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+func TestRevisionGenerations(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	missing := session.Key{AppName: "app", UserID: "user", SessionID: "missing"}
+	raw, err := json.Marshal(sessionrevision.PersistedRecord{Generation: 7})
+	require.NoError(t, err)
+	require.NoError(t, rdb.Set(ctx, c.keys.RevisionKey(key), raw, 0).Err())
+
+	generations, err := c.RevisionGenerations(ctx, []session.Key{key, missing})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(7), generations[key])
+	assert.Zero(t, generations[missing])
+
+	generations, err = c.RevisionGenerations(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, generations)
+
+	require.NoError(t, rdb.Set(ctx, c.keys.RevisionKey(key), "{", 0).Err())
+	_, err = c.RevisionGenerations(ctx, []session.Key{key})
+	assert.ErrorContains(t, err, "decode revision metadata batch")
+}
+
 func TestRewindPreservesRemainingTTL(t *testing.T) {
 	mr, rdb := setupMiniredis(t)
 	cfg := defaultConfig()

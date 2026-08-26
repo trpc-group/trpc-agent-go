@@ -30,6 +30,9 @@ import (
 // Run exercises the contract shared by every backend that supports rewind.
 func Run(t *testing.T, service session.Service) {
 	t.Helper()
+	t.Run("invalid request", func(t *testing.T) {
+		testInvalidRequest(t, service)
+	})
 	t.Run("restore and fencing", func(t *testing.T) {
 		testRestoreAndFencing(t, service)
 	})
@@ -63,6 +66,73 @@ func Run(t *testing.T, service session.Service) {
 	t.Run("concurrent idempotent retries", func(t *testing.T) {
 		testConcurrentIdempotentRetries(t, service)
 	})
+}
+
+func testInvalidRequest(t *testing.T, service session.Service) {
+	t.Helper()
+	rewinder, ok := service.(session.RewindService)
+	if !ok {
+		t.Fatal("service does not implement RewindService")
+	}
+	key := contractKey(t, "invalid-request")
+	for _, req := range []session.RewindRequest{
+		{},
+		{Key: key, ExpectedHeadRequestID: "head", IdempotencyKey: "idempotency"},
+		{Key: key, TargetRequestID: "target", IdempotencyKey: "idempotency"},
+		{Key: key, TargetRequestID: "target", ExpectedHeadRequestID: "head"},
+	} {
+		_, err := rewinder.Rewind(context.Background(), req)
+		if !errors.Is(err, session.ErrInvalidRewindRequest) {
+			t.Fatalf("Rewind(%+v) error = %v, want ErrInvalidRewindRequest", req, err)
+		}
+	}
+
+	sess, err := service.CreateSession(context.Background(), key, nil)
+	requireNoError(t, err)
+	requireNoError(t, service.AppendEvent(
+		context.Background(),
+		sess,
+		messageEvent("before", "before", "before-invocation", model.RoleUser),
+	))
+	turnCtx := revision.ContextWithTurnStart(
+		context.Background(),
+		revision.TurnStart{RequestID: "latest", InvocationID: "latest-invocation"},
+	)
+	requireNoError(t, service.AppendEvent(
+		turnCtx,
+		sess,
+		messageEvent("latest", "latest", "latest-invocation", model.RoleUser),
+	))
+	requireNoError(t, service.AppendEvent(
+		context.Background(),
+		sess,
+		completionEvent("latest", "latest-invocation"),
+	))
+	beforeInvalid, err := service.GetSession(context.Background(), key)
+	requireNoError(t, err)
+	beforeBoundary, err := revision.NewBoundary(beforeInvalid)
+	requireNoError(t, err)
+	_, err = rewinder.Rewind(context.Background(), session.RewindRequest{
+		Key: key, TargetRequestID: "latest", IdempotencyKey: "replacement",
+	})
+	if !errors.Is(err, session.ErrInvalidRewindRequest) {
+		t.Fatalf("invalid Rewind() error = %v, want ErrInvalidRewindRequest", err)
+	}
+	afterInvalid, err := service.GetSession(context.Background(), key)
+	requireNoError(t, err)
+	afterBoundary, err := revision.NewBoundary(afterInvalid)
+	requireNoError(t, err)
+	if !bytes.Equal(afterBoundary, beforeBoundary) {
+		t.Fatal("invalid Rewind() changed the active session projection")
+	}
+	result, err := rewinder.Rewind(context.Background(), session.RewindRequest{
+		Key: key, TargetRequestID: "latest",
+		ExpectedHeadRequestID: "latest", IdempotencyKey: "replacement",
+	})
+	requireNoError(t, err)
+	if result == nil || result.Session == nil || findEvent(result.Session.Events, "latest") != nil {
+		t.Fatalf("valid Rewind() after invalid request = %#v", result)
+	}
 }
 
 func testConcurrentIdempotentRetries(t *testing.T, service session.Service) {

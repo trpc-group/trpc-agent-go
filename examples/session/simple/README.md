@@ -86,6 +86,7 @@ Optional dedicated embedding credentials:
 | `MYSQL_DATABASE` | MySQL database     | `trpc_agent_go`  |
 
 **TDSQL:**
+
 | Variable         | Description        | Default Value    |
 | ---------------- | ------------------ | ---------------- |
 | `TDSQL_HOST`     | TDSQL proxy host   | `localhost`      |
@@ -95,6 +96,7 @@ Optional dedicated embedding credentials:
 | `TDSQL_DATABASE` | TDSQL database     | `trpc_agent_go`  |
 
 **ClickHouse:**
+
 | Variable              | Description             | Default Value    |
 | --------------------- | ----------------------- | ---------------- |
 | `CLICKHOUSE_HOST`     | ClickHouse host         | `localhost`      |
@@ -104,6 +106,7 @@ Optional dedicated embedding credentials:
 | `CLICKHOUSE_DATABASE` | ClickHouse database     | `trpc_agent_go`  |
 
 **MongoDB:**
+
 | Variable           | Description            | Default Value                   |
 | ------------------ | ---------------------- | ------------------------------- |
 | `MONGODB_URI`      | MongoDB connection URI | `mongodb://localhost:27017`     |

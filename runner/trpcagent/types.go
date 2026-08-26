@@ -10,8 +10,6 @@ package trpcagent
 
 import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
-	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/internal/trpcagentwire"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -22,16 +20,9 @@ type session struct {
 	SessionID string `json:"sessionId"`
 }
 
-type runOptions struct {
-	RequestID             string                 `json:"requestID,omitempty"`
-	ExecutionTraceEnabled bool                   `json:"executionTraceEnabled,omitempty"`
-	RuntimeState          map[string]any         `json:"runtimeState,omitempty"`
-	LatestTurnReplacement *latestTurnReplacement `json:"latestTurnReplacement,omitempty"`
-}
+type runOptions = trpcagentwire.RunOptions
 
-type latestTurnReplacement struct {
-	ExpectedRequestID string `json:"expectedRequestID"`
-}
+type latestTurnReplacement = trpcagentwire.LatestTurnReplacement
 
 type runRequest struct {
 	Session session       `json:"session"`
@@ -41,14 +32,7 @@ type runRequest struct {
 	RunOptions runOptions               `json:"runOptions,omitempty"`
 }
 
-type runResponse struct {
-	Status             atrace.TraceStatus               `json:"status"`
-	Events             []event.Event                    `json:"events,omitempty"`
-	ExecutionTrace     *atrace.Trace                    `json:"executionTrace,omitempty"`
-	ErrorMessage       string                           `json:"errorMessage,omitempty"`
-	DirectRunError     bool                             `json:"directRunError,omitempty"`
-	DirectRunErrorKind trpcagentwire.DirectRunErrorKind `json:"directRunErrorKind,omitempty"`
-}
+type runResponse = trpcagentwire.RunResponse
 
 type structureResponse struct {
 	Structure *astructure.Snapshot `json:"structure"`

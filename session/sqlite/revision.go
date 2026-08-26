@@ -24,6 +24,19 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+var errAsyncPersistenceClosed = errors.New("async persistence is closed")
+
+func recoverClosedChannelPanic(result *error) {
+	if recovered := recover(); recovered != nil {
+		if panicErr, ok := recovered.(error); ok &&
+			panicErr.Error() == "send on closed channel" {
+			*result = errors.Join(*result, errAsyncPersistenceClosed)
+			return
+		}
+		panic(recovered)
+	}
+}
+
 type revisionRowQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
@@ -32,7 +45,10 @@ type revisionExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-const revisionTailDeleteBatchSize = 500
+const (
+	revisionGenerationBatchSize = 250
+	revisionTailDeleteBatchSize = 500
+)
 
 func (s *Service) readRevision(
 	ctx context.Context,
@@ -83,6 +99,60 @@ func (s *Service) revisionGeneration(
 	return record.Generation, nil
 }
 
+func (s *Service) revisionGenerations(
+	ctx context.Context,
+	keys []session.Key,
+) (map[session.Key]uint64, error) {
+	generations := make(map[session.Key]uint64, len(keys))
+	for _, key := range keys {
+		generations[key] = 0
+	}
+	for start := 0; start < len(keys); start += revisionGenerationBatchSize {
+		end := min(start+revisionGenerationBatchSize, len(keys))
+		batch := keys[start:end]
+		clauses := make([]string, len(batch))
+		args := make([]any, 0, len(batch)*3)
+		for i, key := range batch {
+			clauses[i] = "(app_name = ? AND user_id = ? AND session_id = ?)"
+			args = append(args, key.AppName, key.UserID, key.SessionID)
+		}
+		rows, err := s.db.QueryContext(ctx, fmt.Sprintf(
+			`SELECT app_name, user_id, session_id, state FROM %s
+WHERE deleted_at IS NULL AND (%s)`,
+			s.tableSessionStates,
+			strings.Join(clauses, " OR "),
+		), args...)
+		if err != nil {
+			return nil, fmt.Errorf("read session revisions: %w", err)
+		}
+		for rows.Next() {
+			var key session.Key
+			var raw []byte
+			if err := rows.Scan(
+				&key.AppName, &key.UserID, &key.SessionID, &raw,
+			); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan session revision: %w", err)
+			}
+			var state SessionState
+			record, err := sessionrevision.DecodeState(raw, &state)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			generations[key] = record.Generation
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterate session revisions: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("close session revisions: %w", err)
+		}
+	}
+	return generations, nil
+}
+
 func (s *Service) flushRevisionPersistence(
 	ctx context.Context,
 	key session.Key,
@@ -99,7 +169,8 @@ func (s *Service) flushRevisionPersistence(
 func (s *Service) flushEventPersistence(
 	ctx context.Context,
 	key session.Key,
-) error {
+) (retErr error) {
+	defer recoverClosedChannelPanic(&retErr)
 	if !s.opts.enableAsyncPersist || len(s.eventPairChans) == 0 {
 		return nil
 	}
@@ -120,7 +191,11 @@ func (s *Service) flushEventPersistence(
 	}
 }
 
-func (s *Service) flushTrackPersistence(ctx context.Context, key session.Key) error {
+func (s *Service) flushTrackPersistence(
+	ctx context.Context,
+	key session.Key,
+) (retErr error) {
+	defer recoverClosedChannelPanic(&retErr)
 	if !s.opts.enableAsyncPersist || len(s.trackEventChans) == 0 {
 		return nil
 	}

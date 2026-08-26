@@ -46,6 +46,40 @@ func (c *Client) Revision(
 	return &record, nil
 }
 
+// RevisionGenerations returns revision generations for a session-key batch.
+func (c *Client) RevisionGenerations(
+	ctx context.Context,
+	keys []session.Key,
+) (map[session.Key]uint64, error) {
+	generations := make(map[session.Key]uint64, len(keys))
+	if len(keys) == 0 {
+		return generations, nil
+	}
+	revisionKeys := make([]string, len(keys))
+	for i, key := range keys {
+		revisionKeys[i] = c.keys.RevisionKey(key)
+	}
+	values, err := c.client.MGet(ctx, revisionKeys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("get revision metadata batch: %w", err)
+	}
+	for i, value := range values {
+		if value == nil {
+			continue
+		}
+		raw, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("decode revision metadata batch: unexpected value %T", value)
+		}
+		var record sessionrevision.PersistedRecord
+		if err := json.Unmarshal([]byte(raw), &record); err != nil {
+			return nil, fmt.Errorf("decode revision metadata batch: %w", err)
+		}
+		generations[keys[i]] = record.Generation
+	}
+	return generations, nil
+}
+
 // RevisionProjection loads the complete active projection without applying a
 // caller-facing event or Track window.
 func (c *Client) RevisionProjection(
@@ -182,7 +216,7 @@ func (c *Client) Rewind(
 		active  *session.Session
 		applied bool
 	)
-	for attempt := 0; attempt < 8; attempt++ {
+	for attempt := 0; attempt < revisionWriteAttempts; attempt++ {
 		trackNames, err := c.client.SMembers(
 			ctx, c.keys.TrackIndexKey(key),
 		).Result()
@@ -235,6 +269,8 @@ func (c *Client) Rewind(
 				if _, err := tx.TxPipelined(
 					ctx,
 					func(pipe redis.Pipeliner) error {
+						// Force EXEC so Redis validates the WATCH set before an
+						// idempotent replay result is accepted.
 						pipe.Get(ctx, revisionKey)
 						return nil
 					},

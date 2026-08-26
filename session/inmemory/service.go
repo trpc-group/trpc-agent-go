@@ -874,6 +874,8 @@ func (s *SessionService) AppendTrackEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+	// Validate the caller projection before storage lookup to preserve existing
+	// error precedence without mutating it ahead of revision checks.
 	validated := sess.Clone()
 	if err := validated.AppendTrackEvent(trackEvent, opts...); err != nil {
 		return fmt.Errorf("append track event: %w", err)

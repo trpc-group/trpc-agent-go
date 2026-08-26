@@ -614,5 +614,16 @@ func TestRewindUnsupported(t *testing.T) {
 		session.RewindRequest{},
 	)
 	assert.Nil(t, result)
+	assert.ErrorIs(t, err, session.ErrInvalidRewindRequest)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	result, err = (&Service{}).Rewind(
+		context.Background(),
+		session.RewindRequest{
+			Key: key, TargetRequestID: "target",
+			ExpectedHeadRequestID: "head", IdempotencyKey: "operation",
+		},
+	)
+	assert.Nil(t, result)
 	assert.ErrorIs(t, err, session.ErrRewindUnsupported)
 }

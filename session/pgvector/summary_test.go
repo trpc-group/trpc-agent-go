@@ -406,6 +406,30 @@ func TestCreateSessionSummary_Success(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestCreateSessionSummary_MissingSession(t *testing.T) {
+	s, mock, db := newTestService(t, nil)
+	defer db.Close()
+	s.opts.summarizer = &activeSummarizer{text: "summary"}
+
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{{
+		InvocationID: "invocation",
+		Timestamp:    time.Now(),
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser, Content: "hello"},
+		}}},
+	}}
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
+		WithArgs(sess.AppName, sess.UserID, sess.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}))
+	mock.ExpectRollback()
+
+	err := s.CreateSessionSummary(context.Background(), sess, "", false)
+	require.ErrorIs(t, err, errSessionNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestCreateSessionSummary_UpsertError(
 	t *testing.T,
 ) {

@@ -24,6 +24,8 @@ import (
 
 const revisionProjectionLimit = -1
 
+const revisionWriteAttempts = 8
+
 // Revision returns the private revision metadata for a session.
 func (c *Client) Revision(
 	ctx context.Context,
@@ -31,6 +33,40 @@ func (c *Client) Revision(
 ) (*sessionrevision.PersistedRecord, error) {
 	record, _, err := readRevisionRecord(ctx, c.client, c.revisionKey(key))
 	return record, err
+}
+
+// RevisionGenerations returns revision generations for a session-key batch.
+func (c *Client) RevisionGenerations(
+	ctx context.Context,
+	keys []session.Key,
+) (map[session.Key]uint64, error) {
+	generations := make(map[session.Key]uint64, len(keys))
+	if len(keys) == 0 {
+		return generations, nil
+	}
+	revisionKeys := make([]string, len(keys))
+	for i, key := range keys {
+		revisionKeys[i] = c.revisionKey(key)
+	}
+	values, err := c.client.MGet(ctx, revisionKeys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("get revision metadata batch: %w", err)
+	}
+	for i, value := range values {
+		if value == nil {
+			continue
+		}
+		raw, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("decode revision metadata batch: unexpected value %T", value)
+		}
+		var record sessionrevision.PersistedRecord
+		if err := json.Unmarshal([]byte(raw), &record); err != nil {
+			return nil, fmt.Errorf("decode revision metadata batch: %w", err)
+		}
+		generations[keys[i]] = record.Generation
+	}
+	return generations, nil
 }
 
 // RevisionProjection loads the complete active projection without applying a
@@ -154,7 +190,7 @@ func (c *Client) Rewind(
 		active  *session.Session
 		applied bool
 	)
-	for attempt := 0; attempt < 8; attempt++ {
+	for attempt := 0; attempt < revisionWriteAttempts; attempt++ {
 		trackNames, err := c.client.SMembers(ctx, c.trackIndexKey(key)).Result()
 		if err != nil {
 			return nil, false, fmt.Errorf("list active tracks: %w", err)
@@ -202,6 +238,8 @@ func (c *Client) Rewind(
 				if _, err := tx.TxPipelined(
 					ctx,
 					func(pipe redis.Pipeliner) error {
+						// Force EXEC so Redis validates the WATCH set before an
+						// idempotent replay result is accepted.
 						pipe.Get(ctx, revisionKey)
 						return nil
 					},

@@ -39,6 +39,7 @@ var _ session.TrackService = (*Service)(nil)
 var _ session.SearchableService = (*Service)(nil)
 
 var errServiceClosing = errors.New("service is closing")
+var errSessionNotFound = errors.New("session not found")
 var errEmbedderRequired = errors.New("pgvector session embedder is required")
 var errEmbedderDimensionMismatch = errors.New("pgvector session embedder dimension mismatch")
 
@@ -534,7 +535,13 @@ func (s *Service) ListSessions(
 		}
 		sessList[i] = stable
 	}
-	return sessList, nil
+	stableSessions := sessList[:0]
+	for _, listed := range sessList {
+		if listed != nil {
+			stableSessions = append(stableSessions, listed)
+		}
+	}
+	return stableSessions, nil
 }
 
 // DeleteSession deletes a session.

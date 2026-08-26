@@ -518,17 +518,29 @@ func (s *Service) ListSessions(
 	if err != nil {
 		return nil, err
 	}
-	for i, listed := range sessList {
+	keys := make([]session.Key, 0, len(sessList))
+	for _, listed := range sessList {
+		if listed == nil {
+			continue
+		}
+		keys = append(keys, session.Key{
+			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+		})
+	}
+	generations, err := s.revisionGenerations(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	stableSessions := sessList[:0]
+	for _, listed := range sessList {
 		if listed == nil {
 			continue
 		}
 		key := session.Key{
 			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
 		}
-		stable, err := sessionrevision.LoadStableListedProjection(
-			ctx,
-			listed,
-			opt.ListSessionOnlyMeta,
+		stable, err := sessionrevision.LoadStableListedProjectionAtGeneration(
+			ctx, listed, opt.ListSessionOnlyMeta, generations[key],
 			func(ctx context.Context) (uint64, error) {
 				return s.revisionGeneration(ctx, key)
 			},
@@ -539,9 +551,11 @@ func (s *Service) ListSessions(
 		if err != nil {
 			return nil, err
 		}
-		sessList[i] = stable
+		if stable != nil {
+			stableSessions = append(stableSessions, stable)
+		}
 	}
-	return sessList, nil
+	return stableSessions, nil
 }
 
 // DeleteSession deletes a session.

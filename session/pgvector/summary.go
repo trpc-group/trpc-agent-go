@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -85,6 +86,9 @@ func (s *Service) CreateSessionSummary(
 			AND session_id = $3 AND deleted_at IS NULL FOR UPDATE`,
 			s.tableSessionStates,
 		), key.AppName, key.UserID, key.SessionID).Scan(&stateRaw, &expiresAt); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("load session revision for summary: %w", errSessionNotFound)
+			}
 			return fmt.Errorf("load session revision for summary: %w", err)
 		}
 		var state SessionState

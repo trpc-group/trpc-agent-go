@@ -141,6 +141,49 @@ func TestListSessionsReloadsMetadataAfterGenerationChange(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestListSessionsOmitsSessionDeletedDuringReload(t *testing.T) {
+	s, mock, db := newTestServiceWithSliceSupport(t, nil)
+	defer db.Close()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+	createdAt := time.Now().Add(-time.Minute)
+	updatedAt := time.Now()
+	state1 := revisionState(t, key.SessionID, 1)
+	state2 := revisionState(t, key.SessionID, 2)
+
+	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WithArgs(key.AppName, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery("SELECT key, value FROM user_states").
+		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery("SELECT session_id, state").
+		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"session_id", "state", "created_at", "updated_at"},
+		).AddRow(key.SessionID, state1, createdAt, updatedAt))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT app_name, user_id, session_id, state FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"app_name", "user_id", "session_id", "state"},
+		).AddRow(key.AppName, key.UserID, key.SessionID, state2))
+	mock.ExpectCommit()
+	expectPGVectorRevisionGeneration(mock, key, state2)
+	mock.ExpectQuery("SELECT state, created_at").
+		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"state", "created_at", "updated_at"},
+		))
+
+	sessions, err := s.ListSessions(
+		context.Background(), userKey, session.WithListSessionOnlyMeta(),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, sessions)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func expectPGVectorRevisionGeneration(
 	mock sqlmock.Sqlmock,
 	key session.Key,
@@ -255,6 +298,10 @@ func TestRevisionFlushBarriers(t *testing.T) {
 	require.NoError(t, s.flushEventPersistence(context.Background(), key))
 	require.NoError(t, s.flushTrackPersistence(context.Background(), key))
 	s.opts.enableAsyncPersist = true
+	s.eventPairChans = nil
+	s.trackEventChans = nil
+	require.NoError(t, s.flushRevisionPersistence(context.Background(), key))
+	require.NoError(t, s.flushEventPersistence(context.Background(), key))
 
 	eventWaitCtx, cancelEventWait := context.WithCancel(context.Background())
 	s.eventPairChans = []chan *sessionEventPair{make(chan *sessionEventPair)}
@@ -290,6 +337,22 @@ func TestRevisionFlushBarriers(t *testing.T) {
 	s.trackEventChans = []chan *trackEventPair{make(chan *trackEventPair)}
 	assert.ErrorIs(
 		t, s.flushTrackPersistence(trackSendCtx, key), context.Canceled,
+	)
+
+	closedEventCh := make(chan *sessionEventPair)
+	close(closedEventCh)
+	s.eventPairChans = []chan *sessionEventPair{closedEventCh}
+	assert.ErrorIs(
+		t, s.flushEventPersistence(context.Background(), key),
+		errServiceClosing,
+	)
+
+	closedTrackCh := make(chan *trackEventPair)
+	close(closedTrackCh)
+	s.trackEventChans = []chan *trackEventPair{closedTrackCh}
+	assert.ErrorIs(
+		t, s.flushTrackPersistence(context.Background(), key),
+		errServiceClosing,
 	)
 }
 

@@ -18,6 +18,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
 
+var errAsyncPersistenceClosed = errors.New("redis session async persistence is closed")
+
 func (s *Service) prepareTurnStartWrite(
 	ctx context.Context,
 	storageType string,
@@ -161,14 +163,17 @@ func flushPairChannel(
 	channels []chan *sessionEventPair,
 	key session.Key,
 	barrier *sessionEventPair,
-) error {
+) (retErr error) {
 	if len(channels) == 0 {
 		return nil
 	}
+	defer recoverClosedChannelPanic(&retErr)
 	barrier.key = key
 	barrier.done = make(chan error)
 	barrier.barrierCtx = ctx
 	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
+	// Started workers remain alive until Close closes their channels, so a
+	// successful send always has a consumer which will complete the barrier.
 	select {
 	case channels[hash%len(channels)] <- barrier:
 	case <-ctx.Done():
@@ -186,14 +191,17 @@ func flushTrackPairChannel(
 	ctx context.Context,
 	channels []chan *trackEventPair,
 	key session.Key,
-) error {
+) (retErr error) {
 	if len(channels) == 0 {
 		return nil
 	}
+	defer recoverClosedChannelPanic(&retErr)
 	barrier := &trackEventPair{
 		key: key, done: make(chan error), barrierCtx: ctx,
 	}
 	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
+	// Started workers remain alive until Close closes their channels, so a
+	// successful send always has a consumer which will complete the barrier.
 	select {
 	case channels[hash%len(channels)] <- barrier:
 	case <-ctx.Done():
@@ -204,5 +212,16 @@ func flushTrackPairChannel(
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func recoverClosedChannelPanic(retErr *error) {
+	if recovered := recover(); recovered != nil {
+		if panicErr, ok := recovered.(error); ok &&
+			panicErr.Error() == "send on closed channel" {
+			*retErr = errAsyncPersistenceClosed
+			return
+		}
+		panic(recovered)
 	}
 }
