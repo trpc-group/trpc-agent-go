@@ -560,10 +560,8 @@ func TestWrapSessionService_RewindUnsupported(t *testing.T) {
 	t.Parallel()
 
 	wrapped := WrapSessionService(&recordingSessionService{})
-	rewinder, ok := wrapped.(session.RewindService)
-	require.True(t, ok)
-	_, err := rewinder.Rewind(context.Background(), session.RewindRequest{})
-	require.ErrorIs(t, err, session.ErrRewindUnsupported)
+	_, ok := wrapped.(session.RewindService)
+	require.False(t, ok)
 }
 
 func TestWrapSessionService_SyncsSummaryRuntimeState(t *testing.T) {

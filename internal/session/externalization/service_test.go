@@ -156,19 +156,8 @@ func TestRewindHydrationFailureCanBeConfirmedByRetry(t *testing.T) {
 
 func TestRewindUnsupportedWrappedService(t *testing.T) {
 	svc := Wrap(&unsupportedReplacementService{}, artifactmem.NewService(), Config{Enabled: true})
-	_, err := revision.Rewind(
-		context.Background(),
-		svc,
-		revision.RewindRequest{
-			Key: session.Key{
-				AppName: "app", UserID: "user", SessionID: "session",
-			},
-			TargetRequestID: "request", ExpectedHeadRequestID: "request",
-			IdempotencyKey: "replacement",
-		},
-	)
-	if !errors.Is(err, revision.ErrRewindUnsupported) {
-		t.Fatalf("Rewind() error = %v", err)
+	if _, ok := svc.(session.RewindService); ok {
+		t.Fatal("wrapped unsupported service implements RewindService")
 	}
 }
 
@@ -786,6 +775,9 @@ func TestAppendEventFailureKeepsSavedArtifactsWhenPersistenceUnknown(t *testing.
 func TestWrapPreservesOptionalInterfaces(t *testing.T) {
 	inner := sessionmem.NewSessionService()
 	wrapped := Wrap(inner, artifactmem.NewService(), Config{Enabled: true})
+	if _, ok := wrapped.(session.RewindService); !ok {
+		t.Fatal("wrapped inmemory service does not implement RewindService")
+	}
 	if _, ok := wrapped.(session.TrackService); !ok {
 		t.Fatal("wrapped inmemory service does not implement TrackService")
 	}
