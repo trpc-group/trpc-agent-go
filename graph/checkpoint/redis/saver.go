@@ -23,7 +23,6 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
 
@@ -313,127 +312,133 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 		return nil, errors.New("lineage_id is required")
 	}
 
-	checkpointIDs, err := s.getCheckpointIDs(ctx, lineageID, checkpointNS, filter)
-	if err != nil {
-		return nil, err
-	}
-
-	var tuples []*graph.CheckpointTuple
-	for _, checkpointID := range checkpointIDs {
-		cfg := graph.CreateCheckpointConfig(lineageID, checkpointID, checkpointNS)
-		tuple, err := s.GetTuple(ctx, cfg)
+	var targetNamespaces []string
+	if checkpointNS != "" {
+		targetNamespaces = []string{checkpointNS}
+	} else {
+		// All-namespace query: get all namespaces belonging to this lineage.
+		nsKey := lineageNSKey(lineageID)
+		namespaces, err := s.client.SMembers(ctx, nsKey).Result()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("get lineage namespaces: %w", err)
 		}
-		if tuple == nil {
-			continue
-		}
-
-		if filter != nil && len(filter.Metadata) > 0 {
-			if tuple.Metadata == nil || tuple.Metadata.Extra == nil {
-				continue
-			}
-			matches := true
-			for key, value := range filter.Metadata {
-				if tuple.Metadata.Extra[key] != value {
-					matches = false
-					break
-				}
-			}
-			if !matches {
-				continue
-			}
-		}
-		tuples = append(tuples, tuple)
-		if filter != nil && filter.Limit > 0 && len(tuples) >= filter.Limit {
-			break
+		if len(namespaces) == 0 {
+			targetNamespaces = []string{""}
+		} else {
+			targetNamespaces = namespaces
 		}
 	}
 
-	return tuples, nil
-}
-
-func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS string, filter *graph.CheckpointFilter) ([]string, error) {
-	key := checkpointTSKey(lineageID, checkpointNS)
-	var members []string
-	var err error
-
+	// If Before filter is specified, resolve the before cursor tuple.
+	var beforeTuple *graph.CheckpointTuple
+	var beforeScore int64
 	if filter != nil && filter.Before != nil {
 		beforeID := graph.GetCheckpointID(filter.Before)
 		if beforeID != "" {
-			beforeScore, found, err := s.getCheckpointScore(ctx, lineageID, checkpointNS, beforeID)
+			var found bool
+			for _, ns := range targetNamespaces {
+				score, err := s.client.ZScore(ctx, checkpointTSKey(lineageID, ns), beforeID).Result()
+				if err == nil {
+					tuple, err := s.GetTuple(ctx, graph.CreateCheckpointConfig(lineageID, beforeID, ns))
+					if err != nil {
+						return nil, err
+					}
+					if tuple != nil && tuple.Checkpoint != nil {
+						beforeTuple = tuple
+						beforeScore = int64(score)
+						found = true
+						break
+					}
+				} else if !errors.Is(err, redis.Nil) {
+					return nil, fmt.Errorf("get before cursor score: %w", err)
+				}
+			}
+			if !found {
+				// Cursor does not exist in the searched namespace(s).
+				// An unknown Before cursor must return an empty list rather than an unfiltered page.
+				return []*graph.CheckpointTuple{}, nil
+			}
+		}
+	}
+
+	var tuples []*graph.CheckpointTuple
+	for _, ns := range targetNamespaces {
+		key := checkpointTSKey(lineageID, ns)
+		var members []string
+		var err error
+		if beforeScore > 0 {
+			// Use inclusive score boundary to avoid dropping checkpoints that share
+			// the same floating-point score due to IEEE-754 precision limits on UnixNano.
+			// Exact nanosecond filtering is performed in-memory below.
+			members, err = s.client.ZRevRangeByScore(ctx, key, &redis.ZRangeBy{
+				Max: fmt.Sprintf("%d", beforeScore),
+				Min: "0",
+			}).Result()
+		} else {
+			members, err = s.client.ZRevRange(ctx, key, 0, -1).Result()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get checkpoint members: %w", err)
+		}
+
+		for _, checkpointID := range members {
+			if checkpointID == "" {
+				continue
+			}
+			cfg := graph.CreateCheckpointConfig(lineageID, checkpointID, ns)
+			tuple, err := s.GetTuple(ctx, cfg)
 			if err != nil {
 				return nil, err
 			}
-			if !found {
-				// Cursor does not exist in this namespace; an unknown Before cursor
-				// must never expand into an unfiltered page.
-				return []string{}, nil
+			if tuple == nil || tuple.Checkpoint == nil {
+				continue
 			}
-			if beforeScore > 0 {
-				members, err = s.client.ZRevRangeByScore(ctx, key, &redis.ZRangeBy{
-					Max: fmt.Sprintf("(%d", beforeScore),
-					Min: "0",
-				}).Result()
+
+			// Apply Before filter: exclude cursor itself and any checkpoints not strictly before cursor's timestamp.
+			if beforeTuple != nil {
+				if tuple.Checkpoint.ID == beforeTuple.Checkpoint.ID {
+					continue
+				}
+				if !tuple.Checkpoint.Timestamp.Before(beforeTuple.Checkpoint.Timestamp) {
+					continue
+				}
 			}
+
+			// Apply Metadata filter:
+			if filter != nil && len(filter.Metadata) > 0 {
+				if tuple.Metadata == nil || tuple.Metadata.Extra == nil {
+					continue
+				}
+				matches := true
+				for k, v := range filter.Metadata {
+					if tuple.Metadata.Extra[k] != v {
+						matches = false
+						break
+					}
+				}
+				if !matches {
+					continue
+				}
+			}
+
+			tuples = append(tuples, tuple)
 		}
 	}
 
-	if members == nil {
-		members, err = s.client.ZRevRange(ctx, key, 0, -1).Result()
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	var checkpointIDs []string
-	for _, id := range members {
-		if id == "" {
-			log.WarnfContext(
-				ctx,
-				"invalid checkpoint id format: %s",
-				id,
-			)
-			continue
+	// Sort results by timestamp (newest first). Use ID as tie-breaker for identical timestamps.
+	sort.Slice(tuples, func(i, j int) bool {
+		if tuples[i].Checkpoint.Timestamp.Equal(tuples[j].Checkpoint.Timestamp) {
+			return tuples[i].Checkpoint.ID > tuples[j].Checkpoint.ID
 		}
-		checkpointIDs = append(checkpointIDs, id)
+		return tuples[i].Checkpoint.Timestamp.After(tuples[j].Checkpoint.Timestamp)
+	})
+
+	// Apply limit after sorting across all searched namespaces.
+	if filter != nil && filter.Limit > 0 && len(tuples) > filter.Limit {
+		tuples = tuples[:filter.Limit]
 	}
 
-	return checkpointIDs, nil
-}
-
-func (s *Saver) getCheckpointScore(ctx context.Context, lineageID, checkpointNS, checkpointID string) (int64, bool, error) {
-	key := checkpointTSKey(lineageID, checkpointNS)
-	score, err := s.client.ZScore(ctx, key, checkpointID).Result()
-	if err == nil {
-		return int64(score), true, nil
-	}
-	if !errors.Is(err, redis.Nil) {
-		return 0, false, err
-	}
-	if checkpointNS != "" {
-		// Cursor not found in the named namespace.
-		return 0, false, nil
-	}
-
-	// Default namespace: search other namespaces in the lineage.
-	actualNS, err := s.findCheckpointNamespace(ctx, lineageID, checkpointID)
-	if err != nil {
-		return 0, false, err
-	}
-	if actualNS == "" {
-		// Cursor not found in any namespace.
-		return 0, false, nil
-	}
-
-	score, err = s.client.ZScore(ctx, checkpointTSKey(lineageID, actualNS), checkpointID).Result()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return 0, false, nil
-		}
-		return 0, false, err
-	}
-	return int64(score), true, nil
+	return tuples, nil
 }
 
 // Put stores the checkpoint and returns the updated config with checkpoint ID.
