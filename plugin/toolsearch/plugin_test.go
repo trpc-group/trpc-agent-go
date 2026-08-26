@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -1216,4 +1218,83 @@ func TestInvocationMode_DispatchToolCalls_CallToolRespectsPermissionFilter(t *te
 	require.True(t, ok)
 	assert.Equal(t, "error", m["status"])
 	assert.Contains(t, m["message"], "permission")
+}
+
+// latchingObjectingTool declines to share a turn and records, on the invocation
+// its Call is handed, that it ran. Parallel workers are handed a view that is
+// discarded afterwards, so the latch reaching the base invocation is what shows
+// the call ran sequentially.
+type latchingObjectingTool struct{ name string }
+
+func (l *latchingObjectingTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: l.name, Description: "objects to sharing its turn"}
+}
+
+func (l *latchingObjectingTool) Call(ctx context.Context, _ []byte) (any, error) {
+	if inv, ok := agent.InvocationFromContext(ctx); ok {
+		inv.SetState("latched_"+l.name, true)
+	}
+	return map[string]any{"ok": true}, nil
+}
+
+func (l *latchingObjectingTool) IsConcurrencySafe() bool { return false }
+
+// In dispatch mode the schedulers only ever see call_tool: deferred targets are
+// not in Request.Tools, and the target is resolved from tool_name after the
+// batch has been admitted. So an objecting deferred tool could be reached from
+// the parallel path unless call_tool carries the objection for it.
+//
+// call_tool objects exactly when a tool it can reach does, and a batch of two
+// call_tool invocations against an objecting deferred tool then runs
+// sequentially, which the latch on the base invocation shows.
+func TestInvocationMode_DispatchToolCalls_CallToolCarriesReachableObjections(t *testing.T) {
+	safeOnly := New(nil,
+		WithInvocationMode(DispatchToolCalls),
+		WithToolboxes([]Toolbox{{Name: "utils", Tools: []tool.Tool{newEchoTool("echo_tool")}}}),
+	)
+	require.NotNil(t, safeOnly.callTool)
+	assert.True(t, tool.IsConcurrencySafe(safeOnly.callTool),
+		"call_tool must stay admissible while nothing it can reach objects")
+
+	objecting := &latchingObjectingTool{name: "solo_tool"}
+	p := New(nil,
+		WithInvocationMode(DispatchToolCalls),
+		WithToolboxes([]Toolbox{{
+			Name:  "utils",
+			Tools: []tool.Tool{newEchoTool("echo_tool"), objecting},
+		}}),
+	)
+	require.False(t, tool.IsConcurrencySafe(p.callTool),
+		"call_tool must object on behalf of an objecting deferred tool")
+
+	// The request as beforeModel builds it: call_tool advertised, the deferred
+	// target hidden behind it.
+	ctx, inv := ctxWithInvocation()
+	callSearch(t, ctx, p, toolSearchInput{ToolNames: []string{"solo_tool"}})
+	req := &model.Request{Tools: map[string]tool.Tool{}}
+	_, err := p.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	callName := p.callTool.Declaration().Name
+	require.Contains(t, req.Tools, callName)
+	require.NotContains(t, req.Tools, "solo_tool",
+		"precondition: dispatch mode keeps the deferred target out of Request.Tools")
+
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{ID: "call-1", Function: model.FunctionDefinitionParam{
+				Name: callName, Arguments: []byte(`{"tool_name":"solo_tool","params":{}}`)}},
+			{ID: "call-2", Function: model.FunctionDefinitionParam{
+				Name: callName, Arguments: []byte(`{"tool_name":"solo_tool","params":{}}`)}},
+		},
+	}}}}
+	ch := make(chan *event.Event, 16)
+	processor.NewFunctionCallResponseProcessor(true, nil).ProcessResponse(ctx, inv, req, rsp, ch)
+	close(ch)
+	for range ch { //revive:disable-line:empty-block
+	}
+
+	latched, _ := agent.GetStateValue[bool](inv, "latched_solo_tool")
+	assert.True(t, latched,
+		"both dispatches must run against the base invocation, not a parallel worker's view")
 }

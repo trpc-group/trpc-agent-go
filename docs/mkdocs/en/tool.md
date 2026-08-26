@@ -2297,6 +2297,14 @@ ts := toolsearch.New(
 // model can build the params object for the following call_tool invocation.
 ```
 
+In this mode the parallel schedulers see `call_tool`, not the tool it will
+dispatch to: the target is resolved from `tool_name` only after the turn has
+been admitted. `call_tool` therefore
+[declines to share a turn](#declining-to-share-a-turn) whenever any tool it can
+reach — deferred or preset — declines, and stays admissible while none does, so
+a dispatch-mode turn keeps its parallelism unless an objecting tool is
+registered.
+
 ##### `WithToolPermissionFilter` Example
 
 Gate deferred tools per caller (e.g. by the authenticated user's RBAC role):

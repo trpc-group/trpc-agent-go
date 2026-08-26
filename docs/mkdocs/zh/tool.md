@@ -2077,6 +2077,12 @@ ts := toolsearch.New(
 // tool_search 的每条结果都会带上目标工具的 input_schema，供 call_tool 的 params 使用。
 ```
 
+在这种模式下，并行调度器看到的是 `call_tool`，而不是它最终派发到的工具：目标
+工具要等到本轮被放行之后才根据 `tool_name` 解析。因此只要 `call_tool` 能触达的
+任何工具（无论延迟还是 preset）拒绝与其他调用同轮执行，`call_tool` 就会代为拒绝
+（参见“拒绝与其他调用同轮执行”）；没有任何工具拒绝时它照常放行，所以除非注册了
+拒绝并发的工具，dispatch 模式的一轮仍保持并行。
+
 ##### `WithToolPermissionFilter` 示例
 
 按调用者维度过滤延迟工具（例如按登录用户的 RBAC 角色）：

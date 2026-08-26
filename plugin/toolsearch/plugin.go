@@ -278,10 +278,53 @@ func (p *Plugin) baseSearchDescription() string {
 	return toolSearchDescription
 }
 
+// callToolDispatcher is the call_tool entry under DispatchToolCalls.
+//
+// It embeds the function tool, keeping every optional interface that offers, and
+// answers the concurrency question itself. The parallel schedulers ask whatever
+// sits in Request.Tools, and in this mode that is call_tool: the target is
+// resolved from tool_name only after the batch has been admitted, so an
+// objecting deferred tool is never asked. The dispatcher therefore objects
+// whenever any tool it can reach objects — the conservative reading, since which
+// target a given call names is unknown at admission — and stays admissible while
+// none does, so a dispatch-mode turn keeps its parallelism in the common case.
+type callToolDispatcher struct {
+	*function.FunctionTool[callToolInput, any]
+	plugin *Plugin
+}
+
+// IsConcurrencySafe implements tool.ConcurrencyAware on behalf of every tool
+// call_tool can dispatch to.
+func (d *callToolDispatcher) IsConcurrencySafe() bool {
+	return !d.plugin.anyReachableToolObjects()
+}
+
+// anyReachableToolObjects reports whether any indexed tool — deferred or
+// preset, since call_tool resolves both — declines to share a turn. It reads the
+// current snapshot: MCP servers are materialized every turn before the model
+// runs, and a deferred tool must have been loaded by an earlier tool_search
+// before call_tool will dispatch to it, so the tools a call can reach are all
+// indexed by the time the batch is admitted.
+func (p *Plugin) anyReachableToolObjects() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, t := range p.toolsByName {
+		if !tool.IsConcurrencySafe(t) {
+			return true
+		}
+	}
+	return false
+}
+
 // createCallTool creates the call_tool function tool used to invoke deferred
 // tools loaded through tool_search. It is only injected when the invocation
 // mode is DispatchToolCalls.
 func (p *Plugin) createCallTool() tool.Tool {
+	return &callToolDispatcher{plugin: p, FunctionTool: p.createCallFunctionTool()}
+}
+
+// createCallFunctionTool builds the function tool callToolDispatcher wraps.
+func (p *Plugin) createCallFunctionTool() *function.FunctionTool[callToolInput, any] {
 	return function.NewFunctionTool(
 		p.callToolFn,
 		function.WithName(callToolToolName),
