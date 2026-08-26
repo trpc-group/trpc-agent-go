@@ -53,6 +53,23 @@ func TestNewCoordinatorLayout_UsesStaticExportOrder(t *testing.T) {
 	}, layout.MemberNodeIDs)
 }
 
+func TestNewCoordinatorLayout_HandlesEmptyAndNilMembers(t *testing.T) {
+	empty := NewCoordinatorLayout("workflow/team", nil)
+	require.Equal(t, "workflow/team/coordinator", empty.CoordinatorNodeID)
+	require.Empty(t, empty.MemberNodeIDs)
+	layout := NewCoordinatorLayout(
+		"workflow/team",
+		[]agent.Agent{
+			nil,
+			layoutAgent(""),
+		},
+	)
+	require.Equal(t, []string{
+		"workflow/team/_",
+		"workflow/team/_~2",
+	}, layout.MemberNodeIDs)
+}
+
 func TestMemberMountContextHelpers(t *testing.T) {
 	mount := MemberMount{
 		TraceNodeID:       "trace/team/member",
@@ -62,7 +79,24 @@ func TestMemberMountContextHelpers(t *testing.T) {
 	got, ok := MemberMountFromContext(ctx)
 	require.True(t, ok)
 	require.Equal(t, mount, got)
+	ctx = ContextWithMemberMount(nil, mount)
+	got, ok = MemberMountFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, mount, got)
+	ctx = ContextWithMemberMount(context.Background(), MemberMount{
+		TraceNodeID: "trace/team/member",
+	})
+	_, ok = MemberMountFromContext(ctx)
+	require.False(t, ok)
+	_, ok = MemberMountFromContext(context.WithValue(
+		context.Background(),
+		memberMountContextKey{},
+		MemberMount{TraceNodeID: "trace/team/member"},
+	))
+	require.False(t, ok)
 	_, ok = MemberMountFromContext(context.Background())
+	require.False(t, ok)
+	_, ok = MemberMountFromContext(nil)
 	require.False(t, ok)
 }
 

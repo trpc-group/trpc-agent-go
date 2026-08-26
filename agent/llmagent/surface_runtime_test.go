@@ -304,6 +304,57 @@ func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesTeamMemberStaticInvocation
 	)
 }
 
+func TestExecutionTraceNodeIDHelpers_GuardAndStaticChildBranches(t *testing.T) {
+	require.Empty(t, executionTraceSurfaceNodeID(nil))
+	require.Empty(t, executionTraceStepNodeID(nil))
+	empty := agent.NewInvocation()
+	require.Empty(t, executionTraceSurfaceNodeID(empty))
+	require.Empty(t, executionTraceStepNodeID(empty))
+	require.False(t, executionTraceNodeIsUnderParent(empty))
+	parent := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("workflow/classify"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	sameNodeChild := parent.Clone(
+		agent.WithInvocationTraceNodeID("workflow/classify"),
+	)
+	require.Empty(t, executionTraceSurfaceNodeID(sameNodeChild))
+	require.Empty(t, executionTraceStepNodeID(sameNodeChild))
+	staticChild := parent.Clone(
+		agent.WithInvocationTraceNodeID("workflow/classify/router"),
+	)
+	require.Equal(t, "workflow/classify/router", executionTraceSurfaceNodeID(staticChild))
+	require.Equal(t, "workflow/classify/router", executionTraceStepNodeID(staticChild))
+	require.True(t, executionTraceNodeIsUnderParent(staticChild))
+	parentWithoutNode := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	childWithoutParentNode := parentWithoutNode.Clone(
+		agent.WithInvocationTraceNodeID("workflow/classify/router"),
+	)
+	require.False(t, executionTraceNodeIsUnderParent(childWithoutParentNode))
+	memberChild := parent.Clone(
+		agent.WithInvocationTraceNodeID("workflow/team/member"),
+	)
+	agent.SetInvocationTeamMemberTraceRoot(memberChild, "workflow/team")
+	require.True(t, executionTraceNodeIsUnderParent(memberChild))
+	require.Equal(t, "workflow/team/member", executionTraceStepNodeID(memberChild))
+	memberRootChild := parent.Clone(
+		agent.WithInvocationTraceNodeID("workflow/team"),
+	)
+	agent.SetInvocationTeamMemberTraceRoot(memberRootChild, "workflow/team")
+	require.True(t, executionTraceNodeIsUnderParent(memberRootChild))
+	otherMemberChild := parent.Clone(
+		agent.WithInvocationTraceNodeID("workflow/other/member"),
+	)
+	agent.SetInvocationTeamMemberTraceRoot(otherMemberChild, "workflow/team")
+	require.False(t, executionTraceNodeIsUnderParent(otherMemberChild))
+}
+
 func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesFilteredToolNames(t *testing.T) {
 	agt := New(
 		"test-agent",
