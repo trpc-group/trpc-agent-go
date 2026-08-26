@@ -1686,10 +1686,10 @@ func TestList_BeforeCursorHashMissing_ExcludesNewerSameScore(t *testing.T) {
 	assert.Empty(t, got, "a same-score checkpoint newer than the cursor must not be returned when the cursor hash is missing")
 }
 
-// TestFilterBeforeIDs_DropsCandidatesWithUnknownTS verifies that candidates
-// without hash data or with a malformed timestamp are dropped by exact
-// timestamp filtering instead of misordering the result.
-func TestFilterBeforeIDs_DropsCandidatesWithUnknownTS(t *testing.T) {
+// TestFilterBeforeIDs_SkipsCandidateWithMissingHash verifies that a candidate
+// whose checkpoint hash data is missing (redis.Nil) is dropped by exact
+// timestamp filtering, while candidates with valid timestamps are kept.
+func TestFilterBeforeIDs_SkipsCandidateWithMissingHash(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -1723,19 +1723,100 @@ func TestFilterBeforeIDs_DropsCandidatesWithUnknownTS(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// A ZSET-only member without hash data and a member with a malformed
-	// timestamp must be dropped by exact-timestamp filtering.
+	// A ZSET-only member without hash data must be dropped by exact-timestamp
+	// filtering; the valid older checkpoint must survive.
 	require.NoError(t, saver.client.ZAdd(ctx, checkpointTSKey(lineageID, ns),
 		redis.Z{Score: 1_500_000_000, Member: "zset-only"},
+	).Err())
+
+	got, err := saver.filterBeforeIDs(ctx, lineageID, ns, graph.GetCheckpointID(cursorCfg),
+		[]string{"zset-only", graph.GetCheckpointID(olderCfg)})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, graph.GetCheckpointID(olderCfg), got[0])
+}
+
+// TestFilterBeforeIDs_MalformedTimestamp_ReturnsError verifies that a malformed
+// timestamp in a candidate's checkpoint hash surfaces a parse error instead of
+// silently dropping the checkpoint from the result.
+func TestFilterBeforeIDs_MalformedTimestamp_ReturnsError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	const (
+		lineageID = "ln-fbf-malformed-ts"
+		ns        = "nsA"
+	)
+
+	cursor := graph.NewCheckpoint(map[string]any{"i": 2}, map[string]int64{"i": 2}, nil)
+	cursor.Timestamp = time.Unix(0, 2_000_000_000)
+	cursorCfg, err := saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", ns),
+		Checkpoint:  cursor,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 2),
+		NewVersions: map[string]int64{"i": 2},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, saver.client.ZAdd(ctx, checkpointTSKey(lineageID, ns),
 		redis.Z{Score: 1_400_000_000, Member: "bad-ts"},
 	).Err())
 	require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, ns, "bad-ts"), tsKey, "not-a-number").Err())
 
 	got, err := saver.filterBeforeIDs(ctx, lineageID, ns, graph.GetCheckpointID(cursorCfg),
-		[]string{"zset-only", "bad-ts", graph.GetCheckpointID(olderCfg)})
+		[]string{"bad-ts"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse timestamp")
+	assert.Nil(t, got)
+}
+
+// TestFilterBeforeIDs_PerCommandError_ReturnsError verifies that a non-Nil
+// per-command error from a later HGET propagates even when an earlier candidate
+// is missing (redis.Nil), so List never returns silently incomplete history.
+func TestFilterBeforeIDs_PerCommandError_ReturnsError(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
 	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, graph.GetCheckpointID(olderCfg), got[0])
+	defer saver.Close()
+
+	ctx := context.Background()
+	const (
+		lineageID = "ln-fbf-per-cmd-err"
+		ns        = "nsA"
+	)
+
+	cursor := graph.NewCheckpoint(map[string]any{"i": 2}, map[string]int64{"i": 2}, nil)
+	cursor.Timestamp = time.Unix(0, 2_000_000_000)
+	cursorCfg, err := saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", ns),
+		Checkpoint:  cursor,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 2),
+		NewVersions: map[string]int64{"i": 2},
+	})
+	require.NoError(t, err)
+
+	// First candidate has no hash data (HGET returns redis.Nil, which the
+	// pipeline reports first); the second candidate's key is a plain string,
+	// so its HGET fails with WRONGTYPE. The WRONGTYPE error must surface
+	// instead of the history being silently truncated.
+	require.NoError(t, saver.client.ZAdd(ctx, checkpointTSKey(lineageID, ns),
+		redis.Z{Score: 1_500_000_000, Member: "zset-only"},
+		redis.Z{Score: 1_400_000_000, Member: "wrong-type"},
+	).Err())
+	require.NoError(t, saver.client.Set(ctx, checkpointKey(lineageID, ns, "wrong-type"), "plain-string", 0).Err())
+
+	got, err := saver.filterBeforeIDs(ctx, lineageID, ns, graph.GetCheckpointID(cursorCfg),
+		[]string{"zset-only", "wrong-type"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "WRONGTYPE")
+	assert.Nil(t, got)
 }
 
 // TestGetCheckpointIDs_CommandErrors exercises the Redis error paths of the

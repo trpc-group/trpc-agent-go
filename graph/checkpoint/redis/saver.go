@@ -485,13 +485,22 @@ func (s *Saver) filterBeforeIDs(ctx context.Context, lineageID, checkpointNS, be
 		// The pipeline only queues HGET commands, so each result is a
 		// *redis.StringCmd.
 		cmd := cmds[i].(*redis.StringCmd)
-		ts := int64(0)
-		if cmd.Err() == nil {
-			if ts, err = strconv.ParseInt(cmd.Val(), 10, 64); err != nil {
-				// Treat malformed timestamps as unknown and drop the
-				// candidate rather than misordering the result.
-				ts = 0
+		if err := cmd.Err(); err != nil {
+			// redis.Nil means the candidate's hash data is missing (e.g. its
+			// checkpoint expired while the ZSET entry remains); drop the
+			// candidate. Any other per-command error aborts the filter so
+			// List never returns silently incomplete history.
+			if errors.Is(err, redis.Nil) {
+				continue
 			}
+			return nil, err
+		}
+		ts, err := strconv.ParseInt(cmd.Val(), 10, 64)
+		if err != nil {
+			// A malformed timestamp is corrupted stored data; surface it
+			// like getCheckpointTS does instead of silently dropping the
+			// checkpoint from the result.
+			return nil, fmt.Errorf("parse timestamp: %w", err)
 		}
 		if ts > 0 && ts < beforeTS {
 			entries = append(entries, tsEntry{id: id, ts: ts})
