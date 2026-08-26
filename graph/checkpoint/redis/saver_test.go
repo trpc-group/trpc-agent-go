@@ -1595,10 +1595,10 @@ func TestGetCheckpointTS_Malformed_ReturnsError(t *testing.T) {
 	assert.Zero(t, ts)
 }
 
-// TestFilterBeforeIDs_CursorTSUnavailable_FallsBack verifies that exact
-// timestamp filtering falls back to the score-based result when the cursor's
-// checkpoint hash data is unavailable.
-func TestFilterBeforeIDs_CursorTSUnavailable_FallsBack(t *testing.T) {
+// TestFilterBeforeIDs_CursorTSUnavailable_ReturnsEmpty verifies that exact
+// timestamp filtering returns no candidates when the cursor's checkpoint hash
+// data is unavailable, keeping Before strict like the inmemory saver.
+func TestFilterBeforeIDs_CursorTSUnavailable_ReturnsEmpty(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -1633,7 +1633,57 @@ func TestFilterBeforeIDs_CursorTSUnavailable_FallsBack(t *testing.T) {
 
 	got, err := saver.filterBeforeIDs(ctx, lineageID, ns, "cursor-only", ids)
 	require.NoError(t, err)
-	assert.Equal(t, ids, got, "cursor with unavailable hash data must fall back to the score-based result")
+	assert.Empty(t, got, "cursor with unavailable hash data must yield no candidates to keep Before strict")
+}
+
+// TestList_BeforeCursorHashMissing_ExcludesNewerSameScore verifies end to end
+// that a same-score checkpoint newer than the cursor is not returned when the
+// cursor's hash data is missing (e.g. expiry skew), preserving strict Before
+// semantics.
+func TestList_BeforeCursorHashMissing_ExcludesNewerSameScore(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	const (
+		lineageID = "ln-before-cursor-missing"
+		ns        = "nsA"
+	)
+
+	// Cursor at (1<<60)+1 and a newer checkpoint at (1<<60)+2: both round to
+	// the same Redis ZSET score, so only the exact hash timestamps can tell
+	// them apart.
+	cursor := graph.NewCheckpoint(map[string]any{"i": 1}, map[string]int64{"i": 1}, nil)
+	cursor.Timestamp = time.Unix(0, (1<<60)+1)
+	curCfg, err := saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", ns),
+		Checkpoint:  cursor,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 1),
+		NewVersions: map[string]int64{"i": 1},
+	})
+	require.NoError(t, err)
+
+	newer := graph.NewCheckpoint(map[string]any{"i": 2}, map[string]int64{"i": 2}, nil)
+	newer.Timestamp = time.Unix(0, (1<<60)+2)
+	_, err = saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", ns),
+		Checkpoint:  newer,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 2),
+		NewVersions: map[string]int64{"i": 2},
+	})
+	require.NoError(t, err)
+
+	// Simulate expiry skew: the cursor hash is gone while its ZSET member
+	// and the newer checkpoint remain.
+	require.NoError(t, saver.client.Del(ctx, checkpointKey(lineageID, ns, graph.GetCheckpointID(curCfg))).Err())
+
+	got, err := saver.List(ctx, graph.CreateCheckpointConfig(lineageID, "", ns), &graph.CheckpointFilter{Before: curCfg})
+	require.NoError(t, err)
+	assert.Empty(t, got, "a same-score checkpoint newer than the cursor must not be returned when the cursor hash is missing")
 }
 
 // TestFilterBeforeIDs_DropsCandidatesWithUnknownTS verifies that candidates

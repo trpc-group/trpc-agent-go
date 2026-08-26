@@ -445,8 +445,8 @@ func (s *Saver) getCheckpointScore(ctx context.Context, lineageID, checkpointNS,
 // orders them by their exact nanosecond timestamps, newest first. Redis ZSET
 // scores are doubles, so checkpoints whose timestamps exceed 2^53 can share the
 // cursor's score; the exact timestamp stored in each checkpoint hash decides
-// membership and order. If the cursor's exact timestamp is unavailable, the
-// score-based result is returned unchanged.
+// membership and order. If the cursor's exact timestamp is unavailable, no
+// checkpoints are returned, keeping Before strict like the inmemory saver.
 func (s *Saver) filterBeforeIDs(ctx context.Context, lineageID, checkpointNS, beforeID string, ids []string) ([]string, error) {
 	if len(ids) == 0 {
 		return ids, nil
@@ -456,8 +456,10 @@ func (s *Saver) filterBeforeIDs(ctx context.Context, lineageID, checkpointNS, be
 		return nil, err
 	}
 	if beforeTS <= 0 {
-		// Cursor hash data is unavailable; keep the score-based result.
-		return ids, nil
+		// The cursor checkpoint data is unavailable, so strict Before
+		// semantics cannot be guaranteed for same-score candidates. Return
+		// nothing instead of risking checkpoints at or after the cursor.
+		return nil, nil
 	}
 
 	cmds, err := s.client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
