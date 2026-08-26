@@ -556,6 +556,14 @@ func isToolResultMessage(message anthropic.MessageParam) bool {
 // CacheControl costs one, since the API answers it with a marker of its own — and
 // on a message chosen from the finalized list.
 //
+// Top-level CacheControl also decides the marker's TTL. The API's own marker goes
+// on the last cacheable block, and it rejects a request whose TTLs shorten and
+// then lengthen again along the prompt, so a default five-minute marker placed
+// ahead of a one-hour automatic one is a 400. Matching the caller's TTL keeps the
+// ordering valid. When the tool result is itself the last cacheable block, the
+// automatic marker already covers it and nothing is placed: an explicit marker on
+// the same block would be redundant at best and, with a different TTL, rejected.
+//
 // This is the conditional breakpoint because losing it costs a delay, not a cache
 // entry: the next request's last-assistant breakpoint writes these results anyway.
 // A caller that spends the whole budget itself is still over it; forcing a fit
@@ -573,7 +581,14 @@ func (m *Model) applyToolResultCacheBreakpoint(chatRequest *anthropic.MessageNew
 	if idx < 0 {
 		return
 	}
-	chatRequest.Messages = m.applyCacheControlToMessages(chatRequest.Messages, idx)
+	cacheControl := anthropic.NewCacheControlEphemeralParam()
+	if !param.IsOmitted(chatRequest.CacheControl) {
+		if idx == len(chatRequest.Messages)-1 {
+			return
+		}
+		cacheControl = chatRequest.CacheControl
+	}
+	chatRequest.Messages = m.applyCacheControlToMessagesWith(chatRequest.Messages, idx, cacheControl)
 }
 
 // countCacheBreakpoints counts the cache_control markers the request will be sent
@@ -606,6 +621,16 @@ func countCacheBreakpoints(chatRequest *anthropic.MessageNewParams) int {
 // applyCacheControlToMessages adds cache control to a specific message.
 // This is used for multi-turn conversation caching.
 func (m *Model) applyCacheControlToMessages(messages []anthropic.MessageParam, index int) []anthropic.MessageParam {
+	return m.applyCacheControlToMessagesWith(messages, index, anthropic.NewCacheControlEphemeralParam())
+}
+
+// applyCacheControlToMessagesWith is applyCacheControlToMessages with the marker
+// spelled out, for a breakpoint whose TTL has to agree with one the caller placed.
+func (m *Model) applyCacheControlToMessagesWith(
+	messages []anthropic.MessageParam,
+	index int,
+	cacheControl anthropic.CacheControlEphemeralParam,
+) []anthropic.MessageParam {
 	if index < 0 || index >= len(messages) {
 		return messages
 	}
@@ -625,17 +650,17 @@ func (m *Model) applyCacheControlToMessages(messages []anthropic.MessageParam, i
 		// Apply cache control based on content type
 		if content.OfText != nil {
 			newContent := *content.OfText
-			newContent.CacheControl = anthropic.NewCacheControlEphemeralParam()
+			newContent.CacheControl = cacheControl
 			msg.Content[i] = anthropic.ContentBlockParamUnion{OfText: &newContent}
 			cacheApplied = true
 		} else if content.OfToolResult != nil {
 			newContent := *content.OfToolResult
-			newContent.CacheControl = anthropic.NewCacheControlEphemeralParam()
+			newContent.CacheControl = cacheControl
 			msg.Content[i] = anthropic.ContentBlockParamUnion{OfToolResult: &newContent}
 			cacheApplied = true
 		} else if content.OfToolUse != nil {
 			newContent := *content.OfToolUse
-			newContent.CacheControl = anthropic.NewCacheControlEphemeralParam()
+			newContent.CacheControl = cacheControl
 			msg.Content[i] = anthropic.ContentBlockParamUnion{OfToolUse: &newContent}
 			cacheApplied = true
 		}

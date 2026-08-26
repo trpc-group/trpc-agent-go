@@ -4052,6 +4052,90 @@ func TestGenerateContent_ToolResultBreakpointFollowsTheCallback(t *testing.T) {
 	}
 }
 
+// A callback that configures one-hour caching — the last-assistant marker
+// aligned to 1h and top-level CacheControl set to 1h — must not have a
+// five-minute marker slipped in behind it.
+//
+// The API places the automatic marker on the last cacheable block and rejects
+// TTLs that shorten and then lengthen again, so the tool-result marker has to
+// carry the caller's TTL when it precedes the automatic one, and has to stay away
+// entirely when the tool result *is* the last cacheable block: the automatic
+// marker already covers it, and a second, shorter one on the same block is a 400.
+func TestGenerateContent_ToolResultBreakpointMatchesTheCallersTTL(t *testing.T) {
+	oneHour := anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTLTTL1h}
+	// configureOneHour is the caller's side: the assistant marker the model
+	// placed is aligned to 1h, and automatic caching is enabled at 1h.
+	configureOneHour := func(req *anthropic.MessageNewParams) {
+		assistant := req.Messages[1].Content
+		last := assistant[len(assistant)-1].OfToolUse
+		require.NotNil(t, last)
+		last.CacheControl = oneHour
+		req.CacheControl = oneHour
+	}
+	// A turn that ends on its tool output, with no per-request note after it.
+	finalToolResult := toolResultTurnMessages()[:5]
+
+	tests := []struct {
+		name     string
+		messages []model.Message
+		mutate   func(*anthropic.MessageNewParams)
+		// wantMarked says whether the tool result may carry a marker at all;
+		// wantTTL is the TTL it must then have, "" being the default.
+		wantMarked      bool
+		wantTTL         anthropic.CacheControlEphemeralTTL
+		wantBreakpoints int
+	}{
+		{
+			name:            "the marker ahead of the automatic one matches its TTL",
+			messages:        toolResultTurnMessages(),
+			mutate:          configureOneHour,
+			wantMarked:      true,
+			wantTTL:         anthropic.CacheControlEphemeralTTLTTL1h,
+			wantBreakpoints: 3,
+		},
+		{
+			name:            "the automatic marker on the final tool result is left alone",
+			messages:        finalToolResult,
+			mutate:          configureOneHour,
+			wantMarked:      false,
+			wantBreakpoints: 2,
+		},
+		{
+			// Without automatic caching there is nothing after the marker for
+			// its TTL to conflict with, so the default is still the default.
+			name:     "no automatic marker keeps the default TTL",
+			messages: toolResultTurnMessages(),
+			mutate: func(req *anthropic.MessageNewParams) {
+				assistant := req.Messages[1].Content
+				assistant[len(assistant)-1].OfToolUse.CacheControl = oneHour
+			},
+			wantMarked:      true,
+			wantTTL:         "",
+			wantBreakpoints: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := captureFinalizedRequest(t,
+				&model.Request{Messages: tt.messages, Tools: readTool()},
+				tt.mutate, WithCacheMessages(true))
+
+			toolResult := got.Messages[2].Content
+			marker := toolResult[len(toolResult)-1].OfToolResult.CacheControl
+			if !tt.wantMarked {
+				assert.True(t, param.IsOmitted(marker),
+					"the automatic marker already covers the final tool result")
+			} else {
+				require.False(t, param.IsOmitted(marker), "the tool result carries the marker")
+				assert.Equal(t, tt.wantTTL, marker.TTL,
+					"the marker's TTL must agree with what follows it")
+			}
+			assert.Equal(t, tt.wantBreakpoints, countCacheBreakpoints(got))
+		})
+	}
+}
+
 // The edge of that guarantee, and the boundary is deliberate.
 //
 // A callback adding two markers of its own is over the limit on its own
