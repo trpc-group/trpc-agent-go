@@ -907,6 +907,14 @@ func TestWrapOptionalInterfaceCombinationMethods(t *testing.T) {
 			},
 		},
 		{
+			name:      "track",
+			wantTrack: true,
+			inner: &trackOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{},
+			},
+		},
+		{
 			name:       "search window track",
 			wantSearch: true,
 			wantWindow: true,
@@ -1034,6 +1042,55 @@ func TestWrapOptionalInterfaceCombinationMethods(t *testing.T) {
 				if result == nil || result.Track != "trace" {
 					t.Fatalf("GetTrackEvents() = %#v, want trace track", result)
 				}
+			}
+
+			base := &Service{
+				Service:         tt.inner,
+				artifactService: artifactmem.NewService(),
+				cfg:             Config{Enabled: true},
+			}
+			rewindBackend := sessionmem.NewSessionService()
+			forwarder := &rewindForwarder{
+				service:  base,
+				rewinder: rewindBackend,
+			}
+			for _, withStateInitialization := range []bool{false, true} {
+				name := "with rewind"
+				if withStateInitialization {
+					name += " and state initialization"
+				}
+				t.Run(name, func(t *testing.T) {
+					wrapped := wrapExistingOptionalInterfaces(base, tt.inner)
+					if withStateInitialization {
+						wrapped = wrapStateInitializationInterface(
+							wrapped,
+							rewindBackend,
+						)
+					}
+					wrapped = wrapRewindInterface(wrapped, forwarder)
+					if _, ok := wrapped.(session.RewindService); !ok {
+						t.Fatal("wrapped service does not implement RewindService")
+					}
+					if _, ok := wrapped.(session.StateInitializationService); ok != withStateInitialization {
+						t.Fatalf(
+							"StateInitializationService ok = %v, want %v",
+							ok,
+							withStateInitialization,
+						)
+					}
+					if _, ok := wrapped.(session.SearchableService); ok != tt.wantSearch {
+						t.Fatalf("SearchableService ok = %v, want %v", ok, tt.wantSearch)
+					}
+					if _, ok := wrapped.(session.WindowService); ok != tt.wantWindow {
+						t.Fatalf("WindowService ok = %v, want %v", ok, tt.wantWindow)
+					}
+					if _, ok := wrapped.(session.TrackService); ok != tt.wantTrack {
+						t.Fatalf("TrackService ok = %v, want %v", ok, tt.wantTrack)
+					}
+					if _, ok := wrapped.(trackEventReader); ok != tt.wantReader {
+						t.Fatalf("trackEventReader ok = %v, want %v", ok, tt.wantReader)
+					}
+				})
 			}
 		})
 	}
@@ -1491,6 +1548,21 @@ func (s *windowTrackOnlyService) GetEventWindow(
 }
 
 func (s *windowTrackOnlyService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	event *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	s.behavior.trackCalled = true
+	return nil
+}
+
+type trackOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *trackOnlyService) AppendTrackEvent(
 	ctx context.Context,
 	sess *session.Session,
 	event *session.TrackEvent,
