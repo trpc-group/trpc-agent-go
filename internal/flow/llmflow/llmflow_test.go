@@ -467,6 +467,19 @@ func TestCreateLLMResponseEvent_LongRunningIDs(t *testing.T) {
 	require.Contains(t, evt.LongRunningToolIDs, "x")
 }
 
+func TestCreateLLMResponseEvent_PreservesPublishedCompletedResponse(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation()
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Content: "published response",
+	}}}}
+
+	evt := f.createLLMResponseEvent(inv, inv, rsp, &model.Request{})
+	rsp.Choices[0].Message.Content = "mutated after publication"
+
+	require.Equal(t, "published response", evt.Response.Choices[0].Message.Content)
+}
+
 func TestMaybeConsumeQueuedUserMessages_NoQueue(t *testing.T) {
 	f := New(nil, nil, Options{})
 	inv := agent.NewInvocation()

@@ -1321,10 +1321,14 @@ func (f *Flow) createLLMResponseEvent(
 		invocationID = eventInvocation.InvocationID
 		agentName = eventInvocation.AgentName
 	}
+	eventResponse := response
+	if !response.IsPartial {
+		eventResponse = response.Clone()
+	}
 	llmResponseEvent := event.New(
 		invocationID,
 		agentName,
-		event.WithResponse(response),
+		event.WithResponse(eventResponse),
 	)
 	applyPartialEventMetadataOverrides(
 		llmResponseEvent,
