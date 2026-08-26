@@ -1000,6 +1000,68 @@ func TestRedis_List_DefaultNamespace_WithBeforeAndLimit(t *testing.T) {
 	assert.Equal(t, ck2.ID, tuplesLimit[0].Checkpoint.ID, "expected limit=1 to return ck2 (newest before ck3)")
 }
 
+func TestRedis_List_UnknownBeforeCursor_NamedNamespace_ReturnsEmpty(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	lineageID := "ln-unknown-cursor-ns"
+
+	ck1 := graph.NewCheckpoint(map[string]any{"i": 1}, map[string]int64{"i": 1}, nil)
+	_, err = saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", "nsA"),
+		Checkpoint:  ck1,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0),
+		NewVersions: map[string]int64{"i": 1},
+	})
+	require.NoError(t, err)
+
+	nonExistentID := "00000000-0000-0000-0000-000000000000"
+	cfgNsA := graph.CreateCheckpointConfig(lineageID, "", "nsA")
+	filter := graph.NewCheckpointFilter().
+		WithBefore(graph.CreateCheckpointConfig(lineageID, nonExistentID, "nsA")).
+		WithLimit(1)
+
+	tuples, err := saver.List(ctx, cfgNsA, filter)
+	require.NoError(t, err)
+	assert.Empty(t, tuples, "unknown Before cursor in named namespace must return empty list, not an unfiltered page")
+}
+
+func TestRedis_List_UnknownBeforeCursor_DefaultNamespace_ReturnsEmpty(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	lineageID := "ln-unknown-cursor-default"
+
+	ck1 := graph.NewCheckpoint(map[string]any{"i": 1}, map[string]int64{"i": 1}, nil)
+	_, err = saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", ""),
+		Checkpoint:  ck1,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0),
+		NewVersions: map[string]int64{"i": 1},
+	})
+	require.NoError(t, err)
+
+	nonExistentID := "00000000-0000-0000-0000-000000000001"
+	cfgDefault := graph.CreateCheckpointConfig(lineageID, "", "")
+	filter := graph.NewCheckpointFilter().
+		WithBefore(graph.CreateCheckpointConfig(lineageID, nonExistentID, "")).
+		WithLimit(1)
+
+	tuples, err := saver.List(ctx, cfgDefault, filter)
+	require.NoError(t, err)
+	assert.Empty(t, tuples, "unknown Before cursor in default namespace must return empty list")
+}
+
 func TestRedis_List_NamespaceNotExists_ReturnsEmpty(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()

@@ -361,9 +361,14 @@ func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS st
 	if filter != nil && filter.Before != nil {
 		beforeID := graph.GetCheckpointID(filter.Before)
 		if beforeID != "" {
-			beforeScore, err := s.getCheckpointScore(ctx, lineageID, checkpointNS, beforeID)
+			beforeScore, found, err := s.getCheckpointScore(ctx, lineageID, checkpointNS, beforeID)
 			if err != nil {
 				return nil, err
+			}
+			if !found {
+				// Cursor does not exist in this namespace; an unknown Before cursor
+				// must never expand into an unfiltered page.
+				return []string{}, nil
 			}
 			if beforeScore > 0 {
 				members, err = s.client.ZRevRangeByScore(ctx, key, &redis.ZRangeBy{
@@ -397,36 +402,38 @@ func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS st
 	return checkpointIDs, nil
 }
 
-func (s *Saver) getCheckpointScore(ctx context.Context, lineageID, checkpointNS, checkpointID string) (int64, error) {
+func (s *Saver) getCheckpointScore(ctx context.Context, lineageID, checkpointNS, checkpointID string) (int64, bool, error) {
 	key := checkpointTSKey(lineageID, checkpointNS)
 	score, err := s.client.ZScore(ctx, key, checkpointID).Result()
 	if err == nil {
-		return int64(score), nil
+		return int64(score), true, nil
 	}
 	if !errors.Is(err, redis.Nil) {
-		return 0, err
+		return 0, false, err
 	}
 	if checkpointNS != "" {
-		return 0, nil
+		// Cursor not found in the named namespace.
+		return 0, false, nil
 	}
 
-	// If not found in default namespace, search other namespaces in the lineage
+	// Default namespace: search other namespaces in the lineage.
 	actualNS, err := s.findCheckpointNamespace(ctx, lineageID, checkpointID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if actualNS == "" {
-		return 0, nil
+		// Cursor not found in any namespace.
+		return 0, false, nil
 	}
 
 	score, err = s.client.ZScore(ctx, checkpointTSKey(lineageID, actualNS), checkpointID).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return 0, nil
+			return 0, false, nil
 		}
-		return 0, err
+		return 0, false, err
 	}
-	return int64(score), nil
+	return int64(score), true, nil
 }
 
 // Put stores the checkpoint and returns the updated config with checkpoint ID.
