@@ -2911,10 +2911,13 @@ sequential, rather than splitting the turn into parallel and serial runs. This
 preserves the ordering the model asked for without introducing a second
 execution schedule.
 
-Returning `true`, or not implementing the interface at all, raises no
-objection: it is the default, and it promises nothing about any specific
-sibling. The framework never infers an objection from `ToolMetadata`, so an
-existing tool that publishes metadata keeps the scheduling it has today.
+Returning `true` is a guarantee: the tool can run at the same time as any other
+call in its turn, other calls to itself included, which is why `tool.MetadataOf`
+reports it as `ConcurrencySafe`. Not implementing the interface at all raises
+no objection and promises nothing — it is the default, and `tool.MetadataOf`
+reports nothing for it. The framework never infers an objection from
+`ToolMetadata`, so an existing tool that publishes metadata keeps the
+scheduling it has today.
 
 When parallel tools are enabled and any available tool objects, **LLMAgent**
 also tells the model, appending a short notice to the system prompt that names

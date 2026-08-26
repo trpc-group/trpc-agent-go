@@ -82,8 +82,11 @@ type declareBlockerTool struct {
 	enforcer    *Enforcer
 }
 
-// Compile-time interface assertion.
-var _ tool.CallableTool = (*declareBlockerTool)(nil)
+// Compile-time interface assertions.
+var (
+	_ tool.CallableTool     = (*declareBlockerTool)(nil)
+	_ tool.ConcurrencyAware = (*declareBlockerTool)(nil)
+)
 
 func newDeclareBlockerTool(name, description string, e *Enforcer) *declareBlockerTool {
 	if name == "" {
@@ -166,6 +169,19 @@ func (t *declareBlockerTool) Call(ctx context.Context, jsonArgs []byte) (any, er
 	}
 	return declareBlockerOutput{OK: true, Reason: reason}, nil
 }
+
+// IsConcurrencySafe reports false: todo_declare_blocker must not
+// run on the parallel path.
+//
+// Call latches the declaration on the invocation it is handed.
+// Parallel execution gives each call a view whose state is cloned
+// and never synced back, so in a mixed batch the latch would land
+// on a copy that is discarded when the worker returns: the tool
+// reports ok, and the enforcer's AfterModel, reading the base
+// invocation, keeps blocking the final response it was just told
+// to allow. Objecting keeps the whole turn sequential, so Call
+// receives the invocation AfterModel reads.
+func (t *declareBlockerTool) IsConcurrencySafe() bool { return false }
 
 // decodeDeclareBlockerInput is split out so tests can reuse the
 // parser without going through Call.
