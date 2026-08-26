@@ -64,13 +64,15 @@ const (
 	interruptedAssistantFinishReason   = "cancelled"
 	interruptedAssistantExtensionKey   = "trpc_agent.runner.interrupted_assistant"
 	cancelledSessionPersistenceTimeout = time.Second
-
-	// cancelledAgentStreamCloseTimeout bounds how long the event loop waits
-	// for the agent event stream to close before running completion
-	// callbacks after an early cancellation, so agents that ignore
-	// cancellation cannot hang the runner.
-	cancelledAgentStreamCloseTimeout = 5 * time.Second
 )
+
+// cancelledAgentStreamCloseTimeout bounds how long the event loop waits for the
+// agent event stream to close before emitting the completion event after an
+// early cancellation. Agents that do not close their stream within this window
+// get degraded completion callbacks: completion plugins are skipped instead of
+// receiving the live invocation while the agent goroutine may still mutate it.
+// It is a variable so tests can shrink it.
+var cancelledAgentStreamCloseTimeout = 5 * time.Second
 
 var (
 	// ErrRunNotFound indicates that the request ID is not active anymore.
@@ -1366,7 +1368,12 @@ type eventLoopContext struct {
 	// completion path uses it instead of reading invocation.AgentName, which
 	// the agent goroutine mutates asynchronously (setupInvocation), so that
 	// cancellation before the first agent event cannot race that write.
-	agentName                          string
+	agentName string
+	// completionPluginsDegraded is set when the agent event stream did not
+	// close within the drain grace period. The completion path then skips
+	// plugin callbacks rather than handing them the live invocation while
+	// the agent goroutine may still be mutating it.
+	completionPluginsDegraded          bool
 	graphCompletionSeen                bool
 	freshAssistantContentProduced      bool
 	persistedAssistantResponseIDs      map[string]struct{}
@@ -2702,29 +2709,33 @@ func sessionPersistenceContext(ctx context.Context) (context.Context, context.Ca
 	)
 }
 
-// waitForAgentStreamClose drains the agent event stream until it closes when
-// the event loop exits without having processed any agent event. On
-// cancellation before the first event there is no channel happens-before edge
-// with the agent goroutine, so the completion path must not hand the live
-// invocation to plugin callbacks while the agent goroutine may still be
-// writing it (setupInvocation writes Invocation.AgentName). Draining until
-// close establishes that edge. The wait is bounded so agents that ignore
-// cancellation cannot hang the runner.
+// waitForAgentStreamClose drains the agent event stream until it closes before
+// the completion path runs. When the event loop exits with the stream still
+// open there is no channel happens-before edge with the agent goroutine, so
+// completion callbacks must not receive the live invocation while the agent
+// goroutine may still be writing it (setupInvocation writes
+// Invocation.AgentName). Draining until close establishes that edge. The wait
+// is bounded: agents that ignore cancellation degrade the completion plugins
+// instead of hanging the runner or racing.
 func waitForAgentStreamClose(loop *eventLoopContext) {
-	if loop.processedEventCount > 0 {
-		// A processed agent event already established a happens-before edge
-		// with the agent goroutine's setup writes.
-		return
-	}
-	streamClosed := make(chan struct{})
-	go func() {
-		for range loop.agentEventCh {
+	timer := time.NewTimer(cancelledAgentStreamCloseTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case _, ok := <-loop.agentEventCh:
+			if !ok {
+				// The stream is closed, so the agent goroutine finished and
+				// completion callbacks may safely read the invocation.
+				return
+			}
+		case <-timer.C:
+			// The agent ignored cancellation and did not close its stream
+			// within the grace period. Degrade the completion plugin
+			// callbacks instead of handing them the live invocation while
+			// the agent goroutine may still be mutating it.
+			loop.completionPluginsDegraded = true
+			return
 		}
-		close(streamClosed)
-	}()
-	select {
-	case <-streamClosed:
-	case <-time.After(cancelledAgentStreamCloseTimeout):
 	}
 }
 
@@ -3183,9 +3194,16 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	}
 
 	agent.InjectIntoEvent(loop.invocation, runnerCompletionEvent)
+	// When the agent ignored cancellation and its stream never closed, skip
+	// plugin callbacks rather than handing them the live invocation while
+	// the agent goroutine may still be mutating it.
+	pluginInvocation := loop.invocation
+	if loop.completionPluginsDegraded {
+		pluginInvocation = nil
+	}
 	runnerCompletionEvent = r.applyEventPlugins(
 		ctx,
-		loop.invocation,
+		pluginInvocation,
 		runnerCompletionEvent,
 	)
 
@@ -3244,11 +3262,11 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			traceSnapshotOnly,
 		)
 	}
-	r.applyAfterRunPlugins(ctx, loop.invocation, runnerCompletionEvent)
+	r.applyAfterRunPlugins(ctx, pluginInvocation, runnerCompletionEvent)
 	applyGlobalAfterRunHooks(
 		ctx,
 		loop.globalAfterRun,
-		loop.invocation,
+		pluginInvocation,
 		runnerCompletionEvent,
 	)
 

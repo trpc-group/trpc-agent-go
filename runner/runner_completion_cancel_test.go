@@ -11,12 +11,51 @@ package runner
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+// cancellationIgnoringAgent ignores cancellation: its event stream is never
+// closed, and it writes Invocation.AgentName late, mimicking setupInvocation of
+// a misbehaving agent. It exercises the drain timeout path of the completion
+// cleanup.
+type cancellationIgnoringAgent struct {
+	name string
+}
+
+func (a *cancellationIgnoringAgent) Info() agent.Info { return agent.Info{Name: a.name} }
+func (a *cancellationIgnoringAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (a *cancellationIgnoringAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+func (a *cancellationIgnoringAgent) Tools() []tool.Tool { return nil }
+func (a *cancellationIgnoringAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	// Capture the delay before spawning the goroutine: the test restores the
+	// timeout variable when it finishes, which would race a read inside the
+	// goroutine.
+	delay := cancelledAgentStreamCloseTimeout / 2
+	go func() {
+		// Write the agent name after the runner starts draining, without any
+		// synchronization, so a completion callback reading the live
+		// invocation would race this write under -race.
+		time.Sleep(delay)
+		inv.AgentName = "late-agent"
+	}()
+	return ch, nil
+}
 
 // TestRunnerCompletionCancelledBeforeFirstEventNoRace guards against a data
 // race between the agent goroutine's asynchronous invocation setup (which
@@ -58,5 +97,23 @@ func TestRunnerCompletionCancelledBeforeFirstEventNoRace(t *testing.T) {
 		// an event is emitted, exercising the plugin-interface path of the
 		// pre-first-event cancellation race.
 		runCancelled(t, WithPlugins(debuglog.New(debuglog.WithEventEnabled(true))))
+	})
+	t.Run("agent ignores cancellation", func(t *testing.T) {
+		// Shrink the drain grace period so the timeout path is exercised.
+		oldTimeout := cancelledAgentStreamCloseTimeout
+		cancelledAgentStreamCloseTimeout = 50 * time.Millisecond
+		defer func() { cancelledAgentStreamCloseTimeout = oldTimeout }()
+
+		ag := &cancellationIgnoringAgent{name: "ignore-cancel"}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		r := NewRunner("app", ag, WithPlugins(debuglog.New(debuglog.WithEventEnabled(true))))
+		ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("hi"))
+		require.NoError(t, err)
+		events := 0
+		for range ch {
+			events++
+		}
+		require.NotZero(t, events, "runner completion must still be emitted when the agent never closes its stream")
 	})
 }
