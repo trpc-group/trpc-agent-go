@@ -1274,6 +1274,57 @@ func TestDeleteSession_SoftDelete(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestDeleteSession_SoftDeleteFallsBackForLegacyStateDuplicates(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSoftDelete(true))
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+	duplicateErr := &mysql.MySQLError{
+		Number:  sqldb.MySQLErrDuplicateEntry,
+		Message: "duplicate active session state",
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnError(duplicateErr)
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT id, user_id FROM session_states WHERE (app_name = ? AND user_id = ? AND session_id = ?) AND deleted_at IS NULL ORDER BY id ASC FOR UPDATE",
+	)).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).
+			AddRow(int64(101), key.UserID).
+			AddRow(int64(102), key.UserID))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), int64(101), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), int64(102), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	err = s.DeleteSession(ctx, key)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestCleanupExpiredSessions(t *testing.T) {
 	tests := []struct {
 		name       string

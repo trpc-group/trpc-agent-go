@@ -530,18 +530,21 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 			// Soft delete: set deleted_at timestamp
 			now := time.Now()
 
-			// Soft delete session state
-			_, err := tx.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-				 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-				now, key.AppName, key.UserID, key.SessionID)
-			if err != nil {
+			// Soft delete session states. Legacy schemas may contain duplicate
+			// active rows that require the compatibility fallback.
+			if err := s.softDeleteSessionStates(
+				ctx,
+				tx,
+				"app_name = ? AND user_id = ? AND session_id = ?",
+				[]any{key.AppName, key.UserID, key.SessionID},
+				now,
+			); err != nil {
 				return err
 			}
 
 			// Soft delete session summaries. Legacy schemas may contain duplicate
 			// active rows that require the compatibility fallback.
-			if err = s.softDeleteSummaries(
+			if err := s.softDeleteSummaries(
 				ctx,
 				tx,
 				"app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL",
@@ -552,7 +555,7 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 			}
 
 			// Soft delete session events
-			_, err = tx.ExecContext(ctx,
+			_, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`UPDATE %s SET deleted_at = ?
 				 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionEvents),
 				now, key.AppName, key.UserID, key.SessionID)
