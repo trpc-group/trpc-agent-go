@@ -4735,6 +4735,21 @@ func (m *failingAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *
 	return nil, errors.New("run failed")
 }
 
+type contextCauseFailingAgent struct{ name string }
+
+func (m *contextCauseFailingAgent) Info() agent.Info         { return agent.Info{Name: m.name} }
+func (m *contextCauseFailingAgent) SubAgents() []agent.Agent { return nil }
+func (m *contextCauseFailingAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+func (m *contextCauseFailingAgent) Tools() []tool.Tool { return nil }
+func (m *contextCauseFailingAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return nil, cause
+	}
+	return nil, errors.New("context is not canceled")
+}
+
 // completionNoticeAgent emits an event that requires completion; it pre-adds
 // a notice channel so Runner can notify it. The test asserts the channel closes.
 type completionNoticeAgent struct {
@@ -5024,6 +5039,105 @@ func TestRunner_Run_AgentRunError(t *testing.T) {
 	require.Equal(t, model.ErrorTypeRunError, errorEvent.Error.Type)
 	require.Equal(t, requestID, errorEvent.RequestID)
 	require.Equal(t, filterKey, errorEvent.FilterKey)
+}
+
+func TestRunner_Run_AgentRunCancellationErrorPersistsCancelledType(t *testing.T) {
+	const requestID = "req-run-cancelled"
+	cancelCauseErr := errors.New("client stopped")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(cancelCauseErr)
+	var hookErrorTypes []string
+	var hookErrorMessages []string
+	sessionService := sessioninmemory.NewSessionService(
+		sessioninmemory.WithAppendEventHook(
+			func(ctx *session.AppendEventContext, next func() error) error {
+				if ctx.Event != nil && ctx.Event.Error != nil {
+					hookErrorTypes = append(hookErrorTypes, ctx.Event.Error.Type)
+					hookErrorMessages = append(hookErrorMessages, ctx.Event.Error.Message)
+				}
+				return next()
+			},
+		),
+	)
+	r := NewRunner(
+		"app",
+		&contextCauseFailingAgent{name: "f"},
+		WithSessionService(sessionService),
+	)
+	ch, err := r.Run(
+		ctx,
+		"u",
+		"s",
+		model.NewUserMessage("m"),
+		agent.WithRequestID(requestID),
+	)
+	require.ErrorIs(t, err, cancelCauseErr)
+	require.Nil(t, ch)
+	require.Equal(t, []string{model.ErrorTypeCancelled}, hookErrorTypes)
+	require.Equal(t, []string{cancelCauseErr.Error()}, hookErrorMessages)
+}
+
+func TestAgentRunErrorType(t *testing.T) {
+	causeErr := errors.New("client stopped")
+	causeCtx, cancelCause := context.WithCancelCause(context.Background())
+	cancelCause(causeErr)
+	wrappedCauseCtx, cancelWrappedCause := context.WithCancelCause(context.Background())
+	wrappedCauseErr := errors.New("wrapped client stopped")
+	cancelWrappedCause(fmt.Errorf("outer: %w", wrappedCauseErr))
+	tests := []struct {
+		name   string
+		ctx    context.Context
+		runErr error
+		want   string
+	}{
+		{
+			name:   "context canceled error",
+			ctx:    context.Background(),
+			runErr: context.Canceled,
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "context deadline exceeded error",
+			ctx:    context.Background(),
+			runErr: fmt.Errorf("model request: %w", context.DeadlineExceeded),
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "matching context cause",
+			ctx:    causeCtx,
+			runErr: fmt.Errorf("run agent: %w", causeErr),
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "wrapped context cause",
+			ctx:    wrappedCauseCtx,
+			runErr: wrappedCauseErr,
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "unrelated error in canceled context",
+			ctx:    causeCtx,
+			runErr: errors.New("run failed"),
+			want:   model.ErrorTypeRunError,
+		},
+		{
+			name:   "plain error",
+			ctx:    context.Background(),
+			runErr: errors.New("run failed"),
+			want:   model.ErrorTypeRunError,
+		},
+		{
+			name:   "nil context",
+			ctx:    nil,
+			runErr: errors.New("run failed"),
+			want:   model.ErrorTypeRunError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, agentRunErrorType(tt.ctx, tt.runErr))
+		})
+	}
 }
 
 func TestRunnerLatencyDiagnosticHelpers(t *testing.T) {
