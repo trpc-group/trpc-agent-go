@@ -1,9 +1,18 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package runner
 
 import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -18,6 +27,7 @@ import (
 // agent.EmitEvent's read of inv.AgentName.
 func TestRunnerCompletionCancelledBeforeFirstEventNoRace(t *testing.T) {
 	ag := chainagent.New("chain")
+	successful := 0
 	for i := 0; i < 100; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -26,7 +36,11 @@ func TestRunnerCompletionCancelledBeforeFirstEventNoRace(t *testing.T) {
 		if err != nil {
 			continue
 		}
+		successful++
 		for range ch {
 		}
 	}
+	// Require at least one run to reach the event loop so the completion
+	// cleanup path is actually exercised.
+	require.NotZero(t, successful)
 }
