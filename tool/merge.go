@@ -35,6 +35,12 @@ func Merge[T any](ts []T) T {
 	// Handle the first element to determine the type and operation
 	first := ts[0]
 	firstValue := reflect.ValueOf(first)
+	// A nil interface value carries no reflect type to drive merging, so return
+	// it unchanged instead of panicking. This matches how a nil pointer field
+	// keeps the first value rather than adopting a later non-nil one.
+	if !firstValue.IsValid() {
+		return first
+	}
 	firstType := firstValue.Type()
 
 	// Check if type implements Mergeable interface
@@ -95,6 +101,11 @@ func mergeInts[T any](ts []T) T {
 	var sum int64
 	for _, t := range ts {
 		val := reflect.ValueOf(t)
+		// Skip nil interface elements: they carry no numeric value to merge,
+		// and reflecting on them would panic.
+		if !val.IsValid() {
+			continue
+		}
 		sum += val.Int()
 	}
 
@@ -108,6 +119,11 @@ func mergeUints[T any](ts []T) T {
 	var sum uint64
 	for _, t := range ts {
 		val := reflect.ValueOf(t)
+		// Skip nil interface elements: they carry no numeric value to merge,
+		// and reflecting on them would panic.
+		if !val.IsValid() {
+			continue
+		}
 		sum += val.Uint()
 	}
 
@@ -121,6 +137,11 @@ func mergeFloats[T any](ts []T) T {
 	var sum float64
 	for _, t := range ts {
 		val := reflect.ValueOf(t)
+		// Skip nil interface elements: they carry no numeric value to merge,
+		// and reflecting on them would panic.
+		if !val.IsValid() {
+			continue
+		}
 		sum += val.Float()
 	}
 
