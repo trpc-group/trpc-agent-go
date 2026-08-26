@@ -26,9 +26,5 @@ const (
 
 // QueuedUserMessageMetadata describes the queued user-message event state.
 type QueuedUserMessageMetadata struct {
-	// Status describes how the queued message was handled.
 	Status string `json:"status"`
-	// Source identifies the framework producer of a synthetic message. It is
-	// empty for a direct user steer.
-	Source string `json:"source,omitempty"`
 }

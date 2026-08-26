@@ -6,25 +6,27 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package toolloopwarning provides an opt-in, session-recorded warning for
+// Package toolloopwarning provides an opt-in, request-local warning for
 // identical consecutive tool rounds.
 //
 // Register the plugin with runner.WithPlugins(toolloopwarning.New()). The
-// plugin is inactive unless registered and depends on Runner's event
-// finalization path; calling an Agent directly does not enable detection.
+// plugin is inactive unless registered.
 //
-// Two adjacent complete tool rounds match when their tool names, canonical
-// JSON arguments, and final model-visible results are identical. On a match,
-// the plugin queues one synthetic user-role message for the next model turn
-// and records it in session history with the queued-message source
-// "plugin/toolloopwarning". It warns once after the second identical round and
-// remains armed without repeating the warning until the round changes or a
-// different queued user message is consumed.
-// Tool results are fingerprinted only after every Runner OnEvent hook has
-// finished, so the comparison uses the event that is about to be persisted.
-// A queued user message from another source consumed between rounds breaks
-// their adjacency. WithExcludedToolNames can exclude polling or other tools
-// whose repeated results are expected.
+// Starting with the second model request in each invocation, the plugin
+// examines the two complete tool rounds at the end of the request. Skipping
+// the first request prevents an old session-history tail from triggering a
+// warning in a new run. Rounds match when their ordered tool names, canonical
+// JSON arguments, and model-visible results are identical. Tool-call IDs are
+// used only to pair results with calls. A malformed or interrupted transcript,
+// an intervening non-tool message, or a changed round breaks adjacency.
+//
+// On a match, the plugin appends one temporary user-role instruction to that
+// model request. It warns once per unchanged streak and rearms after the round
+// changes or adjacency breaks. The instruction is not appended to session
+// events and is not restored from session history. Consumers that deliberately
+// reuse the final model request, such as cache-safe summary forking and
+// execution tracing, can still observe it. WithExcludedToolNames can exclude
+// polling or other tools whose repeated results are expected.
 //
 // The plugin makes no additional model or tool calls. It does not stop or
 // retry the invocation.

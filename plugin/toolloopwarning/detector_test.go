@@ -17,6 +17,151 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+func TestMatchingTrailingRoundFingerprintUsesRequestTail(t *testing.T) {
+	messages := []model.Message{model.NewUserMessage("run")}
+	messages = append(messages, roundMessages(
+		[]model.ToolCall{
+			newToolCall("search-1", "search", `{"query":"x","limit":9007199254740993}`),
+			newToolCall("read-1", "read", `{"path":"a.go"}`),
+		},
+		[]model.Message{
+			model.NewToolMessage("read-1", "read", "file"),
+			model.NewToolMessage("search-1", "search", "matches"),
+		},
+	)...)
+	messages = append(messages, roundMessages(
+		[]model.ToolCall{
+			newToolCall("search-2", "search", ` { "limit": 9007199254740993, "query": "x" } `),
+			newToolCall("read-2", "read", `{"path":"a.go"}`),
+		},
+		[]model.Message{
+			model.NewToolMessage("search-2", "search", "matches"),
+			model.NewToolMessage("read-2", "read", "file"),
+		},
+	)...)
+
+	fingerprint, ok := matchingTrailingRoundFingerprint(messages, nil)
+	require.True(t, ok)
+	require.NotEmpty(t, fingerprint)
+
+	messages = append(messages, model.NewUserMessage("intervene"))
+	_, ok = matchingTrailingRoundFingerprint(messages, nil)
+	require.False(t, ok)
+}
+
+func TestMatchingTrailingRoundFingerprintDetectsChangesAndExclusions(t *testing.T) {
+	base := []model.Message{model.NewUserMessage("run")}
+	base = append(base, roundMessages(
+		[]model.ToolCall{newToolCall("call-1", "search", `{"query":"x"}`)},
+		[]model.Message{model.NewToolMessage("call-1", "search", "same")},
+	)...)
+
+	tests := map[string]struct {
+		call     model.ToolCall
+		result   model.Message
+		excluded map[string]struct{}
+	}{
+		"tool": {
+			call:   newToolCall("call-2", "read", `{"query":"x"}`),
+			result: model.NewToolMessage("call-2", "read", "same"),
+		},
+		"arguments": {
+			call:   newToolCall("call-2", "search", `{"query":"y"}`),
+			result: model.NewToolMessage("call-2", "search", "same"),
+		},
+		"result": {
+			call:   newToolCall("call-2", "search", `{"query":"x"}`),
+			result: model.NewToolMessage("call-2", "search", "changed"),
+		},
+		"excluded": {
+			call:     newToolCall("call-2", "search", `{"query":"x"}`),
+			result:   model.NewToolMessage("call-2", "search", "same"),
+			excluded: map[string]struct{}{"search": {}},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			messages := append([]model.Message(nil), base...)
+			messages = append(messages, roundMessages(
+				[]model.ToolCall{test.call},
+				[]model.Message{test.result},
+			)...)
+			_, ok := matchingTrailingRoundFingerprint(messages, test.excluded)
+			require.False(t, ok)
+		})
+	}
+}
+
+func TestParseTrailingToolRoundRejectsMalformedTranscripts(t *testing.T) {
+	validCall := newToolCall("call-1", "search", `{}`)
+	validResult := model.NewToolMessage("call-1", "search", "same")
+	tests := map[string][]model.Message{
+		"empty": nil,
+		"no result": {
+			model.NewAssistantMessage("done"),
+		},
+		"missing result": {
+			assistantToolMessage(
+				validCall,
+				newToolCall("call-2", "read", `{}`),
+			),
+			validResult,
+		},
+		"unknown result": {
+			assistantToolMessage(validCall),
+			model.NewToolMessage("other", "search", "same"),
+		},
+		"duplicate result": {
+			assistantToolMessage(validCall),
+			validResult,
+			validResult,
+		},
+		"empty result": {
+			assistantToolMessage(validCall),
+			{Role: model.RoleTool, ToolID: "call-1"},
+		},
+		"duplicate call id": {
+			assistantToolMessage(
+				validCall,
+				newToolCall("call-1", "read", `{}`),
+			),
+			validResult,
+		},
+		"missing call id": {
+			assistantToolMessage(newToolCall("", "search", `{}`)),
+			validResult,
+		},
+		"missing tool name": {
+			assistantToolMessage(newToolCall("call-1", "", `{}`)),
+			validResult,
+		},
+		"non-tool boundary": {
+			assistantToolMessage(validCall),
+			validResult,
+			model.NewAssistantMessage("done"),
+		},
+	}
+	for name, messages := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, _, ok := parseTrailingToolRound(messages, len(messages))
+			require.False(t, ok)
+		})
+	}
+
+	round, start, ok := parseTrailingToolRound(
+		[]model.Message{
+			model.NewUserMessage("run"),
+			assistantToolMessage(validCall),
+			validResult,
+		},
+		3,
+	)
+	require.True(t, ok)
+	require.Equal(t, 1, start)
+	require.Equal(t, "call-1", round.toolCalls[0].ID)
+	require.Equal(t, "call-1", round.results[0].ToolID)
+}
+
 func TestFingerprintRoundCanonicalizesArgumentsAndIgnoresIDs(t *testing.T) {
 	callsA := []model.ToolCall{
 		newToolCall(
@@ -50,51 +195,6 @@ func TestFingerprintRoundCanonicalizesArgumentsAndIgnoresIDs(t *testing.T) {
 	require.Equal(t, fingerprintA, fingerprintB)
 }
 
-func TestFingerprintRoundDetectsSemanticFieldsChanging(t *testing.T) {
-	baseFingerprint, ok := fingerprintRound(
-		[]model.ToolCall{newToolCall("call-1", "search", `{"query":"x"}`)},
-		[]model.Message{model.NewToolMessage("call-1", "search", "same")},
-	)
-	require.True(t, ok)
-
-	tests := map[string]struct {
-		call   model.ToolCall
-		result model.Message
-	}{
-		"tool name": {
-			call:   newToolCall("call-2", "read", `{"query":"x"}`),
-			result: model.NewToolMessage("call-2", "read", "same"),
-		},
-		"arguments": {
-			call:   newToolCall("call-2", "search", `{"query":"y"}`),
-			result: model.NewToolMessage("call-2", "search", "same"),
-		},
-		"result content": {
-			call:   newToolCall("call-2", "search", `{"query":"x"}`),
-			result: model.NewToolMessage("call-2", "search", "changed"),
-		},
-	}
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
-			fingerprint, ok := fingerprintRound(
-				[]model.ToolCall{test.call},
-				[]model.Message{test.result},
-			)
-			require.True(t, ok)
-			require.NotEqual(t, baseFingerprint, fingerprint)
-		})
-	}
-	resultWithDifferentToolName := model.NewToolMessage(
-		"call-2", "different", "same",
-	)
-	fingerprint, ok := fingerprintRound(
-		[]model.ToolCall{newToolCall("call-2", "search", `{"query":"x"}`)},
-		[]model.Message{resultWithDifferentToolName},
-	)
-	require.True(t, ok)
-	require.Equal(t, baseFingerprint, fingerprint)
-}
-
 func TestCanonicalArgumentsPreservesNumbersAndInvalidJSON(t *testing.T) {
 	require.Equal(t, "", canonicalArguments(nil))
 	require.Equal(t, "", canonicalArguments([]byte(" \n\t")))
@@ -113,53 +213,7 @@ func TestCanonicalArgumentsPreservesNumbersAndInvalidJSON(t *testing.T) {
 		`{"query":"a  b",}`,
 		canonicalArguments([]byte(`  {"query":"a  b",}  `)),
 	)
-	require.NotEqual(
-		t,
-		canonicalArguments([]byte(`{"query":"a  b",}`)),
-		canonicalArguments([]byte(`{"query":"a b",}`)),
-	)
 	require.Equal(t, `1 2`, canonicalArguments([]byte(` 1 2 `)))
-}
-
-func TestDetectorRejectsMalformedRounds(t *testing.T) {
-	_, ok := toolRoundIdentity(nil)
-	require.False(t, ok)
-	_, ok = toolRoundIdentity([]model.ToolCall{newToolCall("", "search", `{}`)})
-	require.False(t, ok)
-	_, ok = toolRoundIdentity([]model.ToolCall{newToolCall("call", "", `{}`)})
-	require.False(t, ok)
-	_, ok = toolRoundIdentity([]model.ToolCall{
-		newToolCall("call", "search", `{}`),
-		newToolCall("call", "read", `{}`),
-	})
-	require.False(t, ok)
-
-	toolCalls := []model.ToolCall{newToolCall("call", "search", `{}`)}
-	invalidResults := []model.Message{
-		model.NewToolMessage("", "search", "same"),
-		model.NewToolMessage("other", "search", "same"),
-		model.NewAssistantMessage("same"),
-	}
-	for _, result := range invalidResults {
-		state := &detectorState{}
-		require.False(t, state.observeToolMessages(
-			toolCalls,
-			[]model.Message{result},
-		))
-		require.Empty(t, state.previous)
-		require.Nil(t, state.pending)
-	}
-	resultWithoutToolName := model.Message{
-		Role:    model.RoleTool,
-		ToolID:  "call",
-		Content: "same",
-	}
-	state := &detectorState{}
-	require.False(t, state.observeToolMessages(
-		toolCalls,
-		[]model.Message{resultWithoutToolName},
-	))
-	require.NotEmpty(t, state.previous)
 }
 
 func TestFingerprintRoundBoundsMultimodalPayloads(t *testing.T) {
@@ -188,35 +242,48 @@ func TestFingerprintRoundBoundsMultimodalPayloads(t *testing.T) {
 	changedImage.Data = append([]byte(nil), binary...)
 	changedImage.Data[len(changedImage.Data)-1]++
 	changedResult.ContentParts[1].Image = &changedImage
-	changedFingerprint, ok := fingerprintRound(
-		toolCalls,
-		[]model.Message{changedResult},
-	)
+	changedFingerprint, ok := fingerprintRound(toolCalls, []model.Message{changedResult})
 	require.True(t, ok)
 	require.NotEqual(t, fingerprint, changedFingerprint)
 	require.Nil(t, digestBytes(nil))
 	require.Len(t, digestBytes([]byte{}), sha256Size)
 }
 
-func TestFingerprintRoundIgnoresUnexpectedResultToolCalls(t *testing.T) {
+func TestFingerprintRoundIgnoresUnexpectedResultFields(t *testing.T) {
 	toolCalls := []model.ToolCall{newToolCall("call-1", "search", `{}`)}
 	base := model.NewToolMessage("call-1", "search", "same")
 	baseFingerprint, ok := fingerprintRound(toolCalls, []model.Message{base})
 	require.True(t, ok)
 
-	withToolCalls := base
-	withToolCalls.ToolCalls = []model.ToolCall{{
+	unexpected := base
+	unexpected.ToolName = "different"
+	unexpected.ToolCalls = []model.ToolCall{{
 		Function: model.FunctionDefinitionParam{
 			Arguments: bytes.Repeat([]byte("argument"), 1<<16),
 		},
 		ExtraFields: map[string]any{"unsupported": make(chan int)},
 	}}
-	fingerprint, ok := fingerprintRound(
-		toolCalls,
-		[]model.Message{withToolCalls},
-	)
+	fingerprint, ok := fingerprintRound(toolCalls, []model.Message{unexpected})
 	require.True(t, ok)
 	require.Equal(t, baseFingerprint, fingerprint)
+}
+
+func roundMessages(
+	toolCalls []model.ToolCall,
+	results []model.Message,
+) []model.Message {
+	messages := []model.Message{{
+		Role:      model.RoleAssistant,
+		ToolCalls: toolCalls,
+	}}
+	return append(messages, results...)
+}
+
+func assistantToolMessage(toolCalls ...model.ToolCall) model.Message {
+	return model.Message{
+		Role:      model.RoleAssistant,
+		ToolCalls: toolCalls,
+	}
 }
 
 const sha256Size = 32

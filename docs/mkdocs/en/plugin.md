@@ -637,36 +637,40 @@ should apply to all agents managed by a Runner.
 
 ### ToolLoopWarning
 
-`toolloopwarning.New()` compares consecutive complete tool-call rounds after
-their final model-facing tool result messages are available. When the tool
-names, canonical JSON arguments, and results are identical, it queues one
-synthetic user-role instruction after the second round. It does not repeat the
-warning while the same round remains unchanged; a changed round or a queued
-user message from another source starts a new streak.
+`toolloopwarning.New()` examines the two complete tool-call rounds at the end
+of each model request. When their tool names, canonical JSON arguments, and
+model-visible results are identical, it appends one temporary user-role
+instruction to that request. It does not repeat the warning while the same
+round remains unchanged; a changed round or an intervening non-tool message
+starts a new streak. The first model request in each invocation is deliberately
+skipped so a repeated tail restored from an earlier run cannot trigger a new
+warning by itself.
 
 Tool-call IDs are ignored. A complete round requires exactly one trailing
 tool-result message per tool call, matched by ID. An incomplete or malformed
 round resets detection. The plugin is opt-in, makes no additional model or tool
 calls, and does not stop or retry the invocation. It must be registered on a
-`Runner`; direct calls to `Agent.Run` do not provide the finalized-event path
-needed for detection.
+`Runner`; direct calls to `Agent.Run` do not install Runner plugins.
 
-After a successful enqueue, the Runner persists the instruction at the next
-safe model-turn boundary as a session event before constructing the next model
-request. Its model protocol role is `user`; the queued-message extension records
-`source: "plugin/toolloopwarning"` so consumers can distinguish it from direct
-user input. The persisted event remains part of later history and replay.
-If the invocation queue is concurrently closed or cleared before enqueue, the
-plugin logs at debug level and continues without a warning or persisted event.
+The instruction's `user` role is a model-protocol shape, not a claim of human
+authorship. The instruction is request-local: it is not appended as a session
+event and is not restored as history on a later run. A standalone session
+summary reads persisted events and therefore does not receive it as source
+content. If cache-safe summary forking is enabled, however, the summarizer
+deliberately reuses the final model request; the instruction can then be part
+of the summarizer input and can indirectly affect the derived summary.
+Execution tracing likewise
+records the final request on the completion artifact rather than in session
+history. The model response produced from the request follows normal session
+behavior.
 
-The plugin associates tool-call metadata at `AfterToolMessages`, then computes
-the fingerprint after the complete Runner `OnEvent` transformation pipeline.
-Its result therefore does not depend on whether a result-transforming plugin is
-registered before or after it. A queued user message consumed between two tool
-rounds breaks their adjacency unless it is this plugin's own warning. For a
-cloned child invocation, the plugin creates an invocation-local queue only when
-a warning is actually needed; it never borrows the lead agent's user-steer
-queue.
+Detection uses the request view available at `BeforeModel`, so history
+projection, result transformation, summary cutoffs, and context compaction are
+already reflected. The plugin confirms the warning at `AfterModel`; if another
+callback removes it before that stage, the streak is not marked as warned and
+may be eligible again. A `BeforeModel` custom response also proceeds through
+`AfterModel`, so this confirmation describes the framework's model stage, not
+proof that an external provider was called.
 
 Use `WithExcludedToolNames(...)` for polling or other tools whose repeated
 results are expected. Use `WithWarningMessage(...)` to localize or customize

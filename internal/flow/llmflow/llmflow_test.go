@@ -493,11 +493,7 @@ func TestMaybeConsumeQueuedUserMessages_DrainsInOrder(t *testing.T) {
 	queue := steer.NewQueue()
 	steer.Attach(inv, queue)
 	require.True(t, queue.Enqueue(model.NewUserMessage("first")))
-	require.True(t, steer.EnqueueWithSource(
-		inv,
-		model.NewUserMessage("second"),
-		"plugin/example",
-	))
+	require.True(t, queue.Enqueue(model.NewUserMessage("second")))
 
 	ch := make(chan *event.Event, 2)
 	done := make(chan struct{})
@@ -515,7 +511,6 @@ func TestMaybeConsumeQueuedUserMessages_DrainsInOrder(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, ok)
 			require.Equal(t, steer.QueuedUserMessageStatusConsumed, meta.Status)
-			require.Equal(t, []string{"", "plugin/example"}[i], meta.Source)
 			require.Equal(
 				t,
 				[]string{"first", "second"}[i],

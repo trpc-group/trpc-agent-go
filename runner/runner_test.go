@@ -38,7 +38,6 @@ import (
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/finalevent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
@@ -5027,92 +5026,6 @@ func TestRunner_Run_AgentRunError(t *testing.T) {
 	require.Equal(t, filterKey, errorEvent.FilterKey)
 }
 
-func TestRunnerClearsFinalEventCallbacksAtTerminalBoundaries(t *testing.T) {
-	tests := []struct {
-		name         string
-		agent        agent.Agent
-		shortCircuit bool
-		wantRunErr   bool
-	}{
-		{
-			name:         "before agent short circuit",
-			agent:        &mockAgent{name: "short-circuit"},
-			shortCircuit: true,
-		},
-		{
-			name:       "agent run error",
-			agent:      &failingAgent{name: "run-error"},
-			wantRunErr: true,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var invocation *agent.Invocation
-			registeredBeforeTerminal := make(chan bool, 1)
-			capture := &testPlugin{
-				name: "capture-invocation",
-				reg: func(registry *plugin.Registry) {
-					registry.BeforeAgent(func(
-						_ context.Context,
-						args *agent.BeforeAgentArgs,
-					) (*agent.BeforeAgentResult, error) {
-						invocation = args.Invocation
-						registeredBeforeTerminal <- finalevent.Register(
-							invocation,
-							"pending-before-terminal",
-							func(context.Context, *event.Event) {},
-						)
-						if !test.shortCircuit {
-							return nil, nil
-						}
-						return &agent.BeforeAgentResult{
-							CustomResponse: &model.Response{
-								Done: true,
-								Choices: []model.Choice{{
-									Message: model.NewAssistantMessage("done"),
-								}},
-							},
-						}, nil
-					})
-				},
-			}
-			sessionService := sessioninmemory.NewSessionService()
-			runnerInstance := NewRunner(
-				"app",
-				test.agent,
-				WithSessionService(sessionService),
-				WithPlugins(capture),
-			)
-			t.Cleanup(func() {
-				require.NoError(t, runnerInstance.Close())
-				require.NoError(t, sessionService.Close())
-			})
-
-			events, err := runnerInstance.Run(
-				context.Background(),
-				"user",
-				"session",
-				model.NewUserMessage("run"),
-			)
-			if test.wantRunErr {
-				require.Error(t, err)
-				require.Nil(t, events)
-			} else {
-				require.NoError(t, err)
-				for range events {
-				}
-			}
-			require.NotNil(t, invocation)
-			require.True(t, <-registeredBeforeTerminal)
-			require.False(t, finalevent.Register(
-				invocation,
-				"late-event",
-				func(context.Context, *event.Event) {},
-			))
-		})
-	}
-}
-
 func TestRunnerLatencyDiagnosticHelpers(t *testing.T) {
 	ctx := context.Background()
 	_, disabledSpan, disabledStarted := startRunnerLatencySpan(
@@ -8687,7 +8600,7 @@ func TestPersistInterruptedAssistantPreservesFirstSeenOrder(t *testing.T) {
 	require.Equal(t, "second", svc.appendEventCalls[1].event.Choices[0].Message.Content)
 }
 
-func TestPersistInterruptedAssistantDedupeAfterOnEventPlugin(t *testing.T) {
+func TestPersistInterruptedAssistantDedupeAfterEventPlugin(t *testing.T) {
 	const requestID = "req-plugin-dedupe"
 	p := &testPlugin{
 		name: "final-content-plugin",

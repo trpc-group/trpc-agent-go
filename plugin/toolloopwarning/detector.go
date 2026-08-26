@@ -15,23 +15,13 @@ import (
 	"encoding/json"
 	"io"
 	"strconv"
-	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-type detectorState struct {
-	mu          sync.Mutex
-	previous    string
-	repeatCount int
-	warned      bool
-	pending     *pendingRound
-}
-
-type pendingRound struct {
-	identity  string
+type toolRound struct {
 	toolCalls []model.ToolCall
-	results   map[string]model.Message
+	results   []model.Message
 }
 
 type roundFingerprint struct {
@@ -44,150 +34,103 @@ type callFingerprint struct {
 	Result    model.Message `json:"result"`
 }
 
-func (s *detectorState) observeToolMessages(
-	toolCalls []model.ToolCall,
-	toolResultMessages []model.Message,
-) bool {
-	if s == nil {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.observeToolMessagesLocked(toolCalls, toolResultMessages)
-}
-
-func (s *detectorState) observeToolMessagesLocked(
-	toolCalls []model.ToolCall,
-	toolResultMessages []model.Message,
-) bool {
-
-	identity, ok := toolRoundIdentity(toolCalls)
+func matchingTrailingRoundFingerprint(
+	messages []model.Message,
+	excludedToolNames map[string]struct{},
+) (string, bool) {
+	latest, latestStart, ok := parseTrailingToolRound(messages, len(messages))
 	if !ok {
-		s.resetLocked()
-		return false
+		return "", false
 	}
-	if s.pending == nil || s.pending.identity != identity {
-		if s.pending != nil {
-			// A different round before all prior results arrived breaks
-			// adjacency, but the new round may still seed a comparison.
-			s.resetLocked()
-		}
-		s.pending = &pendingRound{
-			identity:  identity,
-			toolCalls: cloneToolCalls(toolCalls),
-			results:   make(map[string]model.Message, len(toolCalls)),
-		}
+	previous, _, ok := parseTrailingToolRound(messages, latestStart)
+	if !ok || roundContainsExcludedTool(latest, excludedToolNames) ||
+		roundContainsExcludedTool(previous, excludedToolNames) {
+		return "", false
 	}
-	if !s.pending.addResults(toolResultMessages) {
-		s.resetLocked()
-		return false
-	}
-	if len(s.pending.results) < len(s.pending.toolCalls) {
-		return false
-	}
-
-	orderedResults := make([]model.Message, 0, len(s.pending.toolCalls))
-	for _, toolCall := range s.pending.toolCalls {
-		result, exists := s.pending.results[toolCall.ID]
-		if !exists {
-			s.resetLocked()
-			return false
-		}
-		orderedResults = append(orderedResults, result)
-	}
-	fingerprint, ok := fingerprintRound(
-		s.pending.toolCalls,
-		orderedResults,
-	)
-	s.pending = nil
+	latestFingerprint, ok := fingerprintRound(latest.toolCalls, latest.results)
 	if !ok {
-		s.resetLocked()
-		return false
+		return "", false
 	}
-	if fingerprint != s.previous {
-		s.previous = fingerprint
-		s.repeatCount = 1
-		s.warned = false
-		return false
+	previousFingerprint, ok := fingerprintRound(previous.toolCalls, previous.results)
+	if !ok || latestFingerprint != previousFingerprint {
+		return "", false
 	}
-	s.repeatCount++
-	if s.warned || s.repeatCount < 2 {
-		return false
-	}
-	s.warned = true
-	return true
+	return latestFingerprint, true
 }
 
-func (s *detectorState) reset() {
-	if s == nil {
-		return
+func parseTrailingToolRound(
+	messages []model.Message,
+	end int,
+) (toolRound, int, bool) {
+	if end <= 0 || end > len(messages) {
+		return toolRound{}, 0, false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.resetLocked()
-}
-
-func (s *detectorState) resetLocked() {
-	s.previous = ""
-	s.repeatCount = 0
-	s.warned = false
-	s.pending = nil
-}
-
-func (p *pendingRound) addResults(messages []model.Message) bool {
-	if p == nil || len(messages) == 0 {
-		return false
+	resultStart := end
+	for resultStart > 0 && messages[resultStart-1].Role == model.RoleTool {
+		resultStart--
 	}
-	expected := make(map[string]struct{}, len(p.toolCalls))
-	for _, toolCall := range p.toolCalls {
+	if resultStart == end || resultStart == 0 {
+		return toolRound{}, 0, false
+	}
+	assistantIndex := resultStart - 1
+	assistant := messages[assistantIndex]
+	if assistant.Role != model.RoleAssistant || len(assistant.ToolCalls) == 0 {
+		return toolRound{}, 0, false
+	}
+
+	expected := make(map[string]struct{}, len(assistant.ToolCalls))
+	for _, toolCall := range assistant.ToolCalls {
+		if toolCall.ID == "" || toolCall.Function.Name == "" {
+			return toolRound{}, 0, false
+		}
+		if _, exists := expected[toolCall.ID]; exists {
+			return toolRound{}, 0, false
+		}
 		expected[toolCall.ID] = struct{}{}
 	}
-	for _, message := range messages {
-		if message.Role != model.RoleTool || message.ToolID == "" {
-			return false
+
+	byID := make(map[string]model.Message, len(assistant.ToolCalls))
+	for _, message := range messages[resultStart:end] {
+		if message.Role != model.RoleTool || message.ToolID == "" ||
+			!model.HasPayload(message) {
+			return toolRound{}, 0, false
 		}
 		if _, exists := expected[message.ToolID]; !exists {
-			return false
+			return toolRound{}, 0, false
 		}
-		if _, exists := p.results[message.ToolID]; exists {
-			return false
+		if _, exists := byID[message.ToolID]; exists {
+			return toolRound{}, 0, false
 		}
-		p.results[message.ToolID] = message
+		byID[message.ToolID] = message
 	}
-	return true
+	if len(byID) != len(assistant.ToolCalls) {
+		return toolRound{}, 0, false
+	}
+
+	results := make([]model.Message, 0, len(assistant.ToolCalls))
+	for _, toolCall := range assistant.ToolCalls {
+		result, exists := byID[toolCall.ID]
+		if !exists {
+			return toolRound{}, 0, false
+		}
+		results = append(results, result)
+	}
+	return toolRound{
+		toolCalls: assistant.ToolCalls,
+		results:   results,
+	}, assistantIndex, true
 }
 
-func toolRoundIdentity(toolCalls []model.ToolCall) (string, bool) {
-	if len(toolCalls) == 0 {
-		return "", false
-	}
-	type identityCall struct {
-		ID        string `json:"id"`
-		ToolName  string `json:"tool_name"`
-		Arguments string `json:"arguments"`
-	}
-	identity := make([]identityCall, 0, len(toolCalls))
-	seen := make(map[string]struct{}, len(toolCalls))
-	for _, toolCall := range toolCalls {
-		if toolCall.ID == "" || toolCall.Function.Name == "" {
-			return "", false
+func roundContainsExcludedTool(
+	round toolRound,
+	excludedToolNames map[string]struct{},
+) bool {
+	for _, toolCall := range round.toolCalls {
+		if _, excluded := excludedToolNames[toolCall.Function.Name]; excluded {
+			return true
 		}
-		if _, exists := seen[toolCall.ID]; exists {
-			return "", false
-		}
-		seen[toolCall.ID] = struct{}{}
-		identity = append(identity, identityCall{
-			ID:        toolCall.ID,
-			ToolName:  toolCall.Function.Name,
-			Arguments: string(toolCall.Function.Arguments),
-		})
 	}
-	encoded, err := json.Marshal(identity)
-	if err != nil {
-		return "", false
-	}
-	digest := sha256.Sum256(encoded)
-	return hex.EncodeToString(digest[:]), true
+	return false
 }
 
 func fingerprintRound(
@@ -201,6 +144,9 @@ func fingerprintRound(
 		ToolCalls: make([]callFingerprint, 0, len(toolCalls)),
 	}
 	for i, toolCall := range toolCalls {
+		if toolCall.Function.Name == "" {
+			return "", false
+		}
 		fingerprint.ToolCalls = append(fingerprint.ToolCalls, callFingerprint{
 			ToolName: toolCall.Function.Name,
 			Arguments: digestText(
@@ -215,18 +161,6 @@ func fingerprintRound(
 	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:]), true
-}
-
-func cloneToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
-	cloned := make([]model.ToolCall, len(toolCalls))
-	copy(cloned, toolCalls)
-	for i := range cloned {
-		cloned[i].Function.Arguments = append(
-			[]byte(nil),
-			toolCalls[i].Function.Arguments...,
-		)
-	}
-	return cloned
 }
 
 func canonicalArguments(arguments []byte) string {

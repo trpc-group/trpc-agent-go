@@ -183,47 +183,6 @@ func TestTranslateQueuedUserMessageConsumed(t *testing.T) {
 	assert.Equal(t, "request-1", activityContent["requestId"])
 	assert.Equal(t, "queued-message-1", activityContent["messageId"])
 	assert.Equal(t, steerext.QueuedUserMessageStatusConsumed, activityContent["status"])
-	assert.NotContains(t, activityContent, "source")
-}
-
-func TestTranslateSourcedQueuedUserMessagePreservesProvenance(t *testing.T) {
-	translator := newTranslatorForTest(t)
-	if translator == nil {
-		return
-	}
-
-	evt := agentevent.NewResponseEvent("inv-1", "user", &model.Response{
-		ID: "synthetic-message-1",
-		Choices: []model.Choice{{
-			Message: model.NewUserMessage("Change your approach"),
-		}},
-	})
-	evt.ID = "synthetic-event-1"
-	evt.RequestID = "request-1"
-	require.NoError(t, agentevent.SetExtension(
-		evt,
-		steerext.QueuedUserMessageExtensionKey,
-		steerext.QueuedUserMessageMetadata{
-			Status: steerext.QueuedUserMessageStatusConsumed,
-			Source: "plugin/toolloopwarning",
-		},
-	))
-
-	events, err := translator.Translate(context.Background(), evt)
-	require.NoError(t, err)
-	require.Len(t, events, 4)
-
-	start, ok := events[0].(*aguievents.TextMessageStartEvent)
-	require.True(t, ok)
-	require.NotNil(t, start.Role)
-	assert.Equal(t, string(aguitypes.RoleUser), *start.Role)
-
-	activity, ok := events[3].(*aguievents.ActivitySnapshotEvent)
-	require.True(t, ok)
-	content, ok := activity.Content.(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "synthetic-message-1", content["messageId"])
-	assert.Equal(t, "plugin/toolloopwarning", content["source"])
 }
 
 func TestTranslateQueuedUserMessageConsumedClosesOpenMessage(t *testing.T) {

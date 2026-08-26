@@ -384,14 +384,13 @@ func (f *Flow) maybeConsumeQueuedUserMessages(
 		return nil
 	}
 
-	messages := steer.DrainQueued(invocation)
+	messages := steer.Drain(invocation)
 	drained = len(messages)
 	if len(messages) == 0 {
 		return nil
 	}
 
-	for _, queued := range messages {
-		message := queued.Message
+	for _, message := range messages {
 		invocation.Message = message
 
 		evt := event.NewResponseEvent(
@@ -408,7 +407,6 @@ func (f *Flow) maybeConsumeQueuedUserMessages(
 				steer.ExtensionKeyQueuedUserMessage,
 				steer.QueuedUserMessageMetadata{
 					Status: steer.QueuedUserMessageStatusConsumed,
-					Source: queued.Source,
 				},
 			),
 		)

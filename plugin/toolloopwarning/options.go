@@ -27,8 +27,9 @@ func newOptions(opts ...Option) *options {
 	return o
 }
 
-// WithWarningMessage sets the synthetic user-role instruction queued after a
-// repeated tool round. An empty message leaves the default unchanged.
+// WithWarningMessage sets the temporary user-role instruction added to a model
+// request after a repeated tool round. An empty message leaves the default
+// unchanged.
 func WithWarningMessage(message string) Option {
 	return func(o *options) {
 		if message != "" {

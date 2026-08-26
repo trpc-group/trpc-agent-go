@@ -651,27 +651,29 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 
 ### ToolLoopWarning（工具循环提醒）
 
-`toolloopwarning.New()` 会在最终模型可见的工具结果准备完成后，比较相邻的完整工具轮次。
-当工具名称、规范化后的 JSON 参数以及结果都相同时，插件会在第二个轮次结束后排队一条
-合成的 `user` 角色提醒。同一轮次继续重复时不会反复提醒；轮次内容发生变化，或消费了其他
-来源的排队用户消息后，才会开始新的连续检测。
+`toolloopwarning.New()` 会在每次模型调用前，检查请求末尾两个相邻的完整工具轮次。当工具
+名称、规范化后的 JSON 参数以及模型可见结果都相同时，插件会在当前请求末尾临时追加一条
+`user` 角色提醒。同一轮次继续重复时不会反复提醒；轮次内容变化或中间出现非工具消息后，
+才会开始新的连续检测。每个 invocation 的第一次模型请求会被明确跳过，避免仅因恢复了上一
+次 Run 的重复历史尾部就触发新的提醒。
 
 检测会忽略工具调用 ID。一个完整轮次要求每个工具调用恰好对应一条末尾工具结果消息，
 并按 ID 匹配；不完整或格式异常的轮次会重置检测状态。该插件默认关闭，不会额外发起模型
 调用或工具调用，也不会停止 invocation 或触发重试。插件必须注册到 `Runner`；直接调用
-`Agent.Run` 不会经过检测所需的最终事件处理路径。
+`Agent.Run` 不会安装 Runner plugin。
 
-提醒成功入队后，Runner 会在下一个安全的模型轮次边界先把它作为会话事件持久化，再构造
-下一次模型请求。它在模型协议中的角色是 `user`；排队消息扩展会记录
-`source: "plugin/toolloopwarning"`，供消费方区分框架注入和用户直接输入。该事件会继续
-参与后续历史与回放。如果 invocation 队列在入队前被并发关闭或清理，插件会记录 debug
-日志并继续执行，不生成提醒或持久化事件。
+提醒的 `user` 角色只是模型协议形态，不表示文本由人类输入。提醒只存在于当前模型请求：
+它不会作为 session event 追加，也不会在后续 Run 中作为 history 恢复。普通 standalone
+summary 只读取已持久化 event，因此不会把提醒作为 source content；但显式启用 cache-safe
+summary forking 时，summarizer 会复用最终模型请求，提醒会进入 summarizer 输入，并可能间接
+影响最终持久化的派生 summary。Execution Trace 同样会在 completion artifact 上记录最终请求，
+但不会把它写成 session history。模型基于提醒生成的响应继续遵循正常的 session 行为。
 
-该插件会在 `AfterToolMessages` 阶段关联工具调用元数据，并在完整的 Runner `OnEvent`
-变换链结束后计算指纹，因此结果不依赖它与结果变换插件之间的注册顺序。两个工具轮次之间
-如果消费了一条其他来源的排队用户消息，则两者不再相邻；插件自身的提醒不会重置检测状态。
-对于克隆出的子 invocation，插件只在确实需要提醒时创建本地队列，不会借用主 agent 的
-用户引导队列。
+检测基于 `BeforeModel` 时可见的请求，因此 history projection、工具结果转换、summary
+cutoff 和 context compaction 已经反映在待比较内容中。插件在 `AfterModel` 确认提醒；如果
+其他 callback 在此之前移除提醒，本次 streak 不会被记为已提醒，后续仍可再次注入。
+`BeforeModel` 返回的 custom response 同样会进入 `AfterModel`，所以这里确认的是框架的模型
+阶段已经处理该请求，而不是证明一定调用了外部 provider。
 
 可使用 `WithExcludedToolNames(...)` 排除轮询等预期会重复的工具；可使用
 `WithWarningMessage(...)` 自定义或本地化提醒内容。
