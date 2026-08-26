@@ -358,22 +358,38 @@ func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS st
 	var members []string
 	var err error
 
+	beforeID := ""
 	if filter != nil && filter.Before != nil {
-		beforeID := graph.GetCheckpointID(filter.Before)
-		if beforeID != "" {
-			beforeScore, err := s.getCheckpointScore(ctx, lineageID, checkpointNS, beforeID)
+		beforeID = graph.GetCheckpointID(filter.Before)
+	}
+
+	// beforeApplied is set once members were fetched with an inclusive score
+	// bound around the cursor, so they still need exact-timestamp filtering.
+	beforeApplied := false
+	if beforeID != "" {
+		beforeScore, err := s.getCheckpointScore(ctx, lineageID, checkpointNS, beforeID)
+		if err != nil {
+			return nil, err
+		}
+		if beforeScore > 0 {
+			// Reverse order (newest first) keeps List consistent with the
+			// CheckpointSaver contract and the inmemory/sqlite savers when
+			// combined with filter.Limit; see issue #2503.
+			//
+			// The upper bound is inclusive: Redis ZSET scores are IEEE-754
+			// doubles that cannot represent nanosecond timestamps exactly
+			// beyond 2^53, so distinct checkpoints can share one score. An
+			// exclusive bound would drop the whole bucket and silently lose
+			// checkpoints that are strictly before the cursor. Same-score
+			// candidates are filtered by their exact timestamps below.
+			members, err = s.client.ZRevRangeByScore(ctx, key, &redis.ZRangeBy{
+				Min: "0",
+				Max: fmt.Sprintf("%d", beforeScore),
+			}).Result()
 			if err != nil {
 				return nil, err
 			}
-			if beforeScore > 0 {
-				// Reverse order (newest first) keeps List consistent with the
-				// CheckpointSaver contract and the inmemory/sqlite savers when
-				// combined with filter.Limit; see issue #2503.
-				members, err = s.client.ZRevRangeByScore(ctx, key, &redis.ZRangeBy{
-					Min: "0",
-					Max: fmt.Sprintf("(%d", beforeScore),
-				}).Result()
-			}
+			beforeApplied = true
 		}
 	}
 
@@ -394,7 +410,19 @@ func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS st
 			)
 			continue
 		}
+		if beforeApplied && id == beforeID {
+			// Exclude the cursor checkpoint itself; exact-timestamp filtering
+			// below can only compare against it, not drop it.
+			continue
+		}
 		checkpointIDs = append(checkpointIDs, id)
+	}
+
+	if beforeApplied {
+		checkpointIDs, err = s.filterBeforeIDs(ctx, lineageID, checkpointNS, beforeID, checkpointIDs)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return checkpointIDs, nil
@@ -407,6 +435,88 @@ func (s *Saver) getCheckpointScore(ctx context.Context, lineageID, checkpointNS,
 		return 0, err
 	}
 	return int64(score), nil
+}
+
+// filterBeforeIDs keeps only the checkpoints strictly before the cursor and
+// orders them by their exact nanosecond timestamps, newest first. Redis ZSET
+// scores are doubles, so checkpoints whose timestamps exceed 2^53 can share the
+// cursor's score; the exact timestamp stored in each checkpoint hash decides
+// membership and order. If the cursor's exact timestamp is unavailable, the
+// score-based result is returned unchanged.
+func (s *Saver) filterBeforeIDs(ctx context.Context, lineageID, checkpointNS, beforeID string, ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return ids, nil
+	}
+	beforeTS, err := s.getCheckpointTS(ctx, lineageID, checkpointNS, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	if beforeTS <= 0 {
+		// Cursor hash data is unavailable; keep the score-based result.
+		return ids, nil
+	}
+
+	cmds, err := s.client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		for _, id := range ids {
+			pipe.HGet(ctx, checkpointKey(lineageID, checkpointNS, id), tsKey)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	type tsEntry struct {
+		id string
+		ts int64
+	}
+	entries := make([]tsEntry, 0, len(ids))
+	for i, id := range ids {
+		cmd, ok := cmds[i].(*redis.StringCmd)
+		if !ok {
+			return nil, fmt.Errorf("unexpected hget result type %T", cmds[i])
+		}
+		ts := int64(0)
+		if cmd.Err() == nil {
+			if ts, err = strconv.ParseInt(cmd.Val(), 10, 64); err != nil {
+				// Treat malformed timestamps as unknown and drop the
+				// candidate rather than misordering the result.
+				ts = 0
+			}
+		}
+		if ts > 0 && ts < beforeTS {
+			entries = append(entries, tsEntry{id: id, ts: ts})
+		}
+	}
+
+	// Newest first. Equal timestamps keep the ZSET order, which is a stable
+	// tie-breaker (reverse lexicographical member order in Redis).
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].ts > entries[j].ts
+	})
+
+	sortedIDs := make([]string, len(entries))
+	for i, entry := range entries {
+		sortedIDs[i] = entry.id
+	}
+	return sortedIDs, nil
+}
+
+// getCheckpointTS returns the exact nanosecond timestamp stored in the
+// checkpoint hash, or 0 if the checkpoint data is unavailable.
+func (s *Saver) getCheckpointTS(ctx context.Context, lineageID, checkpointNS, checkpointID string) (int64, error) {
+	val, err := s.client.HGet(ctx, checkpointKey(lineageID, checkpointNS, checkpointID), tsKey).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	ts, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse timestamp: %w", err)
+	}
+	return ts, nil
 }
 
 // Put stores the checkpoint and returns the updated config with checkpoint ID.

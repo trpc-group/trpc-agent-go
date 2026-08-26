@@ -1459,3 +1459,72 @@ func TestRedisCheckpointSaverListBeforeFilterOrder(t *testing.T) {
 		assert.Empty(t, got)
 	})
 }
+
+func TestRedisCheckpointSaverListBeforeFilterSameScore(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	lineageID := "test-lineage-before-same-score"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
+
+	// Nanosecond timestamps beyond 2^53 all round to the same Redis ZSET
+	// score (IEEE-754 double): 1<<60, (1<<60)+1 and (1<<60)+2.
+	const base = int64(1) << 60
+	var configs []map[string]any
+	for i := 0; i < 3; i++ {
+		checkpoint := graph.NewCheckpoint(
+			map[string]any{"step": i},
+			map[string]int64{"step": int64(i + 1)},
+			map[string]map[string]int64{},
+		)
+		checkpoint.Timestamp = time.Unix(0, base+int64(i))
+		metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, i)
+
+		req := graph.PutRequest{
+			Config:      config,
+			Checkpoint:  checkpoint,
+			Metadata:    metadata,
+			NewVersions: map[string]int64{"step": int64(i + 1)},
+		}
+		updatedConfig, err := saver.Put(ctx, req)
+		require.NoError(t, err)
+		configs = append(configs, updatedConfig)
+	}
+
+	idOf := func(idx int) string {
+		return graph.GetCheckpointID(configs[idx])
+	}
+
+	t.Run("before newest checkpoint returns earlier same-score checkpoints newest-first", func(t *testing.T) {
+		// Cursor at ck3 (1<<60)+2: ck1 and ck2 share its ZSET score and must
+		// still be returned, ordered by exact timestamp.
+		filter := &graph.CheckpointFilter{Before: configs[2]}
+		got, err := saver.List(ctx, config, filter)
+		require.NoError(t, err)
+		require.Len(t, got, 2)
+		assert.Equal(t, idOf(1), got[0].Checkpoint.ID)
+		assert.Equal(t, idOf(0), got[1].Checkpoint.ID)
+	})
+
+	t.Run("before newest checkpoint with limit returns the immediately preceding one", func(t *testing.T) {
+		filter := &graph.CheckpointFilter{Before: configs[2], Limit: 1}
+		got, err := saver.List(ctx, config, filter)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, idOf(1), got[0].Checkpoint.ID)
+	})
+
+	t.Run("before oldest checkpoint returns empty", func(t *testing.T) {
+		// Cursor at ck1 (1<<60): same-score candidates ck2/ck3 are newer and
+		// must be excluded by exact timestamp.
+		filter := &graph.CheckpointFilter{Before: configs[0]}
+		got, err := saver.List(ctx, config, filter)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+}
