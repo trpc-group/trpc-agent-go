@@ -155,6 +155,8 @@ type benchmarkReplacementSessionService struct {
 	*benchmarkSessionService
 }
 
+var _ session.RewindService = (*benchmarkReplacementSessionService)(nil)
+
 func (*benchmarkSessionService) GetSession(
 	_ context.Context,
 	key session.Key,
@@ -196,15 +198,14 @@ func (s *benchmarkReplacementSessionService) GetSession(
 func (*benchmarkReplacementSessionService) Rewind(
 	_ context.Context,
 	req sessionrevision.RewindRequest,
-) (*sessionrevision.StorageRewindResult, error) {
+) (*session.RewindResult, error) {
 	sess := session.NewSession(
 		req.Key.AppName,
 		req.Key.UserID,
 		req.Key.SessionID,
 	)
 	sessionrevision.SetGeneration(sess, 1)
-	return &sessionrevision.StorageRewindResult{
-		ActiveSession: sess,
-		Applied:       true,
+	return &session.RewindResult{
+		Session: sess,
 	}, nil
 }
