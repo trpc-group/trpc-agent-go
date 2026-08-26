@@ -353,6 +353,10 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 	return tuples, nil
 }
 
+// getCheckpointIDs returns the checkpoint IDs for the lineage/namespace in
+// newest-first order. When filter.Before is set, only checkpoints strictly
+// before the cursor checkpoint are returned, ordered by their exact nanosecond
+// timestamps.
 func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS string, filter *graph.CheckpointFilter) ([]string, error) {
 	key := checkpointTSKey(lineageID, checkpointNS)
 	var members []string
@@ -462,9 +466,13 @@ func (s *Saver) filterBeforeIDs(ctx context.Context, lineageID, checkpointNS, be
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return nil, err
 	}
+	// A redis.Nil pipeline error means the first candidate's hash data is
+	// missing (e.g. its checkpoint expired while the ZSET entry remains); the
+	// per-command results below still carry each candidate's own error, so
+	// missing data is handled candidate by candidate.
 
 	type tsEntry struct {
 		id string
