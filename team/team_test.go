@@ -860,7 +860,7 @@ func TestTeam_RunCoordinator_PreservesCustomInvocationState(t *testing.T) {
 	require.Equal(t, "value", value)
 }
 
-func TestTeam_RunCoordinator_MemberToolUsesMemberSurfaceRootNodeID(t *testing.T) {
+func TestTeam_RunCoordinator_MemberToolSeparatesTraceAndSurfaceRoots(t *testing.T) {
 	member := &traceRecordingAgent{name: testMemberNameOne}
 	coordinator := &testCoordinator{name: testCoordinatorName}
 	coordinator.runFunc = func(
@@ -885,6 +885,53 @@ func TestTeam_RunCoordinator_MemberToolUsesMemberSurfaceRootNodeID(t *testing.T)
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(tm),
 		agent.WithInvocationSession(session.NewSession(testAppName, testUserID, testSessionID)),
+		agent.WithInvocationTraceNodeID("workflow/trace/team"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			CustomAgentConfigs: surfacepatch.WithRootNodeID(
+				nil,
+				"workflow/surface/team",
+			),
+		}),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	ch, err := tm.Run(ctx, inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Equal(t, "workflow/trace/team", coordinator.gotTraceNodeID)
+	require.Equal(t, "workflow/surface/team/coordinator", coordinator.gotSurfaceRootNodeID)
+	require.Equal(t, "workflow/trace/team/member_one", member.gotTraceNodeID)
+	require.Equal(t, "workflow/surface/team/member_one", member.gotSurfaceRootNodeID)
+}
+
+func TestTeam_RunCoordinator_DoesNotMountOrdinaryAgentToolAsMember(t *testing.T) {
+	member := &traceRecordingAgent{name: testMemberNameOne}
+	helper := &traceRecordingAgent{name: "helper"}
+	helperTool := agenttool.NewTool(helper)
+	coordinator := &testCoordinator{name: testCoordinatorName}
+	coordinator.runFunc = func(
+		ctx context.Context,
+		_ *agent.Invocation,
+		toolSets []tool.ToolSet,
+	) (<-chan *event.Event, error) {
+		_, err := helperTool.Call(ctx, []byte(testToolArgs))
+		require.NoError(t, err)
+		tools := itool.NewNamedToolSet(toolSets[0]).Tools(ctx)
+		_, err = tools[0].(tool.CallableTool).Call(ctx, []byte(testToolArgs))
+		require.NoError(t, err)
+		ch := make(chan *event.Event, 1)
+		go func() {
+			defer close(ch)
+			ch <- event.New("done", coordinator.name)
+		}()
+		return ch, nil
+	}
+	tm, err := New(coordinator, []agent.Agent{member})
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationSession(session.NewSession(testAppName, testUserID, testSessionID)),
 		agent.WithInvocationTraceNodeID("workflow/team"),
 		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
 	)
@@ -893,10 +940,8 @@ func TestTeam_RunCoordinator_MemberToolUsesMemberSurfaceRootNodeID(t *testing.T)
 	require.NoError(t, err)
 	for range ch {
 	}
-	require.Equal(t, "workflow/team", coordinator.gotTraceNodeID)
-	require.Equal(t, "workflow/team/coordinator", coordinator.gotSurfaceRootNodeID)
+	require.Equal(t, "helper", helper.gotTraceNodeID)
 	require.Equal(t, "workflow/team/member_one", member.gotTraceNodeID)
-	require.Equal(t, "workflow/team/member_one", member.gotSurfaceRootNodeID)
 }
 
 func TestTeam_RunCoordinator_ClearsMountedRootsOnCoordinatorError(t *testing.T) {
@@ -908,6 +953,7 @@ func TestTeam_RunCoordinator_ClearsMountedRootsOnCoordinatorError(t *testing.T) 
 	) (<-chan *event.Event, error) {
 		require.Equal(t, "workflow/team/coordinator", agent.InvocationSurfaceRootNodeID(inv))
 		require.Equal(t, "workflow/team", teamtrace.MemberTraceRootForInvocation(inv))
+		require.Equal(t, "workflow/team", teamtrace.MemberSurfaceRootForInvocation(inv))
 		return nil, errors.New("coordinator failed")
 	}
 	tm, err := New(coordinator, []agent.Agent{testAgent{name: testMemberNameOne}})
@@ -923,6 +969,7 @@ func TestTeam_RunCoordinator_ClearsMountedRootsOnCoordinatorError(t *testing.T) 
 	require.EqualError(t, err, "coordinator failed")
 	require.Equal(t, "workflow/team", agent.InvocationSurfaceRootNodeID(inv))
 	require.Empty(t, teamtrace.MemberTraceRootForInvocation(inv))
+	require.Empty(t, teamtrace.MemberSurfaceRootForInvocation(inv))
 }
 
 func TestWrapCoordinatorInvocationState_Guards(t *testing.T) {

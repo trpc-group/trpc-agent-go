@@ -3683,20 +3683,18 @@ func TestTool_StreamableCall_FlushesParentSession(t *testing.T) {
 	}
 }
 
-func TestTool_StreamableCall_PropagatesSurfaceRootNodeID(t *testing.T) {
+func TestTool_StreamableCall_AppliesMemberMountFromContext(t *testing.T) {
 	sa := &streamingMockAgent{name: "stream-agent"}
 	at := NewTool(sa, WithStreamInner(true))
 	parent := agent.NewInvocation(
 		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
 		agent.WithInvocationEventFilterKey("parent-agent"),
-		agent.WithInvocationRunOptions(agent.RunOptions{
-			CustomAgentConfigs: teamtrace.WithMemberTraceRoot(
-				nil,
-				"workflow/team",
-			),
-		}),
 	)
-	ctx := agent.NewInvocationContext(context.Background(), parent)
+	var ctx context.Context = agent.NewInvocationContext(context.Background(), parent)
+	ctx = teamtrace.ContextWithMemberMount(ctx, teamtrace.MemberMount{
+		TraceNodeID:       "workflow/team/stream-agent",
+		SurfaceRootNodeID: "workflow/surface/team/stream-agent",
+	})
 	reader, err := at.StreamableCall(ctx, []byte(`{"request":"hi"}`))
 	require.NoError(t, err)
 	defer reader.Close()
@@ -3708,7 +3706,7 @@ func TestTool_StreamableCall_PropagatesSurfaceRootNodeID(t *testing.T) {
 		require.NoError(t, recvErr)
 	}
 	require.Equal(t, "workflow/team/stream-agent", sa.seenTraceNodeID)
-	require.Equal(t, "workflow/team/stream-agent", sa.seenSurfaceRootNodeID)
+	require.Equal(t, "workflow/surface/team/stream-agent", sa.seenSurfaceRootNodeID)
 }
 
 func TestTool_StreamableCall_NotifiesCompletion(t *testing.T) {

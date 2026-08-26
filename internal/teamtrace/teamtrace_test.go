@@ -9,12 +9,62 @@
 package teamtrace
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+type layoutAgent string
+
+func (a layoutAgent) Run(
+	context.Context,
+	*agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (a layoutAgent) Tools() []tool.Tool { return nil }
+
+func (a layoutAgent) Info() agent.Info { return agent.Info{Name: string(a)} }
+
+func (a layoutAgent) SubAgents() []agent.Agent { return nil }
+
+func (a layoutAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func TestNewCoordinatorLayout_UsesStaticExportOrder(t *testing.T) {
+	layout := NewCoordinatorLayout(
+		"workflow/team",
+		[]agent.Agent{
+			layoutAgent("member/one"),
+			layoutAgent("member~two"),
+		},
+	)
+	require.Equal(t, "workflow/team/coordinator", layout.CoordinatorNodeID)
+	require.Equal(t, []string{
+		"workflow/team/member~1one",
+		"workflow/team/member~0two",
+	}, layout.MemberNodeIDs)
+}
+
+func TestMemberMountContextHelpers(t *testing.T) {
+	mount := MemberMount{
+		TraceNodeID:       "trace/team/member",
+		SurfaceRootNodeID: "surface/team/member",
+	}
+	ctx := ContextWithMemberMount(context.Background(), mount)
+	got, ok := MemberMountFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, mount, got)
+	_, ok = MemberMountFromContext(context.Background())
+	require.False(t, ok)
+}
 
 func TestRootNodeID_PrefersMountedSurfaceRoot(t *testing.T) {
 	inv := agent.NewInvocation(
@@ -80,6 +130,21 @@ func TestMemberTraceRootForInvocation_PrefersInvocationStateAndFallsBackToConfig
 
 	ClearMemberTraceRootForInvocation(inv)
 	require.Equal(t, "workflow/team/config", MemberTraceRootForInvocation(inv))
+}
+
+func TestMemberSurfaceRootForInvocation_StateHelpers(t *testing.T) {
+	var nilInv *agent.Invocation
+	SetMemberSurfaceRootForInvocation(nilInv, "workflow/team")
+	ClearMemberSurfaceRootForInvocation(nilInv)
+	require.Empty(t, MemberSurfaceRootForInvocation(nilInv))
+	inv := agent.NewInvocation()
+	require.Empty(t, MemberSurfaceRootForInvocation(inv))
+	SetMemberSurfaceRootForInvocation(inv, "workflow/team")
+	require.Equal(t, "workflow/team", MemberSurfaceRootForInvocation(inv))
+	SetMemberSurfaceRootForInvocation(inv, "")
+	require.Equal(t, "workflow/team", MemberSurfaceRootForInvocation(inv))
+	ClearMemberSurfaceRootForInvocation(inv)
+	require.Empty(t, MemberSurfaceRootForInvocation(inv))
 }
 
 func TestMemberTraceRootForInvocation_NilAndEmptyInput(t *testing.T) {
