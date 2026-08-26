@@ -866,11 +866,10 @@ func (r *runner) persistAgentRunError(
 ) {
 	persistCtx, cancel := sessionPersistenceContext(ctx)
 	defer cancel()
-
 	errorEvent := event.NewErrorEvent(
 		invocation.InvocationID,
 		ag.Info().Name,
-		model.ErrorTypeRunError,
+		agentRunErrorType(ctx, runErr),
 		runErr.Error(),
 	)
 	agent.InjectIntoEvent(invocation, errorEvent)
@@ -884,6 +883,25 @@ func (r *runner) persistAgentRunError(
 	if appendErr != nil {
 		log.Errorf("failed to append agent run error event: %v", appendErr)
 	}
+}
+
+func agentRunErrorType(ctx context.Context, runErr error) string {
+	if isAgentRunCancellationError(ctx, runErr) {
+		return model.ErrorTypeCancelled
+	}
+	return model.ErrorTypeRunError
+}
+
+func isAgentRunCancellationError(ctx context.Context, runErr error) bool {
+	if errors.Is(runErr, context.Canceled) ||
+		errors.Is(runErr, context.DeadlineExceeded) {
+		return true
+	}
+	if ctx == nil || ctx.Err() == nil {
+		return false
+	}
+	cause := context.Cause(ctx)
+	return errors.Is(runErr, cause) || errors.Is(cause, runErr)
 }
 
 func (r *runner) applyRunnerRunDefaults(ro *agent.RunOptions) {
