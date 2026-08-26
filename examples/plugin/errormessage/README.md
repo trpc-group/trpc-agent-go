@@ -51,7 +51,8 @@ above to choose a friendlier message:
 In both cases `Response.Error` is left intact, so debugging tools and
 downstream consumers still see the original reason.
 
-Runner marks both messages as framework-synthesised. `LLMAgent` omits this
+Runner marks its fallback message as framework-synthesised, and the ErrorMessage
+plugin marks its customised message the same way. `LLMAgent` omits this
 presentation-only content from subsequent model requests by default while the
 persisted events shown here remain unchanged. Configure an `LLMAgent` with
 `llmagent.WithIncludeSyntheticErrorMessages(true)` only when legacy context

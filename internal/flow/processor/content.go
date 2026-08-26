@@ -486,7 +486,10 @@ func WithEventMessageProjector(
 }
 
 // WithIncludeSyntheticErrorMessages controls whether presentation content
-// synthesized for error events is included in model requests.
+// synthesized for error events is included in model requests. False is the
+// default: synthesized error content is omitted, and adjacent user messages
+// exposed by the omission may be merged. True includes the synthesized content
+// and preserves the previous model-context behavior.
 func WithIncludeSyntheticErrorMessages(include bool) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.includeSyntheticErrorMessages = include
