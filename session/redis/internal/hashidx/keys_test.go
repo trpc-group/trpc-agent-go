@@ -166,11 +166,12 @@ func TestKeyBuilder_SessionKeys(t *testing.T) {
 	kb := newKeyBuilder("")
 	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
 	keys := kb.SessionKeys(key)
-	assert.Len(t, keys, 4)
+	assert.Len(t, keys, 5)
 	assert.Equal(t, "hashidx:meta:app:{u}:s", keys[0])
 	assert.Equal(t, "hashidx:evtdata:app:{u}:s", keys[1])
 	assert.Equal(t, "hashidx:evtidx:time:app:{u}:s", keys[2])
 	assert.Equal(t, "hashidx:sesssum:app:{u}:s", keys[3])
+	assert.Equal(t, "hashidx:revision:app:{u}:s", keys[4])
 }
 
 func TestKeyBuilder_AppStateKey(t *testing.T) {

@@ -121,13 +121,20 @@ sessionService, err := clickhouse.NewService(
 )
 ```
 
+## 替换最新一轮
+
+ClickHouse 会返回 `session.ErrRewindUnsupported`。它的
+ReplacingMergeTree 版本选择不提供跨节点 compare-and-swap 原语，因此并发 writer 无法
+安全发布唯一的 canonical replacement head。框架不会用进程内锁伪装这一保证；如果业务
+需要 latest-turn replacement，请使用支持事务转换的 backend。
+
 ## 存储结构
 
 ClickHouse 实现使用了 `ReplacingMergeTree` 引擎来处理数据更新和去重。
 
 **关键特性：**
 
-1. **ReplacingMergeTree**：利用 `updated_at` 字段，ClickHouse 会在后台自动合并相同主键的记录，保留最新版本
+1. **ReplacingMergeTree**：ClickHouse 按 `ORDER BY` 声明的排序键对记录分组，并使用 `updated_at` 作为版本列，在后台合并时保留最新版本
 2. **FINAL 查询**：所有读取操作都使用 `FINAL` 关键字（如 `SELECT ... FINAL`），确保在查询时合并所有数据部分，保证读取一致性
 3. **Soft Delete**：删除操作通过插入一条带有 `deleted_at` 时间戳的新记录实现，查询时过滤 `deleted_at IS NULL`
 

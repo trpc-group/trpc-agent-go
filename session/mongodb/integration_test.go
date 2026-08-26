@@ -26,9 +26,23 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/rewindtest"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+func TestIntegrationLatestTurnReplacement(t *testing.T) {
+	for _, async := range []bool{false, true} {
+		t.Run(fmt.Sprintf("async=%t", async), func(t *testing.T) {
+			_, svc, _ := newIntegrationService(t, WithEnableAsyncPersist(async))
+			if async {
+				rewindtest.RunAsync(t, svc)
+			} else {
+				rewindtest.Run(t, svc)
+			}
+		})
+	}
+}
 
 const mongodbIntegrationURIEnv = "MONGODB_INTEGRATION_URI"
 

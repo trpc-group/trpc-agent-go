@@ -224,6 +224,168 @@ The following inputs are not re-hosted by this feature:
 
 Failure behavior is fail-closed: if Artifact storage is required but unavailable, or if artifact save/load fails, the operation returns an error instead of silently dropping content. If externalization fails before the event is handed to the session backend, the framework submits best-effort delete requests for artifacts saved by that attempt. After the append has been handed to the backend, artifacts are retained on ambiguous errors to avoid deleting content that a persisted event may already reference.
 
+### Rewinding a Session Projection
+
+`session.RewindService` is an optional capability layered beside
+`session.Service`, so existing third-party session implementations remain
+source compatible. All built-in concrete session services implement the
+interface. In-memory, Redis, MySQL/TDSQL, PostgreSQL, PGVector, SQLite, and
+MongoDB perform the transition; no-op and ClickHouse return
+`session.ErrRewindUnsupported` because they cannot atomically restore a
+persisted multi-part projection.
+
+Callers that need the storage operation directly can type-assert the capability:
+
+```go
+rewinder, ok := service.(session.RewindService)
+if !ok {
+    return session.ErrRewindUnsupported
+}
+result, err := rewinder.Rewind(ctx, session.RewindRequest{
+    Key:                   key,
+    TargetRequestID:       targetRequestID,
+    ExpectedHeadRequestID: observedHeadRequestID,
+    IdempotencyKey:        rewindOperationID,
+})
+```
+
+`TargetRequestID` selects the retained boundary immediately before the target
+request. `ExpectedHeadRequestID` is an independent compare-and-swap condition:
+the active head must still be the one observed by the caller. Keeping the
+target and concurrency condition separate avoids conflating their roles as the
+storage protocol evolves. Current built-in storage retains only the latest
+occurrence, so the two IDs must currently identify the same request; an older
+target returns `session.ErrRewindUnavailable`. Use request IDs that are unique
+within a Session. Built-in storage fails closed with
+`session.ErrRewindUnavailable` when reuse makes the target occurrence
+ambiguous; avoiding an ABA conflict would otherwise require a distinct
+occurrence token.
+
+The idempotency key identifies the complete rewind operation. Reuse it only
+when retrying the same target and expected head after an outcome-unknown error,
+and never recycle it for a different operation.
+A successful result contains the authoritative active session projection.
+Discard any older `Session` value and continue with `result.Session`. Its first
+persistable event append is fenced: if another writer changes the active revision
+first, the append makes no partial mutation and returns
+`session.ErrRewindConflict`.
+
+### Replacing the Latest Turn
+
+Use `Runner.Run` with `agent.WithLatestTurnReplacement` to edit and resend the
+latest persisted turn, including one interrupted before a final response. The
+logical `SessionID` stays unchanged. The old request ID identifies the turn
+that must still be latest, while the ordinary run request ID identifies the
+replacement run.
+
+```go
+events, err := r.Run(
+    ctx,
+    "user123",
+    "session-001",
+    model.NewUserMessage("edited message"),
+    agent.WithRequestID("request-after-edit"),
+    agent.WithLatestTurnReplacement("request-before-edit"),
+)
+if err != nil {
+    return err
+}
+for event := range events {
+    if event.Error != nil {
+        return event.Error
+    }
+}
+```
+
+Consume `events` exactly as for an ordinary run. Both options are required, and
+the IDs must differ. Replacement cannot be combined with resume or history
+seeding through `RunOptions.Messages`, and the replacement message must carry a
+payload.
+
+Retain the exact old/new ID pair until `Run` returns an event channel. A durable
+transition can commit before a later hydration or connection read fails, so an
+error returned directly by `Run` can have an unknown outcome. Retry only when
+the durable transition may have committed before that later failure, using the
+same edited message and ID pair. Validation, conflict, unsupported, and
+unavailable errors have known outcomes and should be handled directly instead
+of blindly retried. Once `Run` returns the channel, the replacement and new
+user-turn boundary are committed. Do not retry the replacement because of a
+later event-stream error.
+
+If a retry finds that the new user-turn boundary was already persisted before
+the earlier error, Runner returns `session.ErrRewindConflict`
+instead of appending the edited message twice. The replacement is then known to
+be canonical, but Runner does not automatically repeat an Agent start whose
+outcome may also have been ambiguous.
+
+Before starting the new run, Runner atomically restores session-scoped events,
+state, summaries, and Track events to the complete checkpoint before the old
+request. The backend verifies the checkpointed event and Track prefixes before
+discarding the latest tail; it does not retain a second copy of the discarded
+projection. App state, user state, model/tool calls, artifact writes, and other
+external side effects are intentionally not rolled back.
+
+Safety rules:
+
+- The latest canonical Runner turn can be replaced whether it completed or was
+  interrupted. If it is still active in the same Runner, cancel it and consume
+  its event stream until the channel closes before replacing it. An earlier
+  attempt returns `session.ErrRewindUnavailable`.
+- A persisted user turn left unfinished by a process failure remains
+  replaceable after restart. Missing checkpoints, already-replaced turns, and
+  ambiguously attributed history return
+  `session.ErrRewindUnavailable`.
+- A latest-request mismatch or conflicting retry returns
+  `session.ErrRewindConflict`.
+- Unsupported storage returns `session.ErrRewindUnsupported`
+  before the replacement run starts.
+- Session projections loaded before a successful replacement are stale.
+  Supporting backends fence their later event, state, summary, and Track writes.
+- Track producers running inside a Runner should propagate its context when
+  calling `AppendTrackEvent`; the framework associates that write with the
+  active request privately. The AG-UI tracker does this automatically and
+  attempts a synchronous Track flush before a terminal Runner event becomes
+  visible. A flush failure is logged but does not suppress the protocol
+  terminal event.
+- A turn that persists routed output into another session is unavailable for
+  replacement because a single-session projection cannot restore it atomically.
+- Replacement preserves the source session's remaining TTL; it does not extend
+  the session lifetime.
+- Checkpoints retain session-scoped state, summaries, timestamps, and compact
+  digests of the event and Track prefixes. They do not copy event or Track
+  payloads and no discarded-projection archive accumulates. If the verified
+  prefix is no longer available, replacement fails closed.
+- Backends advance the prefix digests and counts atomically with event and
+  Track writes. An existing Session performs one authoritative bootstrap read;
+  later turn starts reuse the rolling prefix instead of scanning its full
+  history. Trimming or independent TTL cleanup of Session-owned history
+  invalidates the rolling prefix, so the next turn safely bootstraps it again.
+- Backends retain a bounded recent set of replacement idempotency identities
+  for reuse detection. Retry an ambiguous transition promptly with its
+  original ID pair.
+
+The capability does not add a method to `session.Service`. Its storage protocol
+is private because generation fencing and checkpoint metadata must evolve as
+one contract; applications can use the direct capability or let `Runner.Run`
+coordinate the latest-turn edit workflow. Memory, SQLite, Redis
+HashIdx/ZSet, PostgreSQL, PGVector, MySQL/TDSQL, and MongoDB support
+replacement. The externalization wrapper forwards support from its wrapped
+service. ClickHouse and Noop return unsupported; custom services can implement
+`session.RewindService` with their own atomic storage protocol.
+
+The protocol requires no new relational tables or migration. PostgreSQL,
+PGVector, MySQL/TDSQL, and SQLite store a versioned private sidecar in the
+existing session-state JSON; it is outside the user-visible `Session.State`.
+MongoDB stores the same private revision metadata in the existing session
+document. Redis uses one expiring private revision key in the Session hash
+slot. No backend creates a revision-archive table or collection.
+
+Upgrade every instance that can write the same Session store before enabling
+replacement. Older writers ignore the private metadata and can overwrite it.
+Existing Sessions need no migration; after an upgraded Runner persists the
+start of a new turn, that turn becomes eligible for replacement. This also
+applies to deployments using `WithSkipDBInit(true)`.
+
 ## Core Concepts
 
 ### Session Structure

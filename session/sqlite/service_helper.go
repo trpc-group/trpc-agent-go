@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -132,7 +133,6 @@ AND deleted_at IS NULL`
 			}
 		}
 	}
-
 	return mergeState(appState, userState, sess), nil
 }
 
@@ -298,21 +298,27 @@ ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
 	return out, nil
 }
 
-func (s *Service) addEvent(
+func (s *Service) addEventWithRevision(
 	ctx context.Context,
 	key session.Key,
 	evt *event.Event,
+	write sessionrevision.Write,
 ) error {
 	s.stateWriteMu.Lock()
 	defer s.stateWriteMu.Unlock()
 
 	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
 	var (
 		stateBytes []byte
 		expiresAt  sql.NullInt64
 	)
-	err := s.db.QueryRowContext(
+	err = tx.QueryRowContext(
 		ctx,
 		fmt.Sprintf(
 			`SELECT state, expires_at FROM %s
@@ -332,8 +338,9 @@ AND deleted_at IS NULL`,
 	}
 
 	var sessState SessionState
-	if err := json.Unmarshal(stateBytes, &sessState); err != nil {
-		return fmt.Errorf("unmarshal session state: %w", err)
+	record, err := sessionrevision.DecodeState(stateBytes, &sessState)
+	if err != nil {
+		return err
 	}
 
 	if expiresAt.Valid && unixNanoToTime(expiresAt.Int64).Before(now) {
@@ -346,6 +353,40 @@ AND deleted_at IS NULL`,
 			key.SessionID,
 		)
 	}
+	if err := checkRevisionGeneration(record, write); err != nil {
+		return err
+	}
+	if write.Start != nil {
+		current, err := s.loadTurnBoundaryTx(
+			ctx, tx, key, record, &sessState,
+		)
+		if err != nil {
+			return fmt.Errorf("load authoritative pre-turn session: %w", err)
+		}
+		write.Boundary, err = sessionrevision.NewBoundaryFromProjection(
+			current, record.Projection, write.Start.RestoreState,
+		)
+		if err != nil {
+			return fmt.Errorf("capture session boundary before latest turn: %w", err)
+		}
+	}
+	shouldStoreEvent := evt != nil && evt.Response != nil &&
+		!evt.IsPartial && evt.IsValidContent()
+	sessionrevision.ApplyEventWrite(
+		record,
+		write,
+		evt,
+		shouldStoreEvent,
+	)
+	if shouldStoreEvent {
+		if err := sessionrevision.AppendProjectionEvent(
+			record, evt,
+		); err != nil {
+			return fmt.Errorf(
+				"advance session revision projection: %w", err,
+			)
+		}
+	}
 
 	sessState.UpdatedAt = now
 	if sessState.State == nil {
@@ -353,9 +394,9 @@ AND deleted_at IS NULL`,
 	}
 	session.ApplyEventStateDeltaMap(sessState.State, evt)
 
-	updatedState, err := json.Marshal(sessState)
+	updatedState, err := sessionrevision.EncodeState(&sessState, record)
 	if err != nil {
-		return fmt.Errorf("marshal session state: %w", err)
+		return err
 	}
 
 	eventBytes, err := json.Marshal(evt)
@@ -364,12 +405,6 @@ AND deleted_at IS NULL`,
 	}
 
 	newExpires := calculateExpiresAt(now, s.opts.sessionTTL)
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(
 		ctx,
@@ -391,7 +426,7 @@ AND deleted_at IS NULL`,
 		return fmt.Errorf("update session state: %w", err)
 	}
 
-	if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() {
+	if shouldStoreEvent {
 		_, err = tx.ExecContext(
 			ctx,
 			fmt.Sprintf(
@@ -411,28 +446,33 @@ AND deleted_at IS NULL`,
 			return fmt.Errorf("insert event: %w", err)
 		}
 	}
-
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}
 	return nil
 }
 
-func (s *Service) addTrackEvent(
+func (s *Service) addTrackEventWithRevision(
 	ctx context.Context,
 	key session.Key,
 	trackEvent *session.TrackEvent,
+	write sessionrevision.Write,
 ) error {
 	s.stateWriteMu.Lock()
 	defer s.stateWriteMu.Unlock()
 
 	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
 	var (
 		stateBytes []byte
 		expiresAt  sql.NullInt64
 	)
-	err := s.db.QueryRowContext(
+	err = tx.QueryRowContext(
 		ctx,
 		fmt.Sprintf(
 			`SELECT state, expires_at FROM %s
@@ -452,8 +492,9 @@ AND deleted_at IS NULL`,
 	}
 
 	var sessState SessionState
-	if err := json.Unmarshal(stateBytes, &sessState); err != nil {
-		return fmt.Errorf("unmarshal session state: %w", err)
+	record, err := sessionrevision.DecodeState(stateBytes, &sessState)
+	if err != nil {
+		return err
 	}
 
 	if expiresAt.Valid && unixNanoToTime(expiresAt.Int64).Before(now) {
@@ -465,6 +506,15 @@ AND deleted_at IS NULL`,
 			key.UserID,
 			key.SessionID,
 		)
+	}
+	if err := checkRevisionGeneration(record, write); err != nil {
+		return err
+	}
+	sessionrevision.ApplyTrackWrite(record, write, trackEvent)
+	if err := sessionrevision.AppendProjectionTrack(
+		record, trackEvent,
+	); err != nil {
+		return fmt.Errorf("advance session revision projection: %w", err)
 	}
 
 	sess := &session.Session{
@@ -479,9 +529,9 @@ AND deleted_at IS NULL`,
 	sessState.State = sess.SnapshotState()
 	sessState.UpdatedAt = sess.UpdatedAt
 
-	updatedState, err := json.Marshal(sessState)
+	updatedState, err := sessionrevision.EncodeState(&sessState, record)
 	if err != nil {
-		return fmt.Errorf("marshal session state: %w", err)
+		return err
 	}
 
 	eventBytes, err := json.Marshal(trackEvent)
@@ -491,12 +541,6 @@ AND deleted_at IS NULL`,
 
 	sessionExpires := calculateExpiresAt(now, s.opts.sessionTTL)
 	trackExpires := calculateExpiresAt(now, s.opts.effectiveTrackEventTTL())
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(
 		ctx,
@@ -540,7 +584,6 @@ AND deleted_at IS NULL`,
 	if err != nil {
 		return fmt.Errorf("insert track event: %w", err)
 	}
-
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}

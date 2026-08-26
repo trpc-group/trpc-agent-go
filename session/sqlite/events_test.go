@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -43,6 +44,43 @@ func TestSessionSQLite_AppendEvent_ContextDone(t *testing.T) {
 	cancel()
 	err = svc.AppendEvent(ctx, sess, newUserEvent("hi"))
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestSessionSQLite_AppendNilEvent(t *testing.T) {
+	for _, async := range []bool{false, true} {
+		name := "sync"
+		if async {
+			name = "async"
+		}
+		t.Run(name, func(t *testing.T) {
+			db, _, cleanup := openTempSQLiteDB(t)
+			defer cleanup()
+			svc, err := NewService(
+				db,
+				WithEnableAsyncPersist(async),
+				WithAsyncPersisterNum(1),
+			)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, svc.Close()) }()
+
+			ctx := context.Background()
+			key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+			sess, err := svc.CreateSession(ctx, key, nil)
+			require.NoError(t, err)
+			require.NoError(t, svc.AppendEvent(ctx, sess, nil))
+			if async {
+				require.NoError(t, svc.flushEventPersistence(ctx, key))
+			}
+			var count int
+			require.NoError(t, svc.db.QueryRowContext(ctx, fmt.Sprintf(
+				"SELECT COUNT(*) FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ?",
+				svc.tableSessionEvents,
+			),
+				key.AppName, key.UserID, key.SessionID,
+			).Scan(&count))
+			require.Zero(t, count)
+		})
+	}
 }
 
 func TestSessionSQLite_AppendEvent_SendOnClosedChannel_NoPanic(t *testing.T) {

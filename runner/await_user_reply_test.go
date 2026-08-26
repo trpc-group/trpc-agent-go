@@ -527,7 +527,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 	t.Run("disabled", func(t *testing.T) {
 		r := &runner{}
 
-		got, rootName, lookupPath, err := r.applyAwaitUserReplyRoute(
+		got, rootName, lookupPath, _, err := r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			nil,
@@ -544,7 +544,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 	t.Run("non user message", func(t *testing.T) {
 		r := &runner{awaitUserReplyRouting: true}
 
-		got, rootName, lookupPath, err := r.applyAwaitUserReplyRoute(
+		got, rootName, lookupPath, _, err := r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			nil,
@@ -561,7 +561,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 		r := &runner{awaitUserReplyRouting: true}
 		sess := session.NewSession("app", "user", "sess")
 
-		got, rootName, lookupPath, err := r.applyAwaitUserReplyRoute(
+		got, rootName, lookupPath, _, err := r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
@@ -592,7 +592,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			}),
 		)
 
-		_, _, _, err := r.applyAwaitUserReplyRoute(
+		_, _, _, _, err := r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
@@ -623,7 +623,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			}),
 		)
 
-		got, rootName, lookupPath, err := r.applyAwaitUserReplyRoute(
+		got, rootName, lookupPath, _, err := r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
@@ -658,7 +658,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			session.WithSessionState(state),
 		)
 
-		_, _, _, err = r.applyAwaitUserReplyRoute(
+		_, _, _, _, err = r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
@@ -697,7 +697,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			session.WithSessionState(state),
 		)
 
-		_, _, _, err = r.applyAwaitUserReplyRoute(
+		_, _, _, _, err = r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
@@ -735,7 +735,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			session.WithSessionState(state),
 		)
 
-		_, _, _, err = r.applyAwaitUserReplyRoute(
+		_, _, _, _, err = r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
@@ -762,11 +762,12 @@ func TestRunner_ClearOverriddenAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 		r := &runner{sessionService: svc}
 		sess := session.NewSession("app", "user", "sess")
 
-		got, rootName, err := r.clearOverriddenAwaitUserReplyRoute(
+		got, rootName, _, err := r.clearOverriddenAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
 			ro,
+			false,
 		)
 		require.NoError(t, err)
 		require.Empty(t, rootName)
@@ -788,11 +789,12 @@ func TestRunner_ClearOverriddenAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			}),
 		)
 
-		_, _, err := r.clearOverriddenAwaitUserReplyRoute(
+		_, _, _, err := r.clearOverriddenAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
 			ro,
+			false,
 		)
 		require.NoError(t, err)
 		require.Len(t, svc.updateCalls, 1)
@@ -820,11 +822,12 @@ func TestRunner_ClearOverriddenAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			session.WithSessionState(state),
 		)
 
-		_, _, err = r.clearOverriddenAwaitUserReplyRoute(
+		_, _, _, err = r.clearOverriddenAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
 			ro,
+			false,
 		)
 		require.ErrorContains(
 			t,
@@ -844,12 +847,14 @@ func TestRunner_ClearAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 
 	t.Run("nil runner", func(t *testing.T) {
 		var r *runner
-		require.NoError(t, r.clearAwaitUserReplyRoute(ctx, key, nil))
+		_, err := r.clearAwaitUserReplyRoute(ctx, key, nil, false)
+		require.NoError(t, err)
 	})
 
 	t.Run("nil session service", func(t *testing.T) {
 		r := &runner{}
-		require.NoError(t, r.clearAwaitUserReplyRoute(ctx, key, nil))
+		_, err := r.clearAwaitUserReplyRoute(ctx, key, nil, false)
+		require.NoError(t, err)
 	})
 
 	t.Run("nil session", func(t *testing.T) {
@@ -858,7 +863,7 @@ func TestRunner_ClearAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 		}
 		r := &runner{sessionService: svc}
 
-		err := r.clearAwaitUserReplyRoute(ctx, key, nil)
+		_, err := r.clearAwaitUserReplyRoute(ctx, key, nil, false)
 		require.NoError(t, err)
 		require.Len(t, svc.updateCalls, 1)
 		require.Equal(t, key, svc.updateCalls[0].key)
@@ -881,7 +886,7 @@ func TestRunner_ClearAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			session.WithSessionState(state),
 		)
 
-		err = r.clearAwaitUserReplyRoute(ctx, key, sess)
+		_, err = r.clearAwaitUserReplyRoute(ctx, key, sess, false)
 		require.NoError(t, err)
 		require.Len(t, svc.updateCalls, 1)
 

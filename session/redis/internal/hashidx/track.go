@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -27,6 +28,17 @@ import (
 // that will be set on the session meta atomically.
 // This operation is atomic via Lua script.
 func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent, tracksState []byte) error {
+	return c.AppendTrackEventWithRevision(ctx, key, trackEvent, tracksState, sessionrevision.Write{})
+}
+
+// AppendTrackEventWithRevision persists a track event under a revision fence.
+func (c *Client) AppendTrackEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	trackEvent *session.TrackEvent,
+	tracksState []byte,
+	write sessionrevision.Write,
+) error {
 	eventJSON, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event: %w", err)
@@ -51,24 +63,53 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		c.keys.TrackTimeIndexKey(key, track),
 		c.keys.SessionMetaKey(key),
 		c.keys.TrackIndexKey(key),
+		c.keys.RevisionKey(key),
 	}
-	args := []any{
-		string(eventJSON),
-		trackEvent.Timestamp.UnixNano(),
-		ttlSeconds,
-		boolToInt(c.cfg.TrackEventTTL != nil),
-		tracksVal,
-		string(track),
-	}
+	callerExpectedHead := write.HasExpectedHead
+	for attempt := 0; attempt < revisionWriteAttempts; attempt++ {
+		preparedWrite, projectionJSON, projectionPrepared, err :=
+			c.prepareProjectionWrite(ctx, key, write,
+				func(record *sessionrevision.PersistedRecord) error {
+					return sessionrevision.AppendProjectionTrack(record, trackEvent)
+				})
+		if err != nil {
+			return fmt.Errorf("append track event: prepare revision projection: %w", err)
+		}
+		args := []any{
+			string(eventJSON),
+			trackEvent.Timestamp.UnixNano(),
+			ttlSeconds,
+			boolToInt(c.cfg.TrackEventTTL != nil),
+			tracksVal,
+			string(track),
+			boolToInt(preparedWrite.HasExpectedGeneration),
+			preparedWrite.ExpectedGeneration,
+			boolToInt(preparedWrite.HasExpectedHead),
+			preparedWrite.ExpectedHead,
+			boolToInt(projectionPrepared),
+			projectionJSON,
+			preparedWrite.RequestID,
+		}
 
-	result, err := c.runScript(ctx, luaAppendTrackEvent, keys, args...).Int64()
-	if err != nil {
-		return fmt.Errorf("append track event: %w", err)
+		result, err := c.runScript(ctx, luaAppendTrackEvent, keys, args...).Int64()
+		if err != nil {
+			return fmt.Errorf("append track event: %w", err)
+		}
+		switch result {
+		case 0:
+			return fmt.Errorf("session not found")
+		case -1:
+			return sessionrevision.ErrStaleGeneration
+		case -2:
+			if callerExpectedHead {
+				return sessionrevision.ErrRewindConflict
+			}
+			continue
+		default:
+			return nil
+		}
 	}
-	if result == 0 {
-		return fmt.Errorf("session not found")
-	}
-	return nil
+	return fmt.Errorf("append track event contention: %w", sessionrevision.ErrStaleProjection)
 }
 
 func ttlSecondsCeil(ttl time.Duration) int64 {

@@ -28,6 +28,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -69,6 +70,30 @@ type Service struct {
 	session.Service
 	artifactService artifact.Service
 	cfg             Config
+}
+
+var _ session.RewindService = (*Service)(nil)
+
+// Rewind forwards the optional mutation to the wrapped service and
+// hydrates the authoritative active projection returned by the backend.
+func (s *Service) Rewind(
+	ctx context.Context,
+	req session.RewindRequest,
+) (*session.RewindResult, error) {
+	result, err := sessionrevision.Rewind(ctx, s.Service, req)
+	if err != nil || result == nil || result.Session == nil || !s.cfg.Enabled {
+		return result, err
+	}
+	hydrated, err := hydrateSession(
+		ctx,
+		result.Session,
+		sessionInfoFromKey(req.Key),
+		s.artifactService,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &session.RewindResult{Session: hydrated}, nil
 }
 
 // The following wrapper types intentionally enumerate optional session service
@@ -513,6 +538,9 @@ func (s *Service) AppendEvent(
 	beforeEvents := len(persistedSess.Events)
 	if err := s.Service.AppendEvent(ctx, persistedSess, persisted, options...); err != nil {
 		return err
+	}
+	if _, fenced := sessionrevision.RewindHeadFence(persistedSess); !fenced {
+		sessionrevision.ClearRewindHeadFence(sess)
 	}
 	if !appendObserved(persistedSess, persisted.ID, beforeEvents) {
 		return nil

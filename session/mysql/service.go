@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -31,7 +32,10 @@ import (
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 )
 
-var _ session.Service = (*Service)(nil)
+var (
+	_ session.Service       = (*Service)(nil)
+	_ session.RewindService = (*Service)(nil)
+)
 var _ session.TrackService = (*Service)(nil)
 
 var errSessionNotFound = errors.New("session not found")
@@ -42,6 +46,7 @@ type SessionState struct {
 	State     session.StateMap `json:"state"`
 	CreatedAt time.Time        `json:"createdAt"`
 	UpdatedAt time.Time        `json:"updatedAt"`
+	revision  *sessionrevision.PersistedRecord
 }
 
 // Service is the MySQL session service.
@@ -67,13 +72,19 @@ type Service struct {
 }
 
 type sessionEventPair struct {
-	key   session.Key
-	event *event.Event
+	key        session.Key
+	event      *event.Event
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 type trackEventPair struct {
-	key   session.Key
-	event *session.TrackEvent
+	key        session.Key
+	event      *session.TrackEvent
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 // NewService creates a new MySQL session service.
@@ -294,16 +305,12 @@ func (s *Service) CreateSession(
 	)
 
 	// Insert or update session state
-	// If expired session exists, overwrite it; events/summaries will be filtered by created_at when reading
+	// Reusing an expired logical ID starts a new incarnation. Clear the old
+	// projection and revision fence in the same transaction as the state reset.
 	if sessionExists {
-		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(
-				`UPDATE %s SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL
-				WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
-				s.tableSessionStates,
-			),
-			string(sessBytes), sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
-			key.AppName, key.UserID, key.SessionID,
+		err = s.resetExpiredSession(
+			ctx, key, string(sessBytes), sessState.CreatedAt,
+			sessState.UpdatedAt, expiresAt,
 		)
 	} else {
 		_, err = s.mysqlClient.Exec(ctx,
@@ -336,8 +343,59 @@ func (s *Service) CreateSession(
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
+	sessionrevision.SetGeneration(sess, 0)
 
 	return mergeState(appState, userState, sess), nil
+}
+
+func (s *Service) resetExpiredSession(
+	ctx context.Context,
+	key session.Key,
+	state string,
+	createdAt time.Time,
+	updatedAt time.Time,
+	expiresAt *time.Time,
+) error {
+	return s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		for _, table := range []string{
+			s.tableSessionEvents,
+			s.tableSessionTracks,
+			s.tableSessionSummaries,
+		} {
+			if _, err := tx.ExecContext(
+				ctx,
+				fmt.Sprintf(
+					`DELETE FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?`,
+					table,
+				),
+				key.AppName,
+				key.UserID,
+				key.SessionID,
+			); err != nil {
+				return fmt.Errorf("clear expired session projection: %w", err)
+			}
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			fmt.Sprintf(
+				`UPDATE %s SET state = ?, created_at = ?, updated_at = ?,
+expires_at = ?, deleted_at = NULL
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+				s.tableSessionStates,
+			),
+			state,
+			createdAt,
+			updatedAt,
+			expiresAt,
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		); err != nil {
+			return fmt.Errorf("reset expired session state: %w", err)
+		}
+		return nil
+	})
 }
 
 // GetSession gets a session.
@@ -362,12 +420,12 @@ func (s *Service) GetSession(
 		c *session.GetSessionContext,
 		next func() (*session.Session, error),
 	) (*session.Session, error) {
-		sess, err := s.getSession(
-			c.Context,
-			c.Key,
-			c.Options.EventNum,
-			c.Options.EventTime,
-			c.Options.EventPage,
+		sess, err := s.loadStableProjection(
+			c.Context, c.Key,
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(ctx, c.Key, c.Options.EventNum,
+					c.Options.EventTime, c.Options.EventPage)
+			},
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -403,6 +461,48 @@ func (s *Service) ListSessions(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("mysql session service get session list failed: %w", err)
+	}
+	keys := make([]session.Key, 0, len(sessList))
+	for _, listed := range sessList {
+		if sessionrevision.RecordActive(listed) {
+			keys = append(keys, session.Key{
+				AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+			})
+		}
+	}
+	generations, err := s.revisionGenerations(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	for i, listed := range sessList {
+		if listed == nil {
+			continue
+		}
+		key := session.Key{
+			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+		}
+		before, ok := sessionrevision.Generation(listed)
+		if !ok || !sessionrevision.RecordActive(listed) || before == generations[key] {
+			continue
+		}
+		stable, err := sessionrevision.LoadStableProjection(
+			ctx,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, key)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(ctx, key, opt.EventNum, opt.EventTime, nil)
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+		if opt.ListSessionOnlyMeta && stable != nil {
+			stable.Events = nil
+			stable.Tracks = nil
+			stable.Summaries = nil
+		}
+		sessList[i] = stable
 	}
 	return sessList, nil
 }
@@ -611,8 +711,9 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		}
 	}
 
+	write := sessionrevision.NewWrite(ctx, nil)
 	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
-		sessState, _, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		sessState, record, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
 		if err != nil {
 			if errors.Is(err, errSessionNotFound) {
 				return fmt.Errorf("mysql session service update session state failed: session not found")
@@ -635,12 +736,19 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		}
 		sessState.UpdatedAt = now
 
-		updatedStateBytes, err := json.Marshal(sessState)
+		expiresAt := calculateExpiresAt(s.opts.sessionTTL)
+		if currentExpiresAt.Valid && expiresAt == nil {
+			expiresAt = &currentExpiresAt.Time
+		}
+		if err := s.revisionStore().ApplyMutation(
+			record, write,
+		); err != nil {
+			return err
+		}
+		updatedStateBytes, err := sessionrevision.EncodeState(sessState, record)
 		if err != nil {
 			return fmt.Errorf("mysql session service update session state failed: marshal state: %w", err)
 		}
-
-		expiresAt := calculateExpiresAt(s.opts.sessionTTL)
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 		 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
@@ -719,9 +827,38 @@ func (s *Service) appendEventInternal(
 	e *event.Event,
 	key session.Key,
 	opts ...session.Option,
-) error {
+) (retErr error) {
+	write, err := sessionrevision.NewEventWrite(ctx, sess, e)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		retErr = sessionrevision.CompleteWrite(sess, write, retErr)
+	}()
+	if s.opts.enableAsyncPersist && write.Start != nil {
+		if err := s.flushRevisionPersistence(ctx, key); err != nil {
+			return fmt.Errorf("flush persistence before runner turn: %w", err)
+		}
+	} else if s.opts.enableAsyncPersist && e != nil && e.IsRunnerCompletion() {
+		if err := s.flushTrackPersistence(ctx, key); err != nil {
+			return fmt.Errorf("flush track persistence before runner completion: %w", err)
+		}
+	}
+	if write.HasExpectedHead {
+		if err := s.addEventWithRevision(ctx, key, e, write); err != nil {
+			return fmt.Errorf("mysql session service append event failed: %w", err)
+		}
+		sess.UpdateUserSession(e, opts...)
+		return nil
+	}
 	// update user session with the given event
 	sess.UpdateUserSession(e, opts...)
+	if s.opts.enableAsyncPersist && write.Start != nil {
+		if err := s.addEventWithRevision(ctx, key, e, write); err != nil {
+			return fmt.Errorf("mysql session service append event failed: %w", err)
+		}
+		return nil
+	}
 
 	// persist event to MySQL asynchronously
 	if s.opts.enableAsyncPersist {
@@ -744,14 +881,22 @@ func (s *Service) appendEventInternal(
 		// Hash key to determine which worker channel to use
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e, write: write}:
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+		if e != nil && e.IsRunnerCompletion() {
+			if err := s.flushEventPersistence(ctx, key); err != nil {
+				return fmt.Errorf(
+					"flush event persistence after runner completion: %w",
+					err,
+				)
+			}
 		}
 		return nil
 	}
 
-	if err := s.addEvent(ctx, key, e); err != nil {
+	if err := s.addEventWithRevision(ctx, key, e, write); err != nil {
 		return fmt.Errorf("mysql session service append event failed: %w", err)
 	}
 
@@ -773,6 +918,7 @@ func (s *Service) AppendTrackEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+	write := sessionrevision.NewWrite(ctx, sess)
 	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
 		return fmt.Errorf("mysql session service append track event failed: %w", err)
 	}
@@ -790,14 +936,14 @@ func (s *Service) AppendTrackEvent(
 
 		index := sess.Hash % len(s.trackEventChans)
 		select {
-		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent}:
+		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent, write: write}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.addTrackEvent(ctx, key, trackEvent); err != nil {
+	if err := s.addTrackEventWithRevision(ctx, key, trackEvent, write); err != nil {
 		return fmt.Errorf("mysql session service append track event failed: %w", err)
 	}
 	return nil
@@ -842,7 +988,14 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, eventPairChan := range s.eventPairChans {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
+			var pendingErrors sessionrevision.PendingErrors
 			for eventPair := range eventPairChan {
+				if eventPair.done != nil {
+					pendingErrors.Deliver(
+						eventPair.barrierCtx, eventPair.key, eventPair.done,
+					)
+					continue
+				}
 				ctx := context.Background()
 				ctx, cancel := context.WithTimeout(
 					ctx,
@@ -859,7 +1012,10 @@ func (s *Service) startAsyncPersistWorker() {
 					eventPair.key.UserID,
 					eventPair.key.SessionID,
 				)
-				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
+				if err := s.addEventWithRevision(
+					ctx, eventPair.key, eventPair.event, eventPair.write,
+				); err != nil {
+					pendingErrors.Add(eventPair.key, err)
 					log.ErrorfContext(
 						ctx,
 						"async persist event failed: %v",
@@ -874,7 +1030,16 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, trackPairChan := range s.trackEventChans {
 		go func(trackPairChan chan *trackEventPair) {
 			defer s.persistWg.Done()
+			var pendingErrors sessionrevision.PendingErrors
 			for trackEventPair := range trackPairChan {
+				if trackEventPair.done != nil {
+					pendingErrors.Deliver(
+						trackEventPair.barrierCtx,
+						trackEventPair.key,
+						trackEventPair.done,
+					)
+					continue
+				}
 				ctx := context.Background()
 				ctx, cancel := context.WithTimeout(
 					ctx,
@@ -891,7 +1056,10 @@ func (s *Service) startAsyncPersistWorker() {
 					trackEventPair.key.UserID,
 					trackEventPair.key.SessionID,
 				)
-				if err := s.addTrackEvent(ctx, trackEventPair.key, trackEventPair.event); err != nil {
+				if err := s.addTrackEventWithRevision(
+					ctx, trackEventPair.key, trackEventPair.event, trackEventPair.write,
+				); err != nil {
+					pendingErrors.Add(trackEventPair.key, err)
 					log.ErrorfContext(
 						ctx,
 						"async persist event failed: %v",
@@ -1067,9 +1235,14 @@ func (s *Service) deleteSessions(ctx context.Context, tx *sql.Tx, keys []session
 	stateArgs = append(append([]any(nil), childArgs...), now)
 
 	if s.opts.softDelete {
-		return len(verifiedKeys), s.softDeleteSessions(ctx, tx, stateWhereClause, stateArgs, childWhereClause, childArgs, now)
+		err = s.softDeleteSessions(ctx, tx, stateWhereClause, stateArgs, childWhereClause, childArgs, now)
+	} else {
+		err = s.hardDeleteSessions(ctx, tx, stateWhereClause, stateArgs, childWhereClause, childArgs)
 	}
-	return len(verifiedKeys), s.hardDeleteSessions(ctx, tx, stateWhereClause, stateArgs, childWhereClause, childArgs)
+	if err != nil {
+		return 0, err
+	}
+	return len(verifiedKeys), nil
 }
 
 func (s *Service) sessionKeysWhereClause(keys []session.Key) (string, []any) {
@@ -1300,18 +1473,23 @@ func (s *Service) hardDeleteSessions(
 }
 
 func (s *Service) cleanupExpiredTrackEvents(ctx context.Context, now time.Time) {
-	if s.opts.softDelete {
-		_, err := s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionTracks),
-			now, now)
-		if err != nil {
-			log.ErrorfContext(ctx, "cleanup expired track events failed: %v", err)
+	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		if err := s.revisionStore().InvalidateExpiredChildProjections(
+			ctx, tx, s.tableSessionTracks, now, nil,
+		); err != nil {
+			return err
 		}
-		return
-	}
-	_, err := s.mysqlClient.Exec(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionTracks),
-		now)
+		if s.opts.softDelete {
+			_, err := tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL`, s.tableSessionTracks),
+				now, now)
+			return err
+		}
+		_, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableSessionTracks),
+			now)
+		return err
+	})
 	if err != nil {
 		log.ErrorfContext(ctx, "cleanup expired track events failed: %v", err)
 	}
@@ -1319,16 +1497,18 @@ func (s *Service) cleanupExpiredTrackEvents(ctx context.Context, now time.Time) 
 
 func (s *Service) tdsqlCleanupExpiredTrackEvents(ctx context.Context, now time.Time) {
 	type idPair struct {
-		id     int64
-		userID string
+		id  int64
+		key session.Key
 	}
-	query := fmt.Sprintf(`SELECT id, user_id FROM %s
+	query := fmt.Sprintf(`SELECT id, app_name, user_id, session_id FROM %s
 		WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL
 		LIMIT 1000`, s.tableSessionTracks)
 	var pairs []idPair
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		var p idPair
-		if err := rows.Scan(&p.id, &p.userID); err != nil {
+		if err := rows.Scan(
+			&p.id, &p.key.AppName, &p.key.UserID, &p.key.SessionID,
+		); err != nil {
 			return err
 		}
 		pairs = append(pairs, p)
@@ -1341,45 +1521,56 @@ func (s *Service) tdsqlCleanupExpiredTrackEvents(ctx context.Context, now time.T
 	if len(pairs) == 0 {
 		return
 	}
-	grouped := make(map[string][]int64)
+	grouped := make(map[string][]idPair)
 	for _, p := range pairs {
-		grouped[p.userID] = append(grouped[p.userID], p.id)
+		grouped[p.key.UserID] = append(grouped[p.key.UserID], p)
 	}
 	var total int64
-	for userID, ids := range grouped {
-		placeholders := make([]string, len(ids))
-		for i := range ids {
+	for userID, group := range grouped {
+		placeholders := make([]string, len(group))
+		for i := range group {
 			placeholders[i] = "?"
 		}
 		idClause := strings.Join(placeholders, ",")
-		var err error
-		if s.opts.softDelete {
-			args := make([]any, 0, len(ids)+3)
-			args = append(args, now)
-			for _, id := range ids {
-				args = append(args, id)
+		err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+			keys := make([]session.Key, 0, len(group))
+			for _, pair := range group {
+				keys = append(keys, pair.key)
+			}
+			if err := s.revisionStore().InvalidateProjections(
+				ctx, tx, keys,
+			); err != nil {
+				return err
+			}
+			if s.opts.softDelete {
+				args := make([]any, 0, len(group)+3)
+				args = append(args, now)
+				for _, pair := range group {
+					args = append(args, pair.id)
+				}
+				args = append(args, userID, now)
+				_, err := tx.ExecContext(ctx,
+					fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
+						s.tableSessionTracks, idClause),
+					args...)
+				return err
+			}
+			args := make([]any, 0, len(group)+2)
+			for _, pair := range group {
+				args = append(args, pair.id)
 			}
 			args = append(args, userID, now)
-			_, err = s.mysqlClient.Exec(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
-					s.tableSessionTracks, idClause),
-				args...)
-		} else {
-			args := make([]any, 0, len(ids)+2)
-			for _, id := range ids {
-				args = append(args, id)
-			}
-			args = append(args, userID, now)
-			_, err = s.mysqlClient.Exec(ctx,
+			_, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`DELETE FROM %s WHERE id IN (%s) AND user_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`,
 					s.tableSessionTracks, idClause),
 				args...)
-		}
+			return err
+		})
 		if err != nil {
 			log.ErrorfContext(ctx, "tdsql cleanup: delete track events failed: %v", err)
 			continue
 		}
-		total += int64(len(ids))
+		total += int64(len(group))
 	}
 	if total > 0 {
 		log.InfofContext(ctx, "tdsql cleanup: cleaned up %d expired track events", total)

@@ -180,6 +180,26 @@ func TestTrackerReuseEnsuredSession(t *testing.T) {
 	require.Len(t, trackEvents.Events, 2)
 }
 
+func TestTrackerUsesEffectiveRunnerRequestID(t *testing.T) {
+	ctx := ContextWithRequestID(context.Background(), "resolved-request")
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc)
+	require.NoError(t, err)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+
+	require.NoError(t, tracker.AppendEvent(
+		ctx,
+		key,
+		aguievents.NewRunStartedEvent("thread", "protocol-run"),
+	))
+	require.NoError(t, tracker.Flush(context.Background(), key))
+	stored, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err := stored.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 1)
+}
+
 func TestTrackerGetEventsForwardsOptions(t *testing.T) {
 	ctx := context.Background()
 	svc := newHookSessionService()

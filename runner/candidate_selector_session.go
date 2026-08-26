@@ -34,6 +34,15 @@ type attemptSessionService struct {
 	privateState     map[session.Key]session.StateMap
 }
 
+var _ session.RewindService = (*attemptSessionService)(nil)
+
+func (s *attemptSessionService) Rewind(
+	context.Context,
+	session.RewindRequest,
+) (*session.RewindResult, error) {
+	return nil, session.ErrRewindUnsupported
+}
+
 func newAttemptSessionService(
 	base session.Service,
 	root *session.Session,

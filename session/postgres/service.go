@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -30,7 +31,10 @@ import (
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
 
-var _ session.Service = (*Service)(nil)
+var (
+	_ session.Service       = (*Service)(nil)
+	_ session.RewindService = (*Service)(nil)
+)
 var _ session.TrackService = (*Service)(nil)
 
 var errSessionNotFound = errors.New("session not found")
@@ -41,6 +45,7 @@ type SessionState struct {
 	State     session.StateMap `json:"state"`
 	CreatedAt time.Time        `json:"createdAt"`
 	UpdatedAt time.Time        `json:"updatedAt"`
+	revision  *sessionrevision.PersistedRecord
 }
 
 // Service is the postgres session service.
@@ -66,13 +71,19 @@ type Service struct {
 }
 
 type sessionEventPair struct {
-	key   session.Key
-	event *event.Event
+	key        session.Key
+	event      *event.Event
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 type trackEventPair struct {
-	key   session.Key
-	event *session.TrackEvent
+	key        session.Key
+	event      *session.TrackEvent
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 // buildConnString builds a PostgreSQL connection string from options.
@@ -311,6 +322,7 @@ func (s *Service) CreateSession(
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
+	sessionrevision.SetGeneration(sess, 0)
 
 	return mergeState(appState, userState, sess), nil
 }
@@ -337,12 +349,12 @@ func (s *Service) GetSession(
 		c *session.GetSessionContext,
 		next func() (*session.Session, error),
 	) (*session.Session, error) {
-		sess, err := s.getSession(
-			c.Context,
-			c.Key,
-			c.Options.EventNum,
-			c.Options.EventTime,
-			c.Options.EventPage,
+		sess, err := s.loadStableProjection(
+			c.Context, c.Key,
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(ctx, c.Key, c.Options.EventNum,
+					c.Options.EventTime, c.Options.EventPage)
+			},
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -379,6 +391,48 @@ func (s *Service) ListSessions(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("postgres session service get session list failed: %w", err)
+	}
+	keys := make([]session.Key, 0, len(sessList))
+	for _, listed := range sessList {
+		if sessionrevision.RecordActive(listed) {
+			keys = append(keys, session.Key{
+				AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+			})
+		}
+	}
+	generations, err := s.revisionGenerations(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	for i, listed := range sessList {
+		if listed == nil {
+			continue
+		}
+		key := session.Key{
+			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+		}
+		before, ok := sessionrevision.Generation(listed)
+		if !ok || !sessionrevision.RecordActive(listed) || before == generations[key] {
+			continue
+		}
+		stable, err := sessionrevision.LoadStableProjection(
+			ctx,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, key)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(ctx, key, opt.EventNum, opt.EventTime, nil)
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+		if opt.ListSessionOnlyMeta && stable != nil {
+			stable.Events = nil
+			stable.Tracks = nil
+			stable.Summaries = nil
+		}
+		sessList[i] = stable
 	}
 	return sessList, nil
 }
@@ -572,8 +626,9 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		}
 	}
 
+	write := sessionrevision.NewWrite(ctx, nil)
 	err := s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
-		sessState, _, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		sessState, record, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
 		if err != nil {
 			if errors.Is(err, errSessionNotFound) {
 				return fmt.Errorf("postgres session service update session state failed: session not found")
@@ -596,15 +651,22 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		}
 		sessState.UpdatedAt = now
 
-		updatedStateBytes, err := json.Marshal(sessState)
-		if err != nil {
-			return fmt.Errorf("postgres session service update session state failed: marshal state: %w", err)
-		}
-
 		var expiresAt *time.Time
 		if s.opts.sessionTTL > 0 {
 			t := now.Add(s.opts.sessionTTL)
 			expiresAt = &t
+		}
+		if currentExpiresAt != nil && expiresAt == nil {
+			expiresAt = currentExpiresAt
+		}
+		if err := s.revisionStore().ApplyMutation(
+			record, write,
+		); err != nil {
+			return err
+		}
+		updatedStateBytes, err := sessionrevision.EncodeState(sessState, record)
+		if err != nil {
+			return fmt.Errorf("postgres session service update session state failed: marshal state: %w", err)
 		}
 
 		_, err = tx.ExecContext(ctx,
@@ -685,9 +747,38 @@ func (s *Service) appendEventInternal(
 	e *event.Event,
 	key session.Key,
 	opts ...session.Option,
-) error {
+) (retErr error) {
+	write, err := sessionrevision.NewEventWrite(ctx, sess, e)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		retErr = sessionrevision.CompleteWrite(sess, write, retErr)
+	}()
+	if s.opts.enableAsyncPersist && write.Start != nil {
+		if err := s.flushRevisionPersistence(ctx, key); err != nil {
+			return fmt.Errorf("flush persistence before runner turn: %w", err)
+		}
+	} else if s.opts.enableAsyncPersist && e != nil && e.IsRunnerCompletion() {
+		if err := s.flushTrackPersistence(ctx, key); err != nil {
+			return fmt.Errorf("flush track persistence before runner completion: %w", err)
+		}
+	}
+	if write.HasExpectedHead {
+		if err := s.addEventWithRevision(ctx, key, e, write); err != nil {
+			return fmt.Errorf("postgres session service append event failed: %w", err)
+		}
+		sess.UpdateUserSession(e, opts...)
+		return nil
+	}
 	// update user session with the given event
 	sess.UpdateUserSession(e, opts...)
+	if s.opts.enableAsyncPersist && write.Start != nil {
+		if err := s.addEventWithRevision(ctx, key, e, write); err != nil {
+			return fmt.Errorf("postgres session service append event failed: %w", err)
+		}
+		return nil
+	}
 
 	// persist event to postgres asynchronously
 	if s.opts.enableAsyncPersist {
@@ -709,14 +800,22 @@ func (s *Service) appendEventInternal(
 
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e, write: write}:
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+		if e != nil && e.IsRunnerCompletion() {
+			if err := s.flushEventPersistence(ctx, key); err != nil {
+				return fmt.Errorf(
+					"flush event persistence after runner completion: %w",
+					err,
+				)
+			}
 		}
 		return nil
 	}
 
-	if err := s.addEvent(ctx, key, e); err != nil {
+	if err := s.addEventWithRevision(ctx, key, e, write); err != nil {
 		return fmt.Errorf("postgres session service append event failed: %w", err)
 	}
 
@@ -738,6 +837,7 @@ func (s *Service) AppendTrackEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+	write := sessionrevision.NewWrite(ctx, sess)
 	// Update user session with the given track event.
 	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
 		return err
@@ -765,13 +865,13 @@ func (s *Service) AppendTrackEvent(
 		n := len(s.trackEventChans)
 		index := session.HashString(hKey) % n
 		select {
-		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent}:
+		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent, write: write}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
-	if err := s.addTrackEvent(ctx, key, trackEvent); err != nil {
+	if err := s.addTrackEventWithRevision(ctx, key, trackEvent, write); err != nil {
 		return fmt.Errorf("postgres session service append track event failed: %w", err)
 	}
 	return nil
@@ -876,6 +976,14 @@ func (s *Service) cleanupExpiredData(ctx context.Context, userKey *session.UserK
 	if len(validTasks) > 0 {
 		err := s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
 			for _, task := range validTasks {
+				if task.tableName == s.tableSessionTracks ||
+					task.tableName == s.tableSessionSummaries {
+					if err := s.revisionStore().InvalidateExpiredChildProjections(
+						ctx, tx, task.tableName, now, userKey,
+					); err != nil {
+						return err
+					}
+				}
 				if s.opts.softDelete {
 					if err := s.softDeleteExpiredTableInTx(ctx, tx, task.tableName, now, userKey); err != nil {
 						return err
@@ -948,6 +1056,11 @@ func (s *Service) softDeleteExpiredTableInTx(
 			args = append(args, key.AppName, key.UserID, key.SessionID)
 		}
 		if len(args) > 0 {
+			if err := s.revisionStore().InvalidateProjections(
+				ctx, tx, sessionKeys,
+			); err != nil {
+				return fmt.Errorf("invalidate expired event projections: %w", err)
+			}
 			if _, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`UPDATE %s SET deleted_at = $1 WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
 					tableName, strings.Join(placeholders, ",")), append([]any{now}, args...)...); err != nil {
@@ -1027,6 +1140,11 @@ func (s *Service) hardDeleteExpiredTableInTx(
 			args = append(args, key.AppName, key.UserID, key.SessionID)
 		}
 		if len(args) > 0 {
+			if err := s.revisionStore().InvalidateProjections(
+				ctx, tx, sessionKeys,
+			); err != nil {
+				return fmt.Errorf("invalidate expired event projections: %w", err)
+			}
 			if _, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`DELETE FROM %s WHERE (app_name, user_id, session_id) IN (%s) AND deleted_at IS NULL`,
 					tableName, strings.Join(placeholders, ",")), args...); err != nil {

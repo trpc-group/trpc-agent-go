@@ -19,12 +19,21 @@ import (
 )
 
 var (
-	_ session.Service      = (*Service)(nil)
-	_ session.TrackService = (*Service)(nil)
+	_ session.Service       = (*Service)(nil)
+	_ session.TrackService  = (*Service)(nil)
+	_ session.RewindService = (*Service)(nil)
 )
 
 // Service implements session.Service without storing sessions or state.
 type Service struct{}
+
+// Rewind reports that a no-op service cannot restore persisted state.
+func (s *Service) Rewind(
+	context.Context,
+	session.RewindRequest,
+) (*session.RewindResult, error) {
+	return nil, session.ErrRewindUnsupported
+}
 
 // NewService creates a new no-op session service.
 func NewService() *Service {

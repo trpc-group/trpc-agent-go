@@ -19,33 +19,115 @@ import "github.com/redis/go-redis/v9"
 // ARGV[2] = filterKey
 // ARGV[3] = newSummaryJSON -> {"summary":"...","updated_at":"RFC3339 time"}
 //
-// Returns 1 if updated, 0 if skipped (existing is newer).
-var luaSummariesSetIfNewer = redis.NewScript(
-	"local cur = redis.call('HGET', KEYS[1], ARGV[1])\n" +
-		"local fk = ARGV[2]\n" +
-		"local newSum = cjson.decode(ARGV[3])\n" +
-		"if not cur or cur == '' then\n" +
-		"  local m = {}\n" +
-		"  m[fk] = newSum\n" +
-		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(m))\n" +
-		"  return 1\n" +
-		"end\n" +
-		"local map = cjson.decode(cur)\n" +
-		"local old = map[fk]\n" +
-		"local old_ts = nil\n" +
-		"local new_ts = nil\n" +
-		"if old and old['updated_at'] then old_ts = old['updated_at'] end\n" +
-		"if newSum and newSum['updated_at'] then new_ts = newSum['updated_at'] end\n" +
-		"if not old or (old_ts and new_ts and old_ts <= new_ts) then\n" +
-		"  map[fk] = newSum\n" +
-		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(map))\n" +
-		"  return 1\n" +
-		"end\n" +
-		"return 0\n",
-)
+// Returns 1 if updated, 0 if skipped (existing is newer), and -1 if stale.
+var luaSummariesSetIfNewer = redis.NewScript(`
+local sumKey = KEYS[1]
+local revisionKey = KEYS[2]
+local sessionStateKey = KEYS[3]
+local hashField = ARGV[1]
+local fk = ARGV[2]
+local newSum = cjson.decode(ARGV[3])
+local hasExpectedGeneration = tonumber(ARGV[4]) == 1
+local expectedGeneration = tonumber(ARGV[5])
+local requestID = ARGV[6]
+local ttlMs = tonumber(ARGV[7])
+
+local sessionExists = redis.call('HEXISTS', sessionStateKey, hashField) == 1
+if not sessionExists and hasExpectedGeneration then return -1 end
+
+local revisionJSON = redis.call('GET', revisionKey)
+local revision = {generation = 0}
+if revisionJSON then revision = cjson.decode(revisionJSON) end
+if hasExpectedGeneration and tonumber(revision.generation or 0) ~= expectedGeneration then
+    return -1
+end
+if revision.checkpoint and (not hasExpectedGeneration or requestID == '' or
+    requestID ~= revision.checkpoint.requestID) then
+    revision.checkpoint.hazard = true
+end
+local function touchRevision()
+    if not sessionExists then return end
+    local ttlMs = redis.call('PTTL', sessionStateKey)
+    redis.call('SET', revisionKey, cjson.encode(revision))
+    if ttlMs >= 0 then
+        redis.call('PEXPIRE', revisionKey, ttlMs)
+    elseif ttlMs == -1 then
+        redis.call('PERSIST', revisionKey)
+    end
+end
+
+local cur = redis.call('HGET', sumKey, hashField)
+if not cur or cur == '' then
+    local m = {}
+    m[fk] = newSum
+    redis.call('HSET', sumKey, hashField, cjson.encode(m))
+    if ttlMs > 0 then redis.call('PEXPIRE', sumKey, ttlMs) end
+    revision.head = tonumber(revision.head or 0) + 1
+    touchRevision()
+    return 1
+end
+local map = cjson.decode(cur)
+local old = map[fk]
+local old_ts = old and old['updated_at'] or nil
+local new_ts = newSum and newSum['updated_at'] or nil
+if not old or (old_ts and new_ts and old_ts <= new_ts) then
+    map[fk] = newSum
+    redis.call('HSET', sumKey, hashField, cjson.encode(map))
+    if ttlMs > 0 then redis.call('PEXPIRE', sumKey, ttlMs) end
+    revision.head = tonumber(revision.head or 0) + 1
+    touchRevision()
+    return 1
+end
+if ttlMs > 0 then redis.call('PEXPIRE', sumKey, ttlMs) end
+touchRevision()
+return 0
+`)
+
+// luaTrimEventsWithRevision removes selected event members and advances the
+// private revision record in the same Redis transaction.
+var luaTrimEventsWithRevision = redis.NewScript(`
+local eventKey = KEYS[1]
+local sessionStateKey = KEYS[2]
+local revisionKey = KEYS[3]
+local sessionID = ARGV[1]
+
+if #ARGV <= 1 then return 0 end
+local removed = 0
+local chunk = {}
+for i = 2, #ARGV do
+    table.insert(chunk, ARGV[i])
+    if #chunk == 512 then
+        removed = removed + redis.call('ZREM', eventKey, unpack(chunk))
+        chunk = {}
+    end
+end
+if #chunk > 0 then
+    removed = removed + redis.call('ZREM', eventKey, unpack(chunk))
+end
+if removed == 0 or redis.call('HEXISTS', sessionStateKey, sessionID) == 0 then
+    return removed
+end
+
+local revisionJSON = redis.call('GET', revisionKey)
+local revision = {generation = 0}
+if revisionJSON then revision = cjson.decode(revisionJSON) end
+revision.head = tonumber(revision.head or 0) + 1
+if revision.checkpoint then revision.checkpoint.hazard = true end
+revision.projection = nil
+
+local ttlMs = redis.call('PTTL', sessionStateKey)
+redis.call('SET', revisionKey, cjson.encode(revision))
+if ttlMs >= 0 then
+    redis.call('PEXPIRE', revisionKey, ttlMs)
+elseif ttlMs == -1 then
+    redis.call('PERSIST', revisionKey)
+end
+return removed
+`)
 
 var luaLoadStateInitializationValue = redis.NewScript(`
 local sessionStateKey = KEYS[1]
+local revisionKey = KEYS[2]
 local sessionID = ARGV[1]
 local generationCandidate = ARGV[2]
 
@@ -80,12 +162,13 @@ if not sessionState.generation or sessionState.generation == '' then
     sessionJSON = string.gsub(sessionJSON, markerPair, '')
     redis.call('HSET', sessionStateKey, sessionID, sessionJSON)
 end
-return sessionJSON
+return {sessionJSON, redis.call('GET', revisionKey) or ''}
 `)
 
 var luaCommitStateInitialization = redis.NewScript(`
 local leaseKey = KEYS[1]
 local sessionStateKey = KEYS[2]
+local revisionKey = KEYS[3]
 local ownerToken = ARGV[1]
 local sessionID = ARGV[2]
 local encodedState = ARGV[3]
@@ -95,6 +178,8 @@ local nilSentinel = ARGV[4]
 local expectedGeneration = ARGV[5]
 local updatedAt = ARGV[6]
 local ttlMs = tonumber(ARGV[7])
+local expectedRevisionJSON = ARGV[8]
+local updatedRevisionJSON = ARGV[9]
 
 if redis.call('GET', leaseKey) ~= ownerToken then
     return 0
@@ -121,6 +206,11 @@ if expectedGeneration == '' or sessionState.generation ~= expectedGeneration the
     redis.call('DEL', leaseKey)
     return -2
 end
+local currentRevisionJSON = redis.call('GET', revisionKey) or ''
+if currentRevisionJSON ~= expectedRevisionJSON then
+    redis.call('DEL', leaseKey)
+    return -3
+end
 if not sessionState.state or type(sessionState.state) ~= 'table' then
     sessionState.state = {}
 end
@@ -134,6 +224,13 @@ encodedSession = string.gsub(encodedSession, '"' .. nilSentinel .. '"', 'null')
 redis.call('HSET', sessionStateKey, sessionID, encodedSession)
 if ttlMs > 0 then
     redis.call('PEXPIRE', sessionStateKey, ttlMs)
+end
+local sessionTTL = redis.call('PTTL', sessionStateKey)
+redis.call('SET', revisionKey, updatedRevisionJSON)
+if sessionTTL >= 0 then
+    redis.call('PEXPIRE', revisionKey, sessionTTL)
+elseif sessionTTL == -1 then
+    redis.call('PERSIST', revisionKey)
 end
 redis.call('DEL', leaseKey)
 return 1

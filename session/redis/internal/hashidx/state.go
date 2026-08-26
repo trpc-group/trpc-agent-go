@@ -16,11 +16,22 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // UpdateSessionState updates the session-level state directly (HashIdx).
 func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	return c.UpdateSessionStateWithRevision(ctx, key, state, sessionrevision.Write{})
+}
+
+// UpdateSessionStateWithRevision updates session state under a revision fence.
+func (c *Client) UpdateSessionStateWithRevision(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	write sessionrevision.Write,
+) error {
 	ttlSeconds := int64(0)
 	if c.cfg.SessionTTL > 0 {
 		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
@@ -50,17 +61,27 @@ func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state 
 	result, err := c.runScript(
 		ctx,
 		luaUpdateSessionState,
-		[]string{c.keys.SessionMetaKey(key)},
+		[]string{
+			c.keys.SessionMetaKey(key),
+			c.keys.RevisionKey(key),
+		},
 		string(statePatchJSON),
 		string(nilKeysJSON),
 		time.Now().UTC().Format(time.RFC3339Nano),
 		ttlSeconds,
+		boolToInt(write.HasExpectedGeneration),
+		write.ExpectedGeneration,
+		boolToInt(write.Hazard),
+		write.RequestID,
 	).Int()
 	if err != nil {
 		return fmt.Errorf("update session state: %w", err)
 	}
 	if result == 0 {
 		return fmt.Errorf("session not found")
+	}
+	if result == -1 {
+		return sessionrevision.ErrStaleGeneration
 	}
 	if result != 1 {
 		return fmt.Errorf("update session state: unexpected script result %d", result)

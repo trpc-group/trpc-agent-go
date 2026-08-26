@@ -208,6 +208,19 @@ sessionService, err := postgres.NewService(
 )
 ```
 
+## Latest-turn Replacement
+
+PostgreSQL supports editing and resending the latest persisted turn through
+`Runner.Run` and `agent.WithLatestTurnReplacement`. Events, session state,
+summaries, Tracks, and the new write generation are updated in one database
+transaction after asynchronous writes for the target Session have drained.
+
+Revision metadata is a versioned private sidecar in the existing
+`session_states.state` JSON. No additional table, index, or migration is
+required, including with `WithSkipDBInit(true)`. See
+[Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the Runner
+API, rollout requirements, TTL behavior, and rollback boundaries.
+
 ## Storage Structure
 
 PostgreSQL uses the following table structure:

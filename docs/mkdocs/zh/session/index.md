@@ -225,6 +225,137 @@ r := runner.NewRunner(
 
 失败语义采用 fail-closed：如果开启能力但 Artifact storage 不可用，或 artifact save/load 失败，操作会返回错误，不会静默丢内容。如果在 event 交给 session backend 前 externalization 失败，框架会对本次尝试已保存的 artifacts 提交 best-effort 删除请求；一旦 append 已交给 backend，遇到结果不确定的错误时会保留 artifacts，避免删除已被持久化 event 引用的内容。
 
+### Rewind Session Projection
+
+`session.RewindService` 是与 `session.Service` 并列的可选能力，因此已有第三方 Session
+实现仍保持源码兼容。所有内建具体 Session Service 都实现该接口：InMemory、Redis、
+MySQL/TDSQL、PostgreSQL、PGVector、SQLite 和 MongoDB 会执行原子转换；Noop 与
+ClickHouse 因为无法原子恢复持久化的多部分 projection，会返回
+`session.ErrRewindUnsupported`。
+
+需要直接操作存储层时，可以对 capability 做类型断言：
+
+```go
+rewinder, ok := service.(session.RewindService)
+if !ok {
+    return session.ErrRewindUnsupported
+}
+result, err := rewinder.Rewind(ctx, session.RewindRequest{
+    Key:                   key,
+    TargetRequestID:       targetRequestID,
+    ExpectedHeadRequestID: observedHeadRequestID,
+    IdempotencyKey:        rewindOperationID,
+})
+```
+
+`TargetRequestID` 选择目标请求之前保留的边界；`ExpectedHeadRequestID` 是独立的 CAS
+条件，要求当前 head 仍等于调用方观察到的 head。将 target 与并发条件分开，可以避免
+后续存储协议演进时混淆两者职责。目前内建存储只保留最新 occurrence，因此两个 ID 现在
+必须指向同一请求；更早的目标会返回 `session.ErrRewindUnavailable`。调用方应保证同一
+Session 内的 RequestID 唯一；如果复用导致 target occurrence 不明确，内建存储会
+fail closed 并返回 `session.ErrRewindUnavailable`，否则要避免 ABA 冲突就必须额外引入
+occurrence token。
+
+`IdempotencyKey` 标识完整的 rewind 操作。只有在结果不确定、且 target/head 均未改变时
+才能复用，且不能回收给其他操作。成功结果包含权威的 active session projection。调用方必须丢弃旧的 `Session`
+并继续使用 `result.Session`；它的首个可持久化 event append 带 revision 栅栏。如果其他
+writer 先改变 active revision，该 append 不会产生部分写入，并返回
+`session.ErrRewindConflict`。
+
+### 替换最新一轮 {#replace-latest-turn}
+
+编辑并重发最新一个已持久化的 turn（包括在 final response 之前中断的 turn）时，继续
+使用 `Runner.Run`，并传入 `agent.WithLatestTurnReplacement`。逻辑 `SessionID` 保持
+不变；旧 RequestID 标识必须仍是最新的 turn，普通 run RequestID 标识新的执行。
+
+```go
+events, err := r.Run(
+    ctx,
+    "user123",
+    "session-001",
+    model.NewUserMessage("修改后的问题"),
+    agent.WithRequestID("request-after-edit"),
+    agent.WithLatestTurnReplacement("request-before-edit"),
+)
+if err != nil {
+    return err
+}
+for event := range events {
+    if event.Error != nil {
+        return event.Error
+    }
+}
+```
+
+`events` 的消费方式与普通 Run 完全相同。两个 option 都必须传入，并且 ID 必须不同。
+Replacement 不能与 resume 或 `RunOptions.Messages` 历史 seed 同时使用，并且替换消息
+必须包含有效 payload。
+
+在 `Run` 返回 event channel 前，应保留完全相同的旧、新 ID。持久化转换可能已经提交，
+但后续 hydrate 或连接读取仍可能失败，因此 `Run` 直接返回的错误可能处于结果不确定状态。
+只有持久化转换可能已提交、随后才失败时，才应复用同一条编辑消息和同一组 ID 重试。
+参数校验、冲突、不支持和不可用错误都有明确结果，应直接按其语义处理，而不是盲目重试。
+一旦 `Run` 返回 channel，replacement 与新 user-turn 边界就已经提交；之后事件流中的
+错误不应触发再次 replacement。
+
+如果重试发现新的 user-turn 边界已在上一次错误前持久化，Runner 会返回
+`session.ErrRewindConflict`，而不会把编辑后的消息追加两次。此时可以确认
+replacement 已成为 canonical，但 Runner 不会自动重复一次执行结果同样可能不确定的
+Agent 启动。
+
+新 Run 开始前，Runner 会把 Session 级 events、state、summaries 和 Track events
+原子恢复到旧 Request 之前的完整 checkpoint。Backend 会先验证 checkpoint 对应的
+event 与 Track 前缀，再丢弃最新尾部，不会另外保留一份废弃投影。app state、user
+state、模型/工具调用、artifact 写入和其他外部副作用不会被回滚。
+
+安全规则：
+
+- 最新一个有规范持久化起点的 Runner turn，无论正常完成还是中断，都可以替换。如果
+  它在同一个 Runner 中仍处于执行状态，应先取消，并持续消费旧事件流直至 channel
+  关闭；在此之前尝试替换会返回 `session.ErrRewindUnavailable`。
+- 进程异常退出留下的未完成 user turn，在重启后仍可替换。缺少 checkpoint、已经被
+  替换或无法可靠归属的历史返回 `session.ErrRewindUnavailable`。
+- 最新 Request 不匹配或重试发生冲突时返回
+  `session.ErrRewindConflict`。
+- 存储后端不支持时，在新 Run 开始前返回
+  `session.ErrRewindUnsupported`。
+- 成功替换前加载的 Session 投影已经过期，后续 event、state、summary 和 Track 写入
+  会被支持该能力的 backend 拒绝。
+- Runner 内运行的 Track producer 调用 `AppendTrackEvent` 时应透传其 context；框架会在
+  内部把该写入关联到 active request。AG-UI tracker 会自动处理，并在 terminal Runner
+  event 对外可见前同步尝试 flush Track 持久化。flush 失败会记录日志，但不会吞掉协议
+  terminal event。
+- 把 routed output 持久化到其他 Session 的 turn 无法通过单 Session 投影原子恢复，
+  因此不可替换。
+- Replacement 保留源 Session 的剩余 TTL，不会延长 Session 生命周期。
+- Checkpoint 保存 Session 级 state、summary、时间戳，以及 event/Track 前缀的紧凑
+  摘要，不复制 event 或 Track payload，也不会累积废弃投影 archive。若已无法验证
+  checkpoint 对应的前缀，replacement 会 fail closed。
+- Backend 会把前缀摘要与计数同 event、Track 写入原子推进。已有 Session 首次使用时只
+  做一次权威投影 bootstrap，后续 turn start 直接复用 rolling prefix，不再扫描完整
+  历史。裁剪或 Session 子记录的独立 TTL 清理会使 rolling prefix 失效，下一轮会安全地
+  重新 bootstrap。
+- Backend 会保留一组有界的近期 replacement 幂等身份用于检测复用。结果不确定时应及时
+  使用原始 ID 组合重试。
+
+该能力不会给 `session.Service` 增加方法。由于 generation fencing 与 checkpoint
+metadata 必须作为同一份协议演进，内建存储协议保持为框架内部能力；业务可以直接调用
+capability，也可以让 `Runner.Run` 编排最新消息编辑流程。Memory、SQLite、Redis
+HashIdx/ZSet、PostgreSQL、PGVector、MySQL/TDSQL 和 MongoDB 支持 replacement；
+Externalization wrapper 会透传底层能力；ClickHouse 与 Noop 返回 unsupported。自定义
+service 可以用自己的原子存储协议实现 `session.RewindService`。
+
+该协议不需要新增关系型表或执行 schema migration。PostgreSQL、PGVector、
+MySQL/TDSQL 和 SQLite 会把带版本的私有 sidecar 写入现有 session-state JSON，且该
+字段不会出现在用户可见的 `Session.State` 中；MongoDB 把相同的私有 metadata 放在
+现有 Session 文档内；Redis 在 Session hash slot 中使用一个随 Session 过期的私有
+revision key。任何 backend 都不会创建 revision archive 表或 collection。
+
+启用 replacement 前，应先升级所有可能写入同一 Session 存储的实例。旧版本 writer
+不认识这份私有 metadata，可能在写回 state 时覆盖它。已有 Session 不需要迁移；升级
+后的 Runner 持久化新一轮开头后，该轮即可 replacement。使用
+`WithSkipDBInit(true)` 的部署同样无需额外建表。
+
 ## 核心概念
 
 ### Session 结构

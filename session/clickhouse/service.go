@@ -28,7 +28,10 @@ import (
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 )
 
-var _ session.Service = (*Service)(nil)
+var (
+	_ session.Service       = (*Service)(nil)
+	_ session.RewindService = (*Service)(nil)
+)
 
 // SessionState is the state of a session.
 type SessionState struct {
@@ -56,6 +59,15 @@ type Service struct {
 	tableSessionSummaries string
 	tableAppStates        string
 	tableUserStates       string
+}
+
+// Rewind reports that ClickHouse cannot atomically restore the session-owned
+// projection across its independently persisted tables.
+func (s *Service) Rewind(
+	context.Context,
+	session.RewindRequest,
+) (*session.RewindResult, error) {
+	return nil, session.ErrRewindUnsupported
 }
 
 type sessionEventPair struct {

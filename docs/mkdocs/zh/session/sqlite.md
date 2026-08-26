@@ -53,6 +53,16 @@ defer sessionService.Close()
 - DDL/命名：`WithSkipDBInit`、`WithTablePrefix`
 - Hooks：`WithAppendEventHook`、`WithGetSessionHook`
 
+## 替换最新一轮的存储
+
+通过 `Runner.Run` 替换最新一轮时，带版本的私有 revision sidecar 会写入现有
+`<prefix>session_states.state` JSON。该字段不会出现在用户可见的 `Session.State` 中，
+并与 events、state、summaries 和 Tracks 在同一事务内更新。即使使用
+`WithSkipDBInit(true)`，也不需要额外建表或迁移。
+
+Replacement 沿用源 Session 的过期时间，不会刷新或延长 TTL。启用前应升级所有 writer；
+详见[替换最新一轮](index.md#replace-latest-turn)。
+
 ## 使用场景
 
 | 场景 | 推荐配置 |

@@ -176,6 +176,20 @@ sessionService, err := mysql.NewService(
 )
 ```
 
+## Latest-turn Replacement
+
+MySQL supports editing and resending the latest persisted turn through
+`Runner.Run` and `agent.WithLatestTurnReplacement`. The transition drains
+asynchronous event and Track writes, then restores events, session state,
+summaries, and Tracks in one database transaction.
+
+Revision metadata is a versioned private sidecar in the existing
+`session_states.state` JSON and is updated in the same transaction as the
+projection. No additional table or migration is required, including with
+`WithSkipDBInit(true)`. See
+[Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the Runner
+API, rollout requirements, and rollback boundaries.
+
 ## Storage Structure
 
 MySQL uses the following table structure (`{{PREFIX}}` represents the table prefix):

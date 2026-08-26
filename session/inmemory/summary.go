@@ -59,12 +59,19 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		return fmt.Errorf("session not found: %s", key.SessionID)
 	}
 
-	return s.writeSummaryUnderLock(app, key, filterKey, sum)
+	return s.writeSummaryUnderLock(ctx, app, key, sess, filterKey, sum)
 }
 
 // writeSummaryUnderLock writes a summary for a filterKey under app lock and refreshes TTL.
 // When filterKey is "", it represents the full-session summary.
-func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key, filterKey string, sum *session.Summary) error {
+func (s *SessionService) writeSummaryUnderLock(
+	ctx context.Context,
+	app *appSessions,
+	key session.Key,
+	projection *session.Session,
+	filterKey string,
+	sum *session.Summary,
+) error {
 	app.mu.Lock()
 	defer app.mu.Unlock()
 	swt, ok := app.sessions[key.UserID][key.SessionID]
@@ -74,6 +81,9 @@ func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key
 	cur := getValidSession(swt)
 	if cur == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
+	}
+	if err := swt.applyRevisionWrite(ctx, projection); err != nil {
+		return err
 	}
 	// Acquire write lock to protect Summaries access.
 	cur.SummariesMu.Lock()

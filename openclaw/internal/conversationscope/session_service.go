@@ -22,6 +22,8 @@ type sessionService struct {
 	next session.Service
 }
 
+var _ session.RewindService = (*sessionService)(nil)
+
 type windowSessionService struct {
 	*sessionService
 	window session.WindowService
@@ -218,6 +220,24 @@ func (s *sessionService) GetSession(
 		)
 	}
 	return rewriteSessionForUser(sess, key.UserID), nil
+}
+
+func (s *sessionService) Rewind(
+	ctx context.Context,
+	req session.RewindRequest,
+) (*session.RewindResult, error) {
+	rewinder, ok := s.next.(session.RewindService)
+	if !ok {
+		return nil, session.ErrRewindUnsupported
+	}
+	logicalUserID := req.Key.UserID
+	req.Key = rewriteKeyForStorage(ctx, req.Key)
+	result, err := rewinder.Rewind(ctx, req)
+	if err != nil || result == nil || result.Session == nil {
+		return result, err
+	}
+	result.Session = rewriteSessionForUser(result.Session, logicalUserID)
+	return result, nil
 }
 
 func (s *sessionService) ListSessions(

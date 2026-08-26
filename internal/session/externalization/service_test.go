@@ -18,10 +18,163 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	artifactmem "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessionmem "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
+
+func TestRewindHydratesRestoredSession(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService()
+	t.Cleanup(func() { _ = inner.Close() })
+	artifacts := artifactmem.NewService()
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	baseline := imageEvent([]byte("image-bytes"))
+	baseline.RequestID = "baseline"
+	baseline.InvocationID = "baseline-invocation"
+	if err := svc.AppendEvent(ctx, sess, baseline); err != nil {
+		t.Fatalf("AppendEvent(baseline) error = %v", err)
+	}
+
+	turnCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID:    "latest",
+		InvocationID: "latest-invocation",
+	})
+	latest := responseEvent(model.NewUserMessage("latest"))
+	latest.RequestID = "latest"
+	latest.InvocationID = "latest-invocation"
+	if err := svc.AppendEvent(turnCtx, sess, latest); err != nil {
+		t.Fatalf("AppendEvent(latest) error = %v", err)
+	}
+	completion := event.NewResponseEvent(
+		"latest-invocation",
+		"app",
+		&model.Response{Done: true, Object: model.ObjectTypeRunnerCompletion},
+	)
+	completion.RequestID = "latest"
+	if err := svc.AppendEvent(ctx, sess, completion); err != nil {
+		t.Fatalf("AppendEvent(completion) error = %v", err)
+	}
+
+	result, err := revision.Rewind(ctx, svc, revision.RewindRequest{
+		Key:             key,
+		TargetRequestID: "latest", ExpectedHeadRequestID: "latest",
+		IdempotencyKey: "replacement",
+	})
+	if err != nil {
+		t.Fatalf("Rewind() error = %v", err)
+	}
+	if len(result.Session.Events) != 1 {
+		t.Fatalf("Rewind() result = %#v", result)
+	}
+	part := result.Session.Events[0].Response.Choices[0].Message.ContentParts[0]
+	if string(part.Image.Data) != "image-bytes" || part.ContentRef != nil {
+		t.Fatalf("hydrated restored part = %#v", part)
+	}
+
+	rawService := Wrap(inner, artifacts, Config{})
+	rawResult, err := revision.Rewind(
+		ctx,
+		rawService,
+		revision.RewindRequest{
+			Key:             key,
+			TargetRequestID: "latest", ExpectedHeadRequestID: "latest",
+			IdempotencyKey: "replacement",
+		},
+	)
+	if err != nil {
+		t.Fatalf("Rewind(disabled externalization) error = %v", err)
+	}
+	rawPart := rawResult.Session.Events[0].Response.Choices[0].Message.ContentParts[0]
+	if len(rawPart.Image.Data) != 0 || rawPart.ContentRef == nil {
+		t.Fatalf("unhydrated restored part = %#v", rawPart)
+	}
+}
+
+func TestRewindHydrationFailureCanBeConfirmedByRetry(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService()
+	t.Cleanup(func() { _ = inner.Close() })
+	artifacts := &toggleLoadArtifactService{Service: artifactmem.NewService()}
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	baseline := imageEvent([]byte("image-bytes"))
+	baseline.RequestID = "baseline"
+	baseline.InvocationID = "baseline-invocation"
+	if err := svc.AppendEvent(ctx, sess, baseline); err != nil {
+		t.Fatalf("AppendEvent(baseline) error = %v", err)
+	}
+
+	turnCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID: "latest", InvocationID: "latest-invocation",
+	})
+	latest := responseEvent(model.NewUserMessage("latest"))
+	latest.RequestID = "latest"
+	latest.InvocationID = "latest-invocation"
+	if err := svc.AppendEvent(turnCtx, sess, latest); err != nil {
+		t.Fatalf("AppendEvent(latest) error = %v", err)
+	}
+	completion := event.NewResponseEvent(
+		"latest-invocation",
+		"app",
+		&model.Response{Done: true, Object: model.ObjectTypeRunnerCompletion},
+	)
+	completion.RequestID = "latest"
+	if err := svc.AppendEvent(ctx, sess, completion); err != nil {
+		t.Fatalf("AppendEvent(completion) error = %v", err)
+	}
+
+	req := revision.RewindRequest{
+		Key: key, TargetRequestID: "latest", ExpectedHeadRequestID: "latest", IdempotencyKey: "replacement",
+	}
+	artifacts.failLoad = true
+	result, err := revision.Rewind(ctx, svc, req)
+	if result != nil || err == nil || !strings.Contains(err.Error(), "load failed") {
+		t.Fatalf("Rewind(first) = %#v, %v", result, err)
+	}
+
+	artifacts.failLoad = false
+	result, err = revision.Rewind(ctx, svc, req)
+	if err != nil {
+		t.Fatalf("Rewind(retry) error = %v", err)
+	}
+	part := result.Session.Events[0].Response.Choices[0].Message.ContentParts[0]
+	if string(part.Image.Data) != "image-bytes" || part.ContentRef != nil {
+		t.Fatalf("hydrated restored part = %#v", part)
+	}
+}
+
+func TestRewindUnsupportedWrappedService(t *testing.T) {
+	svc := Wrap(&unsupportedReplacementService{}, artifactmem.NewService(), Config{Enabled: true})
+	_, err := revision.Rewind(
+		context.Background(),
+		svc,
+		revision.RewindRequest{
+			Key: session.Key{
+				AppName: "app", UserID: "user", SessionID: "session",
+			},
+			TargetRequestID: "request", ExpectedHeadRequestID: "request",
+			IdempotencyKey: "replacement",
+		},
+	)
+	if !errors.Is(err, revision.ErrRewindUnsupported) {
+		t.Fatalf("Rewind() error = %v", err)
+	}
+}
+
+type unsupportedReplacementService struct {
+	session.Service
+}
 
 func TestAppendEventExternalizesAndGetSessionHydrates(t *testing.T) {
 	ctx := context.Background()
@@ -1596,6 +1749,23 @@ type loadArtifactService struct {
 	artifact.Service
 	artifact *artifact.Artifact
 	err      error
+}
+
+type toggleLoadArtifactService struct {
+	artifact.Service
+	failLoad bool
+}
+
+func (s *toggleLoadArtifactService) LoadArtifact(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	version *int,
+) (*artifact.Artifact, error) {
+	if s.failLoad {
+		return nil, errors.New("load failed")
+	}
+	return s.Service.LoadArtifact(ctx, sessionInfo, filename, version)
 }
 
 func (s *loadArtifactService) LoadArtifact(

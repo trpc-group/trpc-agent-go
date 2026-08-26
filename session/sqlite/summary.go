@@ -12,10 +12,13 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -82,7 +85,64 @@ ON CONFLICT(app_name, user_id, session_id, filter_key) DO UPDATE SET
   expires_at = excluded.expires_at,
   deleted_at = NULL`
 
-	_, err = s.db.ExecContext(
+	s.stateWriteMu.Lock()
+	defer s.stateWriteMu.Unlock()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin upsert summary: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var stateRaw []byte
+	err = tx.QueryRowContext(
+		ctx,
+		fmt.Sprintf(
+			`SELECT state FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND deleted_at IS NULL`,
+			s.tableSessionStates,
+		),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	).Scan(&stateRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("session not found")
+	}
+	if err != nil {
+		return fmt.Errorf("get session state for summary: %w", err)
+	}
+	write := sessionrevision.NewWrite(ctx, sess)
+	var sessState SessionState
+	record, err := sessionrevision.DecodeState(stateRaw, &sessState)
+	if err != nil {
+		return err
+	}
+	if err := checkRevisionGeneration(record, write); err != nil {
+		return err
+	}
+	sessionrevision.ApplyWrite(record, write)
+	updatedState, err := sessionrevision.EncodeState(&sessState, record)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		fmt.Sprintf(
+			`UPDATE %s SET state = ?
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND deleted_at IS NULL`,
+			s.tableSessionStates,
+		),
+		updatedState,
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	); err != nil {
+		return fmt.Errorf("update session revision for summary: %w", err)
+	}
+
+	_, err = tx.ExecContext(
 		ctx,
 		fmt.Sprintf(insertSQL, s.tableSessionSummaries),
 		key.AppName,
@@ -95,6 +155,9 @@ ON CONFLICT(app_name, user_id, session_id, filter_key) DO UPDATE SET
 	)
 	if err != nil {
 		return fmt.Errorf("upsert summary: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit summary: %w", err)
 	}
 	return nil
 }

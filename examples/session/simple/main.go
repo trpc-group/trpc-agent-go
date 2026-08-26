@@ -66,6 +66,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -104,7 +105,8 @@ var (
 		"session",
 		"redis",
 		"Name of the session service to use, inmemory / noop / "+
-			"sqlite / redis / postgres / pgvector / mysql / tdsql / clickhouse",
+			"sqlite / redis / postgres / pgvector / mysql / tdsql / "+
+			"clickhouse / mongodb",
 	)
 	streaming = flag.Bool(
 		"streaming",
@@ -192,7 +194,15 @@ type multiTurnChat struct {
 	searchable     session.SearchableService
 	userID         string
 	sessionID      string
+	requestIDs     map[string]string
+	pendingEdits   map[string]pendingEdit
 	debugPersisted bool
+}
+
+type pendingEdit struct {
+	expectedRequestID string
+	requestID         string
+	message           string
 }
 
 // run starts the interactive chat session.
@@ -257,6 +267,8 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
+	c.requestIDs = make(map[string]string)
+	c.pendingEdits = make(map[string]pendingEdit)
 
 	fmt.Printf("Chat ready! Session: %s\n\n", c.sessionID)
 	return nil
@@ -265,17 +277,7 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 // startChat runs the interactive conversation loop.
 func (c *multiTurnChat) startChat(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
-
-	fmt.Println("Session commands:")
-	fmt.Println("   /history      - Ask the assistant to recap our conversation")
-	fmt.Println("   /new [id]     - Start a new session (optional: specify custom ID)")
-	fmt.Println("   /sessions     - List known session IDs")
-	fmt.Println("   /use <id>     - Switch to an existing (or new) session")
-	if c.searchable != nil {
-		fmt.Println("   /search <query> - Recall semantically similar events")
-	}
-	fmt.Println("   /exit         - End the conversation")
-	fmt.Println()
+	c.printChatHelp()
 
 	for {
 		fmt.Print("You: ")
@@ -290,6 +292,7 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 
 		lowerInput := strings.ToLower(userInput)
 
+		process := c.processMessage
 		switch {
 		case lowerInput == "/exit":
 			fmt.Println("Goodbye!")
@@ -311,6 +314,13 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 			}
 			c.switchSession(target)
 			continue
+		case strings.HasPrefix(lowerInput, "/edit"):
+			userInput = strings.TrimSpace(userInput[len("/edit"):])
+			if userInput == "" {
+				fmt.Println("Usage: /edit <replacement-message>")
+				continue
+			}
+			process = c.replaceLatestMessage
 		case strings.HasPrefix(lowerInput, "/search"):
 			query := strings.TrimSpace(userInput[len("/search"):])
 			if query == "" {
@@ -324,7 +334,7 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 			continue
 		}
 
-		if err := c.processMessage(ctx, userInput); err != nil {
+		if err := process(ctx, userInput); err != nil {
 			fmt.Printf("Error: %v\n", err)
 		}
 
@@ -351,14 +361,90 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 	return nil
 }
 
+func (c *multiTurnChat) printChatHelp() {
+	fmt.Println("Session commands:")
+	fmt.Println("   /history      - Ask the assistant to recap our conversation")
+	fmt.Println("   /new [id]     - Start a new session (optional: specify custom ID)")
+	fmt.Println("   /sessions     - List known session IDs")
+	fmt.Println("   /use <id>     - Switch to an existing (or new) session")
+	fmt.Println("   /edit <text>  - Replace the latest turn with edited text")
+	if c.searchable != nil {
+		fmt.Println("   /search <query> - Recall semantically similar events")
+	}
+	fmt.Println("   /exit         - End the conversation")
+	fmt.Println()
+}
+
 // processMessage handles a single message exchange.
 func (c *multiTurnChat) processMessage(
 	ctx context.Context,
 	userMessage string,
 ) error {
-	message := model.NewUserMessage(userMessage)
-
 	requestID := uuid.New().String()
+	return c.runMessage(
+		ctx,
+		userMessage,
+		requestID,
+		agent.WithRequestID(requestID),
+	)
+}
+
+func (c *multiTurnChat) replaceLatestMessage(
+	ctx context.Context,
+	userMessage string,
+) error {
+	pending, ok := c.pendingEdits[c.sessionID]
+	if !ok {
+		expectedRequestID, err := c.latestRequestID(ctx)
+		if err != nil {
+			return err
+		}
+		pending = pendingEdit{
+			expectedRequestID: expectedRequestID,
+			requestID:         uuid.New().String(),
+			message:           userMessage,
+		}
+		c.pendingEdits[c.sessionID] = pending
+	} else if userMessage != pending.message {
+		return fmt.Errorf(
+			"pending edit outcome is unknown; retry the same message %q",
+			pending.message,
+		)
+	}
+	started, err := c.runMessageAttempt(
+		ctx,
+		userMessage,
+		pending.requestID,
+		agent.WithRequestID(pending.requestID),
+		agent.WithLatestTurnReplacement(pending.expectedRequestID),
+	)
+	if errors.Is(err, session.ErrRewindConflict) {
+		delete(c.requestIDs, c.sessionID)
+	}
+	if started || errors.Is(err, session.ErrRewindConflict) ||
+		errors.Is(err, session.ErrRewindUnsupported) {
+		delete(c.pendingEdits, c.sessionID)
+	}
+	return err
+}
+
+func (c *multiTurnChat) runMessage(
+	ctx context.Context,
+	userMessage string,
+	requestID string,
+	runOpts ...agent.RunOption,
+) error {
+	_, err := c.runMessageAttempt(ctx, userMessage, requestID, runOpts...)
+	return err
+}
+
+func (c *multiTurnChat) runMessageAttempt(
+	ctx context.Context,
+	userMessage string,
+	requestID string,
+	runOpts ...agent.RunOption,
+) (bool, error) {
+	message := model.NewUserMessage(userMessage)
 
 	// Inject requestID into context for logging.
 	ctx = context.WithValue(ctx, requestIDKey, requestID)
@@ -378,14 +464,36 @@ func (c *multiTurnChat) processMessage(
 		c.userID,
 		c.sessionID,
 		message,
-		agent.WithRequestID(requestID),
+		runOpts...,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to run agent: %w", err)
+		return false, fmt.Errorf("failed to run agent: %w", err)
 	}
+	c.requestIDs[c.sessionID] = requestID
 
 	// Process response.
-	return c.processResponse(eventChan)
+	return true, c.processResponse(eventChan)
+}
+
+func (c *multiTurnChat) latestRequestID(ctx context.Context) (string, error) {
+	if requestID := c.requestIDs[c.sessionID]; requestID != "" {
+		return requestID, nil
+	}
+	sess, err := c.sessionService.GetSession(ctx, session.Key{
+		AppName: appName, UserID: c.userID, SessionID: c.sessionID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("load latest turn: %w", err)
+	}
+	if sess != nil {
+		for i := len(sess.Events) - 1; i >= 0; i-- {
+			if requestID := sess.Events[i].RequestID; requestID != "" {
+				c.requestIDs[c.sessionID] = requestID
+				return requestID, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("current session has no persisted runner turn")
 }
 
 // processResponse handles streaming and non-streaming responses, with
@@ -414,7 +522,12 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
 		// final assistant response).
 		if event.IsFinalResponse() {
 			fmt.Printf("\n")
-			break
+			// Runner cleanup completes before the channel closes. Keep draining
+			// after displaying the final response so a following command can
+			// safely operate on the completed run.
+			for range eventChan {
+			}
+			return nil
 		}
 	}
 

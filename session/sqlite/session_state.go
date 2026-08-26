@@ -13,12 +13,12 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -51,8 +51,14 @@ func (s *Service) UpdateSessionState(
 	s.stateWriteMu.Lock()
 	defer s.stateWriteMu.Unlock()
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update session state: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var current []byte
-	err := s.db.QueryRowContext(
+	err = tx.QueryRowContext(
 		ctx,
 		fmt.Sprintf(
 			`SELECT state FROM %s
@@ -70,13 +76,16 @@ AND deleted_at IS NULL`,
 	if err != nil {
 		return fmt.Errorf("get session state: %w", err)
 	}
-
+	write := sessionrevision.NewWrite(ctx, nil)
 	var sessState SessionState
-	if len(current) > 0 {
-		if err := json.Unmarshal(current, &sessState); err != nil {
-			return fmt.Errorf("unmarshal state: %w", err)
-		}
+	record, err := sessionrevision.DecodeState(current, &sessState)
+	if err != nil {
+		return err
 	}
+	if err := checkRevisionGeneration(record, write); err != nil {
+		return err
+	}
+	sessionrevision.ApplyWrite(record, write)
 	if sessState.State == nil {
 		sessState.State = make(session.StateMap)
 	}
@@ -92,14 +101,14 @@ AND deleted_at IS NULL`,
 
 	now := time.Now().UTC()
 	sessState.UpdatedAt = now
-	updatedBytes, err := json.Marshal(sessState)
+	updatedBytes, err := sessionrevision.EncodeState(&sessState, record)
 	if err != nil {
-		return fmt.Errorf("marshal state: %w", err)
+		return err
 	}
 
 	expiresAt := calculateExpiresAt(now, s.opts.sessionTTL)
 
-	_, err = s.db.ExecContext(
+	_, err = tx.ExecContext(
 		ctx,
 		fmt.Sprintf(
 			`UPDATE %s
@@ -117,6 +126,9 @@ AND deleted_at IS NULL`,
 	)
 	if err != nil {
 		return fmt.Errorf("update session state: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update session state: %w", err)
 	}
 	return nil
 }

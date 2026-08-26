@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -64,7 +65,14 @@ func (s *Service) CreateSessionSummary(
 		return fmt.Errorf("marshal summary failed: %w", err)
 	}
 
-	return s.upsertSessionSummary(ctx, key, filterKey, summaryBytes, sum.UpdatedAt)
+	return s.upsertSessionSummaryWithWrite(
+		ctx,
+		key,
+		filterKey,
+		summaryBytes,
+		sum.UpdatedAt,
+		sessionrevision.NewWrite(ctx, sess),
+	)
 }
 
 // upsertSessionSummary serializes summary persistence through the parent
@@ -78,9 +86,30 @@ func (s *Service) upsertSessionSummary(
 	summaryBytes []byte,
 	updatedAt time.Time,
 ) error {
+	return s.upsertSessionSummaryWithWrite(
+		ctx,
+		key,
+		filterKey,
+		summaryBytes,
+		updatedAt,
+		sessionrevision.NewWrite(ctx, nil),
+	)
+}
+
+func (s *Service) upsertSessionSummaryWithWrite(
+	ctx context.Context,
+	key session.Key,
+	filterKey string,
+	summaryBytes []byte,
+	updatedAt time.Time,
+	write sessionrevision.Write,
+) error {
 	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
-		if err := s.lockActiveSessionForSummary(ctx, tx, key); err != nil {
-			return err
+		state, record, _, err := loadSessionStateForUpdate(
+			ctx, tx, s.tableSessionStates, key,
+		)
+		if err != nil {
+			return fmt.Errorf("load session revision for summary: %w", err)
 		}
 
 		persistedUpdatedAt, exists, err := s.latestActiveSummaryUpdatedAtForUpdate(
@@ -97,7 +126,24 @@ func (s *Service) upsertSessionSummary(
 			if persistedUpdatedAt.After(updatedAt) {
 				return nil
 			}
+		}
 
+		if err := s.revisionStore().ApplyMutation(record, write); err != nil {
+			return fmt.Errorf("apply session revision for summary: %w", err)
+		}
+		stateRaw, err := sessionrevision.EncodeState(state, record)
+		if err != nil {
+			return fmt.Errorf("encode session revision for summary: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, fmt.Sprintf(
+			`UPDATE %s SET state = ?, updated_at = updated_at
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+			s.tableSessionStates,
+		), string(stateRaw), key.AppName, key.UserID, key.SessionID); err != nil {
+			return fmt.Errorf("persist session revision for summary: %w", err)
+		}
+
+		if exists {
 			// Update every active copy so reads remain consistent while legacy
 			// duplicate rows are being cleaned up online.
 			_, err = tx.ExecContext(ctx,
