@@ -524,12 +524,14 @@ func (c *Callbacks) processAfterToolResult(
 
 // finalizeAfterToolResult determines the final return value for after tool callbacks.
 //
-// CustomResult is only an explicit replacement. If no callback produced a
-// result, CustomResult stays nil so callers keep the original tool result
-// instead of treating a pass-through as an override.
+// When no AfterTool callbacks are registered, CustomResult is args.Result so
+// direct callers keep the released no-callback contract. When callbacks ran
+// but none produced a CustomResult, CustomResult stays nil so plugin
+// dispatchers treat that as pass-through rather than an override.
 func (c *Callbacks) finalizeAfterToolResult(
 	lastResult *AfterToolResult,
 	firstErr error,
+	args *AfterToolArgs,
 ) (*AfterToolResult, error) {
 	if lastResult != nil && lastResult.CustomResult != nil {
 		if c.continueOnError && firstErr != nil {
@@ -541,6 +543,11 @@ func (c *Callbacks) finalizeAfterToolResult(
 		return lastResult, firstErr
 	}
 	if lastResult == nil {
+		if len(c.AfterTool) == 0 && args != nil && args.Result != nil {
+			return &AfterToolResult{
+				CustomResult: args.Result,
+			}, nil
+		}
 		return &AfterToolResult{}, nil
 	}
 	return lastResult, nil
@@ -592,8 +599,9 @@ func normalizeAfterToolArgsResult(args *AfterToolArgs) func() {
 // RunAfterTool runs all after tool callbacks in order.
 // This method uses the new structured callback interface.
 // If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
-// If no callback returns a CustomResult, CustomResult is nil and callers should
-// keep using the original tool result.
+// If no AfterTool callbacks are registered, CustomResult is args.Result.
+// If callbacks ran but none returned a CustomResult, CustomResult is nil and
+// callers should keep using the original tool result.
 func (c *Callbacks) RunAfterTool(
 	ctx context.Context,
 	args *AfterToolArgs,
@@ -616,5 +624,5 @@ func (c *Callbacks) RunAfterTool(
 		}
 	}
 
-	return c.finalizeAfterToolResult(lastResult, firstErr)
+	return c.finalizeAfterToolResult(lastResult, firstErr, args)
 }

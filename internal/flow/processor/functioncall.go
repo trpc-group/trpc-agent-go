@@ -3373,7 +3373,7 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 	}
 
 	callbacks := invocation.Plugins.ToolCallbacks()
-	if callbacks == nil {
+	if callbacks == nil || len(callbacks.AfterTool) == 0 {
 		return ctx, toolResult, false, false, nil
 	}
 
@@ -3402,9 +3402,10 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 	}
 	skipSummarization := afterResult != nil &&
 		afterResult.SkipSummarization
-	// A non-nil CustomResult is an explicit plugin replacement and skips
-	// agent AfterTool callbacks. Pass-through plugins must leave
-	// CustomResult nil so those agent callbacks still run.
+	// A non-nil CustomResult from a registered AfterTool hook is an explicit
+	// plugin replacement and skips agent AfterTool callbacks. An empty
+	// AfterTool list is skipped above so the released no-callback echo of
+	// args.Result is not treated as an override.
 	if afterResult != nil && afterResult.CustomResult != nil {
 		if afterResult.SkipResultFormatter {
 			ctx = withUndeclaredToolResult(

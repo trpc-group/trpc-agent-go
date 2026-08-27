@@ -490,7 +490,7 @@ func TestRunAfterTool_Empty(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Nil(t, result.CustomResult)
+	require.Equal(t, originalResult, result.CustomResult)
 }
 
 func TestRunAfterTool_PanicRecovery(t *testing.T) {
@@ -915,7 +915,7 @@ func TestRunAfterTool_NoCallbacksPreservesOriginalResultShape(t *testing.T) {
 	result, err := callbacks.RunAfterTool(context.Background(), afterArgs)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Nil(t, result.CustomResult)
+	require.Same(t, rawResult, result.CustomResult)
 	require.Same(t, rawResult, afterArgs.Result)
 }
 
@@ -1148,8 +1148,7 @@ func TestToolCallbacks_ContextPropagation(t *testing.T) {
 }
 
 // TestToolCallbacks_After_NoCallbacks_WithResult tests that when no callbacks
-// are registered, RunAfterTool does not treat the original result as a custom
-// replacement.
+// are registered and args.Result is not nil, RunAfterTool returns the original result.
 func TestToolCallbacks_After_NoCallbacks_WithResult(t *testing.T) {
 	callbacks := tool.NewCallbacks()
 	originalResult := map[string]string{"key": "value"}
@@ -1163,7 +1162,7 @@ func TestToolCallbacks_After_NoCallbacks_WithResult(t *testing.T) {
 	result, err := callbacks.RunAfterTool(context.Background(), args)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Nil(t, result.CustomResult)
+	require.Equal(t, originalResult, result.CustomResult)
 }
 
 // TestToolCallbacks_After_NoCallbacks_WithoutResult tests that when no callbacks
