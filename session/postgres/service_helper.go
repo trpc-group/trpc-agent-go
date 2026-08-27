@@ -646,11 +646,14 @@ func applySessionStateTimestamps(
 	updatedAt time.Time,
 ) {
 	// PostgreSQL TIMESTAMP columns preserve wall-clock fields but discard the
-	// original offset. The JSON envelope retains the creation instant.
+	// original offset. Prefer the absolute instants retained in the JSON
+	// envelope, and use the columns only for legacy payloads.
 	if state.CreatedAt.IsZero() {
 		state.CreatedAt = createdAt
 	}
-	state.UpdatedAt = updatedAt
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = updatedAt
+	}
 }
 
 // getEventsList batch loads events for multiple sessions.
@@ -948,6 +951,8 @@ func (s *Service) getSummariesList(
 			var sessionID, filterKey string
 			var summaryBytes []byte
 			var updatedAt time.Time
+			var sessionCreatedAt time.Time
+			checkFreshness := false
 			if sessionCreatedAtMap == nil {
 				if err := rows.Scan(&sessionID, &filterKey, &summaryBytes); err != nil {
 					return err
@@ -961,17 +966,27 @@ func (s *Service) getSummariesList(
 				); err != nil {
 					return err
 				}
+				var exists bool
+				sessionCreatedAt, exists = sessionCreatedAtMap[sessionID]
+				if !exists {
+					continue
+				}
+				checkFreshness = true
 			}
 
 			var sum session.Summary
 			if err := json.Unmarshal(summaryBytes, &sum); err != nil {
-				return fmt.Errorf("unmarshal summary failed: %w", err)
-			}
-			if sessionCreatedAtMap != nil {
-				createdAt, exists := sessionCreatedAtMap[sessionID]
-				if !exists || !summaryIsCurrentForSession(&sum, updatedAt, createdAt) {
+				if checkFreshness && updatedAt.Before(sessionCreatedAt) {
 					continue
 				}
+				return fmt.Errorf("unmarshal summary failed: %w", err)
+			}
+			if checkFreshness && !summaryIsCurrentForSession(
+				&sum,
+				updatedAt,
+				sessionCreatedAt,
+			) {
+				continue
 			}
 
 			if summariesMap[sessionID] == nil {

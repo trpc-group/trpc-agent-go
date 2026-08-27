@@ -429,6 +429,115 @@ func TestGetSessionSummaryText_AcrossTimeZones(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetSessionSummaryText_StaleSummary(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	createdAt := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+	summaryBytes, err := json.Marshal(session.Summary{
+		Summary:   "stale summary",
+		UpdatedAt: createdAt.Add(-time.Nanosecond),
+	})
+	require.NoError(t, err)
+
+	mock.ExpectQuery("SELECT summary, updated_at FROM session_summaries").
+		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}).
+			AddRow(summaryBytes, createdAt.Add(time.Hour)))
+
+	text, err := s.getSessionSummaryText(
+		context.Background(),
+		session.Key{
+			AppName:   "test-app",
+			UserID:    "test-user",
+			SessionID: "test-session",
+		},
+		"",
+		createdAt,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, text)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSessionSummaryText_ScanError(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	mock.ExpectQuery("SELECT summary, updated_at FROM session_summaries").
+		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"summary", "updated_at"}).
+			AddRow([]byte(`{"summary":"text"}`), nil))
+
+	text, err := s.getSessionSummaryText(
+		context.Background(),
+		session.Key{
+			AppName:   "test-app",
+			UserID:    "test-user",
+			SessionID: "test-session",
+		},
+		"",
+		time.Now(),
+	)
+	require.Error(t, err)
+	assert.Empty(t, text)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSummaryIsCurrentForSession(t *testing.T) {
+	createdAt := time.Date(2026, 8, 25, 9, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name             string
+		summaryUpdatedAt time.Time
+		storedUpdatedAt  time.Time
+		sessionCreatedAt time.Time
+		want             bool
+	}{
+		{
+			name: "zero session creation time disables filtering",
+			want: true,
+		},
+		{
+			name:             "payload timestamp takes precedence when fresh",
+			summaryUpdatedAt: createdAt,
+			storedUpdatedAt:  createdAt.Add(-time.Hour),
+			sessionCreatedAt: createdAt,
+			want:             true,
+		},
+		{
+			name:             "payload timestamp takes precedence when stale",
+			summaryUpdatedAt: createdAt.Add(-time.Hour),
+			storedUpdatedAt:  createdAt.Add(time.Hour),
+			sessionCreatedAt: createdAt,
+			want:             false,
+		},
+		{
+			name:             "legacy payload falls back to current column timestamp",
+			storedUpdatedAt:  createdAt,
+			sessionCreatedAt: createdAt,
+			want:             true,
+		},
+		{
+			name:             "legacy payload falls back to stale column timestamp",
+			storedUpdatedAt:  createdAt.Add(-time.Nanosecond),
+			sessionCreatedAt: createdAt,
+			want:             false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := summaryIsCurrentForSession(
+				&session.Summary{UpdatedAt: tt.summaryUpdatedAt},
+				tt.storedUpdatedAt,
+				tt.sessionCreatedAt,
+			)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestGetSessionSummaryText_NoSummary(t *testing.T) {
 	s, mock, db := setupMockService(t, &TestServiceOpts{summarizer: &mockSummarizerImpl{shouldSummarize: false}})
 	defer db.Close()
