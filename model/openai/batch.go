@@ -378,7 +378,8 @@ func (m *Model) ParseBatchOutput(text string) ([]BatchRequestOutput, error) {
 		if err := json.Unmarshal([]byte(line), &out); err != nil {
 			return nil, fmt.Errorf("failed to parse jsonl line: %w", err)
 		}
-		out.RawLine = line
+		// Clone so a retained entry does not pin the entire JSONL input.
+		out.RawLine = strings.Clone(line)
 		entries = append(entries, out)
 	}
 	return entries, nil
