@@ -413,13 +413,11 @@ func (w *Workspace) invalidateWorkspaceHandleIfStale(
 		!errors.Is(err, codeexecutor.ErrWorkspaceStale) {
 		return
 	}
-	if w.resolver.IsEphemeralHandle(handle) {
-		// Ephemeral workspaces are not reused after this call, so
-		// destroy the backend workspace rather than only dropping the
-		// cache entry (Invalidate alone would leave it behind).
-		w.releaseEphemeralHandle(context.Background(), handle)
-		return
-	}
+	// Stale always invalidates without Cleanup. The deterministic
+	// workspace path may already belong to a newer physical instance;
+	// Release (including the method-level ephemeral defer) must not
+	// delete that replacement generation. After Invalidate the defer
+	// ReleaseHandle is a token-mismatch no-op.
 	w.resolver.InvalidateWorkspaceHandle(handle)
 }
 
@@ -428,7 +426,9 @@ func (w *Workspace) invalidateWorkspaceHandleIfStale(
 // owning it; without this, every call through this facade would retain
 // the registry entry and the backend workspace for the life of the
 // process. Session-scoped handles are left cached and untouched so
-// valid sessions keep reusing their workspace.
+// valid sessions keep reusing their workspace. A stale handle must be
+// Invalidated first so this Release is a token-mismatch no-op and
+// cannot Cleanup a replacement generation at the same path.
 func (w *Workspace) releaseEphemeralHandle(
 	ctx context.Context,
 	handle codeexecutor.WorkspaceHandle,

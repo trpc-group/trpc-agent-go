@@ -15,8 +15,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -145,4 +147,234 @@ func TestExecTool_EphemeralWorkspaceReleasedAfterCall(t *testing.T) {
 		"session-scoped workspace must be created once and reused")
 	require.Equal(t, 2, cleans,
 		"session-scoped workspace must not be released after each call")
+}
+
+// replacingEphemeralManager creates every workspace at one deterministic
+// path and records Cleanup so tests can prove a stale handle does not
+// delete a replacement generation that reused that path.
+type replacingEphemeralManager struct {
+	mu      sync.Mutex
+	probes  []codeexecutor.WorkspaceInstanceID
+	current codeexecutor.WorkspaceInstanceID
+	path    string
+	creates int
+	cleans  int
+}
+
+func (m *replacingEphemeralManager) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.creates++
+	if err := os.MkdirAll(m.path, 0o755); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	marker := filepath.Join(m.path, "generation.txt")
+	if err := os.WriteFile(
+		marker,
+		[]byte(strconv.Itoa(m.creates)),
+		0o644,
+	); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	return codeexecutor.Workspace{ID: id, Path: m.path}, nil
+}
+
+func (m *replacingEphemeralManager) Cleanup(
+	_ context.Context,
+	ws codeexecutor.Workspace,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cleans++
+	return os.RemoveAll(ws.Path)
+}
+
+func (m *replacingEphemeralManager) InstanceID(
+	context.Context,
+) (codeexecutor.WorkspaceInstanceID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.probes) > 0 {
+		m.current = m.probes[0]
+		m.probes = m.probes[1:]
+	}
+	if m.current == "" {
+		return "", nil
+	}
+	return m.current, nil
+}
+
+func (m *replacingEphemeralManager) counts() (creates, cleans int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.creates, m.cleans
+}
+
+func ephemeralEmptySessionCtx() context.Context {
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationID("ephemeral-stale-inv"),
+	)
+	return agent.NewInvocationContext(context.Background(), inv)
+}
+
+func waitForNoCleanup(t *testing.T, cleans func() int, want int) {
+	t.Helper()
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for {
+		require.Equal(t, want, cleans(),
+			"stale ephemeral handle must not Cleanup a replacement workspace")
+		if !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestExecTool_StaleEphemeralHandleDoesNotCleanupReplacement is the
+// regression for releasing a stale empty-session handle: Cleanup would
+// delete the deterministic path after a replacement instance already
+// owns it. Stale must Invalidate only.
+func TestExecTool_StaleEphemeralHandleDoesNotCleanupReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared-ws")
+	manager := &replacingEphemeralManager{
+		path: path,
+		probes: []codeexecutor.WorkspaceInstanceID{
+			"gen-1", "gen-1", "gen-2",
+			"gen-2", "gen-2", "gen-3",
+		},
+	}
+	exec := &staleRetryExec{
+		eng: codeexecutor.NewEngine(
+			manager,
+			&nonInteractiveFS{},
+			&nonInteractiveRunner{},
+		),
+	}
+	tl := NewExecTool(exec)
+	args, err := json.Marshal(execInput{
+		Command: "echo ok",
+		Timeout: timeoutSecSmall,
+	})
+	require.NoError(t, err)
+
+	_, err = tl.Call(ephemeralEmptySessionCtx(), args)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	creates, cleans := manager.counts()
+	require.Equal(t, 2, creates,
+		"a retry-safe stale fence reacquires once; neither generation is Cleaned up")
+	require.Equal(t, 0, cleans,
+		"the stale acquired handle must not Cleanup")
+
+	replacement := filepath.Join(path, "replacement.txt")
+	require.NoError(t, os.WriteFile(replacement, []byte("next-gen"), 0o644))
+	waitForNoCleanup(t, func() int {
+		_, n := manager.counts()
+		return n
+	}, 0)
+	require.FileExists(t, replacement,
+		"replacement generation at the deterministic path must survive")
+	require.FileExists(t, filepath.Join(path, "generation.txt"))
+}
+
+// TestExecTool_PostReconcileStaleEphemeralDoesNotCleanupReplacement
+// covers the post-reconcile fence: bootstrap may have started, the
+// handle is stale, and Release would still delete the replacement.
+func TestExecTool_PostReconcileStaleEphemeralDoesNotCleanupReplacement(
+	t *testing.T,
+) {
+	path := filepath.Join(t.TempDir(), "shared-ws")
+	manager := &replacingEphemeralManager{
+		path: path,
+		probes: []codeexecutor.WorkspaceInstanceID{
+			"gen-1", "gen-1", "gen-1", "gen-2",
+		},
+	}
+	exec := &staleRetryExec{
+		eng: codeexecutor.NewEngine(
+			manager,
+			&nonInteractiveFS{},
+			&nonInteractiveRunner{},
+		),
+	}
+	tl := NewExecTool(
+		exec,
+		WithWorkspaceBootstrap(codeexecutor.WorkspaceBootstrapSpec{
+			Commands: []codeexecutor.WorkspaceCommand{{Cmd: "true"}},
+		}),
+	)
+	args, err := json.Marshal(execInput{
+		Command: "echo ok",
+		Timeout: timeoutSecSmall,
+	})
+	require.NoError(t, err)
+
+	_, err = tl.Call(ephemeralEmptySessionCtx(), args)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	_, cleans := manager.counts()
+	require.Equal(t, 0, cleans)
+
+	replacement := filepath.Join(path, "replacement.txt")
+	require.NoError(t, os.WriteFile(replacement, []byte("next-gen"), 0o644))
+	waitForNoCleanup(t, func() int {
+		_, n := manager.counts()
+		return n
+	}, 0)
+	require.FileExists(t, replacement)
+}
+
+// TestExecTool_StaleEphemeralSessionWriteDoesNotCleanupReplacement
+// covers invalidateSessionWorkspaceIfStale: a stale write on an
+// empty-session interactive handle must drop the cache entry without
+// Cleanup.
+func TestExecTool_StaleEphemeralSessionWriteDoesNotCleanupReplacement(
+	t *testing.T,
+) {
+	path := filepath.Join(t.TempDir(), "shared-ws")
+	manager := &replacingEphemeralManager{
+		path:    path,
+		current: "gen-1",
+	}
+	exec := &staleRetryExec{
+		eng: codeexecutor.NewEngine(
+			manager,
+			&nonInteractiveFS{},
+			staleWriteRunner{},
+		),
+	}
+	tl := NewExecTool(exec)
+	startArgs, err := json.Marshal(execInput{
+		Command:    "interactive",
+		Background: true,
+		Timeout:    timeoutSecSmall,
+	})
+	require.NoError(t, err)
+
+	ctx := ephemeralEmptySessionCtx()
+	started, err := tl.Call(ctx, startArgs)
+	require.NoError(t, err)
+	sessionID := started.(execOutput).SessionID
+	require.NotEmpty(t, sessionID)
+	_, cleans := manager.counts()
+	require.Equal(t, 0, cleans)
+
+	writeArgs, err := json.Marshal(writeInput{
+		SessionID: sessionID,
+		Chars:     "must-not-cleanup",
+	})
+	require.NoError(t, err)
+	_, err = NewWriteStdinTool(tl).Call(ctx, writeArgs)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+
+	replacement := filepath.Join(path, "replacement.txt")
+	require.NoError(t, os.WriteFile(replacement, []byte("next-gen"), 0o644))
+	waitForNoCleanup(t, func() int {
+		_, n := manager.counts()
+		return n
+	}, 0)
+	require.FileExists(t, replacement)
 }

@@ -12,8 +12,12 @@ package workspaceio
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -118,4 +122,104 @@ func TestWorkspace_EphemeralWorkspaceReleasedAfterEachCall(t *testing.T) {
 		"session-scoped workspace must be created once and reused")
 	require.Equal(t, 2, cleans,
 		"session-scoped workspace must not be released after each call")
+}
+
+// replacingEphemeralManager creates every workspace at one deterministic
+// path and actually removes that path on Cleanup, so a stale handle can
+// be shown not to delete a replacement generation.
+type replacingEphemeralManager struct {
+	mu      sync.Mutex
+	path    string
+	creates int
+	cleans  int
+}
+
+func (m *replacingEphemeralManager) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.creates++
+	if err := os.MkdirAll(m.path, 0o755); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	marker := filepath.Join(m.path, "generation.txt")
+	if err := os.WriteFile(
+		marker,
+		[]byte(strconv.Itoa(m.creates)),
+		0o644,
+	); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	return codeexecutor.Workspace{ID: id, Path: m.path}, nil
+}
+
+func (m *replacingEphemeralManager) Cleanup(
+	_ context.Context,
+	ws codeexecutor.Workspace,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cleans++
+	return os.RemoveAll(ws.Path)
+}
+
+func (m *replacingEphemeralManager) counts() (creates, cleans int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.creates, m.cleans
+}
+
+func waitForNoCleanup(t *testing.T, cleans func() int, want int) {
+	t.Helper()
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for {
+		require.Equal(t, want, cleans(),
+			"stale ephemeral handle must not Cleanup a replacement workspace")
+		if !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestWorkspace_StaleEphemeralHandleDoesNotCleanupReplacement is the
+// facade-side regression: a stale operation on an empty-session handle
+// must Invalidate without Cleanup, so a replacement generation at the
+// same deterministic path survives the method-level ephemeral defer.
+func TestWorkspace_StaleEphemeralHandleDoesNotCleanupReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared-ws")
+	manager := &replacingEphemeralManager{path: path}
+	backend := &staleOperationBackend{operation: "put_files"}
+	eng := codeexecutor.NewEngine(manager, backend, backend)
+	ws := New(&stubFSExec{eng: eng}, nil)
+	require.NotNil(t, ws)
+
+	eInv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationID("ephemeral-stale-wsio"),
+	)
+	eCtx := agent.NewInvocationContext(context.Background(), eInv)
+
+	err := ws.PutFiles(eCtx, codeexecutor.PutFile{
+		Path:    "work/a.txt",
+		Content: []byte("a"),
+	})
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	creates, cleans := manager.counts()
+	require.Equal(t, 1, creates)
+	require.Equal(t, 0, cleans,
+		"the stale ephemeral handle must not Cleanup")
+
+	replacement := filepath.Join(path, "replacement.txt")
+	require.NoError(t, os.WriteFile(replacement, []byte("next-gen"), 0o644))
+	waitForNoCleanup(t, func() int {
+		_, n := manager.counts()
+		return n
+	}, 0)
+	require.FileExists(t, replacement,
+		"replacement generation at the deterministic path must survive")
+	require.FileExists(t, filepath.Join(path, "generation.txt"))
 }

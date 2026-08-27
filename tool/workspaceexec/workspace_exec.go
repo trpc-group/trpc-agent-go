@@ -705,7 +705,7 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	req.workspaceHandle = handle
 	req.ws = handle.Workspace
 	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
-		t.releaseEphemeralWorkspace(ctx, handle)
+		t.releaseOrInvalidateWorkspace(ctx, handle, err)
 		return execOutput{}, true, err
 	}
 	commandMayHaveStarted, err := t.reconcileWorkspace(
@@ -715,7 +715,7 @@ func (t *ExecTool) executeWorkspaceAttempt(
 		req.workspaceHandle.InstanceID,
 	)
 	if err != nil {
-		t.releaseEphemeralWorkspace(ctx, handle)
+		t.releaseOrInvalidateWorkspace(ctx, handle, err)
 		return execOutput{}, true, err
 	}
 	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
@@ -726,7 +726,7 @@ func (t *ExecTool) executeWorkspaceAttempt(
 			// and must not replay automatically.
 			err = errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
 		}
-		t.releaseEphemeralWorkspace(ctx, handle)
+		t.releaseOrInvalidateWorkspace(ctx, handle, err)
 		return execOutput{}, true, err
 	}
 	if t.sessional {
@@ -737,10 +737,33 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	return out, true, err
 }
 
+// releaseOrInvalidateWorkspace tears down an acquired handle.
+//
+// A proven-stale handle is invalidated without Cleanup: a deterministic
+// workspace path may already belong to a newer physical instance.
+// Release is reserved for ephemeral handles that still own the current
+// generation (normal invocation teardown or a non-stale failure).
+func (t *ExecTool) releaseOrInvalidateWorkspace(
+	ctx context.Context,
+	handle codeexecutor.WorkspaceHandle,
+	err error,
+) {
+	if t == nil || t.resolver == nil {
+		return
+	}
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		t.resolver.InvalidateWorkspaceHandle(handle)
+		return
+	}
+	t.releaseEphemeralWorkspace(ctx, handle)
+}
+
 // releaseEphemeralWorkspace cleans up a workspace that was acquired for
 // an invalid (empty-ID) session, which has no session-level lifecycle
 // owning it. Session-scoped handles are left cached and untouched so
-// valid sessions keep reusing their workspace.
+// valid sessions keep reusing their workspace. Callers that have already
+// proven the handle stale must Invalidate instead: Cleanup can delete a
+// replacement instance at the same deterministic path.
 func (t *ExecTool) releaseEphemeralWorkspace(
 	ctx context.Context,
 	handle codeexecutor.WorkspaceHandle,
@@ -918,8 +941,9 @@ func (t *ExecTool) callNonSessional(
 	// Ephemeral (invalid empty-ID session) workspaces have no
 	// session-level lifecycle owning them; release them at the end of
 	// this call so a long-lived process does not retain one backend
-	// workspace per such call. Session-scoped handles stay cached.
-	t.releaseEphemeralWorkspace(ctx, req.workspaceHandle)
+	// workspace per such call. A stale handle is invalidated without
+	// Cleanup so a replacement generation at the same path survives.
+	t.releaseOrInvalidateWorkspace(ctx, req.workspaceHandle, err)
 	if err != nil {
 		return execOutput{}, err
 	}
@@ -933,7 +957,7 @@ func (t *ExecTool) callSessional(
 	if !req.background && !req.tty && (req.yield == nil || *req.yield == 0) {
 		out, err := runOneShot(ctx, req.eng, req.ws, req.spec)
 		// Same ephemeral-release contract as callNonSessional.
-		t.releaseEphemeralWorkspace(ctx, req.workspaceHandle)
+		t.releaseOrInvalidateWorkspace(ctx, req.workspaceHandle, err)
 		if err != nil {
 			return execOutput{}, err
 		}
@@ -981,7 +1005,7 @@ func (t *ExecTool) startInteractive(
 		},
 	)
 	if err != nil {
-		t.releaseEphemeralWorkspace(ctx, req.workspaceHandle)
+		t.releaseOrInvalidateWorkspace(ctx, req.workspaceHandle, err)
 		return execOutput{}, err
 	}
 	// The session now owns the workspace handle; the ephemeral variant
@@ -1254,13 +1278,10 @@ func (t *ExecTool) invalidateSessionWorkspaceIfStale(
 		!errors.Is(err, codeexecutor.ErrWorkspaceStale) {
 		return
 	}
-	if t.resolver.IsEphemeralHandle(sess.handle) {
-		// Ephemeral workspaces are not reused across invocations, so
-		// destroy the backend workspace instead of only dropping the
-		// cache entry. Asynchronous because callers may hold t.mu.
-		go t.releaseEphemeralWorkspace(context.Background(), sess.handle)
-		return
-	}
+	// Stale always invalidates without Cleanup. The deterministic
+	// workspace path may already belong to a newer physical instance,
+	// including for ephemeral handles whose Release would otherwise
+	// delete that replacement generation.
 	t.resolver.InvalidateWorkspaceHandle(sess.handle)
 }
 
