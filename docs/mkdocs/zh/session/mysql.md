@@ -57,7 +57,7 @@ MySQL 存储适用于生产环境和需要复杂查询的应用，MySQL 是广�
 | --- | --- | --- | --- |
 | `WithTablePrefix(prefix string)` | `string` | `""` | 表名前缀 |
 | `WithSkipDBInit(skip bool)` | `bool` | `false` | 跳过自动建表 |
-| `WithStateInitialization(enabled bool)` | `bool` | `true` | 开启协调式 session state 初始化 |
+| `WithStateInitialization(enabled bool)` | `bool` | `false` | 开启协调式 session state 初始化 |
 
 ### Hook 配置
 

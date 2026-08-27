@@ -91,13 +91,15 @@ type ServiceOpt func(*ServiceOpts)
 
 var (
 	defaultOptions = ServiceOpts{
-		sessionEventLimit:          defaultSessionEventLimit,
-		asyncPersisterNum:          defaultAsyncPersisterNum,
-		asyncSummaryNum:            defaultAsyncSummaryNum,
-		summaryQueueSize:           defaultSummaryQueueSize,
-		summaryJobTimeout:          defaultSummaryJobTimeout,
-		softDelete:                 true, // default: enable soft delete
-		stateInitializationEnabled: true,
+		sessionEventLimit: defaultSessionEventLimit,
+		asyncPersisterNum: defaultAsyncPersisterNum,
+		asyncSummaryNum:   defaultAsyncSummaryNum,
+		summaryQueueSize:  defaultSummaryQueueSize,
+		summaryJobTimeout: defaultSummaryJobTimeout,
+		softDelete:        true, // default: enable soft delete
+		// Keep coordinated initialization opt-in so existing schemas remain
+		// compatible until the migration is explicitly enabled.
+		stateInitializationEnabled: false,
 	}
 )
 
@@ -290,10 +292,12 @@ func WithSkipDBInit(skip bool) ServiceOpt {
 }
 
 // WithStateInitialization controls coordinated session-state initialization.
-// It is enabled by default. When enabled with WithSkipDBInit(true), service
-// startup still verifies the required lease schema and TIMESTAMP(6) generation
-// column. Disable it during schema migration to omit the capability, skip its
-// schema and cleanup lifecycle, and retain caller-specific fallback behavior.
+// It is disabled by default for compatibility with existing schemas. When
+// enabled with WithSkipDBInit(true), service startup still verifies the
+// required lease schema and TIMESTAMP(6) generation column. Enable it after
+// applying the coordinated-initialization migration; disabled mode omits the
+// capability, schema and cleanup lifecycle, and retains caller-specific
+// fallback behavior.
 func WithStateInitialization(enabled bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.stateInitializationEnabled = enabled

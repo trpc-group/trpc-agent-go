@@ -44,7 +44,7 @@ func TestNewMySQLSessionBackend_MissingConfigFails(t *testing.T) {
 	require.Contains(t, err.Error(), "requires dsn or instance")
 }
 
-func TestNewMySQLSessionBackend_StateInitializationDefaultsEnabled(
+func TestNewMySQLSessionBackend_StateInitializationDefaultsDisabled(
 	t *testing.T,
 ) {
 	_, restore := stubMySQLBuilder(t)
@@ -58,12 +58,12 @@ skip_db_init: true
 		registry.SessionDeps{},
 		registry.SessionBackendSpec{Config: cfg},
 	)
-	require.Nil(t, svc)
-	require.ErrorContains(
-		t,
-		err,
-		"verify state initialization schema failed",
-	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	availability, ok := svc.(session.StateInitializationAvailability)
+	require.True(t, ok)
+	require.False(t, availability.StateInitializationAvailable())
+	require.NoError(t, svc.Close())
 }
 
 func TestNewPostgresSessionBackend_MissingConfigFails(t *testing.T) {

@@ -514,13 +514,12 @@ Common config fields:
 - `skip_db_init`: set true if your DB schema is pre-created
 - `table_prefix`: optional prefix for table names
 
-MySQL also accepts `state_initialization`, which defaults to `true`. Set it to
-`false` only while staging the coordinated state-initialization schema
-migration. This temporarily avoids the lease table and keeps lenient anonymous
-A2A on its per-agent fallback; strict coordination remains fail-closed. Re-enable
-it only after every instance can verify the complete coordinated-initialization
-schema. With `skip_db_init: true`, provision all of the following before
-re-enabling it:
+MySQL also accepts `state_initialization`, which defaults to `false` for
+compatibility with existing schemas. Set it to `true` only after staging the
+coordinated state-initialization schema migration. Disabled mode avoids the
+lease table and keeps lenient anonymous A2A on its per-agent fallback; strict
+coordination remains fail-closed. With `skip_db_init: true`, provision all of
+the following before enabling it:
 
 - Add the nullable `session_states.state_initialization_active` column and
   backfill it to `1` for every row with `deleted_at IS NULL`; keep soft-deleted

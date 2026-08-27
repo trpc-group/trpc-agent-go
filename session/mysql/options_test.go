@@ -211,7 +211,7 @@ func TestWithSkipDBInit(t *testing.T) {
 
 func TestWithStateInitialization(t *testing.T) {
 	opts := defaultOptions
-	assert.True(t, opts.stateInitializationEnabled)
+	assert.False(t, opts.stateInitializationEnabled)
 
 	WithStateInitialization(false)(&opts)
 	assert.False(t, opts.stateInitializationEnabled)

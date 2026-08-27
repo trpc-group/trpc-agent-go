@@ -258,6 +258,19 @@ type tableColumn struct {
 	nullable bool
 }
 
+func requiredColumnMaxLength(tableName, columnName string) int64 {
+	if tableName == tableNameStateInitializationLeases ||
+		strings.HasSuffix(tableName, "_"+tableNameStateInitializationLeases) {
+		switch columnName {
+		case "coordination_key":
+			return 32
+		case "owner_token":
+			return 36
+		}
+	}
+	return 0
+}
+
 // tableIndex represents a table index definition for schema verification
 type tableIndex struct {
 	table   string   // Base table name (without prefix) like "session_states"
@@ -847,7 +860,10 @@ func (s *Service) verifyStateInitializationSchema(ctx context.Context) error {
 	if s.opts.tdsqlSharding {
 		schemas = tdsqlExpectedSchema
 	}
-	leaseSchema := schemas[tableNameStateInitializationLeases]
+	leaseSchema, ok := schemas[tableNameStateInitializationLeases]
+	if !ok {
+		return fmt.Errorf("state initialization lease schema %q is missing", tableNameStateInitializationLeases)
+	}
 	requirements := []struct {
 		table   string
 		columns []tableColumn
@@ -978,6 +994,7 @@ func alterTimestampPrecisionClause(column tableColumn) string {
 func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedColumns []tableColumn) error {
 	// Get actual columns from database
 	actualColumns := make(map[string]tableColumn)
+	actualColumnLengths := make(map[string]sql.NullInt64)
 	actualDatetimePrecisions := make(map[string]sql.NullInt64)
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		var name, dataType, isNullable string
@@ -1000,6 +1017,36 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 
 	if err != nil {
 		return fmt.Errorf("query columns failed: %w", err)
+	}
+	// Width is only relevant for fixed-width binary/character columns. Keep it
+	// as a separate metadata query so existing schema checks retain their query
+	// shape and callers only pay for the check when a width is required.
+	var expectedWidths bool
+	for _, expected := range expectedColumns {
+		if requiredColumnMaxLength(tableName, expected.name) > 0 {
+			expectedWidths = true
+			break
+		}
+	}
+	if expectedWidths {
+		err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+			var name string
+			var maxLength sql.NullInt64
+			if err := rows.Scan(&name, &maxLength); err != nil {
+				return err
+			}
+			if _, exists := actualColumns[name]; exists && maxLength.Valid {
+				actualColumnLengths[name] = maxLength
+			}
+			return nil
+		}, "SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH "+
+			"FROM information_schema.columns "+
+			"WHERE table_schema = DATABASE() "+
+			"AND table_name = ? "+
+			"ORDER BY ORDINAL_POSITION", tableName)
+		if err != nil {
+			return fmt.Errorf("query column lengths failed: %w", err)
+		}
 	}
 
 	var timestampMismatches []string
@@ -1042,6 +1089,13 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 		if actual.nullable != expected.nullable {
 			return fmt.Errorf("column %s.%s nullable mismatch: got %v, expected %v",
 				tableName, expected.name, actual.nullable, expected.nullable)
+		}
+		expectedMaxLength := requiredColumnMaxLength(tableName, expected.name)
+		actualMaxLength := actualColumnLengths[expected.name]
+		if expectedMaxLength > 0 &&
+			(!actualMaxLength.Valid || actualMaxLength.Int64 != expectedMaxLength) {
+			return fmt.Errorf("column %s.%s has length %d, expected %d",
+				tableName, expected.name, actualMaxLength.Int64, expectedMaxLength)
 		}
 	}
 	if len(timestampMismatches) > 0 {

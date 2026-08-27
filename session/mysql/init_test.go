@@ -73,6 +73,19 @@ func mockVerifySchemaQueriesForTables(
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
 			WithArgs(fullTableName).
 			WillReturnRows(colRows)
+		if tableName == tableNameStateInitializationLeases {
+			lengthRows := sqlmock.NewRows([]string{"COLUMN_NAME", "CHARACTER_MAXIMUM_LENGTH"})
+			for _, col := range schema.columns {
+				var length any
+				if maxLength := requiredColumnMaxLength(tableName, col.name); maxLength > 0 {
+					length = maxLength
+				}
+				lengthRows.AddRow(col.name, length)
+			}
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH")).
+				WithArgs(fullTableName).
+				WillReturnRows(lengthRows)
+		}
 
 		// 3. verifyIndexes query (INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SUB_PART)
 		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART"})
@@ -301,6 +314,7 @@ func TestInitDB_WithLongTablePrefixUsesBoundedIndexNames(t *testing.T) {
 	tablePrefix := strings.Repeat("a", 28)
 	serviceOpts := defaultOptions
 	serviceOpts.tablePrefix = tablePrefix
+	serviceOpts.stateInitializationEnabled = true
 	s := &Service{
 		opts:                           serviceOpts,
 		mysqlClient:                    &mockMySQLClient{db: db},
@@ -1073,6 +1087,46 @@ func TestVerifyColumnsRejectsUnsafeStateInitializationGenerationPrecision(
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestVerifyColumnsRejectsInvalidStateInitializationLeaseWidths(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+	leaseTable := s.tableStateInitializationLeases
+	leaseSchema := expectedSchema[tableNameStateInitializationLeases]
+	columnRows := sqlmock.NewRows([]string{
+		"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION",
+	})
+	for _, column := range leaseSchema.columns {
+		nullable := "NO"
+		if column.nullable {
+			nullable = "YES"
+		}
+		columnRows.AddRow(column.name, column.dataType, nullable, datetimePrecisionForType(column.dataType))
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
+		WithArgs(leaseTable).
+		WillReturnRows(columnRows)
+	lengthRows := sqlmock.NewRows([]string{"COLUMN_NAME", "CHARACTER_MAXIMUM_LENGTH"})
+	for _, column := range leaseSchema.columns {
+		var length any
+		if maxLength := requiredColumnMaxLength(leaseTable, column.name); maxLength > 0 {
+			length = maxLength
+			if column.name == "coordination_key" {
+				length = maxLength / 2
+			}
+		}
+		lengthRows.AddRow(column.name, length)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH")).
+		WithArgs(leaseTable).
+		WillReturnRows(lengthRows)
+
+	err = s.verifyColumns(context.Background(), leaseTable, leaseSchema.columns)
+	require.ErrorContains(t, err, "column "+leaseTable+".coordination_key has length 16, expected 32")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestVerifyStateInitializationSchemaWithSkipDBInit(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -1120,6 +1174,17 @@ func TestVerifyStateInitializationSchemaWithSkipDBInit(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
 		WithArgs(s.tableStateInitializationLeases).
 		WillReturnRows(columnRows)
+	lengthRows := sqlmock.NewRows([]string{"COLUMN_NAME", "CHARACTER_MAXIMUM_LENGTH"})
+	for _, column := range leaseSchema.columns {
+		var length any
+		if maxLength := requiredColumnMaxLength(s.tableStateInitializationLeases, column.name); maxLength > 0 {
+			length = maxLength
+		}
+		lengthRows.AddRow(column.name, length)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH")).
+		WithArgs(s.tableStateInitializationLeases).
+		WillReturnRows(lengthRows)
 	indexRows := sqlmock.NewRows([]string{
 		"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART",
 	})

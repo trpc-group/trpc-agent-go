@@ -57,7 +57,7 @@ MySQL storage is suitable for production environments and applications requiring
 | --- | --- | --- | --- |
 | `WithTablePrefix(prefix string)` | `string` | `""` | Table name prefix |
 | `WithSkipDBInit(skip bool)` | `bool` | `false` | Skip automatic table creation |
-| `WithStateInitialization(enabled bool)` | `bool` | `true` | Enable coordinated session-state initialization |
+| `WithStateInitialization(enabled bool)` | `bool` | `false` | Enable coordinated session-state initialization |
 
 ### Hook Configuration
 

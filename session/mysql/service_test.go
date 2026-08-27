@@ -3473,6 +3473,7 @@ func TestNewService_WithDSN_Success(t *testing.T) {
 	svc, err := NewService(
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
 		WithSessionTTL(1*time.Hour),
+		WithStateInitialization(true),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
@@ -3516,6 +3517,7 @@ func TestNewService_WithTablePrefix(t *testing.T) {
 	svc, err := NewService(
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
 		WithTablePrefix("test_"),
+		WithStateInitialization(true),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
@@ -3587,6 +3589,7 @@ func TestNewService_WithSkipDBInitRejectsTimestampZeroGeneration(t *testing.T) {
 	service, err := NewService(
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
 		WithSkipDBInit(true),
+		WithStateInitialization(true),
 	)
 	require.Nil(t, service)
 	require.ErrorContains(t, err, "state initialization requires TIMESTAMP(6)")
@@ -3622,6 +3625,7 @@ func TestNewService_WithInstance_Success(t *testing.T) {
 
 	svc, err := NewService(
 		WithMySQLInstance(instanceName),
+		WithStateInitialization(true),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
@@ -3716,6 +3720,7 @@ func TestNewService_WithAsyncPersist(t *testing.T) {
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
 		WithEnableAsyncPersist(true),
 		WithAsyncPersisterNum(5),
+		WithStateInitialization(true),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
@@ -3751,6 +3756,7 @@ func TestNewService_WithCleanupRoutine(t *testing.T) {
 		WithAppStateTTL(2*time.Hour),
 		WithUserStateTTL(3*time.Hour),
 		WithCleanupInterval(10*time.Minute),
+		WithStateInitialization(true),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
@@ -3792,6 +3798,7 @@ func TestNewService_WithAllOptions(t *testing.T) {
 		WithSoftDelete(false),
 		WithCleanupInterval(5*time.Minute),
 		WithTablePrefix("myapp_"),
+		WithStateInitialization(true),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
@@ -4016,6 +4023,19 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 		mock.ExpectQuery("SELECT COLUMN_NAME").
 			WithArgs(fullTableName).
 			WillReturnRows(colRows)
+		if tableName == tableNameStateInitializationLeases {
+			lengthRows := sqlmock.NewRows([]string{"COLUMN_NAME", "CHARACTER_MAXIMUM_LENGTH"})
+			for _, col := range schema.columns {
+				var length any
+				if maxLength := requiredColumnMaxLength(tableName, col.name); maxLength > 0 {
+					length = maxLength
+				}
+				lengthRows.AddRow(col.name, length)
+			}
+			mock.ExpectQuery("SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH").
+				WithArgs(fullTableName).
+				WillReturnRows(lengthRows)
+		}
 
 		// 3. verifyIndexes query (INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SUB_PART)
 		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE", "SUB_PART"})

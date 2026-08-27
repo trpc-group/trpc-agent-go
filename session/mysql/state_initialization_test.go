@@ -153,7 +153,9 @@ func TestLoadOrInitializeSessionStateReturnsDefensiveExistingValue(t *testing.T)
 		generation,
 	)
 	expectStateInitializationLoad(mock, key, generation, stateBytes)
+	expectStateInitializationWriterLoad(mock, key, generation, stateBytes)
 	expectStateInitializationLoad(mock, key, generation, stateBytes)
+	expectStateInitializationWriterLoad(mock, key, generation, stateBytes)
 
 	var callbackCalls atomic.Int32
 	var nilCtx context.Context

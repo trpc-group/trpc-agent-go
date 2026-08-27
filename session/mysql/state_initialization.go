@@ -110,7 +110,19 @@ func (s *Service) LoadOrInitializeSessionState(
 			return nil, false, err
 		}
 		if present && validate(cloneStateInitializationValue(value)) {
-			return cloneStateInitializationValue(value), false, nil
+			// The initial read may be served by a lagging replica. Re-read the
+			// value under a writer transaction before accepting the fast path so
+			// a deleted and recreated session cannot reuse stale state.
+			writerValue, writerPresent, writerGeneration, err :=
+				s.loadStateInitializationValueForUpdate(ctx, key, stateKey)
+			if err != nil {
+				return nil, false, err
+			}
+			value, present, expectedGeneration =
+				writerValue, writerPresent, writerGeneration
+			if present && validate(cloneStateInitializationValue(value)) {
+				return cloneStateInitializationValue(value), false, nil
+			}
 		}
 
 		ownerToken := uuid.NewString()
