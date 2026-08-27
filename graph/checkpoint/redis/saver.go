@@ -358,20 +358,6 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 	return tuples, nil
 }
 
-// getCheckpointIDs returns the checkpoint IDs for the lineage/namespace in
-// newest-first order.
-func (s *Saver) getCheckpointIDs(ctx context.Context, lineageID, checkpointNS string, filter *graph.CheckpointFilter) ([]string, error) {
-	refs, err := s.getCheckpointRefs(ctx, lineageID, checkpointNS, filter)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, len(refs))
-	for i, ref := range refs {
-		ids[i] = ref.id
-	}
-	return ids, nil
-}
-
 // getCheckpointRefs returns the checkpoint references (namespace and id) for
 // the lineage in newest-first order. When checkpointNS is empty, all namespaces
 // belonging to the lineage are searched. When filter.Before is set, only
@@ -632,27 +618,6 @@ func (s *Saver) sortRefsByTimestamp(ctx context.Context, lineageID string, refs 
 		sortedRefs[i] = entry.ref
 	}
 	return sortedRefs, nil
-}
-
-// filterBeforeIDs keeps only the checkpoints strictly before the cursor and
-// orders them by their exact nanosecond timestamps, newest first.
-func (s *Saver) filterBeforeIDs(ctx context.Context, lineageID, checkpointNS, beforeID string, ids []string) ([]string, error) {
-	refs := make([]checkpointRef, len(ids))
-	for i, id := range ids {
-		refs[i] = checkpointRef{namespace: checkpointNS, id: id}
-	}
-	filtered, err := s.filterBeforeRefs(ctx, lineageID, checkpointNS, beforeID, refs)
-	if err != nil {
-		return nil, err
-	}
-	if filtered == nil {
-		return nil, nil
-	}
-	res := make([]string, len(filtered))
-	for i, r := range filtered {
-		res[i] = r.id
-	}
-	return res, nil
 }
 
 // getCheckpointTS returns the exact nanosecond timestamp stored in the

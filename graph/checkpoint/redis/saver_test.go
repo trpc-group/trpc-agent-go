@@ -1595,10 +1595,10 @@ func TestGetCheckpointTS_Malformed_ReturnsError(t *testing.T) {
 	assert.Zero(t, ts)
 }
 
-// TestFilterBeforeIDs_CursorTSUnavailable_ReturnsEmpty verifies that exact
+// TestFilterBeforeRefs_CursorTSUnavailable_ReturnsEmpty verifies that exact
 // timestamp filtering returns no candidates when the cursor's checkpoint hash
 // data is unavailable, keeping Before strict like the inmemory saver.
-func TestFilterBeforeIDs_CursorTSUnavailable_ReturnsEmpty(t *testing.T) {
+func TestFilterBeforeRefs_CursorTSUnavailable_ReturnsEmpty(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -1611,7 +1611,7 @@ func TestFilterBeforeIDs_CursorTSUnavailable_ReturnsEmpty(t *testing.T) {
 		lineageID = "ln-fbf-cursor-missing"
 		ns        = "nsA"
 	)
-	var ids []string
+	var refs []checkpointRef
 	for i := 0; i < 2; i++ {
 		checkpoint := graph.NewCheckpoint(map[string]any{"i": i}, map[string]int64{"i": int64(i + 1)}, nil)
 		checkpoint.Timestamp = time.Unix(0, 1_000_000_000+int64(i))
@@ -1622,7 +1622,7 @@ func TestFilterBeforeIDs_CursorTSUnavailable_ReturnsEmpty(t *testing.T) {
 			NewVersions: map[string]int64{"i": int64(i + 1)},
 		})
 		require.NoError(t, err)
-		ids = append(ids, graph.GetCheckpointID(cfg))
+		refs = append(refs, checkpointRef{namespace: ns, id: graph.GetCheckpointID(cfg)})
 	}
 
 	// Cursor exists only in the ZSET; its checkpoint hash is unavailable.
@@ -1631,7 +1631,7 @@ func TestFilterBeforeIDs_CursorTSUnavailable_ReturnsEmpty(t *testing.T) {
 		Member: "cursor-only",
 	}).Err())
 
-	got, err := saver.filterBeforeIDs(ctx, lineageID, ns, "cursor-only", ids)
+	got, err := saver.filterBeforeRefs(ctx, lineageID, ns, "cursor-only", refs)
 	require.NoError(t, err)
 	assert.Empty(t, got, "cursor with unavailable hash data must yield no candidates to keep Before strict")
 }
@@ -1686,10 +1686,10 @@ func TestList_BeforeCursorHashMissing_ExcludesNewerSameScore(t *testing.T) {
 	assert.Empty(t, got, "a same-score checkpoint newer than the cursor must not be returned when the cursor hash is missing")
 }
 
-// TestFilterBeforeIDs_SkipsCandidateWithMissingHash verifies that a candidate
+// TestFilterBeforeRefs_SkipsCandidateWithMissingHash verifies that a candidate
 // whose checkpoint hash data is missing (redis.Nil) is dropped by exact
 // timestamp filtering, while candidates with valid timestamps are kept.
-func TestFilterBeforeIDs_SkipsCandidateWithMissingHash(t *testing.T) {
+func TestFilterBeforeRefs_SkipsCandidateWithMissingHash(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -1729,17 +1729,17 @@ func TestFilterBeforeIDs_SkipsCandidateWithMissingHash(t *testing.T) {
 		redis.Z{Score: 1_500_000_000, Member: "zset-only"},
 	).Err())
 
-	got, err := saver.filterBeforeIDs(ctx, lineageID, ns, graph.GetCheckpointID(cursorCfg),
-		[]string{"zset-only", graph.GetCheckpointID(olderCfg)})
+	got, err := saver.filterBeforeRefs(ctx, lineageID, ns, graph.GetCheckpointID(cursorCfg),
+		[]checkpointRef{{namespace: ns, id: "zset-only"}, {namespace: ns, id: graph.GetCheckpointID(olderCfg)}})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, graph.GetCheckpointID(olderCfg), got[0])
+	assert.Equal(t, graph.GetCheckpointID(olderCfg), got[0].id)
 }
 
-// TestFilterBeforeIDs_MalformedTimestamp_ReturnsError verifies that a malformed
+// TestFilterBeforeRefs_MalformedTimestamp_ReturnsError verifies that a malformed
 // timestamp in a candidate's checkpoint hash surfaces a parse error instead of
 // silently dropping the checkpoint from the result.
-func TestFilterBeforeIDs_MalformedTimestamp_ReturnsError(t *testing.T) {
+func TestFilterBeforeRefs_MalformedTimestamp_ReturnsError(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -1768,17 +1768,17 @@ func TestFilterBeforeIDs_MalformedTimestamp_ReturnsError(t *testing.T) {
 	).Err())
 	require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, ns, "bad-ts"), tsKey, "not-a-number").Err())
 
-	got, err := saver.filterBeforeIDs(ctx, lineageID, ns, graph.GetCheckpointID(cursorCfg),
-		[]string{"bad-ts"})
+	got, err := saver.filterBeforeRefs(ctx, lineageID, ns, graph.GetCheckpointID(cursorCfg),
+		[]checkpointRef{{namespace: ns, id: "bad-ts"}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse timestamp")
 	assert.Nil(t, got)
 }
 
-// TestFilterBeforeIDs_PerCommandError_ReturnsError verifies that a non-Nil
+// TestFilterBeforeRefs_PerCommandError_ReturnsError verifies that a non-Nil
 // per-command error from a later HGET propagates even when an earlier candidate
 // is missing (redis.Nil), so List never returns silently incomplete history.
-func TestFilterBeforeIDs_PerCommandError_ReturnsError(t *testing.T) {
+func TestFilterBeforeRefs_PerCommandError_ReturnsError(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -1812,16 +1812,16 @@ func TestFilterBeforeIDs_PerCommandError_ReturnsError(t *testing.T) {
 	).Err())
 	require.NoError(t, saver.client.Set(ctx, checkpointKey(lineageID, ns, "wrong-type"), "plain-string", 0).Err())
 
-	got, err := saver.filterBeforeIDs(ctx, lineageID, ns, graph.GetCheckpointID(cursorCfg),
-		[]string{"zset-only", "wrong-type"})
+	got, err := saver.filterBeforeRefs(ctx, lineageID, ns, graph.GetCheckpointID(cursorCfg),
+		[]checkpointRef{{namespace: ns, id: "zset-only"}, {namespace: ns, id: "wrong-type"}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "WRONGTYPE")
 	assert.Nil(t, got)
 }
 
-// TestGetCheckpointIDs_CommandErrors exercises the Redis error paths of the
-// Before-filtered ID query by injecting command failures.
-func TestGetCheckpointIDs_CommandErrors(t *testing.T) {
+// TestGetCheckpointRefs_CommandErrors exercises the Redis error paths of the
+// Before-filtered reference query by injecting command failures.
+func TestGetCheckpointRefs_CommandErrors(t *testing.T) {
 	ctx := context.Background()
 	const (
 		lineageID = "ln-cmd-err"
@@ -1838,7 +1838,7 @@ func TestGetCheckpointIDs_CommandErrors(t *testing.T) {
 		saver.client.AddHook(&errHook{failCmd: map[string]bool{"zscore": true}})
 
 		before := graph.CreateCheckpointConfig(lineageID, "cursor-id", ns)
-		_, err = saver.getCheckpointIDs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
+		_, err = saver.getCheckpointRefs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
 		require.Error(t, err)
 	})
 
@@ -1853,7 +1853,7 @@ func TestGetCheckpointIDs_CommandErrors(t *testing.T) {
 		saver.client.AddHook(&errHook{failCmd: map[string]bool{"zrevrangebyscore": true}})
 
 		before := graph.CreateCheckpointConfig(lineageID, "cursor-id", ns)
-		_, err = saver.getCheckpointIDs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
+		_, err = saver.getCheckpointRefs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
 		require.Error(t, err)
 	})
 
@@ -1865,7 +1865,7 @@ func TestGetCheckpointIDs_CommandErrors(t *testing.T) {
 		defer saver.Close()
 		saver.client.AddHook(&errHook{failCmd: map[string]bool{"zrevrange": true}})
 
-		_, err = saver.getCheckpointIDs(ctx, lineageID, ns, nil)
+		_, err = saver.getCheckpointRefs(ctx, lineageID, ns, nil)
 		require.Error(t, err)
 	})
 
@@ -1882,14 +1882,14 @@ func TestGetCheckpointIDs_CommandErrors(t *testing.T) {
 		saver.client.AddHook(&errHook{failCmd: map[string]bool{"hget": true}})
 
 		before := graph.CreateCheckpointConfig(lineageID, "cursor-id", ns)
-		_, err = saver.getCheckpointIDs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
+		_, err = saver.getCheckpointRefs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
 		require.Error(t, err)
 	})
 }
 
-// TestGetCheckpointIDs_EdgeCases exercises the zero-score cursor, empty cursor
-// ID and empty member ID paths of the ID query.
-func TestGetCheckpointIDs_EdgeCases(t *testing.T) {
+// TestGetCheckpointRefs_EdgeCases exercises the zero-score cursor, empty cursor
+// ID and empty member ID paths of the reference query.
+func TestGetCheckpointRefs_EdgeCases(t *testing.T) {
 	ctx := context.Background()
 	const (
 		lineageID = "ln-edge"
@@ -1912,24 +1912,24 @@ func TestGetCheckpointIDs_EdgeCases(t *testing.T) {
 
 	t.Run("zero score cursor falls back to full listing", func(t *testing.T) {
 		before := graph.CreateCheckpointConfig(lineageID, "zero-score", ns)
-		ids, err := saver.getCheckpointIDs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
+		refs, err := saver.getCheckpointRefs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
 		require.NoError(t, err)
 		// Empty member skipped; zero-score cursor retained, matching the
 		// pre-existing fallback behavior.
-		assert.Equal(t, []string{"real", "zero-score"}, ids)
+		assert.Equal(t, []checkpointRef{{namespace: ns, id: "real"}, {namespace: ns, id: "zero-score"}}, refs)
 	})
 
 	t.Run("empty before id falls back to full listing", func(t *testing.T) {
 		before := graph.CreateCheckpointConfig(lineageID, "", ns)
-		ids, err := saver.getCheckpointIDs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
+		refs, err := saver.getCheckpointRefs(ctx, lineageID, ns, &graph.CheckpointFilter{Before: before})
 		require.NoError(t, err)
-		assert.Equal(t, []string{"real", "zero-score"}, ids)
+		assert.Equal(t, []checkpointRef{{namespace: ns, id: "real"}, {namespace: ns, id: "zero-score"}}, refs)
 	})
 }
 
-// TestFilterBeforeIDs_RedisErrors exercises the error paths of exact timestamp
+// TestFilterBeforeRefs_RedisErrors exercises the error paths of exact timestamp
 // filtering by injecting failures into the cursor lookup and the pipeline.
-func TestFilterBeforeIDs_RedisErrors(t *testing.T) {
+func TestFilterBeforeRefs_RedisErrors(t *testing.T) {
 	ctx := context.Background()
 	const (
 		lineageID = "ln-fbf-err"
@@ -1944,7 +1944,7 @@ func TestFilterBeforeIDs_RedisErrors(t *testing.T) {
 		defer saver.Close()
 		saver.client.AddHook(&errHook{failCmd: map[string]bool{"hget": true}})
 
-		_, err = saver.filterBeforeIDs(ctx, lineageID, ns, "cursor-id", []string{"c1", "c2"})
+		_, err = saver.filterBeforeRefs(ctx, lineageID, ns, "cursor-id", []checkpointRef{{namespace: ns, id: "c1"}, {namespace: ns, id: "c2"}})
 		require.Error(t, err)
 	})
 
@@ -1958,7 +1958,7 @@ func TestFilterBeforeIDs_RedisErrors(t *testing.T) {
 		require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, ns, "cursor-id"), tsKey, "100").Err())
 		saver.client.AddHook(&errHook{failPipeline: true})
 
-		_, err = saver.filterBeforeIDs(ctx, lineageID, ns, "cursor-id", []string{"c1", "c2"})
+		_, err = saver.filterBeforeRefs(ctx, lineageID, ns, "cursor-id", []checkpointRef{{namespace: ns, id: "c1"}, {namespace: ns, id: "c2"}})
 		require.Error(t, err)
 	})
 }
@@ -2312,4 +2312,3 @@ func TestRedis_CrossNamespace_ErrorPaths(t *testing.T) {
 		assert.Equal(t, "c2", sorted[0].id)
 	})
 }
-
