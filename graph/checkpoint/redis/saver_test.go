@@ -1976,3 +1976,340 @@ func TestGetCheckpointTS_RedisError(t *testing.T) {
 	_, err = saver.getCheckpointTS(context.Background(), "ln-ts", "nsA", "any-id")
 	require.Error(t, err)
 }
+
+// TestRedis_List_CrossNamespace_Basic verifies that listing with an empty namespace
+// retrieves checkpoints across all registered namespaces in newest-first order.
+func TestRedis_List_CrossNamespace_Basic(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	const lineageID = "ln-cross-ns-basic"
+
+	base := time.Now().UTC().Add(-time.Hour)
+
+	// Put 2 checkpoints in nsA, 2 in nsB, 1 in default namespace ("")
+	// Interleave timestamps:
+	// ckpt1 (nsA): base + 10m
+	// ckpt2 (nsB): base + 20m
+	// ckpt3 (default): base + 30m
+	// ckpt4 (nsA): base + 40m
+	// ckpt5 (nsB): base + 50m
+
+	putCkpt := func(ns string, id string, offset time.Duration) {
+		ck := graph.NewCheckpoint(map[string]any{"id": id}, map[string]int64{"id": 1}, nil)
+		ck.ID = id
+		ck.Timestamp = base.Add(offset)
+		meta := graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 1)
+		_, putErr := saver.Put(ctx, graph.PutRequest{
+			Config:      graph.CreateCheckpointConfig(lineageID, id, ns),
+			Checkpoint:  ck,
+			Metadata:    meta,
+			NewVersions: map[string]int64{"id": 1},
+		})
+		require.NoError(t, putErr)
+	}
+
+	putCkpt("nsA", "ckpt1", 10*time.Minute)
+	putCkpt("nsB", "ckpt2", 20*time.Minute)
+	putCkpt("", "ckpt3", 30*time.Minute)
+	putCkpt("nsA", "ckpt4", 40*time.Minute)
+	putCkpt("nsB", "ckpt5", 50*time.Minute)
+
+	// Cross-namespace List (empty namespace in config)
+	cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+	tuples, err := saver.List(ctx, cfg, nil)
+	require.NoError(t, err)
+	require.Len(t, tuples, 5)
+
+	// Expected newest-first: ckpt5 (nsB), ckpt4 (nsA), ckpt3 (""), ckpt2 (nsB), ckpt1 (nsA)
+	expectedIDs := []string{"ckpt5", "ckpt4", "ckpt3", "ckpt2", "ckpt1"}
+	expectedNS := []string{"nsB", "nsA", "", "nsB", "nsA"}
+
+	for i, tuple := range tuples {
+		assert.Equal(t, expectedIDs[i], tuple.Checkpoint.ID)
+		assert.Equal(t, expectedNS[i], graph.GetNamespace(tuple.Config))
+	}
+}
+
+// TestRedis_List_CrossNamespace_WithLimit verifies that Limit is respected in cross-namespace queries.
+func TestRedis_List_CrossNamespace_WithLimit(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	const lineageID = "ln-cross-ns-limit"
+
+	base := time.Now().UTC().Add(-time.Hour)
+
+	putCkpt := func(ns string, id string, offset time.Duration) {
+		ck := graph.NewCheckpoint(map[string]any{"id": id}, map[string]int64{"id": 1}, nil)
+		ck.ID = id
+		ck.Timestamp = base.Add(offset)
+		meta := graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 1)
+		_, putErr := saver.Put(ctx, graph.PutRequest{
+			Config:      graph.CreateCheckpointConfig(lineageID, id, ns),
+			Checkpoint:  ck,
+			Metadata:    meta,
+			NewVersions: map[string]int64{"id": 1},
+		})
+		require.NoError(t, putErr)
+	}
+
+	putCkpt("nsA", "ckpt1", 10*time.Minute)
+	putCkpt("nsB", "ckpt2", 20*time.Minute)
+	putCkpt("nsA", "ckpt3", 30*time.Minute)
+
+	cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+	tuples, err := saver.List(ctx, cfg, &graph.CheckpointFilter{Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, tuples, 2)
+	assert.Equal(t, "ckpt3", tuples[0].Checkpoint.ID)
+	assert.Equal(t, "ckpt2", tuples[1].Checkpoint.ID)
+}
+
+// TestRedis_List_CrossNamespace_WithBeforeAndLimit verifies pagination across namespaces using Before cursor.
+func TestRedis_List_CrossNamespace_WithBeforeAndLimit(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	const lineageID = "ln-cross-ns-before"
+
+	base := time.Now().UTC().Add(-time.Hour)
+
+	putCkpt := func(ns string, id string, offset time.Duration) {
+		ck := graph.NewCheckpoint(map[string]any{"id": id}, map[string]int64{"id": 1}, nil)
+		ck.ID = id
+		ck.Timestamp = base.Add(offset)
+		meta := graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 1)
+		_, putErr := saver.Put(ctx, graph.PutRequest{
+			Config:      graph.CreateCheckpointConfig(lineageID, id, ns),
+			Checkpoint:  ck,
+			Metadata:    meta,
+			NewVersions: map[string]int64{"id": 1},
+		})
+		require.NoError(t, putErr)
+	}
+
+	putCkpt("nsA", "ckpt1", 10*time.Minute)
+	putCkpt("nsB", "ckpt2", 20*time.Minute)
+	putCkpt("nsA", "ckpt3", 30*time.Minute)
+	putCkpt("nsB", "ckpt4", 40*time.Minute)
+
+	cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+
+	// 1. Before ckpt4 (nsB) -> returns ckpt3 (nsA), ckpt2 (nsB), ckpt1 (nsA)
+	cursor := graph.CreateCheckpointConfig(lineageID, "ckpt4", "nsB")
+	tuples, err := saver.List(ctx, cfg, &graph.CheckpointFilter{Before: cursor})
+	require.NoError(t, err)
+	require.Len(t, tuples, 3)
+	assert.Equal(t, "ckpt3", tuples[0].Checkpoint.ID)
+	assert.Equal(t, "ckpt2", tuples[1].Checkpoint.ID)
+	assert.Equal(t, "ckpt1", tuples[2].Checkpoint.ID)
+
+	// 2. Before ckpt3 (nsA) with Limit 1 -> returns ckpt2 (nsB)
+	cursor2 := graph.CreateCheckpointConfig(lineageID, "ckpt3", "")
+	tuples2, err := saver.List(ctx, cfg, &graph.CheckpointFilter{Before: cursor2, Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, tuples2, 1)
+	assert.Equal(t, "ckpt2", tuples2[0].Checkpoint.ID)
+	assert.Equal(t, "nsB", graph.GetNamespace(tuples2[0].Config))
+
+	// 3. Before oldest ckpt1 -> returns empty
+	cursorOldest := graph.CreateCheckpointConfig(lineageID, "ckpt1", "")
+	tuples3, err := saver.List(ctx, cfg, &graph.CheckpointFilter{Before: cursorOldest})
+	require.NoError(t, err)
+	assert.Empty(t, tuples3)
+}
+
+// TestRedis_List_CrossNamespace_CursorNotFound_ReturnsEmpty verifies unknown cursor returns empty.
+func TestRedis_List_CrossNamespace_CursorNotFound_ReturnsEmpty(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	const lineageID = "ln-cross-unknown-cursor"
+
+	ck := graph.NewCheckpoint(map[string]any{"id": "c1"}, map[string]int64{"id": 1}, nil)
+	ck.ID = "c1"
+	_, err = saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "c1", "nsA"),
+		Checkpoint:  ck,
+		NewVersions: map[string]int64{"id": 1},
+	})
+	require.NoError(t, err)
+
+	cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+	cursor := graph.CreateCheckpointConfig(lineageID, "non-existent", "")
+	tuples, err := saver.List(ctx, cfg, &graph.CheckpointFilter{Before: cursor})
+	require.NoError(t, err)
+	assert.Empty(t, tuples)
+}
+
+// TestRedis_List_CrossNamespace_MetadataFilter verifies metadata filtering across namespaces.
+func TestRedis_List_CrossNamespace_MetadataFilter(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	const lineageID = "ln-cross-meta"
+
+	base := time.Now().UTC().Add(-time.Hour)
+
+	putCkpt := func(ns string, id string, offset time.Duration, tag string) {
+		ck := graph.NewCheckpoint(map[string]any{"id": id}, map[string]int64{"id": 1}, nil)
+		ck.ID = id
+		ck.Timestamp = base.Add(offset)
+		meta := graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 1)
+		meta.Extra = map[string]any{"tag": tag}
+		_, putErr := saver.Put(ctx, graph.PutRequest{
+			Config:      graph.CreateCheckpointConfig(lineageID, id, ns),
+			Checkpoint:  ck,
+			Metadata:    meta,
+			NewVersions: map[string]int64{"id": 1},
+		})
+		require.NoError(t, putErr)
+	}
+
+	putCkpt("nsA", "ckpt1", 10*time.Minute, "blue")
+	putCkpt("nsB", "ckpt2", 20*time.Minute, "red")
+	putCkpt("nsA", "ckpt3", 30*time.Minute, "blue")
+
+	cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+	tuples, err := saver.List(ctx, cfg, &graph.CheckpointFilter{Metadata: map[string]any{"tag": "blue"}})
+	require.NoError(t, err)
+	require.Len(t, tuples, 2)
+	assert.Equal(t, "ckpt3", tuples[0].Checkpoint.ID)
+	assert.Equal(t, "ckpt1", tuples[1].Checkpoint.ID)
+}
+
+// TestRedis_CrossNamespace_ErrorPaths tests injected Redis errors on SMembers, Exists, and Pipelines.
+func TestRedis_CrossNamespace_ErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	const (
+		lineageID = "ln-cross-err"
+		nsA       = "nsA"
+		nsB       = "nsB"
+	)
+
+	t.Run("SMembers error during getCheckpointRefs", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		saver.client.AddHook(&errHook{failCmd: map[string]bool{"smembers": true}})
+		cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+		_, err = saver.List(ctx, cfg, nil)
+		require.Error(t, err)
+	})
+
+	t.Run("SMembers error during findCheckpointNamespace", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		saver.client.AddHook(&errHook{failCmd: map[string]bool{"smembers": true}})
+		_, err = saver.findCheckpointNamespace(ctx, lineageID, "some-id")
+		require.Error(t, err)
+	})
+
+	t.Run("Exists error during findCheckpointNamespace", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		require.NoError(t, saver.client.SAdd(ctx, lineageNSKey(lineageID), nsA).Err())
+		saver.client.AddHook(&errHook{failCmd: map[string]bool{"exists": true}})
+		_, err = saver.findCheckpointNamespace(ctx, lineageID, "some-id")
+		require.Error(t, err)
+	})
+
+	t.Run("Pipeline error in multi-namespace ZSET retrieval", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		require.NoError(t, saver.client.SAdd(ctx, lineageNSKey(lineageID), nsA, nsB).Err())
+		saver.client.AddHook(&errHook{failPipeline: true})
+
+		cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+		_, err = saver.List(ctx, cfg, nil)
+		require.Error(t, err)
+	})
+
+	t.Run("sortRefsByTimestamp pipeline error", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		saver.client.AddHook(&errHook{failPipeline: true})
+		refs := []checkpointRef{{namespace: nsA, id: "c1"}, {namespace: nsB, id: "c2"}}
+		_, err = saver.sortRefsByTimestamp(ctx, lineageID, refs)
+		require.Error(t, err)
+	})
+
+	t.Run("sortRefsByTimestamp malformed timestamp", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, nsA, "c1"), tsKey, "not-a-number").Err())
+		require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, nsB, "c2"), tsKey, "100").Err())
+
+		refs := []checkpointRef{{namespace: nsA, id: "c1"}, {namespace: nsB, id: "c2"}}
+		_, err = saver.sortRefsByTimestamp(ctx, lineageID, refs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "parse timestamp")
+	})
+
+	t.Run("sortRefsByTimestamp skips missing hash entries", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, nsB, "c2"), tsKey, "200").Err())
+
+		// c1 has no hash entry (redis.Nil)
+		refs := []checkpointRef{{namespace: nsA, id: "c1"}, {namespace: nsB, id: "c2"}}
+		sorted, err := saver.sortRefsByTimestamp(ctx, lineageID, refs)
+		require.NoError(t, err)
+		require.Len(t, sorted, 1)
+		assert.Equal(t, "c2", sorted[0].id)
+	})
+}
+
