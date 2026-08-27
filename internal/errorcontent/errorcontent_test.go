@@ -75,6 +75,15 @@ func TestSyntheticMarkerRecognizesLegacyRunnerFallback(t *testing.T) {
 	real.Response.Choices[0].Message.Content = "A real assistant error response."
 	require.False(t, IsSynthetic(real))
 
+	realMatchingText := legacySyntheticEvent()
+	realFinishReason := "stop"
+	realMatchingText.Response.Choices[0].FinishReason = &realFinishReason
+	require.False(t, IsSynthetic(realMatchingText))
+
+	realWithOtherPayload := legacySyntheticEvent()
+	realWithOtherPayload.Response.Choices[0].Message.ReasoningContent = "details"
+	require.False(t, IsSynthetic(realWithOtherPayload))
+
 	nonError := legacySyntheticEvent()
 	nonError.Response.Error = nil
 	require.False(t, IsSynthetic(nonError))
@@ -85,12 +94,14 @@ func legacySyntheticEvent() *event.Event {
 }
 
 func legacySyntheticEventWithRole(role model.Role) *event.Event {
+	reason := "error"
 	evt := event.NewErrorEvent("inv", "agent", "flow_error", "boom")
 	evt.Response.Choices = []model.Choice{{
 		Message: model.Message{
 			Role:    role,
 			Content: FallbackMessage,
 		},
+		FinishReason: &reason,
 	}}
 	return evt
 }

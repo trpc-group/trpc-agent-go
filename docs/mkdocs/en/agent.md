@@ -108,8 +108,11 @@ By default, LLMAgent leaves the emitted and persisted assistant content and
 structured error intact, but omits framework-synthesized error content when
 building later model requests. If omission leaves adjacent user messages, the
 request projection merges them locally to preserve a provider-valid sequence.
-Legacy sessions containing Runner's exact generic fallback are handled in the
-same way.
+Legacy sessions are handled with a best-effort signature: a structured error,
+Runner's exact generic fallback, its `"error"` finish reason, and no other
+message payload. Marker-free events have no definitive provenance, so a real
+response matching that complete legacy signature is indistinguishable; enable
+the compatibility option below if such responses must remain model-visible.
 
 Applications that intentionally relied on the previous context behavior can
 restore it explicitly:

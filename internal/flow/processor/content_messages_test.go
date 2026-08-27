@@ -387,6 +387,18 @@ func TestProcessRequest_OmitsSyntheticErrorContent(t *testing.T) {
 		}
 		return *evt
 	}
+	newLegacyErrorEvent := func() event.Event {
+		evt := newErrorEvent(errorcontent.FallbackMessage, false)
+		reason := "error"
+		evt.Response.Choices[0].FinishReason = &reason
+		return evt
+	}
+	newRealMatchingErrorEvent := func() event.Event {
+		evt := newErrorEvent(errorcontent.FallbackMessage, false)
+		reason := "stop"
+		evt.Response.Choices[0].FinishReason = &reason
+		return evt
+	}
 	tests := []struct {
 		name      string
 		error     event.Event
@@ -412,7 +424,7 @@ func TestProcessRequest_OmitsSyntheticErrorContent(t *testing.T) {
 		},
 		{
 			name:  "legacy runner fallback",
-			error: newErrorEvent(errorcontent.FallbackMessage, false),
+			error: newLegacyErrorEvent(),
 			wantRoles: []model.Role{
 				model.RoleUser,
 			},
@@ -424,6 +436,20 @@ func TestProcessRequest_OmitsSyntheticErrorContent(t *testing.T) {
 			options: []ContentOption{
 				WithIncludeSyntheticErrorMessages(true),
 			},
+			wantRoles: []model.Role{
+				model.RoleUser,
+				model.RoleAssistant,
+				model.RoleUser,
+			},
+			wantText: []string{
+				"first",
+				errorcontent.FallbackMessage,
+				"second",
+			},
+		},
+		{
+			name:  "real response matching fallback text",
+			error: newRealMatchingErrorEvent(),
 			wantRoles: []model.Role{
 				model.RoleUser,
 				model.RoleAssistant,

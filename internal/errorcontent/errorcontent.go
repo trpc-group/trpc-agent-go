@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const (
@@ -43,8 +44,10 @@ func MarkSynthetic(evt *event.Event) {
 
 // IsSynthetic reports whether an error event carries assistant content that
 // was synthesized for presentation and persistence. The fallback comparison
-// recognizes events persisted before the extension marker was introduced,
-// including placeholders whose original role Runner preserved.
+// best-effort recognizes events persisted before the extension marker was
+// introduced by matching the shape Runner produced. Marker-free events cannot
+// carry definitive provenance, so a real response with the complete legacy
+// Runner shape is indistinguishable and is also reported as synthetic.
 func IsSynthetic(evt *event.Event) bool {
 	marked, ok, err := event.GetExtension[bool](evt, syntheticExtensionKey)
 	if err != nil {
@@ -57,6 +60,17 @@ func IsSynthetic(evt *event.Event) bool {
 		len(evt.Response.Choices) == 0 {
 		return false
 	}
-	message := evt.Response.Choices[0].Message
-	return message.Content == FallbackMessage
+	choice := evt.Response.Choices[0]
+	if choice.Message.Content != FallbackMessage ||
+		choice.FinishReason == nil || *choice.FinishReason != "error" {
+		return false
+	}
+
+	// Runner only injected the legacy fallback when the response had no valid
+	// payload. Reversing that injection avoids matching real responses that
+	// carry the same text alongside another payload.
+	response := *evt.Response
+	response.Choices = append([]model.Choice(nil), evt.Response.Choices...)
+	response.Choices[0].Message.Content = ""
+	return !response.IsValidContent()
 }

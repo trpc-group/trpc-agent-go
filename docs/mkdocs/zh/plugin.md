@@ -1056,8 +1056,10 @@ Runner 和本插件会把这类 content 标记为框架合成文案。默认情�
 `LLMAgent` 仍会对外发送并持久化这条事件，但后续请求模型时不会把这段展示文案
 带入上下文，避免模型把它当成自己生成过的内容再次复述。如果过滤后出现相邻的
 两条 user 消息，请求投影层会在本地合并它们，以维持模型服务可接受的消息序列。
-升级前已经持久化、尚未带标记的 Session，只要包含 Runner 完全一致的旧兜底文案，
-也会按相同规则处理。如需恢复原先继续携带给模型的行为，可在创建 LLMAgent 时
+升级前已经持久化、尚未带标记的 Session，会按一组尽力而为的旧版特征识别：
+结构化错误、Runner 完全一致的兜底文案及 `"error"` finish reason，并且没有其他
+消息载荷。与这组无标记特征完全一致的真实响应无法区分。如需恢复原先继续携带给
+模型的行为，可在创建 LLMAgent 时
 传入 `llmagent.WithIncludeSyntheticErrorMessages(true)`，或在创建 GraphAgent 时
 传入 `graphagent.WithIncludeSyntheticErrorMessages(true)`。
 

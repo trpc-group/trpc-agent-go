@@ -788,8 +788,10 @@ subsequent model requests, preventing presentation-only failure text from being
 repeated as if the model had produced it. If the omission makes two user
 messages adjacent, the request projection merges them locally to preserve a
 provider-valid sequence. Sessions written before the marker was introduced are
-also covered when they contain Runner's exact fallback text. To restore the
-previous model-context behavior, configure LLMAgent with
+covered by a best-effort legacy signature: the structured error, Runner's exact
+fallback text and `"error"` finish reason, and no other message payload. A real
+response with that complete marker-free signature is indistinguishable. To
+restore the previous model-context behavior, configure LLMAgent with
 `llmagent.WithIncludeSyntheticErrorMessages(true)` or GraphAgent with
 `graphagent.WithIncludeSyntheticErrorMessages(true)`.
 

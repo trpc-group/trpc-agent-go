@@ -159,6 +159,25 @@ func TestRunner_DoesNotMutateStreamingErrorEventWhenAddingContent(t *testing.T) 
 	require.NotEmpty(t, sess.Events[1].Response.Choices)
 }
 
+func TestEnsureErrorEventContentPreservesRealFallbackText(t *testing.T) {
+	reason := "stop"
+	evt := event.NewErrorEvent("inv", "agent", "flow_error", "boom")
+	evt.Response.Choices = []model.Choice{{
+		Message:      model.NewAssistantMessage(errorcontent.FallbackMessage),
+		FinishReason: &reason,
+	}}
+
+	ensureErrorEventContent(evt)
+
+	require.Equal(
+		t,
+		errorcontent.FallbackMessage,
+		evt.Response.Choices[0].Message.Content,
+	)
+	require.Equal(t, "stop", *evt.Response.Choices[0].FinishReason)
+	require.False(t, errorcontent.IsSynthetic(evt))
+}
+
 // TestRunner_FixesDirectRunError verifies that the runner populates content for errors returned by agent.Run().
 func TestRunner_FixesDirectRunError(t *testing.T) {
 	svc := sessioninmemory.NewSessionService()
