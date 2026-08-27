@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"os"
@@ -20,6 +21,22 @@ import (
 )
 
 func writeReports(outputDir string, report *optimizationReport) error {
+	return writeReportsWithRename(outputDir, report, os.Rename)
+}
+
+type renameFileFunc func(oldPath, newPath string) error
+
+type fileSnapshot struct {
+	data   []byte
+	perm   os.FileMode
+	exists bool
+}
+
+func writeReportsWithRename(
+	outputDir string,
+	report *optimizationReport,
+	rename renameFileFunc,
+) error {
 	if report == nil {
 		return fmt.Errorf("report is nil")
 	}
@@ -31,51 +48,116 @@ func writeReports(outputDir string, report *optimizationReport) error {
 		return fmt.Errorf("marshal JSON report: %w", err)
 	}
 	jsonData = append(jsonData, '\n')
-	if err := atomicWrite(filepath.Join(outputDir, "optimization_report.json"), jsonData, 0o644); err != nil {
+	jsonPath := filepath.Join(outputDir, "optimization_report.json")
+	markdownPath := filepath.Join(outputDir, "optimization_report.md")
+	previousJSON, err := snapshotFile(jsonPath)
+	if err != nil {
+		return fmt.Errorf("snapshot JSON report: %w", err)
+	}
+	jsonTemp, err := stageAtomicFile(jsonPath, jsonData, 0o644)
+	if err != nil {
 		return fmt.Errorf("write JSON report: %w", err)
 	}
-	if err := atomicWrite(
-		filepath.Join(outputDir, "optimization_report.md"),
+	defer os.Remove(jsonTemp)
+	markdownTemp, err := stageAtomicFile(
+		markdownPath,
 		[]byte(renderMarkdown(report)),
 		0o644,
-	); err != nil {
+	)
+	if err != nil {
+		return fmt.Errorf("write Markdown report: %w", err)
+	}
+	defer os.Remove(markdownTemp)
+
+	if err := rename(jsonTemp, jsonPath); err != nil {
+		return fmt.Errorf("write JSON report: %w", err)
+	}
+	if err := rename(markdownTemp, markdownPath); err != nil {
+		if rollbackErr := restoreFile(jsonPath, previousJSON, rename); rollbackErr != nil {
+			return fmt.Errorf(
+				"write Markdown report: %v; restore JSON report: %w",
+				err,
+				rollbackErr,
+			)
+		}
 		return fmt.Errorf("write Markdown report: %w", err)
 	}
 	return nil
 }
 
 func atomicWrite(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, ".optimization-report-*")
+	return atomicWriteWithRename(path, data, perm, os.Rename)
+}
+
+func atomicWriteWithRename(
+	path string,
+	data []byte,
+	perm os.FileMode,
+	rename renameFileFunc,
+) error {
+	tempPath, err := stageAtomicFile(path, data, perm)
 	if err != nil {
 		return err
 	}
+	defer os.Remove(tempPath)
+	return rename(tempPath, path)
+}
+
+func stageAtomicFile(path string, data []byte, perm os.FileMode) (string, error) {
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, ".optimization-report-*")
+	if err != nil {
+		return "", err
+	}
 	tempPath := temp.Name()
-	committed := false
 	defer func() {
-		if !committed {
+		if temp != nil {
+			_ = temp.Close()
 			_ = os.Remove(tempPath)
 		}
 	}()
 	if err := temp.Chmod(perm); err != nil {
-		_ = temp.Close()
-		return err
+		return "", err
 	}
 	if _, err := temp.Write(data); err != nil {
-		_ = temp.Close()
-		return err
+		return "", err
 	}
 	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		return err
+		return "", err
 	}
 	if err := temp.Close(); err != nil {
+		return "", err
+	}
+	temp = nil
+	return tempPath, nil
+}
+
+func snapshotFile(path string) (fileSnapshot, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return fileSnapshot{}, nil
+	}
+	if err != nil {
+		return fileSnapshot{}, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileSnapshot{}, err
+	}
+	return fileSnapshot{data: data, perm: info.Mode().Perm(), exists: true}, nil
+}
+
+func restoreFile(
+	path string,
+	snapshot fileSnapshot,
+	rename renameFileFunc,
+) error {
+	if snapshot.exists {
+		return atomicWriteWithRename(path, snapshot.data, snapshot.perm, rename)
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return err
-	}
-	committed = true
 	return nil
 }
 

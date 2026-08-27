@@ -40,7 +40,7 @@ The sample configuration allows 165 total HTTP attempts, 500,000 total tokens, a
 
 Optimizer errors do not silently fall back to the deterministic patcher. A timeout, exhausted budget, invalid structured response, or invalid patch selects the baseline, writes a rejected audit report, and makes the command exit non-zero. Authentication failures are not retried. This makes a failed live optimization inspectable without presenting a fake candidate as a real model result.
 
-Outputs are atomically written to:
+Both outputs are staged before publication. If the second publication fails, the first is rolled back so a failed update does not leave a newly published JSON report paired with stale or missing Markdown:
 
 - `output/optimization_report.json`: schema `1.1` machine-readable prompts, per-run results, attribution, deltas, gate evidence, stage-level usage and latency, seed, separate evaluation/optimizer model configurations, and candidate source.
 - `output/optimization_report.md`: human-readable acceptance decision and evidence.
