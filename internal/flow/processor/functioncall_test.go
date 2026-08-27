@@ -12169,3 +12169,16 @@ func TestFunctionCallResponseProcessor_ToolConcurrencyScopeLimitsCalls(
 	}
 	require.Equal(t, int64(2), blocking.max.Load())
 }
+
+func TestFunctionCallResponseProcessor_NilInvocationReturnsOriginal(t *testing.T) {
+	proc := &FunctionCallResponseProcessor{}
+	rsp := &model.Response{}
+	got := proc.ProcessResponse(
+		context.Background(),
+		nil,
+		&model.Request{},
+		rsp,
+		make(chan *event.Event, 1),
+	)
+	require.Same(t, rsp, got)
+}

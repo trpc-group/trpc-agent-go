@@ -390,3 +390,13 @@ func TestOutputResponseProcessor_ExtractFinalContent(t *testing.T) {
 		t.Fatalf("expected ok content")
 	}
 }
+
+func TestOutputResponseProcessor_EmptyFinalContentReturnsOriginal(t *testing.T) {
+	proc := &OutputResponseProcessor{outputKey: "out"}
+	inv := &agent.Invocation{}
+	rsp := &model.Response{Done: true, Error: &model.ResponseError{Message: "boom"}}
+	got := proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, make(chan *event.Event, 1))
+	if got != rsp {
+		t.Fatalf("expected original response to be returned, got %v", got)
+	}
+}

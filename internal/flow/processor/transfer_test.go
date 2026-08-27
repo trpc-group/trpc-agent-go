@@ -1324,3 +1324,76 @@ func TestTransferResponseProc_DoesNotInheritParentMetadataFromSource(t *testing.
 			"the transfer is itself the new parent edge, and absent a ToolCallID, "+
 			"that edge has no representable ParentMetadata (must be nil, not inherited)")
 }
+
+type cancelOnRunAgent struct{ cancel context.CancelFunc }
+
+func (a *cancelOnRunAgent) Info() agent.Info                { return agent.Info{Name: "child"} }
+func (a *cancelOnRunAgent) SubAgents() []agent.Agent        { return nil }
+func (a *cancelOnRunAgent) FindSubAgent(string) agent.Agent { return nil }
+func (a *cancelOnRunAgent) Tools() []tool.Tool              { return nil }
+func (a *cancelOnRunAgent) Run(
+	ctx context.Context, inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	a.cancel()
+	ch := make(chan *event.Event, 1)
+	ch <- event.New(inv.InvocationID, a.Info().Name)
+	close(ch)
+	return ch, nil
+}
+
+func TestTransferResponseProc_NilInvocationReturnsOriginal(t *testing.T) {
+	rsp := &model.Response{}
+	got := NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(), nil, nil, rsp, make(chan *event.Event, 1),
+	)
+	require.Same(t, rsp, got)
+}
+
+func TestTransferResponseProc_NoPendingTransferReturnsOriginal(t *testing.T) {
+	inv := &agent.Invocation{
+		Agent:        &parentAgent{},
+		AgentName:    "parent",
+		InvocationID: "inv",
+	}
+	rsp := &model.Response{ID: "r", Created: time.Now().Unix(), Model: "m"}
+	got := NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(), inv, &model.Request{}, rsp, make(chan *event.Event, 1),
+	)
+	require.Same(t, rsp, got)
+}
+
+func TestTransferResponseProc_CancelledContextReturnsOriginal(t *testing.T) {
+	target := &mockAgent{name: "child", emit: true}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv",
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", Message: "hi"},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
+	got := NewTransferResponseProcessor(true).ProcessResponse(
+		ctx, inv, &model.Request{}, rsp, make(chan *event.Event, 4),
+	)
+	require.Same(t, rsp, got)
+}
+
+func TestTransferResponseProc_ForwardFailureReturnsOriginal(t *testing.T) {
+	target := &cancelOnRunAgent{}
+	parent := &parentAgent{child: target}
+	ctx, cancel := context.WithCancel(context.Background())
+	target.cancel = cancel
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "parent",
+		InvocationID: "inv",
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "child", Message: "hi"},
+	}
+	rsp := &model.Response{ID: "r1", Created: time.Now().Unix(), Model: "m"}
+	got := NewTransferResponseProcessor(true).ProcessResponse(
+		ctx, inv, &model.Request{}, rsp, make(chan *event.Event, 4),
+	)
+	require.Same(t, rsp, got)
+}

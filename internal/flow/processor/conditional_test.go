@@ -109,3 +109,18 @@ func TestConditionalResponseProcessor_ProcessResponse(t *testing.T) {
 		t.Fatalf("expected delegate to run when predicate allows invocation")
 	}
 }
+
+func TestConditionalResponseProcessor_NilDelegateReturnsOriginal(t *testing.T) {
+	proc := &ConditionalResponseProcessor{}
+	rsp := &model.Response{}
+	got := proc.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{},
+		&model.Request{},
+		rsp,
+		make(chan *event.Event, 1),
+	)
+	if got != rsp {
+		t.Fatalf("expected original response to be returned, got %v", got)
+	}
+}

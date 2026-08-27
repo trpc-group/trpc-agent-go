@@ -211,3 +211,31 @@ func TestPlanningResponseProcessor_EmitEventError(t *testing.T) {
 		// Expected - no event sent due to error
 	}
 }
+
+type nilPlanner struct{}
+
+func (nilPlanner) BuildPlanningInstruction(
+	ctx context.Context, inv *agent.Invocation, req *model.Request,
+) string {
+	return ""
+}
+
+func (nilPlanner) ProcessPlanningResponse(
+	ctx context.Context, inv *agent.Invocation, rsp *model.Response,
+) *model.Response {
+	return nil
+}
+
+func TestPlanningResponseProcessor_PlannerReturnsNil(t *testing.T) {
+	proc := NewPlanningResponseProcessor(nilPlanner{})
+	ch := make(chan *event.Event, 2)
+	rsp := &model.Response{ID: "orig", Choices: []model.Choice{{}}}
+	got := proc.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{AgentName: "a", InvocationID: "i1"},
+		nil,
+		rsp,
+		ch,
+	)
+	require.Same(t, rsp, got)
+}

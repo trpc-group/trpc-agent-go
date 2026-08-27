@@ -12,6 +12,7 @@ package processor_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -336,3 +337,64 @@ func (a *testAgent) SubAgents() []agent.Agent             { return nil }
 func (a *testAgent) FindSubAgent(name string) agent.Agent { return nil }
 
 func (a *testAgent) CodeExecutor() codeexecutor.CodeExecutor { return a.exec }
+
+type errExec struct{ calls int }
+
+func (e *errExec) ExecuteCode(
+	ctx context.Context, input codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	e.calls++
+	return codeexecutor.CodeExecutionResult{}, errors.New("exec failed")
+}
+
+func (e *errExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+func TestCodeExecutionResponseProcessor_NilInvocation(t *testing.T) {
+	proc := iprocessor.NewCodeExecutionResponseProcessor()
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "x"}}}}
+	got := proc.ProcessResponse(context.Background(), nil, nil, rsp, make(chan *event.Event, 1))
+	require.Same(t, rsp, got)
+}
+
+func TestCodeExecutionResponseProcessor_NoExecutorConfigured(t *testing.T) {
+	proc := iprocessor.NewCodeExecutionResponseProcessor()
+	inv := &agent.Invocation{
+		Agent:     &testAgent{exec: nil},
+		Session:   &session.Session{ID: "s"},
+		AgentName: "test-agent",
+	}
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "```bash\necho hi\n```"}}}}
+	got := proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, make(chan *event.Event, 1))
+	require.Same(t, rsp, got)
+}
+
+func TestCodeExecutionResponseProcessor_EmptyChoices(t *testing.T) {
+	proc := iprocessor.NewCodeExecutionResponseProcessor()
+	exec := &stubExec{}
+	inv := &agent.Invocation{
+		Agent:     &testAgent{exec: exec},
+		Session:   &session.Session{ID: "s"},
+		AgentName: "test-agent",
+	}
+	rsp := &model.Response{}
+	got := proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, make(chan *event.Event, 1))
+	require.Same(t, rsp, got)
+	require.Zero(t, exec.calls)
+}
+
+func TestCodeExecutionResponseProcessor_ExecutionErrorReturnsOriginal(t *testing.T) {
+	proc := iprocessor.NewCodeExecutionResponseProcessor()
+	exec := &errExec{}
+	inv := &agent.Invocation{
+		Agent:     &testAgent{exec: exec},
+		Session:   &session.Session{ID: "s"},
+		AgentName: "test-agent",
+	}
+	content := "```bash\necho hi\n```"
+	rsp := &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: content}}}}
+	got := proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, make(chan *event.Event, 2))
+	require.Same(t, rsp, got)
+	require.Equal(t, content, rsp.Choices[0].Message.Content)
+}
