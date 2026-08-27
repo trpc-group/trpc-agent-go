@@ -78,14 +78,23 @@ func TestNoProgressGuardMarshalFailureResetsState(t *testing.T) {
 func TestNoProgressGuardSupportsConcurrentUse(t *testing.T) {
 	guard := NewNoProgressGuard(2)
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+	trueResults := 0
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				guard.Observe("lookup", nil, nil)
+				if guard.Observe("lookup", nil, nil) {
+					mu.Lock()
+					trueResults++
+					mu.Unlock()
+				}
 			}
 		}()
 	}
 	wg.Wait()
+	if trueResults != 799 {
+		t.Fatalf("expected 799 triggered observations, got %d", trueResults)
+	}
 }
