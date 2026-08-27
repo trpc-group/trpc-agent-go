@@ -819,6 +819,18 @@ func (r *runner) Run(
 		invocation.CleanupNotice(execCtx)
 		return nil, err
 	}
+
+	// BeforeAgent ran synchronously inside RunWithPlugins and may have written
+	// invocation state (billing markers, audit flags, timing data, etc.).
+	// Refresh only the state snapshot so those writes are visible to completion
+	// plugin callbacks on the timeout-degraded path (completionPluginsDegraded).
+	//
+	// We deliberately do NOT re-snapshot bare fields (AgentName, Agent, …):
+	// the agent goroutine launched inside ag.Run may already be mutating them
+	// via setupInvocation, and those fields have no lock protection.
+	// AgentName is already correctly set to the pre-run value captured above.
+	completionInvocationView.RefreshViewState(invocation)
+
 	executionTraceInput = resolveExecutionTraceInvocationInputSnapshot(invocation, executionTraceInput)
 
 	// Process the agent events and emit them to the output channel.
