@@ -397,4 +397,5 @@ func TestCodeExecutionResponseProcessor_ExecutionErrorReturnsOriginal(t *testing
 	got := proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, make(chan *event.Event, 2))
 	require.Same(t, rsp, got)
 	require.Equal(t, content, rsp.Choices[0].Message.Content)
+	require.Equal(t, 1, exec.calls)
 }
