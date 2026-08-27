@@ -3502,12 +3502,19 @@
 <li><code>WithExtraOptions(...options)</code>: Extra options passed to Redis client</li>
 </ul>
 <p><strong>Note</strong>: <code>WithRedisClientURL</code> takes priority over <code>WithRedisInstance</code></p>
-<p><strong>Redis ACL requirement</strong>: <code>UpdateMemory</code> uses a server-side Lua script to
-atomically validate and rotate memory IDs. ACL users must be allowed to run
-<code>EVALSHA</code> and <code>EVAL</code> (<code>EVAL</code> is required when the script is not yet cached), in
-addition to <code>HGET</code> and the script's <code>HEXISTS</code>, <code>HSET</code>, and <code>HDEL</code> commands and access to
-the configured memory-key pattern. Do not remove <code>EVAL</code> after warm-up because
-the Redis script cache can be cleared by a restart or <code>SCRIPT FLUSH</code>.</p>
+<p><strong>Redis ACL requirement</strong>: The default per-user memory limit is <code>1000</code>. When the
+configured limit is positive, <code>AddMemory</code> uses a server-side Lua script to
+atomically check the capacity and write the memory. This script calls
+<code>HEXISTS</code>, <code>HLEN</code>, and <code>HSET</code>. <code>UpdateMemory</code> always uses a Lua script to
+atomically validate and rotate memory IDs; its update path uses <code>HGET</code>, and its
+script calls <code>HEXISTS</code>, <code>HSET</code>, and <code>HDEL</code>.</p>
+<p>ACL users must be allowed to run <code>EVALSHA</code> and <code>EVAL</code> (<code>EVAL</code> is required when
+a script is not yet cached), the commands used by both scripts, and access the
+configured memory-key pattern. Do not remove <code>EVAL</code> after warm-up because the
+Redis script cache can be cleared by a restart or <code>SCRIPT FLUSH</code>. Redis-compatible
+backends must support server-side Lua for these scripted paths.</p>
+<p><code>WithMemoryLimit(0)</code> keeps <code>AddMemory</code> on the direct <code>HSET</code> path without a
+scripting dependency. <code>UpdateMemory</code> still uses Lua.</p>
 <p><strong>Key prefix example</strong>:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
 <span class="normal"><a href="#__codelineno-1-2">2</a></span>
@@ -3545,7 +3552,7 @@ the Redis script cache can be cleared by a restart or <code>SCRIPT FLUSH</code>.
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 14, 2026 02:12:07 UTC">2026-08-14 02:12:07</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 27, 2026 11:10:18 UTC">2026-08-27 11:10:18</span>
   </span>
 
     
