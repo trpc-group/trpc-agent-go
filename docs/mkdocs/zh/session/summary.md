@@ -216,10 +216,13 @@ standalone 重试；这次重试也可以按相同的边界规则选择更小的
 
 这里有一个重要的 branch 摘要行为：开启 `WithCacheSafeForking(true)` 后，非空
 branch 触发摘要时，可以用当前父请求 fork 来生成 branch 摘要；但同一轮 summary
-pass 不会再跑级联出来的全量会话摘要。这既适用于最常见的单 `filterKey` 会话，
-也适用于包含多个 filterKey 的会话。框架会直接跳过这个全量摘要目标，而不是
-回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的 fork request。如果
-需要覆盖所有 branch 的全量摘要，需要单独触发一次全量会话摘要。
+pass 不会再发第二次独立的全量会话 LLM 调用。这既适用于最常见的单
+`filterKey` 会话，也适用于包含多个 filterKey 的会话。框架会跳过这次额外的
+LLM 目标，而不是回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的
+fork request。单 `filterKey` 会话里，branch 摘要仍会在同一轮复制到
+`SummaryFilterKeyAllContents`，因为这两个 key 的内容相同。多 filterKey 会话
+里，全量摘要 key 在这一轮保持不动；如果需要覆盖所有 branch 的全量摘要，请
+单独触发一次全量会话摘要。
 
 Prompt 规则：
 
@@ -1506,9 +1509,12 @@ sessionService := inmemory.NewSessionService(
 - `WithCascadeFullSessionSummary(...)` 控制非空分支触发摘要时，是否同时刷新
   全量会话摘要。
 - 开启 `WithCacheSafeForking(true)` 后，如果当前有父请求可 fork，branch 触发的
-  summary pass 只会生成 branch 摘要；级联出来的全量会话摘要目标会被跳过，不会
-  回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的 fork request。如果
-  确实需要覆盖所有 branch 的全量摘要，请单独触发一次全量会话摘要。
+  summary pass 只会跑 branch 摘要的 LLM 目标，不会回退到独立的全量摘要
+  prompt，也不会把这个 branch 视角的 fork request 再拿去发第二次 LLM 调用。
+  单 `filterKey` 会话里，branch 摘要仍会在同一轮复制到
+  `SummaryFilterKeyAllContents`。多 filterKey 会话里，级联出来的全量摘要目标
+  会被跳过；如果确实需要覆盖所有 branch 的全量摘要，请单独触发一次全量会话
+  摘要。
 - 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入
   空 allowlist，并保持默认 cascade 开启：
 

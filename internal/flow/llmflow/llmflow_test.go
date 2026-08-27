@@ -1115,8 +1115,14 @@ func TestCallLLM_NonCollapsingTokenTailoringKeepsSummaryFork(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, modelCalled)
 	require.NotNil(t, seq)
-	_, ok := summaryfork.Request(inv)
+	forkReq, ok := summaryfork.Request(inv)
 	require.True(t, ok)
+	require.GreaterOrEqual(t, len(forkReq.Messages), 2)
+	require.Equal(t, "", forkReq.Messages[1].Content)
+	require.Equal(t, "thought", forkReq.Messages[1].ReasoningContent)
+	view, ok := summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.True(t, view.Bound)
 }
 
 func TestTokenTailoringCollapsedHistory(t *testing.T) {
