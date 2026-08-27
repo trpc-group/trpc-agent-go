@@ -5720,6 +5720,16 @@ JSON repair，校验发生在 repair 之后。无效 JSON，以及 <code>require
 <h3 id="errormessage">ErrorMessage（错误消息改写）</h3>
 <p><code>plugin/errormessage</code> 下的 <code>errormessage.New(opts...)</code> 会在 Runner 把错误事件写入 session 之前，改写这条错误事件里对用户可见的 <code>Choices[].Message.Content</code>。</p>
 <p>当一个 event 带有 <code>Response.Error</code> 但还没有 <code>Choices[].Message.Content</code> 时（例如 <code>llmflow</code> 把 <code>agent.StopError</code> 转成的 <code>stop_agent_error</code> 事件、或者任何直接 <code>event.NewErrorEvent(...)</code> 产出的事件），Runner 会用一句固定的英文兜底文案 <code>"An error occurred during execution. Please contact the service provider."</code> 补齐。这个插件在 <code>OnEvent</code> 中先一步把 content 填好，方便业务侧展示更友好、本地化或按租户定制的提示信息。结构化的 <code>Response.Error</code> 不会被修改，调试和下游消费方仍能看到原始原因。</p>
+<p>Runner 和本插件会把这类 content 标记为框架合成文案。默认情况下，
+<code>LLMAgent</code> 仍会对外发送并持久化这条事件，但后续请求模型时不会把这段展示文案
+带入上下文，避免模型把它当成自己生成过的内容再次复述。如果过滤后出现相邻的
+两条 user 消息，请求投影层会在本地合并它们，以维持模型服务可接受的消息序列。
+升级前已经持久化、尚未带标记的 Session，会按一组尽力而为的旧版特征识别：
+结构化错误、Runner 完全一致的兜底文案及 <code>"error"</code> finish reason，并且没有其他
+消息载荷。与这组无标记特征完全一致的真实响应无法区分。如需恢复原先继续携带给
+模型的行为，可在创建 LLMAgent 时
+传入 <code>llmagent.WithIncludeSyntheticErrorMessages(true)</code>，或在创建 GraphAgent 时
+传入 <code>graphagent.WithIncludeSyntheticErrorMessages(true)</code>。</p>
 <p>插件只会改写尚未带有有效 content 的错误事件，所以失败前已经产出的流式助手消息不会被覆盖。</p>
 <p>静态文案：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-25-1">1</a></span>
@@ -5861,7 +5871,7 @@ JSON repair，校验发生在 repair 之后。无效 JSON，以及 <code>require
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月10日 15:11:31 UTC">2026-08-10 15:11:31</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月27日 08:58:00 UTC">2026-08-27 08:58:00</span>
   </span>
 
     

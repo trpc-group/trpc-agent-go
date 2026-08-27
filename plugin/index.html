@@ -5284,6 +5284,18 @@ result messages, so the later plugin receives the normalized envelope.</p>
 <h3 id="errormessage">ErrorMessage</h3>
 <p><code>errormessage.New(opts...)</code> from <code>plugin/errormessage</code> rewrites the assistant-visible content of error events before Runner persists them into the session.</p>
 <p>When an event carries <code>Response.Error</code> but no <code>Choices[].Message.Content</code> — for example, the <code>stop_agent_error</code> event produced by <code>llmflow</code> for <code>agent.StopError</code>, or any raw <code>event.NewErrorEvent(...)</code> — Runner falls back to a generic English message: <code>"An error occurred during execution. Please contact the service provider."</code>. This plugin runs in <code>OnEvent</code> before that fallback and fills the content itself, so callers can surface a customised, localised, or tenant-specific message to end users. The structured <code>Response.Error</code> is left intact, so debugging and downstream consumers still see the original reason.</p>
+<p>Runner and this plugin mark such content as framework-synthesised. By default,
+<code>LLMAgent</code> keeps the content in emitted and persisted events but omits it from
+subsequent model requests, preventing presentation-only failure text from being
+repeated as if the model had produced it. If the omission makes two user
+messages adjacent, the request projection merges them locally to preserve a
+provider-valid sequence. Sessions written before the marker was introduced are
+covered by a best-effort legacy signature: the structured error, Runner's exact
+fallback text and <code>"error"</code> finish reason, and no other message payload. A real
+response with that complete marker-free signature is indistinguishable. To
+restore the previous model-context behavior, configure LLMAgent with
+<code>llmagent.WithIncludeSyntheticErrorMessages(true)</code> or GraphAgent with
+<code>graphagent.WithIncludeSyntheticErrorMessages(true)</code>.</p>
 <p>The plugin only rewrites events where no valid content exists yet, so a partial assistant message produced before the failure is never overwritten.</p>
 <p>Static content:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
@@ -5822,7 +5834,7 @@ implemented as custom plugins.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 10, 2026 15:11:31 UTC">2026-08-10 15:11:31</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 27, 2026 08:58:00 UTC">2026-08-27 08:58:00</span>
   </span>
 
     
