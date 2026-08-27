@@ -525,6 +525,79 @@ func TestProcessRequest_OmitsSyntheticErrorContent_PreservesUserParts(t *testing
 	require.Equal(t, secondText, *req.Messages[0].ContentParts[1].Text)
 }
 
+func TestProcessRequest_OmitsSyntheticErrorAcrossEmptyProjection(t *testing.T) {
+	const invocationID = "inv-synthetic-error"
+	first := newSessionEvent("user", model.NewUserMessage("first"))
+	first.InvocationID = invocationID
+	errorEvent := event.NewErrorEvent(
+		invocationID,
+		"test-agent",
+		"flow_error",
+		"boom",
+	)
+	errorEvent.Response.Choices = []model.Choice{{
+		Message: model.NewAssistantMessage(errorcontent.FallbackMessage),
+	}}
+	errorcontent.MarkSynthetic(errorEvent)
+	dropped := newSessionEvent(
+		"test-agent",
+		model.NewAssistantMessage("drop me"),
+	)
+	dropped.InvocationID = invocationID
+	second := newSessionEvent("user", model.NewUserMessage("second"))
+	second.InvocationID = invocationID
+
+	tests := []struct {
+		name         string
+		runtimeState map[string]any
+	}{
+		{name: "all history"},
+		{
+			name: "current invocation",
+			runtimeState: map[string]any{
+				graph.CfgKeyIncludeContents: "none",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := &session.Session{Events: []event.Event{
+				first,
+				*errorEvent,
+				dropped,
+				second,
+			}}
+			inv := &agent.Invocation{
+				InvocationID: invocationID,
+				AgentName:    "test-agent",
+				Session:      sess,
+				RunOptions: agent.RunOptions{
+					RuntimeState: tt.runtimeState,
+				},
+			}
+			req := &model.Request{}
+
+			NewContentRequestProcessor(
+				WithEventMessageProjector(func(
+					_ *agent.Invocation,
+					_ event.Event,
+					msg model.Message,
+				) model.Message {
+					if msg.Content == "drop me" {
+						msg.Content = ""
+					}
+					return msg
+				}),
+			).ProcessRequest(context.Background(), inv, req, nil)
+
+			require.Len(t, req.Messages, 1)
+			require.Equal(t, model.RoleUser, req.Messages[0].Role)
+			require.Equal(t, "first\n\nsecond", req.Messages[0].Content)
+		})
+	}
+}
+
 func TestProcessRequest_IncludeContentsNone_OmitsSyntheticErrorContent(t *testing.T) {
 	const invocationID = "inv-synthetic-error"
 	first := newSessionEvent("user", model.NewUserMessage("first"))

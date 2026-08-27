@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -396,6 +397,7 @@ func (ga *GraphAgent) runWithCallbacks(ctx context.Context, invocation *agent.In
 
 func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.Invocation) graph.State {
 	var initialState graph.State
+	messageprojection.ClearCurrentUser(invocation)
 
 	if ga.initialState != nil {
 		// Clone the base initial state to avoid modifying the original.
@@ -416,6 +418,8 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	if invocation.Session != nil {
 		// Build a temporary request to reuse the processor logic.
 		req := &model.Request{}
+		var projectedCurrentUser model.Message
+		var hasProjectedCurrentUser bool
 
 		// Default processor: include (possibly overridden) + preserve same branch.
 		contentOpts := []processor.ContentOption{
@@ -451,6 +455,19 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 					ga.options.EventMessageProjector,
 				),
 			),
+			processor.WithSyntheticErrorUserMergeObserver(
+				func(
+					inv *agent.Invocation,
+					evt event.Event,
+					msg model.Message,
+				) {
+					if !isCurrentInvocationUserMessage(inv, evt, msg) {
+						return
+					}
+					projectedCurrentUser = msg
+					hasProjectedCurrentUser = true
+				},
+			),
 		}
 		if ga.options.ReasoningContentMode != "" {
 			contentOpts = append(contentOpts,
@@ -463,6 +480,13 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		p := processor.NewContentRequestProcessor(contentOpts...)
 		// We only need messages side effect; no output channel needed.
 		p.ProcessRequest(ctx, invocation, req, nil)
+		if hasProjectedCurrentUser && len(req.Messages) > 0 {
+			messageprojection.SetCurrentUser(
+				invocation,
+				projectedCurrentUser,
+				req.Messages[len(req.Messages)-1],
+			)
+		}
 		if len(req.Messages) > 0 {
 			initialState[graph.StateKeyMessages] = req.Messages
 		}
@@ -498,6 +522,26 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	}
 
 	return initialState
+}
+
+func isCurrentInvocationUserMessage(
+	inv *agent.Invocation,
+	evt event.Event,
+	msg model.Message,
+) bool {
+	if inv == nil || len(evt.Choices) == 0 || evt.Author != "user" ||
+		evt.InvocationID != inv.InvocationID ||
+		evt.RequestID != inv.RunOptions.RequestID {
+		return false
+	}
+	original := evt.Choices[0].Message
+	if inv.Message.Role == "" {
+		return original.Role == model.RoleUser &&
+			original.Content == inv.Message.Content &&
+			msg.Role == model.RoleUser
+	}
+	return model.MessagesEqual(inv.Message, original) &&
+		msg.Role == model.RoleUser
 }
 
 func appendNonUserInvocationMessage(initialState graph.State, message model.Message) {

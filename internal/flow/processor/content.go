@@ -229,8 +229,9 @@ type ContentRequestProcessor struct {
 	SummaryFormatter func(summary string) string
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
-	EventMessageProjector         EventMessageProjector
-	includeSyntheticErrorMessages bool
+	EventMessageProjector           EventMessageProjector
+	syntheticErrorUserMergeObserver func(*agent.Invocation, event.Event, model.Message)
+	includeSyntheticErrorMessages   bool
 	// ContextCompactionConfig controls request-side historical tool-result
 	// compaction before messages are sent to the model.
 	ContextCompactionConfig ContextCompactionConfig
@@ -482,6 +483,17 @@ func WithEventMessageProjector(
 ) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.EventMessageProjector = projector
+	}
+}
+
+// WithSyntheticErrorUserMergeObserver sets an internal observer called when
+// omission of synthetic error content merges a user message into the preceding
+// user message.
+func WithSyntheticErrorUserMergeObserver(
+	observer func(*agent.Invocation, event.Event, model.Message),
+) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.syntheticErrorUserMergeObserver = observer
 	}
 }
 
@@ -1596,13 +1608,14 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 			currentRequestID,
 			toolCallRequestIDs,
 		)
-		appendProjectedHistory(
+		mergedUser, merged := appendProjectedHistory(
 			&history,
 			evt,
 			boundary,
 			projected,
 			mergeFirstUser,
 		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
 	}
 	projectedByEvent := make([][]model.Message, len(retained))
 	for i, evt := range retained {
@@ -1632,7 +1645,9 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 			}
 		}
 		if len(projected) == 0 {
-			mergeNextUser = p.omitsSyntheticErrorEvent(&evt)
+			if p.omitsSyntheticErrorEvent(&evt) {
+				mergeNextUser = true
+			}
 			continue
 		}
 		key, hasKey := historyTurnKeyForEvent(evt)
@@ -1653,13 +1668,14 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 			}
 		}
 		boundary := eligibleBoundaries[evt.ID]
-		appendProjectedHistory(
+		mergedUser, merged := appendProjectedHistory(
 			&history,
 			evt,
 			boundary,
 			projected,
 			mergeNextUser,
 		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
 		mergeNextUser = false
 	}
 	return history
@@ -1671,10 +1687,14 @@ func appendProjectedHistory(
 	boundary summaryview.Boundary,
 	messages []model.Message,
 	mergeFirstUser bool,
-) {
+) (model.Message, bool) {
+	var mergedCurrentUser model.Message
+	var merged bool
 	for i, msg := range messages {
 		if i == 0 && mergeFirstUser &&
 			mergeLastProjectedUser(history, msg, boundary) {
+			mergedCurrentUser = msg
+			merged = true
 			continue
 		}
 		history.messages = append(history.messages, msg)
@@ -1684,6 +1704,19 @@ func appendProjectedHistory(
 			Boundary:       boundary,
 		})
 	}
+	return mergedCurrentUser, merged
+}
+
+func (p *ContentRequestProcessor) observeSyntheticErrorUserMerge(
+	inv *agent.Invocation,
+	evt event.Event,
+	msg model.Message,
+	merged bool,
+) {
+	if !merged || p == nil || p.syntheticErrorUserMergeObserver == nil {
+		return
+	}
+	p.syntheticErrorUserMergeObserver(inv, evt, msg)
 }
 
 func mergeLastProjectedUser(
@@ -2516,16 +2549,19 @@ func (p *ContentRequestProcessor) getCurrentInvocationHistory(
 			}
 		}
 		if len(projected) == 0 {
-			mergeNextUser = p.omitsSyntheticErrorEvent(&evt)
+			if p.omitsSyntheticErrorEvent(&evt) {
+				mergeNextUser = true
+			}
 			continue
 		}
-		appendProjectedHistory(
+		mergedUser, merged := appendProjectedHistory(
 			&history,
 			evt,
 			persistedBoundaries[evt.ID],
 			projected,
 			mergeNextUser,
 		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
 		mergeNextUser = false
 	}
 	history = p.mergeProjectedUserMessages(history)
