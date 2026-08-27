@@ -78,12 +78,12 @@ func (p *ConditionalResponseProcessor) ProcessResponse(
 	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	if p == nil || p.delegate == nil {
-		return
+		return rsp
 	}
 	if p.predicate != nil && !p.predicate(ctx, invocation) {
-		return
+		return rsp
 	}
-	p.delegate.ProcessResponse(ctx, invocation, req, rsp, ch)
+	return p.delegate.ProcessResponse(ctx, invocation, req, rsp, ch)
 }

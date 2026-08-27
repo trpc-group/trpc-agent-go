@@ -41,8 +41,9 @@ func (p *conditionalResponseProcessorStub) ProcessResponse(
 	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	p.called = true
+	return rsp
 }
 
 func TestConditionalRequestProcessor_ProcessRequest(t *testing.T) {

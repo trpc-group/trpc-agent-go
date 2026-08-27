@@ -3036,7 +3036,7 @@ func (f *Flow) postprocessWithLatencySpans(
 ) {
 	if !traceDetails {
 		for _, processor := range f.responseProcessors {
-			processor.ProcessResponse(
+			llmResponse = processor.ProcessResponse(
 				ctx,
 				invocation,
 				llmRequest,
@@ -3081,7 +3081,7 @@ func (f *Flow) postprocessWithLatencySpans(
 				latencyProcessorName(processor),
 			),
 		)
-		processor.ProcessResponse(
+		llmResponse = processor.ProcessResponse(
 			stageCtx,
 			invocation,
 			llmRequest,

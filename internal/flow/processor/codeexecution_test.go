@@ -47,10 +47,14 @@ func TestCodeExecutionResponseProcessor_EmitsCodeAndResultEvents(t *testing.T) {
 	}
 
 	ch := make(chan *event.Event, 4)
-	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
+	cleared := proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
 
-	if assert.NotEmpty(t, rsp.Choices) {
-		assert.Equal(t, "", rsp.Choices[0].Message.Content)
+	// The shared response must stay intact: it may already be published in an
+	// emitted event and read by telemetry trackers. The cleared replacement is
+	// returned for downstream processing stages instead.
+	assert.Equal(t, "```bash\necho hello\n```", rsp.Choices[0].Message.Content)
+	if assert.NotNil(t, cleared) && assert.NotEmpty(t, cleared.Choices) {
+		assert.Equal(t, "", cleared.Choices[0].Message.Content)
 	}
 	var evts []*event.Event
 	for len(ch) > 0 {

@@ -2791,13 +2791,14 @@ func (m *mockResponseProcessor) ProcessResponse(
 	req *model.Request,
 	resp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	evt := event.New(invocation.InvocationID, invocation.AgentName)
 	evt.Object = "postprocessing"
 	select {
 	case ch <- evt:
 	default:
 	}
+	return resp
 }
 
 type cancelResponseProcessor struct {
@@ -2810,8 +2811,9 @@ func (c *cancelResponseProcessor) ProcessResponse(
 	req *model.Request,
 	resp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	c.cancel()
+	return resp
 }
 
 type endInvocationResponseProcessor struct{}
@@ -2822,10 +2824,11 @@ func (p *endInvocationResponseProcessor) ProcessResponse(
 	req *model.Request,
 	resp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	if invocation != nil {
 		invocation.EndInvocation = true
 	}
+	return resp
 }
 
 func TestFlow_Interface(t *testing.T) {

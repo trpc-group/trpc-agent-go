@@ -45,17 +45,17 @@ func (p *OutputResponseProcessor) ProcessResponse(
 	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	if invocation == nil || rsp == nil || !rsp.IsFinalResponse() ||
 		(invocation.StructuredOutput == nil && invocation.StructuredOutputType == nil &&
 			p.outputKey == "" && p.outputSchema == nil) {
-		return
+		return rsp
 	}
 	// Only process complete (non-partial) responses.
 	// Extract text content from the response.
 	content, ok := p.extractFinalContent(rsp)
 	if !ok {
-		return
+		return rsp
 	}
 	jsonObject, ok := extractFirstJSONObject(content)
 
@@ -66,6 +66,7 @@ func (p *OutputResponseProcessor) ProcessResponse(
 
 	// 2) Handle output_key functionality (raw persistence, optional schema validation).
 	p.handleOutputKey(ctx, invocation, content, jsonObject, ch)
+	return rsp
 }
 
 // extractFinalContent returns the final text content if response is complete.

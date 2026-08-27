@@ -96,11 +96,12 @@ func (m *twoChunkModel) GenerateContent(ctx context.Context, req *model.Request)
 // endOnFirstChunkProcessor sets EndInvocation on the first response.
 type endOnFirstChunkProcessor struct{ done bool }
 
-func (p *endOnFirstChunkProcessor) ProcessResponse(ctx context.Context, inv *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event) {
+func (p *endOnFirstChunkProcessor) ProcessResponse(ctx context.Context, inv *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event) *model.Response {
 	if !p.done {
 		inv.EndInvocation = true
 		p.done = true
 	}
+	return rsp
 }
 
 func TestStreaming_BreaksWhenEndInvocationSet(t *testing.T) {
