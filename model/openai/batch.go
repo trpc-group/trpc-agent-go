@@ -10,7 +10,6 @@
 package openai
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -360,26 +359,27 @@ type BatchResponse struct {
 
 // ParseBatchOutput parses output JSONL into OpenAI-aligned structures.
 func (m *Model) ParseBatchOutput(text string) ([]BatchRequestOutput, error) {
-	scanner := bufio.NewScanner(strings.NewReader(text))
-	// Pre-allocate with reasonable default capacity to avoid frequent reallocations.
+	// Split on newlines directly. bufio.Scanner rejects tokens larger than
+	// 64KiB by default, and a batch output line contains a full ChatCompletion
+	// JSON object that routinely exceeds that limit.
 	var entries []BatchRequestOutput
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for remaining := text; remaining != ""; {
+		line, rest, found := strings.Cut(remaining, "\n")
+		if found {
+			remaining = rest
+		} else {
+			remaining = ""
+		}
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		// Unmarshal the line into a BatchRequestOutput.
 		var out BatchRequestOutput
 		if err := json.Unmarshal([]byte(line), &out); err != nil {
 			return nil, fmt.Errorf("failed to parse jsonl line: %w", err)
 		}
-		// Store the original line for debugging purposes.
 		out.RawLine = line
-		// Append the entry to the slice.
 		entries = append(entries, out)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to scan jsonl: %w", err)
 	}
 	return entries, nil
 }

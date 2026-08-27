@@ -10,6 +10,7 @@
 package openai
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -743,6 +744,25 @@ func TestParseBatchOutput_EdgeCases(t *testing.T) {
 {"custom_id":"test2","response":{"status_code":400,"body":{"model":"gpt-4o-mini"}}}`)
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
+}
+
+func TestParseBatchOutput_LongLine(t *testing.T) {
+	m := &Model{}
+	content := strings.Repeat("x", bufio.MaxScanTokenSize)
+	jsonl := fmt.Sprintf(
+		`{"custom_id":"long","response":{"status_code":200,"body":{"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"%s"}}]}}}`,
+		content,
+	)
+	require.Greater(t, len(jsonl), bufio.MaxScanTokenSize)
+
+	results, err := m.ParseBatchOutput(jsonl)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "long", results[0].CustomID)
+	assert.Equal(t, 200, results[0].Response.StatusCode)
+	require.NotEmpty(t, results[0].Response.Body.Choices)
+	assert.Equal(t, content, results[0].Response.Body.Choices[0].Message.Content)
+	assert.Greater(t, len(results[0].RawLine), bufio.MaxScanTokenSize)
 }
 
 // Helper functions to create pointers.
