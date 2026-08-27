@@ -1249,17 +1249,39 @@ func (s *Service) lockUnexpiredSessionKeys(
 	keys []session.Key,
 	now time.Time,
 ) (map[session.Key]struct{}, error) {
-	whereClause, args := s.sessionKeysWhereClause(keys)
-	if whereClause == "" {
+	if len(keys) == 0 {
 		return nil, nil
 	}
 
+	requestRows := make([]string, len(keys))
+	args := make([]any, 0, len(keys)*4+2)
+	for i, key := range keys {
+		requestRows[i] = "SELECT ? AS request_ordinal, ? AS app_name, ? AS user_id, ? AS session_id"
+		args = append(args, int64(i), key.AppName, key.UserID, key.SessionID)
+	}
 	args = append(args, now)
+	query := fmt.Sprintf(`SELECT request_keys.request_ordinal FROM (%s) AS request_keys
+		INNER JOIN %s AS live
+			ON live.app_name = request_keys.app_name
+			AND live.user_id = request_keys.user_id
+			AND live.session_id = request_keys.session_id
+			AND live.deleted_at IS NULL
+			AND (live.expires_at IS NULL OR live.expires_at > ?)`,
+		strings.Join(requestRows, " UNION ALL "),
+		s.tableSessionStates,
+	)
+	if s.opts.tdsqlSharding {
+		query += `
+		WHERE live.user_id = ?`
+		args = append(args, keys[0].UserID)
+	}
+	query += `
+		FOR UPDATE`
+
 	rows, err := tx.QueryContext(ctx,
-		fmt.Sprintf(`SELECT app_name, user_id, session_id FROM %s
-			WHERE %s AND (expires_at IS NULL OR expires_at > ?)
-			FOR UPDATE`, s.tableSessionStates, whereClause),
-		args...)
+		query,
+		args...,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("recheck unexpired sessions failed: %w", err)
 	}
@@ -1267,11 +1289,14 @@ func (s *Service) lockUnexpiredSessionKeys(
 
 	liveKeys := make(map[session.Key]struct{})
 	for rows.Next() {
-		var key session.Key
-		if err := rows.Scan(&key.AppName, &key.UserID, &key.SessionID); err != nil {
+		var requestOrdinal int64
+		if err := rows.Scan(&requestOrdinal); err != nil {
 			return nil, err
 		}
-		liveKeys[key] = struct{}{}
+		if requestOrdinal < 0 || requestOrdinal >= int64(len(keys)) {
+			return nil, fmt.Errorf("unexpired session key ordinal out of range: %d", requestOrdinal)
+		}
+		liveKeys[keys[int(requestOrdinal)]] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
