@@ -4611,6 +4611,21 @@ done:
 	require.Equal(t, 1, count)
 }
 
+func TestFlow_Postprocess_NilResponse(t *testing.T) {
+	f := New(nil, []flow.ResponseProcessor{&mockResponseProcessor{}}, Options{})
+
+	ctx := context.Background()
+	inv := agent.NewInvocation()
+	req := &model.Request{}
+	eventCh := make(chan *event.Event, 2)
+
+	// Should not panic and should not emit events when the response is nil.
+	require.NotPanics(t, func() {
+		f.postprocess(ctx, inv, req, nil, eventCh)
+	})
+	require.Empty(t, eventCh)
+}
+
 // Test that when RunOptions.Resume is enabled and the latest session event
 // is an assistant tool_call response, the flow executes the pending tool
 // before issuing a new LLM request.
