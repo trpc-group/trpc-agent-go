@@ -38,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -1368,8 +1369,21 @@ func (r *llmRunner) executeUserInputStage(
 	var ops []MessageOp
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		if used[len(used)-1].Content != userInput {
-			used[len(used)-1] = model.NewUserMessage(userInput)
-			ops = append(ops, ReplaceLastUser{Content: userInput})
+			if resolved, ok := resolveProjectedCurrentUser(
+				state,
+				used[len(used)-1],
+				userInput,
+			); ok {
+				if !model.MessagesEqual(resolved, used[len(used)-1]) {
+					used[len(used)-1] = resolved
+					ops = append(ops, ReplaceLastUser{
+						Content: resolved.Content,
+					})
+				}
+			} else {
+				used[len(used)-1] = model.NewUserMessage(userInput)
+				ops = append(ops, ReplaceLastUser{Content: userInput})
+			}
 		}
 	} else {
 		used = append(used, model.NewUserMessage(userInput))
@@ -1395,6 +1409,22 @@ func (r *llmRunner) executeUserInputStage(
 			r.nodeID: asst.Content,
 		},
 	}, nil
+}
+
+func resolveProjectedCurrentUser(
+	state State,
+	msg model.Message,
+	userInput string,
+) (model.Message, bool) {
+	execCtx := executionContextFromState(state)
+	if execCtx == nil {
+		return model.Message{}, false
+	}
+	return messageprojection.ResolveCurrentUser(
+		execCtx.Invocation,
+		msg,
+		userInput,
+	)
 }
 
 func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span oteltrace.Span) (any, error) {

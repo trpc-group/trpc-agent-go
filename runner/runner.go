@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
@@ -4707,7 +4708,8 @@ func ensureErrorEventContent(e *event.Event) {
 
 	// Populate content if empty
 	if e.Response.Choices[0].Message.Content == "" {
-		e.Response.Choices[0].Message.Content = "An error occurred during execution. Please contact the service provider."
+		e.Response.Choices[0].Message.Content = errorcontent.FallbackMessage
+		errorcontent.MarkSynthetic(e)
 	}
 
 	// Ensure FinishReason is set
