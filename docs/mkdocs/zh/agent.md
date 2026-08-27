@@ -78,6 +78,32 @@ llmAgent := llmagent.New(
 )
 ```
 
+### Session 历史中的合成错误文案
+
+错误事件没有 assistant content 时，Runner 可能补充通用文案，使事件仍可展示，
+并能作为完整的 user/assistant 轮次持久化。ErrorMessage 插件也可以为同一目的
+提供自定义文案。这类内容是框架合成的展示数据，并不是模型输出。
+
+默认情况下，LLMAgent 不会修改对外事件和已持久化的 Session，但在构造后续模型
+请求时会省略框架合成的错误文案；结构化错误信息仍保留在事件上。如果省略后出现
+相邻 user 消息，请求投影层会在本地合并它们，以维持模型服务可接受的消息序列。
+对于升级前已经持久化、包含 Runner 完全一致的通用兜底文案的 Session，也会按
+相同规则处理。
+
+如果应用明确依赖旧版上下文行为，可以显式恢复：
+
+```go
+llmAgent := llmagent.New(
+    "demo-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithIncludeSyntheticErrorMessages(true),
+)
+```
+
+GraphAgent 从 Session 历史初始化图消息状态时采用相同默认行为，并提供对应的
+`graphagent.WithIncludeSyntheticErrorMessages` 兼容选项。详见
+[Graph 指南](./graph.md#synthetic-error-content-in-session-history)。
+
 <a id="placeholder-variables-session-state-injection"></a>
 
 ### 占位符变量（状态注入）

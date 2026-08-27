@@ -96,6 +96,37 @@ llmAgent := llmagent.New(
 )
 ```
 
+### Synthetic Error Content in Session History
+
+When an error event has no assistant content, Runner may add a generic message
+so the event remains displayable and can be persisted as a complete
+user/assistant turn. The ErrorMessage plugin can provide customized content
+for the same purpose. This content is presentation data synthesized by the
+framework, not model output.
+
+By default, LLMAgent keeps the original event and persisted session unchanged,
+but omits framework-synthesized error content when building later model
+requests. Structured error details remain available on the event. If omission
+leaves adjacent user messages, the request projection merges them locally to
+preserve a provider-valid sequence. Legacy sessions containing Runner's exact
+generic fallback are handled in the same way.
+
+Applications that intentionally relied on the previous context behavior can
+restore it explicitly:
+
+```go
+llmAgent := llmagent.New(
+    "demo-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithIncludeSyntheticErrorMessages(true),
+)
+```
+
+GraphAgent applies the same default while seeding graph message state from
+session history and exposes the matching
+`graphagent.WithIncludeSyntheticErrorMessages` compatibility option. See the
+[Graph guide](./graph.md#synthetic-error-content-in-session-history).
+
 ### Placeholder Variables (State Injection)
 
 LLMAgent automatically injects state into `Instruction` and the optional `SystemPrompt` via placeholder variables. Supported patterns:

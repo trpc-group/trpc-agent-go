@@ -441,6 +441,9 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 			processor.WithPreserveForeignMessages(
 				ga.options.PreserveForeignMessages,
 			),
+			processor.WithIncludeSyntheticErrorMessages(
+				ga.options.includeSyntheticErrorMessages,
+			),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
 			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
 			processor.WithEventMessageProjector(

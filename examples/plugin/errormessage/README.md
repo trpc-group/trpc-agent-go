@@ -54,9 +54,11 @@ downstream consumers still see the original reason.
 Runner marks its fallback message as framework-synthesised, and the ErrorMessage
 plugin marks its customised message the same way. `LLMAgent` omits this
 presentation-only content from subsequent model requests by default while the
-persisted events shown here remain unchanged. Configure an `LLMAgent` with
-`llmagent.WithIncludeSyntheticErrorMessages(true)` only when legacy context
-replay is required.
+persisted events shown here remain unchanged. `GraphAgent` applies the same
+default when seeding message state from session history. Use the matching
+`llmagent.WithIncludeSyntheticErrorMessages(true)` or
+`graphagent.WithIncludeSyntheticErrorMessages(true)` option only when legacy
+context replay is required.
 
 ## Core integration
 

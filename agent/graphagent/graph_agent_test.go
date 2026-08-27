@@ -34,6 +34,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -1233,6 +1234,87 @@ func TestGraphAgent_CreateInitialStateWithSession(t *testing.T) {
 	}
 
 	require.Greater(t, eventCount, 0)
+}
+
+func TestGraphAgent_CreateInitialStateSyntheticErrorMessages(t *testing.T) {
+	g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddNode("process", func(context.Context, graph.State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	newMessageEvent := func(author string, msg model.Message) event.Event {
+		return event.Event{
+			Author: author,
+			Response: &model.Response{
+				Done:    true,
+				Choices: []model.Choice{{Message: msg}},
+			},
+		}
+	}
+	newInvocation := func() *agent.Invocation {
+		errorEvent := event.NewErrorEvent(
+			"inv",
+			"test-agent",
+			model.ErrorTypeFlowError,
+			"boom",
+		)
+		errorEvent.Response.Choices = []model.Choice{{
+			Message: model.NewAssistantMessage(errorcontent.FallbackMessage),
+		}}
+		errorcontent.MarkSynthetic(errorEvent)
+		return &agent.Invocation{
+			AgentName: "test-agent",
+			Session: &session.Session{Events: []event.Event{
+				newMessageEvent("user", model.NewUserMessage("first")),
+				*errorEvent,
+				newMessageEvent("user", model.NewUserMessage("second")),
+			}},
+		}
+	}
+
+	tests := []struct {
+		name        string
+		opts        []Option
+		wantContent []string
+	}{
+		{
+			name:        "default omits",
+			wantContent: []string{"first\n\nsecond"},
+		},
+		{
+			name: "compatibility mode includes",
+			opts: []Option{
+				WithIncludeSyntheticErrorMessages(true),
+			},
+			wantContent: []string{
+				"first",
+				errorcontent.FallbackMessage,
+				"second",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			graphAgent, err := New("test-agent", g, tt.opts...)
+			require.NoError(t, err)
+
+			state := graphAgent.createInitialState(
+				context.Background(),
+				newInvocation(),
+			)
+			messages, ok := state[graph.StateKeyMessages].([]model.Message)
+			require.True(t, ok)
+			require.Len(t, messages, len(tt.wantContent))
+			for i, want := range tt.wantContent {
+				require.Equal(t, want, messages[i].Content)
+			}
+		})
+	}
 }
 
 func TestGraphAgent_CreateInitialStateWithSessionSummary(t *testing.T) {

@@ -789,8 +789,9 @@ repeated as if the model had produced it. If the omission makes two user
 messages adjacent, the request projection merges them locally to preserve a
 provider-valid sequence. Sessions written before the marker was introduced are
 also covered when they contain Runner's exact fallback text. To restore the
-previous model-context behavior, configure the agent with
-`llmagent.WithIncludeSyntheticErrorMessages(true)`.
+previous model-context behavior, configure LLMAgent with
+`llmagent.WithIncludeSyntheticErrorMessages(true)` or GraphAgent with
+`graphagent.WithIncludeSyntheticErrorMessages(true)`.
 
 The plugin only rewrites events where no valid content exists yet, so a partial assistant message produced before the failure is never overwritten.
 
