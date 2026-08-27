@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const (
@@ -44,7 +43,8 @@ func MarkSynthetic(evt *event.Event) {
 
 // IsSynthetic reports whether an error event carries assistant content that
 // was synthesized for presentation and persistence. The fallback comparison
-// recognizes events persisted before the extension marker was introduced.
+// recognizes events persisted before the extension marker was introduced,
+// including placeholders whose original role Runner preserved.
 func IsSynthetic(evt *event.Event) bool {
 	marked, ok, err := event.GetExtension[bool](evt, syntheticExtensionKey)
 	if err != nil {
@@ -58,6 +58,5 @@ func IsSynthetic(evt *event.Event) bool {
 		return false
 	}
 	message := evt.Response.Choices[0].Message
-	return message.Role == model.RoleAssistant &&
-		message.Content == FallbackMessage
+	return message.Content == FallbackMessage
 }

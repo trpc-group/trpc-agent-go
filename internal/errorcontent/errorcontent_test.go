@@ -55,7 +55,21 @@ func TestSyntheticMarkerExplicitFalseAndMalformedFailOpen(t *testing.T) {
 }
 
 func TestSyntheticMarkerRecognizesLegacyRunnerFallback(t *testing.T) {
-	require.True(t, IsSynthetic(legacySyntheticEvent()))
+	tests := []struct {
+		name string
+		role model.Role
+	}{
+		{name: "assistant role", role: model.RoleAssistant},
+		{name: "user role", role: model.RoleUser},
+		{name: "system role", role: model.RoleSystem},
+		{name: "tool role", role: model.RoleTool},
+		{name: "empty role"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.True(t, IsSynthetic(legacySyntheticEventWithRole(tt.role)))
+		})
+	}
 
 	real := legacySyntheticEvent()
 	real.Response.Choices[0].Message.Content = "A real assistant error response."
@@ -67,9 +81,16 @@ func TestSyntheticMarkerRecognizesLegacyRunnerFallback(t *testing.T) {
 }
 
 func legacySyntheticEvent() *event.Event {
+	return legacySyntheticEventWithRole(model.RoleAssistant)
+}
+
+func legacySyntheticEventWithRole(role model.Role) *event.Event {
 	evt := event.NewErrorEvent("inv", "agent", "flow_error", "boom")
 	evt.Response.Choices = []model.Choice{{
-		Message: model.NewAssistantMessage(FallbackMessage),
+		Message: model.Message{
+			Role:    role,
+			Content: FallbackMessage,
+		},
 	}}
 	return evt
 }
