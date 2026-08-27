@@ -1,3 +1,14 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2026 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+//
+//
+
 package tool
 
 import (
@@ -29,14 +40,22 @@ func (g *NoProgressGuard) Observe(name string, arguments, observation any) bool 
 	if g == nil {
 		return false
 	}
-	fingerprint := noProgressFingerprint(name, arguments, observation)
+	fingerprint, ok := noProgressFingerprint(name, arguments, observation)
+	if !ok {
+		g.Reset()
+		return false
+	}
 	if fingerprint == g.last {
 		g.repeats++
 	} else {
 		g.last = fingerprint
 		g.repeats = 1
 	}
-	return g.repeats >= g.threshold
+	threshold := g.threshold
+	if threshold < 2 {
+		threshold = 2
+	}
+	return g.repeats >= threshold
 }
 
 // Reset clears the consecutive-repeat state.
@@ -47,14 +66,20 @@ func (g *NoProgressGuard) Reset() {
 	}
 }
 
-func noProgressFingerprint(name string, arguments, observation any) string {
-	argumentsJSON, _ := json.Marshal(arguments)
-	observationJSON, _ := json.Marshal(observation)
+func noProgressFingerprint(name string, arguments, observation any) (string, bool) {
+	argumentsJSON, err := json.Marshal(arguments)
+	if err != nil {
+		return "", false
+	}
+	observationJSON, err := json.Marshal(observation)
+	if err != nil {
+		return "", false
+	}
 	hash := sha256.New()
 	hash.Write([]byte(name))
 	hash.Write([]byte{0})
 	hash.Write(argumentsJSON)
 	hash.Write([]byte{0})
 	hash.Write(observationJSON)
-	return hex.EncodeToString(hash.Sum(nil))
+	return hex.EncodeToString(hash.Sum(nil)), true
 }

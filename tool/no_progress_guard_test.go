@@ -1,6 +1,30 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2026 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+//
+//
+
 package tool
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
+
+func TestNoProgressGuardZeroValueUsesMinimumThreshold(t *testing.T) {
+	var guard NoProgressGuard
+	if guard.Observe("lookup", nil, nil) {
+		t.Fatal("zero-valued guard must not trigger on the first observation")
+	}
+	if !guard.Observe("lookup", nil, nil) {
+		t.Fatal("zero-valued guard must trigger on the second identical observation")
+	}
+}
 
 func TestNoProgressGuardTriggersOnlyOnConsecutiveIdenticalObservations(t *testing.T) {
 	guard := NewNoProgressGuard(2)
@@ -31,5 +55,18 @@ func TestNoProgressGuardReset(t *testing.T) {
 	guard.Reset()
 	if guard.Observe("lookup", nil, nil) {
 		t.Fatal("reset must clear repeat state")
+	}
+}
+
+func TestNoProgressGuardMarshalFailureResetsState(t *testing.T) {
+	guard := NewNoProgressGuard(2)
+	if guard.Observe("lookup", math.NaN(), nil) {
+		t.Fatal("failed argument serialization must not trigger")
+	}
+	if guard.Observe("lookup", math.Inf(1), nil) {
+		t.Fatal("distinct failed argument serializations must not be treated as repeated")
+	}
+	if guard.Observe("lookup", nil, nil) {
+		t.Fatal("marshal failure must reset the repeat state")
 	}
 }
