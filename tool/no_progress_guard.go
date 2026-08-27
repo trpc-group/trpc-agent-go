@@ -17,6 +17,9 @@ import (
 
 // NoProgressGuard detects consecutive tool calls with the same ordered action
 // and observation. It is disabled unless a caller explicitly uses it.
+//
+// A NoProgressGuard must not be copied after first use. Its methods are safe
+// for concurrent use.
 type NoProgressGuard struct {
 	mu        sync.Mutex
 	threshold int

@@ -10,6 +10,7 @@ package tool
 
 import (
 	"math"
+	"sync"
 	"testing"
 )
 
@@ -57,19 +58,34 @@ func TestNoProgressGuardReset(t *testing.T) {
 
 func TestNoProgressGuardMarshalFailureResetsState(t *testing.T) {
 	guard := NewNoProgressGuard(2)
-	if guard.Observe("lookup", nil, "empty") {
+	if guard.Observe("lookup", nil, nil) {
 		t.Fatal("first valid observation must not trigger")
 	}
-	if !guard.Observe("lookup", nil, "empty") {
+	if !guard.Observe("lookup", nil, nil) {
 		t.Fatal("second identical valid observation must trigger")
 	}
 	if guard.Observe("lookup", math.NaN(), nil) {
 		t.Fatal("failed argument serialization must not trigger")
 	}
-	if guard.Observe("lookup", nil, math.Inf(1)) {
-		t.Fatal("failed observation serialization must not trigger")
+	if guard.Observe("lookup", math.Inf(1), nil) {
+		t.Fatal("distinct failed argument serializations must not be treated as repeated")
 	}
-	if guard.Observe("lookup", nil, "empty") {
+	if guard.Observe("lookup", nil, nil) {
 		t.Fatal("marshal failure must reset the repeat state")
 	}
+}
+
+func TestNoProgressGuardSupportsConcurrentUse(t *testing.T) {
+	guard := NewNoProgressGuard(2)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				guard.Observe("lookup", nil, nil)
+			}
+		}()
+	}
+	wg.Wait()
 }
