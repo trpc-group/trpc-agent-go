@@ -1343,13 +1343,14 @@ func TestGraphAgent_CreateInitialStateSyntheticErrorMessages(t *testing.T) {
 
 func TestGraphAgent_RunPreservesMergedUserHistory(t *testing.T) {
 	tests := []struct {
-		name         string
-		opts         []Option
-		rewriteInput string
-		withFile     bool
-		withSummary  bool
-		wantContent  []string
-		wantContains []string
+		name          string
+		opts          []Option
+		rewriteInput  string
+		withFile      bool
+		withSummary   bool
+		currentAuthor string
+		wantContent   []string
+		wantContains  []string
 	}{
 		{
 			name:        "default omits synthetic content",
@@ -1371,6 +1372,12 @@ func TestGraphAgent_RunPreservesMergedUserHistory(t *testing.T) {
 			},
 			withSummary:  true,
 			wantContains: []string{"summary context", "first", "second"},
+		},
+		{
+			name:          "default preserves transfer-authored current input",
+			currentAuthor: "test-agent",
+			withFile:      true,
+			wantContent:   []string{"first\n\nsecond"},
 		},
 		{
 			name: "compatibility mode includes synthetic content",
@@ -1448,6 +1455,20 @@ func TestGraphAgent_RunPreservesMergedUserHistory(t *testing.T) {
 			}
 			sess := &session.Session{
 				Events: []event.Event{*first, *errorEvent},
+			}
+			if tt.currentAuthor != "" {
+				currentEvent := event.NewResponseEvent(
+					"inv-current",
+					tt.currentAuthor,
+					&model.Response{
+						Done: true,
+						Choices: []model.Choice{{
+							Message: invocationMessage,
+						}},
+					},
+				)
+				currentEvent.RequestID = "request-current"
+				sess.Events = append(sess.Events, *currentEvent)
 			}
 			if tt.withSummary {
 				sess.Summaries = map[string]*session.Summary{

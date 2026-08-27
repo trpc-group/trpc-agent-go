@@ -529,7 +529,7 @@ func isCurrentInvocationUserMessage(
 	evt event.Event,
 	msg model.Message,
 ) bool {
-	if inv == nil || len(evt.Choices) == 0 || evt.Author != "user" ||
+	if inv == nil || len(evt.Choices) == 0 ||
 		evt.InvocationID != inv.InvocationID ||
 		evt.RequestID != inv.RunOptions.RequestID {
 		return false
