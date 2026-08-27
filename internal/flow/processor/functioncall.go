@@ -3402,6 +3402,9 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 	}
 	skipSummarization := afterResult != nil &&
 		afterResult.SkipSummarization
+	// A non-nil CustomResult is an explicit plugin replacement and skips
+	// agent AfterTool callbacks. Pass-through plugins must leave
+	// CustomResult nil so those agent callbacks still run.
 	if afterResult != nil && afterResult.CustomResult != nil {
 		if afterResult.SkipResultFormatter {
 			ctx = withUndeclaredToolResult(

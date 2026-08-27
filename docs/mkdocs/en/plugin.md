@@ -310,6 +310,8 @@ Some “after” hooks can override:
   earlier events).
 - **AfterModel** can return a custom response to replace the model response.
 - **AfterTool** can return a custom result to replace the tool result.
+  A non-nil `CustomResult` skips later Agent AfterTool callbacks. Omitting
+  AfterTool, or returning nil / an empty result, is a pass-through.
 
 > **Caveats for multi-agent (ChainAgent, ParallelAgent, CycleAgent, Graph agent-nodes)**
 >
@@ -372,6 +374,7 @@ the appropriate time in the caller.
 - `BeforeTool`: runs before a tool is called, can modify the tool arguments
   (JavaScript Object Notation (JSON) bytes).
 - `AfterTool`: runs after a tool returns, can replace the result.
+  A non-nil `CustomResult` skips later Agent AfterTool callbacks.
 
 ### Event hook
 

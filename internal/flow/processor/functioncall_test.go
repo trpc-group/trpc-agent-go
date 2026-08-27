@@ -10056,6 +10056,89 @@ func TestExecuteToolWithCallbacks_PluginAfterToolOverrides(t *testing.T) {
 	require.Equal(t, map[string]any{"p": true}, res)
 }
 
+func TestExecuteToolWithCallbacks_PluginPassThroughStillRunsLocalAfterTool(t *testing.T) {
+	tests := []struct {
+		name string
+		reg  func(r *plugin.Registry)
+	}{
+		{
+			name: "before tool only",
+			reg: func(r *plugin.Registry) {
+				r.BeforeTool(func(
+					context.Context,
+					*tool.BeforeToolArgs,
+				) (*tool.BeforeToolResult, error) {
+					return nil, nil
+				})
+			},
+		},
+		{
+			name: "after tool returns nil",
+			reg: func(r *plugin.Registry) {
+				r.AfterTool(func(
+					context.Context,
+					*tool.AfterToolArgs,
+				) (*tool.AfterToolResult, error) {
+					return nil, nil
+				})
+			},
+		},
+		{
+			name: "after tool returns empty result",
+			reg: func(r *plugin.Registry) {
+				r.AfterTool(func(
+					context.Context,
+					*tool.AfterToolArgs,
+				) (*tool.AfterToolResult, error) {
+					return &tool.AfterToolResult{}, nil
+				})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			localAfterCalled := false
+			local := tool.NewCallbacks()
+			local.RegisterAfterTool(func(
+				context.Context,
+				string,
+				*tool.Declaration,
+				[]byte,
+				any,
+				error,
+			) (any, error) {
+				localAfterCalled = true
+				return nil, nil
+			})
+
+			pm := plugin.MustNewManager(&hookPlugin{name: "p", reg: tt.reg})
+			proc := NewFunctionCallResponseProcessor(false, local)
+			inv := &agent.Invocation{Plugins: pm}
+			tl := &mockCallableTool{
+				declaration: &tool.Declaration{Name: "t"},
+				callFn: func(_ context.Context, _ []byte) (any, error) {
+					return "x", nil
+				},
+			}
+			toolCall := model.ToolCall{
+				ID:       "call-1",
+				Function: model.FunctionDefinitionParam{Name: "t"},
+			}
+
+			_, res, _, _, _, err := proc.executeToolWithCallbacks(
+				context.Background(),
+				inv,
+				toolCall,
+				tl,
+				nil,
+			)
+			require.NoError(t, err)
+			require.True(t, localAfterCalled)
+			require.Equal(t, "x", res)
+		})
+	}
+}
+
 func TestExecuteToolWithCallbacks_AfterToolReceivesNormalizedResultAndMeta(t *testing.T) {
 	var (
 		gotResult any

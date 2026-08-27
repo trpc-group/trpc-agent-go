@@ -4236,6 +4236,9 @@ func runAfterToolPluginCallbacks(
 	if errors.As(runErr, &interruptErr) {
 		return ctx, nil, runErr
 	}
+	// A non-nil CustomResult is an explicit plugin replacement and skips
+	// node AfterTool callbacks. Pass-through plugins must leave
+	// CustomResult nil so those node callbacks still run.
 	if afterResult != nil && afterResult.CustomResult != nil {
 		if err != nil {
 			return ctx, afterResult.CustomResult,

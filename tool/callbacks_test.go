@@ -490,7 +490,7 @@ func TestRunAfterTool_Empty(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, originalResult, result.CustomResult)
+	require.Nil(t, result.CustomResult)
 }
 
 func TestRunAfterTool_PanicRecovery(t *testing.T) {
@@ -915,7 +915,7 @@ func TestRunAfterTool_NoCallbacksPreservesOriginalResultShape(t *testing.T) {
 	result, err := callbacks.RunAfterTool(context.Background(), afterArgs)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Same(t, rawResult, result.CustomResult)
+	require.Nil(t, result.CustomResult)
 	require.Same(t, rawResult, afterArgs.Result)
 }
 
@@ -1148,7 +1148,8 @@ func TestToolCallbacks_ContextPropagation(t *testing.T) {
 }
 
 // TestToolCallbacks_After_NoCallbacks_WithResult tests that when no callbacks
-// are registered and args.Result is not nil, RunAfterTool returns the original result.
+// are registered, RunAfterTool does not treat the original result as a custom
+// replacement.
 func TestToolCallbacks_After_NoCallbacks_WithResult(t *testing.T) {
 	callbacks := tool.NewCallbacks()
 	originalResult := map[string]string{"key": "value"}
@@ -1162,7 +1163,7 @@ func TestToolCallbacks_After_NoCallbacks_WithResult(t *testing.T) {
 	result, err := callbacks.RunAfterTool(context.Background(), args)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, originalResult, result.CustomResult)
+	require.Nil(t, result.CustomResult)
 }
 
 // TestToolCallbacks_After_NoCallbacks_WithoutResult tests that when no callbacks
@@ -1174,6 +1175,27 @@ func TestToolCallbacks_After_NoCallbacks_WithoutResult(t *testing.T) {
 		Declaration: &tool.Declaration{Name: "test-tool"},
 		Arguments:   []byte(`{}`),
 		Result:      nil,
+		Error:       nil,
+	}
+	result, err := callbacks.RunAfterTool(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Nil(t, result.CustomResult)
+}
+
+// TestToolCallbacks_After_NilResultDoesNotEchoOriginal tests that a pass-through
+// AfterTool callback does not wrap args.Result as CustomResult.
+func TestToolCallbacks_After_NilResultDoesNotEchoOriginal(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		return nil, nil
+	})
+	originalResult := map[string]string{"original": "result"}
+	args := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      originalResult,
 		Error:       nil,
 	}
 	result, err := callbacks.RunAfterTool(context.Background(), args)
