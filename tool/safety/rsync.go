@@ -15,12 +15,14 @@ import (
 )
 
 type rsyncArguments struct {
-	positionals       []string
-	executionPrograms []rsyncExecutionProgram
-	remoteOptions     []string
-	delete            bool
-	dryRun            bool
-	unresolved        bool
+	positionals             []string
+	executionPrograms       []rsyncExecutionProgram
+	remoteOptions           []string
+	delete                  bool
+	removeSourceFiles       bool
+	remoteRemoveSourceFiles bool
+	dryRun                  bool
+	unresolved              bool
 }
 
 type rsyncExecutionProgram struct {
@@ -55,6 +57,9 @@ func scanRsyncExecutionOptions(
 	}
 	if parsed.delete && !parsed.dryRun {
 		findings = append(findings, rsyncDeleteFinding(parsed))
+	}
+	if (parsed.removeSourceFiles || parsed.remoteRemoveSourceFiles) && !parsed.dryRun {
+		findings = append(findings, rsyncRemoveSourceFinding())
 	}
 	for range parsed.remoteOptions {
 		findings = append(findings, newFinding(
@@ -184,6 +189,12 @@ func parseRsyncLongOption(
 	case name == "--no-dry-run":
 		parsed.dryRun = false
 		return index
+	case isLongOptionAbbreviation(name, "--remove-source-files"):
+		parsed.removeSourceFiles = true
+		return index
+	case isLongOptionAbbreviation(name, "--no-remove-source-files"):
+		parsed.removeSourceFiles = false
+		return index
 	case rsyncDeleteOption(name):
 		parsed.delete = true
 		return index
@@ -256,6 +267,10 @@ func recordRsyncRemoteOption(parsed *rsyncArguments, value string) {
 		parsed.delete = true
 	case rsyncNoDeleteOption(name):
 		parsed.delete = false
+	case isLongOptionAbbreviation(name, "--remove-source-files"):
+		parsed.remoteRemoveSourceFiles = true
+	case isLongOptionAbbreviation(name, "--no-remove-source-files"):
+		parsed.remoteRemoveSourceFiles = false
 	}
 }
 
@@ -296,6 +311,14 @@ func rsyncDeleteFinding(parsed rsyncArguments) Finding {
 		DecisionNeedsHumanReview, RiskHigh, "dangerous.rsync_delete",
 		"rsync deletion removes receiver files that are absent from the source",
 		"use --dry-run and review the source, receiver, and deletion filters",
+	)
+}
+
+func rsyncRemoveSourceFinding() Finding {
+	return newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "dangerous.rsync_delete",
+		"rsync removes successfully transferred source files",
+		"remove --remove-source-files or review the source paths before execution",
 	)
 }
 

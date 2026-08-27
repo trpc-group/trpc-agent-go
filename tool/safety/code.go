@@ -25,6 +25,15 @@ import (
 
 const maxRawArgumentDepth = 32
 
+const pythonOSExecMethods = `(?:execvpe|execlpe|execve|execvp|execv|execle|execlp|execl)`
+
+const jsProcessBridgeMethods = `(?:execFileSync|execFile|execSync|spawnSync|exec|spawn|fork)`
+
+var pythonOSExecMethodNames = map[string]struct{}{
+	"execl": {}, "execle": {}, "execlp": {}, "execlpe": {},
+	"execv": {}, "execve": {}, "execvp": {}, "execvpe": {},
+}
+
 var (
 	pythonImportedBridgePattern = regexp.MustCompile(
 		`(?i)(?:from\s+subprocess\s+import|import\s+subprocess)(?s:.*?)\b` +
@@ -37,18 +46,52 @@ var (
 		`(?m)\bimport\s+(os|subprocess)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)`,
 	)
 	pythonDynamicOSBridgePattern = regexp.MustCompile(
-		`(?i)__import__\s*\(\s*["']os["']\s*\)\s*\.\s*(?:system|popen)\s*\(`,
+		`(?i)__import__\s*\(\s*["']os["']\s*\)\s*\.\s*` +
+			`(?:system|popen|` + pythonOSExecMethods + `)\s*\(`,
+	)
+	pythonOSExecBridgePattern = regexp.MustCompile(
+		`(?i)\bos\s*\.\s*` +
+			pythonOSExecMethods + `\s*\(`,
+	)
+	pythonOSStarImportPattern = regexp.MustCompile(
+		`(?im)\bfrom\s+os\s+import\s*\*`,
+	)
+	pythonBareOSExecCallPattern = regexp.MustCompile(
+		`(?i)\b` + pythonOSExecMethods + `\s*\(`,
+	)
+	pythonGetattrOSExecPattern = regexp.MustCompile(
+		`(?i)\bgetattr\s*\([^,\n]+,\s*["']` +
+			pythonOSExecMethods + `["']\s*\)\s*\(`,
+	)
+	pythonDynamicOSExecPattern = regexp.MustCompile(
+		`(?i)\bgetattr\s*\(\s*os\s*,\s*[^,\n]+\)\s*\(`,
 	)
 	pythonFromProcessPattern = regexp.MustCompile(
-		`(?im)\bfrom\s+(os|subprocess)\s+import\s+` +
-			`(system|popen|run|call|check_call|check_output)` +
+		`(?im)\bfrom\s+(os|subprocess)\s+import\s*\(?\s*` +
+			`(?:[A-Za-z_][A-Za-z0-9_]*\s*(?:as\s+[A-Za-z_][A-Za-z0-9_]*)?\s*,\s*)*` +
+			`(system|popen|run|call|check_call|check_output|` +
+			pythonOSExecMethods + `)` +
 			`(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?`,
 	)
 	goImportedBridgePattern = regexp.MustCompile(
 		`(?i)["']os/exec["'](?s:.*?)\b[A-Za-z_][A-Za-z0-9_]*\.Command(?:Context)?\s*\(`,
 	)
 	jsImportedBridgePattern = regexp.MustCompile(
-		`(?i)(?:require\s*\(\s*["']child_process["']\s*\)|from\s+["']child_process["'])(?s:.*?)\b(?:exec|execSync|spawn|spawnSync)\s*\(`,
+		`(?i)require\s*\(\s*["'](?:node:)?child_process["']\s*\)` +
+			`\s*\.\s*` + jsProcessBridgeMethods + `\s*\(`,
+	)
+	jsProcessModuleAliasPattern = regexp.MustCompile(
+		`(?im)(?:\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*` +
+			`require\s*\(\s*["'](?:node:)?child_process["']\s*\)|` +
+			`\bimport\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+` +
+			`["'](?:node:)?child_process["']|` +
+			`\bimport\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+` +
+			`["'](?:node:)?child_process["'])`,
+	)
+	jsProcessBindingPattern = regexp.MustCompile(
+		`(?im)(?:\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(` +
+			`\s*["'](?:node:)?child_process["']\s*\)|` +
+			`\bimport\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["'])`,
 	)
 	stdinDataCommands = map[string]struct{}{
 		"base64": {}, "cat": {}, "cmp": {}, "cut": {}, "diff": {},
@@ -796,14 +839,21 @@ func processBridgeFindings(policy Policy, payload, evidence string) []Finding {
 
 func processBridgeLiterals(language, code string) []string {
 	literals := quotedLiterals(code)
-	if language != "go" && language != "python" {
+	if language != "go" && language != "python" && language != "javascript" {
 		return literals
 	}
 	filtered := literals[:0]
 	for _, literal := range literals {
-		if literal != "os/exec" && literal != "os" && literal != "subprocess" {
-			filtered = append(filtered, literal)
+		if literal == "os/exec" || literal == "os" || literal == "subprocess" ||
+			literal == "child_process" || literal == "node:child_process" {
+			continue
 		}
+		if language == "python" {
+			if _, ok := pythonOSExecMethodNames[strings.ToLower(literal)]; ok {
+				continue
+			}
+		}
+		filtered = append(filtered, literal)
 	}
 	return filtered
 }
@@ -812,12 +862,18 @@ func containsProcessBridge(language, code string) bool {
 	lower := strings.ToLower(code)
 	switch language {
 	case "python", "py":
-		if pythonImportedBridgePattern.MatchString(code) ||
-			pythonDynamicOSBridgePattern.MatchString(code) || containsAny(lower,
-			"subprocess.run(", "subprocess.call(",
-			"subprocess.check_call(", "subprocess.check_output(",
-			"subprocess.popen(",
-			"os.system(", "os.popen(", "get_ipython().system(") {
+		if len(executableSubmatches(pythonOSExecBridgePattern, code)) > 0 ||
+			len(executableSubmatches(pythonGetattrOSExecPattern, code)) > 0 ||
+			len(executableSubmatches(pythonDynamicOSExecPattern, code)) > 0 ||
+			pythonDynamicOSAliasExecInvoked(code) ||
+			pythonStarImportExecInvoked(code) ||
+			pythonImportedBridgePattern.MatchString(code) ||
+			len(executableSubmatches(pythonDynamicOSBridgePattern, code)) > 0 ||
+			containsAny(lower,
+				"subprocess.run(", "subprocess.call(",
+				"subprocess.check_call(", "subprocess.check_output(",
+				"subprocess.popen(",
+				"os.system(", "os.popen(", "get_ipython().system(") {
 			return true
 		}
 		if pythonFromImportInvokesProcess(code) {
@@ -827,10 +883,7 @@ func containsProcessBridge(language, code string) bool {
 			return true
 		}
 		for _, match := range executableSubmatches(pythonOSAliasPattern, code) {
-			if len(match) > 1 && containsAny(lower,
-				strings.ToLower(match[1])+".system(",
-				strings.ToLower(match[1])+".popen(",
-			) {
+			if len(match) > 1 && pythonOSAliasBridgeInvoked(code, match[1]) {
 				return true
 			}
 		}
@@ -839,18 +892,121 @@ func containsProcessBridge(language, code string) bool {
 		return goImportedBridgePattern.MatchString(code) ||
 			containsAny(lower, "exec.command(", "exec.commandcontext(")
 	case "javascript", "js", "typescript", "ts", "node":
-		return jsImportedBridgePattern.MatchString(code) || containsAny(lower,
+		return len(executableSubmatches(jsImportedBridgePattern, code)) > 0 ||
+			jsAliasedProcessBridgeInvoked(code) || containsAny(lower,
 			"child_process.exec(", "child_process.execsync(",
-			"child_process.spawn(", "child_process.spawnsync(")
+			"child_process.execfile(", "child_process.execfilesync(",
+			"child_process.spawn(", "child_process.spawnsync(",
+			"child_process.fork(")
 	default:
 		return false
 	}
 }
 
+func jsAliasedProcessBridgeInvoked(code string) bool {
+	for _, match := range executableSubmatches(jsProcessModuleAliasPattern, code) {
+		for _, alias := range match[1:] {
+			if jsModuleAliasInvoked(code, alias) {
+				return true
+			}
+		}
+	}
+	for _, match := range executableSubmatches(jsProcessBindingPattern, code) {
+		for _, bindings := range match[1:] {
+			if jsBoundProcessBridgeInvoked(code, bindings) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func jsModuleAliasInvoked(code, alias string) bool {
+	if strings.TrimSpace(alias) == "" {
+		return false
+	}
+	pattern := regexp.MustCompile(
+		`(?i)\b` + regexp.QuoteMeta(alias) + `\s*\.\s*` +
+			jsProcessBridgeMethods + `\s*\(`,
+	)
+	return len(executableSubmatches(pattern, code)) > 0
+}
+
+func jsBoundProcessBridgeInvoked(code, bindings string) bool {
+	for _, binding := range strings.Split(bindings, ",") {
+		parts := strings.Fields(strings.TrimSpace(binding))
+		if len(parts) == 0 {
+			continue
+		}
+		method := strings.TrimSpace(strings.Split(parts[0], ":")[0])
+		if !jsProcessBridgeMethod(method) {
+			continue
+		}
+		name := method
+		switch {
+		case strings.Contains(binding, ":"):
+			name = strings.TrimSpace(strings.SplitN(binding, ":", 2)[1])
+		case len(parts) == 3 && strings.EqualFold(parts[1], "as"):
+			name = parts[2]
+		}
+		pattern := regexp.MustCompile(
+			`(?i)\b` + regexp.QuoteMeta(name) + `\s*\(`,
+		)
+		if len(executableSubmatches(pattern, code)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func jsProcessBridgeMethod(method string) bool {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "exec", "execsync", "execfile", "execfilesync", "spawn",
+		"spawnsync", "fork":
+		return true
+	default:
+		return false
+	}
+}
+
+func pythonOSAliasBridgeInvoked(code, alias string) bool {
+	if strings.TrimSpace(alias) == "" {
+		return false
+	}
+	pattern := regexp.MustCompile(
+		`(?i)\b` + regexp.QuoteMeta(alias) + `\s*\.\s*` +
+			`(?:system|popen|` + pythonOSExecMethods + `)\s*\(`,
+	)
+	return len(executableSubmatches(pattern, code)) > 0
+}
+
+func pythonDynamicOSAliasExecInvoked(code string) bool {
+	for _, match := range executableSubmatches(pythonOSAliasPattern, code) {
+		if len(match) < 2 || strings.TrimSpace(match[1]) == "" {
+			continue
+		}
+		pattern := regexp.MustCompile(
+			`(?i)\bgetattr\s*\(\s*` + regexp.QuoteMeta(match[1]) +
+				`\s*,\s*[^,\n]+\)\s*\(`,
+		)
+		if len(executableSubmatches(pattern, code)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func pythonStarImportExecInvoked(code string) bool {
+	if len(executableSubmatches(pythonOSStarImportPattern, code)) == 0 {
+		return false
+	}
+	return len(executableSubmatches(pythonBareOSExecCallPattern, code)) > 0
+}
+
 func pythonAssignedProcessBridgeInvoked(code string) bool {
 	sources := []string{
 		`subprocess\s*\.\s*(?:run|call|check_call|check_output|popen)`,
-		`os\s*\.\s*(?:system|popen)`,
+		`os\s*\.\s*(?:system|popen|` + pythonOSExecMethods + `)`,
 	}
 	for _, match := range executableSubmatches(pythonProcessModuleAliasPattern, code) {
 		if len(match) < 3 {
@@ -858,7 +1014,7 @@ func pythonAssignedProcessBridgeInvoked(code string) bool {
 		}
 		methods := `(?:run|call|check_call|check_output|popen)`
 		if match[1] == "os" {
-			methods = `(?:system|popen)`
+			methods = `(?:system|popen|` + pythonOSExecMethods + `)`
 		}
 		sources = append(sources, regexp.QuoteMeta(match[2])+`\s*\.\s*`+methods)
 	}

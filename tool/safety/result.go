@@ -117,11 +117,13 @@ func WithResultAuditFailureMode(mode AuditFailureMode) ResultOption {
 	}
 }
 
-// Process copies result through JSON, recursively redacts sensitive data,
-// converts executionErr to redacted single-line data, and enforces the guard's
-// byte limit over the complete serialized ProcessedResult. Byte slices are
-// inspected before JSON base64 encoding; sensitive text is redacted and binary
-// data is replaced with an omission marker. Callers invoke Process explicitly
+// Process first bounds traversal of the caller value, then copies values that
+// fit through JSON, recursively redacts sensitive data, converts executionErr
+// to redacted single-line data, and enforces the guard's byte limit over the
+// complete serialized ProcessedResult. Oversized caller values are omitted
+// before JSON marshaling. Byte slices are inspected before JSON base64 encoding;
+// sensitive text is redacted and binary data is replaced with an omission marker.
+// Callers invoke Process explicitly
 // after execution and their normal callbacks. A nil context is treated as
 // context.Background. Invalid preflight data, cancellation, unsupported,
 // cyclic, excessively nested, or ambiguously encoded result values, a nil or
@@ -149,16 +151,24 @@ func (p *ResultProcessor) Process(
 		return minimalProcessedResult(), errors.New("tool safety result processor preflight report is invalid")
 	}
 
-	value, valueRedacted, err := processResultValue(result)
-	if err != nil {
-		return minimalProcessedResult(), errors.New("tool safety result is not JSON serializable")
-	}
 	executionError, errorRedacted := processExecutionError(executionErr)
-	processed := ProcessedResult{
-		Value:          value,
-		ExecutionError: executionError,
-		Redacted:       valueRedacted || errorRedacted,
+	processed := ProcessedResult{ExecutionError: executionError}
+	oversized, valueRedacted := resultPreprocessingStatus(
+		result, p.maxOutputBytes,
+	)
+	if oversized {
+		processed.Value = safeOmittedValue()
+		processed.Redacted = valueRedacted || errorRedacted
+		processed.Truncated = true
+	} else {
+		value, valueRedacted, err := processResultValue(result)
+		if err != nil {
+			return minimalProcessedResult(), errors.New("tool safety result is not JSON serializable")
+		}
+		processed.Value = value
+		processed.Redacted = valueRedacted || errorRedacted
 	}
+	var err error
 	processed, err = p.enforceOutputBudget(processed)
 	if err != nil {
 		return processed, err
@@ -178,6 +188,149 @@ func (p *ResultProcessor) Process(
 		}
 	}
 	return processed, nil
+}
+
+type preprocessingBudget struct {
+	remaining int64
+	redacted  bool
+}
+
+func resultPreprocessingStatus(result any, limit int64) (bool, bool) {
+	budget := preprocessingBudget{remaining: limit}
+	exceeded := budget.exceeds(reflect.ValueOf(result), 0)
+	return exceeded, budget.redacted
+}
+
+func (b *preprocessingBudget) exceeds(value reflect.Value, depth int) bool {
+	if !value.IsValid() {
+		return false
+	}
+	if depth > maxResultByteDepth {
+		return false
+	}
+	if b.consume(1) {
+		return true
+	}
+	if value.Type() == reflect.TypeOf(json.RawMessage{}) {
+		return b.consume(int64(value.Len()))
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if value.IsNil() {
+			return false
+		}
+		return b.exceeds(value.Elem(), depth+1)
+	case reflect.String:
+		return b.consume(int64(value.Len()))
+	case reflect.Slice:
+		return b.exceedsSlice(value, depth)
+	case reflect.Array:
+		return b.exceedsElements(value, depth)
+	case reflect.Map:
+		return b.exceedsMap(value, depth)
+	case reflect.Struct:
+		return b.exceedsStruct(value, depth)
+	}
+	return false
+}
+
+func (b *preprocessingBudget) exceedsSlice(
+	value reflect.Value,
+	depth int,
+) bool {
+	if value.IsNil() {
+		return false
+	}
+	if value.Type().Elem().Kind() == reflect.Uint8 {
+		return b.consume(int64(value.Len()))
+	}
+	return b.exceedsElements(value, depth)
+}
+
+func (b *preprocessingBudget) exceedsMap(
+	value reflect.Value,
+	depth int,
+) bool {
+	if value.IsNil() {
+		return false
+	}
+	exceeded := false
+	iterator := value.MapRange()
+	for iterator.Next() {
+		key := iterator.Key()
+		if key.Kind() == reflect.String && isSensitiveResultName(key.String()) {
+			b.redacted = true
+		}
+		if exceeded {
+			continue
+		}
+		if b.exceeds(key, depth+1) ||
+			b.exceeds(iterator.Value(), depth+1) {
+			exceeded = true
+		}
+	}
+	return exceeded
+}
+
+func (b *preprocessingBudget) exceedsStruct(
+	value reflect.Value,
+	depth int,
+) bool {
+	exceeded := false
+	customJSON := implementsJSONMarshaler(value.Type())
+	for index := 0; index < value.NumField(); index++ {
+		field := value.Type().Field(index)
+		if !customJSON && (field.PkgPath != "" ||
+			strings.SplitN(field.Tag.Get("json"), ",", 2)[0] == "-") {
+			continue
+		}
+		name := resultJSONFieldName(field)
+		if isSensitiveResultName(name) {
+			b.redacted = true
+		}
+		if exceeded {
+			continue
+		}
+		if b.consume(int64(len(name))) ||
+			b.exceeds(value.Field(index), depth+1) {
+			exceeded = true
+		}
+	}
+	return exceeded
+}
+
+func (b *preprocessingBudget) exceedsElements(
+	value reflect.Value,
+	depth int,
+) bool {
+	for index := 0; index < value.Len(); index++ {
+		if b.exceeds(value.Index(index), depth+1) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *preprocessingBudget) consume(size int64) bool {
+	if size > b.remaining {
+		b.remaining = -1
+		return true
+	}
+	b.remaining -= size
+	return false
+}
+
+func resultJSONFieldName(field reflect.StructField) string {
+	if name := strings.SplitN(field.Tag.Get("json"), ",", 2)[0]; name != "" {
+		return name
+	}
+	return field.Name
+}
+
+func implementsJSONMarshaler(valueType reflect.Type) bool {
+	marshalerType := reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+	return valueType.Implements(marshalerType) ||
+		reflect.PointerTo(valueType).Implements(marshalerType)
 }
 
 func processResultValue(result any) (any, bool, error) {

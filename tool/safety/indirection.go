@@ -38,6 +38,7 @@ func scanCommandIndirectionAtDepth(
 		case "git", "git.exe":
 			findings = append(findings, scanGitClean(argv[1:])...)
 			findings = append(findings, scanGitReset(argv[1:])...)
+			findings = append(findings, scanGitRestore(argv[1:])...)
 			findings = append(findings, scanGitSubmoduleForeach(
 				policy, argv[1:], depth+1,
 			)...)
@@ -51,6 +52,12 @@ func scanCommandIndirectionAtDepth(
 			findings = append(findings, scanGitCleanArguments(argv[1:], false)...)
 		case "git-reset", "git-reset.exe":
 			findings = append(findings, scanGitResetArguments(argv[1:], false)...)
+		case "git-restore", "git-restore.exe":
+			findings = append(findings,
+				scanGitRestoreArguments(argv[1:], "restore", false)...)
+		case "git-checkout", "git-checkout.exe":
+			findings = append(findings,
+				scanGitRestoreArguments(argv[1:], "checkout", false)...)
 		case "git-submodule", "git-submodule.exe":
 			findings = append(findings, scanGitSubmoduleForeachInvocation(
 				policy, parseDirectGitSubmoduleInvocation(argv[1:]), depth+1,
@@ -84,6 +91,16 @@ func scanSSHExecutionOptions(
 ) []Finding {
 	var findings []Finding
 	parsed := parseSSHArguments(client, args)
+	for _, selector := range parsed.localProgramSelectors {
+		findings = append(findings, newFinding(
+			DecisionNeedsHumanReview, RiskHigh, "command.indirect_execution",
+			"scp "+selector.option+" selects a local execution program",
+			"remove the local program selector or review the selected program",
+		))
+		findings = append(findings, scanNestedCommandAtDepth(
+			policy, selector.value, depth,
+		)...)
+	}
 	for _, option := range parsed.configurationOptions {
 		value, name, matched := sshExecutionCommand(option)
 		if !matched {
@@ -107,13 +124,22 @@ func scanSSHExecutionOptions(
 }
 
 type sshArguments struct {
-	configurationOptions []string
-	remoteCommand        []string
-	localArguments       []string
+	configurationOptions  []string
+	remoteCommand         []string
+	localArguments        []string
+	localProgramSelectors []sshProgramSelector
+}
+
+type sshProgramSelector struct {
+	option string
+	value  string
 }
 
 func parseSSHArguments(client string, args []string) sshArguments {
 	parsed := sshArguments{localArguments: args}
+	if client == "scp" {
+		parsed.localProgramSelectors = parseScpLocalProgramSelectors(args)
+	}
 	destinationSeen := false
 	for index := 0; index < len(args); {
 		arg := args[index]
@@ -175,6 +201,55 @@ func parseSSHArguments(client string, args []string) sshArguments {
 		index++
 	}
 	return parsed
+}
+
+func parseScpLocalProgramSelectors(args []string) []sshProgramSelector {
+	const valueOptions = "cDFiJloPSX"
+	const flagOptions = "12346ABCOPRTpqrsv"
+	var selectors []sshProgramSelector
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			break
+		}
+		if arg == "-S" || arg == "-D" {
+			selector := sshProgramSelector{option: arg}
+			if index+1 < len(args) {
+				selector.value = args[index+1]
+				index++
+			}
+			selectors = append(selectors, selector)
+			continue
+		}
+		if len(arg) < 3 || arg[0] != '-' || strings.HasPrefix(arg, "--") {
+			continue
+		}
+		shortOptions := arg[1:]
+		for optionIndex := 0; optionIndex < len(shortOptions); optionIndex++ {
+			option := shortOptions[optionIndex]
+			if option == 'S' || option == 'D' {
+				selector := sshProgramSelector{option: "-" + string(option)}
+				if optionIndex+1 < len(shortOptions) {
+					selector.value = shortOptions[optionIndex+1:]
+				} else if index+1 < len(args) {
+					selector.value = args[index+1]
+					index++
+				}
+				selectors = append(selectors, selector)
+				break
+			}
+			if strings.ContainsRune(valueOptions, rune(option)) {
+				if optionIndex+1 == len(shortOptions) && index+1 < len(args) {
+					index++
+				}
+				break
+			}
+			if !strings.ContainsRune(flagOptions, rune(option)) {
+				continue
+			}
+		}
+	}
+	return selectors
 }
 
 func sshConfigurationOption(arg string) (string, bool, bool) {

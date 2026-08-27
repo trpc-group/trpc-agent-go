@@ -49,6 +49,25 @@ func (k encodedResultKey) MarshalText() ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString([]byte(k.value))), nil
 }
 
+type budgetMarshalProbe struct {
+	called *bool
+}
+
+func (p budgetMarshalProbe) MarshalJSON() ([]byte, error) {
+	*p.called = true
+	return []byte(`"probe"`), nil
+}
+
+type budgetByteMarshalProbe struct {
+	Called  *bool
+	Payload []byte
+}
+
+func (p budgetByteMarshalProbe) MarshalJSON() ([]byte, error) {
+	*p.Called = true
+	return json.Marshal(p.Payload)
+}
+
 func TestResultProcessorRedactsStructuredValuesWithoutMutation(t *testing.T) {
 	type credentials struct {
 		Password string `json:"password"`
@@ -556,6 +575,40 @@ func TestResultProcessorEnforcesCompleteSerializedBudget(t *testing.T) {
 		require.NoError(t, marshalErr)
 		require.LessOrEqual(t, len(encoded), limit)
 	}
+}
+
+func TestResultProcessorRejectsOversizedValuesBeforeMarshaling(t *testing.T) {
+	called := false
+	result := struct {
+		Large string             `json:"large"`
+		Probe budgetMarshalProbe `json:"probe"`
+	}{
+		Large: strings.Repeat("x", 1<<20),
+		Probe: budgetMarshalProbe{called: &called},
+	}
+	processor := mustResultProcessor(t, 180, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), result, nil,
+	)
+
+	require.NoError(t, err)
+	require.False(t, called)
+	require.True(t, processed.Truncated)
+	require.Equal(t, safeOmittedResultValue(), processed.Value)
+
+	byteMarshalCalled := false
+	processed, err = processor.Process(
+		context.Background(), validResultPreflight(),
+		budgetByteMarshalProbe{
+			Called:  &byteMarshalCalled,
+			Payload: bytes.Repeat([]byte("x"), 1<<20),
+		}, nil,
+	)
+	require.NoError(t, err)
+	require.False(t, byteMarshalCalled)
+	require.True(t, processed.Truncated)
+	require.Equal(t, safeOmittedResultValue(), processed.Value)
 }
 
 func TestResultProcessorBudgetIncludesExecutionError(t *testing.T) {

