@@ -655,7 +655,12 @@ func (r *runner) Run(
 		sessionCtx,
 		sessionRestoreFilterKey(effectiveAppName, ro),
 	)
-	sess, err := r.resolveSessionForRun(sessionCtx, ro, sessionKey)
+	sess, err := r.resolveSessionForRun(
+		sessionCtx,
+		ro,
+		sessionKey,
+		preselectedAgent,
+	)
 	if sessionStarted && sess != nil {
 		sessionSpan.SetAttributes(runnerSessionAttrs(sessionKey, sess)...)
 	}
@@ -1522,6 +1527,7 @@ func (r *runner) resolveSessionForRun(
 	ctx context.Context,
 	ro agent.RunOptions,
 	key session.Key,
+	replacementAgent agent.Agent,
 ) (*session.Session, error) {
 	replacement := ro.LatestTurnReplacement
 	if replacement == nil {
@@ -1533,6 +1539,13 @@ func (r *runner) resolveSessionForRun(
 			replacement.ExpectedRequestID,
 			revision.ErrRewindUnavailable,
 		)
+	}
+	if err := r.rejectRoutedLatestTurnReplacement(
+		ctx,
+		key,
+		replacementAgent,
+	); err != nil {
+		return nil, err
 	}
 	result, err := revision.Rewind(
 		ctx,
@@ -1548,6 +1561,30 @@ func (r *runner) resolveSessionForRun(
 		return nil, err
 	}
 	return result.Session, nil
+}
+
+func (r *runner) rejectRoutedLatestTurnReplacement(
+	ctx context.Context,
+	key session.Key,
+	replacementAgent agent.Agent,
+) error {
+	if replacementAgent == nil {
+		return nil
+	}
+	active, err := r.sessionService.GetSession(ctx, key)
+	if err != nil || active == nil {
+		return err
+	}
+	if !sessionroute.HasCurrentTurnRoute(
+		replacementAgent.Info().Name,
+		active,
+	) {
+		return nil
+	}
+	return fmt.Errorf(
+		"runner: latest-turn replacement cannot continue a routed child session: %w",
+		revision.ErrRewindUnavailable,
+	)
 }
 
 // getOrCreateSession returns an existing session or creates a new one.

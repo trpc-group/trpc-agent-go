@@ -333,6 +333,9 @@ state、模型/工具调用、artifact 写入和其他外部副作用不会被�
   terminal event。
 - 把 routed output 持久化到其他 Session 的 turn 无法通过单 Session 投影原子恢复，
   因此不可替换。
+- 如果本次 replacement 选中的 Agent 已把当前 turn 路由到子 Session，Runner 会在
+  rewind 前返回 `session.ErrRewindUnavailable`；源 Session 的 fence 无法原子约束
+  子 Session 的首次 replacement 写入。
 - Replacement 保留源 Session 的剩余 TTL，不会延长 Session 生命周期。
 - Checkpoint 保存 Session 级 state、summary、时间戳，以及 event/Track 前缀的紧凑
   摘要，不复制 event 或 Track payload，也不会累积废弃投影 archive。若已无法验证

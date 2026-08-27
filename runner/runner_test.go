@@ -681,6 +681,78 @@ func TestRunnerLatestTurnReplacementPreservesAwaitUserReplyRoute(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestRunnerLatestTurnReplacementRejectsRoutedChildBeforeRewind(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	rootKey := session.Key{
+		AppName: "app", UserID: "user", SessionID: "session",
+	}
+	childKey := session.Key{
+		AppName: "app", UserID: "user", SessionID: "session/team/member",
+	}
+	root, err := service.CreateSession(ctx, rootKey, nil)
+	require.NoError(t, err)
+	child, err := service.CreateSession(ctx, childKey, nil)
+	require.NoError(t, err)
+	routeState, err := sessionroute.CurrentTurnRouteState(
+		"team",
+		"member",
+		root,
+		child,
+	)
+	require.NoError(t, err)
+	sessionroute.ApplyCurrentTurnRouteState(root, routeState)
+	require.NoError(t, service.UpdateSessionState(ctx, rootKey, routeState))
+
+	team := &awaitReplyTrackingAgent{
+		name:      "team",
+		subAgents: []agent.Agent{&awaitReplyTrackingAgent{name: "member"}},
+	}
+	r := NewRunner(
+		"app",
+		&mockAgent{name: "original-agent"},
+		WithSessionService(service),
+		WithAgent("team", team),
+	)
+	events, err := r.Run(
+		ctx,
+		rootKey.UserID,
+		rootKey.SessionID,
+		model.NewUserMessage("original"),
+		agent.WithRequestID("request-original"),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	before, err := service.GetSession(ctx, rootKey)
+	require.NoError(t, err)
+
+	events, err = r.Run(
+		ctx,
+		rootKey.UserID,
+		rootKey.SessionID,
+		model.NewUserMessage("edited"),
+		agent.WithRequestID("request-edited"),
+		agent.WithLatestTurnReplacement("request-original"),
+		agent.WithAgentByName("team"),
+	)
+	require.Nil(t, events)
+	require.ErrorIs(t, err, session.ErrRewindUnavailable)
+	require.ErrorContains(t, err, "routed child session")
+	require.Zero(t, team.calls)
+
+	after, err := service.GetSession(ctx, rootKey)
+	require.NoError(t, err)
+	assert.Equal(t, before.Events, after.Events)
+	assert.Equal(t, before.State, after.State)
+	child, err = service.GetSession(ctx, childKey)
+	require.NoError(t, err)
+	assert.Empty(t, child.Events)
+}
+
 type interruptThenRespondAgent struct {
 	name string
 	mu   sync.Mutex

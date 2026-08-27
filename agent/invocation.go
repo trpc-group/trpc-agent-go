@@ -678,9 +678,11 @@ type LatestTurnReplacement struct {
 // channel, callers may retry the same message with the same expected and new
 // request IDs to resolve that outcome-unknown transition. Validation errors and
 // session rewind conflict, unsupported, or unavailable errors have known
-// outcomes and should be handled directly. Once Runner.Run returns an event
-// channel, callers must not repeat the replacement because of a later stream
-// error.
+// outcomes and should be handled directly. Runner also returns an unavailable
+// error before rewinding when the selected agent routes its current turn to a
+// child session, because the source-session fence cannot atomically guard that
+// child's first write. Once Runner.Run returns an event channel, callers must
+// not repeat the replacement because of a later stream error.
 func WithLatestTurnReplacement(expectedRequestID string) RunOption {
 	return func(opts *RunOptions) {
 		opts.LatestTurnReplacement = &LatestTurnReplacement{

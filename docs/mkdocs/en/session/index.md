@@ -357,6 +357,9 @@ Safety rules:
   terminal event.
 - A turn that persists routed output into another session is unavailable for
   replacement because a single-session projection cannot restore it atomically.
+- A replacement run whose selected Agent has a current-turn route to a child
+  Session fails before rewind with `session.ErrRewindUnavailable`; the source
+  Session fence cannot atomically guard the child's first replacement write.
 - Replacement preserves the source session's remaining TTL; it does not extend
   the session lifetime.
 - Checkpoints retain session-scoped state, summaries, timestamps, and compact
