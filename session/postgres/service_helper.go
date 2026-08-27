@@ -51,8 +51,7 @@ func (s *Service) getSession(
 				return fmt.Errorf("unmarshal session state failed: %w", err)
 			}
 			sessState.revision = record
-			sessState.CreatedAt = createdAt
-			sessState.UpdatedAt = updatedAt
+			applySessionStateTimestamps(sessState, createdAt, updatedAt)
 		}
 		return nil
 	}, stateQuery, stateArgs...)
@@ -177,8 +176,7 @@ func (s *Service) listSessions(
 			}
 			state.revision = record
 			state.ID = sessionID
-			state.CreatedAt = createdAt
-			state.UpdatedAt = updatedAt
+			applySessionStateTimestamps(&state, createdAt, updatedAt)
 			sessStates = append(sessStates, &state)
 		}
 		return nil
@@ -696,6 +694,22 @@ func applyOptions(opts ...session.Option) *session.Options {
 	return opt
 }
 
+func applySessionStateTimestamps(
+	state *SessionState,
+	createdAt time.Time,
+	updatedAt time.Time,
+) {
+	// PostgreSQL TIMESTAMP columns preserve wall-clock fields but discard the
+	// original offset. Prefer the absolute instants retained in the JSON
+	// envelope, and use the columns only for legacy payloads.
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = createdAt
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = updatedAt
+	}
+}
+
 // getEventsList batch loads events for multiple sessions.
 //
 // When page is nil (context-window mode), time filtering and user-message
@@ -990,12 +1004,14 @@ func (s *Service) getSummariesList(
 		for rows.Next() {
 			var sessionID, filterKey string
 			var summaryBytes []byte
+			var updatedAt time.Time
+			var sessionCreatedAt time.Time
+			checkFreshness := false
 			if sessionCreatedAtMap == nil {
 				if err := rows.Scan(&sessionID, &filterKey, &summaryBytes); err != nil {
 					return err
 				}
 			} else {
-				var updatedAt time.Time
 				if err := rows.Scan(
 					&sessionID,
 					&filterKey,
@@ -1004,15 +1020,27 @@ func (s *Service) getSummariesList(
 				); err != nil {
 					return err
 				}
-				createdAt, exists := sessionCreatedAtMap[sessionID]
-				if !exists || updatedAt.Before(createdAt) {
+				var exists bool
+				sessionCreatedAt, exists = sessionCreatedAtMap[sessionID]
+				if !exists {
 					continue
 				}
+				checkFreshness = true
 			}
 
 			var sum session.Summary
 			if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+				if checkFreshness && updatedAt.Before(sessionCreatedAt) {
+					continue
+				}
 				return fmt.Errorf("unmarshal summary failed: %w", err)
+			}
+			if checkFreshness && !summaryIsCurrentForSession(
+				&sum,
+				updatedAt,
+				sessionCreatedAt,
+			) {
+				continue
 			}
 
 			if summariesMap[sessionID] == nil {

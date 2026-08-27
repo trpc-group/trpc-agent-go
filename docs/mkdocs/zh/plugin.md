@@ -341,7 +341,9 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 - **AfterAgent**：可以返回自定义响应，作为一条额外的“终态”响应事件**追加**到
   Agent 事件流末尾（不替换之前的事件）。
 - **AfterModel**：可以返回自定义响应，替换模型响应。
-- **AfterTool**：可以返回自定义结果，替换工具结果。
+- **AfterTool**：可以返回自定义结果，替换工具结果。`CustomResult` 非 `nil`
+  时会跳过后续 Agent AfterTool 回调；空 map、空 slice、空字符串等非 `nil` 值
+  也属于替换结果。未实现 AfterTool，或未提供 `CustomResult`，都是透传。
 
 > **多 Agent 场景下的注意事项（ChainAgent、ParallelAgent、CycleAgent、Graph Agent 节点）**
 >
@@ -394,7 +396,8 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 
 - `BeforeTool`：工具调用前，可以修改工具参数（JSON（JavaScript Object Notation）
   字节）
-- `AfterTool`：工具调用后，可以替换结果
+- `AfterTool`：工具调用后，可以替换结果。非 `nil` 的 `CustomResult` 会跳过
+  后续 Agent AfterTool 回调。
 
 ### Event Hook 点
 
