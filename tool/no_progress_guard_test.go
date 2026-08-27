@@ -57,13 +57,19 @@ func TestNoProgressGuardReset(t *testing.T) {
 
 func TestNoProgressGuardMarshalFailureResetsState(t *testing.T) {
 	guard := NewNoProgressGuard(2)
+	if guard.Observe("lookup", nil, "empty") {
+		t.Fatal("first valid observation must not trigger")
+	}
+	if !guard.Observe("lookup", nil, "empty") {
+		t.Fatal("second identical valid observation must trigger")
+	}
 	if guard.Observe("lookup", math.NaN(), nil) {
 		t.Fatal("failed argument serialization must not trigger")
 	}
-	if guard.Observe("lookup", math.Inf(1), nil) {
-		t.Fatal("distinct failed argument serializations must not be treated as repeated")
+	if guard.Observe("lookup", nil, math.Inf(1)) {
+		t.Fatal("failed observation serialization must not trigger")
 	}
-	if guard.Observe("lookup", nil, nil) {
+	if guard.Observe("lookup", nil, "empty") {
 		t.Fatal("marshal failure must reset the repeat state")
 	}
 }

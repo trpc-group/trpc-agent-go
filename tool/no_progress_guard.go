@@ -12,11 +12,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"sync"
 )
 
 // NoProgressGuard detects consecutive tool calls with the same ordered action
 // and observation. It is disabled unless a caller explicitly uses it.
 type NoProgressGuard struct {
+	mu        sync.Mutex
 	threshold int
 	last      string
 	repeats   int
@@ -37,9 +39,12 @@ func (g *NoProgressGuard) Observe(name string, arguments, observation any) bool 
 	if g == nil {
 		return false
 	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	fingerprint, ok := noProgressFingerprint(name, arguments, observation)
 	if !ok {
-		g.Reset()
+		g.last = ""
+		g.repeats = 0
 		return false
 	}
 	if fingerprint == g.last {
@@ -58,6 +63,8 @@ func (g *NoProgressGuard) Observe(name string, arguments, observation any) bool 
 // Reset clears the consecutive-repeat state.
 func (g *NoProgressGuard) Reset() {
 	if g != nil {
+		g.mu.Lock()
+		defer g.mu.Unlock()
 		g.last = ""
 		g.repeats = 0
 	}
