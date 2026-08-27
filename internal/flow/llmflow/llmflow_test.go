@@ -4595,7 +4595,7 @@ func TestFlow_Postprocess_WithProcessor(t *testing.T) {
 	}
 	eventCh := make(chan *event.Event, 2)
 
-	f.postprocess(ctx, inv, req, resp, eventCh)
+	got := f.postprocess(ctx, inv, req, resp, eventCh)
 
 	var count int
 	for {
@@ -4609,6 +4609,7 @@ func TestFlow_Postprocess_WithProcessor(t *testing.T) {
 
 done:
 	require.Equal(t, 1, count)
+	require.Same(t, resp, got)
 }
 
 func TestFlow_Postprocess_NilResponse(t *testing.T) {
@@ -4620,9 +4621,11 @@ func TestFlow_Postprocess_NilResponse(t *testing.T) {
 	eventCh := make(chan *event.Event, 2)
 
 	// Should not panic and should not emit events when the response is nil.
+	var got *model.Response
 	require.NotPanics(t, func() {
-		f.postprocess(ctx, inv, req, nil, eventCh)
+		got = f.postprocess(ctx, inv, req, nil, eventCh)
 	})
+	require.Nil(t, got)
 	require.Empty(t, eventCh)
 }
 

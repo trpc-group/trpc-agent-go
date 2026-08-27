@@ -3009,14 +3009,15 @@ func normalizeResponseID(resp *model.Response, currentID *string) *model.Respons
 }
 
 // postprocess handles post-LLM call processing using response processors.
+// It returns the (possibly replaced) response produced by the processors.
 func (f *Flow) postprocess(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
-) {
-	llmResponse = f.postprocessWithLatencySpans(
+) *model.Response {
+	return f.postprocessWithLatencySpans(
 		ctx,
 		invocation,
 		llmRequest,
