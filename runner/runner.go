@@ -724,6 +724,15 @@ func (r *runner) Run(
 	// pre-run snapshot instead of reading the live invocation.
 	agentName := ag.Info().Name
 
+	// Capture a stable invocation view before agent.Run for completion plugin
+	// callbacks. When the agent ignores cancellation and its stream never
+	// closes, the degraded completion path hands plugins this snapshot instead
+	// of the live invocation, which the agent goroutine may still be mutating.
+	// The view preserves identity and carries the plugin manager captured
+	// before the agent starts.
+	completionInvocationView := invocation.View()
+	completionInvocationView.AgentName = agentName
+
 	registerCtx, registerSpan, registerStarted := startRunnerLatencySpan(
 		execCtx,
 		invocation,
@@ -823,6 +832,7 @@ func (r *runner) Run(
 		executionTraceInput,
 		globalAfterRun,
 		invocationAttrs,
+		completionInvocationView,
 		agentName,
 	), nil
 }
@@ -1370,10 +1380,15 @@ type eventLoopContext struct {
 	// cancellation before the first agent event cannot race that write.
 	agentName string
 	// completionPluginsDegraded is set when the agent event stream did not
-	// close within the drain grace period. The completion path then skips
-	// plugin callbacks rather than handing them the live invocation while
-	// the agent goroutine may still be mutating it.
-	completionPluginsDegraded          bool
+	// close within the drain grace period. The completion path then hands
+	// plugin callbacks the pre-run invocation snapshot instead of the live
+	// invocation, which the agent goroutine may still be mutating.
+	completionPluginsDegraded bool
+	// completionInvocationView is a stable snapshot of the invocation
+	// captured before agent.Run. The degraded completion path passes it to
+	// plugin callbacks so the completion OnEvent and AfterRun hooks still
+	// run with safe, pre-run state.
+	completionInvocationView           *agent.Invocation
 	graphCompletionSeen                bool
 	freshAssistantContentProduced      bool
 	persistedAssistantResponseIDs      map[string]struct{}
@@ -1502,6 +1517,7 @@ func (r *runner) processAgentEvents(
 	executionTraceInput *trace.Snapshot,
 	globalAfterRun *globalAfterRunState,
 	invocationAttrs []attribute.KeyValue,
+	completionInvocationView *agent.Invocation,
 	agentName string,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
@@ -1516,6 +1532,7 @@ func (r *runner) processAgentEvents(
 		globalAfterRun:            globalAfterRun,
 		invocationAttrs:           invocationAttrs,
 		agentName:                 agentName,
+		completionInvocationView:  completionInvocationView,
 		baselineFinalResponseID:   baselineFinalResponseID(sess, invocation.RunOptions.RuntimeState),
 		priorAssistantResponseIDs: collectPriorAssistantResponseIDs(sess),
 		streamFilter: graph.NewStreamModeFilter(
@@ -2715,8 +2732,8 @@ func sessionPersistenceContext(ctx context.Context) (context.Context, context.Ca
 // completion callbacks must not receive the live invocation while the agent
 // goroutine may still be writing it (setupInvocation writes
 // Invocation.AgentName). Draining until close establishes that edge. The wait
-// is bounded: agents that ignore cancellation degrade the completion plugins
-// instead of hanging the runner or racing.
+// is bounded: agents that ignore cancellation degrade the completion callbacks
+// to the pre-run invocation snapshot instead of hanging the runner or racing.
 func waitForAgentStreamClose(loop *eventLoopContext) {
 	timer := time.NewTimer(cancelledAgentStreamCloseTimeout)
 	defer timer.Stop()
@@ -2730,9 +2747,9 @@ func waitForAgentStreamClose(loop *eventLoopContext) {
 			}
 		case <-timer.C:
 			// The agent ignored cancellation and did not close its stream
-			// within the grace period. Degrade the completion plugin
-			// callbacks instead of handing them the live invocation while
-			// the agent goroutine may still be mutating it.
+			// within the grace period. Mark the completion as degraded so
+			// plugin callbacks receive the pre-run invocation snapshot
+			// instead of racing the agent's setup writes.
 			loop.completionPluginsDegraded = true
 			return
 		}
@@ -3194,12 +3211,14 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	}
 
 	agent.InjectIntoEvent(loop.invocation, runnerCompletionEvent)
-	// When the agent ignored cancellation and its stream never closed, skip
-	// plugin callbacks rather than handing them the live invocation while
-	// the agent goroutine may still be mutating it.
+	// When the agent ignored cancellation and its stream never closed, hand
+	// plugin callbacks the pre-run invocation snapshot instead of the live
+	// invocation, which the agent goroutine may still be mutating. The
+	// snapshot carries the plugin manager and a stable AgentName, so the
+	// completion OnEvent and AfterRun hooks keep their public contract.
 	pluginInvocation := loop.invocation
 	if loop.completionPluginsDegraded {
-		pluginInvocation = nil
+		pluginInvocation = loop.completionInvocationView
 	}
 	runnerCompletionEvent = r.applyEventPlugins(
 		ctx,

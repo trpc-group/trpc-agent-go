@@ -10,6 +10,7 @@ package runner
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -55,6 +57,41 @@ func (a *cancellationIgnoringAgent) Run(
 		inv.AgentName = "late-agent"
 	}()
 	return ch, nil
+}
+
+// afterRunCountingPlugin registers only an AfterRun hook and records each
+// invocation so tests can assert the completion plugin lifecycle still runs
+// on the degraded timeout path.
+type afterRunCountingPlugin struct {
+	mu      sync.Mutex
+	calls   int
+	invName string
+}
+
+func (p *afterRunCountingPlugin) Name() string { return "after-run-counter" }
+
+func (p *afterRunCountingPlugin) Register(r *plugin.Registry) {
+	r.AfterRun(func(ctx context.Context, args *plugin.AfterRunArgs) error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.calls++
+		if args.Invocation != nil {
+			p.invName = args.Invocation.AgentName
+		}
+		return nil
+	})
+}
+
+func (p *afterRunCountingPlugin) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+func (p *afterRunCountingPlugin) invocationAgentName() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.invName
 }
 
 // TestRunnerCompletionCancelledBeforeFirstEventNoRace guards against a data
@@ -116,4 +153,28 @@ func TestRunnerCompletionCancelledBeforeFirstEventNoRace(t *testing.T) {
 		}
 		require.NotZero(t, events, "runner completion must still be emitted when the agent never closes its stream")
 	})
+}
+
+// TestRunnerCompletionTimeoutPathRunsAfterRunPlugins guards the completion
+// plugin lifecycle on the drain-timeout path: when an agent ignores
+// cancellation and never closes its stream, completion callbacks must still
+// run with the pre-run invocation snapshot instead of being silently skipped.
+func TestRunnerCompletionTimeoutPathRunsAfterRunPlugins(t *testing.T) {
+	oldTimeout := cancelledAgentStreamCloseTimeout
+	cancelledAgentStreamCloseTimeout = 50 * time.Millisecond
+	defer func() { cancelledAgentStreamCloseTimeout = oldTimeout }()
+
+	counter := &afterRunCountingPlugin{}
+	ag := &cancellationIgnoringAgent{name: "ignore-cancel"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := NewRunner("app", ag, WithPlugins(counter))
+	ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("hi"))
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Equal(t, 1, counter.callCount(),
+		"AfterRun hook must run on the timeout path")
+	require.Equal(t, "ignore-cancel", counter.invocationAgentName(),
+		"AfterRun hook must receive the stable pre-run agent name")
 }
