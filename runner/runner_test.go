@@ -9788,7 +9788,7 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 
 	agentCh := make(chan *event.Event)
 	flushCh := make(chan *flush.FlushRequest)
-	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil, nil, nil, runnerInvocationAttrs(inv, "a"), "a")
+	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil, nil, nil, runnerInvocationAttrs(inv, "a"), inv.View(), "a")
 	// Send one event, then close agentCh
 	go func() {
 		agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("x")}}}}
