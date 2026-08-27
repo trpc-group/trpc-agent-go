@@ -158,6 +158,14 @@ func validateReplayAdapterOperation(operation replaytest.Operation) error {
 	case replaytest.OperationWriteMemory:
 		_, err := toMemoryMetadata(operation.Memory.Metadata)
 		return err
+	case replaytest.OperationUpdateSummary:
+		if operation.Summary.FilterKey != filterKeyMain {
+			return fmt.Errorf(
+				"unsupported summary filter key %q, want %q",
+				operation.Summary.FilterKey, filterKeyMain,
+			)
+		}
+		return nil
 	case replaytest.OperationAppendTrack:
 		_, err := json.Marshal(trackPayload{
 			EventType: operation.TrackEvent.EventType, InvocationID: operation.TrackEvent.InvocationID,

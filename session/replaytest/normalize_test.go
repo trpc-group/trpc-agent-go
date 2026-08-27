@@ -941,7 +941,7 @@ func TestNormalizeSnapshotNormalizesSummaryBoundaryCutoffPrecision(t *testing.T)
 	}
 }
 
-func TestNormalizeSnapshotNormalizesGeneratedSummaryUpdateTimesRelatively(t *testing.T) {
+func TestNormalizeSnapshotPreservesSummaryUpdateChronology(t *testing.T) {
 	base := time.Unix(100, 0).UTC()
 	baseline := summaryCutoffSnapshot(base, base)
 	actual := summaryCutoffSnapshot(base, base)
@@ -951,14 +951,8 @@ func TestNormalizeSnapshotNormalizesGeneratedSummaryUpdateTimesRelatively(t *tes
 	actual.Sessions[0].Summaries[0].UpdatedAt = base.Add(10 * time.Second)
 	got := NormalizeSnapshot(actual, DefaultNormalizeOptions())
 	want := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("generated summary update time differs:\ngot:  %#v\nwant: %#v", got, want)
-	}
-
-	actual.Sessions[0].Events[0].Timestamp = base.Add(10 * time.Second)
-	got = NormalizeSnapshot(actual, DefaultNormalizeOptions())
 	if reflect.DeepEqual(got, want) {
-		t.Fatalf("caller-supplied event timestamp shift was normalized away: %#v", got)
+		t.Fatalf("summary update timestamp shift was normalized away: %#v", got)
 	}
 }
 

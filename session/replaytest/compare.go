@@ -521,7 +521,7 @@ func memoryScope(value map[string]any) (string, string) {
 }
 
 func validateAllowedDiffRules(rules []AllowedDiffRule) error {
-	seen := make(map[AllowedDiffRule]struct{}, len(rules))
+	seen := make(map[allowedDiffMatchKey]struct{}, len(rules))
 	for i, rule := range rules {
 		if rule.Case == "" || rule.Backend == "" || rule.Path == "" || rule.Explanation == "" {
 			return fmt.Errorf(
@@ -535,12 +535,25 @@ func validateAllowedDiffRules(rules []AllowedDiffRule) error {
 		if rule.PathPrefix && rule.Path == "$" {
 			return fmt.Errorf("allowed diff rule %d uses a whole-snapshot path prefix", i)
 		}
-		if _, exists := seen[rule]; exists {
+		key := allowedDiffMatchKey{
+			caseName:   rule.Case,
+			backend:    rule.Backend,
+			path:       rule.Path,
+			pathPrefix: rule.PathPrefix,
+		}
+		if _, exists := seen[key]; exists {
 			return fmt.Errorf("allowed diff rule %d is duplicated", i)
 		}
-		seen[rule] = struct{}{}
+		seen[key] = struct{}{}
 	}
 	return nil
+}
+
+type allowedDiffMatchKey struct {
+	caseName   string
+	backend    string
+	path       string
+	pathPrefix bool
 }
 
 func hasPathWildcard(path string) bool {

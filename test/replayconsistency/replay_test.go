@@ -478,6 +478,18 @@ func TestAdapterPreflightRejectsPayloadsBeforeCreatingFixtures(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "unsupported summary filter key",
+			operation: replaytest.Operation{
+				Kind:      replaytest.OperationUpdateSummary,
+				SessionID: "session-1",
+				Summary: &replaytest.SummarySnapshot{
+					SessionID: "session-1",
+					FilterKey: "branch/other",
+					Text:      "summary",
+				},
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

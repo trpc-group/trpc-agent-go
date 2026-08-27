@@ -469,6 +469,9 @@ func parallelDependencies(operations []Operation) (map[string]chan struct{}, err
 	if hasDependencyCycle(dependencies) {
 		return nil, fmt.Errorf("parallel operations contain dependency cycle")
 	}
+	if err := validateParallelSessionCreateConsumers(operations, dependencies); err != nil {
+		return nil, err
+	}
 	if err := validateParallelStateMutations(operations, dependencies); err != nil {
 		return nil, err
 	}
@@ -478,7 +481,95 @@ func parallelDependencies(operations []Operation) (map[string]chan struct{}, err
 	if err := validateParallelSummaryUpdates(operations, dependencies); err != nil {
 		return nil, err
 	}
+	if err := validateParallelMemoryAccesses(operations, dependencies); err != nil {
+		return nil, err
+	}
 	return done, nil
+}
+
+func validateParallelSessionCreateConsumers(
+	operations []Operation,
+	dependencies map[string][]string,
+) error {
+	creates := make([]map[string]struct{}, len(operations))
+	consumers := make([]map[string]struct{}, len(operations))
+	for i, operation := range operations {
+		creates[i] = operationSessionCreates(operation)
+		consumers[i] = operationSessionConsumers(operation)
+	}
+	for i := 0; i < len(operations); i++ {
+		for j := i + 1; j < len(operations); j++ {
+			if sessionID, ok := firstOverlappingSessionID(creates[i], creates[j]); ok {
+				return fmt.Errorf("parallel create session operations for session %q are duplicated", sessionID)
+			}
+			if sessionID, ok := firstOverlappingSessionID(creates[i], consumers[j]); ok &&
+				!parallelOperationDependsOnOperation(operations[j], operations[i], dependencies) {
+				return fmt.Errorf(
+					"parallel session consumer for session %q must depend on create session",
+					sessionID,
+				)
+			}
+			if sessionID, ok := firstOverlappingSessionID(creates[j], consumers[i]); ok &&
+				!parallelOperationDependsOnOperation(operations[i], operations[j], dependencies) {
+				return fmt.Errorf(
+					"parallel session consumer for session %q must depend on create session",
+					sessionID,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func operationSessionCreates(operation Operation) map[string]struct{} {
+	creates := make(map[string]struct{})
+	collectSessionCreates(operation, creates)
+	return creates
+}
+
+func collectSessionCreates(operation Operation, creates map[string]struct{}) {
+	switch operation.Kind {
+	case OperationCreateSession:
+		creates[operation.SessionID] = struct{}{}
+	case OperationParallel:
+		for _, child := range operation.Parallel {
+			collectSessionCreates(child, creates)
+		}
+	}
+}
+
+func operationSessionConsumers(operation Operation) map[string]struct{} {
+	consumers := make(map[string]struct{})
+	collectSessionConsumers(operation, consumers)
+	return consumers
+}
+
+func collectSessionConsumers(operation Operation, consumers map[string]struct{}) {
+	switch operation.Kind {
+	case OperationAppendEvent, OperationUpdateState, OperationUpdateSummary, OperationAppendTrack:
+		consumers[operation.SessionID] = struct{}{}
+	case OperationParallel:
+		for _, child := range operation.Parallel {
+			collectSessionConsumers(child, consumers)
+		}
+	}
+}
+
+func firstOverlappingSessionID(
+	left map[string]struct{},
+	right map[string]struct{},
+) (string, bool) {
+	ids := make([]string, 0)
+	for id := range left {
+		if _, exists := right[id]; exists {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	if len(ids) == 0 {
+		return "", false
+	}
+	return ids[0], true
 }
 
 type stateMutationRef struct {
@@ -539,6 +630,13 @@ func operationStateMutations(operation Operation) map[stateMutationRef]struct{} 
 
 func collectStateMutations(operation Operation, mutations map[stateMutationRef]struct{}) {
 	switch operation.Kind {
+	case OperationAppendEvent:
+		if operation.Event == nil {
+			return
+		}
+		for key := range operation.Event.StateDelta {
+			mutations[stateMutationRef{sessionID: operation.SessionID, key: key}] = struct{}{}
+		}
 	case OperationUpdateState:
 		for key := range operation.StateUpdates {
 			mutations[stateMutationRef{sessionID: operation.SessionID, key: key}] = struct{}{}
@@ -702,6 +800,114 @@ func overlappingSummaryUpdates(
 	return refs
 }
 
+type memoryScopeRef struct {
+	appName string
+	userID  string
+}
+
+func validateParallelMemoryAccesses(
+	operations []Operation,
+	dependencies map[string][]string,
+) error {
+	writes := make([]map[memoryScopeRef]struct{}, len(operations))
+	searches := make([]map[memoryScopeRef]struct{}, len(operations))
+	for i, operation := range operations {
+		writes[i] = operationMemoryWrites(operation)
+		searches[i] = operationMemorySearches(operation)
+	}
+	for i := 0; i < len(operations); i++ {
+		for j := i + 1; j < len(operations); j++ {
+			if parallelOperationsOrdered(operations[i], operations[j], dependencies) {
+				continue
+			}
+			if scope, ok := firstOverlappingMemoryScope(writes[i], writes[j]); ok {
+				return fmt.Errorf(
+					"parallel memory writes for app %q user %q must be ordered with dependencies",
+					scope.appName, scope.userID,
+				)
+			}
+			if scope, ok := firstOverlappingMemoryScope(writes[i], searches[j]); ok {
+				return fmt.Errorf(
+					"parallel memory search and write for app %q user %q must be ordered with dependencies",
+					scope.appName, scope.userID,
+				)
+			}
+			if scope, ok := firstOverlappingMemoryScope(searches[i], writes[j]); ok {
+				return fmt.Errorf(
+					"parallel memory search and write for app %q user %q must be ordered with dependencies",
+					scope.appName, scope.userID,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func operationMemoryWrites(operation Operation) map[memoryScopeRef]struct{} {
+	writes := make(map[memoryScopeRef]struct{})
+	collectMemoryWrites(operation, writes)
+	return writes
+}
+
+func collectMemoryWrites(operation Operation, writes map[memoryScopeRef]struct{}) {
+	switch operation.Kind {
+	case OperationWriteMemory:
+		if operation.Memory == nil {
+			return
+		}
+		writes[memoryScopeRef{
+			appName: operation.Memory.AppName,
+			userID:  operation.Memory.UserID,
+		}] = struct{}{}
+	case OperationParallel:
+		for _, child := range operation.Parallel {
+			collectMemoryWrites(child, writes)
+		}
+	}
+}
+
+func operationMemorySearches(operation Operation) map[memoryScopeRef]struct{} {
+	searches := make(map[memoryScopeRef]struct{})
+	collectMemorySearches(operation, searches)
+	return searches
+}
+
+func collectMemorySearches(operation Operation, searches map[memoryScopeRef]struct{}) {
+	switch operation.Kind {
+	case OperationSearchMemory:
+		searches[memoryScopeRef{
+			appName: operation.SearchAppName,
+			userID:  operation.SearchUserID,
+		}] = struct{}{}
+	case OperationParallel:
+		for _, child := range operation.Parallel {
+			collectMemorySearches(child, searches)
+		}
+	}
+}
+
+func firstOverlappingMemoryScope(
+	left map[memoryScopeRef]struct{},
+	right map[memoryScopeRef]struct{},
+) (memoryScopeRef, bool) {
+	refs := make([]memoryScopeRef, 0)
+	for ref := range left {
+		if _, exists := right[ref]; exists {
+			refs = append(refs, ref)
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].appName != refs[j].appName {
+			return refs[i].appName < refs[j].appName
+		}
+		return refs[i].userID < refs[j].userID
+	})
+	if len(refs) == 0 {
+		return memoryScopeRef{}, false
+	}
+	return refs[0], true
+}
+
 func parallelOperationsOrdered(
 	first Operation,
 	second Operation,
@@ -712,6 +918,17 @@ func parallelOperationsOrdered(
 	}
 	return parallelOperationDependsOn(first.Name, second.Name, dependencies, nil) ||
 		parallelOperationDependsOn(second.Name, first.Name, dependencies, nil)
+}
+
+func parallelOperationDependsOnOperation(
+	operation Operation,
+	dependency Operation,
+	dependencies map[string][]string,
+) bool {
+	if operation.Name == "" || dependency.Name == "" {
+		return false
+	}
+	return parallelOperationDependsOn(operation.Name, dependency.Name, dependencies, nil)
 }
 
 func parallelOperationDependsOn(
@@ -808,16 +1025,19 @@ func validateAllowedDiffRuleScopes(
 	backends []Backend,
 	cases []ReplayCase,
 ) error {
-	backendNames := make(map[string]struct{}, len(backends))
-	for _, backend := range backends {
-		backendNames[backend.Name] = struct{}{}
-	}
+	backendNames := candidateBackendNames(backends)
 	caseNames := make(map[string]struct{}, len(cases))
 	for _, replayCase := range cases {
 		caseNames[replayCase.Name] = struct{}{}
 	}
 	for i, rule := range rules {
 		if _, ok := backendNames[rule.Backend]; !ok {
+			if len(backends) > 0 && rule.Backend == backends[0].Name {
+				return fmt.Errorf(
+					"allowed diff rule %d references baseline backend %q",
+					i, rule.Backend,
+				)
+			}
 			return fmt.Errorf(
 				"allowed diff rule %d references unknown backend %q",
 				i, rule.Backend,
@@ -849,10 +1069,7 @@ func validateUnsupportedAllowances(
 	backends []Backend,
 	cases []ReplayCase,
 ) (map[unsupportedAllowanceKey]*allowanceState, error) {
-	backendNames := make(map[string]struct{}, len(backends))
-	for _, backend := range backends {
-		backendNames[backend.Name] = struct{}{}
-	}
+	backendNames := candidateBackendNames(backends)
 	caseNames := make(map[string]struct{}, len(cases))
 	for _, replayCase := range cases {
 		caseNames[replayCase.Name] = struct{}{}
@@ -864,6 +1081,12 @@ func validateUnsupportedAllowances(
 			return nil, fmt.Errorf("unsupported allowance %d has empty fields", i)
 		}
 		if _, ok := backendNames[allowance.Backend]; !ok {
+			if len(backends) > 0 && allowance.Backend == backends[0].Name {
+				return nil, fmt.Errorf(
+					"unsupported allowance %d references baseline backend %q",
+					i, allowance.Backend,
+				)
+			}
 			return nil, fmt.Errorf(
 				"unsupported allowance %d references unknown backend %q",
 				i, allowance.Backend,
@@ -885,6 +1108,17 @@ func validateUnsupportedAllowances(
 		validated[key] = &allowanceState{reason: allowance.Reason}
 	}
 	return validated, nil
+}
+
+func candidateBackendNames(backends []Backend) map[string]struct{} {
+	names := make(map[string]struct{}, len(backends))
+	if len(backends) <= 1 {
+		return names
+	}
+	for _, backend := range backends[1:] {
+		names[backend.Name] = struct{}{}
+	}
+	return names
 }
 
 func unusedUnsupportedAllowances(

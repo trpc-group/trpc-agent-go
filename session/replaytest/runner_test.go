@@ -267,6 +267,14 @@ func TestRunnerValidatesAllowedDiffRulesBeforeCreatingFixtures(t *testing.T) {
 			},
 			want: "unknown case",
 		},
+		{
+			name: "baseline backend",
+			rule: AllowedDiffRule{
+				Case: "case", Backend: "baseline", Path: "$.sessions",
+				Explanation: "known diff",
+			},
+			want: "baseline backend",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -407,6 +415,45 @@ func TestRunnerRejectsInvalidCasesBeforeCreatingFixtures(t *testing.T) {
 			want:  "dependency cycle",
 		},
 		{
+			name: "parallel duplicate session create",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					{Kind: OperationCreateSession, SessionID: "session"},
+					{Kind: OperationCreateSession, SessionID: "session"},
+				},
+			}}}},
+			want: `parallel create session operations for session "session" are duplicated`,
+		},
+		{
+			name: "parallel unordered session create consumer",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					{Kind: OperationCreateSession, SessionID: "session"},
+					appendEventForSession("session", "event-1", "user", "content", 1),
+				},
+			}}}},
+			want: `parallel session consumer for session "session" must depend on create session`,
+		},
+		{
+			name: "parallel reversed session create dependency",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					namedOperation(
+						Operation{Kind: OperationCreateSession, SessionID: "session"},
+						"create", "append",
+					),
+					namedOperation(
+						appendEventForSession("session", "event-1", "user", "content", 1),
+						"append",
+					),
+				},
+			}}}},
+			want: `parallel session consumer for session "session" must depend on create session`,
+		},
+		{
 			name: "parallel unordered state conflict",
 			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
 				Kind: OperationParallel,
@@ -422,6 +469,28 @@ func TestRunnerRejectsInvalidCasesBeforeCreatingFixtures(t *testing.T) {
 				},
 			}}}},
 			want: `parallel state operations for session "session" key "status" must be ordered`,
+		},
+		{
+			name: "parallel unordered event state delta conflict",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					{
+						Kind: OperationAppendEvent, SessionID: "session",
+						Event: &EventSnapshot{
+							ID: "event-1",
+							StateDelta: map[string]StateValueSnapshot{
+								"theme": JSONStateValue("dark"),
+							},
+						},
+					},
+					{
+						Kind: OperationUpdateState, SessionID: "session",
+						StateUpdates: map[string]any{"theme": "light"},
+					},
+				},
+			}}}},
+			want: `parallel state operations for session "session" key "theme" must be ordered`,
 		},
 		{
 			name: "parallel unordered event appends",
@@ -461,6 +530,32 @@ func TestRunnerRejectsInvalidCasesBeforeCreatingFixtures(t *testing.T) {
 				},
 			}}}},
 			want: `parallel summary updates for session "session" filter "branch/main" must be ordered`,
+		},
+		{
+			name: "parallel unordered memory writes",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					writeMemory("first", "same-scope"),
+					writeMemory("second", "same-scope"),
+				},
+			}}}},
+			want: `parallel memory writes for app "replaytest" user "user-1" must be ordered`,
+		},
+		{
+			name: "parallel unordered memory write search",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					writeMemory("memory", "same-scope"),
+					{
+						Kind:          OperationSearchMemory,
+						SearchAppName: "replaytest", SearchUserID: "user-1",
+						SearchQuery: "memory", SearchLimit: 1,
+					},
+				},
+			}}}},
+			want: `parallel memory search and write for app "replaytest" user "user-1" must be ordered`,
 		},
 		{
 			name: "reserved state prefix",
@@ -548,6 +643,39 @@ func TestRunnerAllowsOrderedParallelStateMutations(t *testing.T) {
 	}
 	if got := fixture.operationNames(); strings.Join(got, ",") != "write,delete" {
 		t.Fatalf("parallel state operation order = %v, want [write delete]", got)
+	}
+}
+
+func TestRunnerAllowsOrderedParallelSessionCreateAndMemoryAccess(t *testing.T) {
+	fixture := &fakeFixture{name: "inmemory", capabilities: allCapabilities()}
+	runner := Runner{Backends: []Backend{fakeBackend("inmemory", fixture)}}
+	report, err := runner.Run(context.Background(), []ReplayCase{{
+		Name: "ordered-create-and-memory",
+		Operations: []Operation{{
+			Kind: OperationParallel,
+			Parallel: []Operation{
+				namedOperation(
+					Operation{Kind: OperationCreateSession, SessionID: "session"},
+					"create",
+				),
+				namedOperation(
+					appendEventForSession("session", "event-1", "user", "content", 1),
+					"append", "create",
+				),
+				namedOperation(writeMemory("memory", "same-scope"), "write-memory"),
+				namedOperation(Operation{
+					Kind:          OperationSearchMemory,
+					SearchAppName: "replaytest", SearchUserID: "user-1",
+					SearchQuery: "memory", SearchLimit: 1,
+				}, "search-memory", "write-memory"),
+			},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+	if len(report.Differences) != 0 {
+		t.Fatalf("Runner.Run() differences = %#v", report.Differences)
 	}
 }
 
@@ -895,9 +1023,10 @@ func TestRunnerDoesNotAllowUnsupportedCapabilitiesByDefault(t *testing.T) {
 }
 
 func TestRunnerRejectsInvalidOrUnusedUnsupportedAllowances(t *testing.T) {
-	backend := fakeBackend(
-		"inmemory", &fakeFixture{name: "inmemory", capabilities: allCapabilities()},
-	)
+	backends := []Backend{
+		fakeBackend("baseline", &fakeFixture{name: "baseline", capabilities: allCapabilities()}),
+		fakeBackend("candidate", &fakeFixture{name: "candidate", capabilities: allCapabilities()}),
+	}
 	cases := []ReplayCase{{Name: "summary", Capabilities: []Capability{CapabilitySummary}}}
 	tests := []struct {
 		name       string
@@ -907,15 +1036,15 @@ func TestRunnerRejectsInvalidOrUnusedUnsupportedAllowances(t *testing.T) {
 		{
 			name: "empty reason",
 			allowances: []UnsupportedAllowance{{
-				Backend: "inmemory", Case: "summary", Capability: CapabilitySummary,
+				Backend: "candidate", Case: "summary", Capability: CapabilitySummary,
 			}},
 			want: "empty fields",
 		},
 		{
 			name: "duplicate",
 			allowances: []UnsupportedAllowance{
-				{Backend: "inmemory", Case: "summary", Capability: CapabilitySummary, Reason: "one"},
-				{Backend: "inmemory", Case: "summary", Capability: CapabilitySummary, Reason: "two"},
+				{Backend: "candidate", Case: "summary", Capability: CapabilitySummary, Reason: "one"},
+				{Backend: "candidate", Case: "summary", Capability: CapabilitySummary, Reason: "two"},
 			},
 			want: "duplicated",
 		},
@@ -929,27 +1058,57 @@ func TestRunnerRejectsInvalidOrUnusedUnsupportedAllowances(t *testing.T) {
 		{
 			name: "unknown case",
 			allowances: []UnsupportedAllowance{{
-				Backend: "inmemory", Case: "missing", Capability: CapabilitySummary, Reason: "test",
+				Backend: "candidate", Case: "missing", Capability: CapabilitySummary, Reason: "test",
 			}},
 			want: "unknown case",
 		},
 		{
+			name: "baseline backend",
+			allowances: []UnsupportedAllowance{{
+				Backend: "baseline", Case: "summary", Capability: CapabilitySummary, Reason: "test",
+			}},
+			want: "baseline backend",
+		},
+		{
 			name: "unused",
 			allowances: []UnsupportedAllowance{{
-				Backend: "inmemory", Case: "summary", Capability: CapabilitySummary,
-				Reason: "not consumed because baseline has no candidate",
+				Backend: "candidate", Case: "summary", Capability: CapabilitySummary,
+				Reason: "not consumed because candidate supports summary",
 			}},
 			want: "unused unsupported allowance",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			runner := Runner{Backends: []Backend{backend}, UnsupportedAllowances: test.allowances}
+			runner := Runner{Backends: backends, UnsupportedAllowances: test.allowances}
 			_, err := runner.Run(context.Background(), cases)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Runner.Run() error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestRunnerValidatesUnsupportedAllowancesBeforeCreatingFixtures(t *testing.T) {
+	newCalls := 0
+	newBackend := func(name string) Backend {
+		return Backend{Name: name, New: func(context.Context, string) (Fixture, error) {
+			newCalls++
+			return &fakeFixture{name: name, capabilities: allCapabilities()}, nil
+		}}
+	}
+	runner := Runner{
+		Backends: []Backend{newBackend("baseline"), newBackend("candidate")},
+		UnsupportedAllowances: []UnsupportedAllowance{{
+			Backend: "baseline", Case: "case", Capability: CapabilitySummary, Reason: "test",
+		}},
+	}
+	_, err := runner.Run(context.Background(), []ReplayCase{{Name: "case"}})
+	if err == nil || !strings.Contains(err.Error(), "baseline backend") {
+		t.Fatalf("Runner.Run() error = %v, want baseline backend", err)
+	}
+	if newCalls != 0 {
+		t.Fatalf("backend.New() calls = %d, want 0", newCalls)
 	}
 }
 

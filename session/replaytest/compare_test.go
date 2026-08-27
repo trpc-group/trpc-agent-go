@@ -451,6 +451,13 @@ func TestCompareSnapshotsRejectsWildcardAndDuplicateAllowedDiffRules(t *testing.
 			Case: "case", Backend: "sqlite", Path: "$.*", Explanation: "too broad",
 		}}, want: "wildcard"},
 		{name: "duplicate", rules: []AllowedDiffRule{valid, valid}, want: "duplicated"},
+		{name: "duplicate match key", rules: []AllowedDiffRule{
+			valid,
+			{
+				Case: "case", Backend: "sqlite", Path: "$.sessions",
+				Explanation: "same match with different explanation",
+			},
+		}, want: "duplicated"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

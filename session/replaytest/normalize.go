@@ -900,7 +900,7 @@ func normalizeSessionTimes(snapshot *SessionSnapshot, precision time.Duration) {
 		conversationTimes = append(conversationTimes, &snapshot.Events[i].Timestamp)
 	}
 	for i := range snapshot.Summaries {
-		normalizeSummaryUpdateTime(&snapshot.Summaries[i].UpdatedAt)
+		conversationTimes = append(conversationTimes, &snapshot.Summaries[i].UpdatedAt)
 		if cutoff, ok := summaryBoundaryCutoffTime(snapshot.Summaries[i].Boundary); ok {
 			value := cutoff
 			boundaryTimes = append(boundaryTimes, mapTimeReference{
@@ -922,13 +922,6 @@ func normalizeSessionTimes(snapshot *SessionSnapshot, precision time.Duration) {
 		}
 	}
 	normalizeAbsoluteTimes(trackTimes, precision)
-}
-
-func normalizeSummaryUpdateTime(updatedAt *time.Time) {
-	if updatedAt.IsZero() {
-		return
-	}
-	*updatedAt = time.Unix(0, 1).UTC()
 }
 
 func summaryBoundaryCutoffTime(boundary map[string]any) (time.Time, bool) {

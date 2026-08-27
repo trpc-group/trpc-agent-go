@@ -46,13 +46,14 @@ const (
 )
 
 // Operation is a backend-neutral action in a replay case. Parallel children may
-// run concurrently; children that mutate the same session state key or append to
-// the same ordered session collection, or update the same summary, must declare
-// an ordering with Name and After. Update-state operations reject app- and
-// user-scoped keys and session bookkeeping keys, and a key cannot be both
-// updated and deleted. For append-event tool responses, ToolResponse owns
-// content and implies the tool role; non-empty Event Role and Content fields
-// must agree with those values.
+// run concurrently; children must declare an ordering with Name and After when
+// they create and consume the same session, mutate the same session state key,
+// append to the same ordered session collection, update the same summary, write
+// the same memory scope, or read and write the same memory scope. Update-state
+// operations reject app- and user-scoped keys and session bookkeeping keys, and
+// a key cannot be both updated and deleted. For append-event tool responses,
+// ToolResponse owns content and implies the tool role; non-empty Event Role and
+// Content fields must agree with those values.
 type Operation struct {
 	Kind                  OperationKind
 	Name                  string
