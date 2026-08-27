@@ -122,6 +122,7 @@ type AfterToolResult struct {
 	// Context if not nil, will be used by the framework for subsequent operations.
 	Context context.Context
 	// CustomResult if not nil, will replace the original result.
+	// Empty maps, slices, and strings are still replacements.
 	CustomResult any
 	// SkipResultFormatter requests default JSON serialization for CustomResult
 	// instead of applying the tool's configured result formatter. It is ignored

@@ -10139,6 +10139,58 @@ func TestExecuteToolWithCallbacks_PluginPassThroughStillRunsLocalAfterTool(t *te
 	}
 }
 
+func TestExecuteToolWithCallbacks_PluginEmptyCustomResultSkipsLocalAfterTool(
+	t *testing.T,
+) {
+	localAfterCalled := false
+	local := tool.NewCallbacks()
+	local.RegisterAfterTool(func(
+		context.Context,
+		string,
+		*tool.Declaration,
+		[]byte,
+		any,
+		error,
+	) (any, error) {
+		localAfterCalled = true
+		return nil, nil
+	})
+
+	empty := map[string]any{}
+	pm := plugin.MustNewManager(&hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterTool(func(
+				context.Context,
+				*tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				return &tool.AfterToolResult{CustomResult: empty}, nil
+			})
+		},
+	})
+	proc := NewFunctionCallResponseProcessor(false, local)
+	inv := &agent.Invocation{Plugins: pm}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return "x", nil
+		},
+	}
+	_, res, _, _, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		model.ToolCall{
+			ID:       "call-1",
+			Function: model.FunctionDefinitionParam{Name: "t"},
+		},
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, localAfterCalled)
+	require.Equal(t, empty, res)
+}
+
 func TestExecuteToolWithCallbacks_AfterToolReceivesNormalizedResultAndMeta(t *testing.T) {
 	var (
 		gotResult any

@@ -647,6 +647,54 @@ func TestRunTool_PluginPassThroughStillRunsLocalAfterTool(t *testing.T) {
 	}
 }
 
+func TestRunTool_PluginEmptyCustomResultSkipsLocalAfterTool(t *testing.T) {
+	const (
+		pluginName = "p"
+		callID     = "call-1"
+		toolName   = "t"
+	)
+	localAfterCalled := false
+	local := tool.NewCallbacks().RegisterAfterTool(func(
+		context.Context,
+		string,
+		*tool.Declaration,
+		[]byte,
+		any,
+		error,
+	) (any, error) {
+		localAfterCalled = true
+		return nil, nil
+	})
+	empty := map[string]any{}
+	pm := plugin.MustNewManager(&hookPlugin{
+		name: pluginName,
+		reg: func(r *plugin.Registry) {
+			r.AfterTool(func(
+				context.Context,
+				*tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				return &tool.AfterToolResult{CustomResult: empty}, nil
+			})
+		},
+	})
+	inv := &agent.Invocation{Plugins: pm}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	tl := &captureTool{name: toolName, result: "x"}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, got, _, err := runTool(ctx, tc, local, tl, State{})
+	require.NoError(t, err)
+	require.Equal(t, empty, got)
+	require.True(t, tl.called)
+	require.False(t, localAfterCalled)
+}
+
 func TestRunTool_PluginBeforeTool_CustomResultWithError(t *testing.T) {
 	const (
 		callID   = "call-1"

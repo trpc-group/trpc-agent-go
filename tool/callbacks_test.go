@@ -1204,6 +1204,24 @@ func TestToolCallbacks_After_NilResultDoesNotEchoOriginal(t *testing.T) {
 	require.Nil(t, result.CustomResult)
 }
 
+func TestRunAfterTool_EmptyMapCustomResultIsReplacement(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	empty := map[string]any{}
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: empty}, nil
+	})
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{Result: map[string]any{"original": true}},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, empty, result.CustomResult)
+}
+
 // TestToolCallbacks_After_NilResult tests that when a callback returns
 // nil result, RunAfterTool continues to the next callback.
 func TestToolCallbacks_After_NilResult(t *testing.T) {

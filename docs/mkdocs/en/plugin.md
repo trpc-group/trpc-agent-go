@@ -310,8 +310,10 @@ Some “after” hooks can override:
   earlier events).
 - **AfterModel** can return a custom response to replace the model response.
 - **AfterTool** can return a custom result to replace the tool result.
-  A non-nil `CustomResult` skips later Agent AfterTool callbacks. Omitting
-  AfterTool, or returning nil / an empty result, is a pass-through.
+  A non-nil `CustomResult` skips later Agent AfterTool callbacks; empty
+  maps, slices, and strings stored in that field are still replacements.
+  Omitting AfterTool, returning nil, or returning a result without
+  `CustomResult` is a pass-through.
 
 > **Caveats for multi-agent (ChainAgent, ParallelAgent, CycleAgent, Graph agent-nodes)**
 >
