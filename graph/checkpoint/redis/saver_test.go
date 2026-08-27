@@ -2312,3 +2312,114 @@ func TestRedis_CrossNamespace_ErrorPaths(t *testing.T) {
 		assert.Equal(t, "c2", sorted[0].id)
 	})
 }
+
+// TestRedis_List_NamespaceIgnoresDifferentBeforeNamespace verifies that when
+// checkpointNS is specified, List strictly fixes the namespace to checkpointNS
+// and ignores a different namespace specified in filter.Before, matching
+// the sqlite and inmemory saver semantics.
+func TestRedis_List_NamespaceIgnoresDifferentBeforeNamespace(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	const (
+		lineageID = "ln-fixed-ns"
+		nsA       = "nsA"
+		nsB       = "nsB"
+	)
+
+	// Put 2 checkpoints in nsA.
+	var cfgA []map[string]any
+	for i := 0; i < 2; i++ {
+		cp := graph.NewCheckpoint(map[string]any{"step": i}, map[string]int64{"step": int64(i + 1)}, nil)
+		cp.Timestamp = time.Unix(0, 1_000_000_000+int64(i*1000))
+		cfg, err := saver.Put(ctx, graph.PutRequest{
+			Config:      graph.CreateCheckpointConfig(lineageID, "", nsA),
+			Checkpoint:  cp,
+			Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceInput, i),
+			NewVersions: map[string]int64{"step": int64(i + 1)},
+		})
+		require.NoError(t, err)
+		cfgA = append(cfgA, cfg)
+	}
+
+	// Put a checkpoint in nsB.
+	cpB := graph.NewCheckpoint(map[string]any{"step": 10}, map[string]int64{"step": 11}, nil)
+	cpB.Timestamp = time.Unix(0, 1_000_000_500)
+	cfgB, err := saver.Put(ctx, graph.PutRequest{
+		Config:      graph.CreateCheckpointConfig(lineageID, "", nsB),
+		Checkpoint:  cpB,
+		Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 10),
+		NewVersions: map[string]int64{"step": 11},
+	})
+	require.NoError(t, err)
+
+	// List in nsA with a Before filter pointing to cfgA[1] but with Namespace explicitly set to nsB.
+	// The query should stay fixed to nsA, where cfgA[1]'s ID is found.
+	beforeWithWrongNS := graph.CreateCheckpointConfig(lineageID, graph.GetCheckpointID(cfgA[1]), nsB)
+	got, err := saver.List(ctx, graph.CreateCheckpointConfig(lineageID, "", nsA), &graph.CheckpointFilter{Before: beforeWithWrongNS})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, graph.GetCheckpointID(cfgA[0]), got[0].Checkpoint.ID)
+	assert.Equal(t, nsA, graph.GetNamespace(got[0].Config))
+
+	_ = cfgB
+}
+
+// TestRedis_List_TopKCapPushedDown verifies that when Limit is specified
+// without metadata filters, results are strictly bounded and correctly sorted.
+func TestRedis_List_TopKCapPushedDown(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	saver, err := NewSaver(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer saver.Close()
+
+	ctx := context.Background()
+	const (
+		lineageID = "ln-topk-cap"
+		nsA       = "nsA"
+		nsB       = "nsB"
+	)
+
+	for i := 0; i < 5; i++ {
+		cpA := graph.NewCheckpoint(map[string]any{"v": i}, map[string]int64{"v": int64(i + 1)}, nil)
+		cpA.Timestamp = time.Unix(0, 1_000_000_000+int64(i*2))
+		_, err := saver.Put(ctx, graph.PutRequest{
+			Config:      graph.CreateCheckpointConfig(lineageID, "", nsA),
+			Checkpoint:  cpA,
+			Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceInput, i),
+			NewVersions: map[string]int64{"v": int64(i + 1)},
+		})
+		require.NoError(t, err)
+
+		cpB := graph.NewCheckpoint(map[string]any{"v": i}, map[string]int64{"v": int64(i + 1)}, nil)
+		cpB.Timestamp = time.Unix(0, 1_000_000_001+int64(i*2))
+		_, err = saver.Put(ctx, graph.PutRequest{
+			Config:      graph.CreateCheckpointConfig(lineageID, "", nsB),
+			Checkpoint:  cpB,
+			Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceInput, i),
+			NewVersions: map[string]int64{"v": int64(i + 1)},
+		})
+		require.NoError(t, err)
+	}
+
+	// Cross-namespace listing with Limit: 3
+	got, err := saver.List(ctx, graph.CreateCheckpointConfig(lineageID, "", ""), &graph.CheckpointFilter{Limit: 3})
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	// Newest first timestamps should be: nsB(4): 1_000_000_009, nsA(4): 1_000_000_008, nsB(3): 1_000_000_007
+	assert.Equal(t, nsB, graph.GetNamespace(got[0].Config))
+	assert.Equal(t, nsA, graph.GetNamespace(got[1].Config))
+	assert.Equal(t, nsB, graph.GetNamespace(got[2].Config))
+
+	// Single-namespace listing with Limit: 2
+	gotSingle, err := saver.List(ctx, graph.CreateCheckpointConfig(lineageID, "", nsA), &graph.CheckpointFilter{Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, gotSingle, 2)
+}

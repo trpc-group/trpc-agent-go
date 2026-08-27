@@ -391,9 +391,9 @@ func (s *Saver) getCheckpointRefs(ctx context.Context, lineageID, checkpointNS s
 	var beforeScore int64
 
 	if beforeID != "" {
-		if beforeNS == "" && checkpointNS != "" {
+		if checkpointNS != "" {
 			beforeNS = checkpointNS
-		} else if beforeNS == "" && checkpointNS == "" {
+		} else if beforeNS == "" {
 			var err error
 			beforeNS, err = s.findCheckpointNamespace(ctx, lineageID, beforeID)
 			if err != nil {
@@ -424,6 +424,11 @@ func (s *Saver) getCheckpointRefs(ctx context.Context, lineageID, checkpointNS s
 		}
 	}
 
+	var queryLimit int64 = -1
+	if filter != nil && filter.Limit > 0 && len(filter.Metadata) == 0 {
+		queryLimit = int64(filter.Limit)
+	}
+
 	var rawCandidates []checkpointRef
 
 	if len(targetNamespaces) == 1 {
@@ -438,7 +443,11 @@ func (s *Saver) getCheckpointRefs(ctx context.Context, lineageID, checkpointNS s
 				Max: fmt.Sprintf("%d", beforeScore),
 			}).Result()
 		} else {
-			members, err = s.client.ZRevRange(ctx, key, 0, -1).Result()
+			stop := int64(-1)
+			if queryLimit > 0 {
+				stop = queryLimit - 1
+			}
+			members, err = s.client.ZRevRange(ctx, key, 0, stop).Result()
 		}
 		if err != nil {
 			return nil, err
@@ -464,7 +473,11 @@ func (s *Saver) getCheckpointRefs(ctx context.Context, lineageID, checkpointNS s
 						Max: fmt.Sprintf("%d", beforeScore),
 					})
 				} else {
-					pipe.ZRevRange(ctx, key, 0, -1)
+					stop := int64(-1)
+					if queryLimit > 0 {
+						stop = queryLimit - 1
+					}
+					pipe.ZRevRange(ctx, key, 0, stop)
 				}
 			}
 			return nil
@@ -498,15 +511,28 @@ func (s *Saver) getCheckpointRefs(ctx context.Context, lineageID, checkpointNS s
 		return nil, nil
 	}
 
+	var res []checkpointRef
 	if beforeApplied {
-		return s.filterBeforeRefs(ctx, lineageID, beforeNS, beforeID, rawCandidates)
+		var err error
+		res, err = s.filterBeforeRefs(ctx, lineageID, beforeNS, beforeID, rawCandidates)
+		if err != nil {
+			return nil, err
+		}
+	} else if len(targetNamespaces) > 1 {
+		var err error
+		res, err = s.sortRefsByTimestamp(ctx, lineageID, rawCandidates)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		res = rawCandidates
 	}
 
-	if len(targetNamespaces) > 1 {
-		return s.sortRefsByTimestamp(ctx, lineageID, rawCandidates)
+	if queryLimit > 0 && len(res) > int(queryLimit) {
+		res = res[:queryLimit]
 	}
 
-	return rawCandidates, nil
+	return res, nil
 }
 
 func (s *Saver) getCheckpointScore(ctx context.Context, lineageID, checkpointNS, checkpointID string) (int64, error) {
