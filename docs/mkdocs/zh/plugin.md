@@ -1052,6 +1052,17 @@ defer runnerInstance.Close()
 
 当一个 event 带有 `Response.Error` 但还没有 `Choices[].Message.Content` 时（例如 `llmflow` 把 `agent.StopError` 转成的 `stop_agent_error` 事件、或者任何直接 `event.NewErrorEvent(...)` 产出的事件），Runner 会用一句固定的英文兜底文案 `"An error occurred during execution. Please contact the service provider."` 补齐。这个插件在 `OnEvent` 中先一步把 content 填好，方便业务侧展示更友好、本地化或按租户定制的提示信息。结构化的 `Response.Error` 不会被修改，调试和下游消费方仍能看到原始原因。
 
+Runner 和本插件会把这类 content 标记为框架合成文案。默认情况下，
+`LLMAgent` 仍会对外发送并持久化这条事件，但后续请求模型时不会把这段展示文案
+带入上下文，避免模型把它当成自己生成过的内容再次复述。如果过滤后出现相邻的
+两条 user 消息，请求投影层会在本地合并它们，以维持模型服务可接受的消息序列。
+升级前已经持久化、尚未带标记的 Session，会按一组尽力而为的旧版特征识别：
+结构化错误、Runner 完全一致的兜底文案及 `"error"` finish reason，并且没有其他
+消息载荷。与这组无标记特征完全一致的真实响应无法区分。如需恢复原先继续携带给
+模型的行为，可在创建 LLMAgent 时
+传入 `llmagent.WithIncludeSyntheticErrorMessages(true)`，或在创建 GraphAgent 时
+传入 `graphagent.WithIncludeSyntheticErrorMessages(true)`。
+
 插件只会改写尚未带有有效 content 的错误事件，所以失败前已经产出的流式助手消息不会被覆盖。
 
 静态文案：

@@ -449,7 +449,8 @@ type Options struct {
 	PreserveForeignMessages bool
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
-	EventMessageProjector EventMessageProjector
+	EventMessageProjector         EventMessageProjector
+	includeSyntheticErrorMessages bool
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
 	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
@@ -1909,6 +1910,18 @@ func WithEventMessageProjector(
 ) Option {
 	return func(opts *Options) {
 		opts.EventMessageProjector = projector
+	}
+}
+
+// WithIncludeSyntheticErrorMessages controls whether assistant content
+// synthesized by Runner or the error-message plugin is included in model
+// requests. By default, synthesized content remains emitted and persisted but
+// is omitted from subsequent model context. When omission leaves adjacent user
+// messages, the messages are merged to preserve a provider-valid sequence.
+// Set include to true to restore the previous model-context behavior.
+func WithIncludeSyntheticErrorMessages(include bool) Option {
+	return func(opts *Options) {
+		opts.includeSyntheticErrorMessages = include
 	}
 }
 

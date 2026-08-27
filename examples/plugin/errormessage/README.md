@@ -51,6 +51,15 @@ above to choose a friendlier message:
 In both cases `Response.Error` is left intact, so debugging tools and
 downstream consumers still see the original reason.
 
+Runner marks its fallback message as framework-synthesised, and the ErrorMessage
+plugin marks its customised message the same way. `LLMAgent` omits this
+presentation-only content from subsequent model requests by default while the
+persisted events shown here remain unchanged. `GraphAgent` applies the same
+default when seeding message state from session history. Use the matching
+`llmagent.WithIncludeSyntheticErrorMessages(true)` or
+`graphagent.WithIncludeSyntheticErrorMessages(true)` option only when legacy
+context replay is required.
+
 ## Core integration
 
 The example wires the plugin at Runner construction time:
