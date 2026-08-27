@@ -24,10 +24,13 @@
 // model request. It appends the instruction to each eligible request while the
 // repeated loop continues, without duplicating it when callbacks re-enter on
 // the same request. The instruction is not appended to session events and is
-// not restored from session history. Consumers that deliberately reuse the
-// final model request, such as cache-safe summary forking and execution
-// tracing, can still observe it. WithExcludedToolNames can exclude polling or
-// other tools whose repeated results are expected.
+// not restored from session history. A standalone summary built from persisted
+// session events does not receive the instruction as source content. When
+// cache-safe summary forking reuses a final request containing the instruction,
+// it can enter the summarizer input and indirectly affect the persisted derived
+// summary. Execution tracing records it as part of the actual model request.
+// WithExcludedToolNames can exclude polling or other tools whose repeated
+// results are expected.
 //
 // The plugin makes no additional model or tool calls. It does not stop or
 // retry the invocation.

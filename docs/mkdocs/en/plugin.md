@@ -647,11 +647,12 @@ intervening non-tool message does not match. The first model request in each
 invocation is deliberately skipped so a repeated tail restored from an earlier
 run cannot trigger a new warning by itself.
 
-Tool-call IDs are ignored. A complete round requires exactly one trailing
-tool-result message per tool call, matched by ID. An incomplete or malformed
-round does not match. The plugin is opt-in, makes no additional model or tool
-calls, and does not stop or retry the invocation. It must be registered on a
-`Runner`; direct calls to `Agent.Run` do not install Runner plugins.
+Tool-call IDs are used to pair results with calls but are not part of the
+round fingerprint. A complete round requires exactly one trailing tool-result
+message per tool call. An incomplete or malformed round does not match. The
+plugin is opt-in, makes no additional model or tool calls, and does not stop or
+retry the invocation. It must be registered on a `Runner`; direct calls to
+`Agent.Run` do not install Runner plugins.
 
 The instruction's `user` role is a model-protocol shape, not a claim of human
 authorship. The instruction is request-local: it is not appended as a session
@@ -697,6 +698,12 @@ runnerInstance := runner.NewRunner(
 )
 defer runnerInstance.Close()
 ```
+
+For a complete, deterministic example that runs without an API key, see
+[examples/plugin/toolloopwarning](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/toolloopwarning).
+The example uses a deterministic scripted model to produce two identical tool
+rounds while exercising the normal Runner, LLMAgent, tool, plugin, and session
+paths.
 
 ### ToolCallID
 

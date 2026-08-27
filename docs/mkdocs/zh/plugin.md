@@ -657,10 +657,10 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 匹配 request 都会收到提醒。轮次内容变化或中间出现非工具消息时不会匹配。每个 invocation
 的第一次模型请求会被明确跳过，避免仅因恢复了上一次 Run 的重复历史尾部就触发新的提醒。
 
-检测会忽略工具调用 ID。一个完整轮次要求每个工具调用恰好对应一条末尾工具结果消息，
-并按 ID 匹配；不完整或格式异常的轮次不会匹配。该插件默认关闭，不会额外发起模型
-调用或工具调用，也不会停止 invocation 或触发重试。插件必须注册到 `Runner`；直接调用
-`Agent.Run` 不会安装 Runner plugin。
+工具调用 ID 用于将结果与调用配对，但不参与轮次指纹比较。一个完整轮次要求每个工具
+调用恰好对应一条末尾工具结果消息；不完整或格式异常的轮次不会匹配。该插件默认关闭，
+不会额外发起模型调用或工具调用，也不会停止 invocation 或触发重试。插件必须注册到
+`Runner`；直接调用 `Agent.Run` 不会安装 Runner plugin。
 
 提醒的 `user` 角色只是模型协议形态，不表示文本由人类输入。提醒只存在于当前模型请求：
 它不会作为 session event 追加，也不会在后续 Run 中作为 history 恢复。普通 standalone
@@ -698,6 +698,11 @@ runnerInstance := runner.NewRunner(
 )
 defer runnerInstance.Close()
 ```
+
+无需 API Key 且可稳定复现的完整示例见
+[examples/plugin/toolloopwarning](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/toolloopwarning)。
+该示例使用确定性的脚本模型（scripted model）生成两个相同工具轮次，同时仍然经过正常的
+Runner、LLMAgent、工具、插件和 session 路径。
 
 ### ToolCallID
 
