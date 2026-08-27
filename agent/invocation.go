@@ -1703,6 +1703,30 @@ func (inv *Invocation) SyncView(view *Invocation) {
 	inv.stateMu.Unlock()
 }
 
+// RefreshViewState copies the view-visible state from src into inv, replacing
+// inv's current state snapshot. Only the state map is updated; identity and
+// structural fields (AgentName, Agent, Session, …) are left unchanged.
+//
+// This is used by the runner to refresh the pre-run completion-plugin snapshot
+// after RunWithPlugins returns: BeforeAgent hooks run synchronously inside
+// RunWithPlugins and may write invocation state (billing markers, audit flags,
+// timing data, etc.). RefreshViewState captures those writes without touching
+// the bare fields that the agent goroutine may already be mutating
+// concurrently.
+//
+// Both src.stateMu (read) and inv.stateMu (write) are held during the copy,
+// so the operation is race-free even when src is the live invocation and a
+// concurrent SetState call is in flight.
+func (inv *Invocation) RefreshViewState(src *Invocation) {
+	if inv == nil || src == nil || inv == src {
+		return
+	}
+	snapshot := src.cloneViewState() // holds src.stateMu.RLock internally
+	inv.stateMu.Lock()
+	inv.state = snapshot
+	inv.stateMu.Unlock()
+}
+
 func (inv *Invocation) cloneState() map[string]any {
 	return inv.cloneStateByFilter(isCloneStateKey, keepStateValue)
 }

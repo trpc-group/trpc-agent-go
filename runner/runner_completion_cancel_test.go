@@ -178,3 +178,91 @@ func TestRunnerCompletionTimeoutPathRunsAfterRunPlugins(t *testing.T) {
 	require.Equal(t, "ignore-cancel", counter.invocationAgentName(),
 		"AfterRun hook must receive the stable pre-run agent name")
 }
+
+// stateWritingPlugin writes a marker into the invocation state during
+// BeforeAgent so the AfterRun hook can assert the state is visible on the
+// timeout-degraded completion path.
+type stateWritingPlugin struct {
+	stateKey   string
+	stateValue string
+
+	mu            sync.Mutex
+	afterRunSaw   string // value observed in AfterRun
+	afterRunCalls int
+}
+
+func (p *stateWritingPlugin) Name() string { return "state-writer" }
+
+func (p *stateWritingPlugin) Register(r *plugin.Registry) {
+	key := p.stateKey
+	value := p.stateValue
+
+	r.BeforeAgent(func(_ context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		if args.Invocation != nil {
+			args.Invocation.SetState(key, value)
+		}
+		return nil, nil
+	})
+
+	r.AfterRun(func(_ context.Context, args *plugin.AfterRunArgs) error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.afterRunCalls++
+		if args.Invocation != nil {
+			if v, ok := args.Invocation.GetState(key); ok {
+				if s, ok2 := v.(string); ok2 {
+					p.afterRunSaw = s
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func (p *stateWritingPlugin) observedValue() (string, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.afterRunSaw, p.afterRunCalls
+}
+
+// TestRunnerTimeoutPathAfterRunSeesBeforeAgentState is the P2 regression test.
+//
+// It guards against the completion-plugin snapshot being captured before
+// RunWithPlugins executes BeforeAgent: on the timeout-degraded path the
+// snapshot passed to AfterRun must reflect state written by BeforeAgent hooks
+// (billing markers, audit flags, etc.) so plugins see a consistent view of
+// the run.
+//
+// The test registers a plugin that writes an invocation state key in
+// BeforeAgent and then reads it back in AfterRun on the timeout path.
+func TestRunnerTimeoutPathAfterRunSeesBeforeAgentState(t *testing.T) {
+	oldTimeout := cancelledAgentStreamCloseTimeout
+	cancelledAgentStreamCloseTimeout = 50 * time.Millisecond
+	defer func() { cancelledAgentStreamCloseTimeout = oldTimeout }()
+
+	const (
+		stateKey   = "billing_marker"
+		stateValue = "charged"
+	)
+
+	plug := &stateWritingPlugin{stateKey: stateKey, stateValue: stateValue}
+	ag := &cancellationIgnoringAgent{name: "ignore-cancel"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := NewRunner("app", ag, WithPlugins(plug))
+	ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("hi"))
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	got, calls := plug.observedValue()
+	require.Equal(t, 1, calls,
+		"AfterRun hook must be called exactly once on the timeout path")
+	require.Equal(t, stateValue, got,
+		"AfterRun hook must see the invocation state written by BeforeAgent "+
+			"(got %q, want %q); snapshot was likely captured before BeforeAgent ran",
+		got, stateValue,
+	)
+}
