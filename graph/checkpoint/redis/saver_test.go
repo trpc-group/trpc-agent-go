@@ -2423,3 +2423,206 @@ func TestRedis_List_TopKCapPushedDown(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, gotSingle, 2)
 }
+
+// TestRedis_CrossNamespace_CoverageBoost tests all edge and error branches in cross-namespace listing.
+func TestRedis_CrossNamespace_CoverageBoost(t *testing.T) {
+	ctx := context.Background()
+	const (
+		lineageID = "ln-cov-boost"
+		nsA       = "nsA"
+		nsB       = "nsB"
+	)
+
+	t.Run("empty lineage with empty namespace returns nil", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		cfg := graph.CreateCheckpointConfig("ln-empty-lineage", "", "")
+		got, err := saver.List(ctx, cfg, nil)
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("findCheckpointNamespace error in getCheckpointRefs", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		require.NoError(t, saver.client.SAdd(ctx, lineageNSKey(lineageID), nsA).Err())
+		saver.client.AddHook(&errHook{failCmd: map[string]bool{"smembers": true}})
+
+		before := graph.CreateCheckpointConfig(lineageID, "some-id", "")
+		cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+		_, err = saver.List(ctx, cfg, &graph.CheckpointFilter{Before: before})
+		require.Error(t, err)
+	})
+
+	t.Run("Exists error during cursor validation in getCheckpointRefs", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		require.NoError(t, saver.client.SAdd(ctx, lineageNSKey(lineageID), nsA).Err())
+		saver.client.AddHook(&errHook{failCmd: map[string]bool{"exists": true}})
+
+		before := graph.CreateCheckpointConfig(lineageID, "cursor-not-found", "")
+		cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+		_, err = saver.List(ctx, cfg, &graph.CheckpointFilter{Before: before})
+		require.Error(t, err)
+	})
+
+	t.Run("getCheckpointScore redis.Nil returns nil", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		require.NoError(t, saver.client.SAdd(ctx, lineageNSKey(lineageID), nsA).Err())
+		require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, nsA, "cur-hash-only"), tsKey, "100").Err())
+
+		before := graph.CreateCheckpointConfig(lineageID, "cur-hash-only", nsA)
+		cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+		got, err := saver.List(ctx, cfg, &graph.CheckpointFilter{Before: before})
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("multi-namespace pipeline with beforeApplied skipping cursor and empty ID", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		require.NoError(t, saver.client.SAdd(ctx, lineageNSKey(lineageID), nsA, nsB).Err())
+
+		cpCur := graph.NewCheckpoint(map[string]any{"v": 1}, map[string]int64{"v": 1}, nil)
+		cpCur.Timestamp = time.Unix(0, 200_000_000)
+		cfgCur, err := saver.Put(ctx, graph.PutRequest{
+			Config:      graph.CreateCheckpointConfig(lineageID, "", nsA),
+			Checkpoint:  cpCur,
+			Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 1),
+			NewVersions: map[string]int64{"v": 1},
+		})
+		require.NoError(t, err)
+		cursorID := graph.GetCheckpointID(cfgCur)
+
+		require.NoError(t, saver.client.ZAdd(ctx, checkpointTSKey(lineageID, nsA), redis.Z{Score: 100, Member: ""}).Err())
+
+		cpOlder := graph.NewCheckpoint(map[string]any{"v": 0}, map[string]int64{"v": 1}, nil)
+		cpOlder.Timestamp = time.Unix(0, 150_000_000)
+		cfgOlder, err := saver.Put(ctx, graph.PutRequest{
+			Config:      graph.CreateCheckpointConfig(lineageID, "", nsB),
+			Checkpoint:  cpOlder,
+			Metadata:    graph.NewCheckpointMetadata(graph.CheckpointSourceInput, 0),
+			NewVersions: map[string]int64{"v": 1},
+		})
+		require.NoError(t, err)
+		olderID := graph.GetCheckpointID(cfgOlder)
+
+		before := graph.CreateCheckpointConfig(lineageID, cursorID, nsA)
+		cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+		got, err := saver.List(ctx, cfg, &graph.CheckpointFilter{Before: before})
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, olderID, got[0].Checkpoint.ID)
+	})
+
+	t.Run("multi-namespace with empty ZSETs returns nil", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		require.NoError(t, saver.client.SAdd(ctx, lineageNSKey(lineageID), nsA, nsB).Err())
+		cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+		got, err := saver.List(ctx, cfg, nil)
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("filterBeforeRefs and sortRefsByTimestamp empty or single element", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		res, err := saver.filterBeforeRefs(ctx, lineageID, nsA, "any-id", nil)
+		require.NoError(t, err)
+		assert.Nil(t, res)
+
+		res, err = saver.sortRefsByTimestamp(ctx, lineageID, nil)
+		require.NoError(t, err)
+		assert.Nil(t, res)
+
+		single := []checkpointRef{{namespace: nsA, id: "c1"}}
+		res, err = saver.sortRefsByTimestamp(ctx, lineageID, single)
+		require.NoError(t, err)
+		assert.Equal(t, single, res)
+	})
+
+	t.Run("getCheckpointRefs propagates filterBeforeRefs error", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		require.NoError(t, saver.client.SAdd(ctx, lineageNSKey(lineageID), nsA).Err())
+		cursorID := "cur-err"
+		require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, nsA, cursorID), tsKey, "malformed-ts").Err())
+		require.NoError(t, saver.client.ZAdd(ctx, checkpointTSKey(lineageID, nsA), redis.Z{Score: 200, Member: cursorID}).Err())
+
+		// Candidate with valid score
+		candID := "cand-1"
+		require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, nsA, candID), tsKey, "100").Err())
+		require.NoError(t, saver.client.ZAdd(ctx, checkpointTSKey(lineageID, nsA), redis.Z{Score: 100, Member: candID}).Err())
+
+		before := graph.CreateCheckpointConfig(lineageID, cursorID, nsA)
+		cfg := graph.CreateCheckpointConfig(lineageID, "", nsA)
+		_, err = saver.List(ctx, cfg, &graph.CheckpointFilter{Before: before})
+		require.Error(t, err)
+	})
+
+	t.Run("sortRefsByTimestamp per-command non-nil error", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		// Setting a WRONGTYPE on a key to trigger a non-nil command error during HGet
+		require.NoError(t, saver.client.Set(ctx, checkpointKey(lineageID, nsA, "c1"), "string-val", 0).Err())
+		require.NoError(t, saver.client.HSet(ctx, checkpointKey(lineageID, nsB, "c2"), tsKey, "200").Err())
+
+		refs := []checkpointRef{{namespace: nsA, id: "c1"}, {namespace: nsB, id: "c2"}}
+		_, err = saver.sortRefsByTimestamp(ctx, lineageID, refs)
+		require.Error(t, err)
+	})
+
+	t.Run("getCheckpointRefs pipeline per-command error", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		saver, err := NewSaver(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer saver.Close()
+
+		require.NoError(t, saver.client.SAdd(ctx, lineageNSKey(lineageID), nsA, nsB).Err())
+		// Set WRONGTYPE on nsA's zset key
+		require.NoError(t, saver.client.Set(ctx, checkpointTSKey(lineageID, nsA), "string-val", 0).Err())
+
+		cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+		_, err = saver.List(ctx, cfg, nil)
+		require.Error(t, err)
+	})
+}
