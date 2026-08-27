@@ -37,6 +37,7 @@ const (
 func TestMetadataIsZero(t *testing.T) {
 	assert.True(t, Metadata{}.IsZero())
 	assert.False(t, testMetadata("evt-1").IsZero())
+	assert.False(t, Metadata{RunID: "run-1"}.IsZero())
 	assert.False(t, Metadata{ForwardedProps: map[string]any{}}.IsZero())
 }
 
@@ -167,6 +168,7 @@ func TestFromRawEventSupportsMapPayload(t *testing.T) {
 	metadata, ok := FromRawEvent(map[string]any{
 		"eventId":            "evt-1",
 		"author":             "member-a",
+		"runId":              "run-1",
 		"invocationId":       "inv-1",
 		"parentInvocationId": "parent-1",
 		"branch":             "root.member-a",
@@ -177,6 +179,7 @@ func TestFromRawEventSupportsMapPayload(t *testing.T) {
 	assert.Equal(t, Metadata{
 		EventID:            "evt-1",
 		Author:             "member-a",
+		RunID:              "run-1",
 		InvocationID:       "inv-1",
 		ParentInvocationID: "parent-1",
 		Branch:             "root.member-a",
@@ -679,6 +682,62 @@ func TestBuildSnapshotMetadataIncludesRunLifecycleEventsWhenEnabled(t *testing.T
 	assert.Equal(t, timestampTime.UnixMilli(), *got.Timestamp)
 }
 
+func TestBuildSnapshotMetadataIndexesCurrentRunID(t *testing.T) {
+	runStarted := aguievents.NewRunStartedEvent("thread", "run-1")
+	assistantStart := aguievents.NewTextMessageStartEvent(
+		"assistant-1",
+		aguievents.WithRole("assistant"),
+	)
+	toolStart := aguievents.NewToolCallStartEvent(
+		"call-1",
+		"search",
+		aguievents.WithParentMessageID("assistant-1"),
+	)
+	runFinished := aguievents.NewRunFinishedEvent("thread", "run-1")
+	afterRun := aguievents.NewTextMessageStartEvent(
+		"assistant-2",
+		aguievents.WithRole("assistant"),
+	)
+	metadata := BuildSnapshotMetadata([]session.TrackEvent{
+		newTrackEvent(t, runStarted),
+		newTrackEvent(t, assistantStart),
+		newTrackEvent(t, toolStart),
+		newTrackEvent(t, runFinished),
+		newTrackEvent(t, afterRun),
+	})
+	require.Contains(t, metadata.Messages, "assistant-1")
+	assert.Equal(t, "run-1", metadata.Messages["assistant-1"].RunID)
+	require.Contains(t, metadata.ToolCalls, "call-1")
+	assert.Equal(t, "run-1", metadata.ToolCalls["call-1"].RunID)
+	require.Contains(t, metadata.Messages, "assistant-2")
+	assert.Empty(t, metadata.Messages["assistant-2"].RunID)
+}
+
+func TestBuildSnapshotMetadataRunErrorClearsCurrentRunID(t *testing.T) {
+	runStarted := aguievents.NewRunStartedEvent("thread", "run-1")
+	inRun := aguievents.NewTextMessageStartEvent(
+		"assistant-1",
+		aguievents.WithRole("assistant"),
+	)
+	runError := aguievents.NewRunErrorEvent("boom", aguievents.WithRunID("run-1"))
+	afterRun := aguievents.NewTextMessageStartEvent(
+		"assistant-2",
+		aguievents.WithRole("assistant"),
+	)
+
+	metadata := BuildSnapshotMetadata([]session.TrackEvent{
+		newTrackEvent(t, runStarted),
+		newTrackEvent(t, inRun),
+		newTrackEvent(t, runError),
+		newTrackEvent(t, afterRun),
+	})
+
+	require.Contains(t, metadata.Messages, "assistant-1")
+	assert.Equal(t, "run-1", metadata.Messages["assistant-1"].RunID)
+	require.Contains(t, metadata.Messages, "assistant-2")
+	assert.Empty(t, metadata.Messages["assistant-2"].RunID)
+}
+
 func TestBuildSnapshotMetadataFallsBackToToolResultSource(t *testing.T) {
 	timestampTime := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
 	toolMetadata := Metadata{
@@ -812,9 +871,11 @@ func TestBuildSnapshotMetadataIndexesForwardedPropsByRunID(t *testing.T) {
 	require.NotNil(t, gotRun.Timestamp)
 	assert.Equal(t, timestampTime.UnixMilli(), *gotRun.Timestamp)
 	assert.Equal(t, "demo-user", gotRun.Author)
+	assert.Empty(t, gotRun.RunID)
 	assert.Equal(t, forwardedProps, gotRun.ForwardedProps)
 	require.Contains(t, metadata.Messages, "user-1")
 	gotMessage := metadata.Messages["user-1"]
+	assert.Equal(t, "run-1", gotMessage.RunID)
 	assert.Nil(t, gotMessage.ForwardedProps)
 }
 
@@ -837,6 +898,9 @@ func TestBuildSnapshotMetadataIndexesRunOnlyForwardedProps(t *testing.T) {
 		})),
 	})
 	assert.Equal(t, SnapshotMetadata{
+		Messages: map[string]Metadata{
+			"user-1": {RunID: "run-1"},
+		},
 		Runs: map[string]Metadata{
 			"run-1": {ForwardedProps: forwardedProps},
 		},

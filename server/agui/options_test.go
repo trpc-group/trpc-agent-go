@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestNewOptionsDefaults(t *testing.T) {
@@ -205,6 +206,24 @@ func TestWithMessagesSnapshotRunLifecycleEventsEnabled(t *testing.T) {
 	opts := newOptions(WithMessagesSnapshotRunLifecycleEventsEnabled(true))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
 	assert.True(t, ro.MessagesSnapshotRunLifecycleEventsEnabled)
+}
+
+func TestWithMessagesSnapshotSessionPageResolver(t *testing.T) {
+	resolver := func(
+		context.Context,
+		*adapter.RunAgentInput,
+		session.Key,
+	) (*aguirunner.MessagesSnapshotPageRequest, error) {
+		return &aguirunner.MessagesSnapshotPageRequest{Cursor: "cursor", EventLimit: 3}, nil
+	}
+
+	opts := newOptions(WithMessagesSnapshotSessionPageResolver(resolver))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	require.NotNil(t, ro.MessagesSnapshotSessionPageResolver)
+
+	req, err := ro.MessagesSnapshotSessionPageResolver(context.Background(), &adapter.RunAgentInput{}, session.Key{})
+	require.NoError(t, err)
+	assert.Equal(t, &aguirunner.MessagesSnapshotPageRequest{Cursor: "cursor", EventLimit: 3}, req)
 }
 
 func TestWithCancelEnabled(t *testing.T) {

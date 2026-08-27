@@ -812,6 +812,7 @@ The `MESSAGES_SNAPSHOT` event returned by the message snapshot route can also ca
       "assistant-1": {
         "eventId": "evt-assistant",
         "author": "member-a",
+        "runId": "run-1",
         "invocationId": "inv-1",
         "branch": "root.member-a",
         "timestamp": 1781258400000
@@ -821,6 +822,7 @@ The `MESSAGES_SNAPSHOT` event returned by the message snapshot route can also ca
       "tool-call-1": {
         "eventId": "evt-tool-call",
         "author": "member-a",
+        "runId": "run-1",
         "invocationId": "inv-1",
         "parentMetadata": {
           "triggerType": "tool_call",
@@ -844,7 +846,7 @@ The `MESSAGES_SNAPSHOT` event returned by the message snapshot route can also ca
 }
 ```
 
-When restoring historical messages, use `rawEvent.messages[messageId]` to get the message source and timestamp, or `rawEvent.toolCalls[toolCallId]` to get the tool call source and timestamp. To restore request-level `forwardedProps`, read `rawEvent.runs[runId].forwardedProps`. The indexed `timestamp` first reuses the top-level `timestamp` from the historical real-time event; only old data without an event `timestamp` falls back to the persisted track event time. Source information in the index uses the same fields as `rawEvent` in real-time events, so the frontend can reuse those field semantics to restore grouping state.
+When restoring historical messages, use `rawEvent.messages[messageId]` to get the message source, `runId`, and timestamp, or `rawEvent.toolCalls[toolCallId]` to get the tool call source, `runId`, and timestamp. To restore request-level `forwardedProps`, first read the `runId` from the message or tool-call metadata, then read `rawEvent.runs[runId].forwardedProps`. The indexed `timestamp` first reuses the top-level `timestamp` from the historical real-time event; only old data without an event `timestamp` falls back to the persisted track event time. Source information in the index uses the same fields as `rawEvent` in real-time events, so the frontend can reuse those field semantics to restore grouping state.
 
 ## External Tools
 

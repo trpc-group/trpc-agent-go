@@ -41,38 +41,39 @@ const (
 
 // Options holds the options for the runner.
 type Options struct {
-	TranslatorFactory                         TranslatorFactory     // TranslatorFactory creates a translator for an AG-UI run.
-	UserIDResolver                            UserIDResolver        // UserIDResolver derives the user identifier for an AG-UI run.
-	TranslateCallbacks                        *translator.Callbacks // TranslateCallbacks translates the run events to AG-UI events.
-	RunAgentInputHook                         RunAgentInputHook     // RunAgentInputHook allows modifying the run input before processing.
-	RunHooks                                  []RunHook             // RunHooks observe an AG-UI run and may emit run-scoped UI events.
-	AppName                                   string                // AppName is the name of the application.
-	AppNameResolver                           AppNameResolver       // AppNameResolver derives the app name for an AG-UI run.
-	SessionService                            session.Service       // SessionService is the session service.
-	StateResolver                             StateResolver         // StateResolver resolves runtime state for an AG-UI run.
-	RunOptionResolver                         RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
-	AggregatorFactory                         aggregator.Factory    // AggregatorFactory builds an aggregator for each run.
-	AggregationOption                         []aggregator.Option   // AggregationOption is the aggregation options for each run.
-	FlushInterval                             time.Duration         // FlushInterval controls how often buffered AG-UI events are flushed for a session.
-	MessagesSnapshotFollowEnabled             bool                  // MessagesSnapshotFollowEnabled enables tailing persisted AG-UI track events after MESSAGES_SNAPSHOT.
-	MessagesSnapshotFollowMaxDuration         time.Duration         // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
-	MessagesSnapshotRunLifecycleEventsEnabled bool                  // MessagesSnapshotRunLifecycleEventsEnabled includes persisted RUN_* events as activity messages in MESSAGES_SNAPSHOT.
-	StartSpan                                 StartSpan             // StartSpan starts a span for an AG-UI run.
-	PostRunFinalizationTimeout                time.Duration         // PostRunFinalizationTimeout bounds how long post-run finalization is allowed to take.
-	TrackPersistenceTimeout                   time.Duration         // TrackPersistenceTimeout bounds how long AG-UI track persistence is allowed to take.
-	Timeout                                   time.Duration         // Timeout controls how long a run is allowed to execute.
-	CancelOnContextDoneEnabled                bool                  // CancelOnContextDoneEnabled cancels the run when the parent context is done.
-	GraphNodeLifecycleActivityEnabled         bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
-	GraphNodeInterruptActivityEnabled         bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
-	GraphNodeInterruptActivityTopLevelOnly    bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
-	ReasoningContentEnabled                   bool                  // ReasoningContentEnabled controls whether reasoning content events are emitted.
-	EventSourceMetadataEnabled                bool                  // EventSourceMetadataEnabled attaches source metadata to AG-UI rawEvent fields.
-	ToolResultInputTranslationEnabled         bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
-	ToolCallDeltaStreamingEnabled             bool                  // ToolCallDeltaStreamingEnabled streams partial tool-call arguments.
-	StreamingToolResultActivityEnabled        bool                  // StreamingToolResultActivityEnabled rewrites partial tool results as activity events.
-	ConcurrentMessageStreamsEnabled           bool                  // ConcurrentMessageStreamsEnabled keeps multiple message streams open by message ID.
-	DistributedCancelEnabled                  bool                  // DistributedCancelEnabled enables best-effort cancel signaling through SessionState.
-	DistributedCancelPollInterval             time.Duration         // DistributedCancelPollInterval controls how often owner runs poll cancel markers.
+	TranslatorFactory                         TranslatorFactory                   // TranslatorFactory creates a translator for an AG-UI run.
+	UserIDResolver                            UserIDResolver                      // UserIDResolver derives the user identifier for an AG-UI run.
+	TranslateCallbacks                        *translator.Callbacks               // TranslateCallbacks translates the run events to AG-UI events.
+	RunAgentInputHook                         RunAgentInputHook                   // RunAgentInputHook allows modifying the run input before processing.
+	RunHooks                                  []RunHook                           // RunHooks observe an AG-UI run and may emit run-scoped UI events.
+	AppName                                   string                              // AppName is the name of the application.
+	AppNameResolver                           AppNameResolver                     // AppNameResolver derives the app name for an AG-UI run.
+	SessionService                            session.Service                     // SessionService is the session service.
+	StateResolver                             StateResolver                       // StateResolver resolves runtime state for an AG-UI run.
+	RunOptionResolver                         RunOptionResolver                   // RunOptionResolver resolves the runner options for an AG-UI run.
+	AggregatorFactory                         aggregator.Factory                  // AggregatorFactory builds an aggregator for each run.
+	AggregationOption                         []aggregator.Option                 // AggregationOption is the aggregation options for each run.
+	FlushInterval                             time.Duration                       // FlushInterval controls how often buffered AG-UI events are flushed for a session.
+	MessagesSnapshotFollowEnabled             bool                                // MessagesSnapshotFollowEnabled enables tailing persisted AG-UI track events after MESSAGES_SNAPSHOT.
+	MessagesSnapshotFollowMaxDuration         time.Duration                       // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
+	MessagesSnapshotRunLifecycleEventsEnabled bool                                // MessagesSnapshotRunLifecycleEventsEnabled includes persisted RUN_* events as activity messages in MESSAGES_SNAPSHOT.
+	MessagesSnapshotSessionPageResolver       MessagesSnapshotSessionPageResolver // MessagesSnapshotSessionPageResolver resolves optional session track-event pagination for MESSAGES_SNAPSHOT.
+	StartSpan                                 StartSpan                           // StartSpan starts a span for an AG-UI run.
+	PostRunFinalizationTimeout                time.Duration                       // PostRunFinalizationTimeout bounds how long post-run finalization is allowed to take.
+	TrackPersistenceTimeout                   time.Duration                       // TrackPersistenceTimeout bounds how long AG-UI track persistence is allowed to take.
+	Timeout                                   time.Duration                       // Timeout controls how long a run is allowed to execute.
+	CancelOnContextDoneEnabled                bool                                // CancelOnContextDoneEnabled cancels the run when the parent context is done.
+	GraphNodeLifecycleActivityEnabled         bool                                // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
+	GraphNodeInterruptActivityEnabled         bool                                // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
+	GraphNodeInterruptActivityTopLevelOnly    bool                                // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
+	ReasoningContentEnabled                   bool                                // ReasoningContentEnabled controls whether reasoning content events are emitted.
+	EventSourceMetadataEnabled                bool                                // EventSourceMetadataEnabled attaches source metadata to AG-UI rawEvent fields.
+	ToolResultInputTranslationEnabled         bool                                // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
+	ToolCallDeltaStreamingEnabled             bool                                // ToolCallDeltaStreamingEnabled streams partial tool-call arguments.
+	StreamingToolResultActivityEnabled        bool                                // StreamingToolResultActivityEnabled rewrites partial tool results as activity events.
+	ConcurrentMessageStreamsEnabled           bool                                // ConcurrentMessageStreamsEnabled keeps multiple message streams open by message ID.
+	DistributedCancelEnabled                  bool                                // DistributedCancelEnabled enables best-effort cancel signaling through SessionState.
+	DistributedCancelPollInterval             time.Duration                       // DistributedCancelPollInterval controls how often owner runs poll cancel markers.
 }
 
 // NewOptions creates a new options instance.
@@ -234,6 +235,32 @@ func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
 func WithMessagesSnapshotRunLifecycleEventsEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.MessagesSnapshotRunLifecycleEventsEnabled = enabled
+	}
+}
+
+// MessagesSnapshotPageRequest configures one session track-event page for MESSAGES_SNAPSHOT.
+type MessagesSnapshotPageRequest struct {
+	Cursor     string // Cursor is the opaque cursor from the previous snapshot page, or empty for the latest page.
+	EventLimit int    // EventLimit is the maximum number of session track events to fetch and must be greater than zero.
+}
+
+// MessagesSnapshotSessionPageResolver resolves optional session pagination for a MESSAGES_SNAPSHOT request.
+//
+// Returning nil uses the existing full-history snapshot behavior. Returning a
+// non-nil request asks the session service for a cursor page of AG-UI track
+// events before AG-UI reduces those events into messages. A non-nil request
+// disables snapshot follow mode for that request, so the stream finishes after
+// the paginated snapshot. The input has already passed through RunAgentInputHook.
+type MessagesSnapshotSessionPageResolver func(
+	ctx context.Context,
+	input *adapter.RunAgentInput,
+	key session.Key,
+) (*MessagesSnapshotPageRequest, error)
+
+// WithMessagesSnapshotSessionPageResolver sets the optional page resolver for MESSAGES_SNAPSHOT.
+func WithMessagesSnapshotSessionPageResolver(r MessagesSnapshotSessionPageResolver) Option {
+	return func(o *Options) {
+		o.MessagesSnapshotSessionPageResolver = r
 	}
 }
 

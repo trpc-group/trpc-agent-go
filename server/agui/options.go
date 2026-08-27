@@ -10,9 +10,11 @@
 package agui
 
 import (
+	"context"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service/sse"
@@ -231,6 +233,22 @@ func WithEventSourceMetadataEnabled(enabled bool) Option {
 		o.aguiRunnerOptions = append(
 			o.aguiRunnerOptions,
 			aguirunner.WithEventSourceMetadataEnabled(enabled),
+		)
+	}
+}
+
+// WithMessagesSnapshotSessionPageResolver sets optional session pagination for message snapshots.
+func WithMessagesSnapshotSessionPageResolver(
+	resolver func(
+		ctx context.Context,
+		input *adapter.RunAgentInput,
+		key session.Key,
+	) (*aguirunner.MessagesSnapshotPageRequest, error),
+) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(
+			o.aguiRunnerOptions,
+			aguirunner.WithMessagesSnapshotSessionPageResolver(resolver),
 		)
 	}
 }

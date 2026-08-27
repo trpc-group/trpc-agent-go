@@ -201,7 +201,7 @@ server, err := agui.New(
 )
 ```
 
-After this is enabled, when the real-time conversation request persists the user input event, it writes the `forwardedProps` field from the AG-UI request body to the user input event's `rawEvent.forwardedProps`; in the Go API, that field corresponds to `RunAgentInput.ForwardedProps`. When reading history, the message snapshot route aggregates it into `MESSAGES_SNAPSHOT.rawEvent.runs[runId].forwardedProps`:
+After this is enabled, when the real-time conversation request persists the user input event, it writes the `forwardedProps` field from the AG-UI request body to the user input event's `rawEvent.forwardedProps`; in the Go API, that field corresponds to `RunAgentInput.ForwardedProps`. When reading history, the message snapshot route aggregates it into `MESSAGES_SNAPSHOT.rawEvent.runs[runId].forwardedProps`, and writes `runId` into message metadata when the message can be associated with a run:
 
 ```json
 {
@@ -232,6 +232,7 @@ After this is enabled, when the real-time conversation request persists the user
     "messages": {
       "user-1": {
         "author": "demo-user",
+        "runId": "run-1",
         "timestamp": 1781258400000
       }
     }
@@ -277,3 +278,73 @@ server, err := agui.New(
 ```
 
 For the complete example, see [examples/agui/server/follow](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/follow). For the frontend, see [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
+
+## Paginated Messages Snapshots
+
+By default, `/history` restores the complete persisted AG-UI history for the requested session. For long-running conversations, returning the whole history in one response can increase storage reads, server-side reduction work, and network traffic. In that case, configure `agui.WithMessagesSnapshotSessionPageResolver` to let each snapshot request load one page of persisted events.
+
+Pagination is resolved at the session layer. The AG-UI server does not define its own public cursor field or fixed request parameter names. Instead, the resolver receives the `RunAgentInput` and the resolved `session.Key`, then returns a session page request. Applications can choose where the cursor and limit come from, such as `forwardedProps`, request metadata mapped by the gateway, or another application-specific input source.
+
+The resolver returns `*aguirunner.MessagesSnapshotPageRequest`. `Cursor` is an opaque value returned by a previous snapshot page; an empty cursor asks the session service for the latest page. `EventLimit` limits the number of persisted AG-UI track events read from session storage. It is an event limit, not a message or turn limit, because a single displayed message may be restored from several persisted AG-UI events.
+
+Pagination is used only when the configured session service implements `session.TrackEventPageService`. If the service does not provide that capability, `/history` keeps the existing full-snapshot behavior.
+
+A non-nil page request makes the snapshot response one-shot. Even when message snapshot follow mode is enabled, `/history` emits the paginated `MESSAGES_SNAPSHOT` and then finishes the stream.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName("demo-app"),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotSessionPageResolver(
+        func(ctx context.Context, input *adapter.RunAgentInput, key session.Key) (*aguirunner.MessagesSnapshotPageRequest, error) {
+            forwardedProps, _ := input.ForwardedProps.(map[string]any)
+            cursor, _ := forwardedProps["cursor"].(string)
+            return &aguirunner.MessagesSnapshotPageRequest{
+                Cursor:     cursor,
+                EventLimit: 200,
+            }, nil
+        },
+    ),
+)
+```
+
+For a paginated snapshot, the response still uses the standard `MESSAGES_SNAPSHOT` event. Page information is attached to `MESSAGES_SNAPSHOT.rawEvent.page`:
+
+```json
+{
+  "type": "MESSAGES_SNAPSHOT",
+  "messages": [
+    {
+      "id": "user-1",
+      "role": "user",
+      "content": "Hello"
+    },
+    {
+      "id": "assistant-1",
+      "role": "assistant",
+      "content": "Hello. How can I help?"
+    }
+  ],
+  "rawEvent": {
+    "page": {
+      "cursor": "opaque-cursor-for-the-page-boundary",
+      "hasMore": true
+    }
+  }
+}
+```
+
+The returned `cursor` should be sent with the next snapshot request to load older history. Treat it as an opaque token: do not parse, compare, or construct it in application code.
+
+`hasMore=true` means the client has not received all older history yet. This can be because the session store still has older events, or because the AG-UI layer trimmed part of the fetched page before returning it. The trimming is intentional: message snapshots are returned from a user-message boundary, so the frontend does not receive the trailing half of an earlier turn.
+
+If the fetched page does not contain a user-message boundary, `/history` returns an empty `messages` array, keeps the requested cursor in `rawEvent.page.cursor`, and sets `hasMore=true`. The client can then retry with the same cursor and a larger `EventLimit` to ask the session service for a wider event window.

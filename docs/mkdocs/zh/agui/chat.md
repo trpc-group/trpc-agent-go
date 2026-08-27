@@ -812,6 +812,7 @@ server, err := agui.New(
       "assistant-1": {
         "eventId": "evt-assistant",
         "author": "member-a",
+        "runId": "run-1",
         "invocationId": "inv-1",
         "branch": "root.member-a",
         "timestamp": 1781258400000
@@ -821,6 +822,7 @@ server, err := agui.New(
       "tool-call-1": {
         "eventId": "evt-tool-call",
         "author": "member-a",
+        "runId": "run-1",
         "invocationId": "inv-1",
         "parentMetadata": {
           "triggerType": "tool_call",
@@ -844,7 +846,7 @@ server, err := agui.New(
 }
 ```
 
-恢复历史消息时，可以通过 `rawEvent.messages[messageId]` 获取消息来源和时间戳，也可以通过 `rawEvent.toolCalls[toolCallId]` 获取工具调用来源和时间戳；如果需要恢复请求级 `forwardedProps`，可以读取 `rawEvent.runs[runId].forwardedProps`。索引中的 `timestamp` 优先复用历史实时事件顶层的 `timestamp`；只有旧数据缺少事件 `timestamp` 时，才回退使用持久化 track event 的时间。索引中的来源信息与实时事件里的 `rawEvent` 使用同一组字段，前端可以沿用这些字段含义恢复分组状态。
+恢复历史消息时，可以通过 `rawEvent.messages[messageId]` 获取消息来源、`runId` 和时间戳，也可以通过 `rawEvent.toolCalls[toolCallId]` 获取工具调用来源、`runId` 和时间戳；如果需要恢复请求级 `forwardedProps`，可以先读取消息或工具调用元数据中的 `runId`，再读取 `rawEvent.runs[runId].forwardedProps`。索引中的 `timestamp` 优先复用历史实时事件顶层的 `timestamp`；只有旧数据缺少事件 `timestamp` 时，才回退使用持久化 track event 的时间。索引中的来源信息与实时事件里的 `rawEvent` 使用同一组字段，前端可以沿用这些字段含义恢复分组状态。
 
 ## 外部工具
 
