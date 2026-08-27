@@ -77,3 +77,35 @@ func TestSetCurrentUserRejectsMissingProjectedContent(t *testing.T) {
 	_, ok := ResolveCurrentUser(inv, merged, "second")
 	require.False(t, ok)
 }
+
+func TestCurrentUserProjectionNilAndInvalidInputs(t *testing.T) {
+	ClearCurrentUser(nil)
+	SetCurrentUser(
+		nil,
+		model.NewUserMessage("second"),
+		model.NewUserMessage("first\n\nsecond"),
+	)
+	_, ok := ResolveCurrentUser(
+		nil,
+		model.NewUserMessage("first\n\nsecond"),
+		"second",
+	)
+	require.False(t, ok)
+
+	inv := agent.NewInvocation()
+	SetCurrentUser(inv, model.NewUserMessage(""), model.NewUserMessage("first"))
+	_, ok = ResolveCurrentUser(inv, model.NewUserMessage("first"), "")
+	require.False(t, ok)
+
+	SetCurrentUser(
+		inv,
+		model.NewUserMessage("second"),
+		model.NewAssistantMessage("first\n\nsecond"),
+	)
+	_, ok = ResolveCurrentUser(
+		inv,
+		model.NewAssistantMessage("first\n\nsecond"),
+		"second",
+	)
+	require.False(t, ok)
+}
