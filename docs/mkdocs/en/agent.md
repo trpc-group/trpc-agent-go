@@ -104,12 +104,12 @@ user/assistant turn. The ErrorMessage plugin can provide customized content
 for the same purpose. This content is presentation data synthesized by the
 framework, not model output.
 
-By default, LLMAgent keeps the original event and persisted session unchanged,
-but omits framework-synthesized error content when building later model
-requests. Structured error details remain available on the event. If omission
-leaves adjacent user messages, the request projection merges them locally to
-preserve a provider-valid sequence. Legacy sessions containing Runner's exact
-generic fallback are handled in the same way.
+By default, LLMAgent leaves the emitted and persisted assistant content and
+structured error intact, but omits framework-synthesized error content when
+building later model requests. If omission leaves adjacent user messages, the
+request projection merges them locally to preserve a provider-valid sequence.
+Legacy sessions containing Runner's exact generic fallback are handled in the
+same way.
 
 Applications that intentionally relied on the previous context behavior can
 restore it explicitly:

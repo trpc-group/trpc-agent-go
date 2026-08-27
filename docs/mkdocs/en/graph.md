@@ -74,10 +74,10 @@ This design lets GraphAgent plug into other agents while orchestrating its own s
 GraphAgent seeds `graph.StateKeyMessages` from Session events before graph
 execution. During this projection, assistant content synthesized by Runner or
 the ErrorMessage plugin is omitted by default so presentation-only failure text
-is not replayed to LLM nodes as model output. The emitted event, persisted
-Session, and structured error remain unchanged. If the omission leaves adjacent
-user messages, they are merged in the model-facing state to keep the sequence
-provider-valid.
+is not replayed to LLM nodes as model output. The assistant content and
+structured error remain available in emitted and persisted events. If the
+omission leaves adjacent user messages, they are merged in the model-facing
+state to keep the sequence provider-valid.
 
 To restore the previous behavior for an application that intentionally uses
 this content as model context, opt in when constructing GraphAgent:

@@ -75,8 +75,8 @@ GraphAgent 实现了 `agent.Agent` 接口，可以：
 
 GraphAgent 会在执行图之前，从 Session 事件初始化 `graph.StateKeyMessages`。
 在这个投影过程中，Runner 或 ErrorMessage 插件合成的 assistant 文案默认会被
-省略，避免仅用于展示的失败提示被当成模型输出再次传给 LLM 节点。对外发送的
-事件、持久化的 Session 和结构化错误都不会改变。如果省略后出现相邻 user 消息，
+省略，避免仅用于展示的失败提示被当成模型输出再次传给 LLM 节点。assistant content
+与结构化错误仍保留在对外发送及持久化的事件中。如果省略后出现相邻 user 消息，
 模型侧状态会合并这些消息，以维持模型服务可接受的消息序列。
 
 如果应用明确需要把这类文案继续作为模型上下文，可以在创建 GraphAgent 时显式
