@@ -2560,19 +2560,21 @@ func (f *Flow) callLLM(
 	ctx, tailoringObserver := imodelrequest.ObserveTokenTailoring(
 		ctx,
 		func(record imodelrequest.TokenTailoringRecord) {
-			summaryview.InvalidateBinding(invocation)
-			summaryfork.Invalidate(invocation)
-			if tokenTailoringCollapsedHistory(record) {
-				log.WarnfContext(
-					ctx,
-					"Model request token tailoring collapsed history: "+
-						"provider=%s, max_input_tokens=%d, messages=%d->%d",
-					record.Provider,
-					record.MaxInputTokens,
-					record.BeforeMessages,
-					record.AfterMessages,
-				)
-				return
+			if tokenTailoringDroppedHistory(record) {
+				summaryview.InvalidateBinding(invocation)
+				summaryfork.Invalidate(invocation)
+				if tokenTailoringCollapsedHistory(record) {
+					log.WarnfContext(
+						ctx,
+						"Model request token tailoring collapsed history: "+
+							"provider=%s, max_input_tokens=%d, messages=%d->%d",
+						record.Provider,
+						record.MaxInputTokens,
+						record.BeforeMessages,
+						record.AfterMessages,
+					)
+					return
+				}
 			}
 			log.DebugfContext(
 				ctx,
@@ -2599,6 +2601,12 @@ func (f *Flow) callLLM(
 		})
 	}
 	return ctx, seq, true, nil
+}
+
+func tokenTailoringDroppedHistory(
+	record imodelrequest.TokenTailoringRecord,
+) bool {
+	return record.AfterMessages < record.BeforeMessages
 }
 
 func tokenTailoringCollapsedHistory(

@@ -232,10 +232,11 @@ boundary rules.
 One important branch-summary behavior: after `WithCacheSafeForking(true)` is
 enabled, a non-empty branch trigger may fork the current parent request for the
 branch summary, but it will not also run the cascaded full-session summary in
-that same summary pass. The framework skips that full-session target instead of
-falling back to a standalone full-session prompt or reusing the branch-scoped
-fork request. Trigger a full-session summary separately when you need an
-all-branch summary.
+that same summary pass. This applies to the common single-`filterKey` session
+as well as sessions that contain multiple filter keys. The framework skips that
+full-session target instead of falling back to a standalone full-session prompt
+or reusing the branch-scoped fork request. Trigger a full-session summary
+separately when you need an all-branch summary.
 
 Prompt rules:
 

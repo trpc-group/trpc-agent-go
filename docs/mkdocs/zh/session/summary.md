@@ -216,7 +216,8 @@ standalone 重试；这次重试也可以按相同的边界规则选择更小的
 
 这里有一个重要的 branch 摘要行为：开启 `WithCacheSafeForking(true)` 后，非空
 branch 触发摘要时，可以用当前父请求 fork 来生成 branch 摘要；但同一轮 summary
-pass 不会再跑级联出来的全量会话摘要。框架会直接跳过这个全量摘要目标，而不是
+pass 不会再跑级联出来的全量会话摘要。这既适用于最常见的单 `filterKey` 会话，
+也适用于包含多个 filterKey 的会话。框架会直接跳过这个全量摘要目标，而不是
 回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的 fork request。如果
 需要覆盖所有 branch 的全量摘要，需要单独触发一次全量会话摘要。
 

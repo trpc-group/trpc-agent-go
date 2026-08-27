@@ -1087,6 +1087,38 @@ func TestCallLLM_TokenTailoringInvalidatesSummarySnapshots(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestCallLLM_NonCollapsingTokenTailoringKeepsSummaryFork(t *testing.T) {
+	callModel := &sequenceFixingModel{}
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(callModel))
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		model.NewAssistantMessage(""),
+		model.NewUserMessage("current"),
+	}}
+	req.Messages[1].ReasoningContent = "thought"
+	summaryview.AttachProjection(inv, &summaryview.View{
+		ContentRequestLength: len(req.Messages),
+		Items: []summaryview.Item{{
+			Message:      req.Messages[1],
+			RequestIndex: 1,
+		}},
+	})
+
+	_, seq, modelCalled, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		callModel,
+	)
+
+	require.NoError(t, err)
+	require.True(t, modelCalled)
+	require.NotNil(t, seq)
+	_, ok := summaryfork.Request(inv)
+	require.True(t, ok)
+}
+
 func TestTokenTailoringCollapsedHistory(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1110,6 +1142,17 @@ func TestTokenTailoringCollapsedHistory(t *testing.T) {
 			require.Equal(t, tt.want, tokenTailoringCollapsedHistory(record))
 		})
 	}
+}
+
+func TestTokenTailoringDroppedHistory(t *testing.T) {
+	require.True(t, tokenTailoringDroppedHistory(imodelrequest.TokenTailoringRecord{
+		BeforeMessages: 16,
+		AfterMessages:  3,
+	}))
+	require.False(t, tokenTailoringDroppedHistory(imodelrequest.TokenTailoringRecord{
+		BeforeMessages: 3,
+		AfterMessages:  3,
+	}))
 }
 
 func TestCallLLM_LazyTokenTailoringFinalizesDiagnosticsAfterIteration(
@@ -2533,6 +2576,40 @@ func (m *tailoringModel) GenerateContent(
 		ctx,
 		imodelrequest.TokenTailoringRecord{
 			Provider:       "tailoringModel",
+			MaxInputTokens: 100,
+			BeforeMessages: beforeMessages,
+			AfterMessages:  len(req.Messages),
+		},
+	)
+	respChan := make(chan *model.Response, 1)
+	respChan <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	}
+	close(respChan)
+	return respChan, nil
+}
+
+type sequenceFixingModel struct{}
+
+func (m *sequenceFixingModel) Info() model.Info {
+	return model.Info{Name: "sequence-fixing-model"}
+}
+
+func (m *sequenceFixingModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	beforeMessages := len(req.Messages)
+	if len(req.Messages) > 1 && req.Messages[1].Content == "" {
+		req.Messages[1].Content = " "
+	}
+	imodelrequest.RecordTokenTailoring(
+		ctx,
+		imodelrequest.TokenTailoringRecord{
+			Provider:       "sequenceFixingModel",
 			MaxInputTokens: 100,
 			BeforeMessages: beforeMessages,
 			AfterMessages:  len(req.Messages),

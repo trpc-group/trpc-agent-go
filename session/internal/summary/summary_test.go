@@ -12,6 +12,7 @@ package summary
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -447,6 +449,35 @@ func (f *fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (
 func (f *fakeSummarizer) SetPrompt(prompt string)  {}
 func (f *fakeSummarizer) SetModel(m model.Model)   {}
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+type capturingSummaryModel struct {
+	mu       sync.Mutex
+	requests []*model.Request
+}
+
+func (m *capturingSummaryModel) Info() model.Info {
+	return model.Info{Name: "capturing"}
+}
+
+func (m *capturingSummaryModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	cloned := *req
+	cloned.Messages = append([]model.Message(nil), req.Messages...)
+	m.mu.Lock()
+	m.requests = append(m.requests, &cloned)
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{Content: "sum"},
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
 
 type reportModel struct{}
 
@@ -2016,6 +2047,105 @@ func TestCreateSessionSummaryWithCascade_SkipsForcedFullTargetForCacheSafeFork(t
 	defer sess.SummariesMu.RUnlock()
 	require.NotNil(t, sess.Summaries["user-messages"])
 	require.Nil(t, sess.Summaries[session.SummaryFilterKeyAllContents])
+}
+
+func TestCreateSessionSummaryWithCascade_SingleFilterDoesNotDumpRawEvents(t *testing.T) {
+	now := time.Now()
+	rawMarker := strings.Repeat("raw-tool-result ", 4000)
+	rawEvent := makeEvent(rawMarker, now, "agent_skill")
+	sess := &session.Session{
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		Events:    []event.Event{rawEvent},
+		Summaries: make(map[string]*session.Summary),
+	}
+	view := &summaryview.View{
+		SessionID:     sess.ID,
+		FilterKey:     "agent_skill",
+		RequestTokens: 50,
+		Bound:         true,
+		Items: []summaryview.Item{{
+			Message:        model.NewUserMessage("short projected"),
+			EffectiveEvent: rawEvent,
+			RequestIndex:   0,
+			Boundary: summaryview.Boundary{
+				EventID:   rawEvent.ID,
+				Timestamp: rawEvent.Timestamp,
+			},
+		}},
+	}
+	ctx := summaryview.ContextWithView(context.Background(), view)
+	capture := &capturingSummaryModel{}
+	summarizer := summary.NewSummarizer(
+		capture,
+		summary.WithTokenThreshold(1000),
+		summary.WithCacheSafeForking(true),
+	)
+
+	err := CreateSessionSummaryWithCascade(
+		ctx,
+		sess,
+		"agent_skill",
+		false,
+		NewSummaryDispatchPolicy(nil, true),
+		func(ctx context.Context, _ *session.Session, filterKey string, force bool) error {
+			_, err := SummarizeSession(ctx, summarizer, sess, filterKey, force)
+			return err
+		},
+	)
+	require.NoError(t, err)
+	require.Empty(t, capture.requests)
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+	require.Nil(t, sess.Summaries["agent_skill"])
+	require.Nil(t, sess.Summaries[session.SummaryFilterKeyAllContents])
+}
+
+func TestCreateSessionSummaryWithCascade_SingleFilterSkipsFullTargetForCacheSafeFork(t *testing.T) {
+	now := time.Now()
+	sess := &session.Session{
+		ID:      "test-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+		Events: []event.Event{
+			makeEvent("e1", now.Add(-time.Minute), "agent_skill"),
+			makeEvent("e2", now, "agent_skill"),
+		},
+		Summaries: make(map[string]*session.Summary),
+	}
+	parent := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("parent request")},
+	}
+	ctx := summary.ContextWithCacheSafeForkRequest(context.Background(), parent)
+	capture := &capturingSummaryModel{}
+	summarizer := summary.NewSummarizer(
+		capture,
+		summary.WithCacheSafeForking(true),
+	)
+
+	err := CreateSessionSummaryWithCascade(
+		ctx,
+		sess,
+		"agent_skill",
+		true,
+		NewSummaryDispatchPolicy(nil, true),
+		func(ctx context.Context, _ *session.Session, filterKey string, force bool) error {
+			_, err := SummarizeSession(ctx, summarizer, sess, filterKey, force)
+			return err
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, capture.requests, 1)
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+	require.NotNil(t, sess.Summaries["agent_skill"])
+	require.NotNil(t, sess.Summaries[session.SummaryFilterKeyAllContents])
+	require.Equal(
+		t,
+		sess.Summaries["agent_skill"].Summary,
+		sess.Summaries[session.SummaryFilterKeyAllContents].Summary,
+	)
 }
 
 func TestCreateSessionSummaryWithCascade_SkipsFullTargetForDynamicCacheSafeFork(t *testing.T) {

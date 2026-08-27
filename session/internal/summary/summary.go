@@ -717,6 +717,23 @@ func contextForSummaryTarget(
 	return contextWithSummaryTriggerFilterKey(ctx, triggerFilterKey)
 }
 
+// contextForCascadeTarget prepares ctx for one cascade target. Full-session
+// targets that were triggered by a branch keep the trigger filter key so the
+// token gate can reuse the model-visible view, and they opt into skipping a
+// second LLM call when cache-safe forking is active.
+func contextForCascadeTarget(
+	ctx context.Context,
+	triggerFilterKey string,
+	targetFilterKey string,
+) context.Context {
+	ctx = contextForSummaryTarget(ctx, triggerFilterKey, targetFilterKey)
+	if targetFilterKey == session.SummaryFilterKeyAllContents &&
+		triggerFilterKey != session.SummaryFilterKeyAllContents {
+		ctx = contextWithSkipBranchForkFullSessionCascade(ctx)
+	}
+	return ctx
+}
+
 // GetSummaryTextFromSession attempts to retrieve summary text from the session's
 // in-memory summaries using the specified filter key. It parses the provided options
 // and applies the summary selection logic. Filters out summaries with UpdatedAt before sess.CreatedAt.
@@ -841,7 +858,15 @@ func CreateSessionSummaryWithCascade(
 		copySummaryToKey(sess, filterKey, session.SummaryFilterKeyAllContents)
 		// Persist the full-session key to storage. SummarizeSession detects
 		// existing in-memory summary with empty delta and returns updated=true.
-		if err := createSummaryFunc(ctx, sess, session.SummaryFilterKeyAllContents, false); err != nil {
+		// Use the same cascade target context as the parallel path so the
+		// full-session gate reuses the branch view / fork instead of counting
+		// raw stored events and falling back to a standalone dump.
+		fullCtx := contextForCascadeTarget(
+			ctx,
+			filterKey,
+			session.SummaryFilterKeyAllContents,
+		)
+		if err := createSummaryFunc(fullCtx, sess, session.SummaryFilterKeyAllContents, false); err != nil {
 			return fmt.Errorf("persist full-session summary failed: %w", err)
 		}
 		return nil
@@ -855,11 +880,7 @@ func CreateSessionSummaryWithCascade(
 		callCtx := contextWithForkedReport(ctx)
 		go func(i int, fk string, callCtx context.Context) {
 			defer summaryWg.Done()
-			callCtx = contextForSummaryTarget(callCtx, filterKey, fk)
-			if fk == session.SummaryFilterKeyAllContents &&
-				filterKey != session.SummaryFilterKeyAllContents {
-				callCtx = contextWithSkipBranchForkFullSessionCascade(callCtx)
-			}
+			callCtx = contextForCascadeTarget(callCtx, filterKey, fk)
 			err := createSummaryFunc(callCtx, sess, fk, force)
 			if err != nil {
 				result[i] = fmt.Errorf("create session summary for filterKey %q failed: %w", fk, err)
