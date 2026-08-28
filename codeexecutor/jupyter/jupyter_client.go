@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -121,14 +122,10 @@ func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 	c.sessionID = uuid.New().String()
 	ready, err := c.waitForReady()
 	if err != nil {
-		_ = c.deleteKernel()
-		_ = c.ws.Close()
-		return nil, err
+		return nil, c.cleanupAfterStartupFailure(err)
 	}
 	if !ready {
-		_ = c.deleteKernel()
-		_ = c.ws.Close()
-		return nil, fmt.Errorf("kernel not ready")
+		return nil, c.cleanupAfterStartupFailure(fmt.Errorf("kernel not ready"))
 	}
 
 	return c, nil
@@ -266,6 +263,14 @@ func (c *Client) deleteKernel() error {
 		return fmt.Errorf("failed to delete kernel: %s", resp.Status)
 	}
 	return nil
+}
+
+func (c *Client) cleanupAfterStartupFailure(err error) error {
+	if cleanupErr := c.deleteKernel(); cleanupErr != nil {
+		err = errors.Join(err, cleanupErr)
+	}
+	_ = c.ws.Close()
+	return err
 }
 
 func (c *Client) waitForReady() (bool, error) {

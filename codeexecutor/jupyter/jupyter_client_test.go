@@ -281,6 +281,11 @@ func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"id":"123"}`))
 		case "/api/kernels/123":
+			if r.Method != http.MethodDelete {
+				t.Errorf("kernel cleanup method = %s, want %s", r.Method, http.MethodDelete)
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 			close(kernelDeleted)
 		case "/api/kernels/123/channels":
@@ -324,4 +329,44 @@ func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("kernel was not deleted after readiness failure")
 	}
+}
+
+func TestNewClientPreservesKernelCleanupError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/kernelspecs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"kernelspecs":{"python3":{"name":"python3"}}}`))
+		case "/api/kernels":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"123"}`))
+		case "/api/kernels/123":
+			http.Error(w, "cleanup failed", http.StatusInternalServerError)
+		case "/api/kernels/123/channels":
+			ws, err := cstUpgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer ws.Close()
+			if _, _, err = ws.ReadMessage(); err != nil {
+				return
+			}
+			_ = ws.WriteMessage(websocket.TextMessage, []byte("{"))
+		}
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+	port, err := strconv.Atoi(parsed.Port())
+	assert.NoError(t, err)
+
+	_, err = NewClient(ConnectionInfo{
+		Host:             parsed.Hostname(),
+		Port:             port,
+		KernelName:       "python3",
+		WaitReadyTimeout: time.Second,
+	})
+	assert.Error(t, err)
+	assert.ErrorContains(t, err, "failed to delete kernel")
 }
