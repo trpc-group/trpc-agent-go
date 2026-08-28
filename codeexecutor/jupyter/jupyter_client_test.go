@@ -271,6 +271,7 @@ func TestNewClient(t *testing.T) {
 
 func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
 	clientClosed := make(chan struct{})
+	kernelDeleted := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/kernelspecs":
@@ -279,6 +280,9 @@ func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
 		case "/api/kernels":
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"id":"123"}`))
+		case "/api/kernels/123":
+			w.WriteHeader(http.StatusNoContent)
+			close(kernelDeleted)
 		case "/api/kernels/123/channels":
 			ws, err := cstUpgrader.Upgrade(w, r, nil)
 			if err != nil {
@@ -314,5 +318,10 @@ func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
 	case <-clientClosed:
 	case <-time.After(time.Second):
 		t.Fatal("websocket was not closed after readiness failure")
+	}
+	select {
+	case <-kernelDeleted:
+	case <-time.After(time.Second):
+		t.Fatal("kernel was not deleted after readiness failure")
 	}
 }

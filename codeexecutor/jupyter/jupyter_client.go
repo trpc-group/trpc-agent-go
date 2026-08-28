@@ -121,10 +121,12 @@ func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 	c.sessionID = uuid.New().String()
 	ready, err := c.waitForReady()
 	if err != nil {
+		_ = c.deleteKernel()
 		_ = c.ws.Close()
 		return nil, err
 	}
 	if !ready {
+		_ = c.deleteKernel()
 		_ = c.ws.Close()
 		return nil, fmt.Errorf("kernel not ready")
 	}
@@ -242,6 +244,28 @@ func (c *Client) startKernel(kernelName string) (string, error) {
 	}
 
 	return kernelResp.ID, nil
+}
+
+func (c *Client) deleteKernel() error {
+	url := fmt.Sprintf("%s/api/kernels/%s", c.baseURL, c.kernelID)
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+
+	if c.connectionInfo.Token != "" {
+		req.Header.Set("Authorization", "token "+c.connectionInfo.Token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to delete kernel: %s", resp.Status)
+	}
+	return nil
 }
 
 func (c *Client) waitForReady() (bool, error) {
