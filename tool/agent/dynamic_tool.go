@@ -1076,6 +1076,10 @@ func (at *Tool) dynamicChildInvocationOptions(
 		agent.WithInvocationEventFilterKey(childKey),
 		func(inv *agent.Invocation) {
 			agent.SetInvocationSurfaceRootNodeID(inv, nodeID)
+			// Dynamic children have a runtime-only surface root, not a static
+			// execution-trace node. Keep composite descendants out of the
+			// parent's shared trace while preserving that surface patch.
+			agent.WithInvocationExecutionTraceHidden()(inv)
 			runOpts := inv.RunOptions
 			agent.WithSurfacePatchForNode(nodeID, patch)(&runOpts)
 			at.sanitizeChildRunOptions(

@@ -23,7 +23,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
@@ -1728,6 +1730,44 @@ func TestNewDynamicTool_Integration_SuppressesFrameworkTransfer(t *testing.T) {
 	require.NotContains(t, seen[0], transfer.TransferToolName,
 		"the child must not be offered framework transfer_to_agent")
 	require.Equal(t, []string{"tool_a"}, seen[0])
+}
+
+// TestNewDynamicTool_Integration_HidesCompositeTemplateDescendantTrace
+// verifies that a composite template's runtime descendants do not publish
+// steps into the parent's shared trace, while the dynamic child still runs.
+func TestNewDynamicTool_Integration_HidesCompositeTemplateDescendantTrace(t *testing.T) {
+	templateModel := &dynRecordingModel{name: "leaf", response: "child-done"}
+	leaf := llmagent.New("leaf", llmagent.WithModel(templateModel))
+	subTemplate := chainagent.New(
+		"helper",
+		chainagent.WithSubAgents([]agent.Agent{leaf}),
+	)
+	main := llmagent.New(
+		"main",
+		llmagent.WithModel(&dynRecordingModel{name: "parent"}),
+	)
+	at := NewDynamicTool(WithTemplateAgent(subTemplate))
+
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(main),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("main"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	got, err := at.Call(ctx, []byte(`{"request":"go"}`))
+	require.NoError(t, err)
+	require.Equal(t, "child-done", got)
+	require.Len(t, templateModel.snapshot(), 1)
+
+	trace := agent.BuildExecutionTrace(parent, atrace.TraceStatusCompleted)
+	require.NotNil(t, trace)
+	require.Empty(t, trace.Steps,
+		"dynamic composite descendants must not publish into the parent's shared trace")
 }
 
 // TestNewDynamicTool_Integration_TemplateModelBoundary is the fix 4 regression:
