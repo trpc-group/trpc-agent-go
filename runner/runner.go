@@ -568,6 +568,7 @@ func (r *runner) Run(
 		ro.RequestID = uuid.NewString()
 	}
 	r.applyRunnerRunDefaults(&ro)
+	globalAfterRun := prepareGlobalAfterRunState()
 	var executionTraceInput *trace.Snapshot
 	if ro.ExecutionTraceEnabled {
 		executionTraceInput = executionTraceInputSnapshot(message, ro)
@@ -694,6 +695,7 @@ func (r *runner) Run(
 		awaitUserReplyRootName,
 		awaitUserReplyLookupPath,
 	)
+	globalAfterRun.attach(invocation)
 	currentTurnSession, err := sessionroute.ResolveCurrentTurnSession(
 		execCtx,
 		r.sessionService,
@@ -800,6 +802,7 @@ func (r *runner) Run(
 		flushChan,
 		handle,
 		executionTraceInput,
+		globalAfterRun,
 	), nil
 }
 
@@ -1336,6 +1339,7 @@ type eventLoopContext struct {
 	fallbackStateDelta                 map[string][]byte
 	finalError                         *model.ResponseError
 	executionTraceInput                *trace.Snapshot
+	globalAfterRun                     *globalAfterRunState
 	graphCompletionSeen                bool
 	freshAssistantContentProduced      bool
 	persistedAssistantResponseIDs      map[string]struct{}
@@ -1462,6 +1466,7 @@ func (r *runner) processAgentEvents(
 	flushChan chan *flush.FlushRequest,
 	handle *runHandle,
 	executionTraceInput *trace.Snapshot,
+	globalAfterRun *globalAfterRunState,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	loop := &eventLoopContext{
@@ -1472,6 +1477,7 @@ func (r *runner) processAgentEvents(
 		processedEventCh:          processedEventCh,
 		runHandle:                 handle,
 		executionTraceInput:       executionTraceInput,
+		globalAfterRun:            globalAfterRun,
 		baselineFinalResponseID:   baselineFinalResponseID(sess, invocation.RunOptions.RuntimeState),
 		priorAssistantResponseIDs: collectPriorAssistantResponseIDs(sess),
 		streamFilter: graph.NewStreamModeFilter(
@@ -3153,6 +3159,12 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		)
 	}
 	r.applyAfterRunPlugins(ctx, loop.invocation, runnerCompletionEvent)
+	applyGlobalAfterRunHooks(
+		ctx,
+		loop.globalAfterRun,
+		loop.invocation,
+		runnerCompletionEvent,
+	)
 
 	// Append runner completion event to session.
 	persistRunnerCompletionEvent := runnerCompletionEvent
