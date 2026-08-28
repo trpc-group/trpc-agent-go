@@ -9796,6 +9796,7 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 		flushCh,
 		nil,
 		nil,
+		nil,
 	)
 	// Send one event, then close agentCh
 	go func() {

@@ -383,6 +383,41 @@ the appropriate time in the caller.
 - `OnEvent`: runs for every event emitted by Runner (including runner completion
   events). You can mutate the event in place or return a replacement event.
 
+### Runner completion hooks
+
+- `Registry.AfterRun`: observes the finalized Runner completion event after its
+  execution trace input and output have been populated. It runs once for the
+  root Runner run, not once per sub-agent invocation. The hook receives a
+  completion-event snapshot, so mutations do not affect Runner output. Hook
+  errors are logged and do not fail the run.
+- `runner.RegisterGlobalAfterRunHook`: registers the same completion hook for
+  every Runner run in the process. This entry point is intended for
+  process-wide infrastructure integrations that cannot add
+  `runner.WithPlugins(...)` to every Runner. Registration is permanent for the
+  process lifetime; names must be unique, hooks must be safe for concurrent
+  use, and Runner does not own or close hook resources. Hooks execute
+  synchronously and should hand blocking export work to their own bounded
+  queue.
+
+Global AfterRun hooks run after Runner-scoped and per-run plugin AfterRun hooks.
+Their context is detached from run cancellation and carries the root
+`invoke_agent` SpanContext when framework tracing captured a recording root
+span. Otherwise, the context contains an invalid SpanContext instead of
+inheriting an unrelated caller span.
+
+```go
+err := runner.RegisterGlobalAfterRunHook(
+	"audit-exporter",
+	func(ctx context.Context, args *plugin.AfterRunArgs) error {
+		// Enqueue the completion snapshot without blocking Runner shutdown.
+		return enqueue(ctx, args.CompletionEvent)
+	},
+)
+if err != nil {
+	return err
+}
+```
+
 ### Graph node hooks (StateGraph / GraphAgent)
 
 Runner plugins intentionally do **not** expose a `BeforeNode` / `AfterNode`
