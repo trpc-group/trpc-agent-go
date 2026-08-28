@@ -160,10 +160,7 @@ func applyGlobalAfterRunHooks(
 		state.spanContext.load(),
 	)
 	for _, registered := range state.hooks {
-		completionSnapshot := completionEvent.Clone()
-		if completionSnapshot != nil {
-			completionSnapshot.ID = completionEvent.ID
-		}
+		completionSnapshot := cloneAfterRunCompletionEvent(completionEvent)
 		invokeGlobalAfterRunHook(
 			hookCtx,
 			registered,

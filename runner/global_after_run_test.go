@@ -188,6 +188,79 @@ func TestGlobalAfterRunHooksObserveCompletedRun(t *testing.T) {
 	assert.True(t, matchedRootSpan)
 }
 
+func TestGlobalAfterRunHooksIsolateNestedCompletionData(t *testing.T) {
+	isolateGlobalAfterRunHooks(t)
+
+	text := "original"
+	arguments := []byte(`{"value":"original"}`)
+	completion := event.NewResponseEvent(
+		"invocation",
+		"runner",
+		&model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					ContentParts: []model.ContentPart{
+						{Type: model.ContentTypeText, Text: &text},
+						{Type: model.ContentTypeImage, Image: &model.Image{Data: []byte("image")}},
+					},
+					ToolCalls: []model.ToolCall{{
+						Function: model.FunctionDefinitionParam{Arguments: arguments},
+						ExtraFields: map[string]any{
+							"nested": map[string]any{"key": "original"},
+						},
+					}},
+				},
+			}},
+		},
+	)
+	var (
+		secondText      string
+		secondArguments string
+		secondExtra     string
+	)
+	require.NoError(t, RegisterGlobalAfterRunHook(
+		"mutator",
+		func(_ context.Context, args *plugin.AfterRunArgs) error {
+			choice := args.CompletionEvent.Choices[0]
+			*choice.Message.ContentParts[0].Text = "mutated"
+			choice.Message.ContentParts[1].Image.Data[0] = 'X'
+			choice.Message.ToolCalls[0].Function.Arguments[0] = '['
+			choice.Message.ToolCalls[0].ExtraFields["nested"].(map[string]any)["key"] = "mutated"
+			return nil
+		},
+	))
+	require.NoError(t, RegisterGlobalAfterRunHook(
+		"observer",
+		func(_ context.Context, args *plugin.AfterRunArgs) error {
+			choice := args.CompletionEvent.Choices[0]
+			secondText = *choice.Message.ContentParts[0].Text
+			secondArguments = string(choice.Message.ToolCalls[0].Function.Arguments)
+			secondExtra = choice.Message.ToolCalls[0].ExtraFields["nested"].(map[string]any)["key"].(string)
+			return nil
+		},
+	))
+
+	applyGlobalAfterRunHooks(
+		context.Background(),
+		prepareGlobalAfterRunState(),
+		agent.NewInvocation(),
+		completion,
+	)
+
+	assert.Equal(t, "original", secondText)
+	assert.Equal(t, `{"value":"original"}`, secondArguments)
+	assert.Equal(t, "original", secondExtra)
+	assert.Equal(t, "original", *completion.Choices[0].Message.ContentParts[0].Text)
+	assert.Equal(t, []byte("image"), completion.Choices[0].Message.ContentParts[1].Image.Data)
+	assert.Equal(t, `{"value":"original"}`, string(completion.Choices[0].Message.ToolCalls[0].Function.Arguments))
+	assert.Equal(
+		t,
+		"original",
+		completion.Choices[0].Message.ToolCalls[0].ExtraFields["nested"].(map[string]any)["key"],
+	)
+}
+
 func TestGlobalAfterRunHookFailuresDoNotAffectCompletion(t *testing.T) {
 	isolateGlobalAfterRunHooks(t)
 	installGlobalAfterRunTestTracer(t)

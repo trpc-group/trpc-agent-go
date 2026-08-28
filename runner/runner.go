@@ -1975,10 +1975,7 @@ func (r *runner) applyAfterRunPlugins(
 	if !ok {
 		return
 	}
-	completionSnapshot := completionEvent.Clone()
-	if completionSnapshot != nil {
-		completionSnapshot.ID = completionEvent.ID
-	}
+	completionSnapshot := cloneAfterRunCompletionEvent(completionEvent)
 	args := &plugin.AfterRunArgs{
 		Invocation:      invocation,
 		CompletionEvent: completionSnapshot,
@@ -1986,6 +1983,27 @@ func (r *runner) applyAfterRunPlugins(
 	if err := hooks.AfterRun(context.WithoutCancel(ctx), args); err != nil {
 		log.ErrorfContext(ctx, "plugin AfterRun failed: %v", err)
 	}
+}
+
+// cloneAfterRunCompletionEvent returns an observer-owned copy of a finalized
+// completion event. Event.Clone deep-copies the event envelope and execution
+// trace, while cloneChoices covers nested response message/tool data that is
+// mutable through slices, pointers, and maps.
+func cloneAfterRunCompletionEvent(completionEvent *event.Event) *event.Event {
+	if completionEvent == nil {
+		return nil
+	}
+	completionSnapshot := completionEvent.Clone()
+	if completionSnapshot == nil {
+		return nil
+	}
+	completionSnapshot.ID = completionEvent.ID
+	if completionEvent.Response != nil {
+		completionSnapshot.Response.Choices = cloneChoices(
+			completionEvent.Response.Choices,
+		)
+	}
+	return completionSnapshot
 }
 
 func backfillEventMetadata(dst *event.Event, src *event.Event) {
