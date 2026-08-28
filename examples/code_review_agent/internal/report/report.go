@@ -14,6 +14,7 @@ package report
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -63,8 +64,8 @@ func BuildMarkdown(result review.Result) string {
 	}
 	if len(result.Metrics.SeverityCounts) > 0 {
 		b.WriteString("Severity Counts:\n")
-		for severity, count := range result.Metrics.SeverityCounts {
-			fmt.Fprintf(&b, "- %s: %d\n", markdownSafe(severity), count)
+		for _, severity := range sortedSeverityKeys(result.Metrics.SeverityCounts) {
+			fmt.Fprintf(&b, "- %s: %d\n", markdownSafe(severity), result.Metrics.SeverityCounts[severity])
 		}
 		b.WriteString("\n")
 	}
@@ -121,8 +122,8 @@ func BuildMarkdownChinese(result review.Result) string {
 	}
 	if len(result.Metrics.SeverityCounts) > 0 {
 		b.WriteString("严重级别统计:\n")
-		for severity, count := range result.Metrics.SeverityCounts {
-			fmt.Fprintf(&b, "- %s: %d\n", markdownSafe(severity), count)
+		for _, severity := range sortedSeverityKeys(result.Metrics.SeverityCounts) {
+			fmt.Fprintf(&b, "- %s: %d\n", markdownSafe(severity), result.Metrics.SeverityCounts[severity])
 		}
 		b.WriteString("\n")
 	}
@@ -143,6 +144,15 @@ func BuildMarkdownChinese(result review.Result) string {
 	writeSandboxChinese(&b, result.SandboxSummary)
 	writeArtifactsChinese(&b, result.Artifacts)
 	return b.String()
+}
+
+func sortedSeverityKeys(counts map[string]int) []string {
+	keys := make([]string, 0, len(counts))
+	for severity := range counts {
+		keys = append(keys, severity)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // humanReviewItems 汇总人工复核项。

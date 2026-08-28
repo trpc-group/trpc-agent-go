@@ -38,6 +38,11 @@ func TestContainerHostConfigEnforcesProductionIsolation(t *testing.T) {
 	if host.ReadonlyRootfs || host.StorageOpt["size"] == "" {
 		t.Fatalf("container writable storage is not bounded: %+v", host)
 	}
+	for _, path := range []string{GoSandboxTempDir, GoSandboxCacheDir, "/go"} {
+		if !strings.Contains(host.Tmpfs[path], "size=") {
+			t.Fatalf("container tmpfs %s is not bounded: %+v", path, host.Tmpfs)
+		}
+	}
 	if !containsString(host.CapDrop, "ALL") || !containsString(host.SecurityOpt, "no-new-privileges") {
 		t.Fatalf("container capabilities/security options are incomplete: %+v", host)
 	}
@@ -171,11 +176,11 @@ func TestContainerSandboxEnvUsesContainerLocalPaths(t *testing.T) {
 	t.Setenv("TMPDIR", "/var/folders/example-host-tmp")
 
 	env := SandboxEnv(RuntimeContainer)
-	if env["HOME"] != "/tmp" {
-		t.Fatalf("container HOME = %q, want /tmp", env["HOME"])
+	if env["HOME"] != GoSandboxTempDir {
+		t.Fatalf("container HOME = %q, want %s", env["HOME"], GoSandboxTempDir)
 	}
-	if env["TMPDIR"] != "/tmp" {
-		t.Fatalf("container TMPDIR = %q, want /tmp", env["TMPDIR"])
+	if env["TMPDIR"] != GoSandboxTempDir {
+		t.Fatalf("container TMPDIR = %q, want %s", env["TMPDIR"], GoSandboxTempDir)
 	}
 }
 

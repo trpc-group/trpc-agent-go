@@ -41,6 +41,7 @@ const (
 
 	ContainerRepoMountPath = "/workspace/repo"
 	DefaultContainerImage  = "golang:1.25-bookworm"
+	GoSandboxTempDir       = "/tmp/cr-agent-tmp"
 	GoSandboxCacheDir      = "/tmp/cr-agent-gocache"
 	GoSandboxBinary        = "/usr/local/go/bin/go"
 	GoSandboxPath          = "/go/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
@@ -80,8 +81,8 @@ func NewExecutor(cfg Config) (codeexecutor.CodeExecutor, error) {
 				OpenStdin:  true,
 				Env: []string{
 					"PATH=" + GoSandboxPath,
-					"HOME=/tmp",
-					"TMPDIR=/tmp",
+					"HOME=" + GoSandboxTempDir,
+					"TMPDIR=" + GoSandboxTempDir,
 					"GOCACHE=" + GoSandboxCacheDir,
 					"GOPATH=/go",
 					"GOTOOLCHAIN=local",
@@ -132,15 +133,24 @@ func CleanupExecutor(exec codeexecutor.CodeExecutor) error {
 func ContainerHostConfig() dockercontainer.HostConfig {
 	pidsLimit := int64(256)
 	return dockercontainer.HostConfig{
-		AutoRemove:     true,
-		Privileged:     false,
-		NetworkMode:    "none",
+		AutoRemove:  true,
+		Privileged:  false,
+		NetworkMode: "none",
+		// The container workspace runtime transfers files through /tmp/run
+		// using Docker's archive API, which cannot operate on a tmpfs mount.
+		// Keep that writable layer bounded and isolate all other growing Go
+		// scratch paths in separately bounded tmpfs mounts.
 		ReadonlyRootfs: false,
 		StorageOpt: map[string]string{
 			"size": "1G",
 		},
 		CapDrop:     []string{"ALL"},
 		SecurityOpt: []string{"no-new-privileges"},
+		Tmpfs: map[string]string{
+			GoSandboxTempDir:  "rw,exec,nosuid,nodev,size=256m",
+			GoSandboxCacheDir: "rw,nosuid,nodev,size=256m",
+			"/go":             "rw,nosuid,nodev,size=256m",
+		},
 		Resources: dockercontainer.Resources{
 			Memory:    1024 * 1024 * 1024,
 			NanoCPUs:  2_000_000_000,
@@ -206,8 +216,8 @@ func SandboxEnv(runtime string) map[string]string {
 	if runtime == RuntimeLocalFallback && os.Getenv("PATH") != "" {
 		pathValue = os.Getenv("PATH")
 	}
-	homeValue := "/tmp"
-	tmpdirValue := "/tmp"
+	homeValue := GoSandboxTempDir
+	tmpdirValue := GoSandboxTempDir
 	if runtime == RuntimeLocalFallback {
 		homeValue = sandboxEnvValue("HOME", "/tmp")
 		tmpdirValue = sandboxEnvValue("TMPDIR", "/tmp")

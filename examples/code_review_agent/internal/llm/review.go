@@ -13,6 +13,7 @@ package llm
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -290,9 +291,6 @@ func NormalizeFinding(f review.Finding) review.Finding {
 	if f.Confidence == "" {
 		f.Confidence = "low"
 	}
-	if f.RuleID == "" {
-		f.RuleID = "model-review"
-	}
 	if f.Category == "" {
 		f.Category = "model"
 	}
@@ -311,8 +309,23 @@ func NormalizeFinding(f review.Finding) review.Finding {
 	f.Recommendation = sanitizeProviderString(f.Recommendation, maxFindingRecommendationLen)
 	f.Confidence = normalizeFindingEnum(f.Confidence, "low", "high", "medium", "low")
 	f.RuleID = sanitizeProviderString(f.RuleID, maxFindingRuleIDLen)
+	if f.RuleID == "" {
+		f.RuleID = modelFindingRuleID(f)
+	}
 	f.Status = normalizeFindingEnum(f.Status, "finding", "finding", "warning", "needs_human_review")
 	return f
+}
+
+func modelFindingRuleID(f review.Finding) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		f.File,
+		fmt.Sprint(f.Line),
+		f.Category,
+		f.Title,
+		f.Evidence,
+		f.Recommendation,
+	}, "\x00")))
+	return fmt.Sprintf("model-review-%x", sum[:6])
 }
 
 // SanitizeFinding 在 Provider 输出进入报告和存储前脱敏 evidence。

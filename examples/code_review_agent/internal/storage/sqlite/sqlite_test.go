@@ -186,6 +186,65 @@ func TestSaveReviewRollsBackEveryRecordOnFailure(t *testing.T) {
 	}
 }
 
+func TestSaveReviewReplacesAggregateAndOwnsChildRows(t *testing.T) {
+	t.Parallel()
+
+	store, err := Open(filepath.Join(t.TempDir(), "review.db"))
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	record := storage.ReviewRecord{
+		Task:        storage.Task{ID: "task-owner", Status: "done", CreatedAt: now},
+		Decisions:   []storage.DecisionRecord{{TaskID: "wrong-task", Command: "go test ./...", Action: "allow", At: now}},
+		SandboxRuns: []storage.SandboxRunRecord{{TaskID: "wrong-task", Command: "go test ./...", Status: "ok", At: now}},
+		Findings:    []review.Finding{{File: "old.go", Line: 1, Category: "correctness", RuleID: "old", Source: "rule", Status: "finding"}},
+		Artifacts:   []storage.ArtifactRecord{{TaskID: "wrong-task", Name: "review.json", Kind: "report", At: now}},
+		Metrics:     storage.MetricsRecord{TaskID: "wrong-task", SeverityCountsJSON: "{}", ExceptionCountsJSON: "{}", At: now},
+		Report:      storage.ReportRecord{JSON: []byte("{}"), Markdown: []byte("old"), CreatedAt: now},
+	}
+	if err := store.SaveReview(ctx, record); err != nil {
+		t.Fatalf("first SaveReview: %v", err)
+	}
+
+	record.Decisions[0].Command = "go vet ./..."
+	record.SandboxRuns = nil
+	record.Findings = []review.Finding{{File: "new.go", Line: 2, Category: "security", RuleID: "new", Source: "rule", Status: "finding"}}
+	record.Artifacts = nil
+	record.Report.Markdown = []byte("new")
+	if err := store.SaveReview(ctx, record); err != nil {
+		t.Fatalf("repeat SaveReview: %v", err)
+	}
+
+	decisions, err := store.DecisionsByTaskID(ctx, "task-owner")
+	if err != nil || len(decisions) != 1 || decisions[0].TaskID != "task-owner" || decisions[0].Command != "go vet ./..." {
+		t.Fatalf("unexpected replacement decisions: %+v err=%v", decisions, err)
+	}
+	findings, err := store.FindingsByTaskID(ctx, "task-owner")
+	if err != nil || len(findings) != 1 || findings[0].File != "new.go" {
+		t.Fatalf("unexpected replacement findings: %+v err=%v", findings, err)
+	}
+	runs, err := store.SandboxRunsByTaskID(ctx, "task-owner")
+	if err != nil || len(runs) != 0 {
+		t.Fatalf("stale sandbox runs survived replacement: %+v err=%v", runs, err)
+	}
+	artifacts, err := store.ArtifactsByTaskID(ctx, "task-owner")
+	if err != nil || len(artifacts) != 0 {
+		t.Fatalf("stale artifacts survived replacement: %+v err=%v", artifacts, err)
+	}
+	metrics, err := store.MetricsByTaskID(ctx, "task-owner")
+	if err != nil || metrics.TaskID != "task-owner" {
+		t.Fatalf("metrics ownership = %+v err=%v", metrics, err)
+	}
+	report, err := store.ReportByTaskID(ctx, "task-owner")
+	if err != nil || string(report.Markdown) != "new" {
+		t.Fatalf("report was not replaced: %+v err=%v", report, err)
+	}
+}
+
 func TestSchemaRejectsAuditRowsWithoutTask(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "review.db"))
 	if err != nil {

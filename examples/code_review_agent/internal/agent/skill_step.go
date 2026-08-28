@@ -45,6 +45,7 @@ func (a *Agent) runDryRun(ctx context.Context, taskID string) (review.Result, st
 		OutputLimitBytes: a.cfg.OutputLimitBytes,
 		EnvWhitelist:     sandboxEnvWhitelist,
 		At:               now,
+		FinishedAt:       now,
 	}
 	return review.Result{
 		Warnings: []review.Finding{{
@@ -62,7 +63,12 @@ func (a *Agent) runDryRun(ctx context.Context, taskID string) (review.Result, st
 }
 
 // runSkillChecks 执行 code-review Skill。
-func (a *Agent) runSkillChecks(ctx context.Context, taskID string, diff []byte) (review.Result, storage.SandboxRunRecord, storage.DecisionRecord, error) {
+func (a *Agent) runSkillChecks(ctx context.Context, taskID string, diff []byte) (
+	result review.Result,
+	runRecord storage.SandboxRunRecord,
+	decision storage.DecisionRecord,
+	err error,
+) {
 	// 先加载受控 Skill。
 	loadArgs := []byte(`{"skill":"code-review"}`)
 	if _, err := a.loadTool.Call(ctx, loadArgs); err != nil {
@@ -95,17 +101,20 @@ func (a *Agent) runSkillChecks(ctx context.Context, taskID string, diff []byte) 
 	if err != nil {
 		return review.Result{}, storage.SandboxRunRecord{}, storage.DecisionRecord{}, err
 	}
-	decision := storage.DecisionRecord{
+	decision = storage.DecisionRecord{
 		TaskID: taskID, Command: defaultSkillCommand,
 		Action: string(perm.Action), Reason: perm.Reason, At: time.Now(),
 	}
-	runRecord := storage.SandboxRunRecord{
+	runRecord = storage.SandboxRunRecord{
 		TaskID: taskID, Command: defaultSkillCommand,
 		Runtime: a.cfg.Runtime, TimeoutMS: a.cfg.Timeout.Milliseconds(),
 		OutputLimitBytes: a.cfg.OutputLimitBytes,
 		EnvWhitelist:     sandboxEnvWhitelist,
 		At:               time.Now(),
 	}
+	defer func() {
+		runRecord.FinishedAt = time.Now()
+	}()
 	if perm.Action != tool.PermissionActionAllow {
 		// 非 allow 转为人工复核项。
 		runRecord.Status = string(perm.Action)
@@ -147,6 +156,6 @@ func (a *Agent) runSkillChecks(ctx context.Context, taskID string, diff []byte) 
 	}
 
 	// stdout 承载结构化 findings。
-	result, err := parseSkillFindings(out.Stdout)
+	result, err = parseSkillFindings(out.Stdout)
 	return result, runRecord, decision, err
 }

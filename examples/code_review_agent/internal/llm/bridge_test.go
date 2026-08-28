@@ -489,6 +489,31 @@ func TestNormalizeFindingPreservesRepositoryPathsStartingWithSidePrefixes(t *tes
 	}
 }
 
+func TestNormalizeFindingUsesDistinctStableFallbackRuleIDs(t *testing.T) {
+	t.Parallel()
+
+	first := NormalizeFinding(review.Finding{
+		File: "service.go", Line: 12, Category: "correctness", Title: "First issue", Evidence: "first evidence",
+	})
+	repeated := NormalizeFinding(review.Finding{
+		File: "service.go", Line: 12, Category: "correctness", Title: "First issue", Evidence: "first evidence",
+	})
+	second := NormalizeFinding(review.Finding{
+		File: "service.go", Line: 12, Category: "correctness", Title: "Second issue", Evidence: "second evidence",
+	})
+	if first.RuleID == "" || first.RuleID != repeated.RuleID {
+		t.Fatalf("fallback rule ID is not stable: first=%q repeated=%q", first.RuleID, repeated.RuleID)
+	}
+	if first.RuleID == second.RuleID {
+		t.Fatalf("distinct findings share fallback rule ID %q", first.RuleID)
+	}
+
+	merged := MergeFindings(review.Result{}, []review.Finding{first, second})
+	if len(merged.Warnings) != 2 {
+		t.Fatalf("distinct same-line findings were collapsed: %+v", merged.Warnings)
+	}
+}
+
 func TestSanitizeFindingRedactsEveryProviderControlledString(t *testing.T) {
 	const secret = "sk-provider-all-fields-1234567890"
 	finding := SanitizeFinding(review.Finding{

@@ -359,22 +359,34 @@ created_at=excluded.created_at, started_at=excluded.started_at, finished_at=excl
 		rec.Task.CreatedAt.UTC().Format(time.RFC3339Nano), nullableTime(rec.Task.StartedAt), nullableTime(rec.Task.FinishedAt)); err != nil {
 		return err
 	}
+	deleteStatements := []string{
+		"DELETE FROM permission_decisions WHERE task_id = ?",
+		"DELETE FROM filter_decisions WHERE task_id = ?",
+		"DELETE FROM sandbox_runs WHERE task_id = ?",
+		"DELETE FROM findings WHERE task_id = ?",
+		"DELETE FROM artifacts WHERE task_id = ?",
+	}
+	for _, statement := range deleteStatements {
+		if _, err = tx.ExecContext(ctx, statement, rec.Task.ID); err != nil {
+			return err
+		}
+	}
 	for _, item := range rec.Decisions {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO permission_decisions(task_id, command, action, reason, created_at) VALUES(?, ?, ?, ?, ?)`,
-			item.TaskID, item.Command, item.Action, item.Reason, item.At.UTC().Format(time.RFC3339Nano)); err != nil {
+			rec.Task.ID, item.Command, item.Action, item.Reason, item.At.UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
 	for _, item := range rec.FilterDecisions {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO filter_decisions(task_id, target, action, reason, created_at) VALUES(?, ?, ?, ?, ?)`,
-			item.TaskID, item.Target, item.Action, item.Reason, item.At.UTC().Format(time.RFC3339Nano)); err != nil {
+			rec.Task.ID, item.Target, item.Action, item.Reason, item.At.UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
 	for _, item := range rec.SandboxRuns {
 		if _, err = tx.ExecContext(ctx, `
 INSERT INTO sandbox_runs(task_id, command, runtime, status, timeout_ms, output_limit_bytes, env_whitelist, exit_code, stdout_digest, stderr_digest, duration_ms, output, created_at, finished_at, artifact_count)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.TaskID, item.Command, item.Runtime, item.Status,
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, rec.Task.ID, item.Command, item.Runtime, item.Status,
 			item.TimeoutMS, item.OutputLimitBytes, item.EnvWhitelist, item.ExitCode, item.StdoutDigest, item.StderrDigest,
 			item.DurationMS, item.Output, item.At.UTC().Format(time.RFC3339Nano), nullableTime(item.FinishedAt), item.ArtifactCount); err != nil {
 			return err
@@ -401,7 +413,7 @@ model_provider=excluded.model_provider, model_name=excluded.model_name, model_ba
 permission_block_count=excluded.permission_block_count, finding_count=excluded.finding_count,
 model_finding_count=excluded.model_finding_count, model_exception_count=excluded.model_exception_count,
 severity_counts_json=excluded.severity_counts_json, exception_counts_json=excluded.exception_counts_json,
-redaction_count=excluded.redaction_count, created_at=excluded.created_at`, m.TaskID, m.Mode, m.SandboxRequested, m.SandboxExecuted, m.ModelRequested, m.ModelExecuted, m.TotalDurationMS, m.SandboxDurationMS,
+redaction_count=excluded.redaction_count, created_at=excluded.created_at`, rec.Task.ID, m.Mode, m.SandboxRequested, m.SandboxExecuted, m.ModelRequested, m.ModelExecuted, m.TotalDurationMS, m.SandboxDurationMS,
 		m.ModelDurationMS, m.ToolCallCount, m.ModelCallCount, m.ModelProvider, m.ModelName, m.ModelBackend,
 		m.PermissionBlockCount, m.FindingCount, m.ModelFindingCount, m.ModelExceptionCount, m.SeverityCountsJSON,
 		m.ExceptionCountsJSON, m.RedactionCount, m.At.UTC().Format(time.RFC3339Nano)); err != nil {
@@ -409,7 +421,7 @@ redaction_count=excluded.redaction_count, created_at=excluded.created_at`, m.Tas
 	}
 	for _, item := range rec.Artifacts {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO artifacts(task_id, name, kind, path, digest, size_bytes, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)`,
-			item.TaskID, item.Name, item.Kind, item.Path, item.Digest, item.Size, item.At.UTC().Format(time.RFC3339Nano)); err != nil {
+			rec.Task.ID, item.Name, item.Kind, item.Path, item.Digest, item.Size, item.At.UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}

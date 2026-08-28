@@ -51,6 +51,9 @@ func (a *Agent) runGoSandboxChecks(ctx context.Context, taskID string, repoPath 
 	decisions := make([]storage.DecisionRecord, 0, len(commands))
 	runs := make([]storage.SandboxRunRecord, 0, len(commands))
 	for _, command := range commands {
+		if ctx.Err() != nil {
+			break
+		}
 		commandDecisions, run := a.runGoSandboxCommand(ctx, taskID, repoPath, command)
 		decisions = append(decisions, commandDecisions...)
 		runs = append(runs, run)
@@ -59,7 +62,10 @@ func (a *Agent) runGoSandboxChecks(ctx context.Context, taskID string, repoPath 
 }
 
 // runGoSandboxCommand 执行一条已审批的 Go 检查命令。
-func (a *Agent) runGoSandboxCommand(ctx context.Context, taskID string, repoPath string, command string) ([]storage.DecisionRecord, storage.SandboxRunRecord) {
+func (a *Agent) runGoSandboxCommand(ctx context.Context, taskID string, repoPath string, command string) (
+	decisions []storage.DecisionRecord,
+	run storage.SandboxRunRecord,
+) {
 	execCommand := execution.SandboxExecCommand(a.cfg.Runtime, command)
 	workspaceArgs, _ := execution.WorkspaceArgs(execCommand, a.cfg.Timeout, execution.SandboxEnv(a.cfg.Runtime))
 	permReq := &tool.PermissionRequest{
@@ -78,14 +84,17 @@ func (a *Agent) runGoSandboxCommand(ctx context.Context, taskID string, repoPath
 		TaskID: taskID, Command: command,
 		Action: string(perm.Action), Reason: perm.Reason, At: time.Now(),
 	}
-	decisions := []storage.DecisionRecord{decision}
-	run := storage.SandboxRunRecord{
+	decisions = []storage.DecisionRecord{decision}
+	run = storage.SandboxRunRecord{
 		TaskID: taskID, Command: command, Runtime: a.cfg.Runtime,
 		Status: "skipped", TimeoutMS: a.cfg.Timeout.Milliseconds(),
 		OutputLimitBytes: a.cfg.OutputLimitBytes,
 		EnvWhitelist:     sandboxEnvWhitelist,
 		At:               time.Now(),
 	}
+	defer func() {
+		run.FinishedAt = time.Now()
+	}()
 	if perm.Action != tool.PermissionActionAllow {
 		run.Status = string(perm.Action)
 		return decisions, run

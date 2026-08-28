@@ -69,6 +69,39 @@ func TestNormalizeExecutionPlan(t *testing.T) {
 	}
 }
 
+func TestSkillRunRecordsActualFinishTime(t *testing.T) {
+	t.Parallel()
+
+	loadTool := fastCallableTool{name: "skill_load", call: func(context.Context, []byte) (any, error) {
+		return map[string]any{"loaded": true}, nil
+	}}
+	runTool := fastCallableTool{name: "skill_run", call: func(context.Context, []byte) (any, error) {
+		return map[string]any{
+			"stdout":      `{"findings":[],"warnings":[]}`,
+			"exit_code":   0,
+			"duration_ms": 1,
+		}, nil
+	}}
+	policy := tool.PermissionPolicyFunc(func(context.Context, *tool.PermissionRequest) (tool.PermissionDecision, error) {
+		return tool.AllowPermission(), nil
+	})
+	ag := &Agent{
+		cfg:      normalizeConfig(Config{Runtime: RuntimeLocalFallback, Timeout: time.Second}),
+		loadTool: loadTool,
+		runTool:  runTool,
+		policy:   policy,
+	}
+
+	_, dryRun, _, err := ag.runDryRun(context.Background(), "task-dry-run")
+	if err != nil || dryRun.FinishedAt.IsZero() || dryRun.FinishedAt.Before(dryRun.At) {
+		t.Fatalf("dry-run completion audit = %+v err=%v", dryRun, err)
+	}
+	_, skillRun, _, err := ag.runSkillChecks(context.Background(), "task-skill", []byte("diff"))
+	if err != nil || skillRun.FinishedAt.IsZero() || skillRun.FinishedAt.Before(skillRun.At) {
+		t.Fatalf("skill completion audit = %+v err=%v", skillRun, err)
+	}
+}
+
 func TestFastParseSkillFindingsRedactsAndDedupes(t *testing.T) {
 	secret := "sk-1234567890abcdef"
 	item := `{"severity":"critical","category":"security","file":"config.go","line":7,"title":"secret","evidence":"` + secret + `","recommendation":"remove","confidence":"high","source":"skill_run","rule_id":"secret-leak","status":"finding"}`

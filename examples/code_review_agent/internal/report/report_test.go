@@ -45,6 +45,27 @@ func TestJSONAndMarkdownReportsIncludeFindings(t *testing.T) {
 	}
 }
 
+func TestMarkdownSeverityCountsAreDeterministic(t *testing.T) {
+	t.Parallel()
+
+	rep := review.Result{Metrics: review.Metrics{SeverityCounts: map[string]int{
+		"medium":   2,
+		"critical": 1,
+		"high":     3,
+	}}}
+	for name, output := range map[string]string{
+		"English": BuildMarkdown(rep),
+		"Chinese": BuildMarkdownChinese(rep),
+	} {
+		critical := strings.Index(output, "- critical: 1")
+		high := strings.Index(output, "- high: 3")
+		medium := strings.Index(output, "- medium: 2")
+		if critical < 0 || !(critical < high && high < medium) {
+			t.Fatalf("%s severity counts are not sorted: %s", name, output)
+		}
+	}
+}
+
 func TestMarkdownReportsEscapeControlCharactersInFindingFields(t *testing.T) {
 	rep := review.Result{
 		Findings: []review.Finding{{

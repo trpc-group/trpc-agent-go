@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/approval"
 )
 
 func TestRunGoSandboxChecksReturnsUnsupportedAuditForNonVendoredContainerModuleRepo(t *testing.T) {
@@ -62,5 +64,34 @@ func TestSandboxCommandOutputRejectsMalformedAndEmptyPayloads(t *testing.T) {
 		if _, err := sandboxCommandOutput(raw); err == nil {
 			t.Fatalf("sandboxCommandOutput(%T) succeeded, want error", raw)
 		}
+	}
+}
+
+func TestRunGoSandboxCommandRecordsFinishTimeWhenDenied(t *testing.T) {
+	t.Parallel()
+
+	ag := &Agent{
+		cfg: Config{
+			Runtime:          RuntimeLocalFallback,
+			Timeout:          time.Second,
+			OutputLimitBytes: 4096,
+		},
+		policy: approval.NewPermissionPolicy("scripts/check.sh", nil),
+	}
+	_, run := ag.runGoSandboxCommand(context.Background(), "task-denied", t.TempDir(), "go test ./...")
+	if run.Status == "ok" || run.FinishedAt.IsZero() || run.FinishedAt.Before(run.At) {
+		t.Fatalf("denied sandbox run has incomplete completion audit: %+v", run)
+	}
+}
+
+func TestRunGoSandboxChecksDoesNotStartCommandsAfterCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ag := &Agent{cfg: Config{Runtime: RuntimeLocalFallback}}
+	decisions, runs := ag.runGoSandboxChecks(ctx, "task-canceled", t.TempDir())
+	if len(decisions) != 0 || len(runs) != 0 {
+		t.Fatalf("canceled sandbox checks started commands: decisions=%+v runs=%+v", decisions, runs)
 	}
 }
