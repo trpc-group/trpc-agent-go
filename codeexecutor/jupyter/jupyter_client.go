@@ -121,9 +121,11 @@ func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 	c.sessionID = uuid.New().String()
 	ready, err := c.waitForReady()
 	if err != nil {
+		_ = c.ws.Close()
 		return nil, err
 	}
 	if !ready {
+		_ = c.ws.Close()
 		return nil, fmt.Errorf("kernel not ready")
 	}
 

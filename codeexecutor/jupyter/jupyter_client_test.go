@@ -268,3 +268,51 @@ func TestNewClient(t *testing.T) {
 	})
 	assert.NoError(t, err)
 }
+
+func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
+	clientClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/kernelspecs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"kernelspecs":{"python3":{"name":"python3"}}}`))
+		case "/api/kernels":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"123"}`))
+		case "/api/kernels/123/channels":
+			ws, err := cstUpgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			if _, _, err = ws.ReadMessage(); err != nil {
+				return
+			}
+			if err = ws.WriteMessage(websocket.TextMessage, []byte("{")); err != nil {
+				return
+			}
+			if _, _, err = ws.ReadMessage(); err != nil {
+				close(clientClosed)
+			}
+		}
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+	port, err := strconv.Atoi(parsed.Port())
+	assert.NoError(t, err)
+
+	_, err = NewClient(ConnectionInfo{
+		Host:             parsed.Hostname(),
+		Port:             port,
+		KernelName:       "python3",
+		WaitReadyTimeout: time.Second,
+	})
+	assert.Error(t, err)
+
+	select {
+	case <-clientClosed:
+	case <-time.After(time.Second):
+		t.Fatal("websocket was not closed after readiness failure")
+	}
+}
