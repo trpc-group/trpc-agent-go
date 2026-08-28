@@ -18,10 +18,182 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	artifactmem "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessionmem "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
+
+func TestRewindHydratesRestoredSession(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService()
+	t.Cleanup(func() { _ = inner.Close() })
+	artifacts := artifactmem.NewService()
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	baseline := imageEvent([]byte("image-bytes"))
+	baseline.RequestID = "baseline"
+	baseline.InvocationID = "baseline-invocation"
+	if err := svc.AppendEvent(ctx, sess, baseline); err != nil {
+		t.Fatalf("AppendEvent(baseline) error = %v", err)
+	}
+
+	turnCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID:    "latest",
+		InvocationID: "latest-invocation",
+	})
+	latest := responseEvent(model.NewUserMessage("latest"))
+	latest.RequestID = "latest"
+	latest.InvocationID = "latest-invocation"
+	if err := svc.AppendEvent(turnCtx, sess, latest); err != nil {
+		t.Fatalf("AppendEvent(latest) error = %v", err)
+	}
+	completion := event.NewResponseEvent(
+		"latest-invocation",
+		"app",
+		&model.Response{Done: true, Object: model.ObjectTypeRunnerCompletion},
+	)
+	completion.RequestID = "latest"
+	if err := svc.AppendEvent(ctx, sess, completion); err != nil {
+		t.Fatalf("AppendEvent(completion) error = %v", err)
+	}
+
+	result, err := revision.Rewind(ctx, svc, revision.RewindRequest{
+		Key:             key,
+		TargetRequestID: "latest", ExpectedHeadRequestID: "latest",
+		IdempotencyKey: "replacement",
+	})
+	if err != nil {
+		t.Fatalf("Rewind() error = %v", err)
+	}
+	if len(result.Session.Events) != 1 {
+		t.Fatalf("Rewind() result = %#v", result)
+	}
+	part := result.Session.Events[0].Response.Choices[0].Message.ContentParts[0]
+	if string(part.Image.Data) != "image-bytes" || part.ContentRef != nil {
+		t.Fatalf("hydrated restored part = %#v", part)
+	}
+
+	rawService := Wrap(inner, artifacts, Config{})
+	rawResult, err := revision.Rewind(
+		ctx,
+		rawService,
+		revision.RewindRequest{
+			Key:             key,
+			TargetRequestID: "latest", ExpectedHeadRequestID: "latest",
+			IdempotencyKey: "replacement",
+		},
+	)
+	if err != nil {
+		t.Fatalf("Rewind(disabled externalization) error = %v", err)
+	}
+	rawPart := rawResult.Session.Events[0].Response.Choices[0].Message.ContentParts[0]
+	if len(rawPart.Image.Data) != 0 || rawPart.ContentRef == nil {
+		t.Fatalf("unhydrated restored part = %#v", rawPart)
+	}
+}
+
+func TestRewindHydrationFailureCanBeConfirmedByRetry(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService()
+	t.Cleanup(func() { _ = inner.Close() })
+	artifacts := &toggleLoadArtifactService{Service: artifactmem.NewService()}
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	baseline := imageEvent([]byte("image-bytes"))
+	baseline.RequestID = "baseline"
+	baseline.InvocationID = "baseline-invocation"
+	if err := svc.AppendEvent(ctx, sess, baseline); err != nil {
+		t.Fatalf("AppendEvent(baseline) error = %v", err)
+	}
+
+	turnCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID: "latest", InvocationID: "latest-invocation",
+	})
+	latest := responseEvent(model.NewUserMessage("latest"))
+	latest.RequestID = "latest"
+	latest.InvocationID = "latest-invocation"
+	if err := svc.AppendEvent(turnCtx, sess, latest); err != nil {
+		t.Fatalf("AppendEvent(latest) error = %v", err)
+	}
+	completion := event.NewResponseEvent(
+		"latest-invocation",
+		"app",
+		&model.Response{Done: true, Object: model.ObjectTypeRunnerCompletion},
+	)
+	completion.RequestID = "latest"
+	if err := svc.AppendEvent(ctx, sess, completion); err != nil {
+		t.Fatalf("AppendEvent(completion) error = %v", err)
+	}
+
+	req := revision.RewindRequest{
+		Key: key, TargetRequestID: "latest", ExpectedHeadRequestID: "latest", IdempotencyKey: "replacement",
+	}
+	artifacts.failLoad = true
+	result, err := revision.Rewind(ctx, svc, req)
+	if result != nil || err == nil || !strings.Contains(err.Error(), "load failed") {
+		t.Fatalf("Rewind(first) = %#v, %v", result, err)
+	}
+
+	artifacts.failLoad = false
+	result, err = revision.Rewind(ctx, svc, req)
+	if err != nil {
+		t.Fatalf("Rewind(retry) error = %v", err)
+	}
+	part := result.Session.Events[0].Response.Choices[0].Message.ContentParts[0]
+	if string(part.Image.Data) != "image-bytes" || part.ContentRef != nil {
+		t.Fatalf("hydrated restored part = %#v", part)
+	}
+}
+
+func TestRewindUnsupportedWrappedService(t *testing.T) {
+	svc := Wrap(&unsupportedReplacementService{}, artifactmem.NewService(), Config{Enabled: true})
+	if _, ok := svc.(session.RewindService); ok {
+		t.Fatal("wrapped unsupported service implements RewindService")
+	}
+}
+
+func TestRewindRejectsInvalidRequestBeforeForwarding(t *testing.T) {
+	inner := &recordingRewindService{SessionService: sessionmem.NewSessionService()}
+	t.Cleanup(func() { _ = inner.Close() })
+	svc := Wrap(inner, artifactmem.NewService(), Config{Enabled: true})
+	rewinder, ok := svc.(session.RewindService)
+	if !ok {
+		t.Fatal("wrapped service does not implement RewindService")
+	}
+	result, err := rewinder.Rewind(context.Background(), session.RewindRequest{})
+	if result != nil || !errors.Is(err, session.ErrInvalidRewindRequest) {
+		t.Fatalf("Rewind() = %#v, %v, want ErrInvalidRewindRequest", result, err)
+	}
+	if inner.calls != 0 {
+		t.Fatalf("underlying Rewind() calls = %d, want 0", inner.calls)
+	}
+}
+
+type recordingRewindService struct {
+	*sessionmem.SessionService
+	calls int
+}
+
+func (s *recordingRewindService) Rewind(
+	context.Context,
+	session.RewindRequest,
+) (*session.RewindResult, error) {
+	s.calls++
+	return nil, errors.New("unexpected rewind")
+}
+
+type unsupportedReplacementService struct {
+	session.Service
+}
 
 func TestAppendEventExternalizesAndGetSessionHydrates(t *testing.T) {
 	ctx := context.Background()
@@ -633,6 +805,9 @@ func TestAppendEventFailureKeepsSavedArtifactsWhenPersistenceUnknown(t *testing.
 func TestWrapPreservesOptionalInterfaces(t *testing.T) {
 	inner := sessionmem.NewSessionService()
 	wrapped := Wrap(inner, artifactmem.NewService(), Config{Enabled: true})
+	if _, ok := wrapped.(session.RewindService); !ok {
+		t.Fatal("wrapped inmemory service does not implement RewindService")
+	}
 	if _, ok := wrapped.(session.TrackService); !ok {
 		t.Fatal("wrapped inmemory service does not implement TrackService")
 	}
@@ -759,6 +934,14 @@ func TestWrapOptionalInterfaceCombinationMethods(t *testing.T) {
 			inner: &windowTrackOnlyService{
 				Service:  sessionmem.NewSessionService(),
 				behavior: &optionalBehavior{window: windowResult},
+			},
+		},
+		{
+			name:      "track",
+			wantTrack: true,
+			inner: &trackOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{},
 			},
 		},
 		{
@@ -889,6 +1072,55 @@ func TestWrapOptionalInterfaceCombinationMethods(t *testing.T) {
 				if result == nil || result.Track != "trace" {
 					t.Fatalf("GetTrackEvents() = %#v, want trace track", result)
 				}
+			}
+
+			base := &Service{
+				Service:         tt.inner,
+				artifactService: artifactmem.NewService(),
+				cfg:             Config{Enabled: true},
+			}
+			rewindBackend := sessionmem.NewSessionService()
+			forwarder := &rewindForwarder{
+				service:  base,
+				rewinder: rewindBackend,
+			}
+			for _, withStateInitialization := range []bool{false, true} {
+				name := "with rewind"
+				if withStateInitialization {
+					name += " and state initialization"
+				}
+				t.Run(name, func(t *testing.T) {
+					wrapped := wrapExistingOptionalInterfaces(base, tt.inner)
+					if withStateInitialization {
+						wrapped = wrapStateInitializationInterface(
+							wrapped,
+							rewindBackend,
+						)
+					}
+					wrapped = wrapRewindInterface(wrapped, forwarder)
+					if _, ok := wrapped.(session.RewindService); !ok {
+						t.Fatal("wrapped service does not implement RewindService")
+					}
+					if _, ok := wrapped.(session.StateInitializationService); ok != withStateInitialization {
+						t.Fatalf(
+							"StateInitializationService ok = %v, want %v",
+							ok,
+							withStateInitialization,
+						)
+					}
+					if _, ok := wrapped.(session.SearchableService); ok != tt.wantSearch {
+						t.Fatalf("SearchableService ok = %v, want %v", ok, tt.wantSearch)
+					}
+					if _, ok := wrapped.(session.WindowService); ok != tt.wantWindow {
+						t.Fatalf("WindowService ok = %v, want %v", ok, tt.wantWindow)
+					}
+					if _, ok := wrapped.(session.TrackService); ok != tt.wantTrack {
+						t.Fatalf("TrackService ok = %v, want %v", ok, tt.wantTrack)
+					}
+					if _, ok := wrapped.(trackEventReader); ok != tt.wantReader {
+						t.Fatalf("trackEventReader ok = %v, want %v", ok, tt.wantReader)
+					}
+				})
 			}
 		})
 	}
@@ -1355,6 +1587,21 @@ func (s *windowTrackOnlyService) AppendTrackEvent(
 	return nil
 }
 
+type trackOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *trackOnlyService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	event *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	s.behavior.trackCalled = true
+	return nil
+}
+
 type searchWindowTrackService struct {
 	session.Service
 	behavior *optionalBehavior
@@ -1596,6 +1843,23 @@ type loadArtifactService struct {
 	artifact.Service
 	artifact *artifact.Artifact
 	err      error
+}
+
+type toggleLoadArtifactService struct {
+	artifact.Service
+	failLoad bool
+}
+
+func (s *toggleLoadArtifactService) LoadArtifact(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	version *int,
+) (*artifact.Artifact, error) {
+	if s.failLoad {
+		return nil, errors.New("load failed")
+	}
+	return s.Service.LoadArtifact(ctx, sessionInfo, filename, version)
 }
 
 func (s *loadArtifactService) LoadArtifact(

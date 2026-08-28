@@ -130,6 +130,17 @@ does not partially disappear while the session is still active. If
 `WithTrackEventTTL` is configured, track events use that TTL independently.
 Dedicated cleanup indexes on `updated_at` support these cleanup scans.
 
+## Latest-turn Replacement
+
+MongoDB supports editing and resending the latest persisted turn through
+`Runner.Run` and `agent.WithLatestTurnReplacement`. A compact active revision
+record is stored in the existing Session state document. Projection restore
+and revision metadata updates run in the same MongoDB transaction; no archive
+collection or additional index is required, including with
+`WithSkipDBInit(true)`. See
+[Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the Runner
+API, rollout requirements, and rollback boundaries.
+
 ## Storage Structure
 
 MongoDB uses these collections:

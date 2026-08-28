@@ -97,7 +97,8 @@ func TestLoadSessionStateValue(t *testing.T) {
 		require.NoError(t, err)
 		var migrated SessionState
 		require.NoError(t, json.Unmarshal(storedJSON, &migrated))
-		require.Equal(t, generation, migrated.Generation)
+		require.Equal(t, migrated.Generation,
+			decodeStateInitializationGeneration(generation).Storage)
 		for key := range migrated.State {
 			require.False(t, strings.HasPrefix(key, "__TRPC_AGENT_GO_STATE_GENERATION_"))
 		}
@@ -170,7 +171,9 @@ func TestCommitStateInitialization(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, exists)
 		require.True(t, present)
-		require.Equal(t, generation, loadedGeneration)
+		require.Equal(t,
+			decodeStateInitializationGeneration(generation).Storage,
+			decodeStateInitializationGeneration(loadedGeneration).Storage)
 		require.Equal(t, "value", string(value))
 	})
 
@@ -214,6 +217,27 @@ func TestCommitStateInitialization(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, -1, result)
 		require.Zero(t, redisClient.Exists(ctx, leaseKey).Val())
+	})
+
+	t.Run("fences private revision changes", func(t *testing.T) {
+		key, generation := createSession(t, "revision-fencing")
+		leaseKey := setLease(t, key, "owner")
+		require.NoError(t, redisClient.Set(
+			ctx, client.revisionKey(key), `{"generation":1}`, 0,
+		).Err())
+		result, err := client.CommitStateInitialization(
+			ctx, key, "state", []byte("stale"), generation, leaseKey, "owner",
+		)
+		require.NoError(t, err)
+		require.Equal(t, -3, result)
+		require.Zero(t, redisClient.Exists(ctx, leaseKey).Val())
+		value, present, _, exists, err := client.LoadSessionStateValue(
+			ctx, key, "state",
+		)
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.False(t, present)
+		require.Nil(t, value)
 	})
 
 	t.Run("supports sub millisecond and zero ttl", func(t *testing.T) {

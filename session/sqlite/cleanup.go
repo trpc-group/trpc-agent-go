@@ -16,7 +16,9 @@ import (
 	"fmt"
 	"time"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 const cleanupTimeout = 5 * time.Minute
@@ -310,9 +312,22 @@ func (s *Service) cleanupExpiredTrackEvents(
 	ctx context.Context,
 	now time.Time,
 ) {
+	s.stateWriteMu.Lock()
+	defer s.stateWriteMu.Unlock()
+
 	nowNs := now.UTC().UnixNano()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		log.ErrorfContext(ctx, "begin track cleanup: %v", err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.invalidateExpiredTrackProjections(ctx, tx, nowNs); err != nil {
+		log.ErrorfContext(ctx, "invalidate expired track projections: %v", err)
+		return
+	}
 	if s.opts.softDelete {
-		_, err := s.db.ExecContext(
+		_, err = tx.ExecContext(
 			ctx,
 			fmt.Sprintf(
 				`UPDATE %s SET deleted_at = ?
@@ -325,21 +340,102 @@ AND deleted_at IS NULL`,
 		)
 		if err != nil {
 			log.ErrorfContext(ctx, "cleanup track events: %v", err)
+			return
 		}
-		return
+	} else {
+		_, err = tx.ExecContext(
+			ctx,
+			fmt.Sprintf(
+				`DELETE FROM %s
+WHERE expires_at IS NOT NULL AND expires_at <= ?`,
+				s.tableSessionTracks,
+			),
+			nowNs,
+		)
+		if err != nil {
+			log.ErrorfContext(ctx, "cleanup track events: %v", err)
+			return
+		}
 	}
-	_, err := s.db.ExecContext(
+	if err := tx.Commit(); err != nil {
+		log.ErrorfContext(ctx, "commit track cleanup: %v", err)
+	}
+}
+
+func (s *Service) invalidateExpiredTrackProjections(
+	ctx context.Context,
+	tx *sql.Tx,
+	nowNs int64,
+) error {
+	rows, err := tx.QueryContext(
 		ctx,
 		fmt.Sprintf(
-			`DELETE FROM %s
-WHERE expires_at IS NOT NULL AND expires_at <= ?`,
+			`SELECT DISTINCT tracks.app_name, tracks.user_id,
+tracks.session_id, states.state
+FROM %s AS tracks
+JOIN %s AS states
+ON states.app_name = tracks.app_name
+AND states.user_id = tracks.user_id
+AND states.session_id = tracks.session_id
+AND states.deleted_at IS NULL
+WHERE tracks.expires_at IS NOT NULL AND tracks.expires_at <= ?
+AND tracks.deleted_at IS NULL`,
 			s.tableSessionTracks,
+			s.tableSessionStates,
 		),
 		nowNs,
 	)
 	if err != nil {
-		log.ErrorfContext(ctx, "cleanup track events: %v", err)
+		return err
 	}
+	type stateRow struct {
+		key session.Key
+		raw []byte
+	}
+	var states []stateRow
+	for rows.Next() {
+		var row stateRow
+		if err := rows.Scan(
+			&row.key.AppName, &row.key.UserID, &row.key.SessionID, &row.raw,
+		); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		states = append(states, row)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, row := range states {
+		var state SessionState
+		record, err := sessionrevision.DecodeState(row.raw, &state)
+		if err != nil {
+			return err
+		}
+		sessionrevision.ApplyWrite(record, sessionrevision.Write{Hazard: true})
+		sessionrevision.InvalidateProjection(record)
+		updated, err := sessionrevision.EncodeState(&state, record)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			fmt.Sprintf(
+				`UPDATE %s SET state = ?
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND deleted_at IS NULL`,
+				s.tableSessionStates,
+			),
+			updated, row.key.AppName, row.key.UserID, row.key.SessionID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) cleanupExpiredAppStates(

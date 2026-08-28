@@ -662,6 +662,35 @@ func WithRequestID(requestID string) RunOption {
 	}
 }
 
+// LatestTurnReplacement identifies the latest persisted request replaced by a
+// run. The replacement run must provide a distinct, explicit RunOptions.RequestID.
+type LatestTurnReplacement struct {
+	// ExpectedRequestID identifies the latest request to replace.
+	ExpectedRequestID string
+}
+
+// WithLatestTurnReplacement makes this run replace the latest persisted turn.
+// expectedRequestID identifies the request to replace. The replaced turn may
+// be completed or unfinished. Callers must also provide a different, stable
+// request ID through WithRequestID, stop any active execution, and wait for its
+// event stream to close before replacing it. If Runner.Run reports an error
+// after the durable transition may have committed but before returning an event
+// channel, callers may retry the same message with the same expected and new
+// request IDs to resolve that outcome-unknown transition. Validation errors and
+// session rewind conflict, unsupported, or unavailable errors have known
+// outcomes and should be handled directly. Runner also returns an unavailable
+// error before rewinding when the selected agent routes its current turn to a
+// child session, because the source-session fence cannot atomically guard that
+// child's first write. Once Runner.Run returns an event channel, callers must
+// not repeat the replacement because of a later stream error.
+func WithLatestTurnReplacement(expectedRequestID string) RunOption {
+	return func(opts *RunOptions) {
+		opts.LatestTurnReplacement = &LatestTurnReplacement{
+			ExpectedRequestID: expectedRequestID,
+		}
+	}
+}
+
 // WithEventFilterKey sets the invocation event filter key for this run.
 //
 // This controls the FilterKey injected into emitted events and the default
@@ -1262,6 +1291,10 @@ type RunOptions struct {
 
 	// RequestID is the request id of the request.
 	RequestID string
+
+	// LatestTurnReplacement describes the latest persisted turn replaced by this
+	// run. A nil value preserves ordinary Run behavior.
+	LatestTurnReplacement *LatestTurnReplacement
 
 	// DetachedCancel controls whether Runner ignores parent context
 	// cancellation for this run.

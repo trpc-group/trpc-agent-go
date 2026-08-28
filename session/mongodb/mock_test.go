@@ -242,6 +242,24 @@ func newServiceForTest(t interface{ Fatalf(string, ...any) }, mc *mockClient, mo
 	}
 }
 
+func newRevisionServiceForTest(
+	t interface{ Fatalf(string, ...any) },
+	mc *mockClient,
+	mods ...func(*serviceOpts),
+) *Service {
+	if mc.findOneFn == nil {
+		mc.findOneFn = func(any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{}, nil, nil)
+		}
+	}
+	if mc.transactionFn == nil {
+		mc.transactionFn = func(fn func(mongo.SessionContext) error) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		}
+	}
+	return newServiceForTest(t, mc, mods...)
+}
+
 // newSessionForTest constructs a minimal in-memory session to feed into tests
 // that need a non-nil *session.Session but don't care about its contents.
 func newSessionForTest(appName, userID, sessionID string) *session.Session {

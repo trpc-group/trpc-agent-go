@@ -541,7 +541,7 @@ func TestLoadOrInitializeSessionStatePersistsUniqueSessionGeneration(t *testing.
 				"state",
 			)
 			require.NoError(t, err)
-			_, err = uuid.Parse(firstGeneration)
+			_, err = uuid.Parse(stateInitializationStorageGeneration(firstGeneration))
 			require.NoError(t, err)
 			ttlAfterMigration, err := service.redisClient.PTTL(
 				context.Background(),
@@ -558,7 +558,10 @@ func TestLoadOrInitializeSessionStatePersistsUniqueSessionGeneration(t *testing.
 				"state",
 			)
 			require.NoError(t, err)
-			require.Equal(t, firstGeneration, persistedGeneration)
+			require.Equal(
+				t, stateInitializationStorageGeneration(firstGeneration),
+				stateInitializationStorageGeneration(persistedGeneration),
+			)
 
 			require.NoError(t, service.DeleteSession(context.Background(), key))
 			_, err = service.CreateSession(context.Background(), key, nil)
@@ -575,9 +578,12 @@ func TestLoadOrInitializeSessionStatePersistsUniqueSessionGeneration(t *testing.
 				"state",
 			)
 			require.NoError(t, err)
-			_, err = uuid.Parse(recreatedGeneration)
+			_, err = uuid.Parse(stateInitializationStorageGeneration(recreatedGeneration))
 			require.NoError(t, err)
-			require.NotEqual(t, firstGeneration, recreatedGeneration)
+			require.NotEqual(
+				t, stateInitializationStorageGeneration(firstGeneration),
+				stateInitializationStorageGeneration(recreatedGeneration),
+			)
 		})
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -28,7 +29,10 @@ import (
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 )
 
-var _ session.Service = (*Service)(nil)
+var (
+	_ session.Service       = (*Service)(nil)
+	_ session.RewindService = (*Service)(nil)
+)
 
 // SessionState is the state of a session.
 type SessionState struct {
@@ -56,6 +60,20 @@ type Service struct {
 	tableSessionSummaries string
 	tableAppStates        string
 	tableUserStates       string
+}
+
+// Rewind validates the request and reports that ClickHouse cannot atomically
+// restore the session-owned projection across its independently persisted
+// tables. Invalid requests return a validation error; valid requests return
+// session.ErrRewindUnsupported.
+func (s *Service) Rewind(
+	_ context.Context,
+	req session.RewindRequest,
+) (*session.RewindResult, error) {
+	if err := sessionrevision.ValidateRewindRequest(req); err != nil {
+		return nil, err
+	}
+	return nil, session.ErrRewindUnsupported
 }
 
 type sessionEventPair struct {

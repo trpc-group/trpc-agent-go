@@ -42,22 +42,30 @@ return 1
 `)
 
 // luaUpdateSessionState atomically merges a session state patch into session meta.
-// KEYS[1] = sessionMeta key
-// ARGV[1] = statePatchJSON, ARGV[2] = nilKeysJSON, ARGV[3] = updatedAt RFC3339 string, ARGV[4] = TTL (seconds)
-// Returns: 1 on success, 0 if session not found
+// KEYS[1] = sessionMeta key, KEYS[2] = private revision metadata key
+// ARGV[1] = statePatchJSON, ARGV[2] = nilKeysJSON,
+// ARGV[3] = updatedAt RFC3339 string, ARGV[4] = TTL (seconds),
+// ARGV[5] = has expected generation, ARGV[6] = expected generation,
+// ARGV[7] = explicit turn hazard, ARGV[8] = request ID.
+// Returns: 1 on success, 0 if session not found, -1 if stale.
 var luaUpdateSessionState = redis.NewScript(`
 local sessionMetaKey = KEYS[1]
+local revisionKey = KEYS[2]
 local statePatchJSON = ARGV[1]
 local nilKeysJSON = ARGV[2]
 local updatedAt = ARGV[3]
 local ttl = tonumber(ARGV[4])
+local hasExpectedGeneration = tonumber(ARGV[5]) == 1
+local expectedGeneration = tonumber(ARGV[6])
+local explicitHazard = tonumber(ARGV[7]) == 1
+local requestID = ARGV[8]
 -- Use a simple placeholder string, then replace its quoted JSON form with null after encoding.
 local nilSentinel = "__TRPC_AGENT_GO_NULL__"
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
     redis.call('SET', key, value)
-    if ttlMs > 0 then
+    if ttlMs >= 0 then
         redis.call('PEXPIRE', key, ttlMs)
     end
 end
@@ -65,6 +73,19 @@ end
 local metaJSON = redis.call('GET', sessionMetaKey)
 if not metaJSON then
     return 0
+end
+local revisionJSON = redis.call('GET', revisionKey)
+local revision = {generation = 0}
+if revisionJSON then
+    revision = cjson.decode(revisionJSON)
+end
+if hasExpectedGeneration and tonumber(revision.generation or 0) ~= expectedGeneration then
+    return -1
+end
+revision.head = tonumber(revision.head or 0) + 1
+if revision.checkpoint and (not hasExpectedGeneration or explicitHazard or
+    requestID == '' or requestID ~= revision.checkpoint.requestID) then
+    revision.checkpoint.hazard = true
 end
 
 local meta = cjson.decode(metaJSON)
@@ -96,29 +117,59 @@ if ttl > 0 then
 else
     setPreserveTTL(sessionMetaKey, encodedMeta)
 end
-
+if ttl > 0 then
+    redis.call('SET', revisionKey, cjson.encode(revision), 'EX', ttl)
+else
+    setPreserveTTL(revisionKey, cjson.encode(revision))
+end
 return 1
 `)
 
 // luaAppendEvent appends an event atomically and applies StateDelta to session state.
-// KEYS[1] = sessionMeta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key
-// ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp, ARGV[4] = TTL (seconds), ARGV[5] = shouldStoreEvent (1 or 0)
-// Returns: 1 on success, 0 if session not found
+// KEYS[1] = sessionMeta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key,
+// KEYS[4] = private revision metadata key, KEYS[5] = summary key.
+// ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp,
+// ARGV[4] = TTL (seconds), ARGV[5] = shouldStoreEvent (1 or 0),
+// ARGV[6] = has expected generation, ARGV[7] = expected generation,
+// ARGV[8] = turn-start request ID, ARGV[9] = turn-start invocation ID,
+// ARGV[10] = pre-turn projection boundary, ARGV[11] = runner completion,
+// ARGV[12] = has expected head, ARGV[13] = expected head,
+// ARGV[14] = has prepared projection, ARGV[15] = prepared projection JSON,
+// ARGV[16] = boundary requires a retained summary carrier,
+// ARGV[17] = explicit turn hazard.
+// (empty JSON clears the projection).
+// Returns: 1 on success, 0 if session not found, -1 for a stale generation,
+// -2 for a stale head, -3 when the boundary requires a retained summary
+// carrier that no longer exists.
 var luaAppendEvent = redis.NewScript(`
 local sessionMetaKey = KEYS[1]
 local evtDataKey = KEYS[2]
 local evtTimeKey = KEYS[3]
+local revisionKey = KEYS[4]
+local summaryKey = KEYS[5]
 
 local eventID = ARGV[1]
 local eventJSON = ARGV[2]
 local timestamp = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
 local shouldStoreEvent = tonumber(ARGV[5]) == 1
+local hasExpectedGeneration = tonumber(ARGV[6]) == 1
+local expectedGeneration = tonumber(ARGV[7])
+local startRequestID = ARGV[8]
+local startInvocationID = ARGV[9]
+local boundaryBase64 = ARGV[10]
+local runnerCompletion = tonumber(ARGV[11]) == 1
+local hasExpectedHead = tonumber(ARGV[12]) == 1
+local expectedHead = tonumber(ARGV[13])
+local hasPreparedProjection = tonumber(ARGV[14]) == 1
+local preparedProjectionJSON = ARGV[15]
+local boundaryRequiresSummary = tonumber(ARGV[16]) == 1
+local explicitHazard = tonumber(ARGV[17]) == 1
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
     redis.call('SET', key, value)
-    if ttlMs > 0 then
+    if ttlMs >= 0 then
         redis.call('PEXPIRE', key, ttlMs)
     end
 end
@@ -129,6 +180,79 @@ if not metaJSON then
     return 0
 end
 
+local revisionJSON = redis.call('GET', revisionKey)
+local revision = {generation = 0}
+if revisionJSON then
+    revision = cjson.decode(revisionJSON)
+end
+local generation = tonumber(revision.generation or 0)
+if hasExpectedGeneration and generation ~= expectedGeneration then
+    return -1
+end
+local head = tonumber(revision.head or 0)
+if hasExpectedHead and head ~= expectedHead then
+    return -2
+end
+if boundaryRequiresSummary and redis.call('EXISTS', summaryKey) == 0 then
+    return -3
+end
+local projectionAppendable = not hasPreparedProjection or preparedProjectionJSON ~= ''
+if shouldStoreEvent and (hasPreparedProjection or revision.checkpoint) then
+    local latest = redis.call('ZREVRANGE', evtTimeKey, 0, 0, 'WITHSCORES')
+    projectionAppendable = projectionAppendable and
+        redis.call('HEXISTS', evtDataKey, eventID) == 0 and
+        (#latest == 0 or timestamp > tonumber(latest[2]))
+end
+if hasPreparedProjection then
+    if projectionAppendable then
+        revision.projection = cjson.decode(preparedProjectionJSON)
+    else
+        revision.projection = nil
+    end
+end
+revision.head = head + 1
+if revision.checkpoint and (not hasExpectedGeneration or explicitHazard) then
+    revision.checkpoint.hazard = true
+end
+local evt = cjson.decode(eventJSON)
+local evtRequestID = evt.requestID or ''
+local evtInvocationID = evt.invocationId or ''
+local validStart = startRequestID ~= '' and shouldStoreEvent and
+    startRequestID == evtRequestID and startInvocationID == evtInvocationID and
+    boundaryBase64 ~= ''
+if validStart then
+    local checkpoint = revision.checkpoint
+    if not checkpoint or checkpoint.terminal then
+        revision.checkpoint = {
+            requestID = startRequestID,
+            invocationID = startInvocationID,
+            priorHeadRequestID = revision.headRequestID,
+            boundary = boundaryBase64,
+            terminal = false,
+            hazard = explicitHazard or
+                (revision.headRequestID and revision.headRequestID == startRequestID)
+        }
+    elseif checkpoint.requestID ~= startRequestID or checkpoint.invocationID ~= startInvocationID then
+        checkpoint.hazard = true
+    end
+end
+if shouldStoreEvent and evtRequestID ~= '' then
+    revision.headRequestID = evtRequestID
+end
+
+local checkpoint = revision.checkpoint
+if checkpoint then
+    if not projectionAppendable then
+        checkpoint.hazard = true
+    end
+    if not validStart and checkpoint.terminal then
+        checkpoint.hazard = true
+    end
+    if evtRequestID ~= checkpoint.requestID then
+        checkpoint.hazard = true
+    end
+end
+
 -- 2. Store event data only if shouldStoreEvent is true
 if shouldStoreEvent then
     redis.call('HSET', evtDataKey, eventID, eventJSON)
@@ -136,7 +260,6 @@ if shouldStoreEvent then
 end
 
 -- 3. Apply StateDelta to session meta's state (always, regardless of shouldStoreEvent)
-local evt = cjson.decode(eventJSON)
 local stateDelta = evt.stateDelta
 if stateDelta and next(stateDelta) ~= nil then
     local meta = cjson.decode(metaJSON)
@@ -153,13 +276,27 @@ if stateDelta and next(stateDelta) ~= nil then
     end
 end
 
+if runnerCompletion and revision.checkpoint then
+    checkpoint = revision.checkpoint
+    if checkpoint.requestID == evtRequestID and checkpoint.invocationID == evtInvocationID then
+        checkpoint.terminal = true
+    else
+        checkpoint.hazard = true
+    end
+end
+
+if ttl > 0 then
+    redis.call('SET', revisionKey, cjson.encode(revision), 'EX', ttl)
+else
+    setPreserveTTL(revisionKey, cjson.encode(revision))
+end
+
 -- 4. Refresh TTL on event data keys
 if ttl > 0 then
     redis.call('EXPIRE', sessionMetaKey, ttl)
     redis.call('EXPIRE', evtDataKey, ttl)
     redis.call('EXPIRE', evtTimeKey, ttl)
 end
-
 return 1
 `)
 
@@ -192,6 +329,7 @@ return result
 
 var luaLoadStateInitializationValue = redis.NewScript(`
 local sessionMetaKey = KEYS[1]
+local revisionKey = KEYS[2]
 local generationCandidate = ARGV[1]
 
 local metaJSON = redis.call('GET', sessionMetaKey)
@@ -233,12 +371,13 @@ if not meta.generation or meta.generation == '' then
         redis.call('SET', sessionMetaKey, metaJSON)
     end
 end
-return metaJSON
+return {metaJSON, redis.call('GET', revisionKey) or ''}
 `)
 
 var luaCommitStateInitialization = redis.NewScript(`
 local leaseKey = KEYS[1]
 local sessionMetaKey = KEYS[2]
+local revisionKey = KEYS[3]
 local ownerToken = ARGV[1]
 local encodedState = ARGV[2]
 -- nilSentinel is derived from a UUID by the Go caller and contains no Lua
@@ -247,6 +386,8 @@ local nilSentinel = ARGV[3]
 local expectedGeneration = ARGV[4]
 local updatedAt = ARGV[5]
 local ttlMs = tonumber(ARGV[6])
+local expectedRevisionJSON = ARGV[7]
+local updatedRevisionJSON = ARGV[8]
 
 if redis.call('GET', leaseKey) ~= ownerToken then
     return 0
@@ -273,6 +414,11 @@ if expectedGeneration == '' or meta.generation ~= expectedGeneration then
     redis.call('DEL', leaseKey)
     return -2
 end
+local currentRevisionJSON = redis.call('GET', revisionKey) or ''
+if currentRevisionJSON ~= expectedRevisionJSON then
+    redis.call('DEL', leaseKey)
+    return -3
+end
 if not meta.state or type(meta.state) ~= 'table' then
     meta.state = {}
 end
@@ -296,6 +442,13 @@ else
         redis.call('SET', sessionMetaKey, encodedMeta)
     end
 end
+local sessionTTL = redis.call('PTTL', sessionMetaKey)
+redis.call('SET', revisionKey, updatedRevisionJSON)
+if sessionTTL >= 0 then
+    redis.call('PEXPIRE', revisionKey, sessionTTL)
+elseif sessionTTL == -1 then
+    redis.call('PERSIST', revisionKey)
+end
 redis.call('DEL', leaseKey)
 return 1
 `)
@@ -304,23 +457,58 @@ return 1
 // JSON map (String key) only if the incoming UpdatedAt is newer-or-equal.
 //
 // KEYS[1] = summaryKey (String containing JSON map of all filterKey summaries)
+// KEYS[2] = private revision metadata key
+// KEYS[3] = session metadata key
 // ARGV[1] = filterKey
 // ARGV[2] = newSummaryJSON (single Summary, e.g. {"summary":"...","updated_at":"..."})
 // ARGV[3] = TTL (seconds, 0 = no TTL)
 //
-// Returns 1 if updated, 0 if skipped (existing is newer).
+// Returns 1 if updated, 0 if skipped (existing is newer), and -1 if stale.
 var luaSummarySetIfNewer = redis.NewScript(`
 local sumKey = KEYS[1]
+local revisionKey = KEYS[2]
+local sessionMetaKey = KEYS[3]
 local fk = ARGV[1]
 local newSum = cjson.decode(ARGV[2])
 local ttl = tonumber(ARGV[3])
+local hasExpectedGeneration = tonumber(ARGV[4]) == 1
+local expectedGeneration = tonumber(ARGV[5])
+local requestID = ARGV[6]
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
     redis.call('SET', key, value)
-    if ttlMs > 0 then
+    if ttlMs >= 0 then
         redis.call('PEXPIRE', key, ttlMs)
     end
+end
+
+local function setFromSessionTTL(key, value)
+    local ttlMs = redis.call('PTTL', sessionMetaKey)
+    redis.call('SET', key, value)
+    if ttlMs >= 0 then
+        redis.call('PEXPIRE', key, ttlMs)
+    elseif ttlMs == -1 then
+        redis.call('PERSIST', key)
+    end
+end
+
+local sessionExists = redis.call('EXISTS', sessionMetaKey) == 1
+if not sessionExists and hasExpectedGeneration then return -1 end
+
+local revisionJSON = redis.call('GET', revisionKey)
+local revision = {generation = 0}
+if revisionJSON then revision = cjson.decode(revisionJSON) end
+if hasExpectedGeneration and tonumber(revision.generation or 0) ~= expectedGeneration then
+    return -1
+end
+if revision.checkpoint and (not hasExpectedGeneration or requestID == '' or
+    requestID ~= revision.checkpoint.requestID) then
+    revision.checkpoint.hazard = true
+end
+local function touchRevision()
+    if not sessionExists then return end
+    setFromSessionTTL(revisionKey, cjson.encode(revision))
 end
 
 local cur = redis.call('GET', sumKey)
@@ -332,6 +520,8 @@ if not cur or cur == '' then
     else
         redis.call('SET', sumKey, cjson.encode(m))
     end
+    revision.head = tonumber(revision.head or 0) + 1
+    touchRevision()
     return 1
 end
 
@@ -344,8 +534,11 @@ local new_ts = newSum and newSum['updated_at'] or nil
 if not old or (old_ts and new_ts and old_ts <= new_ts) then
     map[fk] = newSum
     setPreserveTTL(sumKey, cjson.encode(map))
+    revision.head = tonumber(revision.head or 0) + 1
+    touchRevision()
     return 1
 end
+touchRevision()
 return 0
 `)
 
@@ -388,26 +581,48 @@ end
 return cjson.encode(result)
 `)
 
-// luaDeleteEvent deletes an event and its indexes.
-// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key
+// luaDeleteEvent deletes an event and its indexes and invalidates the rolling
+// revision projection in the same script.
+// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key,
+// KEYS[3] = session metadata key, KEYS[4] = private revision metadata key
 // ARGV[1] = eventID
 var luaDeleteEvent = redis.NewScript(`
 local evtDataKey = KEYS[1]
 local evtTimeKey = KEYS[2]
+local sessionMetaKey = KEYS[3]
+local revisionKey = KEYS[4]
 local eventID = ARGV[1]
 
-redis.call('HDEL', evtDataKey, eventID)
-redis.call('ZREM', evtTimeKey, eventID)
+local removed = redis.call('HDEL', evtDataKey, eventID) +
+    redis.call('ZREM', evtTimeKey, eventID)
+if removed > 0 and redis.call('EXISTS', sessionMetaKey) == 1 then
+    local revisionJSON = redis.call('GET', revisionKey)
+    local revision = {generation = 0}
+    if revisionJSON then revision = cjson.decode(revisionJSON) end
+    revision.head = tonumber(revision.head or 0) + 1
+    if revision.checkpoint then revision.checkpoint.hazard = true end
+    revision.projection = nil
+    local ttlMs = redis.call('PTTL', sessionMetaKey)
+    redis.call('SET', revisionKey, cjson.encode(revision))
+    if ttlMs >= 0 then
+        redis.call('PEXPIRE', revisionKey, ttlMs)
+    elseif ttlMs == -1 then
+        redis.call('PERSIST', revisionKey)
+    end
+end
 
-return 1
+return removed
 `)
 
 // luaTrimConversations trims the most recent N conversations (by RequestID).
-// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key
+// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key,
+// KEYS[3] = session metadata key, KEYS[4] = private revision metadata key
 // ARGV[1] = count
 var luaTrimConversations = redis.NewScript(`
 local evtDataKey = KEYS[1]
 local evtTimeKey = KEYS[2]
+local sessionMetaKey = KEYS[3]
+local revisionKey = KEYS[4]
 local count = tonumber(ARGV[1])
 
 local targetReqIDs = {}
@@ -445,6 +660,22 @@ for _, eid in ipairs(toDelete) do
     table.insert(result, data)
     redis.call('HDEL', evtDataKey, eid)
     redis.call('ZREM', evtTimeKey, eid)
+end
+
+if #toDelete > 0 and redis.call('EXISTS', sessionMetaKey) == 1 then
+    local revisionJSON = redis.call('GET', revisionKey)
+    local revision = {generation = 0}
+    if revisionJSON then revision = cjson.decode(revisionJSON) end
+    revision.head = tonumber(revision.head or 0) + 1
+    if revision.checkpoint then revision.checkpoint.hazard = true end
+    revision.projection = nil
+    local ttlMs = redis.call('PTTL', sessionMetaKey)
+    redis.call('SET', revisionKey, cjson.encode(revision))
+    if ttlMs >= 0 then
+        redis.call('PEXPIRE', revisionKey, ttlMs)
+    elseif ttlMs == -1 then
+        redis.call('PERSIST', revisionKey)
+    end
 end
 
 local reversed = {}
@@ -495,18 +726,26 @@ return 1
 // KEYS[2] = trkidx:time key (ZSet, member=eventID, score=timestamp)
 // KEYS[3] = sessionMeta key (String, for existence check and track registration)
 // KEYS[4] = trkidx:names key (Set, member=trackName)
+// KEYS[5] = private revision metadata key
 // ARGV[1] = TrackEvent JSON
 // ARGV[2] = timestamp (UnixNano)
 // ARGV[3] = TTL (seconds, 0 = no TTL)
 // ARGV[4] = track TTL override set (1 or 0)
 // ARGV[5] = updated tracks value (base64-encoded JSON array, to set as state.tracks)
 // ARGV[6] = track name
-// Returns: generated eventID (integer) on success, 0 if session not found.
+// ARGV[7] = has expected generation, ARGV[8] = expected generation,
+// ARGV[9] = has expected head, ARGV[10] = expected head,
+// ARGV[11] = has prepared projection, ARGV[12] = prepared projection JSON,
+// ARGV[13] = request ID associated with the track write
+// (empty JSON clears the projection).
+// Returns: generated eventID on success, 0 if session not found, -1 if stale
+// generation, -2 if stale projection.
 var luaAppendTrackEvent = redis.NewScript(`
 local dataKey = KEYS[1]
 local idxKey = KEYS[2]
 local metaKey = KEYS[3]
 local trackNamesKey = KEYS[4]
+local revisionKey = KEYS[5]
 
 local payload = ARGV[1]
 local ts = tonumber(ARGV[2])
@@ -514,11 +753,18 @@ local ttl = tonumber(ARGV[3])
 local trackTTLSet = tonumber(ARGV[4]) == 1
 local tracksVal = ARGV[5]
 local trackName = ARGV[6]
+local hasExpectedGeneration = tonumber(ARGV[7]) == 1
+local expectedGeneration = tonumber(ARGV[8])
+local hasExpectedHead = tonumber(ARGV[9]) == 1
+local expectedHead = tonumber(ARGV[10])
+local hasPreparedProjection = tonumber(ARGV[11]) == 1
+local preparedProjectionJSON = ARGV[12]
+local trackRequestID = ARGV[13]
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
     redis.call('SET', key, value)
-    if ttlMs > 0 then
+    if ttlMs >= 0 then
         redis.call('PEXPIRE', key, ttlMs)
     end
 end
@@ -527,6 +773,43 @@ end
 local metaJSON = redis.call('GET', metaKey)
 if not metaJSON then
     return 0
+end
+local sessionTTLms = redis.call('PTTL', metaKey)
+
+local revisionJSON = redis.call('GET', revisionKey)
+local revision = {generation = 0}
+if revisionJSON then
+    revision = cjson.decode(revisionJSON)
+end
+if hasExpectedGeneration and tonumber(revision.generation or 0) ~= expectedGeneration then
+    return -1
+end
+local head = tonumber(revision.head or 0)
+if hasExpectedHead and head ~= expectedHead then
+    return -2
+end
+local projectionAppendable = not hasPreparedProjection or preparedProjectionJSON ~= ''
+if hasPreparedProjection or revision.checkpoint then
+    local latest = redis.call('ZREVRANGE', idxKey, 0, 0, 'WITHSCORES')
+    projectionAppendable = projectionAppendable and
+        (#latest == 0 or ts > tonumber(latest[2]))
+end
+if hasPreparedProjection then
+    if projectionAppendable then
+        revision.projection = cjson.decode(preparedProjectionJSON)
+    else
+        revision.projection = nil
+    end
+end
+revision.head = head + 1
+if not hasExpectedGeneration and revision.checkpoint then
+    revision.checkpoint.hazard = true
+end
+if revision.checkpoint then
+    if not projectionAppendable or revision.checkpoint.terminal or trackRequestID == '' or
+        trackRequestID ~= revision.checkpoint.requestID then
+        revision.checkpoint.hazard = true
+    end
 end
 
 -- Generate auto-increment ID via reserved "_seq" field in the data Hash
@@ -544,7 +827,12 @@ if not meta.state or type(meta.state) ~= 'table' then
 end
 meta.state['tracks'] = tracksVal
 setPreserveTTL(metaKey, cjson.encode(meta))
-
+redis.call('SET', revisionKey, cjson.encode(revision))
+if sessionTTLms >= 0 then
+    redis.call('PEXPIRE', revisionKey, sessionTTLms)
+elseif sessionTTLms == -1 then
+    redis.call('PERSIST', revisionKey)
+end
 -- Refresh TTL for track data keys
 if ttl > 0 then
     redis.call('EXPIRE', dataKey, ttl)

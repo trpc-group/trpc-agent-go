@@ -15,16 +15,31 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 var (
-	_ session.Service      = (*Service)(nil)
-	_ session.TrackService = (*Service)(nil)
+	_ session.Service       = (*Service)(nil)
+	_ session.TrackService  = (*Service)(nil)
+	_ session.RewindService = (*Service)(nil)
 )
 
 // Service implements session.Service without storing sessions or state.
 type Service struct{}
+
+// Rewind validates the request and reports that a no-op service cannot restore
+// persisted state. Invalid requests return a validation error; valid requests
+// return session.ErrRewindUnsupported.
+func (s *Service) Rewind(
+	_ context.Context,
+	req session.RewindRequest,
+) (*session.RewindResult, error) {
+	if err := sessionrevision.ValidateRewindRequest(req); err != nil {
+		return nil, err
+	}
+	return nil, session.ErrRewindUnsupported
+}
 
 // NewService creates a new no-op session service.
 func NewService() *Service {

@@ -14,12 +14,17 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 type sessionService struct {
 	next session.Service
+}
+
+type rewindForwarder struct {
+	rewinder session.RewindService
 }
 
 type windowSessionService struct {
@@ -93,33 +98,89 @@ func WrapSessionService(next session.Service) session.Service {
 	default:
 		wrapped = base
 	}
-	if !hasInitializer {
+	if hasInitializer {
+		forwarder := &stateInitializationForwarder{
+			initializer: initializer,
+		}
+		switch service := wrapped.(type) {
+		case *searchWindowSessionService:
+			wrapped = &stateInitializingSearchWindowSessionService{
+				searchWindowSessionService:   service,
+				stateInitializationForwarder: forwarder,
+			}
+		case *windowSessionService:
+			wrapped = &stateInitializingWindowSessionService{
+				windowSessionService:         service,
+				stateInitializationForwarder: forwarder,
+			}
+		case *searchableSessionService:
+			wrapped = &stateInitializingSearchableSessionService{
+				searchableSessionService:     service,
+				stateInitializationForwarder: forwarder,
+			}
+		default:
+			wrapped = &stateInitializingSessionService{
+				sessionService:               base,
+				stateInitializationForwarder: forwarder,
+			}
+		}
+	}
+	rewinder, ok := next.(session.RewindService)
+	if !ok {
 		return wrapped
 	}
-	forwarder := &stateInitializationForwarder{
-		initializer: initializer,
-	}
+	return wrapRewindInterface(wrapped, &rewindForwarder{
+		rewinder: rewinder,
+	})
+}
+
+func wrapRewindInterface(
+	wrapped session.Service,
+	forwarder *rewindForwarder,
+) session.Service {
 	switch service := wrapped.(type) {
+	case *stateInitializingSearchWindowSessionService:
+		return &struct {
+			*stateInitializingSearchWindowSessionService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingWindowSessionService:
+		return &struct {
+			*stateInitializingWindowSessionService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingSearchableSessionService:
+		return &struct {
+			*stateInitializingSearchableSessionService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingSessionService:
+		return &struct {
+			*stateInitializingSessionService
+			*rewindForwarder
+		}{service, forwarder}
 	case *searchWindowSessionService:
-		return &stateInitializingSearchWindowSessionService{
-			searchWindowSessionService:   service,
-			stateInitializationForwarder: forwarder,
-		}
+		return &struct {
+			*searchWindowSessionService
+			*rewindForwarder
+		}{service, forwarder}
 	case *windowSessionService:
-		return &stateInitializingWindowSessionService{
-			windowSessionService:         service,
-			stateInitializationForwarder: forwarder,
-		}
+		return &struct {
+			*windowSessionService
+			*rewindForwarder
+		}{service, forwarder}
 	case *searchableSessionService:
-		return &stateInitializingSearchableSessionService{
-			searchableSessionService:     service,
-			stateInitializationForwarder: forwarder,
-		}
+		return &struct {
+			*searchableSessionService
+			*rewindForwarder
+		}{service, forwarder}
+	case *sessionService:
+		return &struct {
+			*sessionService
+			*rewindForwarder
+		}{service, forwarder}
 	default:
-		return &stateInitializingSessionService{
-			sessionService:               base,
-			stateInitializationForwarder: forwarder,
-		}
+		return wrapped
 	}
 }
 
@@ -218,6 +279,23 @@ func (s *sessionService) GetSession(
 		)
 	}
 	return rewriteSessionForUser(sess, key.UserID), nil
+}
+
+func (s *rewindForwarder) Rewind(
+	ctx context.Context,
+	req session.RewindRequest,
+) (*session.RewindResult, error) {
+	if err := sessionrevision.ValidateRewindRequest(req); err != nil {
+		return nil, err
+	}
+	logicalUserID := req.Key.UserID
+	req.Key = rewriteKeyForStorage(ctx, req.Key)
+	result, err := s.rewinder.Rewind(ctx, req)
+	if err != nil || result == nil || result.Session == nil {
+		return result, err
+	}
+	result.Session = rewriteSessionForUser(result.Session, logicalUserID)
+	return result, nil
 }
 
 func (s *sessionService) ListSessions(

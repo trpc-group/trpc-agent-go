@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -40,6 +41,18 @@ func (s *Service) effectiveStateInitializationLeaseTTL() time.Duration {
 }
 
 type stateInitializationRoute uint8
+
+type stateInitializationGeneration struct {
+	Storage string `json:"storage"`
+}
+
+func stateInitializationStorageGeneration(raw string) string {
+	var generation stateInitializationGeneration
+	if json.Unmarshal([]byte(raw), &generation) == nil && generation.Storage != "" {
+		return generation.Storage
+	}
+	return raw
+}
 
 const (
 	stateInitializationRouteHashIdx stateInitializationRoute = iota + 1
@@ -155,7 +168,8 @@ func (s *Service) LoadOrInitializeSessionState(
 		if err != nil {
 			return nil, false, err
 		}
-		if generation != expectedGeneration {
+		if stateInitializationStorageGeneration(generation) !=
+			stateInitializationStorageGeneration(expectedGeneration) {
 			return nil, false, errors.New(
 				"initialize session state: session generation changed while waiting for ownership",
 			)
@@ -278,7 +292,8 @@ func (s *Service) initializeSessionState(
 	if err != nil {
 		return nil, false, err
 	}
-	if generation != expectedGeneration {
+	if stateInitializationStorageGeneration(generation) !=
+		stateInitializationStorageGeneration(expectedGeneration) {
 		return nil, false, errors.New(
 			"initialize session state: session generation changed before ownership was established",
 		)
@@ -377,6 +392,9 @@ func (s *Service) initializeSessionState(
 	case -2:
 		owned = false
 		return nil, false, errors.New("initialize session state: session generation changed during commit")
+	case -3:
+		owned = false
+		return nil, false, errors.New("initialize session state: session revision changed during commit")
 	default:
 		return nil, false, fmt.Errorf(
 			"initialize session state: unexpected commit result %d",

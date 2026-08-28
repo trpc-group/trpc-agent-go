@@ -607,3 +607,23 @@ func TestService_EventPageValidation(t *testing.T) {
 	assert.ErrorIs(t, err, session.ErrEventPageOnlyForGetSession)
 	assert.Nil(t, sessions)
 }
+
+func TestRewindUnsupported(t *testing.T) {
+	result, err := (&Service{}).Rewind(
+		context.Background(),
+		session.RewindRequest{},
+	)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, session.ErrInvalidRewindRequest)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	result, err = (&Service{}).Rewind(
+		context.Background(),
+		session.RewindRequest{
+			Key: key, TargetRequestID: "target",
+			ExpectedHeadRequestID: "head", IdempotencyKey: "operation",
+		},
+	)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, session.ErrRewindUnsupported)
+}

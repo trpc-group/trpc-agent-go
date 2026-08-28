@@ -59,6 +59,18 @@ defer sessionService.Close()
 - **Schema/DDL**: `WithSkipDBInit`, `WithTablePrefix`
 - **Hooks**: `WithAppendEventHook`, `WithGetSessionHook`
 
+## Latest-turn Replacement Storage
+
+Latest-turn replacement through `Runner.Run` stores a versioned private
+revision sidecar in the existing `<prefix>session_states.state` JSON. The
+sidecar is outside the user-visible `Session.State` and is updated in the same
+transaction as events, state, summaries, and Tracks. It uses no extra table or
+migration, including with `WithSkipDBInit(true)`.
+
+A replacement preserves the source Session's expiration timestamp rather than
+refreshing its TTL. Upgrade every writer before enabling replacement; see
+[Replacing the Latest Turn](index.md#replacing-the-latest-turn).
+
 ## Use Cases
 
 | Scenario | Recommended Configuration |

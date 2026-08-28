@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/internal/sessionopt"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
@@ -37,10 +38,12 @@ type stateWithTTL struct {
 type sessionWithTTL struct {
 	session   *session.Session
 	expiredAt time.Time
+	revision  *latestTurnRevision
 }
 
 var (
 	_ session.Service       = (*SessionService)(nil)
+	_ session.RewindService = (*SessionService)(nil)
 	_ session.TrackService  = (*SessionService)(nil)
 	_ session.WindowService = (*SessionService)(nil)
 
@@ -318,6 +321,7 @@ func (s *SessionService) CreateSession(
 
 	// Create a copy and merge state for return
 	copiedSess := sess.Clone()
+	revision.SetGeneration(copiedSess, 0)
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[key.UserID])
 	if appState == nil {
@@ -381,6 +385,7 @@ func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *s
 	}
 
 	copiedSess := sess.Clone()
+	revision.SetGeneration(copiedSess, sessWithTTL.revisionGeneration())
 
 	// apply filtering options if provided
 	copiedSess.ApplyEventFiltering(
@@ -492,6 +497,7 @@ func (s *SessionService) ListSessions(
 			copiedSess.ApplyEventFiltering(opts...)
 			applyTrackFiltering(copiedSess, opt)
 		}
+		revision.SetGeneration(copiedSess, sWithTTL.revisionGeneration())
 
 		sessList = append(sessList, mergeState(appState, userState, copiedSess))
 	}
@@ -677,7 +683,6 @@ func (s *SessionService) UpdateSessionState(ctx context.Context, key session.Key
 	if isExpired(sessWithTTL.expiredAt) {
 		return fmt.Errorf("memory session service update session state failed: session expired")
 	}
-
 	// Validate: disallow app: and user: prefixes
 	for k := range state {
 		if strings.HasPrefix(k, session.StateAppPrefix) {
@@ -686,6 +691,9 @@ func (s *SessionService) UpdateSessionState(ctx context.Context, key session.Key
 		if strings.HasPrefix(k, session.StateUserPrefix) {
 			return fmt.Errorf("memory session service update session state failed: %s is not allowed, use UpdateUserState instead", k)
 		}
+	}
+	if err := sessWithTTL.applyRevisionWrite(ctx, nil); err != nil {
+		return err
 	}
 
 	// Update session state (allow temp: prefix and unprefixed keys)
@@ -800,8 +808,6 @@ func (s *SessionService) appendEvent(
 	key session.Key,
 	opts ...session.Option,
 ) error {
-	sess.UpdateUserSession(evt, opts...)
-
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
 		return fmt.Errorf("app not found: %s", key.AppName)
@@ -826,10 +832,24 @@ func (s *SessionService) appendEvent(
 	if storedSession == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
+	write, err := revision.NewEventWrite(ctx, sess, evt)
+	if err != nil {
+		return err
+	}
+	if err := storedSessionWithTTL.applyEventRevisionWrite(ctx, sess, evt); err != nil {
+		return err
+	}
+	_ = revision.CompleteWrite(sess, write, nil)
+	sess.UpdateUserSession(evt, opts...)
 
 	// update stored session with the given event
-	s.updateStoredSession(storedSession, evt)
-
+	if s.updateStoredSession(storedSession, evt) {
+		record := &storedSessionWithTTL.ensureRevision().record
+		if record.Checkpoint != nil {
+			record.Checkpoint.Hazard = true
+		}
+		revision.InvalidateProjection(record)
+	}
 	// Update the session in the wrapper and refresh TTL.
 	storedSessionWithTTL.session = storedSession
 	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
@@ -843,8 +863,8 @@ func (s *SessionService) AppendTrackEvent(
 	trackEvent *session.TrackEvent,
 	opts ...session.Option,
 ) error {
-	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
-		return fmt.Errorf("append track event: %w", err)
+	if sess == nil {
+		return session.ErrNilSession
 	}
 	key := session.Key{
 		AppName:   sess.AppName,
@@ -853,6 +873,12 @@ func (s *SessionService) AppendTrackEvent(
 	}
 	if err := key.CheckSessionKey(); err != nil {
 		return err
+	}
+	// Validate the caller projection before storage lookup to preserve existing
+	// error precedence without mutating it ahead of revision checks.
+	validated := sess.Clone()
+	if err := validated.AppendTrackEvent(trackEvent, opts...); err != nil {
+		return fmt.Errorf("append track event: %w", err)
 	}
 
 	app, ok := s.getAppSessions(key.AppName)
@@ -879,14 +905,25 @@ func (s *SessionService) AppendTrackEvent(
 	if storedSession == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
-
-	// Append track event to the session.
-	if err := storedSession.AppendTrackEvent(trackEvent, opts...); err != nil {
+	storedCandidate := storedSession.Clone()
+	if err := storedCandidate.AppendTrackEvent(trackEvent, opts...); err != nil {
+		return fmt.Errorf("append track event: %w", err)
+	}
+	revisionCandidate, err := storedSessionWithTTL.prepareTrackRevisionWrite(
+		ctx,
+		sess,
+		trackEvent,
+	)
+	if err != nil {
+		return err
+	}
+	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
 		return fmt.Errorf("append track event: %w", err)
 	}
 
-	// Update the session in the wrapper and refresh TTL.
-	storedSessionWithTTL.session = storedSession
+	// Commit the authoritative projection and its revision together.
+	storedSessionWithTTL.session = storedCandidate
+	storedSessionWithTTL.revision = revisionCandidate
 	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 	return nil
 }
@@ -995,19 +1032,25 @@ func (s *SessionService) Close() error {
 }
 
 // updateStoredSession updates the stored session with the given event.
-func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Event) {
+func (s *SessionService) updateStoredSession(
+	sess *session.Session,
+	e *event.Event,
+) bool {
+	trimmed := false
 	if e.Response != nil && !e.IsPartial && e.IsValidContent() {
 		storedEvent := cloneStoredEvent(e)
 		sess.EventMu.Lock()
 		sess.Events = append(sess.Events, storedEvent)
 		if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
 			sess.ApplyEventFiltering(session.WithEventNum(s.opts.sessionEventLimit))
+			trimmed = true
 		}
 		sess.EventMu.Unlock()
 	}
 	sess.UpdatedAt = time.Now()
 	// Merge event state delta to session state.
 	sess.ApplyEventStateDelta(e)
+	return trimmed
 }
 
 func cloneStoredEvent(e *event.Event) event.Event {

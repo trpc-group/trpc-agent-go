@@ -308,6 +308,7 @@ func TestClient_DeleteSession(t *testing.T) {
 	_, err := c.CreateSession(ctx, key, nil)
 	require.NoError(t, err)
 	require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent("e1", time.Now())))
+	require.NoError(t, rdb.Set(ctx, c.keys.RevisionKey(key), `{}`, 0).Err())
 
 	indexKey := c.keys.SessionIndexKey(session.UserKey{AppName: key.AppName, UserID: key.UserID})
 	exists, err := rdb.HExists(ctx, indexKey, key.SessionID).Result()
@@ -323,6 +324,9 @@ func TestClient_DeleteSession(t *testing.T) {
 	exists, err = rdb.HExists(ctx, indexKey, key.SessionID).Result()
 	require.NoError(t, err)
 	assert.False(t, exists)
+	revisionExists, err := rdb.Exists(ctx, c.keys.RevisionKey(key)).Result()
+	require.NoError(t, err)
+	assert.Zero(t, revisionExists)
 }
 
 func TestClient_DeleteSession_FallbackWhenUserIndexDisabled(t *testing.T) {

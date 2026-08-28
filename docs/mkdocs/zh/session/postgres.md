@@ -219,6 +219,17 @@ sessionService, err := postgres.NewService(
 )
 ```
 
+## 替换最新一轮
+
+PostgreSQL 支持通过 `Runner.Run` 和 `agent.WithLatestTurnReplacement` 编辑并重发最新
+一个已持久化 turn。目标 Session 的异步写入 drain 后，events、Session state、
+summaries、Tracks 与新的 write generation 会在同一个数据库事务中更新。
+
+Revision metadata 以带版本的私有 sidecar 保存在现有
+`session_states.state` JSON 中；即使使用 `WithSkipDBInit(true)`，也不需要额外建表、
+索引或迁移。Runner API、滚动升级要求、TTL 行为与回滚边界见
+[替换最新一轮](index.md#replace-latest-turn)。
+
 ## 存储结构
 
 PostgreSQL 使用以下表结构：

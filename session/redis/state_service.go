@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -136,6 +137,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 	}
 
 	// Check session existence in zset and hashidx
+	write := sessionrevision.NewWrite(ctx, nil)
 	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 	if err != nil {
 		return fmt.Errorf("check session existence failed: %w", err)
@@ -143,10 +145,10 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 
 	// zset first: if zset exists, route to zset.
 	if s.compatEnabled() && zsetExists {
-		return s.zsetClient.UpdateSessionState(ctx, key, state)
+		return s.zsetClient.UpdateSessionStateWithRevision(ctx, key, state, write)
 	}
 	if hashidxExists {
-		return s.hashidxClient.UpdateSessionState(ctx, key, state)
+		return s.hashidxClient.UpdateSessionStateWithRevision(ctx, key, state, write)
 	}
 
 	return fmt.Errorf("session not found")

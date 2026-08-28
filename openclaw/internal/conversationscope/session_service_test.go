@@ -74,6 +74,21 @@ type recordingSessionService struct {
 	closeCalls          int
 }
 
+type recordingRewindSessionService struct {
+	*recordingSessionService
+	rewindRequest session.RewindRequest
+	rewindResult  *session.RewindResult
+	rewindErr     error
+}
+
+func (r *recordingRewindSessionService) Rewind(
+	_ context.Context,
+	req session.RewindRequest,
+) (*session.RewindResult, error) {
+	r.rewindRequest = req
+	return r.rewindResult, r.rewindErr
+}
+
 func (r *recordingSessionService) CreateSession(
 	_ context.Context,
 	key session.Key,
@@ -510,6 +525,62 @@ func TestWrapSessionService_UsesContextStorageScopeForStorage(t *testing.T) {
 	raw, ok := updated.GetState("migrated")
 	require.True(t, ok)
 	require.Equal(t, []byte("yes"), raw)
+}
+
+func TestWrapSessionService_RewritesRewindScope(t *testing.T) {
+	t.Parallel()
+
+	storageSession := session.NewSession("app", "chat-scope", "session")
+	storageSession.ServiceMeta = map[string]string{"revision": "fenced"}
+	next := &recordingRewindSessionService{
+		recordingSessionService: &recordingSessionService{},
+		rewindResult:            &session.RewindResult{Session: storageSession},
+	}
+	wrapped := WrapSessionService(next)
+	rewinder, ok := wrapped.(session.RewindService)
+	require.True(t, ok)
+
+	ctx := WithStorageUserID(context.Background(), "chat-scope")
+	request := session.RewindRequest{
+		Key: session.Key{
+			AppName: "app", UserID: "canonical-user", SessionID: "session",
+		},
+		TargetRequestID: "latest", ExpectedHeadRequestID: "latest",
+		IdempotencyKey: "edit",
+	}
+	result, err := rewinder.Rewind(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, "chat-scope", next.rewindRequest.Key.UserID)
+	require.Equal(t, "canonical-user", result.Session.UserID)
+	require.Equal(t, "fenced", result.Session.ServiceMeta["revision"])
+	require.Equal(t, "chat-scope", storageSession.UserID)
+}
+
+func TestWrapSessionService_RejectsInvalidRewindBeforeScopeRewrite(t *testing.T) {
+	t.Parallel()
+
+	next := &recordingRewindSessionService{
+		recordingSessionService: &recordingSessionService{},
+	}
+	rewinder, ok := WrapSessionService(next).(session.RewindService)
+	require.True(t, ok)
+	ctx := WithStorageUserID(context.Background(), "chat-scope")
+	result, err := rewinder.Rewind(ctx, session.RewindRequest{
+		Key:             session.Key{AppName: "app", SessionID: "session"},
+		TargetRequestID: "latest", ExpectedHeadRequestID: "latest",
+		IdempotencyKey: "edit",
+	})
+	require.Nil(t, result)
+	require.ErrorIs(t, err, session.ErrInvalidRewindRequest)
+	require.Equal(t, session.RewindRequest{}, next.rewindRequest)
+}
+
+func TestWrapSessionService_RewindUnsupported(t *testing.T) {
+	t.Parallel()
+
+	wrapped := WrapSessionService(&recordingSessionService{})
+	_, ok := wrapped.(session.RewindService)
+	require.False(t, ok)
 }
 
 func TestWrapSessionService_SyncsSummaryRuntimeState(t *testing.T) {

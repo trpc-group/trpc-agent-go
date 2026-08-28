@@ -261,6 +261,20 @@ If HNSW index creation fails, the service logs a warning and continues running. 
 
 If you use `WithSkipDBInit(true)`, make sure the extension, tables, columns, and indexes already exist, and that the `embedding` column dimension matches `WithIndexDimension(...)`.
 
+## Latest-turn Replacement
+
+PGVector supports editing and resending the latest persisted turn through
+`Runner.Run` and `agent.WithLatestTurnReplacement`. It uses the same
+transactional revision protocol as the PostgreSQL backend. Replacement removes
+only the discarded event tail, so the retained prefix keeps its existing
+`content_text`, role, embedding, and text-search index data.
+
+Revision metadata is a versioned private sidecar in the existing
+`session_states.state` JSON. No additional table, index, or migration is
+required, including with `WithSkipDBInit(true)`. See
+[Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the Runner
+API, rollout requirements, and rollback boundaries.
+
 ## Storage Structure
 
 All regular session tables are the same as `session/postgres`. PGVector extends `session_events` with additional search fields:

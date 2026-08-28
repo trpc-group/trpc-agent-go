@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	rootrunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	servertrpcagent "trpc.group/trpc-go/trpc-agent-go/server/trpcagent"
+	sessionpkg "trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -574,6 +576,184 @@ func TestRunInteroperatesWithServerTRPCAgent(t *testing.T) {
 	assert.Equal(t, "input", serverRunner.message.Content)
 }
 
+func TestRunForwardsLatestTurnReplacementToServerTRPCAgent(t *testing.T) {
+	completion := event.NewResponseEvent("inv-1", "sports-agent", &model.Response{
+		Object: model.ObjectTypeRunnerCompletion,
+		Done:   true,
+	})
+	serverRunner := &fakeServerRunner{events: []*event.Event{completion}}
+	server, err := servertrpcagent.New(
+		servertrpcagent.WithAppName("sports-agent"),
+		servertrpcagent.WithRunner(serverRunner),
+	)
+	require.NoError(t, err)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	apiRunner, err := New("sports-agent", WithTarget(httpServer.URL))
+	require.NoError(t, err)
+	events, err := apiRunner.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("edited input"),
+		agent.WithRequestID("request-new"),
+		agent.WithLatestTurnReplacement("request-old"),
+	)
+	require.NoError(t, err)
+	require.Len(t, collectEvents(events), 1)
+	require.Len(t, serverRunner.runOptions, 1)
+	options := serverRunner.runOptions[0]
+	require.NotNil(t, options.LatestTurnReplacement)
+	assert.Equal(t, "request-old", options.LatestTurnReplacement.ExpectedRequestID)
+	assert.Equal(t, "request-new", options.RequestID)
+}
+
+func TestRunPreservesLatestTurnReplacementErrorsFromServerTRPCAgent(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "unsupported", err: sessionpkg.ErrRewindUnsupported},
+		{name: "conflict", err: sessionpkg.ErrRewindConflict},
+		{name: "unavailable", err: sessionpkg.ErrRewindUnavailable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serverRunner := &fakeServerRunner{err: fmt.Errorf("backend rejected edit: %w", tt.err)}
+			server, err := servertrpcagent.New(
+				servertrpcagent.WithAppName("sports-agent"),
+				servertrpcagent.WithRunner(serverRunner),
+			)
+			require.NoError(t, err)
+			httpServer := httptest.NewServer(server.Handler())
+			defer httpServer.Close()
+
+			apiRunner, err := New("sports-agent", WithTarget(httpServer.URL))
+			require.NoError(t, err)
+			events, err := apiRunner.Run(
+				context.Background(),
+				"user-1",
+				"session-1",
+				model.NewUserMessage("edited input"),
+				agent.WithRequestID("request-new"),
+				agent.WithLatestTurnReplacement("request-old"),
+			)
+			assert.Nil(t, events)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, tt.err)
+			assert.ErrorContains(t, err, "backend rejected edit")
+		})
+	}
+}
+
+func TestRunReturnsGenericDirectLatestTurnReplacementError(t *testing.T) {
+	serverRunner := &fakeServerRunner{err: errors.New("backend rejected edit")}
+	server, err := servertrpcagent.New(
+		servertrpcagent.WithAppName("sports-agent"),
+		servertrpcagent.WithRunner(serverRunner),
+	)
+	require.NoError(t, err)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	apiRunner, err := New("sports-agent", WithTarget(httpServer.URL))
+	require.NoError(t, err)
+	events, err := apiRunner.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("edited input"),
+		agent.WithRequestID("request-new"),
+		agent.WithLatestTurnReplacement("request-old"),
+	)
+	assert.Nil(t, events)
+	require.EqualError(
+		t,
+		err,
+		"trpcagent runner: remote run failed: backend rejected edit",
+	)
+}
+
+func TestDirectRunErrorRejectsUnknownWireKind(t *testing.T) {
+	assert.NoError(t, directRunError(nil, true))
+	assert.NoError(t, directRunError(&runResponse{}, true))
+	assert.NoError(t, directRunError(&runResponse{DirectRunError: true}, false))
+	require.EqualError(
+		t,
+		directRunError(&runResponse{DirectRunError: true}, true),
+		"trpcagent runner: remote run failed",
+	)
+	require.EqualError(
+		t,
+		directRunError(&runResponse{
+			DirectRunError: true,
+			ErrorMessage:   "backend rejected edit",
+		}, true),
+		"trpcagent runner: remote run failed: backend rejected edit",
+	)
+	err := directRunError(&runResponse{
+		DirectRunErrorKind: "latest_turn_replacement_conflict",
+	}, true)
+	require.EqualError(
+		t,
+		err,
+		"trpcagent runner: remote run failed: "+
+			sessionpkg.ErrRewindConflict.Error(),
+	)
+	assert.ErrorIs(t, err, sessionpkg.ErrRewindConflict)
+	err = directRunError(&runResponse{
+		DirectRunErrorKind: "future_kind",
+		ErrorMessage:       "remote rejected run",
+	}, true)
+	require.EqualError(
+		t,
+		err,
+		`trpcagent runner: remote run failed with unknown error kind "future_kind": remote rejected run`,
+	)
+}
+
+func TestNormalizeRunIdentityRejectsInvalidLatestTurnReplacement(t *testing.T) {
+	require.EqualError(t, normalizeRunIdentity(nil), "trpcagent runner: run options are nil")
+	tests := []struct {
+		name    string
+		options agent.RunOptions
+		want    string
+	}{
+		{
+			name: "empty expected request id",
+			options: agent.NewRunOptions(
+				agent.WithRequestID("request-new"),
+				agent.WithLatestTurnReplacement(""),
+			),
+			want: "expected request id is empty",
+		},
+		{
+			name: "empty replacement request id",
+			options: agent.NewRunOptions(
+				agent.WithRequestID(""),
+				agent.WithLatestTurnReplacement("request-old"),
+			),
+			want: "requires an explicit request id",
+		},
+		{
+			name: "matching request ids",
+			options: agent.NewRunOptions(
+				agent.WithRequestID("request-same"),
+				agent.WithLatestTurnReplacement("request-same"),
+			),
+			want: "replacement request ids must differ",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := normalizeRunIdentity(&tt.options)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
 func TestDescribeFetchesStructure(t *testing.T) {
 	want := testStructureSnapshot()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -852,6 +1032,7 @@ type fakeServerRunner struct {
 	message    model.Message
 	runOptions []agent.RunOptions
 	events     []*event.Event
+	err        error
 }
 
 func (r *fakeServerRunner) Run(
@@ -864,6 +1045,9 @@ func (r *fakeServerRunner) Run(
 	r.message = message
 	options := agent.NewRunOptions(runOpts...)
 	r.runOptions = append(r.runOptions, options)
+	if r.err != nil {
+		return nil, r.err
+	}
 	ch := make(chan *event.Event, len(r.events))
 	for _, evt := range r.events {
 		eventValue := *evt

@@ -16,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -281,12 +283,33 @@ func TestSessionSQLite_CleanupExpiredTrackEvents(t *testing.T) {
 			key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
 			sess, err := svc.CreateSession(ctx, key, nil)
 			require.NoError(t, err)
+			turnCtx := sessionrevision.ContextWithTurnStart(
+				ctx,
+				sessionrevision.TurnStart{
+					RequestID: "request", InvocationID: "invocation",
+				},
+			)
+			require.NoError(t, svc.AppendEvent(
+				turnCtx,
+				sess,
+				sqliteTestMessageEvent(
+					"event", "request", "invocation", "message",
+				),
+			))
 			require.NoError(t, svc.AppendTrackEvent(ctx, sess, newTrackEvent("expired", 1)))
 			require.NoError(t, svc.AppendTrackEvent(ctx, sess, newTrackEvent("fresh", 2)))
+			record, err := svc.readRevision(ctx, svc.db, key)
+			require.NoError(t, err)
+			assert.True(t, sessionrevision.ProjectionInitialized(record))
 			now := time.Now().UTC()
 			setSQLiteTrackExpires(t, svc, ctx, key, "expired", now.Add(-time.Hour).UnixNano())
 			setSQLiteTrackExpires(t, svc, ctx, key, "fresh", now.Add(time.Hour).UnixNano())
 			svc.cleanupExpiredTrackEvents(ctx, now)
+			record, err = svc.readRevision(ctx, svc.db, key)
+			require.NoError(t, err)
+			assert.False(t, sessionrevision.ProjectionInitialized(record))
+			require.NotNil(t, record.Checkpoint)
+			assert.True(t, record.Checkpoint.Hazard)
 			if tt.softDelete {
 				require.True(t, sqliteTrackDeletedAt(t, svc, ctx, key, "expired").Valid)
 				require.False(t, sqliteTrackDeletedAt(t, svc, ctx, key, "fresh").Valid)

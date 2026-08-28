@@ -23,6 +23,27 @@ import (
 func TestServiceImplementsInterfaces(t *testing.T) {
 	var _ session.Service = NewService()
 	var _ session.TrackService = NewService()
+	var _ session.RewindService = NewService()
+}
+
+func TestRewindUnsupported(t *testing.T) {
+	result, err := NewService().Rewind(
+		context.Background(),
+		session.RewindRequest{},
+	)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, session.ErrInvalidRewindRequest)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	result, err = NewService().Rewind(
+		context.Background(),
+		session.RewindRequest{
+			Key: key, TargetRequestID: "target",
+			ExpectedHeadRequestID: "head", IdempotencyKey: "operation",
+		},
+	)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, session.ErrRewindUnsupported)
 }
 
 func TestCreateSessionReturnsTransientSession(t *testing.T) {

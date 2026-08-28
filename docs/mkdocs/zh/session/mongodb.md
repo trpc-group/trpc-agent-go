@@ -119,6 +119,14 @@ sessionService, err := mongodb.NewService(
 
 Session events 和 track events 不使用 TTL 索引。默认情况下，它们由服务按会话维度整组清理，避免仍然活跃的会话历史被局部删除。配置 `WithTrackEventTTL` 后，track events 使用该 TTL 独立清理，并通过 `updated_at` cleanup 索引支撑清理扫描。
 
+## 替换最新一轮
+
+MongoDB 支持通过 `Runner.Run` 和 `agent.WithLatestTurnReplacement` 编辑并重发最新
+一个已持久化 turn。紧凑的当前 revision record 保存在现有 Session state 文档中；投影
+恢复与 revision metadata 更新在同一个 MongoDB transaction 中完成。即使使用
+`WithSkipDBInit(true)`，也不需要 archive collection 或额外索引。Runner API、滚动升级
+要求与回滚边界见[替换最新一轮](index.md#replace-latest-turn)。
+
 ## 存储结构
 
 MongoDB 使用以下集合：

@@ -18,8 +18,29 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+type stateInitializationGeneration struct {
+	Storage  string `json:"storage"`
+	Revision string `json:"revision,omitempty"`
+}
+
+func encodeStateInitializationGeneration(storage, revision string) (string, error) {
+	raw, err := json.Marshal(stateInitializationGeneration{
+		Storage: storage, Revision: revision,
+	})
+	return string(raw), err
+}
+
+func decodeStateInitializationGeneration(raw string) stateInitializationGeneration {
+	var generation stateInitializationGeneration
+	if json.Unmarshal([]byte(raw), &generation) == nil && generation.Storage != "" {
+		return generation
+	}
+	return stateInitializationGeneration{Storage: raw}
+}
 
 // StateInitializationLeaseKey returns a lease key in the session's Redis
 // Cluster hash slot. stateKeyDigest must not contain the raw state key.
@@ -43,33 +64,44 @@ func (c *Client) LoadSessionStateValue(
 	key session.Key,
 	stateKey string,
 ) ([]byte, bool, string, bool, error) {
-	metaText, err := c.runScript(
+	loaded, err := c.runScript(
 		ctx,
 		luaLoadStateInitializationValue,
-		[]string{c.keys.SessionMetaKey(key)},
+		[]string{c.keys.SessionMetaKey(key), c.keys.RevisionKey(key)},
 		uuid.NewString(),
-	).Text()
+	).StringSlice()
 	if err == redis.Nil {
 		return nil, false, "", false, nil
 	}
 	if err != nil {
 		return nil, false, "", false, fmt.Errorf("load session state value: %w", err)
 	}
+	if len(loaded) != 2 {
+		return nil, false, "", false, fmt.Errorf(
+			"load session state value: unexpected script result length %d",
+			len(loaded),
+		)
+	}
 	var meta sessionMeta
-	if err := json.Unmarshal([]byte(metaText), &meta); err != nil {
+	if err := json.Unmarshal([]byte(loaded[0]), &meta); err != nil {
 		return nil, false, "", true, fmt.Errorf("load session state value: unmarshal session meta: %w", err)
 	}
 	if meta.Generation == "" {
 		return nil, false, "", true, fmt.Errorf("load session state value: session generation is missing")
 	}
+	generation, err := encodeStateInitializationGeneration(meta.Generation, loaded[1])
+	if err != nil {
+		return nil, false, "", true, fmt.Errorf("load session state value: encode generation: %w", err)
+	}
 	value, present := meta.State[stateKey]
-	return cloneStateInitializationValue(value), present, meta.Generation, true, nil
+	return cloneStateInitializationValue(value), present, generation, true, nil
 }
 
 // CommitStateInitialization atomically persists a primary value and its
 // projections, then releases the owner-token-checked lease. It returns 1 on
 // success, 0 when ownership was lost, -1 when the session disappeared, and -2
-// when the session generation changed.
+// when the session generation changed. It returns -3 when private session
+// revision metadata changed after the value was loaded.
 func (c *Client) CommitStateInitialization(
 	ctx context.Context,
 	key session.Key,
@@ -80,6 +112,25 @@ func (c *Client) CommitStateInitialization(
 	ownerToken string,
 	projections ...session.StateMap,
 ) (int, error) {
+	decodedGeneration := decodeStateInitializationGeneration(generation)
+	revisionJSON := decodedGeneration.Revision
+	write := sessionrevision.NewWrite(ctx, nil)
+	record := &sessionrevision.PersistedRecord{}
+	if revisionJSON != "" {
+		if err := json.Unmarshal([]byte(revisionJSON), record); err != nil {
+			return 0, fmt.Errorf("commit state initialization: unmarshal revision: %w", err)
+		}
+	}
+	if err := sessionrevision.CheckWrite(record, write); err != nil {
+		return 0, err
+	}
+	write.ExpectedGeneration = record.Generation
+	write.HasExpectedGeneration = true
+	sessionrevision.ApplyWrite(record, write)
+	updatedRevision, err := json.Marshal(record)
+	if err != nil {
+		return 0, fmt.Errorf("commit state initialization: marshal revision: %w", err)
+	}
 	ttlMillis := c.cfg.SessionTTL.Milliseconds()
 	if c.cfg.SessionTTL > 0 && ttlMillis == 0 {
 		ttlMillis = 1
@@ -105,13 +156,15 @@ func (c *Client) CommitStateInitialization(
 	result, err := c.runScript(
 		ctx,
 		luaCommitStateInitialization,
-		[]string{leaseKey, c.keys.SessionMetaKey(key)},
+		[]string{leaseKey, c.keys.SessionMetaKey(key), c.keys.RevisionKey(key)},
 		ownerToken,
 		string(encodedState),
 		nilSentinel,
-		generation,
+		decodedGeneration.Storage,
 		time.Now().UTC().Format(time.RFC3339Nano),
 		ttlMillis,
+		revisionJSON,
+		string(updatedRevision),
 	).Int()
 	if err != nil {
 		return 0, fmt.Errorf("commit state initialization: %w", err)

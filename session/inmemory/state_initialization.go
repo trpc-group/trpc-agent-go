@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -31,6 +32,11 @@ type stateInitializationKey struct {
 type stateInitializationGate struct {
 	done chan struct{}
 	once sync.Once
+}
+
+type stateInitializationGeneration struct {
+	storage  *sessionWithTTL
+	revision uint64
 }
 
 func newStateInitializationGate() *stateInitializationGate {
@@ -110,7 +116,7 @@ func (s *SessionService) LoadOrInitializeSessionState(
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
 		}
-		var generation *sessionWithTTL
+		var generation stateInitializationGeneration
 		value, present, generation, err = s.loadSessionStateValue(key, stateKey)
 		if err != nil {
 			return nil, false, err
@@ -187,7 +193,7 @@ func (s *SessionService) initializeSessionState(
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
 	projections []session.StateInitializationProjection,
-	expectedGeneration *sessionWithTTL,
+	expectedGeneration stateInitializationGeneration,
 	coordinationKey stateInitializationKey,
 	gate *stateInitializationGate,
 ) ([]byte, bool, error) {
@@ -324,34 +330,42 @@ func (s *SessionService) closeStateInitialization() {
 func (s *SessionService) loadSessionStateValue(
 	key session.Key,
 	stateKey string,
-) ([]byte, bool, *sessionWithTTL, error) {
+) ([]byte, bool, stateInitializationGeneration, error) {
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
-		return nil, false, nil, errors.New("memory session service initialize session state failed: session not found")
+		return nil, false, stateInitializationGeneration{}, errors.New("memory session service initialize session state failed: session not found")
 	}
 	app.mu.Lock()
 	defer app.mu.Unlock()
 	userSessions := app.sessions[key.UserID]
 	if userSessions == nil {
-		return nil, false, nil, errors.New("memory session service initialize session state failed: session not found")
+		return nil, false, stateInitializationGeneration{}, errors.New("memory session service initialize session state failed: session not found")
 	}
 	stored := userSessions[key.SessionID]
 	if stored == nil {
-		return nil, false, nil, errors.New("memory session service initialize session state failed: session not found")
+		return nil, false, stateInitializationGeneration{}, errors.New("memory session service initialize session state failed: session not found")
 	}
 	if isExpired(stored.expiredAt) {
-		return nil, false, nil, errors.New("memory session service initialize session state failed: session expired")
+		return nil, false, stateInitializationGeneration{}, errors.New("memory session service initialize session state failed: session expired")
 	}
 	value, present := stored.session.GetState(stateKey)
-	return value, present, stored, nil
+	return value, present, stateInitializationGeneration{
+		storage:  stored,
+		revision: stored.revisionGeneration(),
+	}, nil
 }
 
 func (s *SessionService) commitInitializedSessionState(
 	ctx context.Context,
 	key session.Key,
-	generation *sessionWithTTL,
+	generation stateInitializationGeneration,
 	state session.StateMap,
 ) error {
+	select {
+	case <-s.stateInitializationClosed:
+		return errStateInitializationClosed
+	default:
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -377,11 +391,23 @@ func (s *SessionService) commitInitializedSessionState(
 	if isExpired(stored.expiredAt) {
 		return errors.New("memory session service initialize session state failed: session expired")
 	}
-	if stored != generation {
+	if stored != generation.storage {
 		return errors.New(
 			"memory session service initialize session state failed: session generation changed",
 		)
 	}
+	write := sessionrevision.NewWrite(ctx, nil)
+	if write.HasExpectedGeneration &&
+		write.ExpectedGeneration != generation.revision {
+		return sessionrevision.ErrStaleGeneration
+	}
+	write.ExpectedGeneration = generation.revision
+	write.HasExpectedGeneration = true
+	record := &stored.ensureRevision().record
+	if err := sessionrevision.CheckWrite(record, write); err != nil {
+		return err
+	}
+	sessionrevision.ApplyWrite(record, write)
 	for stateKey, value := range state {
 		stored.session.SetState(stateKey, value)
 	}

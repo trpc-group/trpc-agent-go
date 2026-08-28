@@ -11,9 +11,8 @@ package trpcagent
 
 import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
-	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
+	"trpc.group/trpc-go/trpc-agent-go/internal/trpcagentwire"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -24,11 +23,9 @@ type session struct {
 }
 
 // runOptions stores tRPC-Agent API options for one run.
-type runOptions struct {
-	RequestID             string         `json:"requestID,omitempty"`
-	ExecutionTraceEnabled bool           `json:"executionTraceEnabled,omitempty"`
-	RuntimeState          map[string]any `json:"runtimeState,omitempty"`
-}
+type runOptions = trpcagentwire.RunOptions
+
+type latestTurnReplacement = trpcagentwire.LatestTurnReplacement
 
 // runRequest is the request payload for POST /runs.
 type runRequest struct {
@@ -40,13 +37,7 @@ type runRequest struct {
 }
 
 // runResponse is the response payload for POST /runs.
-type runResponse struct {
-	Status         atrace.TraceStatus `json:"status"`
-	Events         []event.Event      `json:"events,omitempty"`
-	Messages       []model.Message    `json:"messages,omitempty"`
-	ExecutionTrace *atrace.Trace      `json:"executionTrace,omitempty"`
-	ErrorMessage   string             `json:"errorMessage,omitempty"`
-}
+type runResponse = trpcagentwire.RunResponse
 
 // structureResponse is the response payload for GET /structure.
 type structureResponse struct {

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -43,6 +44,18 @@ func (c *Client) CreateSummary(
 	sum *session.Summary,
 	ttl time.Duration,
 ) error {
+	return c.CreateSummaryWithRevision(ctx, key, filterKey, sum, ttl, sessionrevision.Write{})
+}
+
+// CreateSummaryWithRevision creates or updates a summary under a revision fence.
+func (c *Client) CreateSummaryWithRevision(
+	ctx context.Context,
+	key session.Key,
+	filterKey string,
+	sum *session.Summary,
+	ttl time.Duration,
+	write sessionrevision.Write,
+) error {
 	if sum == nil {
 		return errors.New(summaryNilError)
 	}
@@ -62,12 +75,27 @@ func (c *Client) CreateSummary(
 
 	sumKey := c.keys.SummaryKey(key)
 
-	if _, err := c.runScript(
-		ctx, luaSummarySetIfNewer, []string{sumKey}, filterKey, string(payload), ttlSeconds,
-	).Result(); err != nil {
+	result, err := c.runScript(
+		ctx,
+		luaSummarySetIfNewer,
+		[]string{
+			sumKey,
+			c.keys.RevisionKey(key),
+			c.keys.SessionMetaKey(key),
+		},
+		filterKey,
+		string(payload),
+		ttlSeconds,
+		boolToInt(write.HasExpectedGeneration),
+		write.ExpectedGeneration,
+		write.RequestID,
+	).Int()
+	if err != nil {
 		return fmt.Errorf("store summary failed: %w", err)
 	}
-
+	if result == -1 {
+		return sessionrevision.ErrStaleGeneration
+	}
 	return nil
 }
 

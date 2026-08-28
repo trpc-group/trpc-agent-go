@@ -204,6 +204,12 @@ func expectLoadSessionStateForUpdate(
 		WithArgs(key.AppName, key.UserID, key.SessionID)
 }
 
+func expectMissingCleanupRevision(mock sqlmock.Sqlmock, key session.Key) {
+	mock.ExpectQuery("SELECT state FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnError(sql.ErrNoRows)
+}
+
 func TestGetSession_EventPageValidation(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
@@ -594,13 +600,22 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 	// 2. Soft delete session_events.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM session_events")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "updated_at"}).
-			AddRow("session-1", "app-1", "user-1", time.Now().Add(-48*time.Hour)))
+			AddRow("app-1", "user-1", "session-1", time.Now().Add(-48*time.Hour)))
+	expectMissingCleanupRevision(mock, session.Key{
+		AppName: "app-1", UserID: "user-1", SessionID: "session-1",
+	})
 	mock.ExpectExec(`UPDATE session_events SET deleted_at = \$1`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// 3. Soft delete session_track_events.
+	mock.ExpectQuery("SELECT DISTINCT app_name, user_id, session_id FROM session_track_events").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}))
 	mock.ExpectExec(`UPDATE session_track_events SET deleted_at = \$1`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// 4. Soft delete session_summaries.
+	mock.ExpectQuery("SELECT DISTINCT app_name, user_id, session_id FROM session_summaries").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}))
 	mock.ExpectExec(`UPDATE session_summaries SET deleted_at = \$1`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -2652,11 +2667,20 @@ func TestCleanupExpired(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM session_events")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "updated_at"}).
-			AddRow("session-1", "app-1", "user-1", time.Now().Add(-48*time.Hour)))
+			AddRow("app-1", "user-1", "session-1", time.Now().Add(-48*time.Hour)))
+	expectMissingCleanupRevision(mock, session.Key{
+		AppName: "app-1", UserID: "user-1", SessionID: "session-1",
+	})
 	mock.ExpectExec("UPDATE session_events SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 10))
+	mock.ExpectQuery("SELECT DISTINCT app_name, user_id, session_id FROM session_track_events").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}))
 	mock.ExpectExec("UPDATE session_track_events SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 10))
+	mock.ExpectQuery("SELECT DISTINCT app_name, user_id, session_id FROM session_summaries").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}))
 	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectExec("UPDATE app_states SET deleted_at").
@@ -2690,12 +2714,21 @@ func TestCleanupExpiredForUser_softdelete(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM session_events")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "updated_at"}).
-			AddRow("session-1", "app-1", "user-1", time.Now().Add(-48*time.Hour)))
+			AddRow("app-1", "user-1", "session-1", time.Now().Add(-48*time.Hour)))
+	expectMissingCleanupRevision(mock, session.Key{
+		AppName: "app-1", UserID: "user-1", SessionID: "session-1",
+	})
 	mock.ExpectExec("UPDATE session_events SET deleted_at").
 		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectQuery("SELECT DISTINCT app_name, user_id, session_id FROM session_track_events").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}))
 	mock.ExpectExec("UPDATE session_track_events SET deleted_at").
 		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
 		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectQuery("SELECT DISTINCT app_name, user_id, session_id FROM session_summaries").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}))
 	mock.ExpectExec("UPDATE session_summaries SET deleted_at").
 		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -2728,11 +2761,20 @@ func TestCleanupExpiredForUser_harddelete(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM session_events")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "updated_at"}).
-			AddRow("session-1", "app-1", "user-1", time.Now().Add(-48*time.Hour)))
+			AddRow("app-1", "user-1", "session-1", time.Now().Add(-48*time.Hour)))
+	expectMissingCleanupRevision(mock, session.Key{
+		AppName: "app-1", UserID: "user-1", SessionID: "session-1",
+	})
 	mock.ExpectExec("DELETE FROM session_events").
 		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectQuery("SELECT DISTINCT app_name, user_id, session_id FROM session_track_events").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}))
 	mock.ExpectExec("DELETE FROM session_track_events").
 		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectQuery("SELECT DISTINCT app_name, user_id, session_id FROM session_summaries").
+		WithArgs(sqlmock.AnyArg(), "test-app", "test-user").
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}))
 	mock.ExpectExec("DELETE FROM session_summaries").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("DELETE FROM user_states").
@@ -2757,11 +2799,20 @@ func TestHardDeleteExpired(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, MAX(updated_at) as updated_at FROM session_events")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "updated_at"}).
-			AddRow("session-1", "app-1", "user-1", time.Now().Add(-48*time.Hour)))
+			AddRow("app-1", "user-1", "session-1", time.Now().Add(-48*time.Hour)))
+	expectMissingCleanupRevision(mock, session.Key{
+		AppName: "app-1", UserID: "user-1", SessionID: "session-1",
+	})
 	mock.ExpectExec("DELETE FROM session_events").
 		WillReturnResult(sqlmock.NewResult(0, 7))
+	mock.ExpectQuery("SELECT DISTINCT app_name, user_id, session_id FROM session_track_events").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}))
 	mock.ExpectExec("DELETE FROM session_track_events").
 		WillReturnResult(sqlmock.NewResult(0, 7))
+	mock.ExpectQuery("SELECT DISTINCT app_name, user_id, session_id FROM session_summaries").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}))
 	mock.ExpectExec("DELETE FROM session_summaries").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectCommit()

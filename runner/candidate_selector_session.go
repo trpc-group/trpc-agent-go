@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/privatestate"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -32,6 +33,20 @@ type attemptSessionService struct {
 	deletedSessions  map[session.Key]bool
 	directStateDelta session.StateMap
 	privateState     map[session.Key]session.StateMap
+}
+
+var _ session.RewindService = (*attemptSessionService)(nil)
+
+// Rewind rejects speculative mutations instead of forwarding them to the
+// candidate attempt's real base service.
+func (s *attemptSessionService) Rewind(
+	_ context.Context,
+	req session.RewindRequest,
+) (*session.RewindResult, error) {
+	if err := sessionrevision.ValidateRewindRequest(req); err != nil {
+		return nil, err
+	}
+	return nil, session.ErrRewindUnsupported
 }
 
 func newAttemptSessionService(

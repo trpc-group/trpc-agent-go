@@ -25,7 +25,9 @@ import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
+	"trpc.group/trpc-go/trpc-agent-go/internal/trpcagentwire"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -152,6 +154,12 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		s.respondError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
+	runtimeState, err := normalizeRunRuntimeState(req.RunOptions.RuntimeState)
+	if err != nil {
+		s.respondError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.RunOptions.RuntimeState = runtimeState
 	if req.RunOptions.RequestID == "" {
 		req.RunOptions.RequestID = uuid.NewString()
 	}
@@ -164,6 +172,11 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runOptions = append(runOptions, agent.WithRequestID(req.RunOptions.RequestID))
+	if replacement := req.RunOptions.LatestTurnReplacement; replacement != nil {
+		runOptions = append(runOptions,
+			agent.WithLatestTurnReplacement(replacement.ExpectedRequestID),
+		)
+	}
 	runOptions = append(runOptions, agent.MergeRuntimeState(req.RunOptions.RuntimeState))
 	runOptions = append(runOptions, agent.WithAppName(s.appName))
 	eventCh, err := s.runner.Run(ctx, req.Session.UserID, req.Session.SessionID, req.Input, runOptions...)
@@ -186,6 +199,38 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	s.respondJSON(w, r, http.StatusOK, response)
 }
 
+func normalizeRunRuntimeState(state map[string]any) (map[string]any, error) {
+	if len(state) == 0 {
+		return state, nil
+	}
+	raw, ok := state[graph.StateKeyCommand]
+	if !ok || raw == nil {
+		return state, nil
+	}
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"runOptions.runtimeState[%q]: encode graph command: %w",
+			graph.StateKeyCommand,
+			err,
+		)
+	}
+	var command graph.Command
+	if err := json.Unmarshal(payload, &command); err != nil {
+		return nil, fmt.Errorf(
+			"runOptions.runtimeState[%q]: decode graph command: %w",
+			graph.StateKeyCommand,
+			err,
+		)
+	}
+	normalized := make(map[string]any, len(state))
+	for key, value := range state {
+		normalized[key] = value
+	}
+	normalized[graph.StateKeyCommand] = &command
+	return normalized, nil
+}
+
 func (s *Server) exportStructure(ctx context.Context) (*astructure.Snapshot, error) {
 	snapshot, err := astructure.Export(ctx, s.agent)
 	if err != nil {
@@ -200,9 +245,11 @@ func runErrorResponse(input model.Message, appName string, requestID string, err
 		status = atrace.TraceStatusIncomplete
 	}
 	response := runResponse{
-		Status:       status,
-		Messages:     []model.Message{input},
-		ErrorMessage: err.Error(),
+		Status:             status,
+		Messages:           []model.Message{input},
+		ErrorMessage:       err.Error(),
+		DirectRunError:     true,
+		DirectRunErrorKind: trpcagentwire.DirectRunErrorKindOf(err),
 	}
 	appendRunTerminalEvents(&response, appName, requestID, err)
 	return response
@@ -226,6 +273,23 @@ func validateRunRequest(req *runRequest) error {
 	}
 	if !model.HasPayload(req.Input) && len(req.Input.ToolCalls) == 0 && req.Input.ToolID == "" {
 		return errors.New("input payload is required")
+	}
+	if replacement := req.RunOptions.LatestTurnReplacement; replacement != nil {
+		if replacement.ExpectedRequestID == "" {
+			return errors.New(
+				"runOptions.latestTurnReplacement.expectedRequestID is required",
+			)
+		}
+		if req.RunOptions.RequestID == "" {
+			return errors.New(
+				"runOptions.requestID is required for latest-turn replacement",
+			)
+		}
+		if replacement.ExpectedRequestID == req.RunOptions.RequestID {
+			return errors.New(
+				"runOptions.latestTurnReplacement request IDs must differ",
+			)
+		}
 	}
 	return nil
 }

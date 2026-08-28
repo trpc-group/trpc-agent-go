@@ -829,6 +829,23 @@ func TestAttemptSessionService_DoesNotExposeUnsupportedOptionalInterfaces(t *tes
 	assert.False(t, initializesState)
 }
 
+func TestAttemptSessionService_RewindIsUnsupported(t *testing.T) {
+	service := newAttemptSessionService(nil, nil).Service()
+	rewinder, ok := service.(session.RewindService)
+	require.True(t, ok)
+	result, err := rewinder.Rewind(context.Background(), session.RewindRequest{})
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, session.ErrInvalidRewindRequest)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	result, err = rewinder.Rewind(context.Background(), session.RewindRequest{
+		Key: key, TargetRequestID: "target",
+		ExpectedHeadRequestID: "head", IdempotencyKey: "operation",
+	})
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, session.ErrRewindUnsupported)
+}
+
 func TestAttemptSessionService_ListSessionsHidesDeletedBaseSession(t *testing.T) {
 	ctx := context.Background()
 	base := sessioninmemory.NewSessionService()

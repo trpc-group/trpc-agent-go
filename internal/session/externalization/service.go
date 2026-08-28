@@ -28,6 +28,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -69,6 +70,38 @@ type Service struct {
 	session.Service
 	artifactService artifact.Service
 	cfg             Config
+}
+
+type rewindForwarder struct {
+	service  *Service
+	rewinder session.RewindService
+}
+
+// Rewind forwards the optional mutation to the wrapped service and
+// hydrates the authoritative active projection returned by the backend.
+func (s *rewindForwarder) Rewind(
+	ctx context.Context,
+	req session.RewindRequest,
+) (*session.RewindResult, error) {
+	if err := sessionrevision.ValidateRewindRequest(req); err != nil {
+		return nil, err
+	}
+	result, err := s.rewinder.Rewind(ctx, req)
+	if err != nil || result == nil || result.Session == nil || !s.service.cfg.Enabled {
+		return result, err
+	}
+	hydrated, err := hydrateSession(
+		ctx,
+		result.Session,
+		sessionInfoFromKey(req.Key),
+		s.service.artifactService,
+	)
+	if err != nil {
+		return nil, err
+	}
+	copied := *result
+	copied.Session = hydrated
+	return &copied, nil
 }
 
 // The following wrapper types intentionally enumerate optional session service
@@ -294,10 +327,157 @@ type stateInitializingWindowTrackReaderService struct {
 func wrapOptionalInterfaces(base *Service, inner session.Service) session.Service {
 	wrapped := wrapExistingOptionalInterfaces(base, inner)
 	initializer, ok := inner.(session.StateInitializationService)
+	if ok {
+		wrapped = wrapStateInitializationInterface(wrapped, initializer)
+	}
+	rewinder, ok := inner.(session.RewindService)
 	if !ok {
 		return wrapped
 	}
-	return wrapStateInitializationInterface(wrapped, initializer)
+	return wrapRewindInterface(wrapped, &rewindForwarder{
+		service:  base,
+		rewinder: rewinder,
+	})
+}
+
+func wrapRewindInterface(
+	wrapped session.Service,
+	forwarder *rewindForwarder,
+) session.Service {
+	switch service := wrapped.(type) {
+	case *searchableWindowTrackReaderService:
+		return &struct {
+			*searchableWindowTrackReaderService
+			*rewindForwarder
+		}{service, forwarder}
+	case *searchableWindowTrackService:
+		return &struct {
+			*searchableWindowTrackService
+			*rewindForwarder
+		}{service, forwarder}
+	case *searchableTrackReaderService:
+		return &struct {
+			*searchableTrackReaderService
+			*rewindForwarder
+		}{service, forwarder}
+	case *windowTrackReaderService:
+		return &struct {
+			*windowTrackReaderService
+			*rewindForwarder
+		}{service, forwarder}
+	case *searchableWindowService:
+		return &struct {
+			*searchableWindowService
+			*rewindForwarder
+		}{service, forwarder}
+	case *searchableTrackService:
+		return &struct {
+			*searchableTrackService
+			*rewindForwarder
+		}{service, forwarder}
+	case *windowTrackService:
+		return &struct {
+			*windowTrackService
+			*rewindForwarder
+		}{service, forwarder}
+	case *trackReaderService:
+		return &struct {
+			*trackReaderService
+			*rewindForwarder
+		}{service, forwarder}
+	case *searchableService:
+		return &struct {
+			*searchableService
+			*rewindForwarder
+		}{service, forwarder}
+	case *windowService:
+		return &struct {
+			*windowService
+			*rewindForwarder
+		}{service, forwarder}
+	case *trackService:
+		return &struct {
+			*trackService
+			*rewindForwarder
+		}{service, forwarder}
+	case *Service:
+		return &struct {
+			*Service
+			*rewindForwarder
+		}{service, forwarder}
+	default:
+		return wrapStateInitializingRewindInterface(wrapped, forwarder)
+	}
+}
+
+func wrapStateInitializingRewindInterface(
+	wrapped session.Service,
+	forwarder *rewindForwarder,
+) session.Service {
+	switch service := wrapped.(type) {
+	case *stateInitializingSearchableWindowTrackReaderService:
+		return &struct {
+			*stateInitializingSearchableWindowTrackReaderService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingSearchableWindowTrackService:
+		return &struct {
+			*stateInitializingSearchableWindowTrackService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingSearchableTrackReaderService:
+		return &struct {
+			*stateInitializingSearchableTrackReaderService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingWindowTrackReaderService:
+		return &struct {
+			*stateInitializingWindowTrackReaderService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingSearchableWindowService:
+		return &struct {
+			*stateInitializingSearchableWindowService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingSearchableTrackService:
+		return &struct {
+			*stateInitializingSearchableTrackService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingWindowTrackService:
+		return &struct {
+			*stateInitializingWindowTrackService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingTrackReaderService:
+		return &struct {
+			*stateInitializingTrackReaderService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingSearchableService:
+		return &struct {
+			*stateInitializingSearchableService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingWindowService:
+		return &struct {
+			*stateInitializingWindowService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingTrackService:
+		return &struct {
+			*stateInitializingTrackService
+			*rewindForwarder
+		}{service, forwarder}
+	case *stateInitializingService:
+		return &struct {
+			*stateInitializingService
+			*rewindForwarder
+		}{service, forwarder}
+	default:
+		return wrapped
+	}
 }
 
 func wrapExistingOptionalInterfaces(base *Service, inner session.Service) session.Service {
@@ -513,6 +693,9 @@ func (s *Service) AppendEvent(
 	beforeEvents := len(persistedSess.Events)
 	if err := s.Service.AppendEvent(ctx, persistedSess, persisted, options...); err != nil {
 		return err
+	}
+	if _, fenced := sessionrevision.RewindHeadFence(persistedSess); !fenced {
+		sessionrevision.ClearRewindHeadFence(sess)
 	}
 	if !appendObserved(persistedSess, persisted.ID, beforeEvents) {
 		return nil

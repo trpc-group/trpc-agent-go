@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -127,6 +128,47 @@ func TestLoadOrInitializeSessionStateCommitsProjection(t *testing.T) {
 	cleared, present := stored.GetState("cleared")
 	require.True(t, present)
 	require.Nil(t, cleared)
+}
+
+func TestStateInitializationCommitIsFencedByRewind(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "rewind"}
+	service := NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	turnCtx := sessionrevision.ContextWithTurnStart(ctx, sessionrevision.TurnStart{
+		RequestID: "latest", InvocationID: "latest-invocation",
+	})
+	require.NoError(t, service.AppendEvent(
+		turnCtx,
+		sess,
+		testMessageEvent(
+			"latest-event", "latest", "latest-invocation", "latest",
+		),
+	))
+	require.NoError(t, service.AppendEvent(
+		ctx, sess, testCompletionEvent("latest", "latest-invocation"),
+	))
+	_, _, generation, err := service.loadSessionStateValue(key, "initialized")
+	require.NoError(t, err)
+
+	_, err = service.Rewind(ctx, session.RewindRequest{
+		Key: key, TargetRequestID: "latest", ExpectedHeadRequestID: "latest",
+		IdempotencyKey: "replacement",
+	})
+	require.NoError(t, err)
+	err = service.commitInitializedSessionState(
+		ctx,
+		key,
+		generation,
+		session.StateMap{"initialized": []byte("stale")},
+	)
+	require.ErrorIs(t, err, sessionrevision.ErrStaleGeneration)
+	stored, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	_, present := stored.GetState("initialized")
+	require.False(t, present)
 }
 
 func TestLoadOrInitializeSessionStateProjectionFailureDoesNotCommit(t *testing.T) {
@@ -687,7 +729,7 @@ func TestInitializeSessionStateOwnerRecheckPaths(t *testing.T) {
 			func([]byte) bool { return false },
 			func(context.Context) ([]byte, error) { return []byte("value"), nil },
 			nil,
-			&sessionWithTTL{},
+			stateInitializationGeneration{storage: &sessionWithTTL{}},
 			coordinationKey,
 			gate,
 		)
@@ -706,7 +748,7 @@ func TestInitializeSessionStateOwnerRecheckPaths(t *testing.T) {
 			func([]byte) bool { return false },
 			func(context.Context) ([]byte, error) { return []byte("value"), nil },
 			nil,
-			nil,
+			stateInitializationGeneration{},
 			coordinationKey,
 			gate,
 		)
@@ -765,7 +807,7 @@ func TestStateInitializationGateAndStorageHelpers(t *testing.T) {
 		require.ErrorIs(
 			t,
 			service.commitInitializedSessionState(
-				canceledCtx, key, stored, session.StateMap{"state": []byte("value")},
+				canceledCtx, key, stateInitializationGeneration{storage: stored}, session.StateMap{"state": []byte("value")},
 			),
 			context.Canceled,
 		)
@@ -774,7 +816,7 @@ func TestStateInitializationGateAndStorageHelpers(t *testing.T) {
 		require.ErrorIs(
 			t,
 			service.commitInitializedSessionState(
-				ctx, key, stored, session.StateMap{"state": []byte("value")},
+				ctx, key, stateInitializationGeneration{storage: stored}, session.StateMap{"state": []byte("value")},
 			),
 			errStateInitializationClosed,
 		)
@@ -784,7 +826,7 @@ func TestStateInitializationGateAndStorageHelpers(t *testing.T) {
 		require.ErrorContains(
 			t,
 			service.commitInitializedSessionState(
-				ctx, key, stored, session.StateMap{"state": []byte("value")},
+				ctx, key, stateInitializationGeneration{storage: stored}, session.StateMap{"state": []byte("value")},
 			),
 			"session not found",
 		)
@@ -794,7 +836,7 @@ func TestStateInitializationGateAndStorageHelpers(t *testing.T) {
 		require.ErrorContains(
 			t,
 			service.commitInitializedSessionState(
-				ctx, key, stored, session.StateMap{"state": []byte("value")},
+				ctx, key, stateInitializationGeneration{storage: stored}, session.StateMap{"state": []byte("value")},
 			),
 			"session not found",
 		)
@@ -803,7 +845,7 @@ func TestStateInitializationGateAndStorageHelpers(t *testing.T) {
 		require.ErrorContains(
 			t,
 			service.commitInitializedSessionState(
-				ctx, key, stored, session.StateMap{"state": []byte("value")},
+				ctx, key, stateInitializationGeneration{storage: stored}, session.StateMap{"state": []byte("value")},
 			),
 			"session expired",
 		)
@@ -811,14 +853,14 @@ func TestStateInitializationGateAndStorageHelpers(t *testing.T) {
 		require.ErrorContains(
 			t,
 			service.commitInitializedSessionState(
-				ctx, key, &sessionWithTTL{}, session.StateMap{"state": []byte("value")},
+				ctx, key, stateInitializationGeneration{storage: &sessionWithTTL{}}, session.StateMap{"state": []byte("value")},
 			),
 			"session generation changed",
 		)
 
 		service.opts.sessionTTL = time.Minute
 		require.NoError(t, service.commitInitializedSessionState(
-			ctx, key, stored, session.StateMap{"state": []byte("value")},
+			ctx, key, stateInitializationGeneration{storage: stored}, session.StateMap{"state": []byte("value")},
 		))
 		require.False(t, stored.expiredAt.IsZero())
 		value, present := stored.session.GetState("state")

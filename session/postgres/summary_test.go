@@ -32,6 +32,27 @@ type mockSummarizerImpl struct {
 	shouldSummarize bool
 }
 
+func expectSummaryRevisionBegin(
+	t *testing.T,
+	mock sqlmock.Sqlmock,
+	sess *session.Session,
+) {
+	t.Helper()
+	stateRaw, err := json.Marshal(SessionState{
+		ID: sess.ID, State: session.StateMap{},
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs(sess.AppName, sess.UserID, sess.ID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
+			AddRow(stateRaw, nil))
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(sqlmock.AnyArg(), sess.AppName, sess.UserID, sess.ID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
 func (m *mockSummarizerImpl) ShouldSummarize(sess *session.Session) bool {
 	return m.shouldSummarize
 }
@@ -187,11 +208,13 @@ func TestCreateSessionSummary_ForcedUpdate(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
+	expectSummaryRevisionBegin(t, mock, sess)
 	// When force=true, should skip checking existing summary
 	// and directly create new one (UPSERT)
 	mock.ExpectExec("INSERT INTO session_summaries").
 		WithArgs("test-app", "test-user", "test-session", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	err := s.CreateSessionSummary(context.Background(), sess, "", true)
 	require.NoError(t, err)
@@ -892,6 +915,9 @@ func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
 	s, mock, db := setupMockService(t, &TestServiceOpts{
 		summarizer: summarizer,
 	})
+	// The two cascade targets are persisted concurrently, so their transaction
+	// order is intentionally nondeterministic.
+	mock.MatchExpectationsInOrder(false)
 	defer db.Close()
 
 	// Note: summaryJobChans is now handled by asyncWorker in session/internal/summary
@@ -928,6 +954,7 @@ func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
 	// CreateSessionSummaryWithCascade calls CreateSessionSummary twice when
 	// filterKey != SummaryFilterKeyAllContents: once for the filterKey and once
 	// for SummaryFilterKeyAllContents.
+	expectSummaryRevisionBegin(t, mock, sess)
 	mock.ExpectExec(regexp.QuoteMeta(fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
 		 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
@@ -938,8 +965,10 @@ func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	// Cascade to full-session summary.
+	expectSummaryRevisionBegin(t, mock, sess)
 	mock.ExpectExec(regexp.QuoteMeta(fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
 		 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
@@ -950,6 +979,7 @@ func TestEnqueueSummaryJob_NoAsyncWorkers(t *testing.T) {
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	// Should fall back to sync processing when no async workers.
 	err := s.EnqueueSummaryJob(context.Background(), sess, "branch1", false)
@@ -1028,6 +1058,7 @@ func TestCreateSessionSummary_UpsertError(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 
+	expectSummaryRevisionBegin(t, mock, sess)
 	// Mock: UPSERT fails.
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
 		WithArgs(
@@ -1040,6 +1071,7 @@ func TestCreateSessionSummary_UpsertError(t *testing.T) {
 			sqlmock.AnyArg(), // expires_at
 		).
 		WillReturnError(fmt.Errorf("upsert error"))
+	mock.ExpectRollback()
 
 	// Use force=true to trigger upsert even with no events.
 	err = s.CreateSessionSummary(ctx, sess, "", true)
@@ -1088,6 +1120,7 @@ func TestEnqueueSummaryJob_SingleFilterKey_PersistsBothKeys(t *testing.T) {
 	sess.Events = append(sess.Events, *e2)
 
 	// Mock: First call persists filterKey="tool-usage" (LLM generates summary).
+	expectSummaryRevisionBegin(t, mock, sess)
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
 		WithArgs(
 			sess.AppName,
@@ -1099,8 +1132,10 @@ func TestEnqueueSummaryJob_SingleFilterKey_PersistsBothKeys(t *testing.T) {
 			sqlmock.AnyArg(),
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	// Mock: Second call persists filter_key="" (full-session, copied summary).
+	expectSummaryRevisionBegin(t, mock, sess)
 	// This is the critical part - verifying that filter_key="" is also persisted!
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).
 		WithArgs(
@@ -1113,6 +1148,7 @@ func TestEnqueueSummaryJob_SingleFilterKey_PersistsBothKeys(t *testing.T) {
 			sqlmock.AnyArg(),
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	// EnqueueSummaryJob with filterKey should trigger single filterKey optimization
 	// and persist BOTH keys.

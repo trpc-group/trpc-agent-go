@@ -25,36 +25,41 @@ func (r *runner) applyAwaitUserReplyRoute(
 	sess *session.Session,
 	message model.Message,
 	ro agent.RunOptions,
-) (agent.RunOptions, string, string, error) {
+) (agent.RunOptions, string, string, session.StateMap, error) {
 	if r == nil || !r.awaitUserReplyRouting {
-		return ro, "", "", nil
+		return ro, "", "", nil, nil
 	}
 	if message.Role != model.RoleUser {
-		return ro, "", "", nil
+		return ro, "", "", nil, nil
 	}
+	deferClear := ro.LatestTurnReplacement != nil
 	if ro.Agent != nil || ro.AgentByName != "" {
-		ro, rootName, err := r.clearOverriddenAwaitUserReplyRoute(
+		ro, rootName, clearState, err := r.clearOverriddenAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
 			ro,
+			deferClear,
 		)
-		return ro, rootName, "", err
+		return ro, rootName, "", clearState, err
 	}
 
 	route, ok, err := agent.PendingAwaitUserReplyRoute(sess)
 	if err != nil {
-		if clearErr := r.clearAwaitUserReplyRoute(ctx, key, sess); clearErr != nil {
-			return ro, "", "", fmt.Errorf(
+		clearState, clearErr := r.clearAwaitUserReplyRoute(
+			ctx, key, sess, deferClear,
+		)
+		if clearErr != nil {
+			return ro, "", "", nil, fmt.Errorf(
 				"runner: clear invalid await_user_reply route: %w",
 				clearErr,
 			)
 		}
 		log.Warnf("runner: ignore invalid await_user_reply route: %v", err)
-		return ro, "", "", nil
+		return ro, "", "", clearState, nil
 	}
 	if !ok {
-		return ro, "", "", nil
+		return ro, "", "", nil, nil
 	}
 	selected, rootName, ok, err := r.resolveAwaitUserReplyRoute(
 		ctx,
@@ -62,11 +67,14 @@ func (r *runner) applyAwaitUserReplyRoute(
 		ro,
 	)
 	if err != nil {
-		return ro, "", "", err
+		return ro, "", "", nil, err
 	}
 	if !ok {
-		if clearErr := r.clearAwaitUserReplyRoute(ctx, key, sess); clearErr != nil {
-			return ro, "", "", fmt.Errorf(
+		clearState, clearErr := r.clearAwaitUserReplyRoute(
+			ctx, key, sess, deferClear,
+		)
+		if clearErr != nil {
+			return ro, "", "", nil, fmt.Errorf(
 				"runner: clear stale await_user_reply route: %w",
 				clearErr,
 			)
@@ -75,16 +83,17 @@ func (r *runner) applyAwaitUserReplyRoute(
 			"runner: ignore stale await_user_reply route for path %q",
 			route.LookupPath,
 		)
-		return ro, "", "", nil
+		return ro, "", "", clearState, nil
 	}
-	if err := r.clearAwaitUserReplyRoute(ctx, key, sess); err != nil {
-		return ro, "", "", fmt.Errorf(
+	clearState, err := r.clearAwaitUserReplyRoute(ctx, key, sess, deferClear)
+	if err != nil {
+		return ro, "", "", nil, fmt.Errorf(
 			"runner: consume await_user_reply route: %w",
 			err,
 		)
 	}
 	ro.Agent = selected
-	return ro, rootName, route.LookupPath, nil
+	return ro, rootName, route.LookupPath, clearState, nil
 }
 
 func (r *runner) clearOverriddenAwaitUserReplyRoute(
@@ -92,47 +101,57 @@ func (r *runner) clearOverriddenAwaitUserReplyRoute(
 	key session.Key,
 	sess *session.Session,
 	ro agent.RunOptions,
-) (agent.RunOptions, string, error) {
+	deferClear bool,
+) (agent.RunOptions, string, session.StateMap, error) {
 	_, ok, err := agent.PendingAwaitUserReplyRoute(sess)
 	if err != nil {
-		if clearErr := r.clearAwaitUserReplyRoute(ctx, key, sess); clearErr != nil {
-			return ro, "", fmt.Errorf(
+		clearState, clearErr := r.clearAwaitUserReplyRoute(
+			ctx, key, sess, deferClear,
+		)
+		if clearErr != nil {
+			return ro, "", nil, fmt.Errorf(
 				"runner: clear invalid await_user_reply route: %w",
 				clearErr,
 			)
 		}
 		log.Warnf("runner: ignore invalid await_user_reply route: %v", err)
-		return ro, "", nil
+		return ro, "", clearState, nil
 	}
 	if !ok {
-		return ro, "", nil
+		return ro, "", nil, nil
 	}
-	if err := r.clearAwaitUserReplyRoute(ctx, key, sess); err != nil {
-		return ro, "", fmt.Errorf(
+	clearState, err := r.clearAwaitUserReplyRoute(ctx, key, sess, deferClear)
+	if err != nil {
+		return ro, "", nil, fmt.Errorf(
 			"runner: clear overridden await_user_reply route: %w",
 			err,
 		)
 	}
-	return ro, "", nil
+	return ro, "", clearState, nil
 }
 
 func (r *runner) clearAwaitUserReplyRoute(
 	ctx context.Context,
 	key session.Key,
 	sess *session.Session,
-) error {
+	deferPersist bool,
+) (session.StateMap, error) {
 	if r == nil || r.sessionService == nil {
-		return nil
+		return nil, nil
 	}
 	state := agent.ClearAwaitUserReplyRouteState()
-	if err := r.sessionService.UpdateSessionState(ctx, key, state); err != nil {
-		return err
+	if !deferPersist {
+		if err := r.sessionService.UpdateSessionState(ctx, key, state); err != nil {
+			return nil, err
+		}
 	}
-	if sess == nil {
-		return nil
+	if sess != nil {
+		for stateKey := range state {
+			sess.SetState(stateKey, nil)
+		}
 	}
-	for stateKey := range state {
-		sess.SetState(stateKey, nil)
+	if deferPersist {
+		return state, nil
 	}
-	return nil
+	return nil, nil
 }
