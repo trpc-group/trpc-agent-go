@@ -150,6 +150,7 @@ type testSwarmMember struct {
 	gotRuntime           bool
 	gotTraceNodeID       string
 	gotSurfaceRootNodeID string
+	gotMemberTraceRoot   string
 	subAgents            []agent.Agent
 	tools                []tool.Tool
 }
@@ -164,6 +165,7 @@ func (t *testSwarmMember) Run(
 ) (<-chan *event.Event, error) {
 	t.gotTraceNodeID = agent.InvocationTraceNodeID(inv)
 	t.gotSurfaceRootNodeID = agent.InvocationSurfaceRootNodeID(inv)
+	t.gotMemberTraceRoot = agent.InvocationTeamMemberTraceRoot(inv)
 	if inv != nil && inv.RunOptions.RuntimeState != nil {
 		val := inv.RunOptions.RuntimeState[agent.RuntimeStateKeyTransferController]
 		_, t.gotRuntime = val.(agent.TransferController)
@@ -1241,6 +1243,35 @@ func TestTeam_RunSwarm_MountsMemberTraceNodeID(t *testing.T) {
 	require.Equal(t, "workflow/swarm/member_one", a.gotTraceNodeID)
 	require.Equal(t, "workflow/swarm/member_one", a.gotSurfaceRootNodeID)
 	require.Empty(t, b.gotTraceNodeID)
+}
+
+func TestTeam_RunSwarm_DefaultTransferKeepsTransientTraceRoot(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+	)
+	require.NoError(t, err)
+	sess := session.NewSession(testAppName, testUserID, testSessionID)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationTraceNodeID("workflow/swarm"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	ch, err := tm.Run(ctx, inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Equal(t, "workflow/swarm", a.gotMemberTraceRoot)
+	_, ok := sess.GetState(swarmTraceNodeIDKey)
+	require.False(t, ok, "default shared-session Swarm must not persist trace root state")
 }
 
 func TestTeam_RunSwarm_PreservesTraceNodeIDWhenSurfaceRootIsMounted(t *testing.T) {

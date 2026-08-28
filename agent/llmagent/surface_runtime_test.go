@@ -322,6 +322,27 @@ func TestExecutionTraceNodeIDHelpers_GuardAndStaticChildBranches(t *testing.T) {
 	)
 	require.Empty(t, executionTraceSurfaceNodeID(sameNodeChild))
 	require.Empty(t, executionTraceStepNodeID(sameNodeChild))
+	transparentSameNodeChild := parent.Clone(
+		agent.WithInvocationTraceNodeID("workflow/classify"),
+		agent.WithInvocationTransparentTraceNode(),
+	)
+	require.Equal(t, "workflow/classify", executionTraceSurfaceNodeID(transparentSameNodeChild))
+	require.Equal(t, "workflow/classify", executionTraceStepNodeID(transparentSameNodeChild))
+	require.True(t, executionTraceNodeIsUnderParent(transparentSameNodeChild))
+	transparentGrandchild := transparentSameNodeChild.Clone(
+		agent.WithInvocationTraceNodeID("workflow/classify"),
+	)
+	require.False(t, executionTraceNodeIsUnderParent(transparentGrandchild))
+	hiddenChild := parent.Clone(
+		agent.WithInvocationTraceNodeID("workflow/classify/helper"),
+		agent.WithInvocationExecutionTraceHidden(),
+	)
+	hiddenGrandchild := hiddenChild.Clone(
+		agent.WithInvocationTraceNodeID("workflow/classify/helper/leaf"),
+	)
+	require.True(t, agent.InvocationExecutionTraceHidden(hiddenGrandchild))
+	require.Empty(t, executionTraceSurfaceNodeID(hiddenGrandchild))
+	require.Empty(t, executionTraceStepNodeID(hiddenGrandchild))
 	staticChild := parent.Clone(
 		agent.WithInvocationTraceNodeID("workflow/classify/router"),
 	)

@@ -633,7 +633,19 @@ func (at *Tool) childInvocationOptions(
 				agent.SetInvocationSurfaceRootNodeID(inv, mount.SurfaceRootNodeID)
 			},
 		)
+		return invocationOpts
 	}
+	// Ordinary AgentTool children are exposed as tool surfaces, not static
+	// execution-trace nodes. Preserve that hidden status for composite descendants
+	// when they share the parent's trace capture.
+	invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
+		agent.ClearInvocationSurfaceRootNodeID(inv)
+		if parentInv != nil &&
+			parentInv.RunOptions.ExecutionTraceEnabled &&
+			inv.RunOptions.ExecutionTraceEnabled {
+			agent.WithInvocationExecutionTraceHidden()(inv)
+		}
+	})
 	return invocationOpts
 }
 

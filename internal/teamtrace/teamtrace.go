@@ -11,6 +11,7 @@ package teamtrace
 
 import (
 	"context"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
@@ -21,6 +22,12 @@ const memberTraceRootConfigsKey = "__trpc_agent_internal_team_member_trace_root_
 const memberSurfaceRootStateKey = "__trpc_agent_internal_team_member_surface_root_state__"
 
 type memberMountContextKey struct{}
+
+type memberMountContextValue struct {
+	mu       sync.Mutex
+	mount    MemberMount
+	consumed bool
+}
 
 // CoordinatorLayout describes static coordinator-team node ids under one root.
 type CoordinatorLayout struct {
@@ -55,6 +62,7 @@ func NewCoordinatorLayout(rootNodeID string, members []agent.Agent) CoordinatorL
 }
 
 // ContextWithMemberMount stores one mounted Team member path in ctx.
+// The mount is consumed by the first AgentTool boundary that reads it.
 func ContextWithMemberMount(ctx context.Context, mount MemberMount) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -62,19 +70,27 @@ func ContextWithMemberMount(ctx context.Context, mount MemberMount) context.Cont
 	if mount.TraceNodeID == "" || mount.SurfaceRootNodeID == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, memberMountContextKey{}, mount)
+	return context.WithValue(ctx, memberMountContextKey{}, &memberMountContextValue{
+		mount: mount,
+	})
 }
 
-// MemberMountFromContext returns one mounted Team member path from ctx.
+// MemberMountFromContext returns and consumes one mounted Team member path from ctx.
 func MemberMountFromContext(ctx context.Context) (MemberMount, bool) {
 	if ctx == nil {
 		return MemberMount{}, false
 	}
-	mount, ok := ctx.Value(memberMountContextKey{}).(MemberMount)
-	if !ok || mount.TraceNodeID == "" || mount.SurfaceRootNodeID == "" {
+	mountState, ok := ctx.Value(memberMountContextKey{}).(*memberMountContextValue)
+	if !ok || mountState == nil {
 		return MemberMount{}, false
 	}
-	return mount, true
+	mountState.mu.Lock()
+	defer mountState.mu.Unlock()
+	if mountState.consumed || mountState.mount.TraceNodeID == "" || mountState.mount.SurfaceRootNodeID == "" {
+		return MemberMount{}, false
+	}
+	mountState.consumed = true
+	return mountState.mount, true
 }
 
 // RootNodeID returns the mounted surface lookup root node id for one team invocation.

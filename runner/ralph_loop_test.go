@@ -63,6 +63,21 @@ func TestNewInnerInvocation_ReattachesSteerQueue(t *testing.T) {
 		"a delegated sub-agent must not inherit the lead's steer queue")
 }
 
+func TestNewInnerInvocation_MarksTransparentTraceNode(t *testing.T) {
+	a := &ralphLoopAgent{inner: &scriptedAgent{name: "lead"}}
+	base := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("workflow/lead"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+
+	inner := a.newInnerInvocation(base, nil)
+	require.Equal(t, "workflow/lead", agent.InvocationTraceNodeID(inner))
+	require.True(t, agent.InvocationTransparentTraceNode(inner))
+	require.False(t, agent.InvocationTransparentTraceNode(inner.Clone()))
+}
+
 type scriptedAgent struct {
 	name    string
 	outputs []string

@@ -303,7 +303,11 @@ func (a *ralphLoopAgent) newInnerInvocation(
 		agent.WithInvocationBranch(base.Branch),
 	}
 	if traceNodeID := agent.InvocationTraceNodeID(base); traceNodeID != "" {
-		invocationOpts = append(invocationOpts, agent.WithInvocationTraceNodeID(traceNodeID))
+		invocationOpts = append(
+			invocationOpts,
+			agent.WithInvocationTraceNodeID(traceNodeID),
+			agent.WithInvocationTransparentTraceNode(),
+		)
 	}
 	if len(entryPredecessors) > 0 {
 		invocationOpts = append(invocationOpts, agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors))

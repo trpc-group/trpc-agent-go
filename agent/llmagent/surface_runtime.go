@@ -317,10 +317,16 @@ func executionTraceNodeIsUnderParent(inv *agent.Invocation) bool {
 	if parent == nil {
 		return false
 	}
+	if agent.InvocationExecutionTraceHidden(inv) {
+		return false
+	}
 	parentNodeID := agent.InvocationTraceNodeID(parent)
 	nodeID := agent.InvocationTraceNodeID(inv)
-	if parentNodeID == "" || nodeID == "" || nodeID == parentNodeID {
+	if parentNodeID == "" || nodeID == "" {
 		return false
+	}
+	if nodeID == parentNodeID {
+		return agent.InvocationTransparentTraceNode(inv)
 	}
 	if rootNodeID := agent.InvocationTeamMemberTraceRoot(inv); rootNodeID != "" {
 		return nodeID == rootNodeID || strings.HasPrefix(nodeID, rootNodeID+"/")

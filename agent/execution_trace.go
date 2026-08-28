@@ -39,6 +39,48 @@ func WithInvocationTraceNodeID(nodeID string) InvocationOptions {
 	}
 }
 
+// WithInvocationExecutionTraceHidden marks a shared-trace child as hidden.
+// The marker is copied to descendants so composite children cannot re-enter
+// the parent's static execution trace at a deeper node.
+func WithInvocationExecutionTraceHidden() InvocationOptions {
+	return func(inv *Invocation) {
+		if inv != nil {
+			inv.SetState(executionTraceHiddenStateKey, true)
+		}
+	}
+}
+
+// InvocationExecutionTraceHidden reports whether the invocation is hidden from
+// its parent's shared execution trace.
+func InvocationExecutionTraceHidden(inv *Invocation) bool {
+	if inv == nil {
+		return false
+	}
+	hidden, _ := GetStateValue[bool](inv, executionTraceHiddenStateKey)
+	return hidden
+}
+
+// WithInvocationTransparentTraceNode marks a cloned invocation as an explicit
+// transparent wrapper that intentionally shares its parent's trace node.
+// The marker is not propagated by Invocation.Clone.
+func WithInvocationTransparentTraceNode() InvocationOptions {
+	return func(inv *Invocation) {
+		if inv != nil {
+			inv.SetState(transparentTraceNodeStateKey, true)
+		}
+	}
+}
+
+// InvocationTransparentTraceNode reports whether inv may publish a step at
+// the same trace node as its parent.
+func InvocationTransparentTraceNode(inv *Invocation) bool {
+	if inv == nil {
+		return false
+	}
+	transparent, _ := GetStateValue[bool](inv, transparentTraceNodeStateKey)
+	return transparent
+}
+
 // executionTraceEnabled reports whether this invocation has execution trace enabled.
 func executionTraceEnabled(inv *Invocation) bool {
 	return inv != nil && inv.executionTraceCapture() != nil

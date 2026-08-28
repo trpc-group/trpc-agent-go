@@ -260,8 +260,8 @@ func (t *Team) runSwarm(
 ) (<-chan *event.Event, error) {
 	traceRootNodeID := teamtrace.TraceRootNodeID(invocation, t.name)
 	surfaceRootNodeID := teamtrace.RootNodeID(invocation, t.name)
+	teamtrace.SetMemberTraceRootForInvocation(invocation, traceRootNodeID)
 	if t.swarmHandoff.needsRootState() && invocation.Session != nil {
-		teamtrace.SetMemberTraceRootForInvocation(invocation, traceRootNodeID)
 		t.markSwarmRootSession(invocation, traceRootNodeID)
 	}
 	var startAgent agent.Agent

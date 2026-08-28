@@ -636,10 +636,11 @@ func TestInvocation_cloneState(t *testing.T) {
 	t.Run("copies allowed keys only", func(t *testing.T) {
 		inv := &Invocation{
 			state: map[string]any{
-				flusherStateKey:             "flush-holder",
-				barrierStateKey:             "barrier-holder",
-				surfaceRootNodeIDStateKey:   "workflow/root",
-				teamMemberTraceRootStateKey: "workflow/team",
+				flusherStateKey:              "flush-holder",
+				barrierStateKey:              "barrier-holder",
+				surfaceRootNodeIDStateKey:    "workflow/root",
+				teamMemberTraceRootStateKey:  "workflow/team",
+				executionTraceHiddenStateKey: true,
 				streamHubStateKey: &StreamHub{
 					streams: make(map[string]*stream),
 				},
@@ -648,11 +649,12 @@ func TestInvocation_cloneState(t *testing.T) {
 		}
 		cloned := inv.cloneState()
 		require.NotNil(t, cloned)
-		require.Len(t, cloned, 5)
+		require.Len(t, cloned, 6)
 		require.Equal(t, "flush-holder", cloned[flusherStateKey])
 		require.Equal(t, "barrier-holder", cloned[barrierStateKey])
 		require.Equal(t, "workflow/root", cloned[surfaceRootNodeIDStateKey])
 		require.Equal(t, "workflow/team", cloned[teamMemberTraceRootStateKey])
+		require.True(t, cloned[executionTraceHiddenStateKey].(bool))
 		require.NotNil(t, cloned[streamHubStateKey])
 		assert.NotContains(t, cloned, "other")
 	})

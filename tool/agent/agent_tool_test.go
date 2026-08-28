@@ -2511,9 +2511,10 @@ func TestTool_WithResponseMode(t *testing.T) {
 type streamingMockAgent struct {
 	name string
 	// capture the event filter key seen by Run for assertion.
-	seenFilterKey         string
-	seenTraceNodeID       string
-	seenSurfaceRootNodeID string
+	seenFilterKey            string
+	seenTraceNodeID          string
+	seenSurfaceRootNodeID    string
+	seenExecutionTraceHidden bool
 }
 
 func (m *streamingMockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
@@ -2521,6 +2522,7 @@ func (m *streamingMockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-
 	m.seenFilterKey = inv.GetEventFilterKey()
 	m.seenTraceNodeID = agent.InvocationTraceNodeID(inv)
 	m.seenSurfaceRootNodeID = agent.InvocationSurfaceRootNodeID(inv)
+	m.seenExecutionTraceHidden = agent.InvocationExecutionTraceHidden(inv)
 	ch := make(chan *event.Event, 3)
 	go func() {
 		defer close(ch)
@@ -2540,6 +2542,39 @@ func (m *streamingMockAgent) Info() agent.Info {
 }
 func (m *streamingMockAgent) SubAgents() []agent.Agent        { return nil }
 func (m *streamingMockAgent) FindSubAgent(string) agent.Agent { return nil }
+
+type nestedAgentToolAgent struct {
+	name                     string
+	child                    tool.CallableTool
+	seenTraceNodeID          string
+	seenSurfaceRootNodeID    string
+	seenExecutionTraceHidden bool
+}
+
+func (a *nestedAgentToolAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	a.seenTraceNodeID = agent.InvocationTraceNodeID(inv)
+	a.seenSurfaceRootNodeID = agent.InvocationSurfaceRootNodeID(inv)
+	a.seenExecutionTraceHidden = agent.InvocationExecutionTraceHidden(inv)
+	if _, err := a.child.Call(ctx, []byte(`{"request":"nested"}`)); err != nil {
+		return nil, err
+	}
+	ch := make(chan *event.Event, 1)
+	ch <- event.NewResponseEvent(inv.InvocationID, a.name, &model.Response{
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("done")}},
+	})
+	close(ch)
+	return ch, nil
+}
+
+func (a *nestedAgentToolAgent) Tools() []tool.Tool { return nil }
+func (a *nestedAgentToolAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+func (a *nestedAgentToolAgent) SubAgents() []agent.Agent        { return nil }
+func (a *nestedAgentToolAgent) FindSubAgent(string) agent.Agent { return nil }
 
 type completionWaitAgent struct {
 	name string
@@ -3707,6 +3742,56 @@ func TestTool_StreamableCall_AppliesMemberMountFromContext(t *testing.T) {
 	}
 	require.Equal(t, "workflow/team/stream-agent", sa.seenTraceNodeID)
 	require.Equal(t, "workflow/surface/team/stream-agent", sa.seenSurfaceRootNodeID)
+}
+
+func TestTool_Call_ConsumesMemberMountBeforeNestedAgentTool(t *testing.T) {
+	leaf := &streamingMockAgent{name: "leaf"}
+	middle := &nestedAgentToolAgent{
+		name:  "member",
+		child: NewTool(leaf),
+	}
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&mockAgent{name: "parent"}),
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	var ctx context.Context = agent.NewInvocationContext(context.Background(), parent)
+	ctx = teamtrace.ContextWithMemberMount(ctx, teamtrace.MemberMount{
+		TraceNodeID:       "workflow/team/member",
+		SurfaceRootNodeID: "workflow/surface/team/member",
+	})
+
+	_, err := NewTool(middle).Call(ctx, []byte(`{"request":"outer"}`))
+	require.NoError(t, err)
+	require.Equal(t, "workflow/team/member", middle.seenTraceNodeID)
+	require.Equal(t, "workflow/surface/team/member", middle.seenSurfaceRootNodeID)
+	require.False(t, middle.seenExecutionTraceHidden)
+	require.Equal(t, "leaf", leaf.seenTraceNodeID)
+	require.Equal(t, "leaf", leaf.seenSurfaceRootNodeID)
+	require.True(t, leaf.seenExecutionTraceHidden)
+}
+
+func TestTool_Call_PropagatesHiddenTraceToOrdinaryAgentToolDescendants(t *testing.T) {
+	leaf := &streamingMockAgent{name: "leaf"}
+	middle := &nestedAgentToolAgent{
+		name:  "helper",
+		child: NewTool(leaf),
+	}
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&mockAgent{name: "parent"}),
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	_, err := NewTool(middle).Call(ctx, []byte(`{"request":"outer"}`))
+	require.NoError(t, err)
+	require.True(t, middle.seenExecutionTraceHidden)
+	require.True(t, leaf.seenExecutionTraceHidden)
 }
 
 func TestTool_StreamableCall_NotifiesCompletion(t *testing.T) {

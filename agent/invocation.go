@@ -73,6 +73,12 @@ const (
 	surfaceRootNodeIDStateKey = "__trpc_agent_internal_surface_root_node_id_state__"
 	// teamMemberTraceRootStateKey stores one invocation's mounted team member trace root.
 	teamMemberTraceRootStateKey = "__trpc_agent_internal_team_member_trace_root_state__"
+	// executionTraceHiddenStateKey marks a child whose shared trace descendants
+	// must remain hidden from the parent's static execution trace.
+	executionTraceHiddenStateKey = "__trpc_agent_internal_execution_trace_hidden_state__"
+	// transparentTraceNodeStateKey marks a wrapper that intentionally shares its
+	// parent's trace node. It is deliberately not copied by Invocation.Clone.
+	transparentTraceNodeStateKey = "__trpc_agent_internal_transparent_trace_node_state__"
 
 	// SyncSummaryIntraRunStateKey is set on the invocation by the
 	// flow when sync intra-run summary is active.
@@ -1757,7 +1763,8 @@ func isCloneStateKey(key string) bool {
 		streamHubStateKey,
 		messageoriginkey.Key,
 		surfaceRootNodeIDStateKey,
-		teamMemberTraceRootStateKey:
+		teamMemberTraceRootStateKey,
+		executionTraceHiddenStateKey:
 		return true
 	default:
 		return false

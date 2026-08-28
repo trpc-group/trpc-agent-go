@@ -79,6 +79,8 @@ func TestMemberMountContextHelpers(t *testing.T) {
 	got, ok := MemberMountFromContext(ctx)
 	require.True(t, ok)
 	require.Equal(t, mount, got)
+	_, ok = MemberMountFromContext(ctx)
+	require.False(t, ok)
 	ctx = ContextWithMemberMount(nil, mount)
 	got, ok = MemberMountFromContext(ctx)
 	require.True(t, ok)
