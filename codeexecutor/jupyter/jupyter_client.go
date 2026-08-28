@@ -77,7 +77,10 @@ type executionMessage struct {
 	} `json:"parent_header"`
 }
 
-// NewClient creates a new Jupyter client
+// NewClient creates a new Jupyter client from connectionInfo.
+// If readiness fails after startup, NewClient attempts to delete the started
+// kernel and closes the websocket. The returned error may include both the
+// readiness error and any cleanup error.
 func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 	baseURL := fmt.Sprintf("http://%s:%d", connectionInfo.Host, connectionInfo.Port)
 	c := &Client{
