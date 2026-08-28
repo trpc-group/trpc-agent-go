@@ -1532,6 +1532,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#executiontrace" class="md-nav__link">
+    <span class="md-ellipsis">
+      ExecutionTrace 默认策略（显式开启）
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#_33" class="md-nav__link">
     <span class="md-ellipsis">
       📝 总结
@@ -4831,6 +4840,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#executiontrace" class="md-nav__link">
+    <span class="md-ellipsis">
+      ExecutionTrace 默认策略（显式开启）
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#_33" class="md-nav__link">
     <span class="md-ellipsis">
       📝 总结
@@ -7480,6 +7498,31 @@ runner 的消费循环也会正常结束，避免写端阻塞。</p>
 </span><span id="__span-63-29"><a id="__codelineno-63-29" name="__codelineno-63-29"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>默认路径为 <code>/trpc-agent/v1/apps/{appName}</code>。<code>Describe</code> 请求远端 structure，<code>Run</code> 请求远端 runs 接口并恢复为框架标准 <code>event.Event</code> 流。更多完整代码可参考 <code>examples/trpcagent</code>。</p>
+<h2 id="executiontrace">ExecutionTrace 默认策略（显式开启）</h2>
+<p>ExecutionTrace 默认关闭。如果一个服务希望某个 Runner 的每次运行都生成
+ExecutionTrace，可以在构造该 Runner 时统一开启：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-64-1">1</a></span>
+<span class="normal"><a href="#__codelineno-64-2">2</a></span>
+<span class="normal"><a href="#__codelineno-64-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-64-1"><a id="__codelineno-64-1" name="__codelineno-64-1"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">"my-app"</span><span class="p">,</span><span class="w"> </span><span class="nx">myAgent</span><span class="p">,</span>
+</span><span id="__span-64-2"><a id="__codelineno-64-2" name="__codelineno-64-2"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithExecutionTraceEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-64-3"><a id="__codelineno-64-3" name="__codelineno-64-3"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>这是 Runner 局部默认值，不会影响进程中的其他 Runner 或 telemetry 集成。单次
+运行仍可覆盖该默认值：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-65-1">1</a></span>
+<span class="normal"><a href="#__codelineno-65-2">2</a></span>
+<span class="normal"><a href="#__codelineno-65-3">3</a></span>
+<span class="normal"><a href="#__codelineno-65-4">4</a></span>
+<span class="normal"><a href="#__codelineno-65-5">5</a></span>
+<span class="normal"><a href="#__codelineno-65-6">6</a></span>
+<span class="normal"><a href="#__codelineno-65-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-65-3"><a id="__codelineno-65-3" name="__codelineno-65-3"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-65-4"><a id="__codelineno-65-4" name="__codelineno-65-4"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-65-5"><a id="__codelineno-65-5" name="__codelineno-65-5"></a><span class="w">    </span><span class="nx">message</span><span class="p">,</span>
+</span><span id="__span-65-6"><a id="__codelineno-65-6" name="__codelineno-65-6"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithExecutionTraceEnabled</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span>
+</span><span id="__span-65-7"><a id="__codelineno-65-7" name="__codelineno-65-7"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
 <h2 id="_33">📝 总结</h2>
 <p>Runner 组件是 tRPC-Agent-Go 框架的核心，提供了完整的对话管理和 Agent 编排能力。通过合理使用会话管理、工具集成和事件处理，可以构建强大的智能对话应用。</p>
 
@@ -7504,7 +7547,7 @@ runner 的消费循环也会正常结束，避免写端阻塞。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月13日 09:44:15 UTC">2026-08-13 09:44:15</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月28日 04:59:05 UTC">2026-08-28 04:59:05</span>
   </span>
 
     
