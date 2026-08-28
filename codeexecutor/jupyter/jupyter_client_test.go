@@ -218,6 +218,72 @@ func Test_waitForReady(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// silentWSHandler upgrades the websocket, then sends a malformed reply so
+// the client's waitForReady fails without the server dropping the
+// connection. It signals closed when the client subsequently closes the
+// connection.
+type silentWSHandler struct {
+	closed chan struct{}
+}
+
+func (h silentWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/api/kernelspecs":
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"kernelspecs":{"python3":{"name":"python3","spec":{"argv":["python3"],"display_name":"Python 3","language":"python"}}}}`))
+		return
+	case "/api/kernels":
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id": "123"}`))
+		return
+	}
+	ws, err := cstUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer ws.Close()
+	// Read the kernel_info_request, then send a malformed reply so the
+	// client's waitForReady fails while the connection stays open.
+	if _, _, err := ws.ReadMessage(); err != nil {
+		return
+	}
+	_ = ws.WriteMessage(websocket.TextMessage, []byte("{invalid-json"))
+	// With the fix, the client closes the connection after waitForReady
+	// fails; without it, this read blocks until the test tears down.
+	if _, _, err := ws.ReadMessage(); err != nil {
+		close(h.closed)
+	}
+}
+
+// TestNewClientWaitForReadyFailure verifies NewClient closes the websocket
+// when waitForReady fails after the connection is established.
+func TestNewClientWaitForReadyFailure(t *testing.T) {
+	h := silentWSHandler{closed: make(chan struct{})}
+	s := httptest.NewServer(h)
+	defer s.Close()
+
+	parsed, err := url.Parse(s.URL)
+	assert.NoError(t, err)
+	port, err := strconv.Atoi(parsed.Port())
+	assert.NoError(t, err)
+
+	// WaitReadyTimeout must be >= 1s: NewClient ignores sub-second values.
+	_, err = NewClient(ConnectionInfo{
+		Host:             parsed.Hostname(),
+		Port:             port,
+		KernelName:       "python3",
+		WaitReadyTimeout: time.Second,
+	})
+	assert.Error(t, err)
+
+	select {
+	case <-h.closed:
+		// Websocket closed as expected.
+	case <-time.After(5 * time.Second):
+		t.Fatal("websocket was not closed after waitForReady failure")
+	}
+}
+
 func Test_sendMessage(t *testing.T) {
 	cli := newInvalidClient()
 	_, err := cli.sendMessage(map[string]any{}, "test", "test")

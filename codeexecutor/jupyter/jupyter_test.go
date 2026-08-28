@@ -11,10 +11,15 @@ package jupyter
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -680,6 +685,85 @@ func TestNewWithFakePythonExited(t *testing.T) {
 		WithWaitReadyTimeout(10*time.Millisecond),
 	)
 	assert.Error(t, err)
+}
+
+// NewClient failure path: the fake gateway announces "is available at" but
+// the endpoint returns an error, so NewClient fails. New() must still clean
+// up the gateway subprocess before returning the error.
+func TestNewClientFailureCleansUpGateway(t *testing.T) {
+	tmp := t.TempDir()
+	pidFile := filepath.Join(tmp, "gateway.pid")
+
+	// Serve a deterministic failing endpoint on an OS-assigned port instead
+	// of guessing a free port.
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failSrv.Close()
+
+	parsed, err := url.Parse(failSrv.URL)
+	if err != nil {
+		t.Fatalf("parse failing endpoint URL: %v", err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatalf("parse failing endpoint port: %v", err)
+	}
+
+	fake := filepath.Join(tmp, "python")
+	script := "#!/bin/sh\n" +
+		"trap 'exit 0' TERM INT\n" +
+		"prev=\"\"\n" +
+		"PORT=8888\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"--version\" ]; then exit 0; fi\n" +
+		"  if [ \"$prev\" = \"--KernelGatewayApp.port\" ]; then PORT=\"$a\"; fi\n" +
+		"  prev=\"$a\"\n" +
+		"done\n" +
+		"echo \"$$\" > \"" + pidFile + "\"\n" +
+		"echo \"[KernelGatewayApp] Jupyter Kernel Gateway is available at http://127.0.0.1:$PORT\" 1>&2\n" +
+		"while :; do sleep 1; done\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake python: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", tmp+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	_, err = New(
+		WithPort(port),
+		WithStartTimeout(8*time.Second),
+		WithWaitReadyTimeout(3*time.Second),
+	)
+	if err == nil {
+		t.Fatal("expected New() to fail: NewClient cannot reach the fake gateway")
+	}
+
+	pidBytes, rerr := os.ReadFile(pidFile)
+	if rerr != nil {
+		t.Fatalf("gateway pid file missing: %v", rerr)
+	}
+	pid, perr := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if perr != nil {
+		t.Fatalf("invalid gateway pid %q: %v", pidBytes, perr)
+	}
+	// Guarantee no leftover process even when this test fails before the
+	// cleanup assertion below.
+	defer func() {
+		_ = exec.Command("kill", "-9", strconv.Itoa(pid)).Run()
+	}()
+
+	// The gateway subprocess must be reaped after New() returns the error.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if proc, ferr := os.FindProcess(pid); ferr != nil {
+			return // Process not found: cleaned up.
+		} else if serr := proc.Signal(syscall.Signal(0)); serr != nil {
+			return // Process not found: cleaned up.
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("gateway subprocess (pid=%d) still alive after New() returned error", pid)
 }
 
 // Error path for ExecuteCode when client is not initialized.

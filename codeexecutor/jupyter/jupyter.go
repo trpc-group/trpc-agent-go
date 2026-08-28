@@ -220,6 +220,7 @@ func New(opts ...Option) (*CodeExecutor, error) {
 					WaitReadyTimeout: c.waitReadyTimeout,
 				})
 				if err != nil {
+					c.cleanup()
 					return nil, err
 				}
 				c.ws = localexec.NewRuntime("")
