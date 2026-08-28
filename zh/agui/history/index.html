@@ -2880,6 +2880,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      尽力加载历史
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3585,6 +3594,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      尽力加载历史
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4002,6 +4020,33 @@
 </span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>完整示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/follow">examples/agui/server/follow</a>，前端可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat">examples/agui/client/tdesign-chat</a>。</p>
+<h2 id="_6">尽力加载历史</h2>
+<p>默认情况下，消息快照会严格校验已持久化 AG-UI 事件之间的配对关系。比如 <code>TEXT_MESSAGE_CONTENT</code> 需要先看到同一条消息的 <code>TEXT_MESSAGE_START</code>，<code>TOOL_CALL_RESULT</code> 需要匹配已经完成参数流的工具调用。如果历史数据中存在缺失、乱序或重复事件，快照路由会尽量返回出错位置之前已经还原出的 <code>MESSAGES_SNAPSHOT</code>，随后返回 <code>RUN_ERROR</code>。</p>
+<p>如果线上历史数据可能因为连接中断、前端工具调用降级、存储写入失败或版本切换而出现少量不完整事件，可以开启尽力加载模式：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-9-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-9-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-9-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-9-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-9-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-9-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-9-10">10</a></span>
+<span class="normal"><a href="#__codelineno-9-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/server/agui"</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="p">)</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAppName</span><span class="p">(</span><span class="nx">appName</span><span class="p">),</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotBestEffortEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>开启后，消息快照在还原历史时会跳过无法识别或无法配对的单条 AG-UI event，并继续处理后续事件。被跳过的事件只会写入 warn 日志，不会让本次 <code>/history</code> 请求返回 <code>RUN_ERROR</code>；如果后续事件仍然能组成完整消息，它们会继续出现在 <code>MESSAGES_SNAPSHOT.messages</code> 中。该模式只影响历史快照还原，不改变实时对话路由的执行行为，也不会修复已经缺失的历史事件内容。</p>
+<p>尽力加载只处理事件内容可读取但无法还原为合法消息的情况。如果会话存储读取失败、<code>SessionService</code> 返回错误，或者消息快照路由无法定位会话，服务端仍会返回 <code>RUN_ERROR</code>。</p>
 
 
 
@@ -4024,7 +4069,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月20日 08:13:05 UTC">2026-08-20 08:13:05</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月28日 02:14:08 UTC">2026-08-28 02:14:08</span>
   </span>
 
     
