@@ -2063,6 +2063,31 @@ if err != nil {
 
 The default path is `/trpc-agent/v1/apps/{appName}`. `Describe` requests the remote structure, and `Run` requests the remote runs endpoint and restores the response into the framework-standard `event.Event` stream. For complete code, see `examples/trpcagent`.
 
+## Execution Trace Default (opt-in)
+
+Execution trace recording is disabled by default. A service that wants every
+run on a specific Runner to produce an execution trace can enable it once when
+constructing that Runner:
+
+```go
+r := runner.NewRunner("my-app", myAgent,
+    runner.WithExecutionTraceEnabled(true),
+)
+```
+
+This is a Runner-local default; it does not affect other Runners or telemetry
+integrations in the process. A single run can override the default:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithExecutionTraceEnabled(false),
+)
+```
+
 ## 📝 Summary
 
 The Runner component is a core part of the tRPC-Agent-Go framework, providing complete conversation management and Agent orchestration capabilities. By properly using session management, tool integration, and event handling, you can build powerful intelligent conversational applications.

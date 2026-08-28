@@ -189,6 +189,15 @@ func WithAwaitUserReplyRouting(enabled bool) Option {
 	}
 }
 
+// WithExecutionTraceEnabled sets whether execution tracing is enabled by
+// default for every run on the Runner. The default is false. A single run can
+// override this default with agent.WithExecutionTraceEnabled.
+func WithExecutionTraceEnabled(enabled bool) Option {
+	return func(opts *Options) {
+		opts.executionTraceEnabledDefault = enabled
+	}
+}
+
 // WithPersistInterruptedAssistant sets the runner default for whether a
 // cancelled streaming run persists already-emitted assistant text as a final
 // assistant message.
@@ -333,6 +342,7 @@ type runner struct {
 	candidateSelector                  CandidateSelector
 	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
+	executionTraceEnabledDefault       bool
 	persistInterruptedAssistantDefault bool
 
 	// Resource management fields.
@@ -365,6 +375,7 @@ type Options struct {
 	candidateSelector                  CandidateSelector
 	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
+	executionTraceEnabledDefault       bool
 	persistInterruptedAssistantDefault bool
 }
 
@@ -422,6 +433,7 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		candidateSelector:                  options.candidateSelector,
 		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
+		executionTraceEnabledDefault:       options.executionTraceEnabledDefault,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
 		ownedSessionService:                ownedSessionService,
 	}
@@ -478,6 +490,7 @@ func NewRunnerWithAgentFactory(
 		candidateSelector:                  options.candidateSelector,
 		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
+		executionTraceEnabledDefault:       options.executionTraceEnabledDefault,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
 		ownedSessionService:                ownedSessionService,
 	}
@@ -986,7 +999,10 @@ func (r *runner) applyRunnerRunDefaults(ro *agent.RunOptions) {
 
 func (r *runner) resolveRunOptions(runOpts []agent.RunOption) (agent.RunOptions, error) {
 	defaultRequestID := uuid.NewString()
-	ro := agent.RunOptions{RequestID: defaultRequestID}
+	ro := agent.RunOptions{
+		RequestID:             defaultRequestID,
+		ExecutionTraceEnabled: r.executionTraceEnabledDefault,
+	}
 	for _, opt := range runOpts {
 		if opt != nil {
 			opt(&ro)

@@ -1979,6 +1979,30 @@ if err != nil {
 
 默认路径为 `/trpc-agent/v1/apps/{appName}`。`Describe` 请求远端 structure，`Run` 请求远端 runs 接口并恢复为框架标准 `event.Event` 流。更多完整代码可参考 `examples/trpcagent`。
 
+## ExecutionTrace 默认策略（显式开启）
+
+ExecutionTrace 默认关闭。如果一个服务希望某个 Runner 的每次运行都生成
+ExecutionTrace，可以在构造该 Runner 时统一开启：
+
+```go
+r := runner.NewRunner("my-app", myAgent,
+    runner.WithExecutionTraceEnabled(true),
+)
+```
+
+这是 Runner 局部默认值，不会影响进程中的其他 Runner 或 telemetry 集成。单次
+运行仍可覆盖该默认值：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithExecutionTraceEnabled(false),
+)
+```
+
 ## 📝 总结
 
 Runner 组件是 tRPC-Agent-Go 框架的核心，提供了完整的对话管理和 Agent 编排能力。通过合理使用会话管理、工具集成和事件处理，可以构建强大的智能对话应用。
