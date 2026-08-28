@@ -702,6 +702,16 @@ func main() {
 	}, time.Second, 10*time.Millisecond) {
 		return
 	}
+	t.Cleanup(func() {
+		if !processRunning(pid) {
+			return
+		}
+		process, findErr := os.FindProcess(pid)
+		if findErr == nil {
+			_ = process.Kill()
+			_, _ = process.Wait()
+		}
+	})
 	assert.Eventually(t, func() bool {
 		return !processRunning(pid)
 	}, time.Second, 10*time.Millisecond)
