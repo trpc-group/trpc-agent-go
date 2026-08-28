@@ -2,7 +2,7 @@ diff --git a/db.go b/db.go
 index 1111111..2222222 100644
 --- a/db.go
 +++ b/db.go
-@@ -1,2 +1,6 @@
+@@ -1 +1,7 @@
  package foo
 +
 +func Query() error {

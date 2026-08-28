@@ -40,7 +40,11 @@ def build_hunk_texts(lines):
 
     for index, raw in enumerate(lines):
         line = raw.rstrip("\n")
+        if line.startswith("diff --git "):
+            saw_diff_structure = True
         counts = hunk_counts(line)
+        if line.startswith("@@ ") and counts is None:
+            raise ValueError(f"invalid hunk header: {line}")
         if counts is not None:
             flush_hunk()
             hunk_lines = []
@@ -74,7 +78,7 @@ def redact(text: str) -> str:
     text = re.sub(r"github_pat_[A-Za-z0-9_]{20,}", "[REDACTED]", text)
     text = re.sub(r"[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", "[REDACTED]", text)
     text = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "[REDACTED_PRIVATE_KEY]", text)
-    text = re.sub(r"([a-z][a-z0-9+.-]*://[^/\s:@]+):([^@\s/]+)@", r"\1:[REDACTED]@", text)
+    text = re.sub(r"(?i)([a-z][a-z0-9+.-]*://[^/\s:@]+):([^@\s/]+)@", r"\1:[REDACTED]@", text)
     text = re.sub(r"(?i)(password=)[^&\s]+", r"\1[REDACTED]", text)
     return text
 
@@ -186,7 +190,7 @@ def command_call_has_dynamic_executable(text: str) -> bool:
 def reports_command_injection(text: str) -> bool:
     if not contains_any(text, "exec.Command(", "exec.CommandContext("):
         return False
-    if '"-c"' in text or "'-c'" in text:
+    if contains_any(text, '"-c"', "'-c'", '"-lc"', "'-lc'"):
         return True
     return command_call_has_dynamic_executable(text)
 
@@ -308,23 +312,29 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
     hunk_texts = build_hunk_texts(lines)
     old_remaining = 0
     new_remaining = 0
+    saw_diff_structure = False
+    loop_seen = False
     for index, raw in enumerate(lines):
         line = raw.rstrip("\n")
         counts = hunk_counts(line)
         if old_remaining <= 0 and new_remaining <= 0 and line.startswith("+++ "):
+            saw_diff_structure = True
             current_file = decode_git_path(line[len("+++ "):])
             continue
         if counts is not None:
+            if old_remaining > 0 or new_remaining > 0:
+                raise ValueError("new hunk started before the previous hunk was complete")
+            saw_diff_structure = True
             match = re.search(r"\+(\d+)", line)
             new_line = int(match.group(1)) - 1 if match else 0
             old_remaining, new_remaining = counts
             current_hunk = []
+            loop_seen = False
             continue
         if new_remaining > 0 and line.startswith("+"):
             new_line += 1
             new_remaining -= 1
             text = line[1:].strip()
-            hunk_before = "\n".join(current_hunk)
             current_hunk.append(text)
             hunk_text = hunk_texts.get(index, "\n".join(current_hunk))
             if "TODO(" in text or "FIXME" in text:
@@ -368,7 +378,7 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
                             "Mutex lock has no visible deferred unlock", text,
                             "Defer Unlock immediately after Lock to avoid deadlocks on early returns.",
                             "mutex-unlock-missing")
-            if reports_defer_in_loop(text, hunk_before):
+            if reports_defer_in_loop(text, "for " if loop_seen else ""):
                 add_finding("medium", "resource", current_file, new_line,
                             "defer is used inside a loop", text,
                             "Move the loop body into a helper or close the resource before the next iteration.",
@@ -378,7 +388,7 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
                             "Error is returned without context", text,
                             "Wrap the error with operation context using fmt.Errorf(\"operation: %w\", err).",
                             "bare-return-err")
-            if reports_string_concat_loop(text, hunk_before, hunk_text):
+            if reports_string_concat_loop(text, "for " if loop_seen else "", hunk_text):
                 add_warning("low", "performance", current_file, new_line,
                             "String concatenation in a loop may allocate repeatedly", text,
                             "Use strings.Builder or bytes.Buffer for repeated string assembly.",
@@ -408,6 +418,8 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
                             "Database handle or transaction has no cleanup path", text,
                             "Defer Close() for handles and Rollback() for transactions in the same scope.",
                             "db-lifecycle")
+            if contains_any(text, "for ", "range "):
+                loop_seen = True
         elif old_remaining > 0 and line.startswith("-"):
             old_remaining -= 1
         elif old_remaining > 0 and new_remaining > 0 and line.startswith(" "):
@@ -415,5 +427,16 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
             current_hunk.append(line[1:])
             old_remaining -= 1
             new_remaining -= 1
+        elif old_remaining > 0 or new_remaining > 0:
+            if line != r"\ No newline at end of file":
+                raise ValueError(f"invalid hunk line: {line}")
+        elif (line.startswith("+") and not line.startswith("+++ ")) or \
+                (line.startswith("-") and not line.startswith("--- ")) or line.startswith(" "):
+            raise ValueError(f"excess hunk line: {line}")
+
+    if old_remaining != 0 or new_remaining != 0:
+        raise ValueError(f"incomplete hunk: {old_remaining} old and {new_remaining} new lines remain")
+    if full_text.strip() and not saw_diff_structure:
+        raise ValueError("input is not a unified diff")
 
 print(json.dumps({"findings": findings, "warnings": warnings}, separators=(",", ":")))

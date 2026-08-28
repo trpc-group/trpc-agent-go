@@ -23,7 +23,7 @@ func TestParseUnifiedDiffExtractsFileAndHunk(t *testing.T) {
 		"index 1111111..2222222 100644\n" +
 		"--- a/main.go\n" +
 		"+++ b/main.go\n" +
-		"@@ -1,2 +1,3 @@\n" +
+		"@@ -1 +1,2 @@\n" +
 		" package main\n" +
 		"+func main() {}\n"
 
@@ -41,8 +41,8 @@ func TestParseUnifiedDiffExtractsFileAndHunk(t *testing.T) {
 		t.Fatalf("expected 1 hunk, got %d", len(parsed.Files[0].Hunks))
 	}
 	hunk := parsed.Files[0].Hunks[0]
-	if hunk.OldLines != 2 || hunk.NewLines != 3 {
-		t.Fatalf("hunk line counts = old:%d new:%d, want old:2 new:3", hunk.OldLines, hunk.NewLines)
+	if hunk.OldLines != 1 || hunk.NewLines != 2 {
+		t.Fatalf("hunk line counts = old:%d new:%d, want old:1 new:2", hunk.OldLines, hunk.NewLines)
 	}
 }
 
@@ -70,7 +70,7 @@ func TestParseUnifiedDiffTracksNewLineNumbersAcrossMixedHunk(t *testing.T) {
 		"diff --git a/service.go b/service.go\n" +
 		"--- a/service.go\n" +
 		"+++ b/service.go\n" +
-		"@@ -10,5 +10,6 @@ func handle() {\n" +
+		"@@ -10,4 +10,5 @@ func handle() {\n" +
 		" \tsetup()\n" +
 		"-\toldCall()\n" +
 		"+\tfirstNewCall()\n" +
@@ -133,7 +133,7 @@ func TestParseUnifiedDiffPreservesRepositoryPathsStartingWithSidePrefixes(t *tes
 	for _, path := range []string{"a/handler.go", "b/handler.go"} {
 		diff := "diff --git a/" + path + " b/" + path + "\n" +
 			"--- a/" + path + "\n+++ b/" + path + "\n" +
-			"@@ -1 +1 @@\n+package main\n"
+			"@@ -0,0 +1 @@\n+package main\n"
 		parsed, err := ParseUnifiedDiff(diff)
 		if err != nil {
 			t.Fatalf("ParseUnifiedDiff(%q) returned error: %v", path, err)
@@ -257,5 +257,17 @@ func TestParseUnifiedDiffTreatsHeaderLikeContentAsAddedLines(t *testing.T) {
 	}
 	if hunk.Lines[0].Text != "++ not-a-file-header" {
 		t.Fatalf("header-like added content = %q", hunk.Lines[0].Text)
+	}
+}
+
+func TestParseUnifiedDiffRejectsIncompleteAndNonDiffInput(t *testing.T) {
+	tests := []string{
+		"this is not a unified diff\n",
+		"--- a/sample.go\n+++ b/sample.go\n@@ -0,0 +1,2 @@\n+package sample\n",
+	}
+	for _, diff := range tests {
+		if _, err := ParseUnifiedDiff(diff); err == nil {
+			t.Fatalf("ParseUnifiedDiff(%q) succeeded, want validation error", diff)
+		}
 	}
 }

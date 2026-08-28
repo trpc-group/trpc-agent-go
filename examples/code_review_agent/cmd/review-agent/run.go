@@ -114,6 +114,7 @@ func runWithContext(ctx context.Context, opts Options, newAgent reviewAgentFacto
 		cfg.ModelHTTP = llm.HTTPConfig{
 			Enabled:   true,
 			Endpoint:  opts.ModelEndpoint,
+			APIKey:    opts.ModelAPIKey,
 			APIKeyEnv: opts.ModelAPIKeyEnv,
 			Model:     opts.ModelName,
 		}

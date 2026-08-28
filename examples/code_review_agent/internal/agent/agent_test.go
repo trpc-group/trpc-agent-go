@@ -2801,16 +2801,6 @@ func TestRunGoSandboxCommandPrefersWorkspaceExec(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	defer ag.Close()
-	fallback := &recordingTool{
-		name: "execute_code",
-		call: func(ctx context.Context, jsonArgs []byte) (any, error) {
-			_ = ctx
-			t.Fatalf("codeexec fallback should not be called after workspaceexec success: %s", jsonArgs)
-			return nil, nil
-		},
-	}
-	ag.checkTool = fallback
-
 	decisions, run := ag.runGoSandboxCommand(context.Background(), "task-workspace-primary", repo, "go test ./...")
 	if len(decisions) != 1 || decisions[0].Action != "allow" {
 		t.Fatalf("expected one allow decision, got %+v", decisions)
@@ -2818,13 +2808,10 @@ func TestRunGoSandboxCommandPrefersWorkspaceExec(t *testing.T) {
 	if run.Status != "ok" {
 		t.Fatalf("expected workspaceexec go test to succeed, got %+v", run)
 	}
-	if fallback.calls != 0 {
-		t.Fatalf("codeexec fallback should not be called after workspaceexec success, calls=%d", fallback.calls)
-	}
 }
 
-// TestRunGoSandboxCommandFallsBackToCodeExec 固定 workspaceexec 不可用时保留 codeexec 兜底。
-func TestRunGoSandboxCommandFallsBackToCodeExec(t *testing.T) {
+// TestRunGoSandboxCommandFailsClosedWithoutWorkspaceExec pins the clean-env boundary.
+func TestRunGoSandboxCommandFailsClosedWithoutWorkspaceExec(t *testing.T) {
 
 	root := repoRoot(t)
 	repo := t.TempDir()
@@ -2839,69 +2826,16 @@ func TestRunGoSandboxCommandFallsBackToCodeExec(t *testing.T) {
 	}
 	defer ag.Close()
 	ag.exec = nil
-	fallback := &recordingTool{
-		name: "execute_code",
-		call: func(ctx context.Context, jsonArgs []byte) (any, error) {
-			_ = ctx
-			if !strings.Contains(string(jsonArgs), "go vet ./...") {
-				t.Fatalf("expected fallback args to include go vet command, got %s", jsonArgs)
-			}
-			return map[string]any{"output": "fallback ok"}, nil
-		},
-	}
-	ag.checkTool = fallback
 
 	decisions, run := ag.runGoSandboxCommand(context.Background(), "task-workspace-fallback", repo, "go vet ./...")
-	if len(decisions) != 2 {
-		t.Fatalf("expected workspace and codeexec decisions, got %+v", decisions)
+	if len(decisions) != 1 {
+		t.Fatalf("expected only the workspace decision, got %+v", decisions)
 	}
-	for _, decision := range decisions {
-		if decision.Action != "allow" {
-			t.Fatalf("expected allow decision, got %+v", decision)
-		}
+	if decisions[0].Action != "allow" {
+		t.Fatalf("expected allow decision, got %+v", decisions[0])
 	}
-	if fallback.calls != 1 {
-		t.Fatalf("expected exactly one codeexec fallback call, got %d", fallback.calls)
-	}
-	if run.Status != "ok" || run.StdoutDigest == "" {
-		t.Fatalf("expected successful fallback sandbox run with digest, got %+v", run)
-	}
-}
-
-func TestRunGoSandboxCommandDoesNotCallFallbackWhenSecondDecisionAsks(t *testing.T) {
-
-	root := repoRoot(t)
-	ag, err := New(Config{
-		SkillsRoot: filepath.Join(root, "skills"),
-		Runtime:    RuntimeLocalFallback,
-		OutputDir:  t.TempDir(),
-		Timeout:    testReviewTimeout,
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	defer ag.Close()
-	ag.exec = nil
-	fallback := &recordingTool{name: "execute_code", call: func(context.Context, []byte) (any, error) {
-		t.Fatal("fallback must not execute after ask")
-		return nil, nil
-	}}
-	ag.checkTool = fallback
-	checks := 0
-	ag.policy = tool.PermissionPolicyFunc(func(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
-		checks++
-		if req.ToolName == "workspace_exec" {
-			return tool.AllowPermission(), nil
-		}
-		return tool.AskPermission("human approval required"), nil
-	})
-
-	decisions, run := ag.runGoSandboxCommand(context.Background(), "task-fallback-ask", t.TempDir(), "go vet ./...")
-	if checks != 2 || len(decisions) != 2 {
-		t.Fatalf("permission checks=%d decisions=%+v, want two", checks, decisions)
-	}
-	if decisions[1].Action != "ask" || run.Status != "ask" || fallback.calls != 0 {
-		t.Fatalf("fallback ask boundary violated: decisions=%+v run=%+v calls=%d", decisions, run, fallback.calls)
+	if run.Status != "error" || run.StderrDigest == "" {
+		t.Fatalf("expected workspace failure to fail closed, got %+v", run)
 	}
 }
 
@@ -3081,6 +3015,12 @@ func TestAgentRunContainerRuntimeExecutesGoChecks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "foo_test.go"), []byte("package containerdemo\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) { if Add(1, 2) != 3 { t.Fatal(\"bad\") } }\n"), 0o644); err != nil {
 		t.Fatalf("write foo_test.go: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(repo, "vendor"), 0o755); err != nil {
+		t.Fatalf("create vendor directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "vendor", "modules.txt"), nil, 0o644); err != nil {
+		t.Fatalf("write vendor manifest: %v", err)
+	}
 
 	dbPath := filepath.Join(t.TempDir(), "review.db")
 	ag, err := New(Config{
@@ -3106,6 +3046,9 @@ func TestAgentRunContainerRuntimeExecutesGoChecks(t *testing.T) {
 	}
 	if len(result.Findings) == 0 || result.Findings[0].RuleID != "secret-leak" {
 		t.Fatalf("container Skill must produce the fixture finding, got %+v warnings=%+v", result.Findings, result.Warnings)
+	}
+	if err := ag.Close(); err != nil {
+		t.Fatalf("close agent before reopening sqlite: %v", err)
 	}
 
 	store, err := sqlite.Open(dbPath)

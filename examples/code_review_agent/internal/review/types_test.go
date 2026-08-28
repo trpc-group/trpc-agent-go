@@ -39,6 +39,7 @@ func TestRedactSecretsMasksCommonTokenShapes(t *testing.T) {
 		`token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature`,
 		`private_key="-----BEGIN PRIVATE KEY-----MIIEvQIBADANBgkqhkiG9w0BAQEFAASC-----END PRIVATE KEY-----"`,
 		`dsn="postgres://reviewer:db-password-123@db.example.com/app?sslmode=require"`,
+		`endpoint="HTTPS://alice:correct-horse-battery@example.com/api"`,
 	}, " ")
 
 	got := RedactSecrets(input)
@@ -55,6 +56,7 @@ func TestRedactSecretsMasksCommonTokenShapes(t *testing.T) {
 		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature",
 		"-----BEGIN PRIVATE KEY-----",
 		"db-password-123",
+		"correct-horse-battery",
 	} {
 		if strings.Contains(got, raw) {
 			t.Fatalf("redacted output still contains %q: %s", raw, got)

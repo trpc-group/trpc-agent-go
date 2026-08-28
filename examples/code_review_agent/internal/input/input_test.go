@@ -212,6 +212,80 @@ func TestReadDiffFileRejectsOversizedInput(t *testing.T) {
 	}
 }
 
+func TestReadDiffFileRejectsMalformedAndTruncatedDiffs(t *testing.T) {
+	t.Parallel()
+
+	for _, content := range []string{
+		"not a unified diff\n",
+		"--- a/sample.go\n+++ b/sample.go\n@@ -0,0 +1,2 @@\n+package sample\n",
+	} {
+		path := filepath.Join(t.TempDir(), "change.diff")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write diff: %v", err)
+		}
+		if _, _, err := Read(Config{}, Request{DiffFile: path}); err == nil || !strings.Contains(err.Error(), "validate unified diff") {
+			t.Fatalf("Read(%q) error = %v, want validation failure", content, err)
+		}
+	}
+}
+
+func TestReadRejectsAmbiguousExplicitInputs(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := Read(Config{}, Request{DiffFile: "a.diff", Fixture: "sample"}); err == nil {
+		t.Fatal("Read accepted multiple explicit input sources")
+	}
+}
+
+func TestReadFileListRejectsSymlinkedParentEscapeWithoutRepoPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.go"), []byte("package secret\n"), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	listPath := filepath.Join(root, "files.txt")
+	if err := os.WriteFile(listPath, []byte("linked/secret.go\n"), 0o600); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+	if _, _, err := Read(Config{}, Request{FileList: listPath}); err == nil || !strings.Contains(err.Error(), "escapes base directory") {
+		t.Fatalf("Read error = %v, want symlinked parent escape rejection", err)
+	}
+}
+
+func TestReadRepoDisablesConfiguredFSMonitor(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init")
+	git(t, repo, "config", "user.email", "reviewer@example.com")
+	git(t, repo, "config", "user.name", "Review Agent Test")
+	tracked := filepath.Join(repo, "main.go")
+	if err := os.WriteFile(tracked, []byte("package main\n"), 0o600); err != nil {
+		t.Fatalf("write tracked file: %v", err)
+	}
+	git(t, repo, "add", "main.go")
+	git(t, repo, "commit", "-m", "initial")
+
+	marker := filepath.Join(t.TempDir(), "fsmonitor-ran")
+	helper := filepath.Join(t.TempDir(), "fsmonitor.sh")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o700); err != nil {
+		t.Fatalf("write fsmonitor helper: %v", err)
+	}
+	git(t, repo, "config", "core.fsmonitor", helper)
+	if err := os.WriteFile(tracked, []byte("package main\n\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatalf("modify tracked file: %v", err)
+	}
+	if _, _, err := Read(Config{}, Request{RepoPath: repo}); err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("repository-configured fsmonitor executed on host: %v", err)
+	}
+}
+
 func TestReadRepoPathInGitWorktreeSubdirectoryUsesGitDiff(t *testing.T) {
 	repo := t.TempDir()
 	git(t, repo, "init")

@@ -12,6 +12,7 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -33,6 +34,9 @@ func TestContainerHostConfigEnforcesProductionIsolation(t *testing.T) {
 	}
 	if host.PidsLimit == nil || *host.PidsLimit <= 0 || host.Resources.Memory <= 0 || host.Resources.NanoCPUs <= 0 {
 		t.Fatalf("container resource limits are incomplete: %+v", host.Resources)
+	}
+	if host.ReadonlyRootfs || host.StorageOpt["size"] == "" {
+		t.Fatalf("container writable storage is not bounded: %+v", host)
 	}
 	if !containsString(host.CapDrop, "ALL") || !containsString(host.SecurityOpt, "no-new-privileges") {
 		t.Fatalf("container capabilities/security options are incomplete: %+v", host)
@@ -70,6 +74,35 @@ func TestBoundedSandboxCommandPreservesExitStatusAfterLargeOutput(t *testing.T) 
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 7 {
 		t.Fatalf("failing command error = %v output=%q, want exit 7", err, out)
 	}
+}
+
+func TestRunWorkspaceCommandUsesCleanEnvironment(t *testing.T) {
+	t.Setenv("CR_AGENT_HOST_SECRET", "must-not-leak")
+	exec, err := NewExecutor(Config{Runtime: RuntimeLocalFallback, Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	defer CleanupExecutor(exec)
+
+	raw, err := RunWorkspaceCommand(
+		context.Background(), exec, t.TempDir(), "printenv", 10*time.Second,
+		SandboxEnv(RuntimeLocalFallback), 16*1024,
+	)
+	if err != nil {
+		t.Fatalf("RunWorkspaceCommand: %v", err)
+	}
+	if strings.Contains(string(mustJSON(t, raw)), "CR_AGENT_HOST_SECRET") || strings.Contains(string(mustJSON(t, raw)), "must-not-leak") {
+		t.Fatalf("workspace command inherited host secret: %+v", raw)
+	}
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	b, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal value: %v", err)
+	}
+	return b
 }
 
 func containsString(values []string, want string) bool {

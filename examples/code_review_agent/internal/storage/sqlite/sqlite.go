@@ -288,6 +288,10 @@ func (s *Store) publish() error {
 	if _, err := s.db.Exec(`VACUUM INTO '` + strings.ReplaceAll(snapshotPath, "'", "''") + `'`); err != nil {
 		return fmt.Errorf("snapshot sqlite database: %w", err)
 	}
+	if err := os.Chmod(snapshotPath, 0o600); err != nil {
+		_ = os.Remove(snapshotPath)
+		return fmt.Errorf("secure sqlite snapshot: %w", err)
+	}
 	if err := os.Rename(snapshotPath, s.targetPath); err != nil {
 		_ = os.Remove(snapshotPath)
 		return fmt.Errorf("publish sqlite database: %w", err)

@@ -39,7 +39,6 @@ import (
 	skillrepo "trpc.group/trpc-go/trpc-agent-go/skill"
 	telemetrytrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-	toolcodeexec "trpc.group/trpc-go/trpc-agent-go/tool/codeexec"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
 
@@ -148,15 +147,12 @@ type Request struct {
 }
 
 // defaultPermissionPolicy 返回代码审查命令的固定 allowlist。
-func defaultPermissionPolicy(enableStaticcheck bool, outputLimit int) tool.PermissionPolicy {
+func defaultPermissionPolicy(enableStaticcheck bool) tool.PermissionPolicy {
 	commands := approval.AllowedReviewCommands(enableStaticcheck)
-	for _, command := range approval.AllowedReviewCommands(enableStaticcheck) {
+	for _, command := range commands {
 		containerCommand := execution.SandboxExecCommand(RuntimeContainer, command)
-		commands = append(commands,
-			containerCommand,
-			execution.BoundedSandboxCommand(command, outputLimit),
-			execution.BoundedSandboxCommand(containerCommand, outputLimit),
-		)
+		localCommand := execution.SandboxExecCommand(RuntimeLocalFallback, command)
+		commands = append(commands, containerCommand, localCommand)
 	}
 	return approval.NewPermissionPolicy(defaultSkillCommand, commands)
 }
@@ -169,8 +165,6 @@ type Agent struct {
 	loadTool tool.CallableTool
 	// runTool 执行 Skill 脚本。
 	runTool tool.CallableTool
-	// checkTool 执行 Go 检查。
-	checkTool tool.CallableTool
 	// exec 是底层执行器，供 workspaceexec 使用。
 	exec codeexecutor.CodeExecutor
 	// policy 审批工具调用。
@@ -274,9 +268,8 @@ func New(cfg Config) (*Agent, error) {
 		cfg:                   cfg,
 		loadTool:              toolskill.NewLoadTool(repo),
 		runTool:               runTool,
-		checkTool:             toolcodeexec.NewTool(exec, toolcodeexec.WithName("execute_code"), toolcodeexec.WithLanguages("bash")),
 		exec:                  exec,
-		policy:                defaultPermissionPolicy(cfg.EnableStaticcheck, cfg.OutputLimitBytes),
+		policy:                defaultPermissionPolicy(cfg.EnableStaticcheck),
 		store:                 store,
 		artifactService:       cfg.ArtifactService,
 		modelProvider:         cfg.ModelProvider,
@@ -584,7 +577,7 @@ func ensureSQLiteParentDir(path string) error {
 	if dir == "." || dir == "" {
 		return nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create sqlite directory %q: %w", dir, err)
 	}
 	return nil
@@ -621,7 +614,7 @@ func normalizeConfig(cfg Config) Config {
 	if cfg.MaxArtifactCount <= 0 {
 		cfg.MaxArtifactCount = defaultMaxArtifactCount
 	}
-	if cfg.OutputDir == "" {
+	if strings.TrimSpace(cfg.OutputDir) == "" {
 		cfg.OutputDir = DefaultOutputDir()
 	}
 	if cfg.ArtifactService == nil {

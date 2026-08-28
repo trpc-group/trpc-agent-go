@@ -329,6 +329,32 @@ func TestSanitizeInputRedactsAndBoundsMetadata(t *testing.T) {
 	}
 }
 
+func TestHTTPProviderUsesExplicitAPIKeyAndRejectsOversizedResponse(t *testing.T) {
+	t.Parallel()
+
+	const apiKey = "explicit-http-key"
+	client := &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+apiKey {
+			t.Errorf("Authorization = %q, want explicit bearer key", got)
+		}
+		body := `{"findings":[]}` + strings.Repeat(" ", defaultModelResponseLimitBytes) + `{"ignored":true}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	provider, err := NewHTTPProvider(HTTPConfig{
+		Enabled: true, Endpoint: "https://provider.example.test/review", APIKey: apiKey, Client: client,
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPProvider: %v", err)
+	}
+	if _, err := provider.Review(context.Background(), Input{}); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Review error = %v, want oversized response rejection", err)
+	}
+}
+
 func TestRunReviewKeepsOnlyProviderFindingsOnAddedLines(t *testing.T) {
 	const secret = "sk-provider-linecheck-1234567890"
 	diff := []byte("diff --git a/main.go b/main.go\n" +

@@ -41,9 +41,6 @@ func NewPermissionPolicy(skillCommand string, allowedReviewCommands []string) to
 		if req.ToolName == "workspace_exec" && allowsWorkspaceCommand(req.Arguments, allowedReviewCommands) {
 			return tool.AllowPermission(), nil
 		}
-		if req.ToolName == "execute_code" && allowsCodeExecFallback(req.Arguments, allowedReviewCommands) {
-			return tool.AllowPermission(), nil
-		}
 		return tool.AskPermission("unrecognized tool command requires human review"), nil
 	})
 }
@@ -66,39 +63,6 @@ func allowsWorkspaceCommand(args []byte, commands []string) bool {
 		return false
 	}
 	return commandAllowed(strings.TrimSpace(payload.Command), commands)
-}
-
-func allowsCodeExecFallback(args []byte, commands []string) bool {
-	var payload struct {
-		CodeBlocks []struct {
-			Code string `json:"code"`
-		} `json:"code_blocks"`
-	}
-	if json.Unmarshal(args, &payload) != nil || len(payload.CodeBlocks) != 1 {
-		return false
-	}
-	code := strings.TrimSpace(payload.CodeBlocks[0].Code)
-	for _, command := range commands {
-		if code == command {
-			return true
-		}
-		prefix, suffix, ok := strings.Cut(code, " && ")
-		if !ok || !strings.HasPrefix(strings.TrimSpace(prefix), "cd ") {
-			continue
-		}
-		suffix = strings.TrimSpace(suffix)
-		if strings.HasPrefix(suffix, "export GOCACHE=") {
-			_, suffix, ok = strings.Cut(suffix, " && ")
-			if !ok {
-				continue
-			}
-			suffix = strings.TrimSpace(suffix)
-		}
-		if suffix == command {
-			return true
-		}
-	}
-	return false
 }
 
 func commandAllowed(candidate string, commands []string) bool {

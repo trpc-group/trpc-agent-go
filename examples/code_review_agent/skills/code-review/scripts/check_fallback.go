@@ -50,6 +50,8 @@ func main() {
 	newLine := 0
 	oldRemaining := 0
 	newRemaining := 0
+	sawDiffStructure := false
+	loopSeen := false
 	hunkStart := regexp.MustCompile(`\+(\d+)`)
 	diff := string(data)
 	hunkTexts := buildHunkTexts(diff)
@@ -67,11 +69,22 @@ func main() {
 		index := lineIndex
 		lineIndex++
 		line := scanner.Text()
+		if strings.HasPrefix(line, "diff --git ") {
+			sawDiffStructure = true
+		}
 		switch {
 		case oldRemaining <= 0 && newRemaining <= 0 && strings.HasPrefix(line, "+++ "):
+			sawDiffStructure = true
 			currentFile = normalizeDiffPath(strings.TrimPrefix(line, "+++ "))
 			continue
-		case parseHunkCounts(line, &oldRemaining, &newRemaining):
+		case strings.HasPrefix(line, "@@ "):
+			if oldRemaining > 0 || newRemaining > 0 {
+				panic("new hunk started before the previous hunk was complete")
+			}
+			if !parseHunkCounts(line, &oldRemaining, &newRemaining) {
+				panic(fmt.Errorf("invalid hunk header: %q", line))
+			}
+			sawDiffStructure = true
 			match := hunkStart.FindStringSubmatch(line)
 			newLine = 0
 			if len(match) == 2 {
@@ -79,12 +92,16 @@ func main() {
 				newLine--
 			}
 			currentHunk = currentHunk[:0]
+			loopSeen = false
 			continue
 		case newRemaining > 0 && strings.HasPrefix(line, "+"):
 			newLine++
 			newRemaining--
 			text := strings.TrimSpace(strings.TrimPrefix(line, "+"))
-			hunkBefore := strings.Join(currentHunk, "\n")
+			hunkBefore := ""
+			if loopSeen {
+				hunkBefore = "for "
+			}
 			currentHunk = append(currentHunk, text)
 			hunkText := hunkTexts[index]
 			if hunkText == "" {
@@ -190,6 +207,9 @@ func main() {
 				addFinding("high", "database", "Database handle or transaction has no cleanup path",
 					"Defer Close() for handles and Rollback() for transactions in the same scope.", "db-lifecycle")
 			}
+			if containsAny(text, "for ", "range ") {
+				loopSeen = true
+			}
 		case oldRemaining > 0 && strings.HasPrefix(line, "-"):
 			oldRemaining--
 		case oldRemaining > 0 && newRemaining > 0 && strings.HasPrefix(line, " "):
@@ -197,10 +217,22 @@ func main() {
 			newRemaining--
 			newLine++
 			currentHunk = append(currentHunk, strings.TrimPrefix(line, " "))
+		case (oldRemaining > 0 || newRemaining > 0) && line != `\ No newline at end of file`:
+			panic(fmt.Errorf("invalid hunk line: %q", line))
+		case (strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++ ")) ||
+			(strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "--- ")) ||
+			strings.HasPrefix(line, " "):
+			panic(fmt.Errorf("excess hunk line: %q", line))
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		panic(fmt.Errorf("scan diff: %w", err))
+	}
+	if oldRemaining != 0 || newRemaining != 0 {
+		panic(fmt.Errorf("incomplete hunk: %d old and %d new lines remain", oldRemaining, newRemaining))
+	}
+	if strings.TrimSpace(diff) != "" && !sawDiffStructure {
+		panic("input is not a unified diff")
 	}
 
 	out, _ := json.Marshal(map[string]any{"findings": findings, "warnings": warnings})
@@ -220,7 +252,7 @@ func redact(text string) string {
 		{regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`), `[REDACTED]`},
 		{regexp.MustCompile(`[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), `[REDACTED]`},
 		{regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`), `[REDACTED_PRIVATE_KEY]`},
-		{regexp.MustCompile(`([a-z][a-z0-9+.-]*://[^/\s:@]+):([^@\s/]+)@`), `${1}:[REDACTED]@`},
+		{regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^/\s:@]+):([^@\s/]+)@`), `${1}:[REDACTED]@`},
 		{regexp.MustCompile(`(?i)(password=)[^&\s]+`), `${1}[REDACTED]`},
 	}
 	for _, replacer := range replacers {
@@ -358,7 +390,7 @@ func reportsCommandInjection(text string) bool {
 	if !containsAny(text, "exec.Command(", "exec.CommandContext(") {
 		return false
 	}
-	if strings.Contains(text, "\"-c\"") || strings.Contains(text, "'-c'") {
+	if containsAny(text, "\"-c\"", "'-c'", "\"-lc\"", "'-lc'") {
 		return true
 	}
 	return commandCallHasDynamicExecutable(text)

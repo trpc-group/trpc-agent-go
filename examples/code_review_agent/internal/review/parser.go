@@ -34,6 +34,7 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 	newLine := 0
 	oldRemaining := 0
 	newRemaining := 0
+	sawDiffStructure := false
 
 	flushHunk := func() {
 		// 切换文件或 hunk 前先保存当前 hunk。
@@ -55,6 +56,7 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 		switch {
 		case currentHunk == nil && strings.HasPrefix(line, "diff --git "):
+			sawDiffStructure = true
 			flushHunk()
 			if current != nil {
 				parsed.Files = append(parsed.Files, *current)
@@ -62,6 +64,7 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 			current = &ParsedFile{}
 			hasTargetFileHeader = false
 		case currentHunk == nil && strings.HasPrefix(line, "--- "):
+			sawDiffStructure = true
 			if current != nil && hasTargetFileHeader {
 				parsed.Files = append(parsed.Files, *current)
 				current = &ParsedFile{}
@@ -71,6 +74,7 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 				current = &ParsedFile{}
 			}
 		case currentHunk == nil && strings.HasPrefix(line, "+++ "):
+			sawDiffStructure = true
 			if current == nil {
 				current = &ParsedFile{}
 			}
@@ -82,6 +86,7 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 				current.IsTestFile = strings.HasSuffix(path, "_test.go")
 			}
 		case currentHunk == nil && strings.HasPrefix(line, "@@ "):
+			sawDiffStructure = true
 			flushHunk()
 			if current == nil || !hasTargetFileHeader {
 				return ParsedDiff{}, fmt.Errorf("hunk header without target file header: %q", line)
@@ -101,40 +106,72 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 				NewStart: newLine,
 				NewLines: hunkLineCount(m[4]),
 			}
+			if oldRemaining == 0 && newRemaining == 0 {
+				flushHunk()
+			}
 		case currentHunk != nil:
 			switch {
 			case line == `\ No newline at end of file`:
 				// This is diff metadata, not a changed source line.
-			case strings.HasPrefix(line, "+"):
+			case strings.HasPrefix(line, "+") && newRemaining > 0:
 				currentHunk.Lines = append(currentHunk.Lines, Line{NewLine: newLine, Kind: "add", Text: strings.TrimPrefix(line, "+")})
 				currentHunk.CandidateLines = append(currentHunk.CandidateLines, newLine)
 				newLine++
 				newRemaining--
-			case strings.HasPrefix(line, "-"):
+			case strings.HasPrefix(line, "-") && oldRemaining > 0:
 				currentHunk.Lines = append(currentHunk.Lines, Line{OldLine: oldLine, Kind: "del", Text: strings.TrimPrefix(line, "-")})
 				oldLine++
 				oldRemaining--
-			default:
+			case strings.HasPrefix(line, " ") && oldRemaining > 0 && newRemaining > 0:
 				currentHunk.Lines = append(currentHunk.Lines, Line{OldLine: oldLine, NewLine: newLine, Kind: "context", Text: line})
 				currentHunk.Context = append(currentHunk.Context, line)
 				oldLine++
 				newLine++
 				oldRemaining--
 				newRemaining--
+			default:
+				return ParsedDiff{}, fmt.Errorf("invalid or excess hunk line: %q", line)
 			}
-			if oldRemaining <= 0 && newRemaining <= 0 {
+			if oldRemaining == 0 && newRemaining == 0 {
 				flushHunk()
 			}
+		case strings.TrimSpace(line) != "" && !isUnifiedDiffMetadata(line):
+			return ParsedDiff{}, fmt.Errorf("invalid unified diff line: %q", line)
 		}
 		if err == io.EOF {
 			break
 		}
 	}
+	if currentHunk != nil && (oldRemaining != 0 || newRemaining != 0) {
+		return ParsedDiff{}, fmt.Errorf(
+			"incomplete hunk: %d old and %d new lines remain",
+			oldRemaining, newRemaining,
+		)
+	}
 	flushHunk()
 	if current != nil {
 		parsed.Files = append(parsed.Files, *current)
 	}
+	if strings.TrimSpace(input) != "" && !sawDiffStructure {
+		return ParsedDiff{}, fmt.Errorf("input is not a unified diff")
+	}
 	return parsed, nil
+}
+
+func isUnifiedDiffMetadata(line string) bool {
+	return line == `\ No newline at end of file` ||
+		strings.HasPrefix(line, "index ") ||
+		strings.HasPrefix(line, "new file mode ") ||
+		strings.HasPrefix(line, "deleted file mode ") ||
+		strings.HasPrefix(line, "old mode ") ||
+		strings.HasPrefix(line, "new mode ") ||
+		strings.HasPrefix(line, "similarity index ") ||
+		strings.HasPrefix(line, "rename from ") ||
+		strings.HasPrefix(line, "rename to ") ||
+		strings.HasPrefix(line, "Binary files ") ||
+		strings.HasPrefix(line, "GIT binary patch") ||
+		strings.HasPrefix(line, "literal ") ||
+		strings.HasPrefix(line, "delta ")
 }
 
 func hunkLineCount(raw string) int {

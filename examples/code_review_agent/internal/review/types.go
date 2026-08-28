@@ -232,7 +232,7 @@ func RedactSecrets(input string) string {
 			with: `[REDACTED]`,
 		},
 		{
-			re:   regexp.MustCompile(`([a-z][a-z0-9+.-]*://[^/\s:@]+):([^@\s/]+)@`),
+			re:   regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^/\s:@]+):([^@\s/]+)@`),
 			with: `${1}:[REDACTED]@`,
 		},
 		{

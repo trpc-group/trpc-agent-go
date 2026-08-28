@@ -16,6 +16,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,30 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/storage"
 )
+
+func TestPublishedDatabaseRemainsOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not enforced on Windows")
+	}
+	target := filepath.Join(t.TempDir(), "review.db")
+	store, err := Open(target)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+	if err := store.SaveTask(context.Background(), storage.Task{
+		ID: "task-mode", Status: "done", CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveTask: %v", err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("database mode = %04o, want 0600", got)
+	}
+}
 
 func TestOpenRejectsSymlinkWithoutInitializingTarget(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "target.db")

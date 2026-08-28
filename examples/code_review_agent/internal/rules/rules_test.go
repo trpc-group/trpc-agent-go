@@ -135,7 +135,7 @@ func TestRunParsedUnifiedDiffFindsRulesAndWarnings(t *testing.T) {
 		"index 1111111..2222222 100644\n"+
 		"--- a/worker.go\n"+
 		"+++ b/worker.go\n"+
-		"@@ -1,2 +1,8 @@\n"+
+		"@@ -1 +1,5 @@\n"+
 		" package worker\n"+
 		"+func Start() {\n"+
 		"+\tgo func() {}\n"+
@@ -160,7 +160,7 @@ func TestRunParsedUnifiedDiffFindsSecretShapesAndSuppressesPlaceholders(t *testi
 		"index 1111111..2222222 100644\n"+
 		"--- a/config.go\n"+
 		"+++ b/config.go\n"+
-		"@@ -1,2 +1,9 @@\n"+
+		"@@ -1 +1,6 @@\n"+
 		" package foo\n"+
 		"+const llmkey = \"llm-live-1234567890abcdef\"\n"+
 		"+const openaiKey = \"sk-proj-1234567890abcdef\"\n"+
@@ -186,7 +186,7 @@ func TestRunKeepsSameRuleOnDifferentLines(t *testing.T) {
 		"index 1111111..2222222 100644\n"+
 		"--- a/dedupe.go\n"+
 		"+++ b/dedupe.go\n"+
-		"@@ -1,2 +1,5 @@\n"+
+		"@@ -1 +1,3 @@\n"+
 		" package foo\n"+
 		"+func Crash() { panic(\"boom\") }\n"+
 		"+func CrashAgain() { panic(\"boom\") }\n")
@@ -203,7 +203,7 @@ func TestRunUsesFollowingCleanupInFullHunk(t *testing.T) {
 		"diff --git a/safe.go b/safe.go\n"+
 		"--- a/safe.go\n"+
 		"+++ b/safe.go\n"+
-		"@@ -1 +1,15 @@\n"+
+		"@@ -1 +1,12 @@\n"+
 		" package safe\n"+
 		"+func safe(ctx context.Context, mu *sync.Mutex, db *sql.DB) {\n"+
 		"+  child, stop := context.WithCancel(ctx)\n"+
@@ -229,7 +229,7 @@ func TestRunAssociatesCleanupWithOpenedVariable(t *testing.T) {
 		"diff --git a/leak.go b/leak.go\n"+
 		"--- a/leak.go\n"+
 		"+++ b/leak.go\n"+
-		"@@ -1 +1,8 @@\n"+
+		"@@ -1 +1,7 @@\n"+
 		" package leak\n"+
 		"+func leak() {\n"+
 		"+  first, _ := os.Open(\"first\")\n"+
@@ -255,7 +255,7 @@ func TestRunAllowsFixedExecutableWithDynamicArguments(t *testing.T) {
 		"diff --git a/git.go b/git.go\n"+
 		"--- a/git.go\n"+
 		"+++ b/git.go\n"+
-		"@@ -1 +1,4 @@\n"+
+		"@@ -1 +1,5 @@\n"+
 		" package gitutil\n"+
 		"+func run(args []string) {\n"+
 		"+  cmd := exec.Command(\"git\", args...)\n"+

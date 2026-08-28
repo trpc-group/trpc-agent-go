@@ -1,7 +1,7 @@
 diff --git a/context_worker.go b/context_worker.go
 --- a/context_worker.go
 +++ b/context_worker.go
-@@ -1,3 +1,7 @@
+@@ -1,2 +1,6 @@
  package sample
  
 +func Load(ctx context.Context) context.Context {

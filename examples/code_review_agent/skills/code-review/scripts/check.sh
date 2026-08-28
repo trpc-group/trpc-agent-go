@@ -7,7 +7,7 @@ if [[ "$script_dir" == "${BASH_SOURCE[0]}" ]]; then
 fi
 
 tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
+trap 'rm -f "$tmp" || true' EXIT
 cat > "$tmp"
 
 if command -v python3 >/dev/null 2>&1; then

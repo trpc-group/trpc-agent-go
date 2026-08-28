@@ -54,3 +54,13 @@ func TestRunGoSandboxChecksReturnsUnsupportedAuditForNonVendoredContainerModuleR
 		t.Fatalf("run output = %q, want network isolation guidance", run.Output)
 	}
 }
+
+func TestSandboxCommandOutputRejectsMalformedAndEmptyPayloads(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []any{make(chan int), map[string]any{"unexpected": true}} {
+		if _, err := sandboxCommandOutput(raw); err == nil {
+			t.Fatalf("sandboxCommandOutput(%T) succeeded, want error", raw)
+		}
+	}
+}

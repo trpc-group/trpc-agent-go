@@ -155,6 +155,54 @@ func TestSkillCheckScriptDetectsSecretShapes(t *testing.T) {
 	}
 }
 
+func TestSkillCheckScriptRedactsUppercaseCredentialURLAndDetectsShellLC(t *testing.T) {
+	t.Parallel()
+
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := "diff --git a/run.go b/run.go\n" +
+		"--- a/run.go\n+++ b/run.go\n@@ -0,0 +1,2 @@\n" +
+		"+const endpoint = \"HTTPS://alice:correct-horse-battery@example.com/api\"\n" +
+		"+exec.Command(\"bash\", \"-lc\", userInput).Run()\n"
+	for _, env := range [][]string{nil, fallbackScriptEnv(t)} {
+		payload := runSkillCheck(t, skillRoot, diff, env)
+		if got := countSkillRule(payload.Findings, "secret-leak"); got != 1 {
+			t.Fatalf("secret findings = %d, want 1: %+v", got, payload.Findings)
+		}
+		if got := countSkillRule(payload.Findings, "command-injection"); got != 1 {
+			t.Fatalf("command findings = %d, want 1: %+v", got, payload.Findings)
+		}
+		encoded, _ := json.Marshal(payload)
+		if strings.Contains(string(encoded), "correct-horse-battery") {
+			t.Fatalf("skill output leaked URL credentials: %s", encoded)
+		}
+	}
+}
+
+func TestSkillCheckScriptRejectsMalformedAndTruncatedDiffs(t *testing.T) {
+	t.Parallel()
+
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, env := range [][]string{nil, fallbackScriptEnv(t)} {
+		for _, diff := range []string{
+			"not a unified diff\n",
+			"--- a/sample.go\n+++ b/sample.go\n@@ -0,0 +1,2 @@\n+package sample\n",
+		} {
+			cmd := exec.Command(mustLookPath(t, "bash"), filepath.Join(skillRoot, "scripts", "check.sh"))
+			cmd.Stdin = strings.NewReader(diff)
+			cmd.Env = append(os.Environ(), env...)
+			if out, err := cmd.CombinedOutput(); err == nil {
+				t.Fatalf("check.sh accepted malformed diff %q: %s", diff, out)
+			}
+		}
+	}
+}
+
 func TestSkillCheckScriptDoesNotTreatFixtureMarkersSpecial(t *testing.T) {
 	skillRoot, err := SkillRoot()
 	if err != nil {

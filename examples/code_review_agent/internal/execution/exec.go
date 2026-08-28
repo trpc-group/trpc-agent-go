@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -135,8 +136,11 @@ func ContainerHostConfig() dockercontainer.HostConfig {
 		Privileged:     false,
 		NetworkMode:    "none",
 		ReadonlyRootfs: false,
-		CapDrop:        []string{"ALL"},
-		SecurityOpt:    []string{"no-new-privileges"},
+		StorageOpt: map[string]string{
+			"size": "1G",
+		},
+		CapDrop:     []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges"},
 		Resources: dockercontainer.Resources{
 			Memory:    1024 * 1024 * 1024,
 			NanoCPUs:  2_000_000_000,
@@ -175,6 +179,14 @@ func (FakeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 func SandboxExecCommand(runtime string, command string) string {
 	if runtime == RuntimeContainer && strings.HasPrefix(command, "go ") {
 		return GoSandboxBinary + strings.TrimPrefix(command, "go")
+	}
+	if runtime == RuntimeLocalFallback {
+		fields := strings.Fields(command)
+		if len(fields) > 0 {
+			if executable, err := osexec.LookPath(fields[0]); err == nil {
+				return executable + strings.TrimPrefix(command, fields[0])
+			}
+		}
 	}
 	return command
 }
@@ -253,11 +265,17 @@ func WorkspaceArgs(command string, timeout time.Duration, env map[string]string)
 }
 
 // RunWorkspaceCommand 在由 host repo 填充的 executor workspace 中执行命令。
-func RunWorkspaceCommand(ctx context.Context, exec codeexecutor.CodeExecutor, repoPath string, command string, timeout time.Duration, env map[string]string) (any, error) {
+func RunWorkspaceCommand(ctx context.Context, exec codeexecutor.CodeExecutor, repoPath string, command string, timeout time.Duration, env map[string]string, outputLimit int) (any, error) {
 	if exec == nil {
 		return nil, fmt.Errorf("workspace exec is not configured")
 	}
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("workspace command is empty")
+	}
 	tool := workspaceexec.NewExecTool(exec,
+		workspaceexec.WithAllowedCommands(fields[0]),
+		workspaceexec.WithOutputLimits(workspaceexec.OutputLimits{MaxOutputBytes: outputLimit}),
 		workspaceexec.WithWorkspaceBootstrap(codeexecutor.WorkspaceBootstrapSpec{
 			Files: []codeexecutor.WorkspaceFile{{
 				Target: "work/repo",

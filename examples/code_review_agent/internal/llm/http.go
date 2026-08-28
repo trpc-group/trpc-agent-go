@@ -31,6 +31,7 @@ const defaultModelResponseLimitBytes = 64 * 1024
 type HTTPConfig struct {
 	Enabled   bool
 	Endpoint  string
+	APIKey    string
 	APIKeyEnv string
 	Model     string
 	Timeout   time.Duration
@@ -71,9 +72,11 @@ func NewHTTPProvider(cfg HTTPConfig) (Provider, error) {
 		clone.Timeout = timeout
 		client = &clone
 	}
-	apiKey := ""
-	if envName := strings.TrimSpace(cfg.APIKeyEnv); envName != "" {
-		apiKey = os.Getenv(envName)
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	if apiKey == "" {
+		if envName := strings.TrimSpace(cfg.APIKeyEnv); envName != "" {
+			apiKey = os.Getenv(envName)
+		}
 	}
 	return &httpProvider{
 		endpoint: endpoint,
@@ -106,9 +109,12 @@ func (p *httpProvider) Review(ctx context.Context, input Input) (Output, error) 
 	}
 	defer resp.Body.Close()
 
-	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, int64(defaultModelResponseLimitBytes)))
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, int64(defaultModelResponseLimitBytes)+1))
 	if err != nil {
 		return Output{}, fmt.Errorf("read model response: %w", err)
+	}
+	if len(responseBody) > defaultModelResponseLimitBytes {
+		return Output{}, fmt.Errorf("model response exceeds %d-byte limit", defaultModelResponseLimitBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return Output{}, fmt.Errorf("model provider returned %d: %s", resp.StatusCode, review.RedactSecrets(string(responseBody)))

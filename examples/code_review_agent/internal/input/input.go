@@ -64,22 +64,41 @@ func Read(cfg Config, req Request) ([]byte, string, error) {
 	if err := validateRefPair(req.BaseRef, req.HeadRef); err != nil {
 		return nil, "", err
 	}
+	explicitInputs := 0
+	for _, value := range []string{req.DiffFile, req.FileList, req.Fixture} {
+		if strings.TrimSpace(value) != "" {
+			explicitInputs++
+		}
+	}
+	if explicitInputs > 1 {
+		return nil, "", errors.New("diff file, file list, and fixture are mutually exclusive")
+	}
+	var (
+		b   []byte
+		ref string
+		err error
+	)
 	if req.DiffFile != "" {
-		b, err := readFileWithLimit(req.DiffFile, maxBytes, "diff file")
-		return b, req.DiffFile, err
+		b, err = readFileWithLimit(req.DiffFile, maxBytes, "diff file")
+		ref = req.DiffFile
+	} else if req.FileList != "" {
+		b, err = diffFromFileList(req.FileList, req.RepoPath, maxBytes)
+		ref = req.FileList
+	} else if req.Fixture != "" {
+		b, ref, err = readFixtureInput(cfg.FixturesRoot, req.Fixture, maxBytes)
+	} else if req.RepoPath != "" {
+		b, err = diffFromRepo(req.RepoPath, req.BaseRef, req.HeadRef, maxBytes)
+		ref = req.RepoPath
+	} else {
+		return nil, "", errors.New("diff file, file list, repo path, or fixture is required")
 	}
-	if req.FileList != "" {
-		b, err := diffFromFileList(req.FileList, req.RepoPath, maxBytes)
-		return b, req.FileList, err
+	if err != nil {
+		return nil, "", err
 	}
-	if req.Fixture != "" {
-		return readFixtureInput(cfg.FixturesRoot, req.Fixture, maxBytes)
+	if _, err := review.ParseUnifiedDiff(string(b)); err != nil {
+		return nil, "", fmt.Errorf("validate unified diff: %w", err)
 	}
-	if req.RepoPath != "" {
-		b, err := diffFromRepo(req.RepoPath, req.BaseRef, req.HeadRef, maxBytes)
-		return b, req.RepoPath, err
-	}
-	return nil, "", errors.New("diff file, file list, repo path, or fixture is required")
+	return b, ref, nil
 }
 
 func validateRefPair(baseRef string, headRef string) error {
@@ -431,19 +450,18 @@ func resolveListedFile(name string, baseDir string, restrictToBase bool) (string
 			display = rel
 		}
 	}
-	if !restrictToBase {
-		return path, display, nil
-	}
-	resolvedBase, err := filepath.EvalSymlinks(baseDir)
-	if err != nil {
-		return "", "", fmt.Errorf("resolve base directory %q: %w", baseDir, err)
-	}
 	resolvedPath, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve listed file %q: %w", name, err)
 	}
-	if rel, err := filepath.Rel(resolvedBase, resolvedPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("listed file %q escapes base directory", name)
+	if restrictToBase || !filepath.IsAbs(name) {
+		resolvedBase, err := filepath.EvalSymlinks(baseDir)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve base directory %q: %w", baseDir, err)
+		}
+		if rel, err := filepath.Rel(resolvedBase, resolvedPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", "", fmt.Errorf("listed file %q escapes base directory", name)
+		}
 	}
 	return resolvedPath, display, nil
 }
@@ -546,7 +564,7 @@ func modulePath(repoPath string) string {
 	if strings.TrimSpace(repoPath) == "" {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(repoPath, "go.mod"))
+	data, err := readFileWithLimit(filepath.Join(repoPath, "go.mod"), defaultMaxInputBytes, "go.mod")
 	if err != nil {
 		return ""
 	}
@@ -608,7 +626,8 @@ func readFileWithLimit(path string, maxBytes int64, label string) ([]byte, error
 func runGitCommand(args []string, maxBytes int64, label string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
+	hardenedArgs := append([]string{"-c", "core.fsmonitor=false"}, args...)
+	cmd := exec.CommandContext(ctx, "git", hardenedArgs...)
 	stdout := newLimitedBuffer(maxBytes, label)
 	stderr := newLimitedBuffer(maxBytes, label)
 	cmd.Stdout = stdout

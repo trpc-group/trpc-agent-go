@@ -12,7 +12,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -61,23 +60,11 @@ func (a *Agent) runGoSandboxChecks(ctx context.Context, taskID string, repoPath 
 
 // runGoSandboxCommand 执行一条已审批的 Go 检查命令。
 func (a *Agent) runGoSandboxCommand(ctx context.Context, taskID string, repoPath string, command string) ([]storage.DecisionRecord, storage.SandboxRunRecord) {
-	execCommand := execution.BoundedSandboxCommand(
-		execution.SandboxExecCommand(a.cfg.Runtime, command),
-		a.cfg.OutputLimitBytes,
-	)
+	execCommand := execution.SandboxExecCommand(a.cfg.Runtime, command)
 	workspaceArgs, _ := execution.WorkspaceArgs(execCommand, a.cfg.Timeout, execution.SandboxEnv(a.cfg.Runtime))
-	legacyArgs, _ := json.Marshal(map[string]any{
-		"code_blocks": []map[string]string{{
-			"language": "bash",
-			"code":     execution.SandboxCode(a.cfg.Runtime, repoPath, execCommand),
-		}},
-		"execution_id": taskID + "-" + strings.ReplaceAll(command, " ", "-"),
-	})
 	permReq := &tool.PermissionRequest{
-		Tool:        a.checkTool,
-		ToolName:    "workspace_exec",
-		Declaration: a.checkTool.Declaration(),
-		Arguments:   workspaceArgs,
+		ToolName:  "workspace_exec",
+		Arguments: workspaceArgs,
 	}
 	perm, err := a.policy.CheckToolPermission(ctx, permReq)
 	if err != nil {
@@ -108,35 +95,12 @@ func (a *Agent) runGoSandboxCommand(ctx context.Context, taskID string, repoPath
 	run.ExecutionStarted = true
 	execCtx, cancel := context.WithTimeout(ctx, a.cfg.Timeout)
 	defer cancel()
-	raw, err := execution.RunWorkspaceCommand(execCtx, a.exec, repoPath, execCommand, a.cfg.Timeout, execution.SandboxEnv(a.cfg.Runtime))
+	raw, err := execution.RunWorkspaceCommand(
+		execCtx, a.exec, repoPath, execCommand, a.cfg.Timeout,
+		execution.SandboxEnv(a.cfg.Runtime), a.cfg.OutputLimitBytes,
+	)
 	if err != nil {
-		fallbackReq := &tool.PermissionRequest{
-			Tool:        a.checkTool,
-			ToolName:    "execute_code",
-			Declaration: a.checkTool.Declaration(),
-			Arguments:   legacyArgs,
-		}
-		fallbackPerm, permissionErr := a.policy.CheckToolPermission(execCtx, fallbackReq)
-		if permissionErr != nil {
-			fallbackPerm = tool.DenyPermission(permissionErr.Error())
-		}
-		fallbackPerm, permissionErr = tool.NormalizePermissionDecision(fallbackPerm)
-		if permissionErr != nil {
-			fallbackPerm = tool.DenyPermission(permissionErr.Error())
-		}
-		decisions = append(decisions, storage.DecisionRecord{
-			TaskID: taskID, Command: command,
-			Action: string(fallbackPerm.Action), Reason: fallbackPerm.Reason, At: time.Now(),
-		})
-		if fallbackPerm.Action != tool.PermissionActionAllow {
-			run.Status = string(fallbackPerm.Action)
-			run.DurationMS = time.Since(start).Milliseconds()
-			return decisions, run
-		}
-		raw, err = a.checkTool.Call(execCtx, legacyArgs)
-	}
-	run.DurationMS = time.Since(start).Milliseconds()
-	if err != nil {
+		run.DurationMS = time.Since(start).Milliseconds()
 		if execCtx.Err() != nil {
 			run.Status = "timed_out"
 		} else {
@@ -145,7 +109,14 @@ func (a *Agent) runGoSandboxCommand(ctx context.Context, taskID string, repoPath
 		run.StderrDigest = digestString(err.Error())
 		return decisions, run
 	}
-	output := sandboxCommandOutput(raw)
+	run.DurationMS = time.Since(start).Milliseconds()
+	output, err := sandboxCommandOutput(raw)
+	if err != nil {
+		run.Status = "error"
+		run.StderrDigest = digestString(err.Error())
+		run.Output = sandboxRunOutput(err.Error(), a.cfg.OutputLimitBytes)
+		return decisions, run
+	}
 	run.StdoutDigest = digestString(output.Text)
 	run.Output = sandboxRunOutput(output.Text, a.cfg.OutputLimitBytes)
 	if output.ExitCode != nil {

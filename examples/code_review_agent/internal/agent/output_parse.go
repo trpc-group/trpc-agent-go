@@ -124,10 +124,10 @@ func digestString(data string) string {
 	return digestBytes([]byte(data))
 }
 
-func sandboxCommandOutput(raw any) commandOutput {
+func sandboxCommandOutput(raw any) (commandOutput, error) {
 	b, err := json.Marshal(raw)
 	if err != nil {
-		return commandOutput{}
+		return commandOutput{}, fmt.Errorf("marshal sandbox output: %w", err)
 	}
 	var out struct {
 		Status   string `json:"status"`
@@ -135,13 +135,16 @@ func sandboxCommandOutput(raw any) commandOutput {
 		ExitCode *int   `json:"exit_code"`
 	}
 	if err := json.Unmarshal(b, &out); err != nil {
-		return commandOutput{}
+		return commandOutput{}, fmt.Errorf("decode sandbox output: %w", err)
+	}
+	if out.Status == "" && out.Output == "" && out.ExitCode == nil {
+		return commandOutput{}, fmt.Errorf("sandbox output is missing status, output, and exit code")
 	}
 	return commandOutput{
 		Status:   out.Status,
 		Text:     out.Output,
 		ExitCode: out.ExitCode,
-	}
+	}, nil
 }
 
 func sandboxRunOutput(text string, limit int) string {
