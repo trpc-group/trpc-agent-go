@@ -248,6 +248,55 @@ func TestRunAssociatesCleanupWithOpenedVariable(t *testing.T) {
 	}
 }
 
+func TestRunDoesNotBorrowCleanupAcrossFunctionOrNestedScope(t *testing.T) {
+	t.Parallel()
+
+	result := runUnifiedDiff(t, ""+
+		"diff --git a/scope.go b/scope.go\n"+
+		"--- /dev/null\n"+
+		"+++ b/scope.go\n"+
+		"@@ -0,0 +1,11 @@\n"+
+		"+package scope\n"+
+		"+func closed() {\n"+
+		"+  file, _ := os.Open(\"closed\")\n"+
+		"+  defer file.Close()\n"+
+		"+}\n"+
+		"+func leaked(flag bool) {\n"+
+		"+  file, _ := os.Open(\"leaked\")\n"+
+		"+  if flag {\n"+
+		"+    file.Close()\n"+
+		"+  }\n"+
+		"+}\n")
+
+	if got := countRule(result.Findings, "resource-leak"); got != 1 {
+		t.Fatalf("resource leaks = %d, want only the conditionally closed resource: %+v", got, result.Findings)
+	}
+	for _, finding := range result.Findings {
+		if finding.RuleID == "resource-leak" && finding.Line != 7 {
+			t.Fatalf("resource leak = %+v, want scope.go:7", finding)
+		}
+	}
+}
+
+func TestRunDoesNotTreatDeferAfterClosedLoopAsInsideLoop(t *testing.T) {
+	t.Parallel()
+
+	result := runUnifiedDiff(t, ""+
+		"diff --git a/loop.go b/loop.go\n"+
+		"--- /dev/null\n"+
+		"+++ b/loop.go\n"+
+		"@@ -0,0 +1,7 @@\n"+
+		"+package loop\n"+
+		"+func process(items []int) {\n"+
+		"+  for _, item := range items {\n"+
+		"+    use(item)\n"+
+		"+  }\n"+
+		"+  defer cleanup()\n"+
+		"+}\n")
+
+	assertNoRule(t, result.Findings, "defer-in-loop")
+}
+
 func TestRunAllowsFixedExecutableWithDynamicArguments(t *testing.T) {
 	t.Parallel()
 

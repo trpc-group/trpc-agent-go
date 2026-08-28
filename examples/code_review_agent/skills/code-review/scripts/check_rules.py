@@ -24,19 +24,131 @@ def hunk_counts(line: str):
     return old_count, new_count
 
 
-def build_hunk_texts(lines):
-    hunk_texts = {}
+class GoStructureScanner:
+    def __init__(self):
+        self.quote = None
+        self.block_comment = False
+        self.escape = False
+
+    def scan(self, line: str):
+        tokens = []
+        index = 0
+        while index < len(line):
+            char = line[index]
+            next_char = line[index + 1] if index + 1 < len(line) else ""
+            if self.block_comment:
+                if char == "*" and next_char == "/":
+                    self.block_comment = False
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if self.quote is not None:
+                if self.quote != "`" and self.escape:
+                    self.escape = False
+                elif self.quote != "`" and char == "\\":
+                    self.escape = True
+                elif char == self.quote:
+                    self.quote = None
+                index += 1
+                continue
+            if char == "/" and next_char == "/":
+                break
+            if char == "/" and next_char == "*":
+                self.block_comment = True
+                index += 2
+                continue
+            if char in ('"', "'", "`"):
+                self.quote = char
+                self.escape = False
+                index += 1
+                continue
+            if char.isalpha() or char == "_":
+                end = index + 1
+                while end < len(line) and (line[end].isalnum() or line[end] == "_"):
+                    end += 1
+                if line[index:end] == "for":
+                    tokens.append("for")
+                index = end
+                continue
+            if char in "{}":
+                tokens.append(char)
+            index += 1
+        return tokens
+
+
+def is_function_start(text: str) -> bool:
+    return text.startswith("func ") or text.startswith("func(")
+
+
+def analyze_scoped_lines(scoped_lines):
+    function_parts = {}
+    cleanup_parts = {}
+    cleanup_lengths = {}
+    for item in scoped_lines:
+        value = item["text"] + "\n"
+        function_parts.setdefault(item["segment"], []).append(value)
+        cleanup_key = (item["segment"], item["block_path"])
+        item["cleanup_offset"] = cleanup_lengths.get(cleanup_key, 0)
+        cleanup_parts.setdefault(cleanup_key, []).append(value)
+        cleanup_lengths[cleanup_key] = item["cleanup_offset"] + len(value)
+    function_text = {segment: "".join(parts) for segment, parts in function_parts.items()}
+    cleanup_text = {key: "".join(parts) for key, parts in cleanup_parts.items()}
+    scopes = {}
+    for item in scoped_lines:
+        cleanup_key = (item["segment"], item["block_path"])
+        cleanup = cleanup_text[cleanup_key][item["cleanup_offset"]:]
+        scopes[item["index"]] = {
+            "function_text": function_text[item["segment"]],
+            "cleanup_text": cleanup,
+            "in_loop": item["in_loop"],
+        }
+    return scopes
+
+
+def build_hunk_scopes(lines):
+    hunk_scopes = {}
     hunk_lines = []
-    hunk_indexes = []
+    blocks = []
+    segment = 0
+    next_block_id = 0
+    structure_scanner = GoStructureScanner()
     old_remaining = 0
     new_remaining = 0
 
     def flush_hunk():
-        if not hunk_indexes:
+        if not hunk_lines:
             return
-        text = "\n".join(hunk_lines)
-        for index in hunk_indexes:
-            hunk_texts[index] = text
+        hunk_scopes.update(analyze_scoped_lines(hunk_lines))
+
+    def append_line(index, text):
+        nonlocal segment, next_block_id
+        text = text.strip()
+        if is_function_start(text):
+            segment += 1
+            blocks.clear()
+        tokens = structure_scanner.scan(text)
+        while tokens and tokens[0] == "}":
+            if blocks:
+                blocks.pop()
+            tokens.pop(0)
+        hunk_lines.append({
+            "index": index,
+            "text": text,
+            "segment": segment,
+            "block_path": tuple(block["id"] for block in blocks),
+            "in_loop": any(block["is_loop"] for block in blocks),
+        })
+        pending_loop = False
+        for structure_token in tokens:
+            if structure_token == "for":
+                pending_loop = True
+            elif structure_token == "{":
+                next_block_id += 1
+                blocks.append({"id": next_block_id, "is_loop": pending_loop})
+                pending_loop = False
+            elif structure_token == "}" and blocks:
+                blocks.pop()
 
     for index, raw in enumerate(lines):
         line = raw.rstrip("\n")
@@ -48,18 +160,19 @@ def build_hunk_texts(lines):
         if counts is not None:
             flush_hunk()
             hunk_lines = []
-            hunk_indexes = []
+            blocks = []
+            segment = 0
+            structure_scanner = GoStructureScanner()
             old_remaining, new_remaining = counts
             continue
         if old_remaining <= 0 and new_remaining <= 0 and (line.startswith("diff --git ") or line.startswith("+++ ")):
             continue
         if new_remaining > 0 and line.startswith("+"):
-            hunk_lines.append(line[1:].strip())
-            hunk_indexes.append(index)
+            append_line(index, line[1:])
             new_remaining -= 1
             continue
         if old_remaining > 0 and new_remaining > 0 and line.startswith(" "):
-            hunk_lines.append(line[1:])
+            append_line(index, line[1:])
             old_remaining -= 1
             new_remaining -= 1
             continue
@@ -67,7 +180,7 @@ def build_hunk_texts(lines):
             old_remaining -= 1
 
     flush_hunk()
-    return hunk_texts
+    return hunk_scopes
 
 
 def redact(text: str) -> str:
@@ -233,8 +346,8 @@ def database_has_cleanup(text: str, hunk_text: str) -> bool:
     return f"{name}.{cleanup}()" in hunk_text
 
 
-def reports_defer_in_loop(text: str, hunk_before: str) -> bool:
-    return text.strip().startswith("defer ") and contains_any(hunk_before, "for ", "range ")
+def reports_defer_in_loop(text: str, in_loop: bool) -> bool:
+    return text.strip().startswith("defer ") and in_loop
 
 
 def reports_bare_return_err(text: str) -> bool:
@@ -253,17 +366,17 @@ def string_concat_lhs(text: str) -> str:
     return parts[-1].strip(" \t;")
 
 
-def reports_string_concat_loop(text: str, hunk_before: str, hunk_text: str) -> bool:
+def reports_string_concat_loop(text: str, in_loop: bool, function_text: str) -> bool:
     if "+=" not in text:
         return False
-    if not contains_any(hunk_before, "for ", "range ") and not contains_any(text, "for ", "range "):
+    if not in_loop:
         return False
     lhs = string_concat_lhs(text)
     if not lhs:
         return False
     if '"' in text or "`" in text:
         return True
-    return contains_any(hunk_text, f'{lhs} := ""', f"var {lhs} string")
+    return contains_any(function_text, f'{lhs} := ""', f"var {lhs} string")
 
 
 def add_finding(severity, category, file, line, title, evidence, recommendation, rule_id, status="finding", confidence="high"):
@@ -309,11 +422,10 @@ def add_warning(severity, category, file, line, title, evidence, recommendation,
 with open(path, "r", encoding="utf-8", errors="replace") as f:
     full_text = f.read()
     lines = full_text.splitlines()
-    hunk_texts = build_hunk_texts(lines)
+    hunk_scopes = build_hunk_scopes(lines)
     old_remaining = 0
     new_remaining = 0
     saw_diff_structure = False
-    loop_seen = False
     for index, raw in enumerate(lines):
         line = raw.rstrip("\n")
         counts = hunk_counts(line)
@@ -329,14 +441,19 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
             new_line = int(match.group(1)) - 1 if match else 0
             old_remaining, new_remaining = counts
             current_hunk = []
-            loop_seen = False
             continue
         if new_remaining > 0 and line.startswith("+"):
             new_line += 1
             new_remaining -= 1
             text = line[1:].strip()
             current_hunk.append(text)
-            hunk_text = hunk_texts.get(index, "\n".join(current_hunk))
+            scope = hunk_scopes.get(index, {
+                "function_text": "\n".join(current_hunk),
+                "cleanup_text": "\n".join(current_hunk),
+                "in_loop": False,
+            })
+            function_text = scope["function_text"]
+            cleanup_text = scope["cleanup_text"]
             if "TODO(" in text or "FIXME" in text:
                 add_finding("medium", "maintainability", current_file, new_line,
                             "New code contains a TODO or FIXME marker", text,
@@ -353,7 +470,7 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
                             "New function panics directly", text,
                             "Return an error or handle the failure path explicitly.",
                             "panic-direct")
-            if reports_http_body_leak(text, hunk_text):
+            if reports_http_body_leak(text, cleanup_text):
                 add_finding("high", "resource", current_file, new_line,
                             "HTTP response body is not closed", text,
                             "Close the response body with defer resp.Body.Close() after checking the request error.",
@@ -368,17 +485,17 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
                             "Command execution uses a shell or dynamic argument", text,
                             "Avoid shell execution and pass validated literal arguments to exec.CommandContext.",
                             "command-injection")
-            if reports_context_background_misuse(text, hunk_text):
+            if reports_context_background_misuse(text, function_text):
                 add_finding("medium", "lifecycle", current_file, new_line,
                             "context.Background is used inside a context-aware function", text,
                             "Propagate the existing ctx so cancellation, deadlines, and trace context are preserved.",
                             "context-background-misuse")
-            if reports_mutex_unlock_missing(text, hunk_text):
+            if reports_mutex_unlock_missing(text, cleanup_text):
                 add_finding("high", "concurrency", current_file, new_line,
                             "Mutex lock has no visible deferred unlock", text,
                             "Defer Unlock immediately after Lock to avoid deadlocks on early returns.",
                             "mutex-unlock-missing")
-            if reports_defer_in_loop(text, "for " if loop_seen else ""):
+            if reports_defer_in_loop(text, scope["in_loop"]):
                 add_finding("medium", "resource", current_file, new_line,
                             "defer is used inside a loop", text,
                             "Move the loop body into a helper or close the resource before the next iteration.",
@@ -388,7 +505,7 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
                             "Error is returned without context", text,
                             "Wrap the error with operation context using fmt.Errorf(\"operation: %w\", err).",
                             "bare-return-err")
-            if reports_string_concat_loop(text, "for " if loop_seen else "", hunk_text):
+            if reports_string_concat_loop(text, scope["in_loop"], function_text):
                 add_warning("low", "performance", current_file, new_line,
                             "String concatenation in a loop may allocate repeatedly", text,
                             "Use strings.Builder or bytes.Buffer for repeated string assembly.",
@@ -398,28 +515,26 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
                             "New function may need a focused test", text,
                             "Add a unit test that exercises the new path.",
                             "missing-test-hint")
-            if ("go func" in text or text.startswith("go ")) and not contains_any(hunk_text, "WaitGroup", ".Done()", "errgroup", "done", "sync."):
+            if ("go func" in text or text.startswith("go ")) and not contains_any(function_text, "WaitGroup", ".Done()", "errgroup", "done", "sync."):
                 add_finding("high", "concurrency", current_file, new_line,
                             "New goroutine has no visible lifecycle guard", text,
                             "Bind the goroutine to a context, wait group, or explicit completion signal.",
                             "goroutine-leak")
-            if contains_any(text, "context.WithCancel", "context.WithTimeout", "context.WithDeadline") and not context_has_cancel_cleanup(text, hunk_text):
+            if contains_any(text, "context.WithCancel", "context.WithTimeout", "context.WithDeadline") and not context_has_cancel_cleanup(text, cleanup_text):
                 add_finding("high", "lifecycle", current_file, new_line,
                             "Derived context is not canceled", text,
                             "Store the cancel function and defer cancel() in the same scope.",
                             "context-leak")
-            if contains_any(text, "os.Open", "os.OpenFile", "os.Create") and not resource_has_cleanup(text, hunk_text):
+            if contains_any(text, "os.Open", "os.OpenFile", "os.Create") and not resource_has_cleanup(text, cleanup_text):
                 add_finding("high", "resource", current_file, new_line,
                             "Opened resource has no close path", text,
                             "Defer Close() immediately after the resource is opened.",
                             "resource-leak")
-            if contains_any(text, "sql.Open", ".BeginTx", ".Begin(") and not database_has_cleanup(text, hunk_text):
+            if contains_any(text, "sql.Open", ".BeginTx", ".Begin(") and not database_has_cleanup(text, cleanup_text):
                 add_finding("high", "database", current_file, new_line,
                             "Database handle or transaction has no cleanup path", text,
                             "Defer Close() for handles and Rollback() for transactions in the same scope.",
                             "db-lifecycle")
-            if contains_any(text, "for ", "range "):
-                loop_seen = True
         elif old_remaining > 0 and line.startswith("-"):
             old_remaining -= 1
         elif old_remaining > 0 and new_remaining > 0 and line.startswith(" "):

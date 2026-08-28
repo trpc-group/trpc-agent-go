@@ -12,7 +12,10 @@
 package rules
 
 import (
+	"go/scanner"
+	"go/token"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
@@ -39,13 +42,13 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 	var out Analysis
 	for _, file := range diff.Files {
 		for _, hunk := range file.Hunks {
-			hunkText := hunkJoinedText(hunk)
+			scopes := analyzeHunkScopes(hunk)
 			for lineIndex, line := range hunk.Lines {
 				if line.Kind != "add" {
 					continue
 				}
 				text := strings.TrimSpace(line.Text)
-				hunkBefore := hunkTextBefore(hunk, lineIndex)
+				scope := scopes[lineIndex]
 				if file.Path == "" {
 					continue
 				}
@@ -91,7 +94,7 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 						Status:         "finding",
 					})
 				}
-				if reportsHTTPBodyLeak(text, hunkText) {
+				if reportsHTTPBodyLeak(text, scope.CleanupText) {
 					out.Findings = append(out.Findings, review.Finding{
 						Severity:       "high",
 						Category:       "resource",
@@ -136,7 +139,7 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 						Status:         "finding",
 					})
 				}
-				if reportsContextBackgroundMisuse(text, hunkText) {
+				if reportsContextBackgroundMisuse(text, scope.FunctionText) {
 					out.Findings = append(out.Findings, review.Finding{
 						Severity:       "medium",
 						Category:       "lifecycle",
@@ -151,7 +154,7 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 						Status:         "finding",
 					})
 				}
-				if reportsMutexUnlockMissing(text, hunkText) {
+				if reportsMutexUnlockMissing(text, scope.CleanupText) {
 					out.Findings = append(out.Findings, review.Finding{
 						Severity:       "high",
 						Category:       "concurrency",
@@ -166,7 +169,7 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 						Status:         "finding",
 					})
 				}
-				if reportsDeferInLoop(text, hunkBefore) {
+				if reportsDeferInLoop(text, scope.InLoop) {
 					out.Findings = append(out.Findings, review.Finding{
 						Severity:       "medium",
 						Category:       "resource",
@@ -196,7 +199,7 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 						Status:         "finding",
 					})
 				}
-				if reportsStringConcatLoop(text, hunkBefore, hunkText) {
+				if reportsStringConcatLoop(text, scope.InLoop, scope.FunctionText) {
 					out.Warnings = append(out.Warnings, review.Finding{
 						Severity:       "low",
 						Category:       "performance",
@@ -230,7 +233,7 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 					})
 				}
 				if strings.Contains(text, "go func") || strings.HasPrefix(text, "go ") {
-					if !containsAny(hunkText, "WaitGroup", ".Done()", "errgroup", "done", "sync.") {
+					if !containsAny(scope.FunctionText, "WaitGroup", ".Done()", "errgroup", "done", "sync.") {
 						out.Findings = append(out.Findings, review.Finding{
 							Severity:       "high",
 							Category:       "concurrency",
@@ -249,7 +252,7 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 				if strings.Contains(text, "context.WithCancel") ||
 					strings.Contains(text, "context.WithTimeout") ||
 					strings.Contains(text, "context.WithDeadline") {
-					if !contextHasCancelCleanup(text, hunkText) {
+					if !contextHasCancelCleanup(text, scope.CleanupText) {
 						out.Findings = append(out.Findings, review.Finding{
 							Severity:       "high",
 							Category:       "lifecycle",
@@ -266,7 +269,7 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 					}
 				}
 				if strings.Contains(text, "os.Open") || strings.Contains(text, "os.OpenFile") || strings.Contains(text, "os.Create") {
-					if !resourceHasCleanup(text, hunkText) {
+					if !resourceHasCleanup(text, scope.CleanupText) {
 						out.Findings = append(out.Findings, review.Finding{
 							Severity:       "high",
 							Category:       "resource",
@@ -283,7 +286,7 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 					}
 				}
 				if strings.Contains(text, "sql.Open") || strings.Contains(text, ".BeginTx") || strings.Contains(text, ".Begin(") {
-					if !databaseHasCleanup(text, hunkText) {
+					if !databaseHasCleanup(text, scope.CleanupText) {
 						out.Findings = append(out.Findings, review.Finding{
 							Severity:       "high",
 							Category:       "database",
@@ -305,22 +308,157 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 	return out
 }
 
-func hunkJoinedText(hunk review.Hunk) string {
+type hunkScope struct {
+	FunctionText string
+	CleanupText  string
+	InLoop       bool
+}
+
+type scopedHunkLine struct {
+	index         int
+	text          string
+	segment       int
+	blockPath     string
+	inLoop        bool
+	cleanupOffset int
+}
+
+type lexicalBlock struct {
+	id     int
+	isLoop bool
+}
+
+// analyzeHunkScopes keeps heuristic rules inside the visible function and
+// lexical block. It intentionally fails closed when a surrounding block is not
+// present in the hunk instead of borrowing cleanup from unrelated functions.
+func analyzeHunkScopes(hunk review.Hunk) map[int]hunkScope {
+	lines := make([]scopedHunkLine, 0, len(hunk.Lines))
+	blocks := make([]lexicalBlock, 0)
+	segment := 0
+	nextBlockID := 0
+	for index, line := range hunk.Lines {
+		if line.Kind == "del" {
+			continue
+		}
+		text := strings.TrimSpace(line.Text)
+		if isFunctionStart(text) {
+			segment++
+			blocks = blocks[:0]
+		}
+		tokens := goStructureTokens(text)
+		for len(tokens) > 0 && tokens[0] == "}" {
+			if len(blocks) > 0 {
+				blocks = blocks[:len(blocks)-1]
+			}
+			tokens = tokens[1:]
+		}
+		lines = append(lines, scopedHunkLine{
+			index: index, text: text, segment: segment,
+			blockPath: lexicalBlockPath(blocks), inLoop: lexicalLoopActive(blocks),
+		})
+		pendingLoop := false
+		for _, structureToken := range tokens {
+			switch structureToken {
+			case "for":
+				pendingLoop = true
+			case "{":
+				nextBlockID++
+				blocks = append(blocks, lexicalBlock{id: nextBlockID, isLoop: pendingLoop})
+				pendingLoop = false
+			case "}":
+				if len(blocks) > 0 {
+					blocks = blocks[:len(blocks)-1]
+				}
+			}
+		}
+	}
+
+	functionBuilders := make(map[int]*strings.Builder)
+	cleanupBuilders := make(map[string]*strings.Builder)
+	for index := range lines {
+		line := &lines[index]
+		functionBuilder := functionBuilders[line.segment]
+		if functionBuilder == nil {
+			functionBuilder = &strings.Builder{}
+			functionBuilders[line.segment] = functionBuilder
+		}
+		functionBuilder.WriteString(line.text)
+		functionBuilder.WriteByte('\n')
+		cleanupKey := lexicalCleanupKey(line.segment, line.blockPath)
+		cleanupBuilder := cleanupBuilders[cleanupKey]
+		if cleanupBuilder == nil {
+			cleanupBuilder = &strings.Builder{}
+			cleanupBuilders[cleanupKey] = cleanupBuilder
+		}
+		line.cleanupOffset = cleanupBuilder.Len()
+		cleanupBuilder.WriteString(line.text)
+		cleanupBuilder.WriteByte('\n')
+	}
+	functionText := make(map[int]string, len(functionBuilders))
+	for segment, builder := range functionBuilders {
+		functionText[segment] = builder.String()
+	}
+	cleanupText := make(map[string]string, len(cleanupBuilders))
+	for key, builder := range cleanupBuilders {
+		cleanupText[key] = builder.String()
+	}
+	out := make(map[int]hunkScope, len(lines))
+	for _, line := range lines {
+		cleanup := cleanupText[lexicalCleanupKey(line.segment, line.blockPath)]
+		out[line.index] = hunkScope{
+			FunctionText: functionText[line.segment],
+			CleanupText:  cleanup[line.cleanupOffset:],
+			InLoop:       line.inLoop,
+		}
+	}
+	return out
+}
+
+func lexicalCleanupKey(segment int, blockPath string) string {
+	return strconv.Itoa(segment) + ":" + blockPath
+}
+
+func isFunctionStart(text string) bool {
+	return strings.HasPrefix(text, "func ") || strings.HasPrefix(text, "func(")
+}
+
+func goStructureTokens(text string) []string {
+	fileSet := token.NewFileSet()
+	file := fileSet.AddFile("hunk.go", fileSet.Base(), len(text))
+	var lexer scanner.Scanner
+	lexer.Init(file, []byte(text), func(token.Position, string) {}, scanner.ScanComments)
+	var out []string
+	for {
+		_, tok, _ := lexer.Scan()
+		switch tok {
+		case token.EOF:
+			return out
+		case token.FOR:
+			out = append(out, "for")
+		case token.LBRACE:
+			out = append(out, "{")
+		case token.RBRACE:
+			out = append(out, "}")
+		}
+	}
+}
+
+func lexicalBlockPath(blocks []lexicalBlock) string {
 	var b strings.Builder
-	for _, line := range hunk.Lines {
-		b.WriteString(line.Text)
-		b.WriteString("\n")
+	for _, block := range blocks {
+		b.WriteString(strconv.Itoa(block.id))
+		b.WriteByte('/')
 	}
 	return b.String()
 }
 
-func hunkTextBefore(hunk review.Hunk, lineIndex int) string {
-	var b strings.Builder
-	for i := 0; i < lineIndex && i < len(hunk.Lines); i++ {
-		b.WriteString(hunk.Lines[i].Text)
-		b.WriteString("\n")
+func lexicalLoopActive(blocks []lexicalBlock) bool {
+	for _, block := range blocks {
+		if block.isLoop {
+			return true
+		}
 	}
-	return b.String()
+	return false
 }
 
 func containsAny(text string, needles ...string) bool {
@@ -432,19 +570,19 @@ func databaseHasCleanup(text, hunkText string) bool {
 	return strings.Contains(hunkText, name+".Rollback()")
 }
 
-func reportsDeferInLoop(text string, hunkBefore string) bool {
-	return strings.HasPrefix(strings.TrimSpace(text), "defer ") && containsAny(hunkBefore, "for ", "range ")
+func reportsDeferInLoop(text string, inLoop bool) bool {
+	return strings.HasPrefix(strings.TrimSpace(text), "defer ") && inLoop
 }
 
 func reportsBareReturnErr(text string) bool {
 	return strings.TrimSpace(text) == "return err"
 }
 
-func reportsStringConcatLoop(text string, hunkBefore string, hunkText string) bool {
+func reportsStringConcatLoop(text string, inLoop bool, functionText string) bool {
 	if !strings.Contains(text, "+=") {
 		return false
 	}
-	if !containsAny(hunkBefore, "for ", "range ") && !containsAny(text, "for ", "range ") {
+	if !inLoop {
 		return false
 	}
 	lhs := stringConcatLHS(text)
@@ -454,7 +592,7 @@ func reportsStringConcatLoop(text string, hunkBefore string, hunkText string) bo
 	if strings.Contains(text, "\"") || strings.Contains(text, "`") {
 		return true
 	}
-	return containsAny(hunkText, lhs+" := \"\"", "var "+lhs+" string")
+	return containsAny(functionText, lhs+" := \"\"", "var "+lhs+" string")
 }
 
 func stringConcatLHS(text string) string {

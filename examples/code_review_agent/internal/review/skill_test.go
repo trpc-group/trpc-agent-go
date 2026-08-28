@@ -493,6 +493,45 @@ func TestSkillCheckScriptFallbackParityForFollowingCleanup(t *testing.T) {
 	}
 }
 
+func TestSkillCheckScriptScopesCleanupAndLoops(t *testing.T) {
+	t.Parallel()
+
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatalf("SkillRoot returned error: %v", err)
+	}
+	diff := "diff --git a/scope.go b/scope.go\n" +
+		"--- /dev/null\n+++ b/scope.go\n" +
+		"@@ -0,0 +1,17 @@\n" +
+		"+package scope\n" +
+		"+func closed() {\n" +
+		"+  file, _ := os.Open(\"closed\")\n" +
+		"+  defer file.Close()\n" +
+		"+}\n" +
+		"+func leaked(flag bool) {\n" +
+		"+  file, _ := os.Open(\"leaked\")\n" +
+		"+  if flag {\n" +
+		"+    file.Close()\n" +
+		"+  }\n" +
+		"+}\n" +
+		"+func process(items []int) {\n" +
+		"+  for _, item := range items {\n" +
+		"+    use(item)\n" +
+		"+  }\n" +
+		"+  defer cleanup()\n" +
+		"+}\n"
+
+	pythonPayload := runSkillCheck(t, skillRoot, diff, nil)
+	fallbackPayload := runSkillCheck(t, skillRoot, diff, fallbackScriptEnv(t))
+	assertSkillOutputParity(t, pythonPayload, fallbackPayload)
+	if got := countSkillRule(fallbackPayload.Findings, "resource-leak"); got != 1 {
+		t.Fatalf("resource leaks = %d, want one: %+v", got, fallbackPayload.Findings)
+	}
+	if got := countSkillRule(fallbackPayload.Findings, "defer-in-loop"); got != 0 {
+		t.Fatalf("defer after closed loop was reported: %+v", fallbackPayload.Findings)
+	}
+}
+
 func TestSkillCheckScriptFallbackParityForCommandInjectionBoundaries(t *testing.T) {
 	t.Parallel()
 
