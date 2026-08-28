@@ -181,12 +181,15 @@ type Agent struct {
 	artifactService artifact.Service
 	// modelProvider 提供语义审查增量。
 	modelProvider llm.Provider
-	closeOnce     sync.Once
-	closeErr      error
+	// isolateDefaultReports keeps each default run's report bundle in its task directory.
+	isolateDefaultReports bool
+	closeOnce             sync.Once
+	closeErr              error
 }
 
 // New 创建基于 trpc-agent-go 的 CR Agent。
 func New(cfg Config) (*Agent, error) {
+	isolateDefaultReports := strings.TrimSpace(cfg.OutputDir) == ""
 	cfg = normalizeConfig(cfg)
 	providerCount := 0
 	if cfg.ModelProvider != nil {
@@ -268,15 +271,16 @@ func New(cfg Config) (*Agent, error) {
 	)
 
 	agent := &Agent{
-		cfg:             cfg,
-		loadTool:        toolskill.NewLoadTool(repo),
-		runTool:         runTool,
-		checkTool:       toolcodeexec.NewTool(exec, toolcodeexec.WithName("execute_code"), toolcodeexec.WithLanguages("bash")),
-		exec:            exec,
-		policy:          defaultPermissionPolicy(cfg.EnableStaticcheck, cfg.OutputLimitBytes),
-		store:           store,
-		artifactService: cfg.ArtifactService,
-		modelProvider:   cfg.ModelProvider,
+		cfg:                   cfg,
+		loadTool:              toolskill.NewLoadTool(repo),
+		runTool:               runTool,
+		checkTool:             toolcodeexec.NewTool(exec, toolcodeexec.WithName("execute_code"), toolcodeexec.WithLanguages("bash")),
+		exec:                  exec,
+		policy:                defaultPermissionPolicy(cfg.EnableStaticcheck, cfg.OutputLimitBytes),
+		store:                 store,
+		artifactService:       cfg.ArtifactService,
+		modelProvider:         cfg.ModelProvider,
+		isolateDefaultReports: isolateDefaultReports,
 	}
 	cleanupOnError = false
 	return agent, nil
@@ -626,7 +630,7 @@ func normalizeConfig(cfg Config) Config {
 	return cfg
 }
 
-// DefaultOutputDir returns a user-owned location outside the reviewed checkout.
+// DefaultOutputDir returns the user-owned base directory for task-specific report directories.
 func DefaultOutputDir() string {
 	base, err := os.UserCacheDir()
 	if err != nil || strings.TrimSpace(base) == "" {

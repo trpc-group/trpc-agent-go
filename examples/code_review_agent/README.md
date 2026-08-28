@@ -48,6 +48,9 @@ model 不联网，真实 Provider 必须显式配置。`dry-run` 只验证 Skill
 每次评审输出 `review_report.json`、`review_report.md`、`review_report.zh.md`、
 `review_diagnostics.json` 和默认 `review.db`。示例报告见
 `review_report.json`、`review_report.md`、`review_report.zh.md`。
+未显式指定 `--output-dir` 时，每次评审的四份报告会写入
+`DefaultOutputDir()/taskID` 对应的独立子目录，避免并发运行互相覆盖。显式指定
+`--output-dir` 时，报告仍直接写入指定目录。
 
 ## Verify
 

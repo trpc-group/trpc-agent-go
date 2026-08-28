@@ -127,7 +127,11 @@ func (a *Agent) writeReviewArtifacts(ctx context.Context, taskID string, result 
 	if err := enforceArtifactLimits(a.cfg, payloads); err != nil {
 		return err
 	}
-	if err := writeReports(a.cfg.OutputDir, bundle.JSON, bundle.Markdown, bundle.MarkdownZH, bundle.Diagnostics); err != nil {
+	outputDir := a.cfg.OutputDir
+	if a.isolateDefaultReports {
+		outputDir = filepath.Join(outputDir, taskID)
+	}
+	if err := writeReports(outputDir, bundle.JSON, bundle.Markdown, bundle.MarkdownZH, bundle.Diagnostics); err != nil {
 		return err
 	}
 	if a.artifactService == nil {

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -155,6 +156,59 @@ func TestWriteReportsRejectsReportSymlink(t *testing.T) {
 	}
 	if string(data) != "keep-me" {
 		t.Fatalf("symlink target was modified: %q", data)
+	}
+}
+
+func TestWriteReviewArtifactsIsolatesConcurrentDefaultRuns(t *testing.T) {
+	dir := t.TempDir()
+	ag := &Agent{
+		cfg:                   normalizeConfig(Config{OutputDir: dir}),
+		isolateDefaultReports: true,
+	}
+	bundles := map[string]reportBundle{
+		"task-one": {
+			JSON: []byte("one-json"), Markdown: []byte("one-markdown"),
+			MarkdownZH: []byte("one-markdown-zh"), Diagnostics: []byte("one-diagnostics"),
+		},
+		"task-two": {
+			JSON: []byte("two-json"), Markdown: []byte("two-markdown"),
+			MarkdownZH: []byte("two-markdown-zh"), Diagnostics: []byte("two-diagnostics"),
+		},
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, len(bundles))
+	for taskID, bundle := range bundles {
+		taskID, bundle := taskID, bundle
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- ag.writeReviewArtifacts(context.Background(), taskID, review.Result{}, bundle)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("writeReviewArtifacts: %v", err)
+		}
+	}
+
+	for taskID, bundle := range bundles {
+		for _, payload := range bundle.payloads() {
+			got, err := os.ReadFile(filepath.Join(dir, taskID, payload.Name))
+			if err != nil {
+				t.Fatalf("read %s for %s: %v", payload.Name, taskID, err)
+			}
+			if string(got) != string(payload.Data) {
+				t.Fatalf("%s for %s = %q, want %q", payload.Name, taskID, got, payload.Data)
+			}
+		}
+	}
+	for _, payload := range reportArtifacts() {
+		if _, err := os.Stat(filepath.Join(dir, payload.Name)); !os.IsNotExist(err) {
+			t.Fatalf("shared report path %s exists: %v", payload.Name, err)
+		}
 	}
 }
 
@@ -385,6 +439,35 @@ func TestNormalizeConfigUsesIsolatedDefaultOutputDirectory(t *testing.T) {
 	cfg := normalizeConfig(Config{})
 	if cfg.OutputDir != DefaultOutputDir() || !filepath.IsAbs(cfg.OutputDir) {
 		t.Fatalf("default output directory = %q, want absolute user-owned directory %q", cfg.OutputDir, DefaultOutputDir())
+	}
+}
+
+func TestNewOnlyIsolatesImplicitDefaultOutputDirectory(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		outputDir string
+		want      bool
+	}{
+		{name: "implicit", want: true},
+		{name: "explicit default path", outputDir: DefaultOutputDir(), want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ag, err := New(Config{
+				SkillsRoot: writeFastSkillRoot(t),
+				Runtime:    RuntimeLocalFallback,
+				OutputDir:  tc.outputDir,
+				Timeout:    time.Second,
+			})
+			if err != nil {
+				t.Fatalf("New returned error: %v", err)
+			}
+			t.Cleanup(func() { _ = ag.Close() })
+			if ag.isolateDefaultReports != tc.want {
+				t.Fatalf("isolateDefaultReports = %t, want %t", ag.isolateDefaultReports, tc.want)
+			}
+		})
 	}
 }
 

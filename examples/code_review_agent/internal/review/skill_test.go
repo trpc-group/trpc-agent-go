@@ -87,6 +87,29 @@ func TestSkillCheckScriptFallsBackToGoWhenPythonUnavailable(t *testing.T) {
 	}
 }
 
+// TestSkillCheckScriptGoFallbackScansPastLongLines ensures an accepted input
+// cannot be reported as successfully reviewed after Scanner stops early.
+func TestSkillCheckScriptGoFallbackScansPastLongLines(t *testing.T) {
+	t.Parallel()
+
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatalf("SkillRoot returned error: %v", err)
+	}
+	diff := "diff --git a/sample.go b/sample.go\n" +
+		"--- a/sample.go\n" +
+		"+++ b/sample.go\n" +
+		"@@ -0,0 +1 @@\n" +
+		"+" + strings.Repeat("x", 1024*1024) + "\n" +
+		"@@ -0,0 +2 @@\n" +
+		"+panic(\"after long line\")\n"
+
+	payload := runSkillCheck(t, skillRoot, diff, fallbackScriptEnv(t))
+	if got := countSkillRule(payload.Findings, "panic-direct"); got != 1 {
+		t.Fatalf("expected finding after oversized line, got %d: %+v", got, payload.Findings)
+	}
+}
+
 // TestSkillCheckScriptDetectsSecretShapes 固定 Skill 规则的密钥覆盖面。
 func TestSkillCheckScriptDetectsSecretShapes(t *testing.T) {
 	t.Parallel()

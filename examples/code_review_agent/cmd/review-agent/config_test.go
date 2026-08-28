@@ -274,6 +274,20 @@ func TestOptionDefaultsEnableOutputScopedPersistence(t *testing.T) {
 	}
 }
 
+func TestOptionDefaultsPreserveImplicitOutputDirectory(t *testing.T) {
+	t.Parallel()
+
+	opts := Options{}
+	applyOptionDefaults(&opts)
+	if opts.OutputDir != "" {
+		t.Fatalf("implicit output directory = %q, want empty for Agent task isolation", opts.OutputDir)
+	}
+	wantSQLite := filepath.Join(cragent.DefaultOutputDir(), "review.db")
+	if opts.SQLitePath != wantSQLite {
+		t.Fatalf("default sqlite path = %q, want %q", opts.SQLitePath, wantSQLite)
+	}
+}
+
 func TestNoPersistSuppressesDefaultSQLitePath(t *testing.T) {
 	t.Parallel()
 
@@ -358,7 +372,23 @@ func TestDefaultOutputDoesNotClobberRepositoryReports(t *testing.T) {
 	if string(sentinel) != "symlink target unchanged" {
 		t.Fatalf("default output followed checkout parent symlink: %q", sentinel)
 	}
-	assertFileExists(t, filepath.Join(cragent.DefaultOutputDir(), "review_report.json"))
+	entries, err := os.ReadDir(cragent.DefaultOutputDir())
+	if err != nil {
+		t.Fatalf("read default report directory: %v", err)
+	}
+	foundReport := false
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(cragent.DefaultOutputDir(), entry.Name(), "review_report.json")); err == nil {
+			foundReport = true
+			break
+		}
+	}
+	if !foundReport {
+		t.Fatal("default output did not create a task-specific report directory")
+	}
 }
 
 func TestCapabilityConfigPreservesExplicitFalseAndCLIOverrides(t *testing.T) {

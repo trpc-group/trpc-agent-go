@@ -192,13 +192,14 @@ func optionWasSetAny(cli Options, fallback bool, flagNames ...string) bool {
 }
 
 func applyOptionDefaults(opts *Options) {
-	if strings.TrimSpace(opts.OutputDir) == "" {
-		opts.OutputDir = cragent.DefaultOutputDir()
-	}
 	if opts.NoPersist {
 		opts.SQLitePath = ""
 	} else if strings.TrimSpace(opts.SQLitePath) == "" {
-		opts.SQLitePath = filepath.Join(opts.OutputDir, "review.db")
+		outputDir := opts.OutputDir
+		if strings.TrimSpace(outputDir) == "" {
+			outputDir = cragent.DefaultOutputDir()
+		}
+		opts.SQLitePath = filepath.Join(outputDir, "review.db")
 	}
 	if strings.TrimSpace(opts.Mode) == "" {
 		opts.Mode = cragent.ModeReview

@@ -51,10 +51,17 @@ func main() {
 	oldRemaining := 0
 	newRemaining := 0
 	hunkStart := regexp.MustCompile(`\+(\d+)`)
-	hunkTexts := buildHunkTexts(string(data))
+	diff := string(data)
+	hunkTexts := buildHunkTexts(diff)
 
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	scanner.Buffer(make([]byte, 1024), 1024*1024)
+	// The input layer has already enforced the configured total input bound.
+	// Allow any single line within that accepted input to fit in the scanner.
+	maxTokenBytes := len(data) + 1
+	if maxTokenBytes < 1024 {
+		maxTokenBytes = 1024
+	}
+	scanner := bufio.NewScanner(strings.NewReader(diff))
+	scanner.Buffer(make([]byte, 1024), maxTokenBytes)
 	lineIndex := 0
 	for scanner.Scan() {
 		index := lineIndex
@@ -191,6 +198,9 @@ func main() {
 			newLine++
 			currentHunk = append(currentHunk, strings.TrimPrefix(line, " "))
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		panic(fmt.Errorf("scan diff: %w", err))
 	}
 
 	out, _ := json.Marshal(map[string]any{"findings": findings, "warnings": warnings})
