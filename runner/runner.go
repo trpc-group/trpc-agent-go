@@ -2002,6 +2002,9 @@ func cloneAfterRunCompletionEvent(completionEvent *event.Event) *event.Event {
 		completionSnapshot.Response.Choices = cloneChoices(
 			completionEvent.Response.Choices,
 		)
+		completionSnapshot.Response.Error = cloneResponseError(
+			completionEvent.Response.Error,
+		)
 	}
 	return completionSnapshot
 }

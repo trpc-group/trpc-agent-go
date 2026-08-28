@@ -261,6 +261,61 @@ func TestGlobalAfterRunHooksIsolateNestedCompletionData(t *testing.T) {
 	)
 }
 
+func TestGlobalAfterRunHooksIsolateResponseErrorPointers(t *testing.T) {
+	isolateGlobalAfterRunHooks(t)
+
+	param := "original-param"
+	code := "original-code"
+	completion := event.NewResponseEvent(
+		"invocation",
+		"runner",
+		&model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Error: &model.ResponseError{
+				Type:    model.ErrorTypeRunError,
+				Message: "original-message",
+				Param:   &param,
+				Code:    &code,
+			},
+		},
+	)
+	var (
+		secondParam string
+		secondCode  string
+	)
+	require.NoError(t, RegisterGlobalAfterRunHook(
+		"mutator",
+		func(_ context.Context, args *plugin.AfterRunArgs) error {
+			*args.CompletionEvent.Response.Error.Param = "mutated-param"
+			*args.CompletionEvent.Response.Error.Code = "mutated-code"
+			return nil
+		},
+	))
+	require.NoError(t, RegisterGlobalAfterRunHook(
+		"observer",
+		func(_ context.Context, args *plugin.AfterRunArgs) error {
+			err := args.CompletionEvent.Response.Error
+			secondParam = *err.Param
+			secondCode = *err.Code
+			return nil
+		},
+	))
+
+	applyGlobalAfterRunHooks(
+		context.Background(),
+		prepareGlobalAfterRunState(),
+		agent.NewInvocation(),
+		completion,
+	)
+
+	assert.Equal(t, "original-param", secondParam)
+	assert.Equal(t, "original-code", secondCode)
+	require.NotNil(t, completion.Response)
+	require.NotNil(t, completion.Response.Error)
+	assert.Equal(t, "original-param", *completion.Response.Error.Param)
+	assert.Equal(t, "original-code", *completion.Response.Error.Code)
+}
+
 func TestGlobalAfterRunHookFailuresDoNotAffectCompletion(t *testing.T) {
 	isolateGlobalAfterRunHooks(t)
 	installGlobalAfterRunTestTracer(t)
