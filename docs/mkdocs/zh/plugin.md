@@ -404,6 +404,28 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 - `OnEvent`：Runner 发出每一个事件时都会调用（包括 runner completion 事件）。你可以
   原地修改事件，或者返回一个新的事件作为替代。
 
+### Runner 完成 Hook
+
+- `Registry.AfterRun`：在 ExecutionTrace 的输入、输出完成填充后观测最终 Runner
+  completion event。它只对根 Runner run 调用一次，不会对每个子 Agent invocation
+  调用。Hook 收到独立快照，修改不会影响 Runner 输出；错误只记录日志，不会让运行失败。
+- `runner.RegisterGlobalAfterRunHook`：为进程内所有 Runner 注册相同的完成 Hook，适合
+  无法向每个 Runner 注入 `runner.WithPlugins(...)` 的基础设施集成。注册在进程生命周期
+  内永久有效且名称唯一；Hook 必须并发安全，并将阻塞式导出交给自身的有界队列。
+
+全局 AfterRun Hook 在 Runner 级和单次 Run 插件的 AfterRun 之后同步执行。它收到的
+context 已脱离运行取消；框架 tracing 捕获到 recording 的根 `invoke_agent` span 时，
+context 携带该 SpanContext，否则显式携带无效 SpanContext，不会错误继承调用方的 span。
+
+```go
+err := runner.RegisterGlobalAfterRunHook(
+	"audit-exporter",
+	func(ctx context.Context, args *plugin.AfterRunArgs) error {
+		return enqueue(ctx, args.CompletionEvent)
+	},
+)
+```
+
 ### Graph 节点 Hook（StateGraph / GraphAgent）
 
 Runner 插件**不会**提供 `BeforeNode` / `AfterNode` 这类“节点级”的 Hook 点。
