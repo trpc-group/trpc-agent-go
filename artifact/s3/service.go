@@ -382,7 +382,6 @@ func validateFilename(filename string) error {
 	// Note: "user:" prefix is allowed for user-scoped artifacts.
 	if path.IsAbs(filename) ||
 		path.Clean(filename) != filename ||
-		filename == "." ||
 		strings.Contains(filename, "\\") ||
 		strings.Contains(filename, "\x00") {
 		return ErrInvalidFilename

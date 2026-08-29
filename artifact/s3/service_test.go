@@ -481,6 +481,45 @@ func TestNestedArtifactLifecycle(t *testing.T) {
 	assert.Equal(t, []string{descendant}, keys)
 }
 
+func TestLegacyDotArtifactLifecycle(t *testing.T) {
+	svc, client := newTestService(t)
+	ctx := context.Background()
+	info := testSessionInfo()
+	filename := "."
+
+	require.NoError(t, client.PutObject(
+		ctx,
+		"test-app/user-123/session-456/./0",
+		[]byte("legacy-v0"),
+		"text/plain",
+	))
+
+	keys, err := svc.ListArtifactKeys(ctx, info)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filename}, keys)
+
+	loaded, err := svc.LoadArtifact(ctx, info, filename, nil)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, []byte("legacy-v0"), loaded.Data)
+
+	version, err := svc.SaveArtifact(ctx, info, filename, &artifact.Artifact{
+		Data:     []byte("v1"),
+		MimeType: "text/plain",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, version)
+
+	versions, err := svc.ListVersions(ctx, info, filename)
+	require.NoError(t, err)
+	assert.Equal(t, []int{0, 1}, versions)
+
+	require.NoError(t, svc.DeleteArtifact(ctx, info, filename))
+	keys, err = svc.ListArtifactKeys(ctx, info)
+	require.NoError(t, err)
+	assert.Empty(t, keys)
+}
+
 func TestListArtifactKeys(t *testing.T) {
 	t.Run("list empty", func(t *testing.T) {
 		svc, _ := newTestService(t)
@@ -696,6 +735,7 @@ func TestListVersions(t *testing.T) {
 func TestValidateFilename(t *testing.T) {
 	t.Run("valid filenames", func(t *testing.T) {
 		validNames := []string{
+			".", // legacy flat artifact name
 			"file.txt",
 			"my-document.pdf",
 			"image_001.png",
@@ -729,7 +769,6 @@ func TestValidateFilename(t *testing.T) {
 			"path/..",            // trailing parent directory segment
 			"..\\parent.txt",     // path traversal with backslash
 			"file\x00name.txt",   // null byte
-			".",                  // current directory
 		}
 
 		for _, name := range invalidNames {
