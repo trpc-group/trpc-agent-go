@@ -90,16 +90,18 @@ For the complete example, see [examples/agui/messagessnapshot](https://github.co
 
 In multi-instance deployments, different instances must share the same `SessionService`; otherwise, the messages snapshot route cannot read historical events written by other instances.
 
-Streaming responses usually produce multiple incremental text events or reasoning events. To reduce pressure on session storage, the framework aggregates consecutive `TEXT_MESSAGE_CONTENT` and `REASONING_MESSAGE_CONTENT` events with the same `messageId` before writing them to session storage by default.
+Real-time streaming output is split into many small events. Writing every small chunk to `SessionService` immediately can put high pressure on MySQL, Redis, or other session storage backends, especially during long text output, reasoning output, or streaming tool arguments. By default, the framework queues history events and writes them to session storage in batches.
 
-Aggregated results are flushed once per second by default. When a run finishes normally, is canceled, or fails, the framework also performs post-run finalization. This fills in protocol stream closing events that are still open and tries to write the aggregation cache to session storage.
+The default aggregator merges adjacent text chunks from the same assistant message, adjacent reasoning chunks from the same assistant message, and adjacent argument chunks from the same tool call. A different message or tool-call ID, a different content type, or any non-content event ends the current aggregate. `TOOL_CALL_RESULT` represents the complete result of one tool call and is not merged. Aggregator output is still queued by the history tracker and written only by a startup, periodic, or final flush.
+
+For every tracked run with a positive flush interval, the runner makes one startup best-effort flush after recording the initial `RUN_STARTED` and before publishing the first SSE event. Later SSE delivery does not wait for history persistence to finish, so the frontend continues to receive model output immediately. `/history` reads only content that has already been written to session storage. While a conversation is running, a messages snapshot may therefore show the state from the last successful flush. When follow mode is enabled, later successfully flushed events are pushed to the client.
 
 Related configuration:
 
-- `aggregator.WithEnabled(true)` controls whether event aggregation is enabled. It is enabled by default.
-- `agui.WithFlushInterval(time.Second)` controls the periodic flush interval for aggregation results. The default is `1s`. Setting it to `0` disables periodic flushing.
-- `agui.WithTrackPersistenceTimeout(5*time.Second)` limits the maximum duration for event history persistence. The default is `5s`. Setting it to `0` means no timeout is applied.
-- `agui.WithPostRunFinalizationTimeout(5*time.Second)` limits the maximum duration of post-run finalization. The default is `5s`. Finalization needs to fill in protocol closing events and write the aggregation cache to `SessionService`; if session storage becomes slow or fails, the timeout prevents the request from blocking for too long. Setting it to `0` means no timeout is applied.
+- `aggregator.WithEnabled(true)` controls whether adjacent streaming chunks are merged. It is enabled by default.
+- `agui.WithFlushInterval(time.Second)` controls the startup and periodic history flushes. The default is `1s`. A positive interval enables one startup best-effort flush before the first SSE event and periodic writes while the run is active. Setting it to `0` disables both startup and periodic writes; history events are then mainly written during post-run finalization. During long-running or high-volume runs, unwritten history events remain in process memory until finalization.
+- `agui.WithTrackPersistenceTimeout(5*time.Second)` limits how long each AG-UI history persistence attempt can wait for session storage, including the startup best-effort flush, periodic flushes, and the final `Close` flush. The default is `5s`. A failed storage write during an active flush returns an error and discards its drained batch instead of retrying it; events queued while that write is in progress remain eligible for later flushes. If the final `Close` fails or times out, the error is logged, the completed run's in-process tracker state is released, and any remaining unwritten events are discarded. Setting it to `0` means no timeout is applied.
+- `agui.WithPostRunFinalizationTimeout(5*time.Second)` sets the timeout used to generate and emit protocol closing events after a run. The default is `5s`. It does not bound the final history `Flush` or `Close`; those operations use `agui.WithTrackPersistenceTimeout`. Setting it to `0` means no timeout is applied.
 
 ```go
 import (
@@ -125,7 +127,7 @@ server, err := agui.New(
 )
 ```
 
-For more complex aggregation strategies, implement `aggregator.Aggregator` and inject it through a custom factory. Although each session gets its own aggregator, so cross-session state management and concurrency handling are not needed, aggregation methods themselves may still be called concurrently and must handle concurrency properly.
+Most applications do not need a custom aggregation strategy. If you need to change which events can be merged, implement `aggregator.Aggregator` and inject it through a custom factory. A custom implementation may, for example, buffer several `CUSTOM` events and return one merged event from `Flush`. `Append` may borrow its input only for the duration of the call; an implementation must copy any data it retains after returning. The history tracker snapshots returned events immediately and queues them for the next persistence flush. Custom aggregators must handle concurrent calls.
 
 ## Historical Run Lifecycle Events
 
@@ -245,6 +247,8 @@ After continuation is enabled, the server continues reading and forwarding subse
 
 `RUN_STARTED → MESSAGES_SNAPSHOT → subsequent AG-UI events → RUN_FINISHED/RUN_ERROR`
 
+Every tracked run with a positive flush interval makes a startup best-effort flush after recording the initial `RUN_STARTED` event and before publishing it to the real-time SSE stream. A successful startup flush establishes the session before the periodic writer, RunHooks, and the wrapped runner start. When continuation is enabled and the synchronous `TrackService` flush succeeds, another instance sharing the same `SessionService` can therefore observe a non-terminal event once `RUN_STARTED` has been emitted; later events continue to use periodic buffering. If the startup flush fails, the error is logged without stopping the run and its drained batch is not retried. To avoid racing first-session creation, periodic flushing then starts only after the wrapped runner completes synchronous initialization; events recorded in the meantime remain queued for a later periodic flush or final close. Asynchronous `TrackService` implementations may still delay cross-instance visibility after a flush call returns.
+
 Related configuration:
 
 - `agui.WithMessagesSnapshotFollowEnabled(true)` enables messages snapshot continuation.
@@ -273,3 +277,27 @@ server, err := agui.New(
 ```
 
 For the complete example, see [examples/agui/server/follow](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/follow). For the frontend, see [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
+
+## Best-Effort History Loading
+
+By default, messages snapshots strictly validate pairing relationships between persisted AG-UI events. For example, `TEXT_MESSAGE_CONTENT` must be preceded by `TEXT_MESSAGE_START` for the same message, and `TOOL_CALL_RESULT` must match a tool call whose argument stream has completed. If historical data contains missing, out-of-order, or duplicate events, the snapshot route tries to return the `MESSAGES_SNAPSHOT` restored before the failure point, and then returns `RUN_ERROR`.
+
+If production history data may contain a small number of incomplete events because of connection interruptions, frontend tool-call fallback, storage write failures, or version switches, enable best-effort loading:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotBestEffortEnabled(true),
+)
+```
+
+After this is enabled, messages snapshots skip individual AG-UI events that cannot be decoded or paired while restoring history, and continue processing subsequent events. Skipped events are only written to warn logs and do not make the current `/history` request return `RUN_ERROR`. If later events can still form complete messages, they continue to appear in `MESSAGES_SNAPSHOT.messages`. This mode only affects history snapshot restoration. It does not change the real-time conversation route execution behavior, and it cannot restore historical event content that has already been lost.
+
+Best-effort loading only handles cases where event content can be read but cannot be restored as a valid message. If session storage reads fail, `SessionService` returns an error, or the messages snapshot route cannot locate the session, the server still returns `RUN_ERROR`.

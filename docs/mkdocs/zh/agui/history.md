@@ -90,16 +90,18 @@ curl -N -X POST http://localhost:8080/history \
 
 多实例部署时，不同实例需要共享同一个 `SessionService`，否则消息快照路由无法读取其他实例写入的历史事件。
 
-流式响应通常会产生多条增量文本事件或 reasoning 事件。为减少会话存储压力，框架默认会先聚合连续且具有相同 `messageId` 的 `TEXT_MESSAGE_CONTENT` 与 `REASONING_MESSAGE_CONTENT` 事件，再写入会话存储。
+实时对话通常会产生大量流式事件。如果每个事件都立即写入 `SessionService`，在长文本、reasoning 内容或工具参数流式输出较多时，会给 MySQL、Redis 等会话存储带来较高写入压力。框架默认会先将历史事件加入队列，再批量写入会话存储。
 
-聚合结果默认每秒刷新一次。运行正常结束、被取消或发生错误时，框架还会执行运行结束后的收尾流程，用于补发仍然打开的协议流结束事件，并将聚合缓存尽量写入会话存储。
+默认聚合器只聚合同一条助手消息中相邻的文本内容事件、同一条助手消息中相邻的 reasoning 内容事件，以及同一个工具调用中相邻的参数事件。消息或工具调用 ID 变化、内容类型变化，或者出现任一非内容事件时，都会结束当前聚合。`TOOL_CALL_RESULT` 表示一次工具调用的完整结果，不会被聚合。聚合器输出仍由历史 tracker 排队，只会在启动、定时或最终刷新时写入。
+
+对于所有已启用历史追踪且刷新间隔为正的 run，Runner 都会在记录初始 `RUN_STARTED` 后、发布首个 SSE 事件之前执行一次启动尽力刷新。后续 SSE 发送不会等待历史持久化完成，前端仍会即时收到模型输出。`/history` 只读取已经成功写入会话存储的内容，因此在对话仍在运行时，消息快照可能只能看到上一次刷新成功时的状态。开启消息快照续传后，后续刷新成功的事件会继续推送给客户端。
 
 相关配置如下：
 
-- `aggregator.WithEnabled(true)` 用于控制是否开启事件聚合，默认开启。
-- `agui.WithFlushInterval(time.Second)` 用于控制聚合结果的定时刷新间隔，默认 `1s`。设置为 `0` 表示不开启定时刷新。
-- `agui.WithTrackPersistenceTimeout(5*time.Second)` 用于限制事件历史记录持久化的最长执行时间，默认 `5s`。设置为 `0` 表示不设置超时。
-- `agui.WithPostRunFinalizationTimeout(5*time.Second)` 用于限制运行结束后收尾流程的最长执行时间，默认 `5s`。收尾流程需要补齐协议结束事件，并将聚合缓存写入 `SessionService`；如果会话存储变慢或异常，超时可以避免请求长时间阻塞。设置为 `0` 表示不设置超时事件。
+- `aggregator.WithEnabled(true)` 用于控制是否聚合相邻的流式内容事件，默认开启。
+- `agui.WithFlushInterval(time.Second)` 用于控制启动刷新和运行中的定时刷新，默认 `1s`。刷新间隔为正时，Runner 会在首个 SSE 事件前执行一次启动尽力刷新，并在 run 活动期间定时写入。设置为 `0` 会同时关闭启动刷新和定时刷新；历史事件随后主要在运行结束收尾时写入。运行时间较长或事件量较大时，未写入的历史事件会持续占用进程内存，直到运行结束收尾。
+- `agui.WithTrackPersistenceTimeout(5*time.Second)` 用于限制每次 AG-UI 历史持久化操作等待会话存储的最长时间，包括启动尽力刷新、运行中的定时刷新以及最终 `Close` 刷新，默认 `5s`。运行中的存储写入失败时会返回错误，并丢弃本次已取出的 batch，而不会自动重试；写入期间新进入队列的事件仍可由后续刷新处理。如果最终 `Close` 失败或超时，错误会被记录，同时释放已结束 run 的进程内 tracker 状态；尚未写入的剩余事件会被丢弃。设置为 `0` 表示不设置超时。
+- `agui.WithPostRunFinalizationTimeout(5*time.Second)` 用于设置运行结束后生成和发送协议收尾事件时使用的超时，默认 `5s`。它不限制最终历史 `Flush` 或 `Close`；这些操作使用 `agui.WithTrackPersistenceTimeout`。设置为 `0` 表示不设置超时。
 
 ```go
 import (
@@ -125,7 +127,7 @@ server, err := agui.New(
 )
 ```
 
-如果需要更复杂的聚合策略，可以实现 `aggregator.Aggregator` 并通过自定义工厂注入。需要注意的是，虽然每个会话都会单独创建一个聚合器，省去了跨会话的状态维护和并发处理，但聚合方法本身仍有可能被并发调用，因此仍需妥善处理并发。
+大多数场景不需要自定义聚合策略。如果确实需要改变哪些事件可以被合并，可以实现 `aggregator.Aggregator` 并通过自定义工厂注入。例如，自定义实现可以先缓冲多个 `CUSTOM` 事件，再由 `Flush` 返回一个合并后的事件。`Append` 的输入只可在本次调用期间借用；实现如果需要在返回后继续保留其中的数据，必须自行复制。历史 tracker 会立即对返回事件生成快照，并将其加入下一次持久化刷新队列。自定义聚合器需要能够处理并发调用。
 
 ## 历史运行生命周期事件
 
@@ -245,11 +247,13 @@ server, err := agui.New(
 
 `RUN_STARTED → MESSAGES_SNAPSHOT → 后续 AG-UI 事件 → RUN_FINISHED/RUN_ERROR`
 
+所有已启用历史追踪且刷新间隔为正的 run，都会在记录初始 `RUN_STARTED` 事件后、将其发布到实时 SSE 流之前执行一次启动尽力刷新。启动刷新成功后，Runner 会先完成 session 初始化，再启动定时写入、RunHook 和被包装的 Runner。开启消息快照续传且同步 `TrackService` 刷新成功时，其他共享同一个 `SessionService` 的实例可在 `RUN_STARTED` 已发出后观察到非终态事件；后续事件继续按周期缓冲写入。如果启动刷新失败，错误会被记录但不会阻止 run 继续执行，本次已取出的 batch 也不会重试。为避免首次 session 创建竞态，定时刷新此时只会在被包装的 Runner 完成同步初始化后启动；期间记录的新事件仍保留在队列中，可由之后的定时刷新或最终关闭处理。异步 `TrackService` 在刷新调用返回后仍可能延迟跨实例可见性。
+
 相关配置如下：
 
 - `agui.WithMessagesSnapshotFollowEnabled(true)` 用于启用消息快照续传。
 - `agui.WithMessagesSnapshotFollowMaxDuration(time.Duration)` 用于限制续传最长时间，避免一直等待正在运行的对话结束。
-- `agui.WithFlushInterval(time.Duration)` 用于控制历史事件落库频率，续传轮询间隔会复用该值。
+- `agui.WithFlushInterval(time.Duration)` 用于控制历史事件写入会话存储的频率，续传轮询间隔会复用该值。
 
 代码示例如下。
 
@@ -273,3 +277,27 @@ server, err := agui.New(
 ```
 
 完整示例可参考 [examples/agui/server/follow](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/follow)，前端可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
+
+## 尽力加载历史
+
+默认情况下，消息快照会严格校验已持久化 AG-UI 事件之间的配对关系。比如 `TEXT_MESSAGE_CONTENT` 需要先看到同一条消息的 `TEXT_MESSAGE_START`，`TOOL_CALL_RESULT` 需要匹配已经完成参数流的工具调用。如果历史数据中存在缺失、乱序或重复事件，快照路由会尽量返回出错位置之前已经还原出的 `MESSAGES_SNAPSHOT`，随后返回 `RUN_ERROR`。
+
+如果线上历史数据可能因为连接中断、前端工具调用降级、存储写入失败或版本切换而出现少量不完整事件，可以开启尽力加载模式：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotBestEffortEnabled(true),
+)
+```
+
+开启后，消息快照在还原历史时会跳过无法识别或无法配对的单条 AG-UI event，并继续处理后续事件。被跳过的事件只会写入 warn 日志，不会让本次 `/history` 请求返回 `RUN_ERROR`；如果后续事件仍然能组成完整消息，它们会继续出现在 `MESSAGES_SNAPSHOT.messages` 中。该模式只影响历史快照还原，不改变实时对话路由的执行行为，也不会修复已经缺失的历史事件内容。
+
+尽力加载只处理事件内容可读取但无法还原为合法消息的情况。如果会话存储读取失败、`SessionService` 返回错误，或者消息快照路由无法定位会话，服务端仍会返回 `RUN_ERROR`。

@@ -11,6 +11,7 @@ package errormessage_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -18,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	rootplugin "trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/plugin/errormessage"
@@ -42,6 +44,9 @@ func TestPlugin_RewritesEmptyErrorEventContent(t *testing.T) {
 	m := newPluginManager(t, p)
 
 	original := newErrorEvent(agent.ErrorTypeStopAgentError, "stopped: reason X")
+	original.Extensions = map[string]json.RawMessage{
+		"example.key": json.RawMessage(`{"value":true}`),
+	}
 	require.False(t, original.Response.IsValidContent())
 
 	out, err := m.OnEvent(context.Background(), nil, original)
@@ -60,6 +65,7 @@ func TestPlugin_RewritesEmptyErrorEventContent(t *testing.T) {
 	)
 	require.NotNil(t, out.Response.Choices[0].FinishReason)
 	require.Equal(t, "error", *out.Response.Choices[0].FinishReason)
+	require.True(t, errorcontent.IsSynthetic(out))
 
 	// Structured Response.Error must remain intact for downstream consumers.
 	require.NotNil(t, out.Response.Error)
@@ -72,6 +78,15 @@ func TestPlugin_RewritesEmptyErrorEventContent(t *testing.T) {
 
 	// Original event must be untouched.
 	require.Empty(t, original.Response.Choices)
+	require.False(t, errorcontent.IsSynthetic(original))
+	require.Len(t, original.Extensions, 1)
+	require.Len(t, out.Extensions, 2)
+	out.Extensions["example.key"][0] = '['
+	require.JSONEq(
+		t,
+		`{"value":true}`,
+		string(original.Extensions["example.key"]),
+	)
 }
 
 func TestPlugin_KeepsExistingAssistantContent(t *testing.T) {
@@ -107,6 +122,7 @@ func TestPlugin_KeepsExistingAssistantContent(t *testing.T) {
 		"partial answer before failure",
 		out.Response.Choices[0].Message.Content,
 	)
+	require.False(t, errorcontent.IsSynthetic(out))
 }
 
 func TestPlugin_SkipsNonErrorEvents(t *testing.T) {

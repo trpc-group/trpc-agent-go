@@ -184,9 +184,9 @@ func TestWithStreamingToolResultActivityEnabled(t *testing.T) {
 }
 
 func TestWithConcurrentMessageStreamsEnabled(t *testing.T) {
-	opts := newOptions(WithConcurrentMessageStreamsEnabled(true))
+	opts := newOptions(WithConcurrentMessageStreamsEnabled(false))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
-	assert.True(t, ro.ConcurrentMessageStreamsEnabled)
+	assert.False(t, ro.ConcurrentMessageStreamsEnabled)
 }
 
 func TestWithMessagesSnapshotFollowEnabled(t *testing.T) {
@@ -205,6 +205,12 @@ func TestWithMessagesSnapshotRunLifecycleEventsEnabled(t *testing.T) {
 	opts := newOptions(WithMessagesSnapshotRunLifecycleEventsEnabled(true))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
 	assert.True(t, ro.MessagesSnapshotRunLifecycleEventsEnabled)
+}
+
+func TestWithMessagesSnapshotBestEffortEnabled(t *testing.T) {
+	opts := newOptions(WithMessagesSnapshotBestEffortEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.MessagesSnapshotBestEffortEnabled)
 }
 
 func TestWithCancelEnabled(t *testing.T) {

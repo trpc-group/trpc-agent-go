@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
@@ -861,7 +862,7 @@ func (s *Service) startAsyncPersistWorker() {
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
 					log.ErrorfContext(
 						ctx,
-						"async persist event failed: %w",
+						"async persist event failed: %v",
 						err,
 					)
 				}
@@ -893,7 +894,7 @@ func (s *Service) startAsyncPersistWorker() {
 				if err := s.addTrackEvent(ctx, trackEventPair.key, trackEventPair.event); err != nil {
 					log.ErrorfContext(
 						ctx,
-						"async persist event failed: %w",
+						"async persist event failed: %v",
 						err,
 					)
 				}
@@ -1139,10 +1140,9 @@ func (s *Service) softDeleteSessions(
 		return fmt.Errorf("soft delete sessions: %w", err)
 	}
 
-	// Soft delete summaries
-	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionSummaries, childWhereClause),
-		append([]any{now}, childArgs...)...); err != nil {
+	// Soft delete summaries. Legacy schemas may contain duplicate active rows
+	// that collide when assigned the same deleted_at value.
+	if err := s.softDeleteSummaries(ctx, tx, childWhereClause, childArgs, now); err != nil {
 		return fmt.Errorf("soft delete summaries: %w", err)
 	}
 
@@ -1163,6 +1163,97 @@ func (s *Service) softDeleteSessions(
 	}
 
 	return nil
+}
+
+func (s *Service) softDeleteSummaries(
+	ctx context.Context,
+	tx *sql.Tx,
+	whereClause string,
+	args []any,
+	now time.Time,
+) error {
+	activeWhereClause := fmt.Sprintf("(%s) AND deleted_at IS NULL", whereClause)
+	_, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE %s SET deleted_at = ? WHERE %s`, s.tableSessionSummaries, activeWhereClause),
+		append([]any{now}, args...)...)
+	if err == nil {
+		return nil
+	}
+	if !isDuplicateEntryError(err) {
+		return err
+	}
+
+	// MySQL rolls back the failed UPDATE statement without aborting the
+	// transaction. Retry each row so healthy summaries retain their soft-delete
+	// history and only a row that still conflicts is physically removed.
+	log.WarnfContext(ctx, "soft deleting summaries hit duplicate legacy rows; "+
+		"retrying the affected active summaries individually: %v", err)
+	return s.softDeleteSummariesIndividually(ctx, tx, activeWhereClause, args, now)
+}
+
+func (s *Service) softDeleteSummariesIndividually(
+	ctx context.Context,
+	tx *sql.Tx,
+	activeWhereClause string,
+	args []any,
+	now time.Time,
+) error {
+	type summaryRowKey struct {
+		id     int64
+		userID string
+	}
+
+	rows, err := tx.QueryContext(ctx,
+		fmt.Sprintf(`SELECT id, user_id FROM %s WHERE %s ORDER BY id ASC FOR UPDATE`,
+			s.tableSessionSummaries, activeWhereClause),
+		args...)
+	if err != nil {
+		return fmt.Errorf("query active summaries after soft-delete conflict: %w", err)
+	}
+	var keys []summaryRowKey
+	for rows.Next() {
+		var key summaryRowKey
+		if err := rows.Scan(&key.id, &key.userID); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan active summary after soft-delete conflict: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate active summaries after soft-delete conflict: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close active summaries after soft-delete conflict: %w", err)
+	}
+
+	for _, key := range keys {
+		_, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE %s SET deleted_at = ?
+				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionSummaries),
+			now, key.id, key.userID)
+		if err == nil {
+			continue
+		}
+		if !isDuplicateEntryError(err) {
+			return fmt.Errorf("soft delete summary %d individually: %w", key.id, err)
+		}
+
+		log.WarnfContext(ctx, "soft deleting summary %d still hit a duplicate legacy row; "+
+			"deleting only that active row: %v", key.id, err)
+		if _, deleteErr := tx.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s
+				WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, s.tableSessionSummaries),
+			key.id, key.userID); deleteErr != nil {
+			return fmt.Errorf("delete duplicate active summary %d: %w", key.id, deleteErr)
+		}
+	}
+	return nil
+}
+
+func isDuplicateEntryError(err error) bool {
+	var mysqlErr *drivermysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == sqldb.MySQLErrDuplicateEntry
 }
 
 // hardDeleteSessions performs hard delete on session tables.

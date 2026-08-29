@@ -25,13 +25,40 @@ const (
 	processKillPoll       = 10 * time.Millisecond
 )
 
-func preparePipeCommand(cmd *exec.Cmd) {
+// preparePipeCommand isolates a pipe-mode child so the manager can clean up its
+// whole tree, and — when detached — so it cannot reach a terminal no one is
+// there to answer.
+//
+// Setpgid alone gives the child its own process group but leaves it attached to
+// whatever controlling terminal the host process inherited. A command that
+// prompts by opening /dev/tty directly — sudo, ssh, git, Python's getpass —
+// never touches fd 0 and still finds that terminal, so a nil stdin does not
+// reach it. Worse, reading a terminal from a background process group raises
+// SIGTTIN and stops the child, so the prompt hangs until the run times out
+// instead of failing.
+//
+// Setsid puts the child in a new session with no controlling terminal, so that
+// open fails with ENXIO and the command reports the error immediately. It also
+// makes the child a session and process-group leader, so PGID == PID and
+// terminateProcessTree still signals the whole tree. The two attributes cannot
+// be combined: Go issues setsid before setpgid, and setpgid rejects a session
+// leader with EPERM.
+//
+// Only the detached path gives up the terminal. A background session is
+// registered with the manager and remains addressable — write_stdin can answer
+// its prompts, and the caller can see it waiting and kill it — so it keeps the
+// terminal it has always had.
+func preparePipeCommand(cmd *exec.Cmd, detach bool) {
 	if cmd == nil {
 		return
 	}
 
 	attrs := ensureSysProcAttr(cmd)
-	attrs.Setpgid = true
+	if detach {
+		attrs.Setsid = true
+	} else {
+		attrs.Setpgid = true
+	}
 	applyParentDeathSignal(attrs)
 }
 

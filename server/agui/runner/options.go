@@ -34,7 +34,7 @@ const (
 	defaultToolResultInputTranslationEnabled      = false
 	defaultToolCallDeltaStreamingEnabled          = false
 	defaultStreamingToolResultActivityEnabled     = false
-	defaultConcurrentMessageStreamsEnabled        = false
+	defaultConcurrentMessageStreamsEnabled        = true
 	defaultDistributedCancelEnabled               = false
 	defaultDistributedCancelPollInterval          = time.Second
 )
@@ -57,6 +57,7 @@ type Options struct {
 	MessagesSnapshotFollowEnabled             bool                  // MessagesSnapshotFollowEnabled enables tailing persisted AG-UI track events after MESSAGES_SNAPSHOT.
 	MessagesSnapshotFollowMaxDuration         time.Duration         // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
 	MessagesSnapshotRunLifecycleEventsEnabled bool                  // MessagesSnapshotRunLifecycleEventsEnabled includes persisted RUN_* events as activity messages in MESSAGES_SNAPSHOT.
+	MessagesSnapshotBestEffortEnabled         bool                  // MessagesSnapshotBestEffortEnabled skips malformed track events while reducing history snapshots.
 	StartSpan                                 StartSpan             // StartSpan starts a span for an AG-UI run.
 	PostRunFinalizationTimeout                time.Duration         // PostRunFinalizationTimeout bounds how long post-run finalization is allowed to take.
 	TrackPersistenceTimeout                   time.Duration         // TrackPersistenceTimeout bounds how long AG-UI track persistence is allowed to take.
@@ -207,7 +208,8 @@ func WithAggregatorFactory(factory aggregator.Factory) Option {
 	}
 }
 
-// WithFlushInterval sets how often buffered AG-UI events are flushed for a session.
+// WithFlushInterval configures startup and periodic history flushes. A positive duration enables both;
+// zero disables both and leaves buffered history for finalization.
 func WithFlushInterval(d time.Duration) Option {
 	return func(o *Options) {
 		o.FlushInterval = d
@@ -233,6 +235,14 @@ func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
 func WithMessagesSnapshotRunLifecycleEventsEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.MessagesSnapshotRunLifecycleEventsEnabled = enabled
+	}
+}
+
+// WithMessagesSnapshotBestEffortEnabled controls whether malformed history
+// track events are skipped while building MESSAGES_SNAPSHOT.
+func WithMessagesSnapshotBestEffortEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.MessagesSnapshotBestEffortEnabled = enabled
 	}
 }
 
@@ -345,8 +355,9 @@ func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	}
 }
 
-// WithConcurrentMessageStreamsEnabled controls whether multiple text and reasoning
-// message streams with different message IDs may stay open concurrently.
+// WithConcurrentMessageStreamsEnabled controls whether text and reasoning
+// message streams are scoped by message ID. It is enabled by default; pass false
+// to preserve the previous legacy serial message-stream boundaries.
 func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.ConcurrentMessageStreamsEnabled = enabled

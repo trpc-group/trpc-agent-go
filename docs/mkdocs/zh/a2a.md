@@ -1,5 +1,7 @@
 # tRPC-Agent-Go A2A 集成指南
 
+> 本文介绍面向 A2A v0.2.x 的旧版 `server/a2a` 与 `agent/a2aagent` 包。新接入和迁移说明请参考 [A2A v1.0 接入与迁移指南](a2a_v1.md)。
+
 ## 概述
 
 tRPC-Agent-Go 提供了完整的 A2A (Agent-to-Agent) 解决方案，包含两个核心组件：
@@ -155,6 +157,10 @@ func main() {
 会在 Cookie Jar 中遵循 anonymous `Set-Cookie` 的 Path、Domain、过期和删除指令。
 它不会接入 `SessionService`，也不负责持久化 session state。
 应先完成一次初始请求，再开始并发匿名消息发送，或者提供可信用户身份。
+
+`NewAnonymousA2AClient` 仅在请求期间从响应或自定义 HTTP handler 观察到有效匿名 Cookie，且配置的 Cookie Jar 接受同一值并可用于 agent URL 后，才解除初始化 gate。预加载 Cookie 会随请求发送，但本身不能确认初始化完成；自定义服务端必须通过 `Set-Cookie` 回写已接受的 Cookie，或返回替代值，后续请求才能并发执行。内置 A2A Server 已具备该行为。
+
+浏览器匿名身份连续性要求同站部署。服务端 Cookie 使用 `SameSite=Lax`，因此浏览器不会在跨站 JSON-RPC POST 请求中携带该 Cookie。当前端页面与 A2A 接口同站但跨源时，Fetch 请求必须设置 `credentials: "include"`，部署层还必须为该前端的明确 Origin 返回 `Access-Control-Allow-Origin`，并设置 `Access-Control-Allow-Credentials: true`。跨站部署应改为提供可信用户身份；当前不支持跨站匿名 Cookie 连续性。
 
 #### 匿名 Principal 行为
 

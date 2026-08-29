@@ -34,6 +34,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -66,6 +67,30 @@ type usageGraphAgentModel struct {
 	name    string
 	content string
 	usage   model.Usage
+}
+
+type requestRecordingGraphAgentModel struct {
+	requests chan []model.Message
+}
+
+func (m *requestRecordingGraphAgentModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.requests <- append([]model.Message(nil), req.Messages...)
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *requestRecordingGraphAgentModel) Info() model.Info {
+	return model.Info{Name: "request-recording"}
 }
 
 func (m *staticGraphAgentModel) GenerateContent(
@@ -1233,6 +1258,268 @@ func TestGraphAgent_CreateInitialStateWithSession(t *testing.T) {
 	}
 
 	require.Greater(t, eventCount, 0)
+}
+
+func TestGraphAgent_CreateInitialStateSyntheticErrorMessages(t *testing.T) {
+	g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddNode("process", func(context.Context, graph.State) (any, error) {
+			return nil, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	newMessageEvent := func(author string, msg model.Message) event.Event {
+		return event.Event{
+			Author: author,
+			Response: &model.Response{
+				Done:    true,
+				Choices: []model.Choice{{Message: msg}},
+			},
+		}
+	}
+	newInvocation := func() *agent.Invocation {
+		errorEvent := event.NewErrorEvent(
+			"inv",
+			"test-agent",
+			model.ErrorTypeFlowError,
+			"boom",
+		)
+		errorEvent.Response.Choices = []model.Choice{{
+			Message: model.NewAssistantMessage(errorcontent.FallbackMessage),
+		}}
+		errorcontent.MarkSynthetic(errorEvent)
+		return &agent.Invocation{
+			AgentName: "test-agent",
+			Session: &session.Session{Events: []event.Event{
+				newMessageEvent("user", model.NewUserMessage("first")),
+				*errorEvent,
+				newMessageEvent("user", model.NewUserMessage("second")),
+			}},
+		}
+	}
+
+	tests := []struct {
+		name        string
+		opts        []Option
+		wantContent []string
+	}{
+		{
+			name:        "default omits",
+			wantContent: []string{"first\n\nsecond"},
+		},
+		{
+			name: "compatibility mode includes",
+			opts: []Option{
+				WithIncludeSyntheticErrorMessages(true),
+			},
+			wantContent: []string{
+				"first",
+				errorcontent.FallbackMessage,
+				"second",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			graphAgent, err := New("test-agent", g, tt.opts...)
+			require.NoError(t, err)
+
+			state := graphAgent.createInitialState(
+				context.Background(),
+				newInvocation(),
+			)
+			messages, ok := state[graph.StateKeyMessages].([]model.Message)
+			require.True(t, ok)
+			require.Len(t, messages, len(tt.wantContent))
+			for i, want := range tt.wantContent {
+				require.Equal(t, want, messages[i].Content)
+			}
+		})
+	}
+}
+
+func TestGraphAgent_RunPreservesMergedUserHistory(t *testing.T) {
+	tests := []struct {
+		name          string
+		opts          []Option
+		rewriteInput  string
+		withFile      bool
+		withSummary   bool
+		currentAuthor string
+		wantContent   []string
+		wantContains  []string
+	}{
+		{
+			name:        "default omits synthetic content",
+			wantContent: []string{"first\n\nsecond"},
+		},
+		{
+			name:         "default preserves projection when input is rewritten",
+			rewriteInput: "SECOND",
+			withFile:     true,
+			wantContent:  []string{"first\n\nSECOND"},
+		},
+		{
+			name: "default preserves user-mode summary",
+			opts: []Option{
+				WithAddSessionSummary(true),
+				WithSessionSummaryInjectionMode(
+					SessionSummaryInjectionUser,
+				),
+			},
+			withSummary:  true,
+			wantContains: []string{"summary context", "first", "second"},
+		},
+		{
+			name:          "default preserves transfer-authored current input",
+			currentAuthor: "test-agent",
+			withFile:      true,
+			wantContent:   []string{"first\n\nsecond"},
+		},
+		{
+			name: "compatibility mode includes synthetic content",
+			opts: []Option{
+				WithIncludeSyntheticErrorMessages(true),
+			},
+			wantContent: []string{
+				"first",
+				errorcontent.FallbackMessage,
+				"second",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := make(chan []model.Message, 1)
+			observedInput := make(chan string, 1)
+			recordingModel := &requestRecordingGraphAgentModel{
+				requests: requests,
+			}
+			stateGraph := graph.NewStateGraph(graph.MessagesStateSchema()).
+				AddNode("inspect", func(
+					_ context.Context,
+					state graph.State,
+				) (any, error) {
+					input, _ := state[graph.StateKeyUserInput].(string)
+					observedInput <- input
+					if tt.rewriteInput != "" {
+						return graph.State{
+							graph.StateKeyUserInput: tt.rewriteInput,
+						}, nil
+					}
+					return nil, nil
+				}).
+				AddLLMNode("llm", recordingModel, "", nil).
+				AddEdge("inspect", "llm").
+				SetEntryPoint("inspect").
+				SetFinishPoint("llm")
+			g, err := stateGraph.Compile()
+			require.NoError(t, err)
+
+			graphAgent, err := New("test-agent", g, tt.opts...)
+			require.NoError(t, err)
+
+			first := event.NewResponseEvent(
+				"inv-first",
+				"user",
+				&model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewUserMessage("first"),
+					}},
+				},
+			)
+			first.RequestID = "request-first"
+			errorEvent := event.NewErrorEvent(
+				"inv-first",
+				"test-agent",
+				model.ErrorTypeFlowError,
+				"boom",
+			)
+			errorEvent.RequestID = "request-first"
+			errorEvent.Response.Choices = []model.Choice{{
+				Message: model.NewAssistantMessage(errorcontent.FallbackMessage),
+			}}
+			errorcontent.MarkSynthetic(errorEvent)
+			invocationMessage := model.NewUserMessage("second")
+			if tt.withFile {
+				invocationMessage.AddFileData(
+					"context.txt",
+					[]byte("context"),
+					"text/plain",
+				)
+			}
+			sess := &session.Session{
+				Events: []event.Event{*first, *errorEvent},
+			}
+			if tt.currentAuthor != "" {
+				currentEvent := event.NewResponseEvent(
+					"inv-current",
+					tt.currentAuthor,
+					&model.Response{
+						Done: true,
+						Choices: []model.Choice{{
+							Message: invocationMessage,
+						}},
+					},
+				)
+				currentEvent.RequestID = "request-current"
+				sess.Events = append(sess.Events, *currentEvent)
+			}
+			if tt.withSummary {
+				sess.Summaries = map[string]*session.Summary{
+					"test-agent": {
+						Summary:   "summary context",
+						UpdatedAt: time.Now().Add(-time.Hour),
+					},
+				}
+			}
+			invocation := agent.NewInvocation(
+				agent.WithInvocationID("inv-current"),
+				agent.WithInvocationMessage(invocationMessage),
+				agent.WithInvocationSession(sess),
+				agent.WithInvocationEventFilterKey("test-agent"),
+			)
+			invocation.RunOptions.RequestID = "request-current"
+
+			events, err := graphAgent.Run(context.Background(), invocation)
+			require.NoError(t, err)
+			for range events {
+			}
+
+			require.Equal(t, "second", <-observedInput)
+			messages := <-requests
+			if len(tt.wantContent) > 0 {
+				require.Len(t, messages, len(tt.wantContent))
+				for i, want := range tt.wantContent {
+					require.Equal(t, want, messages[i].Content)
+				}
+			}
+			if len(tt.wantContains) > 0 {
+				require.Len(t, messages, 1)
+				for _, want := range tt.wantContains {
+					require.Contains(t, messages[0].Content, want)
+				}
+			}
+			if tt.withFile {
+				require.Len(t, messages[len(messages)-1].ContentParts, 2)
+				require.Equal(
+					t,
+					model.ContentTypeText,
+					messages[len(messages)-1].ContentParts[0].Type,
+				)
+				require.Equal(
+					t,
+					model.ContentTypeFile,
+					messages[len(messages)-1].ContentParts[1].Type,
+				)
+			}
+		})
+	}
 }
 
 func TestGraphAgent_CreateInitialStateWithSessionSummary(t *testing.T) {

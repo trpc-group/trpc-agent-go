@@ -252,6 +252,70 @@ Metric 的 `toolTrajectory` 配置示例如下：
 
 完整可运行示例参见 [examples/evaluation/claudecode](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claudecode)。
 
+## 远程 Agent 评估
+
+远程 Agent 评估适用于评估平台与待测 Agent 分开部署的场景。运行评估的进程负责读取评估集和指标、调用待测 Agent、执行裁判打分并保存评估结果；远端 Agent 服务只负责根据输入完成一次真实推理。接入时，远端服务接入见 [tRPC-Agent API 服务](../trpcagent.md)，远程 Runner 创建见 [远程 tRPC-Agent Runner](../runner.md#远程-trpc-agent-runner)；评估侧通过 `runner/trpcagent` 将远端服务包装成普通 `runner.Runner`。
+
+完整示例见 [examples/evaluation/trpcagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trpcagent)。该示例提供 Go `server/trpcagent` 参考服务，以及 ADK、LangGraph 两个兼容 tRPC-Agent 协议的服务；评估客户端统一使用 `runner/trpcagent` 调用候选服务。
+
+业务侧先用 `server/trpcagent` 暴露待测 Agent：
+
+```go
+import (
+	"net/http"
+
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	servertrpcagent "trpc.group/trpc-go/trpc-agent-go/server/trpcagent"
+)
+
+agentRunner := runner.NewRunner(appName, candidateAgent)
+defer agentRunner.Close()
+
+server, err := servertrpcagent.New(
+	servertrpcagent.WithAppName(appName),
+	servertrpcagent.WithAgent(candidateAgent),
+	servertrpcagent.WithRunner(agentRunner),
+)
+if err != nil {
+	return err
+}
+if err := http.ListenAndServe(":8081", server.Handler()); err != nil {
+	return err
+}
+```
+
+评估侧创建远程 Runner，并将其作为待测 Runner 传给 `AgentEvaluator`：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	trpcagentrunner "trpc.group/trpc-go/trpc-agent-go/runner/trpcagent"
+)
+
+candidateRunner, err := trpcagentrunner.New(
+	appName,
+	trpcagentrunner.WithTarget(candidateTarget),
+)
+if err != nil {
+	return err
+}
+defer candidateRunner.Close()
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	candidateRunner,
+	evaluation.WithEvalSetManager(evalSetManager),
+	evaluation.WithMetricManager(metricManager),
+	evaluation.WithEvalResultManager(evalResultManager),
+	evaluation.WithRegistry(registry.New()),
+	evaluation.WithJudgeRunner(judgeRunner),
+)
+if err != nil {
+	return err
+}
+```
+
 ## pass@k 与 pass^k
 
 当评估通过 `NumRuns` 对同一评估集重复运行时，可以将每次运行视为一次独立的伯努利试验，并在通过与失败的统计之上给出更贴近能力与稳定性的两个派生指标 `pass@k` 与 `pass^k`。设 `n` 表示采样到的总运行次数，`c` 表示其中通过的次数，`k` 表示关注的尝试次数。

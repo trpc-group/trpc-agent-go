@@ -56,6 +56,7 @@ const (
 // Runner executes AG-UI runs and emits AG-UI events.
 type Runner interface {
 	// Run starts processing one AG-UI run request and returns a channel of AG-UI events.
+	// The receiver owns each event after receiving it from the channel and may mutate it.
 	Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan aguievents.Event, error)
 }
 
@@ -101,6 +102,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		messagesSnapshotFollowEnabled:          opts.MessagesSnapshotFollowEnabled,
 		messagesSnapshotFollowMaxDuration:      opts.MessagesSnapshotFollowMaxDuration,
 		messagesSnapshotRunLifecycleEventsEnabled: opts.MessagesSnapshotRunLifecycleEventsEnabled,
+		messagesSnapshotBestEffortEnabled:         opts.MessagesSnapshotBestEffortEnabled,
 		toolResultInputTranslationEnabled:         opts.ToolResultInputTranslationEnabled,
 		toolCallDeltaStreamingEnabled:             opts.ToolCallDeltaStreamingEnabled,
 		streamingToolResultActivityEnabled:        opts.StreamingToolResultActivityEnabled,
@@ -141,6 +143,7 @@ type runner struct {
 	messagesSnapshotFollowEnabled             bool
 	messagesSnapshotFollowMaxDuration         time.Duration
 	messagesSnapshotRunLifecycleEventsEnabled bool
+	messagesSnapshotBestEffortEnabled         bool
 	toolResultInputTranslationEnabled         bool
 	toolCallDeltaStreamingEnabled             bool
 	streamingToolResultActivityEnabled        bool
@@ -508,12 +511,10 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 					runID,
 					err,
 				)
-			} else {
-				input.startTrackFlush()
 			}
 		}
 	}
-	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
+	if !r.emitStartupEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
 		return
 	}
 	if input.messages.inputMessage.Role == model.RoleTool {
@@ -576,6 +577,9 @@ func (r *runner) runEventLoop(
 			return hookDone, hookRemaining
 		case result := <-agentRun:
 			agentRun = nil
+			if input.startTrackFlush != nil {
+				input.startTrackFlush()
+			}
 			if result.err != nil {
 				if ctx.Err() != nil {
 					r.emitPostRunTerminalEvent(ctx, events, input)
@@ -1130,11 +1134,22 @@ func (r *runner) handleAfterTranslate(ctx context.Context, event aguievents.Even
 
 func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
 	input *runInput) bool {
+	return r.emitEventWithStartupFlush(ctx, events, event, input, false)
+}
+
+func (r *runner) emitStartupEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
+	input *runInput) bool {
+	flushStartup := input.enableTrack && r.flushInterval > 0
+	return r.emitEventWithStartupFlush(ctx, events, event, input, flushStartup)
+}
+
+func (r *runner) emitEventWithStartupFlush(ctx context.Context, events chan<- aguievents.Event,
+	event aguievents.Event, input *runInput, flushStartup bool) bool {
 	if input != nil && input.terminalEmitted {
 		return false
 	}
 	event, ok := r.afterTranslateEvent(ctx, event, input)
-	written := r.writeEvent(ctx, events, event, input)
+	written := r.writeEventWithStartupFlush(ctx, events, event, input, flushStartup)
 	return ok && written
 }
 
@@ -1158,6 +1173,11 @@ func (r *runner) afterTranslateEvent(ctx context.Context, event aguievents.Event
 
 func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
 	input *runInput) bool {
+	return r.writeEventWithStartupFlush(ctx, events, event, input, false)
+}
+
+func (r *runner) writeEventWithStartupFlush(ctx context.Context, events chan<- aguievents.Event,
+	event aguievents.Event, input *runInput, flushStartup bool) bool {
 	if input != nil && input.terminalEmitted {
 		return false
 	}
@@ -1175,6 +1195,17 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 				ctx,
 				"agui emit event: record track event failed: "+
 					"threadID: %s, runID: %s, err: %v",
+				input.threadID,
+				input.runID,
+				err,
+			)
+		}
+	}
+	if flushStartup {
+		if err := r.flushTrack(ctx, input.key); err != nil {
+			log.WarnfContext(
+				ctx,
+				"agui run: threadID: %s, runID: %s, flush startup track events: %v",
 				input.threadID,
 				input.runID,
 				err,
@@ -1343,6 +1374,13 @@ func (r *runner) distributedCancelSnapshot(key session.Key) (bool, context.Cance
 		return entry.distributedCancelStarted, entry.stopDistributedCancel
 	}
 	return false, nil
+}
+
+func (r *runner) isRunning(key session.Key) bool {
+	r.runningMu.Lock()
+	defer r.runningMu.Unlock()
+	_, ok := r.running[key]
+	return ok
 }
 
 func (r *runner) unregister(key session.Key) {

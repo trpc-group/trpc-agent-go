@@ -14,6 +14,7 @@ type Option func(*options)
 
 type options struct {
 	includeRunLifecycleEvents bool
+	bestEffort                bool
 }
 
 // WithRunLifecycleEvents controls whether RUN_* lifecycle events are included in the
@@ -21,5 +22,13 @@ type options struct {
 func WithRunLifecycleEvents(include bool) Option {
 	return func(o *options) {
 		o.includeRunLifecycleEvents = include
+	}
+}
+
+// WithBestEffort controls whether malformed track events are skipped while
+// reducing a message snapshot.
+func WithBestEffort(enabled bool) Option {
+	return func(o *options) {
+		o.bestEffort = enabled
 	}
 }

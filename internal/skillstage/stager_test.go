@@ -505,3 +505,155 @@ func TestSkillStagingHelpers_ReturnExitCodeErrors(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "exit code 1")
 }
+
+// pathPrefixRunner prepends a directory to PATH inside bash -lc scripts
+// so the login shell's profile cannot clobber the test shim.
+type pathPrefixRunner struct {
+	inner  codeexecutor.ProgramRunner
+	prefix string
+}
+
+func (r *pathPrefixRunner) RunProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	if spec.Cmd == "bash" && len(spec.Args) >= 2 && spec.Args[0] == "-lc" {
+		args := append([]string(nil), spec.Args...)
+		args[1] = "export PATH=" + shellQuote(r.prefix) + ":\"$PATH\"; " + args[1]
+		spec.Args = args
+	}
+	return r.inner.RunProgram(ctx, ws, spec)
+}
+
+func chmodDeniedShimDir(t *testing.T) (binDir, marker string) {
+	t.Helper()
+	binDir = t.TempDir()
+	marker = filepath.Join(t.TempDir(), "chmod.called")
+	script := "#!/bin/sh\n" +
+		"echo called >> " + shellQuote(marker) + "\n" +
+		"echo \"chmod: changing permissions of '$2': " +
+		"Operation not permitted\" >&2\n" +
+		"exit 1\n"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(binDir, "chmod"),
+		[]byte(script),
+		0o755,
+	))
+	return binDir, marker
+}
+
+func engineWithChmodDenied(
+	t *testing.T,
+	rt *localexec.Runtime,
+) (codeexecutor.Engine, string) {
+	t.Helper()
+	binDir, marker := chmodDeniedShimDir(t)
+	return codeexecutor.NewEngine(rt, rt, &pathPrefixRunner{
+		inner:  rt,
+		prefix: binDir,
+	}), marker
+}
+
+func writeSkillDir(t *testing.T, root, body string) string {
+	t.Helper()
+	skillRoot := filepath.Join(root, "echoer")
+	require.NoError(t, os.MkdirAll(skillRoot, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillRoot, "SKILL.md"),
+		[]byte(body),
+		0o644,
+	))
+	return skillRoot
+}
+
+func TestRemoveWorkspacePath_ChmodDeniedStillRemoves(t *testing.T) {
+	ctx := context.Background()
+	rt := localexec.NewRuntime("")
+	eng, marker := engineWithChmodDenied(t, rt)
+	ws, err := rt.CreateWorkspace(
+		ctx, "remove-chmod-denied", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Cleanup(ctx, ws)
+	})
+
+	st := New()
+	err = st.StageSkill(
+		ctx, eng, ws, writeSkillDir(t, t.TempDir(), "v1"), "echoer",
+	)
+	require.NoError(t, err)
+
+	dest := filepath.Join(ws.Path, "skills", "echoer")
+	require.DirExists(t, dest)
+
+	err = st.RemoveWorkspacePath(ctx, eng, ws, "skills/echoer")
+	require.NoError(t, err)
+	require.NoDirExists(t, dest)
+	_, statErr := os.Stat(marker)
+	require.NoError(t, statErr, "chmod shim must have been invoked")
+}
+
+func TestRemoveWorkspacePath_RemoveFailureStillReported(t *testing.T) {
+	ctx := context.Background()
+	rt := localexec.NewRuntime("")
+	eng, _ := engineWithChmodDenied(t, rt)
+	ws, err := rt.CreateWorkspace(
+		ctx, "remove-rm-denied", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Cleanup(ctx, ws)
+	})
+
+	dest := filepath.Join(ws.Path, "skills", "echoer")
+	require.NoError(t, os.MkdirAll(dest, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dest, "SKILL.md"),
+		[]byte("body"),
+		0o644,
+	))
+	// Directory write is required to unlink children. The chmod shim
+	// cannot restore u+w, so rm -rf must fail and be reported.
+	require.NoError(t, os.Chmod(dest, 0o555))
+	t.Cleanup(func() {
+		_ = os.Chmod(dest, 0o755)
+	})
+
+	err = New().RemoveWorkspacePath(ctx, eng, ws, "skills/echoer")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "remove workspace path")
+	require.DirExists(t, dest)
+}
+
+func TestStager_StageSkill_RestagesWhenChmodDenied(t *testing.T) {
+	ctx := context.Background()
+	rt := localexec.NewRuntime("")
+	eng, marker := engineWithChmodDenied(t, rt)
+	ws, err := rt.CreateWorkspace(
+		ctx, "restage-chmod-denied", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Cleanup(ctx, ws)
+	})
+
+	st := New()
+	err = st.StageSkill(
+		ctx, eng, ws, writeSkillDir(t, t.TempDir(), "v1"), "echoer",
+	)
+	require.NoError(t, err)
+
+	err = st.StageSkill(
+		ctx, eng, ws, writeSkillDir(t, t.TempDir(), "v2"), "echoer",
+	)
+	require.NoError(t, err)
+
+	files, err := rt.Collect(ctx, ws, []string{"skills/echoer/SKILL.md"})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "v2", files[0].Content)
+	_, statErr := os.Stat(marker)
+	require.NoError(t, statErr, "restage must attempt chmod on the old tree")
+}

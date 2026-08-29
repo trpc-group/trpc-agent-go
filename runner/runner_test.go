@@ -58,6 +58,19 @@ type mockAgent struct {
 	name string
 }
 
+type executionTraceCapturingAgent struct {
+	*mockAgent
+	executionTraceEnabled bool
+}
+
+func (a *executionTraceCapturingAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	a.executionTraceEnabled = invocation.RunOptions.ExecutionTraceEnabled
+	return a.mockAgent.Run(ctx, invocation)
+}
+
 type repositoryOnlyAgent struct {
 	*mockAgent
 }
@@ -83,6 +96,93 @@ func TestRunnerRejectsSkillLoadsForUnsupportedAgent(t *testing.T) {
 	require.Nil(t, events)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, agent.ErrSkillLoadingUnsupported))
+}
+
+func TestRunnerExecutionTraceDefaultAndPerRunOverride(t *testing.T) {
+	tests := []struct {
+		name          string
+		runnerOptions []Option
+		runOptions    []agent.RunOption
+		wantEnabled   bool
+	}{
+		{
+			name:        "default disabled",
+			wantEnabled: false,
+		},
+		{
+			name:          "runner default enabled",
+			runnerOptions: []Option{WithExecutionTraceEnabled(true)},
+			wantEnabled:   true,
+		},
+		{
+			name:          "single run disables runner default",
+			runnerOptions: []Option{WithExecutionTraceEnabled(true)},
+			runOptions:    []agent.RunOption{agent.WithExecutionTraceEnabled(false)},
+			wantEnabled:   false,
+		},
+		{
+			name:          "single run enables disabled runner",
+			runnerOptions: []Option{WithExecutionTraceEnabled(false)},
+			runOptions:    []agent.RunOption{agent.WithExecutionTraceEnabled(true)},
+			wantEnabled:   true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ag := &executionTraceCapturingAgent{
+				mockAgent: &mockAgent{name: "trace-capture"},
+			}
+			r := NewRunner("app", ag, test.runnerOptions...)
+			t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+			events, err := r.Run(
+				context.Background(),
+				"user",
+				"session",
+				model.NewUserMessage("hello"),
+				test.runOptions...,
+			)
+			require.NoError(t, err)
+			var completion *event.Event
+			for evt := range events {
+				if evt != nil && evt.IsRunnerCompletion() {
+					completion = evt
+				}
+			}
+			assert.Equal(t, test.wantEnabled, ag.executionTraceEnabled)
+			require.NotNil(t, completion)
+			if test.wantEnabled {
+				assert.NotNil(t, completion.ExecutionTrace)
+			} else {
+				assert.Nil(t, completion.ExecutionTrace)
+			}
+		})
+	}
+}
+
+func TestRunnerExecutionTraceDefaultAppliesToAgentFactory(t *testing.T) {
+	var got agent.RunOptions
+	r := NewRunnerWithAgentFactory(
+		"app",
+		"factory-agent",
+		func(_ context.Context, runOptions agent.RunOptions) (agent.Agent, error) {
+			got = runOptions
+			return &mockAgent{name: "factory-agent"}, nil
+		},
+		WithExecutionTraceEnabled(true),
+	)
+	t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("hello"),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	assert.True(t, got.ExecutionTraceEnabled)
 }
 
 func TestRunnerRejectsRepositoryProviderWithoutSkillLoadSupport(t *testing.T) {
@@ -4735,6 +4835,21 @@ func (m *failingAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *
 	return nil, errors.New("run failed")
 }
 
+type contextCauseFailingAgent struct{ name string }
+
+func (m *contextCauseFailingAgent) Info() agent.Info         { return agent.Info{Name: m.name} }
+func (m *contextCauseFailingAgent) SubAgents() []agent.Agent { return nil }
+func (m *contextCauseFailingAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+func (m *contextCauseFailingAgent) Tools() []tool.Tool { return nil }
+func (m *contextCauseFailingAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return nil, cause
+	}
+	return nil, errors.New("context is not canceled")
+}
+
 // completionNoticeAgent emits an event that requires completion; it pre-adds
 // a notice channel so Runner can notify it. The test asserts the channel closes.
 type completionNoticeAgent struct {
@@ -5024,6 +5139,105 @@ func TestRunner_Run_AgentRunError(t *testing.T) {
 	require.Equal(t, model.ErrorTypeRunError, errorEvent.Error.Type)
 	require.Equal(t, requestID, errorEvent.RequestID)
 	require.Equal(t, filterKey, errorEvent.FilterKey)
+}
+
+func TestRunner_Run_AgentRunCancellationErrorPersistsCancelledType(t *testing.T) {
+	const requestID = "req-run-cancelled"
+	cancelCauseErr := errors.New("client stopped")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(cancelCauseErr)
+	var hookErrorTypes []string
+	var hookErrorMessages []string
+	sessionService := sessioninmemory.NewSessionService(
+		sessioninmemory.WithAppendEventHook(
+			func(ctx *session.AppendEventContext, next func() error) error {
+				if ctx.Event != nil && ctx.Event.Error != nil {
+					hookErrorTypes = append(hookErrorTypes, ctx.Event.Error.Type)
+					hookErrorMessages = append(hookErrorMessages, ctx.Event.Error.Message)
+				}
+				return next()
+			},
+		),
+	)
+	r := NewRunner(
+		"app",
+		&contextCauseFailingAgent{name: "f"},
+		WithSessionService(sessionService),
+	)
+	ch, err := r.Run(
+		ctx,
+		"u",
+		"s",
+		model.NewUserMessage("m"),
+		agent.WithRequestID(requestID),
+	)
+	require.ErrorIs(t, err, cancelCauseErr)
+	require.Nil(t, ch)
+	require.Equal(t, []string{model.ErrorTypeCancelled}, hookErrorTypes)
+	require.Equal(t, []string{cancelCauseErr.Error()}, hookErrorMessages)
+}
+
+func TestAgentRunErrorType(t *testing.T) {
+	causeErr := errors.New("client stopped")
+	causeCtx, cancelCause := context.WithCancelCause(context.Background())
+	cancelCause(causeErr)
+	wrappedCauseCtx, cancelWrappedCause := context.WithCancelCause(context.Background())
+	wrappedCauseErr := errors.New("wrapped client stopped")
+	cancelWrappedCause(fmt.Errorf("outer: %w", wrappedCauseErr))
+	tests := []struct {
+		name   string
+		ctx    context.Context
+		runErr error
+		want   string
+	}{
+		{
+			name:   "context canceled error",
+			ctx:    context.Background(),
+			runErr: context.Canceled,
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "context deadline exceeded error",
+			ctx:    context.Background(),
+			runErr: fmt.Errorf("model request: %w", context.DeadlineExceeded),
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "matching context cause",
+			ctx:    causeCtx,
+			runErr: fmt.Errorf("run agent: %w", causeErr),
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "wrapped context cause",
+			ctx:    wrappedCauseCtx,
+			runErr: wrappedCauseErr,
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "unrelated error in canceled context",
+			ctx:    causeCtx,
+			runErr: errors.New("run failed"),
+			want:   model.ErrorTypeRunError,
+		},
+		{
+			name:   "plain error",
+			ctx:    context.Background(),
+			runErr: errors.New("run failed"),
+			want:   model.ErrorTypeRunError,
+		},
+		{
+			name:   "nil context",
+			ctx:    nil,
+			runErr: errors.New("run failed"),
+			want:   model.ErrorTypeRunError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, agentRunErrorType(tt.ctx, tt.runErr))
+		})
+	}
 }
 
 func TestRunnerLatencyDiagnosticHelpers(t *testing.T) {
@@ -9574,7 +9788,16 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 
 	agentCh := make(chan *event.Event)
 	flushCh := make(chan *flush.FlushRequest)
-	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil, nil)
+	processed := rr.processAgentEvents(
+		ctx,
+		sess,
+		inv,
+		agentCh,
+		flushCh,
+		nil,
+		nil,
+		nil,
+	)
 	// Send one event, then close agentCh
 	go func() {
 		agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("x")}}}}

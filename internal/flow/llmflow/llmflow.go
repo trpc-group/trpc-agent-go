@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -70,6 +71,13 @@ const (
 	defaultContextCompactionThresholdRatio = 0.7
 	contextCompactionFallbackWindow        = 8192
 	contextCompactionMinTokens             = 2000
+
+	contextCompactionOutcomeSuccess            = "success"
+	contextCompactionOutcomeNoUpdate           = "no_update"
+	contextCompactionOutcomeSummaryError       = "summary_error"
+	contextCompactionOutcomeRebuildUnavailable = "rebuild_unavailable"
+	contextCompactionOutcomePersistenceError   = "persistence_error"
+	contextCompactionOutcomePostCountError     = "post_count_error"
 )
 
 // InvocationHasFilteredUserTools reports whether the cached filtered tool
@@ -1573,8 +1581,31 @@ func (f *Flow) preprocess(
 		finishLatencySpan(stageSpan, stageStarted, nil)
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
-	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(ctx, llmRequest.Messages, llmRequest.Tools)
+	sanitizeRequestMessages(ctx, invocation, llmRequest)
 	return rebuildPlan
+}
+
+func sanitizeRequestMessages(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) {
+	if req == nil {
+		return
+	}
+	before := req.Messages
+	result := toolcall.SanitizeMessagesWithToolsResult(
+		ctx,
+		before,
+		req.Tools,
+	)
+	req.Messages = result.Messages
+	summaryview.RebaseAfterTransform(
+		invocation,
+		before,
+		result.Messages,
+		result.SourceIndexes,
+	)
 }
 
 func normalizeContextCompactionThresholdRatio(ratio float64) float64 {
@@ -1658,6 +1689,7 @@ func (f *Flow) runContextCompaction(
 	rebuildPlan *contextCompactionRebuildPlan,
 	decision contextCompactionDecision,
 ) *model.Request {
+	startedAt := time.Now()
 	decisionRequest := requestWithCallLimitFinalizationMessage(
 		req,
 		rebuildPlan.callLimitFinalizationMessage,
@@ -1687,8 +1719,46 @@ func (f *Flow) runContextCompaction(
 		contextCompactionAttrs(decision, decisionRequest)...,
 	)
 	summaryCtx = summary.ContextWithCacheSafeForkRequest(summaryCtx, req)
-	if view, ok := summaryview.Snapshot(invocation); ok {
+	view, viewPresent := summaryview.Snapshot(invocation)
+	if viewPresent {
 		summaryCtx = summaryview.ContextWithView(summaryCtx, view)
+	}
+	logResult := func(
+		outcome string,
+		result *model.Request,
+		postRequestTokens int,
+	) {
+		var viewBound bool
+		var viewItems int
+		if viewPresent && view != nil {
+			viewBound = view.Bound
+			viewItems = len(view.Items)
+		}
+		format := "Pre-LLM context compaction result: outcome=%s, agent=%s, " +
+			"filter_key=%q, request_tokens=%d, threshold=%d, " +
+			"context_window=%d, messages=%d->%d, post_request_tokens=%d, " +
+			"summary_view_present=%t, summary_view_bound=%t, " +
+			"summary_view_items=%d, duration_ms=%d"
+		args := []any{
+			outcome,
+			invocation.AgentName,
+			filterKey,
+			decision.tokenCount,
+			decision.threshold,
+			decision.contextWindow,
+			len(decisionRequest.Messages),
+			len(result.Messages),
+			postRequestTokens,
+			viewPresent,
+			viewBound,
+			viewItems,
+			time.Since(startedAt).Milliseconds(),
+		}
+		if outcome == contextCompactionOutcomeSuccess {
+			log.InfofContext(ctx, format, args...)
+			return
+		}
+		log.WarnfContext(ctx, format, args...)
 	}
 	err := invocation.SessionService.CreateSessionSummary(
 		summaryCtx,
@@ -1724,14 +1794,11 @@ func (f *Flow) runContextCompaction(
 		},
 	)
 	if !updated {
+		outcome := contextCompactionOutcomeNoUpdate
 		if err != nil {
-			log.DebugfContext(
-				ctx,
-				"Pre-LLM context compaction skipped for agent %s: %v",
-				invocation.AgentName,
-				err,
-			)
+			outcome = contextCompactionOutcomeSummaryError
 		}
+		logResult(outcome, decisionRequest, decision.tokenCount)
 		return req
 	}
 
@@ -1750,10 +1817,10 @@ func (f *Flow) runContextCompaction(
 	}
 	finishLatencySpan(rebuildSpan, rebuildStarted, nil)
 	if rebuilt == nil {
-		log.DebugfContext(
-			ctx,
-			"Pre-LLM context compaction skipped for agent %s: safe rebuild unavailable",
-			invocation.AgentName,
+		logResult(
+			contextCompactionOutcomeRebuildUnavailable,
+			decisionRequest,
+			decision.tokenCount,
 		)
 		return req
 	}
@@ -1768,6 +1835,7 @@ func (f *Flow) runContextCompaction(
 		f.contextCompactionThresholdRatio,
 		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
 	)
+	postRequestTokens := postDecision.tokenCount
 	if postDecision.err == nil {
 		summaryview.Finalize(
 			invocation,
@@ -1781,23 +1849,23 @@ func (f *Flow) runContextCompaction(
 			invocation.AgentName,
 			postDecision.err,
 		)
+		postRequestTokens = -1
 	}
 
 	if err != nil {
-		log.WarnfContext(
-			ctx,
-			"Pre-LLM context compaction rebuilt request for agent %s after in-memory summary update; persistence failed: %v",
-			invocation.AgentName,
-			err,
+		logResult(
+			contextCompactionOutcomePersistenceError,
+			postDecisionRequest,
+			postRequestTokens,
 		)
 		return rebuilt
 	}
 
-	log.DebugfContext(
-		ctx,
-		"Pre-LLM context compaction rebuilt request for agent %s",
-		invocation.AgentName,
-	)
+	outcome := contextCompactionOutcomeSuccess
+	if postDecision.err != nil {
+		outcome = contextCompactionOutcomePostCountError
+	}
+	logResult(outcome, postDecisionRequest, postRequestTokens)
 	return rebuilt
 }
 
@@ -1826,11 +1894,7 @@ func (f *Flow) rebuildRequestForContextCompaction(
 			rebuilt,
 		)
 	}
-	rebuilt.Messages = toolcall.SanitizeMessagesWithTools(
-		ctx,
-		rebuilt.Messages,
-		rebuilt.Tools,
-	)
+	sanitizeRequestMessages(ctx, invocation, rebuilt)
 	return rebuilt
 }
 
@@ -2095,8 +2159,11 @@ func syncCompactContextDecision(
 		return decision
 	}
 
-	decision.threshold = contextCompactionThreshold(inv, ratio)
 	decision.contextWindow = contextCompactionWindow(inv)
+	decision.threshold, decision.thresholdBasis = contextCompactionThresholdForWindow(
+		decision.contextWindow,
+		ratio,
+	)
 	if counter == nil {
 		counter = model.NewSimpleTokenCounter()
 	}
@@ -2133,14 +2200,25 @@ func contextCompactionWindow(inv *agent.Invocation) int {
 
 func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
 	contextWindow := contextCompactionWindow(inv)
+	threshold, _ := contextCompactionThresholdForWindow(contextWindow, ratio)
+	return threshold
+}
+
+func contextCompactionThresholdForWindow(
+	contextWindow int,
+	ratio float64,
+) (int, string) {
 	threshold := int(float64(contextWindow) * normalizeContextCompactionThresholdRatio(ratio))
+	basis := contextCompactionThresholdBasisContextWindow
 	if threshold < contextCompactionMinTokens {
 		threshold = contextCompactionMinTokens
+		basis = contextCompactionThresholdBasisMinimumTokens
 	}
 	if threshold > contextWindow {
 		threshold = contextWindow
+		basis = contextCompactionThresholdBasisContextWindow
 	}
-	return threshold
+	return threshold, basis
 }
 
 // getFilteredTools returns the list of tools for this invocation after applying the filter.
@@ -2396,13 +2474,19 @@ func (f *Flow) callLLM(
 		latencyRequestAttrs(llmRequest)...,
 	)
 	var err error
-	defer func() {
+	finishSpanOnReturn := true
+	finishCallSpan := func(finishErr error) {
 		if started && callModel != nil {
 			span.SetAttributes(
 				attribute.String("llmflow.model", callModel.Info().Name),
 			)
 		}
-		finishLatencySpan(span, started, err)
+		finishLatencySpan(span, started, finishErr)
+	}
+	defer func() {
+		if finishSpanOnReturn {
+			finishCallSpan(err)
+		}
 	}()
 	if callModel == nil {
 		err = errors.New("no model available for LLM call")
@@ -2473,11 +2557,65 @@ func (f *Flow) callLLM(
 			finalizationMessage,
 		),
 	)
+	ctx, tailoringObserver := imodelrequest.ObserveTokenTailoring(
+		ctx,
+		func(record imodelrequest.TokenTailoringRecord) {
+			summaryview.InvalidateBinding(invocation)
+			summaryfork.Invalidate(invocation)
+			if tokenTailoringCollapsedHistory(record) {
+				log.WarnfContext(
+					ctx,
+					"Model request token tailoring collapsed history: "+
+						"provider=%s, max_input_tokens=%d, messages=%d->%d",
+					record.Provider,
+					record.MaxInputTokens,
+					record.BeforeMessages,
+					record.AfterMessages,
+				)
+				return
+			}
+			log.DebugfContext(
+				ctx,
+				"Model request token tailoring applied: provider=%s, "+
+					"max_input_tokens=%d, messages=%d->%d",
+				record.Provider,
+				record.MaxInputTokens,
+				record.BeforeMessages,
+				record.AfterMessages,
+			)
+		},
+	)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
 		return ctx, nil, true, err
 	}
+	if started {
+		finishSpanOnReturn = false
+		seq = withResponseSeqFinalizer(seq, func() {
+			span.SetAttributes(
+				tokenTailoringAttrs(tailoringObserver.Snapshot())...,
+			)
+			finishCallSpan(nil)
+		})
+	}
 	return ctx, seq, true, nil
+}
+
+func tokenTailoringCollapsedHistory(
+	record imodelrequest.TokenTailoringRecord,
+) bool {
+	return record.BeforeMessages > 2 && record.AfterMessages <= 2
+}
+
+func withResponseSeqFinalizer(
+	seq model.Seq[*model.Response],
+	finalize func(),
+) model.Seq[*model.Response] {
+	var once sync.Once
+	return func(yield func(*model.Response) bool) {
+		defer once.Do(finalize)
+		seq(yield)
+	}
 }
 
 type callLimitFinalizationMessage struct {

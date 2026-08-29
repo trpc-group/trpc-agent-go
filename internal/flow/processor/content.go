@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
@@ -228,7 +229,9 @@ type ContentRequestProcessor struct {
 	SummaryFormatter func(summary string) string
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
-	EventMessageProjector EventMessageProjector
+	EventMessageProjector           EventMessageProjector
+	syntheticErrorUserMergeObserver func(*agent.Invocation, event.Event, model.Message)
+	includeSyntheticErrorMessages   bool
 	// ContextCompactionConfig controls request-side historical tool-result
 	// compaction before messages are sent to the model.
 	ContextCompactionConfig ContextCompactionConfig
@@ -480,6 +483,28 @@ func WithEventMessageProjector(
 ) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.EventMessageProjector = projector
+	}
+}
+
+// WithSyntheticErrorUserMergeObserver sets an internal observer called when
+// omission of synthetic error content merges a user message into the preceding
+// user message.
+func WithSyntheticErrorUserMergeObserver(
+	observer func(*agent.Invocation, event.Event, model.Message),
+) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.syntheticErrorUserMergeObserver = observer
+	}
+}
+
+// WithIncludeSyntheticErrorMessages controls whether presentation content
+// synthesized for error events is included in model requests. False is the
+// default: synthesized error content is omitted, and adjacent user messages
+// exposed by the omission may be merged. True includes the synthesized content
+// and preserves the previous model-context behavior.
+func WithIncludeSyntheticErrorMessages(include bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.includeSyntheticErrorMessages = include
 	}
 }
 
@@ -1375,6 +1400,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 		events = p.insertInvocationMessage(events, inv)
 	}
 
+	assistantToolCallPairs := nonTerminalAssistantToolCallPairs(inv, events)
 	resultEvents := p.applyToolTranscriptMode(events, inv)
 	resultEvents = p.rearrangeLatestFuncResp(resultEvents)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
@@ -1405,6 +1431,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 		inv,
 		filter,
 		eventCutoff,
+		assistantToolCallPairs,
 	)
 
 	history = p.mergeProjectedUserMessages(history)
@@ -1545,6 +1572,7 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 	inv *agent.Invocation,
 	filter string,
 	cutoff eventHistoryCutoff,
+	assistantToolCallPairs map[string]string,
 ) projectedHistory {
 	// Decide whether a turn needs its covered user anchor only after projection.
 	// A projector may remove or rewrite the retained assistant or tool message.
@@ -1569,31 +1597,57 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 	}
 
 	var history projectedHistory
-	appendEvent := func(evt event.Event, boundary summaryview.Boundary) {
-		for _, msg := range p.projectMessagesForEvent(
-			inv,
-			evt,
-			currentRequestID,
-			toolCallRequestIDs,
-		) {
-			effective := effectiveEventForMessage(evt, msg)
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effective,
-				Boundary:       boundary,
-			})
-		}
-	}
-	seenTurns := make(map[historyTurnKey]struct{})
-	for _, evt := range retained {
+	appendEvent := func(
+		evt event.Event,
+		boundary summaryview.Boundary,
+		mergeFirstUser bool,
+	) {
 		projected := p.projectMessagesForEvent(
 			inv,
 			evt,
 			currentRequestID,
 			toolCallRequestIDs,
 		)
+		mergedUser, merged := appendProjectedHistory(
+			&history,
+			evt,
+			boundary,
+			projected,
+			mergeFirstUser,
+		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
+	}
+	projectedByEvent := make([][]model.Message, len(retained))
+	for i, evt := range retained {
+		projectedByEvent[i] = p.projectMessagesForEvent(
+			inv,
+			evt,
+			currentRequestID,
+			toolCallRequestIDs,
+		)
+	}
+
+	seenTurns := make(map[historyTurnKey]struct{})
+	mergeNextUser := false
+	for i := 0; i < len(retained); i++ {
+		evt := retained[i]
+		projected := projectedByEvent[i]
+		pairedEventID, paired := assistantToolCallPairs[evt.ID]
+		if i+1 < len(retained) && paired &&
+			pairedEventID == retained[i+1].ID {
+			if merged, ok := mergeProjectedAssistantToolCallMessages(
+				projected,
+				projectedByEvent[i+1],
+			); ok {
+				evt = retained[i+1]
+				projected = []model.Message{merged}
+				i++
+			}
+		}
 		if len(projected) == 0 {
+			if p.omitsSyntheticErrorEvent(&evt) {
+				mergeNextUser = true
+			}
 			continue
 		}
 		key, hasKey := historyTurnKeyForEvent(evt)
@@ -1605,21 +1659,99 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 			}
 			if userEvt, ok := coveredUsers[key]; ok &&
 				(role == model.RoleAssistant || role == model.RoleTool) {
-				appendEvent(userEvt, summaryview.Boundary{})
+				appendEvent(
+					userEvt,
+					summaryview.Boundary{},
+					mergeNextUser,
+				)
+				mergeNextUser = false
 			}
 		}
 		boundary := eligibleBoundaries[evt.ID]
-		for _, msg := range projected {
-			effective := effectiveEventForMessage(evt, msg)
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effective,
-				Boundary:       boundary,
-			})
-		}
+		mergedUser, merged := appendProjectedHistory(
+			&history,
+			evt,
+			boundary,
+			projected,
+			mergeNextUser,
+		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
+		mergeNextUser = false
 	}
 	return history
+}
+
+func appendProjectedHistory(
+	history *projectedHistory,
+	evt event.Event,
+	boundary summaryview.Boundary,
+	messages []model.Message,
+	mergeFirstUser bool,
+) (model.Message, bool) {
+	var mergedCurrentUser model.Message
+	var merged bool
+	for i, msg := range messages {
+		if i == 0 && mergeFirstUser &&
+			mergeLastProjectedUser(history, msg, boundary) {
+			mergedCurrentUser = msg
+			merged = true
+			continue
+		}
+		history.messages = append(history.messages, msg)
+		history.items = append(history.items, summaryview.Item{
+			Message:        msg,
+			EffectiveEvent: effectiveEventForMessage(evt, msg),
+			Boundary:       boundary,
+		})
+	}
+	return mergedCurrentUser, merged
+}
+
+func (p *ContentRequestProcessor) observeSyntheticErrorUserMerge(
+	inv *agent.Invocation,
+	evt event.Event,
+	msg model.Message,
+	merged bool,
+) {
+	if !merged || p == nil || p.syntheticErrorUserMergeObserver == nil {
+		return
+	}
+	p.syntheticErrorUserMergeObserver(inv, evt, msg)
+}
+
+func mergeLastProjectedUser(
+	history *projectedHistory,
+	next model.Message,
+	boundary summaryview.Boundary,
+) bool {
+	if history == nil || len(history.messages) == 0 ||
+		len(history.messages) != len(history.items) ||
+		next.Role != model.RoleUser {
+		return false
+	}
+	lastIndex := len(history.messages) - 1
+	if history.messages[lastIndex].Role != model.RoleUser {
+		return false
+	}
+	last := &history.messages[lastIndex]
+	if next.Content != "" {
+		if last.Content == "" {
+			last.Content = next.Content
+		} else {
+			last.Content += mergedUserSeparator + next.Content
+		}
+	}
+	last.ContentParts = append(last.ContentParts, next.ContentParts...)
+	item := &history.items[lastIndex]
+	item.Message = *last
+	item.EffectiveEvent = effectiveEventForMessage(
+		item.EffectiveEvent,
+		*last,
+	)
+	if !boundary.IsZero() {
+		item.Boundary = boundary
+	}
+	return true
 }
 
 func effectiveEventForMessage(
@@ -2385,25 +2517,52 @@ func (p *ContentRequestProcessor) getCurrentInvocationHistory(
 		events = p.insertInvocationMessage(events, inv)
 	}
 
+	assistantToolCallPairs := nonTerminalAssistantToolCallPairs(inv, events)
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 	currentRequestID := inv.RunOptions.RequestID
 	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
-	var history projectedHistory
-	for _, evt := range resultEvents {
-		for _, msg := range p.projectMessagesForEvent(
+	projectedByEvent := make([][]model.Message, len(resultEvents))
+	for i, evt := range resultEvents {
+		projectedByEvent[i] = p.projectMessagesForEvent(
 			inv,
 			evt,
 			currentRequestID,
 			toolCallRequestIDs,
-		) {
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effectiveEventForMessage(evt, msg),
-				Boundary:       persistedBoundaries[evt.ID],
-			})
+		)
+	}
+	var history projectedHistory
+	mergeNextUser := false
+	for i := 0; i < len(resultEvents); i++ {
+		evt := resultEvents[i]
+		projected := projectedByEvent[i]
+		pairedEventID, paired := assistantToolCallPairs[evt.ID]
+		if i+1 < len(resultEvents) && paired &&
+			pairedEventID == resultEvents[i+1].ID {
+			if merged, ok := mergeProjectedAssistantToolCallMessages(
+				projected,
+				projectedByEvent[i+1],
+			); ok {
+				evt = resultEvents[i+1]
+				projected = []model.Message{merged}
+				i++
+			}
 		}
+		if len(projected) == 0 {
+			if p.omitsSyntheticErrorEvent(&evt) {
+				mergeNextUser = true
+			}
+			continue
+		}
+		mergedUser, merged := appendProjectedHistory(
+			&history,
+			evt,
+			persistedBoundaries[evt.ID],
+			projected,
+			mergeNextUser,
+		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
+		mergeNextUser = false
 	}
 	history = p.mergeProjectedUserMessages(history)
 	if len(history.items) != len(history.messages) {
@@ -2483,12 +2642,139 @@ func containsInvocationMessage(
 	return false
 }
 
+// nonTerminalAssistantToolCallPairs records adjacent raw events that may form
+// one assistant model turn. Session events remain unchanged; the pair is only
+// normalized after both events have passed through message projection.
+func nonTerminalAssistantToolCallPairs(
+	inv *agent.Invocation,
+	events []event.Event,
+) map[string]string {
+	pairs := make(map[string]string)
+	for i := 0; i+1 < len(events); i++ {
+		textEvent := events[i]
+		toolCallEvent := events[i+1]
+		if !sameAssistantTurnIdentity(textEvent, toolCallEvent) ||
+			!sameAssistantTurnContext(textEvent, toolCallEvent) ||
+			!mergeableAssistantEventShape(textEvent, toolCallEvent) ||
+			!sameAssistantEventOrigin(inv, textEvent, toolCallEvent) {
+			continue
+		}
+		if _, ok := mergeProjectedAssistantToolCallMessages(
+			[]model.Message{textEvent.Choices[0].Message},
+			[]model.Message{toolCallEvent.Choices[0].Message},
+		); !ok {
+			continue
+		}
+		pairs[textEvent.ID] = toolCallEvent.ID
+	}
+	return pairs
+}
+
+func sameAssistantTurnIdentity(textEvent, toolCallEvent event.Event) bool {
+	return textEvent.ID != "" && toolCallEvent.ID != "" &&
+		textEvent.Response != nil && toolCallEvent.Response != nil &&
+		textEvent.Response.ID != "" && toolCallEvent.Response.ID != "" &&
+		textEvent.RequestID != "" &&
+		textEvent.RequestID == toolCallEvent.RequestID &&
+		textEvent.InvocationID != "" &&
+		textEvent.InvocationID == toolCallEvent.InvocationID
+}
+
+func sameAssistantTurnContext(textEvent, toolCallEvent event.Event) bool {
+	if textEvent.ParentInvocationID != toolCallEvent.ParentInvocationID ||
+		textEvent.Author != toolCallEvent.Author ||
+		textEvent.Branch != toolCallEvent.Branch ||
+		textEvent.FilterKey != toolCallEvent.FilterKey {
+		return false
+	}
+	if (textEvent.ParentMetadata == nil) !=
+		(toolCallEvent.ParentMetadata == nil) {
+		return false
+	}
+	return textEvent.ParentMetadata == nil ||
+		*textEvent.ParentMetadata == *toolCallEvent.ParentMetadata
+}
+
+func mergeableAssistantEventShape(textEvent, toolCallEvent event.Event) bool {
+	return textEvent.Error == nil && toolCallEvent.Error == nil &&
+		!textEvent.IsPartial && !toolCallEvent.IsPartial &&
+		!textEvent.Done && !toolCallEvent.Done &&
+		len(textEvent.Choices) == 1 && len(toolCallEvent.Choices) == 1 &&
+		mergeableAssistantObject(textEvent.Object) &&
+		mergeableAssistantObject(toolCallEvent.Object)
+}
+
+func mergeableAssistantObject(object string) bool {
+	return object == "" || object == model.ObjectTypeChatCompletion
+}
+
+func sameAssistantEventOrigin(
+	inv *agent.Invocation,
+	textEvent event.Event,
+	toolCallEvent event.Event,
+) bool {
+	return messageorigin.IsSeedHistory(inv, textEvent.ID) ==
+		messageorigin.IsSeedHistory(inv, toolCallEvent.ID) &&
+		messageorigin.IsCurrentTurn(inv, textEvent.ID) ==
+			messageorigin.IsCurrentTurn(inv, toolCallEvent.ID)
+}
+
+// mergeProjectedAssistantToolCallMessages combines one assistant text event
+// with its following assistant tool-call event for model-facing history. Any
+// text on the tool-call event is appended verbatim because event content owns
+// its whitespace; the processor must not invent a separator. Rich fields that
+// cannot be combined without changing provider semantics cause rejection.
+func mergeProjectedAssistantToolCallMessages(
+	textMessages []model.Message,
+	toolCallMessages []model.Message,
+) (model.Message, bool) {
+	if len(textMessages) != 1 || len(toolCallMessages) != 1 {
+		return model.Message{}, false
+	}
+	text := textMessages[0]
+	toolCall := toolCallMessages[0]
+	if !mergeableAssistantTextMessage(text) ||
+		!mergeableAssistantToolCallMessage(toolCall) ||
+		!mergeableAssistantToolCalls(toolCall.ToolCalls) {
+		return model.Message{}, false
+	}
+	combined := toolCall
+	combined.Content = text.Content + toolCall.Content
+	return combined, true
+}
+
+func mergeableAssistantTextMessage(message model.Message) bool {
+	return message.Role == model.RoleAssistant && message.Content != "" &&
+		len(message.ContentParts) == 0 && message.ToolID == "" &&
+		message.ToolName == "" && len(message.ToolCalls) == 0 &&
+		message.ReasoningContent == "" && message.ReasoningSignature == ""
+}
+
+func mergeableAssistantToolCallMessage(message model.Message) bool {
+	return message.Role == model.RoleAssistant && len(message.ToolCalls) > 0 &&
+		len(message.ContentParts) == 0 && message.ToolID == "" &&
+		message.ToolName == "" && message.ReasoningContent == "" &&
+		message.ReasoningSignature == ""
+}
+
+func mergeableAssistantToolCalls(toolCalls []model.ToolCall) bool {
+	for _, call := range toolCalls {
+		if call.Index != nil || len(call.ExtraFields) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *ContentRequestProcessor) projectMessagesForEvent(
 	inv *agent.Invocation,
 	evt event.Event,
 	currentRequestID string,
 	toolCallRequestIDs map[string]struct{},
 ) []model.Message {
+	if p.omitsSyntheticErrorEvent(&evt) {
+		return nil
+	}
 	ev := evt
 	if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
 		ev = p.convertForeignEvent(&ev)
@@ -2513,6 +2799,13 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 		messages = append(messages, msg)
 	}
 	return messages
+}
+
+func (p *ContentRequestProcessor) omitsSyntheticErrorEvent(
+	evt *event.Event,
+) bool {
+	return p != nil && !p.includeSyntheticErrorMessages &&
+		errorcontent.IsSynthetic(evt)
 }
 
 func requestIDsWithToolCalls(events []event.Event) map[string]struct{} {

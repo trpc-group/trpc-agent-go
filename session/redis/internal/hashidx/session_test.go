@@ -741,7 +741,226 @@ func TestClient_GetSession_WithEventLimit(t *testing.T) {
 	sess, err := c.GetSession(ctx, key, 2, time.Time{})
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	assert.Len(t, sess.Events, 2)
+	require.Len(t, sess.Events, 2)
+	assert.Equal(t, "e3", sess.Events[0].ID)
+	assert.Equal(t, "e4", sess.Events[1].ID)
+}
+
+func TestClient_GetSession_EventLimitPreservesUserAnchor(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "anchor1"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	baseTime := time.Now()
+	require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent("e0", baseTime)))
+	for i := 1; i < 4; i++ {
+		evt := makeTestEvent(fmt.Sprintf("e%d", i), baseTime.Add(time.Duration(i)*time.Second))
+		evt.Response.Choices[0].Message.Role = model.RoleAssistant
+		require.NoError(t, c.AppendEvent(ctx, key, evt))
+	}
+
+	sess, err := c.GetSession(ctx, key, 2, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 3)
+	assert.Equal(t, []string{"e0", "e2", "e3"}, []string{
+		sess.Events[0].ID, sess.Events[1].ID, sess.Events[2].ID,
+	})
+}
+
+func TestClient_GetSession_AfterTimeAndLimitPreserveUserAnchor(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "anchor-after"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	baseTime := time.Now()
+	require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent("e0", baseTime)))
+	for i := 1; i < 3; i++ {
+		evt := makeTestEvent(fmt.Sprintf("e%d", i), baseTime.Add(time.Duration(i)*time.Second))
+		evt.Response.Choices[0].Message.Role = model.RoleAssistant
+		require.NoError(t, c.AppendEvent(ctx, key, evt))
+	}
+
+	sess, err := c.GetSession(ctx, key, 2, baseTime.Add(time.Second))
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 3)
+	assert.Equal(t, []string{"e0", "e1", "e2"}, []string{
+		sess.Events[0].ID, sess.Events[1].ID, sess.Events[2].ID,
+	})
+}
+
+func TestClient_GetSession_EventLimitUsesIndexOrderForEqualTimestamps(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "same-time"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	timestamp := time.Now()
+	for _, id := range []string{"c", "a", "b"} {
+		require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent(id, timestamp)))
+	}
+
+	sess, err := c.GetSession(ctx, key, 2, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+	assert.Equal(t, []string{"b", "c"}, []string{sess.Events[0].ID, sess.Events[1].ID})
+}
+
+func TestClient_GetSession_EventLimitBackfillsMissingPayload(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "missing-payload"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	baseTime := time.Now()
+	require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent("e0", baseTime)))
+	require.NoError(t, rdb.ZAdd(ctx, c.keys.EventTimeIndexKey(key), redis.Z{
+		Score:  float64(baseTime.Add(time.Second).UnixNano()),
+		Member: "orphan",
+	}).Err())
+	require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent("e2", baseTime.Add(2*time.Second))))
+
+	sess, err := c.GetSession(ctx, key, 2, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+	assert.Equal(t, []string{"e0", "e2"}, []string{sess.Events[0].ID, sess.Events[1].ID})
+}
+
+func TestClient_GetSession_EventLimitWithoutUserAnchor(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "no-user-anchor"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	baseTime := time.Now()
+	for i := 0; i < 3; i++ {
+		evt := makeTestEvent(fmt.Sprintf("e%d", i), baseTime.Add(time.Duration(i)*time.Second))
+		evt.Response.Choices[0].Message.Role = model.RoleAssistant
+		require.NoError(t, c.AppendEvent(ctx, key, evt))
+	}
+
+	sess, err := c.GetSession(ctx, key, 2, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Empty(t, sess.Events)
+}
+
+func TestClient_GetSession_EventLimitSkipsCorruptedAnchorPayload(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "bad-anchor"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	baseTime := time.Now()
+	require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent("e0", baseTime)))
+	require.NoError(t, rdb.HSet(ctx, c.keys.EventDataKey(key), "bad", "not-json").Err())
+	require.NoError(t, rdb.ZAdd(ctx, c.keys.EventTimeIndexKey(key), redis.Z{
+		Score:  float64(baseTime.Add(time.Second).UnixNano()),
+		Member: "bad",
+	}).Err())
+	for i := 2; i < 4; i++ {
+		evt := makeTestEvent(fmt.Sprintf("e%d", i), baseTime.Add(time.Duration(i)*time.Second))
+		evt.Response.Choices[0].Message.Role = model.RoleAssistant
+		require.NoError(t, c.AppendEvent(ctx, key, evt))
+	}
+
+	sess, err := c.GetSession(ctx, key, 2, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 3)
+	assert.Equal(t, []string{"e0", "e2", "e3"}, []string{
+		sess.Events[0].ID, sess.Events[1].ID, sess.Events[2].ID,
+	})
+}
+
+func TestClient_GetSession_AfterTimeBackfillsScoreCandidate(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "after-time-backfill"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	baseTime := time.Unix(1_700_000_000, 0)
+	afterTime := baseTime.Add(time.Second)
+	valid := makeTestEvent("valid", afterTime)
+	stale := makeTestEvent("stale", baseTime)
+	validJSON, err := json.Marshal(valid)
+	require.NoError(t, err)
+	staleJSON, err := json.Marshal(stale)
+	require.NoError(t, err)
+	require.NoError(t, rdb.HSet(ctx, c.keys.EventDataKey(key),
+		valid.ID, validJSON, stale.ID, staleJSON).Err())
+	require.NoError(t, rdb.ZAdd(ctx, c.keys.EventTimeIndexKey(key),
+		redis.Z{Score: float64(afterTime.UnixNano()), Member: valid.ID},
+		redis.Z{Score: float64(afterTime.Add(time.Second).UnixNano()), Member: stale.ID},
+	).Err())
+
+	sess, err := c.GetSession(ctx, key, 1, afterTime)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 1)
+	assert.Equal(t, valid.ID, sess.Events[0].ID)
+}
+
+func TestClient_GetSession_EventLimitBeyondLuaStackLimit(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "large-history"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	const eventCount = 8200
+	baseTime := time.Unix(1_700_000_000, 0)
+	pipe := rdb.Pipeline()
+	for i := 0; i < eventCount; i++ {
+		id := fmt.Sprintf("e%05d", i)
+		evtJSON, err := json.Marshal(makeTestEvent(id, baseTime.Add(time.Duration(i)*time.Second)))
+		require.NoError(t, err)
+		pipe.HSet(ctx, c.keys.EventDataKey(key), id, evtJSON)
+		pipe.ZAdd(ctx, c.keys.EventTimeIndexKey(key), redis.Z{
+			Score:  float64(baseTime.Add(time.Duration(i) * time.Second).UnixNano()),
+			Member: id,
+		})
+	}
+	_, err = pipe.Exec(ctx)
+	require.NoError(t, err)
+
+	sess, err := c.GetSession(ctx, key, 200, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 200)
+	assert.Equal(t, "e08000", sess.Events[0].ID)
+	assert.Equal(t, "e08199", sess.Events[199].ID)
+
+	sess, err = c.GetSession(ctx, key, eventCount, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, eventCount)
+	assert.Equal(t, "e00000", sess.Events[0].ID)
+	assert.Equal(t, "e08199", sess.Events[eventCount-1].ID)
 }
 
 func TestClient_GetSession_WithAfterTime(t *testing.T) {
@@ -824,6 +1043,33 @@ func TestClient_ListSessions_WithEventsAndAppState(t *testing.T) {
 	}
 }
 
+func TestClient_ListSessions_WithEventLimit(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app", UserID: "u1"}
+	key := session.Key{AppName: userKey.AppName, UserID: userKey.UserID, SessionID: "list-limit"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	baseTime := time.Now()
+	for i := 0; i < 5; i++ {
+		require.NoError(t, c.AppendEvent(
+			ctx,
+			key,
+			makeTestEvent(fmt.Sprintf("e%d", i), baseTime.Add(time.Duration(i)*time.Second)),
+		))
+	}
+
+	sessions, err := c.ListSessions(ctx, userKey, 2, time.Time{}, false)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.Len(t, sessions[0].Events, 2)
+	assert.Equal(t, []string{"e3", "e4"}, []string{
+		sessions[0].Events[0].ID, sessions[0].Events[1].ID,
+	})
+}
+
 func TestClient_loadAndAttachTrackEvents_NilSession(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())
@@ -865,25 +1111,6 @@ func TestClient_loadAndMergeAppState_NilSession(t *testing.T) {
 
 	// Should not panic
 	c.loadAndMergeAppState(ctx, key, nil)
-}
-
-func Test_parseEvents_EmptyObject(t *testing.T) {
-	// Lua cjson encodes empty arrays as {} (JSON object)
-	r := &sessionDataResult{Events: json.RawMessage(`{}`)}
-	result := r.parseEvents()
-	assert.Nil(t, result)
-}
-
-func Test_parseEvents_EmptyInput(t *testing.T) {
-	r := &sessionDataResult{Events: nil}
-	result := r.parseEvents()
-	assert.Nil(t, result)
-}
-
-func Test_parseEvents_ValidArray(t *testing.T) {
-	r := &sessionDataResult{Events: json.RawMessage(`["a","b"]`)}
-	result := r.parseEvents()
-	assert.Equal(t, []string{"a", "b"}, result)
 }
 
 func TestClient_DeleteEvent_Error(t *testing.T) {
@@ -985,6 +1212,30 @@ func TestLoadSessionComplete_LuaError(t *testing.T) {
 	_, err = c.loadSessionComplete(ctx, key, metaJSON, 0, time.Time{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "load session data")
+}
+
+func TestLoadSessionDataViaLua_RedisError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "state-lua-err"}
+
+	mr.Close()
+
+	_, err := c.loadSessionDataViaLua(ctx, key)
+	require.Error(t, err)
+}
+
+func TestLoadLatestUserEvent_RedisError(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "anchor-lua-err"}
+
+	mr.Close()
+
+	_, _, err := c.loadLatestUserEvent(ctx, key)
+	require.Error(t, err)
 }
 
 func TestGetSession_WithUserState(t *testing.T) {

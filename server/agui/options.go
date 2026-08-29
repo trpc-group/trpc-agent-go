@@ -165,7 +165,8 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
-// WithFlushInterval sets how often buffered AG-UI events are flushed for a session.
+// WithFlushInterval configures startup and periodic history flushes. A positive duration enables both;
+// zero disables both and leaves buffered history for finalization.
 func WithFlushInterval(d time.Duration) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithFlushInterval(d))
@@ -258,8 +259,9 @@ func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	}
 }
 
-// WithConcurrentMessageStreamsEnabled controls whether multiple text and reasoning
-// message streams with different message IDs may stay open concurrently.
+// WithConcurrentMessageStreamsEnabled controls whether text and reasoning
+// message streams are scoped by message ID. It is enabled by default; pass false
+// to preserve the previous legacy serial message-stream boundaries.
 func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithConcurrentMessageStreamsEnabled(enabled))
@@ -299,6 +301,14 @@ func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
 func WithMessagesSnapshotRunLifecycleEventsEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotRunLifecycleEventsEnabled(enabled))
+	}
+}
+
+// WithMessagesSnapshotBestEffortEnabled controls whether malformed history
+// track events are skipped while building MESSAGES_SNAPSHOT.
+func WithMessagesSnapshotBestEffortEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotBestEffortEnabled(enabled))
 	}
 }
 
