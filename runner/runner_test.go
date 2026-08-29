@@ -58,6 +58,19 @@ type mockAgent struct {
 	name string
 }
 
+type executionTraceCapturingAgent struct {
+	*mockAgent
+	executionTraceEnabled bool
+}
+
+func (a *executionTraceCapturingAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	a.executionTraceEnabled = invocation.RunOptions.ExecutionTraceEnabled
+	return a.mockAgent.Run(ctx, invocation)
+}
+
 type repositoryOnlyAgent struct {
 	*mockAgent
 }
@@ -83,6 +96,93 @@ func TestRunnerRejectsSkillLoadsForUnsupportedAgent(t *testing.T) {
 	require.Nil(t, events)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, agent.ErrSkillLoadingUnsupported))
+}
+
+func TestRunnerExecutionTraceDefaultAndPerRunOverride(t *testing.T) {
+	tests := []struct {
+		name          string
+		runnerOptions []Option
+		runOptions    []agent.RunOption
+		wantEnabled   bool
+	}{
+		{
+			name:        "default disabled",
+			wantEnabled: false,
+		},
+		{
+			name:          "runner default enabled",
+			runnerOptions: []Option{WithExecutionTraceEnabled(true)},
+			wantEnabled:   true,
+		},
+		{
+			name:          "single run disables runner default",
+			runnerOptions: []Option{WithExecutionTraceEnabled(true)},
+			runOptions:    []agent.RunOption{agent.WithExecutionTraceEnabled(false)},
+			wantEnabled:   false,
+		},
+		{
+			name:          "single run enables disabled runner",
+			runnerOptions: []Option{WithExecutionTraceEnabled(false)},
+			runOptions:    []agent.RunOption{agent.WithExecutionTraceEnabled(true)},
+			wantEnabled:   true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ag := &executionTraceCapturingAgent{
+				mockAgent: &mockAgent{name: "trace-capture"},
+			}
+			r := NewRunner("app", ag, test.runnerOptions...)
+			t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+			events, err := r.Run(
+				context.Background(),
+				"user",
+				"session",
+				model.NewUserMessage("hello"),
+				test.runOptions...,
+			)
+			require.NoError(t, err)
+			var completion *event.Event
+			for evt := range events {
+				if evt != nil && evt.IsRunnerCompletion() {
+					completion = evt
+				}
+			}
+			assert.Equal(t, test.wantEnabled, ag.executionTraceEnabled)
+			require.NotNil(t, completion)
+			if test.wantEnabled {
+				assert.NotNil(t, completion.ExecutionTrace)
+			} else {
+				assert.Nil(t, completion.ExecutionTrace)
+			}
+		})
+	}
+}
+
+func TestRunnerExecutionTraceDefaultAppliesToAgentFactory(t *testing.T) {
+	var got agent.RunOptions
+	r := NewRunnerWithAgentFactory(
+		"app",
+		"factory-agent",
+		func(_ context.Context, runOptions agent.RunOptions) (agent.Agent, error) {
+			got = runOptions
+			return &mockAgent{name: "factory-agent"}, nil
+		},
+		WithExecutionTraceEnabled(true),
+	)
+	t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("hello"),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	assert.True(t, got.ExecutionTraceEnabled)
 }
 
 func TestRunnerRejectsRepositoryProviderWithoutSkillLoadSupport(t *testing.T) {
@@ -9688,7 +9788,16 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 
 	agentCh := make(chan *event.Event)
 	flushCh := make(chan *flush.FlushRequest)
-	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil, nil)
+	processed := rr.processAgentEvents(
+		ctx,
+		sess,
+		inv,
+		agentCh,
+		flushCh,
+		nil,
+		nil,
+		nil,
+	)
 	// Send one event, then close agentCh
 	go func() {
 		agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("x")}}}}
