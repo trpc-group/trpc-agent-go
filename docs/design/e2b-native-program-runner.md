@@ -539,11 +539,12 @@ owned by the old `RunProgram` framing path:
 ```text
 codeexecutor/e2b/internal/envdprocess/client.go
 codeexecutor/e2b/internal/envdprocess/client_test.go
+codeexecutor/e2b/internal/envdprocess/process_protocol_test.go
+codeexecutor/e2b/internal/envdprocess/process_integration_test.go
 codeexecutor/e2b/internal/envdprocess/spec/README.md
 codeexecutor/e2b/internal/envdprocess/spec/process.proto
 codeexecutor/e2b/internal/envdprocess/spec/process.pb.go
-codeexecutor/e2b/internal/envdprocess/processconnect/process.connect.go
-codeexecutor/e2b/process_integration_test.go
+codeexecutor/e2b/internal/envdprocess/spec/processconnect/process.connect.go
 ```
 
 ### Modified files
@@ -594,6 +595,10 @@ codeexecutor/e2b/process_integration_test.go
 
 Use an in-process Connect mock server to verify:
 
+- every generated Process RPC: `List`, `Connect`, `Start`, `Update`,
+  `StreamInput`, `SendInput`, `SendSignal`, and `CloseStdin`;
+- unary, server-streaming, and client-streaming request cardinality;
+- request headers, including `StreamInput.RequestHeader`;
 - exact `cmd`, `args`, `cwd`, and env mapping;
 - `pty` is absent;
 - authentication and traffic headers;
@@ -658,15 +663,31 @@ Follow the repository's integration-test convention:
 //go:build integration
 ```
 
-Skip when `E2B_API_KEY` is unset. Keep the scenario small:
+The test skips when `E2B_API_KEY` is unset. It creates one sandbox through the
+E2B-compatible management API, derives the envd data-plane URL from the create
+response, and kills the sandbox during cleanup. The envd and traffic access
+tokens are run-scoped: the test reads them only from the create response and
+sends them as `X-Access-Token` and `E2B-Traffic-Access-Token`. It never accepts
+these tokens through environment variables. Set
+`E2B_CUBESANDBOX_COMPATIBLE=true` when the deployment also requires the
+CubeSandbox-compatible `Cube-Traffic-Access-Token` header.
 
-1. create one real sandbox;
-2. run one command that consumes stdin, writes stdout and stderr, emits an old
-   sentinel, and exits non-zero;
-3. verify exact output and exit status;
-4. run one timeout/cancellation case;
-5. verify the remote process is no longer listed;
-6. clean up the sandbox.
+Cover the complete Process service through three protocol flows:
+
+1. start, list, and connect to a non-PTY process, then send input;
+2. start and signal a long-running process, then verify it disappears;
+3. start and resize a PTY, then use ordered streaming input and verify the
+   terminal size.
+
+Probe `CloseStdin` as an optional envd capability. Run the close-stdin protocol
+and high-level stdin scenarios when it is supported; skip only those scenarios
+when an older deployment returns `CodeUnimplemented`. Other protocol failures
+remain test failures.
+
+Also run the high-level `Client.Run` adapter against real envd, covering
+separate stdout and stderr, a non-zero exit, timeout, and remote process
+cleanup. Every started PID is tracked and receives a best-effort `SIGKILL`
+from `t.Cleanup` before the sandbox is destroyed.
 
 ## Validation
 
@@ -680,7 +701,9 @@ go test ./tool/workspaceexec ./tool/skill
 Real integration validation:
 
 ```bash
-go test -tags=integration ./codeexecutor/e2b -run TestIntegration
+E2B_API_KEY='<api-key>' \
+go test -tags=integration ./codeexecutor/e2b/internal/envdprocess \
+  -run '^TestIntegrationEnvdProcess$' -count=1 -v
 ```
 
 Broader repository validation before delivery, following `AGENTS.md`:

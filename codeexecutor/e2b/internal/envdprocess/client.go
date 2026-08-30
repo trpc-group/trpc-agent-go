@@ -13,6 +13,7 @@ package envdprocess
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -35,10 +36,13 @@ const (
 // Request describes one non-interactive process invocation. Timeout bounds
 // the whole invocation; a non-positive timeout leaves it to the caller context.
 type Request struct {
-	Cmd     string
-	Args    []string
-	Envs    map[string]string
-	Cwd     string
+	Cmd  string
+	Args []string
+	Envs map[string]string
+	Cwd  string
+	// User selects the sandbox user through envd's Basic authentication
+	// header. An empty value omits the header and lets envd choose its default.
+	User    string
 	Stdin   string
 	Timeout time.Duration
 }
@@ -266,6 +270,7 @@ func (c *Client) start(
 		Stdin: &stdin,
 	})
 	c.addHeaders(rpcReq.Header())
+	addProcessUserHeader(rpcReq.Header(), req.User)
 	stream, err := c.rpc.Start(ctx, rpcReq)
 	select {
 	case result <- startCall{stream: stream, err: err}:
@@ -423,6 +428,14 @@ func (c *Client) addHeaders(target http.Header) {
 			target.Add(key, value)
 		}
 	}
+}
+
+func addProcessUserHeader(target http.Header, user string) {
+	if user == "" {
+		return
+	}
+	credentials := base64.StdEncoding.EncodeToString([]byte(user + ":"))
+	target.Set("Authorization", "Basic "+credentials)
 }
 
 func pidSelector(pid uint32) *process.ProcessSelector {

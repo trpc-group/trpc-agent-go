@@ -85,6 +85,7 @@ func TestRunMapsRequestInputAndEvents(t *testing.T) {
 		Args:    []string{"script.py", "a b"},
 		Envs:    map[string]string{"A": "1"},
 		Cwd:     "/tmp/work",
+		User:    "sandbox-user",
 		Stdin:   "input\n",
 		Timeout: time.Second,
 	})
@@ -104,6 +105,7 @@ func TestRunMapsRequestInputAndEvents(t *testing.T) {
 	assert.True(t, startReq.Msg.GetStdin())
 	assert.NotEmpty(t, startReq.Msg.GetTag())
 	assert.Equal(t, "access-token", startReq.Header().Get("X-Access-Token"))
+	assert.Equal(t, "Basic c2FuZGJveC11c2VyOg==", startReq.Header().Get("Authorization"))
 	assert.Equal(
 		t, "traffic-token",
 		startReq.Header().Get("E2B-Traffic-Access-Token"),
@@ -151,7 +153,9 @@ func TestRunWithEmptyStdinDoesNotOpenStdin(t *testing.T) {
 	result, err := client.Run(context.Background(), Request{Cmd: "true"})
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
-	assert.False(t, (<-startRequests).Msg.GetStdin())
+	startReq := <-startRequests
+	assert.False(t, startReq.Msg.GetStdin())
+	assert.Empty(t, startReq.Header().Get("Authorization"))
 }
 
 func TestRunTimeoutKillsKnownPID(t *testing.T) {
