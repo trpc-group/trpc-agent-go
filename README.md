@@ -161,9 +161,10 @@ tools := []tool.Tool{
 `NewFSRepository` also accepts an HTTP(S) URL (for example, a `.zip` or
 `.tar.gz` archive). The payload is downloaded and cached locally (set
 `SKILLS_CACHE_DIR` to override the cache location). Remote downloads time
-out after 30 seconds and reject private, loopback, and link-local targets,
-including redirects. Use the literal `localhost` hostname for intentional
-local development; redirects must remain on the same origin.
+out after 30 seconds, follow at most 10 redirects, and reject private,
+loopback, and link-local destinations for both initial URLs and redirects.
+Use the literal `localhost` hostname for intentional local development; in
+that case, redirects must remain on the same origin.
 
 `NewFSRepository` also accepts multiple roots, which is useful for
 combining shared skills with user-private skills. In a long-lived
