@@ -10,6 +10,7 @@
 package gemini
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -562,6 +563,38 @@ func TestModel_convertTools_MultipleToolsGroupedIntoSingleTool(t *testing.T) {
 
 func TestNormalizeToolSchema_NilSchemaReturnsNil(t *testing.T) {
 	require.Nil(t, normalizeToolSchema("tool", "input", nil))
+}
+
+func TestNormalizeToolSchema_NumericBoundsRemainJSONNumbers(t *testing.T) {
+	schema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"page_size": {
+				Type:             "integer",
+				Minimum:          json.Number("1"),
+				Maximum:          json.Number("9007199254740993"),
+				ExclusiveMinimum: json.Number("0"),
+				ExclusiveMaximum: json.Number("9007199254740994"),
+			},
+		},
+	}
+	normalized := normalizeToolSchema("bounded_search", "input", schema)
+	require.IsType(t, map[string]any{}, normalized)
+
+	wireJSON, err := json.Marshal(normalized)
+	require.NoError(t, err)
+	decoder := json.NewDecoder(bytes.NewReader(wireJSON))
+	decoder.UseNumber()
+	var wireSchema struct {
+		Properties map[string]map[string]any `json:"properties"`
+	}
+	require.NoError(t, decoder.Decode(&wireSchema))
+
+	pageSize := wireSchema.Properties["page_size"]
+	assert.Equal(t, json.Number("1"), pageSize["minimum"])
+	assert.Equal(t, json.Number("9007199254740993"), pageSize["maximum"])
+	assert.Equal(t, json.Number("0"), pageSize["exclusiveMinimum"])
+	assert.Equal(t, json.Number("9007199254740994"), pageSize["exclusiveMaximum"])
 }
 
 func TestNormalizeToolSchema_UnmarshalErrorFallsBack(t *testing.T) {

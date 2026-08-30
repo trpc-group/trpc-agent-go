@@ -11,6 +11,7 @@
 package gemini
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -989,7 +990,9 @@ func normalizeToolSchema(toolName, schemaKind string, schema *tool.Schema) any {
 
 func normalizeToolSchemaBytes(toolName, schemaKind string, schemaBytes []byte) any {
 	var out map[string]any
-	if err := json.Unmarshal(schemaBytes, &out); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(schemaBytes))
+	decoder.UseNumber()
+	if err := decoder.Decode(&out); err != nil {
 		log.Warnf(
 			"failed to unmarshal %s schema for tool %q: %v",
 			schemaKind,

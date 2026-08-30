@@ -105,11 +105,11 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 			propSchema.ExclusiveMinimum = schemaNumber(propMap, "exclusiveMinimum")
 			propSchema.ExclusiveMaximum = schemaNumber(propMap, "exclusiveMaximum")
 			if defaultVal, exists := propMap["default"]; exists {
-				propSchema.Default = defaultVal
+				propSchema.Default = legacyJSONValue(defaultVal)
 			}
 			if enumVal, exists := propMap["enum"]; exists {
 				if enumArr, ok := enumVal.([]any); ok {
-					propSchema.Enum = enumArr
+					propSchema.Enum = legacyJSONValues(enumArr)
 				}
 			}
 			// Recursively process nested properties.
@@ -134,7 +134,7 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 			}
 			// Handle additionalProperties field.
 			if additionalPropsVal, exists := propMap["additionalProperties"]; exists {
-				propSchema.AdditionalProperties = additionalPropsVal
+				propSchema.AdditionalProperties = legacyJSONValue(additionalPropsVal)
 			}
 			if refVal, ok := propMap["$ref"].(string); ok {
 				propSchema.Ref = refVal
@@ -166,6 +166,12 @@ func schemaNumber(schema map[string]any, keyword string) json.Number {
 	if !ok {
 		return ""
 	}
+	return anyToSchemaNumber(value)
+}
+
+// anyToSchemaNumber converts a decoded JSON value to json.Number.
+// Non-numeric values, including Draft-4 boolean exclusive bounds, become empty.
+func anyToSchemaNumber(value any) json.Number {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return ""
@@ -175,4 +181,40 @@ func schemaNumber(schema map[string]any, keyword string) json.Number {
 		return ""
 	}
 	return number
+}
+
+// legacyJSONValue restores pre-UseNumber map semantics for public any fields.
+// Numeric values that UseNumber decoded as json.Number become float64 so
+// Default, Enum, and AdditionalProperties keep their historical dynamic types.
+func legacyJSONValue(value any) any {
+	switch typed := value.(type) {
+	case json.Number:
+		f, err := typed.Float64()
+		if err != nil {
+			return typed
+		}
+		return f
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, nested := range typed {
+			out[key] = legacyJSONValue(nested)
+		}
+		return out
+	case []any:
+		return legacyJSONValues(typed)
+	default:
+		return value
+	}
+}
+
+// legacyJSONValues restores pre-UseNumber slice semantics for enum values.
+func legacyJSONValues(values []any) []any {
+	if values == nil {
+		return nil
+	}
+	out := make([]any, len(values))
+	for i, value := range values {
+		out[i] = legacyJSONValue(value)
+	}
+	return out
 }

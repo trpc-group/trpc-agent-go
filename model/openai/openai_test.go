@@ -1617,6 +1617,46 @@ func TestModel_convertTools(t *testing.T) {
 	assert.Empty(t, props, "expected empty properties for no-arg tool")
 }
 
+func TestModel_convertTools_NumericBoundsRemainJSONNumbers(t *testing.T) {
+	m := New("dummy")
+	toolsMap := map[string]tool.Tool{
+		"bounded_search": stubTool{decl: &tool.Declaration{
+			Name:        "bounded_search",
+			Description: "search with a bounded page size",
+			InputSchema: &tool.Schema{
+				Type: "object",
+				Properties: map[string]*tool.Schema{
+					"page_size": {
+						Type:             "integer",
+						Minimum:          json.Number("1"),
+						Maximum:          json.Number("9007199254740993"),
+						ExclusiveMinimum: json.Number("0"),
+						ExclusiveMaximum: json.Number("9007199254740994"),
+					},
+				},
+			},
+		}},
+	}
+
+	params := m.convertTools(toolsMap)
+	require.Len(t, params, 1)
+
+	wireJSON, err := json.Marshal(params[0].Function.Parameters)
+	require.NoError(t, err)
+	decoder := json.NewDecoder(bytes.NewReader(wireJSON))
+	decoder.UseNumber()
+	var wireSchema struct {
+		Properties map[string]map[string]any `json:"properties"`
+	}
+	require.NoError(t, decoder.Decode(&wireSchema))
+
+	pageSize := wireSchema.Properties["page_size"]
+	assert.Equal(t, json.Number("1"), pageSize["minimum"])
+	assert.Equal(t, json.Number("9007199254740993"), pageSize["maximum"])
+	assert.Equal(t, json.Number("0"), pageSize["exclusiveMinimum"])
+	assert.Equal(t, json.Number("9007199254740994"), pageSize["exclusiveMaximum"])
+}
+
 // TestModel_convertTools_StrictProxyTopLevelProperties validates the final JSON
 // payload shape expected by strict OpenAI-compatible proxies.
 func TestModel_convertTools_StrictProxyTopLevelProperties(t *testing.T) {

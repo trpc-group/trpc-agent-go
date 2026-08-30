@@ -5203,6 +5203,28 @@ func TestConvertMapToToolSchema(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "draft-4 boolean exclusive bounds are ignored",
+			input: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"page_size": map[string]any{
+						"type":             "integer",
+						"minimum":          float64(0),
+						"exclusiveMinimum": true,
+					},
+				},
+			},
+			expected: &tool.Schema{
+				Type: "object",
+				Properties: map[string]*tool.Schema{
+					"page_size": {
+						Type:    "integer",
+						Minimum: json.Number("0"),
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -92,3 +92,45 @@ type Schema struct {
 	// Defs contains reusable schema definitions
 	Defs map[string]*Schema `json:"$defs,omitempty"`
 }
+
+// UnmarshalJSON decodes a Schema while tolerating Draft-4 boolean exclusive
+// bounds. Numeric exclusiveMinimum/exclusiveMaximum become json.Number;
+// boolean or other non-numeric forms are ignored instead of failing the
+// whole schema, matching the MCP conversion path.
+func (s *Schema) UnmarshalJSON(data []byte) error {
+	type schemaAlias Schema
+	aux := &struct {
+		*schemaAlias
+		Minimum          any `json:"minimum"`
+		Maximum          any `json:"maximum"`
+		ExclusiveMinimum any `json:"exclusiveMinimum"`
+		ExclusiveMaximum any `json:"exclusiveMaximum"`
+	}{
+		schemaAlias: (*schemaAlias)(s),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	s.Minimum = decodeSchemaNumber(aux.Minimum)
+	s.Maximum = decodeSchemaNumber(aux.Maximum)
+	s.ExclusiveMinimum = decodeSchemaNumber(aux.ExclusiveMinimum)
+	s.ExclusiveMaximum = decodeSchemaNumber(aux.ExclusiveMaximum)
+	return nil
+}
+
+// decodeSchemaNumber converts a decoded JSON value to json.Number.
+// Non-numeric values, including Draft-4 boolean exclusive bounds, become empty.
+func decodeSchemaNumber(value any) json.Number {
+	if value == nil {
+		return ""
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	var number json.Number
+	if err := json.Unmarshal(encoded, &number); err != nil {
+		return ""
+	}
+	return number
+}
