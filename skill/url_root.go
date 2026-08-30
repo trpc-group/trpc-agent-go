@@ -14,16 +14,19 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -41,7 +44,9 @@ const (
 
 	bytesPerMiB = 1 << 20
 
-	maxDownloadBytes = 64 * bytesPerMiB
+	maxDownloadBytes          = 64 * bytesPerMiB
+	skillsRootDownloadTimeout = 30 * time.Second
+	maxSkillsRootRedirects    = 10
 
 	maxExtractFileBytes  = 64 * bytesPerMiB
 	maxExtractTotalBytes = 256 * bytesPerMiB
@@ -142,9 +147,64 @@ func skillsCacheDir() string {
 }
 
 func downloadURLToFile(u *url.URL, path string) error {
-	resp, err := http.Get(u.String())
+	return downloadURLToFileWithTimeout(
+		u,
+		path,
+		skillsRootDownloadTimeout,
+	)
+}
+
+func downloadURLToFileWithTimeout(
+	u *url.URL,
+	path string,
+	timeout time.Duration,
+) error {
+	if timeout <= 0 {
+		return fmt.Errorf("download skills root: timeout must be positive")
+	}
+	allowLocalhost := isLocalhostURL(u)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := validateSkillsRootURL(ctx, u, allowLocalhost); err != nil {
+		return fmt.Errorf("download skills root: %w", err)
+	}
+
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(
+			req *http.Request,
+			via []*http.Request,
+		) error {
+			if len(via) >= maxSkillsRootRedirects {
+				return fmt.Errorf(
+					"stopped after %d redirects",
+					maxSkillsRootRedirects,
+				)
+			}
+			allowRedirectLocalhost := allowLocalhost &&
+				sameURLOrigin(u, req.URL)
+			if err := validateSkillsRootURL(
+				req.Context(),
+				req.URL,
+				allowRedirectLocalhost,
+			); err != nil {
+				return fmt.Errorf("unsafe redirect: %w", err)
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		u.String(),
+		nil,
+	)
 	if err != nil {
-		return err
+		return fmt.Errorf("download skills root: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("download skills root: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK ||
@@ -168,6 +228,104 @@ func downloadURLToFile(u *url.URL, path string) error {
 		return fmt.Errorf("download skills root: too large")
 	}
 	return nil
+}
+
+func validateSkillsRootURL(
+	ctx context.Context,
+	u *url.URL,
+	allowLocalhost bool,
+) error {
+	return validateSkillsRootURLWithResolver(
+		ctx,
+		u,
+		allowLocalhost,
+		net.DefaultResolver,
+	)
+}
+
+type skillsRootIPResolver interface {
+	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
+}
+
+func validateSkillsRootURLWithResolver(
+	ctx context.Context,
+	u *url.URL,
+	allowLocalhost bool,
+	resolver skillsRootIPResolver,
+) error {
+	if u == nil {
+		return fmt.Errorf("URL is nil")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("unsupported URL scheme %q", u.Scheme)
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" {
+		return fmt.Errorf("URL host is required")
+	}
+	if host == "localhost" {
+		if allowLocalhost {
+			return nil
+		}
+		return fmt.Errorf("private or local address is not allowed: %s", host)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return validateSkillsRootIP(ip)
+	}
+
+	addresses, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("resolve URL host %q: %w", host, err)
+	}
+	if len(addresses) == 0 {
+		return fmt.Errorf("URL host %q resolved to no addresses", host)
+	}
+	for _, address := range addresses {
+		if err := validateSkillsRootIP(address.IP); err != nil {
+			return fmt.Errorf("URL host %q: %w", host, err)
+		}
+	}
+	return nil
+}
+
+func validateSkillsRootIP(ip net.IP) error {
+	if ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified() {
+		return fmt.Errorf("private or local address is not allowed: %s", ip)
+	}
+	return nil
+}
+
+func isLocalhostURL(u *url.URL) bool {
+	// A literal localhost hostname is the explicit local-development escape
+	// hatch. Numeric loopback and other private addresses remain blocked.
+	return u != nil && strings.EqualFold(
+		strings.TrimSuffix(u.Hostname(), "."),
+		"localhost",
+	)
+}
+
+func sameURLOrigin(left *url.URL, right *url.URL) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return strings.EqualFold(left.Scheme, right.Scheme) &&
+		strings.EqualFold(left.Hostname(), right.Hostname()) &&
+		effectiveURLPort(left) == effectiveURLPort(right)
+}
+
+func effectiveURLPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 func extractURLPayload(u *url.URL, srcPath string, destDir string) error {
