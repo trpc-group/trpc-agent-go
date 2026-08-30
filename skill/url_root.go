@@ -165,34 +165,17 @@ func downloadURLToFileWithTimeout(
 	allowLocalhost := isLocalhostURL(u)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if err := validateSkillsRootURL(ctx, u, allowLocalhost); err != nil {
+	if err := validateSkillsRootURL(u, allowLocalhost); err != nil {
 		return fmt.Errorf("download skills root: %w", err)
 	}
 
-	client := &http.Client{
-		Timeout: timeout,
-		CheckRedirect: func(
-			req *http.Request,
-			via []*http.Request,
-		) error {
-			if len(via) >= maxSkillsRootRedirects {
-				return fmt.Errorf(
-					"stopped after %d redirects",
-					maxSkillsRootRedirects,
-				)
-			}
-			allowRedirectLocalhost := allowLocalhost &&
-				sameURLOrigin(u, req.URL)
-			if err := validateSkillsRootURL(
-				req.Context(),
-				req.URL,
-				allowRedirectLocalhost,
-			); err != nil {
-				return fmt.Errorf("unsafe redirect: %w", err)
-			}
-			return nil
-		},
-	}
+	client := newSkillsRootHTTPClient(
+		u,
+		timeout,
+		net.DefaultResolver,
+		&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second},
+	)
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
@@ -230,29 +213,160 @@ func downloadURLToFileWithTimeout(
 	return nil
 }
 
-func validateSkillsRootURL(
-	ctx context.Context,
-	u *url.URL,
-	allowLocalhost bool,
-) error {
-	return validateSkillsRootURLWithResolver(
-		ctx,
-		u,
-		allowLocalhost,
-		net.DefaultResolver,
-	)
+type skillsRootNetworkDialer interface {
+	DialContext(context.Context, string, string) (net.Conn, error)
+}
+
+func newSkillsRootHTTPClient(
+	initialURL *url.URL,
+	timeout time.Duration,
+	resolver skillsRootIPResolver,
+	dialer skillsRootNetworkDialer,
+) *http.Client {
+	allowedLocalhost := ""
+	if isLocalhostURL(initialURL) {
+		allowedLocalhost = net.JoinHostPort(
+			"localhost",
+			effectiveURLPort(initialURL),
+		)
+	}
+	transport := &http.Transport{
+		// A proxy would resolve the target outside the guarded dial path.
+		Proxy: nil,
+		DialContext: func(
+			ctx context.Context,
+			network string,
+			address string,
+		) (net.Conn, error) {
+			return dialSkillsRootAddress(
+				ctx,
+				network,
+				address,
+				allowedLocalhost,
+				resolver,
+				dialer,
+			)
+		},
+		ForceAttemptHTTP2: true,
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(
+			req *http.Request,
+			via []*http.Request,
+		) error {
+			if len(via) >= maxSkillsRootRedirects {
+				return fmt.Errorf(
+					"stopped after %d redirects",
+					maxSkillsRootRedirects,
+				)
+			}
+			allowRedirectLocalhost := isLocalhostURL(initialURL) &&
+				sameURLOrigin(initialURL, req.URL)
+			if err := validateSkillsRootURL(
+				req.URL,
+				allowRedirectLocalhost,
+			); err != nil {
+				return fmt.Errorf("unsafe redirect: %w", err)
+			}
+			return nil
+		},
+	}
 }
 
 type skillsRootIPResolver interface {
 	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
 }
 
-func validateSkillsRootURLWithResolver(
+func dialSkillsRootAddress(
 	ctx context.Context,
-	u *url.URL,
-	allowLocalhost bool,
+	network string,
+	address string,
+	allowedLocalhost string,
 	resolver skillsRootIPResolver,
-) error {
+	dialer skillsRootNetworkDialer,
+) (net.Conn, error) {
+	addresses, err := resolveSkillsRootDialAddresses(
+		ctx,
+		address,
+		allowedLocalhost,
+		resolver,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for _, vettedAddress := range addresses {
+		conn, err := dialer.DialContext(ctx, network, vettedAddress)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("dial skills root %q: %w", address, lastErr)
+}
+
+func resolveSkillsRootDialAddresses(
+	ctx context.Context,
+	address string,
+	allowedLocalhost string,
+	resolver skillsRootIPResolver,
+) ([]string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("parse dial address %q: %w", address, err)
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "" {
+		return nil, fmt.Errorf("dial host is required")
+	}
+	allowLocalhost := allowedLocalhost != "" && strings.EqualFold(
+		net.JoinHostPort(host, port),
+		allowedLocalhost,
+	)
+	if host == "localhost" && !allowLocalhost {
+		return nil, fmt.Errorf(
+			"private or local address is not allowed: %s",
+			host,
+		)
+	}
+
+	var resolved []net.IPAddr
+	if ip := net.ParseIP(host); ip != nil {
+		resolved = []net.IPAddr{{IP: ip}}
+	} else {
+		resolved, err = resolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("resolve dial host %q: %w", host, err)
+		}
+	}
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("dial host %q resolved to no addresses", host)
+	}
+
+	addresses := make([]string, 0, len(resolved))
+	for _, resolvedAddress := range resolved {
+		if allowLocalhost {
+			if !resolvedAddress.IP.IsLoopback() {
+				return nil, fmt.Errorf(
+					"localhost resolved to a non-loopback address: %s",
+					resolvedAddress.IP,
+				)
+			}
+		} else if err := validateSkillsRootIP(resolvedAddress.IP); err != nil {
+			return nil, fmt.Errorf("dial host %q: %w", host, err)
+		}
+		dialHost := resolvedAddress.IP.String()
+		if resolvedAddress.Zone != "" {
+			dialHost += "%" + resolvedAddress.Zone
+		}
+		addresses = append(addresses, net.JoinHostPort(dialHost, port))
+	}
+	return addresses, nil
+}
+
+func validateSkillsRootURL(u *url.URL, allowLocalhost bool) error {
 	if u == nil {
 		return fmt.Errorf("URL is nil")
 	}
@@ -272,24 +386,12 @@ func validateSkillsRootURLWithResolver(
 	if ip := net.ParseIP(host); ip != nil {
 		return validateSkillsRootIP(ip)
 	}
-
-	addresses, err := resolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return fmt.Errorf("resolve URL host %q: %w", host, err)
-	}
-	if len(addresses) == 0 {
-		return fmt.Errorf("URL host %q resolved to no addresses", host)
-	}
-	for _, address := range addresses {
-		if err := validateSkillsRootIP(address.IP); err != nil {
-			return fmt.Errorf("URL host %q: %w", host, err)
-		}
-	}
 	return nil
 }
 
 func validateSkillsRootIP(ip net.IP) error {
-	if ip.IsLoopback() ||
+	if ip == nil ||
+		ip.IsLoopback() ||
 		ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() ||

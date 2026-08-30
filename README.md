@@ -164,7 +164,9 @@ tools := []tool.Tool{
 out after 30 seconds, follow at most 10 redirects, and reject private,
 loopback, and link-local destinations for both initial URLs and redirects.
 Use the literal `localhost` hostname for intentional local development; in
-that case, redirects must remain on the same origin.
+that case, redirects must remain on the same origin. Remote skill downloads
+connect directly instead of using environment HTTP proxies so address
+validation applies to the actual dial target.
 
 `NewFSRepository` also accepts multiple roots, which is useful for
 combining shared skills with user-private skills. In a long-lived

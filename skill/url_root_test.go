@@ -118,6 +118,12 @@ func TestDownloadURLToFile_Errors(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("request", func(t *testing.T) {
+		u := &url.URL{Scheme: "http", Host: "example.com:bad"}
+		err := downloadURLToFile(u, filepath.Join(t.TempDir(), "x"))
+		require.Error(t, err)
+	})
+
 	t.Run("create", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(
 			func(w http.ResponseWriter, _ *http.Request) {
@@ -300,6 +306,7 @@ func TestValidateSkillsRootURL(t *testing.T) {
 		{name: "multicast", rawURL: "http://[ff02::1]", wantErr: true},
 		{name: "unspecified", rawURL: "http://[::]", wantErr: true},
 		{name: "public", rawURL: "https://8.8.8.8"},
+		{name: "hostname", rawURL: "https://skills.example.test"},
 	}
 
 	for _, tt := range tests {
@@ -310,11 +317,7 @@ func TestValidateSkillsRootURL(t *testing.T) {
 				u, err = url.Parse(tt.rawURL)
 				require.NoError(t, err)
 			}
-			err := validateSkillsRootURL(
-				context.Background(),
-				u,
-				tt.allowLocalhost,
-			)
+			err := validateSkillsRootURL(u, tt.allowLocalhost)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -324,55 +327,155 @@ func TestValidateSkillsRootURL(t *testing.T) {
 	}
 }
 
-func TestValidateSkillsRootURL_HostnameResolution(t *testing.T) {
+func TestResolveSkillsRootDialAddresses(t *testing.T) {
 	tests := []struct {
-		name       string
-		addresses  []net.IPAddr
-		resolveErr error
-		wantErr    bool
+		name             string
+		address          string
+		allowedLocalhost string
+		addresses        []net.IPAddr
+		resolveErr       error
+		want             []string
+		wantErr          bool
 	}{
 		{
+			name:    "invalid-address",
+			address: "skills.example.test",
+			wantErr: true,
+		},
+		{name: "empty-host", address: ":443", wantErr: true},
+		{
 			name:       "resolve-error",
+			address:    "skills.example.test:443",
 			resolveErr: errors.New("lookup failed"),
 			wantErr:    true,
 		},
-		{name: "no-addresses", wantErr: true},
 		{
-			name: "private-address",
+			name:    "no-addresses",
+			address: "skills.example.test:443",
+			wantErr: true,
+		},
+		{
+			name:    "private-address",
+			address: "skills.example.test:443",
 			addresses: []net.IPAddr{
 				{IP: net.ParseIP("192.168.1.10")},
 			},
 			wantErr: true,
 		},
 		{
-			name: "public-address",
+			name:    "public-addresses",
+			address: "skills.example.test:443",
 			addresses: []net.IPAddr{
 				{IP: net.ParseIP("8.8.8.8")},
 				{IP: net.ParseIP("2001:4860:4860::8888")},
 			},
+			want: []string{
+				"8.8.8.8:443",
+				"[2001:4860:4860::8888]:443",
+			},
+		},
+		{
+			name:             "localhost-allowed",
+			address:          "localhost:8080",
+			allowedLocalhost: "localhost:8080",
+			addresses: []net.IPAddr{
+				{IP: net.ParseIP("127.0.0.1")},
+			},
+			want: []string{"127.0.0.1:8080"},
+		},
+		{
+			name:             "localhost-wrong-port",
+			address:          "localhost:8081",
+			allowedLocalhost: "localhost:8080",
+			wantErr:          true,
+		},
+		{
+			name:             "localhost-must-remain-loopback",
+			address:          "localhost:8080",
+			allowedLocalhost: "localhost:8080",
+			addresses: []net.IPAddr{
+				{IP: net.ParseIP("8.8.8.8")},
+			},
+			wantErr: true,
+		},
+		{
+			name:    "public-ip-literal",
+			address: "8.8.4.4:80",
+			want:    []string{"8.8.4.4:80"},
+		},
+		{
+			name:    "ipv6-zone",
+			address: "skills.example.test:443",
+			addresses: []net.IPAddr{
+				{
+					IP:   net.ParseIP("2001:4860:4860::8888"),
+					Zone: "eth0",
+				},
+			},
+			want: []string{"[2001:4860:4860::8888%eth0]:443"},
 		},
 	}
 
-	u, err := url.Parse("https://skills.example.test/archive.zip")
-	require.NoError(t, err)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateSkillsRootURLWithResolver(
+			resolver := &stubSkillsRootIPResolver{
+				addresses: tt.addresses,
+				err:       tt.resolveErr,
+			}
+			got, err := resolveSkillsRootDialAddresses(
 				context.Background(),
-				u,
-				false,
-				stubSkillsRootIPResolver{
-					addresses: tt.addresses,
-					err:       tt.resolveErr,
-				},
+				tt.address,
+				tt.allowedLocalhost,
+				resolver,
 			)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestSkillsRootHTTPClient_DialsValidatedIP(t *testing.T) {
+	u, err := url.Parse("http://skills.example.test/archive.zip")
+	require.NoError(t, err)
+
+	t.Run("public", func(t *testing.T) {
+		resolver := &stubSkillsRootIPResolver{
+			addresses: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}},
+		}
+		dialErr := errors.New("stop after vetted dial")
+		dialer := &stubSkillsRootNetworkDialer{err: dialErr}
+		client := newSkillsRootHTTPClient(u, time.Second, resolver, dialer)
+		defer client.CloseIdleConnections()
+
+		_, err := client.Get(u.String())
+		require.ErrorIs(t, err, dialErr)
+		require.Equal(t, 1, resolver.calls)
+		require.Equal(t, []string{"8.8.8.8:80"}, dialer.addresses)
+		transport, ok := client.Transport.(*http.Transport)
+		require.True(t, ok)
+		require.Nil(t, transport.Proxy)
+	})
+
+	t.Run("rebound-private", func(t *testing.T) {
+		resolver := &stubSkillsRootIPResolver{
+			addresses: []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}},
+		}
+		dialer := &stubSkillsRootNetworkDialer{
+			err: errors.New("must not dial"),
+		}
+		client := newSkillsRootHTTPClient(u, time.Second, resolver, dialer)
+		defer client.CloseIdleConnections()
+
+		_, err := client.Get(u.String())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "private or local")
+		require.Equal(t, 1, resolver.calls)
+		require.Empty(t, dialer.addresses)
+	})
 }
 
 func TestSameURLOrigin(t *testing.T) {
@@ -398,13 +501,29 @@ func TestSameURLOrigin(t *testing.T) {
 type stubSkillsRootIPResolver struct {
 	addresses []net.IPAddr
 	err       error
+	calls     int
 }
 
-func (r stubSkillsRootIPResolver) LookupIPAddr(
+func (r *stubSkillsRootIPResolver) LookupIPAddr(
 	context.Context,
 	string,
 ) ([]net.IPAddr, error) {
+	r.calls++
 	return r.addresses, r.err
+}
+
+type stubSkillsRootNetworkDialer struct {
+	addresses []string
+	err       error
+}
+
+func (d *stubSkillsRootNetworkDialer) DialContext(
+	_ context.Context,
+	_ string,
+	address string,
+) (net.Conn, error) {
+	d.addresses = append(d.addresses, address)
+	return nil, d.err
 }
 
 func localhostServerURL(t *testing.T, raw string) string {
