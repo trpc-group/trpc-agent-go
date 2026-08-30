@@ -111,6 +111,15 @@ const (
 	// user/history. This is more prompt-cache friendly, but recall context
 	// participates in token-budget trimming.
 	PreloadSessionRecallInjectionUser = processor.PreloadSessionRecallInjectionUser
+
+	// TimePromptPlacementSystem adds request-time clock context to the system
+	// prompt. This is the backward-compatible default.
+	TimePromptPlacementSystem = processor.TimePromptPlacementSystem
+	// TimePromptPlacementUser adds request-time clock context to the latest user
+	// turn, preserving a cache-stable system prefix. When the request has no
+	// user message, a user message holding the clock context is appended, which
+	// changes the provider-visible message roles.
+	TimePromptPlacementUser = processor.TimePromptPlacementUser
 )
 
 // SessionSummaryInjectionMode controls where session summaries are injected.
@@ -122,6 +131,9 @@ type PreloadMemoryInjectionMode = processor.PreloadMemoryInjectionMode
 // PreloadSessionRecallInjectionMode controls where recalled session events are
 // injected.
 type PreloadSessionRecallInjectionMode = processor.PreloadSessionRecallInjectionMode
+
+// TimePromptPlacement controls which message receives request-time clock data.
+type TimePromptPlacement = processor.TimePromptPlacement
 
 // ToolTranscriptMode controls how historical tool-call/tool-result transcripts
 // are projected into model requests.
@@ -339,12 +351,16 @@ type Options struct {
 	// EnableParallelTools enables parallel tool execution if true.
 	// If false (default), tools will execute serially for safety.
 	EnableParallelTools bool
-	// AddCurrentTime adds the current time to the system prompt if true.
+	// AddCurrentTime adds the current time to the request if true.
+	// TimePromptPlacement selects the message that receives it.
 	AddCurrentTime bool
 	// Timezone specifies the timezone to use for time display.
 	Timezone string
 	// TimeFormat specifies the format for time display.
 	TimeFormat string
+	// TimePromptPlacement controls whether clock context is added to the system
+	// prompt or latest user turn. The zero value keeps system placement.
+	TimePromptPlacement TimePromptPlacement
 	// OutputKey is the key in session state to store the output of the agent.
 	OutputKey string
 	// OutputSchema is the JSON schema for validating agent output.
@@ -1708,7 +1724,8 @@ func newStructuredOutput(name string, schema map[string]any, strict bool, descri
 	}
 }
 
-// WithAddCurrentTime adds the current time to the system prompt if true.
+// WithAddCurrentTime adds the current time to the request if true. It goes to
+// the system prompt unless WithTimePromptPlacement selects another placement.
 func WithAddCurrentTime(addCurrentTime bool) Option {
 	return func(opts *Options) {
 		opts.AddCurrentTime = addCurrentTime
@@ -1728,6 +1745,28 @@ func WithTimezone(timezone string) Option {
 func WithTimeFormat(timeFormat string) Option {
 	return func(opts *Options) {
 		opts.TimeFormat = timeFormat
+	}
+}
+
+// WithTimePromptPlacement selects the message role that receives request-time
+// clock context.
+//
+// Available placements:
+//   - TimePromptPlacementSystem (default): adds clock context to the system
+//     prompt.
+//   - TimePromptPlacementUser: keeps the stable system prefix cacheable by
+//     appending clock context to the latest user turn, or by appending a user
+//     message holding it when the request has no user message.
+//
+// Unsupported placements fall back to TimePromptPlacementSystem.
+func WithTimePromptPlacement(placement TimePromptPlacement) Option {
+	return func(opts *Options) {
+		switch placement {
+		case TimePromptPlacementUser:
+			opts.TimePromptPlacement = TimePromptPlacementUser
+		default:
+			opts.TimePromptPlacement = TimePromptPlacementSystem
+		}
 	}
 }
 
