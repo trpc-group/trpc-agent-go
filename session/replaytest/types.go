@@ -197,11 +197,17 @@ type MemoryScope struct {
 	UserID  string `json:"user_id"`
 }
 
-// MemorySearchSnapshot captures one ordered memory query result.
+// MemorySearchSnapshot captures one memory search request and its ordered result.
 type MemorySearchSnapshot struct {
-	AppName string           `json:"app_name"`
-	UserID  string           `json:"user_id"`
-	Query   string           `json:"query"`
+	AppName string `json:"app_name"`
+	UserID  string `json:"user_id"`
+	Query   string `json:"query"`
+	// Limit is the maximum number of results requested by the search.
+	Limit int `json:"limit"`
+	// MinScore is the minimum similarity score requested by the search.
+	MinScore float64 `json:"min_score"`
+	// Name identifies the replay operation when one was provided.
+	Name    string           `json:"name,omitempty"`
 	Results []MemorySnapshot `json:"results"`
 }
 

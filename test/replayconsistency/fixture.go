@@ -365,9 +365,12 @@ func (fixture *replayFixture) applySearchMemory(
 		return fmt.Errorf("search memories: %w", err)
 	}
 	search := replaytest.MemorySearchSnapshot{
-		AppName: logicalScope.AppName,
-		UserID:  logicalScope.UserID,
-		Query:   operation.SearchQuery,
+		AppName:  logicalScope.AppName,
+		UserID:   logicalScope.UserID,
+		Query:    operation.SearchQuery,
+		Limit:    operation.SearchLimit,
+		MinScore: operation.SearchMinScore,
+		Name:     operation.Name,
 	}
 	for _, entry := range results {
 		if err := validatePhysicalMemoryScope(entry, physicalScope); err != nil {

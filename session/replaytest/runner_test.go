@@ -532,6 +532,31 @@ func TestRunnerRejectsInvalidCasesBeforeCreatingFixtures(t *testing.T) {
 			want: `parallel summary updates for session "session" filter "branch/main" must be ordered`,
 		},
 		{
+			name: "parallel unordered session append and summary update",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{
+					appendEventForSession("session", "event-1", "user", "content", 1),
+					updateSummaryForSession("session", "summary"),
+				},
+			}}}},
+			want: `parallel append event and summary update for session "session" must be ordered with dependencies`,
+		},
+		{
+			name: "nested parallel unordered session append and summary update",
+			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
+				Kind: OperationParallel,
+				Parallel: []Operation{{
+					Kind: OperationParallel,
+					Parallel: []Operation{
+						appendEventForSession("session", "event-1", "user", "content", 1),
+						updateSummaryForSession("session", "summary"),
+					},
+				}},
+			}}}},
+			want: `parallel append event and summary update for session "session" must be ordered with dependencies`,
+		},
+		{
 			name: "parallel unordered memory writes",
 			cases: []ReplayCase{{Name: "case", Operations: []Operation{{
 				Kind: OperationParallel,
@@ -709,6 +734,36 @@ func TestRunnerAllowsIndependentParallelSummaryUpdates(t *testing.T) {
 	}
 	if got := fixture.operationCount(); got != 3 {
 		t.Fatalf("operation count = %d, want 3", got)
+	}
+}
+
+func TestRunnerAllowsOrderedParallelSessionAppendAndSummaryUpdate(t *testing.T) {
+	fixture := &fakeFixture{name: "inmemory", capabilities: allCapabilities()}
+	runner := Runner{Backends: []Backend{fakeBackend("inmemory", fixture)}}
+	report, err := runner.Run(context.Background(), []ReplayCase{{
+		Name: "ordered-session-append-summary",
+		Operations: []Operation{{
+			Kind: OperationParallel,
+			Parallel: []Operation{
+				namedOperation(
+					appendEventForSession("session", "event-1", "user", "content", 1),
+					"append",
+				),
+				namedOperation(
+					updateSummaryForSession("session", "summary"),
+					"summary", "append",
+				),
+			},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+	if len(report.Differences) != 0 {
+		t.Fatalf("Runner.Run() differences = %#v", report.Differences)
+	}
+	if got := fixture.operationNames(); strings.Join(got, ",") != "append,summary" {
+		t.Fatalf("parallel operation order = %v, want [append summary]", got)
 	}
 }
 

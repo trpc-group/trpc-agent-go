@@ -347,8 +347,9 @@ func TestReplayFixtureCapturesMemorySearchAtApplyTime(t *testing.T) {
 		},
 	}
 	search := replaytest.Operation{
-		Kind: replaytest.OperationSearchMemory, SearchQuery: "shared", SearchLimit: 10,
-		SearchAppName: replayAppName, SearchUserID: replayUserID,
+		Kind: replaytest.OperationSearchMemory, Name: "search", SearchQuery: "shared", SearchLimit: 10,
+		SearchMinScore: 0.42,
+		SearchAppName:  replayAppName, SearchUserID: replayUserID,
 	}
 	second := replaytest.Operation{
 		Kind: replaytest.OperationWriteMemory,
@@ -369,6 +370,12 @@ func TestReplayFixtureCapturesMemorySearchAtApplyTime(t *testing.T) {
 	if len(snapshot.MemorySearches) != 1 || len(snapshot.MemorySearches[0].Results) != 1 ||
 		snapshot.MemorySearches[0].Results[0].Content != "shared first" {
 		t.Fatalf("point-in-time search = %#v", snapshot.MemorySearches)
+	}
+	if snapshot.MemorySearches[0].Name != search.Name ||
+		snapshot.MemorySearches[0].Limit != search.SearchLimit ||
+		snapshot.MemorySearches[0].MinScore != search.SearchMinScore {
+		t.Fatalf("search request parameters = %#v, want name %q limit %d min score %v",
+			snapshot.MemorySearches[0], search.Name, search.SearchLimit, search.SearchMinScore)
 	}
 	snapshot.MemorySearches[0].Results[0].Topics[0] = "mutated"
 	snapshot.MemorySearches[0].Results[0].Metadata["participants"].([]string)[0] = "mutated"

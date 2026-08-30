@@ -310,7 +310,11 @@ func (runner Runner) runComparableCase(
 	if err != nil {
 		return Snapshot{}, nil, err
 	}
-	return NormalizeSnapshot(snapshot, runner.NormalizeOptions), nil, nil
+	normalized, err := NormalizeSnapshotWithError(snapshot, runner.NormalizeOptions)
+	if err != nil {
+		return Snapshot{}, nil, fmt.Errorf("normalize snapshot: %w", err)
+	}
+	return normalized, nil, nil
 }
 
 func (runner Runner) runCase(
@@ -479,6 +483,9 @@ func parallelDependencies(operations []Operation) (map[string]chan struct{}, err
 		return nil, err
 	}
 	if err := validateParallelSummaryUpdates(operations, dependencies); err != nil {
+		return nil, err
+	}
+	if err := validateParallelSessionAppendSummaryOrdering(operations, dependencies); err != nil {
 		return nil, err
 	}
 	if err := validateParallelMemoryAccesses(operations, dependencies); err != nil {
@@ -798,6 +805,55 @@ func overlappingSummaryUpdates(
 		return refs[i].filterKey < refs[j].filterKey
 	})
 	return refs
+}
+
+func validateParallelSessionAppendSummaryOrdering(
+	operations []Operation,
+	dependencies map[string][]string,
+) error {
+	appends := make([]map[orderedSessionAppendRef]struct{}, len(operations))
+	summaries := make([]map[summaryUpdateRef]struct{}, len(operations))
+	for i, operation := range operations {
+		appends[i] = operationOrderedSessionAppends(operation)
+		summaries[i] = operationSummaryUpdates(operation)
+	}
+	for i := 0; i < len(operations); i++ {
+		for j := i + 1; j < len(operations); j++ {
+			if parallelOperationsOrdered(operations[i], operations[j], dependencies) {
+				continue
+			}
+			if sessionID, ok := firstOverlappingSessionAppendSummary(appends[i], summaries[j]); ok {
+				return fmt.Errorf(
+					"parallel append event and summary update for session %q must be ordered with dependencies",
+					sessionID,
+				)
+			}
+			if sessionID, ok := firstOverlappingSessionAppendSummary(appends[j], summaries[i]); ok {
+				return fmt.Errorf(
+					"parallel append event and summary update for session %q must be ordered with dependencies",
+					sessionID,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func firstOverlappingSessionAppendSummary(
+	appends map[orderedSessionAppendRef]struct{},
+	summaries map[summaryUpdateRef]struct{},
+) (string, bool) {
+	appendSessions := make(map[string]struct{})
+	for appendRef := range appends {
+		if appendRef.collection == "events" {
+			appendSessions[appendRef.sessionID] = struct{}{}
+		}
+	}
+	summarySessions := make(map[string]struct{}, len(summaries))
+	for summaryRef := range summaries {
+		summarySessions[summaryRef.sessionID] = struct{}{}
+	}
+	return firstOverlappingSessionID(appendSessions, summarySessions)
 }
 
 type memoryScopeRef struct {

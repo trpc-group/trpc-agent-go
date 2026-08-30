@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -218,6 +219,84 @@ func TestNormalizeSnapshotPreservesMemorySearchOrder(t *testing.T) {
 	gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
 	if reflect.DeepEqual(gotBaseline, gotActual) {
 		t.Fatal("memory search order difference was normalized away")
+	}
+}
+
+func TestNormalizeSnapshotSortsMemorySearchesByRequest(t *testing.T) {
+	tests := []struct {
+		name   string
+		first  MemorySearchSnapshot
+		second MemorySearchSnapshot
+	}{
+		{
+			name: "limit",
+			first: MemorySearchSnapshot{
+				AppName: "app", UserID: "user", Query: "query", Limit: 1,
+				Results: []MemorySnapshot{{Content: "first"}},
+			},
+			second: MemorySearchSnapshot{
+				AppName: "app", UserID: "user", Query: "query", Limit: 2,
+				Results: []MemorySnapshot{{Content: "second"}},
+			},
+		},
+		{
+			name: "minimum score",
+			first: MemorySearchSnapshot{
+				AppName: "app", UserID: "user", Query: "query", MinScore: 0.1,
+				Results: []MemorySnapshot{{Content: "first"}},
+			},
+			second: MemorySearchSnapshot{
+				AppName: "app", UserID: "user", Query: "query", MinScore: 0.2,
+				Results: []MemorySnapshot{{Content: "second"}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := Snapshot{MemorySearches: []MemorySearchSnapshot{test.first, test.second}}
+			actual := Snapshot{MemorySearches: []MemorySearchSnapshot{test.second, test.first}}
+			gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+			gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+			if !reflect.DeepEqual(gotBaseline, gotActual) {
+				t.Fatalf("memory searches with different requests were ordered differently:\nbaseline: %#v\nactual: %#v", gotBaseline, gotActual)
+			}
+		})
+	}
+}
+
+func TestNormalizeSnapshotSortsDuplicateMemorySearchesByIdentity(t *testing.T) {
+	first := MemorySearchSnapshot{
+		AppName: "app", UserID: "user", Query: "query", Limit: 1,
+		Name: "first", Results: []MemorySnapshot{{Content: "first"}},
+	}
+	second := MemorySearchSnapshot{
+		AppName: "app", UserID: "user", Query: "query", Limit: 1,
+		Name: "second", Results: []MemorySnapshot{{Content: "second"}},
+	}
+	baseline := Snapshot{MemorySearches: []MemorySearchSnapshot{first, second}}
+	actual := Snapshot{MemorySearches: []MemorySearchSnapshot{second, first}}
+	gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+	gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	if !reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatalf("duplicate memory searches were ordered differently:\nbaseline: %#v\nactual: %#v", gotBaseline, gotActual)
+	}
+}
+
+func TestNormalizeSnapshotSortsUnnamedDuplicateMemorySearchesByResults(t *testing.T) {
+	first := MemorySearchSnapshot{
+		AppName: "app", UserID: "user", Query: "query", Limit: 1,
+		Results: []MemorySnapshot{{Content: "first"}},
+	}
+	second := MemorySearchSnapshot{
+		AppName: "app", UserID: "user", Query: "query", Limit: 1,
+		Results: []MemorySnapshot{{Content: "second"}},
+	}
+	baseline := Snapshot{MemorySearches: []MemorySearchSnapshot{first, second}}
+	actual := Snapshot{MemorySearches: []MemorySearchSnapshot{second, first}}
+	gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+	gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	if !reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatalf("unnamed duplicate memory searches were ordered differently:\nbaseline: %#v\nactual: %#v", gotBaseline, gotActual)
 	}
 }
 
@@ -657,6 +736,47 @@ func TestCloneJSONLikeCopiesTypedStructsAndPreservesReferences(t *testing.T) {
 	first.Items[0] = "changed"
 	if shared.Labels["key"] != "value" || shared.Items[0] != "item" {
 		t.Fatalf("typed clone retained input aliases: %#v", shared)
+	}
+}
+
+func TestNormalizeSnapshotWithErrorRejectsCyclicValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{
+			name: "map",
+			value: func() any {
+				value := map[string]any{"key": "value"}
+				value["self"] = value
+				return value
+			}(),
+		},
+		{
+			name: "slice",
+			value: func() any {
+				value := make([]any, 1)
+				value[0] = value
+				return value
+			}(),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := Snapshot{Sessions: []SessionSnapshot{{
+				State: map[string]StateValueSnapshot{"cyclic": JSONStateValue(test.value)},
+			}}}
+			got, err := NormalizeSnapshotWithError(snapshot, DefaultNormalizeOptions())
+			if err == nil || !strings.Contains(err.Error(), "cyclic") {
+				t.Fatalf("NormalizeSnapshotWithError() error = %v, want cyclic reference error", err)
+			}
+			if !reflect.DeepEqual(got, Snapshot{}) {
+				t.Fatalf("NormalizeSnapshotWithError() snapshot = %#v, want zero snapshot", got)
+			}
+			if got := NormalizeSnapshot(snapshot, DefaultNormalizeOptions()); !reflect.DeepEqual(got, Snapshot{}) {
+				t.Fatalf("NormalizeSnapshot() snapshot = %#v, want zero snapshot", got)
+			}
+		})
 	}
 }
 

@@ -79,7 +79,28 @@ func DefaultNormalizeOptions() NormalizeOptions {
 }
 
 // NormalizeSnapshot returns a deep, deterministically ordered snapshot.
+// It returns the zero Snapshot when the input contains a cyclic JSON-like
+// value. Use NormalizeSnapshotWithError when the validation error must be
+// inspected.
 func NormalizeSnapshot(snapshot Snapshot, options NormalizeOptions) Snapshot {
+	normalized, err := NormalizeSnapshotWithError(snapshot, options)
+	if err != nil {
+		return Snapshot{}
+	}
+	return normalized
+}
+
+// NormalizeSnapshotWithError returns a deep, deterministically ordered snapshot
+// or an error when the snapshot contains a cyclic JSON-like value. It preserves
+// the normalization behavior of NormalizeSnapshot for valid snapshots.
+func NormalizeSnapshotWithError(snapshot Snapshot, options NormalizeOptions) (Snapshot, error) {
+	if err := validateCyclicJSONLike(snapshot); err != nil {
+		return Snapshot{}, fmt.Errorf("snapshot cannot be safely normalized: %w", err)
+	}
+	return normalizeSnapshot(snapshot, options), nil
+}
+
+func normalizeSnapshot(snapshot Snapshot, options NormalizeOptions) Snapshot {
 	if options.TimePrecision <= 0 {
 		options.TimePrecision = time.Millisecond
 	}
@@ -1334,32 +1355,45 @@ func validateCloneableJSONLike(value any) error {
 	return validateCloneableJSONLikeValue(reflect.ValueOf(value), &cloneValidationState{
 		done:  make(map[cloneReference]struct{}),
 		stack: make(map[cloneReference]struct{}),
-	})
+	}, true)
+}
+
+func validateCyclicJSONLike(value any) error {
+	if value == nil {
+		return nil
+	}
+	return validateCloneableJSONLikeValue(reflect.ValueOf(value), &cloneValidationState{
+		done:  make(map[cloneReference]struct{}),
+		stack: make(map[cloneReference]struct{}),
+	}, false)
 }
 
 func validateCloneableJSONLikeValue(
 	value reflect.Value,
 	state *cloneValidationState,
+	strict bool,
 ) error {
 	if !value.IsValid() {
 		return nil
 	}
 	switch value.Kind() {
 	case reflect.Interface:
-		return validateCloneableInterface(value, state)
+		return validateCloneableInterface(value, state, strict)
 	case reflect.Map:
-		return validateCloneableMap(value, state)
+		return validateCloneableMap(value, state, strict)
 	case reflect.Pointer:
-		return validateCloneablePointer(value, state)
+		return validateCloneablePointer(value, state, strict)
 	case reflect.Slice:
-		return validateCloneableSlice(value, state)
+		return validateCloneableSlice(value, state, strict)
 	case reflect.Array:
-		return validateCloneableArray(value, state)
+		return validateCloneableArray(value, state, strict)
 	case reflect.Struct:
-		return validateCloneableStruct(value, state)
+		return validateCloneableStruct(value, state, strict)
 	case reflect.Chan, reflect.Func, reflect.UnsafePointer,
 		reflect.Complex64, reflect.Complex128, reflect.Uintptr:
-		return fmt.Errorf("value type %s cannot be safely cloned", value.Type())
+		if strict {
+			return fmt.Errorf("value type %s cannot be safely cloned", value.Type())
+		}
 	}
 	return nil
 }
@@ -1367,16 +1401,18 @@ func validateCloneableJSONLikeValue(
 func validateCloneableInterface(
 	value reflect.Value,
 	state *cloneValidationState,
+	strict bool,
 ) error {
 	if value.IsNil() {
 		return nil
 	}
-	return validateCloneableJSONLikeValue(value.Elem(), state)
+	return validateCloneableJSONLikeValue(value.Elem(), state, strict)
 }
 
 func validateCloneableMap(
 	value reflect.Value,
 	state *cloneValidationState,
+	strict bool,
 ) error {
 	if value.IsNil() {
 		return nil
@@ -1389,10 +1425,10 @@ func validateCloneableMap(
 	defer exitCloneReference(state, reference)
 	iterator := value.MapRange()
 	for iterator.Next() {
-		if !isSafeJSONMapKey(iterator.Key()) {
+		if strict && !isSafeJSONMapKey(iterator.Key()) {
 			return fmt.Errorf("map key type %s cannot be safely cloned", iterator.Key().Type())
 		}
-		if err := validateCloneableJSONLikeValue(iterator.Value(), state); err != nil {
+		if err := validateCloneableJSONLikeValue(iterator.Value(), state, strict); err != nil {
 			return err
 		}
 	}
@@ -1403,6 +1439,7 @@ func validateCloneableMap(
 func validateCloneablePointer(
 	value reflect.Value,
 	state *cloneValidationState,
+	strict bool,
 ) error {
 	if value.IsNil() {
 		return nil
@@ -1413,7 +1450,7 @@ func validateCloneablePointer(
 		return err
 	}
 	defer exitCloneReference(state, reference)
-	if err := validateCloneableJSONLikeValue(value.Elem(), state); err != nil {
+	if err := validateCloneableJSONLikeValue(value.Elem(), state, strict); err != nil {
 		return err
 	}
 	finishCloneReference(state, reference)
@@ -1423,6 +1460,7 @@ func validateCloneablePointer(
 func validateCloneableSlice(
 	value reflect.Value,
 	state *cloneValidationState,
+	strict bool,
 ) error {
 	if value.IsNil() {
 		return nil
@@ -1434,7 +1472,7 @@ func validateCloneableSlice(
 	}
 	defer exitCloneReference(state, reference)
 	for i := 0; i < value.Len(); i++ {
-		if err := validateCloneableJSONLikeValue(value.Index(i), state); err != nil {
+		if err := validateCloneableJSONLikeValue(value.Index(i), state, strict); err != nil {
 			return err
 		}
 	}
@@ -1445,9 +1483,10 @@ func validateCloneableSlice(
 func validateCloneableArray(
 	value reflect.Value,
 	state *cloneValidationState,
+	strict bool,
 ) error {
 	for i := 0; i < value.Len(); i++ {
-		if err := validateCloneableJSONLikeValue(value.Index(i), state); err != nil {
+		if err := validateCloneableJSONLikeValue(value.Index(i), state, strict); err != nil {
 			return err
 		}
 	}
@@ -1457,6 +1496,7 @@ func validateCloneableArray(
 func validateCloneableStruct(
 	value reflect.Value,
 	state *cloneValidationState,
+	strict bool,
 ) error {
 	if value.Type() == reflect.TypeOf(time.Time{}) {
 		return nil
@@ -1464,7 +1504,7 @@ func validateCloneableStruct(
 	for i := 0; i < value.NumField(); i++ {
 		field := value.Type().Field(i)
 		if field.PkgPath != "" {
-			if typeContainsMutableReference(field.Type, make(map[reflect.Type]bool)) {
+			if strict && typeContainsMutableReference(field.Type, make(map[reflect.Type]bool)) {
 				return fmt.Errorf(
 					"struct %s has unexported mutable field %s",
 					value.Type(), field.Name,
@@ -1472,7 +1512,7 @@ func validateCloneableStruct(
 			}
 			continue
 		}
-		if err := validateCloneableJSONLikeValue(value.Field(i), state); err != nil {
+		if err := validateCloneableJSONLikeValue(value.Field(i), state, strict); err != nil {
 			return err
 		}
 	}
@@ -1683,7 +1723,43 @@ func memorySortKey(snapshot MemorySnapshot) string {
 }
 
 func memorySearchSortKey(snapshot MemorySearchSnapshot) string {
-	return snapshot.AppName + "\x00" + snapshot.UserID + "\x00" + snapshot.Query
+	semantic := struct {
+		AppName  string  `json:"app_name"`
+		UserID   string  `json:"user_id"`
+		Query    string  `json:"query"`
+		Limit    int     `json:"limit"`
+		MinScore float64 `json:"min_score"`
+		Name     string  `json:"name"`
+		Results  string  `json:"results"`
+	}{
+		AppName: snapshot.AppName, UserID: snapshot.UserID, Query: snapshot.Query,
+		Limit: snapshot.Limit, MinScore: snapshot.MinScore, Name: snapshot.Name,
+		Results: memorySearchResultsSortKey(snapshot.Results),
+	}
+	return stableKey(semantic)
+}
+
+func memorySearchResultsSortKey(results []MemorySnapshot) string {
+	// Exclude backend-generated IDs and timestamps so equivalent results do not
+	// change the search ordering across backends.
+	type semanticMemory struct {
+		AppName  string         `json:"app_name"`
+		UserID   string         `json:"user_id"`
+		Scope    MemoryScope    `json:"scope"`
+		Content  string         `json:"content"`
+		Topics   []string       `json:"topics,omitempty"`
+		Metadata map[string]any `json:"metadata,omitempty"`
+		Score    float64        `json:"score"`
+	}
+	semantic := make([]semanticMemory, len(results))
+	for i, result := range results {
+		semantic[i] = semanticMemory{
+			AppName: result.AppName, UserID: result.UserID, Scope: result.Scope,
+			Content: result.Content, Topics: result.Topics, Metadata: result.Metadata,
+			Score: result.Score,
+		}
+	}
+	return stableKey(semantic)
 }
 
 func stableKey(value any) string {
