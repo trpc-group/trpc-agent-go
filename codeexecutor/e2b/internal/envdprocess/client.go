@@ -124,13 +124,8 @@ func (c *Client) Run(ctx context.Context, req Request) (Result, error) {
 	startCalls := make(chan startCall, 1)
 	go c.start(streamCtx, req, tag, startCalls)
 
-	var (
-		stdout      bytes.Buffer
-		stderr      bytes.Buffer
-		pid         uint32
-		events      <-chan receivedEvent
-		streamReady bool
-	)
+	state := runState{}
+	var events <-chan receivedEvent
 
 	for {
 		select {
@@ -138,102 +133,173 @@ func (c *Client) Run(ctx context.Context, req Request) (Result, error) {
 			startCalls = nil
 			if started.err != nil {
 				cleanupErr := c.terminate(ctx, 0, tag, false)
-				return resultWithOutput(stdout, stderr), errors.Join(
+				return state.result(0), errors.Join(
 					fmt.Errorf("envd process: start: %w", started.err),
 					cleanupErr,
 				)
 			}
 			if started.stream == nil {
 				err := errors.New("envd process: start returned a nil stream")
-				return c.fail(ctx, stdout, stderr, pid, tag, false, err)
+				return c.fail(
+					ctx, state.stdout, state.stderr, state.pid, tag, false, err,
+				)
 			}
-			streamReady = true
+			state.streamReady = true
 			events = receive(streamCtx, started.stream)
 
 		case received, ok := <-events:
-			if !ok {
-				err := errors.New("envd process: stream ended without EndEvent")
-				return c.fail(ctx, stdout, stderr, pid, tag, streamReady, err)
-			}
-			if received.err != nil {
-				return c.fail(
-					ctx, stdout, stderr, pid, tag, streamReady,
-					fmt.Errorf("envd process: receive stream: %w", received.err),
+			outcome := c.handleReceivedEvent(
+				runCtx, req.Stdin, &state, received, ok,
+			)
+			switch outcome.action {
+			case runEventContinue:
+				continue
+			case runEventComplete:
+				return outcome.result, nil
+			case runEventStop:
+				return c.stop(
+					ctx, runCtx, state.stdout, state.stderr, state.pid, tag,
 				)
-			}
-			if received.event == nil {
-				err := errors.New("envd process: received empty event")
-				return c.fail(ctx, stdout, stderr, pid, tag, streamReady, err)
-			}
-
-			switch event := received.event.Event.(type) {
-			case *process.ProcessEvent_Start:
-				if event.Start == nil || event.Start.Pid == 0 {
-					err := errors.New("envd process: received invalid StartEvent")
-					return c.fail(ctx, stdout, stderr, pid, tag, streamReady, err)
-				}
-				if pid != 0 {
-					err := errors.New("envd process: received duplicate StartEvent")
-					return c.fail(ctx, stdout, stderr, pid, tag, streamReady, err)
-				}
-				pid = event.Start.Pid
-				if err := c.writeStdin(runCtx, pid, req.Stdin); err != nil {
-					if runCtx.Err() != nil {
-						return c.stop(ctx, runCtx, stdout, stderr, pid, tag)
-					}
-					return c.fail(
-						ctx, stdout, stderr, pid, tag, true,
-						fmt.Errorf("envd process: write stdin: %w", err),
-					)
-				}
-
-			case *process.ProcessEvent_Data:
-				if event.Data == nil {
-					err := errors.New("envd process: received empty DataEvent")
-					return c.fail(ctx, stdout, stderr, pid, tag, streamReady, err)
-				}
-				switch output := event.Data.Output.(type) {
-				case *process.ProcessEvent_DataEvent_Stdout:
-					_, _ = stdout.Write(output.Stdout)
-				case *process.ProcessEvent_DataEvent_Stderr:
-					_, _ = stderr.Write(output.Stderr)
-				case *process.ProcessEvent_DataEvent_Pty:
-					err := errors.New("envd process: received PTY data for non-PTY process")
-					return c.fail(ctx, stdout, stderr, pid, tag, streamReady, err)
-				default:
-					err := errors.New("envd process: received DataEvent without output")
-					return c.fail(ctx, stdout, stderr, pid, tag, streamReady, err)
-				}
-
-			case *process.ProcessEvent_End:
-				if event.End == nil {
-					err := errors.New("envd process: received empty EndEvent")
-					return c.fail(ctx, stdout, stderr, pid, tag, streamReady, err)
-				}
-				if pid == 0 {
-					err := errors.New("envd process: received EndEvent before StartEvent")
-					return c.fail(ctx, stdout, stderr, pid, tag, streamReady, err)
-				}
-				return Result{
-					Stdout:   stdout.String(),
-					Stderr:   stderr.String(),
-					ExitCode: int(event.End.ExitCode),
-				}, nil
-
-			case *process.ProcessEvent_Keepalive:
-				// KeepAlive has no caller-visible payload.
-
-			default:
-				err := errors.New("envd process: received unknown event")
-				return c.fail(ctx, stdout, stderr, pid, tag, streamReady, err)
+			case runEventFail:
+				return c.fail(
+					ctx, state.stdout, state.stderr, state.pid, tag,
+					state.streamReady, outcome.err,
+				)
 			}
 
 		case <-runCtx.Done():
 			return c.stop(
-				ctx, runCtx, stdout, stderr, pid, tag,
+				ctx, runCtx, state.stdout, state.stderr, state.pid, tag,
 			)
 		}
 	}
+}
+
+type runState struct {
+	stdout      bytes.Buffer
+	stderr      bytes.Buffer
+	pid         uint32
+	streamReady bool
+}
+
+func (s *runState) result(exitCode int32) Result {
+	result := resultWithOutput(s.stdout, s.stderr)
+	result.ExitCode = int(exitCode)
+	return result
+}
+
+type runEventAction uint8
+
+const (
+	runEventContinue runEventAction = iota
+	runEventComplete
+	runEventStop
+	runEventFail
+)
+
+type runEventOutcome struct {
+	action runEventAction
+	result Result
+	err    error
+}
+
+func (c *Client) handleReceivedEvent(
+	ctx context.Context,
+	stdin string,
+	state *runState,
+	received receivedEvent,
+	ok bool,
+) runEventOutcome {
+	if !ok {
+		return failedRunEvent(
+			errors.New("envd process: stream ended without EndEvent"),
+		)
+	}
+	if received.err != nil {
+		return failedRunEvent(
+			fmt.Errorf("envd process: receive stream: %w", received.err),
+		)
+	}
+	if received.event == nil {
+		return failedRunEvent(errors.New("envd process: received empty event"))
+	}
+
+	switch event := received.event.Event.(type) {
+	case *process.ProcessEvent_Start:
+		return c.handleStartEvent(ctx, stdin, state, event.Start)
+	case *process.ProcessEvent_Data:
+		if err := state.appendData(event.Data); err != nil {
+			return failedRunEvent(err)
+		}
+		return runEventOutcome{action: runEventContinue}
+	case *process.ProcessEvent_End:
+		if event.End == nil {
+			return failedRunEvent(
+				errors.New("envd process: received empty EndEvent"),
+			)
+		}
+		if state.pid == 0 {
+			return failedRunEvent(
+				errors.New("envd process: received EndEvent before StartEvent"),
+			)
+		}
+		return runEventOutcome{
+			action: runEventComplete,
+			result: state.result(event.End.ExitCode),
+		}
+	case *process.ProcessEvent_Keepalive:
+		return runEventOutcome{action: runEventContinue}
+	default:
+		return failedRunEvent(errors.New("envd process: received unknown event"))
+	}
+}
+
+func (c *Client) handleStartEvent(
+	ctx context.Context,
+	stdin string,
+	state *runState,
+	event *process.ProcessEvent_StartEvent,
+) runEventOutcome {
+	if event == nil || event.Pid == 0 {
+		return failedRunEvent(
+			errors.New("envd process: received invalid StartEvent"),
+		)
+	}
+	if state.pid != 0 {
+		return failedRunEvent(
+			errors.New("envd process: received duplicate StartEvent"),
+		)
+	}
+	state.pid = event.Pid
+	if err := c.writeStdin(ctx, state.pid, stdin); err != nil {
+		if ctx.Err() != nil {
+			return runEventOutcome{action: runEventStop}
+		}
+		return failedRunEvent(fmt.Errorf("envd process: write stdin: %w", err))
+	}
+	return runEventOutcome{action: runEventContinue}
+}
+
+func (s *runState) appendData(event *process.ProcessEvent_DataEvent) error {
+	if event == nil {
+		return errors.New("envd process: received empty DataEvent")
+	}
+	switch output := event.Output.(type) {
+	case *process.ProcessEvent_DataEvent_Stdout:
+		_, _ = s.stdout.Write(output.Stdout)
+		return nil
+	case *process.ProcessEvent_DataEvent_Stderr:
+		_, _ = s.stderr.Write(output.Stderr)
+		return nil
+	case *process.ProcessEvent_DataEvent_Pty:
+		return errors.New("envd process: received PTY data for non-PTY process")
+	default:
+		return errors.New("envd process: received DataEvent without output")
+	}
+}
+
+func failedRunEvent(err error) runEventOutcome {
+	return runEventOutcome{action: runEventFail, err: err}
 }
 
 type startCall struct {
