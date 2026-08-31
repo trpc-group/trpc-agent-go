@@ -117,6 +117,9 @@ func TestIntegrationEnvdProcess(t *testing.T) {
 	t.Run("RunTimeout", func(t *testing.T) {
 		testEnv.testRunTimeout(ctx, t)
 	})
+	t.Run("ProcessHandleLifecycle", func(t *testing.T) {
+		testEnv.testProcessHandleLifecycle(ctx, t)
+	})
 }
 
 type integrationConfig struct {
@@ -611,6 +614,66 @@ func (e *integrationEnvironment) testRunTimeout(
 	require.NoError(t, err)
 	assert.True(t, result.TimedOut)
 	require.NoError(t, e.waitForProcessConfigToDisappear(ctx, marker))
+}
+
+func (e *integrationEnvironment) testProcessHandleLifecycle(
+	parent context.Context,
+	t *testing.T,
+) {
+	ctx, cancel := context.WithTimeout(parent, integrationOperationTimeout)
+	defer cancel()
+
+	tag := integrationTag("handle")
+	proc, err := e.runner.Start(ctx, Request{
+		Cmd:     "/bin/sh",
+		Args:    []string{"-c", "exec sleep 60"},
+		User:    e.user,
+		Tag:     tag,
+		Timeout: 20 * time.Second,
+	})
+	require.NoError(t, err)
+	pid := proc.PID()
+	require.NotZero(t, pid)
+	e.trackPID(pid)
+
+	infos, err := e.runner.List(ctx)
+	require.NoError(t, err)
+	assertProcessInfoListed(t, infos, pid, tag)
+
+	proc.Disconnect()
+	result, err := proc.Wait(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, pid, result.PID)
+
+	reconnected, err := e.runner.Connect(ctx, pid)
+	require.NoError(t, err)
+	defer reconnected.Disconnect()
+	killed, err := reconnected.Kill(ctx)
+	require.NoError(t, err)
+	assert.True(t, killed)
+	require.NoError(t, e.waitForProcessToDisappear(ctx, pid))
+	e.forgetPID(pid)
+}
+
+func assertProcessInfoListed(
+	t *testing.T,
+	infos []ProcessInfo,
+	pid uint32,
+	tag string,
+) {
+	t.Helper()
+	for _, info := range infos {
+		if info.PID == pid && info.Tag == tag {
+			return
+		}
+	}
+	require.Failf(
+		t,
+		"process not listed",
+		"PID %d with tag %q was absent from Client.List",
+		pid,
+		tag,
+	)
 }
 
 func (e *integrationEnvironment) trackPID(pid uint32) {

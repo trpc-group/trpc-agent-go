@@ -5,13 +5,11 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
 
 // Package envdprocess runs non-interactive processes through E2B envd.
 package envdprocess
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -19,8 +17,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync/atomic"
-	"time"
 
 	"connectrpc.com/connect"
 
@@ -28,42 +24,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec/processconnect"
 )
 
-const (
-	defaultCleanupTimeout = 2 * time.Second
-	cleanupRetryInterval  = 25 * time.Millisecond
-)
-
-// Request describes one non-interactive process invocation. Timeout bounds
-// the whole invocation; a non-positive timeout leaves it to the caller context.
-type Request struct {
-	Cmd  string
-	Args []string
-	Envs map[string]string
-	Cwd  string
-	// User selects the sandbox user through envd's Basic authentication
-	// header. An empty value omits the header and lets envd choose its default.
-	User    string
-	Stdin   string
-	Timeout time.Duration
-}
-
-// Result is the terminal state and exact output collected from a process.
-// TimedOut is set only when Request.Timeout expires, not when the caller
-// context is canceled or reaches its own deadline.
-type Result struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
-	TimedOut bool
-}
-
 // Client runs non-interactive processes through the envd Process service.
 // A Client is safe for concurrent use.
 type Client struct {
-	rpc            processconnect.ProcessClient
-	headers        http.Header
-	cleanupTimeout time.Duration
-	tagSequence    atomic.Uint64
+	processClient processconnect.ProcessClient
+	headers       http.Header
 }
 
 // NewClient constructs an envd process client. Headers are snapshotted and
@@ -83,258 +48,239 @@ func NewClient(
 		httpClient = http.DefaultClient
 	}
 	return &Client{
-		rpc: processconnect.NewProcessClient(
+		processClient: processconnect.NewProcessClient(
 			httpClient,
 			strings.TrimRight(baseURL, "/"),
 		),
-		headers:        headers.Clone(),
-		cleanupTimeout: defaultCleanupTimeout,
+		headers: headers.Clone(),
 	}, nil
 }
 
 // Run starts a process without a PTY and waits for its terminal EndEvent.
 // Non-zero exits from an EndEvent with Exited set are returned in Result with a
-// nil error. Transport, protocol, stdin, failed EndEvent, and cleanup failures
-// are returned as errors. On timeout or caller cancellation, Run explicitly
-// sends SIGKILL before returning.
+// nil error. Transport, protocol, stdin, and failed EndEvent failures are
+// returned as errors. Canceling ctx disconnects the Start stream but does not
+// terminate the remote process. Set Request.Timeout to give envd a remote
+// process deadline.
 func (c *Client) Run(ctx context.Context, req Request) (Result, error) {
-	if ctx == nil {
-		return Result{}, errors.New("envd process: nil context")
+	proc, err := c.Start(ctx, req)
+	if err != nil {
+		if proc != nil {
+			proc.Disconnect()
+			result, _ := proc.snapshot()
+			return result, err
+		}
+		if ctx != nil && ctx.Err() != nil {
+			return Result{}, ctx.Err()
+		}
+		if isRemoteTimeout(req.Timeout > 0, err) || errors.Is(
+			err, context.DeadlineExceeded,
+		) {
+			return Result{TimedOut: true}, nil
+		}
+		return Result{}, err
 	}
-	if c == nil || c.rpc == nil {
-		return Result{}, errors.New("envd process: client is not initialized")
-	}
-	if req.Cmd == "" {
-		return Result{}, errors.New("envd process: command is empty")
+	defer proc.Disconnect()
+	return proc.Wait(ctx)
+}
+
+// Start starts a non-PTY process and returns a handle after envd reports its
+// PID. The returned Process can be non-nil together with an error when initial
+// stdin delivery fails; callers can then use Process.Kill for cleanup.
+func (c *Client) Start(ctx context.Context, req Request) (*Process, error) {
+	if err := c.validateRequest(ctx, req); err != nil {
+		return nil, err
 	}
 
-	runCtx := ctx
-	cancelRun := func() {}
-	if req.Timeout > 0 {
-		runCtx, cancelRun = context.WithTimeout(ctx, req.Timeout)
-	}
-	defer cancelRun()
-
-	// Envd intentionally decouples process lifetime from the Start stream.
-	// Keep the stream alive until this method has explicitly handled caller
-	// cancellation or timeout and terminated the remote process.
-	streamCtx, cancelStream := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancelStream()
-
-	tag := c.nextTag()
+	streamCtx, disconnect := newStartStreamContext(ctx, req.Timeout)
 	startCalls := make(chan startCall, 1)
-	go c.start(streamCtx, req, tag, startCalls)
+	go c.startStream(streamCtx, req, startCalls)
 
-	state := runState{}
-	var events <-chan receivedEvent
-
-	for {
-		select {
-		case started := <-startCalls:
-			startCalls = nil
-			if started.err != nil {
-				cleanupErr := c.terminate(ctx, 0, tag, false)
-				return state.result(0), errors.Join(
-					fmt.Errorf("envd process: start: %w", started.err),
-					cleanupErr,
-				)
-			}
-			if started.stream == nil {
-				err := errors.New("envd process: start returned a nil stream")
-				return c.fail(
-					ctx, state.stdout, state.stderr, state.pid, tag, false, err,
-				)
-			}
-			state.streamReady = true
-			events = receive(streamCtx, started.stream)
-
-		case received, ok := <-events:
-			outcome := c.handleReceivedEvent(
-				runCtx, req.Stdin, &state, received, ok,
-			)
-			switch outcome.action {
-			case runEventContinue:
-				continue
-			case runEventComplete:
-				return outcome.result, nil
-			case runEventStop:
-				return c.stop(
-					ctx, runCtx, state.stdout, state.stderr, state.pid, tag,
-				)
-			case runEventFail:
-				return c.fail(
-					ctx, state.stdout, state.stderr, state.pid, tag,
-					state.streamReady, outcome.err,
-				)
-			}
-
-		case <-runCtx.Done():
-			return c.stop(
-				ctx, runCtx, state.stdout, state.stderr, state.pid, tag,
-			)
+	started, err := waitForStartCall(ctx, streamCtx, startCalls)
+	if err != nil {
+		disconnect()
+		return nil, err
+	}
+	if started.err != nil {
+		streamErr := streamContextError(ctx, streamCtx)
+		disconnect()
+		if streamErr != nil {
+			return nil, streamErr
 		}
+		return nil, fmt.Errorf("envd process: start: %w", started.err)
 	}
-}
-
-type runState struct {
-	stdout      bytes.Buffer
-	stderr      bytes.Buffer
-	pid         uint32
-	streamReady bool
-}
-
-func (s *runState) result(exitCode int32) Result {
-	result := resultWithOutput(s.stdout, s.stderr)
-	result.ExitCode = int(exitCode)
-	return result
-}
-
-type runEventAction uint8
-
-const (
-	runEventContinue runEventAction = iota
-	runEventComplete
-	runEventStop
-	runEventFail
-)
-
-type runEventOutcome struct {
-	action runEventAction
-	result Result
-	err    error
-}
-
-func (c *Client) handleReceivedEvent(
-	ctx context.Context,
-	stdin string,
-	state *runState,
-	received receivedEvent,
-	ok bool,
-) runEventOutcome {
-	if !ok {
-		return failedRunEvent(
-			errors.New("envd process: stream ended without EndEvent"),
-		)
-	}
-	if received.err != nil {
-		return failedRunEvent(
-			fmt.Errorf("envd process: receive stream: %w", received.err),
-		)
-	}
-	if received.event == nil {
-		return failedRunEvent(errors.New("envd process: received empty event"))
+	if started.stream == nil {
+		disconnect()
+		return nil, errors.New("envd process: start returned a nil stream")
 	}
 
-	switch event := received.event.Event.(type) {
-	case *process.ProcessEvent_Start:
-		return c.handleStartEvent(ctx, stdin, state, event.Start)
-	case *process.ProcessEvent_Data:
-		if err := state.appendData(event.Data); err != nil {
-			return failedRunEvent(err)
-		}
-		return runEventOutcome{action: runEventContinue}
-	case *process.ProcessEvent_End:
-		if event.End == nil {
-			return failedRunEvent(
-				errors.New("envd process: received empty EndEvent"),
-			)
-		}
-		if state.pid == 0 {
-			return failedRunEvent(
-				errors.New("envd process: received EndEvent before StartEvent"),
-			)
-		}
-		if !event.End.Exited {
-			return failedRunEvent(endEventError(event.End))
-		}
-		return runEventOutcome{
-			action: runEventComplete,
-			result: state.result(event.End.ExitCode),
-		}
-	case *process.ProcessEvent_Keepalive:
-		return runEventOutcome{action: runEventContinue}
-	default:
-		return failedRunEvent(errors.New("envd process: received unknown event"))
+	events := receive(streamCtx, started.stream)
+	pid, err := waitForProcessStart(ctx, streamCtx, events)
+	if err != nil {
+		disconnect()
+		return nil, err
 	}
-}
-
-func endEventError(event *process.ProcessEvent_EndEvent) error {
-	details := make([]string, 0, 2)
-	if status := strings.TrimSpace(event.Status); status != "" {
-		details = append(details, fmt.Sprintf("status=%q", status))
-	}
-	if message := strings.TrimSpace(event.GetError()); message != "" {
-		details = append(details, fmt.Sprintf("error=%q", message))
-	}
-	if len(details) == 0 {
-		return errors.New("envd process: process ended without exiting")
-	}
-	return fmt.Errorf(
-		"envd process: process ended without exiting: %s",
-		strings.Join(details, ", "),
+	proc := newProcess(
+		c, pid, ctx, streamCtx, req.Timeout > 0, disconnect, events,
 	)
-}
 
-func (c *Client) handleStartEvent(
-	ctx context.Context,
-	stdin string,
-	state *runState,
-	event *process.ProcessEvent_StartEvent,
-) runEventOutcome {
-	if event == nil || event.Pid == 0 {
-		return failedRunEvent(
-			errors.New("envd process: received invalid StartEvent"),
-		)
-	}
-	if state.pid != 0 {
-		return failedRunEvent(
-			errors.New("envd process: received duplicate StartEvent"),
-		)
-	}
-	state.pid = event.Pid
-	if err := c.writeStdin(ctx, state.pid, stdin); err != nil {
-		if ctx.Err() != nil {
-			return runEventOutcome{action: runEventStop}
+	if req.Stdin != "" {
+		if err := proc.SendInput(streamCtx, []byte(req.Stdin)); err != nil {
+			return proc, fmt.Errorf("envd process: write stdin: %w", err)
 		}
-		return failedRunEvent(fmt.Errorf("envd process: write stdin: %w", err))
+		if !req.KeepStdinOpen {
+			if err := proc.CloseStdin(streamCtx); err != nil {
+				return proc, fmt.Errorf("envd process: close stdin: %w", err)
+			}
+		}
 	}
-	return runEventOutcome{action: runEventContinue}
+	return proc, nil
 }
 
-func (s *runState) appendData(event *process.ProcessEvent_DataEvent) error {
-	if event == nil {
-		return errors.New("envd process: received empty DataEvent")
+// Connect attaches to an existing non-PTY process by PID. Canceling ctx or
+// calling Process.Disconnect closes only this event stream.
+func (c *Client) Connect(ctx context.Context, pid uint32) (*Process, error) {
+	if err := c.validateOperation(ctx, pid); err != nil {
+		return nil, err
 	}
-	switch output := event.Output.(type) {
-	case *process.ProcessEvent_DataEvent_Stdout:
-		_, _ = s.stdout.Write(output.Stdout)
-		return nil
-	case *process.ProcessEvent_DataEvent_Stderr:
-		_, _ = s.stderr.Write(output.Stderr)
-		return nil
-	case *process.ProcessEvent_DataEvent_Pty:
-		return errors.New("envd process: received PTY data for non-PTY process")
-	default:
-		return errors.New("envd process: received DataEvent without output")
+	streamCtx, cancelStream := context.WithCancelCause(ctx)
+	disconnect := func() {
+		cancelStream(errProcessDisconnected)
 	}
+	connectReq := connect.NewRequest(&process.ConnectRequest{
+		Process: pidSelector(pid),
+	})
+	c.addHeaders(connectReq.Header())
+	stream, err := c.processClient.Connect(streamCtx, connectReq)
+	if err != nil {
+		disconnect()
+		return nil, fmt.Errorf("envd process: connect: %w", err)
+	}
+	if stream == nil {
+		disconnect()
+		return nil, errors.New("envd process: connect returned a nil stream")
+	}
+	events := receiveConnected(streamCtx, stream)
+	connectedPID, err := waitForProcessStart(ctx, streamCtx, events)
+	if err != nil {
+		disconnect()
+		return nil, err
+	}
+	if connectedPID != pid {
+		disconnect()
+		return nil, fmt.Errorf(
+			"envd process: connect returned PID %d, want %d",
+			connectedPID, pid,
+		)
+	}
+	return newProcess(
+		c, pid, ctx, streamCtx, false, disconnect, events,
+	), nil
 }
 
-func failedRunEvent(err error) runEventOutcome {
-	return runEventOutcome{action: runEventFail, err: err}
+// List returns the processes currently known to envd.
+func (c *Client) List(ctx context.Context) ([]ProcessInfo, error) {
+	if ctx == nil {
+		return nil, errors.New("envd process: nil context")
+	}
+	if c == nil || c.processClient == nil {
+		return nil, errors.New("envd process: client is not initialized")
+	}
+	listReq := connect.NewRequest(&process.ListRequest{})
+	c.addHeaders(listReq.Header())
+	resp, err := c.processClient.List(ctx, listReq)
+	if err != nil {
+		return nil, fmt.Errorf("envd process: list: %w", err)
+	}
+	if resp == nil || resp.Msg == nil {
+		return nil, errors.New("envd process: list returned an empty response")
+	}
+	infos := make([]ProcessInfo, 0, len(resp.Msg.Processes))
+	for _, item := range resp.Msg.Processes {
+		if item == nil {
+			continue
+		}
+		info := ProcessInfo{
+			PID: item.Pid,
+			Tag: item.GetTag(),
+		}
+		if config := item.Config; config != nil {
+			info.Cmd = config.Cmd
+			info.Args = append([]string(nil), config.Args...)
+			info.Envs = cloneStrings(config.Envs)
+			info.Cwd = config.GetCwd()
+		}
+		infos = append(infos, info)
+	}
+	return infos, nil
 }
 
-type startCall struct {
-	stream *connect.ServerStreamForClient[process.StartResponse]
-	err    error
+// Kill sends SIGKILL to a process. It returns false without an error when envd
+// reports that the process does not exist.
+func (c *Client) Kill(ctx context.Context, pid uint32) (bool, error) {
+	if err := c.validateOperation(ctx, pid); err != nil {
+		return false, err
+	}
+	request := connect.NewRequest(&process.SendSignalRequest{
+		Process: pidSelector(pid),
+		Signal:  process.Signal_SIGNAL_SIGKILL,
+	})
+	c.addHeaders(request.Header())
+	_, err := c.processClient.SendSignal(ctx, request)
+	if connect.CodeOf(err) == connect.CodeNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("envd process: kill %d: %w", pid, err)
+	}
+	return true, nil
 }
 
-func (c *Client) start(
+// SendInput writes bytes to an open process stdin.
+func (c *Client) SendInput(
+	ctx context.Context,
+	pid uint32,
+	input []byte,
+) error {
+	if err := c.validateOperation(ctx, pid); err != nil {
+		return err
+	}
+	inputReq := connect.NewRequest(&process.SendInputRequest{
+		Process: pidSelector(pid),
+		Input: &process.ProcessInput{
+			Input: &process.ProcessInput_Stdin{
+				Stdin: append([]byte(nil), input...),
+			},
+		},
+	})
+	c.addHeaders(inputReq.Header())
+	if _, err := c.processClient.SendInput(ctx, inputReq); err != nil {
+		return fmt.Errorf("envd process: send input to %d: %w", pid, err)
+	}
+	return nil
+}
+
+// CloseStdin closes a process stdin and signals EOF.
+func (c *Client) CloseStdin(ctx context.Context, pid uint32) error {
+	if err := c.validateOperation(ctx, pid); err != nil {
+		return err
+	}
+	closeReq := connect.NewRequest(&process.CloseStdinRequest{
+		Process: pidSelector(pid),
+	})
+	c.addHeaders(closeReq.Header())
+	if _, err := c.processClient.CloseStdin(ctx, closeReq); err != nil {
+		return fmt.Errorf("envd process: close stdin for %d: %w", pid, err)
+	}
+	return nil
+}
+
+func (c *Client) startStream(
 	ctx context.Context,
 	req Request,
-	tag string,
 	result chan<- startCall,
 ) {
-	stdin := req.Stdin != ""
+	stdin := req.Stdin != "" || req.KeepStdinOpen
 	args := append([]string(nil), req.Args...)
 	envs := make(map[string]string, len(req.Envs))
 	for key, value := range req.Envs {
@@ -346,167 +292,26 @@ func (c *Client) start(
 		cwd = &cwdValue
 	}
 
-	rpcReq := connect.NewRequest(&process.StartRequest{
+	startReq := connect.NewRequest(&process.StartRequest{
 		Process: &process.ProcessConfig{
 			Cmd:  req.Cmd,
 			Args: args,
 			Envs: envs,
 			Cwd:  cwd,
 		},
-		Tag:   &tag,
 		Stdin: &stdin,
 	})
-	c.addHeaders(rpcReq.Header())
-	addProcessUserHeader(rpcReq.Header(), req.User)
-	stream, err := c.rpc.Start(ctx, rpcReq)
+	if req.Tag != "" {
+		tag := req.Tag
+		startReq.Msg.Tag = &tag
+	}
+	c.addHeaders(startReq.Header())
+	addProcessUserHeader(startReq.Header(), req.User)
+	stream, err := c.processClient.Start(ctx, startReq)
 	select {
 	case result <- startCall{stream: stream, err: err}:
 	case <-ctx.Done():
 	}
-}
-
-type receivedEvent struct {
-	event *process.ProcessEvent
-	err   error
-}
-
-func receive(
-	ctx context.Context,
-	stream *connect.ServerStreamForClient[process.StartResponse],
-) <-chan receivedEvent {
-	events := make(chan receivedEvent)
-	go func() {
-		defer close(events)
-		defer stream.Close()
-		for stream.Receive() {
-			msg := stream.Msg()
-			var event *process.ProcessEvent
-			if msg != nil {
-				event = msg.Event
-			}
-			select {
-			case events <- receivedEvent{event: event}:
-			case <-ctx.Done():
-				return
-			}
-		}
-		if err := stream.Err(); err != nil {
-			select {
-			case events <- receivedEvent{err: err}:
-			case <-ctx.Done():
-			}
-		}
-	}()
-	return events
-}
-
-func (c *Client) writeStdin(
-	ctx context.Context,
-	pid uint32,
-	stdin string,
-) error {
-	if stdin == "" {
-		return nil
-	}
-	selector := pidSelector(pid)
-	inputReq := connect.NewRequest(&process.SendInputRequest{
-		Process: selector,
-		Input: &process.ProcessInput{
-			Input: &process.ProcessInput_Stdin{Stdin: []byte(stdin)},
-		},
-	})
-	c.addHeaders(inputReq.Header())
-	if _, err := c.rpc.SendInput(ctx, inputReq); err != nil {
-		return err
-	}
-	closeReq := connect.NewRequest(&process.CloseStdinRequest{
-		Process: selector,
-	})
-	c.addHeaders(closeReq.Header())
-	_, err := c.rpc.CloseStdin(ctx, closeReq)
-	return err
-}
-
-func (c *Client) stop(
-	ctx context.Context,
-	runCtx context.Context,
-	stdout bytes.Buffer,
-	stderr bytes.Buffer,
-	pid uint32,
-	tag string,
-) (Result, error) {
-	cleanupErr := c.terminate(ctx, pid, tag, pid == 0)
-	result := resultWithOutput(stdout, stderr)
-	if ctx.Err() != nil {
-		return result, errors.Join(ctx.Err(), cleanupErr)
-	}
-	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-		result.TimedOut = true
-		return result, cleanupErr
-	}
-	return result, errors.Join(runCtx.Err(), cleanupErr)
-}
-
-func (c *Client) fail(
-	ctx context.Context,
-	stdout bytes.Buffer,
-	stderr bytes.Buffer,
-	pid uint32,
-	tag string,
-	streamReady bool,
-	err error,
-) (Result, error) {
-	cleanupErr := c.terminate(ctx, pid, tag, streamReady)
-	return resultWithOutput(stdout, stderr), errors.Join(err, cleanupErr)
-}
-
-func (c *Client) terminate(
-	parent context.Context,
-	pid uint32,
-	tag string,
-	waitForTag bool,
-) error {
-	cleanupCtx, cancel := context.WithTimeout(
-		context.WithoutCancel(parent), c.cleanupTimeout,
-	)
-	defer cancel()
-
-	selector := pidSelector(pid)
-	if pid == 0 {
-		selector = tagSelector(tag)
-	}
-	for {
-		req := connect.NewRequest(&process.SendSignalRequest{
-			Process: selector,
-			Signal:  process.Signal_SIGNAL_SIGKILL,
-		})
-		c.addHeaders(req.Header())
-		_, err := c.rpc.SendSignal(cleanupCtx, req)
-		if err == nil {
-			return nil
-		}
-		if connect.CodeOf(err) != connect.CodeNotFound {
-			return fmt.Errorf("envd process: send SIGKILL: %w", err)
-		}
-		if pid != 0 || !waitForTag {
-			return nil
-		}
-		// A tag miss is ambiguous while Start may still be registering the
-		// process. Retry for the full cleanup window. If it never appears,
-		// treat it as already stopped rather than turning timeout into an error.
-		select {
-		case <-cleanupCtx.Done():
-			return nil
-		case <-time.After(cleanupRetryInterval):
-		}
-	}
-}
-
-func (c *Client) nextTag() string {
-	return fmt.Sprintf(
-		"trpc-agent-go-%d-%d",
-		time.Now().UnixNano(), c.tagSequence.Add(1),
-	)
 }
 
 func (c *Client) addHeaders(target http.Header) {
@@ -515,6 +320,32 @@ func (c *Client) addHeaders(target http.Header) {
 			target.Add(key, value)
 		}
 	}
+}
+
+func (c *Client) validateRequest(ctx context.Context, req Request) error {
+	if ctx == nil {
+		return errors.New("envd process: nil context")
+	}
+	if c == nil || c.processClient == nil {
+		return errors.New("envd process: client is not initialized")
+	}
+	if req.Cmd == "" {
+		return errors.New("envd process: command is empty")
+	}
+	return ctx.Err()
+}
+
+func (c *Client) validateOperation(ctx context.Context, pid uint32) error {
+	if ctx == nil {
+		return errors.New("envd process: nil context")
+	}
+	if c == nil || c.processClient == nil {
+		return errors.New("envd process: client is not initialized")
+	}
+	if pid == 0 {
+		return errors.New("envd process: pid is zero")
+	}
+	return ctx.Err()
 }
 
 func addProcessUserHeader(target http.Header, user string) {
@@ -535,8 +366,4 @@ func tagSelector(tag string) *process.ProcessSelector {
 	return &process.ProcessSelector{
 		Selector: &process.ProcessSelector_Tag{Tag: tag},
 	}
-}
-
-func resultWithOutput(stdout, stderr bytes.Buffer) Result {
-	return Result{Stdout: stdout.String(), Stderr: stderr.String()}
 }
