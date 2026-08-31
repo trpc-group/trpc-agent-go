@@ -1325,7 +1325,10 @@ func TestTransferResponseProc_DoesNotInheritParentMetadataFromSource(t *testing.
 			"that edge has no representable ParentMetadata (must be nil, not inherited)")
 }
 
-type cancelOnRunAgent struct{ cancel context.CancelFunc }
+type cancelOnRunAgent struct {
+	cancel context.CancelFunc
+	calls  int
+}
 
 func (a *cancelOnRunAgent) Info() agent.Info                { return agent.Info{Name: "child"} }
 func (a *cancelOnRunAgent) SubAgents() []agent.Agent        { return nil }
@@ -1334,6 +1337,7 @@ func (a *cancelOnRunAgent) Tools() []tool.Tool              { return nil }
 func (a *cancelOnRunAgent) Run(
 	ctx context.Context, inv *agent.Invocation,
 ) (<-chan *event.Event, error) {
+	a.calls++
 	a.cancel()
 	ch := make(chan *event.Event, 1)
 	ch <- event.New(inv.InvocationID, a.Info().Name)
@@ -1363,7 +1367,7 @@ func TestTransferResponseProc_NoPendingTransferReturnsOriginal(t *testing.T) {
 }
 
 func TestTransferResponseProc_CancelledContextReturnsOriginal(t *testing.T) {
-	target := &mockAgent{name: "child", emit: true}
+	target := &runErrorAgent{name: "child"}
 	parent := &parentAgent{child: target}
 	inv := &agent.Invocation{
 		Agent:        parent,
@@ -1378,6 +1382,7 @@ func TestTransferResponseProc_CancelledContextReturnsOriginal(t *testing.T) {
 		ctx, inv, &model.Request{}, rsp, make(chan *event.Event, 4),
 	)
 	require.Same(t, rsp, got)
+	require.Zero(t, target.calls)
 }
 
 func TestTransferResponseProc_ForwardFailureReturnsOriginal(t *testing.T) {
@@ -1396,4 +1401,5 @@ func TestTransferResponseProc_ForwardFailureReturnsOriginal(t *testing.T) {
 		ctx, inv, &model.Request{}, rsp, make(chan *event.Event, 4),
 	)
 	require.Same(t, rsp, got)
+	require.Equal(t, 1, target.calls)
 }
