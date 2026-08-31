@@ -14,11 +14,12 @@
 package processconnect
 
 import (
-	connect "connectrpc.com/connect"
 	context "context"
 	errors "errors"
 	http "net/http"
 	strings "strings"
+
+	connect "connectrpc.com/connect"
 	process "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec"
 )
 
