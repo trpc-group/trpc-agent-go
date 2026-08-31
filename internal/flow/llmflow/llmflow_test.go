@@ -4984,3 +4984,26 @@ func TestWaitEventTimeout_NoDeadline(t *testing.T) {
 	timeout := WaitEventTimeout(ctx)
 	require.Equal(t, 5*time.Second, timeout)
 }
+
+func TestEmitStartEventAndWaitDeadlineExceeded(t *testing.T) {
+	f := &Flow{}
+	inv := agent.NewInvocation(agent.WithInvocationID("deadline-repro"))
+	eventChan := make(chan *event.Event, 4)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err := f.emitStartEventAndWait(ctx, inv, eventChan)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestEmitStartEventAndWaitNoticeTimeoutContinues(t *testing.T) {
+	f := &Flow{}
+	inv := agent.NewInvocation(agent.WithInvocationID("notice-timeout-repro"))
+	eventChan := make(chan *event.Event, 4)
+
+	// The completion notice never arrives; the wait must not block the flow
+	// beyond eventCompletionTimeout, and the timeout must not fail the run.
+	err := f.emitStartEventAndWait(context.Background(), inv, eventChan)
+	require.NoError(t, err)
+}
