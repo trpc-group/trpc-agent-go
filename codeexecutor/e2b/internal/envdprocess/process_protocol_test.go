@@ -117,6 +117,8 @@ func testProcessProtocolStart(t *testing.T) {
 		assertProtocolHeader(t, req.Header())
 		assert.Equal(t, "/bin/sh", req.Msg.Process.Cmd)
 		assert.Equal(t, []string{"-c", "printf started"}, req.Msg.Process.Args)
+		assert.Equal(t, map[string]string{"MODE": "protocol"}, req.Msg.Process.Envs)
+		assert.Equal(t, "/tmp/protocol", req.Msg.Process.GetCwd())
 		assert.Equal(t, "start-process", req.Msg.GetTag())
 		assert.True(t, req.Msg.GetStdin())
 		for _, event := range []*process.ProcessEvent{
@@ -133,11 +135,14 @@ func testProcessProtocolStart(t *testing.T) {
 
 	stdin := true
 	tag := "start-process"
+	cwd := "/tmp/protocol"
 	client := newProtocolTestClient(t, handler)
 	req := connect.NewRequest(&process.StartRequest{
 		Process: &process.ProcessConfig{
 			Cmd:  "/bin/sh",
 			Args: []string{"-c", "printf started"},
+			Envs: map[string]string{"MODE": "protocol"},
+			Cwd:  &cwd,
 		},
 		Tag:   &tag,
 		Stdin: &stdin,

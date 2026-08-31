@@ -93,9 +93,10 @@ func NewClient(
 }
 
 // Run starts a process without a PTY and waits for its terminal EndEvent.
-// Non-zero exits are returned in Result with a nil error. Transport, protocol,
-// stdin, and cleanup failures are returned as errors. On timeout or caller
-// cancellation, Run explicitly sends SIGKILL before returning.
+// Non-zero exits from an EndEvent with Exited set are returned in Result with a
+// nil error. Transport, protocol, stdin, failed EndEvent, and cleanup failures
+// are returned as errors. On timeout or caller cancellation, Run explicitly
+// sends SIGKILL before returning.
 func (c *Client) Run(ctx context.Context, req Request) (Result, error) {
 	if ctx == nil {
 		return Result{}, errors.New("envd process: nil context")
@@ -243,6 +244,9 @@ func (c *Client) handleReceivedEvent(
 				errors.New("envd process: received EndEvent before StartEvent"),
 			)
 		}
+		if !event.End.Exited {
+			return failedRunEvent(endEventError(event.End))
+		}
 		return runEventOutcome{
 			action: runEventComplete,
 			result: state.result(event.End.ExitCode),
@@ -252,6 +256,23 @@ func (c *Client) handleReceivedEvent(
 	default:
 		return failedRunEvent(errors.New("envd process: received unknown event"))
 	}
+}
+
+func endEventError(event *process.ProcessEvent_EndEvent) error {
+	details := make([]string, 0, 2)
+	if status := strings.TrimSpace(event.Status); status != "" {
+		details = append(details, fmt.Sprintf("status=%q", status))
+	}
+	if message := strings.TrimSpace(event.GetError()); message != "" {
+		details = append(details, fmt.Sprintf("error=%q", message))
+	}
+	if len(details) == 0 {
+		return errors.New("envd process: process ended without exiting")
+	}
+	return fmt.Errorf(
+		"envd process: process ended without exiting: %s",
+		strings.Join(details, ", "),
+	)
 }
 
 func (c *Client) handleStartEvent(
@@ -470,12 +491,12 @@ func (c *Client) terminate(
 		if pid != 0 || !waitForTag {
 			return nil
 		}
+		// A tag miss is ambiguous while Start may still be registering the
+		// process. Retry for the full cleanup window. If it never appears,
+		// treat it as already stopped rather than turning timeout into an error.
 		select {
 		case <-cleanupCtx.Done():
-			return fmt.Errorf(
-				"envd process: locate process tagged %q for cleanup: %w",
-				tag, cleanupCtx.Err(),
-			)
+			return nil
 		case <-time.After(cleanupRetryInterval):
 		}
 	}

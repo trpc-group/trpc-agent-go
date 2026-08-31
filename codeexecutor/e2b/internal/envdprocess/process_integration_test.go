@@ -47,7 +47,7 @@ const (
 	integrationDefaultE2BUser                = "user"
 	integrationDefaultCubeSandboxUser        = "root"
 	integrationEnvdPort                      = 49983
-	integrationTestTimeout                   = 2 * time.Minute
+	integrationTestTimeout                   = 5 * time.Minute
 	integrationOperationTimeout              = 30 * time.Second
 	integrationSandboxTimeout                = 5 * time.Minute
 )

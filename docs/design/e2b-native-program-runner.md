@@ -139,6 +139,8 @@ service Process {
     rpc List(ListRequest) returns (ListResponse);
     rpc Connect(ConnectRequest) returns (stream ConnectResponse);
     rpc Start(StartRequest) returns (stream StartResponse);
+    rpc Update(UpdateRequest) returns (UpdateResponse);
+    rpc StreamInput(stream StreamInputRequest) returns (StreamInputResponse);
     rpc SendInput(SendInputRequest) returns (SendInputResponse);
     rpc SendSignal(SendSignalRequest) returns (SendSignalResponse);
     rpc CloseStdin(CloseStdinRequest) returns (CloseStdinResponse);
@@ -288,8 +290,8 @@ helper so process RPC does not inherit `Content-Type: application/json`.
 
 ## Envd Version and Capability Policy
 
-The first PR requires the process protocol plus finite stdin delivery. The
-official E2B SDK records these relevant capability versions:
+The client contract requires the process protocol plus finite stdin delivery.
+The official E2B SDK records these relevant capability versions:
 
 ```text
 ENVD_COMMANDS_STDIN = 0.3.0
@@ -304,6 +306,10 @@ is:
 ```text
 envd >= 0.5.2
 ```
+
+`envdprocess.Client.Run` must not ignore `CodeUnimplemented` from `CloseStdin`:
+reporting success without delivering EOF violates the finite-stdin contract and
+can leave the remote process waiting indefinitely.
 
 Version handling must be explicit:
 
@@ -679,10 +685,13 @@ Cover the complete Process service through three protocol flows:
 3. start and resize a PTY, then use ordered streaming input and verify the
    terminal size.
 
-Probe `CloseStdin` as an optional envd capability. Run the close-stdin protocol
-and high-level stdin scenarios when it is supported; skip only those scenarios
-when an older deployment returns `CodeUnimplemented`. Other protocol failures
-remain test failures.
+Probe `CloseStdin` as an optional envd capability of the integration target.
+Run the close-stdin protocol and high-level stdin scenarios when it is
+supported; skip only those scenarios when an older deployment returns
+`CodeUnimplemented`. The skip records protocol compatibility of that deployment
+and does not declare it suitable for the native `ProgramRunner`. The later
+`RunProgram` wiring must still reject envd versions older than `0.5.2` before
+execution. Other protocol failures remain test failures.
 
 Also run the high-level `Client.Run` adapter against real envd, covering
 separate stdout and stderr, a non-zero exit, timeout, and remote process

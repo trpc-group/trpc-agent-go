@@ -31,6 +31,29 @@ func TestNewClientRejectsInvalidBaseURL(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewClientUsesDefaultHTTPClient(t *testing.T) {
+	client, err := NewClient("https://envd.example", nil, nil)
+	require.NoError(t, err)
+	assert.NotNil(t, client.rpc)
+}
+
+func TestRunRejectsInvalidInput(t *testing.T) {
+	client := newTestClient(t, &testProcessHandler{}, nil)
+
+	_, err := client.Run(nil, Request{Cmd: "true"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil context")
+
+	var nilClient *Client
+	_, err = nilClient.Run(context.Background(), Request{Cmd: "true"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client is not initialized")
+
+	_, err = client.Run(context.Background(), Request{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "command is empty")
+}
+
 func TestRunMapsRequestInputAndEvents(t *testing.T) {
 	stdinClosed := make(chan struct{})
 	startRequests := make(chan *connect.Request[process.StartRequest], 1)
@@ -247,6 +270,38 @@ func TestRunCancellationBeforeStartEventKillsByTag(t *testing.T) {
 	assert.Equal(t, 3, signalAttempts)
 }
 
+func TestRunTimeoutTreatsMissingTagAsStopped(t *testing.T) {
+	var signalAttempts int
+	handler := &testProcessHandler{}
+	handler.start = func(
+		ctx context.Context,
+		_ *connect.Request[process.StartRequest],
+		_ *connect.ServerStream[process.StartResponse],
+	) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	handler.sendSignal = func(
+		context.Context,
+		*connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		signalAttempts++
+		return nil, connect.NewError(
+			connect.CodeNotFound, errors.New("process is not running"),
+		)
+	}
+
+	client := newTestClient(t, handler, nil)
+	client.cleanupTimeout = 75 * time.Millisecond
+	result, err := client.Run(context.Background(), Request{
+		Cmd:     "true",
+		Timeout: 25 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	assert.True(t, result.TimedOut)
+	assert.Greater(t, signalAttempts, 1)
+}
+
 func TestRunStreamWithoutEndEventIsProtocolError(t *testing.T) {
 	signals := make(chan *connect.Request[process.SendSignalRequest], 1)
 	handler := &testProcessHandler{}
@@ -276,6 +331,163 @@ func TestRunStreamWithoutEndEventIsProtocolError(t *testing.T) {
 	assert.Contains(t, err.Error(), "without EndEvent")
 	assert.Equal(t, "partial", result.Stdout)
 	assert.Equal(t, uint32(99), (<-signals).Msg.Process.GetPid())
+}
+
+func TestRunStreamErrorIsProtocolError(t *testing.T) {
+	handler := &testProcessHandler{}
+	handler.start = func(
+		_ context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(100)); err != nil {
+			return err
+		}
+		return connect.NewError(connect.CodeUnavailable, errors.New("stream down"))
+	}
+	handler.sendSignal = processNotFoundSignal
+
+	client := newTestClient(t, handler, nil)
+	_, err := client.Run(context.Background(), Request{Cmd: "broken"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "receive stream")
+	assert.Contains(t, err.Error(), "stream down")
+}
+
+func TestRunFailedEndEventIsExecutionError(t *testing.T) {
+	errMessage := "failed to wait for process"
+	handler := &testProcessHandler{}
+	handler.start = func(
+		_ context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		for _, response := range []*process.StartResponse{
+			startEvent(101),
+			{Event: stdoutEvent([]byte("partial output"))},
+			{Event: &process.ProcessEvent{Event: &process.ProcessEvent_End{
+				End: &process.ProcessEvent_EndEvent{
+					Exited: false,
+					Status: "wait failed",
+					Error:  &errMessage,
+				},
+			}}},
+		} {
+			if err := stream.Send(response); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	handler.sendSignal = processNotFoundSignal
+
+	client := newTestClient(t, handler, nil)
+	result, err := client.Run(context.Background(), Request{Cmd: "broken"})
+	require.Error(t, err)
+	assert.Equal(t, "partial output", result.Stdout)
+	assert.Contains(t, err.Error(), `status="wait failed"`)
+	assert.Contains(t, err.Error(), `error="failed to wait for process"`)
+}
+
+func TestRunRejectsMalformedEvents(t *testing.T) {
+	tests := []struct {
+		name      string
+		responses []*process.StartResponse
+		wantError string
+	}{
+		{
+			name:      "EmptyEvent",
+			responses: []*process.StartResponse{{}},
+			wantError: "received empty event",
+		},
+		{
+			name:      "InvalidStart",
+			responses: []*process.StartResponse{startEvent(0)},
+			wantError: "invalid StartEvent",
+		},
+		{
+			name:      "DuplicateStart",
+			responses: []*process.StartResponse{startEvent(1), startEvent(2)},
+			wantError: "duplicate StartEvent",
+		},
+		{
+			name: "DataWithoutOutputFromEmptyMessage",
+			responses: []*process.StartResponse{
+				startEvent(1),
+				{Event: &process.ProcessEvent{Event: &process.ProcessEvent_Data{}}},
+			},
+			wantError: "DataEvent without output",
+		},
+		{
+			name: "PTYData",
+			responses: []*process.StartResponse{
+				startEvent(1),
+				{Event: &process.ProcessEvent{Event: &process.ProcessEvent_Data{
+					Data: &process.ProcessEvent_DataEvent{
+						Output: &process.ProcessEvent_DataEvent_Pty{Pty: []byte("pty")},
+					},
+				}}},
+			},
+			wantError: "PTY data for non-PTY process",
+		},
+		{
+			name: "DataWithoutOutput",
+			responses: []*process.StartResponse{
+				startEvent(1),
+				{Event: &process.ProcessEvent{Event: &process.ProcessEvent_Data{
+					Data: &process.ProcessEvent_DataEvent{},
+				}}},
+			},
+			wantError: "DataEvent without output",
+		},
+		{
+			name: "EndWithoutExitedFromEmptyMessage",
+			responses: []*process.StartResponse{
+				startEvent(1),
+				{Event: &process.ProcessEvent{Event: &process.ProcessEvent_End{}}},
+			},
+			wantError: "process ended without exiting",
+		},
+		{
+			name: "EndBeforeStart",
+			responses: []*process.StartResponse{
+				{Event: endEvent(0)},
+			},
+			wantError: "EndEvent before StartEvent",
+		},
+		{
+			name: "UnknownEvent",
+			responses: []*process.StartResponse{
+				{Event: &process.ProcessEvent{}},
+			},
+			wantError: "unknown event",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := &testProcessHandler{}
+			handler.start = func(
+				_ context.Context,
+				_ *connect.Request[process.StartRequest],
+				stream *connect.ServerStream[process.StartResponse],
+			) error {
+				for _, response := range tt.responses {
+					if err := stream.Send(response); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			handler.sendSignal = processNotFoundSignal
+
+			client := newTestClient(t, handler, nil)
+			client.cleanupTimeout = 20 * time.Millisecond
+			_, err := client.Run(context.Background(), Request{Cmd: "broken"})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantError)
+		})
+	}
 }
 
 func TestRunTimeoutTreatsMissingProcessAsStopped(t *testing.T) {
@@ -412,6 +624,15 @@ func blockingProcessHandler(
 		return connect.NewResponse(&process.SendSignalResponse{}), nil
 	}
 	return handler
+}
+
+func processNotFoundSignal(
+	context.Context,
+	*connect.Request[process.SendSignalRequest],
+) (*connect.Response[process.SendSignalResponse], error) {
+	return nil, connect.NewError(
+		connect.CodeNotFound, errors.New("process is not running"),
+	)
 }
 
 func startEvent(pid uint32) *process.StartResponse {
