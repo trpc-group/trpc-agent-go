@@ -71,6 +71,11 @@ const (
 	defaultKimiBaseURL string = "https://api.moonshot.ai/v1"
 	kimiAPIHost        string = "api.moonshot.ai"
 	kimiCNAPIHost      string = "api.moonshot.cn"
+
+	//nolint:gosec
+	orcarouterAPIKeyName     string = "ORCAROUTER_API_KEY"
+	defaultOrcaRouterBaseURL string = "https://api.orcarouter.ai/v1"
+	orcaRouterAPIHost        string = "api.orcarouter.ai"
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -95,6 +100,10 @@ const (
 	VariantMiniMax Variant = "minimax"
 	// VariantKimi is the Kimi OpenAI-compatible variant.
 	VariantKimi Variant = "kimi"
+	// VariantOrcaRouter is the OrcaRouter OpenAI-compatible gateway variant.
+	// OrcaRouter exposes a provider/model namespace like OpenRouter, with
+	// adaptive routing and failover behind the same endpoint.
+	VariantOrcaRouter Variant = "orcarouter"
 )
 
 // thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
@@ -397,6 +406,14 @@ var variantConfigs = map[Variant]variantConfig{
 		thinkingEnabledKey:        thinkingKey,
 		thinkingValueConvertor:    thinkingTypeValueConvertor,
 	},
+	VariantOrcaRouter: {
+		filePurpose:               openai.FilePurposeUserData,
+		fileDeletionMethod:        http.MethodDelete,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		apiKeyName:                orcarouterAPIKeyName,
+		defaultBaseURL:            defaultOrcaRouterBaseURL,
+	},
 }
 
 // Model implements the model.Model interface for OpenAI API.
@@ -536,6 +553,9 @@ func inferVariant(baseURL string) Variant {
 	if isKimiBaseURL(baseURL) {
 		return VariantKimi
 	}
+	if isOrcaRouterBaseURL(baseURL) {
+		return VariantOrcaRouter
+	}
 	return VariantOpenAI
 }
 
@@ -549,6 +569,10 @@ func isMiniMaxBaseURL(raw string) bool {
 
 func isKimiBaseURL(raw string) bool {
 	return baseURLMatchesHost(raw, kimiAPIHost, kimiCNAPIHost)
+}
+
+func isOrcaRouterBaseURL(raw string) bool {
+	return baseURLMatchesHost(raw, orcaRouterAPIHost)
 }
 
 func baseURLMatchesHost(raw string, hosts ...string) bool {
