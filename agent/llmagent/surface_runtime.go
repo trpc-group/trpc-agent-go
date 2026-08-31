@@ -10,6 +10,7 @@ package llmagent
 
 import (
 	"context"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
@@ -221,8 +222,9 @@ func (a *LLMAgent) skillToolFlagsForInvocation(
 }
 
 // ExecutionTraceAppliedSurfaceIDs reports the effective surfaces that affected one invocation step.
+// It returns nil when a shared-trace child invocation does not map to a static child node.
 func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []string {
-	nodeID := agent.InvocationSurfaceRootNodeID(inv)
+	nodeID := executionTraceSurfaceNodeID(inv)
 	if nodeID == "" {
 		return nil
 	}
@@ -269,6 +271,61 @@ func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []stri
 		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeSkill))
 	}
 	return appliedSurfaceIDs
+}
+
+// executionTraceSurfaceNodeID returns the node id that can safely publish applied surfaces.
+func executionTraceSurfaceNodeID(inv *agent.Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	nodeID := agent.InvocationSurfaceRootNodeID(inv)
+	if nodeID == "" {
+		return ""
+	}
+	if executionTraceUsesParentCapture(inv) && !executionTraceNodeIsUnderParent(inv) {
+		return ""
+	}
+	return nodeID
+}
+
+// executionTraceStepNodeID returns the static trace node id for an LLM step.
+func executionTraceStepNodeID(inv *agent.Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	nodeID := agent.InvocationTraceNodeID(inv)
+	if nodeID == "" {
+		return ""
+	}
+	if executionTraceUsesParentCapture(inv) && !executionTraceNodeIsUnderParent(inv) {
+		return ""
+	}
+	return nodeID
+}
+
+// executionTraceUsesParentCapture reports whether an invocation participates in its parent's trace.
+func executionTraceUsesParentCapture(inv *agent.Invocation) bool {
+	parent := inv.GetParentInvocation()
+	return parent != nil &&
+		inv.RunOptions.ExecutionTraceEnabled &&
+		parent.RunOptions.ExecutionTraceEnabled
+}
+
+// executionTraceNodeIsUnderParent reports whether the invocation maps to a static child node.
+func executionTraceNodeIsUnderParent(inv *agent.Invocation) bool {
+	parent := inv.GetParentInvocation()
+	if parent == nil {
+		return false
+	}
+	parentNodeID := agent.InvocationTraceNodeID(parent)
+	nodeID := agent.InvocationTraceNodeID(inv)
+	if parentNodeID == "" || nodeID == "" || nodeID == parentNodeID {
+		return false
+	}
+	if rootNodeID := agent.InvocationTeamMemberTraceRoot(inv); rootNodeID != "" {
+		return nodeID == rootNodeID || strings.HasPrefix(nodeID, rootNodeID+"/")
+	}
+	return strings.HasPrefix(nodeID, parentNodeID+"/")
 }
 
 // InvocationToolSurface returns the invocation-scoped tool surface and user tool names.

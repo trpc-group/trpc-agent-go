@@ -1535,21 +1535,22 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	a.setupInvocation(invocation)
 	var traceLease tracecapture.StepLease
 	if invocation.RunOptions.ExecutionTraceEnabled {
-		traceNodeID := agent.InvocationTraceNodeID(invocation)
-		traceCtx := agent.NewInvocationContext(ctx, invocation)
-		traceLease = tracecapture.EnsureInvocationStep(
-			traceCtx,
-			func() string {
-				return agent.StartExecutionTraceStep(
-					invocation,
-					traceNodeID,
-					llmAgentTraceInputSnapshot(invocation),
-					nil,
-				)
-			},
-		)
-		if traceLease.Owns {
-			tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "agent")
+		if traceNodeID := executionTraceStepNodeID(invocation); traceNodeID != "" {
+			traceCtx := agent.NewInvocationContext(ctx, invocation)
+			traceLease = tracecapture.EnsureInvocationStep(
+				traceCtx,
+				func() string {
+					return agent.StartExecutionTraceStep(
+						invocation,
+						traceNodeID,
+						llmAgentTraceInputSnapshot(invocation),
+						nil,
+					)
+				},
+			)
+			if traceLease.Owns {
+				tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "agent")
+			}
 		}
 	}
 	ctx = a.withWorkspace(ctx, invocation)
