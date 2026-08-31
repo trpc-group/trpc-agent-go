@@ -220,7 +220,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		firstIteration := true
 		for {
 			// emit start event and wait for completion notice.
-			if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
+			if err := f.emitStartEventAndWait(ctx, invocation, eventChan, eventCompletionTimeout); err != nil {
 				runErr = err
 				return
 			}
@@ -562,7 +562,7 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 }
 
 func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invocation,
-	eventChan chan<- *event.Event) error {
+	eventChan chan<- *event.Event, timeout time.Duration) error {
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,
@@ -585,18 +585,32 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 	// Wait for completion notice.
 	// Ensure that the events of the previous agent or the previous step have been synchronized to the session.
 	completionID := agent.GetAppendEventNoticeKey(startEvent.ID)
-	err = invocation.AddNoticeChannelAndWait(ctx, completionID, eventCompletionTimeout)
+	err = invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
+	return handleStartEventWaitError(ctx, err)
+}
+
+// handleStartEventWaitError maps the completion-wait result to a flow error.
+// Cancellation and deadline errors are propagated. A notice timeout on a live
+// context is recoverable and only logged, while a timeout that raced with a
+// just-expired context is propagated as the context error.
+func handleStartEventWaitError(ctx context.Context, err error) error {
 	if errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	if err != nil {
-		log.WarnfContext(
-			ctx,
-			"Wait for start event completion failed: %v",
-			err,
-		)
+	if err == nil {
+		return nil
 	}
+	// The timeout branch may win the select race against a context that
+	// expired at the same moment; never continue with an expired context.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	log.WarnfContext(
+		ctx,
+		"Wait for start event completion failed: %v",
+		err,
+	)
 	return nil
 }
 

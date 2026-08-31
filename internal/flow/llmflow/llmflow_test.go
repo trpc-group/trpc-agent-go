@@ -4993,7 +4993,7 @@ func TestEmitStartEventAndWaitDeadlineExceeded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	err := f.emitStartEventAndWait(ctx, inv, eventChan)
+	err := f.emitStartEventAndWait(ctx, inv, eventChan, 200*time.Millisecond)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
@@ -5002,8 +5002,48 @@ func TestEmitStartEventAndWaitNoticeTimeoutContinues(t *testing.T) {
 	inv := agent.NewInvocation(agent.WithInvocationID("notice-timeout-repro"))
 	eventChan := make(chan *event.Event, 4)
 
-	// The completion notice never arrives; the wait must not block the flow
-	// beyond eventCompletionTimeout, and the timeout must not fail the run.
-	err := f.emitStartEventAndWait(context.Background(), inv, eventChan)
+	// The completion notice never arrives; the wait must time out without
+	// blocking the flow, and the timeout must not fail the run.
+	const waitTimeout = 200 * time.Millisecond
+	start := time.Now()
+	err := f.emitStartEventAndWait(context.Background(), inv, eventChan, waitTimeout)
 	require.NoError(t, err)
+
+	// Prove the timeout path actually ran: the call must have waited for the
+	// injected timeout instead of returning immediately.
+	require.GreaterOrEqual(t, time.Since(start), 150*time.Millisecond)
+}
+
+func TestHandleStartEventWaitError(t *testing.T) {
+	t.Run("propagates cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		require.ErrorIs(t, handleStartEventWaitError(ctx, context.Canceled), context.Canceled)
+	})
+
+	t.Run("propagates deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+
+		require.ErrorIs(t, handleStartEventWaitError(ctx, context.DeadlineExceeded), context.DeadlineExceeded)
+	})
+
+	t.Run("nil is fine", func(t *testing.T) {
+		require.NoError(t, handleStartEventWaitError(context.Background(), nil))
+	})
+
+	t.Run("timeout racing an expired context is propagated", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+		time.Sleep(2 * time.Millisecond)
+
+		err := handleStartEventWaitError(ctx, agent.NewWaitNoticeTimeoutError("boom"))
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("timeout on a live context is recoverable", func(t *testing.T) {
+		err := handleStartEventWaitError(context.Background(), agent.NewWaitNoticeTimeoutError("boom"))
+		require.NoError(t, err)
+	})
 }
