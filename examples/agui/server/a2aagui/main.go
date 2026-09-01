@@ -130,19 +130,8 @@ func main() {
 		log.Fatalf("create A2A Agent Card: %v", err)
 	}
 
-	a2aRunner := runner.NewRunner(
-		localAgent.Info().Name,
-		localAgent,
-		runner.WithSessionService(sessionService),
-	)
-	defer func() {
-		if err := a2aRunner.Close(); err != nil {
-			log.Errorf("close A2A runner: %v", err)
-		}
-	}()
-
-	// Keep the UI and A2A runners in different application scopes. Both run the
-	// same local agent, while only the UI scope owns AG-UI tracks.
+	// Keep the UI scope separate from the A2A server's agent-name scope. Both run
+	// the same local agent, while only the UI scope owns AG-UI tracks.
 	uiRunner := runner.NewRunner(
 		uiAppName,
 		localAgent,
@@ -179,7 +168,7 @@ func main() {
 
 	a2aServer, err := a2aserver.New(
 		a2aserver.WithAgentCard(agentCard),
-		a2aserver.WithRunner(a2aRunner),
+		a2aserver.WithAgent(localAgent, *enableStream),
 		a2aserver.WithSessionService(sessionService),
 		a2aserver.WithExtraA2AOptions(
 			a2aprotocolserver.WithHTTPRouter(mux),
