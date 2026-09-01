@@ -140,8 +140,8 @@ type Attempt struct {
 	sess      *session.Session
 	filterKey string
 	before    summaryBoundaryMark
-	report    *summary.Report
 	selection isummarycontext.EventSelection
+	modelCall isummarycontext.ModelCall
 
 	gate         summaryGate
 	skip         string
@@ -173,8 +173,9 @@ func BeginAttempt(
 		persist:   PersistNotAttempted,
 	}
 	ctx = contextWithSummaryAttempt(ctx, att)
-	att.report, ctx = ensureSummaryReport(ctx)
+	_, ctx = ensureSummaryReport(ctx)
 	ctx = isummarycontext.WithEventSelectionRecorder(ctx, &att.selection)
+	ctx = isummarycontext.WithModelCallRecorder(ctx, &att.modelCall)
 	att.ctx = ctx
 	return ctx, att
 }
@@ -372,7 +373,7 @@ func (a *Attempt) Report() {
 		a.selection.SkipRecentRequested,
 		a.selection.SkipRecentApplied,
 		a.selection.Selected,
-		summaryModelCallStatus(a.report),
+		a.modelCallStatus(),
 		a.updated,
 		after.advancedFrom(a.before),
 		a.persist,
@@ -504,11 +505,19 @@ func isSummaryContextError(err error) bool {
 			errors.Is(err, context.DeadlineExceeded))
 }
 
-func summaryModelCallStatus(report *summary.Report) string {
-	if report == nil {
+// modelCallStatus reports this attempt's observed summary model call from the
+// attempt-local recorder. A caller-attached Report can retain Call.Mode from a
+// prior sequential target; leftover Report state is never treated as this
+// attempt's observation.
+func (a *Attempt) modelCallStatus() string {
+	if a == nil {
 		return modelCallStatusUnobserved
 	}
-	switch report.Call.Mode {
+	return summaryModelCallStatus(a.modelCall.Mode)
+}
+
+func summaryModelCallStatus(mode string) string {
+	switch mode {
 	case callModeStandalone, callModeCacheSafeFork:
 		return modelCallStatusCalled
 	case callModeCustomResponse:

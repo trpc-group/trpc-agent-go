@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarydiag"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 const cascadeBranchKey = "branch"
@@ -126,6 +127,58 @@ func TestCascadeReportsCopiedSource(t *testing.T) {
 	require.Equal(t, secretSummaryText,
 		sess.Summaries[session.SummaryFilterKeyAllContents].Summary,
 		"cascade behaviour must be unchanged")
+}
+
+// TestCascadeSharedReportCopiedTargetIsNotCalled proves a caller-attached
+// Report reused across sequential CreateSessionSummary calls does not make
+// the copied full-session target look like a model call.
+func TestCascadeSharedReportCopiedTargetIsNotCalled(t *testing.T) {
+	logs := captureLogs(t)
+	sess := cascadeSession()
+	report := &summary.Report{}
+	ctx := summary.ContextWithReport(context.Background(), report)
+	summarizer := &diagSummarizer{
+		fired:    true,
+		callMode: callModeStandalone,
+		text:     secretSummaryText,
+	}
+
+	require.NoError(t, CreateSessionSummaryWithCascade(
+		ctx, sess, cascadeBranchKey, false, cascadePolicy(),
+		func(
+			ctx context.Context, s *session.Session, fk string, force bool,
+		) error {
+			got, ok := summary.ReportFromContext(ctx)
+			require.True(t, ok)
+			require.Same(t, report, got,
+				"sequential cascade targets must keep the caller-attached Report")
+			return summarizeAndPersist(
+				ctx, summarizer, s, fk, force,
+				func(context.Context, *session.Summary) error { return nil },
+			)
+		},
+	))
+	require.Equal(t, 1, summarizer.summarizeCalls,
+		"materializing a copied full-session summary must not call the model")
+	require.Equal(t, callModeStandalone, report.Call.Mode)
+
+	branchLevel, branchLine := sessionSummaryRecordByTarget(t, logs, targetKindBranch)
+	require.Equal(t, "info", branchLevel)
+	requireFields(t, branchLine, map[string]string{
+		"outcome":           outcomeSuccess,
+		"model_call_status": modelCallStatusCalled,
+		"target_kind":       targetKindBranch,
+	})
+
+	fullLevel, fullLine := sessionSummaryRecordByTarget(t, logs, targetKindFull)
+	require.Equal(t, "debug", fullLevel)
+	requireFields(t, fullLine, map[string]string{
+		"outcome":           outcomeCopied,
+		"model_call_status": modelCallStatusUnobserved,
+		"target_kind":       targetKindFull,
+	})
+	require.NotContains(t, fullLine, "model_call_status="+modelCallStatusCalled)
+	requireNoSensitiveText(t, logs.all())
 }
 
 // TestCascadeReportsSkippedWhenBranchNotMaterialized observes the upstream

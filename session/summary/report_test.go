@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 )
 
 type reportModel struct {
@@ -140,7 +141,9 @@ func TestSessionSummarizer_ReportHookStandaloneCall(t *testing.T) {
 	)
 
 	report := &Report{}
+	var call isummarycontext.ModelCall
 	ctx := ContextWithReport(context.Background(), report)
+	ctx = isummarycontext.WithModelCallRecorder(ctx, &call)
 	contextual := s.(ContextAwareSummarizer)
 	require.True(t, contextual.ShouldSummarizeWithContext(ctx, newReportSession()))
 
@@ -151,6 +154,7 @@ func TestSessionSummarizer_ReportHookStandaloneCall(t *testing.T) {
 	require.Equal(t, 7, got.Trigger.Value)
 	require.Equal(t, 5, got.Trigger.Threshold)
 	require.Equal(t, callModeStandalone, got.Call.Mode)
+	require.Equal(t, callModeStandalone, call.Mode)
 	require.Equal(t, 7, got.Call.EstimatedPromptTokens)
 	require.Equal(t, 123, got.Call.PromptTokens)
 	require.Equal(t, 45, got.Call.CachedTokens)

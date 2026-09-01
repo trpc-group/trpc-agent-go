@@ -12,16 +12,13 @@ package clickhouse
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
@@ -80,24 +77,11 @@ func (l *persistLogs) summaryRecord(t *testing.T) (level, line string) {
 	return "", ""
 }
 
-func waitUntilStackContains(t *testing.T, needle string) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	buf := make([]byte, 1<<20)
-	for time.Now().Before(deadline) {
-		n := runtime.Stack(buf, true)
-		if strings.Contains(string(buf[:n]), needle) {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %q in goroutine stacks", needle)
-}
-
-// TestCreateSessionSummary_NilSummaryDoesNotInsert proves updated=true with
-// no in-memory summary matches the other backends: no INSERT, no stored
-// record, and persist_result=no_summary.
-func TestCreateSessionSummary_NilSummaryDoesNotInsert(t *testing.T) {
+// TestPersistSessionSummary_NilSummaryDoesNotInsert proves the persist stage
+// classifies a nil in-memory summary as PersistNoSummary: no INSERT, no stale
+// query, and no stored outcome. CreateSessionSummary reaches this stage only
+// after SummarizeSession reports updated=true.
+func TestPersistSessionSummary_NilSummaryDoesNotInsert(t *testing.T) {
 	logs := capturePersistLogs(t)
 	execCalls := 0
 	queryCalls := 0
@@ -118,30 +102,16 @@ func TestCreateSessionSummary_NilSummaryDoesNotInsert(t *testing.T) {
 		AppName: "app1",
 		UserID:  "user1",
 		Summaries: map[string]*session.Summary{
-			"key": {Summary: "copied summary"},
+			"key": nil,
 		},
-		Events: []event.Event{{
-			ID:        "1",
-			Timestamp: time.Now().Add(-time.Minute),
-		}},
 	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	ctx, att := isummary.BeginAttempt(context.Background(), sess, "key")
+	att.Summarized(true, nil)
 
-	// Hold EventMu so persistCopiedSummary blocks in computeDeltaSince after
-	// it has already decided updated=true. Clearing the entry then reproduces
-	// the generation/persist inconsistency every backend guards.
-	sess.EventMu.Lock()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- s.CreateSessionSummary(context.Background(), sess, "key", true)
-	}()
-	waitUntilStackContains(t, "computeDeltaSince")
+	require.NoError(t, s.persistSessionSummary(ctx, att, key, sess, "key"))
+	att.Report()
 
-	sess.SummariesMu.Lock()
-	sess.Summaries["key"] = nil
-	sess.SummariesMu.Unlock()
-	sess.EventMu.Unlock()
-
-	require.NoError(t, <-errCh)
 	require.Zero(t, execCalls, "a nil summary must not INSERT")
 	require.Zero(t, queryCalls, "a nil summary must not reach the stale check")
 

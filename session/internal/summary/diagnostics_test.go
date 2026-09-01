@@ -94,6 +94,37 @@ func requireSessionSummaryRecord(t *testing.T, line string) {
 		"schema_version=1 must follow the record name in %q", line)
 }
 
+func sessionSummaryRecordByTarget(
+	t *testing.T, logs *capturedLogs, targetKind string,
+) (level, line string) {
+	t.Helper()
+	debug, info, warn := logs.snapshot()
+	var found []struct {
+		level string
+		line  string
+	}
+	for _, group := range []struct {
+		level string
+		lines []string
+	}{{"warn", warn}, {"info", info}, {"debug", debug}} {
+		for _, candidate := range group.lines {
+			if !strings.HasPrefix(candidate, "Session summary result:") {
+				continue
+			}
+			if field(t, candidate, "target_kind") == targetKind {
+				found = append(found, struct {
+					level string
+					line  string
+				}{group.level, candidate})
+			}
+		}
+	}
+	require.Lenf(t, found, 1, "expected one %s session summary record in %q",
+		targetKind, logs.all())
+	requireSessionSummaryRecord(t, found[0].line)
+	return found[0].level, found[0].line
+}
+
 func captureLogs(t *testing.T) *capturedLogs {
 	t.Helper()
 	captured := &capturedLogs{}
@@ -163,6 +194,7 @@ func (s *diagSummarizer) Summarize(
 		if report, ok := summary.ReportFromContext(ctx); ok {
 			report.Call.Mode = s.callMode
 		}
+		isummarycontext.RecordModelCall(ctx, s.callMode)
 	}
 	return s.text, s.err
 }
@@ -1020,6 +1052,59 @@ func TestAttemptPreservesCallerReport(t *testing.T) {
 	))
 	require.Equal(t, "token_threshold", report.Trigger.Name)
 	require.Equal(t, "standalone", report.Call.Mode)
+}
+
+// TestAttemptKeepsCallerCallWhenLaterAttemptErrorsBeforePublish proves a
+// later attempt that fails before publishing a call must not mutate the
+// caller-attached Report leftover from an earlier target.
+func TestAttemptKeepsCallerCallWhenLaterAttemptErrorsBeforePublish(t *testing.T) {
+	logs := captureLogs(t)
+	report := &summary.Report{}
+	ctx := summary.ContextWithReport(context.Background(), report)
+
+	require.NoError(t, summarizeAndPersist(
+		ctx,
+		&diagSummarizer{
+			fired:    true,
+			callMode: callModeStandalone,
+			text:     secretSummaryText,
+		},
+		diagSession(diagEvent(-time.Minute)),
+		"",
+		false,
+		func(context.Context, *session.Summary) error { return nil },
+	))
+	require.Equal(t, callModeStandalone, report.Call.Mode)
+
+	err := summarizeAndPersist(
+		ctx,
+		&diagSummarizer{
+			fired: true,
+			err:   errors.New(secretErrorText),
+		},
+		diagSession(diagEvent(-time.Minute)),
+		"",
+		false,
+		nil,
+	)
+	require.Error(t, err)
+	require.Equal(t, callModeStandalone, report.Call.Mode,
+		"an error before publishing a call must leave the caller Report unchanged")
+
+	_, info, warn := logs.snapshot()
+	require.Len(t, info, 1)
+	require.Len(t, warn, 1)
+	requireSessionSummaryRecord(t, info[0])
+	requireSessionSummaryRecord(t, warn[0])
+	requireFields(t, info[0], map[string]string{
+		"outcome":           outcomeSuccess,
+		"model_call_status": modelCallStatusCalled,
+	})
+	requireFields(t, warn[0], map[string]string{
+		"outcome":           outcomeSummaryError,
+		"model_call_status": modelCallStatusUnobserved,
+	})
+	requireNoSensitiveText(t, logs.all())
 }
 
 func TestAttemptTolerantOfNilInputs(t *testing.T) {

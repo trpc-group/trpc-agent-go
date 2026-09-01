@@ -56,8 +56,20 @@ func (s *Service) CreateSessionSummary(
 	if !updated {
 		return nil
 	}
+	return s.persistSessionSummary(ctx, att, key, sess, filterKey)
+}
 
-	// Persist only the updated filterKey summary with atomic set-if-newer to avoid late-write override.
+// persistSessionSummary reads the in-memory summary for filterKey after
+// generation and either persists it or classifies a nil summary as
+// PersistNoSummary. A nil summary must not insert, query for staleness, or
+// record a stored outcome.
+func (s *Service) persistSessionSummary(
+	ctx context.Context,
+	att *isummary.Attempt,
+	key session.Key,
+	sess *session.Session,
+	filterKey string,
+) error {
 	sess.SummariesMu.RLock()
 	summary := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
@@ -65,6 +77,7 @@ func (s *Service) CreateSessionSummary(
 		att.Persisted(isummary.PersistNoSummary)
 		return nil
 	}
+	// Persist only the updated filterKey summary with atomic set-if-newer to avoid late-write override.
 	summaryBytes, err := json.Marshal(summary)
 	if err != nil {
 		return att.RecordWrite(fmt.Errorf("marshal summary failed: %w", err))

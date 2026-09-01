@@ -2190,12 +2190,11 @@ func (s *sessionSummarizer) recordReportCall(
 	request *model.Request,
 	mode string,
 ) {
-	report, ok := reportFromContext(ctx)
-	if !ok {
-		return
+	if report, ok := reportFromContext(ctx); ok {
+		report.Call.Mode = mode
+		report.Call.EstimatedPromptTokens = estimateRequestPromptTokens(ctx, request)
 	}
-	report.Call.Mode = mode
-	report.Call.EstimatedPromptTokens = estimateRequestPromptTokens(ctx, request)
+	isummarycontext.RecordModelCall(ctx, mode)
 }
 
 func (s *sessionSummarizer) recordReportUsage(
