@@ -2299,10 +2299,12 @@ ts := toolsearch.New(
 
 In this mode the parallel schedulers see `call_tool`, not the tool it will
 dispatch to: the target is resolved from `tool_name` only after the turn has
-been admitted. `call_tool` therefore
-[declines to share a turn](#declining-to-share-a-turn) whenever any tool it can
-reach — deferred or preset — declines, and stays admissible while none does, so
-a dispatch-mode turn keeps its parallelism unless an objecting tool is
+been admitted. `call_tool` is therefore advertised as
+[declining to share a turn](#declining-to-share-a-turn) whenever any tool it can
+reach — deferred or preset — declines. While none does it declares nothing at
+all, exactly like a tool implementing neither concurrency interface: it is
+admitted, and no reentrancy guarantee is made on behalf of the hidden targets.
+A dispatch-mode turn thus keeps its parallelism unless an objecting tool is
 registered.
 
 ##### `WithToolPermissionFilter` Example

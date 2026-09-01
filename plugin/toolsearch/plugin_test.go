@@ -1244,17 +1244,31 @@ func (l *latchingObjectingTool) IsConcurrencySafe() bool { return false }
 // batch has been admitted. So an objecting deferred tool could be reached from
 // the parallel path unless call_tool carries the objection for it.
 //
-// call_tool objects exactly when a tool it can reach does, and a batch of two
-// call_tool invocations against an objecting deferred tool then runs
-// sequentially, which the latch on the base invocation shows.
+// call_tool is advertised as objecting exactly when a tool it can reach does,
+// and a batch of two call_tool invocations against an objecting deferred tool
+// then runs sequentially, which the latch on the base invocation shows. While
+// nothing it can reach objects, call_tool declares nothing at all — it is a
+// function tool underneath, which would otherwise guarantee reentrancy on behalf
+// of hidden targets that never claimed it.
 func TestInvocationMode_DispatchToolCalls_CallToolCarriesReachableObjections(t *testing.T) {
 	safeOnly := New(nil,
 		WithInvocationMode(DispatchToolCalls),
 		WithToolboxes([]Toolbox{{Name: "utils", Tools: []tool.Tool{newEchoTool("echo_tool")}}}),
 	)
 	require.NotNil(t, safeOnly.callTool)
-	assert.True(t, tool.IsConcurrencySafe(safeOnly.callTool),
+	safeCtx, _ := ctxWithInvocation()
+	safeReq := &model.Request{Tools: map[string]tool.Tool{}}
+	_, err := safeOnly.beforeModel(safeCtx, &model.BeforeModelArgs{Request: safeReq})
+	require.NoError(t, err)
+	advertised := safeReq.Tools[safeOnly.callTool.Declaration().Name]
+	require.NotNil(t, advertised)
+	assert.True(t, tool.IsConcurrencySafe(advertised),
 		"call_tool must stay admissible while nothing it can reach objects")
+	_, declared := advertised.(tool.ConcurrencyAware)
+	assert.False(t, declared,
+		"call_tool must declare nothing while nothing it can reach objects, rather than guarantee for hidden targets")
+	assert.Equal(t, tool.ToolMetadata{}, tool.MetadataOf(advertised),
+		"no reentrancy guarantee may be synthesized for call_tool")
 
 	objecting := &latchingObjectingTool{name: "solo_tool"}
 	p := New(nil,
@@ -1264,20 +1278,20 @@ func TestInvocationMode_DispatchToolCalls_CallToolCarriesReachableObjections(t *
 			Tools: []tool.Tool{newEchoTool("echo_tool"), objecting},
 		}}),
 	)
-	require.False(t, tool.IsConcurrencySafe(p.callTool),
-		"call_tool must object on behalf of an objecting deferred tool")
 
 	// The request as beforeModel builds it: call_tool advertised, the deferred
 	// target hidden behind it.
 	ctx, inv := ctxWithInvocation()
 	callSearch(t, ctx, p, toolSearchInput{ToolNames: []string{"solo_tool"}})
 	req := &model.Request{Tools: map[string]tool.Tool{}}
-	_, err := p.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	_, err = p.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
 	require.NoError(t, err)
 	callName := p.callTool.Declaration().Name
 	require.Contains(t, req.Tools, callName)
 	require.NotContains(t, req.Tools, "solo_tool",
 		"precondition: dispatch mode keeps the deferred target out of Request.Tools")
+	require.False(t, tool.IsConcurrencySafe(req.Tools[callName]),
+		"call_tool must object on behalf of an objecting deferred tool")
 
 	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{
 		Role: model.RoleAssistant,
