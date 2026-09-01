@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -2559,7 +2560,33 @@ func (f *Flow) callLLM(
 	)
 	ctx, tailoringObserver := imodelrequest.ObserveTokenTailoring(
 		ctx,
-		func(record imodelrequest.TokenTailoringRecord) {
+		func(change imodelrequest.TokenTailoringChange) {
+			record := change.Record
+			if tokenTailoringPreservesHistory(change, llmRequest) {
+				summaryview.RebaseAfterTransform(
+					invocation,
+					change.Before,
+					change.After,
+					nil,
+				)
+				summaryfork.Attach(
+					invocation,
+					requestWithoutCallLimitFinalizationMessage(
+						llmRequest,
+						finalizationMessage,
+					),
+				)
+				log.DebugfContext(
+					ctx,
+					"Model request token tailoring preserved history: "+
+						"provider=%s, max_input_tokens=%d, messages=%d->%d",
+					record.Provider,
+					record.MaxInputTokens,
+					record.BeforeMessages,
+					record.AfterMessages,
+				)
+				return
+			}
 			summaryview.InvalidateBinding(invocation)
 			summaryfork.Invalidate(invocation)
 			if tokenTailoringCollapsedHistory(record) {
@@ -2605,6 +2632,20 @@ func tokenTailoringCollapsedHistory(
 	record imodelrequest.TokenTailoringRecord,
 ) bool {
 	return record.BeforeMessages > 2 && record.AfterMessages <= 2
+}
+
+func tokenTailoringPreservesHistory(
+	change imodelrequest.TokenTailoringChange,
+	request *model.Request,
+) bool {
+	record := change.Record
+	return request != nil &&
+		record.Provenance ==
+			imodelrequest.TokenTailoringProvenancePreserved &&
+		record.BeforeMessages == len(change.Before) &&
+		record.AfterMessages == len(change.After) &&
+		len(change.Before) == len(change.After) &&
+		reflect.DeepEqual(change.After, request.Messages)
 }
 
 func withResponseSeqFinalizer(
