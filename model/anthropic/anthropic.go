@@ -176,15 +176,20 @@ func disableChatRequestTools(request *anthropic.MessageNewParams) {
 }
 
 func (m *Model) requestOptions(ctx context.Context) []option.RequestOption {
-	if !imodelrequest.ToolsDisabled(ctx) {
-		return m.anthropicRequestOptions
-	}
 	opts := append([]option.RequestOption(nil), m.anthropicRequestOptions...)
-	return append(
-		opts,
-		option.WithJSONDel("tools"),
-		option.WithJSONDel("tool_choice"),
-	)
+	if imodelrequest.ToolsDisabled(ctx) {
+		opts = append(
+			opts,
+			option.WithJSONDel("tools"),
+			option.WithJSONDel("tool_choice"),
+		)
+	}
+	// Last, so it runs innermost and reads the body every option and middleware
+	// ahead of it has finished with.
+	if m.cacheMessages {
+		opts = append(opts, option.WithMiddleware(m.toolResultCacheBreakpointMiddleware()))
+	}
+	return opts
 }
 
 func (m *Model) runChatResponseCallback(
@@ -471,6 +476,10 @@ func modelNameMatches(modelName string, targets ...string) bool {
 //   - System prompt: always cached when cacheSystemPrompt is true (stable across turns)
 //   - Tools: always cached when cacheTools is true (stable across turns)
 //   - Last assistant message: cached when cacheMessages is true (opt-in, benefits multi-turn)
+//
+// A fourth, on the last tool-result message, is placed on the serialized body by
+// toolResultCacheBreakpointMiddleware: it is the only one conditional on what the
+// request callback and the request options leave behind.
 func (m *Model) applyCacheControl(
 	systemPrompts []anthropic.TextBlockParam,
 	tools []anthropic.ToolUnionParam,
