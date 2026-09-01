@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguitypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
@@ -282,6 +283,51 @@ func TestWrapCoreRunnerRecordingFailureDoesNotChangeCoreEvents(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Nil(t, sess)
+}
+
+func TestWrapCoreRunnerCancellationUnblocksUnreadOutputAndFlushesTrack(t *testing.T) {
+	base := &recordingBaseRunner{events: []*event.Event{
+		newAssistantEvent("run-1", "hello"),
+	}}
+	service := inmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events, err := recorded.Run(
+		ctx, "user", "thread", model.NewUserMessage("hi"),
+	)
+	require.NoError(t, err)
+	cancel()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.Eventually(t, func() bool {
+		sess, err := service.GetSession(context.Background(), key)
+		return err == nil && sess != nil
+	}, time.Second, 10*time.Millisecond)
+
+	channelClosed := false
+	for !channelClosed {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				channelClosed = true
+			}
+		case <-time.After(time.Second):
+			t.Fatal("wrapped event channel did not close after cancellation")
+		}
+	}
+	sess, err := service.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	trackEvents, err := sess.GetTrackEvents(session.Track("agui"))
+	require.NoError(t, err)
+	require.NotEmpty(t, trackEvents.Events)
+	terminal, err := aguievents.EventFromJSON(
+		trackEvents.Events[len(trackEvents.Events)-1].Payload,
+	)
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunErrorEvent)(nil), terminal)
 }
 
 func TestWrapCoreRunnerCloseDelegates(t *testing.T) {

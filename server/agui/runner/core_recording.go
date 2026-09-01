@@ -112,7 +112,19 @@ func (r *coreRecordingRunner) forward(
 	defer close(out)
 	var state *coreRecordingState
 	recordingDisabled := false
-	for evt := range source {
+
+stream:
+	for {
+		var evt *event.Event
+		select {
+		case <-ctx.Done():
+			break stream
+		case next, ok := <-source:
+			if !ok {
+				break stream
+			}
+			evt = next
+		}
 		if state == nil && !recordingDisabled && evt != nil {
 			var err error
 			state, err = r.newRecordingState(ctx, key, message, evt.RequestID)
@@ -132,7 +144,11 @@ func (r *coreRecordingRunner) forward(
 				)
 			}
 		}
-		out <- evt
+		select {
+		case out <- evt:
+		case <-ctx.Done():
+			break stream
+		}
 	}
 	if state == nil && !recordingDisabled {
 		var err error
