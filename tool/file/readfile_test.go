@@ -1296,7 +1296,7 @@ func TestFileTool_ReadFile_RangedReadOfLargeFileInvalidUTF8(t *testing.T) {
 	for i := 1; i <= 100; i++ {
 		fmt.Fprintf(&b, "line-%d\n", i)
 	}
-	b.WriteString("caf\xffe\n")
+	b.WriteString("bad\xffbyte\n")
 	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "latin.txt"), []byte(b.String()), 0o644))
 
 	start, num := 101, 1
@@ -1304,7 +1304,7 @@ func TestFileTool_ReadFile_RangedReadOfLargeFileInvalidUTF8(t *testing.T) {
 		&readFileRequest{FileName: "latin.txt", StartLine: &start, NumLines: &num})
 
 	assert.NoError(t, err)
-	assert.Equal(t, "caf�e", rsp.Contents)
+	assert.Equal(t, "bad�byte", rsp.Contents)
 	assert.Contains(t, rsp.Message, invalidUTF8Note)
 }
 
