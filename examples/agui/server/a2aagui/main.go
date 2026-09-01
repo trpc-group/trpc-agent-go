@@ -7,8 +7,9 @@
 //
 
 // Package main demonstrates serving A2A Protocol v1.0 and AG-UI from one
-// process and one HTTP port. Both protocol servers run the same local agent,
-// while the AG-UI runner persists events for session listing and message replay.
+// process and one HTTP port. Both protocol servers share one local agent and
+// one core runner. A recording adapter persists A2A runs as AG-UI tracks so
+// the AG-UI history endpoint can replay sessions created through either API.
 //
 // Routes:
 //
@@ -66,7 +67,7 @@ var (
 	)
 	listenAddr = flag.String(
 		"addr",
-		"0.0.0.0:8080",
+		"127.0.0.1:8080",
 		"HTTP listen address",
 	)
 	publicURL = flag.String(
@@ -132,32 +133,27 @@ func main() {
 		log.Fatalf("create A2A Agent Card: %v", err)
 	}
 
-	// Keep A2A and AG-UI in different application scopes so direct A2A sessions
-	// do not appear in the UI session list without an AG-UI event track.
-	a2aRunner := runner.NewRunner(
-		localAgent.Info().Name,
-		localAgent,
-		runner.WithSessionService(sessionService),
-	)
-	defer func() {
-		if err := a2aRunner.Close(); err != nil {
-			log.Errorf("close A2A runner: %v", err)
-		}
-	}()
-
-	uiRunner := runner.NewRunner(
+	sharedRunner := runner.NewRunner(
 		uiAppName,
 		localAgent,
 		runner.WithSessionService(sessionService),
 	)
+	a2aRunner, err := agui.NewRecordingRunner(
+		sharedRunner,
+		uiAppName,
+		sessionService,
+	)
+	if err != nil {
+		log.Fatalf("create A2A recording runner: %v", err)
+	}
 	defer func() {
-		if err := uiRunner.Close(); err != nil {
-			log.Errorf("close AG-UI runner: %v", err)
+		if err := a2aRunner.Close(); err != nil {
+			log.Errorf("close shared runner: %v", err)
 		}
 	}()
 
 	uiServer, err := agui.New(
-		uiRunner,
+		sharedRunner,
 		agui.WithBasePath(uiBasePath),
 		agui.WithPath(uiChatPath),
 		agui.WithMessagesSnapshotEnabled(true),
@@ -186,12 +182,13 @@ func main() {
 		sessionListPath,
 		userIDMiddleware(newSessionListHandler(sessionService, uiAppName)),
 	)
-	mux.Handle("/", a2aServer.Handler())
+	mux.Handle("/", userIDMiddleware(a2aServer.Handler()))
 
 	httpServer := &http.Server{
 		Addr:              *listenAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
 	}
 
 	log.Infof("combined server listening on %s", *listenAddr)
@@ -264,6 +261,7 @@ func userIDMiddleware(next http.Handler) http.Handler {
 		if userID == "" {
 			userID = defaultUserID
 		}
+		r.Header.Set(userIDHeader, userID)
 		ctx := context.WithValue(r.Context(), userIDContextKey{}, userID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
