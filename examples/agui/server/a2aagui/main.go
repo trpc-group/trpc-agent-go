@@ -6,9 +6,9 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package main demonstrates serving A2A and AG-UI from one process and one
-// HTTP port. Both protocol servers run the same local agent, while the AG-UI
-// runner persists AG-UI events for session listing and message replay.
+// Package main demonstrates serving A2A Protocol v1.0 and AG-UI from one
+// process and one HTTP port. Both protocol servers run the same local agent,
+// while the AG-UI runner persists events for session listing and message replay.
 //
 // Routes:
 //
@@ -31,6 +31,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"math"
@@ -42,13 +43,12 @@ import (
 	"syscall"
 	"time"
 
-	a2aprotocolserver "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a/v1"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
@@ -78,6 +78,7 @@ var (
 )
 
 const (
+	agentVersion       = "1.0.0"
 	uiAppName          = "a2a-agui-demo"
 	a2aBasePath        = "/a2a"
 	uiBasePath         = "/ui"
@@ -122,6 +123,7 @@ func main() {
 	agentCard, err := a2aserver.NewAgentCard(
 		localAgent.Info().Name,
 		localAgent.Info().Description,
+		agentVersion,
 		a2aURL,
 		*enableStream,
 		a2aserver.WithCardTools(localAgent.Tools()...),
@@ -130,8 +132,19 @@ func main() {
 		log.Fatalf("create A2A Agent Card: %v", err)
 	}
 
-	// Keep the UI scope separate from the A2A server's agent-name scope. Both run
-	// the same local agent, while only the UI scope owns AG-UI tracks.
+	// Keep A2A and AG-UI in different application scopes so direct A2A sessions
+	// do not appear in the UI session list without an AG-UI event track.
+	a2aRunner := runner.NewRunner(
+		localAgent.Info().Name,
+		localAgent,
+		runner.WithSessionService(sessionService),
+	)
+	defer func() {
+		if err := a2aRunner.Close(); err != nil {
+			log.Errorf("close A2A runner: %v", err)
+		}
+	}()
+
 	uiRunner := runner.NewRunner(
 		uiAppName,
 		localAgent,
@@ -159,23 +172,26 @@ func main() {
 		log.Fatalf("create AG-UI server: %v", err)
 	}
 
+	a2aServer, err := a2aserver.New(
+		a2aserver.WithAgentCard(agentCard),
+		a2aserver.WithRunner(a2aRunner),
+	)
+	if err != nil {
+		log.Fatalf("create A2A server: %v", err)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle(uiBasePath+"/", userIDMiddleware(uiServer.Handler()))
 	mux.Handle(
 		sessionListPath,
 		userIDMiddleware(newSessionListHandler(sessionService, uiAppName)),
 	)
+	mux.Handle("/", a2aServer.Handler())
 
-	a2aServer, err := a2aserver.New(
-		a2aserver.WithAgentCard(agentCard),
-		a2aserver.WithAgent(localAgent, *enableStream),
-		a2aserver.WithSessionService(sessionService),
-		a2aserver.WithExtraA2AOptions(
-			a2aprotocolserver.WithHTTPRouter(mux),
-		),
-	)
-	if err != nil {
-		log.Fatalf("create A2A server: %v", err)
+	httpServer := &http.Server{
+		Addr:              *listenAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	log.Infof("combined server listening on %s", *listenAddr)
@@ -186,7 +202,7 @@ func main() {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		serverErr <- a2aServer.Start(*listenAddr)
+		serverErr <- httpServer.ListenAndServe()
 	}()
 
 	signalCtx, stopSignals := signal.NotifyContext(
@@ -197,7 +213,7 @@ func main() {
 	defer stopSignals()
 	select {
 	case err := <-serverErr:
-		if err != nil {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Errorf("combined server stopped: %v", err)
 		}
 		return
@@ -206,10 +222,10 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := a2aServer.Stop(shutdownCtx); err != nil {
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Errorf("stop combined server: %v", err)
 	}
-	if err := <-serverErr; err != nil {
+	if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Errorf("combined server stopped: %v", err)
 	}
 }
