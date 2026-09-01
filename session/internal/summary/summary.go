@@ -13,6 +13,7 @@ package summary
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -693,12 +694,12 @@ func PickSummaryText(
 	return "", false
 }
 
-func contextWithForkedReport(ctx context.Context) context.Context {
+func contextWithIsolatedReport(ctx context.Context) context.Context {
 	report, ok := summary.ReportFromContext(ctx)
 	if !ok {
 		return ctx
 	}
-	// Parallel cascade paths keep per-target report writes isolated. The cloned
+	// Cascade targets keep per-target report writes isolated. The cloned
 	// report is emitted through that target's hook and is not merged back to the
 	// caller-attached root report.
 	cloned := report.Clone()
@@ -715,6 +716,23 @@ func contextForSummaryTarget(
 		return ctx
 	}
 	return contextWithSummaryTriggerFilterKey(ctx, triggerFilterKey)
+}
+
+// contextForCascadeTarget prepares ctx for one cascade target. Full-session
+// targets that were triggered by a branch keep the trigger filter key so the
+// token gate can reuse the model-visible view, and they opt into skipping a
+// second LLM call when cache-safe forking is active.
+func contextForCascadeTarget(
+	ctx context.Context,
+	triggerFilterKey string,
+	targetFilterKey string,
+) context.Context {
+	ctx = contextForSummaryTarget(ctx, triggerFilterKey, targetFilterKey)
+	if targetFilterKey == session.SummaryFilterKeyAllContents &&
+		triggerFilterKey != session.SummaryFilterKeyAllContents {
+		ctx = contextWithSkipBranchForkFullSessionCascade(ctx)
+	}
+	return ctx
 }
 
 // GetSummaryTextFromSession attempts to retrieve summary text from the session's
@@ -774,19 +792,20 @@ func isSingleFilterKey(sess *session.Session, targetKey string) bool {
 
 // copySummaryToKey copies a summary from srcKey to dstKey within the session.
 // This avoids duplicate LLM calls when the summaries would be identical.
-// Sets UpdatedAt to zero to mark the summary as needing persistence.
-func copySummaryToKey(sess *session.Session, srcKey, dstKey string) {
+// Sets UpdatedAt to zero to mark the summary as needing persistence and reports
+// whether a source summary was available to copy.
+func copySummaryToKey(sess *session.Session, srcKey, dstKey string) bool {
 	if sess == nil {
-		return
+		return false
 	}
 	sess.SummariesMu.Lock()
 	defer sess.SummariesMu.Unlock()
 	if sess.Summaries == nil {
-		return
+		return false
 	}
 	src, ok := sess.Summaries[srcKey]
 	if !ok || src == nil {
-		return
+		return false
 	}
 	copied := src.Clone()
 	if boundary := copied.CutoffBoundary(); boundary != nil {
@@ -800,6 +819,42 @@ func copySummaryToKey(sess *session.Session, srcKey, dstKey string) {
 		copied.Topics = nil
 	}
 	sess.Summaries[dstKey] = copied
+	return true
+}
+
+type summarySnapshot struct {
+	pointer *session.Summary
+	value   *session.Summary
+}
+
+func snapshotSummary(sess *session.Session, filterKey string) summarySnapshot {
+	if sess == nil {
+		return summarySnapshot{}
+	}
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+	current := sess.Summaries[filterKey]
+	return summarySnapshot{pointer: current, value: current.Clone()}
+}
+
+// summaryMaterializedSince reports whether a cascade source wrote or updated
+// its in-memory summary during the current attempt. A pre-existing, unchanged
+// summary is not evidence that this attempt was safe to cascade.
+func summaryMaterializedSince(
+	sess *session.Session,
+	filterKey string,
+	before summarySnapshot,
+) bool {
+	if sess == nil {
+		return false
+	}
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+	current := sess.Summaries[filterKey]
+	if current == nil {
+		return false
+	}
+	return current != before.pointer || !reflect.DeepEqual(current, before.value)
 }
 
 // CreateSessionSummaryWithCascade creates one or more session summaries for the
@@ -833,45 +888,75 @@ func CreateSessionSummaryWithCascade(
 	// would be identical to the full-session summary. Generate only once via LLM,
 	// then copy to memory and persist both keys.
 	if isSingleFilterKey(sess, filterKey) {
+		before := snapshotSummary(sess, filterKey)
 		if err := createSummaryFunc(ctx, sess, filterKey, force); err != nil {
 			return fmt.Errorf("create session summary for filterKey %q failed: %w",
 				filterKey, err)
 		}
-		// Copy to in-memory session for immediate access.
-		copySummaryToKey(sess, filterKey, session.SummaryFilterKeyAllContents)
+		// A nil error may mean the branch summary was intentionally not updated.
+		// Stop here so the full-session target cannot advance independently.
+		if !summaryMaterializedSince(sess, filterKey, before) {
+			return nil
+		}
+		// Copy to in-memory session for immediate access. A concurrent removal is
+		// treated as a missing source and also stops the cascade.
+		if !copySummaryToKey(
+			sess,
+			filterKey,
+			session.SummaryFilterKeyAllContents,
+		) {
+			return nil
+		}
 		// Persist the full-session key to storage. SummarizeSession detects
 		// existing in-memory summary with empty delta and returns updated=true.
-		if err := createSummaryFunc(ctx, sess, session.SummaryFilterKeyAllContents, false); err != nil {
+		fullCtx := contextForCascadeTarget(
+			ctx,
+			filterKey,
+			session.SummaryFilterKeyAllContents,
+		)
+		if err := createSummaryFunc(fullCtx, sess, session.SummaryFilterKeyAllContents, false); err != nil {
 			return fmt.Errorf("persist full-session summary failed: %w", err)
 		}
 		return nil
 	}
 
-	// Multiple filterKeys detected: generate both summaries in parallel.
-	var summaryWg sync.WaitGroup
-	result := make([]error, len(targets))
-	summaryWg.Add(len(targets))
-	for i, fk := range targets {
-		callCtx := contextWithForkedReport(ctx)
-		go func(i int, fk string, callCtx context.Context) {
-			defer summaryWg.Done()
-			callCtx = contextForSummaryTarget(callCtx, filterKey, fk)
-			if fk == session.SummaryFilterKeyAllContents &&
-				filterKey != session.SummaryFilterKeyAllContents {
-				callCtx = contextWithSkipBranchForkFullSessionCascade(callCtx)
-			}
-			err := createSummaryFunc(callCtx, sess, fk, force)
-			if err != nil {
-				result[i] = fmt.Errorf("create session summary for filterKey %q failed: %w", fk, err)
-			}
-		}(i, fk, callCtx)
+	// Multiple filter keys require distinct summaries. Run the branch target
+	// first because the full-session target is a dependent cascade, not an
+	// independent request. This also prevents a full summary when the branch
+	// gate declines to materialize a result.
+	branchCtx := contextForCascadeTarget(
+		contextWithIsolatedReport(ctx),
+		filterKey,
+		filterKey,
+	)
+	before := snapshotSummary(sess, filterKey)
+	if err := createSummaryFunc(branchCtx, sess, filterKey, force); err != nil {
+		return fmt.Errorf(
+			"create session summary for filterKey %q failed: %w",
+			filterKey,
+			err,
+		)
 	}
-	summaryWg.Wait()
+	if !summaryMaterializedSince(sess, filterKey, before) {
+		return nil
+	}
 
-	for _, err := range result {
-		if err != nil {
-			return err
-		}
+	fullCtx := contextForCascadeTarget(
+		contextWithIsolatedReport(ctx),
+		filterKey,
+		session.SummaryFilterKeyAllContents,
+	)
+	if err := createSummaryFunc(
+		fullCtx,
+		sess,
+		session.SummaryFilterKeyAllContents,
+		force,
+	); err != nil {
+		return fmt.Errorf(
+			"create session summary for filterKey %q failed: %w",
+			session.SummaryFilterKeyAllContents,
+			err,
+		)
 	}
 	return nil
 }

@@ -231,11 +231,20 @@ boundary rules.
 
 One important branch-summary behavior: after `WithCacheSafeForking(true)` is
 enabled, a non-empty branch trigger may fork the current parent request for the
-branch summary, but it will not also run the cascaded full-session summary in
-that same summary pass. The framework skips that full-session target instead of
-falling back to a standalone full-session prompt or reusing the branch-scoped
-fork request. Trigger a full-session summary separately when you need an
-all-branch summary.
+branch summary, but that same summary pass does not make a second standalone
+full-session LLM call. This applies to the common single-`filterKey` session as
+well as sessions that contain multiple filter keys. The framework skips that
+extra LLM target instead of falling back to a standalone full-session prompt or
+reusing the branch-scoped fork request. On a single-`filterKey` session, a
+materialized branch summary is copied to `SummaryFilterKeyAllContents` in the
+same pass because the two keys would be identical. On a multi-`filterKey`
+session, the full-session key is left untouched in that pass; trigger a
+full-session summary separately when you need an all-branch summary.
+
+More generally, a branch-triggered full-session cascade depends on the branch
+target producing a summary in that pass. If the branch gate declines to update
+its summary, the framework stops the cascade instead of independently advancing
+the full-session summary.
 
 Prompt rules:
 
@@ -555,10 +564,10 @@ sent, the mode is `custom_response` and the prompt estimate remains zero.
 Advanced integrations can attach a report before entering a higher-level
 summary flow with `summary.ContextWithReport(ctx, report)` and retrieve it with
 `summary.ReportFromContext(ctx)`. The framework reuses that report for a single
-summary path; when a cascade generates multiple summaries in parallel, each
-worker receives a cloned report so branch-specific writes do not race. Those
-forked reports are emitted through their per-call hooks and are not merged back
-into the root report.
+summary path; when a cascade targets both a branch and the full session, each
+target receives a cloned report so target-specific writes remain isolated.
+Those forked reports are emitted through their per-call hooks and are not
+merged back into the root report.
 
 For private deployments, endpoint IDs, fine-tuned models, newly released
 models, or multi-tenant custom model configuration, prefer the instance or
@@ -1579,11 +1588,16 @@ Behavior notes:
 - `WithCascadeFullSessionSummary(...)` controls whether a non-empty branch
   trigger also refreshes the full-session summary.
 - With `WithCacheSafeForking(true)`, a branch-triggered summary pass only runs
-  the branch summary target when a parent fork request is available. The
-  full-session cascade target is skipped in that pass; it does not fall back to
-  the standalone full-session prompt and does not reuse the branch-scoped fork
-  request. Request a full-session summary separately when you need one for all
-  branches.
+  the branch summary LLM target when a parent fork request is available. It
+  does not fall back to a standalone full-session prompt and does not reuse the
+  branch-scoped fork request for a second LLM call. On a single-`filterKey`
+  session, a materialized branch summary is copied to
+  `SummaryFilterKeyAllContents` in that pass. On a multi-`filterKey` session,
+  the full-session cascade target is skipped; request a full-session summary
+  separately when you need one for all branches.
+- A full-session cascade is conditional on the branch target producing a
+  summary in the same pass. If the branch is not updated, the full-session
+  target is not run independently.
 - To keep only full-session summaries from branch-triggered automatic summary,
   pass an explicit empty allowlist and leave cascade enabled:
 

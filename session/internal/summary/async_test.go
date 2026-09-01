@@ -534,8 +534,19 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 			SummaryQueueSize:      10,
 			SummaryJobTimeout:     time.Second,
 			SummaryDispatchPolicy: NewSummaryDispatchPolicy(nil, true),
-			CreateSummaryFunc: func(_ context.Context, _ *session.Session, fk string, _ bool) error {
+			CreateSummaryFunc: func(_ context.Context, sess *session.Session, fk string, _ bool) error {
 				filterKeyCh <- fk
+				if fk != session.SummaryFilterKeyAllContents {
+					sess.SummariesMu.Lock()
+					if sess.Summaries == nil {
+						sess.Summaries = make(map[string]*session.Summary)
+					}
+					sess.Summaries[fk] = &session.Summary{
+						Summary:   "branch summary",
+						UpdatedAt: time.Now(),
+					}
+					sess.SummariesMu.Unlock()
+				}
 				return nil
 			},
 		}
