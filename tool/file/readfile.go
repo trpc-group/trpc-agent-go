@@ -247,7 +247,7 @@ func (f *fileToolSet) readFileFromDiskOrCache(
 	}
 	if stat.Size() > f.maxFileSize {
 		if req.StartLine != nil || req.NumLines != nil {
-			return f.readLargeFileRange(req, rsp, filePath)
+			return f.readLargeFileRange(ctx, req, rsp, filePath)
 		}
 		rsp.Message = fmt.Sprintf(
 			"Error: file is too large: %d > %d. Pass start_line/"+
@@ -355,8 +355,11 @@ func (f *fileToolSet) readFileFromCache(
 // readLargeFileRange serves a ranged read of a file too large to read whole.
 // It streams the file line by line, so memory holds only the requested range,
 // which itself must stay within maxFileSize — the limit protects what is
-// returned to the model, not what the tool may look at.
+// returned to the model, not what the tool may look at. Once num_lines is
+// satisfied the read stops rather than scanning to EOF for an exact line
+// count, so the message then reports the total as a lower bound.
 func (f *fileToolSet) readLargeFileRange(
+	ctx context.Context,
 	req *readFileRequest,
 	rsp *readFileResponse,
 	filePath string,
@@ -383,7 +386,14 @@ func (f *fileToolSet) readLargeFileRange(
 	var collected int64
 	lineNo := 0
 	endLine := 0
+	rangeSatisfied := false
 	for {
+		if lineNo&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				rsp.Message = fmt.Sprintf("Error: %v", err)
+				return err
+			}
+		}
 		segment, rerr := reader.ReadString('\n')
 		atEOF := errors.Is(rerr, io.EOF)
 		if rerr != nil && !atEOF {
@@ -409,13 +419,17 @@ func (f *fileToolSet) readLargeFileRange(
 			}
 			lines = append(lines, line)
 			endLine = lineNo
+			if req.NumLines != nil && len(lines) == *req.NumLines {
+				rangeSatisfied = !atEOF
+				break
+			}
 		}
 		if atEOF {
 			break
 		}
 	}
 	total := lineNo
-	if start > total {
+	if !rangeSatisfied && start > total {
 		err := fmt.Errorf(
 			"start line is out of range, start line: %d, "+
 				"total lines: %d",
@@ -432,13 +446,17 @@ func (f *fileToolSet) readLargeFileRange(
 	}
 	chunk, replaced := sanitizeText(chunk)
 	rsp.Contents = chunk
+	totalDesc := fmt.Sprintf("%d", total)
+	if rangeSatisfied {
+		totalDesc = fmt.Sprintf("at least %d", total)
+	}
 	rsp.Message = fmt.Sprintf(
 		"Successfully read %s, start line: %d, "+
-			"end line: %d, total lines: %d",
+			"end line: %d, total lines: %s",
 		req.FileName,
 		start,
 		endLine,
-		total,
+		totalDesc,
 	)
 	if replaced {
 		rsp.Message += invalidUTF8Note

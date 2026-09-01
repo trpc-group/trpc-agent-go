@@ -228,6 +228,9 @@ func (f *fileToolSet) searchContentByPath(
 	case fileref.SchemeWorkspace:
 		path := fileref.WorkspaceRef(pathRef.Path)
 		matches := f.searchWorkspaceContent(ctx, pathRef.Path, req, re)
+		if err := ctx.Err(); err != nil {
+			return path, nil, nil, err
+		}
 		return path, matches, nil, nil
 	default:
 		reqPath := normalizeToolPath(f.baseDir, pathRef.Path)
@@ -266,7 +269,10 @@ func (f *fileToolSet) searchContentLocal(
 		return nil, nil, fmt.Errorf("accessing path '%s': %w", reqPath, err)
 	}
 	if !stat.IsDir() {
-		match, tooLarge, ok := f.searchSingleLocalFile(targetPath, reqPath, re)
+		match, tooLarge, ok := f.searchSingleLocalFile(ctx, targetPath, reqPath, re)
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		if ok {
 			if tooLarge {
 				return []*fileMatch{}, []string{reqPath}, nil
@@ -295,6 +301,9 @@ func (f *fileToolSet) searchContentLocal(
 		skipped     []string
 	)
 	for _, file := range files {
+		if ctx.Err() != nil {
+			break
+		}
 		fullPath := filepath.Join(targetPath, file)
 		relPath := filepath.Join(reqPath, file)
 		stat, err := os.Stat(fullPath)
@@ -312,7 +321,7 @@ func (f *fileToolSet) searchContentLocal(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			match, err := searchFileContent(fullPath, re)
+			match, err := searchFileContent(ctx, fullPath, re)
 			if err != nil || len(match.Matches) == 0 {
 				return
 			}
@@ -324,6 +333,9 @@ func (f *fileToolSet) searchContentLocal(
 		}()
 	}
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	slices.Sort(skipped)
 	return fileMatches, skipped, nil
 }
@@ -375,6 +387,7 @@ func (f *fileToolSet) searchSinglePath(
 }
 
 func (f *fileToolSet) searchSingleLocalFile(
+	ctx context.Context,
 	fullPath string,
 	reqPath string,
 	re *regexp.Regexp,
@@ -389,7 +402,7 @@ func (f *fileToolSet) searchSingleLocalFile(
 	if st.Size() > f.searchSizeCap() {
 		return []*fileMatch{}, true, true
 	}
-	match, err := searchFileContent(fullPath, re)
+	match, err := searchFileContent(ctx, fullPath, re)
 	if err != nil || len(match.Matches) == 0 {
 		if err == nil {
 			return []*fileMatch{}, false, true
@@ -479,6 +492,9 @@ func (f *fileToolSet) searchWorkspaceContent(
 
 	var out []*fileMatch
 	for _, entry := range fileref.WorkspaceFiles(ctx) {
+		if ctx.Err() != nil {
+			break
+		}
 		full := filepath.Clean(strings.TrimSpace(entry.Name))
 		if full == "" || full == "." {
 			continue
@@ -585,8 +601,10 @@ func regexCompile(
 // searchFileContent searches for content matches in a single file. It streams
 // the file line by line, so its memory use is bounded by the longest line, not
 // the file size — this is what lets search look inside files far larger than
-// the read limit.
+// the read limit. A cancelled context aborts the scan rather than letting an
+// abandoned request keep burning I/O on a huge file.
 func searchFileContent(
+	ctx context.Context,
 	filePath string,
 	re *regexp.Regexp,
 ) (*fileMatch, error) {
@@ -601,6 +619,11 @@ func searchFileContent(
 	lineNum := 0
 	for sc.Scan() {
 		lineNum++
+		if lineNum&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if line := sc.Text(); re.MatchString(line) {
 			if len(fileMatches.Matches) >= maxMatchesPerFile {
 				fileMatches.Truncated = true

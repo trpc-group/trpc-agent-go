@@ -1103,9 +1103,67 @@ func TestFileTool_ReadFile_RangedReadOfLargeFile(t *testing.T) {
 	assert.Equal(
 		t,
 		"Successfully read big.txt, start line: 42, end line: 44, "+
+			"total lines: at least 44",
+		rsp.Message,
+	)
+}
+
+func TestFileTool_ReadFile_RangedReadOfLargeFileToEOFCountsExactly(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(
+		WithBaseDir(tempDir),
+		WithMaxFileSize(64),
+	)
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	var b strings.Builder
+	for i := 1; i <= 100; i++ {
+		fmt.Fprintf(&b, "line-%d\n", i)
+	}
+	err = os.WriteFile(filepath.Join(tempDir, "big.txt"), []byte(b.String()), 0644)
+	assert.NoError(t, err)
+
+	start := 99
+	rsp, err := fts.readFile(
+		context.Background(),
+		&readFileRequest{FileName: "big.txt", StartLine: &start},
+	)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "line-99\nline-100\n", rsp.Contents)
+	assert.Equal(
+		t,
+		"Successfully read big.txt, start line: 99, end line: 101, "+
 			"total lines: 101",
 		rsp.Message,
 	)
+}
+
+func TestFileTool_ReadFile_RangedReadOfLargeFileCancelled(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(
+		WithBaseDir(tempDir),
+		WithMaxFileSize(16),
+	)
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	content := strings.Repeat("0123456789\n", 10)
+	err = os.WriteFile(filepath.Join(tempDir, "big.txt"), []byte(content), 0644)
+	assert.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := 1
+	num := 1
+	rsp, err := fts.readFile(
+		ctx,
+		&readFileRequest{FileName: "big.txt", StartLine: &start, NumLines: &num},
+	)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, rsp.Message, "context canceled")
 }
 
 func TestFileTool_ReadFile_RangedReadOfLargeFileRangeTooBig(t *testing.T) {

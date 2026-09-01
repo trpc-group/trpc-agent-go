@@ -536,33 +536,33 @@ func TestSearchSingleLocalFile_Branches(t *testing.T) {
 
 	re := regexp.MustCompile("foo")
 
-	matches, tooLarge, ok := fts.searchSingleLocalFile("", "", re)
+	matches, tooLarge, ok := fts.searchSingleLocalFile(context.Background(), "", "", re)
 	assert.False(t, ok)
 	assert.False(t, tooLarge)
 	assert.Nil(t, matches)
 
-	matches, tooLarge, ok = fts.searchSingleLocalFile(base, "", re)
+	matches, tooLarge, ok = fts.searchSingleLocalFile(context.Background(), base, "", re)
 	assert.False(t, ok)
 	assert.False(t, tooLarge)
 	assert.Nil(t, matches)
 
 	withinCap := filepath.Join(base, "big.txt")
 	assert.NoError(t, os.WriteFile(withinCap, []byte("123\nfoo"), 0o644))
-	matches, tooLarge, ok = fts.searchSingleLocalFile(withinCap, "big.txt", re)
+	matches, tooLarge, ok = fts.searchSingleLocalFile(context.Background(), withinCap, "big.txt", re)
 	assert.True(t, ok)
 	assert.False(t, tooLarge)
 	assert.Len(t, matches, 1)
 
 	tooBig := filepath.Join(base, "huge.txt")
 	assert.NoError(t, os.WriteFile(tooBig, []byte(strings.Repeat("foo\n", 100)), 0o644))
-	matches, tooLarge, ok = fts.searchSingleLocalFile(tooBig, "huge.txt", re)
+	matches, tooLarge, ok = fts.searchSingleLocalFile(context.Background(), tooBig, "huge.txt", re)
 	assert.True(t, ok)
 	assert.True(t, tooLarge)
 	assert.Empty(t, matches)
 
 	noMatch := filepath.Join(base, "nomatch.txt")
 	assert.NoError(t, os.WriteFile(noMatch, []byte("bar"), 0o644))
-	matches, tooLarge, ok = fts.searchSingleLocalFile(noMatch, "nomatch.txt", re)
+	matches, tooLarge, ok = fts.searchSingleLocalFile(context.Background(), noMatch, "nomatch.txt", re)
 	assert.True(t, ok)
 	assert.False(t, tooLarge)
 	assert.Empty(t, matches)
@@ -659,4 +659,28 @@ func TestSearchContent_WorkspaceContent_SortsAndSkips(t *testing.T) {
 		rsp.FileMatches[0].FilePath)
 	assert.Equal(t, fileref.WorkspaceRef("dir1/b.txt"),
 		rsp.FileMatches[1].FilePath)
+}
+
+func TestSearchContent_CancelledContext(t *testing.T) {
+	tempDir := t.TempDir()
+	assert.NoError(t, os.WriteFile(
+		filepath.Join(tempDir, "a.txt"),
+		[]byte("foo\nbar\n"),
+		0o644,
+	))
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := searchContentRequest{
+		Path:           "",
+		FilePattern:    "*.txt",
+		ContentPattern: "foo",
+	}
+	rsp, err := fts.searchContent(ctx, &req)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.NotNil(t, rsp)
+	assert.Contains(t, rsp.Message, "context canceled")
 }
