@@ -138,13 +138,13 @@ func main() {
 		localAgent,
 		runner.WithSessionService(sessionService),
 	)
-	a2aRunner, err := agui.NewRecordingRunner(
+	a2aRunner, err := aguirunner.WrapCoreRunner(
 		sharedRunner,
 		uiAppName,
 		sessionService,
 	)
 	if err != nil {
-		log.Fatalf("create A2A recording runner: %v", err)
+		log.Fatalf("wrap A2A core runner: %v", err)
 	}
 	defer func() {
 		if err := a2aRunner.Close(); err != nil {

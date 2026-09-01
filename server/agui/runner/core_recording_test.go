@@ -6,7 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package agui_test
+package runner_test
 
 import (
 	"context"
@@ -21,7 +21,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
@@ -29,14 +28,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
-func TestNewRecordingRunnerRecordsAGUITrackAndForwardsCoreEvents(t *testing.T) {
+func TestWrapCoreRunnerRecordsAGUITrackAndForwardsCoreEvents(t *testing.T) {
 	assistant := newAssistantEvent("run-1", "hello")
 	completion := newCompletionEvent("run-1")
 	base := &recordingBaseRunner{events: []*event.Event{assistant, completion}}
 	service := inmemory.NewSessionService()
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
 
-	recorded, err := agui.NewRecordingRunner(base, "app", service)
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
 	require.NoError(t, err)
 
 	events, err := recorded.Run(
@@ -80,11 +79,11 @@ func TestNewRecordingRunnerRecordsAGUITrackAndForwardsCoreEvents(t *testing.T) {
 	assert.Equal(t, multimodal.CustomEventNameUserMessage, userEvent.Name)
 }
 
-func TestNewRecordingRunnerUsesFirstEventRequestID(t *testing.T) {
+func TestWrapCoreRunnerUsesFirstEventRequestID(t *testing.T) {
 	base := &recordingBaseRunner{events: []*event.Event{newCompletionEvent("request-id")}}
 	service := inmemory.NewSessionService()
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
-	recorded, err := agui.NewRecordingRunner(base, "app", service)
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
 	require.NoError(t, err)
 
 	events, err := recorded.Run(
@@ -107,14 +106,48 @@ func TestNewRecordingRunnerUsesFirstEventRequestID(t *testing.T) {
 	assert.Equal(t, "request-id", started.RunID())
 }
 
-func TestNewRecordingRunnerTrackCanBeReadAsMessagesSnapshot(t *testing.T) {
+func TestWrapCoreRunnerRecordsEmptySuccessfulRun(t *testing.T) {
+	base := &recordingBaseRunner{}
+	service := inmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
+	require.NoError(t, err)
+
+	events, err := recorded.Run(
+		context.Background(), "user", "thread", model.NewUserMessage("hi"),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, collectCoreEvents(events))
+
+	sess, err := service.GetSession(context.Background(), session.Key{
+		AppName: "app", UserID: "user", SessionID: "thread",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	trackEvents, err := sess.GetTrackEvents(session.Track("agui"))
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 3)
+	gotTypes := make([]aguievents.EventType, 0, len(trackEvents.Events))
+	for _, trackEvent := range trackEvents.Events {
+		evt, err := aguievents.EventFromJSON(trackEvent.Payload)
+		require.NoError(t, err)
+		gotTypes = append(gotTypes, evt.Type())
+	}
+	assert.Equal(t, []aguievents.EventType{
+		aguievents.EventTypeCustom,
+		aguievents.EventTypeRunStarted,
+		aguievents.EventTypeRunFinished,
+	}, gotTypes)
+}
+
+func TestWrapCoreRunnerTrackCanBeReadAsMessagesSnapshot(t *testing.T) {
 	base := &recordingBaseRunner{events: []*event.Event{
 		newAssistantEvent("run-1", "hello"),
 		newCompletionEvent("run-1"),
 	}}
 	service := inmemory.NewSessionService()
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
-	recorded, err := agui.NewRecordingRunner(base, "app", service)
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
 	require.NoError(t, err)
 
 	events, err := recorded.Run(
@@ -153,11 +186,11 @@ func TestNewRecordingRunnerTrackCanBeReadAsMessagesSnapshot(t *testing.T) {
 	assert.Equal(t, "hello", assistantContent)
 }
 
-func TestNewRecordingRunnerAppendsMultipleRunsToOneSession(t *testing.T) {
+func TestWrapCoreRunnerAppendsMultipleRunsToOneSession(t *testing.T) {
 	base := &recordingBaseRunner{}
 	service := inmemory.NewSessionService()
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
-	recorded, err := agui.NewRecordingRunner(base, "app", service)
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
 	require.NoError(t, err)
 
 	base.events = []*event.Event{
@@ -204,12 +237,12 @@ func TestNewRecordingRunnerAppendsMultipleRunsToOneSession(t *testing.T) {
 	assertSnapshotContent(t, snapshot.Messages[3], aguitypes.RoleAssistant, "second")
 }
 
-func TestNewRecordingRunnerRunErrorIsUnchanged(t *testing.T) {
+func TestWrapCoreRunnerRunErrorIsUnchanged(t *testing.T) {
 	wantErr := errors.New("run failed")
 	base := &recordingBaseRunner{runErr: wantErr}
 	service := inmemory.NewSessionService()
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
-	recorded, err := agui.NewRecordingRunner(base, "app", service)
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
 	require.NoError(t, err)
 
 	events, err := recorded.Run(
@@ -225,12 +258,12 @@ func TestNewRecordingRunnerRunErrorIsUnchanged(t *testing.T) {
 	assert.Nil(t, sess)
 }
 
-func TestNewRecordingRunnerRecordingFailureDoesNotChangeCoreEvents(t *testing.T) {
+func TestWrapCoreRunnerRecordingFailureDoesNotChangeCoreEvents(t *testing.T) {
 	completion := newCompletionEvent("run-1")
 	base := &recordingBaseRunner{events: []*event.Event{completion}}
 	service := inmemory.NewSessionService()
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
-	recorded, err := agui.NewRecordingRunner(base, "app", service)
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
 	require.NoError(t, err)
 
 	events, err := recorded.Run(
@@ -251,29 +284,29 @@ func TestNewRecordingRunnerRecordingFailureDoesNotChangeCoreEvents(t *testing.T)
 	assert.Nil(t, sess)
 }
 
-func TestNewRecordingRunnerCloseDelegates(t *testing.T) {
+func TestWrapCoreRunnerCloseDelegates(t *testing.T) {
 	base := &recordingBaseRunner{}
 	service := inmemory.NewSessionService()
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
-	recorded, err := agui.NewRecordingRunner(base, "app", service)
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
 	require.NoError(t, err)
 
 	require.NoError(t, recorded.Close())
 	assert.Equal(t, 1, base.closeCalls)
 }
 
-func TestNewRecordingRunnerValidatesConfiguration(t *testing.T) {
+func TestWrapCoreRunnerValidatesConfiguration(t *testing.T) {
 	base := &recordingBaseRunner{}
 	service := inmemory.NewSessionService()
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
 
-	_, err := agui.NewRecordingRunner(nil, "app", service)
+	_, err := aguirunner.WrapCoreRunner(nil, "app", service)
 	assert.ErrorContains(t, err, "runner is nil")
-	_, err = agui.NewRecordingRunner(base, "", service)
+	_, err = aguirunner.WrapCoreRunner(base, "", service)
 	assert.ErrorContains(t, err, "app name is empty")
-	_, err = agui.NewRecordingRunner(base, "app", nil)
+	_, err = aguirunner.WrapCoreRunner(base, "app", nil)
 	assert.ErrorContains(t, err, "session service is nil")
-	_, err = agui.NewRecordingRunner(
+	_, err = aguirunner.WrapCoreRunner(
 		base,
 		"app",
 		serviceWithoutTrack{Service: service},

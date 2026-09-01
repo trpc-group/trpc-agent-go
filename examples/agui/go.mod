@@ -16,6 +16,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	go.opentelemetry.io/otel v1.40.0
 	go.opentelemetry.io/otel/trace v1.40.0
+	trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.3.0.20260813112030-aed2c1f02f9c
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/server/agui v0.0.0-20251126064502-c8c2594d2519
 	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0-20251126064502-c8c2594d2519
@@ -67,7 +68,6 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb // indirect
-	trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.3.0.20260813112030-aed2c1f02f9c // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
 )

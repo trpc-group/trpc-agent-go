@@ -6,7 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package agui
+package runner
 
 import (
 	"context"
@@ -21,59 +21,63 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
+	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-const defaultRecordingTrackPersistenceTimeout = 5 * time.Second
+const defaultCoreRecordingTrackPersistenceTimeout = 5 * time.Second
 
-// NewRecordingRunner wraps a core runner and records its event stream as AG-UI
-// track events. Run forwards the wrapped runner's events unchanged and treats
-// AG-UI translation and persistence as best effort, so recording failures do
-// not change the core run events or errors. The returned event channel closes
-// after the final track batch has been flushed or its bounded persistence
-// timeout has elapsed.
+// WrapCoreRunner wraps a trpc-agent-go core runner with AG-UI track recording.
+// Unlike Runner, the returned runner keeps the core runner Run signature and
+// forwards core events unchanged. AG-UI translation and persistence are best
+// effort, so recording failures do not change the core run events or errors.
+// The returned event channel closes after the final track batch has been
+// flushed or its bounded persistence timeout has elapsed.
 //
 // appName identifies the session scope used for AG-UI tracks and must match the
 // effective application name of the wrapped runner. sessionService must be the
 // same service used by the wrapped runner and must implement session.TrackService.
 // Close delegates to the wrapped runner; callers should close the returned
 // runner instead of closing both. Optional capabilities implemented by the
-// wrapped runner beyond runner.Runner are not exposed by the returned adapter.
-func NewRecordingRunner(
-	base runner.Runner,
+// wrapped runner beyond trpc-agent-go/runner.Runner are not exposed by the
+// returned adapter.
+func WrapCoreRunner(
+	base trunner.Runner,
 	appName string,
 	sessionService session.Service,
-) (runner.Runner, error) {
+) (trunner.Runner, error) {
 	if base == nil {
-		return nil, errors.New("agui: recording runner is nil")
+		return nil, errors.New("agui: core runner is nil")
 	}
 	if strings.TrimSpace(appName) == "" {
-		return nil, errors.New("agui: recording app name is empty")
+		return nil, errors.New("agui: core runner app name is empty")
 	}
 	if sessionService == nil {
-		return nil, errors.New("agui: recording session service is nil")
+		return nil, errors.New("agui: core runner session service is nil")
 	}
 	if _, ok := sessionService.(session.TrackService); !ok {
-		return nil, errors.New("agui: recording session service does not implement track service")
+		return nil, errors.New("agui: core runner session service does not implement track service")
 	}
-	return &recordingRunner{
+	return &coreRecordingRunner{
 		base:           base,
 		appName:        appName,
 		sessionService: sessionService,
 	}, nil
 }
 
-type recordingRunner struct {
-	base           runner.Runner
+// TODO: Share the track recording lifecycle below with the default AG-UI
+// Runner after both paths can preserve their current final-event ordering and
+// filtering behavior.
+type coreRecordingRunner struct {
+	base           trunner.Runner
 	appName        string
 	sessionService session.Service
 }
 
-func (r *recordingRunner) Run(
+func (r *coreRecordingRunner) Run(
 	ctx context.Context,
 	userID string,
 	sessionID string,
@@ -94,11 +98,11 @@ func (r *recordingRunner) Run(
 	return out, nil
 }
 
-func (r *recordingRunner) Close() error {
+func (r *coreRecordingRunner) Close() error {
 	return r.base.Close()
 }
 
-func (r *recordingRunner) forward(
+func (r *coreRecordingRunner) forward(
 	ctx context.Context,
 	key session.Key,
 	message model.Message,
@@ -106,7 +110,7 @@ func (r *recordingRunner) forward(
 	out chan<- *event.Event,
 ) {
 	defer close(out)
-	var state *recordingState
+	var state *coreRecordingState
 	recordingDisabled := false
 	for evt := range source {
 		if state == nil && !recordingDisabled && evt != nil {
@@ -130,6 +134,17 @@ func (r *recordingRunner) forward(
 		}
 		out <- evt
 	}
+	if state == nil && !recordingDisabled {
+		var err error
+		state, err = r.newRecordingState(ctx, key, message, "")
+		if err != nil {
+			log.WarnfContext(ctx,
+				"agui recording: initialize track for empty core stream failed: app=%s, user=%s, session=%s, err=%v",
+				key.AppName, key.UserID, key.SessionID, err,
+			)
+			return
+		}
+	}
 	if state == nil {
 		return
 	}
@@ -141,12 +156,12 @@ func (r *recordingRunner) forward(
 	}
 }
 
-func (r *recordingRunner) newRecordingState(
+func (r *coreRecordingRunner) newRecordingState(
 	ctx context.Context,
 	key session.Key,
 	message model.Message,
 	runID string,
-) (*recordingState, error) {
+) (*coreRecordingState, error) {
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, fmt.Errorf("session key: %w", err)
 	}
@@ -172,7 +187,7 @@ func (r *recordingRunner) newRecordingState(
 		return nil, fmt.Errorf("convert user message: %w", err)
 	}
 	userMessage.Name = key.UserID
-	state := &recordingState{
+	state := &coreRecordingState{
 		key:        key,
 		runID:      runID,
 		tracker:    tracker,
@@ -190,7 +205,7 @@ func (r *recordingRunner) newRecordingState(
 	return state, nil
 }
 
-type recordingState struct {
+type coreRecordingState struct {
 	key        session.Key
 	runID      string
 	tracker    track.Tracker
@@ -198,7 +213,7 @@ type recordingState struct {
 	terminal   bool
 }
 
-func (s *recordingState) record(ctx context.Context, evt *event.Event) error {
+func (s *coreRecordingState) record(ctx context.Context, evt *event.Event) error {
 	if s == nil || s.terminal || evt == nil {
 		return nil
 	}
@@ -212,7 +227,7 @@ func (s *recordingState) record(ctx context.Context, evt *event.Event) error {
 	return nil
 }
 
-func (s *recordingState) append(ctx context.Context, events ...aguievents.Event) error {
+func (s *coreRecordingState) append(ctx context.Context, events ...aguievents.Event) error {
 	for _, evt := range events {
 		if evt == nil {
 			continue
@@ -220,7 +235,7 @@ func (s *recordingState) append(ctx context.Context, events ...aguievents.Event)
 		if err := s.tracker.AppendEvent(ctx, s.key, evt); err != nil {
 			return err
 		}
-		if recordingTerminalRunSignal(evt) {
+		if coreRecordingTerminalRunSignal(evt) {
 			s.terminal = true
 			break
 		}
@@ -228,7 +243,7 @@ func (s *recordingState) append(ctx context.Context, events ...aguievents.Event)
 	return nil
 }
 
-func (s *recordingState) finish(ctx context.Context) error {
+func (s *coreRecordingState) finish(ctx context.Context) error {
 	var finishErr error
 	if !s.terminal {
 		if finalizer, ok := s.translator.(translator.PostRunFinalizingTranslator); ok {
@@ -268,7 +283,7 @@ func (s *recordingState) finish(ctx context.Context) error {
 			)
 		}
 	}
-	closeCtx, cancel := newRecordingPersistenceContext(ctx)
+	closeCtx, cancel := newCoreRecordingPersistenceContext(ctx)
 	defer cancel()
 	if err := s.tracker.Close(closeCtx, s.key); err != nil {
 		finishErr = errors.Join(
@@ -279,7 +294,7 @@ func (s *recordingState) finish(ctx context.Context) error {
 	return finishErr
 }
 
-func recordingTerminalRunSignal(evt aguievents.Event) bool {
+func coreRecordingTerminalRunSignal(evt aguievents.Event) bool {
 	switch evt.(type) {
 	case *aguievents.RunFinishedEvent, *aguievents.RunErrorEvent:
 		return true
@@ -288,7 +303,7 @@ func recordingTerminalRunSignal(evt aguievents.Event) bool {
 	}
 }
 
-func newRecordingPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+func newCoreRecordingPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	ctx = context.WithoutCancel(agent.CloneContext(ctx))
-	return context.WithTimeout(ctx, defaultRecordingTrackPersistenceTimeout)
+	return context.WithTimeout(ctx, defaultCoreRecordingTrackPersistenceTimeout)
 }
