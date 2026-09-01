@@ -239,3 +239,83 @@ func TestStartStdinFailureReturnsProcessForCleanup(t *testing.T) {
 	require.NoError(t, killErr)
 	assert.True(t, killedProcess)
 }
+
+func TestUninitializedProcessMethods(t *testing.T) {
+	var proc *Process
+	assert.Zero(t, proc.PID())
+
+	_, err := proc.Wait(context.Background())
+	require.ErrorContains(t, err, "process is not initialized")
+
+	_, err = (&Process{}).Wait(nil)
+	require.ErrorContains(t, err, "nil context")
+
+	_, err = proc.Kill(context.Background())
+	require.ErrorContains(t, err, "process is not initialized")
+
+	err = proc.SendInput(context.Background(), []byte("input"))
+	require.ErrorContains(t, err, "process is not initialized")
+
+	err = proc.CloseStdin(context.Background())
+	require.ErrorContains(t, err, "process is not initialized")
+}
+
+func TestConnectRejectsInvalidInitialStream(t *testing.T) {
+	tests := []struct {
+		name    string
+		connect func(
+			context.Context,
+			*connect.Request[processrpc.ConnectRequest],
+			*connect.ServerStream[processrpc.ConnectResponse],
+		) error
+		wantError string
+	}{
+		{
+			name: "EmptyStream",
+			connect: func(
+				context.Context,
+				*connect.Request[processrpc.ConnectRequest],
+				*connect.ServerStream[processrpc.ConnectResponse],
+			) error {
+				return nil
+			},
+			wantError: "stream ended before StartEvent",
+		},
+		{
+			name: "StreamError",
+			connect: func(
+				context.Context,
+				*connect.Request[processrpc.ConnectRequest],
+				*connect.ServerStream[processrpc.ConnectResponse],
+			) error {
+				return connect.NewError(
+					connect.CodeUnavailable, errors.New("stream unavailable"),
+				)
+			},
+			wantError: "stream unavailable",
+		},
+		{
+			name: "WrongPID",
+			connect: func(
+				_ context.Context,
+				_ *connect.Request[processrpc.ConnectRequest],
+				stream *connect.ServerStream[processrpc.ConnectResponse],
+			) error {
+				return stream.Send(&processrpc.ConnectResponse{
+					Event: startProcessEvent(999),
+				})
+			},
+			wantError: "returned PID 999, want 123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := &testProcessHandler{connect: tt.connect}
+			client := newTestClient(t, handler, nil)
+
+			_, err := client.Connect(context.Background(), 123)
+			require.ErrorContains(t, err, tt.wantError)
+		})
+	}
+}

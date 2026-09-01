@@ -87,3 +87,23 @@ func TestClientKillMissingProcessReturnsFalse(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, killed)
 }
+
+func TestClientOperationsRejectInvalidInput(t *testing.T) {
+	client := newTestClient(t, &testProcessHandler{}, nil)
+
+	_, err := client.Connect(nil, 1)
+	require.ErrorContains(t, err, "nil context")
+
+	_, err = client.Kill(context.Background(), 0)
+	require.ErrorContains(t, err, "pid is zero")
+
+	err = client.SendInput(context.Background(), 0, []byte("input"))
+	require.ErrorContains(t, err, "pid is zero")
+
+	err = client.CloseStdin(context.Background(), 0)
+	require.ErrorContains(t, err, "pid is zero")
+
+	var uninitialized *Client
+	_, err = uninitialized.Kill(context.Background(), 1)
+	require.ErrorContains(t, err, "client is not initialized")
+}
