@@ -28,6 +28,7 @@ func ObserveChanges(
 	provider string,
 	request *model.Request,
 	maxInputTokens int,
+	strategy model.TailoringStrategy,
 ) func() {
 	if request == nil {
 		return func() {}
@@ -37,16 +38,64 @@ func ObserveChanges(
 		if reflect.DeepEqual(before, request.Messages) {
 			return
 		}
-		modelrequest.RecordTokenTailoring(
+		provenance := classifyProvenance(strategy, before, request.Messages)
+		modelrequest.RecordTokenTailoringChange(
 			ctx,
-			modelrequest.TokenTailoringRecord{
-				Provider:       provider,
-				MaxInputTokens: maxInputTokens,
-				BeforeMessages: len(before),
-				AfterMessages:  len(request.Messages),
+			modelrequest.TokenTailoringChange{
+				Record: modelrequest.TokenTailoringRecord{
+					Provider:       provider,
+					MaxInputTokens: maxInputTokens,
+					BeforeMessages: len(before),
+					AfterMessages:  len(request.Messages),
+					Provenance:     provenance,
+				},
+				Before: before,
+				After:  statecopy.Messages(request.Messages),
 			},
 		)
 	}
+}
+
+func classifyProvenance(
+	strategy model.TailoringStrategy,
+	before []model.Message,
+	after []model.Message,
+) modelrequest.TokenTailoringProvenance {
+	if len(after) < len(before) {
+		return modelrequest.TokenTailoringProvenanceDropped
+	}
+	if len(after) != len(before) || !isBuiltInStrategy(strategy) {
+		return modelrequest.TokenTailoringProvenanceUnknown
+	}
+	for i := range before {
+		if !isSafeBuiltInNormalization(before[i], after[i]) {
+			return modelrequest.TokenTailoringProvenanceUnknown
+		}
+	}
+	return modelrequest.TokenTailoringProvenancePreserved
+}
+
+func isBuiltInStrategy(strategy model.TailoringStrategy) bool {
+	switch strategy.(type) {
+	case *model.MiddleOutStrategy, *model.HeadOutStrategy, *model.TailOutStrategy:
+		return true
+	default:
+		return false
+	}
+}
+
+func isSafeBuiltInNormalization(before model.Message, after model.Message) bool {
+	if reflect.DeepEqual(before, after) {
+		return true
+	}
+	if before.Content != "" || after.Content != " " ||
+		(len(before.ContentParts) == 0 &&
+			len(before.ToolCalls) == 0 &&
+			before.ReasoningContent == "") {
+		return false
+	}
+	after.Content = before.Content
+	return reflect.DeepEqual(before, after)
 }
 
 // ApplyResult applies a token-tailored message slice when it is safe to do so.

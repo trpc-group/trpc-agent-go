@@ -785,7 +785,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		)
 	}
 	finishObservation := modeltailoring.ObserveChanges(
-		ctx, "openai.Model", request, maxInputTokens,
+		ctx, "openai.Model", request, maxInputTokens, m.tailoringStrategy,
 	)
 	defer finishObservation()
 

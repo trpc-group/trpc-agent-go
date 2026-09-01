@@ -621,7 +621,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		)
 	}
 	finishObservation := modeltailoring.ObserveChanges(
-		ctx, "gemini.Model", request, maxInputTokens,
+		ctx, "gemini.Model", request, maxInputTokens, m.tailoringStrategy,
 	)
 	defer finishObservation()
 

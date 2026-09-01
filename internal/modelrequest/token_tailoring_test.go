@@ -13,14 +13,15 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestTokenTailoringObserver(t *testing.T) {
-	var callbacks []TokenTailoringRecord
+	var callbacks []TokenTailoringChange
 	ctx, observer := ObserveTokenTailoring(
 		context.Background(),
-		func(record TokenTailoringRecord) {
-			callbacks = append(callbacks, record)
+		func(change TokenTailoringChange) {
+			callbacks = append(callbacks, change)
 		},
 	)
 	record := TokenTailoringRecord{
@@ -30,10 +31,15 @@ func TestTokenTailoringObserver(t *testing.T) {
 		AfterMessages:  2,
 	}
 
-	RecordTokenTailoring(ctx, record)
+	change := TokenTailoringChange{
+		Record: record,
+		Before: []model.Message{model.NewUserMessage("before")},
+		After:  []model.Message{model.NewUserMessage("after")},
+	}
+	RecordTokenTailoringChange(ctx, change)
 
 	require.Equal(t, []TokenTailoringRecord{record}, observer.Snapshot())
-	require.Equal(t, []TokenTailoringRecord{record}, callbacks)
+	require.Equal(t, []TokenTailoringChange{change}, callbacks)
 	copyOfSnapshot := observer.Snapshot()
 	copyOfSnapshot[0].Provider = "mutated"
 	require.Equal(t, "test.Model", observer.Snapshot()[0].Provider)
@@ -46,4 +52,11 @@ func TestTokenTailoringObserverHandlesMissingObserver(t *testing.T) {
 	RecordTokenTailoring(ctx, TokenTailoringRecord{Provider: "test.Model"})
 	require.Len(t, observer.Snapshot(), 1)
 	require.Nil(t, (*TokenTailoringObserver)(nil).Snapshot())
+}
+
+func TestTokenTailoringProvenanceString(t *testing.T) {
+	require.Equal(t, "unknown", TokenTailoringProvenanceUnknown.String())
+	require.Equal(t, "preserved", TokenTailoringProvenancePreserved.String())
+	require.Equal(t, "dropped", TokenTailoringProvenanceDropped.String())
+	require.Equal(t, "unknown", TokenTailoringProvenance(255).String())
 }
