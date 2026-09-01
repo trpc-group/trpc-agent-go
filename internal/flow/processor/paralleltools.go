@@ -23,20 +23,31 @@ import (
 // exclusiveToolsNotice tells the model which tools cannot share a turn. It states
 // the consequence rather than a rule: batching an exclusive tool does not fail,
 // it silently costs the parallelism the rest of the batch would have had.
-const exclusiveToolsNotice = noticeMarker + "\nTool-call batching: independent tool calls issued in the " +
+const exclusiveToolsNotice = "Tool-call batching: independent tool calls issued in the " +
 	"same turn %s, so a turn of several calls can cost about as much as its slowest one. These tools are the " +
 	"exception and must be the only call in their turn: %s. A turn that includes one of them runs every call " +
 	"in it one after another."
 
-// noticeMarker identifies a paragraph this annotator wrote, so a later pass can
-// take back its own text and nothing else.
+// noticeStart and noticeEnd delimit the span this annotator wrote, so a later
+// pass can take back its own bytes and nothing else.
 //
 // Ownership cannot be inferred from how the notice reads: an earlier version
 // matched its opening words, so a caller's own system policy beginning
-// "Tool-call batching: " was deleted on the first pass. The marker is spliced
-// into exclusiveToolsNotice rather than compared against it, so the two cannot
-// drift.
-const noticeMarker = "<!-- trpc-agent-go:tool-batching-notice -->"
+// "Tool-call batching: " was deleted on the first pass. Nor can the edges be
+// inferred from paragraph structure: a version that removed "the marked
+// paragraph" had to normalize the caller's trailing newlines to find it, and
+// withdrawing the notice then gave back trimmed content rather than the bytes
+// the caller supplied. With both edges marked, the span and the separator
+// written ahead of it are removed exactly.
+const (
+	noticeStart = "<!-- trpc-agent-go:tool-batching-notice -->"
+	noticeEnd   = "<!-- /trpc-agent-go:tool-batching-notice -->"
+)
+
+// noticeSeparator is what appendToSystemMessage writes between the caller's
+// content and the span, whatever that content ends in, so removal can take back
+// exactly that.
+const noticeSeparator = "\n\n"
 
 // What a turn's calls actually do depends on the run's concurrency
 // configuration, which can withhold parallelism the scheduler would otherwise
@@ -77,7 +88,9 @@ func NewToolBatchingNotice(concurrency tool.ConcurrencyConfig) *ToolBatchingNoti
 // A retry re-runs the before-model callbacks over the same Request and this
 // annotator runs again afterwards, by which point the tools may have changed. So
 // annotating starts by removing whatever notice a previous pass left: the request
-// carries the current one, or none once the tools that earned it are gone.
+// carries the current one, or none once the tools that earned it are gone, and
+// the caller's own system content is then byte for byte what it was before the
+// first pass.
 func (n *ToolBatchingNotice) Annotate(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -103,22 +116,21 @@ func (n *ToolBatchingNotice) Annotate(
 }
 
 // removeToolBatchingNotice deletes the notice a previous Annotate wrote, leaving
-// the caller's own system content untouched.
+// the caller's own system content exactly as it was.
 //
 // It sweeps every system message, not the first: a callback may prepend one of
 // its own, so on a retry the notice is no longer where appendToSystemMessage put
 // it, and looking only at the first would leave it in place and add another
-// beside it. The notice is one paragraph joined by a blank line, so paragraph
-// boundaries are its edges; a message that carried nothing else is dropped.
+// beside it. A message that existed only to carry the notice is dropped.
 func removeToolBatchingNotice(req *model.Request) {
 	kept := req.Messages[:0]
 	for _, msg := range req.Messages {
 		if msg.Role != model.RoleSystem ||
-			!strings.Contains(msg.Content, noticeMarker) {
+			!strings.Contains(msg.Content, noticeStart) {
 			kept = append(kept, msg)
 			continue
 		}
-		content, ok := withoutNoticeParagraphs(msg.Content)
+		content, ok := withoutNoticeSpans(msg.Content)
 		if !ok {
 			continue
 		}
@@ -128,40 +140,52 @@ func removeToolBatchingNotice(req *model.Request) {
 	req.Messages = kept
 }
 
-// withoutNoticeParagraphs drops the marked paragraphs from a system message's
-// content. The second result is false when nothing else is left, meaning the
-// message existed only to carry the notice.
+// withoutNoticeSpans removes every delimited span from a system message's
+// content, each together with the separator written ahead of it, and returns
+// the rest byte for byte. The second result is false when the message existed
+// only to carry the notice: nothing remains and no separator was ever written,
+// which is the message appendToSystemMessage creates. A caller's empty system
+// message that the notice was appended to is kept, empty, since the separator
+// ahead of the span shows it was there first.
 //
-// A paragraph is matched past any leading newlines. Content that already ended
-// in a newline leaves three at the seam, so the notice's paragraph starts with
-// the leftover one and an exact prefix test misses it — keeping the stale notice
-// and letting the next pass add another. appendToSystemMessage no longer writes
-// that seam, but content from an earlier build still carries it.
-func withoutNoticeParagraphs(content string) (string, bool) {
-	paragraphs := strings.Split(content, "\n\n")
-	kept := paragraphs[:0]
-	for _, paragraph := range paragraphs {
-		if strings.HasPrefix(strings.TrimLeft(paragraph, "\n"), noticeMarker) {
-			continue
+// Only a span with both edges is the annotator's; a start marker with no end is
+// not removed, because its extent is unknown.
+func withoutNoticeSpans(content string) (string, bool) {
+	appended := false
+	for {
+		start := strings.Index(content, noticeStart)
+		if start < 0 {
+			break
 		}
-		kept = append(kept, paragraph)
+		length := strings.Index(content[start:], noticeEnd)
+		if length < 0 {
+			break
+		}
+		end := start + length + len(noticeEnd)
+		if strings.HasSuffix(content[:start], noticeSeparator) {
+			start -= len(noticeSeparator)
+			appended = true
+		}
+		content = content[:start] + content[end:]
 	}
-	if len(kept) == 0 {
+	if content == "" && !appended {
 		return "", false
 	}
-	return strings.TrimRight(strings.Join(kept, "\n\n"), "\n"), true
+	return content, true
 }
 
+// notice renders the delimited span: the text between the markers, each marker
+// on its own line so the model reads the sentence and not the fences.
 func (n *ToolBatchingNotice) notice(names []string) string {
 	quoted := make([]string, 0, len(names))
 	for _, name := range names {
 		quoted = append(quoted, "`"+name+"`")
 	}
-	return fmt.Sprintf(
+	return noticeStart + "\n" + fmt.Sprintf(
 		exclusiveToolsNotice,
 		n.concurrencyClause(),
 		strings.Join(quoted, ", "),
-	)
+	) + "\n" + noticeEnd
 }
 
 // concurrencyClause reports what a turn's calls actually do under this run's
@@ -201,14 +225,15 @@ func exclusiveToolNames(tools map[string]tool.Tool) []string {
 // appendToSystemMessage adds content to the request's system message, creating
 // one if the request has none.
 //
-// Trailing newlines on the existing content are dropped so the join produces one
-// blank line exactly. Otherwise the seam has three, which is a paragraph boundary
-// followed by a paragraph that begins with a newline — enough to hide the marker
-// from a later removal pass and let notices accumulate across retries.
+// The caller's content is left exactly as supplied, trailing newlines included,
+// and the separator is written after it; removal takes back the separator and
+// the span, so withdrawing the notice restores the caller's bytes. A trailing
+// newline on the caller's side makes the seam wider than one blank line, which
+// costs nothing, whereas trimming it changed content a caller may have loaded
+// verbatim from a file and be caching by identity.
 func appendToSystemMessage(req *model.Request, content string) {
 	if idx := findSystemMessageIndex(req.Messages); idx >= 0 {
-		req.Messages[idx].Content = strings.TrimRight(req.Messages[idx].Content, "\n") +
-			"\n\n" + content
+		req.Messages[idx].Content += noticeSeparator + content
 		return
 	}
 	req.Messages = append(

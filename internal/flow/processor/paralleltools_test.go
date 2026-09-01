@@ -279,13 +279,14 @@ func TestParallelToolsNamesASoleExclusiveTool(t *testing.T) {
 
 // A retry re-runs the before-model callbacks over the same request and the
 // annotators run again afterwards, so the notice must describe the request as it
-// stands rather than accumulate.
-// A second pass has to land on the same prompt as the first.
+// stands rather than accumulate: a second pass has to land on the same prompt as
+// the first.
 //
-// The trailing-newline cases are the ones that broke: content already ending in a
-// newline puts three at the seam, so the notice's paragraph starts with the
-// leftover one rather than the marker. Removal stopped recognizing its own text,
-// and every retry left the stale notice and added another copy.
+// The trailing-newline cases are the ones that broke when the notice was found
+// by paragraph structure: content already ending in a newline put three at the
+// seam, removal stopped recognizing its own text, and every retry left the stale
+// notice and added another copy. The span's edges are now marked, so the seam's
+// width does not matter.
 func TestParallelToolsIsIdempotent(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -313,13 +314,81 @@ func TestParallelToolsIsIdempotent(t *testing.T) {
 			if got := systemContent(req); got != once {
 				t.Fatalf("annotating twice must not change the prompt:\n%q\n%q", once, got)
 			}
-			if n := strings.Count(systemContent(req), noticeMarker); n != 1 {
+			if n := strings.Count(systemContent(req), noticeStart); n != 1 {
 				t.Errorf("expected exactly one notice, got %d: %q", n, systemContent(req))
 			}
-			if !strings.HasPrefix(systemContent(req), strings.TrimRight(tt.content, "\n")) {
-				t.Errorf("the caller's own system content must survive: %q", systemContent(req))
+			if !strings.HasPrefix(systemContent(req), tt.content+noticeSeparator) {
+				t.Errorf("the caller's own system content must survive, unchanged: %q", systemContent(req))
 			}
 		})
+	}
+}
+
+// Withdrawing the notice must give the caller's system content back byte for
+// byte, trailing newlines included. An earlier version trimmed them to keep the
+// seam to one blank line, so a policy loaded verbatim from a file did not
+// round-trip and its prompt identity changed after the annotation was withdrawn.
+func TestParallelToolsRestoresCallerContentByteForByte(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "no trailing newline", content: "base"},
+		{name: "one trailing newline", content: "base\n"},
+		{name: "trailing blank line", content: "base\n\n"},
+		{name: "several paragraphs ending in a newline", content: "base\n\nmore policy\n"},
+		{name: "leading and trailing whitespace", content: "\n  base  \n\n\n"},
+		{name: "empty system message", content: ""},
+	}
+	exclusive := map[string]tool.Tool{
+		"read":  safeStubTool{name: "read"},
+		"agent": unsafeStubTool{name: "agent"},
+	}
+	safe := map[string]tool.Tool{"read": safeStubTool{name: "read"}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &model.Request{
+				Messages: []model.Message{model.NewSystemMessage(tt.content)},
+				Tools:    exclusive,
+			}
+			// Add, withdraw, add, withdraw: every withdrawal must land on the
+			// caller's bytes, and every addition on the same annotated prompt.
+			processParallelTools(req)
+			annotated := systemContent(req)
+			if !strings.HasPrefix(annotated, tt.content+noticeSeparator) {
+				t.Fatalf("the notice must follow the caller's content unchanged, got %q", annotated)
+			}
+			for i := 0; i < 2; i++ {
+				req.Tools = safe
+				processParallelTools(req)
+				if len(req.Messages) != 1 {
+					t.Fatalf("the caller's system message must survive withdrawal, got %+v", req.Messages)
+				}
+				if got := systemContent(req); got != tt.content {
+					t.Fatalf("pass %d: withdrawing must restore %q exactly, got %q", i, tt.content, got)
+				}
+				req.Tools = exclusive
+				processParallelTools(req)
+				if got := systemContent(req); got != annotated {
+					t.Fatalf("pass %d: re-adding must land on the same prompt:\n%q\n%q", i, annotated, got)
+				}
+			}
+		})
+	}
+}
+
+// Only a span with both edges is the annotator's. A start marker a caller left
+// unterminated is not removed, since its extent is unknown.
+func TestParallelToolsLeavesAnUnterminatedMarkerAlone(t *testing.T) {
+	content := "base\n\n" + noticeStart + " a caller quoting the marker"
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage(content)},
+		Tools:    map[string]tool.Tool{"read": safeStubTool{name: "read"}},
+	}
+	processParallelTools(req)
+	if got := systemContent(req); got != content {
+		t.Fatalf("an unterminated marker is not the annotator's to remove, got %q", got)
 	}
 }
 
@@ -419,7 +488,7 @@ func TestParallelToolsKeepsCallerContentThatReadsLikeTheNotice(t *testing.T) {
 		}
 		processParallelTools(req)
 		if got := systemContent(req); !strings.Contains(got, callerPolicy) ||
-			!strings.Contains(got, noticeMarker) {
+			!strings.Contains(got, noticeStart) {
 			t.Fatalf("precondition: both paragraphs must be present, got %q", got)
 		}
 
@@ -457,7 +526,7 @@ func TestParallelToolsRemovesTheNoticeFromALaterSystemMessage(t *testing.T) {
 	processParallelTools(req)
 
 	for i, msg := range req.Messages {
-		if strings.Contains(msg.Content, noticeMarker) {
+		if strings.Contains(msg.Content, noticeStart) {
 			t.Fatalf("a stale notice survived in message %d: %q", i, msg.Content)
 		}
 	}
@@ -492,7 +561,7 @@ func TestParallelToolsDoesNotAccumulateAcrossSystemMessages(t *testing.T) {
 
 	var notices int
 	for _, msg := range req.Messages {
-		notices += strings.Count(msg.Content, noticeMarker)
+		notices += strings.Count(msg.Content, noticeStart)
 	}
 	if notices != 1 {
 		t.Fatalf("expected exactly one notice across the request, got %d: %+v", notices, req.Messages)
