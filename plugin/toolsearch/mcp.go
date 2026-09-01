@@ -345,6 +345,11 @@ func (t *renamedTool) Declaration() *tool.Declaration {
 }
 
 // Original returns the wrapped tool so framework unwrapping can reach it.
+//
+// That is also how the wrapped tool's concurrency declaration reaches the
+// schedulers: tool.IsConcurrencySafe resolves Original() before asking, so a
+// renamed tool keeps its objection, and one that declared nothing is not
+// answered for.
 func (t *renamedTool) Original() tool.Tool { return t.original }
 
 // Call delegates to the original tool. If the original tool is only a
@@ -373,12 +378,6 @@ func (t *renamedTool) SkipSummarization() bool {
 // ToolMetadata delegates to the original tool.
 func (t *renamedTool) ToolMetadata() tool.ToolMetadata {
 	return tool.MetadataOf(t.original)
-}
-
-// IsConcurrencySafe delegates to the original tool. Without this, renaming a
-// tool would hide an objection it raised and put it back on the parallel path.
-func (t *renamedTool) IsConcurrencySafe() bool {
-	return tool.IsConcurrencySafe(t.original)
 }
 
 // StreamableCall delegates to the original streamable tool.

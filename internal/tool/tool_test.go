@@ -264,7 +264,11 @@ func TestNamedTool_MetadataAndPermissionDelegation(t *testing.T) {
 	nt := nts.Tools(ctx)[0].(*NamedTool)
 
 	require.Equal(t, original.metadata, nt.ToolMetadata())
-	require.True(t, nt.IsConcurrencySafe())
+	// The wrapper answers nothing about concurrency itself; the question is
+	// resolved to the original, which declares nothing here.
+	_, aware := tool.Tool(nt).(tool.ConcurrencyAware)
+	require.False(t, aware)
+	require.True(t, tool.IsConcurrencySafe(nt))
 	require.True(t, nt.ShouldDefer(ctx))
 	decision, err := nt.CheckPermission(ctx, &tool.PermissionRequest{})
 	require.NoError(t, err)
@@ -277,9 +281,10 @@ func TestNamedTool_MetadataAndPermissionDelegation(t *testing.T) {
 		tools: []tool.Tool{&simpleTool{name: "plain"}},
 	}).Tools(ctx)[0].(*NamedTool)
 	require.Equal(t, tool.ToolMetadata{}, plain.ToolMetadata())
-	// IsConcurrencySafe does not read the metadata above: a tool publishing
-	// nothing raises no objection, and this wrapper must not raise one for it.
-	require.True(t, plain.IsConcurrencySafe())
+	// A tool publishing nothing raises no objection, and this wrapper must
+	// neither raise one for it nor guarantee anything on its behalf.
+	require.True(t, tool.IsConcurrencySafe(plain))
+	require.Equal(t, tool.ToolMetadata{}, tool.MetadataOf(plain))
 	require.False(t, plain.ShouldDefer(ctx))
 	decision, err = plain.CheckPermission(ctx, &tool.PermissionRequest{})
 	require.NoError(t, err)

@@ -2919,6 +2919,21 @@ reports nothing for it. The framework never infers an objection from
 `ToolMetadata`, so an existing tool that publishes metadata keeps the
 scheduling it has today.
 
+Those three states survive the framework's own wrappers. A toolset's
+name-prefixed tool, a ToolPipe-augmented tool, a renamed deferred tool, and a
+declaration overlay do not implement `ConcurrencyAware` themselves — a wrapper
+answering with a `bool` would have to turn "declared nothing" into an objection
+or a guarantee — but expose the tool they wrap, and `tool.IsConcurrencySafe`
+resolves through them before asking. Custom schedulers and policies should call
+`tool.IsConcurrencySafe` rather than type-assert `ConcurrencyAware` on an entry
+in `Request.Tools`, which is usually such a wrapper.
+
+The framework tools whose effect is a mutation of the invocation or a
+read-modify-write over the session already object: `transfer_to_agent`,
+`await_user_reply`, the TodoEnforcer's `todo_declare_blocker`, and the Goal
+extension's `create_goal` and `update_goal` (its `get_goal` only reads). A turn
+containing one of them runs sequentially when parallel tools are enabled.
+
 **Parallel execution effect:**
 
 ```bash

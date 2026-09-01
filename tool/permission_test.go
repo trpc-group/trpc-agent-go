@@ -158,6 +158,18 @@ func TestIsConcurrencySafe(t *testing.T) {
 			metadata: ToolMetadata{ConcurrencySafe: false},
 			aware:    true,
 		}, true},
+		// Framework wrappers do not answer; the question reaches the tool they
+		// wrap, however deep.
+		{"a wrapper carries the objection", &originalWrapper{
+			inner: &concurrencyTool{safe: false},
+		}, false},
+		{"a wrapper does not manufacture an objection", &originalWrapper{
+			inner: newMockTool(testToolName),
+		}, true},
+		{"nested wrappers resolve to the innermost tool", &originalWrapper{
+			inner: &originalWrapper{inner: &concurrencyTool{safe: false}},
+		}, false},
+		{"a wrapper with no original is asked itself", &originalWrapper{}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -165,6 +177,34 @@ func TestIsConcurrencySafe(t *testing.T) {
 				t.Fatalf("IsConcurrencySafe() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// originalWrapper stands in for a framework wrapper: it exposes the tool it
+// wraps through Original() and answers nothing about concurrency itself.
+type originalWrapper struct {
+	inner Tool
+}
+
+func (w *originalWrapper) Declaration() *Declaration { return &Declaration{Name: testToolName} }
+func (w *originalWrapper) Original() Tool            { return w.inner }
+
+// selfReferencingWrapper returns itself from Original(), the shape that would
+// otherwise never terminate.
+type selfReferencingWrapper struct {
+	safe bool
+}
+
+func (w *selfReferencingWrapper) Declaration() *Declaration { return &Declaration{Name: testToolName} }
+func (w *selfReferencingWrapper) Original() Tool            { return w }
+func (w *selfReferencingWrapper) IsConcurrencySafe() bool   { return w.safe }
+
+func TestIsConcurrencySafe_SelfReferencingWrapperTerminates(t *testing.T) {
+	if IsConcurrencySafe(&selfReferencingWrapper{safe: false}) {
+		t.Fatal("a wrapper that is its own original is asked itself")
+	}
+	if !IsConcurrencySafe(&selfReferencingWrapper{safe: true}) {
+		t.Fatal("a wrapper that is its own original is asked itself")
 	}
 }
 

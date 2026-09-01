@@ -139,6 +139,13 @@ func ResolveSemantic(t tool.Tool) tool.Tool {
 	}
 }
 
+// originalProvider is the unwrapping contract wrappers share with
+// tool.IsConcurrencySafe: a NamedTool, a request-local schema augmentation, or
+// a renamed deferred tool exposes the tool it stands in for through Original().
+type originalProvider interface {
+	Original() tool.Tool
+}
+
 // IsConcurrencySafe reports whether a tool objects to running at the same time as
 // the other tool calls in its turn, resolving framework wrappers first.
 //
@@ -146,8 +153,35 @@ func ResolveSemantic(t tool.Tool) tool.Tool {
 // overlays expose none of the wrapped tool's optional interfaces — that isolation
 // is the point of ApplyDeclarations — so a patched tool would otherwise raise no
 // objection, and editing a description would put it back on the parallel path.
+// Wrappers exposing Original() are resolved by both helpers; this one adds the
+// overlays, in whatever order the two nest.
 func IsConcurrencySafe(t tool.Tool) bool {
-	return tool.IsConcurrencySafe(ResolveSemantic(t))
+	return tool.IsConcurrencySafe(resolveConcurrencyOwner(t))
+}
+
+// resolveConcurrencyOwner unwraps declaration overlays and Original() chains to
+// the tool whose ConcurrencyAware answer counts. It is narrower than
+// ResolveSemantic on purpose: that resolver decides capabilities such as
+// streamability, where a wrapper exposing Original() may still mean to stand
+// in for the tool itself, while a concurrency declaration always belongs to
+// the innermost tool. A wrapper returning nil or itself ends the chain.
+func resolveConcurrencyOwner(t tool.Tool) tool.Tool {
+	for {
+		switch current := t.(type) {
+		case nil:
+			return nil
+		case declarationWrapper:
+			t = current.originalTool()
+		case originalProvider:
+			original := current.Original()
+			if original == nil || original == t {
+				return t
+			}
+			t = original
+		default:
+			return t
+		}
+	}
 }
 
 type declarationTool struct {
@@ -276,14 +310,17 @@ func (t *NamedTool) Original() tool.Tool {
 }
 
 // ToolMetadata delegates to the original tool.
+//
+// NamedTool deliberately does not implement tool.ConcurrencyAware. That
+// interface has three states — objects, guarantees, declares nothing — and a
+// wrapper answering with a bool would have to turn the third into one of the
+// other two: an earlier version read MetadataOf(...).ConcurrencySafe and had
+// every plain toolset tool object, and the next read the admission default and
+// had every plain toolset tool guarantee. Schedulers and tool.IsConcurrencySafe
+// resolve through Original() instead, so the wrapped tool's own state is what
+// they find.
 func (t *NamedTool) ToolMetadata() tool.ToolMetadata {
 	return tool.MetadataOf(t.original)
-}
-
-// IsConcurrencySafe delegates to the original tool, through this package's
-// resolver so a declaration overlay in between cannot hide the objection.
-func (t *NamedTool) IsConcurrencySafe() bool {
-	return IsConcurrencySafe(t.original)
 }
 
 // ShouldDefer delegates to the original tool.

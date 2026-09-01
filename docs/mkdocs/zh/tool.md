@@ -2634,6 +2634,18 @@ function-call processor 和 Graph 的 Tools 节点——只有在本轮**没有�
 不会报告任何内容。框架不会从 `ToolMetadata` 推断拒绝，因此现有工具发布
 metadata 后，调度行为与今天保持一致。
 
+这三种状态在框架自身的包装器之下也原样保留。ToolSet 加前缀后的工具、经 ToolPipe
+增强的工具、重命名后的延迟工具以及声明覆盖层都不会自己实现 `ConcurrencyAware`
+——包装器若以 `bool` 作答，就不得不把“未声明”变成拒绝或承诺——而是暴露被包装
+的工具，`tool.IsConcurrencySafe` 会先穿透它们再提问。自定义调度器和策略应调用
+`tool.IsConcurrencySafe`，而不是对 `Request.Tools` 中的条目直接断言
+`ConcurrencyAware`：那里的条目通常正是这样的包装器。
+
+那些通过修改 Invocation 或对 session 做“读-改-写”来产生效果的框架工具已经会
+拒绝：`transfer_to_agent`、`await_user_reply`、TodoEnforcer 的
+`todo_declare_blocker`，以及 Goal 扩展的 `create_goal` 与 `update_goal`
+（`get_goal` 只读，不拒绝）。启用并行工具时，包含其中任何一个的一轮都会顺序执行。
+
 **并行执行效果：**
 
 ```bash
