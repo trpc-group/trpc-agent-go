@@ -31,13 +31,14 @@ func TestSearchContent(t *testing.T) {
 	tempDir := t.TempDir()
 	// Create test directory structure with files.
 	testFiles := map[string]string{
-		"a.txt":     "hello foo\nnope\nfoo bar foo\n",
-		"b.txt":     "bar\nFooBar\nbaz\n",
-		"foo.txt":   "hit\n",
-		"x.txt":     "ToDo\n",
-		"big.log":   "this-is-a-big-file-with-foo",
-		"small.log": "foo\n",
-		"sub/c.txt": "foo\n",
+		"a.txt":       "hello foo\nnope\nfoo bar foo\n",
+		"b.txt":       "bar\nFooBar\nbaz\n",
+		"foo.txt":     "hit\n",
+		"x.txt":       "ToDo\n",
+		"big.log":     "this-is-a-big-file-with-foo",
+		"small.log":   "foo\n",
+		"beyond.huge": strings.Repeat("padding padding foo\n", 32),
+		"sub/c.txt":   "foo\n",
 	}
 	// Create directories and files.
 	for filePath, content := range testFiles {
@@ -52,11 +53,12 @@ func TestSearchContent(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	tests := []struct {
-		name      string
-		opts      []Option
-		req       searchContentRequest
-		wantErr   bool
-		wantFiles map[string][]int // relative path -> line numbers.
+		name        string
+		opts        []Option
+		req         searchContentRequest
+		wantErr     bool
+		wantFiles   map[string][]int // relative path -> line numbers.
+		wantSkipped []string
 	}{
 		{
 			name: "empty file pattern",
@@ -134,7 +136,7 @@ func TestSearchContent(t *testing.T) {
 			},
 		},
 		{
-			name: "skip large files by maxFileSize",
+			name: "files above maxFileSize are still searched",
 			opts: []Option{WithMaxFileSize(5)},
 			req: searchContentRequest{
 				Path:           "",
@@ -143,7 +145,19 @@ func TestSearchContent(t *testing.T) {
 			},
 			wantFiles: map[string][]int{
 				"small.log": {1},
+				"big.log":   {1},
 			},
+		},
+		{
+			name: "files above the search cap are reported, not silently skipped",
+			opts: []Option{WithMaxFileSize(5)},
+			req: searchContentRequest{
+				Path:           "",
+				FilePattern:    "*.huge",
+				ContentPattern: "foo",
+			},
+			wantFiles:   map[string][]int{},
+			wantSkipped: []string{"beyond.huge"},
 		},
 		{
 			name: "not found",
@@ -216,6 +230,13 @@ func TestSearchContent(t *testing.T) {
 				}
 			}
 			assert.Equal(t, tc.wantFiles, actual)
+			assert.Equal(t, tc.wantSkipped, rsp.SkippedFiles)
+			if len(tc.wantSkipped) > 0 {
+				assert.Contains(t, rsp.Message, "were NOT searched")
+				for _, name := range tc.wantSkipped {
+					assert.Contains(t, rsp.Message, name)
+				}
+			}
 		})
 	}
 }
@@ -407,7 +428,7 @@ func TestSearchContent_FilePatternRef_NotExported(t *testing.T) {
 	assert.Contains(t, rsp.Message, "workspace file is not exported")
 }
 
-func TestSearchContent_FilePatternRef_TooLarge(t *testing.T) {
+func TestSearchContent_FilePatternRef_AboveReadLimitStillSearched(t *testing.T) {
 	set, err := NewToolSet(
 		WithBaseDir(t.TempDir()),
 		WithMaxFileSize(3),
@@ -431,9 +452,39 @@ func TestSearchContent_FilePatternRef_TooLarge(t *testing.T) {
 		ContentPattern: "1",
 	}
 	rsp, err := fts.searchContent(ctx, &req)
+	assert.NoError(t, err)
+	assert.NotNil(t, rsp)
+	assert.Len(t, rsp.FileMatches, 1)
+	assert.Equal(t, 1, rsp.FileMatches[0].Matches[0].LineNumber)
+}
+
+func TestSearchContent_FilePatternRef_TooLarge(t *testing.T) {
+	set, err := NewToolSet(
+		WithBaseDir(t.TempDir()),
+		WithMaxFileSize(3),
+	)
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{
+			Name:     "out/a.txt",
+			Content:  strings.Repeat("1", 200),
+			MIMEType: "text/plain",
+		},
+	})
+
+	req := searchContentRequest{
+		Path:           "",
+		FilePattern:    "workspace://out/a.txt",
+		ContentPattern: "1",
+	}
+	rsp, err := fts.searchContent(ctx, &req)
 	assert.Error(t, err)
 	assert.NotNil(t, rsp)
-	assert.Contains(t, rsp.Message, "file size is beyond")
+	assert.Contains(t, rsp.Message, "max search size")
 }
 
 func TestSearchContent_FilePatternRef_NoMatches(t *testing.T) {
@@ -485,24 +536,35 @@ func TestSearchSingleLocalFile_Branches(t *testing.T) {
 
 	re := regexp.MustCompile("foo")
 
-	matches, ok := fts.searchSingleLocalFile("", "", re)
+	matches, tooLarge, ok := fts.searchSingleLocalFile("", "", re)
 	assert.False(t, ok)
+	assert.False(t, tooLarge)
 	assert.Nil(t, matches)
 
-	matches, ok = fts.searchSingleLocalFile(base, "", re)
+	matches, tooLarge, ok = fts.searchSingleLocalFile(base, "", re)
 	assert.False(t, ok)
+	assert.False(t, tooLarge)
 	assert.Nil(t, matches)
 
-	tooBig := filepath.Join(base, "big.txt")
-	assert.NoError(t, os.WriteFile(tooBig, []byte("123"), 0o644))
-	matches, ok = fts.searchSingleLocalFile(tooBig, "big.txt", re)
+	withinCap := filepath.Join(base, "big.txt")
+	assert.NoError(t, os.WriteFile(withinCap, []byte("123\nfoo"), 0o644))
+	matches, tooLarge, ok = fts.searchSingleLocalFile(withinCap, "big.txt", re)
 	assert.True(t, ok)
+	assert.False(t, tooLarge)
+	assert.Len(t, matches, 1)
+
+	tooBig := filepath.Join(base, "huge.txt")
+	assert.NoError(t, os.WriteFile(tooBig, []byte(strings.Repeat("foo\n", 100)), 0o644))
+	matches, tooLarge, ok = fts.searchSingleLocalFile(tooBig, "huge.txt", re)
+	assert.True(t, ok)
+	assert.True(t, tooLarge)
 	assert.Empty(t, matches)
 
 	noMatch := filepath.Join(base, "nomatch.txt")
 	assert.NoError(t, os.WriteFile(noMatch, []byte("bar"), 0o644))
-	matches, ok = fts.searchSingleLocalFile(noMatch, "nomatch.txt", re)
+	matches, tooLarge, ok = fts.searchSingleLocalFile(noMatch, "nomatch.txt", re)
 	assert.True(t, ok)
+	assert.False(t, tooLarge)
 	assert.Empty(t, matches)
 }
 

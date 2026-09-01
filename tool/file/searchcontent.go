@@ -11,6 +11,7 @@
 package file
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +27,27 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
+
+const (
+	// searchSizeCapMultiple scales maxFileSize into the search-size cap. The
+	// read limit protects the model's context from whole-file dumps; search
+	// returns only matching lines, so it can safely look inside files far
+	// larger than a read may return whole. Files above even this cap are
+	// reported by name, never skipped silently: a zero-match result must be
+	// distinguishable from a file the tool refused to open.
+	searchSizeCapMultiple = 64
+	// maxMatchesPerFile bounds how many matching lines one file contributes,
+	// so an overly broad pattern on a huge file cannot flood the result.
+	maxMatchesPerFile = 500
+	// maxSearchLineSize bounds a single scanned line during streaming search;
+	// a line longer than this fails the file's scan rather than the process.
+	maxSearchLineSize = 4 * 1024 * 1024
+)
+
+// searchSizeCap is the largest file search will stream through.
+func (f *fileToolSet) searchSizeCap() int64 {
+	return f.maxFileSize * searchSizeCapMultiple
+}
 
 // searchContentRequest represents the input for the search content operation.
 type searchContentRequest struct {
@@ -50,14 +72,20 @@ type searchContentResponse struct {
 	FilePattern    string       `json:"file_pattern"`
 	ContentPattern string       `json:"content_pattern"`
 	FileMatches    []*fileMatch `json:"file_matches"`
-	Message        string       `json:"message"`
+	// SkippedFiles names files that matched the file pattern but exceed the
+	// search-size cap and were therefore not searched.
+	SkippedFiles []string `json:"skipped_files,omitempty"`
+	Message      string   `json:"message"`
 }
 
 // fileMatch represents all matches within a single file.
 type fileMatch struct {
 	FilePath string       `json:"file_path"`
 	Matches  []*lineMatch `json:"matches"`
-	Message  string       `json:"message"`
+	// Truncated reports that the file had more matching lines than
+	// maxMatchesPerFile and only the first ones are listed.
+	Truncated bool   `json:"truncated,omitempty"`
+	Message   string `json:"message"`
 }
 
 // lineMatch represents a single line match within a file.
@@ -110,15 +138,33 @@ func (f *fileToolSet) searchContent(
 		return rsp, nil
 	}
 
-	path, matches, err := f.searchContentByPath(ctx, req, re)
+	path, matches, skipped, err := f.searchContentByPath(ctx, req, re)
 	if err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return rsp, err
 	}
 	rsp.Path = path
 	rsp.FileMatches = matches
-	rsp.Message = fmt.Sprintf("Found %v files matching", len(matches))
+	rsp.SkippedFiles = skipped
+	rsp.Message = f.searchResultMessage(len(matches), skipped)
 	return rsp, nil
+}
+
+// searchResultMessage summarizes a search, naming any file that matched the
+// file pattern but was too large to search so a zero-match result is never
+// mistaken for proof of absence.
+func (f *fileToolSet) searchResultMessage(matched int, skipped []string) string {
+	msg := fmt.Sprintf("Found %v files matching", matched)
+	if len(skipped) > 0 {
+		msg += fmt.Sprintf(
+			"; %d file(s) matched the file pattern but exceed the "+
+				"%d-byte search cap and were NOT searched: %s",
+			len(skipped),
+			f.searchSizeCap(),
+			strings.Join(skipped, ", "),
+		)
+	}
+	return msg
 }
 
 func (f *fileToolSet) searchContentByFilePatternRef(
@@ -136,12 +182,12 @@ func (f *fileToolSet) searchContentByFilePatternRef(
 	if err != nil {
 		return nil, true, err
 	}
-	if int64(len(content)) > f.maxFileSize {
+	if int64(len(content)) > f.searchSizeCap() {
 		return nil, true, fmt.Errorf(
-			"file size is beyond of max file size, "+
-				"file size: %d, max file size: %d",
+			"file size is beyond of max search size, "+
+				"file size: %d, max search size: %d",
 			len(content),
-			f.maxFileSize,
+			f.searchSizeCap(),
 		)
 	}
 
@@ -166,27 +212,27 @@ func (f *fileToolSet) searchContentByPath(
 	ctx context.Context,
 	req *searchContentRequest,
 	re *regexp.Regexp,
-) (string, []*fileMatch, error) {
+) (string, []*fileMatch, []string, error) {
 	if req == nil || re == nil {
-		return "", nil, errors.New("request cannot be nil")
+		return "", nil, nil, errors.New("request cannot be nil")
 	}
 	pathRef, err := fileref.Parse(req.Path)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	switch pathRef.Scheme {
 	case fileref.SchemeArtifact:
-		return "", nil, fmt.Errorf(
+		return "", nil, nil, fmt.Errorf(
 			"searching artifact:// path is not supported",
 		)
 	case fileref.SchemeWorkspace:
 		path := fileref.WorkspaceRef(pathRef.Path)
 		matches := f.searchWorkspaceContent(ctx, pathRef.Path, req, re)
-		return path, matches, nil
+		return path, matches, nil, nil
 	default:
 		reqPath := normalizeToolPath(f.baseDir, pathRef.Path)
-		matches, err := f.searchContentLocal(ctx, reqPath, req, re)
-		return reqPath, matches, err
+		matches, skipped, err := f.searchContentLocal(ctx, reqPath, req, re)
+		return reqPath, matches, skipped, err
 	}
 }
 
@@ -195,36 +241,39 @@ func (f *fileToolSet) searchContentLocal(
 	reqPath string,
 	req *searchContentRequest,
 	re *regexp.Regexp,
-) ([]*fileMatch, error) {
+) ([]*fileMatch, []string, error) {
 	// When path is a file (or a cached workspace output file), search directly
 	// within that single file. Models commonly pass a file path in "path"
 	// together with a glob file_pattern like "*", which would otherwise be
 	// treated as a directory and fail.
 	if matches, ok := f.searchSinglePath(ctx, reqPath, re); ok {
-		return matches, nil
+		return matches, nil, nil
 	}
 	// Fast path: if the requested file exists only as a skill_run output_files
 	// entry, search against the cached content instead of the host filesystem.
 	// This avoids model loops where a workspace-relative skill output path is
 	// passed to file tools whose base directory is different.
 	if matches, ok := f.searchSkillCache(ctx, reqPath, req, re); ok {
-		return matches, nil
+		return matches, nil, nil
 	}
 
 	targetPath, err := f.resolvePath(reqPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	stat, err := os.Stat(targetPath)
 	if err != nil {
-		return nil, fmt.Errorf("accessing path '%s': %w", reqPath, err)
+		return nil, nil, fmt.Errorf("accessing path '%s': %w", reqPath, err)
 	}
 	if !stat.IsDir() {
-		match, ok := f.searchSingleLocalFile(targetPath, reqPath, re)
+		match, tooLarge, ok := f.searchSingleLocalFile(targetPath, reqPath, re)
 		if ok {
-			return match, nil
+			if tooLarge {
+				return []*fileMatch{}, []string{reqPath}, nil
+			}
+			return match, nil, nil
 		}
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"target path '%s' is a file, not a directory",
 			reqPath,
 		)
@@ -236,13 +285,14 @@ func (f *fileToolSet) searchContentLocal(
 		req.FileCaseSensitive,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var (
 		wg          sync.WaitGroup
 		mu          sync.Mutex
 		fileMatches []*fileMatch
+		skipped     []string
 	)
 	for _, file := range files {
 		fullPath := filepath.Join(targetPath, file)
@@ -251,7 +301,11 @@ func (f *fileToolSet) searchContentLocal(
 		if err != nil {
 			continue
 		}
-		if stat.IsDir() || stat.Size() > f.maxFileSize {
+		if stat.IsDir() {
+			continue
+		}
+		if stat.Size() > f.searchSizeCap() {
+			skipped = append(skipped, relPath)
 			continue
 		}
 
@@ -263,18 +317,33 @@ func (f *fileToolSet) searchContentLocal(
 				return
 			}
 			match.FilePath = relPath
-			match.Message = fmt.Sprintf(
-				"Found %d matches in file '%s'",
-				len(match.Matches),
-				relPath,
-			)
+			match.Message = fileMatchMessage(match, relPath)
 			mu.Lock()
 			fileMatches = append(fileMatches, match)
 			mu.Unlock()
 		}()
 	}
 	wg.Wait()
-	return fileMatches, nil
+	slices.Sort(skipped)
+	return fileMatches, skipped, nil
+}
+
+// fileMatchMessage summarizes one file's matches, noting when the list was
+// truncated at maxMatchesPerFile.
+func fileMatchMessage(m *fileMatch, path string) string {
+	if m.Truncated {
+		return fmt.Sprintf(
+			"Found %d matches in file '%s' (stopped at the first %d)",
+			len(m.Matches),
+			path,
+			maxMatchesPerFile,
+		)
+	}
+	return fmt.Sprintf(
+		"Found %d matches in file '%s'",
+		len(m.Matches),
+		path,
+	)
 }
 
 func (f *fileToolSet) searchSinglePath(
@@ -309,31 +378,27 @@ func (f *fileToolSet) searchSingleLocalFile(
 	fullPath string,
 	reqPath string,
 	re *regexp.Regexp,
-) ([]*fileMatch, bool) {
+) ([]*fileMatch, bool, bool) {
 	if strings.TrimSpace(fullPath) == "" || re == nil {
-		return nil, false
+		return nil, false, false
 	}
 	st, err := os.Stat(fullPath)
 	if err != nil || st.IsDir() {
-		return nil, false
+		return nil, false, false
 	}
-	if st.Size() > f.maxFileSize {
-		return []*fileMatch{}, true
+	if st.Size() > f.searchSizeCap() {
+		return []*fileMatch{}, true, true
 	}
 	match, err := searchFileContent(fullPath, re)
 	if err != nil || len(match.Matches) == 0 {
 		if err == nil {
-			return []*fileMatch{}, true
+			return []*fileMatch{}, false, true
 		}
-		return nil, false
+		return nil, false, false
 	}
 	match.FilePath = reqPath
-	match.Message = fmt.Sprintf(
-		"Found %d matches in file '%s'",
-		len(match.Matches),
-		reqPath,
-	)
-	return []*fileMatch{match}, true
+	match.Message = fileMatchMessage(match, reqPath)
+	return []*fileMatch{match}, false, true
 }
 
 func normalizeToolPath(baseDir string, p string) string {
@@ -430,9 +495,6 @@ func (f *fileToolSet) searchWorkspaceContent(
 		if err != nil || !ok {
 			continue
 		}
-		if int64(len(entry.Content)) > f.maxFileSize {
-			continue
-		}
 		path := fileref.WorkspaceRef(full)
 		match := searchTextContent(path, entry.Content, re)
 		if len(match.Matches) == 0 {
@@ -520,25 +582,38 @@ func regexCompile(
 	return re, nil
 }
 
-// searchFileContent searches for content matches in a single file.
+// searchFileContent searches for content matches in a single file. It streams
+// the file line by line, so its memory use is bounded by the longest line, not
+// the file size — this is what lets search look inside files far larger than
+// the read limit.
 func searchFileContent(
 	filePath string,
 	re *regexp.Regexp,
 ) (*fileMatch, error) {
-	content, err := os.ReadFile(filePath)
+	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(string(content), "\n")
+	defer file.Close()
 	fileMatches := &fileMatch{Matches: []*lineMatch{}}
-	// Search each line for matches.
-	for lineNum, line := range lines {
-		if re.MatchString(line) {
+	sc := bufio.NewScanner(file)
+	sc.Buffer(make([]byte, 64*1024), maxSearchLineSize)
+	lineNum := 0
+	for sc.Scan() {
+		lineNum++
+		if line := sc.Text(); re.MatchString(line) {
+			if len(fileMatches.Matches) >= maxMatchesPerFile {
+				fileMatches.Truncated = true
+				return fileMatches, nil
+			}
 			fileMatches.Matches = append(fileMatches.Matches, &lineMatch{
-				LineNumber:  lineNum + 1, // Line numbers are 1-based.
+				LineNumber:  lineNum, // Line numbers are 1-based.
 				LineContent: line,
 			})
 		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
 	}
 	return fileMatches, nil
 }

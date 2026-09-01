@@ -13,6 +13,7 @@ package file
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1071,4 +1072,133 @@ func TestFileTool_ReadFile_InvalidUTF8AtMaxFileSize(t *testing.T) {
 			"total lines: 1 (invalid UTF-8 replaced with U+FFFD)",
 		rsp.Message,
 	)
+}
+
+func TestFileTool_ReadFile_RangedReadOfLargeFile(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(
+		WithBaseDir(tempDir),
+		WithMaxFileSize(64),
+	)
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	var b strings.Builder
+	for i := 1; i <= 100; i++ {
+		fmt.Fprintf(&b, "line-%d\n", i)
+	}
+	assert.Greater(t, int64(b.Len()), int64(64))
+	err = os.WriteFile(filepath.Join(tempDir, "big.txt"), []byte(b.String()), 0644)
+	assert.NoError(t, err)
+
+	start := 42
+	num := 3
+	rsp, err := fts.readFile(
+		context.Background(),
+		&readFileRequest{FileName: "big.txt", StartLine: &start, NumLines: &num},
+	)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "line-42\nline-43\nline-44", rsp.Contents)
+	assert.Equal(
+		t,
+		"Successfully read big.txt, start line: 42, end line: 44, "+
+			"total lines: 101",
+		rsp.Message,
+	)
+}
+
+func TestFileTool_ReadFile_RangedReadOfLargeFileRangeTooBig(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(
+		WithBaseDir(tempDir),
+		WithMaxFileSize(16),
+	)
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	content := strings.Repeat("0123456789\n", 10)
+	err = os.WriteFile(filepath.Join(tempDir, "big.txt"), []byte(content), 0644)
+	assert.NoError(t, err)
+
+	start := 1
+	num := 5
+	rsp, err := fts.readFile(
+		context.Background(),
+		&readFileRequest{FileName: "big.txt", StartLine: &start, NumLines: &num},
+	)
+
+	assert.Error(t, err)
+	assert.Contains(t, rsp.Message, "request fewer lines")
+}
+
+func TestFileTool_ReadFile_RangedReadOfLargeFileStartBeyondEOF(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(
+		WithBaseDir(tempDir),
+		WithMaxFileSize(16),
+	)
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	content := strings.Repeat("0123456789\n", 10)
+	err = os.WriteFile(filepath.Join(tempDir, "big.txt"), []byte(content), 0644)
+	assert.NoError(t, err)
+
+	start := 500
+	rsp, err := fts.readFile(
+		context.Background(),
+		&readFileRequest{FileName: "big.txt", StartLine: &start},
+	)
+
+	assert.Error(t, err)
+	assert.Contains(t, rsp.Message, "start line is out of range")
+}
+
+func TestFileTool_ReadFile_WholeFileTooLargeSuggestsRange(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(
+		WithBaseDir(tempDir),
+		WithMaxFileSize(16),
+	)
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	content := strings.Repeat("0123456789\n", 10)
+	err = os.WriteFile(filepath.Join(tempDir, "big.txt"), []byte(content), 0644)
+	assert.NoError(t, err)
+
+	rsp, err := fts.readFile(
+		context.Background(),
+		&readFileRequest{FileName: "big.txt"},
+	)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "file is too large")
+	assert.Contains(t, rsp.Message, "start_line/num_lines")
+	assert.Contains(t, rsp.Message, "search_content")
+}
+
+func TestFileTool_ReadFile_RangedReadOfLargeBinaryRejected(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(
+		WithBaseDir(tempDir),
+		WithMaxFileSize(16),
+	)
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	content := append([]byte{0x00, 0x01, 0x02}, []byte(strings.Repeat("x", 100))...)
+	err = os.WriteFile(filepath.Join(tempDir, "blob.bin"), content, 0644)
+	assert.NoError(t, err)
+
+	start := 1
+	num := 1
+	rsp, err := fts.readFile(
+		context.Background(),
+		&readFileRequest{FileName: "blob.bin", StartLine: &start, NumLines: &num},
+	)
+
+	assert.Error(t, err)
+	assert.Contains(t, rsp.Message, "not a UTF-8 text file")
 }

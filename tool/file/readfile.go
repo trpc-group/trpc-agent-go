@@ -11,9 +11,11 @@
 package file
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -244,8 +246,13 @@ func (f *fileToolSet) readFileFromDiskOrCache(
 		)
 	}
 	if stat.Size() > f.maxFileSize {
+		if req.StartLine != nil || req.NumLines != nil {
+			return f.readLargeFileRange(req, rsp, filePath)
+		}
 		rsp.Message = fmt.Sprintf(
-			"Error: file is too large: %d > %d",
+			"Error: file is too large: %d > %d. Pass start_line/"+
+				"num_lines to read a slice of it, or use "+
+				"search_content to find the lines you need",
 			stat.Size(),
 			f.maxFileSize,
 		)
@@ -345,11 +352,106 @@ func (f *fileToolSet) readFileFromCache(
 	return true, nil
 }
 
+// readLargeFileRange serves a ranged read of a file too large to read whole.
+// It streams the file line by line, so memory holds only the requested range,
+// which itself must stay within maxFileSize — the limit protects what is
+// returned to the model, not what the tool may look at.
+func (f *fileToolSet) readLargeFileRange(
+	req *readFileRequest,
+	rsp *readFileResponse,
+	filePath string,
+) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: cannot read file: %v", err)
+		return fmt.Errorf("reading file: %w", err)
+	}
+	defer file.Close()
+	reader := bufio.NewReaderSize(file, 64*1024)
+	head, _ := reader.Peek(512)
+	mimeType := http.DetectContentType(head)
+	if err := rejectNonText(string(head), mimeType); err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return err
+	}
+
+	start := 1
+	if req.StartLine != nil {
+		start = *req.StartLine
+	}
+	var lines []string
+	var collected int64
+	lineNo := 0
+	endLine := 0
+	for {
+		segment, rerr := reader.ReadString('\n')
+		atEOF := errors.Is(rerr, io.EOF)
+		if rerr != nil && !atEOF {
+			rsp.Message = fmt.Sprintf("Error: cannot read file: %v", rerr)
+			return fmt.Errorf("reading file: %w", rerr)
+		}
+		// Mirror strings.Split semantics: every segment is a line, including
+		// the empty final segment after a trailing newline.
+		lineNo++
+		inRange := lineNo >= start &&
+			(req.NumLines == nil || len(lines) < *req.NumLines)
+		if inRange {
+			line := strings.TrimSuffix(segment, "\n")
+			collected += int64(len(line)) + 1
+			if collected > f.maxFileSize {
+				err := fmt.Errorf(
+					"selected range is larger than %d bytes; "+
+						"request fewer lines",
+					f.maxFileSize,
+				)
+				rsp.Message = "Error: " + err.Error()
+				return err
+			}
+			lines = append(lines, line)
+			endLine = lineNo
+		}
+		if atEOF {
+			break
+		}
+	}
+	total := lineNo
+	if start > total {
+		err := fmt.Errorf(
+			"start line is out of range, start line: %d, "+
+				"total lines: %d",
+			start,
+			total,
+		)
+		rsp.Message = "Error: " + err.Error()
+		return err
+	}
+	chunk := strings.Join(lines, "\n")
+	if err := rejectNonText(chunk, mimeType); err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return err
+	}
+	chunk, replaced := sanitizeText(chunk)
+	rsp.Contents = chunk
+	rsp.Message = fmt.Sprintf(
+		"Successfully read %s, start line: %d, "+
+			"end line: %d, total lines: %d",
+		req.FileName,
+		start,
+		endLine,
+		total,
+	)
+	if replaced {
+		rsp.Message += invalidUTF8Note
+	}
+	return nil
+}
+
 func (f *fileToolSet) sliceReadFile(
 	req *readFileRequest,
 	content string,
 ) (string, int, int, int, bool, error) {
-	if int64(len(content)) > f.maxFileSize {
+	wholeFile := req.StartLine == nil && req.NumLines == nil
+	if wholeFile && int64(len(content)) > f.maxFileSize {
 		return "", 0, 0, 0, false, fmt.Errorf(
 			"file size is beyond of max file size, "+
 				"file size: %d, max file size: %d",
@@ -365,7 +467,17 @@ func (f *fileToolSet) sliceReadFile(
 		req.StartLine,
 		req.NumLines,
 	)
-	return chunk, start, end, total, false, err
+	if err != nil {
+		return "", 0, 0, 0, false, err
+	}
+	if int64(len(chunk)) > f.maxFileSize {
+		return "", 0, 0, 0, false, fmt.Errorf(
+			"selected range is larger than %d bytes; "+
+				"request fewer lines",
+			f.maxFileSize,
+		)
+	}
+	return chunk, start, end, total, false, nil
 }
 
 func sliceTextByLines(
