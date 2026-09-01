@@ -324,7 +324,11 @@ func (f *fileToolSet) searchContentLocal(
 			continue
 		}
 		if stat.Size() > f.searchSizeCap() {
+			// Goroutines for earlier files may be appending scan failures
+			// to the same slice, so this append takes the lock too.
+			mu.Lock()
 			skipped = append(skipped, relPath)
+			mu.Unlock()
 			continue
 		}
 

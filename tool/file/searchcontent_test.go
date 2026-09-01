@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -888,4 +890,43 @@ func TestSearchContent_StreamingLimits(t *testing.T) {
 		_, err := searchFileContent(ctx, filepath.Join(tempDir, "sparse.txt"), regexp.MustCompile("foo"))
 		assert.ErrorIs(t, err, context.Canceled)
 	})
+}
+
+// Oversized files are recorded by the walking loop while goroutines for
+// earlier files may be recording scan failures; both must reach skipped_files.
+// Run with -race, this is the regression for the unguarded append.
+func TestSearchContent_SkippedFilesFromBothPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 0 does not deny reads on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a mode-0 file")
+	}
+	tempDir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(8))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	var want []string
+	for i := 0; i < 8; i++ {
+		// Under the cap but unreadable: its goroutine records a scan failure.
+		locked := fmt.Sprintf("a-locked-%d.txt", i)
+		path := filepath.Join(tempDir, locked)
+		assert.NoError(t, os.WriteFile(path, []byte("foo\n"), 0o644))
+		assert.NoError(t, os.Chmod(path, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+		// Over the cap: the walking loop records it.
+		huge := fmt.Sprintf("b-huge-%d.txt", i)
+		assert.NoError(t, os.WriteFile(filepath.Join(tempDir, huge),
+			[]byte(strings.Repeat("foo\n", 1000)), 0o644))
+		want = append(want, locked, huge)
+	}
+	rsp, err := fts.searchContent(context.Background(), &searchContentRequest{
+		FilePattern:    "*.txt",
+		ContentPattern: "foo",
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, rsp.FileMatches)
+	slices.Sort(want)
+	assert.Equal(t, want, rsp.SkippedFiles)
 }
