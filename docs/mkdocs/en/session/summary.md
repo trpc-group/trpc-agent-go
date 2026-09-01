@@ -248,12 +248,13 @@ target producing a summary in that pass. If the branch gate declines to update
 its summary, the framework stops the cascade instead of independently advancing
 the full-session summary. The only exception is a retry carrying durable
 incomplete-cascade provenance: a branch summary materialized for a cascade is
-persisted with a framework-owned `PendingFullCascadeID`. If its dependent
-full-session target returns an error, a later ordinary call can retry that
-target after the session is reloaded without inferring failure from unrelated
-branch/full boundaries. After the target completes without error (including an
-intentional cache-safe skip), the framework clears and persists the marker.
-Custom summary storage or copying code must preserve this field.
+persisted with a framework-owned `PendingFullCascadeID` when its dependent
+full-session target is required. Intentional cache-safe skips do not write this
+marker. If the dependent target returns an error, a later ordinary call can
+retry it after the session is reloaded without inferring failure from unrelated
+branch/full boundaries. After the target completes without error, the framework
+clears and persists the marker. Custom summary storage or copying code must
+preserve this field.
 
 `WithSummaryJobTimeout(...)` is the deadline for the entire summary job. A
 multi-`filterKey` cascade runs the branch and full-session targets sequentially,

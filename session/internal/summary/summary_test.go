@@ -2002,6 +2002,15 @@ func TestCreateSessionSummaryWithCascade_SkipsFullTargetForCacheSafeFork(t *test
 		false,
 		NewSummaryDispatchPolicy(nil, true),
 		func(ctx context.Context, _ *session.Session, filterKey string, _ bool) error {
+			if filterKey == session.SummaryFilterKeyAllContents {
+				require.Empty(
+					t,
+					readSummaryPointer(
+						sess,
+						"user-messages",
+					).PendingFullCascadeID,
+				)
+			}
 			_, err := SummarizeSession(ctx, summarizer, sess, filterKey, false)
 			return err
 		},

@@ -204,13 +204,13 @@ func SummarizeSession(
 		if summaryPersistOnlyFromContext(ctx) ||
 			!shouldRefreshPendingCascadeSummary(ctx, base, filterKey) ||
 			len(delta) == 0 {
-			persistCopiedSummary(ctx, base, filterKey)
+			persistCopiedSummary(ctx, m, base, filterKey)
 			return true, nil
 		}
 	}
 	if m == nil {
 		if prev.needsPersistOnly {
-			persistCopiedSummary(ctx, base, filterKey)
+			persistCopiedSummary(ctx, m, base, filterKey)
 			return true, nil
 		}
 		return false, nil
@@ -219,7 +219,7 @@ func SummarizeSession(
 	input, ok := buildSummaryInput(ctx, m, base, filterKey, force, prev)
 	if !ok {
 		if prev.needsPersistOnly {
-			persistCopiedSummary(ctx, base, filterKey)
+			persistCopiedSummary(ctx, m, base, filterKey)
 			return true, nil
 		}
 		return false, nil
@@ -249,7 +249,12 @@ func SummarizeSession(
 		text,
 		updatedAt,
 		boundary,
-		pendingFullCascadeIDFromContext(ctx, filterKey),
+		pendingFullCascadeIDForSummary(
+			ctx,
+			m,
+			input.session,
+			filterKey,
+		),
 	)
 	return true, nil
 }
@@ -289,6 +294,7 @@ func readPreviousSummary(base *session.Session, filterKey string) previousSummar
 // persistCopiedSummary marks a copied in-memory summary as persisted-ready.
 func persistCopiedSummary(
 	ctx context.Context,
+	m summary.SessionSummarizer,
 	base *session.Session,
 	filterKey string,
 ) {
@@ -321,8 +327,10 @@ func persistCopiedSummary(
 	if base.Summaries != nil && base.Summaries[filterKey] != nil {
 		base.Summaries[filterKey].UpdatedAt = updatedAt.UTC()
 		base.Summaries[filterKey].Boundary = boundary
-		if cascadeID := pendingFullCascadeIDFromContext(
+		if cascadeID := pendingFullCascadeIDForSummary(
 			ctx,
+			m,
+			base,
 			filterKey,
 		); cascadeID != "" {
 			base.Summaries[filterKey].PendingFullCascadeID = cascadeID
@@ -557,14 +565,16 @@ type pendingFullCascadeIDContextKey struct{}
 type summaryPersistOnlyContextKey struct{}
 
 type pendingFullCascade struct {
-	filterKey string
-	id        string
+	filterKey        string
+	id               string
+	skipForCacheSafe bool
 }
 
 func contextWithPendingFullCascadeID(
 	ctx context.Context,
 	filterKey string,
 	id string,
+	skipForCacheSafe bool,
 ) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -572,7 +582,11 @@ func contextWithPendingFullCascadeID(
 	return context.WithValue(
 		ctx,
 		pendingFullCascadeIDContextKey{},
-		pendingFullCascade{filterKey: filterKey, id: id},
+		pendingFullCascade{
+			filterKey:        filterKey,
+			id:               id,
+			skipForCacheSafe: skipForCacheSafe,
+		},
 	)
 }
 
@@ -588,6 +602,30 @@ func pendingFullCascadeIDFromContext(
 	).(pendingFullCascade)
 	if pending.filterKey != filterKey {
 		return ""
+	}
+	return pending.id
+}
+
+func pendingFullCascadeIDForSummary(
+	ctx context.Context,
+	m summary.SessionSummarizer,
+	sess *session.Session,
+	filterKey string,
+) string {
+	if ctx == nil || filterKey == session.SummaryFilterKeyAllContents {
+		return ""
+	}
+	pending, _ := ctx.Value(
+		pendingFullCascadeIDContextKey{},
+	).(pendingFullCascade)
+	if pending.filterKey != filterKey {
+		return ""
+	}
+	if pending.skipForCacheSafe {
+		if _, ok := summary.CacheSafeForkRequestFromContext(ctx); ok &&
+			cacheSafeForkingEnabled(ctx, m, sess) {
+			return ""
+		}
 	}
 	return pending.id
 }
@@ -1220,6 +1258,7 @@ func CreateSessionSummaryWithCascade(
 			ctx,
 			filterKey,
 			cascadeID,
+			false,
 		)
 		branchCtx, materialization :=
 			contextWithSummaryMaterializationObserver(branchCtx, filterKey)
@@ -1312,6 +1351,7 @@ func CreateSessionSummaryWithCascade(
 		branchCtx,
 		filterKey,
 		cascadeID,
+		true,
 	)
 	branchCtx, materialization :=
 		contextWithSummaryMaterializationObserver(branchCtx, filterKey)
