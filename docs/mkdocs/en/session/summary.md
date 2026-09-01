@@ -235,16 +235,23 @@ branch summary, but that same summary pass does not make a second standalone
 full-session LLM call. This applies to the common single-`filterKey` session as
 well as sessions that contain multiple filter keys. The framework skips that
 extra LLM target instead of falling back to a standalone full-session prompt or
-reusing the branch-scoped fork request. On a single-`filterKey` session, a
-materialized branch summary is copied to `SummaryFilterKeyAllContents` in the
-same pass because the two keys would be identical. On a multi-`filterKey`
-session, the full-session key is left untouched in that pass; trigger a
-full-session summary separately when you need an all-branch summary.
+reusing the branch-scoped fork request. When every event loaded on the session
+has the same `filterKey`, a materialized branch summary is copied to
+`SummaryFilterKeyAllContents` in the same pass. This is a loaded-window
+optimization: a storage event limit can omit older events from other branches,
+so do not infer historical branch/full equivalence from the copy. On a
+multi-`filterKey` session, the full-session key is left untouched in that pass;
+trigger a full-session summary separately when you need an all-branch summary.
 
 More generally, a branch-triggered full-session cascade depends on the branch
 target producing a summary in that pass. If the branch gate declines to update
 its summary, the framework stops the cascade instead of independently advancing
 the full-session summary.
+
+`WithSummaryJobTimeout(...)` is the deadline for the entire summary job. A
+multi-`filterKey` cascade runs the branch and full-session targets sequentially,
+and both targets share that deadline. Size the timeout for their combined model
+and persistence latency.
 
 Prompt rules:
 
@@ -1590,14 +1597,18 @@ Behavior notes:
 - With `WithCacheSafeForking(true)`, a branch-triggered summary pass only runs
   the branch summary LLM target when a parent fork request is available. It
   does not fall back to a standalone full-session prompt and does not reuse the
-  branch-scoped fork request for a second LLM call. On a single-`filterKey`
-  session, a materialized branch summary is copied to
-  `SummaryFilterKeyAllContents` in that pass. On a multi-`filterKey` session,
-  the full-session cascade target is skipped; request a full-session summary
-  separately when you need one for all branches.
+  branch-scoped fork request for a second LLM call. When every event loaded on
+  the session has the same `filterKey`, a materialized branch summary is copied
+  to `SummaryFilterKeyAllContents` in that pass. This loaded-window optimization
+  does not prove that older, unloaded history contains no other branches. On a
+  multi-`filterKey` session, the full-session cascade target is skipped; request
+  a full-session summary separately when you need one for all branches.
 - A full-session cascade is conditional on the branch target producing a
   summary in the same pass. If the branch is not updated, the full-session
   target is not run independently.
+- `WithSummaryJobTimeout(...)` applies to the complete summary job. Branch and
+  full-session targets run sequentially and share the same deadline, so allow
+  for their combined model and persistence latency.
 - To keep only full-session summaries from branch-triggered automatic summary,
   pass an explicit empty allowlist and leave cascade enabled:
 

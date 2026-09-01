@@ -1837,7 +1837,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 						UpdatedAt: now,
 					}
 					sess.SummariesMu.Unlock()
-					recordSummaryMaterialized(ctx, filterKey)
+					recordSummaryMaterialized(ctx, sess, filterKey)
 				}
 				return err
 			}
@@ -1888,7 +1888,7 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 				UpdatedAt: now,
 			}
 			sess.SummariesMu.Unlock()
-			recordSummaryMaterialized(ctx, filterKey)
+			recordSummaryMaterialized(ctx, sess, filterKey)
 		}
 		return nil
 	}
@@ -1963,7 +1963,7 @@ func TestCreateSessionSummaryWithCascade_ForksReportForCascadeTargets(t *testing
 					UpdatedAt: now,
 				}
 				sess.SummariesMu.Unlock()
-				recordSummaryMaterialized(ctx, filterKey)
+				recordSummaryMaterialized(ctx, sess, filterKey)
 			}
 			return nil
 		},
@@ -2330,12 +2330,12 @@ func TestCopySummaryToKey(t *testing.T) {
 	now := time.Now()
 
 	t.Run("nil session", func(t *testing.T) {
-		require.False(t, copySummaryToKey(nil, "src", "dst"))
+		require.Nil(t, copySummaryToKey(nil, "src", "dst"))
 	})
 
 	t.Run("nil summaries", func(t *testing.T) {
 		sess := &session.Session{ID: "s1"}
-		require.False(t, copySummaryToKey(sess, "src", "dst"))
+		require.Nil(t, copySummaryToKey(sess, "src", "dst"))
 		require.Nil(t, sess.Summaries)
 	})
 
@@ -2346,7 +2346,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"other": {Summary: "other summary", UpdatedAt: now},
 			},
 		}
-		require.False(t, copySummaryToKey(sess, "src", "dst"))
+		require.Nil(t, copySummaryToKey(sess, "src", "dst"))
 		_, ok := sess.Summaries["dst"]
 		require.False(t, ok)
 	})
@@ -2358,7 +2358,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"src": nil,
 			},
 		}
-		require.False(t, copySummaryToKey(sess, "src", "dst"))
+		require.Nil(t, copySummaryToKey(sess, "src", "dst"))
 		_, ok := sess.Summaries["dst"]
 		require.False(t, ok)
 	})
@@ -2370,7 +2370,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"src": {Summary: "source summary", UpdatedAt: now},
 			},
 		}
-		require.True(t, copySummaryToKey(sess, "src", "dst"))
+		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
 		require.NotNil(t, sess.Summaries["dst"])
 		require.Equal(t, "source summary", sess.Summaries["dst"].Summary)
 		// UpdatedAt is set to zero to mark as needing persistence.
@@ -2389,7 +2389,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"dst": {Summary: "old summary", UpdatedAt: oldTime},
 			},
 		}
-		require.True(t, copySummaryToKey(sess, "src", "dst"))
+		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
 		require.Equal(t, "new summary", sess.Summaries["dst"].Summary)
 		// UpdatedAt is set to zero to mark as needing persistence.
 		require.True(t, sess.Summaries["dst"].UpdatedAt.IsZero())
@@ -2406,7 +2406,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				},
 			},
 		}
-		require.True(t, copySummaryToKey(sess, "src", "dst"))
+		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
 		require.NotNil(t, sess.Summaries["dst"])
 		require.Equal(t, "summary with topics", sess.Summaries["dst"].Summary)
 		require.Equal(t, []string{"topic1", "topic2", "topic3"}, sess.Summaries["dst"].Topics)
@@ -2430,7 +2430,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				},
 			},
 		}
-		require.True(t, copySummaryToKey(sess, "src", "dst"))
+		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
 		require.NotNil(t, sess.Summaries["dst"])
 		require.NotNil(t, sess.Summaries["dst"].Boundary)
 		require.Equal(t, "dst", sess.Summaries["dst"].Boundary.FilterKey)
@@ -2444,7 +2444,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"src": {Summary: "summary without topics", UpdatedAt: now},
 			},
 		}
-		require.True(t, copySummaryToKey(sess, "src", "dst"))
+		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
 		require.NotNil(t, sess.Summaries["dst"])
 		require.Equal(t, "summary without topics", sess.Summaries["dst"].Summary)
 		require.Nil(t, sess.Summaries["dst"].Topics)
@@ -2457,7 +2457,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"src": {Summary: "summary with empty topics", Topics: []string{}, UpdatedAt: now},
 			},
 		}
-		require.True(t, copySummaryToKey(sess, "src", "dst"))
+		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
 		require.NotNil(t, sess.Summaries["dst"])
 		require.Equal(t, "summary with empty topics", sess.Summaries["dst"].Summary)
 		require.Nil(t, sess.Summaries["dst"].Topics) // Empty slice becomes nil.
@@ -2746,7 +2746,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 				}
 			}
 			s.SummariesMu.Unlock()
-			recordSummaryMaterialized(ctx, filterKey)
+			recordSummaryMaterialized(ctx, s, filterKey)
 			return nil
 		}
 
@@ -2858,7 +2858,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 				UpdatedAt: now,
 			}
 			s.SummariesMu.Unlock()
-			recordSummaryMaterialized(ctx, filterKey)
+			recordSummaryMaterialized(ctx, s, filterKey)
 			return nil
 		}
 
@@ -2957,7 +2957,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 				UpdatedAt: now,
 			}
 			s.SummariesMu.Unlock()
-			recordSummaryMaterialized(ctx, filterKey)
+			recordSummaryMaterialized(ctx, s, filterKey)
 			return nil
 		}
 
@@ -3003,6 +3003,136 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 		require.NoError(t, err)
 		require.Equal(t, 1, callCount)
 	})
+}
+
+func TestCreateSessionSummaryWithCascade_RetriesPendingFullPersistence(
+	t *testing.T,
+) {
+	const filterKey = "app/math"
+	now := time.Now()
+	for _, tt := range []struct {
+		name   string
+		events []event.Event
+	}{
+		{
+			name: "single filter key",
+			events: []event.Event{
+				makeEvent("math", now, filterKey),
+			},
+		},
+		{
+			name: "multiple filter keys",
+			events: []event.Event{
+				makeEvent("math", now.Add(-time.Minute), filterKey),
+				makeEvent("science", now, "app/science"),
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := &session.Session{
+				ID:        "retry-session",
+				AppName:   "test-app",
+				UserID:    "test-user",
+				Events:    tt.events,
+				Summaries: make(map[string]*session.Summary),
+			}
+			summarizer := &fakeSummarizer{allow: true, out: "summary"}
+			persisted := make(map[string]*session.Summary)
+			var calls []string
+			fullAttempts := 0
+			createSummary := func(
+				ctx context.Context,
+				sess *session.Session,
+				target string,
+				force bool,
+			) error {
+				calls = append(calls, target)
+				updated, err := SummarizeSession(
+					ctx,
+					summarizer,
+					sess,
+					target,
+					force,
+				)
+				if err != nil || !updated {
+					return err
+				}
+				if target == session.SummaryFilterKeyAllContents {
+					fullAttempts++
+					if fullAttempts == 1 {
+						return errors.New("transient persist error")
+					}
+				}
+				sess.SummariesMu.RLock()
+				persisted[target] = sess.Summaries[target].Clone()
+				sess.SummariesMu.RUnlock()
+				return nil
+			}
+
+			err := CreateSessionSummaryWithCascade(
+				context.Background(),
+				sess,
+				filterKey,
+				false,
+				NewSummaryDispatchPolicy(nil, true),
+				createSummary,
+			)
+			require.ErrorContains(t, err, "transient persist error")
+			pending := pendingSummaryForPersistence(
+				sess,
+				session.SummaryFilterKeyAllContents,
+			)
+			require.NotNil(t, pending)
+			require.Nil(t, persisted[session.SummaryFilterKeyAllContents])
+
+			err = CreateSessionSummaryWithCascade(
+				context.Background(),
+				sess,
+				filterKey,
+				false,
+				NewSummaryDispatchPolicy(nil, true),
+				createSummary,
+			)
+			require.NoError(t, err)
+			require.Equal(t, 2, fullAttempts)
+			require.Equal(
+				t,
+				[]string{filterKey, "", filterKey, ""},
+				calls,
+			)
+			require.NotNil(
+				t,
+				persisted[session.SummaryFilterKeyAllContents],
+			)
+			require.Nil(t, pendingSummaryForPersistence(
+				sess,
+				session.SummaryFilterKeyAllContents,
+			))
+		})
+	}
+}
+
+func TestMarkSummaryPendingPersistence_DoesNotClobberReplacement(t *testing.T) {
+	old := &session.Summary{Summary: "old", UpdatedAt: time.Now()}
+	replacement := &session.Summary{Summary: "new", UpdatedAt: time.Now()}
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: replacement,
+		},
+	}
+
+	markSummaryPendingPersistence(
+		sess,
+		session.SummaryFilterKeyAllContents,
+		old,
+	)
+
+	require.False(t, replacement.UpdatedAt.IsZero())
+	require.Same(
+		t,
+		replacement,
+		readSummaryPointer(sess, session.SummaryFilterKeyAllContents),
+	)
 }
 
 func TestCreateSessionSummaryWithCascade_UnboundBranchStopsCascade(
@@ -3148,7 +3278,7 @@ func TestCreateSessionSummaryWithCascade_IgnoresUnattributedBranchUpdate(
 						UpdatedAt: now,
 					}
 					sess.SummariesMu.Unlock()
-					recordSummaryMaterialized(otherCtx, filterKey)
+					recordSummaryMaterialized(otherCtx, sess, filterKey)
 					require.True(t, otherObserver.didMaterialize())
 					return nil
 				},

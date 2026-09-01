@@ -225,6 +225,48 @@ func TestMemoryService_CreateSessionSummary_FilterAllowlistAndCascade(t *testing
 	require.False(t, ok)
 }
 
+func TestMemoryService_EnqueueSummaryJob_CascadePreservesObserverContext(
+	t *testing.T,
+) {
+	const filterKey = "branch"
+	s := NewSessionService(
+		WithSummarizer(&fakeSummarizer{allow: true, out: "summary"}),
+		WithAsyncSummaryNum(1),
+	)
+	defer s.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "observer-context",
+	}
+	sess, err := s.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+	for i, target := range []string{filterKey, "other"} {
+		evt := event.New(fmt.Sprintf("inv-%d", i), "author")
+		evt.Timestamp = time.Now().Add(time.Duration(i) * time.Second)
+		evt.FilterKey = target
+		evt.Response = &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser, Content: target},
+		}}}
+		require.NoError(t, s.AppendEvent(ctx, sess, evt))
+	}
+
+	sess, err = s.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NoError(t, s.EnqueueSummaryJob(ctx, sess, filterKey, false))
+
+	require.Eventually(t, func() bool {
+		got, getErr := s.GetSession(ctx, key)
+		if getErr != nil || got == nil {
+			return false
+		}
+		return got.Summaries[filterKey] != nil &&
+			got.Summaries[session.SummaryFilterKeyAllContents] != nil
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
 func TestMemoryService_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {
 	// Create service with async summary enabled but no summarizer
 	s := NewSessionService(

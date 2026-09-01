@@ -219,13 +219,19 @@ branch 触发摘要时，可以用当前父请求 fork 来生成 branch 摘要�
 pass 不会再发第二次独立的全量会话 LLM 调用。这既适用于最常见的单
 `filterKey` 会话，也适用于包含多个 filterKey 的会话。框架会跳过这次额外的
 LLM 目标，而不是回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的
-fork request。单 `filterKey` 会话里，如果本轮实际产出了 branch 摘要，该摘要会
-复制到 `SummaryFilterKeyAllContents`，因为这两个 key 的内容相同。多 filterKey
-会话里，全量摘要 key 在这一轮保持不动；如果需要覆盖所有 branch 的全量摘要，
-请单独触发一次全量会话摘要。
+fork request。当 session 当前加载的所有事件都属于同一个 `filterKey` 时，如果
+本轮实际产出了 branch 摘要，该摘要会复制到 `SummaryFilterKeyAllContents`。这是
+基于当前加载窗口的优化：存储层事件数量限制可能省略其他 branch 的更早事件，
+因此不能仅凭这次复制推断 branch/full 的完整历史等价。多 filterKey 会话里，
+全量摘要 key 在这一轮保持不动；如果需要覆盖所有 branch 的全量摘要，请单独
+触发一次全量会话摘要。
 
 更一般地，branch 触发的全量摘要级联依赖 branch 目标在本轮实际产出摘要。如果
 branch gate 决定不更新摘要，框架会停止级联，不会独立推进全量会话摘要。
+
+`WithSummaryJobTimeout(...)` 是整条 summary job 的 deadline。多 filterKey 级联会
+串行执行 branch 与全量摘要目标，两个目标共享同一个 deadline；配置时需要覆盖
+两段模型调用和持久化的总延迟。
 
 Prompt 规则：
 
@@ -1514,11 +1520,15 @@ sessionService := inmemory.NewSessionService(
 - 开启 `WithCacheSafeForking(true)` 后，如果当前有父请求可 fork，branch 触发的
   summary pass 只会跑 branch 摘要的 LLM 目标，不会回退到独立的全量摘要
   prompt，也不会把这个 branch 视角的 fork request 再拿去发第二次 LLM 调用。
-  单 `filterKey` 会话里，如果本轮实际产出了 branch 摘要，该摘要会复制到
-  `SummaryFilterKeyAllContents`。多 filterKey 会话里，级联出来的全量摘要目标会
-  被跳过；如果确实需要覆盖所有 branch 的全量摘要，请单独触发一次全量会话摘要。
+  当 session 当前加载的所有事件都属于同一个 `filterKey` 时，如果本轮实际产出
+  了 branch 摘要，该摘要会复制到 `SummaryFilterKeyAllContents`。这是基于当前
+  加载窗口的优化，不能证明更早但未加载的历史中没有其他 branch。多 filterKey
+  会话里，级联出来的全量摘要目标会被跳过；如果确实需要覆盖所有 branch 的全量
+  摘要，请单独触发一次全量会话摘要。
 - 全量摘要级联以本轮 branch 目标实际产出摘要为前提；如果 branch 没有更新，
   不会独立运行全量摘要目标。
+- `WithSummaryJobTimeout(...)` 作用于整条 summary job。branch 与全量摘要目标会
+  串行执行并共享同一个 deadline，因此配置时需要覆盖两段模型调用和持久化的总延迟。
 - 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入
   空 allowlist，并保持默认 cascade 开启：
 

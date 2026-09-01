@@ -182,16 +182,16 @@ func SummarizeSession(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	defer func() {
-		if updated {
-			recordSummaryMaterialized(ctx, filterKey)
-		}
-	}()
 	unlock, err := lockSessionSummary(ctx, base, filterKey)
 	if err != nil {
 		return false, err
 	}
 	defer unlock()
+	defer func() {
+		if updated {
+			recordSummaryMaterialized(ctx, base, filterKey)
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -529,10 +529,12 @@ type summaryMaterializationObserverContextKey struct{}
 type summaryMaterializationObserver struct {
 	filterKey string
 	observed  atomic.Bool
+	summary   atomic.Pointer[session.Summary]
 }
 
 // contextWithSummaryMaterializationObserver returns a request-scoped observer
-// that only SummarizeSession calls using the derived context can satisfy.
+// that only SummarizeSession calls using the derived context lineage can
+// satisfy.
 func contextWithSummaryMaterializationObserver(
 	ctx context.Context,
 	filterKey string,
@@ -549,8 +551,12 @@ func contextWithSummaryMaterializationObserver(
 }
 
 // recordSummaryMaterialized attributes a successful summary update to the
-// observer attached to this exact call context.
-func recordSummaryMaterialized(ctx context.Context, filterKey string) {
+// observer attached to this call's context lineage.
+func recordSummaryMaterialized(
+	ctx context.Context,
+	sess *session.Session,
+	filterKey string,
+) {
 	if ctx == nil {
 		return
 	}
@@ -560,11 +566,21 @@ func recordSummaryMaterialized(ctx context.Context, filterKey string) {
 	if observer == nil || observer.filterKey != filterKey {
 		return
 	}
+	observer.summary.Store(readSummaryPointer(sess, filterKey))
 	observer.observed.Store(true)
 }
 
+// didMaterialize reports whether the observed attempt updated its target.
 func (o *summaryMaterializationObserver) didMaterialize() bool {
 	return o != nil && o.observed.Load()
+}
+
+// materializedSummary returns the exact summary entry updated by the attempt.
+func (o *summaryMaterializationObserver) materializedSummary() *session.Summary {
+	if o == nil {
+		return nil
+	}
+	return o.summary.Load()
 }
 
 // summaryLockKey identifies the summary scope that must be serialized.
@@ -820,9 +836,8 @@ func GetFilterKeyFromOptions(opts ...session.SummaryOption) string {
 	return options.FilterKey
 }
 
-// isSingleFilterKey checks if all events in the session match the target filterKey.
-// Returns true if all events match, meaning the filterKey summary would be identical
-// to the full-session summary, allowing us to skip duplicate LLM calls.
+// isSingleFilterKey checks whether all events loaded on the session match the
+// target filterKey. The optimization treats that loaded window as single-key.
 func isSingleFilterKey(sess *session.Session, targetKey string) bool {
 	if sess == nil || targetKey == "" {
 		return false
@@ -838,21 +853,25 @@ func isSingleFilterKey(sess *session.Session, targetKey string) bool {
 }
 
 // copySummaryToKey copies a summary from srcKey to dstKey within the session.
-// This avoids duplicate LLM calls when the summaries would be identical.
-// Sets UpdatedAt to zero to mark the summary as needing persistence and reports
-// whether a source summary was available to copy.
-func copySummaryToKey(sess *session.Session, srcKey, dstKey string) bool {
+// This avoids duplicate LLM calls for a loaded single-filter window. It sets
+// UpdatedAt to zero to mark the summary as needing persistence and returns the
+// copied summary, or nil when no source was available.
+func copySummaryToKey(
+	sess *session.Session,
+	srcKey string,
+	dstKey string,
+) *session.Summary {
 	if sess == nil {
-		return false
+		return nil
 	}
 	sess.SummariesMu.Lock()
 	defer sess.SummariesMu.Unlock()
 	if sess.Summaries == nil {
-		return false
+		return nil
 	}
 	src, ok := sess.Summaries[srcKey]
 	if !ok || src == nil {
-		return false
+		return nil
 	}
 	copied := src.Clone()
 	if boundary := copied.CutoffBoundary(); boundary != nil {
@@ -866,20 +885,104 @@ func copySummaryToKey(sess *session.Session, srcKey, dstKey string) bool {
 		copied.Topics = nil
 	}
 	sess.Summaries[dstKey] = copied
-	return true
+	return copied
 }
 
-// CreateSessionSummaryWithCascade creates one or more session summaries for the
-// specified filterKey according to the dispatch policy.
-//
-// The createSummaryFunc should create a summary for the given filterKey, pass
-// its received context through to SummarizeSession, and return an error if it
-// fails. Preserving the context lets this helper attribute materialization to
-// the exact branch attempt. When the policy selects both the branch key and the
-// full-session key and all events match the branch, the helper generates only
-// one summary and copies it to both keys to avoid duplicate LLM calls. The
-// copied summary is then persisted via createSummaryFunc which detects the
-// existing in-memory summary and triggers persistence.
+// readSummaryPointer returns the current summary map entry without cloning it.
+func readSummaryPointer(
+	sess *session.Session,
+	filterKey string,
+) *session.Summary {
+	if sess == nil {
+		return nil
+	}
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+	return sess.Summaries[filterKey]
+}
+
+// pendingSummaryForPersistence returns a non-empty summary whose zero
+// UpdatedAt marks a completed materialization that still needs persistence.
+func pendingSummaryForPersistence(
+	sess *session.Session,
+	filterKey string,
+) *session.Summary {
+	if sess == nil {
+		return nil
+	}
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+	summary := sess.Summaries[filterKey]
+	if summary == nil || summary.Summary == "" || !summary.UpdatedAt.IsZero() {
+		return nil
+	}
+	return summary
+}
+
+// markSummaryPendingPersistence restores the pending marker only when the
+// summary materialized by this attempt is still the current map entry.
+func markSummaryPendingPersistence(
+	sess *session.Session,
+	filterKey string,
+	expected *session.Summary,
+) {
+	if sess == nil || expected == nil {
+		return
+	}
+	sess.SummariesMu.Lock()
+	defer sess.SummariesMu.Unlock()
+	if sess.Summaries[filterKey] == expected {
+		expected.UpdatedAt = time.Time{}
+	}
+}
+
+// createFullSessionCascadeTarget runs a dependent full-session target and
+// preserves a retry marker when persistence fails after materialization.
+func createFullSessionCascadeTarget(
+	ctx context.Context,
+	sess *session.Session,
+	triggerFilterKey string,
+	force bool,
+	pending *session.Summary,
+	createSummaryFunc func(context.Context, *session.Session, string, bool) error,
+) error {
+	fullCtx := contextForCascadeTarget(
+		ctx,
+		triggerFilterKey,
+		session.SummaryFilterKeyAllContents,
+	)
+	fullCtx, materialization := contextWithSummaryMaterializationObserver(
+		fullCtx,
+		session.SummaryFilterKeyAllContents,
+	)
+	if err := createSummaryFunc(
+		fullCtx,
+		sess,
+		session.SummaryFilterKeyAllContents,
+		force,
+	); err != nil {
+		if materialized := materialization.materializedSummary(); materialized != nil {
+			pending = materialized
+		}
+		markSummaryPendingPersistence(
+			sess,
+			session.SummaryFilterKeyAllContents,
+			pending,
+		)
+		return err
+	}
+	return nil
+}
+
+// CreateSessionSummaryWithCascade creates summaries according to the dispatch
+// policy. The createSummaryFunc callback must pass its received context through
+// to SummarizeSession so this helper can attribute materialization to the exact
+// branch attempt. When a loaded session contains only the target filter key,
+// the helper avoids a duplicate LLM call by copying the branch summary to the
+// full-session key and then asking createSummaryFunc to persist that copy. If a
+// dependent full-session persistence attempt fails after materialization, the
+// in-memory summary remains marked pending and a later ordinary cascade call
+// retries that persistence even when the branch has no new delta.
 func CreateSessionSummaryWithCascade(
 	ctx context.Context,
 	sess *session.Session,
@@ -916,25 +1019,46 @@ func CreateSessionSummaryWithCascade(
 		// A nil error may mean the branch summary was intentionally not updated.
 		// Stop here so the full-session target cannot advance independently.
 		if !materialization.didMaterialize() {
+			if pending := pendingSummaryForPersistence(
+				sess,
+				session.SummaryFilterKeyAllContents,
+			); pending != nil {
+				if err := createFullSessionCascadeTarget(
+					ctx,
+					sess,
+					filterKey,
+					false,
+					pending,
+					createSummaryFunc,
+				); err != nil {
+					return fmt.Errorf(
+						"persist full-session summary failed: %w",
+						err,
+					)
+				}
+			}
 			return nil
 		}
 		// Copy to in-memory session for immediate access. A concurrent removal is
 		// treated as a missing source and also stops the cascade.
-		if !copySummaryToKey(
+		copied := copySummaryToKey(
 			sess,
 			filterKey,
 			session.SummaryFilterKeyAllContents,
-		) {
+		)
+		if copied == nil {
 			return nil
 		}
 		// Persist the full-session key to storage. SummarizeSession detects
 		// existing in-memory summary with empty delta and returns updated=true.
-		fullCtx := contextForCascadeTarget(
+		if err := createFullSessionCascadeTarget(
 			ctx,
+			sess,
 			filterKey,
-			session.SummaryFilterKeyAllContents,
-		)
-		if err := createSummaryFunc(fullCtx, sess, session.SummaryFilterKeyAllContents, false); err != nil {
+			false,
+			copied,
+			createSummaryFunc,
+		); err != nil {
 			return fmt.Errorf("persist full-session summary failed: %w", err)
 		}
 		return nil
@@ -959,19 +1083,35 @@ func CreateSessionSummaryWithCascade(
 		)
 	}
 	if !materialization.didMaterialize() {
+		if pending := pendingSummaryForPersistence(
+			sess,
+			session.SummaryFilterKeyAllContents,
+		); pending != nil {
+			if err := createFullSessionCascadeTarget(
+				contextWithIsolatedReport(ctx),
+				sess,
+				filterKey,
+				false,
+				pending,
+				createSummaryFunc,
+			); err != nil {
+				return fmt.Errorf(
+					"create session summary for filterKey %q failed: %w",
+					session.SummaryFilterKeyAllContents,
+					err,
+				)
+			}
+		}
 		return nil
 	}
 
-	fullCtx := contextForCascadeTarget(
+	if err := createFullSessionCascadeTarget(
 		contextWithIsolatedReport(ctx),
-		filterKey,
-		session.SummaryFilterKeyAllContents,
-	)
-	if err := createSummaryFunc(
-		fullCtx,
 		sess,
-		session.SummaryFilterKeyAllContents,
+		filterKey,
 		force,
+		nil,
+		createSummaryFunc,
 	); err != nil {
 		return fmt.Errorf(
 			"create session summary for filterKey %q failed: %w",
