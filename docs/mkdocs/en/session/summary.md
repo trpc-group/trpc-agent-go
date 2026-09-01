@@ -245,8 +245,11 @@ trigger a full-session summary separately when you need an all-branch summary.
 
 More generally, a branch-triggered full-session cascade depends on the branch
 target producing a summary in that pass. If the branch gate declines to update
-its summary, the framework stops the cascade instead of independently advancing
-the full-session summary.
+its summary, the framework stops the cascade unless a persisted branch summary
+exists and the full-session summary is missing or has an earlier boundary.
+That gap identifies a previously incomplete cascade, so the framework retries
+the dependent full-session target. The retry invokes the target's hooks and
+consumes the shared summary-job timeout budget.
 
 `WithSummaryJobTimeout(...)` is the deadline for the entire summary job. A
 multi-`filterKey` cascade runs the branch and full-session targets sequentially,
@@ -1605,7 +1608,11 @@ Behavior notes:
   a full-session summary separately when you need one for all branches.
 - A full-session cascade is conditional on the branch target producing a
   summary in the same pass. If the branch is not updated, the full-session
-  target is not run independently.
+  target is not run independently unless a persisted branch summary exists and
+  the full-session summary is missing or has an earlier boundary. That gap
+  identifies an incomplete earlier cascade and retries the dependent
+  full-session target, including its hooks and use of the shared summary-job
+  timeout budget.
 - `WithSummaryJobTimeout(...)` applies to the complete summary job. Branch and
   full-session targets run sequentially and share the same deadline, so allow
   for their combined model and persistence latency.

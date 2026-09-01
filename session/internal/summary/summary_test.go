@@ -2805,6 +2805,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 			Summary:   "older branch summary",
 			UpdatedAt: now.Add(-time.Minute),
 		}
+		full := existing.Clone()
 		sess := &session.Session{
 			ID:      "test-session",
 			AppName: "test-app",
@@ -2812,7 +2813,10 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 			Events: []event.Event{
 				makeEvent("e1", now, "app/math"),
 			},
-			Summaries: map[string]*session.Summary{"app/math": existing},
+			Summaries: map[string]*session.Summary{
+				"app/math":                          existing,
+				session.SummaryFilterKeyAllContents: full,
+			},
 		}
 
 		err := CreateSessionSummaryWithCascade(
@@ -2829,7 +2833,11 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 		require.NoError(t, err)
 		require.Equal(t, []string{"app/math"}, calls)
 		require.Same(t, existing, sess.Summaries["app/math"])
-		require.Nil(t, sess.Summaries[session.SummaryFilterKeyAllContents])
+		require.Same(
+			t,
+			full,
+			sess.Summaries[session.SummaryFilterKeyAllContents],
+		)
 	})
 
 	t.Run("multiple filterKeys - two LLM calls", func(t *testing.T) {
@@ -3005,23 +3013,41 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 	})
 }
 
-func TestCreateSessionSummaryWithCascade_RetriesPendingFullPersistence(
+func TestCreateSessionSummaryWithCascade_RetriesIncompleteFullCascade(
 	t *testing.T,
 ) {
 	const filterKey = "app/math"
 	now := time.Now()
 	for _, tt := range []struct {
-		name   string
-		events []event.Event
+		name                       string
+		events                     []event.Event
+		beforeMaterializationError error
 	}{
 		{
-			name: "single filter key",
+			name: "single filter key model error before materialization",
+			events: []event.Event{
+				makeEvent("math", now, filterKey),
+			},
+			beforeMaterializationError: errors.New(
+				"transient full model error",
+			),
+		},
+		{
+			name: "single filter key after materialization",
 			events: []event.Event{
 				makeEvent("math", now, filterKey),
 			},
 		},
 		{
-			name: "multiple filter keys",
+			name: "multiple filter keys timeout before materialization",
+			events: []event.Event{
+				makeEvent("math", now.Add(-time.Minute), filterKey),
+				makeEvent("science", now, "app/science"),
+			},
+			beforeMaterializationError: context.DeadlineExceeded,
+		},
+		{
+			name: "multiple filter keys after materialization",
 			events: []event.Event{
 				makeEvent("math", now.Add(-time.Minute), filterKey),
 				makeEvent("science", now, "app/science"),
@@ -3047,6 +3073,13 @@ func TestCreateSessionSummaryWithCascade_RetriesPendingFullPersistence(
 				force bool,
 			) error {
 				calls = append(calls, target)
+				if target == session.SummaryFilterKeyAllContents {
+					fullAttempts++
+					if fullAttempts == 1 &&
+						tt.beforeMaterializationError != nil {
+						return tt.beforeMaterializationError
+					}
+				}
 				updated, err := SummarizeSession(
 					ctx,
 					summarizer,
@@ -3057,11 +3090,9 @@ func TestCreateSessionSummaryWithCascade_RetriesPendingFullPersistence(
 				if err != nil || !updated {
 					return err
 				}
-				if target == session.SummaryFilterKeyAllContents {
-					fullAttempts++
-					if fullAttempts == 1 {
-						return errors.New("transient persist error")
-					}
+				if target == session.SummaryFilterKeyAllContents &&
+					fullAttempts == 1 {
+					return errors.New("transient persist error")
 				}
 				sess.SummariesMu.RLock()
 				persisted[target] = sess.Summaries[target].Clone()
@@ -3077,17 +3108,31 @@ func TestCreateSessionSummaryWithCascade_RetriesPendingFullPersistence(
 				NewSummaryDispatchPolicy(nil, true),
 				createSummary,
 			)
-			require.ErrorContains(t, err, "transient persist error")
-			pending := pendingSummaryForPersistence(
-				sess,
-				session.SummaryFilterKeyAllContents,
-			)
-			require.NotNil(t, pending)
+			require.Error(t, err)
+			require.NotNil(t, persisted[filterKey])
 			require.Nil(t, persisted[session.SummaryFilterKeyAllContents])
+			require.Nil(
+				t,
+				readSummaryPointer(
+					sess,
+					session.SummaryFilterKeyAllContents,
+				),
+			)
+
+			reloaded := &session.Session{
+				ID:        sess.ID,
+				AppName:   sess.AppName,
+				UserID:    sess.UserID,
+				Events:    append([]event.Event(nil), sess.Events...),
+				Summaries: make(map[string]*session.Summary),
+			}
+			for target, summary := range persisted {
+				reloaded.Summaries[target] = summary.Clone()
+			}
 
 			err = CreateSessionSummaryWithCascade(
 				context.Background(),
-				sess,
+				reloaded,
 				filterKey,
 				false,
 				NewSummaryDispatchPolicy(nil, true),
@@ -3104,16 +3149,232 @@ func TestCreateSessionSummaryWithCascade_RetriesPendingFullPersistence(
 				t,
 				persisted[session.SummaryFilterKeyAllContents],
 			)
-			require.Nil(t, pendingSummaryForPersistence(
-				sess,
-				session.SummaryFilterKeyAllContents,
-			))
 		})
 	}
 }
 
-func TestMarkSummaryPendingPersistence_DoesNotClobberReplacement(t *testing.T) {
+func TestCreateSessionSummaryWithCascade_RetriesFailedBranchPersistence(
+	t *testing.T,
+) {
+	const filterKey = "app/math"
+	now := time.Now()
+	for _, tt := range []struct {
+		name   string
+		events []event.Event
+		reload bool
+	}{
+		{
+			name: "single filter key",
+			events: []event.Event{
+				makeEvent("math", now, filterKey),
+			},
+		},
+		{
+			name: "multiple filter keys",
+			events: []event.Event{
+				makeEvent("math", now.Add(-time.Minute), filterKey),
+				makeEvent("science", now, "app/science"),
+			},
+			reload: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := &session.Session{
+				ID:        "branch-retry-session",
+				AppName:   "test-app",
+				UserID:    "test-user",
+				Events:    tt.events,
+				Summaries: make(map[string]*session.Summary),
+			}
+			summarizer := &fakeSummarizer{allow: true, out: "summary"}
+			branchAttempts := 0
+			var calls []string
+			createSummary := func(
+				ctx context.Context,
+				sess *session.Session,
+				target string,
+				force bool,
+			) error {
+				calls = append(calls, target)
+				updated, err := SummarizeSession(
+					ctx,
+					summarizer,
+					sess,
+					target,
+					force,
+				)
+				if err != nil || !updated {
+					return err
+				}
+				if target == filterKey {
+					branchAttempts++
+					if branchAttempts == 1 {
+						return errors.New("transient branch persist error")
+					}
+				}
+				return nil
+			}
+
+			err := CreateSessionSummaryWithCascade(
+				context.Background(),
+				sess,
+				filterKey,
+				false,
+				NewSummaryDispatchPolicy(nil, true),
+				createSummary,
+			)
+			require.ErrorContains(t, err, "transient branch persist error")
+			require.Nil(t, readSummaryPointer(sess, filterKey))
+			require.Nil(
+				t,
+				readSummaryPointer(
+					sess,
+					session.SummaryFilterKeyAllContents,
+				),
+			)
+
+			retrySess := sess
+			if tt.reload {
+				retrySess = &session.Session{
+					ID:      sess.ID,
+					AppName: sess.AppName,
+					UserID:  sess.UserID,
+					Events: append(
+						[]event.Event(nil),
+						sess.Events...,
+					),
+					Summaries: make(map[string]*session.Summary),
+				}
+			}
+			err = CreateSessionSummaryWithCascade(
+				context.Background(),
+				retrySess,
+				filterKey,
+				false,
+				NewSummaryDispatchPolicy(nil, true),
+				createSummary,
+			)
+			require.NoError(t, err)
+			require.Equal(t, 2, branchAttempts)
+			require.Equal(
+				t,
+				[]string{filterKey, filterKey, ""},
+				calls,
+			)
+			require.NotNil(t, readSummaryPointer(retrySess, filterKey))
+			require.NotNil(
+				t,
+				readSummaryPointer(
+					retrySess,
+					session.SummaryFilterKeyAllContents,
+				),
+			)
+		})
+	}
+}
+
+func TestCreateSessionSummaryWithCascade_RetryIncludesNewDelta(t *testing.T) {
+	const filterKey = "app/math"
+	t0 := time.Now().Add(-2 * time.Minute)
+	t1 := t0.Add(time.Minute)
+	t2 := t1.Add(time.Minute)
+	sess := &session.Session{
+		ID:      "new-delta-retry-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+		Events: []event.Event{
+			makeEvent("science", t0, "app/science"),
+			makeEvent("math-1", t1, filterKey),
+		},
+		Summaries: map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: {
+				Summary:   "old full summary",
+				UpdatedAt: t0,
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					session.SummaryFilterKeyAllContents,
+					t0,
+					"science",
+				),
+			},
+		},
+	}
+	summarizer := &fakeSummarizer{allow: true, out: "summary"}
+	fullAttempts := 0
+	createSummary := func(
+		ctx context.Context,
+		sess *session.Session,
+		target string,
+		force bool,
+	) error {
+		updated, err := SummarizeSession(
+			ctx,
+			summarizer,
+			sess,
+			target,
+			force,
+		)
+		if err != nil || !updated {
+			return err
+		}
+		if target == session.SummaryFilterKeyAllContents {
+			fullAttempts++
+			if fullAttempts == 1 {
+				return errors.New("transient persist error")
+			}
+		}
+		return nil
+	}
+
+	err := CreateSessionSummaryWithCascade(
+		context.Background(),
+		sess,
+		filterKey,
+		false,
+		NewSummaryDispatchPolicy(nil, true),
+		createSummary,
+	)
+	require.ErrorContains(t, err, "transient persist error")
+	restored := readSummaryPointer(
+		sess,
+		session.SummaryFilterKeyAllContents,
+	)
+	require.NotNil(t, restored)
+	require.Equal(t, "old full summary", restored.Summary)
+	require.Equal(t, "science", restored.Boundary.LastEventID)
+
+	sess.EventMu.Lock()
+	sess.Events = append(
+		sess.Events,
+		makeEvent("math-2", t2, filterKey),
+	)
+	sess.EventMu.Unlock()
+
+	err = CreateSessionSummaryWithCascade(
+		context.Background(),
+		sess,
+		filterKey,
+		false,
+		NewSummaryDispatchPolicy(nil, true),
+		createSummary,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, fullAttempts)
+	full := readSummaryPointer(
+		sess,
+		session.SummaryFilterKeyAllContents,
+	)
+	require.NotNil(t, full)
+	require.NotNil(t, full.Boundary)
+	require.Equal(t, "math-2", full.Boundary.LastEventID)
+	require.True(t, full.Boundary.CutoffAt.Equal(t2.UTC()))
+}
+
+func TestRestoreSummaryState_DoesNotClobberReplacement(t *testing.T) {
 	old := &session.Summary{Summary: "old", UpdatedAt: time.Now()}
+	materialized := &session.Summary{
+		Summary:   "materialized",
+		UpdatedAt: time.Now(),
+	}
 	replacement := &session.Summary{Summary: "new", UpdatedAt: time.Now()}
 	sess := &session.Session{
 		Summaries: map[string]*session.Summary{
@@ -3121,13 +3382,13 @@ func TestMarkSummaryPendingPersistence_DoesNotClobberReplacement(t *testing.T) {
 		},
 	}
 
-	markSummaryPendingPersistence(
+	restoreSummaryState(
 		sess,
 		session.SummaryFilterKeyAllContents,
-		old,
+		materialized,
+		summaryState{entry: old, snapshot: old.Clone()},
 	)
 
-	require.False(t, replacement.UpdatedAt.IsZero())
 	require.Same(
 		t,
 		replacement,

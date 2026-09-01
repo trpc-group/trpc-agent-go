@@ -227,7 +227,10 @@ fork request。当 session 当前加载的所有事件都属于同一个 `filter
 触发一次全量会话摘要。
 
 更一般地，branch 触发的全量摘要级联依赖 branch 目标在本轮实际产出摘要。如果
-branch gate 决定不更新摘要，框架会停止级联，不会独立推进全量会话摘要。
+branch gate 决定不更新摘要，框架会停止级联；但如果已持久化的 branch boundary
+存在，而全量会话摘要缺失或 boundary 更早，这个差异表示之前的级联尚未完成，
+框架仍会重试依赖的全量会话目标。这次重试会调用该目标的 hook，并消耗共享的
+summary job timeout 预算。
 
 `WithSummaryJobTimeout(...)` 是整条 summary job 的 deadline。多 filterKey 级联会
 串行执行 branch 与全量摘要目标，两个目标共享同一个 deadline；配置时需要覆盖
@@ -1526,7 +1529,10 @@ sessionService := inmemory.NewSessionService(
   会话里，级联出来的全量摘要目标会被跳过；如果确实需要覆盖所有 branch 的全量
   摘要，请单独触发一次全量会话摘要。
 - 全量摘要级联以本轮 branch 目标实际产出摘要为前提；如果 branch 没有更新，
-  不会独立运行全量摘要目标。
+  通常不会独立运行全量摘要目标。但如果已持久化的 branch 摘要存在，而全量会话
+  摘要缺失或 boundary 更早，框架会把它视为之前未完成的级联并重试依赖的全量
+  摘要目标；这次重试会调用该目标的 hook，并消耗共享的 summary job timeout
+  预算。
 - `WithSummaryJobTimeout(...)` 作用于整条 summary job。branch 与全量摘要目标会
   串行执行并共享同一个 deadline，因此配置时需要覆盖两段模型调用和持久化的总延迟。
 - 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入

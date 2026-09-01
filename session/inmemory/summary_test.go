@@ -11,6 +11,7 @@ package inmemory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	ssummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
@@ -265,6 +267,99 @@ func TestMemoryService_EnqueueSummaryJob_CascadePreservesObserverContext(
 		return got.Summaries[filterKey] != nil &&
 			got.Summaries[session.SummaryFilterKeyAllContents] != nil
 	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestMemoryService_CascadeRetrySurvivesSessionReload(t *testing.T) {
+	const filterKey = "branch"
+	summarizer := &fakeSummarizer{allow: true, out: "summary"}
+	s := NewSessionService(WithSummarizer(summarizer))
+	defer s.Close()
+
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "cascade-reload",
+	}
+	sess, err := s.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+	for i, target := range []string{filterKey, "other"} {
+		evt := event.New(fmt.Sprintf("inv-%d", i), "author")
+		evt.Timestamp = time.Now().Add(time.Duration(i) * time.Second)
+		evt.FilterKey = target
+		evt.Response = &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser, Content: target},
+		}}}
+		require.NoError(t, s.AppendEvent(ctx, sess, evt))
+	}
+
+	sess, err = s.GetSession(ctx, key)
+	require.NoError(t, err)
+	fullAttempts := 0
+	createSummary := func(
+		ctx context.Context,
+		sess *session.Session,
+		target string,
+		force bool,
+	) error {
+		if target != session.SummaryFilterKeyAllContents {
+			return s.CreateSessionSummary(ctx, sess, target, force)
+		}
+		fullAttempts++
+		if fullAttempts == 1 {
+			updated, summarizeErr := isummary.SummarizeSession(
+				ctx,
+				summarizer,
+				sess,
+				target,
+				force,
+			)
+			if summarizeErr != nil {
+				return summarizeErr
+			}
+			if !updated {
+				return errors.New("full summary was not materialized")
+			}
+			return errors.New("transient full persistence error")
+		}
+		return s.CreateSessionSummary(ctx, sess, target, force)
+	}
+	policy := isummary.NewSummaryDispatchPolicy(nil, true)
+
+	err = isummary.CreateSessionSummaryWithCascade(
+		ctx,
+		sess,
+		filterKey,
+		false,
+		policy,
+		createSummary,
+	)
+	require.ErrorContains(t, err, "transient full persistence error")
+
+	reloaded, err := s.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded.Summaries[filterKey])
+	require.Nil(
+		t,
+		reloaded.Summaries[session.SummaryFilterKeyAllContents],
+	)
+
+	require.NoError(t, isummary.CreateSessionSummaryWithCascade(
+		ctx,
+		reloaded,
+		filterKey,
+		false,
+		policy,
+		createSummary,
+	))
+	require.Equal(t, 2, fullAttempts)
+
+	reloaded, err = s.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(
+		t,
+		reloaded.Summaries[session.SummaryFilterKeyAllContents],
+	)
 }
 
 func TestMemoryService_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {
