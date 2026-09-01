@@ -7,8 +7,8 @@
 //
 
 // Package main demonstrates serving A2A and AG-UI from one process and one
-// HTTP port. The AG-UI runner calls the A2A endpoint over HTTP, then persists
-// the translated AG-UI events for session listing and message replay.
+// HTTP port. Both protocol servers run the same local agent, while the AG-UI
+// runner persists AG-UI events for session listing and message replay.
 //
 // Routes:
 //
@@ -43,7 +43,6 @@ import (
 	"time"
 
 	a2aprotocolserver "trpc.group/trpc-go/trpc-a2a-go/server"
-	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -131,34 +130,22 @@ func main() {
 		log.Fatalf("create A2A Agent Card: %v", err)
 	}
 
-	backendRunner := runner.NewRunner(
+	a2aRunner := runner.NewRunner(
 		localAgent.Info().Name,
 		localAgent,
 		runner.WithSessionService(sessionService),
 	)
 	defer func() {
-		if err := backendRunner.Close(); err != nil {
+		if err := a2aRunner.Close(); err != nil {
 			log.Errorf("close A2A runner: %v", err)
 		}
 	}()
 
-	// Passing the already-built Agent Card avoids fetching it before the shared
-	// HTTP server has started listening. Runtime calls still go through A2A HTTP.
-	remoteAgent, err := a2aagent.New(
-		a2aagent.WithAgentCard(&agentCard),
-		a2aagent.WithName(agentCard.Name),
-		a2aagent.WithDescription(agentCard.Description),
-		a2aagent.WithEnableStreaming(*enableStream),
-	)
-	if err != nil {
-		log.Fatalf("create A2A Agent client: %v", err)
-	}
-
-	// Keep the UI and backend runners in different application scopes. The UI
-	// scope owns AG-UI tracks, while the backend scope owns A2A runner events.
+	// Keep the UI and A2A runners in different application scopes. Both run the
+	// same local agent, while only the UI scope owns AG-UI tracks.
 	uiRunner := runner.NewRunner(
 		uiAppName,
-		remoteAgent,
+		localAgent,
 		runner.WithSessionService(sessionService),
 	)
 	defer func() {
@@ -192,7 +179,7 @@ func main() {
 
 	a2aServer, err := a2aserver.New(
 		a2aserver.WithAgentCard(agentCard),
-		a2aserver.WithRunner(backendRunner),
+		a2aserver.WithRunner(a2aRunner),
 		a2aserver.WithSessionService(sessionService),
 		a2aserver.WithExtraA2AOptions(
 			a2aprotocolserver.WithHTTPRouter(mux),
