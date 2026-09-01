@@ -405,9 +405,21 @@ func (f *fileToolSet) readLargeFileRange(
 		lineNo++
 		inRange := lineNo >= start &&
 			(req.NumLines == nil || len(lines) < *req.NumLines)
+		// The head check saw only the first 512 bytes; a NUL anywhere the
+		// scan passes over makes the file not text, as it does for a whole
+		// read. Bytes past the range are not scanned.
+		if err := rejectNonText(segment, ""); err != nil {
+			rsp.Message = fmt.Sprintf("Error: %v", notTextFileErr(mimeType))
+			return notTextFileErr(mimeType)
+		}
 		if inRange {
 			line := strings.TrimSuffix(segment, "\n")
-			collected += int64(len(line)) + 1
+			// What is returned is the lines joined by "\n": a separator
+			// between lines, none after the last.
+			if len(lines) > 0 {
+				collected++
+			}
+			collected += int64(len(line))
 			if collected > f.maxFileSize {
 				err := fmt.Errorf(
 					"selected range is larger than %d bytes; "+

@@ -12,9 +12,11 @@ package file
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -44,8 +46,13 @@ const (
 	maxSearchLineSize = 4 * 1024 * 1024
 )
 
-// searchSizeCap is the largest file search will stream through.
+// searchSizeCap is the largest file search will stream through. It saturates
+// rather than overflows: a read limit large enough that scaling it would wrap
+// means no file is too large to search.
 func (f *fileToolSet) searchSizeCap() int64 {
+	if f.maxFileSize > math.MaxInt64/searchSizeCapMultiple {
+		return math.MaxInt64
+	}
 	return f.maxFileSize * searchSizeCapMultiple
 }
 
@@ -72,8 +79,10 @@ type searchContentResponse struct {
 	FilePattern    string       `json:"file_pattern"`
 	ContentPattern string       `json:"content_pattern"`
 	FileMatches    []*fileMatch `json:"file_matches"`
-	// SkippedFiles names files that matched the file pattern but exceed the
-	// search-size cap and were therefore not searched.
+	// SkippedFiles names files that matched the file pattern but were not
+	// searched: they exceed the search-size cap, or their scan failed partway
+	// on a line the scanner cannot hold. Never silent, so a zero-match result
+	// is distinguishable from a file the tool refused.
 	SkippedFiles []string `json:"skipped_files,omitempty"`
 	Message      string   `json:"message"`
 }
@@ -151,14 +160,15 @@ func (f *fileToolSet) searchContent(
 }
 
 // searchResultMessage summarizes a search, naming any file that matched the
-// file pattern but was too large to search so a zero-match result is never
-// mistaken for proof of absence.
+// file pattern but could not be searched — too large, or a scan that failed —
+// so a zero-match result is never mistaken for proof of absence.
 func (f *fileToolSet) searchResultMessage(matched int, skipped []string) string {
 	msg := fmt.Sprintf("Found %v files matching", matched)
 	if len(skipped) > 0 {
 		msg += fmt.Sprintf(
-			"; %d file(s) matched the file pattern but exceed the "+
-				"%d-byte search cap and were NOT searched: %s",
+			"; %d file(s) matched the file pattern but were NOT searched "+
+				"(beyond the %d-byte search cap, or a line the scanner "+
+				"cannot hold): %s",
 			len(skipped),
 			f.searchSizeCap(),
 			strings.Join(skipped, ", "),
@@ -269,20 +279,20 @@ func (f *fileToolSet) searchContentLocal(
 		return nil, nil, fmt.Errorf("accessing path '%s': %w", reqPath, err)
 	}
 	if !stat.IsDir() {
-		match, tooLarge, ok := f.searchSingleLocalFile(ctx, targetPath, reqPath, re)
+		match, unsearchable, ok := f.searchSingleLocalFile(ctx, targetPath, reqPath, re)
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		if ok {
-			if tooLarge {
-				return []*fileMatch{}, []string{reqPath}, nil
-			}
-			return match, nil, nil
+		if !ok {
+			return nil, nil, fmt.Errorf(
+				"target path '%s' is a file, not a directory",
+				reqPath,
+			)
 		}
-		return nil, nil, fmt.Errorf(
-			"target path '%s' is a file, not a directory",
-			reqPath,
-		)
+		if unsearchable {
+			return []*fileMatch{}, []string{reqPath}, nil
+		}
+		return match, nil, nil
 	}
 
 	files, err := f.matchFiles(
@@ -322,7 +332,16 @@ func (f *fileToolSet) searchContentLocal(
 		go func() {
 			defer wg.Done()
 			match, err := searchFileContent(ctx, fullPath, re)
-			if err != nil || len(match.Matches) == 0 {
+			if err != nil {
+				// A file the scan could not finish — a line beyond the
+				// scanner's buffer, or one it could not read — is reported
+				// beside the oversized ones rather than as a miss.
+				mu.Lock()
+				skipped = append(skipped, relPath)
+				mu.Unlock()
+				return
+			}
+			if len(match.Matches) == 0 {
 				return
 			}
 			match.FilePath = relPath
@@ -386,6 +405,10 @@ func (f *fileToolSet) searchSinglePath(
 	return []*fileMatch{match}, true
 }
 
+// searchSingleLocalFile searches one local file. The second result reports a
+// file that exists but could not be searched — beyond the search cap, or a scan
+// that failed partway — so the caller names it rather than reporting a miss.
+// The third is false when fullPath is not a file at all.
 func (f *fileToolSet) searchSingleLocalFile(
 	ctx context.Context,
 	fullPath string,
@@ -403,11 +426,14 @@ func (f *fileToolSet) searchSingleLocalFile(
 		return []*fileMatch{}, true, true
 	}
 	match, err := searchFileContent(ctx, fullPath, re)
-	if err != nil || len(match.Matches) == 0 {
-		if err == nil {
-			return []*fileMatch{}, false, true
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, false, true
 		}
-		return nil, false, false
+		return []*fileMatch{}, true, true
+	}
+	if len(match.Matches) == 0 {
+		return []*fileMatch{}, false, true
 	}
 	match.FilePath = reqPath
 	match.Message = fileMatchMessage(match, reqPath)
@@ -598,6 +624,22 @@ func regexCompile(
 	return re, nil
 }
 
+// scanLinesKeepCR splits on "\n" alone, so a CRLF line keeps its "\r" exactly as
+// strings.Split(content, "\n") in searchTextContent leaves it: the two backends
+// must report the same line content and match the same patterns.
+func scanLinesKeepCR(data []byte, atEOF bool) (int, []byte, error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
 // searchFileContent searches for content matches in a single file. It streams
 // the file line by line, so its memory use is bounded by the longest line, not
 // the file size — this is what lets search look inside files far larger than
@@ -616,6 +658,7 @@ func searchFileContent(
 	fileMatches := &fileMatch{Matches: []*lineMatch{}}
 	sc := bufio.NewScanner(file)
 	sc.Buffer(make([]byte, 64*1024), maxSearchLineSize)
+	sc.Split(scanLinesKeepCR)
 	lineNum := 0
 	for sc.Scan() {
 		lineNum++

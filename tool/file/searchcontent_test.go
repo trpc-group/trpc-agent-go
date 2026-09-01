@@ -13,6 +13,7 @@ package file
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -761,23 +762,71 @@ func TestSearchContent_PathIsFile(t *testing.T) {
 		assert.ErrorIs(t, err, context.Canceled)
 	})
 
-	t.Run("a file that cannot be scanned is an error", func(t *testing.T) {
+	t.Run("a file the scanner cannot finish is reported, not a miss", func(t *testing.T) {
 		// A line longer than the scanner tolerates makes the scan fail, which
-		// is the one way a readable file is not searchable.
+		// is the one way a readable file is not searchable. It is named
+		// beside the oversized files rather than reported as zero matches.
 		long := filepath.Join(tempDir, "long.txt")
 		assert.NoError(t, os.WriteFile(long, []byte("foo "+strings.Repeat("x", maxSearchLineSize+1)+"\n"), 0o644))
 		t.Cleanup(func() { _ = os.Remove(long) })
-		big := set.(*fileToolSet)
-		big.maxFileSize = int64(maxSearchLineSize * 2)
-		t.Cleanup(func() { big.maxFileSize = 8 })
+		fts.maxFileSize = int64(maxSearchLineSize * 2)
+		t.Cleanup(func() { fts.maxFileSize = 8 })
 
-		_, err := fts.searchContent(context.Background(), &searchContentRequest{
+		rsp, err := fts.searchContent(context.Background(), &searchContentRequest{
 			Path:           "long.txt",
 			FilePattern:    "*",
 			ContentPattern: "foo",
 		})
-		assert.ErrorContains(t, err, "long.txt")
+		assert.NoError(t, err)
+		assert.Empty(t, rsp.FileMatches)
+		assert.Equal(t, []string{"long.txt"}, rsp.SkippedFiles)
+		assert.Contains(t, rsp.Message, "NOT searched")
+
+		// The same file reached through a pattern is reported the same way.
+		rsp, err = fts.searchContent(context.Background(), &searchContentRequest{
+			FilePattern:    "long.txt",
+			ContentPattern: "foo",
+		})
+		assert.NoError(t, err)
+		assert.Empty(t, rsp.FileMatches)
+		assert.Equal(t, []string{"long.txt"}, rsp.SkippedFiles)
 	})
+}
+
+// A CRLF line keeps its "\r" in line_content, as it does when the same file is
+// searched from the workspace cache, so both backends match the same patterns.
+func TestSearchContent_KeepsCarriageReturns(t *testing.T) {
+	tempDir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "dos.txt"), []byte("foo\r\nbar\r\nfoo"), 0o644))
+
+	rsp, err := fts.searchContent(context.Background(), &searchContentRequest{
+		FilePattern:    "dos.txt",
+		ContentPattern: "foo\r$",
+	})
+	assert.NoError(t, err)
+	assert.Len(t, rsp.FileMatches, 1)
+	assert.Len(t, rsp.FileMatches[0].Matches, 1)
+	assert.Equal(t, "foo\r", rsp.FileMatches[0].Matches[0].LineContent)
+	assert.Equal(t, 1, rsp.FileMatches[0].Matches[0].LineNumber)
+
+	cached := searchTextContent("dos.txt", "foo\r\nbar\r\nfoo", regexp.MustCompile("foo\r$"))
+	assert.Equal(t, rsp.FileMatches[0].Matches, cached.Matches,
+		"the local and cached backends must agree on line content")
+}
+
+// A read limit large enough that scaling it would overflow saturates, so no
+// file is turned away as too large.
+func TestSearchSizeCap_Saturates(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()), WithMaxFileSize(math.MaxInt64/searchSizeCapMultiple+1))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(math.MaxInt64), set.(*fileToolSet).searchSizeCap())
+
+	set, err = NewToolSet(WithBaseDir(t.TempDir()), WithMaxFileSize(10))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(10*searchSizeCapMultiple), set.(*fileToolSet).searchSizeCap())
 }
 
 // Streaming search stops listing a file's matches at maxMatchesPerFile, says so

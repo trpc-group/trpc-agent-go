@@ -1311,6 +1311,9 @@ func TestFileTool_ReadFile_RangedReadOfLargeFileInvalidUTF8(t *testing.T) {
 // A large file the process cannot open reports the open error rather than an
 // empty range.
 func TestFileTool_ReadFile_RangedReadOfLargeFileUnreadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 0 does not deny reads on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root can read a mode-0 file")
 	}
@@ -1358,4 +1361,55 @@ func TestFileTool_ReadFile_FromCache_RangeLargerThanMaxFileSize(t *testing.T) {
 	rsp, err = fts.readFile(ctx, &readFileRequest{FileName: "out/big.txt", StartLine: &start, NumLines: &num})
 	assert.Error(t, err)
 	assert.Contains(t, rsp.Message, "selected range is larger than 12 bytes")
+}
+
+// A NUL byte the scan passes over — beyond the first 512 bytes and before the
+// requested range — makes the file not text, as it does for a whole-file read.
+func TestFileTool_ReadFile_RangedReadOfLargeFileRejectsNULBeforeRange(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(64))
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	var b strings.Builder
+	for i := 1; i <= 100; i++ {
+		fmt.Fprintf(&b, "line-%d\n", i)
+	}
+	b.WriteString("bin\x00ary\n")
+	for i := 102; i <= 120; i++ {
+		fmt.Fprintf(&b, "line-%d\n", i)
+	}
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "mixed.txt"), []byte(b.String()), 0o644))
+
+	start, num := 110, 2
+	rsp, err := fts.readFile(context.Background(),
+		&readFileRequest{FileName: "mixed.txt", StartLine: &start, NumLines: &num})
+
+	assert.Error(t, err)
+	assert.Contains(t, rsp.Message, "not a UTF-8 text file")
+}
+
+// The range limit is the size of what is returned: the lines joined by "\n",
+// with no separator after the last. A range of exactly maxFileSize bytes is
+// served; one byte more is refused.
+func TestFileTool_ReadFile_RangedReadOfLargeFileExactLimit(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(11))
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+	// Lines of five bytes: two joined are exactly 11, three are 17.
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "five.txt"),
+		[]byte(strings.Repeat("abcde\n", 10)), 0o644))
+
+	start, num := 3, 2
+	rsp, err := fts.readFile(context.Background(),
+		&readFileRequest{FileName: "five.txt", StartLine: &start, NumLines: &num})
+	assert.NoError(t, err)
+	assert.Equal(t, "abcde\nabcde", rsp.Contents)
+
+	num = 3
+	rsp, err = fts.readFile(context.Background(),
+		&readFileRequest{FileName: "five.txt", StartLine: &start, NumLines: &num})
+	assert.Error(t, err)
+	assert.Contains(t, rsp.Message, "selected range is larger than 11 bytes")
 }
