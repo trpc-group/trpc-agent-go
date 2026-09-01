@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,13 +28,17 @@ import (
 // Client runs non-interactive processes through the envd Process service.
 // A Client is safe for concurrent use.
 type Client struct {
-	processClient processconnect.ProcessClient
-	headers       http.Header
+	processClient      processconnect.ProcessClient
+	headers            http.Header
+	credentialsAllowed bool
 }
 
 // NewClient constructs an envd process client. Headers are snapshotted and
 // added to every RPC. The supplied HTTP client is reused so custom transports,
-// TLS configuration, proxies, and request timeouts remain effective.
+// TLS configuration, proxies, redirect policies, and request timeouts remain
+// effective. Remote endpoints must use HTTPS. Loopback HTTP is accepted only
+// without configured headers or per-process user credentials. When httpClient
+// is nil, the default client rejects cross-host redirects and HTTPS downgrades.
 func NewClient(
 	baseURL string,
 	httpClient *http.Client,
@@ -44,24 +49,81 @@ func NewClient(
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("envd process: invalid base URL %q", baseURL)
 	}
+	if u.User != nil {
+		return nil, errors.New(
+			"envd process: base URL must not contain user credentials",
+		)
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf(
+			"envd process: unsupported base URL scheme %q", u.Scheme,
+		)
+	}
+	credentialsAllowed := u.Scheme == "https"
+	if !credentialsAllowed && !isLoopbackHost(u.Hostname()) {
+		return nil, errors.New(
+			"envd process: remote base URL must use HTTPS",
+		)
+	}
+	if !credentialsAllowed && len(headers) != 0 {
+		return nil, errors.New(
+			"envd process: configured headers require HTTPS",
+		)
+	}
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = newDefaultHTTPClient()
 	}
 	return &Client{
 		processClient: processconnect.NewProcessClient(
 			httpClient,
 			strings.TrimRight(baseURL, "/"),
 		),
-		headers: headers.Clone(),
+		headers:            headers.Clone(),
+		credentialsAllowed: credentialsAllowed,
 	}, nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func newDefaultHTTPClient() *http.Client {
+	httpClient := *http.DefaultClient
+	httpClient.CheckRedirect = func(
+		req *http.Request,
+		via []*http.Request,
+	) error {
+		if len(via) == 0 {
+			return nil
+		}
+		origin := via[0].URL
+		if !strings.EqualFold(req.URL.Host, origin.Host) {
+			return errors.New(
+				"envd process: refusing cross-host redirect",
+			)
+		}
+		if strings.EqualFold(origin.Scheme, "https") &&
+			!strings.EqualFold(req.URL.Scheme, "https") {
+			return errors.New(
+				"envd process: refusing HTTPS downgrade redirect",
+			)
+		}
+		return nil
+	}
+	return &httpClient
 }
 
 // Run starts a process without a PTY and waits for its terminal EndEvent.
 // Non-zero exits from an EndEvent with Exited set are returned in Result with a
 // nil error. Transport, protocol, stdin, and failed EndEvent failures are
 // returned as errors. Canceling ctx disconnects the Start stream but does not
-// terminate the remote process. Set Request.Timeout to give envd a remote
-// process deadline.
+// terminate the remote process. Request.Timeout controls envd's remote process
+// deadline and defaults to 60 seconds when non-positive.
 func (c *Client) Run(ctx context.Context, req Request) (Result, error) {
 	proc, err := c.Start(ctx, req)
 	if err != nil {
@@ -73,9 +135,8 @@ func (c *Client) Run(ctx context.Context, req Request) (Result, error) {
 		if ctx != nil && ctx.Err() != nil {
 			return Result{}, ctx.Err()
 		}
-		if isRemoteTimeout(req.Timeout > 0, err) || errors.Is(
-			err, context.DeadlineExceeded,
-		) {
+		if isRemoteTimeout(err) ||
+			errors.Is(err, context.DeadlineExceeded) {
 			return Result{TimedOut: true}, nil
 		}
 		return Result{}, err
@@ -86,50 +147,50 @@ func (c *Client) Run(ctx context.Context, req Request) (Result, error) {
 
 // Start starts a non-PTY process and returns a handle after envd reports its
 // PID. The returned Process can be non-nil together with an error when initial
-// stdin delivery fails; callers can then use Process.Kill for cleanup.
+// stdin delivery fails; callers can then use Process.Kill for cleanup. A
+// non-positive Request.Timeout uses a 60-second remote process deadline.
 func (c *Client) Start(ctx context.Context, req Request) (*Process, error) {
 	if err := c.validateRequest(ctx, req); err != nil {
 		return nil, err
 	}
-
-	streamCtx, disconnect := newStartStreamContext(ctx, req.Timeout)
-	startCalls := make(chan startCall, 1)
-	go c.startStream(streamCtx, req, startCalls)
-
-	started, err := waitForStartCall(ctx, streamCtx, startCalls)
+	// processStreamCtx owns the Start RPC, initial stdin RPCs, and event-stream
+	// attachment, but not the remote process itself. Its deadline is the remote
+	// process deadline, while caller cancellation only disconnects the local
+	// attachment and never sends Kill to envd.
+	processStreamCtx, disconnect := newStartStreamContext(ctx, req.Timeout)
+	stream, err := c.startStream(processStreamCtx, req)
 	if err != nil {
-		disconnect()
-		return nil, err
-	}
-	if started.err != nil {
-		streamErr := streamContextError(ctx, streamCtx)
+		streamErr := streamContextError(processStreamCtx)
 		disconnect()
 		if streamErr != nil {
 			return nil, streamErr
 		}
-		return nil, fmt.Errorf("envd process: start: %w", started.err)
+		return nil, fmt.Errorf("envd process: start: %w", err)
 	}
-	if started.stream == nil {
+	if stream == nil {
 		disconnect()
 		return nil, errors.New("envd process: start returned a nil stream")
 	}
 
-	events := receive(streamCtx, started.stream)
-	pid, err := waitForProcessStart(ctx, streamCtx, events)
+	eventStream := &startEventStream{stream: stream}
+	pid, err := receiveProcessStart(processStreamCtx, eventStream)
 	if err != nil {
 		disconnect()
+		_ = eventStream.Close()
 		return nil, err
 	}
 	proc := newProcess(
-		c, pid, ctx, streamCtx, req.Timeout > 0, disconnect, events,
+		c, pid, processStreamCtx, true, disconnect, eventStream,
 	)
 
 	if req.Stdin != "" {
-		if err := proc.SendInput(streamCtx, []byte(req.Stdin)); err != nil {
+		if err := proc.SendInput(
+			processStreamCtx, []byte(req.Stdin),
+		); err != nil {
 			return proc, fmt.Errorf("envd process: write stdin: %w", err)
 		}
 		if !req.KeepStdinOpen {
-			if err := proc.CloseStdin(streamCtx); err != nil {
+			if err := proc.CloseStdin(processStreamCtx); err != nil {
 				return proc, fmt.Errorf("envd process: close stdin: %w", err)
 			}
 		}
@@ -160,21 +221,23 @@ func (c *Client) Connect(ctx context.Context, pid uint32) (*Process, error) {
 		disconnect()
 		return nil, errors.New("envd process: connect returned a nil stream")
 	}
-	events := receiveConnected(streamCtx, stream)
-	connectedPID, err := waitForProcessStart(ctx, streamCtx, events)
+	eventStream := &connectEventStream{stream: stream}
+	connectedPID, err := receiveProcessStart(streamCtx, eventStream)
 	if err != nil {
 		disconnect()
+		_ = eventStream.Close()
 		return nil, err
 	}
 	if connectedPID != pid {
 		disconnect()
+		_ = eventStream.Close()
 		return nil, fmt.Errorf(
 			"envd process: connect returned PID %d, want %d",
 			connectedPID, pid,
 		)
 	}
 	return newProcess(
-		c, pid, ctx, streamCtx, false, disconnect, events,
+		c, pid, streamCtx, false, disconnect, eventStream,
 	), nil
 }
 
@@ -275,11 +338,13 @@ func (c *Client) CloseStdin(ctx context.Context, pid uint32) error {
 	return nil
 }
 
+// startStream synchronously opens the server-streaming RPC. The Connect client
+// observes ctx while sending the request, so an extra goroutine would not add
+// cancellation semantics and could only leave an orphaned request behind.
 func (c *Client) startStream(
 	ctx context.Context,
 	req Request,
-	result chan<- startCall,
-) {
+) (*connect.ServerStreamForClient[process.StartResponse], error) {
 	stdin := req.Stdin != "" || req.KeepStdinOpen
 	args := append([]string(nil), req.Args...)
 	envs := make(map[string]string, len(req.Envs))
@@ -307,11 +372,7 @@ func (c *Client) startStream(
 	}
 	c.addHeaders(startReq.Header())
 	addProcessUserHeader(startReq.Header(), req.User)
-	stream, err := c.processClient.Start(ctx, startReq)
-	select {
-	case result <- startCall{stream: stream, err: err}:
-	case <-ctx.Done():
-	}
+	return c.processClient.Start(ctx, startReq)
 }
 
 func (c *Client) addHeaders(target http.Header) {
@@ -328,6 +389,9 @@ func (c *Client) validateRequest(ctx context.Context, req Request) error {
 	}
 	if c == nil || c.processClient == nil {
 		return errors.New("envd process: client is not initialized")
+	}
+	if req.User != "" && !c.credentialsAllowed {
+		return errors.New("envd process: process user requires HTTPS")
 	}
 	if req.Cmd == "" {
 		return errors.New("envd process: command is empty")

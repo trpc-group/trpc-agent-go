@@ -625,11 +625,10 @@ func (e *integrationEnvironment) testProcessHandleLifecycle(
 
 	tag := integrationTag("handle")
 	proc, err := e.runner.Start(ctx, Request{
-		Cmd:     "/bin/sh",
-		Args:    []string{"-c", "exec sleep 60"},
-		User:    e.user,
-		Tag:     tag,
-		Timeout: 20 * time.Second,
+		Cmd:  "/bin/sh",
+		Args: []string{"-c", "exec sleep 60"},
+		User: e.user,
+		Tag:  tag,
 	})
 	require.NoError(t, err)
 	pid := proc.PID()

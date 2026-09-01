@@ -167,6 +167,35 @@ func TestRunWithEmptyStdinDoesNotOpenStdin(t *testing.T) {
 	startReq := <-startRequests
 	assert.False(t, startReq.Msg.GetStdin())
 	assert.Empty(t, startReq.Header().Get("Authorization"))
+	assertConnectTimeout(
+		t, startReq.Header(), 59*time.Second, defaultProcessTimeout,
+	)
+}
+
+func TestRunNegativeTimeoutUsesDefaultRemoteProcessDeadline(t *testing.T) {
+	startRequests := make(chan *connect.Request[process.StartRequest], 1)
+	handler := &testProcessHandler{}
+	handler.start = func(
+		_ context.Context,
+		req *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		startRequests <- req
+		if err := stream.Send(startEvent(12)); err != nil {
+			return err
+		}
+		return stream.Send(&process.StartResponse{Event: endEvent(0)})
+	}
+
+	client := newTestClient(t, handler, nil)
+	_, err := client.Run(context.Background(), Request{
+		Cmd:     "true",
+		Timeout: -time.Second,
+	})
+	require.NoError(t, err)
+	assertConnectTimeout(
+		t, (<-startRequests).Header(), 59*time.Second, defaultProcessTimeout,
+	)
 }
 
 func TestRunTimeoutSetsRemoteProcessDeadline(t *testing.T) {
@@ -199,7 +228,7 @@ func TestRunTimeoutSetsRemoteProcessDeadline(t *testing.T) {
 	)
 }
 
-func TestRunCallerCancellationDisconnectsWithoutRemoteDeadline(t *testing.T) {
+func TestRunCallerCancellationDisconnectsWithoutKillingProcess(t *testing.T) {
 	stdinClosed := make(chan struct{})
 	startRequests := make(chan *connect.Request[process.StartRequest], 1)
 	handler := blockingProcessHandler(t, stdinClosed)
@@ -229,7 +258,122 @@ func TestRunCallerCancellationDisconnectsWithoutRemoteDeadline(t *testing.T) {
 	<-done
 	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, result.TimedOut)
-	assert.Empty(t, (<-startRequests).Header().Get("Connect-Timeout-Ms"))
+	assertConnectTimeout(
+		t, (<-startRequests).Header(), 59*time.Second, defaultProcessTimeout,
+	)
+}
+
+func TestStartCallerCancellationCancelsInitialSendInput(t *testing.T) {
+	inputStarted := make(chan struct{})
+	handler := &testProcessHandler{}
+	handler.start = func(
+		ctx context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(78)); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	handler.sendInput = func(
+		ctx context.Context,
+		_ *connect.Request[process.SendInputRequest],
+	) (*connect.Response[process.SendInputResponse], error) {
+		close(inputStarted)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	handler.closeStdin = func(
+		context.Context,
+		*connect.Request[process.CloseStdinRequest],
+	) (*connect.Response[process.CloseStdinResponse], error) {
+		t.Error("CloseStdin must not be called after SendInput fails")
+		return connect.NewResponse(&process.CloseStdinResponse{}), nil
+	}
+
+	client := newTestClient(t, handler, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	type startResult struct {
+		proc *Process
+		err  error
+	}
+	resultCh := make(chan startResult, 1)
+	go func() {
+		proc, err := client.Start(ctx, Request{Cmd: "cat", Stdin: "input"})
+		resultCh <- startResult{proc: proc, err: err}
+	}()
+
+	<-inputStarted
+	cancel()
+	select {
+	case result := <-resultCh:
+		require.NotNil(t, result.proc)
+		assert.Equal(t, uint32(78), result.proc.PID())
+		require.Error(t, result.err)
+		assert.ErrorIs(t, result.err, context.Canceled)
+		assert.Contains(t, result.err.Error(), "write stdin")
+	case <-time.After(time.Second):
+		t.Fatal("Start did not return after caller cancellation")
+	}
+}
+
+func TestStartCallerCancellationCancelsInitialCloseStdin(t *testing.T) {
+	closeStarted := make(chan struct{})
+	handler := &testProcessHandler{}
+	handler.start = func(
+		ctx context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(79)); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	handler.sendInput = func(
+		context.Context,
+		*connect.Request[process.SendInputRequest],
+	) (*connect.Response[process.SendInputResponse], error) {
+		return connect.NewResponse(&process.SendInputResponse{}), nil
+	}
+	handler.closeStdin = func(
+		ctx context.Context,
+		_ *connect.Request[process.CloseStdinRequest],
+	) (*connect.Response[process.CloseStdinResponse], error) {
+		close(closeStarted)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	client := newTestClient(t, handler, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	type startResult struct {
+		proc *Process
+		err  error
+	}
+	resultCh := make(chan startResult, 1)
+	go func() {
+		proc, err := client.Start(ctx, Request{Cmd: "cat", Stdin: "input"})
+		resultCh <- startResult{proc: proc, err: err}
+	}()
+
+	<-closeStarted
+	cancel()
+	select {
+	case result := <-resultCh:
+		require.NotNil(t, result.proc)
+		assert.Equal(t, uint32(79), result.proc.PID())
+		require.Error(t, result.err)
+		assert.ErrorIs(t, result.err, context.Canceled)
+		assert.Contains(t, result.err.Error(), "close stdin")
+	case <-time.After(time.Second):
+		t.Fatal("Start did not return after caller cancellation")
+	}
 }
 
 func TestRunCallerDeadlineDoesNotShortenRemoteProcessDeadline(t *testing.T) {

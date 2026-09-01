@@ -119,14 +119,16 @@ func (p *Process) CloseStdin(ctx context.Context) error {
 	return p.client.CloseStdin(ctx, p.pid)
 }
 
+// newProcess transfers processStreamCtx and stream ownership to the event
+// consumer. Neither lifetime object is stored in Process, avoiding a second
+// context or stream owner inside the handle.
 func newProcess(
 	client *Client,
 	pid uint32,
-	callerCtx context.Context,
-	streamCtx context.Context,
+	processStreamCtx context.Context,
 	hasRemoteTimeout bool,
 	disconnect context.CancelFunc,
-	events <-chan receivedEvent,
+	stream processEventStream,
 ) *Process {
 	proc := &Process{
 		client:     client,
@@ -134,64 +136,67 @@ func newProcess(
 		disconnect: disconnect,
 		done:       make(chan struct{}),
 	}
-	go proc.consume(callerCtx, streamCtx, hasRemoteTimeout, events)
+	go proc.consume(processStreamCtx, hasRemoteTimeout, stream)
 	return proc
 }
 
 func (p *Process) consume(
-	callerCtx context.Context,
-	streamCtx context.Context,
+	processStreamCtx context.Context,
 	hasRemoteTimeout bool,
-	events <-chan receivedEvent,
+	stream processEventStream,
 ) {
+	// Defers run in reverse order: disconnect the attachment and cancel its RPC
+	// context before closing the response side of the stream. This keeps all
+	// transport cleanup with the sole stream owner.
+	defer stream.Close()
 	defer p.disconnect()
-	for {
-		select {
-		case <-callerCtx.Done():
-			p.finish(callerCtx.Err())
-			return
-		case received, ok := <-events:
-			if err := callerCtx.Err(); err != nil {
-				p.finish(err)
-				return
-			}
-			p.mu.Lock()
-			outcome := handleIncomingEvent(
-				streamCtx,
-				hasRemoteTimeout,
-				&p.state,
-				received,
-				ok,
-			)
-			err, done := finishProcessEvent(
-				streamCtx, &p.state, outcome,
-			)
-			p.mu.Unlock()
-			if done {
-				p.finish(err)
-				return
-			}
-		case <-streamCtx.Done():
-			if err := callerCtx.Err(); err != nil {
-				p.finish(err)
-				return
-			}
-			p.mu.Lock()
-			err := finishStoppedProcess(streamCtx, &p.state)
-			p.mu.Unlock()
-			p.finish(err)
+	for stream.Receive() {
+		if p.consumeEvent(
+			processStreamCtx,
+			hasRemoteTimeout,
+			receivedEvent{event: stream.Event()},
+			true,
+		) {
 			return
 		}
 	}
+	streamErr := stream.Err()
+	p.consumeEvent(
+		processStreamCtx,
+		hasRemoteTimeout,
+		receivedEvent{err: streamErr},
+		streamErr != nil,
+	)
 }
 
-// finish is called only by the stream-consuming goroutine.
-func (p *Process) finish(err error) {
+// consumeEvent is the only processState mutation path. The single stream
+// consumer guarantees that done is closed exactly once for a terminal event.
+func (p *Process) consumeEvent(
+	processStreamCtx context.Context,
+	hasRemoteTimeout bool,
+	received receivedEvent,
+	ok bool,
+) bool {
 	p.mu.Lock()
-	p.state.err = err
-	p.state.finished = true
+	outcome := handleIncomingEvent(
+		processStreamCtx,
+		hasRemoteTimeout,
+		&p.state,
+		received,
+		ok,
+	)
+	err, done := finishProcessEvent(
+		processStreamCtx, &p.state, outcome,
+	)
+	if done {
+		p.state.err = err
+		p.state.finished = true
+	}
 	p.mu.Unlock()
-	close(p.done)
+	if done {
+		close(p.done)
+	}
+	return done
 }
 
 func (p *Process) snapshot() (Result, error) {
@@ -204,73 +209,55 @@ func (p *Process) snapshot() (Result, error) {
 	return result, nil
 }
 
-func waitForStartCall(
-	ctx context.Context,
-	streamCtx context.Context,
-	startCalls <-chan startCall,
-) (startCall, error) {
-	select {
-	case started := <-startCalls:
-		return started, nil
-	case <-ctx.Done():
-		return startCall{}, ctx.Err()
-	case <-streamCtx.Done():
-		return startCall{}, streamContextError(ctx, streamCtx)
-	}
-}
-
-func waitForProcessStart(
-	ctx context.Context,
-	streamCtx context.Context,
-	events <-chan receivedEvent,
+// receiveProcessStart synchronously consumes the first response because Start
+// and Connect promise to return a Process with a known PID. Later responses
+// are handed to the Process consumer, avoiding a separate reader goroutine and
+// event channel. Canceling processStreamCtx unblocks Receive.
+func receiveProcessStart(
+	processStreamCtx context.Context,
+	stream processEventStream,
 ) (uint32, error) {
-	select {
-	case received, ok := <-events:
-		if !ok {
-			return 0, errors.New(
-				"envd process: stream ended before StartEvent",
-			)
+	if !stream.Receive() {
+		if processStreamCtx.Err() != nil {
+			return 0, streamContextError(processStreamCtx)
 		}
-		if received.err != nil {
+		if err := stream.Err(); err != nil {
 			return 0, fmt.Errorf(
-				"envd process: receive StartEvent: %w", received.err,
+				"envd process: receive StartEvent: %w", err,
 			)
 		}
-		if received.event == nil {
-			return 0, errors.New("envd process: received empty event")
-		}
-		switch event := received.event.Event.(type) {
-		case *processrpc.ProcessEvent_Start:
-			if event.Start == nil || event.Start.Pid == 0 {
-				return 0, errors.New(
-					"envd process: received invalid StartEvent",
-				)
-			}
-			return event.Start.Pid, nil
-		case *processrpc.ProcessEvent_End:
+		return 0, errors.New(
+			"envd process: stream ended before StartEvent",
+		)
+	}
+	if processStreamCtx.Err() != nil {
+		return 0, streamContextError(processStreamCtx)
+	}
+	event := stream.Event()
+	if event == nil {
+		return 0, errors.New("envd process: received empty event")
+	}
+	switch event := event.Event.(type) {
+	case *processrpc.ProcessEvent_Start:
+		if event.Start == nil || event.Start.Pid == 0 {
 			return 0, errors.New(
-				"envd process: received EndEvent before StartEvent",
-			)
-		default:
-			return 0, errors.New(
-				"envd process: received unknown event before StartEvent",
+				"envd process: received invalid StartEvent",
 			)
 		}
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	case <-streamCtx.Done():
-		return 0, streamContextError(ctx, streamCtx)
+		return event.Start.Pid, nil
+	case *processrpc.ProcessEvent_End:
+		return 0, errors.New(
+			"envd process: received EndEvent before StartEvent",
+		)
+	default:
+		return 0, errors.New(
+			"envd process: received unknown event before StartEvent",
+		)
 	}
 }
 
-func streamContextError(
-	callerCtx context.Context,
-	streamCtx context.Context,
-) error {
-	if err := callerCtx.Err(); err != nil {
-		return err
-	}
-	cause := context.Cause(streamCtx)
+func streamContextError(processStreamCtx context.Context) error {
+	cause := context.Cause(processStreamCtx)
 	if errors.Is(cause, errProcessTimeout) {
 		return context.DeadlineExceeded
 	}
@@ -280,35 +267,50 @@ func streamContextError(
 	if cause != nil {
 		return cause
 	}
-	return streamCtx.Err()
+	return processStreamCtx.Err()
 }
 
-func receiveConnected(
-	ctx context.Context,
-	stream *connect.ServerStreamForClient[processrpc.ConnectResponse],
-) <-chan receivedEvent {
-	events := make(chan receivedEvent)
-	go func() {
-		defer close(events)
-		defer stream.Close()
-		for stream.Receive() {
-			msg := stream.Msg()
-			var event *processrpc.ProcessEvent
-			if msg != nil {
-				event = msg.Event
-			}
-			select {
-			case events <- receivedEvent{event: event}:
-			case <-ctx.Done():
-				return
-			}
-		}
-		if err := stream.Err(); err != nil {
-			select {
-			case events <- receivedEvent{err: err}:
-			case <-ctx.Done():
-			}
-		}
-	}()
-	return events
+// processEventStream normalizes the Start and Connect response envelopes. It
+// is a synchronous adapter; the Process consumer owns all stream concurrency.
+type processEventStream interface {
+	Receive() bool
+	Event() *processrpc.ProcessEvent
+	Err() error
+	Close() error
 }
+
+// startEventStream unwraps ProcessEvent from the Start response envelope.
+type startEventStream struct {
+	stream *connect.ServerStreamForClient[processrpc.StartResponse]
+}
+
+func (s *startEventStream) Receive() bool { return s.stream.Receive() }
+
+func (s *startEventStream) Event() *processrpc.ProcessEvent {
+	if msg := s.stream.Msg(); msg != nil {
+		return msg.Event
+	}
+	return nil
+}
+
+func (s *startEventStream) Err() error { return s.stream.Err() }
+
+func (s *startEventStream) Close() error { return s.stream.Close() }
+
+// connectEventStream unwraps ProcessEvent from the Connect response envelope.
+type connectEventStream struct {
+	stream *connect.ServerStreamForClient[processrpc.ConnectResponse]
+}
+
+func (s *connectEventStream) Receive() bool { return s.stream.Receive() }
+
+func (s *connectEventStream) Event() *processrpc.ProcessEvent {
+	if msg := s.stream.Msg(); msg != nil {
+		return msg.Event
+	}
+	return nil
+}
+
+func (s *connectEventStream) Err() error { return s.stream.Err() }
+
+func (s *connectEventStream) Close() error { return s.stream.Close() }

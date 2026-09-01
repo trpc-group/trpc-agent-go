@@ -101,7 +101,7 @@ func newTestClient(
 ) *Client {
 	t.Helper()
 	_, rpcHandler := processconnect.NewProcessHandler(handler)
-	server := httptest.NewServer(rpcHandler)
+	server := httptest.NewTLSServer(rpcHandler)
 	t.Cleanup(server.Close)
 	client, err := NewClient(server.URL, server.Client(), headers)
 	require.NoError(t, err)

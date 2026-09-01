@@ -25,6 +25,11 @@ var (
 	errProcessDisconnected = errors.New("envd process: process disconnected")
 )
 
+// defaultProcessTimeout matches the E2B SDK command timeout. It is applied
+// before processStreamCtx is passed to Connect so envd always receives an
+// explicit remote process deadline.
+const defaultProcessTimeout = 60 * time.Second
+
 // Request describes one non-interactive process invocation.
 type Request struct {
 	Cmd  string
@@ -42,17 +47,16 @@ type Request struct {
 	// Start callers that will continue writing through Process.SendInput. Run
 	// callers should use it only when the command can finish without stdin EOF.
 	KeepStdinOpen bool
-	// Timeout is the remote process deadline. Start and Run send a positive
-	// value to envd through Connect-Timeout-Ms; envd terminates the process when
-	// that deadline expires. A non-positive value leaves the process without a
-	// client-specified deadline.
+	// Timeout is the remote process deadline sent to envd through
+	// Connect-Timeout-Ms. envd terminates the process when the deadline expires.
+	// A non-positive value uses the E2B-compatible default of 60 seconds.
 	Timeout time.Duration
 }
 
 // Result is the terminal state and exact output collected from a process. PID
 // is zero only when Run failed before receiving StartEvent. TimedOut is set
-// only when Request.Timeout expires, not when the caller context is canceled
-// or reaches its own deadline.
+// only when the configured or default remote process deadline expires, not
+// when the caller context is canceled or reaches its own deadline.
 type Result struct {
 	PID      uint32
 	Stdout   string
@@ -62,25 +66,24 @@ type Result struct {
 }
 
 func handleIncomingEvent(
-	streamCtx context.Context,
+	processStreamCtx context.Context,
 	hasRemoteTimeout bool,
 	state *processState,
 	received receivedEvent,
 	ok bool,
 ) runEventOutcome {
-	if streamCtx.Err() != nil {
+	if processStreamCtx.Err() != nil {
 		return runEventOutcome{action: runEventStop}
 	}
-	if received.err != nil && isRemoteTimeout(
-		hasRemoteTimeout, received.err,
-	) {
+	if received.err != nil && hasRemoteTimeout &&
+		isRemoteTimeout(received.err) {
 		return runEventOutcome{action: runEventTimedOut}
 	}
 	return handleReceivedEvent(state, received, ok)
 }
 
 func finishProcessEvent(
-	streamCtx context.Context,
+	processStreamCtx context.Context,
 	state *processState,
 	outcome runEventOutcome,
 ) (error, bool) {
@@ -91,7 +94,7 @@ func finishProcessEvent(
 		state.exitCode = int(outcome.exitCode)
 		return nil, true
 	case runEventStop:
-		return finishStoppedProcess(streamCtx, state), true
+		return finishStoppedProcess(processStreamCtx, state), true
 	case runEventTimedOut:
 		state.timedOut = true
 		return nil, true
@@ -104,37 +107,48 @@ func finishProcessEvent(
 	}
 }
 
-// newStartStreamContext keeps the caller deadline out of Connect-Timeout-Ms.
-// The startup path and stream consumer observe the caller context directly;
-// this context carries only the configured process timeout and disconnect.
+// newStartStreamContext creates the single context that owns the Start RPC and
+// its event-stream attachment. It retains caller values but detaches the
+// caller's cancellation and deadline before adding the remote process timeout;
+// this prevents Connect from encoding the caller deadline as
+// Connect-Timeout-Ms. Caller cancellation is then mirrored with AfterFunc so
+// it disconnects the local attachment without sending a signal to the remote
+// process. The timeout remains the envd-owned process deadline, while the
+// returned cancel function represents an explicit local Disconnect.
 func newStartStreamContext(
-	ctx context.Context,
+	callerCtx context.Context,
 	timeout time.Duration,
 ) (context.Context, context.CancelFunc) {
-	detachedCtx := context.WithoutCancel(ctx)
-	var (
-		deadlineCtx    context.Context
-		cancelDeadline context.CancelFunc
+	detachedCtx := context.WithoutCancel(callerCtx)
+	deadlineCtx, cancelDeadline := context.WithTimeoutCause(
+		detachedCtx, normalizeProcessTimeout(timeout), errProcessTimeout,
 	)
-	if timeout > 0 {
-		deadlineCtx, cancelDeadline = context.WithTimeoutCause(
-			detachedCtx, timeout, errProcessTimeout,
-		)
-	} else {
-		deadlineCtx, cancelDeadline = context.WithCancel(detachedCtx)
+	processStreamCtx, cancelStream := context.WithCancelCause(deadlineCtx)
+	stopCallerCancellation := context.AfterFunc(callerCtx, func() {
+		cancelStream(context.Cause(callerCtx))
+	})
+	if cause := context.Cause(callerCtx); cause != nil {
+		cancelStream(cause)
 	}
-	streamCtx, cancelStream := context.WithCancelCause(deadlineCtx)
-	return streamCtx, func() {
+	return processStreamCtx, func() {
+		stopCallerCancellation()
 		cancelStream(errProcessDisconnected)
 		cancelDeadline()
 	}
 }
 
+func normalizeProcessTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return defaultProcessTimeout
+	}
+	return timeout
+}
+
 func finishStoppedProcess(
-	streamCtx context.Context,
+	processStreamCtx context.Context,
 	state *processState,
 ) error {
-	cause := context.Cause(streamCtx)
+	cause := context.Cause(processStreamCtx)
 	if errors.Is(cause, errProcessTimeout) {
 		state.timedOut = true
 		return nil
@@ -145,11 +159,11 @@ func finishStoppedProcess(
 	if cause != nil {
 		return cause
 	}
-	return streamCtx.Err()
+	return processStreamCtx.Err()
 }
 
-func isRemoteTimeout(configured bool, err error) bool {
-	return configured && connect.CodeOf(err) == connect.CodeDeadlineExceeded
+func isRemoteTimeout(err error) bool {
+	return connect.CodeOf(err) == connect.CodeDeadlineExceeded
 }
 
 type runEventAction uint8
@@ -263,42 +277,7 @@ func failedRunEvent(err error) runEventOutcome {
 	return runEventOutcome{action: runEventFail, err: err}
 }
 
-type startCall struct {
-	stream *connect.ServerStreamForClient[process.StartResponse]
-	err    error
-}
-
 type receivedEvent struct {
 	event *process.ProcessEvent
 	err   error
-}
-
-func receive(
-	ctx context.Context,
-	stream *connect.ServerStreamForClient[process.StartResponse],
-) <-chan receivedEvent {
-	events := make(chan receivedEvent)
-	go func() {
-		defer close(events)
-		defer stream.Close()
-		for stream.Receive() {
-			msg := stream.Msg()
-			var event *process.ProcessEvent
-			if msg != nil {
-				event = msg.Event
-			}
-			select {
-			case events <- receivedEvent{event: event}:
-			case <-ctx.Done():
-				return
-			}
-		}
-		if err := stream.Err(); err != nil {
-			select {
-			case events <- receivedEvent{err: err}:
-			case <-ctx.Done():
-			}
-		}
-	}()
-	return events
 }
