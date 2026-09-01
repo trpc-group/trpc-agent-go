@@ -245,16 +245,21 @@ trigger a full-session summary separately when you need an all-branch summary.
 
 More generally, a branch-triggered full-session cascade depends on the branch
 target producing a summary in that pass. If the branch gate declines to update
-its summary, the framework stops the cascade unless a persisted branch summary
-exists and the full-session summary is missing or has an earlier boundary.
-That gap identifies a previously incomplete cascade, so the framework retries
-the dependent full-session target. The retry invokes the target's hooks and
-consumes the shared summary-job timeout budget.
+its summary, the framework stops the cascade instead of independently advancing
+the full-session summary. The only exception is a retry carrying durable
+incomplete-cascade provenance: a branch summary materialized for a cascade is
+persisted with a framework-owned `PendingFullCascadeID`. If its dependent
+full-session target returns an error, a later ordinary call can retry that
+target after the session is reloaded without inferring failure from unrelated
+branch/full boundaries. After the target completes without error (including an
+intentional cache-safe skip), the framework clears and persists the marker.
+Custom summary storage or copying code must preserve this field.
 
 `WithSummaryJobTimeout(...)` is the deadline for the entire summary job. A
 multi-`filterKey` cascade runs the branch and full-session targets sequentially,
-and both targets share that deadline. Size the timeout for their combined model
-and persistence latency.
+and both targets share that deadline. Cascade completion also performs a
+metadata-only branch persistence to clear `PendingFullCascadeID`. Size the
+timeout for the combined model and persistence latency.
 
 Prompt rules:
 
@@ -1608,14 +1613,14 @@ Behavior notes:
   a full-session summary separately when you need one for all branches.
 - A full-session cascade is conditional on the branch target producing a
   summary in the same pass. If the branch is not updated, the full-session
-  target is not run independently unless a persisted branch summary exists and
-  the full-session summary is missing or has an earlier boundary. That gap
-  identifies an incomplete earlier cascade and retries the dependent
-  full-session target, including its hooks and use of the shared summary-job
-  timeout budget.
+  target is not run independently unless the persisted branch summary carries
+  `PendingFullCascadeID`, which proves that an earlier cascade did not finish.
+  This marker is cleared with a metadata-only branch persistence after the
+  dependent target completes without error.
 - `WithSummaryJobTimeout(...)` applies to the complete summary job. Branch and
-  full-session targets run sequentially and share the same deadline, so allow
-  for their combined model and persistence latency.
+  full-session targets and cascade-completion metadata persistence run
+  sequentially and share the same deadline, so allow for their combined model
+  and persistence latency.
 - To keep only full-session summaries from branch-triggered automatic summary,
   pass an explicit empty allowlist and leave cascade enabled:
 

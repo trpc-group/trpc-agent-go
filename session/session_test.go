@@ -422,6 +422,29 @@ func TestSummaryBoundaryJSONCompatibility(t *testing.T) {
 		require.Nil(t, decoded.Boundary)
 		assert.True(t, decoded.CutoffTime().Equal(cutoff))
 	})
+
+	t.Run("round trip pending full cascade provenance", func(t *testing.T) {
+		sum := &Summary{
+			Summary:              "branch summary",
+			UpdatedAt:            cutoff,
+			PendingFullCascadeID: "cascade-attempt",
+		}
+		raw, err := json.Marshal(sum)
+		require.NoError(t, err)
+
+		var decoded Summary
+		require.NoError(t, json.Unmarshal(raw, &decoded))
+		assert.Equal(
+			t,
+			"cascade-attempt",
+			decoded.PendingFullCascadeID,
+		)
+		assert.Equal(
+			t,
+			"cascade-attempt",
+			decoded.Clone().PendingFullCascadeID,
+		)
+	})
 }
 
 func TestKey_CheckSessionKey(t *testing.T) {

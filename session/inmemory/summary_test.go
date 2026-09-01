@@ -269,17 +269,18 @@ func TestMemoryService_EnqueueSummaryJob_CascadePreservesObserverContext(
 	}, 2*time.Second, 10*time.Millisecond)
 }
 
-func TestMemoryService_CascadeRetrySurvivesSessionReload(t *testing.T) {
+func TestMemoryService_CascadeRetryUsesPersistedProvenance(t *testing.T) {
 	const filterKey = "branch"
-	summarizer := &fakeSummarizer{allow: true, out: "summary"}
-	s := NewSessionService(WithSummarizer(summarizer))
+	s := NewSessionService(
+		WithSummarizer(&fakeSummarizer{allow: true, out: "summary"}),
+	)
 	defer s.Close()
 
 	ctx := context.Background()
 	key := session.Key{
 		AppName:   "app",
 		UserID:    "user",
-		SessionID: "cascade-reload",
+		SessionID: "durable-cascade-retry",
 	}
 	sess, err := s.CreateSession(ctx, key, session.StateMap{})
 	require.NoError(t, err)
@@ -292,9 +293,9 @@ func TestMemoryService_CascadeRetrySurvivesSessionReload(t *testing.T) {
 		}}}
 		require.NoError(t, s.AppendEvent(ctx, sess, evt))
 	}
-
 	sess, err = s.GetSession(ctx, key)
 	require.NoError(t, err)
+
 	fullAttempts := 0
 	createSummary := func(
 		ctx context.Context,
@@ -302,30 +303,15 @@ func TestMemoryService_CascadeRetrySurvivesSessionReload(t *testing.T) {
 		target string,
 		force bool,
 	) error {
-		if target != session.SummaryFilterKeyAllContents {
-			return s.CreateSessionSummary(ctx, sess, target, force)
-		}
-		fullAttempts++
-		if fullAttempts == 1 {
-			updated, summarizeErr := isummary.SummarizeSession(
-				ctx,
-				summarizer,
-				sess,
-				target,
-				force,
-			)
-			if summarizeErr != nil {
-				return summarizeErr
+		if target == session.SummaryFilterKeyAllContents {
+			fullAttempts++
+			if fullAttempts == 1 {
+				return errors.New("injected full failure")
 			}
-			if !updated {
-				return errors.New("full summary was not materialized")
-			}
-			return errors.New("transient full persistence error")
 		}
 		return s.CreateSessionSummary(ctx, sess, target, force)
 	}
 	policy := isummary.NewSummaryDispatchPolicy(nil, true)
-
 	err = isummary.CreateSessionSummaryWithCascade(
 		ctx,
 		sess,
@@ -334,11 +320,14 @@ func TestMemoryService_CascadeRetrySurvivesSessionReload(t *testing.T) {
 		policy,
 		createSummary,
 	)
-	require.ErrorContains(t, err, "transient full persistence error")
+	require.ErrorContains(t, err, "injected full failure")
 
 	reloaded, err := s.GetSession(ctx, key)
 	require.NoError(t, err)
-	require.NotNil(t, reloaded.Summaries[filterKey])
+	require.NotEmpty(
+		t,
+		reloaded.Summaries[filterKey].PendingFullCascadeID,
+	)
 	require.Nil(
 		t,
 		reloaded.Summaries[session.SummaryFilterKeyAllContents],
@@ -354,11 +343,15 @@ func TestMemoryService_CascadeRetrySurvivesSessionReload(t *testing.T) {
 	))
 	require.Equal(t, 2, fullAttempts)
 
-	reloaded, err = s.GetSession(ctx, key)
+	got, err := s.GetSession(ctx, key)
 	require.NoError(t, err)
+	require.Empty(
+		t,
+		got.Summaries[filterKey].PendingFullCascadeID,
+	)
 	require.NotNil(
 		t,
-		reloaded.Summaries[session.SummaryFilterKeyAllContents],
+		got.Summaries[session.SummaryFilterKeyAllContents],
 	)
 }
 
