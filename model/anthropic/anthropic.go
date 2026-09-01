@@ -55,10 +55,6 @@ const (
 	defaultThinkingDisplay = anthropic.ThinkingConfigAdaptiveDisplaySummarized
 )
 
-// cacheBreakpointLimit is the number of cache_control markers Anthropic accepts
-// in one request. A fifth is rejected outright, so this is a budget, not a hint.
-const cacheBreakpointLimit = 4
-
 // Model implements the model.Model interface for Anthropic API.
 type Model struct {
 	client                     anthropic.Client
@@ -180,15 +176,20 @@ func disableChatRequestTools(request *anthropic.MessageNewParams) {
 }
 
 func (m *Model) requestOptions(ctx context.Context) []option.RequestOption {
-	if !imodelrequest.ToolsDisabled(ctx) {
-		return m.anthropicRequestOptions
-	}
 	opts := append([]option.RequestOption(nil), m.anthropicRequestOptions...)
-	return append(
-		opts,
-		option.WithJSONDel("tools"),
-		option.WithJSONDel("tool_choice"),
-	)
+	if imodelrequest.ToolsDisabled(ctx) {
+		opts = append(
+			opts,
+			option.WithJSONDel("tools"),
+			option.WithJSONDel("tool_choice"),
+		)
+	}
+	// Last, so it runs innermost and reads the body every option and middleware
+	// ahead of it has finished with.
+	if m.cacheMessages {
+		opts = append(opts, option.WithMiddleware(m.toolResultCacheBreakpointMiddleware()))
+	}
+	return opts
 }
 
 func (m *Model) runChatResponseCallback(
@@ -251,7 +252,6 @@ func (m *Model) GenerateContent(
 	if imodelrequest.ToolsDisabled(ctx) {
 		disableChatRequestTools(chatRequest)
 	}
-	m.applyToolResultCacheBreakpoint(chatRequest)
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
@@ -477,9 +477,9 @@ func modelNameMatches(modelName string, targets ...string) bool {
 //   - Tools: always cached when cacheTools is true (stable across turns)
 //   - Last assistant message: cached when cacheMessages is true (opt-in, benefits multi-turn)
 //
-// A fourth, on the last tool-result message, is added after the request callback
-// by applyToolResultCacheBreakpoint: it is the only one conditional on what that
-// callback leaves behind.
+// A fourth, on the last tool-result message, is placed on the serialized body by
+// toolResultCacheBreakpointMiddleware: it is the only one conditional on what the
+// request callback and the request options leave behind.
 func (m *Model) applyCacheControl(
 	systemPrompts []anthropic.TextBlockParam,
 	tools []anthropic.ToolUnionParam,
@@ -492,9 +492,8 @@ func (m *Model) applyCacheControl(
 		tools = m.applyCacheControlToTools(tools)
 	}
 	if m.cacheMessages && len(messages) > 1 {
-		lastAssistant := m.findLastAssistantMessageIndex(messages)
-		if lastAssistant >= 0 {
-			messages = m.applyCacheControlToMessages(messages, lastAssistant)
+		if idx := m.findLastAssistantMessageIndex(messages); idx >= 0 {
+			messages = m.applyCacheControlToMessages(messages, idx)
 		}
 	}
 	return systemPrompts, tools, messages
@@ -514,123 +513,9 @@ func (m *Model) findLastAssistantMessageIndex(messages []anthropic.MessageParam)
 	return -1
 }
 
-// findLastToolResultMessageIndex finds the newest message that carries nothing but
-// tool results, searching only past minIndex (the last-assistant breakpoint, or -1
-// when there is none). convertMessages merges contiguous tool results into a single
-// user message, so the match is the whole of the latest turn's tool output.
-//
-// Without it every tool result crosses the cache boundary twice: sent uncached in
-// the request carrying it, then written once the last-assistant breakpoint moves
-// past it. It also halves the distance between cache entries, which matters
-// because a breakpoint looks back a bounded number of blocks to find the previous
-// one — one wide parallel-tool turn can otherwise put it out of range.
-func (m *Model) findLastToolResultMessageIndex(messages []anthropic.MessageParam, minIndex int) int {
-	for i := len(messages) - 1; i > minIndex; i-- {
-		if isToolResultMessage(messages[i]) {
-			return i
-		}
-	}
-	return -1
-}
-
-// isToolResultMessage reports whether every content block of a message is a tool
-// result, which is the shape convertMessages produces when it merges a turn's tool
-// results together.
-func isToolResultMessage(message anthropic.MessageParam) bool {
-	if len(message.Content) == 0 {
-		return false
-	}
-	for _, block := range message.Content {
-		if block.OfToolResult == nil {
-			return false
-		}
-	}
-	return true
-}
-
-// applyToolResultCacheBreakpoint marks the newest tool-result message, so a turn's
-// tool output is cached in the request that carries it rather than the next one.
-//
-// It runs after the request callback, which can both spend budget and rewrite
-// Messages. So the marker is placed only while a slot is free — top-level
-// CacheControl costs one, since the API answers it with a marker of its own — and
-// on a message chosen from the finalized list.
-//
-// Top-level CacheControl also decides the marker's TTL. The API's own marker goes
-// on the last cacheable block, and it rejects a request whose TTLs shorten and
-// then lengthen again along the prompt, so a default five-minute marker placed
-// ahead of a one-hour automatic one is a 400. Matching the caller's TTL keeps the
-// ordering valid. When the tool result is itself the last cacheable block, the
-// automatic marker already covers it and nothing is placed: an explicit marker on
-// the same block would be redundant at best and, with a different TTL, rejected.
-//
-// This is the conditional breakpoint because losing it costs a delay, not a cache
-// entry: the next request's last-assistant breakpoint writes these results anyway.
-// A caller that spends the whole budget itself is still over it; forcing a fit
-// would mean dropping its marker or the system and tools ones, trading a 400 that
-// names the problem for a silent cache regression.
-func (m *Model) applyToolResultCacheBreakpoint(chatRequest *anthropic.MessageNewParams) {
-	if chatRequest == nil || !m.cacheMessages || len(chatRequest.Messages) <= 1 {
-		return
-	}
-	if countCacheBreakpoints(chatRequest) >= cacheBreakpointLimit {
-		return
-	}
-	lastAssistant := m.findLastAssistantMessageIndex(chatRequest.Messages)
-	idx := m.findLastToolResultMessageIndex(chatRequest.Messages, lastAssistant)
-	if idx < 0 {
-		return
-	}
-	cacheControl := anthropic.NewCacheControlEphemeralParam()
-	if !param.IsOmitted(chatRequest.CacheControl) {
-		if idx == len(chatRequest.Messages)-1 {
-			return
-		}
-		cacheControl = chatRequest.CacheControl
-	}
-	chatRequest.Messages = m.applyCacheControlToMessagesWith(chatRequest.Messages, idx, cacheControl)
-}
-
-// countCacheBreakpoints counts the cache_control markers the request will be sent
-// with. Top-level CacheControl counts as one: the API answers it with a marker.
-func countCacheBreakpoints(chatRequest *anthropic.MessageNewParams) int {
-	count := 0
-	if !param.IsOmitted(chatRequest.CacheControl) {
-		count++
-	}
-	for _, prompt := range chatRequest.System {
-		if !param.IsOmitted(prompt.CacheControl) {
-			count++
-		}
-	}
-	for _, t := range chatRequest.Tools {
-		if cc := t.GetCacheControl(); cc != nil && !param.IsOmitted(*cc) {
-			count++
-		}
-	}
-	for _, message := range chatRequest.Messages {
-		for _, content := range message.Content {
-			if cc := content.GetCacheControl(); cc != nil && !param.IsOmitted(*cc) {
-				count++
-			}
-		}
-	}
-	return count
-}
-
 // applyCacheControlToMessages adds cache control to a specific message.
 // This is used for multi-turn conversation caching.
 func (m *Model) applyCacheControlToMessages(messages []anthropic.MessageParam, index int) []anthropic.MessageParam {
-	return m.applyCacheControlToMessagesWith(messages, index, anthropic.NewCacheControlEphemeralParam())
-}
-
-// applyCacheControlToMessagesWith is applyCacheControlToMessages with the marker
-// spelled out, for a breakpoint whose TTL has to agree with one the caller placed.
-func (m *Model) applyCacheControlToMessagesWith(
-	messages []anthropic.MessageParam,
-	index int,
-	cacheControl anthropic.CacheControlEphemeralParam,
-) []anthropic.MessageParam {
 	if index < 0 || index >= len(messages) {
 		return messages
 	}
@@ -650,17 +535,17 @@ func (m *Model) applyCacheControlToMessagesWith(
 		// Apply cache control based on content type
 		if content.OfText != nil {
 			newContent := *content.OfText
-			newContent.CacheControl = cacheControl
+			newContent.CacheControl = anthropic.NewCacheControlEphemeralParam()
 			msg.Content[i] = anthropic.ContentBlockParamUnion{OfText: &newContent}
 			cacheApplied = true
 		} else if content.OfToolResult != nil {
 			newContent := *content.OfToolResult
-			newContent.CacheControl = cacheControl
+			newContent.CacheControl = anthropic.NewCacheControlEphemeralParam()
 			msg.Content[i] = anthropic.ContentBlockParamUnion{OfToolResult: &newContent}
 			cacheApplied = true
 		} else if content.OfToolUse != nil {
 			newContent := *content.OfToolUse
-			newContent.CacheControl = cacheControl
+			newContent.CacheControl = anthropic.NewCacheControlEphemeralParam()
 			msg.Content[i] = anthropic.ContentBlockParamUnion{OfToolUse: &newContent}
 			cacheApplied = true
 		}
