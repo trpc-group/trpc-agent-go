@@ -159,6 +159,9 @@ func TestA2ASessionIsListedAndReplayableThroughAGUI(t *testing.T) {
 	if listResponse.StatusCode != http.StatusOK {
 		t.Fatalf("session list status = %d, want %d", listResponse.StatusCode, http.StatusOK)
 	}
+	if got := listResponse.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("session list Cache-Control = %q, want %q", got, "no-store")
+	}
 	var listed sessionListResponse
 	if err := json.NewDecoder(listResponse.Body).Decode(&listed); err != nil {
 		t.Fatalf("decode session list: %v", err)

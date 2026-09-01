@@ -18,7 +18,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// UserMessageFromModel converts a model user message into an AG-UI message.
+// UserMessageFromModel converts a model user message into an AG-UI user message.
+// When ContentParts is empty, non-empty Content remains a string. Otherwise,
+// Content and ContentParts are converted to []aguitypes.InputContent. It returns
+// an error when no usable content remains or a content part is empty or
+// unsupported. ContentRef-only parts must be hydrated before conversion.
 func UserMessageFromModel(
 	messageID string,
 	message model.Message,
