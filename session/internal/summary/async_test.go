@@ -534,7 +534,7 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 			SummaryQueueSize:      10,
 			SummaryJobTimeout:     time.Second,
 			SummaryDispatchPolicy: NewSummaryDispatchPolicy(nil, true),
-			CreateSummaryFunc: func(_ context.Context, sess *session.Session, fk string, _ bool) error {
+			CreateSummaryFunc: func(ctx context.Context, sess *session.Session, fk string, _ bool) error {
 				filterKeyCh <- fk
 				if fk != session.SummaryFilterKeyAllContents {
 					sess.SummariesMu.Lock()
@@ -546,6 +546,7 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 						UpdatedAt: time.Now(),
 					}
 					sess.SummariesMu.Unlock()
+					recordSummaryMaterialized(ctx, fk)
 				}
 				return nil
 			},

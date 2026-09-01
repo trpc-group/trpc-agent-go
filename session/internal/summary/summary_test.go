@@ -1837,6 +1837,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 						UpdatedAt: now,
 					}
 					sess.SummariesMu.Unlock()
+					recordSummaryMaterialized(ctx, filterKey)
 				}
 				return err
 			}
@@ -1855,10 +1856,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			require.Equal(t, len(tt.expectCalls), len(calls))
-			for _, expectedCall := range tt.expectCalls {
-				require.Contains(t, calls, expectedCall)
-			}
+			require.Equal(t, tt.expectCalls, calls)
 		})
 	}
 }
@@ -1873,7 +1871,7 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 
 	mockSvc := &mockService{}
 
-	createFunc := func(_ context.Context, sess *session.Session, filterKey string, _ bool) error {
+	createFunc := func(ctx context.Context, sess *session.Session, filterKey string, _ bool) error {
 		mockSvc.mu.Lock()
 		if mockSvc.summaries == nil {
 			mockSvc.summaries = make(map[string]string)
@@ -1890,6 +1888,7 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 				UpdatedAt: now,
 			}
 			sess.SummariesMu.Unlock()
+			recordSummaryMaterialized(ctx, filterKey)
 		}
 		return nil
 	}
@@ -1964,6 +1963,7 @@ func TestCreateSessionSummaryWithCascade_ForksReportForCascadeTargets(t *testing
 					UpdatedAt: now,
 				}
 				sess.SummariesMu.Unlock()
+				recordSummaryMaterialized(ctx, filterKey)
 			}
 			return nil
 		},
@@ -2746,6 +2746,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 				}
 			}
 			s.SummariesMu.Unlock()
+			recordSummaryMaterialized(ctx, filterKey)
 			return nil
 		}
 
@@ -2857,6 +2858,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 				UpdatedAt: now,
 			}
 			s.SummariesMu.Unlock()
+			recordSummaryMaterialized(ctx, filterKey)
 			return nil
 		}
 
@@ -2871,9 +2873,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 		require.NoError(t, err)
 
 		// Should call createFunc twice (no optimization).
-		require.Equal(t, 2, len(calls))
-		require.Contains(t, calls, "app/math")
-		require.Contains(t, calls, "")
+		require.Equal(t, []string{"app/math", ""}, calls)
 	})
 
 	t.Run("multiple filterKeys - missing branch summary stops full cascade", func(t *testing.T) {
@@ -2957,6 +2957,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 				UpdatedAt: now,
 			}
 			s.SummariesMu.Unlock()
+			recordSummaryMaterialized(ctx, filterKey)
 			return nil
 		}
 
@@ -3083,6 +3084,83 @@ func TestCreateSessionSummaryWithCascade_UnboundBranchStopsCascade(
 			require.NoError(t, err)
 			require.Equal(t, []string{filterKey}, targets)
 			require.Empty(t, sess.Summaries)
+		})
+	}
+}
+
+func TestCreateSessionSummaryWithCascade_IgnoresUnattributedBranchUpdate(
+	t *testing.T,
+) {
+	const filterKey = "agent_skill"
+	now := time.Now()
+	for _, tt := range []struct {
+		name   string
+		events []event.Event
+	}{
+		{
+			name: "single filter key",
+			events: []event.Event{
+				makeEvent("branch", now, filterKey),
+			},
+		},
+		{
+			name: "multiple filter keys",
+			events: []event.Event{
+				makeEvent("branch", now.Add(-time.Minute), filterKey),
+				makeEvent("other", now, "other_skill"),
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := &session.Session{
+				ID:        "concurrent-session",
+				AppName:   "test-app",
+				UserID:    "test-user",
+				Events:    tt.events,
+				Summaries: make(map[string]*session.Summary),
+			}
+			var calls []string
+
+			err := CreateSessionSummaryWithCascade(
+				context.Background(),
+				sess,
+				filterKey,
+				false,
+				NewSummaryDispatchPolicy(nil, true),
+				func(
+					_ context.Context,
+					sess *session.Session,
+					target string,
+					_ bool,
+				) error {
+					calls = append(calls, target)
+					// Simulate another request updating the branch after this
+					// attempt declined to produce a summary. The other request
+					// reports its own materialization, but not this attempt's.
+					otherCtx, otherObserver :=
+						contextWithSummaryMaterializationObserver(
+							context.Background(),
+							filterKey,
+						)
+					sess.SummariesMu.Lock()
+					sess.Summaries[filterKey] = &session.Summary{
+						Summary:   "concurrent summary",
+						UpdatedAt: now,
+					}
+					sess.SummariesMu.Unlock()
+					recordSummaryMaterialized(otherCtx, filterKey)
+					require.True(t, otherObserver.didMaterialize())
+					return nil
+				},
+			)
+			require.NoError(t, err)
+			require.Equal(t, []string{filterKey}, calls)
+			sess.SummariesMu.RLock()
+			branchSummary := sess.Summaries[filterKey]
+			fullSummary := sess.Summaries[session.SummaryFilterKeyAllContents]
+			sess.SummariesMu.RUnlock()
+			require.NotNil(t, branchSummary)
+			require.Nil(t, fullSummary)
 		})
 	}
 }
