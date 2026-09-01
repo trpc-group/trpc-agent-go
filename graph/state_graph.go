@@ -171,10 +171,16 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 	}
 }
 
-// WithEnableParallelTools enables parallel tool execution for a Tools node.
-// When enabled, if the last assistant message contains multiple tool calls,
-// they will be executed concurrently and their responses will be merged in
-// the original order. By default, tools run serially for compatibility.
+// WithEnableParallelTools allows parallel tool execution for a Tools node.
+// When enabled, a last assistant message containing multiple tool calls may be
+// executed concurrently; the responses are merged in the original order either
+// way. By default, tools run serially for compatibility.
+//
+// It allows rather than enables because concurrency is decided per batch: one
+// tool.ConcurrencyAware returning false keeps that whole batch on the serial
+// path, responses and ordering unchanged. Tools implementing neither interface
+// raise no objection, so this only changes turns containing a tool that opted
+// out. See tool.ConcurrencyAware and tool.IsConcurrencySafe.
 func WithEnableParallelTools(enable bool) Option {
 	return func(node *Node) {
 		node.enableParallelTools = enable
@@ -5550,6 +5556,40 @@ func (c *parallelToolCallCancelCause) Unwrap() error {
 	return c.err
 }
 
+// admitsParallelToolCalls reports whether this node may run its tool calls
+// concurrently. A lone call has nothing to run beside it.
+func admitsParallelToolCalls(config toolCallsConfig) bool {
+	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
+		return false
+	}
+	return admitsConcurrentToolCalls(config.ToolCalls, config.Tools)
+}
+
+// admitsConcurrentToolCalls reports whether no tool in the batch objects to
+// running beside its siblings.
+//
+// tool.ConcurrencyAware is framework-wide, so this node honors it for the same
+// reason the LLMAgent function-call processor does: otherwise the guarantee would
+// hold on only one of the two schedulers that can run a tool. An unresolvable
+// name is admissible — it produces a terminal error result instead of executing.
+// The check goes through itool.IsConcurrencySafe so a declaration overlay cannot
+// hide the objection.
+func admitsConcurrentToolCalls(
+	toolCalls []model.ToolCall,
+	tools map[string]tool.Tool,
+) bool {
+	for _, tc := range toolCalls {
+		tl, ok := tools[tc.Function.Name]
+		if !ok {
+			continue
+		}
+		if !itool.IsConcurrencySafe(tl) {
+			return false
+		}
+	}
+	return true
+}
+
 // processToolCalls executes all tool calls and returns the resulting messages.
 func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Message, error) {
 	// Use callbacks from config if provided; otherwise extract from state.
@@ -5558,8 +5598,8 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		toolCallbacks, _ = extractToolCallbacks(config.State)
 	}
 	completedMessages := completedToolMessagesForNode(config.State, config.NodeID)
-	// Serial path or single tool call.
-	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
+	// Serial path, single tool call, or a batch some tool objects to sharing.
+	if !admitsParallelToolCalls(config) {
 		newMessages := make([]model.Message, 0, len(config.ToolCalls))
 		completedThisRun := make(map[string]model.Message)
 		for i, toolCall := range config.ToolCalls {

@@ -79,6 +79,13 @@ MCP 工具采用更保守的策略，除非业务侧还有额外的可信信号�
 MCP annotations 没有与 `SearchOrRead` 或 `ConcurrencySafe` 对应的字段。
 框架也不会把 `readOnlyHint` 或 `idempotentHint` 推断为并发安全信号。
 
+`ToolMetadata.ConcurrencySafe` 只是描述性字段，不参与调度。它表示“同一个
+工具的多个独立调用可以并发执行”，把它设置为 `false` **不会**让工具退出并行
+路径：`ToolMetadata` 使用普通 `bool` 字段，框架无法区分“显式设为 false”和
+“从未设置”，如果据此调度，所有只发布了无关 metadata 的工具都会被误判为拒绝
+并发。要影响调度，请实现 `tool.ConcurrencyAware`，参见下文
+“并行工具执行 / 拒绝与其他调用同轮执行”。
+
 权限策略发生在模型已经发起 tool call、框架完成 JSON 修复和 before-tool callbacks 参数改写、并且即将真正执行工具之前：
 
 ```go
@@ -2588,6 +2595,56 @@ child := llmagent.New(
 只有显式开启工具并行执行后，该配置才会生效。非正数的分组上限会被忽略。每个
 工具名只能出现在一个正数上限的组中；重复配置会导致
 `WithToolConcurrencyConfig` panic。
+
+#### 拒绝与其他调用同轮执行
+
+有些工具完全无法与同轮的其他调用一起运行。并行路径会在所有调用开始之前克隆
+一份 Invocation，并把各自的视图交给每个 worker；如果某个工具的实际效果是修改
+Invocation 而不是通过返回值传递结果，那么这份视图被丢弃时该修改也会一并丢失。
+争用同一个工作目录或同一个外部进程的工具，则是因为另一个原因面临同样的问题。
+
+这类工具应实现 `tool.ConcurrencyAware`：
+
+```go
+type ConcurrencyAware interface {
+    IsConcurrencySafe() bool
+}
+```
+
+Function Tool 可以直接通过选项声明：
+
+```go
+exclusive := function.NewFunctionTool(
+    applyPatch,
+    function.WithName("apply_patch"),
+    function.WithDescription("把补丁应用到工作区。"),
+    function.WithConcurrencySafe(false),
+)
+```
+
+返回 `false` 是一次**明确拒绝**，并且作用于整轮：两个并行调度器——LLMAgent 的
+function-call processor 和 Graph 的 Tools 节点——只有在本轮**没有任何**调用提出
+拒绝时，才会把这一轮交给并行路径。因此只要有一个调用拒绝，整轮的所有调用都会
+顺序执行，而不是把一轮拆成并行和串行两段。这样既遵守了拒绝，也保留了模型请求
+的调用顺序，不需要引入第二套执行调度。
+
+返回 `true` 是一项承诺：该工具可以与本轮中的任何其他调用同时执行，包括对它
+自身的其他调用，因此 `tool.MetadataOf` 会把它读作 `ConcurrencySafe`。干脆不实现
+该接口则表示不提出拒绝、也不作任何承诺：这是默认行为，`tool.MetadataOf` 对此
+不会报告任何内容。框架不会从 `ToolMetadata` 推断拒绝，因此现有工具发布
+metadata 后，调度行为与今天保持一致。
+
+这三种状态在框架自身的包装器之下也原样保留。ToolSet 加前缀后的工具、经 ToolPipe
+增强的工具、重命名后的延迟工具以及声明覆盖层都不会自己实现 `ConcurrencyAware`
+——包装器若以 `bool` 作答，就不得不把“未声明”变成拒绝或承诺——而是暴露被包装
+的工具，`tool.IsConcurrencySafe` 会先穿透它们再提问。自定义调度器和策略应调用
+`tool.IsConcurrencySafe`，而不是对 `Request.Tools` 中的条目直接断言
+`ConcurrencyAware`：那里的条目通常正是这样的包装器。
+
+那些通过修改 Invocation 或对 session 做“读-改-写”来产生效果的框架工具已经会
+拒绝：`transfer_to_agent`、`await_user_reply`、TodoEnforcer 的
+`todo_declare_blocker`，以及 Goal 扩展的 `create_goal` 与 `update_goal`
+（`get_goal` 只读，不拒绝）。启用并行工具时，包含其中任何一个的一轮都会顺序执行。
 
 **并行执行效果：**
 
