@@ -3013,6 +3013,35 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 	})
 }
 
+func TestSummaryBoundaryBefore_PrefersExactEventOrder(t *testing.T) {
+	laterTimestamp := time.Now()
+	earlierTimestamp := laterTimestamp.Add(-time.Minute)
+	sess := &session.Session{Events: []event.Event{
+		makeEvent("full-boundary", laterTimestamp, "other"),
+		makeEvent("branch-boundary", earlierTimestamp, "app/math"),
+	}}
+	full := &session.Summary{
+		Summary:   "full",
+		UpdatedAt: laterTimestamp,
+		Boundary: session.NewSummaryBoundaryWithEventID(
+			session.SummaryFilterKeyAllContents,
+			laterTimestamp,
+			"full-boundary",
+		),
+	}
+	branch := &session.Summary{
+		Summary:   "branch",
+		UpdatedAt: earlierTimestamp,
+		Boundary: session.NewSummaryBoundaryWithEventID(
+			"app/math",
+			earlierTimestamp,
+			"branch-boundary",
+		),
+	}
+
+	require.True(t, summaryBoundaryBefore(full, branch, sess))
+}
+
 func TestCreateSessionSummaryWithCascade_RetriesIncompleteFullCascade(
 	t *testing.T,
 ) {

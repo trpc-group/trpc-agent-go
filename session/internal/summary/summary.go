@@ -975,16 +975,7 @@ func summaryBoundaryBefore(
 	if earlierBoundary == nil || laterBoundary == nil {
 		return false
 	}
-	earlierCutoff := earlierBoundary.CutoffTime()
-	laterCutoff := laterBoundary.CutoffTime()
-	if earlierCutoff.Before(laterCutoff) {
-		return true
-	}
-	if earlierCutoff.After(laterCutoff) {
-		return false
-	}
 	sess.EventMu.RLock()
-	defer sess.EventMu.RUnlock()
 	earlierIndex, earlierOK := summaryBoundaryEventIndex(
 		sess.Events,
 		earlierBoundary,
@@ -993,7 +984,19 @@ func summaryBoundaryBefore(
 		sess.Events,
 		laterBoundary,
 	)
-	return earlierOK && laterOK && earlierIndex < laterIndex
+	sess.EventMu.RUnlock()
+	if earlierOK && laterOK {
+		return earlierIndex < laterIndex
+	}
+	earlierCutoff := earlierBoundary.CutoffTime()
+	laterCutoff := laterBoundary.CutoffTime()
+	if earlierCutoff.Before(laterCutoff) {
+		return true
+	}
+	if earlierCutoff.After(laterCutoff) {
+		return false
+	}
+	return false
 }
 
 // summaryBoundaryEventIndex locates an exact boundary in loaded event order.
