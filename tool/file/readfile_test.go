@@ -1260,3 +1260,102 @@ func TestFileTool_ReadFile_RangedReadOfLargeBinaryRejected(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, rsp.Message, "not a UTF-8 text file")
 }
+
+// A ranged read of a large file whose head looks like text but whose requested
+// range carries a NUL byte is rejected on the range, not just on the head.
+func TestFileTool_ReadFile_RangedReadOfLargeFileRejectsNonTextRange(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(64))
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	var b strings.Builder
+	for i := 1; i <= 100; i++ {
+		fmt.Fprintf(&b, "line-%d\n", i)
+	}
+	b.WriteString("bin\x00ary\n")
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "mixed.txt"), []byte(b.String()), 0o644))
+
+	start, num := 101, 1
+	rsp, err := fts.readFile(context.Background(),
+		&readFileRequest{FileName: "mixed.txt", StartLine: &start, NumLines: &num})
+
+	assert.Error(t, err)
+	assert.Contains(t, rsp.Message, "not a UTF-8 text file")
+}
+
+// Invalid UTF-8 inside the requested range of a large file is replaced and
+// noted, exactly as it is for a whole-file read.
+func TestFileTool_ReadFile_RangedReadOfLargeFileInvalidUTF8(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(64))
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	var b strings.Builder
+	for i := 1; i <= 100; i++ {
+		fmt.Fprintf(&b, "line-%d\n", i)
+	}
+	b.WriteString("caf\xffe\n")
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "latin.txt"), []byte(b.String()), 0o644))
+
+	start, num := 101, 1
+	rsp, err := fts.readFile(context.Background(),
+		&readFileRequest{FileName: "latin.txt", StartLine: &start, NumLines: &num})
+
+	assert.NoError(t, err)
+	assert.Equal(t, "caf�e", rsp.Contents)
+	assert.Contains(t, rsp.Message, invalidUTF8Note)
+}
+
+// A large file the process cannot open reports the open error rather than an
+// empty range.
+func TestFileTool_ReadFile_RangedReadOfLargeFileUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a mode-0 file")
+	}
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(8))
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	path := filepath.Join(tempDir, "locked.txt")
+	assert.NoError(t, os.WriteFile(path, []byte(strings.Repeat("line\n", 20)), 0o644))
+	assert.NoError(t, os.Chmod(path, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+
+	start, num := 1, 1
+	rsp, err := fts.readFile(context.Background(),
+		&readFileRequest{FileName: "locked.txt", StartLine: &start, NumLines: &num})
+
+	assert.Error(t, err)
+	assert.Contains(t, rsp.Message, "cannot read file")
+}
+
+// The in-memory slicer applies the same range-aware limit as the streaming
+// read: a cached file beyond the read limit still serves a small range and
+// still refuses one larger than the limit.
+func TestFileTool_ReadFile_FromCache_RangeLargerThanMaxFileSize(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(12))
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{{
+		Name:     "out/big.txt",
+		Content:  strings.Repeat("0123456789\n", 4),
+		MIMEType: "text/plain",
+	}})
+
+	start, num := 2, 1
+	rsp, err := fts.readFile(ctx, &readFileRequest{FileName: "out/big.txt", StartLine: &start, NumLines: &num})
+	assert.NoError(t, err)
+	assert.Equal(t, "0123456789", rsp.Contents)
+
+	num = 3
+	rsp, err = fts.readFile(ctx, &readFileRequest{FileName: "out/big.txt", StartLine: &start, NumLines: &num})
+	assert.Error(t, err)
+	assert.Contains(t, rsp.Message, "selected range is larger than 12 bytes")
+}

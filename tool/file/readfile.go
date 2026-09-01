@@ -428,34 +428,64 @@ func (f *fileToolSet) readLargeFileRange(
 			break
 		}
 	}
-	total := lineNo
-	if !rangeSatisfied && start > total {
+	return finishLargeFileRange(req, rsp, collectedRange{
+		lines:          lines,
+		start:          start,
+		end:            endLine,
+		total:          lineNo,
+		rangeSatisfied: rangeSatisfied,
+		mimeType:       mimeType,
+	})
+}
+
+// collectedRange is what streaming a ranged read gathered: the lines in the
+// requested range, where it started and ended, how many lines were seen, and
+// whether the read stopped once the range was satisfied — in which case total
+// is a lower bound.
+type collectedRange struct {
+	lines          []string
+	start          int
+	end            int
+	total          int
+	rangeSatisfied bool
+	mimeType       string
+}
+
+// finishLargeFileRange validates the collected range and fills the response:
+// the range must exist, the text must be text, and invalid UTF-8 is replaced
+// and noted, as for a whole-file read.
+func finishLargeFileRange(
+	req *readFileRequest,
+	rsp *readFileResponse,
+	collected collectedRange,
+) error {
+	if !collected.rangeSatisfied && collected.start > collected.total {
 		err := fmt.Errorf(
 			"start line is out of range, start line: %d, "+
 				"total lines: %d",
-			start,
-			total,
+			collected.start,
+			collected.total,
 		)
 		rsp.Message = "Error: " + err.Error()
 		return err
 	}
-	chunk := strings.Join(lines, "\n")
-	if err := rejectNonText(chunk, mimeType); err != nil {
+	chunk := strings.Join(collected.lines, "\n")
+	if err := rejectNonText(chunk, collected.mimeType); err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return err
 	}
 	chunk, replaced := sanitizeText(chunk)
 	rsp.Contents = chunk
-	totalDesc := fmt.Sprintf("%d", total)
-	if rangeSatisfied {
-		totalDesc = fmt.Sprintf("at least %d", total)
+	totalDesc := fmt.Sprintf("%d", collected.total)
+	if collected.rangeSatisfied {
+		totalDesc = fmt.Sprintf("at least %d", collected.total)
 	}
 	rsp.Message = fmt.Sprintf(
 		"Successfully read %s, start line: %d, "+
 			"end line: %d, total lines: %s",
 		req.FileName,
-		start,
-		endLine,
+		collected.start,
+		collected.end,
 		totalDesc,
 	)
 	if replaced {

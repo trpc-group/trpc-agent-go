@@ -12,6 +12,7 @@ package file
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -683,4 +684,159 @@ func TestSearchContent_CancelledContext(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 	assert.NotNil(t, rsp)
 	assert.Contains(t, rsp.Message, "context canceled")
+}
+
+func TestSearchContentByPath_Guards(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+	re := regexp.MustCompile("foo")
+
+	_, _, _, err = fts.searchContentByPath(context.Background(), nil, nil)
+	assert.EqualError(t, err, "request cannot be nil")
+
+	_, _, _, err = fts.searchContentByPath(context.Background(),
+		&searchContentRequest{Path: "ftp://host/dir"}, re)
+	assert.ErrorContains(t, err, "unsupported file ref scheme")
+}
+
+// A cancelled context stops a workspace search before it reads any file, and
+// is reported rather than returned as an empty result.
+func TestSearchContent_WorkspaceRef_CancelledContext(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx, cancel := context.WithCancel(agent.NewInvocationContext(context.Background(), inv))
+	cancel()
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{{
+		Name:     "out/transcript.txt",
+		Content:  "foo\n",
+		MIMEType: "text/plain",
+	}})
+
+	rsp, err := fts.searchContent(ctx, &searchContentRequest{
+		Path:           "workspace://",
+		FilePattern:    "**/*.txt",
+		ContentPattern: "foo",
+	})
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.NotNil(t, rsp)
+	assert.Empty(t, rsp.FileMatches)
+}
+
+// Searching a single file by path, rather than a directory with a pattern,
+// goes through the same size and cancellation rules.
+func TestSearchContent_PathIsFile(t *testing.T) {
+	tempDir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(8))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "small.txt"), []byte("foo\nbar\n"), 0o644))
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "huge.txt"),
+		[]byte(strings.Repeat("foo\n", 1000)), 0o644))
+
+	t.Run("a file beyond the search cap is reported, not searched", func(t *testing.T) {
+		rsp, err := fts.searchContent(context.Background(), &searchContentRequest{
+			Path:           "huge.txt",
+			FilePattern:    "*",
+			ContentPattern: "foo",
+		})
+		assert.NoError(t, err)
+		assert.Empty(t, rsp.FileMatches)
+		assert.Equal(t, []string{"huge.txt"}, rsp.SkippedFiles)
+		assert.Contains(t, rsp.Message, "huge.txt")
+	})
+
+	t.Run("a cancelled context is reported", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := fts.searchContent(ctx, &searchContentRequest{
+			Path:           "small.txt",
+			FilePattern:    "*",
+			ContentPattern: "foo",
+		})
+		assert.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("a file that cannot be scanned is an error", func(t *testing.T) {
+		// A line longer than the scanner tolerates makes the scan fail, which
+		// is the one way a readable file is not searchable.
+		long := filepath.Join(tempDir, "long.txt")
+		assert.NoError(t, os.WriteFile(long, []byte("foo "+strings.Repeat("x", maxSearchLineSize+1)+"\n"), 0o644))
+		t.Cleanup(func() { _ = os.Remove(long) })
+		big := set.(*fileToolSet)
+		big.maxFileSize = int64(maxSearchLineSize * 2)
+		t.Cleanup(func() { big.maxFileSize = 8 })
+
+		_, err := fts.searchContent(context.Background(), &searchContentRequest{
+			Path:           "long.txt",
+			FilePattern:    "*",
+			ContentPattern: "foo",
+		})
+		assert.ErrorContains(t, err, "long.txt")
+	})
+}
+
+// Streaming search stops listing a file's matches at maxMatchesPerFile, says so
+// in the message, and checks for cancellation as it scans.
+func TestSearchContent_StreamingLimits(t *testing.T) {
+	tempDir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "many.txt"),
+		[]byte(strings.Repeat("foo\n", maxMatchesPerFile+50)), 0o644))
+	// sparse.txt is long enough to reach the periodic cancellation check but
+	// matches too rarely to hit the per-file cap first.
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "sparse.txt"),
+		[]byte(strings.Repeat("bar\n", 2000)+"foo\n"), 0o644))
+	assert.NoError(t, os.Mkdir(filepath.Join(tempDir, "dir.txt"), 0o755))
+
+	t.Run("matches per file are capped", func(t *testing.T) {
+		rsp, err := fts.searchContent(context.Background(), &searchContentRequest{
+			FilePattern:    "*.txt",
+			ContentPattern: "foo",
+		})
+		assert.NoError(t, err)
+		assert.Len(t, rsp.FileMatches, 2, "the directory matching the pattern is skipped")
+		for _, m := range rsp.FileMatches {
+			if m.FilePath == "many.txt" {
+				assert.Len(t, m.Matches, maxMatchesPerFile)
+				assert.True(t, m.Truncated)
+			} else {
+				assert.False(t, m.Truncated)
+			}
+		}
+	})
+
+	t.Run("a single file searched by path is capped the same way", func(t *testing.T) {
+		rsp, err := fts.searchContent(context.Background(), &searchContentRequest{
+			Path:           "many.txt",
+			FilePattern:    "*",
+			ContentPattern: "foo",
+		})
+		assert.NoError(t, err)
+		assert.Len(t, rsp.FileMatches, 1)
+		assert.Len(t, rsp.FileMatches[0].Matches, maxMatchesPerFile)
+		assert.True(t, rsp.FileMatches[0].Truncated)
+	})
+
+	t.Run("the per-file message says where it stopped", func(t *testing.T) {
+		assert.Contains(t,
+			fileMatchMessage(&fileMatch{Truncated: true, Matches: make([]*lineMatch, maxMatchesPerFile)}, "many.txt"),
+			fmt.Sprintf("stopped at the first %d", maxMatchesPerFile))
+		assert.Equal(t, "Found 1 matches in file 'a.txt'",
+			fileMatchMessage(&fileMatch{Matches: make([]*lineMatch, 1)}, "a.txt"))
+	})
+
+	t.Run("cancellation is noticed mid-scan", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := searchFileContent(ctx, filepath.Join(tempDir, "sparse.txt"), regexp.MustCompile("foo"))
+		assert.ErrorIs(t, err, context.Canceled)
+	})
 }
