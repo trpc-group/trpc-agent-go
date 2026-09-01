@@ -83,6 +83,15 @@ MCP annotations do not have matching fields for `SearchOrRead` or
 `ConcurrencySafe`. The framework also does not treat `readOnlyHint` or
 `idempotentHint` as a concurrency-safety signal.
 
+`ToolMetadata.ConcurrencySafe` is descriptive and does not affect scheduling.
+It says that independent calls to the *same* tool can overlap, and setting it
+to `false` does **not** keep a tool off the parallel path — `ToolMetadata` uses
+plain `bool` fields, so the framework cannot distinguish "set to false" from
+"never set", and acting on it would take every tool that publishes unrelated
+metadata off that path too. To influence scheduling, implement
+`tool.ConcurrencyAware`; see
+[Declining to share a turn](#declining-to-share-a-turn).
+
 Permission policy is checked after the model requests a tool, after JSON repair
 and before-tool callbacks have finalized arguments, and immediately before the
 framework executes it:
@@ -2288,6 +2297,16 @@ ts := toolsearch.New(
 // model can build the params object for the following call_tool invocation.
 ```
 
+In this mode the parallel schedulers see `call_tool`, not the tool it will
+dispatch to: the target is resolved from `tool_name` only after the turn has
+been admitted. `call_tool` is therefore advertised as
+[declining to share a turn](#declining-to-share-a-turn) whenever any tool it can
+reach — deferred or preset — declines. While none does it declares nothing at
+all, exactly like a tool implementing neither concurrency interface: it is
+admitted, and no reentrancy guarantee is made on behalf of the hidden targets.
+A dispatch-mode turn thus keeps its parallelism unless an objecting tool is
+registered.
+
 ##### `WithToolPermissionFilter` Example
 
 Gate deferred tools per caller (e.g. by the authenticated user's RBAC role):
@@ -2865,6 +2884,77 @@ The configuration has no effect unless parallel tool execution is enabled.
 Non-positive group limits are ignored. Each tool name may appear in only one
 positive-limit group; duplicate membership causes
 `WithToolConcurrencyConfig` to panic.
+
+#### Declining to share a turn
+
+Some tools cannot run beside other calls at all. The parallel path hands each
+call its own invocation view, cloned before any of them start, so a tool whose
+observable effect is a mutation of that invocation rather than its returned
+result loses that mutation when the view is discarded. A tool contending for a
+shared working directory or an external process has the same problem for a
+different reason.
+
+Such a tool implements `tool.ConcurrencyAware`:
+
+```go
+type ConcurrencyAware interface {
+    IsConcurrencySafe() bool
+}
+```
+
+A Function Tool declares it with an option:
+
+```go
+exclusive := function.NewFunctionTool(
+    applyPatch,
+    function.WithName("apply_patch"),
+    function.WithDescription("Apply a patch to the workspace."),
+    function.WithConcurrencySafe(false),
+)
+```
+
+Returning `false` is an **objection**, and it applies to the whole turn: both
+parallel schedulers — the LLMAgent function-call processor and the Graph Tools
+node — admit a turn's calls to the parallel path only when *no* call in it
+objects. A single objecting call therefore keeps every call in that turn
+sequential, rather than splitting the turn into parallel and serial runs. This
+preserves the ordering the model asked for without introducing a second
+execution schedule.
+
+Returning `true` is a guarantee: the tool can run at the same time as any other
+call in its turn, other calls to itself included, which is why `tool.MetadataOf`
+reports it as `ConcurrencySafe`. Not implementing the interface at all raises
+no objection and promises nothing — it is the default, and `tool.MetadataOf`
+reports nothing for it. The framework never infers an objection from
+`ToolMetadata`, so an existing tool that publishes metadata keeps the
+scheduling it has today.
+
+Those three states survive the framework's own wrappers. A toolset's
+name-prefixed tool, a ToolPipe-augmented tool, a renamed deferred tool, and a
+declaration overlay do not implement `ConcurrencyAware` themselves — a wrapper
+answering with a `bool` would have to turn "declared nothing" into an objection
+or a guarantee — but expose the tool they wrap, and `tool.IsConcurrencySafe`
+resolves through them before asking. Custom schedulers and policies should call
+`tool.IsConcurrencySafe` rather than type-assert `ConcurrencyAware` on an entry
+in `Request.Tools`, which is usually such a wrapper.
+
+The framework tools whose effect is a mutation of the invocation or a
+read-modify-write over the session already object: `transfer_to_agent`,
+`await_user_reply`, the TodoEnforcer's `todo_declare_blocker`, and the Goal
+extension's `create_goal` and `update_goal` (its `get_goal` only reads). A turn
+containing one of them runs sequentially when parallel tools are enabled.
+
+When parallel tools are enabled and any available tool objects, **LLMAgent**
+also tells the model, appending a short notice to the system prompt that names
+those tools and explains that a turn including one of them runs every call in
+it one after another. Without that, a model batching an exclusive tool with
+three cheap reads would quietly serialize all four with no way to see why.
+
+This notice is LLMAgent's alone. A Graph Tools node applies the same execution
+gate — an objecting call keeps its batch sequential either way — but it does not
+annotate the model request that produced the calls, so a graph whose model step
+is built separately gets the behavior without the explanation. Add the same
+guidance to that step's own system prompt if the model needs to see it.
 
 **Parallel execution effect:**
 

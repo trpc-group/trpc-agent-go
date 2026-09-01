@@ -56,18 +56,21 @@ type Plugin struct {
 	name string
 	// mu guards the index maps; MCP toolboxes mutate them at runtime when a
 	// server is listed lazily, and a single Plugin is shared across goroutines.
-	mu               sync.RWMutex
-	toolsByName      map[string]tool.Tool
-	metaByName       map[string]*toolMetadata
-	nameByLower      map[string]string
-	deferredNames    map[string]struct{}
-	toolboxes        []*toolboxIndex
-	toolboxByName    map[string]*toolboxIndex
-	namespaceByTool  map[string]string
-	searchTool       tool.Tool
-	callTool         tool.Tool
-	maxResults       int
-	permissionFilter ToolPermissionFilter
+	mu              sync.RWMutex
+	toolsByName     map[string]tool.Tool
+	metaByName      map[string]*toolMetadata
+	nameByLower     map[string]string
+	deferredNames   map[string]struct{}
+	toolboxes       []*toolboxIndex
+	toolboxByName   map[string]*toolboxIndex
+	namespaceByTool map[string]string
+	searchTool      tool.Tool
+	callTool        tool.Tool
+	// exclusiveCallTool is call_tool as advertised while a tool it can reach
+	// objects to sharing a turn; see callToolForTurn.
+	exclusiveCallTool tool.Tool
+	maxResults        int
+	permissionFilter  ToolPermissionFilter
 	// catalogInDescription, when true, embeds the deferred-tool catalog into
 	// the tool_search tool's description each turn instead of injecting it
 	// into the system prompt via {deferred_tools_section}.
@@ -162,6 +165,7 @@ func New(presetTools []tool.Tool, opts ...Option) *Plugin {
 	p.searchTool = p.createSearchTool()
 	if p.invocationMode == DispatchToolCalls {
 		p.callTool = p.createCallTool()
+		p.exclusiveCallTool = &exclusiveCallToolDispatcher{callToolDispatcher: p.callTool.(*callToolDispatcher)}
 	}
 	log.Infof("[%s] registered %d deferred tools across %d toolboxes",
 		p.name, len(p.deferredNames), len(p.toolboxes))
@@ -278,10 +282,84 @@ func (p *Plugin) baseSearchDescription() string {
 	return toolSearchDescription
 }
 
-// createCallTool creates the call_tool function tool used to invoke deferred
-// tools loaded through tool_search. It is only injected when the invocation
-// mode is DispatchToolCalls.
+// callToolDispatcher is the call_tool entry under DispatchToolCalls.
+//
+// It fronts the function tool rather than embedding it, so that it declares
+// nothing about concurrency: a function tool implements tool.ConcurrencyAware
+// and answers true by default, which for call_tool would guarantee, on behalf
+// of every hidden target, a reentrancy those targets never claimed. The parallel
+// schedulers ask whatever sits in Request.Tools, and in this mode that is
+// call_tool: the target is resolved from tool_name only after the batch has
+// been admitted, so a target is never asked itself. This entry is advertised
+// while no reachable tool objects, and is then read exactly as a tool
+// implementing neither interface — admitted, promising nothing.
+type callToolDispatcher struct {
+	fn *function.FunctionTool[callToolInput, any]
+}
+
+// Declaration returns the call_tool declaration.
+func (d *callToolDispatcher) Declaration() *tool.Declaration { return d.fn.Declaration() }
+
+// Call dispatches to the named tool.
+func (d *callToolDispatcher) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	return d.fn.Call(ctx, jsonArgs)
+}
+
+// exclusiveCallToolDispatcher is the call_tool entry advertised while a tool it
+// can reach objects to sharing a turn.
+//
+// Which target a given call names is unknown at admission, so the objection is
+// carried for all of them: a dispatch-mode turn containing call_tool then runs
+// sequentially, and the batching notice names call_tool. The variant, rather
+// than a method answering from the snapshot, is what keeps the other state
+// honest — call_tool either objects or declares nothing, and never manufactures
+// a guarantee.
+type exclusiveCallToolDispatcher struct {
+	*callToolDispatcher
+}
+
+// IsConcurrencySafe implements tool.ConcurrencyAware on behalf of the objecting
+// tool call_tool can reach.
+func (*exclusiveCallToolDispatcher) IsConcurrencySafe() bool { return false }
+
+// callToolForTurn returns the call_tool entry to advertise for the current
+// snapshot: the objecting variant while any reachable tool objects, otherwise
+// the plain one. It is decided when beforeModel injects the tool, after the
+// turn's MCP servers are materialized, so the snapshot it reads is the one the
+// model is shown.
+func (p *Plugin) callToolForTurn() tool.Tool {
+	if p.anyReachableToolObjects() {
+		return p.exclusiveCallTool
+	}
+	return p.callTool
+}
+
+// anyReachableToolObjects reports whether any indexed tool — deferred or
+// preset, since call_tool resolves both — declines to share a turn. It reads the
+// current snapshot: MCP servers are materialized every turn before the model
+// runs, and a deferred tool must have been loaded by an earlier tool_search
+// before call_tool will dispatch to it, so the tools a call can reach are all
+// indexed by the time call_tool is advertised.
+func (p *Plugin) anyReachableToolObjects() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, t := range p.toolsByName {
+		if !tool.IsConcurrencySafe(t) {
+			return true
+		}
+	}
+	return false
+}
+
+// createCallTool creates the call_tool entry used to invoke deferred tools
+// loaded through tool_search. It is only injected when the invocation mode is
+// DispatchToolCalls.
 func (p *Plugin) createCallTool() tool.Tool {
+	return &callToolDispatcher{fn: p.createCallFunctionTool()}
+}
+
+// createCallFunctionTool builds the function tool callToolDispatcher fronts.
+func (p *Plugin) createCallFunctionTool() *function.FunctionTool[callToolInput, any] {
 	return function.NewFunctionTool(
 		p.callToolFn,
 		function.WithName(callToolToolName),
@@ -564,7 +642,7 @@ func (p *Plugin) beforeModel(
 	if p.invocationMode == DispatchToolCalls && p.callTool != nil {
 		callName := p.callTool.Declaration().Name
 		if _, exists := args.Request.Tools[callName]; !exists {
-			args.Request.Tools[callName] = p.callTool
+			args.Request.Tools[callName] = p.callToolForTurn()
 		}
 	}
 

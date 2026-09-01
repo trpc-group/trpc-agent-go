@@ -101,7 +101,21 @@ type Options struct {
 	EnableContextCompaction         bool
 	ContextCompactionThresholdRatio float64
 	ToolActivationApplier           ToolActivationApplier
+	FinalizedRequestAnnotators      []FinalizedRequestAnnotator
 }
+
+// FinalizedRequestAnnotator adjusts a request after every before-model callback
+// has finished with it, immediately before it reaches the model.
+//
+// Request processors run earlier, during preprocessing, and before-model
+// callbacks replace entries in Tools afterwards. An annotator that must describe
+// the tool surface the model is actually shown has to run here instead. There is
+// no event channel at this point, so it may only mutate the request.
+type FinalizedRequestAnnotator func(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+)
 
 // ToolActivationApplier applies invocation-specific tool activation.
 type ToolActivationApplier func(
@@ -133,6 +147,7 @@ type Flow struct {
 	enableContextCompaction         bool
 	contextCompactionThresholdRatio float64
 	toolActivationApplier           ToolActivationApplier
+	finalizedRequestAnnotators      []FinalizedRequestAnnotator
 }
 
 type contextCompactionTailProcessor interface {
@@ -169,15 +184,16 @@ func New(
 	opts Options,
 ) *Flow {
 	return &Flow{
-		requestProcessors:       requestProcessors,
-		responseProcessors:      responseProcessors,
-		channelBufferSize:       opts.ChannelBufferSize,
-		modelCallbacks:          opts.ModelCallbacks,
-		baseModelResolver:       opts.BaseModelResolver,
-		modelSelector:           opts.ModelSelector,
-		syncSummaryIntraRun:     opts.SyncSummaryIntraRun,
-		enableContextCompaction: opts.EnableContextCompaction,
-		toolActivationApplier:   opts.ToolActivationApplier,
+		requestProcessors:          requestProcessors,
+		responseProcessors:         responseProcessors,
+		channelBufferSize:          opts.ChannelBufferSize,
+		modelCallbacks:             opts.ModelCallbacks,
+		baseModelResolver:          opts.BaseModelResolver,
+		modelSelector:              opts.ModelSelector,
+		syncSummaryIntraRun:        opts.SyncSummaryIntraRun,
+		enableContextCompaction:    opts.EnableContextCompaction,
+		toolActivationApplier:      opts.ToolActivationApplier,
+		finalizedRequestAnnotators: opts.FinalizedRequestAnnotators,
 		contextCompactionThresholdRatio: normalizeContextCompactionThresholdRatio(
 			opts.ContextCompactionThresholdRatio,
 		),
@@ -1898,6 +1914,21 @@ func (f *Flow) rebuildRequestForContextCompaction(
 	return rebuilt
 }
 
+// annotateFinalizedRequest runs the configured annotators on a request that no
+// callback will change again.
+func (f *Flow) annotateFinalizedRequest(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmRequest *model.Request,
+) {
+	for _, annotate := range f.finalizedRequestAnnotators {
+		if annotate == nil {
+			continue
+		}
+		annotate(ctx, invocation, llmRequest)
+	}
+}
+
 func (f *Flow) supportsSyncSummaryRetry() bool {
 	for _, requestProcessor := range f.requestProcessors {
 		contentProcessor, ok := requestProcessor.(*processor.ContentRequestProcessor)
@@ -2532,6 +2563,9 @@ func (f *Flow) callLLM(
 		err = errors.New(errMsgNoLLMMessages)
 		return ctx, nil, false, err
 	}
+	// Final here: every before-model callback has run, so Tools and Messages are
+	// what the provider receives and what the processor later executes.
+	f.annotateFinalizedRequest(ctx, invocation, llmRequest)
 	if invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
 		traceCtx := agent.NewInvocationContext(ctx, invocation)
 		tracecapture.SetInvocationStepInput(
