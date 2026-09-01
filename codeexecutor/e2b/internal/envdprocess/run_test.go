@@ -376,6 +376,47 @@ func TestStartCallerCancellationCancelsInitialCloseStdin(t *testing.T) {
 	}
 }
 
+func TestRunCompletesInitialStdinBeforeConsumingImmediateEnd(t *testing.T) {
+	handler := &testProcessHandler{}
+	handler.start = func(
+		_ context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(80)); err != nil {
+			return err
+		}
+		return stream.Send(&process.StartResponse{Event: endEvent(0)})
+	}
+	handler.sendInput = func(
+		ctx context.Context,
+		_ *connect.Request[process.SendInputRequest],
+	) (*connect.Response[process.SendInputResponse], error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+			return connect.NewResponse(&process.SendInputResponse{}), nil
+		}
+	}
+	handler.closeStdin = func(
+		_ context.Context,
+		_ *connect.Request[process.CloseStdinRequest],
+	) (*connect.Response[process.CloseStdinResponse], error) {
+		return connect.NewResponse(&process.CloseStdinResponse{}), nil
+	}
+	handler.sendSignal = unexpectedSendSignal(t)
+
+	client := newTestClient(t, handler, nil)
+	result, err := client.Run(context.Background(), Request{
+		Cmd:   "cat",
+		Stdin: "input",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(80), result.PID)
+	assert.Equal(t, 0, result.ExitCode)
+}
+
 func TestRunCallerDeadlineDoesNotShortenRemoteProcessDeadline(t *testing.T) {
 	startRequests := make(chan *connect.Request[process.StartRequest], 1)
 	handler := blockingProcessHandler(t, nil)

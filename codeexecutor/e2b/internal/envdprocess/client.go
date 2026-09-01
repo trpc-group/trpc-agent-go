@@ -34,11 +34,13 @@ type Client struct {
 }
 
 // NewClient constructs an envd process client. Headers are snapshotted and
-// added to every RPC. The supplied HTTP client is reused so custom transports,
-// TLS configuration, proxies, redirect policies, and request timeouts remain
-// effective. Remote endpoints must use HTTPS. Loopback HTTP is accepted only
-// without configured headers or per-process user credentials. When httpClient
-// is nil, the default client rejects cross-host redirects and HTTPS downgrades.
+// added to every RPC. The supplied HTTP client configuration is copied so
+// custom transports, TLS configuration, proxies, redirect policies, and
+// request timeouts remain effective without mutating the caller's client.
+// Remote endpoints must use HTTPS. Loopback HTTP is accepted only without
+// configured headers or per-process user credentials. Every outbound request
+// is restricted to the configured envd origin, including requests produced by
+// redirects.
 func NewClient(
 	baseURL string,
 	httpClient *http.Client,
@@ -71,9 +73,7 @@ func NewClient(
 			"envd process: configured headers require HTTPS",
 		)
 	}
-	if httpClient == nil {
-		httpClient = newDefaultHTTPClient()
-	}
+	httpClient = newOriginBoundHTTPClient(httpClient, u)
 	return &Client{
 		processClient: processconnect.NewProcessClient(
 			httpClient,
@@ -92,30 +92,59 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func newDefaultHTTPClient() *http.Client {
-	httpClient := *http.DefaultClient
-	httpClient.CheckRedirect = func(
-		req *http.Request,
-		via []*http.Request,
-	) error {
-		if len(via) == 0 {
-			return nil
-		}
-		origin := via[0].URL
-		if !strings.EqualFold(req.URL.Host, origin.Host) {
-			return errors.New(
-				"envd process: refusing cross-host redirect",
-			)
-		}
-		if strings.EqualFold(origin.Scheme, "https") &&
-			!strings.EqualFold(req.URL.Scheme, "https") {
-			return errors.New(
-				"envd process: refusing HTTPS downgrade redirect",
-			)
-		}
-		return nil
+func newOriginBoundHTTPClient(
+	httpClient *http.Client,
+	baseURL *url.URL,
+) *http.Client {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
 	}
-	return &httpClient
+	boundClient := *httpClient
+	transport := httpClient.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	boundClient.Transport = &originBoundRoundTripper{
+		base:   transport,
+		origin: originFromURL(baseURL),
+	}
+	return &boundClient
+}
+
+type originBoundRoundTripper struct {
+	base   http.RoundTripper
+	origin string
+}
+
+// RoundTrip checks the final request URL at the transport seam, after any
+// redirect policy has run, so configured credentials cannot leave the envd
+// origin even when a caller-supplied HTTP client follows redirects.
+func (t *originBoundRoundTripper) RoundTrip(
+	req *http.Request,
+) (*http.Response, error) {
+	if req == nil || req.URL == nil {
+		return nil, errors.New("envd process: request URL is nil")
+	}
+	if originFromURL(req.URL) != t.origin {
+		return nil, errors.New(
+			"envd process: refusing request outside configured origin",
+		)
+	}
+	return t.base.RoundTrip(req)
+}
+
+func originFromURL(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		}
+	}
+	return strings.ToLower(u.Scheme) + "://" +
+		strings.ToLower(u.Hostname()) + ":" + port
 }
 
 // Run starts a process without a PTY and waits for its terminal EndEvent.
@@ -179,23 +208,33 @@ func (c *Client) Start(ctx context.Context, req Request) (*Process, error) {
 		_ = eventStream.Close()
 		return nil, err
 	}
-	proc := newProcess(
-		c, pid, processStreamCtx, true, disconnect, eventStream,
-	)
-
-	if req.Stdin != "" {
-		if err := proc.SendInput(
-			processStreamCtx, []byte(req.Stdin),
-		); err != nil {
-			return proc, fmt.Errorf("envd process: write stdin: %w", err)
-		}
-		if !req.KeepStdinOpen {
-			if err := proc.CloseStdin(processStreamCtx); err != nil {
-				return proc, fmt.Errorf("envd process: close stdin: %w", err)
-			}
-		}
+	proc := newProcess(c, pid, disconnect)
+	stdinErr := initializeProcessStdin(processStreamCtx, proc, req)
+	proc.startConsumer(processStreamCtx, true, eventStream)
+	if stdinErr != nil {
+		return proc, stdinErr
 	}
 	return proc, nil
+}
+
+func initializeProcessStdin(
+	ctx context.Context,
+	proc *Process,
+	req Request,
+) error {
+	if req.Stdin == "" {
+		return nil
+	}
+	if err := proc.SendInput(ctx, []byte(req.Stdin)); err != nil {
+		return fmt.Errorf("envd process: write stdin: %w", err)
+	}
+	if req.KeepStdinOpen {
+		return nil
+	}
+	if err := proc.CloseStdin(ctx); err != nil {
+		return fmt.Errorf("envd process: close stdin: %w", err)
+	}
+	return nil
 }
 
 // Connect attaches to an existing non-PTY process by PID. Canceling ctx or
@@ -236,9 +275,9 @@ func (c *Client) Connect(ctx context.Context, pid uint32) (*Process, error) {
 			connectedPID, pid,
 		)
 	}
-	return newProcess(
-		c, pid, streamCtx, false, disconnect, eventStream,
-	), nil
+	proc := newProcess(c, pid, disconnect)
+	proc.startConsumer(streamCtx, false, eventStream)
+	return proc, nil
 }
 
 // List returns the processes currently known to envd.

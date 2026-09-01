@@ -119,25 +119,30 @@ func (p *Process) CloseStdin(ctx context.Context) error {
 	return p.client.CloseStdin(ctx, p.pid)
 }
 
-// newProcess transfers processStreamCtx and stream ownership to the event
-// consumer. Neither lifetime object is stored in Process, avoiding a second
-// context or stream owner inside the handle.
+// newProcess constructs a process handle without transferring stream
+// ownership. Client.Start uses this phase to complete initial stdin setup
+// before the event consumer can terminate the stream context.
 func newProcess(
 	client *Client,
 	pid uint32,
-	processStreamCtx context.Context,
-	hasRemoteTimeout bool,
 	disconnect context.CancelFunc,
-	stream processEventStream,
 ) *Process {
-	proc := &Process{
+	return &Process{
 		client:     client,
 		pid:        pid,
 		disconnect: disconnect,
 		done:       make(chan struct{}),
 	}
-	go proc.consume(processStreamCtx, hasRemoteTimeout, stream)
-	return proc
+}
+
+// startConsumer transfers processStreamCtx and stream ownership to the sole
+// event consumer. It is called exactly once after startup setup completes.
+func (p *Process) startConsumer(
+	processStreamCtx context.Context,
+	hasRemoteTimeout bool,
+	stream processEventStream,
+) {
+	go p.consume(processStreamCtx, hasRemoteTimeout, stream)
 }
 
 func (p *Process) consume(
