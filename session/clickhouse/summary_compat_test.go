@@ -104,10 +104,9 @@ func TestCreateSessionSummary_StaleWriteIsSkipped(t *testing.T) {
 }
 
 // TestCreateSessionSummary_WritesInMemorySummaryVerbatim pins that this backend
-// serializes whatever the session holds for the target filter key and always
-// reaches the staleness check and the insert. Unlike the other SQL backends it
-// has no nil-summary early return, so no stage may filter or normalize the
-// value between generation and the write.
+// serializes the non-nil in-memory summary for the target filter key and then
+// reaches the staleness check and the insert. A nil summary is rejected before
+// this path, matching the other backends.
 func TestCreateSessionSummary_WritesInMemorySummaryVerbatim(t *testing.T) {
 	sess := compatSession()
 	var staleChecked bool

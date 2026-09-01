@@ -226,3 +226,83 @@ func TestBindingFromContextDoesNotCopyHistory(t *testing.T) {
 		RequestTokens: 0,
 	}, binding)
 }
+
+func TestBindingFromInvocationReportsViewState(t *testing.T) {
+	history := []model.Message{
+		model.NewUserMessage("first"),
+		model.NewAssistantMessage("second"),
+	}
+
+	t.Run("absent view", func(t *testing.T) {
+		binding := BindingFromInvocation(agent.NewInvocation())
+		require.False(t, binding.Present)
+		require.False(t, binding.Bound)
+		require.Equal(t, BindingReasonAbsent, binding.Reason)
+		require.Zero(t, binding.Items)
+	})
+
+	t.Run("nil invocation", func(t *testing.T) {
+		binding := BindingFromInvocation(nil)
+		require.False(t, binding.Present)
+		require.Equal(t, BindingReasonAbsent, binding.Reason)
+	})
+
+	t.Run("bound view", func(t *testing.T) {
+		invocation := agent.NewInvocation()
+		AttachProjection(invocation, projectionFor(history, 2))
+		Finalize(invocation, &model.Request{Messages: history}, 4_096)
+
+		binding := BindingFromInvocation(invocation)
+		require.True(t, binding.Present)
+		require.True(t, binding.Bound)
+		require.Equal(t, BindingReasonBound, binding.Reason)
+		require.Equal(t, 2, binding.Items)
+		require.Equal(t, 4_096, binding.RequestTokens)
+	})
+
+	t.Run("unbound view keeps request tokens", func(t *testing.T) {
+		invocation := agent.NewInvocation()
+		AttachProjection(invocation, projectionFor(history, 2))
+		InvalidateBinding(invocation)
+		Finalize(invocation, &model.Request{Messages: history}, 4_096)
+
+		binding := BindingFromInvocation(invocation)
+		require.True(t, binding.Present)
+		require.False(t, binding.Bound)
+		require.Equal(t, BindingReasonInvalidated, binding.Reason)
+		require.Equal(t, 4_096, binding.RequestTokens)
+	})
+
+	t.Run("projection before finalize is not finalized", func(t *testing.T) {
+		invocation := agent.NewInvocation()
+		AttachProjection(invocation, projectionFor(history, 2))
+
+		binding := BindingFromInvocation(invocation)
+		require.True(t, binding.Present)
+		require.False(t, binding.Bound)
+		require.Equal(t, BindingReasonNotFinalized, binding.Reason)
+	})
+}
+
+// TestBindingFromInvocationDoesNotCopyHistory guards the constraint that
+// diagnostics never duplicate model-visible history: the reported binding
+// carries counts only.
+func TestBindingFromInvocationDoesNotCopyHistory(t *testing.T) {
+	invocation := agent.NewInvocation()
+	view := projectionFor([]model.Message{
+		model.NewUserMessage("secret user content"),
+	}, 1)
+	AttachProjection(invocation, view)
+	Finalize(invocation, &model.Request{Messages: []model.Message{
+		model.NewUserMessage("secret user content"),
+	}}, 32)
+
+	binding := BindingFromInvocation(invocation)
+	require.Equal(t, Binding{
+		Present:       true,
+		Bound:         true,
+		Reason:        BindingReasonBound,
+		Items:         1,
+		RequestTokens: 32,
+	}, binding)
+}

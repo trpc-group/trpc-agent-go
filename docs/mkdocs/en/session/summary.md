@@ -1740,7 +1740,7 @@ injection text, and compaction decisions stay on their existing code paths.
 | --- | --- | --- |
 | `Session summary result` | Once per summary target, after generation and persistence | `schema_version`, `outcome`, `dispatch`, `target_kind`, `filter_key`, `filter_key_truncated`, `triggered`, `trigger`, `trigger_metric`, `trigger_value`, `trigger_threshold`, `threshold_ratio`, `context_window`, `summary_view_present`, `summary_view_bound`, `binding_reason`, `input_source`, `selection_reason`, `eligible_events`, `skip_recent_requested`, `skip_recent_applied`, `selected_events`, `model_call_status`, `updated`, `boundary_advanced`, `persist_result` |
 | `Session summary cascade result` | Once per cascade dispatch that fans a branch trigger out to the full-session target | `schema_version`, `outcome`, `mode`, `trigger_filter_key`, `trigger_filter_key_truncated`, `targets`, `source_materialized`, `action`, `invariant` |
-| `Session summary injection result` | Once per model request that uses session summaries, after `GenerateContent` returns | `schema_version`, `outcome`, `agent`, `filter_key`, `filter_key_truncated`, `lookup_strategy`, `lookup_result`, `selected`, `selected_block_present`, `stored_summaries`, `matching_candidates`, `full_session_summary`, `session_events`, `history_messages`, `request_messages` |
+| `Session summary injection result` | Once per model request that uses session summaries, after the returned response sequence finishes or is stopped early; if the model call fails before returning a response sequence, the record is emitted immediately | `schema_version`, `outcome`, `agent`, `filter_key`, `filter_key_truncated`, `lookup_strategy`, `lookup_result`, `selected`, `selected_block_present`, `stored_summaries`, `matching_candidates`, `full_session_summary`, `session_events`, `history_messages`, `request_messages` |
 | `Pre-LLM context compaction result` | Once per synchronous compaction attempt before an LLM call | `schema_version`, `outcome`, `filter_key`, `filter_key_truncated`, `request_tokens`, `threshold`, `context_window`, `messages`, `summary_view_bound`, `binding_reason` |
 
 `Session summary result` outcomes:
@@ -1775,11 +1775,11 @@ injection text, and compaction decisions stay on their existing code paths.
 
 | Outcome | Level | Meaning |
 | --- | --- | --- |
-| `injected` | Debug | The original summary block is still present in the same framework `model.Request` after `GenerateContent` returns (`selected_block_present=true`). This does not describe a provider payload |
+| `injected` | Debug | The original summary block is still present in the same framework `model.Request` after the returned response sequence finishes or is stopped early (`selected_block_present=true`). If the model call fails before returning a response sequence, this is observed immediately. This does not describe a provider payload |
 | `not_selected` | Debug | The session stores no summary yet |
 | `lookup_miss` | Debug | Summaries exist for other branches, but none in this request's scope |
 | `scope_mismatch` | Debug | A branch-scoped request found nothing in scope while a full-session summary exists outside it. Because no in-scope summary was selected, this request's summary cutoff stays zero, so the raw scoped history is kept at this stage. That does not depend on whether the unused full-session summary has a boundary |
-| `selected_block_missing` | Warn | A summary was selected (`selected=true`), but the original summary block is not observable in the same framework `model.Request` after `GenerateContent` returns. This does not claim the provider's final payload, and it does not mean the summary was never written into the request. For built-in providers that mutate the shared request in place, including OpenAI, this is usually in-place token tailoring |
+| `selected_block_missing` | Warn | A summary was selected (`selected=true`), but the original summary block is not observable in the same framework `model.Request` after the returned response sequence finishes or is stopped early. If the model call fails before returning a response sequence, this is observed immediately. This does not claim the provider's final payload, and it does not mean the summary was never written into the request. For built-in providers that mutate the shared request in place, including OpenAI, this is usually in-place token tailoring |
 
 ### How much history reached the summary model
 
@@ -1845,7 +1845,9 @@ Follow the records in this order for a single request or session:
    materialization.
 3. **`Session summary injection result`** answers whether a later request
    still carries the stored summary in the framework `model.Request` after
-   `GenerateContent` returns. Compare `lookup_strategy` (the scope you
+   the returned response sequence finishes or is stopped early. If the model
+   call fails before returning a response sequence, this is observed
+   immediately. Compare `lookup_strategy` (the scope you
    configured, driven by `WithBranchFilterMode`) with `lookup_result` (what
    that scope found) and `full_session_summary`. `scope_mismatch` means a
    full-session summary was unused, not that scoped history was dropped:
@@ -1859,8 +1861,9 @@ Follow the records in this order for a single request or session:
    custom `Model` that copies the request may leave the framework copy
    unchanged, so this record still does not describe the provider payload.
 
-Set the framework log level to `debug` to see the routine records; at the
-default level only the Warn and Info records above are emitted.
+Routine Debug records such as `injected`, healthy cascade results, `copied`,
+and `below_threshold` require the framework log level to be `debug`. At the
+normal Info level only the Info and Warn outcomes listed above are visible.
 
 ## Performance Considerations
 

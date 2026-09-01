@@ -1735,12 +1735,19 @@ func (f *Flow) runContextCompaction(
 	if viewPresent {
 		summaryCtx = summaryview.ContextWithView(summaryCtx, view)
 	}
+	var viewFinalized bool
 	logResult := func(
 		outcome string,
 		result *model.Request,
 		postRequestTokens int,
 	) {
+		// After a post-rebuild Finalize the invocation holds the latest
+		// binding. Paths that never Finalize keep the snapshot frozen
+		// before summarization.
 		binding := summaryview.BindingFromContext(summaryCtx)
+		if viewFinalized {
+			binding = summaryview.BindingFromInvocation(invocation)
+		}
 		filterKeyDisplay, filterKeyTruncated :=
 			summarydiag.FormatFilterKey(filterKey)
 		format := "Pre-LLM context compaction result: schema_version=%d, " +
@@ -1855,6 +1862,7 @@ func (f *Flow) runContextCompaction(
 			postDecisionRequest,
 			postDecision.tokenCount,
 		)
+		viewFinalized = true
 	} else {
 		log.DebugfContext(
 			ctx,
@@ -2599,22 +2607,32 @@ func (f *Flow) callLLM(
 		},
 	)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
-	// Report against the same model.Request after GenerateContent returns.
-	// Built-in providers mutate it in place during token tailoring; a custom
-	// Model may copy it, so this is the final framework request, not a
-	// universal view of what a provider sent. Report on the error path too.
-	reportSummaryInjection(ctx, invocation, llmRequest)
 	if err != nil {
+		// generateContentSeq failed before returning a seq. Report once
+		// against the request as observed at that failure; do not also
+		// attach a seq finalizer.
+		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, true, err
+	}
+	// Eager GenerateContent has already mutated llmRequest. A lazy
+	// IterModel may tailor or drop the selected summary only while the
+	// seq runs. Report once after the seq ends or is stopped early, and
+	// always attach that finalizer so a disabled call span cannot skip
+	// the record.
+	reportInjection := func() {
+		reportSummaryInjection(ctx, invocation, llmRequest)
 	}
 	if started {
 		finishSpanOnReturn = false
 		seq = withResponseSeqFinalizer(seq, func() {
+			reportInjection()
 			span.SetAttributes(
 				tokenTailoringAttrs(tailoringObserver.Snapshot())...,
 			)
 			finishCallSpan(nil)
 		})
+	} else {
+		seq = withResponseSeqFinalizer(seq, reportInjection)
 	}
 	return ctx, seq, true, nil
 }
@@ -2775,12 +2793,14 @@ func finalizeSummaryView(
 }
 
 // reportSummaryInjection reports whether the session summary selected while
-// building this request is still present in the same model.Request after
-// GenerateContent returns. Built-in providers, including the OpenAI adapter,
-// mutate that request in place during token tailoring, so the record then
-// reflects the tailored framework request. A custom Model may copy the
-// request, in which case the record does not claim to describe the payload
-// that Model sent. Requests that do not use session summaries report nothing.
+// building this request is still present in the same model.Request after the
+// model call has been observed. Eager GenerateContent mutates that request
+// before returning a seq; a lazy IterModel may mutate it only while the seq
+// runs. Built-in providers, including the OpenAI adapter, mutate the request
+// in place during token tailoring, so the record then reflects the tailored
+// framework request. A custom Model may copy the request, in which case the
+// record does not claim to describe the payload that Model sent. Requests
+// that do not use session summaries report nothing.
 func reportSummaryInjection(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -2825,8 +2845,8 @@ func reportSummaryInjection(
 	case summaryInjectionOutcomeSelectedBlockMissing:
 		// A selected summary whose original block is missing from the final
 		// framework request is the only injection defect that Warns. This is
-		// an observation of the same model.Request after GenerateContent
-		// returns; it does not claim what a provider sent, or that the
+		// an observation of the same model.Request after the model call has
+		// been observed; it does not claim what a provider sent, or that the
 		// summary was never written into the request.
 		log.WarnfContext(ctx, format, args...)
 	default:
@@ -2838,7 +2858,7 @@ func reportSummaryInjection(
 
 // summaryInjectionOutcome classifies one request's summary injection. A
 // selected summary whose original block is missing from the same framework
-// model.Request after GenerateContent returns is reported as
+// model.Request after the model call has been observed is reported as
 // selected_block_missing. That observation does not describe a provider's
 // final payload. A scope mismatch names the unused full-session summary; it
 // does not mean the scoped history was dropped from this request.

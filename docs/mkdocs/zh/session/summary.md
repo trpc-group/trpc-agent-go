@@ -1643,7 +1643,7 @@ SessionService API，也不新增诊断开关。
 | --- | --- | --- |
 | `Session summary result` | 每个摘要目标一条，在生成与持久化之后 | `schema_version`、`outcome`、`dispatch`、`target_kind`、`filter_key`、`filter_key_truncated`、`triggered`、`trigger`、`trigger_metric`、`trigger_value`、`trigger_threshold`、`threshold_ratio`、`context_window`、`summary_view_present`、`summary_view_bound`、`binding_reason`、`input_source`、`selection_reason`、`eligible_events`、`skip_recent_requested`、`skip_recent_applied`、`selected_events`、`model_call_status`、`updated`、`boundary_advanced`、`persist_result` |
 | `Session summary cascade result` | 分支触发扩散到全会话目标的每次级联一条 | `schema_version`、`outcome`、`mode`、`trigger_filter_key`、`trigger_filter_key_truncated`、`targets`、`source_materialized`、`action`、`invariant` |
-| `Session summary injection result` | 使用会话摘要的每个模型请求一条，在 `GenerateContent` 返回之后 | `schema_version`、`outcome`、`agent`、`filter_key`、`filter_key_truncated`、`lookup_strategy`、`lookup_result`、`selected`、`selected_block_present`、`stored_summaries`、`matching_candidates`、`full_session_summary`、`session_events`、`history_messages`、`request_messages` |
+| `Session summary injection result` | 使用会话摘要的每个模型请求一条，在返回的响应序列结束或被提前停止之后记录；若模型调用在返回响应序列之前失败，则立即记录 | `schema_version`、`outcome`、`agent`、`filter_key`、`filter_key_truncated`、`lookup_strategy`、`lookup_result`、`selected`、`selected_block_present`、`stored_summaries`、`matching_candidates`、`full_session_summary`、`session_events`、`history_messages`、`request_messages` |
 | `Pre-LLM context compaction result` | LLM 调用前的每次同步压缩尝试一条 | `schema_version`、`outcome`、`filter_key`、`filter_key_truncated`、`request_tokens`、`threshold`、`context_window`、`messages`、`summary_view_bound`、`binding_reason` |
 
 `Session summary result` 的 outcome：
@@ -1677,11 +1677,11 @@ SessionService API，也不新增诊断开关。
 
 | Outcome | 级别 | 含义 |
 | --- | --- | --- |
-| `injected` | Debug | `GenerateContent` 返回后，同一份框架 `model.Request` 中仍能找到原始摘要 block（`selected_block_present=true`）。这不描述 provider payload |
+| `injected` | Debug | 在返回的响应序列结束或被提前停止之后，同一份框架 `model.Request` 中仍能找到原始摘要 block（`selected_block_present=true`）。若模型调用在返回响应序列之前失败，则立即观察。这不描述 provider payload |
 | `not_selected` | Debug | 会话尚未存储任何摘要 |
 | `lookup_miss` | Debug | 其他分支存在摘要，但本次请求的作用域内没有 |
 | `scope_mismatch` | Debug | 分支作用域的请求在作用域内没有命中，而作用域之外存在全会话摘要。因为本次没有选中 in-scope 摘要，本次 summaryCutoff 保持为零，所以这一阶段仍会保留原始分支历史。这与作用域外的全会话摘要自身有没有 boundary/cutoff 无关 |
-| `selected_block_missing` | Warn | 摘要已选中（`selected=true`），但 `GenerateContent` 返回后，在同一份框架 `model.Request` 中观察不到原始摘要 block。这不表示 provider 的最终 payload，也不表示摘要从未写入请求。对会原地修改共享请求的内置 provider（包括 OpenAI），这通常是 token 裁剪导致的 |
+| `selected_block_missing` | Warn | 摘要已选中（`selected=true`），但在返回的响应序列结束或被提前停止之后，在同一份框架 `model.Request` 中观察不到原始摘要 block。若模型调用在返回响应序列之前失败，则立即观察。这不表示 provider 的最终 payload，也不表示摘要从未写入请求。对会原地修改共享请求的内置 provider（包括 OpenAI），这通常是 token 裁剪导致的 |
 
 ### 有多少历史进入了摘要模型
 
@@ -1736,8 +1736,9 @@ SessionService API，也不新增诊断开关。
    `mode=dependent` 表示多 filter 顺序级联，而不是并发生成。
    `invariant=violation` 仅表示全会话目标在本轮没有分支 materialization
    的情况下推进了。
-3. **`Session summary injection result`** 回答后续请求在 `GenerateContent`
-   返回后，框架这份 `model.Request` 里是否还带着已存储的摘要。对比
+3. **`Session summary injection result`** 回答后续请求在返回的响应序列
+   结束或被提前停止之后，框架这份 `model.Request` 里是否还带着已存储的摘要。
+   若模型调用在返回响应序列之前失败，则立即观察。对比
    `lookup_strategy`（由 `WithBranchFilterMode` 决定的配置作用域）与
    `lookup_result`（该作用域实际找到的结果）以及 `full_session_summary`。
    `scope_mismatch` 表示全会话摘要未被使用，并不表示分支历史已被丢弃：因为本
@@ -1749,8 +1750,9 @@ SessionService API，也不新增诊断开关。
    block。自定义 `Model` 如果复制了请求，框架这份拷贝可能不会反映它实际发送
    的内容，因此该记录仍然不描述 provider 最终 payload。
 
-将框架日志级别设为 `debug` 可看到常规记录；默认级别下只输出上表中的 Warn 与
-Info 记录。
+`injected`、healthy cascade、`copied`、`below_threshold` 等常规 Debug 记录
+需要把框架日志级别设为 `debug`。在正常的 Info 级别下，只能看到上表中的
+Info 与 Warn outcome。
 
 ## 性能考虑
 

@@ -441,6 +441,30 @@ func BindingFromContext(ctx context.Context) Binding {
 	if !ok || view == nil {
 		return Binding{Reason: BindingReasonAbsent}
 	}
+	return bindingFromView(view)
+}
+
+// BindingFromInvocation reports the binding state stored on inv. GetStateValue
+// holds the invocation lock only while retrieving the immutable
+// invocationState pointer; field reads then use that snapshot, which is never
+// mutated in place. The result does not copy view items. A missing invocation
+// or view reports Present=false with BindingReasonAbsent. Reason is always one
+// of the closed binding-reason constants.
+func BindingFromInvocation(inv *agent.Invocation) Binding {
+	if inv == nil {
+		return Binding{Reason: BindingReasonAbsent}
+	}
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.view == nil {
+		return Binding{Reason: BindingReasonAbsent}
+	}
+	return bindingFromView(state.view)
+}
+
+func bindingFromView(view *View) Binding {
+	if view == nil {
+		return Binding{Reason: BindingReasonAbsent}
+	}
 	return Binding{
 		Present:       true,
 		Bound:         view.Bound,

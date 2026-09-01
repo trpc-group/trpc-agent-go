@@ -61,6 +61,10 @@ func (s *Service) CreateSessionSummary(
 	sess.SummariesMu.RLock()
 	summary := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
+	if summary == nil {
+		att.Persisted(isummary.PersistNoSummary)
+		return nil
+	}
 	summaryBytes, err := json.Marshal(summary)
 	if err != nil {
 		return att.RecordWrite(fmt.Errorf("marshal summary failed: %w", err))

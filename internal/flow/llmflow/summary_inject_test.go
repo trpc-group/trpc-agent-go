@@ -67,6 +67,23 @@ func (l *injectionLogs) snapshot() (debug, warn []string) {
 }
 
 // record returns the single injection record captured at any level.
+func (l *injectionLogs) injectionLines() []string {
+	debug, warn := l.snapshot()
+	var lines []string
+	for _, candidate := range append(append([]string{}, warn...), debug...) {
+		if strings.Contains(candidate, "injection result") {
+			lines = append(lines, candidate)
+		}
+	}
+	return lines
+}
+
+func drainResponseSeq(t *testing.T, seq model.Seq[*model.Response]) {
+	t.Helper()
+	require.NotNil(t, seq)
+	seq(func(*model.Response) bool { return true })
+}
+
 func (l *injectionLogs) record(t *testing.T) (level, line string) {
 	t.Helper()
 	debug, warn := l.snapshot()
@@ -314,7 +331,7 @@ func TestCallLLMReportsInjectionAfterTokenTailoring(t *testing.T) {
 	flow := New(nil, nil, Options{})
 	_, seq, _, err := flow.callLLM(context.Background(), inv, req, tailored)
 	require.NoError(t, err)
-	require.NotNil(t, seq)
+	drainResponseSeq(t, seq)
 
 	level, line := logs.record(t)
 	require.Equal(t, "warn", level)
@@ -348,8 +365,9 @@ func TestCallLLMReportsInjectionWhenTailoringKeepsSummary(t *testing.T) {
 	}}
 
 	flow := New(nil, nil, Options{})
-	_, _, _, err := flow.callLLM(context.Background(), inv, req, tailored)
+	_, seq, _, err := flow.callLLM(context.Background(), inv, req, tailored)
 	require.NoError(t, err)
+	drainResponseSeq(t, seq)
 
 	level, line := logs.record(t)
 	require.Equal(t, "debug", level)
@@ -358,6 +376,144 @@ func TestCallLLMReportsInjectionWhenTailoringKeepsSummary(t *testing.T) {
 	require.Contains(t, line, "selected_block_present=true")
 	require.NotContains(t, line, "injected=")
 	require.Contains(t, line, "request_messages=2")
+}
+
+// injectLazyTailoringIterModel simulates a lazy IterModel: GenerateContentIter
+// returns a seq immediately, and token tailoring mutates the shared request
+// only while that seq runs.
+type injectLazyTailoringIterModel struct {
+	tailor func(*model.Request)
+	err    error
+}
+
+func (m *injectLazyTailoringIterModel) Info() model.Info {
+	return model.Info{Name: "lazy-tailoring"}
+}
+
+func (m *injectLazyTailoringIterModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	return nil, fmt.Errorf("unexpected GenerateContent call")
+}
+
+func (m *injectLazyTailoringIterModel) GenerateContentIter(
+	ctx context.Context,
+	req *model.Request,
+) (model.Seq[*model.Response], error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return func(yield func(*model.Response) bool) {
+		before := len(req.Messages)
+		if m.tailor != nil {
+			m.tailor(req)
+		}
+		imodelrequest.RecordTokenTailoring(ctx, imodelrequest.TokenTailoringRecord{
+			Provider:       "lazy-tailoring",
+			MaxInputTokens: 16,
+			BeforeMessages: before,
+			AfterMessages:  len(req.Messages),
+		})
+		yield(&model.Response{Done: true})
+	}, nil
+}
+
+func selectedSummaryInjectionInvocation(t *testing.T) (*agent.Invocation, *model.Request) {
+	t.Helper()
+	inv := injectionInvocation(t, summaryinject.Selection{
+		LookupStrategy:  summaryinject.LookupStrategyPrefix,
+		LookupResult:    summaryinject.LookupResultExact,
+		Selected:        true,
+		StoredSummaries: 1,
+		Block:           injectedSummaryBlock,
+	})
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("instructions\n\n" + injectedSummaryBlock),
+		model.NewUserMessage("older turn"),
+		model.NewUserMessage("current request"),
+	}}
+	return inv, req
+}
+
+func dropAllButLastMessage(r *model.Request) {
+	r.Messages = r.Messages[len(r.Messages)-1:]
+}
+
+// TestCallLLMReportsInjectionAfterLazyIterTailoring is the lazy-IterModel
+// counterpart of TestCallLLMReportsInjectionAfterTokenTailoring: the seq is
+// returned before tailoring runs, so reporting immediately would falsely
+// record injected. The final record must be selected_block_missing, once.
+func TestCallLLMReportsInjectionAfterLazyIterTailoring(t *testing.T) {
+	logs := captureInjectionLogs(t)
+	inv, req := selectedSummaryInjectionInvocation(t)
+	lazy := &injectLazyTailoringIterModel{tailor: dropAllButLastMessage}
+
+	flow := New(nil, nil, Options{})
+	_, seq, _, err := flow.callLLM(context.Background(), inv, req, lazy)
+	require.NoError(t, err)
+	require.NotNil(t, seq)
+	require.Empty(t, logs.injectionLines(),
+		"lazy IterModel must not report injected before the seq runs")
+
+	drainResponseSeq(t, seq)
+
+	require.Len(t, logs.injectionLines(), 1)
+	level, line := logs.record(t)
+	require.Equal(t, "warn", level)
+	require.Contains(t, line,
+		"outcome="+summaryInjectionOutcomeSelectedBlockMissing)
+	require.Contains(t, line, "selected=true")
+	require.Contains(t, line, "selected_block_present=false")
+	require.NotContains(t, line, "injected=")
+	require.Contains(t, line, "request_messages=1")
+	require.NotContains(t, line, "SECRET-SUMMARY-CONTENT")
+}
+
+// TestCallLLMReportsInjectionOnceWhenLazyIterStopsEarly proves the seq
+// finalizer still reports once when the consumer stops before draining.
+func TestCallLLMReportsInjectionOnceWhenLazyIterStopsEarly(t *testing.T) {
+	logs := captureInjectionLogs(t)
+	inv, req := selectedSummaryInjectionInvocation(t)
+	lazy := &injectLazyTailoringIterModel{tailor: dropAllButLastMessage}
+
+	flow := New(nil, nil, Options{})
+	_, seq, _, err := flow.callLLM(context.Background(), inv, req, lazy)
+	require.NoError(t, err)
+	require.Empty(t, logs.injectionLines())
+
+	seq(func(*model.Response) bool { return false })
+
+	require.Len(t, logs.injectionLines(), 1)
+	level, line := logs.record(t)
+	require.Equal(t, "warn", level)
+	require.Contains(t, line,
+		"outcome="+summaryInjectionOutcomeSelectedBlockMissing)
+	require.Contains(t, line, "selected_block_present=false")
+}
+
+// TestCallLLMReportsInjectionOnceWhenGenerateContentSeqFails covers the
+// error path: generateContentSeq returns an error, the injection record is
+// emitted immediately, and it is not repeated.
+func TestCallLLMReportsInjectionOnceWhenGenerateContentSeqFails(t *testing.T) {
+	logs := captureInjectionLogs(t)
+	inv, req := selectedSummaryInjectionInvocation(t)
+	lazy := &injectLazyTailoringIterModel{
+		err: fmt.Errorf("generate content failed"),
+	}
+
+	flow := New(nil, nil, Options{})
+	_, seq, _, err := flow.callLLM(context.Background(), inv, req, lazy)
+	require.Error(t, err)
+	require.Nil(t, seq)
+
+	require.Len(t, logs.injectionLines(), 1)
+	level, line := logs.record(t)
+	require.Equal(t, "debug", level)
+	require.Contains(t, line,
+		"outcome="+summaryInjectionOutcomeInjected)
+	require.Contains(t, line, "selected_block_present=true")
+	require.Contains(t, line, "request_messages=3")
 }
 
 // TestReportSummaryInjectionStaysSilentWithoutSelection verifies that requests
