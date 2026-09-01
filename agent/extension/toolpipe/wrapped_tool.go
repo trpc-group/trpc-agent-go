@@ -24,7 +24,9 @@ import (
 
 // declaredCallableTool is a request-local tool wrapper that returns
 // an augmented Declaration while delegating Call and optional interfaces
-// (SkipSummarization, IsConcurrencySafe, ToolMetadata) to the original.
+// (SkipSummarization, ToolMetadata) to the original, and exposing the
+// original through Original() for the capabilities the framework resolves
+// rather than delegates.
 // It is NOT a persistent wrapper — it only lives within one
 // BeforeModel callback's Request.Tools replacement. The original
 // tool object is never mutated.
@@ -119,31 +121,26 @@ func (t *declaredCallableTool) SkipSummarization() bool {
 	return false
 }
 
-// IsConcurrencySafe delegates the inner tool's concurrency objection.
+// Original exposes the inner tool for the framework's wrapper resolution.
 //
-// The parallel paths ask this of whatever sits in Request.Tools, which is this
-// wrapper once BeforeModel has run. Without the delegation, a tool that declined
-// to share its turn would be readmitted to the parallel path purely because
-// ToolPipe augmented its schema. Resolution goes through itool.IsConcurrencySafe
-// so a NamedTool or declaration overlay in between cannot hide it either.
-func (t *declaredCallableTool) IsConcurrencySafe() bool {
-	return itool.IsConcurrencySafe(t.inner)
+// The parallel paths ask itool.IsConcurrencySafe of whatever sits in
+// Request.Tools, which is this wrapper once BeforeModel has run, and that helper
+// resolves Original() chains before consulting tool.ConcurrencyAware. Without
+// the exposure, a tool that declined to share its turn would be readmitted to
+// the parallel path purely because ToolPipe augmented its schema.
+//
+// The wrapper does not answer IsConcurrencySafe itself: the interface has three
+// states, and a wrapper answering with a bool would turn "nothing declared"
+// into a guarantee the inner tool never made.
+func (t *declaredCallableTool) Original() tool.Tool {
+	return t.inner
 }
 
-// ToolMetadata delegates the inner tool's descriptive metadata.
-//
-// It exists because of IsConcurrencySafe above: without a ToolMetadata method,
-// tool.MetadataOf falls back to ConcurrencyAware and reports ConcurrencySafe:
-// true for every wrapped tool, promising the same-tool reentrancy the inner tool
-// never claimed. Permission policies read that off this wrapper. Delegating also
-// stops it dropping ReadOnly, Destructive, and OpenWorld.
-//
-// The delegation resolves the semantic tool first, as IsConcurrencySafe does.
-// Invocation-scoped declaration patches are applied before BeforeModel runs, and
-// a declaration overlay exposes none of the wrapped tool's optional interfaces,
-// so asking the immediate inner tool would return the zero value for every
-// patched tool. The permission path resolves overlays itself, but only down to
-// the first wrapper that is not one — this wrapper.
+// ToolMetadata delegates the inner tool's descriptive metadata, resolving the
+// wrappers between here and the semantic tool: a declaration overlay applied
+// by a host surface exposes no metadata itself. Without the delegation the
+// wrapper would drop ReadOnly, Destructive, and OpenWorld, and permission
+// policies read metadata off this wrapper.
 func (t *declaredCallableTool) ToolMetadata() tool.ToolMetadata {
 	return tool.MetadataOf(itool.ResolveSemantic(t.inner))
 }
@@ -468,7 +465,6 @@ func resultToString(result any) string {
 var (
 	_ tool.Tool             = (*declaredCallableTool)(nil)
 	_ tool.CallableTool     = (*declaredCallableTool)(nil)
-	_ tool.ConcurrencyAware = (*declaredCallableTool)(nil)
 	_ tool.MetadataProvider = (*declaredCallableTool)(nil)
 	_ tool.Tool             = (*declaredStreamableCallableTool)(nil)
 	_ tool.CallableTool     = (*declaredStreamableCallableTool)(nil)

@@ -25,42 +25,83 @@ type unsafeTool struct{}
 func (unsafeTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: "unsafe"} }
 func (unsafeTool) IsConcurrencySafe() bool        { return false }
 
-// Wrapping must not invent an objection the wrapped tool never raised.
-//
-// NamedTool wraps every tool from a toolset. Reading MetadataOf(...)
-// .ConcurrencySafe to answer for them would have the file and shell toolsets all
-// read as objecting, dropping every turn containing one off the parallel path. A
-// measured run did exactly that: 45 turns, 45 tool calls, one call per turn.
-func TestNamedToolPreservesConcurrencyDefault(t *testing.T) {
-	wrapped := NewUnprefixedNamedTool(plainTool{})
+// guaranteeingTool promises it can share a turn with anything.
+type guaranteeingTool struct{}
 
-	if !wrapped.IsConcurrencySafe() {
-		t.Error("wrapping a tool that publishes nothing must leave it admissible")
+func (guaranteeingTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: "safe"} }
+func (guaranteeingTool) IsConcurrencySafe() bool        { return true }
+
+// declaresConcurrency reports which of the three ConcurrencyAware states a tool
+// is in when asked directly: (answer, declared).
+func declaresConcurrency(t tool.Tool) (bool, bool) {
+	aware, ok := t.(tool.ConcurrencyAware)
+	if !ok {
+		return false, false
 	}
-	if !tool.IsConcurrencySafe(tool.Tool(wrapped)) {
-		t.Error("the wrapper must resolve as admissible through tool.IsConcurrencySafe")
-	}
+	return aware.IsConcurrencySafe(), true
 }
 
-// The wrapper must still carry a real objection through.
-func TestNamedToolPreservesDeclaredUnsafety(t *testing.T) {
-	wrapped := NewUnprefixedNamedTool(unsafeTool{})
-
-	if wrapped.IsConcurrencySafe() {
-		t.Error("wrapping must not lose a tool's objection")
+// Wrapping preserves all three concurrency states, because the wrapper does not
+// answer for the tool: it is resolved to it.
+//
+// NamedTool wraps every tool from a toolset, so whatever it answered would be
+// the answer for the file and shell toolsets wholesale. Reading
+// MetadataOf(...).ConcurrencySafe had them all object — a measured run did
+// exactly that: 45 turns, 45 tool calls, one call per turn — and reading the
+// admission default had them all guarantee reentrancy they never claimed. Not
+// answering is the only reading that changes nothing.
+func TestNamedToolPreservesConcurrencyState(t *testing.T) {
+	tests := []struct {
+		name string
+		tool tool.Tool
+		// wantDeclared is whether the resolved tool declares anything;
+		// wantSafe is its answer when it does.
+		wantDeclared bool
+		wantSafe     bool
+	}{
+		{"declares nothing", plainTool{}, false, false},
+		{"objects", unsafeTool{}, true, false},
+		{"guarantees", guaranteeingTool{}, true, true},
 	}
-	if tool.IsConcurrencySafe(tool.Tool(wrapped)) {
-		t.Error("the wrapper must resolve as objecting through tool.IsConcurrencySafe")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapped := NewUnprefixedNamedTool(tt.tool)
+
+			if _, declared := declaresConcurrency(wrapped); declared {
+				t.Error("the wrapper must not answer ConcurrencyAware itself")
+			}
+			gotSafe, gotDeclared := declaresConcurrency(ResolveSemantic(wrapped))
+			if gotDeclared != tt.wantDeclared || (gotDeclared && gotSafe != tt.wantSafe) {
+				t.Errorf("resolved state = (%v, declared %v), want (%v, declared %v)",
+					gotSafe, gotDeclared, tt.wantSafe, tt.wantDeclared)
+			}
+
+			// Admission: only an objection is false.
+			wantAdmitted := !tt.wantDeclared || tt.wantSafe
+			if got := IsConcurrencySafe(wrapped); got != wantAdmitted {
+				t.Errorf("IsConcurrencySafe(wrapped) = %v, want %v", got, wantAdmitted)
+			}
+			if got := tool.IsConcurrencySafe(wrapped); got != wantAdmitted {
+				t.Errorf("tool.IsConcurrencySafe(wrapped) = %v, want %v", got, wantAdmitted)
+			}
+
+			// Description: MetadataOf synthesizes ConcurrencySafe only from a
+			// declared guarantee, and the wrapper delegates rather than
+			// answering, so it reports exactly what the tool would.
+			if got, want := tool.MetadataOf(wrapped), tool.MetadataOf(tt.tool); got != want {
+				t.Errorf("MetadataOf(wrapped) = %+v, want %+v", got, want)
+			}
+		})
 	}
 }
 
 // A declaration overlay changes only what the model is shown, so it must not
 // change how the call is scheduled.
 //
-// The overlay exposes none of the wrapped tool's optional interfaces, which is
-// why schedulers resolve through this package rather than calling
-// tool.IsConcurrencySafe on what they are handed: asked directly, the wrapper
-// reports the default and a patched description restores the parallel path.
+// The overlay exposes none of the wrapped tool's optional interfaces — not even
+// Original() — which is why schedulers resolve through this package rather than
+// calling tool.IsConcurrencySafe on what they are handed: asked directly, the
+// overlay declares nothing and a patched description restores the parallel path.
 func TestApplyDeclarationsPreservesConcurrencyObjection(t *testing.T) {
 	patched := ApplyDeclarations(
 		[]tool.Tool{unsafeTool{}},
@@ -110,39 +151,100 @@ func TestIsConcurrencySafeResolvesNamedTools(t *testing.T) {
 }
 
 // Wrappers nest: a toolset's tool is a NamedTool, and patching its declaration
-// wraps that in an overlay — or the reverse, when the patch lands first.
-//
-// NamedTool.IsConcurrencySafe must therefore resolve rather than ask its
-// original directly: an overlay asked directly reports the default, and
-// tool.IsConcurrencySafe stops at the first ConcurrencyAware it finds, so it
-// would take the wrapper's answer and never reach the resolver.
-func TestNamedToolResolvesNestedDeclarationOverlays(t *testing.T) {
-	patched := ApplyDeclarations(
-		[]tool.Tool{unsafeTool{}},
-		[]tool.Declaration{{Name: "unsafe", Description: "patched"}},
-	)[0]
-	wrapped := NewUnprefixedNamedTool(patched)
-
-	if wrapped.IsConcurrencySafe() {
-		t.Error("a named wrapper over an overlay must not hide the objection")
+// wraps that in an overlay — or the reverse, when the patch lands first. The
+// resolver must reach the tool through both orders, and the state it finds
+// there must be the tool's own.
+func TestResolveSemanticReachesThroughNestedWrappers(t *testing.T) {
+	tests := []struct {
+		name string
+		tool tool.Tool
+		// wrap builds the nested shape around the tool.
+		wrap func(tool.Tool) tool.Tool
+	}{
+		{"named over overlay, objecting", unsafeTool{}, func(t tool.Tool) tool.Tool {
+			return NewUnprefixedNamedTool(overlay(t))
+		}},
+		{"overlay over named, objecting", unsafeTool{}, func(t tool.Tool) tool.Tool {
+			return overlay(NewUnprefixedNamedTool(t))
+		}},
+		{"named over overlay, nothing declared", plainTool{}, func(t tool.Tool) tool.Tool {
+			return NewUnprefixedNamedTool(overlay(t))
+		}},
+		{"overlay over named, guaranteeing", guaranteeingTool{}, func(t tool.Tool) tool.Tool {
+			return overlay(NewUnprefixedNamedTool(t))
+		}},
 	}
-	if IsConcurrencySafe(wrapped) {
-		t.Error("the resolver must reach the objection through both wrappers")
-	}
-	if tool.IsConcurrencySafe(tool.Tool(wrapped)) {
-		t.Error("the named wrapper must report the objection to plain callers too")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapped := tt.wrap(tt.tool)
+			if got := resolveConcurrencyOwner(wrapped); got != tt.tool {
+				t.Fatalf("resolveConcurrencyOwner() = %T, want the wrapped %T", got, tt.tool)
+			}
+			if got, want := IsConcurrencySafe(wrapped), tool.IsConcurrencySafe(tt.tool); got != want {
+				t.Errorf("IsConcurrencySafe(nested) = %v, want the tool's own %v", got, want)
+			}
+		})
 	}
 }
 
-// The nested case must not manufacture an objection either.
-func TestNamedToolResolvesNestedOverlaysWithoutObjection(t *testing.T) {
-	patched := ApplyDeclarations(
-		[]tool.Tool{plainTool{}},
-		[]tool.Declaration{{Name: "plain", Description: "patched"}},
-	)[0]
-	wrapped := NewUnprefixedNamedTool(patched)
+// originalOnlyWrapper is a wrapper that is not a NamedTool but exposes what it
+// wraps through Original(), the shape ToolPipe and toolsearch use.
+type originalOnlyWrapper struct {
+	plainTool
+	inner tool.Tool
+}
 
-	if !wrapped.IsConcurrencySafe() {
-		t.Error("nesting wrappers must leave an unobjecting tool admissible")
+func (w *originalOnlyWrapper) Original() tool.Tool { return w.inner }
+
+// The concurrency resolver follows any Original() chain, interleaved with
+// overlays, while ResolveSemantic keeps its narrower contract: a wrapper that is
+// not a NamedTool still stands in for the tool's other capabilities.
+func TestConcurrencyResolutionFollowsOriginalChains(t *testing.T) {
+	wrapped := overlay(&originalOnlyWrapper{inner: overlay(NewUnprefixedNamedTool(unsafeTool{}))})
+
+	if got := resolveConcurrencyOwner(wrapped); got != tool.Tool(unsafeTool{}) {
+		t.Fatalf("resolveConcurrencyOwner() = %T, want the innermost tool", got)
+	}
+	if IsConcurrencySafe(wrapped) {
+		t.Error("the objection must be found through every wrapper in the chain")
+	}
+	if _, ok := ResolveSemantic(wrapped).(*originalOnlyWrapper); !ok {
+		t.Errorf("ResolveSemantic must stop at a wrapper that is not a NamedTool, got %T",
+			ResolveSemantic(wrapped))
+	}
+}
+
+// overlay patches a tool's description, producing a declaration wrapper.
+func overlay(t tool.Tool) tool.Tool {
+	return ApplyDeclarations(
+		[]tool.Tool{t},
+		[]tool.Declaration{{Name: t.Declaration().Name, Description: "patched"}},
+	)[0]
+}
+
+// selfWrapper is a wrapper whose Original() points back at itself, the shape
+// that would otherwise loop.
+type selfWrapper struct{ plainTool }
+
+func (s *selfWrapper) Original() tool.Tool { return s }
+
+// nilWrapper is a wrapper whose Original() is nil.
+type nilWrapper struct{ plainTool }
+
+func (*nilWrapper) Original() tool.Tool { return nil }
+
+// A wrapper returning itself or nil ends the chain at the wrapper rather than
+// looping or resolving to nothing.
+func TestConcurrencyResolutionStopsAtDegenerateWrappers(t *testing.T) {
+	self := &selfWrapper{}
+	if got := resolveConcurrencyOwner(self); got != tool.Tool(self) {
+		t.Errorf("a self-referential wrapper must resolve to itself, got %T", got)
+	}
+	empty := &nilWrapper{}
+	if got := resolveConcurrencyOwner(empty); got != tool.Tool(empty) {
+		t.Errorf("a wrapper with no original must resolve to itself, got %T", got)
+	}
+	if !IsConcurrencySafe(self) || !IsConcurrencySafe(empty) {
+		t.Error("degenerate wrappers declare nothing and are admitted")
 	}
 }

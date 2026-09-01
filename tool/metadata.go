@@ -50,16 +50,24 @@ type MetadataProvider interface {
 // ConcurrencyAware is a small opt-in interface for tools that only need to
 // publish their concurrency property.
 //
-// Returning false is an objection: the parallel tool paths keep the tool's whole
-// turn sequential. Returning true is a guarantee — the tool can run at the same
-// time as any other tool call in its turn, other calls to itself included — which
-// is why MetadataOf reads it as ConcurrencySafe. Not implementing the interface
-// raises no objection and promises nothing: it is the admission default, and
-// MetadataOf reports nothing for it.
+// It has three states, and each is preserved through framework wrappers:
 //
-// Framework wrappers forward the answer of the tool they wrap and delegate
-// ToolMetadata the same way, so a wrapper neither adds a guarantee nor hides an
-// objection.
+//   - Returning false is an objection: the parallel tool paths keep the tool's
+//     whole turn sequential.
+//   - Returning true is a guarantee — the tool can run at the same time as any
+//     other tool call in its turn, other calls to itself included — which is
+//     why MetadataOf reads it as ConcurrencySafe.
+//   - Not implementing the interface raises no objection and promises nothing.
+//     It is the admission default, and MetadataOf reports nothing for it.
+//
+// Only the tool that owns the decision implements it. Framework wrappers — a
+// toolset's name prefix, a request-local schema augmentation, a renamed
+// deferred tool, a declaration overlay — do not, since a wrapper answering
+// with a bool would have to turn "nothing declared" into one of the other two
+// states. They expose the tool they wrap instead, and IsConcurrencySafe
+// resolves through them; a wrapper therefore neither adds a guarantee nor
+// hides an objection, and asking it directly finds nothing declared, which is
+// exactly what the wrapper itself declares.
 type ConcurrencyAware interface {
 	IsConcurrencySafe() bool
 }
@@ -106,14 +114,38 @@ func MetadataOf(t Tool) ToolMetadata {
 //
 // A tool implementing neither interface is admitted, which is what makes this an
 // opt-out rather than an opt-in.
+//
+// Framework wrappers do not implement ConcurrencyAware; they expose the tool
+// they wrap through an Original() Tool method, and the question is put to the
+// innermost tool. Custom schedulers and policies should ask here rather than
+// type-assert ConcurrencyAware on whatever sits in a request's tool map, which
+// is usually a wrapper.
 func IsConcurrencySafe(t Tool) bool {
-	if t == nil {
-		return true
-	}
-	if aware, ok := t.(ConcurrencyAware); ok {
+	if aware, ok := unwrapOriginal(t).(ConcurrencyAware); ok {
 		return aware.IsConcurrencySafe()
 	}
 	return true
+}
+
+// unwrapOriginal follows the Original() chain framework wrappers expose to the
+// tool that owns the declaration. A wrapper returning nil or itself ends the
+// chain at the wrapper.
+func unwrapOriginal(t Tool) Tool {
+	type originalProvider interface {
+		Original() Tool
+	}
+	for t != nil {
+		wrapper, ok := t.(originalProvider)
+		if !ok {
+			return t
+		}
+		original := wrapper.Original()
+		if original == nil || original == t {
+			return t
+		}
+		t = original
+	}
+	return nil
 }
 
 // ShouldDefer reports whether a tool asks host-side loading logic to defer
