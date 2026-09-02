@@ -255,28 +255,28 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt 
 		return nil, fmt.Errorf("evaluate case results (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
 	}
 	runResult = &service.EvalSetRunResult{
-		AppName:            req.AppName,
-		EvalSetID:          req.EvalSetID,
-		AgentExecutionTime: agentExecutionTimeForInferenceResults(req.InferenceResults),
-		EvalCaseResults:    evalCaseResults,
+		AppName:           req.AppName,
+		EvalSetID:         req.EvalSetID,
+		InferenceDuration: inferenceDurationForInferenceResults(req.InferenceResults),
+		EvalCaseResults:   evalCaseResults,
 	}
 	return runResult, nil
 }
 
-func agentExecutionTimeForInferenceResults(results []*service.InferenceResult) time.Duration {
+func inferenceDurationForInferenceResults(results []*service.InferenceResult) time.Duration {
 	var elapsed time.Duration
 	for _, result := range results {
-		elapsed += agentExecutionTimeForInferenceResult(result)
+		elapsed += inferenceDurationForInferenceResult(result)
 	}
 	return elapsed
 }
 
-func agentExecutionTimeForInferenceResult(result *service.InferenceResult) time.Duration {
+func inferenceDurationForInferenceResult(result *service.InferenceResult) time.Duration {
 	if result == nil {
 		return 0
 	}
-	if result.AgentExecutionTime > 0 {
-		return result.AgentExecutionTime
+	if result.InferenceDuration > 0 {
+		return result.InferenceDuration
 	}
 	// Trace-mode cases replay recorded invocations without executing the agent.
 	if result.EvalMode == evalset.EvalModeTrace {
@@ -406,13 +406,13 @@ func (s *local) evaluateCase(ctx context.Context, req *service.EvaluateRequest, 
 
 func (s *local) failedEvalCaseResult(evalSetID string, inferenceResult *service.InferenceResult, errorMessage string) *evalresult.EvalCaseResult {
 	return &evalresult.EvalCaseResult{
-		EvalSetID:          evalSetID,
-		EvalID:             inferenceResult.EvalCaseID,
-		FinalEvalStatus:    evalstatus.EvalStatusFailed,
-		ErrorMessage:       errorMessage,
-		SessionID:          inferenceResult.SessionID,
-		UserID:             inferenceResult.UserID,
-		AgentExecutionTime: agentExecutionTimeForInferenceResult(inferenceResult),
+		EvalSetID:         evalSetID,
+		EvalID:            inferenceResult.EvalCaseID,
+		FinalEvalStatus:   evalstatus.EvalStatusFailed,
+		ErrorMessage:      errorMessage,
+		SessionID:         inferenceResult.SessionID,
+		UserID:            inferenceResult.UserID,
+		InferenceDuration: inferenceDurationForInferenceResult(inferenceResult),
 	}
 }
 
@@ -573,7 +573,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		EvalMetricResultPerInvocation: perInvocation,
 		SessionID:                     inferenceResult.SessionID,
 		UserID:                        inputs.userID,
-		AgentExecutionTime:            agentExecutionTimeForInferenceResult(inferenceResult),
+		InferenceDuration:             inferenceDurationForInferenceResult(inferenceResult),
 	}, nil
 }
 

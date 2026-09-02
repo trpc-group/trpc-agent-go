@@ -23,7 +23,7 @@ type EvaluationResult struct {
 	EvalSetID     string                    // EvalSetID 是评估集标识
 	OverallStatus status.EvalStatus         // OverallStatus 是整体状态
 	ExecutionTime time.Duration             // ExecutionTime 是执行耗时
-	AgentExecutionTime time.Duration        // AgentExecutionTime 是实际 agent 推理耗时（不含评估和预期 runner）
+	InferenceDuration time.Duration        // InferenceDuration 是实际 agent 推理耗时（不含评估和预期 runner）
 	EvalCases     []*EvaluationCaseResult   // EvalCases 是用例结果列表
 	EvalResult    *evalresult.EvalSetResult // EvalResult 是持久化的 EvalSetResult
 }
@@ -31,7 +31,7 @@ type EvaluationResult struct {
 type EvaluationCaseResult struct {
 	EvalCaseID      string                         // EvalCaseID 是用例标识
 	OverallStatus   status.EvalStatus              // OverallStatus 是该用例的聚合状态
-	AgentExecutionTime time.Duration              // AgentExecutionTime 是该用例所有 run 的实际 agent 推理耗时
+	InferenceDuration time.Duration              // InferenceDuration 是该用例所有 run 的实际 agent 推理耗时
 	EvalCaseResults []*evalresult.EvalCaseResult   // EvalCaseResults 是每次运行的用例结果
 	MetricResults   []*evalresult.EvalMetricResult // MetricResults 是聚合后的指标结果
 	RunDetails      []*EvaluationCaseRunDetails    // RunDetails 是可选的逐 run 推理详情
@@ -47,7 +47,7 @@ type EvaluationInferenceDetails struct {
 	UserID          string                // UserID 是本次运行使用的用户标识
 	Status          status.EvalStatus     // Status 是推理状态
 	ErrorMessage    string                // ErrorMessage 是推理失败信息
-	AgentExecutionTime time.Duration      // AgentExecutionTime 是本次 run 的实际 agent 推理耗时
+	InferenceDuration time.Duration      // InferenceDuration 是本次 run 的实际 agent 推理耗时
 	Inferences      []*evalset.Invocation // Inferences 是推理输出
 	ExecutionTraces []*trace.Trace        // ExecutionTraces 是执行轨迹
 }
@@ -55,7 +55,7 @@ type EvaluationInferenceDetails struct {
 
 `EvalResult` 包含可由 EvalResultManager 持久化的聚合 EvalSetResult。`RunDetails` 只会在开启 run details 后填充，每条明细都对应一次具体运行。
 
-`ExecutionTime` 是完整评测流程耗时，包含推理和指标评估；`AgentExecutionTime` 只统计实际 agent 推理耗时，并按所有 case/run 累加，不包含评估器或预期 runner 的耗时。开启 run 级并发时，它可能大于端到端的墙钟耗时。
+`ExecutionTime` 是完整评测流程耗时，包含推理和指标评估；`InferenceDuration` 只统计实际 agent 推理耗时，并按所有 case/run 累加，不包含评估器或预期 runner 的耗时。开启 run 级并发时，它可能大于端到端的墙钟耗时。
 
 默认情况下，`evaluation.New` 会创建 AgentEvaluator 并使用 InMemory 的 EvalSetManager、MetricManager、EvalResultManager 与默认 Registry，同时创建本地 Service。若希望从本地文件读取 EvalSet 与指标配置，并将结果写入文件，需要显式注入 Local Manager。
 

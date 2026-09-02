@@ -55,8 +55,8 @@ type options struct {
 	runDetailsEnabled                 bool
 	runDetailsCollector               *runDetailsCollector
 	runOptions                        []agent.RunOption
-	agentExecutionTime                time.Duration
-	agentExecutionTimeMu              sync.Mutex
+	inferenceDuration                 time.Duration
+	inferenceDurationMu               sync.Mutex
 }
 
 // newOptions creates a new options with the default values.
@@ -263,20 +263,20 @@ func (o *options) validate(requireEvalService bool) error {
 	return nil
 }
 
-func (o *options) addAgentExecutionDuration(elapsed time.Duration) {
+func (o *options) addInferenceDuration(elapsed time.Duration) {
 	if o == nil || elapsed <= 0 {
 		return
 	}
-	o.agentExecutionTimeMu.Lock()
-	o.agentExecutionTime += elapsed
-	o.agentExecutionTimeMu.Unlock()
+	o.inferenceDurationMu.Lock()
+	o.inferenceDuration += elapsed
+	o.inferenceDurationMu.Unlock()
 }
 
-func (o *options) agentExecutionTimeValue() time.Duration {
+func (o *options) inferenceDurationValue() time.Duration {
 	if o == nil {
 		return 0
 	}
-	o.agentExecutionTimeMu.Lock()
-	defer o.agentExecutionTimeMu.Unlock()
-	return o.agentExecutionTime
+	o.inferenceDurationMu.Lock()
+	defer o.inferenceDurationMu.Unlock()
+	return o.inferenceDuration
 }

@@ -51,7 +51,7 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 		UserID:             "user-123",
 		Status:             status.EvalStatusPassed,
 		ErrorMessage:       "",
-		AgentExecutionTime: 42 * time.Millisecond,
+		InferenceDuration:  42 * time.Millisecond,
 	}
 
 	data, err := json.Marshal(result)
@@ -67,7 +67,7 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, result.SessionID, decoded.SessionID)
 	assert.Equal(t, result.UserID, decoded.UserID)
 	assert.Equal(t, result.Status, decoded.Status)
-	assert.Equal(t, result.AgentExecutionTime, decoded.AgentExecutionTime)
+	assert.Equal(t, result.InferenceDuration, decoded.InferenceDuration)
 	assert.Len(t, decoded.Inferences, 1)
 	if len(decoded.Inferences) == 1 {
 		assert.Equal(t, "inv-1", decoded.Inferences[0].InvocationID)

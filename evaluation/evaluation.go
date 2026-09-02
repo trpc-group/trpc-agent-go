@@ -149,23 +149,23 @@ type agentEvaluator struct {
 
 // EvaluationResult contains the aggregated outcome of running an evaluation across multiple runs.
 type EvaluationResult struct {
-	AppName            string                    `json:"appName"`            // AppName identifies the agent being evaluated.
-	EvalSetID          string                    `json:"evalSetId"`          // EvalSetID identifies the evaluation set used in this run.
-	OverallStatus      status.EvalStatus         `json:"overallStatus"`      // OverallStatus summarizes the aggregated evaluation status across cases.
-	ExecutionTime      time.Duration             `json:"executionTime"`      // ExecutionTime records the total latency for the evaluation run.
-	AgentExecutionTime time.Duration             `json:"agentExecutionTime"` // AgentExecutionTime records summed actual agent time across cases and runs.
-	EvalCases          []*EvaluationCaseResult   `json:"evalCases"`          // EvalCases contains aggregated results for each evaluation case.
-	EvalResult         *evalresult.EvalSetResult `json:"evalSetResult"`      // EvalSetResult contains the aggregated results of the evaluation set.
+	AppName           string                    `json:"appName"`           // AppName identifies the agent being evaluated.
+	EvalSetID         string                    `json:"evalSetId"`         // EvalSetID identifies the evaluation set used in this run.
+	OverallStatus     status.EvalStatus         `json:"overallStatus"`     // OverallStatus summarizes the aggregated evaluation status across cases.
+	ExecutionTime     time.Duration             `json:"executionTime"`     // ExecutionTime records the total latency for the evaluation run.
+	InferenceDuration time.Duration             `json:"inferenceDuration"` // InferenceDuration records summed actual agent time across cases and runs.
+	EvalCases         []*EvaluationCaseResult   `json:"evalCases"`         // EvalCases contains aggregated results for each evaluation case.
+	EvalResult        *evalresult.EvalSetResult `json:"evalSetResult"`     // EvalSetResult contains the aggregated results of the evaluation set.
 }
 
 // EvaluationCaseResult aggregates the outcome of a single eval case across multiple runs.
 type EvaluationCaseResult struct {
-	EvalCaseID         string                         `json:"evalId"`               // EvalCaseID identifies the evaluation case.
-	OverallStatus      status.EvalStatus              `json:"overallStatus"`        // OverallStatus summarizes the overall status of case across runs.
-	AgentExecutionTime time.Duration                  `json:"agentExecutionTime"`   // AgentExecutionTime is the total actual agent time across runs for this case.
-	EvalCaseResults    []*evalresult.EvalCaseResult   `json:"evalCaseResults"`      // EvalCaseResults stores the per-run results for this case.
-	MetricResults      []*evalresult.EvalMetricResult `json:"metricResults"`        // MetricResults lists aggregated metric outcomes across runs.
-	RunDetails         []*EvaluationCaseRunDetails    `json:"runDetails,omitempty"` // RunDetails stores optional per-run inference details for this case.
+	EvalCaseID        string                         `json:"evalId"`               // EvalCaseID identifies the evaluation case.
+	OverallStatus     status.EvalStatus              `json:"overallStatus"`        // OverallStatus summarizes the overall status of case across runs.
+	InferenceDuration time.Duration                  `json:"inferenceDuration"`    // InferenceDuration is the total actual agent time across runs for this case.
+	EvalCaseResults   []*evalresult.EvalCaseResult   `json:"evalCaseResults"`      // EvalCaseResults stores the per-run results for this case.
+	MetricResults     []*evalresult.EvalMetricResult `json:"metricResults"`        // MetricResults lists aggregated metric outcomes across runs.
+	RunDetails        []*EvaluationCaseRunDetails    `json:"runDetails,omitempty"` // RunDetails stores optional per-run inference details for this case.
 }
 
 // EvaluationCaseRunDetails contains caller-facing details for a single run of an eval case.
@@ -176,13 +176,13 @@ type EvaluationCaseRunDetails struct {
 
 // EvaluationInferenceDetails contains caller-facing inference details for a single eval case run.
 type EvaluationInferenceDetails struct {
-	SessionID          string                `json:"sessionId,omitempty"`          // SessionID identifies the inference session used for this run.
-	UserID             string                `json:"userId,omitempty"`             // UserID identifies the user used for this run.
-	Status             status.EvalStatus     `json:"status,omitempty"`             // Status records the inference status for this run.
-	ErrorMessage       string                `json:"errorMessage,omitempty"`       // ErrorMessage records the inference failure message when present.
-	AgentExecutionTime time.Duration         `json:"agentExecutionTime,omitempty"` // AgentExecutionTime records the actual agent time for this run.
-	Inferences         []*evalset.Invocation `json:"inferences,omitempty"`         // Inferences stores the invocation outputs captured during this run.
-	ExecutionTraces    []*trace.Trace        `json:"executionTraces,omitempty"`    // ExecutionTraces stores the execution traces captured during this run.
+	SessionID         string                `json:"sessionId,omitempty"`         // SessionID identifies the inference session used for this run.
+	UserID            string                `json:"userId,omitempty"`            // UserID identifies the user used for this run.
+	Status            status.EvalStatus     `json:"status,omitempty"`            // Status records the inference status for this run.
+	ErrorMessage      string                `json:"errorMessage,omitempty"`      // ErrorMessage records the inference failure message when present.
+	InferenceDuration time.Duration         `json:"inferenceDuration,omitempty"` // InferenceDuration records the actual agent time for this run.
+	Inferences        []*evalset.Invocation `json:"inferences,omitempty"`        // Inferences stores the invocation outputs captured during this run.
+	ExecutionTraces   []*trace.Trace        `json:"executionTraces,omitempty"`   // ExecutionTraces stores the execution traces captured during this run.
 }
 
 type runDetailsCollector struct {
@@ -212,13 +212,13 @@ func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string, opt ...
 		return nil, fmt.Errorf("summarize overall status: %w", err)
 	}
 	return &EvaluationResult{
-		AppName:            a.appName,
-		EvalSetID:          evalSetID,
-		OverallStatus:      status,
-		ExecutionTime:      time.Since(start),
-		AgentExecutionTime: callOpts.agentExecutionTimeValue(),
-		EvalCases:          evalCases,
-		EvalResult:         evalSetResult,
+		AppName:           a.appName,
+		EvalSetID:         evalSetID,
+		OverallStatus:     status,
+		ExecutionTime:     time.Since(start),
+		InferenceDuration: callOpts.inferenceDurationValue(),
+		EvalCases:         evalCases,
+		EvalResult:        evalSetResult,
 	}, nil
 }
 
@@ -322,7 +322,7 @@ func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID strin
 		}
 		for _, run := range runs {
 			if run != nil {
-				evalCaseResult.AgentExecutionTime += run.AgentExecutionTime
+				evalCaseResult.InferenceDuration += run.InferenceDuration
 			}
 		}
 		evalCaseResults = append(evalCaseResults, evalCaseResult)
@@ -392,9 +392,9 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string, op
 		allCaseResults = append(allCaseResults, caseResults...)
 	}
 	evalSetResult := &evalresult.EvalSetResult{
-		EvalSetID:          evalSetID,
-		AgentExecutionTime: opts.agentExecutionTimeValue(),
-		EvalCaseResults:    allCaseResults,
+		EvalSetID:         evalSetID,
+		InferenceDuration: opts.inferenceDurationValue(),
+		EvalCaseResults:   allCaseResults,
 	}
 	if err := multirun.SummarizeMultiRun(evalSetResult, opts.numRuns); err != nil {
 		return nil, fmt.Errorf("summarize eval set result: %w", err)
@@ -489,8 +489,8 @@ func (a *agentEvaluator) runEvaluationOnce(
 	if err != nil {
 		return nil, fmt.Errorf("run %d inference: %w", runID, err)
 	}
-	inferenceAgentExecutionTime := agentExecutionTimeForInferenceResults(runInferenceResults)
-	opts.addAgentExecutionDuration(inferenceAgentExecutionTime)
+	inferenceDuration := inferenceDurationForInferenceResults(runInferenceResults)
+	opts.addInferenceDuration(inferenceDuration)
 	if opts.runDetailsCollector != nil {
 		opts.runDetailsCollector.add(runID, runInferenceResults)
 	}
@@ -535,32 +535,32 @@ func (a *agentEvaluator) runEvaluationOnce(
 	if runResult == nil {
 		return nil, errors.New("eval set run result is nil")
 	}
-	if inferenceAgentExecutionTime == 0 {
-		runAgentExecutionTime := runResult.AgentExecutionTime
-		if runAgentExecutionTime == 0 {
+	if inferenceDuration == 0 {
+		runInferenceDuration := runResult.InferenceDuration
+		if runInferenceDuration == 0 {
 			for _, caseResult := range runResult.EvalCaseResults {
 				if caseResult != nil {
-					runAgentExecutionTime += caseResult.AgentExecutionTime
+					runInferenceDuration += caseResult.InferenceDuration
 				}
 			}
 		}
-		opts.addAgentExecutionDuration(runAgentExecutionTime)
+		opts.addInferenceDuration(runInferenceDuration)
 	}
 	caseResults := make([]*evalresult.EvalCaseResult, 0, len(runResult.EvalCaseResults))
-	agentExecutionTimes := make(map[string]time.Duration)
+	inferenceDurations := make(map[string]time.Duration)
 	for _, inferenceResult := range runInferenceResults {
 		if inferenceResult == nil || inferenceResult.EvalCaseID == "" {
 			continue
 		}
-		agentExecutionTimes[inferenceResult.EvalCaseID] += agentExecutionTimeForInferenceResult(inferenceResult)
+		inferenceDurations[inferenceResult.EvalCaseID] += inferenceDurationForInferenceResult(inferenceResult)
 	}
 	for _, caseResult := range runResult.EvalCaseResults {
 		if caseResult == nil {
 			continue
 		}
 		caseResult.RunID = runID
-		if elapsed, ok := agentExecutionTimes[caseResult.EvalID]; ok {
-			caseResult.AgentExecutionTime = elapsed
+		if elapsed, ok := inferenceDurations[caseResult.EvalID]; ok {
+			caseResult.InferenceDuration = elapsed
 		}
 		caseResults = append(caseResults, caseResult)
 	}
@@ -675,22 +675,22 @@ func newEvaluationInferenceDetails(inferenceResult *service.InferenceResult) *Ev
 		return nil
 	}
 	return &EvaluationInferenceDetails{
-		SessionID:          inferenceResult.SessionID,
-		UserID:             inferenceResult.UserID,
-		Status:             inferenceResult.Status,
-		ErrorMessage:       inferenceResult.ErrorMessage,
-		AgentExecutionTime: agentExecutionTimeForInferenceResult(inferenceResult),
-		Inferences:         append([]*evalset.Invocation(nil), inferenceResult.Inferences...),
-		ExecutionTraces:    append([]*trace.Trace(nil), inferenceResult.ExecutionTraces...),
+		SessionID:         inferenceResult.SessionID,
+		UserID:            inferenceResult.UserID,
+		Status:            inferenceResult.Status,
+		ErrorMessage:      inferenceResult.ErrorMessage,
+		InferenceDuration: inferenceDurationForInferenceResult(inferenceResult),
+		Inferences:        append([]*evalset.Invocation(nil), inferenceResult.Inferences...),
+		ExecutionTraces:   append([]*trace.Trace(nil), inferenceResult.ExecutionTraces...),
 	}
 }
 
-func agentExecutionTimeForInferenceResult(inferenceResult *service.InferenceResult) time.Duration {
+func inferenceDurationForInferenceResult(inferenceResult *service.InferenceResult) time.Duration {
 	if inferenceResult == nil {
 		return 0
 	}
-	if inferenceResult.AgentExecutionTime > 0 {
-		return inferenceResult.AgentExecutionTime
+	if inferenceResult.InferenceDuration > 0 {
+		return inferenceResult.InferenceDuration
 	}
 	// Trace-mode cases replay recorded invocations without executing the agent.
 	if inferenceResult.EvalMode == evalset.EvalModeTrace {
@@ -708,10 +708,10 @@ func agentExecutionTimeForInferenceResult(inferenceResult *service.InferenceResu
 	return elapsed
 }
 
-func agentExecutionTimeForInferenceResults(inferenceResults []*service.InferenceResult) time.Duration {
+func inferenceDurationForInferenceResults(inferenceResults []*service.InferenceResult) time.Duration {
 	var elapsed time.Duration
 	for _, inferenceResult := range inferenceResults {
-		elapsed += agentExecutionTimeForInferenceResult(inferenceResult)
+		elapsed += inferenceDurationForInferenceResult(inferenceResult)
 	}
 	return elapsed
 }

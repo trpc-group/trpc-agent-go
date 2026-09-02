@@ -598,7 +598,7 @@ func TestInferenceValidation(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestInferenceTracksAgentExecutionTime(t *testing.T) {
+func TestInferenceTracksInferenceDuration(t *testing.T) {
 	delay := 20 * time.Millisecond
 	r := &delayedRunner{
 		fakeRunner: &fakeRunner{events: []*event.Event{makeFinalEvent("answer")}},
@@ -609,7 +609,7 @@ func TestInferenceTracksAgentExecutionTime(t *testing.T) {
 	}}, &evalset.SessionInput{UserID: "user"}, "session", nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.GreaterOrEqual(t, result.AgentExecutionTime, delay)
+	assert.GreaterOrEqual(t, result.InferenceDuration, delay)
 }
 
 func TestInference_CollectsExecutionTracesInInvocationOrder(t *testing.T) {
