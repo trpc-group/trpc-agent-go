@@ -123,12 +123,9 @@ func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 
 	c.ws = ws
 	c.sessionID = uuid.New().String()
-	ready, err := c.waitForReady()
+	_, err = c.waitForReady()
 	if err != nil {
 		return nil, c.cleanupAfterStartupFailure(err)
-	}
-	if !ready {
-		return nil, c.cleanupAfterStartupFailure(fmt.Errorf("kernel not ready"))
 	}
 
 	return c, nil
