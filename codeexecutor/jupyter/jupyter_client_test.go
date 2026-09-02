@@ -385,7 +385,7 @@ func TestDeleteKernelCoversRequestAndResponseBranches(t *testing.T) {
 			kernelID: "123",
 			httpClient: &http.Client{},
 		}
-	ssert.Error(t, client.deleteKernel())
+	assert.Error(t, client.deleteKernel())
 	})
 
 	 t.Run("transport error", func(t *testing.T) {
@@ -402,7 +402,7 @@ func TestDeleteKernelCoversRequestAndResponseBranches(t *testing.T) {
 	 t.Run("ok with token", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "token secret", r.Header.Get("Authorization"))
-			assert.Equal(t, /api/kernels/123, r.URL.Path)
+			assert.Equal(t, "/api/kernels/123", r.URL.Path)
 			assert.Equal(t, http.MethodDelete, r.Method)
 			w.WriteHeader(http.StatusOK)
 		}))
