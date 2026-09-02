@@ -98,12 +98,13 @@ func newTestClient(
 	t *testing.T,
 	handler processconnect.ProcessHandler,
 	headers http.Header,
+	options ...ClientOption,
 ) *Client {
 	t.Helper()
 	_, rpcHandler := processconnect.NewProcessHandler(handler)
 	server := httptest.NewTLSServer(rpcHandler)
 	t.Cleanup(server.Close)
-	client, err := NewClient(server.URL, server.Client(), headers)
+	client, err := NewClient(server.URL, server.Client(), headers, options...)
 	require.NoError(t, err)
 	return client
 }
@@ -154,6 +155,20 @@ func unexpectedSendSignal(t *testing.T) func(
 		*connect.Request[process.SendSignalRequest],
 	) (*connect.Response[process.SendSignalResponse], error) {
 		t.Error("Run must not send an implicit process signal")
+		return connect.NewResponse(&process.SendSignalResponse{}), nil
+	}
+}
+
+func successfulSendSignal(t *testing.T) func(
+	context.Context,
+	*connect.Request[process.SendSignalRequest],
+) (*connect.Response[process.SendSignalResponse], error) {
+	t.Helper()
+	return func(
+		_ context.Context,
+		req *connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		assert.Equal(t, process.Signal_SIGNAL_SIGKILL, req.Msg.Signal)
 		return connect.NewResponse(&process.SendSignalResponse{}), nil
 	}
 }

@@ -66,9 +66,8 @@ func TestStartReturnsControllableProcess(t *testing.T) {
 	client := newTestClient(t, handler, nil)
 	proc, err := client.Start(context.Background(), Request{
 		Cmd:           "cat",
-		Tag:           "handle-process",
 		KeepStdinOpen: true,
-	})
+	}, WithTag("handle-process"))
 	require.NoError(t, err)
 	assert.Equal(t, uint32(201), proc.PID())
 
@@ -258,6 +257,65 @@ func TestUninitializedProcessMethods(t *testing.T) {
 
 	err = proc.CloseStdin(context.Background())
 	require.ErrorContains(t, err, "process is not initialized")
+}
+
+func TestCaptureBufferBoundaries(t *testing.T) {
+	tests := []struct {
+		name          string
+		limit         int
+		chunks        []string
+		want          string
+		wantTruncated bool
+	}{
+		{
+			name:   "UnlimitedAcrossEvents",
+			chunks: []string{"ab", "cde"},
+			want:   "abcde",
+		},
+		{
+			name:   "ExactlyAtLimitAcrossEvents",
+			limit:  4,
+			chunks: []string{"ab", "cd"},
+			want:   "abcd",
+		},
+		{
+			name:          "OneByteOverLimit",
+			limit:         4,
+			chunks:        []string{"abcde"},
+			want:          "abcd",
+			wantTruncated: true,
+		},
+		{
+			name:          "CrossesLimitAcrossEvents",
+			limit:         4,
+			chunks:        []string{"ab", "cde"},
+			want:          "abcd",
+			wantTruncated: true,
+		},
+		{
+			name:          "DataAfterExactLimit",
+			limit:         4,
+			chunks:        []string{"abcd", "e"},
+			want:          "abcd",
+			wantTruncated: true,
+		},
+		{
+			name:   "EmptyDataAfterExactLimit",
+			limit:  4,
+			chunks: []string{"abcd", ""},
+			want:   "abcd",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buffer := captureBuffer{limit: tt.limit}
+			for _, chunk := range tt.chunks {
+				buffer.append([]byte(chunk))
+			}
+			assert.Equal(t, tt.want, buffer.String())
+			assert.Equal(t, tt.wantTruncated, buffer.truncated)
+		})
+	}
 }
 
 func TestConnectRejectsInvalidInitialStream(t *testing.T) {

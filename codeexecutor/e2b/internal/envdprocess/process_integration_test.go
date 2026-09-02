@@ -76,7 +76,21 @@ func TestIntegrationEnvdProcess(t *testing.T) {
 	sandbox := createIntegrationSandbox(ctx, t, httpClient, config)
 
 	rpc := processconnect.NewProcessClient(httpClient, sandbox.baseURL)
-	runner, err := NewClient(sandbox.baseURL, httpClient, sandbox.headers)
+	runner, err := NewClient(
+		sandbox.baseURL,
+		httpClient,
+		sandbox.headers,
+		WithEnvdVersion(sandbox.envdVersion),
+	)
+	require.NoError(t, err)
+	captureLimitedRunner, err := NewClient(
+		sandbox.baseURL,
+		httpClient,
+		sandbox.headers,
+		WithEnvdVersion(sandbox.envdVersion),
+		WithStdoutCaptureLimit(4),
+		WithStderrCaptureLimit(4),
+	)
 	require.NoError(t, err)
 	supportsCloseStdin := integrationSupportsCloseStdin(
 		ctx,
@@ -88,11 +102,12 @@ func TestIntegrationEnvdProcess(t *testing.T) {
 		sandbox.envdVersion, supportsCloseStdin)
 
 	testEnv := &integrationEnvironment{
-		rpc:                rpc,
-		runner:             runner,
-		headers:            sandbox.headers,
-		user:               config.envdUser,
-		supportsCloseStdin: supportsCloseStdin,
+		rpc:                  rpc,
+		runner:               runner,
+		captureLimitedRunner: captureLimitedRunner,
+		headers:              sandbox.headers,
+		user:                 config.envdUser,
+		supportsCloseStdin:   supportsCloseStdin,
 	}
 	t.Cleanup(func() { testEnv.cleanupProcesses(t) })
 
@@ -114,8 +129,20 @@ func TestIntegrationEnvdProcess(t *testing.T) {
 	t.Run("RunWithStdin", func(t *testing.T) {
 		testEnv.testRunWithStdin(ctx, t)
 	})
+	t.Run("RunOutputCaptureBoundaries", func(t *testing.T) {
+		testEnv.testRunOutputCaptureBoundaries(ctx, t)
+	})
+	t.Run("RunImmediateExitWithStdin", func(t *testing.T) {
+		testEnv.testRunImmediateExitWithStdin(ctx, t)
+	})
+	t.Run("RunBackpressureWithLargeStdin", func(t *testing.T) {
+		testEnv.testRunBackpressureWithLargeStdin(ctx, t)
+	})
 	t.Run("RunTimeout", func(t *testing.T) {
 		testEnv.testRunTimeout(ctx, t)
+	})
+	t.Run("RunCancellationCleanup", func(t *testing.T) {
+		testEnv.testRunCancellationCleanup(ctx, t)
 	})
 	t.Run("ProcessHandleLifecycle", func(t *testing.T) {
 		testEnv.testProcessHandleLifecycle(ctx, t)
@@ -305,11 +332,12 @@ func (s integrationSandbox) kill(
 }
 
 type integrationEnvironment struct {
-	rpc                processconnect.ProcessClient
-	runner             *Client
-	headers            http.Header
-	user               string
-	supportsCloseStdin bool
+	rpc                  processconnect.ProcessClient
+	runner               *Client
+	captureLimitedRunner *Client
+	headers              http.Header
+	user                 string
+	supportsCloseStdin   bool
 
 	mu   sync.Mutex
 	pids map[uint32]struct{}
@@ -575,7 +603,18 @@ func (e *integrationEnvironment) testRunWithStdin(
 	t *testing.T,
 ) {
 	if !e.supportsCloseStdin {
-		t.Skip("sandbox envd does not implement Process.CloseStdin; E2B requires envd >= 0.5.2")
+		_, err := e.runner.Run(parent, Request{
+			Cmd:   "/bin/sh",
+			Args:  []string{"-c", "cat"},
+			User:  e.user,
+			Stdin: "run-stdin-marker\n",
+		})
+		require.ErrorContains(
+			t,
+			err,
+			"finite stdin requires envd >= 0.5.2",
+		)
+		return
 	}
 	ctx, cancel := context.WithTimeout(parent, integrationOperationTimeout)
 	defer cancel()
@@ -593,6 +632,87 @@ func (e *integrationEnvironment) testRunWithStdin(
 	require.NoError(t, err)
 	assert.Equal(t, "run-stdin-marker\n__RUN_STDIN_CLOSED__\n", result.Stdout)
 	assert.Empty(t, result.Stderr)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.False(t, result.TimedOut)
+}
+
+func (e *integrationEnvironment) testRunOutputCaptureBoundaries(
+	parent context.Context,
+	t *testing.T,
+) {
+	ctx, cancel := context.WithTimeout(parent, integrationOperationTimeout)
+	defer cancel()
+
+	result, err := e.captureLimitedRunner.Run(ctx, Request{
+		Cmd:     "/bin/sh",
+		Args:    []string{"-c", "printf 'abcd'; printf 'abcde' >&2"},
+		User:    e.user,
+		Timeout: 20 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "abcd", result.Stdout)
+	assert.Equal(t, "abcd", result.Stderr)
+	assert.False(t, result.StdoutTruncated)
+	assert.True(t, result.StderrTruncated)
+}
+
+func (e *integrationEnvironment) testRunImmediateExitWithStdin(
+	parent context.Context,
+	t *testing.T,
+) {
+	ctx, cancel := context.WithTimeout(parent, integrationOperationTimeout)
+	defer cancel()
+
+	// The command does not need EOF, so keeping stdin open exercises this race on
+	// envd versions that do not implement CloseStdin.
+	result, err := e.runner.Run(ctx, Request{
+		Cmd:           "/bin/sh",
+		Args:          []string{"-c", "exit 0"},
+		User:          e.user,
+		Stdin:         "unused",
+		KeepStdinOpen: true,
+		Timeout:       20 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.False(t, result.TimedOut)
+}
+
+func (e *integrationEnvironment) testRunBackpressureWithLargeStdin(
+	parent context.Context,
+	t *testing.T,
+) {
+	const (
+		outputSize = 64 << 20
+		stdinSize  = 1 << 20
+	)
+	ctx, cancel := context.WithTimeout(parent, integrationOperationTimeout)
+	defer cancel()
+
+	// The process writes incompressible output before reading a fixed amount of
+	// stdin. Run must drain the response stream while SendInput is in flight.
+	// Reading an exact byte count avoids depending on CloseStdin support.
+	result, err := e.captureLimitedRunner.Run(ctx, Request{
+		Cmd: "/bin/sh",
+		Args: []string{
+			"-c",
+			fmt.Sprintf(
+				"head -c %d /dev/urandom; "+
+					"head -c %d >/dev/null; printf 'done' >&2",
+				outputSize,
+				stdinSize,
+			),
+		},
+		User:          e.user,
+		Stdin:         strings.Repeat("i", stdinSize),
+		KeepStdinOpen: true,
+		Timeout:       20 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.Len(t, result.Stdout, 4)
+	assert.Equal(t, "done", result.Stderr)
+	assert.True(t, result.StdoutTruncated)
+	assert.False(t, result.StderrTruncated)
 	assert.Equal(t, 0, result.ExitCode)
 	assert.False(t, result.TimedOut)
 }
@@ -616,6 +736,50 @@ func (e *integrationEnvironment) testRunTimeout(
 	require.NoError(t, e.waitForProcessConfigToDisappear(ctx, marker))
 }
 
+func (e *integrationEnvironment) testRunCancellationCleanup(
+	parent context.Context,
+	t *testing.T,
+) {
+	operationCtx, cancelOperation := context.WithTimeout(
+		parent, integrationOperationTimeout,
+	)
+	defer cancelOperation()
+	runCtx, cancelRun := context.WithCancel(parent)
+	defer cancelRun()
+	tag := integrationTag("run-cancel")
+	type runResult struct {
+		result Result
+		err    error
+	}
+	resultCh := make(chan runResult, 1)
+	go func() {
+		result, err := e.runner.Run(runCtx, Request{
+			Cmd:     "/bin/sh",
+			Args:    []string{"-c", "exec sleep 60"},
+			User:    e.user,
+			Timeout: 20 * time.Second,
+		}, WithTag(tag))
+		resultCh <- runResult{result: result, err: err}
+	}()
+
+	pid, err := e.waitForProcessConfig(operationCtx, func(info *process.ProcessInfo) bool {
+		return info.GetTag() == tag
+	})
+	require.NoError(t, err)
+	e.trackPID(pid)
+	cancelRun()
+
+	select {
+	case run := <-resultCh:
+		require.ErrorIs(t, run.err, context.Canceled)
+		assert.Equal(t, pid, run.result.PID)
+	case <-operationCtx.Done():
+		t.Fatal("Run did not return after caller cancellation")
+	}
+	require.NoError(t, e.waitForProcessToDisappear(operationCtx, pid))
+	e.forgetPID(pid)
+}
+
 func (e *integrationEnvironment) testProcessHandleLifecycle(
 	parent context.Context,
 	t *testing.T,
@@ -628,8 +792,7 @@ func (e *integrationEnvironment) testProcessHandleLifecycle(
 		Cmd:  "/bin/sh",
 		Args: []string{"-c", "exec sleep 60"},
 		User: e.user,
-		Tag:  tag,
-	})
+	}, WithTag(tag))
 	require.NoError(t, err)
 	pid := proc.PID()
 	require.NotZero(t, pid)
@@ -763,6 +926,33 @@ func (e *integrationEnvironment) waitForProcess(
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *integrationEnvironment) waitForProcessConfig(
+	ctx context.Context,
+	matches func(*process.ProcessInfo) bool,
+) (uint32, error) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		resp, err := e.rpc.List(
+			ctx,
+			integrationRequest(e.headers, &process.ListRequest{}),
+		)
+		if err != nil {
+			return 0, err
+		}
+		for _, info := range resp.Msg.Processes {
+			if matches(info) {
+				return info.Pid, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
 		case <-ticker.C:
 		}
 	}

@@ -107,3 +107,23 @@ func TestClientOperationsRejectInvalidInput(t *testing.T) {
 	_, err = uninitialized.Kill(context.Background(), 1)
 	require.ErrorContains(t, err, "client is not initialized")
 }
+
+func TestClientCloseStdinRejectsUnsupportedEnvd(t *testing.T) {
+	handler := &testProcessHandler{}
+	handler.closeStdin = func(
+		context.Context,
+		*connect.Request[processrpc.CloseStdinRequest],
+	) (*connect.Response[processrpc.CloseStdinResponse], error) {
+		t.Fatal("CloseStdin RPC must not be sent to unsupported envd")
+		return nil, nil
+	}
+	client := newTestClient(
+		t,
+		handler,
+		nil,
+		WithEnvdVersion("0.2.10"),
+	)
+
+	err := client.CloseStdin(context.Background(), 1)
+	require.ErrorContains(t, err, "close stdin requires envd >= 0.5.2")
+}

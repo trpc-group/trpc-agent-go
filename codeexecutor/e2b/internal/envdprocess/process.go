@@ -24,32 +24,64 @@ import (
 // safe for concurrent use. Canceling the context passed to Start or Connect
 // disconnects its event stream without killing the remote process.
 type Process struct {
-	client     *Client
-	pid        uint32
-	disconnect context.CancelFunc
-	done       chan struct{}
+	client      *Client
+	pid         uint32
+	disconnect  context.CancelFunc
+	done        chan struct{}
+	startupDone chan struct{}
+	startupOnce sync.Once
 
 	mu    sync.RWMutex
 	state processState
 }
 
 type processState struct {
-	stdout   bytes.Buffer
-	stderr   bytes.Buffer
-	exitCode int
-	timedOut bool
-	err      error
-	finished bool
+	stdout      captureBuffer
+	stderr      captureBuffer
+	exitCode    int
+	timedOut    bool
+	err         error
+	finished    bool
+	remoteEnded bool
 }
 
 func (s *processState) result(pid uint32) Result {
 	return Result{
-		PID:      pid,
-		Stdout:   s.stdout.String(),
-		Stderr:   s.stderr.String(),
-		ExitCode: s.exitCode,
-		TimedOut: s.timedOut,
+		PID:             pid,
+		Stdout:          s.stdout.String(),
+		Stderr:          s.stderr.String(),
+		ExitCode:        s.exitCode,
+		TimedOut:        s.timedOut,
+		StdoutTruncated: s.stdout.truncated,
+		StderrTruncated: s.stderr.truncated,
 	}
+}
+
+type captureBuffer struct {
+	bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *captureBuffer) append(output []byte) {
+	if len(output) == 0 {
+		return
+	}
+	if b.limit == 0 {
+		_, _ = b.Write(output)
+		return
+	}
+	remaining := b.limit - b.Len()
+	if remaining <= 0 {
+		b.truncated = true
+		return
+	}
+	if len(output) > remaining {
+		_, _ = b.Write(output[:remaining])
+		b.truncated = true
+		return
+	}
+	_, _ = b.Write(output)
 }
 
 // PID returns the envd process ID.
@@ -128,15 +160,25 @@ func newProcess(
 	disconnect context.CancelFunc,
 ) *Process {
 	return &Process{
-		client:     client,
-		pid:        pid,
-		disconnect: disconnect,
-		done:       make(chan struct{}),
+		client:      client,
+		pid:         pid,
+		disconnect:  disconnect,
+		done:        make(chan struct{}),
+		startupDone: make(chan struct{}),
+		state: processState{
+			stdout: captureBuffer{limit: client.stdoutCaptureLimit},
+			stderr: captureBuffer{limit: client.stderrCaptureLimit},
+		},
 	}
 }
 
+func (p *Process) completeStartup() {
+	p.startupOnce.Do(func() { close(p.startupDone) })
+}
+
 // startConsumer transfers processStreamCtx and stream ownership to the sole
-// event consumer. It is called exactly once after startup setup completes.
+// event consumer. Start calls it before initial stdin RPCs so process output
+// and stdin can make progress independently.
 func (p *Process) startConsumer(
 	processStreamCtx context.Context,
 	hasRemoteTimeout bool,
@@ -153,8 +195,14 @@ func (p *Process) consume(
 	// Defers run in reverse order: disconnect the attachment and cancel its RPC
 	// context before closing the response side of the stream. This keeps all
 	// transport cleanup with the sole stream owner.
-	defer stream.Close()
-	defer p.disconnect()
+	defer func() {
+		// A terminal response may arrive while Start is still writing initial
+		// stdin. Delay stream cancellation until startup finishes so consumer
+		// teardown cannot turn a successful stdin RPC into context.Canceled.
+		<-p.startupDone
+		p.disconnect()
+		_ = stream.Close()
+	}()
 	for stream.Receive() {
 		if p.consumeEvent(
 			processStreamCtx,
@@ -193,6 +241,9 @@ func (p *Process) consumeEvent(
 	err, done := finishProcessEvent(
 		processStreamCtx, &p.state, outcome,
 	)
+	if received.event != nil {
+		_, p.state.remoteEnded = received.event.Event.(*processrpc.ProcessEvent_End)
+	}
 	if done {
 		p.state.err = err
 		p.state.finished = true
@@ -202,6 +253,15 @@ func (p *Process) consumeEvent(
 		close(p.done)
 	}
 	return done
+}
+
+func (p *Process) remoteExecutionFinished() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.state.remoteEnded || p.state.timedOut
 }
 
 func (p *Process) snapshot() (Result, error) {
@@ -264,7 +324,7 @@ func receiveProcessStart(
 func streamContextError(processStreamCtx context.Context) error {
 	cause := context.Cause(processStreamCtx)
 	if errors.Is(cause, errProcessTimeout) {
-		return context.DeadlineExceeded
+		return errors.Join(errProcessTimeout, context.DeadlineExceeded)
 	}
 	if errors.Is(cause, errProcessDisconnected) {
 		return context.Canceled

@@ -26,8 +26,8 @@ var (
 )
 
 // defaultProcessTimeout matches the E2B SDK command timeout. It is applied
-// before processStreamCtx is passed to Connect so envd always receives an
-// explicit remote process deadline.
+// before processStreamCtx opens Start so envd always receives an explicit
+// remote process deadline.
 const defaultProcessTimeout = 60 * time.Second
 
 // Request describes one non-interactive process invocation.
@@ -39,9 +39,9 @@ type Request struct {
 	// User selects the sandbox user through envd's Basic authentication
 	// header. An empty value omits the header and lets envd choose its default.
 	User string
-	// Tag optionally identifies the process for List and Connect recovery.
-	Tag string
-	// Stdin is initial input sent after envd reports the process PID.
+	// Stdin is initial input sent after envd reports the process PID. Unless
+	// KeepStdinOpen is set, it requires CloseStdin support in envd 0.5.2 or
+	// newer so the remote process observes EOF.
 	Stdin string
 	// KeepStdinOpen leaves stdin open after Stdin is sent. It is intended for
 	// Start callers that will continue writing through Process.SendInput. Run
@@ -53,16 +53,20 @@ type Request struct {
 	Timeout time.Duration
 }
 
-// Result is the terminal state and exact output collected from a process. PID
-// is zero only when Run failed before receiving StartEvent. TimedOut is set
-// only when the configured or default remote process deadline expires, not
-// when the caller context is canceled or reaches its own deadline.
+// Result is the terminal state and captured output from a process. PID is zero
+// only when Run failed before receiving StartEvent. TimedOut is set only when
+// the configured or default remote process deadline expires, not when the
+// caller context is canceled or reaches its own deadline. Truncation flags are
+// set only when the corresponding Client capture limit discards output;
+// capture is exact and unlimited by default.
 type Result struct {
-	PID      uint32
-	Stdout   string
-	Stderr   string
-	ExitCode int
-	TimedOut bool
+	PID             uint32
+	Stdout          string
+	Stderr          string
+	ExitCode        int
+	TimedOut        bool
+	StdoutTruncated bool
+	StderrTruncated bool
 }
 
 func handleIncomingEvent(
@@ -261,10 +265,10 @@ func (s *processState) appendData(
 	}
 	switch output := event.Output.(type) {
 	case *process.ProcessEvent_DataEvent_Stdout:
-		_, _ = s.stdout.Write(output.Stdout)
+		s.stdout.append(output.Stdout)
 		return nil
 	case *process.ProcessEvent_DataEvent_Stderr:
-		_, _ = s.stderr.Write(output.Stderr)
+		s.stderr.append(output.Stderr)
 		return nil
 	case *process.ProcessEvent_DataEvent_Pty:
 		return errors.New("envd process: received PTY data for non-PTY process")

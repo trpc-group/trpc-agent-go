@@ -11,8 +11,10 @@ package envdprocess
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,13 +99,15 @@ func TestRunMapsRequestInputAndEvents(t *testing.T) {
 		User:    "sandbox-user",
 		Stdin:   "input\n",
 		Timeout: time.Second,
-	})
+	}, WithTag("mapped-run"))
 	require.NoError(t, err)
 	assert.Equal(t, uint32(42), result.PID)
 	assert.Equal(t, "before\n__E2B_STDOUT_END__\nafter\n", result.Stdout)
 	assert.Equal(t, "warning\n", result.Stderr)
 	assert.Equal(t, 7, result.ExitCode)
 	assert.False(t, result.TimedOut)
+	assert.False(t, result.StdoutTruncated)
+	assert.False(t, result.StderrTruncated)
 
 	startReq := <-startRequests
 	require.NotNil(t, startReq.Msg.Process)
@@ -113,7 +117,7 @@ func TestRunMapsRequestInputAndEvents(t *testing.T) {
 	assert.Equal(t, "/tmp/work", startReq.Msg.Process.GetCwd())
 	assert.Nil(t, startReq.Msg.Pty)
 	assert.True(t, startReq.Msg.GetStdin())
-	assert.Empty(t, startReq.Msg.GetTag())
+	assert.Equal(t, "mapped-run", startReq.Msg.GetTag())
 	assertConnectTimeout(t, startReq.Header(), 500*time.Millisecond, time.Second)
 	assert.Equal(t, "access-token", startReq.Header().Get("X-Access-Token"))
 	assert.Equal(t, "Basic c2FuZGJveC11c2VyOg==", startReq.Header().Get("Authorization"))
@@ -172,6 +176,137 @@ func TestRunWithEmptyStdinDoesNotOpenStdin(t *testing.T) {
 	)
 }
 
+func TestRunDrainsOutputWhileSendingInitialStdin(t *testing.T) {
+	const (
+		outputChunkSize  = 1 << 20
+		outputChunkCount = 64
+		stdinSize        = 1 << 20
+	)
+	outputSent := make(chan struct{})
+	stdinClosed := make(chan struct{})
+	// Random output prevents transport compression from hiding the response-side
+	// backpressure reproduced by the reviewer.
+	chunk := make([]byte, outputChunkSize)
+	_, err := rand.Read(chunk)
+	require.NoError(t, err)
+	handler := &testProcessHandler{}
+	handler.start = func(
+		ctx context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(13)); err != nil {
+			return err
+		}
+		for i := 0; i < outputChunkCount; i++ {
+			if err := stream.Send(&process.StartResponse{
+				Event: stdoutEvent(chunk),
+			}); err != nil {
+				return err
+			}
+		}
+		close(outputSent)
+		select {
+		case <-stdinClosed:
+			return stream.Send(&process.StartResponse{Event: endEvent(0)})
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	handler.sendInput = func(
+		ctx context.Context,
+		_ *connect.Request[process.SendInputRequest],
+	) (*connect.Response[process.SendInputResponse], error) {
+		select {
+		case <-outputSent:
+			return connect.NewResponse(&process.SendInputResponse{}), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	handler.closeStdin = func(
+		_ context.Context,
+		_ *connect.Request[process.CloseStdinRequest],
+	) (*connect.Response[process.CloseStdinResponse], error) {
+		close(stdinClosed)
+		return connect.NewResponse(&process.CloseStdinResponse{}), nil
+	}
+
+	client := newTestClient(
+		t,
+		handler,
+		nil,
+		WithStdoutCaptureLimit(16),
+	)
+	result, err := client.Run(context.Background(), Request{
+		Cmd:     "cat",
+		Stdin:   strings.Repeat("i", stdinSize),
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, string(chunk[:16]), result.Stdout)
+	assert.True(t, result.StdoutTruncated)
+}
+
+func TestRunOutputCaptureLimitsAreIndependent(t *testing.T) {
+	handler := &testProcessHandler{}
+	handler.start = func(
+		_ context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		for _, response := range []*process.StartResponse{
+			startEvent(14),
+			{Event: stdoutEvent([]byte("abcde"))},
+			{Event: stderrEvent([]byte("wxyz"))},
+			{Event: endEvent(0)},
+		} {
+			if err := stream.Send(response); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	client := newTestClient(
+		t,
+		handler,
+		nil,
+		WithStdoutCaptureLimit(4),
+		WithStderrCaptureLimit(4),
+	)
+	result, err := client.Run(context.Background(), Request{Cmd: "true"})
+	require.NoError(t, err)
+	assert.Equal(t, "abcd", result.Stdout)
+	assert.Equal(t, "wxyz", result.Stderr)
+	assert.True(t, result.StdoutTruncated)
+	assert.False(t, result.StderrTruncated)
+}
+
+func TestRunFiniteStdinFailsBeforeStartOnOldEnvd(t *testing.T) {
+	handler := &testProcessHandler{}
+	handler.start = func(
+		context.Context,
+		*connect.Request[process.StartRequest],
+		*connect.ServerStream[process.StartResponse],
+	) error {
+		t.Fatal("Start must not be called without CloseStdin capability")
+		return nil
+	}
+	client := newTestClient(
+		t,
+		handler,
+		nil,
+		WithEnvdVersion("0.2.10"),
+	)
+
+	_, err := client.Run(context.Background(), Request{
+		Cmd:   "cat",
+		Stdin: "input",
+	})
+	require.ErrorContains(t, err, "finite stdin requires envd >= 0.5.2")
+}
+
 func TestRunNegativeTimeoutUsesDefaultRemoteProcessDeadline(t *testing.T) {
 	startRequests := make(chan *connect.Request[process.StartRequest], 1)
 	handler := &testProcessHandler{}
@@ -228,9 +363,37 @@ func TestRunTimeoutSetsRemoteProcessDeadline(t *testing.T) {
 	)
 }
 
-func TestRunCallerCancellationDisconnectsWithoutKillingProcess(t *testing.T) {
+func TestRunDoesNotMapUnrelatedDeadlineErrorToProcessTimeout(t *testing.T) {
+	killRequests := make(chan *connect.Request[process.SendSignalRequest], 1)
+	handler := &testProcessHandler{}
+	handler.start = func(
+		context.Context,
+		*connect.Request[process.StartRequest],
+		*connect.ServerStream[process.StartResponse],
+	) error {
+		return connect.NewError(
+			connect.CodeDeadlineExceeded, errors.New("gateway deadline"),
+		)
+	}
+	handler.sendSignal = func(
+		_ context.Context,
+		req *connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		killRequests <- req
+		return connect.NewResponse(&process.SendSignalResponse{}), nil
+	}
+
+	client := newTestClient(t, handler, nil)
+	result, err := client.Run(context.Background(), Request{Cmd: "sleep"})
+	require.ErrorContains(t, err, "gateway deadline")
+	assert.False(t, result.TimedOut)
+	assert.NotEmpty(t, (<-killRequests).Msg.Process.GetTag())
+}
+
+func TestRunCallerCancellationKillsProcess(t *testing.T) {
 	stdinClosed := make(chan struct{})
 	startRequests := make(chan *connect.Request[process.StartRequest], 1)
+	killRequests := make(chan *connect.Request[process.SendSignalRequest], 1)
 	handler := blockingProcessHandler(t, stdinClosed)
 	originalStart := handler.start
 	handler.start = func(
@@ -241,7 +404,13 @@ func TestRunCallerCancellationDisconnectsWithoutKillingProcess(t *testing.T) {
 		startRequests <- req
 		return originalStart(ctx, req, stream)
 	}
-	handler.sendSignal = unexpectedSendSignal(t)
+	handler.sendSignal = func(
+		_ context.Context,
+		req *connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		killRequests <- req
+		return connect.NewResponse(&process.SendSignalResponse{}), nil
+	}
 	client := newTestClient(t, handler, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -261,6 +430,9 @@ func TestRunCallerCancellationDisconnectsWithoutKillingProcess(t *testing.T) {
 	assertConnectTimeout(
 		t, (<-startRequests).Header(), 59*time.Second, defaultProcessTimeout,
 	)
+	killReq := <-killRequests
+	assert.Equal(t, uint32(77), killReq.Msg.Process.GetPid())
+	assert.Equal(t, process.Signal_SIGNAL_SIGKILL, killReq.Msg.Signal)
 }
 
 func TestStartCallerCancellationCancelsInitialSendInput(t *testing.T) {
@@ -417,8 +589,41 @@ func TestRunCompletesInitialStdinBeforeConsumingImmediateEnd(t *testing.T) {
 	assert.Equal(t, 0, result.ExitCode)
 }
 
+func TestRunNormalEndTakesPrecedenceOverConcurrentSendInputError(t *testing.T) {
+	handler := &testProcessHandler{}
+	handler.start = func(
+		_ context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(81)); err != nil {
+			return err
+		}
+		return stream.Send(&process.StartResponse{Event: endEvent(0)})
+	}
+	handler.sendInput = func(
+		context.Context,
+		*connect.Request[process.SendInputRequest],
+	) (*connect.Response[process.SendInputResponse], error) {
+		return nil, connect.NewError(
+			connect.CodeNotFound, errors.New("process already exited"),
+		)
+	}
+	handler.sendSignal = unexpectedSendSignal(t)
+
+	client := newTestClient(t, handler, nil)
+	result, err := client.Run(context.Background(), Request{
+		Cmd:   "true",
+		Stdin: "unused",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(81), result.PID)
+	assert.Equal(t, 0, result.ExitCode)
+}
+
 func TestRunCallerDeadlineDoesNotShortenRemoteProcessDeadline(t *testing.T) {
 	startRequests := make(chan *connect.Request[process.StartRequest], 1)
+	killRequests := make(chan *connect.Request[process.SendSignalRequest], 1)
 	handler := blockingProcessHandler(t, nil)
 	originalStart := handler.start
 	handler.start = func(
@@ -429,7 +634,13 @@ func TestRunCallerDeadlineDoesNotShortenRemoteProcessDeadline(t *testing.T) {
 		startRequests <- req
 		return originalStart(ctx, req, stream)
 	}
-	handler.sendSignal = unexpectedSendSignal(t)
+	handler.sendSignal = func(
+		_ context.Context,
+		req *connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		killRequests <- req
+		return connect.NewResponse(&process.SendSignalResponse{}), nil
+	}
 	client := newTestClient(t, handler, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -444,22 +655,70 @@ func TestRunCallerDeadlineDoesNotShortenRemoteProcessDeadline(t *testing.T) {
 	assertConnectTimeout(
 		t, (<-startRequests).Header(), time.Second, 2*time.Second,
 	)
+	assert.Equal(t, uint32(77), (<-killRequests).Msg.Process.GetPid())
 }
 
-func TestRunCancellationBeforeStartEventDoesNotSetTag(t *testing.T) {
+func TestRunPreservesCallerErrorWhenCleanupFails(t *testing.T) {
+	started := make(chan struct{})
+	handler := &testProcessHandler{}
+	handler.start = func(
+		ctx context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(82)); err != nil {
+			return err
+		}
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	handler.sendSignal = func(
+		context.Context,
+		*connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		return nil, connect.NewError(
+			connect.CodeUnavailable, errors.New("cleanup unavailable"),
+		)
+	}
+
+	client := newTestClient(t, handler, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+	_, err := client.Run(ctx, Request{Cmd: "sleep"})
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorContains(t, err, "cleanup unavailable")
+}
+
+func TestRunCancellationBeforeStartEventRetriesTagCleanup(t *testing.T) {
 	registered := make(chan struct{}, 1)
+	killRequests := make(chan *connect.Request[process.SendSignalRequest], 2)
 	handler := &testProcessHandler{}
 	handler.start = func(
 		ctx context.Context,
 		req *connect.Request[process.StartRequest],
 		_ *connect.ServerStream[process.StartResponse],
 	) error {
-		assert.Empty(t, req.Msg.GetTag())
+		assert.Regexp(t, `^trpc-agent-go-run-[0-9a-f]{32}$`, req.Msg.GetTag())
 		registered <- struct{}{}
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	handler.sendSignal = unexpectedSendSignal(t)
+	var attempts int
+	handler.sendSignal = func(
+		_ context.Context,
+		req *connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		attempts++
+		killRequests <- req
+		if attempts == 1 {
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("not registered"))
+		}
+		return connect.NewResponse(&process.SendSignalResponse{}), nil
+	}
 
 	client := newTestClient(t, handler, nil)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -469,6 +728,11 @@ func TestRunCancellationBeforeStartEventDoesNotSetTag(t *testing.T) {
 	}()
 	_, err := client.Run(ctx, Request{Cmd: "sleep", Args: []string{"60"}})
 	require.ErrorIs(t, err, context.Canceled)
+	first := <-killRequests
+	second := <-killRequests
+	assert.NotEmpty(t, first.Msg.Process.GetTag())
+	assert.Equal(t, first.Msg.Process.GetTag(), second.Msg.Process.GetTag())
+	assert.Equal(t, process.Signal_SIGNAL_SIGKILL, second.Msg.Signal)
 }
 
 func TestRunStreamWithoutEndEventIsProtocolError(t *testing.T) {
@@ -485,7 +749,7 @@ func TestRunStreamWithoutEndEventIsProtocolError(t *testing.T) {
 			Event: stdoutEvent([]byte("partial")),
 		})
 	}
-	handler.sendSignal = unexpectedSendSignal(t)
+	handler.sendSignal = successfulSendSignal(t)
 
 	client := newTestClient(t, handler, nil)
 	result, err := client.Run(context.Background(), Request{Cmd: "broken"})
@@ -506,7 +770,7 @@ func TestRunStreamErrorIsProtocolError(t *testing.T) {
 		}
 		return connect.NewError(connect.CodeUnavailable, errors.New("stream down"))
 	}
-	handler.sendSignal = unexpectedSendSignal(t)
+	handler.sendSignal = successfulSendSignal(t)
 
 	client := newTestClient(t, handler, nil)
 	_, err := client.Run(context.Background(), Request{Cmd: "broken"})
@@ -552,9 +816,10 @@ func TestRunFailedEndEventIsExecutionError(t *testing.T) {
 
 func TestRunRejectsMalformedEvents(t *testing.T) {
 	tests := []struct {
-		name      string
-		responses []*process.StartResponse
-		wantError string
+		name        string
+		responses   []*process.StartResponse
+		wantError   string
+		remoteEnded bool
 	}{
 		{
 			name:      "EmptyEvent",
@@ -607,7 +872,8 @@ func TestRunRejectsMalformedEvents(t *testing.T) {
 				startEvent(1),
 				{Event: &process.ProcessEvent{Event: &process.ProcessEvent_End{}}},
 			},
-			wantError: "process ended without exiting",
+			wantError:   "process ended without exiting",
+			remoteEnded: true,
 		},
 		{
 			name: "EndBeforeStart",
@@ -640,7 +906,11 @@ func TestRunRejectsMalformedEvents(t *testing.T) {
 				}
 				return nil
 			}
-			handler.sendSignal = unexpectedSendSignal(t)
+			if tt.remoteEnded {
+				handler.sendSignal = unexpectedSendSignal(t)
+			} else {
+				handler.sendSignal = successfulSendSignal(t)
+			}
 
 			client := newTestClient(t, handler, nil)
 			_, err := client.Run(context.Background(), Request{Cmd: "broken"})
@@ -650,7 +920,8 @@ func TestRunRejectsMalformedEvents(t *testing.T) {
 	}
 }
 
-func TestRunStdinFailureDisconnectsWithoutKillingProcess(t *testing.T) {
+func TestRunStdinFailureKillsProcess(t *testing.T) {
+	killRequests := make(chan *connect.Request[process.SendSignalRequest], 1)
 	handler := &testProcessHandler{}
 	handler.start = func(
 		ctx context.Context,
@@ -669,7 +940,13 @@ func TestRunStdinFailureDisconnectsWithoutKillingProcess(t *testing.T) {
 	) (*connect.Response[process.SendInputResponse], error) {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("down"))
 	}
-	handler.sendSignal = unexpectedSendSignal(t)
+	handler.sendSignal = func(
+		_ context.Context,
+		req *connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		killRequests <- req
+		return connect.NewResponse(&process.SendSignalResponse{}), nil
+	}
 
 	client := newTestClient(t, handler, nil)
 	result, err := client.Run(context.Background(), Request{
@@ -679,4 +956,5 @@ func TestRunStdinFailureDisconnectsWithoutKillingProcess(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, uint32(123), result.PID)
 	assert.Contains(t, err.Error(), "write stdin")
+	assert.Equal(t, uint32(123), (<-killRequests).Msg.Process.GetPid())
 }
