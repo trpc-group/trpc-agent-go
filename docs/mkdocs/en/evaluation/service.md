@@ -40,7 +40,7 @@ type InferenceResult struct {
 	UserID       string                // UserID is the inference user identifier.
 	Status       status.EvalStatus     // Status is the inference status.
 	ErrorMessage string                // ErrorMessage is the inference failure reason.
-	InferenceDuration time.Duration   // InferenceDuration is actual agent inference time (excluding evaluation and expected-runner work).
+	InferenceDuration time.Duration   // InferenceDuration is actual agent inference time.
 }
 
 // EvaluateRequest is the evaluation request.

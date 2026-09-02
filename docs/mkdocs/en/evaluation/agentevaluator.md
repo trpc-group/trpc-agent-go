@@ -23,7 +23,7 @@ type EvaluationResult struct {
 	EvalSetID     string                    // EvalSetID is the evaluation set identifier.
 	OverallStatus status.EvalStatus         // OverallStatus is the overall status.
 	ExecutionTime time.Duration             // ExecutionTime is the execution duration.
-	InferenceDuration time.Duration        // InferenceDuration is actual agent inference time (excluding evaluation and expected-runner work).
+	InferenceDuration time.Duration        // InferenceDuration is actual agent inference time.
 	EvalCases     []*EvaluationCaseResult   // EvalCases are the list of case results.
 	EvalResult    *evalresult.EvalSetResult // EvalResult is the persisted EvalSetResult.
 }

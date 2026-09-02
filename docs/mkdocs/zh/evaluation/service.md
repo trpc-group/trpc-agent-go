@@ -40,7 +40,7 @@ type InferenceResult struct {
 	UserID       string                // UserID 是推理阶段用户标识
 	Status       status.EvalStatus     // Status 是推理状态
 	ErrorMessage string                // ErrorMessage 是推理失败原因
-	InferenceDuration time.Duration   // InferenceDuration 是实际 agent 推理耗时，不含评估和预期 runner
+	InferenceDuration time.Duration   // InferenceDuration 是实际 agent 推理耗时
 }
 
 // EvaluateRequest 是评估请求

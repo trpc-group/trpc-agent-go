@@ -23,7 +23,7 @@ type EvaluationResult struct {
 	EvalSetID     string                    // EvalSetID 是评估集标识
 	OverallStatus status.EvalStatus         // OverallStatus 是整体状态
 	ExecutionTime time.Duration             // ExecutionTime 是执行耗时
-	InferenceDuration time.Duration        // InferenceDuration 是实际 agent 推理耗时，不含评估和预期 runner
+	InferenceDuration time.Duration        // InferenceDuration 是实际 agent 推理耗时
 	EvalCases     []*EvaluationCaseResult   // EvalCases 是用例结果列表
 	EvalResult    *evalresult.EvalSetResult // EvalResult 是持久化的 EvalSetResult
 }
