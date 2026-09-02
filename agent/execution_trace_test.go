@@ -51,7 +51,10 @@ func TestNewInvocation_InitializesExecutionTraceMetadata(t *testing.T) {
 func TestClone_PreservesExecutionTraceCaptureAndEntryPredecessors(t *testing.T) {
 	root := NewInvocation(
 		WithInvocationAgent(&mockAgent{name: "assistant"}),
-		WithInvocationRunOptions(RunOptions{ExecutionTraceEnabled: true}),
+		WithInvocationRunOptions(RunOptions{
+			ExecutionTraceEnabled:      true,
+			ForcePromptEngineTelemetry: true,
+		}),
 		WithInvocationMessage(model.NewUserMessage("hello")),
 	)
 	rootStepID := StartExecutionTraceStep(
@@ -67,6 +70,7 @@ func TestClone_PreservesExecutionTraceCaptureAndEntryPredecessors(t *testing.T) 
 		WithInvocationEntryPredecessorStepIDs([]string{rootStepID}),
 	)
 	require.True(t, executionTraceEnabled(child))
+	assert.True(t, child.RunOptions.ForcePromptEngineTelemetry)
 	childStepID := StartExecutionTraceStep(
 		child,
 		InvocationTraceNodeID(child),
@@ -209,6 +213,14 @@ func TestWithExecutionTraceEnabled_SetsRunOptions(t *testing.T) {
 	assert.True(t, opts.ExecutionTraceEnabled)
 	WithExecutionTraceEnabled(false)(&opts)
 	assert.False(t, opts.ExecutionTraceEnabled)
+}
+
+func TestWithForcePromptEngineTelemetry_SetsRunOptions(t *testing.T) {
+	var opts RunOptions
+	WithForcePromptEngineTelemetry(true)(&opts)
+	assert.True(t, opts.ForcePromptEngineTelemetry)
+	WithForcePromptEngineTelemetry(false)(&opts)
+	assert.False(t, opts.ForcePromptEngineTelemetry)
 }
 
 func TestExecutionTraceHelpers_HandleNilAndDisabledInvocation(t *testing.T) {

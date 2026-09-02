@@ -25,6 +25,16 @@ func WithExecutionTraceEnabled(enabled bool) RunOption {
 	}
 }
 
+// WithForcePromptEngineTelemetry controls Prompt Engine's local telemetry
+// sampling for this run. When enabled, Prompt Engine exporters bypass their
+// configured local trace sampling rate. It does not enable execution trace
+// recording or override an upstream OpenTelemetry sampler.
+func WithForcePromptEngineTelemetry(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.ForcePromptEngineTelemetry = enabled
+	}
+}
+
 // WithInvocationEntryPredecessorStepIDs sets entry predecessor step ids for a child invocation.
 func WithInvocationEntryPredecessorStepIDs(stepIDs []string) InvocationOptions {
 	return func(inv *Invocation) {

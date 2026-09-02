@@ -186,8 +186,9 @@ func TestServerRunCompilesProfileAndReturnsTrace(t *testing.T) {
 			},
 		},
 		RunOptions: runOptions{
-			RequestID:             "req-1",
-			ExecutionTraceEnabled: true,
+			RequestID:                  "req-1",
+			ExecutionTraceEnabled:      true,
+			ForcePromptEngineTelemetry: true,
 			RuntimeState: map[string]any{
 				"ignore": true,
 				"source": "promptiter",
@@ -213,6 +214,7 @@ func TestServerRunCompilesProfileAndReturnsTrace(t *testing.T) {
 	assert.Equal(t, "sports-agent", ag.runOptions.AppName)
 	assert.Equal(t, "req-1", ag.runOptions.RequestID)
 	assert.True(t, ag.runOptions.ExecutionTraceEnabled)
+	assert.True(t, ag.runOptions.ForcePromptEngineTelemetry)
 	assert.Equal(t, true, ag.runOptions.RuntimeState["ignore"])
 	assert.Equal(t, "promptiter", ag.runOptions.RuntimeState["source"])
 	assert.True(t, surfacepatch.ToolSurfaceTracingEnabled(ag.runOptions.CustomAgentConfigs))
