@@ -94,7 +94,7 @@ EvalSet 由 `evalSetId` 标识，包含多个 EvalCase，每个用例用 `evalId
 
 EvalSet 中的 `tools` 与 `finalResponse` 用于描述工具轨迹与最终响应，是否需要填写取决于所选评估指标。
 
-可以通过 `metricNames` 为单独一轮 Invocation 绑定评估指标。不配置时，该轮继承 `EvaluateConfig` 中配置的全部指标；配置一个或多个指标名时，该列表作为本轮白名单，未列出的指标会跳过。列表中的每个名称都必须对应 `EvaluateConfig` 中已配置的指标。
+可以通过 `metricNames` 为单独一轮 Invocation 绑定评估指标。不配置或为空时，该轮继承 `EvaluateConfig` 中配置的全部指标；配置一个或多个指标名时，该列表作为本轮白名单，未列出的指标会跳过。列表中的每个名称都必须对应 `EvaluateConfig` 中已配置的指标。在 Trace 模式下，如果 `conversation` 与 `actualConversation` 都配置了指标名，则优先使用预期侧 `conversation` 的绑定；仅当预期侧没有配置指标名时，才回退到实际侧选择。
 
 `conversationScenario` 动态生成的轮次没有预先声明的 Invocation，因此仍会继承全部已配置指标。
 

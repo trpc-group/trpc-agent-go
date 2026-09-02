@@ -1815,6 +1815,14 @@ func TestBuildMetricInvocationIndexes(t *testing.T) {
 		assert.Equal(t, map[string][]int{"first": {0, 1}, "second": {0, 1}}, indexes)
 	})
 
+	t.Run("duplicate configured names do not duplicate inherited indexes", func(t *testing.T) {
+		indexes, err := buildMetricInvocationIndexes("case", []*evalset.Invocation{{}, {}}, []*evalset.Invocation{{}, {}}, []*metric.EvalMetric{
+			{MetricName: "first"}, {MetricName: "first"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, map[string][]int{"first": {0, 1}}, indexes)
+	})
+
 	t.Run("unknown metric is rejected", func(t *testing.T) {
 		_, err := buildMetricInvocationIndexes("case", []*evalset.Invocation{{}}, []*evalset.Invocation{{
 			MetricNames: []string{"missing"},

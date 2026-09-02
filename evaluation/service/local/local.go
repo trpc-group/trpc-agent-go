@@ -699,11 +699,8 @@ func buildMetricInvocationIndexes(
 			metricNames = actuals[invocationIndex].MetricNames
 		}
 		if len(metricNames) == 0 {
-			for _, evalMetric := range evalMetrics {
-				if evalMetric == nil {
-					continue
-				}
-				indexesByMetric[evalMetric.MetricName] = append(indexesByMetric[evalMetric.MetricName], invocationIndex)
+			for metricName := range configuredMetricNames {
+				indexesByMetric[metricName] = append(indexesByMetric[metricName], invocationIndex)
 			}
 			continue
 		}

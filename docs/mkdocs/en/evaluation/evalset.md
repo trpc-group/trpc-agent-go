@@ -94,7 +94,7 @@ In default mode, inference can be organized in two ways. With `conversation`, th
 
 `tools` and `finalResponse` in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics.
 
-`metricNames` can bind metrics to an individual invocation. When it is omitted, the invocation inherits all metrics configured in `EvaluateConfig`. When it contains one or more metric names, only those configured metrics are evaluated for that turn; metrics not listed for the invocation are skipped. Each name must refer to a metric configured in `EvaluateConfig`.
+`metricNames` can bind metrics to an individual invocation. When it is omitted or empty, the invocation inherits all metrics configured in `EvaluateConfig`. When it contains one or more metric names, only those configured metrics are evaluated for that turn; metrics not listed for the invocation are skipped. Each name must refer to a metric configured in `EvaluateConfig`. In trace mode, when both `conversation` and `actualConversation` provide metric names, the expected-side `conversation` takes precedence; the actual-side selection is used only when the expected side has no metric names.
 
 Turns generated dynamically by `conversationScenario` have no predeclared `Invocation`, so they continue to inherit all configured metrics.
 
