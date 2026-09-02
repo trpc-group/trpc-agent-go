@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
@@ -33,6 +34,8 @@ import (
 type Result struct {
 	Invocations     []*evalset.Invocation
 	ExecutionTraces []*trace.Trace
+	// AgentExecutionTime is the total time spent executing the target agent.
+	AgentExecutionTime time.Duration
 }
 
 // Inference executes the agent against the provided invocations.
@@ -55,26 +58,32 @@ func Inference(
 	// Accumulate each invocation response.
 	responseInvocations := make([]*evalset.Invocation, 0, len(invocations))
 	executionTraces := make([]*trace.Trace, 0, len(invocations))
+	var agentExecutionTime time.Duration
 	for _, invocation := range invocations {
+		startTime := time.Now()
 		responseInvocation, executionTrace, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation, runOptions, opts)
+		agentExecutionTime += time.Since(startTime)
 		if err != nil && responseInvocation == nil && executionTrace == nil {
 			return &Result{
-				Invocations:     responseInvocations,
-				ExecutionTraces: executionTraces,
+				Invocations:        responseInvocations,
+				ExecutionTraces:    executionTraces,
+				AgentExecutionTime: agentExecutionTime,
 			}, err
 		}
 		responseInvocations = append(responseInvocations, responseInvocation)
 		executionTraces = append(executionTraces, executionTrace)
 		if err != nil {
 			return &Result{
-				Invocations:     responseInvocations,
-				ExecutionTraces: executionTraces,
+				Invocations:        responseInvocations,
+				ExecutionTraces:    executionTraces,
+				AgentExecutionTime: agentExecutionTime,
 			}, err
 		}
 	}
 	return &Result{
-		Invocations:     responseInvocations,
-		ExecutionTraces: executionTraces,
+		Invocations:        responseInvocations,
+		ExecutionTraces:    executionTraces,
+		AgentExecutionTime: agentExecutionTime,
 	}, nil
 }
 
@@ -123,6 +132,7 @@ func InferenceWithConversationScenario(
 		Invocations:     make([]*evalset.Invocation, 0),
 		ExecutionTraces: make([]*trace.Trace, 0),
 	}
+	var agentExecutionTime time.Duration
 	var lastTargetResponse *model.Message
 	for {
 		decision, nextErr := conversation.Next(ctx, &usersimulation.TurnRequest{LastTargetResponse: lastTargetResponse})
@@ -145,10 +155,13 @@ func InferenceWithConversationScenario(
 		if userMessage.Role != model.RoleUser {
 			return nil, fmt.Errorf("simulate next turn: invalid message role %q", userMessage.Role)
 		}
+		startTime := time.Now()
 		responseInvocation, executionTrace, nextErr := inferenceInvocation(ctx, r, sessionID, initialSession, &evalset.Invocation{
 			UserContent: &userMessage,
 		}, runOptions, nil)
+		agentExecutionTime += time.Since(startTime)
 		if nextErr != nil {
+			result.AgentExecutionTime = agentExecutionTime
 			return nil, nextErr
 		}
 		if responseInvocation.FinalResponse == nil {
@@ -157,6 +170,7 @@ func InferenceWithConversationScenario(
 		result.Invocations = append(result.Invocations, responseInvocation)
 		result.ExecutionTraces = append(result.ExecutionTraces, executionTrace)
 		lastTargetResponse = responseInvocation.FinalResponse
+		result.AgentExecutionTime = agentExecutionTime
 	}
 }
 

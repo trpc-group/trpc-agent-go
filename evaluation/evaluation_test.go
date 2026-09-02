@@ -1433,24 +1433,26 @@ func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
 	svc := &fakeService{
 		inferenceResults: [][]*service.InferenceResult{
 			{{
-				AppName:         appName,
-				EvalSetID:       evalSetID,
-				EvalCaseID:      caseID,
-				Inferences:      []*evalset.Invocation{{InvocationID: "inv-1"}},
-				SessionID:       "session-1",
-				UserID:          "user-1",
-				Status:          status.EvalStatusPassed,
-				ExecutionTraces: []*agenttrace.Trace{runOneTrace},
+				AppName:            appName,
+				EvalSetID:          evalSetID,
+				EvalCaseID:         caseID,
+				Inferences:         []*evalset.Invocation{{InvocationID: "inv-1"}},
+				SessionID:          "session-1",
+				UserID:             "user-1",
+				Status:             status.EvalStatusPassed,
+				AgentExecutionTime: 3 * time.Second,
+				ExecutionTraces:    []*agenttrace.Trace{runOneTrace},
 			}},
 			{{
-				AppName:         appName,
-				EvalSetID:       evalSetID,
-				EvalCaseID:      caseID,
-				Inferences:      []*evalset.Invocation{{InvocationID: "inv-2"}},
-				SessionID:       "session-2",
-				UserID:          "user-2",
-				Status:          status.EvalStatusPassed,
-				ExecutionTraces: []*agenttrace.Trace{runTwoTrace},
+				AppName:            appName,
+				EvalSetID:          evalSetID,
+				EvalCaseID:         caseID,
+				Inferences:         []*evalset.Invocation{{InvocationID: "inv-2"}},
+				SessionID:          "session-2",
+				UserID:             "user-2",
+				Status:             status.EvalStatusPassed,
+				AgentExecutionTime: 5 * time.Second,
+				ExecutionTraces:    []*agenttrace.Trace{runTwoTrace},
 			}},
 		},
 		evaluateResults: []*service.EvalSetRunResult{
@@ -1488,10 +1490,13 @@ func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
 	}()
 	evaluationResult, err := ae.Evaluate(ctx, evalSetID, WithRunDetailsEnabled(true))
 	assert.NoError(t, err)
+	assert.Equal(t, 8*time.Second, evaluationResult.AgentExecutionTime)
+	assert.Equal(t, 8*time.Second, evaluationResult.EvalResult.AgentExecutionTime)
 	if !assert.Len(t, evaluationResult.EvalCases, 1) {
 		return
 	}
 	caseResult := evaluationResult.EvalCases[0]
+	assert.Equal(t, 8*time.Second, caseResult.AgentExecutionTime)
 	if !assert.Len(t, caseResult.RunDetails, 2) {
 		return
 	}
@@ -1501,6 +1506,7 @@ func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
 		assert.Equal(t, "session-1", caseResult.RunDetails[0].Inference.SessionID)
 		assert.Equal(t, "user-1", caseResult.RunDetails[0].Inference.UserID)
 		assert.Equal(t, status.EvalStatusPassed, caseResult.RunDetails[0].Inference.Status)
+		assert.Equal(t, 3*time.Second, caseResult.RunDetails[0].Inference.AgentExecutionTime)
 		if assert.Len(t, caseResult.RunDetails[0].Inference.Inferences, 1) {
 			assert.Equal(t, "inv-1", caseResult.RunDetails[0].Inference.Inferences[0].InvocationID)
 		}
@@ -1514,6 +1520,7 @@ func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
 	if assert.NotNil(t, caseResult.RunDetails[1].Inference) {
 		assert.Equal(t, "session-2", caseResult.RunDetails[1].Inference.SessionID)
 		assert.Equal(t, "user-2", caseResult.RunDetails[1].Inference.UserID)
+		assert.Equal(t, 5*time.Second, caseResult.RunDetails[1].Inference.AgentExecutionTime)
 		if assert.Len(t, caseResult.RunDetails[1].Inference.Inferences, 1) {
 			assert.Equal(t, "inv-2", caseResult.RunDetails[1].Inference.Inferences[0].InvocationID)
 		}

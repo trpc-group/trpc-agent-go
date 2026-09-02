@@ -12,6 +12,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -65,6 +66,9 @@ type InferenceResult struct {
 	Status status.EvalStatus `json:"status,omitempty"`
 	// ErrorMessage contains the error message if inference failed.
 	ErrorMessage string `json:"errorMessage,omitempty"`
+	// AgentExecutionTime is the total time spent executing the actual agent for this eval case.
+	// It excludes evaluation and expected-runner work.
+	AgentExecutionTime time.Duration `json:"agentExecutionTime,omitempty"`
 	// ExecutionTraces contains the per-run execution traces collected during inference.
 	ExecutionTraces []*trace.Trace `json:"-"`
 }
@@ -93,6 +97,8 @@ type EvalSetRunResult struct {
 	AppName string `json:"appName,omitempty"`
 	// EvalSetID is the ID of the eval set.
 	EvalSetID string `json:"evalSetId,omitempty"`
+	// AgentExecutionTime is the total time spent executing the actual agent for this run.
+	AgentExecutionTime time.Duration `json:"agentExecutionTime,omitempty"`
 	// EvalCaseResults are the evaluation results produced in this run.
 	EvalCaseResults []*evalresult.EvalCaseResult `json:"evalCaseResults,omitempty"`
 }

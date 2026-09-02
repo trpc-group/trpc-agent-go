@@ -40,6 +40,7 @@ type InferenceResult struct {
 	UserID       string                // UserID is the inference user identifier.
 	Status       status.EvalStatus     // Status is the inference status.
 	ErrorMessage string                // ErrorMessage is the inference failure reason.
+	AgentExecutionTime time.Duration   // AgentExecutionTime is actual agent inference time (excluding evaluation and expected-runner work).
 }
 
 // EvaluateRequest is the evaluation request.
@@ -59,6 +60,7 @@ type EvaluateConfig struct {
 type EvalSetRunResult struct {
 	AppName         string                       // AppName is the application name.
 	EvalSetID       string                       // EvalSetID is the evaluation set identifier.
+	AgentExecutionTime time.Duration             // AgentExecutionTime is actual agent inference time for this run.
 	EvalCaseResults []*evalresult.EvalCaseResult // EvalCaseResults are the evaluation case results.
 }
 

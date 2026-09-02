@@ -276,6 +276,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 			attachContextMessages(inferenceResult.Invocations, evalCase.ContextMessages)
 			result.Inferences = inferenceResult.Invocations
 			result.ExecutionTraces = inferenceResult.ExecutionTraces
+			result.AgentExecutionTime = inferenceResult.AgentExecutionTime
 		}
 		attachContextMessages(expectedInferences, evalCase.ContextMessages)
 		result.ExpectedInferences = expectedInferences
@@ -317,6 +318,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 	)
 	if inferenceResult != nil {
 		result.ExecutionTraces = inferenceResult.ExecutionTraces
+		result.AgentExecutionTime = inferenceResult.AgentExecutionTime
 		attachContextMessages(inferenceResult.Invocations, evalCase.ContextMessages)
 		result.Inferences = inferenceResult.Invocations
 	}

@@ -11,6 +11,8 @@ package evaluation
 
 import (
 	"errors"
+	"sync"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -53,6 +55,8 @@ type options struct {
 	runDetailsEnabled                 bool
 	runDetailsCollector               *runDetailsCollector
 	runOptions                        []agent.RunOption
+	agentExecutionTime                time.Duration
+	agentExecutionTimeMu              sync.Mutex
 }
 
 // newOptions creates a new options with the default values.
@@ -257,4 +261,22 @@ func (o *options) validate(requireEvalService bool) error {
 		return errors.New("eval service is nil")
 	}
 	return nil
+}
+
+func (o *options) addAgentExecutionDuration(elapsed time.Duration) {
+	if o == nil || elapsed <= 0 {
+		return
+	}
+	o.agentExecutionTimeMu.Lock()
+	o.agentExecutionTime += elapsed
+	o.agentExecutionTimeMu.Unlock()
+}
+
+func (o *options) agentExecutionTimeValue() time.Duration {
+	if o == nil {
+		return 0
+	}
+	o.agentExecutionTimeMu.Lock()
+	defer o.agentExecutionTimeMu.Unlock()
+	return o.agentExecutionTime
 }

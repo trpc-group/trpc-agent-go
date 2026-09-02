@@ -12,6 +12,7 @@ package evalresult
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -28,6 +29,8 @@ type EvalSetResult struct {
 	EvalSetResultName string `json:"evalSetResultName,omitempty"`
 	// EvalSetID identifies the eval set.
 	EvalSetID string `json:"evalSetId,omitempty"`
+	// AgentExecutionTime is the total time spent executing the actual agent across all cases and runs.
+	AgentExecutionTime time.Duration `json:"agentExecutionTime,omitempty"`
 	// EvalCaseResults contains results for each eval case.
 	EvalCaseResults []*EvalCaseResult `json:"evalCaseResults,omitempty"`
 	// Summary provides aggregated statistics for multi-run results.
@@ -58,6 +61,8 @@ type EvalCaseResult struct {
 	SessionID string `json:"sessionId,omitempty"`
 	// UserID is the user id used during inferencing stage of the eval.
 	UserID string `json:"userId,omitempty"`
+	// AgentExecutionTime is the total time spent executing the actual agent for this eval case run.
+	AgentExecutionTime time.Duration `json:"agentExecutionTime,omitempty"`
 }
 
 // EvalMetricResult represents the result of a single metric evaluation.
