@@ -256,11 +256,13 @@ func TestInferTraceConversationUsesActualUserContentAndConversationToolMockForEx
 		ExpectedRunnerEnabled: true,
 		ActualConversation: []*evalset.Invocation{{
 			InvocationID:  "actual",
+			MetricNames:   []string{"actual_metric"},
 			UserContent:   &model.Message{Role: model.RoleUser, Content: "actual-question"},
 			FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "actual"},
 		}},
 		Conversation: []*evalset.Invocation{{
 			InvocationID: "expected-input",
+			MetricNames:  []string{"expected_metric"},
 			ToolMock: &toolmock.ToolMock{
 				Expected: []*toolmock.Tool{{
 					Name:      "weather",
@@ -285,6 +287,7 @@ func TestInferTraceConversationUsesActualUserContentAndConversationToolMockForEx
 	assert.Equal(t, 1, pluginCount)
 	assert.Equal(t, "actual", inferenceResult.Invocations[0].InvocationID)
 	assert.Equal(t, "expected", expectedInferences[0].FinalResponse.Content)
+	assert.Equal(t, []string{"expected_metric"}, expectedInferences[0].MetricNames)
 }
 
 func TestInferTraceConversationClearsActualToolMockWhenConversationHasNoToolMock(t *testing.T) {
@@ -1730,6 +1733,108 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	assert.Equal(t, score.KindCategorical, perMetric.Details.Value.Kind)
 	assert.Equal(t, "correct", perMetric.Details.Value.Categorical)
 	assert.Equal(t, "demo-user", caseResult.UserID)
+}
+
+func TestEvaluatePerCaseUsesInvocationMetricNames(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-turn-metrics"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	require.NoError(t, err)
+	evalCase := makeEvalCase(appName, caseID, "first prompt")
+	evalCase.Conversation = []*evalset.Invocation{
+		{
+			InvocationID: "expected-1",
+			MetricNames:  []string{"intent_metric"},
+			UserContent:  &model.Message{Role: model.RoleUser, Content: "first prompt"},
+		},
+		{
+			InvocationID: "expected-2",
+			MetricNames:  []string{"tool_metric"},
+			UserContent:  &model.Message{Role: model.RoleUser, Content: "second prompt"},
+		},
+	}
+	require.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+
+	newEvaluator := func(name string) *fakeEvaluator {
+		return &fakeEvaluator{
+			name: name,
+			result: &evaluator.EvaluateResult{
+				OverallScore:         1,
+				OverallStatus:        status.EvalStatusPassed,
+				PerInvocationResults: []*evaluator.PerInvocationResult{{Score: 1, Status: status.EvalStatusPassed}},
+			},
+		}
+	}
+	intentEval := newEvaluator("intent_metric")
+	toolEval := newEvaluator("tool_metric")
+	reg := registry.New()
+	require.NoError(t, reg.Register(intentEval.name, intentEval))
+	require.NoError(t, reg.Register(toolEval.name, toolEval))
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-1")
+	inferenceResult := makeInferenceResult(appName, evalSetID, caseID, "session-1", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "first prompt", "first answer"),
+		makeActualInvocation("actual-2", "second prompt", "second answer"),
+	})
+	result, err := svc.evaluatePerCase(ctx, inferenceResult, &service.EvaluateConfig{
+		EvalMetrics: []*metric.EvalMetric{
+			{MetricName: "intent_metric"},
+			{MetricName: "tool_metric"},
+			{MetricName: "unused_metric"},
+		},
+	}, service.NewOptions(service.WithEvalSetManager(mgr), service.WithRegistry(reg)))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.EvalMetricResultPerInvocation, 2)
+	require.Len(t, result.EvalMetricResultPerInvocation[0].EvalMetricResults, 1)
+	require.Len(t, result.EvalMetricResultPerInvocation[1].EvalMetricResults, 1)
+	assert.Equal(t, "intent_metric", result.EvalMetricResultPerInvocation[0].EvalMetricResults[0].MetricName)
+	assert.Equal(t, "tool_metric", result.EvalMetricResultPerInvocation[1].EvalMetricResults[0].MetricName)
+	require.Len(t, intentEval.receivedActuals, 1)
+	require.Len(t, toolEval.receivedActuals, 1)
+	require.Len(t, intentEval.receivedExpecteds, 1)
+	require.Len(t, toolEval.receivedExpecteds, 1)
+	assert.Same(t, inferenceResult.Inferences[0], intentEval.receivedActuals[0])
+	assert.Same(t, inferenceResult.Inferences[1], toolEval.receivedActuals[0])
+	assert.Equal(t, "expected-1", intentEval.receivedExpecteds[0].InvocationID)
+	assert.Equal(t, "expected-2", toolEval.receivedExpecteds[0].InvocationID)
+}
+
+func TestBuildMetricInvocationIndexes(t *testing.T) {
+	metrics := []*metric.EvalMetric{{MetricName: "first"}, {MetricName: "second"}}
+
+	t.Run("empty list inherits all metrics", func(t *testing.T) {
+		indexes, err := buildMetricInvocationIndexes("case", []*evalset.Invocation{
+			{}, {},
+		}, []*evalset.Invocation{
+			{}, {MetricNames: []string{}},
+		}, metrics)
+		require.NoError(t, err)
+		assert.Equal(t, map[string][]int{"first": {0, 1}, "second": {0, 1}}, indexes)
+	})
+
+	t.Run("unknown metric is rejected", func(t *testing.T) {
+		_, err := buildMetricInvocationIndexes("case", []*evalset.Invocation{{}}, []*evalset.Invocation{{
+			MetricNames: []string{"missing"},
+		}}, metrics)
+		assert.ErrorContains(t, err, "metric missing is not configured")
+	})
+
+	t.Run("duplicate metric is rejected", func(t *testing.T) {
+		_, err := buildMetricInvocationIndexes("case", []*evalset.Invocation{{}}, []*evalset.Invocation{{
+			MetricNames: []string{"first", "first"},
+		}}, metrics)
+		assert.ErrorContains(t, err, "metric first is duplicated")
+	})
+
+	t.Run("empty metric name is rejected", func(t *testing.T) {
+		_, err := buildMetricInvocationIndexes("case", []*evalset.Invocation{{}}, []*evalset.Invocation{{
+			MetricNames: []string{" "},
+		}}, metrics)
+		assert.ErrorContains(t, err, "metric name 0 is empty")
+	})
 }
 
 func TestLocalEvaluateParallelEvaluationPreservesOrder(t *testing.T) {

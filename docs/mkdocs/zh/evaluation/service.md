@@ -98,7 +98,7 @@ Local 实现支持 EvalCase 级并发推理。开启后会并行运行多个用�
 
 ## 评估阶段
 
-评估阶段由 `Evaluate` 方法负责，以 `InferenceResult` 为输入，加载对应的 EvalCase，构造 actuals 与 expecteds 两组 Invocation 列表。默认情况下，expecteds 来自 EvalSet 的 `conversation`；若用例使用 `conversationScenario` 且未开启 `expectedRunnerEnabled`，则会基于实际轨迹构造仅保留 `userContent` 的占位 expecteds；当 EvalCase 开启 `expectedRunnerEnabled` 时，评估阶段直接复用推理阶段已经生成好的 `ExpectedInferences`。然后按 `EvaluateConfig.EvalMetrics` 逐条执行评估器。
+评估阶段由 `Evaluate` 方法负责，以 `InferenceResult` 为输入，加载对应的 EvalCase，构造 actuals 与 expecteds 两组 Invocation 列表。默认情况下，expecteds 来自 EvalSet 的 `conversation`；若用例使用 `conversationScenario` 且未开启 `expectedRunnerEnabled`，则会基于实际轨迹构造仅保留 `userContent` 的占位 expecteds；当 EvalCase 开启 `expectedRunnerEnabled` 时，评估阶段直接复用推理阶段已经生成好的 `ExpectedInferences`。然后按 `EvaluateConfig.EvalMetrics` 逐条执行评估器；Invocation 配置 `metricNames` 时只执行其中列出的指标，未配置时使用全部已配置指标。
 
 Local 实现会通过 Registry 获取 Evaluator，并调用 `Evaluator.Evaluate` 完成打分。该调用以 EvalCase 为粒度，actuals 与 expecteds 均来自同一个用例，并按轮次对齐。
 

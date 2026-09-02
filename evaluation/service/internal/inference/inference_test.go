@@ -326,6 +326,7 @@ func TestInferenceSuccess(t *testing.T) {
 	input := []*evalset.Invocation{
 		{
 			InvocationID: "input",
+			MetricNames:  []string{"intent_metric"},
 			UserContent: &model.Message{
 				Role:    model.RoleUser,
 				Content: "question",
@@ -353,6 +354,7 @@ func TestInferenceSuccess(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Len(t, result.Invocations, 1)
 	assert.Equal(t, "generated-inv", result.Invocations[0].InvocationID)
+	assert.Equal(t, input[0].MetricNames, result.Invocations[0].MetricNames)
 	assert.Equal(t, input[0].UserContent, result.Invocations[0].UserContent)
 	assert.NotNil(t, result.Invocations[0].FinalResponse)
 	assert.Equal(t, "answer", result.Invocations[0].FinalResponse.Content)
