@@ -2849,6 +2849,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#assistant" class="md-nav__link">
+    <span class="md-ellipsis">
+      框架下发的 Assistant 消息
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3877,6 +3886,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#assistant" class="md-nav__link">
+    <span class="md-ellipsis">
+      框架下发的 Assistant 消息
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4243,7 +4261,7 @@
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">RunID</span><span class="w">          </span><span class="kt">string</span><span class="w">          </span><span class="c1">// 本次运行 ID，用于关联运行生命周期事件。</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">ParentRunID</span><span class="w">    </span><span class="o">*</span><span class="kt">string</span><span class="w">         </span><span class="c1">// 父运行 ID，可选。</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nx">State</span><span class="w">          </span><span class="kt">any</span><span class="w">             </span><span class="c1">// 任意状态；对象类型的值默认会合并到 RuntimeState。</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nx">Messages</span><span class="w">       </span><span class="p">[]</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// 消息列表，用于传递本次用户输入或外部工具结果。</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nx">Messages</span><span class="w">       </span><span class="p">[]</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// 消息列表，用于传递本次用户输入、外部工具结果或框架下发的 assistant 消息。</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="nx">Tools</span><span class="w">          </span><span class="p">[]</span><span class="nx">Tool</span><span class="w">          </span><span class="c1">// 工具定义列表，协议字段，可选。</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">Context</span><span class="w">        </span><span class="p">[]</span><span class="nx">Context</span><span class="w">       </span><span class="c1">// 上下文列表，协议字段，可选。</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">ForwardedProps</span><span class="w"> </span><span class="kt">any</span><span class="w">             </span><span class="c1">// 任意透传字段，通常用于携带业务自定义参数。</span>
@@ -4426,6 +4444,9 @@
 </span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>每条 <code>role=tool</code> 消息对应一个工具调用结果。<code>toolCallId</code> 用于关联上一轮事件流中的工具调用，<code>name</code> 表示工具名，<code>content</code> 使用字符串承载工具执行结果；<code>id</code> 会作为返回 <code>TOOL_CALL_RESULT</code> 事件时的 message id。</p>
+<h3 id="assistant">框架下发的 Assistant 消息</h3>
+<p>后台已经生成最终回复、无需再次调用大模型时，可以把 <code>messages</code> 尾部消息设为 <code>role=assistant</code>，并使用非空字符串 <code>content</code>。Runner 会将该消息追加到已有且包含真实 <code>role=user</code> 消息的会话，写入 session transcript 和 AG-UI track，不会调用底层 Agent。成功时 SSE 只返回 <code>RUN_STARTED</code> 和 <code>RUN_FINISHED</code>；持久化失败时返回 <code>RUN_STARTED</code> 和 <code>RUN_ERROR</code>。</p>
+<p>assistant-only 的新会话会失败，不会伪造 user 消息；因此 history 的起点逻辑仍然从真实 user 消息开始。</p>
 <h2 id="runagentinput-hook">RunAgentInput Hook</h2>
 <p><code>RunAgentInput Hook</code> 会在 AG-UI Runner 处理请求前执行，用于统一规范化或改写 <code>RunAgentInput</code>。实时对话、消息快照和取消路由都会使用 Hook 处理后的请求体。</p>
 <p>Hook 接收当前 <code>RunAgentInput</code>，可以返回原请求体、原位修改后的请求体，或一个新的 <code>RunAgentInput</code>。如果只需要解析 <code>UserID</code>、<code>AppName</code>、<code>State</code> 或运行选项，优先使用后续对应的 Resolver。</p>
@@ -6414,7 +6435,7 @@ resolver 只需要返回业务额外需要的 run options。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月6日 02:05:42 UTC">2026-08-06 02:05:42</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年9月2日 08:33:36 UTC">2026-09-02 08:33:36</span>
   </span>
 
     
