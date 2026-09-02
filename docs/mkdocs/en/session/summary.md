@@ -1690,8 +1690,9 @@ summary from generation to injection. All of them are emitted on the request
 or job context, so they share your existing trace correlation.
 
 **No record contains prompt text, summary text, event content, model output,
-raw error text, connection strings, or credentials.** User and session
-identifiers are never logged.
+raw error text, connection strings, or credentials.** Framework-owned user
+and session identifiers are never logged. Caller-supplied `filter_key` values
+are logged and are outside that guarantee.
 
 `EventFilterKey` / `filter_key` is a caller-supplied scope identifier. It must
 not contain credentials, secrets, or user-private data. Diagnostic records log
@@ -1738,7 +1739,7 @@ injection text, and compaction decisions stay on their existing code paths.
 
 | Record | Emitted when | Key fields |
 | --- | --- | --- |
-| `Session summary result` | Once per summary target, after generation and persistence | `schema_version`, `outcome`, `dispatch`, `target_kind`, `filter_key`, `filter_key_truncated`, `triggered`, `trigger`, `trigger_metric`, `trigger_value`, `trigger_threshold`, `threshold_ratio`, `context_window`, `summary_view_present`, `summary_view_bound`, `binding_reason`, `input_source`, `selection_reason`, `eligible_events`, `skip_recent_requested`, `skip_recent_applied`, `selected_events`, `model_call_status`, `updated`, `boundary_advanced`, `persist_result` |
+| `Session summary result` | Once per summary target, after the summary attempt completes | `schema_version`, `outcome`, `dispatch`, `target_kind`, `filter_key`, `filter_key_truncated`, `triggered`, `trigger`, `trigger_metric`, `trigger_value`, `trigger_threshold`, `threshold_ratio`, `context_window`, `summary_view_present`, `summary_view_bound`, `binding_reason`, `input_source`, `selection_reason`, `eligible_events`, `skip_recent_requested`, `skip_recent_applied`, `selected_events`, `model_call_status`, `updated`, `boundary_advanced`, `persist_result` |
 | `Session summary cascade result` | Once per cascade dispatch that fans a branch trigger out to the full-session target | `schema_version`, `outcome`, `mode`, `trigger_filter_key`, `trigger_filter_key_truncated`, `targets`, `source_materialized`, `action`, `invariant` |
 | `Session summary injection result` | Once per model request that uses session summaries, after the returned response sequence finishes or is stopped early; if the model call fails before returning a response sequence, the record is emitted immediately | `schema_version`, `outcome`, `agent`, `filter_key`, `filter_key_truncated`, `lookup_strategy`, `lookup_result`, `selected`, `selected_block_present`, `stored_summaries`, `matching_candidates`, `full_session_summary`, `session_events`, `history_messages`, `request_messages` |
 | `Pre-LLM context compaction result` | Once per synchronous compaction attempt before an LLM call | `schema_version`, `outcome`, `filter_key`, `filter_key_truncated`, `request_tokens`, `threshold`, `context_window`, `messages`, `summary_view_bound`, `binding_reason` |

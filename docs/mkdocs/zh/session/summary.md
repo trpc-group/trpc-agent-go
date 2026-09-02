@@ -1601,7 +1601,8 @@ sessionService, err := mysql.NewService(
 任务的 context 上输出，因此与你现有的 trace 关联方式一致。
 
 **任何记录都不包含提示词、摘要正文、事件内容、模型输出、原始错误文本、连接串
-或凭据。** 用户 ID 和会话 ID 不会被记录。
+或凭据。** 框架自身的用户 ID 和会话 ID 不会被记录。调用方提供的 `filter_key`
+会被记录，不在该保证范围内。
 
 `EventFilterKey` / `filter_key` 是业务提供的作用域标识，不应包含凭据、秘密或
 用户隐私。诊断记录会记录原始值（不会 hash）。显示值最多 255 个 Unicode code
@@ -1641,7 +1642,7 @@ SessionService API，也不新增诊断开关。
 
 | 记录 | 输出时机 | 关键字段 |
 | --- | --- | --- |
-| `Session summary result` | 每个摘要目标一条，在生成与持久化之后 | `schema_version`、`outcome`、`dispatch`、`target_kind`、`filter_key`、`filter_key_truncated`、`triggered`、`trigger`、`trigger_metric`、`trigger_value`、`trigger_threshold`、`threshold_ratio`、`context_window`、`summary_view_present`、`summary_view_bound`、`binding_reason`、`input_source`、`selection_reason`、`eligible_events`、`skip_recent_requested`、`skip_recent_applied`、`selected_events`、`model_call_status`、`updated`、`boundary_advanced`、`persist_result` |
+| `Session summary result` | 每个摘要目标一条，摘要尝试完成之后 | `schema_version`、`outcome`、`dispatch`、`target_kind`、`filter_key`、`filter_key_truncated`、`triggered`、`trigger`、`trigger_metric`、`trigger_value`、`trigger_threshold`、`threshold_ratio`、`context_window`、`summary_view_present`、`summary_view_bound`、`binding_reason`、`input_source`、`selection_reason`、`eligible_events`、`skip_recent_requested`、`skip_recent_applied`、`selected_events`、`model_call_status`、`updated`、`boundary_advanced`、`persist_result` |
 | `Session summary cascade result` | 分支触发扩散到全会话目标的每次级联一条 | `schema_version`、`outcome`、`mode`、`trigger_filter_key`、`trigger_filter_key_truncated`、`targets`、`source_materialized`、`action`、`invariant` |
 | `Session summary injection result` | 使用会话摘要的每个模型请求一条，在返回的响应序列结束或被提前停止之后记录；若模型调用在返回响应序列之前失败，则立即记录 | `schema_version`、`outcome`、`agent`、`filter_key`、`filter_key_truncated`、`lookup_strategy`、`lookup_result`、`selected`、`selected_block_present`、`stored_summaries`、`matching_candidates`、`full_session_summary`、`session_events`、`history_messages`、`request_messages` |
 | `Pre-LLM context compaction result` | LLM 调用前的每次同步压缩尝试一条 | `schema_version`、`outcome`、`filter_key`、`filter_key_truncated`、`request_tokens`、`threshold`、`context_window`、`messages`、`summary_view_bound`、`binding_reason` |

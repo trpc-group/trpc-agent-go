@@ -183,13 +183,17 @@ func TestClient_CreateSummary_StaleWriteKeepsTTL(t *testing.T) {
 	sumKey := c.keys.SummaryKey(key)
 	require.Equal(t, 10*time.Second, mr.TTL(sumKey))
 
+	mr.FastForward(4 * time.Second)
+	require.Equal(t, 6*time.Second, mr.TTL(sumKey))
+
 	applied, err := c.CreateSummary(ctx, key, "all", &session.Summary{
 		Summary:   "stale",
 		UpdatedAt: at.Add(-time.Hour),
 	}, cfg.SessionTTL)
 	require.NoError(t, err)
 	assert.False(t, applied.Applied())
-	assert.Equal(t, 10*time.Second, mr.TTL(sumKey))
+	assert.Equal(t, 6*time.Second, mr.TTL(sumKey),
+		"a skipped stale write must not refresh the TTL")
 
 	result, err := c.GetSummary(ctx, key)
 	require.NoError(t, err)
