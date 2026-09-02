@@ -572,12 +572,17 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 }
 
 func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invocation,
-	eventChan chan<- *event.Event, timeout time.Duration) error {
+	eventChan chan<- *event.Event, timeout time.Duration) (result error) {
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,
 		latencySpanEmitStartWait,
 	)
+	// Use a named return and defer so finishLatencySpan runs on both normal
+	// returns and any panic paths. The deferred closure reads `result` after
+	// it has been assigned, so the span records the mapped error (what the
+	// caller receives) rather than the raw AddNoticeChannelAndWait result.
+	defer func() { finishLatencySpan(span, started, result) }()
 
 	invocationID, agentName := "", ""
 	if invocation != nil {
@@ -592,10 +597,9 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 	// Ensure that the events of the previous agent or the previous step have been synchronized to the session.
 	completionID := agent.GetAppendEventNoticeKey(startEvent.ID)
 	waitErr := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
-	// Map the wait result before recording the span so the span reflects the
-	// error that the caller will actually receive, not the raw wait result.
-	result := handleStartEventWaitError(ctx, waitErr)
-	finishLatencySpan(span, started, result)
+	// Map the wait result; the deferred finishLatencySpan will record this
+	// value because `result` is the named return variable.
+	result = handleStartEventWaitError(ctx, waitErr)
 	return result
 }
 
