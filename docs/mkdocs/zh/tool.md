@@ -969,7 +969,7 @@ agent := llmagent.New("mcp-assistant",
 通过 `WithToolSets` 把 MCP ToolSet 挂到 `LLMAgent` 上时，框架会用
 `NamedToolSet` 包装它。默认情况下，模型侧看到的工具名为
 `{toolSetName}_{远端工具名}`，实际 MCP `tools/call` 仍使用远端原始名称。
-如果希望保留远端原始名称，请参考[ToolSet 工具命名](#toolset-工具命名)，配置
+如果希望保留远端原始名称，请参考上文“ToolSet 工具命名”，配置
 `tool.ToolSetToolNameModeOriginal`。
 
 - 默认 ToolSet 名为 `"mcp"`，远端工具 `search` 会暴露为 `mcp_search`。
