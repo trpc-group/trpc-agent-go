@@ -52,6 +52,14 @@ func (s activationToolSet) Name() string {
 	return s.name
 }
 
+type originalNameActivationToolSet struct {
+	activationToolSet
+}
+
+func (s originalNameActivationToolSet) ToolNameMode() tool.ToolNameMode {
+	return tool.ToolNameModeOriginal
+}
+
 func TestToolActivationOptionsValidateToolSets(t *testing.T) {
 	require.Panics(t, func() {
 		New(
@@ -234,6 +242,49 @@ func TestToolActivationSkillLoadUpdatesNextModelRequestTools(t *testing.T) {
 	require.Contains(t, requests[0].Tools, "skill_load")
 	require.NotContains(t, requests[0].Tools, "browser_open")
 	require.Contains(t, requests[1].Tools, "browser_open")
+}
+
+func TestToolActivationOriginalToolNames(t *testing.T) {
+	repo, err := skill.NewFSRepository(
+		createNamedTestSkill(t, "research", "research skill"),
+	)
+	require.NoError(t, err)
+	mockModel := &activationSequenceModel{
+		responses: []*model.Response{
+			activationToolCallResponse(t, "call-1", "research"),
+			activationFinalResponse("done"),
+		},
+	}
+	agt := New(
+		"agent",
+		WithModel(mockModel),
+		WithSkills(repo),
+		WithActivatableToolSets([]tool.ToolSet{
+			originalNameActivationToolSet{
+				activationToolSet{
+					name:  "github",
+					tools: []tool.Tool{activationTool{name: "search"}},
+				},
+			},
+		}),
+		WithToolActivationOnSkillLoad("research", []string{"github"}),
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv",
+		Session:      session.NewSession("app", "user", "session"),
+		Message:      model.NewUserMessage("load research"),
+	}
+	events, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := mockModel.Requests()
+	require.Len(t, requests, 2)
+	require.NotContains(t, requests[0].Tools, "search")
+	require.Contains(t, requests[1].Tools, "search")
+	require.NotContains(t, requests[1].Tools, "github_search")
 }
 
 func TestToolActivationSessionLifetimeVisibleInNextInvocation(t *testing.T) {

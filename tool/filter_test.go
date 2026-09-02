@@ -68,6 +68,18 @@ func TestFilterToolSet_NoFilter(t *testing.T) {
 	assertToolNames(t, filtered.Tools(ctx), []string{"alpha", "beta"})
 }
 
+func TestFilterToolSet_PreservesToolNameMode(t *testing.T) {
+	base := &modeMockToolSet{
+		mockToolSet: mockToolSet{name: "mock-set"},
+		mode:        ToolNameModeOriginal,
+	}
+
+	filtered := FilterToolSet(base, nil)
+	if got := ToolNameModeOf(filtered); got != ToolNameModeOriginal {
+		t.Fatalf("ToolNameMode = %v, want %v", got, ToolNameModeOriginal)
+	}
+}
+
 func TestNewIncludeToolNamesFilter(t *testing.T) {
 	ctx := context.Background()
 	filter := NewIncludeToolNamesFilter("allowed")
@@ -139,6 +151,15 @@ type mockToolSet struct {
 	tools  []Tool
 	name   string
 	closed bool
+}
+
+type modeMockToolSet struct {
+	mockToolSet
+	mode ToolNameMode
+}
+
+func (m *modeMockToolSet) ToolNameMode() ToolNameMode {
+	return m.mode
 }
 
 func (m *mockToolSet) Tools(ctx context.Context) []Tool {

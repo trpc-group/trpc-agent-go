@@ -59,12 +59,15 @@ type ToolSet struct {
 	tools          []tool.Tool
 	mu             sync.RWMutex
 	name           string
+	toolNameMode   tool.ToolNameMode
 }
 
 // NewMCPToolSet creates a new MCP tool set with the given configuration.
 // The default ToolSet name is "mcp". When attached to an LLMAgent, tools are
 // exposed to the model as {name}_{remoteToolName}; pass WithName with a unique
 // value per MCP server to avoid prefix collisions across multiple ToolSets.
+// WithToolNameMode(ToolNameModeOriginal) keeps the remote tool names unchanged
+// while retaining the ToolSet name for identification and policy checks.
 func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 	// Apply default configuration.
 	cfg := toolSetConfig{
@@ -91,6 +94,7 @@ func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 		sessionManager: sessionManager,
 		tools:          nil,
 		name:           cfg.name,
+		toolNameMode:   cfg.toolNameMode,
 	}
 
 	return toolSet
@@ -146,6 +150,13 @@ func (ts *ToolSet) Close() error {
 // Name implements the ToolSet interface.
 func (ts *ToolSet) Name() string {
 	return ts.name
+}
+
+// ToolNameMode reports how this MCP ToolSet's tools should be named when they
+// are exposed to a model. The mode does not change the ToolSet identity or the
+// remote MCP tool names used for calls.
+func (ts *ToolSet) ToolNameMode() tool.ToolNameMode {
+	return ts.toolNameMode
 }
 
 // listTools connects to the MCP server and refreshes the tool list.

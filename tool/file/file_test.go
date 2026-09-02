@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestWithBaseDir(t *testing.T) {
@@ -116,6 +117,12 @@ func TestNewToolSet_CustomOptions(t *testing.T) {
 	assert.False(t, fts.searchFileEnabled)
 	assert.Equal(t, os.FileMode(0700), fts.createDirMode)
 	assert.Equal(t, os.FileMode(0600), fts.createFileMode)
+}
+
+func TestNewToolSet_ToolNameMode(t *testing.T) {
+	set, err := NewToolSet(WithToolNameMode(tool.ToolNameModeOriginal))
+	assert.NoError(t, err)
+	assert.Equal(t, tool.ToolNameModeOriginal, tool.ToolNameModeOf(set))
 }
 
 func TestNewToolSet_BaseDirNotExist(t *testing.T) {

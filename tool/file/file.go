@@ -171,6 +171,15 @@ func WithName(name string) Option {
 	}
 }
 
+// WithToolNameMode sets how this ToolSet's tools are named when exposed to a
+// model. ToolNameModeQualified is the default; ToolNameModeOriginal preserves
+// each tool's declaration name while the ToolSet name remains its identity.
+func WithToolNameMode(mode tool.ToolNameMode) Option {
+	return func(f *fileToolSet) {
+		f.toolNameMode = mode
+	}
+}
+
 // fileToolSet implements the ToolSet interface for file operations.
 type fileToolSet struct {
 	baseDir                  string
@@ -188,6 +197,7 @@ type fileToolSet struct {
 	maxFileSize              int64
 	tools                    []tool.Tool
 	name                     string
+	toolNameMode             tool.ToolNameMode
 }
 
 // Tools implements the ToolSet interface.
@@ -204,6 +214,12 @@ func (f *fileToolSet) Close() error {
 // Name implements the ToolSet interface.
 func (f *fileToolSet) Name() string {
 	return f.name
+}
+
+// ToolNameMode reports how this ToolSet's tools should be named when exposed
+// to a model.
+func (f *fileToolSet) ToolNameMode() tool.ToolNameMode {
+	return f.toolNameMode
 }
 
 // NewToolSet creates a new file operation tool set with the provided

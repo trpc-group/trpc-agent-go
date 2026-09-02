@@ -201,6 +201,26 @@ llmAgent := llmagent.New(
 )
 ```
 
+### Keep MCP Tool Names Unprefixed
+
+By default, an MCP ToolSet named `github` exposes a remote `search` tool to the
+model as `github_search`. If the remote names are already unique in the agent,
+use `tool.ToolNameModeOriginal` to keep them unchanged:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool"
+
+githubToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{Transport: "sse", ServerURL: "http://localhost:8080/sse"},
+    mcp.WithName("github"),
+    mcp.WithToolNameMode(tool.ToolNameModeOriginal),
+)
+```
+
+The model sees `search`, while `githubToolSet.Name()` remains `github` for
+ToolSet identification, activation, policy checks, and tracing. Tool names
+must be unique across all tools visible in the same model request.
+
 ## Retry Mechanism for Network Tools
 
 The trpc-agent-go framework provides automatic retry functionality for MCP tools to handle temporary network failures. This feature is available for network-based transports (Streamable HTTP and SSE), but not for STDIO transport due to its process-based nature.

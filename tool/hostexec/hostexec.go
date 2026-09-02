@@ -43,11 +43,12 @@ const (
 )
 
 type config struct {
-	baseDir  string
-	name     string
-	maxLines int
-	jobTTL   time.Duration
-	baseEnv  map[string]string
+	baseDir      string
+	name         string
+	maxLines     int
+	jobTTL       time.Duration
+	baseEnv      map[string]string
+	toolNameMode tool.ToolNameMode
 }
 
 // Option configures the hostexec tool set.
@@ -64,6 +65,15 @@ func WithBaseDir(baseDir string) Option {
 func WithName(name string) Option {
 	return func(c *config) {
 		c.name = name
+	}
+}
+
+// WithToolNameMode sets how this ToolSet's tools are named when exposed to a
+// model. ToolNameModeQualified is the default; ToolNameModeOriginal preserves
+// each tool's declaration name while the ToolSet name remains its identity.
+func WithToolNameMode(mode tool.ToolNameMode) Option {
+	return func(c *config) {
+		c.toolNameMode = mode
 	}
 }
 
@@ -128,9 +138,10 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	}
 
 	set := &toolSet{
-		name:    strings.TrimSpace(cfg.name),
-		baseDir: baseDir,
-		mgr:     mgr,
+		name:         strings.TrimSpace(cfg.name),
+		baseDir:      baseDir,
+		mgr:          mgr,
+		toolNameMode: cfg.toolNameMode,
 	}
 	if set.name == "" {
 		set.name = defaultToolSetName
@@ -144,10 +155,11 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 }
 
 type toolSet struct {
-	name    string
-	baseDir string
-	mgr     *manager
-	tools   []tool.Tool
+	name         string
+	baseDir      string
+	mgr          *manager
+	tools        []tool.Tool
+	toolNameMode tool.ToolNameMode
 }
 
 func (s *toolSet) Tools(context.Context) []tool.Tool {
@@ -163,6 +175,12 @@ func (s *toolSet) Close() error {
 
 func (s *toolSet) Name() string {
 	return s.name
+}
+
+// ToolNameMode reports how this ToolSet's tools should be named when exposed
+// to a model.
+func (s *toolSet) ToolNameMode() tool.ToolNameMode {
+	return s.toolNameMode
 }
 
 type execCommandTool struct {

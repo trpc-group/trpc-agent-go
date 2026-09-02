@@ -9,6 +9,8 @@
 
 package okf
 
+import "trpc.group/trpc-go/trpc-agent-go/tool"
+
 // Option configures a ToolSet built by NewToolSet.
 type Option func(*toolSet)
 
@@ -18,6 +20,13 @@ type Option func(*toolSet)
 // tool names within 64 characters. NewToolSet returns an error otherwise.
 func WithNamePrefix(prefix string) Option {
 	return func(t *toolSet) { t.namePrefix = prefix }
+}
+
+// WithToolNameMode sets how this ToolSet's tools are named when exposed to a
+// model. ToolNameModeQualified is the default; ToolNameModeOriginal preserves
+// each tool's declaration name while the ToolSet name remains its identity.
+func WithToolNameMode(mode tool.ToolNameMode) Option {
+	return func(t *toolSet) { t.toolNameMode = mode }
 }
 
 // WithMaxBodyBytes caps the body returned by okf_read; longer bodies are
