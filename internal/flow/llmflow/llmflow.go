@@ -222,6 +222,16 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			// emit start event and wait for completion notice.
 			if err := f.emitStartEventAndWait(ctx, invocation, eventChan, eventCompletionTimeout); err != nil {
 				runErr = err
+				// Emit an error event so the caller can observe the termination
+				// reason instead of seeing only a closed channel. Use a fresh
+				// context because the original ctx may already be cancelled.
+				errorEvent := event.NewErrorEvent(
+					flowInvocationID(invocation),
+					flowAgentName(invocation),
+					model.ErrorTypeCancelled,
+					err.Error(),
+				)
+				agent.EmitEvent(context.Background(), invocation, eventChan, errorEvent)
 				return
 			}
 
@@ -568,10 +578,6 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 		invocation,
 		latencySpanEmitStartWait,
 	)
-	var err error
-	defer func() {
-		finishLatencySpan(span, started, err)
-	}()
 
 	invocationID, agentName := "", ""
 	if invocation != nil {
@@ -585,14 +591,21 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 	// Wait for completion notice.
 	// Ensure that the events of the previous agent or the previous step have been synchronized to the session.
 	completionID := agent.GetAppendEventNoticeKey(startEvent.ID)
-	err = invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
-	return handleStartEventWaitError(ctx, err)
+	waitErr := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
+	// Map the wait result before recording the span so the span reflects the
+	// error that the caller will actually receive, not the raw wait result.
+	result := handleStartEventWaitError(ctx, waitErr)
+	finishLatencySpan(span, started, result)
+	return result
 }
 
 // handleStartEventWaitError maps the completion-wait result to a flow error.
-// Cancellation and deadline errors are propagated. A notice timeout on a live
-// context is recoverable and only logged, while a timeout that raced with a
-// just-expired context is propagated as the context error.
+// Cancellation and deadline errors are propagated as-is. Any other non-nil
+// error (e.g. a notice timeout or a channel-creation failure) is treated as
+// recoverable when the context is still live — only a warning is logged and
+// nil is returned so the flow can continue. When the context has already
+// expired, the context error is returned regardless of the wait result to
+// prevent the flow from advancing with a dead context.
 func handleStartEventWaitError(ctx context.Context, err error) error {
 	if errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) {

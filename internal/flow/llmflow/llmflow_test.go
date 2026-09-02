@@ -5047,3 +5047,47 @@ func TestHandleStartEventWaitError(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+// TestFlowRun_DeadlineBeforeStartWait is a regression test for
+// https://github.com/trpc-group/trpc-agent-go/issues/2559.
+//
+// When emitStartEventAndWait returns a context error (Canceled or
+// DeadlineExceeded), Flow.Run must:
+//  1. Stop immediately and not proceed to runOneStep.
+//  2. Emit an error event into the channel so the caller can observe the
+//     termination reason rather than just seeing a closed channel.
+//
+// The test cancels the context before delivering the completion notice, so
+// the very first emitStartEventAndWait returns context.Canceled.  The caller
+// must receive an error event and the channel must close cleanly.
+func TestFlowRun_DeadlineBeforeStartWait(t *testing.T) {
+	f := New(nil, nil, Options{ChannelBufferSize: 16})
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("deadline-regression"),
+		agent.WithInvocationAgent(&minimalAgent{}),
+	)
+
+	// Cancel the context immediately after Run returns so the first
+	// emitStartEventAndWait sees a cancelled context when it calls
+	// AddNoticeChannelAndWait.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancelled before any notice arrives
+
+	eventChan, err := f.Run(ctx, inv)
+	require.NoError(t, err)
+
+	var errorEvents []*event.Event
+	for evt := range eventChan {
+		if evt == nil {
+			continue
+		}
+		if evt.IsError() {
+			errorEvents = append(errorEvents, evt)
+		}
+	}
+
+	// An error event must have been emitted so the caller can observe why the
+	// run ended, rather than only seeing a closed channel.
+	require.NotEmpty(t, errorEvents,
+		"Flow.Run must emit an error event when emitStartEventAndWait fails with a context error")
+}
