@@ -87,9 +87,4 @@ curl -sS http://127.0.0.1:8080/trpc-agent/v1/apps/calculator/runs \
   }'
 ```
 
-Prompt Engine 评估或迭代请求可以在 `runOptions` 中设置
-`forcePromptEngineTelemetry: true`，跳过 Prompt Engine 自己的本地 Trace 采样率，
-避免本次运行被该本地采样门控丢弃。省略或设为 `false` 时按 Prompt Engine 配置采样。
-该字段不影响其他观测平台，也不会覆盖上游 OpenTelemetry sampler。
-
 `profile` 字段可选。未传入 profile 时，Runner 按 Agent 当前配置执行；传入 profile 时，服务端会将结构化 profile 编译为运行时 option 后再执行。

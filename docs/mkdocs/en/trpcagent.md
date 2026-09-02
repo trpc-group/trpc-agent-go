@@ -87,10 +87,4 @@ curl -sS http://127.0.0.1:8080/trpc-agent/v1/apps/calculator/runs \
   }'
 ```
 
-Prompt Engine evaluation or iteration requests can set
-`forcePromptEngineTelemetry: true` under `runOptions` to bypass Prompt Engine's local
-trace sampling rate, so the run is not dropped by that local gate. When omitted or
-`false`, Prompt Engine sampling applies. This field does not affect other
-observability platforms or override an upstream OpenTelemetry sampler.
-
 The `profile` field is optional. When omitted, the runner executes with the current agent configuration. When provided, the server compiles the structured profile into runtime options before execution.

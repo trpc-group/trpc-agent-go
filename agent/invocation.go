@@ -1260,11 +1260,6 @@ type RunOptions struct {
 	// ExecutionTraceEnabled enables in-process execution trace recording for this run.
 	ExecutionTraceEnabled bool
 
-	// ForcePromptEngineTelemetry bypasses Prompt Engine's local exporter-side
-	// trace sampling for this run. It does not enable execution trace recording
-	// or override an upstream OpenTelemetry sampler.
-	ForcePromptEngineTelemetry bool
-
 	// RequestID is the request id of the request.
 	RequestID string
 

@@ -25,10 +25,9 @@ type session struct {
 
 // runOptions stores tRPC-Agent API options for one run.
 type runOptions struct {
-	RequestID                  string         `json:"requestID,omitempty"`
-	ExecutionTraceEnabled      bool           `json:"executionTraceEnabled,omitempty"`
-	ForcePromptEngineTelemetry bool           `json:"forcePromptEngineTelemetry,omitempty"`
-	RuntimeState               map[string]any `json:"runtimeState,omitempty"`
+	RequestID             string         `json:"requestID,omitempty"`
+	ExecutionTraceEnabled bool           `json:"executionTraceEnabled,omitempty"`
+	RuntimeState          map[string]any `json:"runtimeState,omitempty"`
 }
 
 // runRequest is the request payload for POST /runs.
