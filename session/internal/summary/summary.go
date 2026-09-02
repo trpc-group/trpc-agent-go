@@ -881,7 +881,8 @@ func copySummaryToKey(sess *session.Session, srcKey, dstKey string) bool {
 // copied summary is then persisted via createSummaryFunc which detects the
 // existing in-memory summary and triggers persistence. Dependent-target errors
 // are returned without persisting recovery state; a later call only cascades
-// after its branch target materializes again.
+// after its branch target materializes again. Consequently, an unforced retry
+// with no new branch delta can return nil without retrying the failed target.
 func CreateSessionSummaryWithCascade(
 	ctx context.Context,
 	sess *session.Session,

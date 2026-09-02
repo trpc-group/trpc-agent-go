@@ -229,7 +229,14 @@ fork request。当 session 当前加载的所有事件都属于同一个 `filter
 更一般地，branch 触发的全量摘要级联依赖 branch 目标在本轮实际产出摘要。如果
 branch gate 决定不更新摘要，框架会停止级联，不会独立推进全量会话摘要。后续
 目标失败时会返回错误，但不会创建独立的持久化恢复协议；后续普通调用必须重新
-通过 branch gate，如果需要立即重试，可以显式强制生成摘要。
+通过 branch gate。如果 gate 没有触发，该调用可能返回 `nil`，但此前失败的全量
+目标仍未补齐。需要立即恢复时，应直接对 `SummaryFilterKeyAllContents` 强制生成
+摘要，或者在不携带 cache-safe parent fork 的 context 中用 `force=true` 重试
+branch cascade。携带 cache-safe parent 时，即使强制 branch cascade，后续全量
+LLM 目标仍会按设计跳过。
+
+异步 worker 会在执行结束后记录后续目标的错误；enqueue 成功只表示任务已接收，
+不会把 worker 稍后产生的错误同步返回给已经结束的 enqueue 调用。
 
 `WithSummaryJobTimeout(...)` 是整条 summary job 的 deadline。多 filterKey 级联会
 串行执行 branch 与全量摘要目标，两个目标共享同一个 deadline；配置时需要覆盖
@@ -527,9 +534,10 @@ summarizer := summary.NewSummarizer(
 
 高级集成如果要在高层 summary 流程前放入同一个 report，可以使用
 `summary.ContextWithReport(ctx, report)`，需要从 context 取出时使用
-`summary.ReportFromContext(ctx)`。单一路径会复用这个 report；cascade 同时包含 branch
-和全量目标时，框架会给每个目标克隆一份 report，隔离各自的写入。这些 fork 出来的
-report 会通过各自调用的 hook 发出，不会再合并回 root report。
+`summary.ReportFromContext(ctx)`。单一路径会复用这个 report；多 filterKey cascade
+中的独立 branch 和全量目标会各自获得一份克隆的 report，以隔离各自的写入。这些
+fork 出来的 report 会通过各自调用的 hook 发出，不会再合并回 root report。单
+filterKey 的 copy-persistence 优化不会产生这一对 target report。
 
 对于私有部署、endpoint ID、微调模型、新模型或多租户自定义模型配置，优先使用模型实例或单次运行 option，
 避免不同用户覆盖同一个进程级注册表：
@@ -1529,7 +1537,9 @@ sessionService := inmemory.NewSessionService(
   摘要，请单独触发一次全量会话摘要。
 - 全量摘要级联以本轮 branch 目标实际产出摘要为前提；如果 branch 没有更新，
   不会独立运行全量摘要目标。失败的后续目标不会根据推断或框架持久化的恢复状态
-  自动重试；后续调用必须重新产出 branch 摘要（例如显式强制生成）。
+  自动重试；后续调用必须重新产出 branch 摘要。需要立即恢复时，应直接强制生成
+  全量 key，或在不携带 cache-safe parent fork 的 context 中强制 branch cascade。
+- 异步 enqueue 成功不会返回 worker 稍后发生的错误；后续目标错误由 worker 记录。
 - `WithSummaryJobTimeout(...)` 作用于整条 summary job。branch 与全量摘要目标会
   串行执行并共享同一个 deadline，因此配置时需要覆盖两段模型调用和持久化的总延迟。
 - 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入

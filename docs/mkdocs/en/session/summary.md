@@ -248,8 +248,16 @@ target producing a summary in that pass. If the branch gate declines to update
 its summary, the framework stops the cascade instead of independently advancing
 the full-session summary. A failed dependent target returns an error but does
 not create a separate durable recovery protocol. A later ordinary call must
-pass the branch gate again; use a forced summary when an immediate retry is
-required.
+pass the branch gate again and can return `nil` without completing the earlier
+full target when that gate does not fire. To recover immediately, directly
+force `SummaryFilterKeyAllContents`, or retry the branch cascade with
+`force=true` from a context that does not carry a cache-safe parent fork.
+Forcing a branch cascade with a cache-safe parent still intentionally skips its
+dependent full-session LLM target.
+
+Asynchronous workers log dependent-target errors after processing. A successful
+enqueue only confirms that the job was accepted; it does not synchronously
+return errors produced later by the worker.
 
 `WithSummaryJobTimeout(...)` is the deadline for the entire summary job. A
 multi-`filterKey` cascade runs the branch and full-session targets sequentially,
@@ -574,10 +582,11 @@ sent, the mode is `custom_response` and the prompt estimate remains zero.
 Advanced integrations can attach a report before entering a higher-level
 summary flow with `summary.ContextWithReport(ctx, report)` and retrieve it with
 `summary.ReportFromContext(ctx)`. The framework reuses that report for a single
-summary path; when a cascade targets both a branch and the full session, each
-target receives a cloned report so target-specific writes remain isolated.
-Those forked reports are emitted through their per-call hooks and are not
-merged back into the root report.
+summary path. Distinct branch and full-session targets in a multi-`filterKey`
+cascade each receive a cloned report so target-specific writes remain isolated.
+Those forked reports are emitted through their per-call hooks and are not merged
+back into the root report. The single-`filterKey` copy-persistence optimization
+does not create this pair of target reports.
 
 For private deployments, endpoint IDs, fine-tuned models, newly released
 models, or multi-tenant custom model configuration, prefer the instance or
@@ -1610,7 +1619,10 @@ Behavior notes:
   summary in the same pass. If the branch is not updated, the full-session
   target is not run independently. Failed dependent targets are not retried
   from inferred or framework-persisted recovery state; a later pass must
-  materialize the branch again (for example with a forced summary).
+  materialize the branch again. For immediate recovery, force the full-session
+  key directly, or force the branch cascade without a cache-safe parent fork.
+- Async enqueue success does not report later worker failures; dependent-target
+  errors are logged by the worker.
 - `WithSummaryJobTimeout(...)` applies to the complete summary job. Branch and
   full-session targets run sequentially and share the same deadline, so allow
   for their combined model and persistence latency.
