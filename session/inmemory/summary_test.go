@@ -11,7 +11,6 @@ package inmemory
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -21,7 +20,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	ssummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
@@ -225,134 +223,6 @@ func TestMemoryService_CreateSessionSummary_FilterAllowlistAndCascade(t *testing
 	require.Equal(t, "branch-summary", got.Summaries["branch"].Summary)
 	_, ok = got.Summaries[""]
 	require.False(t, ok)
-}
-
-func TestMemoryService_EnqueueSummaryJob_CascadePreservesObserverContext(
-	t *testing.T,
-) {
-	const filterKey = "branch"
-	s := NewSessionService(
-		WithSummarizer(&fakeSummarizer{allow: true, out: "summary"}),
-		WithAsyncSummaryNum(1),
-	)
-	defer s.Close()
-
-	ctx := context.Background()
-	key := session.Key{
-		AppName:   "app",
-		UserID:    "user",
-		SessionID: "observer-context",
-	}
-	sess, err := s.CreateSession(ctx, key, session.StateMap{})
-	require.NoError(t, err)
-	for i, target := range []string{filterKey, "other"} {
-		evt := event.New(fmt.Sprintf("inv-%d", i), "author")
-		evt.Timestamp = time.Now().Add(time.Duration(i) * time.Second)
-		evt.FilterKey = target
-		evt.Response = &model.Response{Choices: []model.Choice{{
-			Message: model.Message{Role: model.RoleUser, Content: target},
-		}}}
-		require.NoError(t, s.AppendEvent(ctx, sess, evt))
-	}
-
-	sess, err = s.GetSession(ctx, key)
-	require.NoError(t, err)
-	require.NoError(t, s.EnqueueSummaryJob(ctx, sess, filterKey, false))
-
-	require.Eventually(t, func() bool {
-		got, getErr := s.GetSession(ctx, key)
-		if getErr != nil || got == nil {
-			return false
-		}
-		return got.Summaries[filterKey] != nil &&
-			got.Summaries[session.SummaryFilterKeyAllContents] != nil
-	}, 2*time.Second, 10*time.Millisecond)
-}
-
-func TestMemoryService_CascadeRetryUsesPersistedProvenance(t *testing.T) {
-	const filterKey = "branch"
-	s := NewSessionService(
-		WithSummarizer(&fakeSummarizer{allow: true, out: "summary"}),
-	)
-	defer s.Close()
-
-	ctx := context.Background()
-	key := session.Key{
-		AppName:   "app",
-		UserID:    "user",
-		SessionID: "durable-cascade-retry",
-	}
-	sess, err := s.CreateSession(ctx, key, session.StateMap{})
-	require.NoError(t, err)
-	for i, target := range []string{filterKey, "other"} {
-		evt := event.New(fmt.Sprintf("inv-%d", i), "author")
-		evt.Timestamp = time.Now().Add(time.Duration(i) * time.Second)
-		evt.FilterKey = target
-		evt.Response = &model.Response{Choices: []model.Choice{{
-			Message: model.Message{Role: model.RoleUser, Content: target},
-		}}}
-		require.NoError(t, s.AppendEvent(ctx, sess, evt))
-	}
-	sess, err = s.GetSession(ctx, key)
-	require.NoError(t, err)
-
-	fullAttempts := 0
-	createSummary := func(
-		ctx context.Context,
-		sess *session.Session,
-		target string,
-		force bool,
-	) error {
-		if target == session.SummaryFilterKeyAllContents {
-			fullAttempts++
-			if fullAttempts == 1 {
-				return errors.New("injected full failure")
-			}
-		}
-		return s.CreateSessionSummary(ctx, sess, target, force)
-	}
-	policy := isummary.NewSummaryDispatchPolicy(nil, true)
-	err = isummary.CreateSessionSummaryWithCascade(
-		ctx,
-		sess,
-		filterKey,
-		false,
-		policy,
-		createSummary,
-	)
-	require.ErrorContains(t, err, "injected full failure")
-
-	reloaded, err := s.GetSession(ctx, key)
-	require.NoError(t, err)
-	require.NotEmpty(
-		t,
-		reloaded.Summaries[filterKey].PendingFullCascadeID,
-	)
-	require.Nil(
-		t,
-		reloaded.Summaries[session.SummaryFilterKeyAllContents],
-	)
-
-	require.NoError(t, isummary.CreateSessionSummaryWithCascade(
-		ctx,
-		reloaded,
-		filterKey,
-		false,
-		policy,
-		createSummary,
-	))
-	require.Equal(t, 2, fullAttempts)
-
-	got, err := s.GetSession(ctx, key)
-	require.NoError(t, err)
-	require.Empty(
-		t,
-		got.Summaries[filterKey].PendingFullCascadeID,
-	)
-	require.NotNil(
-		t,
-		got.Summaries[session.SummaryFilterKeyAllContents],
-	)
 }
 
 func TestMemoryService_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {

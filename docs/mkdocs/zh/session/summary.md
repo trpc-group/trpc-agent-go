@@ -227,18 +227,13 @@ fork request。当 session 当前加载的所有事件都属于同一个 `filter
 触发一次全量会话摘要。
 
 更一般地，branch 触发的全量摘要级联依赖 branch 目标在本轮实际产出摘要。如果
-branch gate 决定不更新摘要，框架会停止级联，不会独立推进全量会话摘要。唯一
-例外是带有持久化未完成级联来源信息的重试：为级联实际产出的 branch 摘要会携带
-框架维护的 `PendingFullCascadeID` 并一同持久化，但有意的 cache-safe skip 从一
-开始就不会写入该标记。如果后续全量目标返回错误，即使 session 已重新加载，
-后续普通调用也可以据此重试，而不会根据互不相关的 branch/full 边界差异推断失败。
-全量目标无错误完成后，框架会清除并持久化该标记。自定义摘要存储或复制逻辑必须
-保留此字段。
+branch gate 决定不更新摘要，框架会停止级联，不会独立推进全量会话摘要。后续
+目标失败时会返回错误，但不会创建独立的持久化恢复协议；后续普通调用必须重新
+通过 branch gate，如果需要立即重试，可以显式强制生成摘要。
 
 `WithSummaryJobTimeout(...)` 是整条 summary job 的 deadline。多 filterKey 级联会
-串行执行 branch 与全量摘要目标，两个目标共享同一个 deadline。级联完成时还会
-执行一次仅用于清除 `PendingFullCascadeID` 的 branch 元数据持久化；配置时需要
-覆盖模型调用和这些持久化操作的总延迟。
+串行执行 branch 与全量摘要目标，两个目标共享同一个 deadline；配置时需要覆盖
+两段模型调用和持久化的总延迟。
 
 Prompt 规则：
 
@@ -1533,12 +1528,10 @@ sessionService := inmemory.NewSessionService(
   会话里，级联出来的全量摘要目标会被跳过；如果确实需要覆盖所有 branch 的全量
   摘要，请单独触发一次全量会话摘要。
 - 全量摘要级联以本轮 branch 目标实际产出摘要为前提；如果 branch 没有更新，
-  不会独立运行全量摘要目标。唯一例外是已持久化 branch 摘要携带
-  `PendingFullCascadeID`，明确证明此前的级联尚未完成；后续目标无错误完成后，
-  框架会通过一次仅更新元数据的 branch 持久化清除该标记。
+  不会独立运行全量摘要目标。失败的后续目标不会根据推断或框架持久化的恢复状态
+  自动重试；后续调用必须重新产出 branch 摘要（例如显式强制生成）。
 - `WithSummaryJobTimeout(...)` 作用于整条 summary job。branch 与全量摘要目标会
-  和级联完成元数据持久化串行执行并共享同一个 deadline，因此配置时需要覆盖模型
-  调用和这些持久化操作的总延迟。
+  串行执行并共享同一个 deadline，因此配置时需要覆盖两段模型调用和持久化的总延迟。
 - 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入
   空 allowlist，并保持默认 cascade 开启：
 

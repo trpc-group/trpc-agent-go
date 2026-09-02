@@ -589,11 +589,6 @@ type Summary struct {
 	Topics    []string         `json:"topics,omitempty"`   // Topics is the optional topics list.
 	UpdatedAt time.Time        `json:"updated_at"`         // UpdatedAt is the legacy cutoff timestamp in UTC.
 	Boundary  *SummaryBoundary `json:"boundary,omitempty"` // Boundary records the summarized history cutoff.
-	// PendingFullCascadeID is an opaque, framework-owned identifier for a
-	// branch-triggered full-session cascade that has not completed without
-	// error. An empty value means no cascade retry is pending. Callers must
-	// preserve the value when copying or persisting Summary values.
-	PendingFullCascadeID string `json:"pending_full_cascade_id,omitempty"`
 }
 
 const (

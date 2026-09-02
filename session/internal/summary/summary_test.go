@@ -1837,7 +1837,7 @@ func TestCreateSessionSummaryWithCascade(t *testing.T) {
 						UpdatedAt: now,
 					}
 					sess.SummariesMu.Unlock()
-					recordSummaryMaterialized(ctx, sess, filterKey)
+					recordSummaryMaterialized(ctx, filterKey)
 				}
 				return err
 			}
@@ -1888,7 +1888,7 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 				UpdatedAt: now,
 			}
 			sess.SummariesMu.Unlock()
-			recordSummaryMaterialized(ctx, sess, filterKey)
+			recordSummaryMaterialized(ctx, filterKey)
 		}
 		return nil
 	}
@@ -1963,7 +1963,7 @@ func TestCreateSessionSummaryWithCascade_ForksReportForCascadeTargets(t *testing
 					UpdatedAt: now,
 				}
 				sess.SummariesMu.Unlock()
-				recordSummaryMaterialized(ctx, sess, filterKey)
+				recordSummaryMaterialized(ctx, filterKey)
 			}
 			return nil
 		},
@@ -2002,15 +2002,6 @@ func TestCreateSessionSummaryWithCascade_SkipsFullTargetForCacheSafeFork(t *test
 		false,
 		NewSummaryDispatchPolicy(nil, true),
 		func(ctx context.Context, _ *session.Session, filterKey string, _ bool) error {
-			if filterKey == session.SummaryFilterKeyAllContents {
-				require.Empty(
-					t,
-					readSummaryPointer(
-						sess,
-						"user-messages",
-					).PendingFullCascadeID,
-				)
-			}
 			_, err := SummarizeSession(ctx, summarizer, sess, filterKey, false)
 			return err
 		},
@@ -2018,44 +2009,9 @@ func TestCreateSessionSummaryWithCascade_SkipsFullTargetForCacheSafeFork(t *test
 	require.NoError(t, err)
 
 	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
 	require.NotNil(t, sess.Summaries["user-messages"])
-	require.Empty(
-		t,
-		sess.Summaries["user-messages"].PendingFullCascadeID,
-	)
 	require.Nil(t, sess.Summaries[session.SummaryFilterKeyAllContents])
-	sess.SummariesMu.RUnlock()
-
-	var retryTargets []string
-	err = CreateSessionSummaryWithCascade(
-		context.Background(),
-		sess,
-		"user-messages",
-		false,
-		NewSummaryDispatchPolicy(nil, true),
-		func(
-			ctx context.Context,
-			_ *session.Session,
-			filterKey string,
-			force bool,
-		) error {
-			retryTargets = append(retryTargets, filterKey)
-			_, err := SummarizeSession(
-				ctx,
-				summarizer,
-				sess,
-				filterKey,
-				force,
-			)
-			return err
-		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, []string{"user-messages"}, retryTargets)
-	require.Nil(
-		t,
-		readSummaryPointer(sess, session.SummaryFilterKeyAllContents),
-	)
 }
 
 func TestCreateSessionSummaryWithCascade_SkipsForcedFullTargetForCacheSafeFork(t *testing.T) {
@@ -2374,12 +2330,12 @@ func TestCopySummaryToKey(t *testing.T) {
 	now := time.Now()
 
 	t.Run("nil session", func(t *testing.T) {
-		require.Nil(t, copySummaryToKey(nil, "src", "dst"))
+		require.False(t, copySummaryToKey(nil, "src", "dst"))
 	})
 
 	t.Run("nil summaries", func(t *testing.T) {
 		sess := &session.Session{ID: "s1"}
-		require.Nil(t, copySummaryToKey(sess, "src", "dst"))
+		require.False(t, copySummaryToKey(sess, "src", "dst"))
 		require.Nil(t, sess.Summaries)
 	})
 
@@ -2390,7 +2346,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"other": {Summary: "other summary", UpdatedAt: now},
 			},
 		}
-		require.Nil(t, copySummaryToKey(sess, "src", "dst"))
+		require.False(t, copySummaryToKey(sess, "src", "dst"))
 		_, ok := sess.Summaries["dst"]
 		require.False(t, ok)
 	})
@@ -2402,7 +2358,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"src": nil,
 			},
 		}
-		require.Nil(t, copySummaryToKey(sess, "src", "dst"))
+		require.False(t, copySummaryToKey(sess, "src", "dst"))
 		_, ok := sess.Summaries["dst"]
 		require.False(t, ok)
 	})
@@ -2414,7 +2370,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"src": {Summary: "source summary", UpdatedAt: now},
 			},
 		}
-		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
+		require.True(t, copySummaryToKey(sess, "src", "dst"))
 		require.NotNil(t, sess.Summaries["dst"])
 		require.Equal(t, "source summary", sess.Summaries["dst"].Summary)
 		// UpdatedAt is set to zero to mark as needing persistence.
@@ -2433,7 +2389,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"dst": {Summary: "old summary", UpdatedAt: oldTime},
 			},
 		}
-		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
+		require.True(t, copySummaryToKey(sess, "src", "dst"))
 		require.Equal(t, "new summary", sess.Summaries["dst"].Summary)
 		// UpdatedAt is set to zero to mark as needing persistence.
 		require.True(t, sess.Summaries["dst"].UpdatedAt.IsZero())
@@ -2450,7 +2406,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				},
 			},
 		}
-		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
+		require.True(t, copySummaryToKey(sess, "src", "dst"))
 		require.NotNil(t, sess.Summaries["dst"])
 		require.Equal(t, "summary with topics", sess.Summaries["dst"].Summary)
 		require.Equal(t, []string{"topic1", "topic2", "topic3"}, sess.Summaries["dst"].Topics)
@@ -2474,7 +2430,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				},
 			},
 		}
-		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
+		require.True(t, copySummaryToKey(sess, "src", "dst"))
 		require.NotNil(t, sess.Summaries["dst"])
 		require.NotNil(t, sess.Summaries["dst"].Boundary)
 		require.Equal(t, "dst", sess.Summaries["dst"].Boundary.FilterKey)
@@ -2488,7 +2444,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"src": {Summary: "summary without topics", UpdatedAt: now},
 			},
 		}
-		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
+		require.True(t, copySummaryToKey(sess, "src", "dst"))
 		require.NotNil(t, sess.Summaries["dst"])
 		require.Equal(t, "summary without topics", sess.Summaries["dst"].Summary)
 		require.Nil(t, sess.Summaries["dst"].Topics)
@@ -2501,7 +2457,7 @@ func TestCopySummaryToKey(t *testing.T) {
 				"src": {Summary: "summary with empty topics", Topics: []string{}, UpdatedAt: now},
 			},
 		}
-		require.NotNil(t, copySummaryToKey(sess, "src", "dst"))
+		require.True(t, copySummaryToKey(sess, "src", "dst"))
 		require.NotNil(t, sess.Summaries["dst"])
 		require.Equal(t, "summary with empty topics", sess.Summaries["dst"].Summary)
 		require.Nil(t, sess.Summaries["dst"].Topics) // Empty slice becomes nil.
@@ -2790,7 +2746,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 				}
 			}
 			s.SummariesMu.Unlock()
-			recordSummaryMaterialized(ctx, s, filterKey)
+			recordSummaryMaterialized(ctx, filterKey)
 			return nil
 		}
 
@@ -2902,7 +2858,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 				UpdatedAt: now,
 			}
 			s.SummariesMu.Unlock()
-			recordSummaryMaterialized(ctx, s, filterKey)
+			recordSummaryMaterialized(ctx, filterKey)
 			return nil
 		}
 
@@ -3001,7 +2957,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 				UpdatedAt: now,
 			}
 			s.SummariesMu.Unlock()
-			recordSummaryMaterialized(ctx, s, filterKey)
+			recordSummaryMaterialized(ctx, filterKey)
 			return nil
 		}
 
@@ -3049,7 +3005,7 @@ func TestCreateSessionSummaryWithCascade_SingleFilterKeyOptimization(t *testing.
 	})
 }
 
-func TestCreateSessionSummaryWithCascade_RetriesPendingFullPersistence(
+func TestCreateSessionSummaryWithCascade_FailedFullRequiresBranchMaterialization(
 	t *testing.T,
 ) {
 	const filterKey = "app/math"
@@ -3074,14 +3030,14 @@ func TestCreateSessionSummaryWithCascade_RetriesPendingFullPersistence(
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			sess := &session.Session{
-				ID:        "retry-session",
+				ID:        "failed-full-retry",
 				AppName:   "test-app",
 				UserID:    "test-user",
+				CreatedAt: now.Add(-time.Hour),
 				Events:    tt.events,
 				Summaries: make(map[string]*session.Summary),
 			}
 			summarizer := &fakeSummarizer{allow: true, out: "summary"}
-			persisted := make(map[string]*session.Summary)
 			var calls []string
 			fullAttempts := 0
 			createSummary := func(
@@ -3091,618 +3047,71 @@ func TestCreateSessionSummaryWithCascade_RetriesPendingFullPersistence(
 				force bool,
 			) error {
 				calls = append(calls, target)
-				updated, err := SummarizeSession(
+				_, err := SummarizeSession(
 					ctx,
 					summarizer,
 					sess,
 					target,
 					force,
 				)
-				if err != nil || !updated {
+				if err != nil {
 					return err
 				}
 				if target == session.SummaryFilterKeyAllContents {
 					fullAttempts++
 					if fullAttempts == 1 {
-						return errors.New("transient persist error")
+						return errors.New("injected full persistence error")
 					}
 				}
-				sess.SummariesMu.RLock()
-				persisted[target] = sess.Summaries[target].Clone()
-				sess.SummariesMu.RUnlock()
 				return nil
 			}
+			policy := NewSummaryDispatchPolicy(nil, true)
 
 			err := CreateSessionSummaryWithCascade(
 				context.Background(),
 				sess,
 				filterKey,
 				false,
-				NewSummaryDispatchPolicy(nil, true),
+				policy,
 				createSummary,
 			)
-			require.ErrorContains(t, err, "transient persist error")
-			pending := pendingSummaryForPersistence(
-				sess,
-				session.SummaryFilterKeyAllContents,
-			)
-			require.NotNil(t, pending)
-			require.Nil(t, persisted[session.SummaryFilterKeyAllContents])
-			cascadeID := pendingFullCascadeID(sess, filterKey)
-			require.NotEmpty(t, cascadeID)
-			require.Equal(
+			require.ErrorContains(
 				t,
-				cascadeID,
-				persisted[filterKey].PendingFullCascadeID,
+				err,
+				"injected full persistence error",
 			)
 
-			err = CreateSessionSummaryWithCascade(
+			require.NoError(t, CreateSessionSummaryWithCascade(
 				context.Background(),
 				sess,
 				filterKey,
 				false,
-				NewSummaryDispatchPolicy(nil, true),
+				policy,
 				createSummary,
-			)
-			require.NoError(t, err)
-			require.Equal(t, 2, fullAttempts)
-			require.Equal(
-				t,
-				[]string{filterKey, "", filterKey, "", filterKey},
-				calls,
-			)
-			require.NotNil(
-				t,
-				persisted[session.SummaryFilterKeyAllContents],
-			)
-			require.Nil(t, pendingSummaryForPersistence(
-				sess,
-				session.SummaryFilterKeyAllContents,
 			))
-			require.Empty(t, pendingFullCascadeID(sess, filterKey))
-			require.Empty(
+			require.Equal(t, 1, fullAttempts)
+			require.Equal(
 				t,
-				persisted[filterKey].PendingFullCascadeID,
+				[]string{filterKey, "", filterKey},
+				calls,
 			)
-		})
-	}
-}
 
-func TestCreateSessionSummaryWithCascade_DoesNotInferCascadeFromSummaryGap(
-	t *testing.T,
-) {
-	const filterKey = "app/math"
-	now := time.Now()
-	for _, tt := range []struct {
-		name   string
-		events []event.Event
-		full   *session.Summary
-	}{
-		{
-			name: "trimmed single-filter window preserves existing full",
-			events: []event.Event{
-				makeEvent("math", now, filterKey),
-			},
-			full: &session.Summary{
-				Summary:   "full summary with unloaded branches",
-				UpdatedAt: now.Add(-time.Hour),
-				Boundary: session.NewSummaryBoundaryWithEventID(
-					session.SummaryFilterKeyAllContents,
-					now.Add(-time.Hour),
-					"unloaded-event",
-				),
-			},
-		},
-		{
-			name: "multi-filter branch-only summary remains legal",
-			events: []event.Event{
-				makeEvent("math", now.Add(-time.Minute), filterKey),
-				makeEvent("science", now, "app/science"),
-			},
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			branchEvent := tt.events[0]
-			branch := &session.Summary{
-				Summary:   "legitimate branch-only summary",
-				UpdatedAt: branchEvent.Timestamp,
-				Boundary: session.NewSummaryBoundaryWithEventID(
-					filterKey,
-					branchEvent.Timestamp,
-					branchEvent.ID,
-				),
-			}
-			sess := &session.Session{
-				ID:      "legitimate-gap",
-				AppName: "test-app",
-				UserID:  "test-user",
-				Events:  tt.events,
-				Summaries: map[string]*session.Summary{
-					filterKey: branch,
-				},
-			}
-			if tt.full != nil {
-				sess.Summaries[session.SummaryFilterKeyAllContents] =
-					tt.full
-			}
-			var calls []string
-			err := CreateSessionSummaryWithCascade(
+			require.NoError(t, CreateSessionSummaryWithCascade(
 				context.Background(),
 				sess,
 				filterKey,
-				false,
-				NewSummaryDispatchPolicy(nil, true),
-				func(
-					ctx context.Context,
-					sess *session.Session,
-					target string,
-					force bool,
-				) error {
-					calls = append(calls, target)
-					_, summarizeErr := SummarizeSession(
-						ctx,
-						&fakeSummarizer{allow: true, out: "unexpected"},
-						sess,
-						target,
-						force,
-					)
-					return summarizeErr
-				},
-			)
-			require.NoError(t, err)
-			require.Equal(t, []string{filterKey}, calls)
-			require.Same(t, branch, sess.Summaries[filterKey])
-			require.Same(
-				t,
-				tt.full,
-				sess.Summaries[session.SummaryFilterKeyAllContents],
-			)
-		})
-	}
-}
-
-func TestCreateSessionSummaryWithCascade_RetriesDurableCascadeAfterReload(
-	t *testing.T,
-) {
-	const filterKey = "app/math"
-	now := time.Now()
-	for _, tt := range []struct {
-		name   string
-		events []event.Event
-	}{
-		{
-			name: "single filter key",
-			events: []event.Event{
-				makeEvent("math", now, filterKey),
-			},
-		},
-		{
-			name: "multiple filter keys",
-			events: []event.Event{
-				makeEvent("math", now.Add(-time.Minute), filterKey),
-				makeEvent("science", now, "app/science"),
-			},
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			sess := &session.Session{
-				ID:        "durable-retry",
-				AppName:   "test-app",
-				UserID:    "test-user",
-				Events:    tt.events,
-				Summaries: make(map[string]*session.Summary),
-			}
-			summarizer := &fakeSummarizer{allow: true, out: "summary"}
-			persisted := make(map[string]*session.Summary)
-			var calls []string
-			fullAttempts := 0
-			createSummary := func(
-				ctx context.Context,
-				sess *session.Session,
-				target string,
-				force bool,
-			) error {
-				calls = append(calls, target)
-				if target == session.SummaryFilterKeyAllContents {
-					fullAttempts++
-					if fullAttempts == 1 {
-						return context.DeadlineExceeded
-					}
-				}
-				updated, err := SummarizeSession(
-					ctx,
-					summarizer,
-					sess,
-					target,
-					force,
-				)
-				if err != nil || !updated {
-					return err
-				}
-				persisted[target] = readSummaryClone(sess, target)
-				return nil
-			}
-
-			err := CreateSessionSummaryWithCascade(
-				context.Background(),
-				sess,
-				filterKey,
-				false,
-				NewSummaryDispatchPolicy(nil, true),
+				true,
+				policy,
 				createSummary,
-			)
-			require.ErrorIs(t, err, context.DeadlineExceeded)
-			require.NotEmpty(
-				t,
-				persisted[filterKey].PendingFullCascadeID,
-			)
-			require.Nil(
-				t,
-				persisted[session.SummaryFilterKeyAllContents],
-			)
-
-			reloaded := &session.Session{
-				ID:        sess.ID,
-				AppName:   sess.AppName,
-				UserID:    sess.UserID,
-				Events:    append([]event.Event(nil), sess.Events...),
-				Summaries: make(map[string]*session.Summary),
-			}
-			for target, sum := range persisted {
-				reloaded.Summaries[target] = sum.Clone()
-			}
-			err = CreateSessionSummaryWithCascade(
-				context.Background(),
-				reloaded,
-				filterKey,
-				false,
-				NewSummaryDispatchPolicy(nil, true),
-				createSummary,
-			)
-			require.NoError(t, err)
+			))
 			require.Equal(t, 2, fullAttempts)
 			require.Equal(
 				t,
-				[]string{filterKey, "", filterKey, "", filterKey},
+				[]string{filterKey, "", filterKey, filterKey, ""},
 				calls,
-			)
-			require.NotNil(
-				t,
-				persisted[session.SummaryFilterKeyAllContents],
-			)
-			require.Empty(
-				t,
-				persisted[filterKey].PendingFullCascadeID,
 			)
 		})
 	}
-}
-
-func TestCreateSessionSummaryWithCascade_RetriesBranchPersistence(
-	t *testing.T,
-) {
-	const filterKey = "app/math"
-	now := time.Now()
-	sess := &session.Session{
-		ID:      "branch-persistence-retry",
-		AppName: "test-app",
-		UserID:  "test-user",
-		Events: []event.Event{
-			makeEvent("math", now.Add(-time.Minute), filterKey),
-			makeEvent("science", now, "app/science"),
-		},
-		Summaries: make(map[string]*session.Summary),
-	}
-	summarizer := &fakeSummarizer{allow: true, out: "summary"}
-	var calls []string
-	branchPersistenceAttempts := 0
-	createSummary := func(
-		ctx context.Context,
-		sess *session.Session,
-		target string,
-		force bool,
-	) error {
-		calls = append(calls, target)
-		updated, err := SummarizeSession(
-			ctx,
-			summarizer,
-			sess,
-			target,
-			force,
-		)
-		if err != nil || !updated {
-			return err
-		}
-		if target == filterKey {
-			branchPersistenceAttempts++
-			if branchPersistenceAttempts == 1 {
-				return errors.New("transient branch persistence error")
-			}
-		}
-		return nil
-	}
-
-	err := CreateSessionSummaryWithCascade(
-		context.Background(),
-		sess,
-		filterKey,
-		false,
-		NewSummaryDispatchPolicy(nil, true),
-		createSummary,
-	)
-	require.ErrorContains(t, err, "transient branch persistence error")
-	branch := pendingSummaryForPersistence(sess, filterKey)
-	require.NotNil(t, branch)
-	require.NotEmpty(t, branch.PendingFullCascadeID)
-	require.Nil(
-		t,
-		readSummaryPointer(sess, session.SummaryFilterKeyAllContents),
-	)
-
-	err = CreateSessionSummaryWithCascade(
-		context.Background(),
-		sess,
-		filterKey,
-		false,
-		NewSummaryDispatchPolicy(nil, true),
-		createSummary,
-	)
-	require.NoError(t, err)
-	require.Equal(t, 3, branchPersistenceAttempts)
-	require.Equal(
-		t,
-		[]string{filterKey, filterKey, "", filterKey},
-		calls,
-	)
-	require.Empty(t, pendingFullCascadeID(sess, filterKey))
-	require.NotNil(
-		t,
-		readSummaryPointer(sess, session.SummaryFilterKeyAllContents),
-	)
-}
-
-func TestCreateSessionSummaryWithCascade_RetryIncludesNewDelta(t *testing.T) {
-	const filterKey = "app/math"
-	t0 := time.Now().Add(-2 * time.Minute)
-	t1 := t0.Add(time.Minute)
-	t2 := t1.Add(time.Minute)
-	sess := &session.Session{
-		ID:      "new-delta-retry",
-		AppName: "test-app",
-		UserID:  "test-user",
-		Events: []event.Event{
-			makeEvent("science", t0, "app/science"),
-			makeEvent("math-1", t1, filterKey),
-		},
-		Summaries: map[string]*session.Summary{
-			session.SummaryFilterKeyAllContents: {
-				Summary:   "old full summary",
-				UpdatedAt: t0,
-				Boundary: session.NewSummaryBoundaryWithEventID(
-					session.SummaryFilterKeyAllContents,
-					t0,
-					"science",
-				),
-			},
-		},
-	}
-	summarizer := &fakeSummarizer{allow: true, out: "summary"}
-	fullAttempts := 0
-	createSummary := func(
-		ctx context.Context,
-		sess *session.Session,
-		target string,
-		force bool,
-	) error {
-		updated, err := SummarizeSession(
-			ctx,
-			summarizer,
-			sess,
-			target,
-			force,
-		)
-		if err != nil || !updated {
-			return err
-		}
-		if target == session.SummaryFilterKeyAllContents {
-			fullAttempts++
-			if fullAttempts == 1 {
-				return errors.New("transient full persistence error")
-			}
-		}
-		return nil
-	}
-
-	err := CreateSessionSummaryWithCascade(
-		context.Background(),
-		sess,
-		filterKey,
-		false,
-		NewSummaryDispatchPolicy(nil, true),
-		createSummary,
-	)
-	require.ErrorContains(t, err, "transient full persistence error")
-	require.NotNil(
-		t,
-		pendingSummaryForPersistence(
-			sess,
-			session.SummaryFilterKeyAllContents,
-		),
-	)
-
-	sess.EventMu.Lock()
-	sess.Events = append(
-		sess.Events,
-		makeEvent("math-2", t2, filterKey),
-	)
-	sess.EventMu.Unlock()
-
-	err = CreateSessionSummaryWithCascade(
-		context.Background(),
-		sess,
-		filterKey,
-		false,
-		NewSummaryDispatchPolicy(nil, true),
-		createSummary,
-	)
-	require.NoError(t, err)
-	require.Equal(t, 2, fullAttempts)
-	full := readSummaryPointer(
-		sess,
-		session.SummaryFilterKeyAllContents,
-	)
-	require.NotNil(t, full)
-	require.NotNil(t, full.Boundary)
-	require.Equal(t, "math-2", full.Boundary.LastEventID)
-	require.True(t, full.Boundary.CutoffAt.Equal(t2.UTC()))
-	require.Empty(t, pendingFullCascadeID(sess, filterKey))
-}
-
-func TestMarkSummaryPendingPersistence_DoesNotClobberReplacement(t *testing.T) {
-	old := &session.Summary{Summary: "old", UpdatedAt: time.Now()}
-	replacement := &session.Summary{Summary: "new", UpdatedAt: time.Now()}
-	sess := &session.Session{
-		Summaries: map[string]*session.Summary{
-			session.SummaryFilterKeyAllContents: replacement,
-		},
-	}
-
-	markSummaryPendingPersistence(
-		sess,
-		session.SummaryFilterKeyAllContents,
-		old,
-	)
-
-	require.False(t, replacement.UpdatedAt.IsZero())
-	require.Same(
-		t,
-		replacement,
-		readSummaryPointer(sess, session.SummaryFilterKeyAllContents),
-	)
-}
-
-func TestMarkSummaryPendingPersistence_OverlappingFailuresKeepLatest(
-	t *testing.T,
-) {
-	first := &session.Summary{Summary: "first", UpdatedAt: time.Now()}
-	latest := &session.Summary{Summary: "latest", UpdatedAt: time.Now()}
-	sess := &session.Session{
-		Summaries: map[string]*session.Summary{
-			session.SummaryFilterKeyAllContents: latest,
-		},
-	}
-
-	markSummaryPendingPersistence(
-		sess,
-		session.SummaryFilterKeyAllContents,
-		latest,
-	)
-	markSummaryPendingPersistence(
-		sess,
-		session.SummaryFilterKeyAllContents,
-		first,
-	)
-
-	require.Same(
-		t,
-		latest,
-		readSummaryPointer(sess, session.SummaryFilterKeyAllContents),
-	)
-	require.True(t, latest.UpdatedAt.IsZero())
-	require.False(t, first.UpdatedAt.IsZero())
-}
-
-func TestClearPendingFullCascade_DoesNotClearNewAttempt(t *testing.T) {
-	const filterKey = "app/math"
-	newer := &session.Summary{
-		Summary:              "newer branch",
-		UpdatedAt:            time.Now(),
-		PendingFullCascadeID: "new-attempt",
-	}
-	sess := &session.Session{
-		Summaries: map[string]*session.Summary{
-			filterKey: newer,
-		},
-	}
-	called := false
-
-	require.NoError(t, clearPendingFullCascade(
-		context.Background(),
-		sess,
-		filterKey,
-		"old-attempt",
-		func(context.Context, *session.Session, string, bool) error {
-			called = true
-			return nil
-		},
-	))
-	require.False(t, called)
-	require.Same(t, newer, readSummaryPointer(sess, filterKey))
-	require.Equal(t, "new-attempt", newer.PendingFullCascadeID)
-}
-
-func TestCreateFullSessionCascadeTarget_SerializesPersistence(t *testing.T) {
-	sess := &session.Session{
-		ID:      "serialized-full-target",
-		AppName: "test-app",
-		UserID:  "test-user",
-	}
-	firstEntered := make(chan struct{})
-	secondEntered := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	var mu sync.Mutex
-	attempts := 0
-	createSummary := func(
-		context.Context,
-		*session.Session,
-		string,
-		bool,
-	) error {
-		mu.Lock()
-		attempts++
-		attempt := attempts
-		mu.Unlock()
-		if attempt == 1 {
-			close(firstEntered)
-			<-releaseFirst
-		} else {
-			close(secondEntered)
-		}
-		return nil
-	}
-	errs := make(chan error, 2)
-
-	go func() {
-		errs <- createFullSessionCascadeTarget(
-			context.Background(),
-			sess,
-			"app/math",
-			false,
-			nil,
-			createSummary,
-		)
-	}()
-	<-firstEntered
-	go func() {
-		errs <- createFullSessionCascadeTarget(
-			context.Background(),
-			sess,
-			"app/math",
-			false,
-			nil,
-			createSummary,
-		)
-	}()
-
-	select {
-	case <-secondEntered:
-		t.Fatal("second persistence entered before first completed")
-	case <-time.After(50 * time.Millisecond):
-	}
-	close(releaseFirst)
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
-	<-secondEntered
 }
 
 func TestCreateSessionSummaryWithCascade_UnboundBranchStopsCascade(
@@ -3788,81 +3197,6 @@ func TestCreateSessionSummaryWithCascade_UnboundBranchStopsCascade(
 	}
 }
 
-func TestCreateSessionSummaryWithCascade_UnboundExistingBranchGapStopsCascade(
-	t *testing.T,
-) {
-	const filterKey = "agent_skill"
-	now := time.Now()
-	covered := makeEvent("covered", now.Add(-time.Minute), filterKey)
-	current := makeEvent("current", now, filterKey)
-	branch := &session.Summary{
-		Summary:   "legitimate branch-only summary",
-		UpdatedAt: covered.Timestamp,
-		Boundary: session.NewSummaryBoundaryWithEventID(
-			filterKey,
-			covered.Timestamp,
-			covered.ID,
-		),
-	}
-	sess := &session.Session{
-		ID:      "unbound-existing-branch",
-		AppName: filterKey,
-		UserID:  "production-user",
-		Events:  []event.Event{covered, current},
-		Summaries: map[string]*session.Summary{
-			filterKey: branch,
-		},
-	}
-	ctx := summaryview.ContextWithView(
-		context.Background(),
-		&summaryview.View{
-			SessionID:     sess.ID,
-			FilterKey:     filterKey,
-			RequestTokens: 64_000,
-			Bound:         false,
-			Items: []summaryview.Item{{
-				EffectiveEvent: current,
-				Boundary: summaryview.Boundary{
-					EventID:   current.ID,
-					Timestamp: current.Timestamp,
-				},
-			}},
-		},
-	)
-	summarizer := &fakeSummarizer{allow: false, out: "unexpected"}
-	var targets []string
-
-	require.NoError(t, CreateSessionSummaryWithCascade(
-		ctx,
-		sess,
-		filterKey,
-		false,
-		NewSummaryDispatchPolicy(nil, true),
-		func(
-			ctx context.Context,
-			sess *session.Session,
-			target string,
-			force bool,
-		) error {
-			targets = append(targets, target)
-			_, err := SummarizeSession(
-				ctx,
-				summarizer,
-				sess,
-				target,
-				force,
-			)
-			return err
-		},
-	))
-	require.Equal(t, []string{filterKey}, targets)
-	require.Same(t, branch, readSummaryPointer(sess, filterKey))
-	require.Nil(
-		t,
-		readSummaryPointer(sess, session.SummaryFilterKeyAllContents),
-	)
-}
-
 func TestCreateSessionSummaryWithCascade_IgnoresUnattributedBranchUpdate(
 	t *testing.T,
 ) {
@@ -3923,7 +3257,7 @@ func TestCreateSessionSummaryWithCascade_IgnoresUnattributedBranchUpdate(
 						UpdatedAt: now,
 					}
 					sess.SummariesMu.Unlock()
-					recordSummaryMaterialized(otherCtx, sess, filterKey)
+					recordSummaryMaterialized(otherCtx, filterKey)
 					require.True(t, otherObserver.didMaterialize())
 					return nil
 				},

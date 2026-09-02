@@ -251,6 +251,21 @@ func TestSummaryCutoffTimeAndClone(t *testing.T) {
 	})
 }
 
+func TestSummaryPositionalLiteralCompatibility(t *testing.T) {
+	updatedAt := time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)
+	sum := Summary{
+		"summary",
+		[]string{"topic"},
+		updatedAt,
+		NewSummaryBoundary("branch", updatedAt),
+	}
+
+	require.Equal(t, "summary", sum.Summary)
+	require.Equal(t, []string{"topic"}, sum.Topics)
+	require.Equal(t, updatedAt, sum.UpdatedAt)
+	require.Equal(t, "branch", sum.Boundary.FilterKey)
+}
+
 func TestSummaryPrefixCutoff(t *testing.T) {
 	base := time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)
 
@@ -421,29 +436,6 @@ func TestSummaryBoundaryJSONCompatibility(t *testing.T) {
 		require.NoError(t, json.Unmarshal(raw, &decoded))
 		require.Nil(t, decoded.Boundary)
 		assert.True(t, decoded.CutoffTime().Equal(cutoff))
-	})
-
-	t.Run("round trip pending full cascade provenance", func(t *testing.T) {
-		sum := &Summary{
-			Summary:              "branch summary",
-			UpdatedAt:            cutoff,
-			PendingFullCascadeID: "cascade-attempt",
-		}
-		raw, err := json.Marshal(sum)
-		require.NoError(t, err)
-
-		var decoded Summary
-		require.NoError(t, json.Unmarshal(raw, &decoded))
-		assert.Equal(
-			t,
-			"cascade-attempt",
-			decoded.PendingFullCascadeID,
-		)
-		assert.Equal(
-			t,
-			"cascade-attempt",
-			decoded.Clone().PendingFullCascadeID,
-		)
 	})
 }
 

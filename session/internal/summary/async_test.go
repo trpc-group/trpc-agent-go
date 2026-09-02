@@ -525,61 +525,6 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 
-	t.Run("cascade targets share the summary job deadline", func(t *testing.T) {
-		const filterKey = "branch1"
-		var calls []string
-		var deadlines []time.Time
-		config := AsyncSummaryConfig{
-			Summarizer:            &mockSummarizer{shouldSummarize: true, summaryText: "test"},
-			SummaryJobTimeout:     20 * time.Millisecond,
-			SummaryDispatchPolicy: NewSummaryDispatchPolicy(nil, true),
-			CreateSummaryFunc: func(
-				ctx context.Context,
-				sess *session.Session,
-				target string,
-				_ bool,
-			) error {
-				calls = append(calls, target)
-				deadline, ok := ctx.Deadline()
-				require.True(t, ok)
-				deadlines = append(deadlines, deadline)
-				if target == filterKey {
-					sess.SummariesMu.Lock()
-					sess.Summaries[target] = &session.Summary{
-						Summary:   "branch summary",
-						UpdatedAt: time.Now(),
-					}
-					sess.SummariesMu.Unlock()
-					recordSummaryMaterialized(ctx, sess, target)
-					return nil
-				}
-				<-ctx.Done()
-				return ctx.Err()
-			},
-		}
-		worker := NewAsyncSummaryWorker(config)
-		sess := &session.Session{
-			ID:      "deadline-session",
-			AppName: "test-app",
-			UserID:  "test-user",
-			Events: []event.Event{
-				{FilterKey: filterKey, Version: event.CurrentVersion},
-				{FilterKey: "branch2", Version: event.CurrentVersion},
-			},
-			Summaries: make(map[string]*session.Summary),
-		}
-
-		err := worker.runJob(&summaryJob{
-			ctx:       context.Background(),
-			filterKey: filterKey,
-			session:   sess,
-		})
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-		require.Equal(t, []string{filterKey, ""}, calls)
-		require.Len(t, deadlines, 2)
-		require.True(t, deadlines[0].Equal(deadlines[1]))
-	})
-
 	t.Run("enqueue with filter key", func(t *testing.T) {
 		summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
 		filterKeyCh := make(chan string, 10)
@@ -601,7 +546,7 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 						UpdatedAt: time.Now(),
 					}
 					sess.SummariesMu.Unlock()
-					recordSummaryMaterialized(ctx, sess, fk)
+					recordSummaryMaterialized(ctx, fk)
 				}
 				return nil
 			},
