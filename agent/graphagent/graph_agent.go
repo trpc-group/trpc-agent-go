@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -494,20 +495,17 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		appendNonUserInvocationMessage(initialState, invocation.Message)
 	}
 
-	// Add invocation message to state.
-	// When resuming from checkpoint, only add user input if it's meaningful content
-	// (not just a resume signal), following LangGraph's pattern.
+	// Project the current user turn onto StateKeyUserInput.
+	// Agent Builder / AG-UI often encode ordinary text in ContentParts with
+	// empty Content. Prefer Content unchanged when it is non-empty; otherwise
+	// join textual ContentParts. When resuming, preserve the legacy Content
+	// "resume" sentinel and also recognize text-only ContentParts.
 	isResuming := invocation.RunOptions.RuntimeState != nil &&
 		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
-
-	if invocation.Message.Content != "" && invocation.Message.Role == model.RoleUser {
-		// If resuming and the message is just "resume", don't add it as input.
-		// This allows pure checkpoint resumption without input interference.
-		if isResuming && invocation.Message.Content == "resume" {
-			// Skip adding user_input to preserve checkpoint state.
-		} else {
-			// Add user input for normal execution or resume with meaningful input.
-			initialState[graph.StateKeyUserInput] = invocation.Message.Content
+	if invocation.Message.Role == model.RoleUser &&
+		!(isResuming && isPlainResumeInput(invocation.Message)) {
+		if userInput := textUserInput(invocation.Message); userInput != "" {
+			initialState[graph.StateKeyUserInput] = userInput
 		}
 	}
 	// Add session context if available.
@@ -522,6 +520,48 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	}
 
 	return initialState
+}
+
+// textUserInput returns the textual user input of msg. Non-empty Content is
+// returned unchanged. Otherwise non-empty text ContentParts are joined in
+// order with newlines. Nil, empty, and non-text parts are ignored so a
+// media-only payload does not fabricate user_input.
+func textUserInput(msg model.Message) string {
+	if msg.Content != "" {
+		return msg.Content
+	}
+	parts := make([]string, 0, len(msg.ContentParts))
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText || part.Text == nil || *part.Text == "" {
+			continue
+		}
+		parts = append(parts, *part.Text)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// isPlainResumeInput reports whether msg is the checkpoint resume sentinel.
+//
+// Legacy Content sentinel: when Content is non-empty, skip iff Content ==
+// "resume", matching the pre-ContentParts rule. Extra image/file parts do not
+// change that decision; Content remains highest priority.
+//
+// ContentParts sentinel: when Content is empty, skip only a text-only
+// projection of "resume". A non-text payload is not a sentinel, and the
+// joined text parts are written as user_input.
+func isPlainResumeInput(msg model.Message) bool {
+	if msg.Content != "" {
+		return msg.Content == "resume"
+	}
+	if textUserInput(msg) != "resume" {
+		return false
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText {
+			return false
+		}
+	}
+	return true
 }
 
 func isCurrentInvocationUserMessage(
