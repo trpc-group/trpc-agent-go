@@ -55,7 +55,7 @@ type EvaluationInferenceDetails struct {
 
 `EvalResult` contains the aggregated EvalSetResult that can be persisted by EvalResultManager. `RunDetails` is filled only when run details are enabled, and each item is associated with a specific run ID.
 
-`ExecutionTime` covers the complete evaluation flow, including inference and metric evaluation. `InferenceDuration` sums only actual agent inference time across cases and runs, excluding evaluator and expected-runner work. With run-level parallelism, it can exceed the end-to-end wall-clock duration.
+`ExecutionTime` covers the complete evaluation flow, including inference and metric evaluation. `InferenceDuration` sums actual agent inference time across cases and runs. With run-level parallelism, it can exceed the end-to-end wall-clock duration.
 
 By default, `evaluation.New` creates AgentEvaluator and uses in-memory EvalSetManager, MetricManager, EvalResultManager, and the default Registry, and also creates a local Service. If you want to read EvalSet and metric configuration from local files and write results to files, you need to inject Local Managers explicitly.
 

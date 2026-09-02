@@ -80,9 +80,10 @@ func TestNewOptionsDefaults(t *testing.T) {
 func TestOptionsInferenceDuration(t *testing.T) {
 	opts := newOptions()
 	opts.addInferenceDuration(2 * time.Second)
+	opts.addInferenceDuration(3 * time.Second)
 	opts.addInferenceDuration(0)
 	opts.addInferenceDuration(-time.Second)
-	assert.Equal(t, 2*time.Second, opts.inferenceDurationValue())
+	assert.Equal(t, 5*time.Second, opts.inferenceDurationValue())
 
 	var nilOpts *options
 	nilOpts.addInferenceDuration(time.Second)

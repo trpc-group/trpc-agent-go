@@ -1208,6 +1208,7 @@ func TestInferenceWithConversationScenarioSuccess(t *testing.T) {
 }
 
 func TestInferenceWithConversationScenarioInferenceError(t *testing.T) {
+	delay := 20 * time.Millisecond
 	conv := &stubScenarioConversation{
 		decisions: []*usersimulation.Decision{{
 			Message: &model.Message{Role: model.RoleUser, Content: "Hello"},
@@ -1215,7 +1216,7 @@ func TestInferenceWithConversationScenarioInferenceError(t *testing.T) {
 	}
 	result, err := InferenceWithConversationScenario(
 		context.Background(),
-		&scenarioRunner{runErr: errors.New("runner failed")},
+		&delayedRunner{fakeRunner: &fakeRunner{runErr: errors.New("runner failed")}, delay: delay},
 		&stubScenarioSimulator{conversation: conv},
 		"case-1",
 		&evalset.ConversationScenario{ConversationPlan: "Finish the task."},
@@ -1224,7 +1225,8 @@ func TestInferenceWithConversationScenarioInferenceError(t *testing.T) {
 		nil,
 	)
 	assert.Error(t, err)
-	assert.Nil(t, result)
+	require.NotNil(t, result)
+	assert.GreaterOrEqual(t, result.InferenceDuration, delay)
 	assert.True(t, conv.closed)
 }
 

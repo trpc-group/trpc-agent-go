@@ -56,6 +56,10 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 
 	data, err := json.Marshal(result)
 	assert.NoError(t, err)
+	var payload map[string]json.RawMessage
+	assert.NoError(t, json.Unmarshal(data, &payload))
+	assert.Contains(t, payload, "inferenceDuration")
+	assert.NotContains(t, payload, "agentExecutionTime")
 
 	var decoded InferenceResult
 	err = json.Unmarshal(data, &decoded)

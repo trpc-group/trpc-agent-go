@@ -122,7 +122,11 @@ func InferenceWithConversationScenario(
 	if conversation == nil {
 		return nil, errors.New("user simulator conversation is nil")
 	}
+	var inferenceDuration time.Duration
 	defer func() {
+		if result != nil {
+			result.InferenceDuration = inferenceDuration
+		}
 		closeErr := conversation.Close()
 		if closeErr != nil {
 			err = errors.Join(err, fmt.Errorf("close user simulator conversation: %w", closeErr))
@@ -132,28 +136,27 @@ func InferenceWithConversationScenario(
 		Invocations:     make([]*evalset.Invocation, 0),
 		ExecutionTraces: make([]*trace.Trace, 0),
 	}
-	var inferenceDuration time.Duration
 	var lastTargetResponse *model.Message
 	for {
 		decision, nextErr := conversation.Next(ctx, &usersimulation.TurnRequest{LastTargetResponse: lastTargetResponse})
 		if nextErr != nil {
-			return nil, fmt.Errorf("simulate next turn: %w", nextErr)
+			return result, fmt.Errorf("simulate next turn: %w", nextErr)
 		}
 		if decision == nil {
-			return nil, errors.New("simulate next turn: decision is nil")
+			return result, errors.New("simulate next turn: decision is nil")
 		}
 		if decision.Stop {
 			return result, nil
 		}
 		if decision.Message == nil {
-			return nil, errors.New("simulate next turn: message is nil")
+			return result, errors.New("simulate next turn: message is nil")
 		}
 		userMessage := *decision.Message
 		if userMessage.Role == "" {
 			userMessage.Role = model.RoleUser
 		}
 		if userMessage.Role != model.RoleUser {
-			return nil, fmt.Errorf("simulate next turn: invalid message role %q", userMessage.Role)
+			return result, fmt.Errorf("simulate next turn: invalid message role %q", userMessage.Role)
 		}
 		startTime := time.Now()
 		responseInvocation, executionTrace, nextErr := inferenceInvocation(ctx, r, sessionID, initialSession, &evalset.Invocation{
@@ -161,11 +164,10 @@ func InferenceWithConversationScenario(
 		}, runOptions, nil)
 		inferenceDuration += time.Since(startTime)
 		if nextErr != nil {
-			result.InferenceDuration = inferenceDuration
-			return nil, nextErr
+			return result, nextErr
 		}
 		if responseInvocation.FinalResponse == nil {
-			return nil, errors.New("target final response is nil")
+			return result, errors.New("target final response is nil")
 		}
 		result.Invocations = append(result.Invocations, responseInvocation)
 		result.ExecutionTraces = append(result.ExecutionTraces, executionTrace)

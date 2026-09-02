@@ -275,12 +275,12 @@ func inferenceDurationForInferenceResult(result *service.InferenceResult) time.D
 	if result == nil {
 		return 0
 	}
-	if result.InferenceDuration > 0 {
-		return result.InferenceDuration
-	}
 	// Trace-mode cases replay recorded invocations without executing the agent.
 	if result.EvalMode == evalset.EvalModeTrace {
 		return 0
+	}
+	if result.InferenceDuration > 0 {
+		return result.InferenceDuration
 	}
 	var elapsed time.Duration
 	for _, executionTrace := range result.ExecutionTraces {

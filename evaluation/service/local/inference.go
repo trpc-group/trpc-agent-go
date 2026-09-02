@@ -519,7 +519,7 @@ func (s *local) inferScenarioConversation(
 			runOptions,
 		)
 		if err != nil {
-			return nil, nil, err
+			return inferenceResult, nil, err
 		}
 		if !evalCase.ExpectedRunnerEnabled {
 			return inferenceResult, nil, nil

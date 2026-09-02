@@ -1541,7 +1541,8 @@ func TestInferenceDurationForInferenceResultFallbacks(t *testing.T) {
 		InferenceDuration: 42 * time.Millisecond,
 	}))
 	assert.Zero(t, inferenceDurationForInferenceResult(&service.InferenceResult{
-		EvalMode: evalset.EvalModeTrace,
+		EvalMode:          evalset.EvalModeTrace,
+		InferenceDuration: 42 * time.Millisecond,
 		ExecutionTraces: []*agenttrace.Trace{{
 			StartedAt: start,
 			EndedAt:   start.Add(time.Second),
@@ -1555,6 +1556,40 @@ func TestInferenceDurationForInferenceResultFallbacks(t *testing.T) {
 			{StartedAt: start.Add(10 * time.Millisecond), EndedAt: start.Add(5 * time.Millisecond)},
 		},
 	}))
+}
+
+func TestAgentEvaluatorPreservesServiceCaseInferenceDuration(t *testing.T) {
+	const (
+		appName   = "app"
+		evalSetID = "set"
+		caseID    = "case"
+	)
+	serviceCaseDuration := 7 * time.Second
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{{{
+			AppName:    appName,
+			EvalSetID:  evalSetID,
+			EvalCaseID: caseID,
+		}}},
+		evaluateResults: []*service.EvalSetRunResult{{
+			AppName:   appName,
+			EvalSetID: evalSetID,
+			EvalCaseResults: []*evalresult.EvalCaseResult{{
+				EvalSetID:         evalSetID,
+				EvalID:            caseID,
+				InferenceDuration: serviceCaseDuration,
+			}},
+		}},
+	}
+	opts := newOptions()
+	opts.evalService = svc
+	ae := &agentEvaluator{appName: appName, evalService: svc}
+
+	results, err := ae.runEvaluationOnce(context.Background(), evalSetID, opts, nil, 1)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, serviceCaseDuration, results[0].InferenceDuration)
+	assert.Equal(t, serviceCaseDuration, opts.inferenceDurationValue())
 }
 
 func TestAgentEvaluatorEvaluateInferenceError(t *testing.T) {

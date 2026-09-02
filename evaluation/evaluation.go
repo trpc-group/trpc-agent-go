@@ -559,7 +559,7 @@ func (a *agentEvaluator) runEvaluationOnce(
 			continue
 		}
 		caseResult.RunID = runID
-		if elapsed, ok := inferenceDurations[caseResult.EvalID]; ok {
+		if elapsed, ok := inferenceDurations[caseResult.EvalID]; ok && elapsed > 0 {
 			caseResult.InferenceDuration = elapsed
 		}
 		caseResults = append(caseResults, caseResult)
@@ -689,12 +689,12 @@ func inferenceDurationForInferenceResult(inferenceResult *service.InferenceResul
 	if inferenceResult == nil {
 		return 0
 	}
-	if inferenceResult.InferenceDuration > 0 {
-		return inferenceResult.InferenceDuration
-	}
 	// Trace-mode cases replay recorded invocations without executing the agent.
 	if inferenceResult.EvalMode == evalset.EvalModeTrace {
 		return 0
+	}
+	if inferenceResult.InferenceDuration > 0 {
+		return inferenceResult.InferenceDuration
 	}
 	var elapsed time.Duration
 	for _, executionTrace := range inferenceResult.ExecutionTraces {

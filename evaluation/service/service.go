@@ -67,7 +67,6 @@ type InferenceResult struct {
 	// ErrorMessage contains the error message if inference failed.
 	ErrorMessage string `json:"errorMessage,omitempty"`
 	// InferenceDuration is the total time spent executing the actual agent for this eval case.
-	// It excludes evaluation and expected-runner work.
 	InferenceDuration time.Duration `json:"inferenceDuration,omitempty"`
 	// ExecutionTraces contains the per-run execution traces collected during inference.
 	ExecutionTraces []*trace.Trace `json:"-"`

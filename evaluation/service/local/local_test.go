@@ -1742,7 +1742,8 @@ func TestInferenceDurationForInferenceResultFallbacks(t *testing.T) {
 		InferenceDuration: 42 * time.Millisecond,
 	}))
 	assert.Zero(t, inferenceDurationForInferenceResult(&service.InferenceResult{
-		EvalMode: evalset.EvalModeTrace,
+		EvalMode:          evalset.EvalModeTrace,
+		InferenceDuration: 42 * time.Millisecond,
 		ExecutionTraces: []*agenttrace.Trace{{
 			StartedAt: start,
 			EndedAt:   start.Add(time.Second),

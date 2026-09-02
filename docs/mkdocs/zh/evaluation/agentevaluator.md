@@ -55,7 +55,7 @@ type EvaluationInferenceDetails struct {
 
 `EvalResult` 包含可由 EvalResultManager 持久化的聚合 EvalSetResult。`RunDetails` 只会在开启 run details 后填充，每条明细都对应一次具体运行。
 
-`ExecutionTime` 是完整评测流程耗时，包含推理和指标评估；`InferenceDuration` 只统计实际 agent 推理耗时，并按所有 case/run 累加，不包含评估器或预期 runner 的耗时。开启 run 级并发时，它可能大于端到端的墙钟耗时。
+`ExecutionTime` 是完整评测流程耗时，包含推理和指标评估；`InferenceDuration` 按所有 case/run 累加实际 agent 推理耗时。开启 run 级并发时，它可能大于端到端的墙钟耗时。
 
 默认情况下，`evaluation.New` 会创建 AgentEvaluator 并使用 InMemory 的 EvalSetManager、MetricManager、EvalResultManager 与默认 Registry，同时创建本地 Service。若希望从本地文件读取 EvalSet 与指标配置，并将结果写入文件，需要显式注入 Local Manager。
 
