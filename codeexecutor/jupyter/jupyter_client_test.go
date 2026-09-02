@@ -371,7 +371,6 @@ func TestNewClientPreservesKernelCleanupError(t *testing.T) {
 	assert.ErrorContains(t, err, "failed to delete kernel")
 }
 
-
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -379,27 +378,27 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestDeleteKernelCoversRequestAndResponseBranches(t *testing.T) {
-	 t.Run("invalid request URL", func(t *testing.T) {
+	t.Run("invalid request URL", func(t *testing.T) {
 		client := &Client{
-			baseURL: "http://[::1",
-			kernelID: "123",
+			baseURL:    "http://[::1",
+			kernelID:   "123",
 			httpClient: &http.Client{},
 		}
-	assert.Error(t, client.deleteKernel())
+		assert.Error(t, client.deleteKernel())
 	})
 
-	 t.Run("transport error", func(t *testing.T) {
+	t.Run("transport error", func(t *testing.T) {
 		client := &Client{
-			baseURL: "http://jupyter.test",
+			baseURL:  "http://jupyter.test",
 			kernelID: "123",
 			httpClient: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 				return nil, fmt.Errorf("transport failed")
 			})},
 		}
-	assert.ErrorContains(t, client.deleteKernel(), "transport failed")
+		assert.ErrorContains(t, client.deleteKernel(), "transport failed")
 	})
 
-	 t.Run("ok with token", func(t *testing.T) {
+	t.Run("ok with token", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "token secret", r.Header.Get("Authorization"))
 			assert.Equal(t, "/api/kernels/123", r.URL.Path)
@@ -408,10 +407,10 @@ func TestDeleteKernelCoversRequestAndResponseBranches(t *testing.T) {
 		}))
 		defer server.Close()
 		client := &Client{
-			baseURL: server.URL,
-			kernelID: "123",
-			httpClient: server.Client(),
-		 connectionInfo: ConnectionInfo{Token: "secret"},
+			baseURL:        server.URL,
+			kernelID:       "123",
+			httpClient:     server.Client(),
+			connectionInfo: ConnectionInfo{Token: "secret"},
 		}
 		assert.NoError(t, client.deleteKernel())
 	})
