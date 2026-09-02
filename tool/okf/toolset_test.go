@@ -104,21 +104,6 @@ func TestNewToolSet_NamePrefix(t *testing.T) {
 	}
 }
 
-func TestNewToolSet_ToolNameMode(t *testing.T) {
-	ts, err := NewToolSet(&fakeStore{}, WithToolNameMode(tool.ToolNameModeOriginal))
-	if err != nil {
-		t.Fatalf("NewToolSet: %v", err)
-	}
-	if got := tool.ToolNameModeOf(ts); got != tool.ToolNameModeOriginal {
-		t.Fatalf("ToolNameMode = %v, want %v", got, tool.ToolNameModeOriginal)
-	}
-	modelTools := modelTools(ts)
-	modelNames := toolNames(modelTools)
-	if toolByName(modelTools, "list") == nil {
-		t.Fatalf("model tool names = %v, want list", modelNames)
-	}
-}
-
 func TestToolSet_CloseAndListDispatch(t *testing.T) {
 	store := &fakeStore{}
 	ts, err := NewToolSet(store)

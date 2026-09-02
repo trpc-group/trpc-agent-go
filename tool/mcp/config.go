@@ -95,7 +95,6 @@ type toolSetConfig struct {
 	mcpOptions             []mcp.ClientOption      // MCP client options.
 	sessionReconnectConfig *SessionReconnectConfig // Session reconnection configuration.
 	name                   string                  // ToolSet name for identification and conflict resolution.
-	toolNameMode           tool.ToolNameMode       // Model-facing tool name mode.
 }
 
 // ToolSetOption is a function type for configuring ToolSet.
@@ -171,16 +170,6 @@ func WithSessionReconnectConfig(config SessionReconnectConfig) ToolSetOption {
 func WithName(name string) ToolSetOption {
 	return func(c *toolSetConfig) {
 		c.name = name
-	}
-}
-
-// WithToolNameMode sets how tools from the MCP ToolSet are named when exposed
-// to a model. ToolNameModeQualified is the default and exposes tools as
-// {toolSetName}_{remoteToolName}. ToolNameModeOriginal keeps the remote tool
-// names unchanged while ToolSet.Name remains the ToolSet identity.
-func WithToolNameMode(mode tool.ToolNameMode) ToolSetOption {
-	return func(c *toolSetConfig) {
-		c.toolNameMode = mode
 	}
 }
 

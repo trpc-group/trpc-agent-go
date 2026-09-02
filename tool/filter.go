@@ -66,12 +66,6 @@ func (f *filteredToolSet) Name() string {
 	return f.original.Name()
 }
 
-// ToolNameMode preserves the model-facing naming mode of the wrapped ToolSet.
-// ToolSets that do not publish a mode use the default qualified mode.
-func (f *filteredToolSet) ToolNameMode() ToolNameMode {
-	return ToolNameModeOf(f.original)
-}
-
 // NewIncludeToolNamesFilter creates a FilterFunc that includes only the specified tool names.
 func NewIncludeToolNamesFilter(names ...string) FilterFunc {
 	allowedNames := make(map[string]struct{}, len(names))

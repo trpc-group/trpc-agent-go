@@ -52,14 +52,6 @@ func (s activationToolSet) Name() string {
 	return s.name
 }
 
-type originalNameActivationToolSet struct {
-	activationToolSet
-}
-
-func (s originalNameActivationToolSet) ToolNameMode() tool.ToolNameMode {
-	return tool.ToolNameModeOriginal
-}
-
 func TestToolActivationOptionsValidateToolSets(t *testing.T) {
 	require.Panics(t, func() {
 		New(
@@ -260,13 +252,12 @@ func TestToolActivationOriginalToolNames(t *testing.T) {
 		WithModel(mockModel),
 		WithSkills(repo),
 		WithActivatableToolSets([]tool.ToolSet{
-			originalNameActivationToolSet{
-				activationToolSet{
-					name:  "github",
-					tools: []tool.Tool{activationTool{name: "search"}},
-				},
+			activationToolSet{
+				name:  "github",
+				tools: []tool.Tool{activationTool{name: "search"}},
 			},
 		}),
+		WithToolSetToolNameMode("github", tool.ToolSetToolNameModeOriginal),
 		WithToolActivationOnSkillLoad("research", []string{"github"}),
 	)
 
@@ -283,6 +274,7 @@ func TestToolActivationOriginalToolNames(t *testing.T) {
 	requests := mockModel.Requests()
 	require.Len(t, requests, 2)
 	require.NotContains(t, requests[0].Tools, "search")
+	require.NotContains(t, requests[0].Tools, "github_search")
 	require.Contains(t, requests[1].Tools, "search")
 	require.NotContains(t, requests[1].Tools, "github_search")
 }
@@ -521,6 +513,7 @@ func TestToolActivationIncludeReplacesExternalToolWithSameName(t *testing.T) {
 				tools: []tool.Tool{activationTool{name: "browse"}},
 			},
 		},
+		nil,
 		nil,
 		nil,
 	)
@@ -910,6 +903,7 @@ func TestToolActivationExpansionSkipsDuplicatesAndFilteredTools(t *testing.T) {
 		func(_ context.Context, tl tool.Tool) bool {
 			return toolActivationToolName(tl) != "safe_skip"
 		},
+		nil,
 	)
 	require.Len(t, tools, 1)
 	require.Equal(t, "safe_browse", toolActivationToolName(tools[0]))
@@ -922,11 +916,13 @@ func TestToolActivationExpansionSkipsDuplicatesAndFilteredTools(t *testing.T) {
 		},
 		accepted,
 		nil,
+		nil,
 	))
 	require.Empty(t, expandOneToolActivationSet(
 		ctx,
 		activationToolSet{name: "empty"},
 		map[string]bool{},
+		nil,
 		nil,
 	))
 }

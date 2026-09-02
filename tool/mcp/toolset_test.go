@@ -36,9 +36,6 @@ func TestNewMCPToolSet(t *testing.T) {
 	if toolset.Name() != "mcp" {
 		t.Errorf("Expected default name 'mcp', got %q", toolset.Name())
 	}
-	if toolset.ToolNameMode() != tool.ToolNameModeQualified {
-		t.Errorf("Expected qualified tool name mode, got %v", toolset.ToolNameMode())
-	}
 
 	// Clean up
 	if err := toolset.Close(); err != nil {
@@ -58,7 +55,6 @@ func TestNewMCPToolSet_WithOptions(t *testing.T) {
 		WithName("test-toolset"),
 		WithToolFilterFunc(filterFunc),
 		WithSessionReconnect(3),
-		WithToolNameMode(tool.ToolNameModeOriginal),
 	)
 
 	if toolset == nil {
@@ -67,9 +63,6 @@ func TestNewMCPToolSet_WithOptions(t *testing.T) {
 
 	if toolset.Name() != "test-toolset" {
 		t.Errorf("Expected name 'test-toolset', got %q", toolset.Name())
-	}
-	if toolset.ToolNameMode() != tool.ToolNameModeOriginal {
-		t.Errorf("Expected original tool name mode, got %v", toolset.ToolNameMode())
 	}
 
 	// Clean up

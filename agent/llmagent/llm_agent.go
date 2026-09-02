@@ -161,6 +161,9 @@ func New(name string, opts ...Option) *LLMAgent {
 	if err := validateAndNormalizeToolActivationOptions(&options); err != nil {
 		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
 	}
+	if err := validateAndNormalizeToolSetToolNameModes(&options); err != nil {
+		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
+	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
 	// Also track which tools are user-registered (via WithTools) for filtering purposes.
@@ -893,7 +896,10 @@ func appendStaticToolSetTools(
 
 	ctx := context.Background()
 	for _, toolSet := range options.ToolSets {
-		namedToolSet := itool.NewNamedToolSet(toolSet)
+		namedToolSet := itool.NewNamedToolSetWithMode(
+			toolSet,
+			toolSetToolNameMode(options.toolSetToolNameModes, toolSet),
+		)
 		for _, t := range namedToolSet.Tools(ctx) {
 			allTools = append(allTools, t)
 			userToolNames[t.Declaration().Name] = true
@@ -2083,7 +2089,10 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 	if a.option.RefreshToolSetsOnRun && len(a.option.ToolSets) > 0 {
 		dynamic := make([]tool.Tool, 0)
 		for _, toolSet := range a.option.ToolSets {
-			namedToolSet := itool.NewNamedToolSet(toolSet)
+			namedToolSet := itool.NewNamedToolSetWithMode(
+				toolSet,
+				toolSetToolNameMode(a.option.toolSetToolNameModes, toolSet),
+			)
 			setTools := namedToolSet.Tools(ctx)
 			dynamic = append(dynamic, setTools...)
 		}

@@ -17,9 +17,10 @@ import (
 )
 
 // NamedToolSet wraps a ToolSet to qualify tool names with the ToolSet name by
-// default. A ToolSet may opt into exposing its original tool names.
+// default. Callers can opt into exposing the original tool names.
 type NamedToolSet struct {
-	toolSet tool.ToolSet
+	toolSet  tool.ToolSet
+	nameMode tool.ToolSetToolNameMode
 }
 
 // NewNamedToolSet creates a new named toolset wrapper.
@@ -28,9 +29,36 @@ func NewNamedToolSet(toolSet tool.ToolSet) *NamedToolSet {
 	if t, ok := toolSet.(*NamedToolSet); ok {
 		return t
 	}
-	return &NamedToolSet{
-		toolSet: toolSet,
+	return NewNamedToolSetWithMode(toolSet, tool.ToolSetToolNameModeQualified)
+}
+
+// NewNamedToolSetWithMode creates a named ToolSet wrapper with the requested
+// model-facing name mode.
+func NewNamedToolSetWithMode(
+	toolSet tool.ToolSet,
+	nameMode tool.ToolSetToolNameMode,
+) *NamedToolSet {
+	mode := normalizeToolSetToolNameMode(nameMode)
+	if t, ok := toolSet.(*NamedToolSet); ok {
+		if t.nameMode == mode {
+			return t
+		}
+		return &NamedToolSet{
+			toolSet:  t.toolSet,
+			nameMode: mode,
+		}
 	}
+	return &NamedToolSet{
+		toolSet:  toolSet,
+		nameMode: mode,
+	}
+}
+
+func normalizeToolSetToolNameMode(mode tool.ToolSetToolNameMode) tool.ToolSetToolNameMode {
+	if mode == tool.ToolSetToolNameModeOriginal {
+		return tool.ToolSetToolNameModeOriginal
+	}
+	return tool.ToolSetToolNameModeQualified
 }
 
 // Tools returns tools with model-facing names according to the ToolSet's name
@@ -42,8 +70,6 @@ func (s *NamedToolSet) Tools(ctx context.Context) []tool.Tool {
 	if toolSetName == "" {
 		return tools
 	}
-	nameMode := toolSetNameMode(s.toolSet)
-
 	// Create tools with model-facing names while retaining the source ToolSet
 	// name for runtime policy and tracing checks.
 	namedTools := make([]tool.Tool, 0, len(tools))
@@ -52,17 +78,13 @@ func (s *NamedToolSet) Tools(ctx context.Context) []tool.Tool {
 			original:    t,
 			toolSetName: toolSetName,
 		}
-		if nameMode == tool.ToolNameModeQualified {
+		if s.nameMode == tool.ToolSetToolNameModeQualified {
 			namedTool.name = toolSetName
 		}
 		namedTools = append(namedTools, namedTool)
 	}
 
 	return namedTools
-}
-
-func toolSetNameMode(toolSet tool.ToolSet) tool.ToolNameMode {
-	return tool.ToolNameModeOf(toolSet)
 }
 
 // Close implements the ToolSet interface.
@@ -73,11 +95,6 @@ func (s *NamedToolSet) Close() error {
 // Name implements the ToolSet interface.
 func (s *NamedToolSet) Name() string {
 	return s.toolSet.Name()
-}
-
-// ToolNameMode reports the model-facing naming mode of the wrapped ToolSet.
-func (s *NamedToolSet) ToolNameMode() tool.ToolNameMode {
-	return toolSetNameMode(s.toolSet)
 }
 
 // NamedTool wraps an original tool with a model-facing name and retains the

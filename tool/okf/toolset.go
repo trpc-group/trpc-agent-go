@@ -27,7 +27,6 @@ type toolSet struct {
 	namePrefix   string
 	maxBodyBytes int
 	tools        []tool.Tool
-	toolNameMode tool.ToolNameMode
 }
 
 // NewToolSet adapts a Store into a tool.ToolSet. Mount it on an agent with
@@ -73,12 +72,6 @@ func (t *toolSet) Name() string {
 		return t.namePrefix + "_" + defaultName
 	}
 	return defaultName
-}
-
-// ToolNameMode reports how this ToolSet's tools should be named when exposed
-// to a model.
-func (t *toolSet) ToolNameMode() tool.ToolNameMode {
-	return t.toolNameMode
 }
 
 // truncateUTF8 returns s cut to at most n bytes without splitting a rune.
