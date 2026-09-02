@@ -1207,6 +1207,27 @@ func TestInferenceWithConversationScenarioSuccess(t *testing.T) {
 	}
 }
 
+func TestInferenceWithConversationScenarioInferenceError(t *testing.T) {
+	conv := &stubScenarioConversation{
+		decisions: []*usersimulation.Decision{{
+			Message: &model.Message{Role: model.RoleUser, Content: "Hello"},
+		}},
+	}
+	result, err := InferenceWithConversationScenario(
+		context.Background(),
+		&scenarioRunner{runErr: errors.New("runner failed")},
+		&stubScenarioSimulator{conversation: conv},
+		"case-1",
+		&evalset.ConversationScenario{ConversationPlan: "Finish the task."},
+		&evalset.SessionInput{UserID: "target-user"},
+		"session-1",
+		nil,
+	)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.True(t, conv.closed)
+}
+
 func TestInferenceWithConversationScenarioValidation(t *testing.T) {
 	initialSession := &evalset.SessionInput{UserID: "target-user"}
 	scenario := &evalset.ConversationScenario{ConversationPlan: "Continue until done."}

@@ -1735,6 +1735,29 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	assert.Equal(t, "demo-user", caseResult.UserID)
 }
 
+func TestInferenceDurationForInferenceResultFallbacks(t *testing.T) {
+	start := time.Now()
+	assert.Zero(t, inferenceDurationForInferenceResult(nil))
+	assert.Equal(t, 42*time.Millisecond, inferenceDurationForInferenceResult(&service.InferenceResult{
+		InferenceDuration: 42 * time.Millisecond,
+	}))
+	assert.Zero(t, inferenceDurationForInferenceResult(&service.InferenceResult{
+		EvalMode: evalset.EvalModeTrace,
+		ExecutionTraces: []*agenttrace.Trace{{
+			StartedAt: start,
+			EndedAt:   start.Add(time.Second),
+		}},
+	}))
+	assert.Equal(t, 5*time.Millisecond, inferenceDurationForInferenceResult(&service.InferenceResult{
+		ExecutionTraces: []*agenttrace.Trace{
+			nil,
+			{},
+			{StartedAt: start, EndedAt: start.Add(5 * time.Millisecond)},
+			{StartedAt: start.Add(10 * time.Millisecond), EndedAt: start.Add(5 * time.Millisecond)},
+		},
+	}))
+}
+
 func TestLocalEvaluateParallelEvaluationPreservesOrder(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"

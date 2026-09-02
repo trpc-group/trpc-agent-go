@@ -1432,17 +1432,20 @@ func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
 	runTwoTrace := &agenttrace.Trace{RootInvocationID: "root-2", SessionID: "session-2", Status: agenttrace.TraceStatusCompleted}
 	svc := &fakeService{
 		inferenceResults: [][]*service.InferenceResult{
-			{{
-				AppName:           appName,
-				EvalSetID:         evalSetID,
-				EvalCaseID:        caseID,
-				Inferences:        []*evalset.Invocation{{InvocationID: "inv-1"}},
-				SessionID:         "session-1",
-				UserID:            "user-1",
-				Status:            status.EvalStatusPassed,
-				InferenceDuration: 3 * time.Second,
-				ExecutionTraces:   []*agenttrace.Trace{runOneTrace},
-			}},
+			{
+				nil,
+				{
+					AppName:           appName,
+					EvalSetID:         evalSetID,
+					EvalCaseID:        caseID,
+					Inferences:        []*evalset.Invocation{{InvocationID: "inv-1"}},
+					SessionID:         "session-1",
+					UserID:            "user-1",
+					Status:            status.EvalStatusPassed,
+					InferenceDuration: 3 * time.Second,
+					ExecutionTraces:   []*agenttrace.Trace{runOneTrace},
+				},
+			},
 			{{
 				AppName:           appName,
 				EvalSetID:         evalSetID,
@@ -1529,6 +1532,29 @@ func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
 			assert.Equal(t, "session-2", caseResult.RunDetails[1].Inference.ExecutionTraces[0].SessionID)
 		}
 	}
+}
+
+func TestInferenceDurationForInferenceResultFallbacks(t *testing.T) {
+	start := time.Now()
+	assert.Zero(t, inferenceDurationForInferenceResult(nil))
+	assert.Equal(t, 42*time.Millisecond, inferenceDurationForInferenceResult(&service.InferenceResult{
+		InferenceDuration: 42 * time.Millisecond,
+	}))
+	assert.Zero(t, inferenceDurationForInferenceResult(&service.InferenceResult{
+		EvalMode: evalset.EvalModeTrace,
+		ExecutionTraces: []*agenttrace.Trace{{
+			StartedAt: start,
+			EndedAt:   start.Add(time.Second),
+		}},
+	}))
+	assert.Equal(t, 5*time.Millisecond, inferenceDurationForInferenceResult(&service.InferenceResult{
+		ExecutionTraces: []*agenttrace.Trace{
+			nil,
+			{},
+			{StartedAt: start, EndedAt: start.Add(5 * time.Millisecond)},
+			{StartedAt: start.Add(10 * time.Millisecond), EndedAt: start.Add(5 * time.Millisecond)},
+		},
+	}))
 }
 
 func TestAgentEvaluatorEvaluateInferenceError(t *testing.T) {
