@@ -5111,7 +5111,7 @@
 </tbody>
 </table>
 <p>旧版包还保留 <code>WithProcessorBuilder</code>、<code>WithTaskManagerBuilder</code>、<code>WithStreamingEventType</code>、<code>WithStreamingRespHandler</code> 和 <code>WithStructuredTaskErrors</code> 等兼容扩展点。它们用于维持既有 v0 应用行为，不代表 v1 的推荐设计；新代码应优先使用 v1 的统一 MessageProcessor、TaskManager 和 converter 扩展边界。</p>
-<p>工具调用、代码执行、reasoning 和 <code>state_delta</code> 使用的共享 metadata extension 见 <a href="../a2a-interaction/">A2A 协议交互规范</a>。其中的 metadata key 与交互规范版本同时适用于旧版和 v1 包；<code>TextPart</code>、<code>DataPart</code>、小写 method 和流式 envelope 示例描述的是 v0.2.x wire model，v1 则通过统一 Part、Message、Artifact 和 Task update event 承载这些共享 metadata。</p>
+<p>工具调用、代码执行、reasoning 和 <code>state_delta</code> 使用的共享 metadata extension 见 <a href="https://trpc-group.github.io/trpc-agent-go/zh/a2a-interaction/">A2A 协议交互规范</a>。其中的 metadata key 与交互规范版本同时适用于旧版和 v1 包；<code>TextPart</code>、<code>DataPart</code>、小写 method 和流式 envelope 示例描述的是 v0.2.x wire model，v1 则通过统一 Part、Message、Artifact 和 Task update event 承载这些共享 metadata。</p>
 <h3 id="v0-task">v0 Task 管理边界</h3>
 <p>旧版服务端内部默认创建 memory TaskManager，但这不等于 v1 的保留型 Task 管理。内置非流式适配器会等待 Runner event channel 关闭：只有一个结果时直接返回 Message，有多个结果时合成一个 completed Task；这个 completed Task 没有登记为可供后续 <code>tasks/get</code> 查询的保留型 Task。</p>
 <p>流式适配器会在当前 <code>message/stream</code> 请求期间创建 Task，发送 submitted、artifact 和 completed 事件，并在事件流结束时清理 Task。因此它主要是本次 SSE 的 Task envelope，不能承诺请求结束后仍可查询、取消或重新订阅。</p>
@@ -5643,7 +5643,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月25日 03:47:39 UTC">2026-08-25 03:47:39</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年9月3日 09:13:40 UTC">2026-09-03 09:13:40</span>
   </span>
 
     
