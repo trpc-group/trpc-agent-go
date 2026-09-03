@@ -1065,7 +1065,8 @@ func TestService_WithDisableScriptCache(t *testing.T) {
 	// WithDisableScriptCache forces every Lua script to run via EVAL instead of
 	// the default EVALSHA-first Script.Run. Exercise a full session round-trip to
 	// make sure the EVAL path is functionally identical: AppendEvent runs
-	// luaAppendEvent and GetSession runs luaLoadSessionData, both via EVAL here.
+	// luaAppendEvent, while GetSession runs the bounded event loader and
+	// luaLoadSessionData, all via EVAL here.
 	service, err := NewService(
 		WithRedisClientURL(redisURL),
 		WithDisableScriptCache(true),
@@ -1097,7 +1098,7 @@ func TestService_WithDisableScriptCache(t *testing.T) {
 	sessions, err := service.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"})
 	require.NoError(t, err)
 	assert.Len(t, sessions, 1)
-	assert.Equal(t, []string{"eval", "eval", "eval"}, recorder.snapshot())
+	assert.Equal(t, []string{"eval", "eval", "eval", "eval"}, recorder.snapshot())
 }
 
 func TestService_WithDisableScriptCache_ZSetSummary(t *testing.T) {

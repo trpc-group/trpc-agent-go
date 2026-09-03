@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
@@ -187,6 +188,15 @@ func WithAwaitUserReplyRouting(enabled bool) Option {
 	}
 }
 
+// WithExecutionTraceEnabled sets whether execution tracing is enabled by
+// default for every run on the Runner. The default is false. A single run can
+// override this default with agent.WithExecutionTraceEnabled.
+func WithExecutionTraceEnabled(enabled bool) Option {
+	return func(opts *Options) {
+		opts.executionTraceEnabledDefault = enabled
+	}
+}
+
 // WithPersistInterruptedAssistant sets the runner default for whether a
 // cancelled streaming run persists already-emitted assistant text as a final
 // assistant message.
@@ -331,6 +341,7 @@ type runner struct {
 	candidateSelector                  CandidateSelector
 	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
+	executionTraceEnabledDefault       bool
 	persistInterruptedAssistantDefault bool
 
 	// Resource management fields.
@@ -363,6 +374,7 @@ type Options struct {
 	candidateSelector                  CandidateSelector
 	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
+	executionTraceEnabledDefault       bool
 	persistInterruptedAssistantDefault bool
 }
 
@@ -420,6 +432,7 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		candidateSelector:                  options.candidateSelector,
 		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
+		executionTraceEnabledDefault:       options.executionTraceEnabledDefault,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
 		ownedSessionService:                ownedSessionService,
 	}
@@ -476,6 +489,7 @@ func NewRunnerWithAgentFactory(
 		candidateSelector:                  options.candidateSelector,
 		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
+		executionTraceEnabledDefault:       options.executionTraceEnabledDefault,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
 		ownedSessionService:                ownedSessionService,
 	}
@@ -543,7 +557,10 @@ func (r *runner) Run(
 		message.Role = model.RoleUser
 	}
 
-	ro := agent.RunOptions{RequestID: uuid.NewString()}
+	ro := agent.RunOptions{
+		RequestID:             uuid.NewString(),
+		ExecutionTraceEnabled: r.executionTraceEnabledDefault,
+	}
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
@@ -551,6 +568,7 @@ func (r *runner) Run(
 		ro.RequestID = uuid.NewString()
 	}
 	r.applyRunnerRunDefaults(&ro)
+	globalAfterRun := prepareGlobalAfterRunState()
 	var executionTraceInput *trace.Snapshot
 	if ro.ExecutionTraceEnabled {
 		executionTraceInput = executionTraceInputSnapshot(message, ro)
@@ -677,6 +695,7 @@ func (r *runner) Run(
 		awaitUserReplyRootName,
 		awaitUserReplyLookupPath,
 	)
+	globalAfterRun.attach(invocation)
 	currentTurnSession, err := sessionroute.ResolveCurrentTurnSession(
 		execCtx,
 		r.sessionService,
@@ -783,6 +802,7 @@ func (r *runner) Run(
 		flushChan,
 		handle,
 		executionTraceInput,
+		globalAfterRun,
 	), nil
 }
 
@@ -866,11 +886,10 @@ func (r *runner) persistAgentRunError(
 ) {
 	persistCtx, cancel := sessionPersistenceContext(ctx)
 	defer cancel()
-
 	errorEvent := event.NewErrorEvent(
 		invocation.InvocationID,
 		ag.Info().Name,
-		model.ErrorTypeRunError,
+		agentRunErrorType(ctx, runErr),
 		runErr.Error(),
 	)
 	agent.InjectIntoEvent(invocation, errorEvent)
@@ -884,6 +903,25 @@ func (r *runner) persistAgentRunError(
 	if appendErr != nil {
 		log.Errorf("failed to append agent run error event: %v", appendErr)
 	}
+}
+
+func agentRunErrorType(ctx context.Context, runErr error) string {
+	if isAgentRunCancellationError(ctx, runErr) {
+		return model.ErrorTypeCancelled
+	}
+	return model.ErrorTypeRunError
+}
+
+func isAgentRunCancellationError(ctx context.Context, runErr error) bool {
+	if errors.Is(runErr, context.Canceled) ||
+		errors.Is(runErr, context.DeadlineExceeded) {
+		return true
+	}
+	if ctx == nil || ctx.Err() == nil {
+		return false
+	}
+	cause := context.Cause(ctx)
+	return errors.Is(runErr, cause) || errors.Is(cause, runErr)
 }
 
 func (r *runner) applyRunnerRunDefaults(ro *agent.RunOptions) {
@@ -1301,6 +1339,7 @@ type eventLoopContext struct {
 	fallbackStateDelta                 map[string][]byte
 	finalError                         *model.ResponseError
 	executionTraceInput                *trace.Snapshot
+	globalAfterRun                     *globalAfterRunState
 	graphCompletionSeen                bool
 	freshAssistantContentProduced      bool
 	persistedAssistantResponseIDs      map[string]struct{}
@@ -1427,6 +1466,7 @@ func (r *runner) processAgentEvents(
 	flushChan chan *flush.FlushRequest,
 	handle *runHandle,
 	executionTraceInput *trace.Snapshot,
+	globalAfterRun *globalAfterRunState,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	loop := &eventLoopContext{
@@ -1437,6 +1477,7 @@ func (r *runner) processAgentEvents(
 		processedEventCh:          processedEventCh,
 		runHandle:                 handle,
 		executionTraceInput:       executionTraceInput,
+		globalAfterRun:            globalAfterRun,
 		baselineFinalResponseID:   baselineFinalResponseID(sess, invocation.RunOptions.RuntimeState),
 		priorAssistantResponseIDs: collectPriorAssistantResponseIDs(sess),
 		streamFilter: graph.NewStreamModeFilter(
@@ -1934,10 +1975,7 @@ func (r *runner) applyAfterRunPlugins(
 	if !ok {
 		return
 	}
-	completionSnapshot := completionEvent.Clone()
-	if completionSnapshot != nil {
-		completionSnapshot.ID = completionEvent.ID
-	}
+	completionSnapshot := cloneAfterRunCompletionEvent(completionEvent)
 	args := &plugin.AfterRunArgs{
 		Invocation:      invocation,
 		CompletionEvent: completionSnapshot,
@@ -1945,6 +1983,30 @@ func (r *runner) applyAfterRunPlugins(
 	if err := hooks.AfterRun(context.WithoutCancel(ctx), args); err != nil {
 		log.ErrorfContext(ctx, "plugin AfterRun failed: %v", err)
 	}
+}
+
+// cloneAfterRunCompletionEvent returns an observer-owned copy of a finalized
+// completion event. Event.Clone deep-copies the event envelope and execution
+// trace, while cloneChoices covers nested response message/tool data that is
+// mutable through slices, pointers, and maps.
+func cloneAfterRunCompletionEvent(completionEvent *event.Event) *event.Event {
+	if completionEvent == nil {
+		return nil
+	}
+	completionSnapshot := completionEvent.Clone()
+	if completionSnapshot == nil {
+		return nil
+	}
+	completionSnapshot.ID = completionEvent.ID
+	if completionEvent.Response != nil {
+		completionSnapshot.Response.Choices = cloneChoices(
+			completionEvent.Response.Choices,
+		)
+		completionSnapshot.Response.Error = cloneResponseError(
+			completionEvent.Response.Error,
+		)
+	}
+	return completionSnapshot
 }
 
 func backfillEventMetadata(dst *event.Event, src *event.Event) {
@@ -3118,6 +3180,12 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		)
 	}
 	r.applyAfterRunPlugins(ctx, loop.invocation, runnerCompletionEvent)
+	applyGlobalAfterRunHooks(
+		ctx,
+		loop.globalAfterRun,
+		loop.invocation,
+		runnerCompletionEvent,
+	)
 
 	// Append runner completion event to session.
 	persistRunnerCompletionEvent := runnerCompletionEvent
@@ -4297,7 +4365,8 @@ func ensureErrorEventContent(e *event.Event) {
 
 	// Populate content if empty
 	if e.Response.Choices[0].Message.Content == "" {
-		e.Response.Choices[0].Message.Content = "An error occurred during execution. Please contact the service provider."
+		e.Response.Choices[0].Message.Content = errorcontent.FallbackMessage
+		errorcontent.MarkSynthetic(e)
 	}
 
 	// Ensure FinishReason is set
