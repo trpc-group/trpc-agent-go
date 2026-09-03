@@ -6,6 +6,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.9.1
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/creack/pty v1.1.24
+	github.com/getkin/kin-openapi v0.124.0
 	github.com/go-ego/gse v1.0.0
 	github.com/gomutex/godocx v0.1.5
 	github.com/gonfva/docxlib v0.0.0-20210517191039-d8f39cecf1ad
@@ -47,7 +48,6 @@ require (
 	github.com/clbanning/mxj v1.8.4 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
-	github.com/getkin/kin-openapi v0.124.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.20.2 // indirect
