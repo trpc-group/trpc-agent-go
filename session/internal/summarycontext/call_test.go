@@ -27,6 +27,17 @@ func TestRecordModelCall(t *testing.T) {
 	RecordModelCall(ctx, "cache_safe_fork")
 	require.Equal(t, "cache_safe_fork", call.Mode)
 
+	RecordModelCall(ctx, "custom_response")
+	require.Equal(t, "cache_safe_fork", call.Mode,
+		"a later custom_response must not hide a provider call")
+
+	var customFirst ModelCall
+	customCtx := WithModelCallRecorder(context.Background(), &customFirst)
+	RecordModelCall(customCtx, "custom_response")
+	RecordModelCall(customCtx, "standalone")
+	require.Equal(t, "standalone", customFirst.Mode,
+		"a later provider call upgrades custom_response to called")
+
 	RecordModelCall(WithModelCallRecorder(context.Background(), nil), "custom_response")
 	require.Equal(t, "cache_safe_fork", call.Mode)
 }

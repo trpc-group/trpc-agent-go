@@ -1827,11 +1827,16 @@ callback:
 
 All four counts are `-1` when `selection_reason` is `custom` or `none`.
 
-`trigger` and `trigger_metric` are normalized to the framework's own vocabulary.
-Any other value, including one set by a custom summarizer or by a caller-supplied
-`summary.Report`, is reported as `custom`, so these fields stay bounded and never
-carry application strings. `trigger_value`, `trigger_threshold`,
-`threshold_ratio`, and `context_window` are reported unchanged.
+`trigger` and `trigger_metric` are taken only from this attempt's internal
+trigger recorder. Writing `summary.Report.Trigger` from a custom summarizer or
+a caller-supplied report is not an observation: a fired unpublished gate
+reports `triggered=true` with `trigger=none`, and an unfired unpublished gate
+reports `outcome=unobserved` and `trigger=none`. Leftover `Report.Trigger`
+values are never copied into the record. When a trigger observation is
+published, names and metrics outside the framework vocabulary are normalized
+to `custom`, so these fields stay bounded and never carry application
+strings. `trigger_value`, `trigger_threshold`, `threshold_ratio`, and
+`context_window` are reported unchanged.
 
 ### Tracing one incident
 

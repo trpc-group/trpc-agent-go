@@ -1722,10 +1722,14 @@ SessionService API，也不新增诊断开关。
 
 当 `selection_reason` 为 `custom` 或 `none` 时，这四个计数均为 `-1`。
 
-`trigger` 与 `trigger_metric` 会被归一化到框架自身的取值集合。其他任何取值（包
-括自定义 summarizer 或调用方通过 `summary.Report` 设置的取值）都上报为
-`custom`，因此这两个字段始终有界，且不会携带应用侧字符串。`trigger_value`、
-`trigger_threshold`、`threshold_ratio` 与 `context_window` 原样上报。
+`trigger` 与 `trigger_metric` 只来自本轮 attempt 的内部 trigger recorder。
+自定义 summarizer 或调用方只写入 `summary.Report.Trigger` 不会被诊断采用：
+门控为 true 但未发布时上报 `triggered=true` 且 `trigger=none`；门控为 false
+且未发布时上报 `outcome=unobserved` 且 `trigger=none`。leftover
+`Report.Trigger` 不会被拷进记录。当内部 recorder 已发布触发观测时，框架词
+汇表之外的 name/metric 会归一化为 `custom`，因此这两个字段始终有界，且不
+会携带应用侧字符串。`trigger_value`、`trigger_threshold`、
+`threshold_ratio` 与 `context_window` 原样上报。
 
 ### 排查一次问题
 

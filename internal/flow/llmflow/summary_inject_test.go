@@ -659,6 +659,79 @@ func TestCallLLMReportsInjectionOnceOnBeforeModelError(t *testing.T) {
 	require.Contains(t, line, "block_text_present=true")
 }
 
+func TestCallLLMReportsInjectionOnceOnEarlyReturns(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*testing.T, *agent.Invocation) (model.Model, *model.Callbacks)
+	}{
+		{
+			name: "nil model",
+			setup: func(*testing.T, *agent.Invocation) (model.Model, *model.Callbacks) {
+				return nil, nil
+			},
+		},
+		{
+			name: "llm call limit",
+			setup: func(t *testing.T, inv *agent.Invocation) (model.Model, *model.Callbacks) {
+				t.Helper()
+				inv.MaxLLMCalls = 1
+				require.NoError(t, inv.IncLLMCallCount())
+				return &injectTailoringModel{}, nil
+			},
+		},
+		{
+			name: "empty messages after callback",
+			setup: func(*testing.T, *agent.Invocation) (model.Model, *model.Callbacks) {
+				callbacks := model.NewCallbacks()
+				callbacks.RegisterBeforeModel(func(
+					_ context.Context,
+					args *model.BeforeModelArgs,
+				) (*model.BeforeModelResult, error) {
+					args.Request.Messages = nil
+					return nil, nil
+				})
+				return &injectTailoringModel{}, callbacks
+			},
+		},
+	} {
+		t.Run(tc.name+"/selected", func(t *testing.T) {
+			logs := captureInjectionLogs(t)
+			inv, req := selectedSummaryInjectionInvocation(t)
+			callModel, callbacks := tc.setup(t, inv)
+			flow := New(nil, nil, Options{ModelCallbacks: callbacks})
+
+			_, seq, modelCalled, err := flow.callLLM(
+				context.Background(), inv, req, callModel,
+			)
+			require.Error(t, err)
+			require.Nil(t, seq)
+			require.False(t, modelCalled)
+			require.Len(t, logs.injectionLines(), 1)
+			_, line := logs.record(t)
+			requireInjectionRecord(t, line)
+		})
+		t.Run(tc.name+"/unselected", func(t *testing.T) {
+			logs := captureInjectionLogs(t)
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(&session.Session{ID: "no-summary"}),
+			)
+			inv.AgentName = "test-agent"
+			req := &model.Request{Messages: []model.Message{
+				model.NewUserMessage("current request"),
+			}}
+			callModel, callbacks := tc.setup(t, inv)
+			flow := New(nil, nil, Options{ModelCallbacks: callbacks})
+
+			_, seq, _, err := flow.callLLM(
+				context.Background(), inv, req, callModel,
+			)
+			require.Error(t, err)
+			require.Nil(t, seq)
+			require.Empty(t, logs.injectionLines())
+		})
+	}
+}
+
 func TestCallLLMReportsInjectionOnceOnBeforeModelCustomResponse(t *testing.T) {
 	logs := captureInjectionLogs(t)
 	inv, req := selectedSummaryInjectionInvocation(t)

@@ -62,7 +62,7 @@ func TriggerFromContext(ctx context.Context) *TriggerObservation {
 		return nil
 	}
 	recorder, ok := ctx.Value(triggerKey{}).(*TriggerObservation)
-	if !ok {
+	if !ok || recorder == nil {
 		return nil
 	}
 	return recorder

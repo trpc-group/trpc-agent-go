@@ -33,8 +33,9 @@ func WithModelCallRecorder(ctx context.Context, call *ModelCall) context.Context
 }
 
 // RecordModelCall publishes the built-in summary call mode for the current
-// attempt, replacing any mode recorded earlier in the same attempt. It is a
-// no-op when no recorder is attached to ctx.
+// attempt. A provider-called mode (standalone or cache_safe_fork) is kept
+// once observed, so a later custom_response cannot hide that the provider
+// was reached. It is a no-op when no recorder is attached to ctx.
 func RecordModelCall(ctx context.Context, mode string) {
 	if ctx == nil {
 		return
@@ -43,7 +44,14 @@ func RecordModelCall(ctx context.Context, mode string) {
 	if recorder == nil {
 		return
 	}
+	if isProviderCalledMode(recorder.Mode) && !isProviderCalledMode(mode) {
+		return
+	}
 	recorder.Mode = mode
+}
+
+func isProviderCalledMode(mode string) bool {
+	return mode == "standalone" || mode == "cache_safe_fork"
 }
 
 // ModelCallFromContext returns the attempt-local model-call recorder, or nil
@@ -53,7 +61,7 @@ func ModelCallFromContext(ctx context.Context) *ModelCall {
 		return nil
 	}
 	recorder, ok := ctx.Value(modelCallKey{}).(*ModelCall)
-	if !ok {
+	if !ok || recorder == nil {
 		return nil
 	}
 	return recorder

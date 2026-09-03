@@ -147,7 +147,7 @@ func EventSelectionFromContext(ctx context.Context) *EventSelection {
 		return nil
 	}
 	recorder, ok := ctx.Value(eventSelectionKey{}).(*EventSelection)
-	if !ok {
+	if !ok || recorder == nil {
 		return nil
 	}
 	return recorder

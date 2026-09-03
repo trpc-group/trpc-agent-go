@@ -2346,9 +2346,9 @@ func inheritReportContext(next context.Context, current context.Context) context
 	if next == nil {
 		return current
 	}
-	next = inheritModelCallRecorder(next, current)
-	next = inheritTriggerRecorder(next, current)
-	next = inheritEventSelectionRecorder(next, current)
+	next = isummarycontext.InheritModelCallRecorder(next, current)
+	next = isummarycontext.InheritTriggerRecorder(next, current)
+	next = isummarycontext.InheritEventSelectionRecorder(next, current)
 	report, ok := reportFromContext(current)
 	if !ok {
 		return next
@@ -2357,36 +2357,6 @@ func inheritReportContext(next context.Context, current context.Context) context
 		return next
 	}
 	return ContextWithReport(next, report)
-}
-
-func inheritModelCallRecorder(next, current context.Context) context.Context {
-	if isummarycontext.ModelCallFromContext(next) != nil {
-		return next
-	}
-	if call := isummarycontext.ModelCallFromContext(current); call != nil {
-		return isummarycontext.WithModelCallRecorder(next, call)
-	}
-	return next
-}
-
-func inheritTriggerRecorder(next, current context.Context) context.Context {
-	if isummarycontext.TriggerFromContext(next) != nil {
-		return next
-	}
-	if obs := isummarycontext.TriggerFromContext(current); obs != nil {
-		return isummarycontext.WithTriggerRecorder(next, obs)
-	}
-	return next
-}
-
-func inheritEventSelectionRecorder(next, current context.Context) context.Context {
-	if isummarycontext.EventSelectionFromContext(next) != nil {
-		return next
-	}
-	if selection := isummarycontext.EventSelectionFromContext(current); selection != nil {
-		return isummarycontext.WithEventSelectionRecorder(next, selection)
-	}
-	return next
 }
 
 func (s *sessionSummarizer) collectSummaryFromResponses(

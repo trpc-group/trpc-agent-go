@@ -2515,6 +2515,7 @@ func (f *Flow) callLLM(
 	}()
 	if callModel == nil {
 		err = errors.New("no model available for LLM call")
+		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, false, err
 	}
 	log.DebugfContext(
@@ -2526,6 +2527,7 @@ func (f *Flow) callLLM(
 	// configured (<= 0), this is a no-op and preserves existing behavior.
 	if err = invocation.IncLLMCallCount(); err != nil {
 		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
+		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, false, err
 	}
 	llmLimitReached := calllimit.RecordLLMCall(
@@ -2564,6 +2566,7 @@ func (f *Flow) callLLM(
 	}
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		err = errors.New(errMsgNoLLMMessages)
+		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, false, err
 	}
 	if invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {

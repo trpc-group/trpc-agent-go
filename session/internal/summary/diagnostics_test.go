@@ -1684,3 +1684,73 @@ func TestAttemptSelectedEventsStayPreHookCountAfterHookRewrite(t *testing.T) {
 		"selected_events":  "2",
 	})
 }
+
+type sequentialDiagModel struct {
+	calls     int
+	responses []*model.Response
+}
+
+func (m *sequentialDiagModel) Info() model.Info {
+	return model.Info{Name: "sequential-diag"}
+}
+
+func (m *sequentialDiagModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	m.calls++
+	ch := make(chan *model.Response, 1)
+	if m.calls > len(m.responses) {
+		close(ch)
+		return ch, nil
+	}
+	ch <- m.responses[m.calls-1]
+	close(ch)
+	return ch, nil
+}
+
+func TestBuiltInSummarizerRetryCustomResponseReportsCalled(t *testing.T) {
+	logs := captureLogs(t)
+	sess := diagSession(diagEvent(-time.Minute), diagEvent(-30*time.Second))
+	m := &sequentialDiagModel{responses: []*model.Response{{Done: true}}}
+	var beforeCalls int
+	callbacks := model.NewCallbacks()
+	callbacks.RegisterBeforeModel(func(
+		context.Context,
+		*model.BeforeModelArgs,
+	) (*model.BeforeModelResult, error) {
+		beforeCalls++
+		if beforeCalls == 1 {
+			return nil, nil
+		}
+		return &model.BeforeModelResult{
+			CustomResponse: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.Message{Content: "callback summary"},
+				}},
+			},
+		}, nil
+	})
+	report := &summary.Report{}
+	ctx := summary.ContextWithReport(context.Background(), report)
+	summarizer := summary.NewSummarizer(
+		m,
+		summary.WithChecksAny(summary.CheckEventThreshold(1)),
+		summary.WithModelCallbacks(callbacks),
+	)
+
+	require.NoError(t, summarizeAndPersist(
+		ctx, summarizer, sess, "", false,
+		func(context.Context, *session.Summary) error { return nil },
+	))
+
+	require.Equal(t, 1, m.calls)
+	require.Equal(t, 2, beforeCalls)
+	require.Equal(t, callModeCustomResponse, report.Call.Mode)
+	_, line := sessionSummaryRecordByTarget(t, logs, "full")
+	requireFields(t, line, map[string]string{
+		"outcome":           outcomeSuccess,
+		"model_call_status": modelCallStatusCalled,
+	})
+}
