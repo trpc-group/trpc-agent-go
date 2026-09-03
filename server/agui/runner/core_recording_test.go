@@ -285,6 +285,142 @@ func TestWrapCoreRunnerRecordingFailureDoesNotChangeCoreEvents(t *testing.T) {
 	assert.Nil(t, sess)
 }
 
+func TestWrapCoreRunnerEmptyStreamRecordingFailureDoesNotChangeCoreEvents(t *testing.T) {
+	base := &recordingBaseRunner{}
+	service := inmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
+	require.NoError(t, err)
+
+	events, err := recorded.Run(
+		context.Background(),
+		"user",
+		"thread",
+		model.NewAssistantMessage("invalid recording input"),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, collectCoreEvents(events))
+
+	sess, err := service.GetSession(context.Background(), session.Key{
+		AppName: "app", UserID: "user", SessionID: "thread",
+	})
+	require.NoError(t, err)
+	assert.Nil(t, sess)
+}
+
+func TestWrapCoreRunnerInvalidSessionKeyDoesNotChangeCoreEvents(t *testing.T) {
+	completion := newCompletionEvent("run-1")
+	base := &recordingBaseRunner{events: []*event.Event{completion}}
+	service := inmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
+	require.NoError(t, err)
+
+	events, err := recorded.Run(
+		context.Background(),
+		"",
+		"thread",
+		model.NewUserMessage("hi"),
+	)
+	require.NoError(t, err)
+	got := collectCoreEvents(events)
+	require.Len(t, got, 1)
+	assert.Same(t, completion, got[0])
+}
+
+func TestWrapCoreRunnerEmptyUserMessageDoesNotChangeCoreEvents(t *testing.T) {
+	completion := newCompletionEvent("run-1")
+	base := &recordingBaseRunner{events: []*event.Event{completion}}
+	service := inmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
+	require.NoError(t, err)
+
+	events, err := recorded.Run(
+		context.Background(),
+		"user",
+		"thread",
+		model.Message{Role: model.RoleUser},
+	)
+	require.NoError(t, err)
+	got := collectCoreEvents(events)
+	require.Len(t, got, 1)
+	assert.Same(t, completion, got[0])
+}
+
+func TestWrapCoreRunnerRecordsRolelessUserMessage(t *testing.T) {
+	base := &recordingBaseRunner{}
+	service := inmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
+	require.NoError(t, err)
+
+	events, err := recorded.Run(
+		context.Background(),
+		"user",
+		"thread",
+		model.Message{Content: "hi"},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, collectCoreEvents(events))
+
+	sess, err := service.GetSession(context.Background(), session.Key{
+		AppName: "app", UserID: "user", SessionID: "thread",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	trackEvents, err := sess.GetTrackEvents(session.Track("agui"))
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 3)
+}
+
+func TestWrapCoreRunnerPersistenceFailureDoesNotChangeCoreEvents(t *testing.T) {
+	completion := newCompletionEvent("run-1")
+	base := &recordingBaseRunner{events: []*event.Event{completion}}
+	underlying := inmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, underlying.Close()) })
+	service := &failingTrackService{
+		Service: underlying,
+		err:     errors.New("append failed"),
+	}
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
+	require.NoError(t, err)
+
+	events, err := recorded.Run(
+		context.Background(),
+		"user",
+		"thread",
+		model.NewUserMessage("hi"),
+	)
+	require.NoError(t, err)
+	got := collectCoreEvents(events)
+	require.Len(t, got, 1)
+	assert.Same(t, completion, got[0])
+	assert.Positive(t, service.appendCalls)
+}
+
+func TestWrapCoreRunnerTranslationFailureDoesNotChangeCoreEvents(t *testing.T) {
+	assistant := newAssistantEvent("run-1", "hello")
+	invalid := &event.Event{}
+	base := &recordingBaseRunner{events: []*event.Event{assistant, invalid}}
+	service := inmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	recorded, err := aguirunner.WrapCoreRunner(base, "app", service)
+	require.NoError(t, err)
+
+	events, err := recorded.Run(
+		context.Background(),
+		"user",
+		"thread",
+		model.NewUserMessage("hi"),
+	)
+	require.NoError(t, err)
+	got := collectCoreEvents(events)
+	require.Len(t, got, 2)
+	assert.Same(t, assistant, got[0])
+	assert.Same(t, invalid, got[1])
+}
+
 func TestWrapCoreRunnerCancellationUnblocksUnreadOutputAndFlushesTrack(t *testing.T) {
 	base := &recordingBaseRunner{events: []*event.Event{
 		newAssistantEvent("run-1", "hello"),
@@ -391,6 +527,22 @@ func (r *recordingBaseRunner) Close() error {
 
 type serviceWithoutTrack struct {
 	session.Service
+}
+
+type failingTrackService struct {
+	session.Service
+	err         error
+	appendCalls int
+}
+
+func (s *failingTrackService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	s.appendCalls++
+	return s.err
 }
 
 func newAssistantEvent(requestID, content string) *event.Event {
