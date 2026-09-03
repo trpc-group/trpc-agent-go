@@ -191,7 +191,7 @@ func TestClient_CreateSummary_StaleWriteKeepsTTL(t *testing.T) {
 		UpdatedAt: at.Add(-time.Hour),
 	}, cfg.SessionTTL)
 	require.NoError(t, err)
-	assert.False(t, applied.Applied())
+	assert.Equal(t, util.SummaryWriteStale, applied)
 	assert.Equal(t, 6*time.Second, mr.TTL(sumKey),
 		"a skipped stale write must not refresh the TTL")
 
