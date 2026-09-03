@@ -675,6 +675,76 @@ The output is one JSON debug message per line, for example:
 request. This is useful for organization-wide policies or shared behavior that
 should apply to all agents managed by a Runner.
 
+### ToolLoopWarning
+
+`toolloopwarning.New()` examines the two complete tool-call rounds at the end
+of each model request. When their tool names, canonical JSON arguments, and
+model-visible results are identical, it appends one temporary user-role
+instruction to that request. It does not append a duplicate while the warning
+is already present in the same request, but it appends the warning to each new
+eligible request while the repeated loop continues. A changed round or an
+intervening non-tool message does not match. The first model request in each
+invocation is deliberately skipped so a repeated tail restored from an earlier
+run cannot trigger a new warning by itself.
+
+Tool-call IDs are used to pair results with calls but are not part of the
+round fingerprint. A complete round requires exactly one trailing tool-result
+message per tool call. An incomplete or malformed round does not match. The
+plugin is opt-in, makes no additional model or tool calls, and does not stop or
+retry the invocation. It must be registered on a `Runner`; direct calls to
+`Agent.Run` do not install Runner plugins.
+
+The instruction's `user` role is a model-protocol shape, not a claim of human
+authorship. The instruction is request-local: it is not appended as a session
+event and is not restored as history on a later run. A standalone session
+summary reads persisted events and therefore does not receive it as source
+content. If cache-safe summary forking is enabled, however, the summarizer
+deliberately reuses the final model request; the instruction can then be part
+of the summarizer input and can indirectly affect the derived summary.
+Execution tracing likewise
+records the final request on the completion artifact rather than in session
+history. The model response produced from the request follows normal session
+behavior.
+
+Detection uses the request view available at `BeforeModel`, so history
+projection, result transformation, summary cutoffs, and context compaction are
+already reflected. If a later callback removes the instruction and the
+callback chain is re-entered on the same request, the plugin adds it again only
+when the trailing rounds still match. A warning already present at the end of
+the same request is not duplicated.
+
+Use `WithExcludedToolNames(...)` for polling or other tools whose repeated
+results are expected. Use `WithWarningMessage(...)` to localize or customize
+the synthetic instruction.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolloopwarning"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+agentInstance := llmagent.New(
+	"my-agent",
+	llmagent.WithModel(openai.New("gpt-4o-mini")),
+)
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(toolloopwarning.New(
+		toolloopwarning.WithExcludedToolNames("poll_status"),
+	)),
+)
+defer runnerInstance.Close()
+```
+
+For a complete, deterministic example that runs without an API key, see
+[examples/plugin/toolloopwarning](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/toolloopwarning).
+The example uses a deterministic scripted model to produce two identical tool
+rounds while exercising the normal Runner, LLMAgent, tool, plugin, and session
+paths.
+
 ### ToolCallID
 
 `toolcallid.New()` from `plugin/toolcallid` rewrites the final `ToolCall.ID`
@@ -1189,10 +1259,10 @@ The example includes verified scenarios for:
 - A defensive analysis request that is allowed
 
 The repository currently includes Logging, DebugLog, GlobalInstruction,
-ToolCallID, ToolError, MessageMerger, ErrorMessage, and Guardrail as built-in
-plugins. Tool Approval, Prompt Injection, and Unsafe Intent are currently
-built-in capabilities under the Guardrail plugin. Additional plugins can be
-implemented as custom plugins.
+ToolCallID, ToolError, ToolLoopWarning, MessageMerger, ErrorMessage, and
+Guardrail as built-in plugins. Tool Approval, Prompt Injection, and Unsafe
+Intent are currently built-in capabilities under the Guardrail plugin.
+Additional plugins can be implemented as custom plugins.
 
 ## Writing Your Own Plugin
 
