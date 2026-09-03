@@ -338,8 +338,11 @@ func (a *testAgent) FindSubAgent(name string) agent.Agent { return nil }
 
 func (a *testAgent) CodeExecutor() codeexecutor.CodeExecutor { return a.exec }
 
+// errExec is a test stub whose ExecuteCode always returns an error.
+// It records the number of times it has been called in calls.
 type errExec struct{ calls int }
 
+// ExecuteCode increments the call counter and returns a fixed error.
 func (e *errExec) ExecuteCode(
 	ctx context.Context, input codeexecutor.CodeExecutionInput,
 ) (codeexecutor.CodeExecutionResult, error) {
@@ -347,6 +350,7 @@ func (e *errExec) ExecuteCode(
 	return codeexecutor.CodeExecutionResult{}, errors.New("exec failed")
 }
 
+// CodeBlockDelimiter returns the default triple-backtick code block delimiter.
 func (e *errExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
 }

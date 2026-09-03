@@ -31,10 +31,13 @@ func (p *conditionalRequestProcessorStub) ProcessRequest(
 	p.called = true
 }
 
+// conditionalResponseProcessorStub is a test stub that records whether
+// ProcessResponse was invoked.
 type conditionalResponseProcessorStub struct {
 	called bool
 }
 
+// ProcessResponse marks the stub as called and returns the original response.
 func (p *conditionalResponseProcessorStub) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,

@@ -46,8 +46,9 @@ func NewTransferResponseProcessor(endInvocation bool) *TransferResponseProcessor
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
-// It checks for transfer requests and handles agent handoffs by actually calling
-// the target agent's Run method.
+// It checks for a pending transfer request and, when present, invokes the
+// target agent's Run method to perform the handoff. It returns the original
+// response unchanged (agent transfer does not replace the published response).
 func (p *TransferResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,

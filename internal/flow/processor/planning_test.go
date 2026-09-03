@@ -212,14 +212,19 @@ func TestPlanningResponseProcessor_EmitEventError(t *testing.T) {
 	}
 }
 
+// nilPlanner is a test stub whose ProcessPlanningResponse always returns nil,
+// used to verify that the processor falls back to returning the original response.
 type nilPlanner struct{}
 
+// BuildPlanningInstruction returns an empty string (no planning instruction).
 func (nilPlanner) BuildPlanningInstruction(
 	ctx context.Context, inv *agent.Invocation, req *model.Request,
 ) string {
 	return ""
 }
 
+// ProcessPlanningResponse always returns nil, simulating a planner that
+// produces no replacement response.
 func (nilPlanner) ProcessPlanningResponse(
 	ctx context.Context, inv *agent.Invocation, rsp *model.Response,
 ) *model.Response {

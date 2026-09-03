@@ -1325,15 +1325,28 @@ func TestTransferResponseProc_DoesNotInheritParentMetadataFromSource(t *testing.
 			"that edge has no representable ParentMetadata (must be nil, not inherited)")
 }
 
+// cancelOnRunAgent is a test stub that cancels the provided context when Run is
+// called. It records the number of invocations in calls so tests can assert
+// that the target agent was (or was not) reached.
 type cancelOnRunAgent struct {
 	cancel context.CancelFunc
 	calls  int
 }
 
+// Info returns a fixed agent.Info with Name "child".
 func (a *cancelOnRunAgent) Info() agent.Info                { return agent.Info{Name: "child"} }
+
+// SubAgents returns nil (no sub-agents).
 func (a *cancelOnRunAgent) SubAgents() []agent.Agent        { return nil }
+
+// FindSubAgent always returns nil.
 func (a *cancelOnRunAgent) FindSubAgent(string) agent.Agent { return nil }
+
+// Tools returns nil (no tools).
 func (a *cancelOnRunAgent) Tools() []tool.Tool              { return nil }
+
+// Run increments the call counter, cancels the context, and returns a single
+// completion event before closing the channel.
 func (a *cancelOnRunAgent) Run(
 	ctx context.Context, inv *agent.Invocation,
 ) (<-chan *event.Event, error) {

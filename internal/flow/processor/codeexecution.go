@@ -50,7 +50,9 @@ func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {
 }
 
 // ProcessResponse processes the model response, extracts code blocks, executes them,
-// and emits events for the code execution result.
+// and emits events for the code execution result. It returns a cleared-content
+// clone of the response when execution succeeds (to avoid mutating the shared
+// response), or the original response unchanged when execution is skipped or fails.
 func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event) *model.Response {
 	if invocation == nil || rsp == nil || rsp.IsPartial {

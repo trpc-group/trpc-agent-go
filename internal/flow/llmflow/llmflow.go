@@ -3027,6 +3027,9 @@ func (f *Flow) postprocess(
 	)
 }
 
+// postprocessWithLatencySpans runs response processors, optionally wrapping each
+// in a latency-tracking span. It returns the (possibly replaced) response
+// produced by the last processor in the chain.
 func (f *Flow) postprocessWithLatencySpans(
 	ctx context.Context,
 	invocation *agent.Invocation,

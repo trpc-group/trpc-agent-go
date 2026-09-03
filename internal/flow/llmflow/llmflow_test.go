@@ -2785,6 +2785,7 @@ func (p *panicRequestProcessor) ProcessRequest(
 // mockResponseProcessor implements flow.ResponseProcessor
 type mockResponseProcessor struct{}
 
+// ProcessResponse emits a "postprocessing" event and returns the original response.
 func (m *mockResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -2801,10 +2802,13 @@ func (m *mockResponseProcessor) ProcessResponse(
 	return resp
 }
 
+// cancelResponseProcessor is a test stub that cancels the context during
+// response processing to exercise cancellation paths.
 type cancelResponseProcessor struct {
 	cancel context.CancelFunc
 }
 
+// ProcessResponse cancels the associated context and returns the original response.
 func (c *cancelResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -2816,8 +2820,11 @@ func (c *cancelResponseProcessor) ProcessResponse(
 	return resp
 }
 
+// endInvocationResponseProcessor is a test stub that sets EndInvocation on
+// each response to terminate the flow after the first postprocessing step.
 type endInvocationResponseProcessor struct{}
 
+// ProcessResponse sets invocation.EndInvocation and returns the original response.
 func (p *endInvocationResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,

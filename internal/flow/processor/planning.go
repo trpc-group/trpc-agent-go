@@ -138,7 +138,9 @@ func NewPlanningResponseProcessor(p planner.Planner) *PlanningResponseProcessor 
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
-// It processes planning responses using the configured planner.
+// It processes planning responses using the configured planner and returns
+// the planner's replacement response when one is produced, or the original
+// response otherwise.
 func (p *PlanningResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,

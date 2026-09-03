@@ -289,8 +289,9 @@ func NewFunctionCallResponseProcessor(
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
-// It checks for transfer requests and handles agent handoffs by actually calling
-// the target agent's Run method.
+// It dispatches any pending tool calls, emits the corresponding events, and
+// returns the original response unchanged (tool-call dispatch does not replace
+// the published LLM response).
 func (p *FunctionCallResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
