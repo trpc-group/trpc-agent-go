@@ -127,13 +127,27 @@ type Workspace struct {
 	exec     codeexecutor.CodeExecutor
 	resolver *workspacesession.Resolver
 
-	// mu guards the ephemeral handle cache below. It is the only mutable
-	// state on Workspace: the facade methods themselves still forward each
-	// call directly to the backend without serializing.
+	// cache holds the invocation-scoped ephemeral handle cache. It is a
+	// pointer so Workspace itself stays comparable: putting the mutex, map,
+	// and slice directly on Workspace would make the type non-comparable, a
+	// breaking change for callers that compare Workspace values or use them
+	// as map keys.
+	cache *workspaceCache
+}
+
+// workspaceCache holds the invocation-scoped ephemeral handle cache. All
+// fields are guarded by mu.
+type workspaceCache struct {
 	mu               sync.Mutex
 	ephemeralHandles map[string]codeexecutor.WorkspaceHandle // key: invocation ID
 	ephemeralOrder   []string                                // FIFO insertion order
 }
+
+// Compile-time assertion that Workspace stays comparable. The cache must be
+// reachable only through a pointer field; adding a map/slice/mutex field
+// directly on Workspace would break this and turn == / map-key use into a
+// compile error (or panic) for existing callers.
+var _ = map[Workspace]struct{}{}
 
 // ephemeralHandleCacheLimit bounds the number of invocation-scoped ephemeral
 // workspaces the facade retains before evicting the oldest. Without a bound a
@@ -159,6 +173,7 @@ func New(
 	return &Workspace{
 		exec:     exec,
 		resolver: workspacesession.NewResolver(exec, reg),
+		cache:    &workspaceCache{},
 	}
 }
 
@@ -501,20 +516,25 @@ func (w *Workspace) retainEphemeralHandle(
 		return func() { w.releaseEphemeralHandle(ctx, handle) }
 	}
 	id := strings.TrimSpace(inv.InvocationID)
-	w.mu.Lock()
-	if w.ephemeralHandles == nil {
-		w.ephemeralHandles = make(map[string]codeexecutor.WorkspaceHandle)
+	if w.cache == nil {
+		// Zero-value Workspace (not constructed via New): no cache to key
+		// by, so fall back to per-call release.
+		return func() { w.releaseEphemeralHandle(ctx, handle) }
 	}
-	_, cached := w.ephemeralHandles[id]
+	w.cache.mu.Lock()
+	if w.cache.ephemeralHandles == nil {
+		w.cache.ephemeralHandles = make(map[string]codeexecutor.WorkspaceHandle)
+	}
+	_, cached := w.cache.ephemeralHandles[id]
 	// Always refresh the cached handle. A stale operation invalidates the
 	// registry entry, so the next call re-acquires a new generation (H2);
 	// caching only the first handle would release the stale H1 (token
 	// mismatch, no-op) and leak H2's backend workspace forever.
-	w.ephemeralHandles[id] = handle
+	w.cache.ephemeralHandles[id] = handle
 	if !cached {
-		w.ephemeralOrder = append(w.ephemeralOrder, id)
+		w.cache.ephemeralOrder = append(w.cache.ephemeralOrder, id)
 	}
-	w.mu.Unlock()
+	w.cache.mu.Unlock()
 	if cached {
 		return nil
 	}
@@ -535,15 +555,18 @@ func (w *Workspace) retainEphemeralHandle(
 // handle for id. Release runs outside the lock because backend Cleanup may
 // block; removing the entry first makes concurrent release idempotent.
 func (w *Workspace) releaseEphemeralByInvocation(id string) {
-	w.mu.Lock()
-	handle, ok := w.ephemeralHandles[id]
-	if !ok {
-		w.mu.Unlock()
+	if w == nil || w.cache == nil {
 		return
 	}
-	delete(w.ephemeralHandles, id)
-	w.ephemeralOrder = removeInvocationOrder(w.ephemeralOrder, id)
-	w.mu.Unlock()
+	w.cache.mu.Lock()
+	handle, ok := w.cache.ephemeralHandles[id]
+	if !ok {
+		w.cache.mu.Unlock()
+		return
+	}
+	delete(w.cache.ephemeralHandles, id)
+	w.cache.ephemeralOrder = removeInvocationOrder(w.cache.ephemeralOrder, id)
+	w.cache.mu.Unlock()
 	w.releaseEphemeralHandle(context.Background(), handle)
 }
 
@@ -552,18 +575,21 @@ func (w *Workspace) releaseEphemeralByInvocation(id string) {
 // the bounded-leak fallback for invocations whose context is never canceled.
 func (w *Workspace) evictEphemeralIfNeeded() {
 	for {
-		w.mu.Lock()
-		if len(w.ephemeralOrder) <= ephemeralHandleCacheLimit {
-			w.mu.Unlock()
+		if w == nil || w.cache == nil {
 			return
 		}
-		id := w.ephemeralOrder[0]
-		w.ephemeralOrder = w.ephemeralOrder[1:]
-		handle, ok := w.ephemeralHandles[id]
-		if ok {
-			delete(w.ephemeralHandles, id)
+		w.cache.mu.Lock()
+		if len(w.cache.ephemeralOrder) <= ephemeralHandleCacheLimit {
+			w.cache.mu.Unlock()
+			return
 		}
-		w.mu.Unlock()
+		id := w.cache.ephemeralOrder[0]
+		w.cache.ephemeralOrder = w.cache.ephemeralOrder[1:]
+		handle, ok := w.cache.ephemeralHandles[id]
+		if ok {
+			delete(w.cache.ephemeralHandles, id)
+		}
+		w.cache.mu.Unlock()
 		if !ok {
 			continue
 		}
