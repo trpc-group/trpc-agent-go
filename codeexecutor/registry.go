@@ -212,8 +212,10 @@ func (r *WorkspaceRegistry) createWorkspace(
 		}
 	}
 	var ws Workspace
+	wsCreated := false
 	if err == nil {
 		ws, err = m.CreateWorkspace(ctx, id, WorkspacePolicy{})
+		wsCreated = err == nil
 	}
 	entry := workspaceRegistryEntry{
 		ws:                ws,
@@ -234,6 +236,17 @@ func (r *WorkspaceRegistry) createWorkspace(
 					"codeexecutor: workspace instance changed during creation",
 				),
 			)
+		}
+	}
+
+	// A workspace created but not cached is orphaned: no registry entry
+	// will ever reference it, so no Release can reclaim the backend
+	// workspace. Clean it up best-effort through the manager that created
+	// it (same ownership as the CreateWorkspace call), joining any cleanup
+	// failure onto the original error without changing its semantics.
+	if err != nil && wsCreated && m != nil {
+		if cleanupErr := m.Cleanup(ctx, ws); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
 		}
 	}
 

@@ -12,6 +12,19 @@
 // OpenSandbox, an open-source sandbox platform (Alibaba) with strong
 // isolation (gVisor / Kata / Firecracker microVM) and Kubernetes
 // elastic scheduling.
+//
+// # Platform support
+//
+// Directory staging (PutDirectory / StageDirectory) pins the host tree
+// with openat(2) + O_NOFOLLOW to close the host-directory swap race. On
+// Linux, BSD, and Darwin this is implemented natively. On Windows and
+// other non-Unix hosts the source tree cannot be pinned, so directory
+// staging fail-closes with an error instead of reopening children by
+// pathname (which would leave the swap race open). As a result, skill
+// staging and other directory uploads are unavailable when the agent
+// process runs on a Windows host. Single-file uploads (PutFiles) and
+// program execution are unaffected. The sandbox itself always runs
+// remotely, so the host OS never changes sandbox-side behavior.
 package opensandbox
 
 import (

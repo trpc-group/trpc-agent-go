@@ -64,6 +64,11 @@ type mockOpenSandboxServer struct {
 	exitCode *int
 	stdout   string
 	stderr   string
+	// stdoutChunkSize, when > 0, splits the stdout text into multiple
+	// `{"type":"stdout"}` SSE events of at most this many bytes, so
+	// tests can exercise the SDK delivering a NUL-framed stream across
+	// multiple OutputMessage boundaries.
+	stdoutChunkSize int
 	// noComplete, when true, omits the execution_complete event so
 	// Execution.ExitCode stays nil (tests the -1 fallback).
 	noComplete bool
@@ -168,6 +173,28 @@ func (m *mockOpenSandboxServer) setStdout(s string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stdout = s
+}
+
+func (m *mockOpenSandboxServer) setStdoutChunkSize(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stdoutChunkSize = n
+}
+
+// chunkString splits s into at-most-n byte chunks, simulating an execd or
+// proxy that flushes a stream at buffer boundaries rather than line
+// boundaries. Used to verify NUL-framed infra output survives an SSE split.
+func chunkString(s string, n int) []string {
+	if n <= 0 || len(s) <= n {
+		return []string{s}
+	}
+	var chunks []string
+	for len(s) > n {
+		chunks = append(chunks, s[:n])
+		s = s[n:]
+	}
+	chunks = append(chunks, s)
+	return chunks
 }
 
 func (m *mockOpenSandboxServer) setStderr(s string) {
@@ -485,6 +512,7 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	exitCode := m.exitCode
 	stdout := m.stdout
 	stderr := m.stderr
+	stdoutChunkSize := m.stdoutChunkSize
 	noComplete := m.noComplete
 	runErr := m.runError
 	forceInfraExit := m.forceInfraExit
@@ -720,11 +748,17 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		// output now contains NUL bytes (NUL-framed records), which
 		// fmt's %q renders as \x00 — an invalid JSON escape. json.Marshal
 		// emits the spec-compliant \u0000 instead.
-		sb, _ := json.Marshal(stdout)
-		fmt.Fprintf(w, `{"type":"stdout","text":%s}`, sb)
-		fmt.Fprint(w, "\n\n")
-		if flusher != nil {
-			flusher.Flush()
+		chunks := []string{stdout}
+		if stdoutChunkSize > 0 {
+			chunks = chunkString(stdout, stdoutChunkSize)
+		}
+		for _, chunk := range chunks {
+			sb, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, `{"type":"stdout","text":%s}`, sb)
+			fmt.Fprint(w, "\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
 		}
 	}
 	if stderr != "" {
@@ -1466,6 +1500,36 @@ func TestWorkspace_Collect_MultipleFiles(t *testing.T) {
 		assert.Equal(t, "mock-content", f.Content)
 		assert.False(t, f.Truncated)
 	}
+}
+
+// TestWorkspace_Collect_SSESplitPreservesNULFraming is the regression for
+// NUL-framing corruption when the SDK delivers a NUL-framed stream split
+// across multiple SSE OutputMessages. cappedBuffer's line semantics inject a
+// newline between messages, corrupting a record split across a buffer
+// boundary; runBashRaw must accumulate byte-exact so no file is silently
+// dropped by the Go-side pathUnder filter.
+func TestWorkspace_Collect_SSESplitPreservesNULFraming(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	m.setSearchResults([]string{"a.txt", "b.txt", "c.txt"})
+	// Force the NUL-framed stdout to be delivered as many small SSE
+	// events, splitting records across OutputMessage boundaries.
+	m.setStdoutChunkSize(7)
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-split", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
+	require.NoError(t, err)
+	require.Len(t, files, 3, "all three files must survive the SSE split")
+
+	names := []string{files[0].Name, files[1].Name, files[2].Name}
+	assert.Contains(t, names, "a.txt")
+	assert.Contains(t, names, "b.txt")
+	assert.Contains(t, names, "c.txt")
 }
 
 // TestWorkspace_Collect_FilenamesWithDelimiters verifies that filenames
@@ -3828,6 +3892,50 @@ func TestWorkspace_RunProgram_EnsuresLayoutDirs(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "RunProgram must ensureLayoutDirs before execution")
+}
+
+// TestRunProgram_EnsuresRunDirStrippedWithoutStdin is the regression for the
+// runDir leaf-symlink gap: when Stdin is empty, the per-run directory is
+// otherwise only created by the remote "mkdir -p" in buildRunCommand, which
+// silently follows a planted leaf symlink. RunProgram must strip and verify
+// runDir via ensureLayoutDirs regardless of stdin.
+func TestRunProgram_EnsuresRunDirStrippedWithoutStdin(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-rundir", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// No Stdin: runDir must still be leaf-symlink-stripped and verified.
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "echo",
+		Args:    []string{"hi"},
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	commands := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+
+	// The ensureLayoutDirs command must cover the per-run directory
+	// (readlink -f strip/verify), not only the four layout dirs. The
+	// buildRunCommand "mkdir -p runDir" has no readlink -f, so this
+	// specifically detects the runDir entry in ensureLayoutDirs.
+	found := false
+	for _, cmd := range commands {
+		if strings.Contains(cmd, "readlink -f") &&
+			strings.Contains(cmd, "run_") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found,
+		"RunProgram must strip/verify runDir via ensureLayoutDirs even without stdin")
 }
 
 // --- Fail-closed unsupported policy / limits (v1 honesty) ---

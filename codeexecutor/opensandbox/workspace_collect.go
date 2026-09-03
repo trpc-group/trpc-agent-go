@@ -165,7 +165,7 @@ func (r *workspaceRuntime) resolveSandboxPaths(
 		script.WriteString(shellQuote(fr.path))
 	}
 	script.WriteString(`; do r=""; IFS= read -r -d '' r < <(readlink -z -f -- "$p" 2>/dev/null) || r=""; printf '%s\0' "$r"; done`)
-	out, err := r.runBash(ctx, script.String(), defaultCollectTimeout)
+	out, err := r.runBashRaw(ctx, script.String(), defaultCollectTimeout)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"opensandbox: resolve paths: %w", err,
@@ -405,7 +405,7 @@ func (r *workspaceRuntime) listFilesByGlob(
 	cmd.WriteString("done; ")
 	cmd.WriteString("done")
 
-	stdout, err := r.runBash(ctx, cmd.String(), defaultCollectTimeout)
+	stdout, err := r.runBashRaw(ctx, cmd.String(), defaultCollectTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("opensandbox: list files by glob: %w", err)
 	}

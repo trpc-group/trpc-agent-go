@@ -191,11 +191,17 @@ func (r *workspaceRuntime) revalidateUploadBatch(
 	return nil
 }
 
-// PutDirectory packs a host directory into tar.gz then uploads and
-// extracts it in the sandbox under ws.Path/to. We use the SDK's
-// UploadFiles API with one entry per file, walking the host tree with
-// filepath.WalkDir and skipping non-regular entries (symlinks,
-// devices, etc.) to prevent following symlinks outside hostPath.
+// PutDirectory uploads a host directory into the sandbox under
+// ws.Path/to, walking the host tree from pinned directory handles
+// (openat + O_NOFOLLOW) and skipping non-regular entries (symlinks,
+// devices, etc.) so a symlink inside the tree cannot pull files from
+// outside hostPath.
+//
+// Directory upload requires pinning the host tree, which is only
+// possible on Unix (Linux/BSD/Darwin). On Windows and other non-Unix
+// hosts the tree cannot be pinned, so PutDirectory fail-closes with an
+// error instead of reopening children by pathname (which would leave the
+// host-directory swap race open).
 func (r *workspaceRuntime) PutDirectory(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
@@ -594,7 +600,9 @@ func (r *workspaceRuntime) removeSymlinksBatch(
 	return nil
 }
 
-// StageDirectory stages a directory with options (ReadOnly).
+// StageDirectory stages a directory with options (ReadOnly). It shares
+// PutDirectory's host-tree pinning requirement: on Windows and other
+// non-Unix hosts it fail-closes with an error.
 func (r *workspaceRuntime) StageDirectory(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
@@ -678,7 +686,7 @@ func (r *workspaceRuntime) resolveSandboxPath(
 	ctx context.Context, target, wsBase string,
 ) (string, error) {
 	script := "readlink -z -f " + shellQuote(target)
-	out, err := r.runBash(ctx, script, defaultCreateTimeout)
+	out, err := r.runBashRaw(ctx, script, defaultCreateTimeout)
 	if err != nil {
 		return "", fmt.Errorf(
 			"opensandbox: resolve path %q: %w", target, err,
@@ -732,7 +740,7 @@ func (r *workspaceRuntime) resolveSandboxAncestor(
 	// Use readlink -m: canonicalizes existing symlink components,
 	// leaves non-existent components as-is. Unlike readlink -f, it
 	// does not fail when intermediate components don't exist.
-	out, err := r.runBash(ctx, "readlink -z -m "+shellQuote(target), defaultCreateTimeout)
+	out, err := r.runBashRaw(ctx, "readlink -z -m "+shellQuote(target), defaultCreateTimeout)
 	if err != nil {
 		return "", fmt.Errorf(
 			"opensandbox: resolve ancestor %q: %w", target, err,

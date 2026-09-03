@@ -445,7 +445,7 @@ func TestWorkspaceRegistry_AcquireHandle_GenerationFence(t *testing.T) {
 		require.Equal(t, 1, wm.creates)
 	})
 
-	t.Run("rotation during creation is not cached or cleaned", func(t *testing.T) {
+	t.Run("rotation during creation is not cached but cleaned", func(t *testing.T) {
 		r := NewWorkspaceRegistry()
 		wm := &fencedWM{probes: []instanceProbeResult{
 			{id: "instance-a"},
@@ -456,7 +456,8 @@ func TestWorkspaceRegistry_AcquireHandle_GenerationFence(t *testing.T) {
 		require.ErrorIs(t, err, ErrWorkspaceStale)
 		require.NotContains(t, r.byID, "rotated")
 		require.Equal(t, 1, wm.creates)
-		require.Zero(t, wm.cleanups)
+		require.Equal(t, 1, wm.cleanups,
+			"the orphaned workspace must be cleaned up, not leaked")
 
 		wm.addProbes(
 			instanceProbeResult{id: "instance-b"},
@@ -1068,4 +1069,74 @@ func TestWorkspaceRegistry_Acquire_NonComparableManagerDoesNotPanic(t *testing.T
 		_, err = r.Acquire(ctx, wm, "non-comparable")
 		require.NoError(t, err)
 	})
+}
+
+// orphanOnCreateWM simulates a WorkspaceManager whose instance ID changes
+// while a workspace is being created. The workspace created in that window is
+// orphaned (never cached) and must be cleaned up by the registry.
+type orphanOnCreateWM struct {
+	mu      sync.Mutex
+	probes  int
+	before  WorkspaceInstanceID
+	after   WorkspaceInstanceID
+	creates int
+	cleans  int
+}
+
+func (m *orphanOnCreateWM) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ WorkspacePolicy,
+) (Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.creates++
+	return Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (m *orphanOnCreateWM) Cleanup(
+	_ context.Context,
+	_ Workspace,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cleans++
+	return nil
+}
+
+// InstanceID returns before on the first probe (pre-create) and after on all
+// later probes (post-create), so createWorkspace observes an instance change
+// between CreateWorkspace and its post-create validation.
+func (m *orphanOnCreateWM) InstanceID(
+	context.Context,
+) (WorkspaceInstanceID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.probes++
+	if m.probes == 1 {
+		return m.before, nil
+	}
+	return m.after, nil
+}
+
+func (m *orphanOnCreateWM) counts() (creates, cleans int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.creates, m.cleans
+}
+
+// TestWorkspaceRegistry_Acquire_OrphanOnInstanceChangeCleansUp verifies that
+// a workspace created in the instance-change window (before != after) is not
+// cached but is still cleaned up, so it does not leak as an orphan.
+func TestWorkspaceRegistry_Acquire_OrphanOnInstanceChangeCleansUp(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &orphanOnCreateWM{before: "gen-1", after: "gen-2"}
+
+	_, err := r.Acquire(context.Background(), wm, "orphan")
+	require.ErrorIs(t, err, ErrWorkspaceStale)
+
+	creates, cleans := wm.counts()
+	require.Equal(t, 1, creates)
+	require.Equal(t, 1, cleans,
+		"the orphaned workspace must be cleaned up after the instance change")
 }

@@ -933,6 +933,11 @@ func (t *ExecTool) callNonSessional(
 	req execRequest,
 ) (execOutput, error) {
 	if req.background || req.tty {
+		// The workspace was already acquired for this attempt. The
+		// interactive-unsupported error path must release an ephemeral
+		// handle exactly like startInteractive does, or a long-lived
+		// process leaks one backend workspace per such call.
+		t.releaseEphemeralWorkspace(ctx, req.workspaceHandle)
 		return execOutput{}, errors.New(
 			"workspace_exec interactive sessions are not supported by the current executor",
 		)

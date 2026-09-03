@@ -32,7 +32,10 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
+	"sync"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
@@ -96,13 +99,14 @@ type ArtifactRef struct {
 //
 // Concurrency:
 //
-// Workspace has no internal locking. The struct simply forwards each
-// call to the underlying codeexecutor backend, so concurrent callers
-// inherit whatever guarantees that backend offers. The framework does
-// not standardize those guarantees; in practice callbacks should
-// serialize their workspace operations when ordering matters (a
-// PutFiles followed by a Collect against the same path is the
-// canonical example).
+// Workspace forwards each call directly to the underlying codeexecutor
+// backend, so concurrent callers inherit whatever guarantees that backend
+// offers; the framework does not standardize those guarantees. In practice
+// callbacks should serialize their workspace operations when ordering
+// matters (a PutFiles followed by a Collect against the same path is the
+// canonical example). The only internal state is the ephemeral handle cache
+// (see mu), which is guarded by its own mutex and never serializes backend
+// operations.
 //
 // Scope and backend caveats:
 //
@@ -122,7 +126,21 @@ type ArtifactRef struct {
 type Workspace struct {
 	exec     codeexecutor.CodeExecutor
 	resolver *workspacesession.Resolver
+
+	// mu guards the ephemeral handle cache below. It is the only mutable
+	// state on Workspace: the facade methods themselves still forward each
+	// call directly to the backend without serializing.
+	mu               sync.Mutex
+	ephemeralHandles map[string]codeexecutor.WorkspaceHandle // key: invocation ID
+	ephemeralOrder   []string                                // FIFO insertion order
 }
+
+// ephemeralHandleCacheLimit bounds the number of invocation-scoped ephemeral
+// workspaces the facade retains before evicting the oldest. Without a bound a
+// long-lived process that never cancels invocation contexts would leak one
+// backend workspace per invocation; the bound turns that into a fixed-size
+// cache. Well-behaved invocations are released promptly via ctx.Done instead.
+const ephemeralHandleCacheLimit = 16
 
 // New creates a Workspace backed by exec. When reg is nil the
 // Workspace allocates a private workspace registry; pass the agent's
@@ -180,11 +198,13 @@ func (w *Workspace) Collect(
 	if len(patterns) == 0 {
 		return []*File{}, nil
 	}
-	eng, handle, err := w.bindWorkspaceHandle(ctx)
+	eng, handle, release, err := w.bindWorkspaceHandle(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer w.releaseEphemeralHandle(ctx, handle)
+	if release != nil {
+		defer release()
+	}
 	raw, err := eng.FS().Collect(ctx, handle.Workspace, patterns)
 	w.invalidateWorkspaceHandleIfStale(handle, err)
 	if err != nil {
@@ -216,11 +236,13 @@ func (w *Workspace) PutFiles(
 	if len(files) == 0 {
 		return nil
 	}
-	eng, handle, err := w.bindWorkspaceHandle(ctx)
+	eng, handle, release, err := w.bindWorkspaceHandle(ctx)
 	if err != nil {
 		return err
 	}
-	defer w.releaseEphemeralHandle(ctx, handle)
+	if release != nil {
+		defer release()
+	}
 	err = eng.FS().PutFiles(ctx, handle.Workspace, files)
 	w.invalidateWorkspaceHandleIfStale(handle, err)
 	return err
@@ -258,11 +280,13 @@ func (w *Workspace) SaveArtifact(
 		cfg.MaxBytes = workspacefacade.DefaultArtifactMaxBytes
 	}
 	ctxIO := workspacefacade.WithArtifactContext(ctx)
-	eng, handle, err := w.bindWorkspaceHandle(ctxIO)
+	eng, handle, release, err := w.bindWorkspaceHandle(ctxIO)
 	if err != nil {
 		return nil, err
 	}
-	defer w.releaseEphemeralHandle(ctxIO, handle)
+	if release != nil {
+		defer release()
+	}
 	ws := handle.Workspace
 	manifest, err := eng.FS().CollectOutputs(ctxIO, ws, codeexecutor.OutputSpec{
 		Globs:         []string{rel},
@@ -326,11 +350,13 @@ func (w *Workspace) StageInputs(
 		return nil
 	}
 	ctxIO := workspacefacade.WithArtifactContext(ctx)
-	eng, handle, err := w.bindWorkspaceHandle(ctxIO)
+	eng, handle, release, err := w.bindWorkspaceHandle(ctxIO)
 	if err != nil {
 		return err
 	}
-	defer w.releaseEphemeralHandle(ctxIO, handle)
+	if release != nil {
+		defer release()
+	}
 	err = eng.FS().StageInputs(ctxIO, handle.Workspace, specs)
 	w.invalidateWorkspaceHandleIfStale(handle, err)
 	return err
@@ -368,11 +394,13 @@ func (w *Workspace) RunProgram(
 		return codeexecutor.RunResult{}, err
 	}
 	spec.Cwd = cwd
-	eng, handle, err := w.bindWorkspaceHandle(ctx)
+	eng, handle, release, err := w.bindWorkspaceHandle(ctx)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
-	defer w.releaseEphemeralHandle(ctx, handle)
+	if release != nil {
+		defer release()
+	}
 	runner := eng.Runner()
 	if runner == nil {
 		return codeexecutor.RunResult{}, errors.New(
@@ -386,23 +414,29 @@ func (w *Workspace) RunProgram(
 
 func (w *Workspace) bindWorkspaceHandle(
 	ctx context.Context,
-) (codeexecutor.Engine, codeexecutor.WorkspaceHandle, error) {
+) (codeexecutor.Engine, codeexecutor.WorkspaceHandle, func(), error) {
 	if w == nil || w.resolver == nil {
-		return nil, codeexecutor.WorkspaceHandle{}, errors.New(
+		return nil, codeexecutor.WorkspaceHandle{}, nil, errors.New(
 			"workspaceio: workspace is not initialized",
 		)
 	}
 	eng := w.resolver.EnsureEngine()
 	if eng == nil || eng.FS() == nil || eng.Manager() == nil {
-		return nil, codeexecutor.WorkspaceHandle{}, errors.New(
+		return nil, codeexecutor.WorkspaceHandle{}, nil, errors.New(
 			"workspaceio: executor does not expose a live workspace engine",
 		)
 	}
 	handle, err := w.resolver.CreateWorkspaceHandle(ctx, eng, "workspace")
 	if err != nil {
-		return nil, codeexecutor.WorkspaceHandle{}, err
+		return nil, codeexecutor.WorkspaceHandle{}, nil, err
 	}
-	return eng, handle, nil
+	// Ephemeral (invalid empty-ID session) handles are cached per
+	// invocation and released once when the invocation finishes, not after
+	// every method call, so multi-step workflows within one invocation keep
+	// their files across calls. When the invocation has no stable identity,
+	// retainEphemeralHandle returns a release func to defer after the op.
+	release := w.retainEphemeralHandle(ctx, handle)
+	return eng, handle, release, nil
 }
 
 func (w *Workspace) invalidateWorkspaceHandleIfStale(
@@ -415,20 +449,14 @@ func (w *Workspace) invalidateWorkspaceHandleIfStale(
 	}
 	// Stale always invalidates without Cleanup. The deterministic
 	// workspace path may already belong to a newer physical instance;
-	// Release (including the method-level ephemeral defer) must not
-	// delete that replacement generation. After Invalidate the defer
-	// ReleaseHandle is a token-mismatch no-op.
+	// Release must not delete that replacement generation. After
+	// Invalidate the invocation-end Release is a token-mismatch no-op.
 	w.resolver.InvalidateWorkspaceHandle(handle)
 }
 
-// releaseEphemeralHandle cleans up a workspace that was acquired for an
-// invalid (empty-ID) session, which has no session-level lifecycle
-// owning it; without this, every call through this facade would retain
-// the registry entry and the backend workspace for the life of the
-// process. Session-scoped handles are left cached and untouched so
-// valid sessions keep reusing their workspace. A stale handle must be
-// Invalidated first so this Release is a token-mismatch no-op and
-// cannot Cleanup a replacement generation at the same path.
+// releaseEphemeralHandle releases a single ephemeral handle through the
+// resolver, logging any cleanup failure. It is the shared release path for
+// the invocation-scoped cache (no-invocation fallback, eviction, ctx.Done).
 func (w *Workspace) releaseEphemeralHandle(
 	ctx context.Context,
 	handle codeexecutor.WorkspaceHandle,
@@ -442,6 +470,114 @@ func (w *Workspace) releaseEphemeralHandle(
 			handle.Workspace.ID, err,
 		)
 	}
+}
+
+// retainEphemeralHandle caches an ephemeral handle keyed by invocation ID so
+// multiple facade calls within the same invocation reuse one backend
+// workspace (the registry already returns the cached entry for the stable
+// ephemeral key). The workspace is released once when the invocation context
+// is done, or when the bounded cache evicts the oldest entry.
+//
+// When the invocation carries no stable identity (empty InvocationID), the
+// handle cannot be keyed for reuse; retainEphemeralHandle returns a release
+// func instead, which the caller must defer so the backend workspace is
+// released after the operation, never before it.
+//
+// Session-scoped handles are never cached here: they are left in the registry
+// for the life of the session, exactly as before.
+func (w *Workspace) retainEphemeralHandle(
+	ctx context.Context,
+	handle codeexecutor.WorkspaceHandle,
+) func() {
+	if w == nil || w.resolver == nil || !w.resolver.IsEphemeralHandle(handle) {
+		return nil
+	}
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || strings.TrimSpace(inv.InvocationID) == "" {
+		// No stable invocation identity to bind the lifecycle to. Hand the
+		// release back to the caller so it runs AFTER the operation (the
+		// old per-call defer ordering); releasing here would let the async
+		// Cleanup race the caller's PutFiles/Collect/RunProgram.
+		return func() { w.releaseEphemeralHandle(ctx, handle) }
+	}
+	id := strings.TrimSpace(inv.InvocationID)
+	w.mu.Lock()
+	if w.ephemeralHandles == nil {
+		w.ephemeralHandles = make(map[string]codeexecutor.WorkspaceHandle)
+	}
+	_, cached := w.ephemeralHandles[id]
+	// Always refresh the cached handle. A stale operation invalidates the
+	// registry entry, so the next call re-acquires a new generation (H2);
+	// caching only the first handle would release the stale H1 (token
+	// mismatch, no-op) and leak H2's backend workspace forever.
+	w.ephemeralHandles[id] = handle
+	if !cached {
+		w.ephemeralOrder = append(w.ephemeralOrder, id)
+	}
+	w.mu.Unlock()
+	if cached {
+		return nil
+	}
+	// Prompt release for a well-behaved invocation whose context is
+	// canceled on completion. A nil Done channel (never-canceled context)
+	// is covered by the bounded eviction below instead.
+	if done := ctx.Done(); done != nil {
+		go func(id string, done <-chan struct{}) {
+			<-done
+			w.releaseEphemeralByInvocation(id)
+		}(id, done)
+	}
+	w.evictEphemeralIfNeeded()
+	return nil
+}
+
+// releaseEphemeralByInvocation removes and releases the cached ephemeral
+// handle for id. Release runs outside the lock because backend Cleanup may
+// block; removing the entry first makes concurrent release idempotent.
+func (w *Workspace) releaseEphemeralByInvocation(id string) {
+	w.mu.Lock()
+	handle, ok := w.ephemeralHandles[id]
+	if !ok {
+		w.mu.Unlock()
+		return
+	}
+	delete(w.ephemeralHandles, id)
+	w.ephemeralOrder = removeInvocationOrder(w.ephemeralOrder, id)
+	w.mu.Unlock()
+	w.releaseEphemeralHandle(context.Background(), handle)
+}
+
+// evictEphemeralIfNeeded evicts the oldest cached invocation once the cache
+// exceeds its bound, releasing the evicted workspace outside the lock. It is
+// the bounded-leak fallback for invocations whose context is never canceled.
+func (w *Workspace) evictEphemeralIfNeeded() {
+	for {
+		w.mu.Lock()
+		if len(w.ephemeralOrder) <= ephemeralHandleCacheLimit {
+			w.mu.Unlock()
+			return
+		}
+		id := w.ephemeralOrder[0]
+		w.ephemeralOrder = w.ephemeralOrder[1:]
+		handle, ok := w.ephemeralHandles[id]
+		if ok {
+			delete(w.ephemeralHandles, id)
+		}
+		w.mu.Unlock()
+		if !ok {
+			continue
+		}
+		w.releaseEphemeralHandle(context.Background(), handle)
+	}
+}
+
+func removeInvocationOrder(order []string, id string) []string {
+	for i, v := range order {
+		if v == id {
+			return append(order[:i], order[i+1:]...)
+		}
+	}
+	return order
 }
 
 // toFile converts a codeexecutor.File into the public File type.

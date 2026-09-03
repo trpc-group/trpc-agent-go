@@ -90,8 +90,13 @@ func (r *workspaceRuntime) RunProgram(
 	// Reject layout directories that are symlinks outside the workspace
 	// before mkdir/upload. In PerSession mode a previous turn can leave
 	// skills/work/runs/out as symlinks; mkdir -p and UploadFiles would
-	// otherwise follow them.
-	if err := r.ensureLayoutDirs(ctx, ws, skillsDir, workDir, outDir, runsDir); err != nil {
+	// otherwise follow them. runDir is included unconditionally: when
+	// Stdin is empty the per-run directory is only created by the remote
+	// "mkdir -p" in buildRunCommand, which silently follows a planted
+	// leaf symlink, so strip/verify it here too.
+	if err := r.ensureLayoutDirs(
+		ctx, ws, skillsDir, workDir, outDir, runsDir, runDir,
+	); err != nil {
 		return codeexecutor.RunResult{}, err
 	}
 	baseEnv := map[string]string{
@@ -171,10 +176,9 @@ func (r *workspaceRuntime) prepareStdinRedirect(
 		return "", nil
 	}
 	stdinPath := path.Join(runDir, "stdin")
-	// runDir may not exist yet; create it and strip a leaf symlink.
-	if err := r.ensureLayoutDirs(ctx, ws, runDir); err != nil {
-		return "", err
-	}
+	// runDir was already created and leaf-symlink-stripped by RunProgram's
+	// unconditional ensureLayoutDirs call; only the stdin file itself needs
+	// symlink stripping here.
 	if err := r.removeSymlinksBatch(ctx, []string{stdinPath}, ws.Path); err != nil {
 		return "", err
 	}
@@ -491,8 +495,32 @@ func (r *workspaceRuntime) ExecuteInline(
 // and returns the captured stdout. The script is wrapped in `bash -c`
 // so the caller can pass a multi-line script with redirects/pipes
 // without worrying about the shell's top-level parsing rules.
+// outputSink is the accumulator contract shared by cappedBuffer (line
+// semantics: a newline is inserted between OutputMessages) and rawBuffer
+// (byte-exact: no separator).
+type outputSink interface {
+	write(string)
+	string() string
+}
+
 func (r *workspaceRuntime) runBash(
 	ctx context.Context, script string, timeout time.Duration,
+) (string, error) {
+	return r.runBashWithMode(ctx, script, timeout, false)
+}
+
+// runBashRaw is runBash with byte-exact stdout accumulation: no newline is
+// inserted between SDK OutputMessages. Use only for NUL-framed infra scripts
+// (resolveSandboxPath/Ancestor/Paths, listFilesByGlob), whose records are
+// delimited by NUL bytes and would be corrupted by an injected newline.
+func (r *workspaceRuntime) runBashRaw(
+	ctx context.Context, script string, timeout time.Duration,
+) (string, error) {
+	return r.runBashWithMode(ctx, script, timeout, true)
+}
+
+func (r *workspaceRuntime) runBashWithMode(
+	ctx context.Context, script string, timeout time.Duration, raw bool,
 ) (string, error) {
 	sb, err := r.sandbox()
 	if err != nil {
@@ -520,9 +548,14 @@ func (r *workspaceRuntime) runBash(
 	// millions of files). Without this, the SDK's Execution struct
 	// would accumulate all output in memory.
 	var (
-		stdoutBuf cappedBuffer
+		stdoutBuf outputSink
 		stderrBuf cappedBuffer
 	)
+	if raw {
+		stdoutBuf = &rawBuffer{}
+	} else {
+		stdoutBuf = &cappedBuffer{}
+	}
 	handlers := &osb.ExecutionHandlers{
 		OnStdout: func(m osb.OutputMessage) error {
 			stdoutBuf.write(m.Text)
@@ -769,6 +802,40 @@ func (b *cappedBuffer) write(s string) {
 }
 
 func (b *cappedBuffer) string() string {
+	return b.buf.String()
+}
+
+// rawBuffer accumulates string data up to maxCommandOutputBytes without
+// inserting any separator between SDK OutputMessages. It backs NUL-framed
+// infrastructure scripts (resolveSandboxPath/Ancestor/Paths,
+// listFilesByGlob) whose records are delimited by NUL bytes: a newline
+// injected between SSE events — cappedBuffer's line semantics — would
+// corrupt a record that the server split across buffer boundaries.
+//
+// Do NOT use rawBuffer for line-oriented commands: it would glue a
+// multi-event line-oriented stream into one run-on blob.
+type rawBuffer struct {
+	buf       strings.Builder
+	truncated bool
+}
+
+func (b *rawBuffer) write(s string) {
+	if b.truncated {
+		return
+	}
+	if b.buf.Len()+len(s) > maxCommandOutputBytes {
+		remaining := maxCommandOutputBytes - b.buf.Len()
+		if remaining > 0 {
+			b.buf.WriteString(s[:remaining])
+		}
+		fmt.Fprintf(&b.buf, "\n[output truncated: exceeded %d bytes]\n", maxCommandOutputBytes)
+		b.truncated = true
+		return
+	}
+	b.buf.WriteString(s)
+}
+
+func (b *rawBuffer) string() string {
 	return b.buf.String()
 }
 

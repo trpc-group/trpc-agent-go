@@ -149,6 +149,44 @@ func TestExecTool_EphemeralWorkspaceReleasedAfterCall(t *testing.T) {
 		"session-scoped workspace must not be released after each call")
 }
 
+// TestExecTool_NonSessionalBackgroundReleasesEphemeralWorkspace covers the
+// twin branch of startInteractive: a non-sessional executor (no
+// InteractiveProgramRunner) with background/tty requested returns the
+// "interactive sessions are not supported" error, but the workspace was
+// already acquired for the attempt and must still be released. Without this,
+// every such call through a long-lived process leaks one backend workspace.
+func TestExecTool_NonSessionalBackgroundReleasesEphemeralWorkspace(t *testing.T) {
+	manager := &ephemeralProbeManager{}
+	exec := &staleRetryExec{
+		eng: codeexecutor.NewEngine(
+			manager,
+			&nonInteractiveFS{},
+			&nonInteractiveRunner{},
+		),
+	}
+	tl := NewExecTool(exec)
+	args, err := json.Marshal(execInput{
+		Command:    "echo ok",
+		Background: true,
+		Timeout:    timeoutSecSmall,
+	})
+	require.NoError(t, err)
+
+	// Empty session ID -> ephemeral workspace; non-sessional executor +
+	// background=true -> callNonSessional's interactive-unsupported branch.
+	_, err = tl.Call(ephemeralEmptySessionCtx(), args)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "interactive sessions")
+
+	creates, cleans := manager.counts()
+	require.Equal(t, 1, creates,
+		"one ephemeral workspace must be created for the attempt")
+	require.Equal(t, 1, cleans,
+		"the background error branch must release the ephemeral workspace")
+	require.Equal(t, manager.lastCreated(), manager.lastCleaned(),
+		"the acquired workspace must be the one released")
+}
+
 // replacingEphemeralManager creates every workspace at one deterministic
 // path and records Cleanup so tests can prove a stale handle does not
 // delete a replacement generation that reused that path.

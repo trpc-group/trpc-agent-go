@@ -123,6 +123,13 @@ Common backends:
   Remote self-hosted OpenSandbox. Good when you want isolation without
   managing local Docker yourself. See
   `examples/codeexecution/opensandbox`.
+
+  > **Platform note**: directory staging (skill staging / `PutDirectory` /
+  > `StageDirectory`) pins the host tree with `openat` + `O_NOFOLLOW` to
+  > close the symlink-swap race. Linux / BSD / Darwin support this
+  > natively; **Windows hosts do not**, so directory staging fail-closes
+  > with an error. Single-file uploads (`PutFiles`) and program execution
+  > are unaffected; the sandbox itself always runs remotely.
 - `e2b.New(...)`
   Managed cloud sandbox (when the e2b backend is enabled in your tree).
 

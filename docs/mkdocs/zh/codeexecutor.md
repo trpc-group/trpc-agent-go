@@ -120,6 +120,12 @@ agent := llmagent.New(
 - `opensandbox.New(...)`
   远程自托管 OpenSandbox。不想本地管 Docker 时可用；示例见
   `examples/codeexecution/opensandbox`。
+
+  > **平台限制**：目录暂存（skill 暂存 / `PutDirectory` /
+  > `StageDirectory`）需要在宿主机上固定目录树（`openat` +
+  > `O_NOFOLLOW`）来关闭符号链接替换竞态。Linux / BSD / Darwin 原生支持；
+  > **Windows 宿主机不支持**，目录暂存会直接报错（fail-closed）。单文件
+  > 上传（`PutFiles`）与程序执行不受影响，沙箱本身始终运行在远端。
 - `e2b.New(...)`
   云托管沙箱（在启用 e2b 后端的树中）。
 
