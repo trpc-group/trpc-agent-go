@@ -7,6 +7,8 @@
 //
 //
 
+//go:build !windows
+
 package jupyter
 
 import (
