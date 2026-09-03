@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,16 @@ type fakeRunner struct {
 	lastInjectedContextMessages []model.Message
 	lastInstruction             string
 	lastRuntimeState            map[string]any
+}
+
+type delayedRunner struct {
+	*fakeRunner
+	delay time.Duration
+}
+
+func (r *delayedRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
+	time.Sleep(r.delay)
+	return r.fakeRunner.Run(ctx, userID, sessionID, message, runOpts...)
 }
 
 func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
@@ -587,6 +598,20 @@ func TestInferenceValidation(t *testing.T) {
 	}
 	_, err = Inference(context.Background(), &fakeRunner{runErr: errors.New("boom")}, input, &evalset.SessionInput{UserID: "user"}, "session", nil)
 	assert.Error(t, err)
+}
+
+func TestInferenceTracksInferenceDuration(t *testing.T) {
+	delay := 20 * time.Millisecond
+	r := &delayedRunner{
+		fakeRunner: &fakeRunner{events: []*event.Event{makeFinalEvent("answer")}},
+		delay:      delay,
+	}
+	result, err := Inference(context.Background(), r, []*evalset.Invocation{{
+		UserContent: &model.Message{Role: model.RoleUser, Content: "question"},
+	}}, &evalset.SessionInput{UserID: "user"}, "session", nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.GreaterOrEqual(t, result.InferenceDuration, delay)
 }
 
 func TestInference_CollectsExecutionTracesInInvocationOrder(t *testing.T) {
@@ -1182,6 +1207,29 @@ func TestInferenceWithConversationScenarioSuccess(t *testing.T) {
 	if assert.NotNil(t, result.Invocations[1].FinalResponse) {
 		assert.Equal(t, "Assistant reply 2.", result.Invocations[1].FinalResponse.Content)
 	}
+}
+
+func TestInferenceWithConversationScenarioInferenceError(t *testing.T) {
+	delay := 20 * time.Millisecond
+	conv := &stubScenarioConversation{
+		decisions: []*usersimulation.Decision{{
+			Message: &model.Message{Role: model.RoleUser, Content: "Hello"},
+		}},
+	}
+	result, err := InferenceWithConversationScenario(
+		context.Background(),
+		&delayedRunner{fakeRunner: &fakeRunner{runErr: errors.New("runner failed")}, delay: delay},
+		&stubScenarioSimulator{conversation: conv},
+		"case-1",
+		&evalset.ConversationScenario{ConversationPlan: "Finish the task."},
+		&evalset.SessionInput{UserID: "target-user"},
+		"session-1",
+		nil,
+	)
+	assert.Error(t, err)
+	require.NotNil(t, result)
+	assert.GreaterOrEqual(t, result.InferenceDuration, delay)
+	assert.True(t, conv.closed)
 }
 
 func TestInferenceWithConversationScenarioValidation(t *testing.T) {

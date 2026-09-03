@@ -40,6 +40,7 @@ type InferenceResult struct {
 	UserID       string                // UserID 是推理阶段用户标识
 	Status       status.EvalStatus     // Status 是推理状态
 	ErrorMessage string                // ErrorMessage 是推理失败原因
+	InferenceDuration time.Duration   // InferenceDuration 是实际 agent 推理耗时
 }
 
 // EvaluateRequest 是评估请求
@@ -59,6 +60,7 @@ type EvaluateConfig struct {
 type EvalSetRunResult struct {
 	AppName         string                       // AppName 是应用名
 	EvalSetID       string                       // EvalSetID 是评估集标识
+	InferenceDuration time.Duration             // InferenceDuration 是本次 run 的实际 agent 推理耗时
 	EvalCaseResults []*evalresult.EvalCaseResult // EvalCaseResults 是评估用例结果
 }
 

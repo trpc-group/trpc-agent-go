@@ -336,6 +336,10 @@ components:
         executionTime:
           type: integer
           description: Nanoseconds encoded by Go duration JSON marshaling.
+        inferenceDuration:
+          type: integer
+          format: int64
+          description: Nanoseconds encoded by Go duration JSON marshaling.
         evalCases:
           type: array
           items:
@@ -349,6 +353,10 @@ components:
           type: string
         overallStatus:
           $ref: "#/components/schemas/EvalStatus"
+        inferenceDuration:
+          type: integer
+          format: int64
+          description: Nanoseconds encoded by Go duration JSON marshaling.
         evalCaseResults:
           type: array
           items:
@@ -617,6 +625,10 @@ components:
           type: string
         userId:
           type: string
+        inferenceDuration:
+          type: integer
+          format: int64
+          description: Nanoseconds encoded by Go duration JSON marshaling.
     EvalMetricResult:
       type: object
       properties:

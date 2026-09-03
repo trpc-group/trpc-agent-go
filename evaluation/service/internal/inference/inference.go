@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
@@ -33,6 +34,8 @@ import (
 type Result struct {
 	Invocations     []*evalset.Invocation
 	ExecutionTraces []*trace.Trace
+	// InferenceDuration is the total time spent executing the target agent.
+	InferenceDuration time.Duration
 }
 
 // Inference executes the agent against the provided invocations.
@@ -55,26 +58,32 @@ func Inference(
 	// Accumulate each invocation response.
 	responseInvocations := make([]*evalset.Invocation, 0, len(invocations))
 	executionTraces := make([]*trace.Trace, 0, len(invocations))
+	var inferenceDuration time.Duration
 	for _, invocation := range invocations {
+		startTime := time.Now()
 		responseInvocation, executionTrace, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation, runOptions, opts)
+		inferenceDuration += time.Since(startTime)
 		if err != nil && responseInvocation == nil && executionTrace == nil {
 			return &Result{
-				Invocations:     responseInvocations,
-				ExecutionTraces: executionTraces,
+				Invocations:       responseInvocations,
+				ExecutionTraces:   executionTraces,
+				InferenceDuration: inferenceDuration,
 			}, err
 		}
 		responseInvocations = append(responseInvocations, responseInvocation)
 		executionTraces = append(executionTraces, executionTrace)
 		if err != nil {
 			return &Result{
-				Invocations:     responseInvocations,
-				ExecutionTraces: executionTraces,
+				Invocations:       responseInvocations,
+				ExecutionTraces:   executionTraces,
+				InferenceDuration: inferenceDuration,
 			}, err
 		}
 	}
 	return &Result{
-		Invocations:     responseInvocations,
-		ExecutionTraces: executionTraces,
+		Invocations:       responseInvocations,
+		ExecutionTraces:   executionTraces,
+		InferenceDuration: inferenceDuration,
 	}, nil
 }
 
@@ -113,7 +122,11 @@ func InferenceWithConversationScenario(
 	if conversation == nil {
 		return nil, errors.New("user simulator conversation is nil")
 	}
+	var inferenceDuration time.Duration
 	defer func() {
+		if result != nil {
+			result.InferenceDuration = inferenceDuration
+		}
 		closeErr := conversation.Close()
 		if closeErr != nil {
 			err = errors.Join(err, fmt.Errorf("close user simulator conversation: %w", closeErr))
@@ -127,36 +140,39 @@ func InferenceWithConversationScenario(
 	for {
 		decision, nextErr := conversation.Next(ctx, &usersimulation.TurnRequest{LastTargetResponse: lastTargetResponse})
 		if nextErr != nil {
-			return nil, fmt.Errorf("simulate next turn: %w", nextErr)
+			return result, fmt.Errorf("simulate next turn: %w", nextErr)
 		}
 		if decision == nil {
-			return nil, errors.New("simulate next turn: decision is nil")
+			return result, errors.New("simulate next turn: decision is nil")
 		}
 		if decision.Stop {
 			return result, nil
 		}
 		if decision.Message == nil {
-			return nil, errors.New("simulate next turn: message is nil")
+			return result, errors.New("simulate next turn: message is nil")
 		}
 		userMessage := *decision.Message
 		if userMessage.Role == "" {
 			userMessage.Role = model.RoleUser
 		}
 		if userMessage.Role != model.RoleUser {
-			return nil, fmt.Errorf("simulate next turn: invalid message role %q", userMessage.Role)
+			return result, fmt.Errorf("simulate next turn: invalid message role %q", userMessage.Role)
 		}
+		startTime := time.Now()
 		responseInvocation, executionTrace, nextErr := inferenceInvocation(ctx, r, sessionID, initialSession, &evalset.Invocation{
 			UserContent: &userMessage,
 		}, runOptions, nil)
+		inferenceDuration += time.Since(startTime)
 		if nextErr != nil {
-			return nil, nextErr
+			return result, nextErr
 		}
 		if responseInvocation.FinalResponse == nil {
-			return nil, errors.New("target final response is nil")
+			return result, errors.New("target final response is nil")
 		}
 		result.Invocations = append(result.Invocations, responseInvocation)
 		result.ExecutionTraces = append(result.ExecutionTraces, executionTrace)
 		lastTargetResponse = responseInvocation.FinalResponse
+		result.InferenceDuration = inferenceDuration
 	}
 }
 

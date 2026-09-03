@@ -1,6 +1,6 @@
 # EvalResult
 
-EvalResult holds evaluation output. One evaluation run produces an EvalSetResult, organizes results by EvalCase, and records each metric's score, status, and per-turn details.
+EvalResult holds evaluation output. One evaluation run produces an EvalSetResult, organizes results by EvalCase, and records each metric's score, status, and per-turn details. Persisted EvalSetResult values keep inference duration at case/run level; sum the case results when a set-level total is needed.
 
 ## Structure Definition
 
@@ -8,6 +8,7 @@ The EvalSetResult structure is defined as follows.
 
 ```go
 import (
+	"time"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
@@ -36,6 +37,7 @@ type EvalCaseResult struct {
 	EvalMetricResultPerInvocation []*EvalMetricResultPerInvocation // EvalMetricResultPerInvocation is the list of per-turn metric results.
 	SessionID                     string                           // SessionID is the session identifier.
 	UserID                        string                           // UserID is the user identifier.
+	InferenceDuration            time.Duration                    // InferenceDuration is the actual agent inference time for this case run.
 }
 
 // EvalMetricResult represents the result of one evaluation metric.
@@ -71,7 +73,9 @@ type RubricScore struct {
 }
 ```
 
-Overall results write each metric output into `overallEvalMetricResults`. Per-turn details are written into `evalMetricResultPerInvocation` and retain both `actualInvocation` and `expectedInvocation` traces for troubleshooting. `EvalCaseResult.score` is the evaluation case-level aggregated score, and `finalEvalStatus` is the evaluation case-level final status. Both are computed by the Service case result aggregator.
+Overall results write each metric output into `overallEvalMetricResults`. Per-turn details are written into `evalMetricResultPerInvocation` and retain both `actualInvocation` and `expectedInvocation` traces for troubleshooting. `EvalCaseResult.score` is the evaluation case-level aggregated score, `finalEvalStatus` is the evaluation case-level final status, and `inferenceDuration` is the actual agent inference time for this case run. Both score and status are computed by the Service case result aggregator.
+
+When encoded with Go's standard JSON encoder, `inferenceDuration` is an integer number of nanoseconds; for example, `1.2s` is encoded as `1200000000`. The persisted EvalSetResult does not contain a separate set-level `inferenceDuration`; sum the case-level values when needed.
 
 `details.value` in metric details is typed score detail. It does not replace `score` and does not participate in the framework's default threshold checks. The default pass logic is still determined by the evaluator's numeric `score` and `threshold`. If `details.value` is present, `kind` selects the corresponding field to read; an omitted `details.value` means the evaluator did not provide typed detail. Numeric zero and boolean false are valid values. Typed values are intended for per-turn metric details; overall metric details keep aggregated numeric results and do not aggregate typed values by default. Platforms that need to distinguish numeric scores, boolean conclusions, or categorical labels can read `details.value.kind` and the corresponding field:
 
@@ -93,6 +97,7 @@ Below is an example result file snippet.
   "evalCaseResults": [
     {
       "evalId": "calc_add",
+      "inferenceDuration": 120000000,
       "score": 1,
       "finalEvalStatus": "passed",
       "overallEvalMetricResults": [
