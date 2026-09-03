@@ -424,3 +424,64 @@ func TestWorkspace_StaleEphemeralHandleDoesNotCleanupReplacement(t *testing.T) {
 		"replacement generation at the deterministic path must survive")
 	require.FileExists(t, filepath.Join(path, "generation.txt"))
 }
+
+// TestWorkspace_EphemeralCacheEvictsOldest covers the bounded-cache eviction
+// path: once the cache exceeds its limit, the oldest invocation's workspace
+// is released (bounded leak) instead of growing without bound.
+func TestWorkspace_EphemeralCacheEvictsOldest(t *testing.T) {
+	manager := &ephemeralProbeManager{}
+	backend := &staleOperationBackend{}
+	eng := codeexecutor.NewEngine(manager, backend, backend)
+	ws := New(&stubFSExec{eng: eng}, nil)
+	require.NotNil(t, ws)
+
+	// Fill the cache beyond its bound: each new invocation (unique
+	// InvocationID, empty session) caches one handle and, past the limit,
+	// evicts the oldest.
+	total := ephemeralHandleCacheLimit + 2
+	for i := 0; i < total; i++ {
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{}),
+			agent.WithInvocationID("evict-"+strconv.Itoa(i)),
+		)
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		require.NoError(t, ws.PutFiles(ctx, codeexecutor.PutFile{
+			Path:    "work/a.txt",
+			Content: []byte("a"),
+		}))
+	}
+
+	creates, cleans := manager.counts()
+	require.Equal(t, total, creates,
+		"each invocation creates one ephemeral workspace")
+	require.Equal(t, total-ephemeralHandleCacheLimit, cleans,
+		"overflow beyond the cache bound must be released (bounded leak)")
+}
+
+// TestWorkspace_EphemeralNoCacheFallsBackToPerCallRelease covers the
+// cache == nil defensive branch: a Workspace without a cache (not built via
+// New) cannot key by invocation, so it falls back to per-call release.
+func TestWorkspace_EphemeralNoCacheFallsBackToPerCallRelease(t *testing.T) {
+	manager := &ephemeralProbeManager{}
+	backend := &staleOperationBackend{}
+	eng := codeexecutor.NewEngine(manager, backend, backend)
+	ws := New(&stubFSExec{eng: eng}, nil)
+	require.NotNil(t, ws)
+	ws.cache = nil // simulate a Workspace not constructed via New
+
+	eInv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationID("no-cache"),
+	)
+	eCtx := agent.NewInvocationContext(context.Background(), eInv)
+
+	require.NoError(t, ws.PutFiles(eCtx, codeexecutor.PutFile{
+		Path:    "work/a.txt",
+		Content: []byte("a"),
+	}))
+
+	creates, cleans := manager.counts()
+	require.Equal(t, 1, creates)
+	require.Equal(t, 1, cleans,
+		"cache-less fallback must release the workspace after the call")
+}
