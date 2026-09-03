@@ -38,6 +38,7 @@ import (
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/runoutcome"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
@@ -7785,8 +7786,139 @@ func TestRunner_CancelEmitsRunnerCompletion(t *testing.T) {
 	}
 
 	require.Equal(t, 1, completionCount, "should receive exactly one runner-completion after cancel")
+	require.Nil(t, completion.RunOutcome, "generic runner cancellation must not be reported as AG-UI cancellation")
 	require.NotNil(t, completion.ExecutionTrace)
 	require.Equal(t, atrace.TraceStatusIncomplete, completion.ExecutionTrace.Status)
+}
+
+func TestRunner_ExplicitCancelAnnotatesRunnerCompletion(t *testing.T) {
+	const (
+		requestID = "req-cancel-run-outcome"
+		userID    = "u"
+		sessionID = "s"
+		maxWait   = time.Second
+	)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+
+	var hookStatus event.RunOutcomeStatus
+	var hookSawOutcome bool
+	sessionService := sessioninmemory.NewSessionService(
+		sessioninmemory.WithAppendEventHook(
+			func(ctx *session.AppendEventContext, next func() error) error {
+				if ctx.Event != nil && ctx.Event.RunOutcome != nil {
+					hookSawOutcome = true
+					hookStatus = ctx.Event.RunOutcome.Status
+				}
+				return next()
+			},
+		),
+	)
+	r := NewRunner(
+		"app",
+		&tickCtxAgent{name: "t", interval: 10 * time.Millisecond},
+		WithSessionService(sessionService),
+	)
+
+	events, err := r.Run(
+		ctx,
+		userID,
+		sessionID,
+		model.NewUserMessage("hi"),
+		agent.WithRequestID(requestID),
+	)
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(maxWait):
+		t.Fatal("did not receive first event")
+	case _, ok := <-events:
+		require.True(t, ok)
+	}
+	cancel(runoutcome.ErrExplicitCancel)
+
+	var completion *event.Event
+	deadline := time.After(maxWait)
+	for events != nil {
+		select {
+		case evt, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
+			if evt != nil && evt.IsRunnerCompletion() {
+				completion = evt
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for channel to close")
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.RunOutcome)
+	require.Equal(t, event.RunOutcomeStatusCancelled, completion.RunOutcome.Status)
+	require.True(t, hookSawOutcome)
+	require.Equal(t, event.RunOutcomeStatusCancelled, hookStatus)
+}
+
+func TestRunner_TimeoutAnnotatesRunnerCompletion(t *testing.T) {
+	const (
+		requestID = "req-timeout-run-outcome"
+		userID    = "u"
+		sessionID = "s"
+		maxWait   = time.Second
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	var hookStatus event.RunOutcomeStatus
+	var hookSawOutcome bool
+	sessionService := sessioninmemory.NewSessionService(
+		sessioninmemory.WithAppendEventHook(
+			func(ctx *session.AppendEventContext, next func() error) error {
+				if ctx.Event != nil && ctx.Event.RunOutcome != nil {
+					hookSawOutcome = true
+					hookStatus = ctx.Event.RunOutcome.Status
+				}
+				return next()
+			},
+		),
+	)
+	r := NewRunner(
+		"app",
+		&tickCtxAgent{name: "t", interval: 10 * time.Millisecond},
+		WithSessionService(sessionService),
+	)
+
+	events, err := r.Run(
+		ctx,
+		userID,
+		sessionID,
+		model.NewUserMessage("hi"),
+		agent.WithRequestID(requestID),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	deadline := time.After(maxWait)
+	for events != nil {
+		select {
+		case evt, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
+			if evt != nil && evt.IsRunnerCompletion() {
+				completion = evt
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for channel to close")
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.RunOutcome)
+	require.Equal(t, event.RunOutcomeStatusTimedOut, completion.RunOutcome.Status)
+	require.True(t, hookSawOutcome)
+	require.Equal(t, event.RunOutcomeStatusTimedOut, hookStatus)
 }
 
 func TestRunner_CancelPersistsInterruptedPartialAssistant(t *testing.T) {
