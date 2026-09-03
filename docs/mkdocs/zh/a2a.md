@@ -916,7 +916,7 @@ subAgent, _ := a2aagent.New(
 
 关于 A2A 协议中工具调用、代码执行、思考内容等事件的传递规范，以及 Metadata 字段定义、ADK 兼容模式、分布式追踪等详细说明，请参考独立文档：
 
-**[A2A 协议交互规范](a2a-interaction.md)**
+**[A2A 协议交互规范](https://trpc-group.github.io/trpc-agent-go/zh/a2a-interaction/)**
 
 该文档定义了 trpc-agent-go 在 A2A 协议之上的扩展规范，是 Client 和 Server 实现的标准参考。
 
