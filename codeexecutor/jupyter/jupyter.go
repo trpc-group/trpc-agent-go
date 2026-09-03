@@ -198,53 +198,75 @@ func New(opts ...Option) (*CodeExecutor, error) {
 		return nil, fmt.Errorf("failed to start jupyter gateway: %v", err)
 	}
 
-	// lines carries stderr lines from a dedicated scanner goroutine so the
-	// select loop below never blocks on I/O. The goroutine exits when:
-	//   • the subprocess closes its stderr (normal exit), OR
-	//   • stderrPipe is closed by cleanup().
-	// After startup, if New() returned successfully, unread lines are
-	// discarded via the context-aware default branch to avoid blocking the
-	// goroutine indefinitely while the gateway runs.
+	lines, startupDone := c.startStderrScanner(stderrPipe)
+	return c.waitForGatewayReady(lines, startupDone)
+}
+
+// startStderrScanner spawns a goroutine that forwards subprocess stderr lines
+// to the returned channel. The goroutine blocks on each send until startupDone
+// is closed (guaranteeing no line is dropped during startup), then switches to
+// a non-blocking discard loop so the subprocess pipe never fills up at runtime.
+// The channel is closed when the scanner reaches EOF or the context is cancelled.
+func (c *CodeExecutor) startStderrScanner(pipe io.ReadCloser) (<-chan string, chan struct{}) {
 	lines := make(chan string, 64)
+	startupDone := make(chan struct{})
 	go func() {
 		defer close(lines)
-		sc := bufio.NewScanner(stderrPipe)
+		sc := bufio.NewScanner(pipe)
 		for sc.Scan() {
 			select {
 			case lines <- sc.Text():
 			case <-c.ctx.Done():
-				// Context cancelled (cleanup in progress): drain remaining
-				// buffered data so the subprocess can flush, then exit.
 				for sc.Scan() {
 				}
 				return
-			default:
-				// lines channel is full (startup poll loop has exited after
-				// New() returned successfully). Discard the line so we keep
-				// draining stderr and the subprocess never blocks on a full
-				// pipe buffer.
+			case <-startupDone:
+				// Startup complete: switch to non-blocking discard so the
+				// subprocess can keep writing without filling the pipe.
+				for sc.Scan() {
+					select {
+					case lines <- sc.Text():
+					default:
+					case <-c.ctx.Done():
+						for sc.Scan() {
+						}
+						return
+					}
+				}
+				return
 			}
 		}
 	}()
+	return lines, startupDone
+}
 
+// waitForGatewayReady reads lines from the scanner channel and returns once
+// the gateway announces "is available at", or returns an error on timeout,
+// process exit, or a logged ERROR.
+func (c *CodeExecutor) waitForGatewayReady(lines <-chan string, startupDone chan struct{}) (*CodeExecutor, error) {
+	var err error
 	timeout := time.After(c.startTimeout)
 	for {
 		select {
 		case <-timeout:
+			close(startupDone)
 			c.cleanup()
 			return nil, fmt.Errorf("jupyter gateway startup timeout")
 		case line, ok := <-lines:
 			if !ok {
-				// Scanner reached EOF: subprocess has closed stderr (exited).
+				// EOF: subprocess closed stderr (exited). Call cleanup() so
+				// Wait() populates ProcessState before reading ExitCode.
+				close(startupDone)
+				c.cleanup()
 				exitCode := -1
 				if c.subprocess.ProcessState != nil {
 					exitCode = c.subprocess.ProcessState.ExitCode()
 				}
-				c.cleanup()
 				return nil, fmt.Errorf("jupyter gateway exited with code %d", exitCode)
 			}
 			if strings.Contains(line, "ERROR:") {
 				errorInfo := strings.Split(line, "ERROR:")[1]
+				close(startupDone)
 				c.cleanup()
 				return nil, fmt.Errorf("jupyter gateway error: %s", errorInfo)
 			}
@@ -257,9 +279,11 @@ func New(opts ...Option) (*CodeExecutor, error) {
 					WaitReadyTimeout: c.waitReadyTimeout,
 				})
 				if err != nil {
+					close(startupDone)
 					c.cleanup()
 					return nil, err
 				}
+				close(startupDone)
 				c.ws = localexec.NewRuntime("")
 				return c, nil
 			}

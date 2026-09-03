@@ -855,16 +855,14 @@ func TestScannerGoroutineExitsOnContextCancel(t *testing.T) {
 	}
 }
 
-// TestNewExitedWithKnownExitCode verifies that when the subprocess exits and
-// ProcessState is populated before the pipe EOF is observed, the exit code is
-// correctly extracted. This covers the ProcessState.ExitCode() branch inside
-// the !ok case.
+// TestNewExitedWithKnownExitCode verifies that when the subprocess exits, the
+// exit code is correctly extracted. Now that cleanup() (which calls Wait()) is
+// invoked before reading ProcessState, the real exit code should always be
+// available.
 func TestNewExitedWithKnownExitCode(t *testing.T) {
 	tmp := t.TempDir()
 	fake := filepath.Join(tmp, "python")
-	// Script writes one stderr line then exits with code 42, giving the parent
-	// time to call Wait() (and thus populate ProcessState) before the pipe
-	// is fully drained and EOF is detected.
+	// Script writes one stderr line then exits with a known code.
 	script := "#!/bin/sh\n" +
 		"for a in \"$@\"; do\n" +
 		"  if [ \"$a\" = \"--version\" ]; then exit 0; fi\n" +
@@ -884,7 +882,53 @@ func TestNewExitedWithKnownExitCode(t *testing.T) {
 		WithWaitReadyTimeout(100*time.Millisecond),
 	)
 	require.Error(t, err)
-	// The error should mention the exit code (either 42 or -1 depending on
-	// whether ProcessState was populated before EOF; both are valid).
-	assert.Contains(t, err.Error(), "jupyter gateway exited with code")
+	// cleanup() now calls Wait() before ExitCode() is read, so the real
+	// exit code (42) must be present in the error message.
+	assert.Contains(t, err.Error(), "jupyter gateway exited with code 42",
+		"expected real exit code 42 in error, got: %v", err)
+}
+
+// TestNewReadyLineNotDroppedAfter64Lines verifies that the startup ready line
+// is never discarded even when the gateway emits more than 64 lines of output
+// before announcing "is available at". This is a regression test for the
+// default-discard-during-startup bug.
+func TestNewReadyLineNotDroppedAfter64Lines(t *testing.T) {
+	tmp := t.TempDir()
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failSrv.Close()
+
+	parsed, err := url.Parse(failSrv.URL)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(parsed.Port())
+	require.NoError(t, err)
+
+	fake := filepath.Join(tmp, "python")
+	// Emit 100 lines of noise BEFORE the ready line, far exceeding the 64-
+	// line channel buffer. The ready line must still be observed by New().
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"--version\" ]; then exit 0; fi\n" +
+		"done\n" +
+		"i=0; while [ $i -lt 100 ]; do echo \"noise line $i\" >&2; i=$((i+1)); done\n" +
+		"echo \"[KernelGatewayApp] Jupyter Kernel Gateway is available at http://127.0.0.1:8888\" >&2\n" +
+		"while :; do sleep 1; done\n"
+	require.NoError(t, os.WriteFile(fake, []byte(script), 0o755))
+
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", tmp+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	_, err = New(
+		WithPort(port),
+		WithStartTimeout(8*time.Second),
+		WithWaitReadyTimeout(3*time.Second),
+	)
+	// NewClient will fail (the endpoint returns 500), but the failure must be
+	// from NewClient — not a startup timeout. A startup timeout would mean the
+	// ready line was dropped.
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "startup timeout",
+		"ready line was dropped (channel buffer full during startup): %v", err)
 }
