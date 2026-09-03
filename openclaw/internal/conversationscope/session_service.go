@@ -72,6 +72,10 @@ func WrapSessionService(next session.Service) session.Service {
 	window, hasWindow := next.(session.WindowService)
 	searchable, hasSearch := next.(session.SearchableService)
 	initializer, hasInitializer := next.(session.StateInitializationService)
+	if availability, ok := next.(session.StateInitializationAvailability); ok &&
+		!availability.StateInitializationAvailable() {
+		hasInitializer = false
+	}
 	var wrapped session.Service
 	switch {
 	case hasWindow && hasSearch:
