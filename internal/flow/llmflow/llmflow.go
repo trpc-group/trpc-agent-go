@@ -184,7 +184,8 @@ func New(
 	}
 }
 
-// Run executes the flow in a loop until completion.
+// Run executes the flow in a loop until the invocation completes or the
+// context is cancelled.
 func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, f.channelBufferSize) // Configurable buffered channel for events.
 
@@ -571,6 +572,11 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 	}
 }
 
+// emitStartEventAndWait emits the invocation-start event into eventChan and
+// waits for a completion notice from the notice channel. If the notice does
+// not arrive within timeout, the wait times out; the error is forwarded to
+// handleStartEventWaitError which decides whether it is fatal or recoverable.
+// A context cancellation or deadline is always propagated as-is.
 func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invocation,
 	eventChan chan<- *event.Event, timeout time.Duration) (result error) {
 	ctx, span, started := startLatencySpan(

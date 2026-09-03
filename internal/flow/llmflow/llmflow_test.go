@@ -4985,6 +4985,9 @@ func TestWaitEventTimeout_NoDeadline(t *testing.T) {
 	require.Equal(t, 5*time.Second, timeout)
 }
 
+// TestEmitStartEventAndWaitDeadlineExceeded verifies that emitStartEventAndWait
+// propagates context.DeadlineExceeded when the parent deadline expires before
+// the completion notice arrives.
 func TestEmitStartEventAndWaitDeadlineExceeded(t *testing.T) {
 	f := &Flow{}
 	inv := agent.NewInvocation(agent.WithInvocationID("deadline-repro"))
@@ -4997,6 +5000,9 @@ func TestEmitStartEventAndWaitDeadlineExceeded(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+// TestEmitStartEventAndWaitNoticeTimeoutContinues verifies that when no
+// completion notice arrives within the timeout window, emitStartEventAndWait
+// returns nil (recoverable) on a live context and does not block the flow.
 func TestEmitStartEventAndWaitNoticeTimeoutContinues(t *testing.T) {
 	f := &Flow{}
 	inv := agent.NewInvocation(agent.WithInvocationID("notice-timeout-repro"))
@@ -5014,6 +5020,10 @@ func TestEmitStartEventAndWaitNoticeTimeoutContinues(t *testing.T) {
 	require.GreaterOrEqual(t, time.Since(start), 150*time.Millisecond)
 }
 
+// TestHandleStartEventWaitError is a table-driven suite that covers all
+// branches of handleStartEventWaitError: propagation of cancellation and
+// deadline errors, nil pass-through, timeout racing an expired context, and
+// timeout on a still-live context treated as recoverable.
 func TestHandleStartEventWaitError(t *testing.T) {
 	t.Run("propagates cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
