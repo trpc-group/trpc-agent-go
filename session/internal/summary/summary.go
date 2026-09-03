@@ -395,7 +395,7 @@ func shouldGenerateSummary(
 		if report != nil {
 			report.Trigger = trigger
 		}
-		recordSummaryGate(ctx, true, trigger)
+		recordPublishedTrigger(ctx, true, trigger)
 		return true
 	}
 	checkTmp := tmp
@@ -410,11 +410,7 @@ func shouldGenerateSummary(
 	}
 	attachRequestGapObservation(ctx, base, checkTmp, previousBoundary)
 	fired := ShouldSummarize(ctx, m, checkTmp)
-	if report != nil {
-		recordSummaryGate(ctx, fired, report.Trigger)
-		return fired
-	}
-	recordSummaryGate(ctx, fired, summary.Trigger{})
+	recordAttemptGate(ctx, fired)
 	return fired
 }
 

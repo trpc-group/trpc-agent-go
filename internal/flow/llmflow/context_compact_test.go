@@ -625,6 +625,11 @@ func TestMaybeCompactContextBeforeLLM_LogsPostCountError(t *testing.T) {
 	require.Contains(t, logged, "outcome=post_count_error")
 	require.Contains(t, logged, "post_request_tokens=-1")
 	require.NotContains(t, logged, "outcome=success")
+	binding := summaryview.BindingFromInvocation(inv)
+	require.Contains(t, logged, fmt.Sprintf("summary_view_present=%t", binding.Present))
+	require.Contains(t, logged, fmt.Sprintf("summary_view_bound=%t", binding.Bound))
+	require.Contains(t, logged, fmt.Sprintf("summary_view_items=%d", binding.Items))
+	require.Contains(t, logged, fmt.Sprintf("binding_reason=%s", binding.Reason))
 }
 
 func TestMaybeCompactContextBeforeLLM_SummarizesSanitizedOrphanToolCall(

@@ -51,9 +51,14 @@ const (
 	// outcomeCascadeSuppressed reports a full-session target that was skipped
 	// because it was only requested as a branch cascade.
 	outcomeCascadeSuppressed = "cascade_suppressed"
-	// outcomeNoContent reports that no eligible content reached the summary
-	// model, so the model was never called.
+	// outcomeNoContent reports that the built-in summarizer published a
+	// trigger observation with no eligible content, so the model was never
+	// called.
 	outcomeNoContent = "no_content"
+	// outcomeUnobserved reports that this attempt's gate did not fire and no
+	// trigger observation was published for this attempt. That is diagnostic
+	// uncertainty, not proof of missing content or a failed threshold check.
+	outcomeUnobserved = "unobserved"
 	// outcomeUnsafeView reports outcomeNoContent caused by a model-visible
 	// view that exists but is not bound to the request the model saw.
 	outcomeUnsafeView = "unsafe_view"
@@ -135,13 +140,14 @@ const (
 type Attempt struct {
 	// ctx is the reporting context for this attempt. The Attempt owns it for
 	// the duration of one CreateSessionSummary call.
-	ctx       context.Context
-	startedAt time.Time
-	sess      *session.Session
-	filterKey string
-	before    summaryBoundaryMark
-	selection isummarycontext.EventSelection
-	modelCall isummarycontext.ModelCall
+	ctx        context.Context
+	startedAt  time.Time
+	sess       *session.Session
+	filterKey  string
+	before     summaryBoundaryMark
+	selection  isummarycontext.EventSelection
+	modelCall  isummarycontext.ModelCall
+	triggerObs isummarycontext.TriggerObservation
 
 	gate         summaryGate
 	skip         string
@@ -176,6 +182,7 @@ func BeginAttempt(
 	_, ctx = ensureSummaryReport(ctx)
 	ctx = isummarycontext.WithEventSelectionRecorder(ctx, &att.selection)
 	ctx = isummarycontext.WithModelCallRecorder(ctx, &att.modelCall)
+	ctx = isummarycontext.WithTriggerRecorder(ctx, &att.triggerObs)
 	att.ctx = ctx
 	return ctx, att
 }
@@ -274,37 +281,65 @@ type summaryGate struct {
 	thresholdRatio float64
 }
 
-// recordSummaryGate records the trigger decision. When the gate did not fire,
-// the shape of trigger separates an evaluated check that stayed below its
-// threshold from a gate that produced no check result at all, which means no
-// eligible content reached the checks.
-func recordSummaryGate(
-	ctx context.Context,
-	fired bool,
-	trigger summary.Trigger,
-) {
+// recordAttemptGate records this attempt's gate from the attempt-local
+// trigger observation. A leftover caller Report.Trigger is never read here.
+// An unpublished observation cannot be classified as no_content or
+// below_threshold.
+func recordAttemptGate(ctx context.Context, fired bool) {
 	att := summaryAttemptFromContext(ctx)
 	if att == nil {
 		return
 	}
 	att.triggered = fired
+	obs := isummarycontext.TriggerFromContext(ctx)
+	if obs == nil || !obs.Published {
+		if fired {
+			att.skip = ""
+			return
+		}
+		att.skip = outcomeUnobserved
+		return
+	}
 	att.gate = summaryGate{
-		name:           trigger.Name,
-		metric:         trigger.Metric,
-		value:          trigger.Value,
-		threshold:      trigger.Threshold,
-		contextWindow:  trigger.ContextWindow,
-		thresholdRatio: trigger.ThresholdRatio,
+		name:           obs.Name,
+		metric:         obs.Metric,
+		value:          obs.Value,
+		threshold:      obs.Threshold,
+		contextWindow:  obs.ContextWindow,
+		thresholdRatio: obs.ThresholdRatio,
 	}
 	if fired {
 		att.skip = ""
 		return
 	}
-	if trigger.Name == "" && trigger.Metric == "" && len(trigger.Checks) == 0 {
+	if obs.Name == "" && obs.Metric == "" && obs.CheckCount == 0 {
 		att.skip = outcomeNoContent
 		return
 	}
 	att.skip = outcomeBelowThreshold
+}
+
+// recordPublishedTrigger publishes an attempt-local trigger observation and
+// records the gate from that observation. It does not mutate a caller Report.
+func recordPublishedTrigger(
+	ctx context.Context,
+	fired bool,
+	trigger summary.Trigger,
+) {
+	isummarycontext.RecordTrigger(ctx, triggerObservation(trigger))
+	recordAttemptGate(ctx, fired)
+}
+
+func triggerObservation(trigger summary.Trigger) isummarycontext.TriggerObservation {
+	return isummarycontext.TriggerObservation{
+		Name:           trigger.Name,
+		Metric:         trigger.Metric,
+		Value:          trigger.Value,
+		Threshold:      trigger.Threshold,
+		ContextWindow:  trigger.ContextWindow,
+		CheckCount:     len(trigger.Checks),
+		ThresholdRatio: trigger.ThresholdRatio,
+	}
 }
 
 // recordSummaryCopied records that an existing summary was materialized for
@@ -383,8 +418,8 @@ func (a *Attempt) Report() {
 	case outcomeSuccess:
 		log.InfofContext(ctx, format, args...)
 	case outcomeCopied, outcomeNoDelta, outcomeBelowThreshold,
-		outcomeCascadeSuppressed, outcomeNoContent, outcomeStaleWrite,
-		outcomeUnknownWrite:
+		outcomeCascadeSuppressed, outcomeNoContent, outcomeUnobserved,
+		outcomeStaleWrite, outcomeUnknownWrite:
 		// Routine decisions that did no backend-confirmed write, including a
 		// set-if-newer skip when a newer summary is already stored.
 		log.DebugfContext(ctx, format, args...)

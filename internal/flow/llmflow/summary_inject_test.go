@@ -148,11 +148,13 @@ func TestReportSummaryInjectionReportsInjectedSummary(t *testing.T) {
 	require.Equal(t, "debug", level,
 		"a correctly injected summary is routine")
 	require.Contains(t, line,
-		"outcome="+summaryInjectionOutcomeInjected)
+		"outcome="+summaryInjectionOutcomeBlockTextPresent)
+	require.Contains(t, line, `agent="test-agent"`)
+	require.Contains(t, line, "agent_truncated=false")
 	require.Contains(t, line, `filter_key="test-agent"`)
 	require.Contains(t, line, "filter_key_truncated=false")
 	require.Contains(t, line, "selected=true")
-	require.Contains(t, line, "selected_block_present=true")
+	require.Contains(t, line, "block_text_present=true")
 	require.NotContains(t, line, "injected=")
 	require.Contains(t, line, "boundary_present=true")
 	require.Contains(t, line, "stored_summaries=2")
@@ -168,7 +170,7 @@ func TestReportSummaryInjectionReportsInjectedSummary(t *testing.T) {
 // TestReportSummaryInjectionWarnsOnSelectedBlockMissing covers the only
 // injection state that Warns: a summary was selected, but the original
 // summary block is not observable in the same framework model.Request after
-// GenerateContent returns. That does not claim the provider payload.
+// the response sequence has been observed. That does not claim the provider payload.
 func TestReportSummaryInjectionWarnsOnSelectedBlockMissing(t *testing.T) {
 	logs := captureInjectionLogs(t)
 	inv := injectionInvocation(t, summaryinject.Selection{
@@ -188,9 +190,9 @@ func TestReportSummaryInjectionWarnsOnSelectedBlockMissing(t *testing.T) {
 	level, line := logs.record(t)
 	require.Equal(t, "warn", level)
 	require.Contains(t, line,
-		"outcome="+summaryInjectionOutcomeSelectedBlockMissing)
+		"outcome="+summaryInjectionOutcomeBlockTextMissing)
 	require.Contains(t, line, "selected=true")
-	require.Contains(t, line, "selected_block_present=false")
+	require.Contains(t, line, "block_text_present=false")
 	require.NotContains(t, line, "injected=")
 	require.NotContains(t, line, "SECRET-SUMMARY-CONTENT")
 }
@@ -308,8 +310,8 @@ func (m *injectTailoringModel) GenerateContent(
 // TestCallLLMReportsInjectionAfterTokenTailoring pins the reporting boundary:
 // the injection record describes the same model.Request after GenerateContent
 // returns. Built-in providers mutate it in place, so a summary block missing
-// after their token tailoring is reported as selected_block_missing rather
-// than injected.
+// after their token tailoring is reported as block_text_missing rather
+// than block_text_present.
 func TestCallLLMReportsInjectionAfterTokenTailoring(t *testing.T) {
 	logs := captureInjectionLogs(t)
 	inv := injectionInvocation(t, summaryinject.Selection{
@@ -336,9 +338,9 @@ func TestCallLLMReportsInjectionAfterTokenTailoring(t *testing.T) {
 	level, line := logs.record(t)
 	require.Equal(t, "warn", level)
 	require.Contains(t, line,
-		"outcome="+summaryInjectionOutcomeSelectedBlockMissing)
+		"outcome="+summaryInjectionOutcomeBlockTextMissing)
 	require.Contains(t, line, "selected=true")
-	require.Contains(t, line, "selected_block_present=false")
+	require.Contains(t, line, "block_text_present=false")
 	require.NotContains(t, line, "injected=")
 	require.Contains(t, line, "request_messages=1")
 	require.NotContains(t, line, "SECRET-SUMMARY-CONTENT")
@@ -372,8 +374,8 @@ func TestCallLLMReportsInjectionWhenTailoringKeepsSummary(t *testing.T) {
 	level, line := logs.record(t)
 	require.Equal(t, "debug", level)
 	require.Contains(t, line,
-		"outcome="+summaryInjectionOutcomeInjected)
-	require.Contains(t, line, "selected_block_present=true")
+		"outcome="+summaryInjectionOutcomeBlockTextPresent)
+	require.Contains(t, line, "block_text_present=true")
 	require.NotContains(t, line, "injected=")
 	require.Contains(t, line, "request_messages=2")
 }
@@ -443,7 +445,7 @@ func dropAllButLastMessage(r *model.Request) {
 // TestCallLLMReportsInjectionAfterLazyIterTailoring is the lazy-IterModel
 // counterpart of TestCallLLMReportsInjectionAfterTokenTailoring: the seq is
 // returned before tailoring runs, so reporting immediately would falsely
-// record injected. The final record must be selected_block_missing, once.
+// record block_text_present. The final record must be block_text_missing, once.
 func TestCallLLMReportsInjectionAfterLazyIterTailoring(t *testing.T) {
 	logs := captureInjectionLogs(t)
 	inv, req := selectedSummaryInjectionInvocation(t)
@@ -462,9 +464,9 @@ func TestCallLLMReportsInjectionAfterLazyIterTailoring(t *testing.T) {
 	level, line := logs.record(t)
 	require.Equal(t, "warn", level)
 	require.Contains(t, line,
-		"outcome="+summaryInjectionOutcomeSelectedBlockMissing)
+		"outcome="+summaryInjectionOutcomeBlockTextMissing)
 	require.Contains(t, line, "selected=true")
-	require.Contains(t, line, "selected_block_present=false")
+	require.Contains(t, line, "block_text_present=false")
 	require.NotContains(t, line, "injected=")
 	require.Contains(t, line, "request_messages=1")
 	require.NotContains(t, line, "SECRET-SUMMARY-CONTENT")
@@ -488,8 +490,8 @@ func TestCallLLMReportsInjectionOnceWhenLazyIterStopsEarly(t *testing.T) {
 	level, line := logs.record(t)
 	require.Equal(t, "warn", level)
 	require.Contains(t, line,
-		"outcome="+summaryInjectionOutcomeSelectedBlockMissing)
-	require.Contains(t, line, "selected_block_present=false")
+		"outcome="+summaryInjectionOutcomeBlockTextMissing)
+	require.Contains(t, line, "block_text_present=false")
 }
 
 // TestCallLLMReportsInjectionOnceWhenGenerateContentSeqFails covers the
@@ -511,8 +513,8 @@ func TestCallLLMReportsInjectionOnceWhenGenerateContentSeqFails(t *testing.T) {
 	level, line := logs.record(t)
 	require.Equal(t, "debug", level)
 	require.Contains(t, line,
-		"outcome="+summaryInjectionOutcomeInjected)
-	require.Contains(t, line, "selected_block_present=true")
+		"outcome="+summaryInjectionOutcomeBlockTextPresent)
+	require.Contains(t, line, "block_text_present=true")
 	require.Contains(t, line, "request_messages=3")
 }
 
@@ -588,4 +590,100 @@ func TestReportSummaryInjectionTruncatesLongFilterKey(t *testing.T) {
 	require.NotContains(t, line, key)
 	require.Equal(t, key, inv.GetEventFilterKey(),
 		"truncation must not change the invocation filter key")
+}
+
+func TestReportSummaryInjectionQuotesUnsafeAgentName(t *testing.T) {
+	logs := captureInjectionLogs(t)
+	inv := injectionInvocation(t, summaryinject.Selection{
+		LookupStrategy: summaryinject.LookupStrategyAll,
+		LookupResult:   summaryinject.LookupResultNone,
+	})
+	inv.AgentName = "agent\nextra,field=1"
+	display, truncated := summarydiag.FormatAgentName(inv.AgentName)
+	require.False(t, truncated)
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("current request"),
+	}}
+
+	reportSummaryInjection(context.Background(), inv, req)
+
+	_, line := logs.record(t)
+	require.Contains(t, line, fmt.Sprintf("agent=%q", display))
+	require.Contains(t, line, "agent_truncated=false")
+	require.NotContains(t, line, "\n")
+}
+
+func TestReportSummaryInjectionTreatsUnrelatedCopyAsBlockTextPresent(t *testing.T) {
+	logs := captureInjectionLogs(t)
+	inv := injectionInvocation(t, summaryinject.Selection{
+		LookupStrategy:  summaryinject.LookupStrategyPrefix,
+		LookupResult:    summaryinject.LookupResultExact,
+		Selected:        true,
+		StoredSummaries: 1,
+		Block:           injectedSummaryBlock,
+	})
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("instructions without the original block"),
+		model.NewUserMessage("unrelated copy:\n" + injectedSummaryBlock),
+	}}
+
+	reportSummaryInjection(context.Background(), inv, req)
+
+	level, line := logs.record(t)
+	require.Equal(t, "debug", level)
+	require.Contains(t, line,
+		"outcome="+summaryInjectionOutcomeBlockTextPresent)
+	require.Contains(t, line, "block_text_present=true")
+	require.NotContains(t, line, "SECRET-SUMMARY-CONTENT")
+}
+
+func TestCallLLMReportsInjectionOnceOnBeforeModelError(t *testing.T) {
+	logs := captureInjectionLogs(t)
+	inv, req := selectedSummaryInjectionInvocation(t)
+	callbacks := model.NewCallbacks()
+	callbacks.RegisterBeforeModel(func(
+		context.Context, *model.BeforeModelArgs,
+	) (*model.BeforeModelResult, error) {
+		return nil, fmt.Errorf("before model failed")
+	})
+	flow := New(nil, nil, Options{ModelCallbacks: callbacks})
+
+	_, seq, modelCalled, err := flow.callLLM(
+		context.Background(), inv, req, &injectTailoringModel{},
+	)
+	require.Error(t, err)
+	require.Nil(t, seq)
+	require.False(t, modelCalled)
+	require.Len(t, logs.injectionLines(), 1)
+	_, line := logs.record(t)
+	require.Contains(t, line, "block_text_present=true")
+}
+
+func TestCallLLMReportsInjectionOnceOnBeforeModelCustomResponse(t *testing.T) {
+	logs := captureInjectionLogs(t)
+	inv, req := selectedSummaryInjectionInvocation(t)
+	callbacks := model.NewCallbacks()
+	callbacks.RegisterBeforeModel(func(
+		context.Context, *model.BeforeModelArgs,
+	) (*model.BeforeModelResult, error) {
+		return &model.BeforeModelResult{
+			CustomResponse: &model.Response{Done: true},
+		}, nil
+	})
+	flow := New(nil, nil, Options{ModelCallbacks: callbacks})
+
+	_, seq, modelCalled, err := flow.callLLM(
+		context.Background(), inv, req, &injectTailoringModel{},
+	)
+	require.NoError(t, err)
+	require.False(t, modelCalled)
+	require.Empty(t, logs.injectionLines())
+
+	seq(func(*model.Response) bool { return false })
+
+	require.Len(t, logs.injectionLines(), 1)
+	level, line := logs.record(t)
+	require.Equal(t, "debug", level)
+	require.Contains(t, line,
+		"outcome="+summaryInjectionOutcomeBlockTextPresent)
 }

@@ -823,6 +823,7 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	// turn. If no such message exists, fall back to a trailing user message in
 	// req.Messages (for example, injected context) to avoid creating an extra
 	// adjacent user block.
+	summarySelection.historyMessages = len(messages)
 	if len(userContextBlocks) > 0 {
 		messages = prependUserContextMessage(
 			strings.Join(userContextBlocks, mergedUserSeparator),
@@ -833,7 +834,6 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 
 	messageStart := len(req.Messages)
 	req.Messages = append(req.Messages, messages...)
-	summarySelection.historyMessages = len(messages)
 	summarySelection.record(invocation)
 	view := modelVisibleHistoryView(
 		invocation,

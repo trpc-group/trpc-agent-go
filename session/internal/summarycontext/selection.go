@@ -88,8 +88,9 @@ type EventSelection struct {
 	// retained prefix, session scoping, or an unmapped boundary are not
 	// counted here.
 	SkipRecentApplied int
-	// Selected is the number of events that reached the summary model after
-	// skip-recent filtering, session scoping, and safe-prefix mapping.
+	// Selected is the number of events chosen before a PreSummaryHook or
+	// before-model callback may rewrite the prompt. It is not a count of the
+	// payload that later reached the summary model.
 	Selected int
 }
 
@@ -137,4 +138,17 @@ func RecordEventSelection(ctx context.Context, selection EventSelection) {
 		return
 	}
 	*recorder = selection
+}
+
+// EventSelectionFromContext returns the attempt-local event-selection
+// recorder, or nil when none is attached.
+func EventSelectionFromContext(ctx context.Context) *EventSelection {
+	if ctx == nil {
+		return nil
+	}
+	recorder, ok := ctx.Value(eventSelectionKey{}).(*EventSelection)
+	if !ok {
+		return nil
+	}
+	return recorder
 }

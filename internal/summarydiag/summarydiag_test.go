@@ -10,6 +10,7 @@
 package summarydiag
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -126,4 +127,30 @@ func TestFormatFilterKeyDoesNotSplitMultibyteRune(t *testing.T) {
 	require.True(t, utf8.ValidString(display))
 	require.Equal(t, FilterKeyMaxRunes, utf8.RuneCountInString(display))
 	require.NotContains(t, display, "\xff")
+}
+
+func TestFormatAgentNameMatchesFilterKeyAndQuotesUnsafeInput(t *testing.T) {
+	display, truncated := FormatAgentName("agent\nextra,field=1")
+	require.False(t, truncated)
+	require.Equal(t, "agent\nextra,field=1", display)
+	require.Equal(t, `"agent\nextra,field=1"`, strconv.Quote(display))
+
+	long := strings.Repeat("名", FilterKeyMaxRunes+8)
+	display, truncated = FormatAgentName(long)
+	require.True(t, truncated)
+	require.Equal(t, FilterKeyMaxRunes, utf8.RuneCountInString(display))
+	keyDisplay, keyTruncated := FormatFilterKey(long)
+	require.Equal(t, keyDisplay, display)
+	require.Equal(t, keyTruncated, truncated)
+
+	invalid := "agent\x80name"
+	original := invalid
+	display, truncated = FormatAgentName(invalid)
+	require.False(t, truncated)
+	require.Equal(t, original, invalid,
+		"quoting must not change the original business name")
+	require.Equal(t, original, display)
+	quoted := strconv.Quote(display)
+	require.Contains(t, quoted, `\x80`)
+	require.NotContains(t, quoted, "\x80")
 }

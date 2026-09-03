@@ -259,7 +259,13 @@ type reportContextTestKey struct{}
 
 func TestInheritReportContext(t *testing.T) {
 	report := &Report{Trigger: Trigger{Name: checkNameTokenThreshold}}
+	var call isummarycontext.ModelCall
+	var trigger isummarycontext.TriggerObservation
+	var selection isummarycontext.EventSelection
 	current := ContextWithReport(context.Background(), report)
+	current = isummarycontext.WithModelCallRecorder(current, &call)
+	current = isummarycontext.WithTriggerRecorder(current, &trigger)
+	current = isummarycontext.WithEventSelectionRecorder(current, &selection)
 	next := context.WithValue(context.Background(), reportContextTestKey{}, "next")
 
 	got := inheritReportContext(next, current)
@@ -267,6 +273,9 @@ func TestInheritReportContext(t *testing.T) {
 	require.True(t, ok)
 	require.Same(t, report, inherited)
 	require.Equal(t, "next", got.Value(reportContextTestKey{}))
+	require.Same(t, &call, isummarycontext.ModelCallFromContext(got))
+	require.Same(t, &trigger, isummarycontext.TriggerFromContext(got))
+	require.Same(t, &selection, isummarycontext.EventSelectionFromContext(got))
 
 	existing := &Report{Trigger: Trigger{Name: checkNameContextThreshold}}
 	got = inheritReportContext(ContextWithReport(next, existing), current)

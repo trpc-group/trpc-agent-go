@@ -180,8 +180,19 @@ func (s *diagSummarizer) ShouldSummarize(*session.Session) bool { return s.fired
 func (s *diagSummarizer) ShouldSummarizeWithContext(
 	ctx context.Context, _ *session.Session,
 ) bool {
-	if report, ok := summary.ReportFromContext(ctx); ok && s.trigger != nil {
-		report.Trigger = *s.trigger
+	if s.trigger != nil {
+		if report, ok := summary.ReportFromContext(ctx); ok {
+			report.Trigger = *s.trigger
+		}
+		isummarycontext.RecordTrigger(ctx, isummarycontext.TriggerObservation{
+			Name:           s.trigger.Name,
+			Metric:         s.trigger.Metric,
+			Value:          s.trigger.Value,
+			Threshold:      s.trigger.Threshold,
+			ContextWindow:  s.trigger.ContextWindow,
+			CheckCount:     len(s.trigger.Checks),
+			ThresholdRatio: s.trigger.ThresholdRatio,
+		})
 	}
 	return s.fired
 }
@@ -700,10 +711,11 @@ func TestAttemptReportsBelowThresholdWithGateDetails(t *testing.T) {
 	requireNoSensitiveText(t, logs.all())
 }
 
-func TestAttemptReportsNoContentWhenGateSawNothing(t *testing.T) {
+func TestAttemptReportsUnobservedWhenCustomGateDoesNotPublish(t *testing.T) {
 	logs := captureLogs(t)
 	sess := diagSession(diagEvent(-time.Minute))
-	// A gate that publishes no check result never saw eligible content.
+	// A custom ShouldSummarize that returns false without publishing a
+	// trigger is not proof of missing content.
 	summarizer := &diagSummarizer{fired: false}
 
 	require.NoError(t, summarizeAndPersist(
@@ -712,9 +724,9 @@ func TestAttemptReportsNoContentWhenGateSawNothing(t *testing.T) {
 
 	level, line := logs.only(t)
 	require.Equal(t, "debug", level,
-		"a session with nothing to summarize is not an operator problem")
+		"an unpublished custom gate is diagnostic uncertainty, not an incident")
 	requireFields(t, line, map[string]string{
-		"outcome":              outcomeNoContent,
+		"outcome":              outcomeUnobserved,
 		"triggered":            "false",
 		"trigger":              "none",
 		"summary_view_present": "false",
@@ -725,7 +737,7 @@ func TestAttemptReportsNoContentWhenGateSawNothing(t *testing.T) {
 func TestAttemptReportsUnsafeViewForUnboundView(t *testing.T) {
 	logs := captureLogs(t)
 	sess := diagSession(diagEvent(-time.Minute))
-	summarizer := &diagSummarizer{fired: false}
+	summarizer := &diagSummarizer{fired: false, trigger: &summary.Trigger{}}
 	ctx := summaryview.ContextWithView(context.Background(), &summaryview.View{
 		SessionID:     secretSessionID,
 		Items:         []summaryview.Item{{}, {}},
@@ -754,7 +766,7 @@ func TestAttemptReportsUnsafeViewForUnboundView(t *testing.T) {
 func TestAttemptKeepsNoContentForBoundView(t *testing.T) {
 	logs := captureLogs(t)
 	sess := diagSession(diagEvent(-time.Minute))
-	summarizer := &diagSummarizer{fired: false}
+	summarizer := &diagSummarizer{fired: false, trigger: &summary.Trigger{}}
 	ctx := summaryview.ContextWithView(context.Background(), &summaryview.View{
 		SessionID:     secretSessionID,
 		Items:         []summaryview.Item{{}},
@@ -1465,4 +1477,210 @@ func TestSummaryTargetKindIsBounded(t *testing.T) {
 	require.Equal(t, targetKindFull,
 		summaryTargetKind(session.SummaryFilterKeyAllContents))
 	require.Equal(t, targetKindBranch, summaryTargetKind("app/branch-42"))
+}
+
+func TestAttemptIgnoresLeftoverCallerTriggerWhenCustomDoesNotPublish(t *testing.T) {
+	logs := captureLogs(t)
+	sess := diagSession(diagEvent(-time.Minute))
+	report := &summary.Report{Trigger: summary.Trigger{
+		Fired:     true,
+		Name:      "token_threshold",
+		Metric:    "tokens",
+		Value:     99,
+		Threshold: 10,
+	}}
+	ctx := summary.ContextWithReport(context.Background(), report)
+
+	require.NoError(t, summarizeAndPersist(
+		ctx, &diagSummarizer{fired: false}, sess, "", false, nil,
+	))
+	require.Equal(t, "token_threshold", report.Trigger.Name,
+		"diagnostics must not clear a leftover caller Report to hide reuse")
+
+	level, line := logs.only(t)
+	require.Equal(t, "debug", level)
+	requireFields(t, line, map[string]string{
+		"outcome":        outcomeUnobserved,
+		"triggered":      "false",
+		"trigger":        "none",
+		"trigger_metric": "none",
+		"trigger_value":  "0",
+	})
+}
+
+func TestAttemptPublishesBuiltInTriggerDespiteLeftoverCallerReport(t *testing.T) {
+	logs := captureLogs(t)
+	sess := diagSession(diagEvent(-time.Minute), diagEvent(-30*time.Second))
+	report := &summary.Report{Trigger: summary.Trigger{
+		Name:   "token_threshold",
+		Metric: "tokens",
+		Value:  99,
+	}}
+	ctx := summary.ContextWithReport(context.Background(), report)
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithEventThreshold(1),
+	)
+
+	require.NoError(t, summarizeAndPersist(
+		ctx, summarizer, sess, "", false,
+		func(context.Context, *session.Summary) error { return nil },
+	))
+	require.Equal(t, "event_threshold", report.Trigger.Name)
+
+	_, line := logs.only(t)
+	requireFields(t, line, map[string]string{
+		"outcome":        outcomeSuccess,
+		"triggered":      "true",
+		"trigger":        "event_threshold",
+		"trigger_metric": "events",
+	})
+}
+
+func TestBuiltInSummarizerObservesModelCallAfterHookReturnsBackground(t *testing.T) {
+	logs := captureLogs(t)
+	sess := diagSession(diagEvent(-time.Minute), diagEvent(-30*time.Second))
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithChecksAny(summary.CheckEventThreshold(1)),
+		summary.WithPreSummaryHook(func(in *summary.PreSummaryHookContext) error {
+			in.Ctx = context.Background()
+			return nil
+		}),
+	)
+
+	require.NoError(t, summarizeAndPersist(
+		context.Background(), summarizer, sess, "", false,
+		func(context.Context, *session.Summary) error { return nil },
+	))
+
+	_, line := logs.only(t)
+	requireFields(t, line, map[string]string{
+		"outcome":           outcomeSuccess,
+		"model_call_status": modelCallStatusCalled,
+	})
+}
+
+// TestBuiltInSummarizerReportsNoContentWhenSkipRecentLeavesNothing is the
+// built-in counterpart of TestAttemptReportsUnobservedWhenCustomGateDoesNotPublish:
+// events exist so the attempt is not no_delta, ShouldSummarize publishes an
+// empty trigger, and the outcome is no_content rather than unobserved.
+func TestBuiltInSummarizerReportsNoContentWhenSkipRecentLeavesNothing(t *testing.T) {
+	logs := captureLogs(t)
+	sess := diagSession(diagEvent(-time.Minute), diagEvent(-30*time.Second))
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithEventThreshold(1),
+		summary.WithSkipRecent(func(events []event.Event) int {
+			return len(events)
+		}),
+	)
+
+	require.NoError(t, summarizeAndPersist(
+		context.Background(), summarizer, sess, "", false,
+		func(context.Context, *session.Summary) error {
+			t.Fatal("built-in no-content must not persist")
+			return nil
+		},
+	))
+
+	level, line := logs.only(t)
+	require.Equal(t, "debug", level)
+	requireFields(t, line, map[string]string{
+		"outcome":          outcomeNoContent,
+		"triggered":        "false",
+		"trigger":          "none",
+		"selection_reason": isummarycontext.ReasonSkipRecentAll,
+		"selected_events":  "0",
+	})
+}
+
+func TestBuiltInSummarizerObservesModelCallAfterBeforeModelReturnsBackground(t *testing.T) {
+	logs := captureLogs(t)
+	sess := diagSession(diagEvent(-time.Minute), diagEvent(-30*time.Second))
+	callbacks := model.NewCallbacks()
+	callbacks.RegisterBeforeModel(func(
+		_ context.Context,
+		_ *model.BeforeModelArgs,
+	) (*model.BeforeModelResult, error) {
+		return &model.BeforeModelResult{Context: context.Background()}, nil
+	})
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithChecksAny(summary.CheckEventThreshold(1)),
+		summary.WithModelCallbacks(callbacks),
+	)
+
+	require.NoError(t, summarizeAndPersist(
+		context.Background(), summarizer, sess, "", false,
+		func(context.Context, *session.Summary) error { return nil },
+	))
+
+	_, line := logs.only(t)
+	requireFields(t, line, map[string]string{
+		"outcome":           outcomeSuccess,
+		"model_call_status": modelCallStatusCalled,
+	})
+}
+
+func TestBuiltInSummarizerObservesCustomResponseAfterBeforeModelReturnsBackground(t *testing.T) {
+	logs := captureLogs(t)
+	sess := diagSession(diagEvent(-time.Minute), diagEvent(-30*time.Second))
+	callbacks := model.NewCallbacks()
+	callbacks.RegisterBeforeModel(func(
+		_ context.Context,
+		_ *model.BeforeModelArgs,
+	) (*model.BeforeModelResult, error) {
+		return &model.BeforeModelResult{
+			Context: context.Background(),
+			CustomResponse: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.Message{Content: "callback summary"},
+				}},
+			},
+		}, nil
+	})
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithChecksAny(summary.CheckEventThreshold(1)),
+		summary.WithModelCallbacks(callbacks),
+	)
+
+	require.NoError(t, summarizeAndPersist(
+		context.Background(), summarizer, sess, "", false,
+		func(context.Context, *session.Summary) error { return nil },
+	))
+
+	_, line := logs.only(t)
+	requireFields(t, line, map[string]string{
+		"outcome":           outcomeSuccess,
+		"model_call_status": modelCallStatusCustomResponse,
+	})
+}
+
+func TestAttemptSelectedEventsStayPreHookCountAfterHookRewrite(t *testing.T) {
+	logs := captureLogs(t)
+	sess := diagSession(diagEvent(-time.Minute), diagEvent(-30*time.Second))
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithChecksAny(summary.CheckEventThreshold(1)),
+		summary.WithPreSummaryHook(func(in *summary.PreSummaryHookContext) error {
+			in.Text = "hook replaced the selected conversation"
+			in.Events = nil
+			return nil
+		}),
+	)
+
+	require.NoError(t, summarizeAndPersist(
+		context.Background(), summarizer, sess, "", false,
+		func(context.Context, *session.Summary) error { return nil },
+	))
+
+	_, line := logs.only(t)
+	requireFields(t, line, map[string]string{
+		"outcome":          outcomeSuccess,
+		"selection_reason": isummarycontext.ReasonSelected,
+		"selected_events":  "2",
+	})
 }

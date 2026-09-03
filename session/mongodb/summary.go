@@ -115,14 +115,15 @@ func (s *Service) CreateSessionSummary(
 	return nil
 }
 
-// mongoPersistResult maps an upsert result to a persistence diagnostic. A
-// conditional upsert that matched nothing left the persisted summary in place.
+// mongoPersistResult maps an upsert result to a persistence diagnostic.
+// Acknowledged match or insert is stored. A nil or zero-count result cannot
+// prove stored or stale. Duplicate-key races are classified by the caller.
 func mongoPersistResult(result *mongo.UpdateResult) isummary.PersistResult {
 	if result == nil {
-		return isummary.PersistStored
+		return isummary.PersistUnknown
 	}
 	if result.MatchedCount == 0 && result.UpsertedCount == 0 {
-		return isummary.PersistStale
+		return isummary.PersistUnknown
 	}
 	return isummary.PersistStored
 }

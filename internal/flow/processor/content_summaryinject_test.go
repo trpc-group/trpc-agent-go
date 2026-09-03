@@ -297,3 +297,36 @@ func TestSummaryInjectionIsClearedBetweenRequests(t *testing.T) {
 	require.False(t, selection.Selected)
 	require.Zero(t, selection.StoredSummaries)
 }
+
+func TestSummaryInjectionHistoryMessagesExcludesSyntheticUserContext(t *testing.T) {
+	sess := &session.Session{
+		ID: "session",
+		Summaries: map[string]*session.Summary{
+			"test-agent": {
+				Summary:   injectSummaryText,
+				UpdatedAt: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-agent"),
+	)
+	inv.AgentName = "test-agent"
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("existing system prompt"),
+	}}
+
+	NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+		WithSessionSummaryInjectionMode(SessionSummaryInjectionUser),
+	).ProcessRequest(context.Background(), inv, req, nil)
+
+	selection, ok := summaryinject.FromInvocation(inv)
+	require.True(t, ok)
+	require.True(t, selection.Selected)
+	require.Zero(t, selection.HistoryMessages,
+		"a synthetic user-context message is not cutoff history")
+	require.GreaterOrEqual(t, len(req.Messages), 2,
+		"user-mode injection still prepends a synthetic context message")
+}

@@ -348,6 +348,15 @@ func (s *sessionSummarizer) ShouldSummarizeWithContext(
 	if report, ok := reportFromContext(ctx); ok {
 		report.Trigger = trigger
 	}
+	isummarycontext.RecordTrigger(ctx, isummarycontext.TriggerObservation{
+		Name:           trigger.Name,
+		Metric:         trigger.Metric,
+		Value:          trigger.Value,
+		Threshold:      trigger.Threshold,
+		ContextWindow:  trigger.ContextWindow,
+		CheckCount:     len(trigger.Checks),
+		ThresholdRatio: trigger.ThresholdRatio,
+	})
 	return trigger.Fired
 }
 
@@ -558,9 +567,9 @@ func (s *sessionSummarizer) selectSummaryEvents(
 }
 
 // recordSelection publishes the observed summary input selection. retained is
-// the number of events that survived skip-recent, and selected is the number
-// that survived every later stage, so the two separate a skip-recent decision
-// from later session scoping.
+// the number of events that survived skip-recent, and selected is the
+// pre-hook count that survived every later built-in stage. A later hook or
+// callback may rewrite the prompt without changing this observation.
 func recordSelection(
 	ctx context.Context,
 	source string,
@@ -574,7 +583,9 @@ func recordSelection(
 		Eligible:            decision.eligible,
 		SkipRecentRequested: decision.requested,
 		SkipRecentApplied:   decision.applied,
-		Selected:            selected,
+		// Selected is the pre-hook event count. A later hook or callback
+		// may rewrite the prompt without changing this observation.
+		Selected: selected,
 	})
 }
 
@@ -2335,6 +2346,9 @@ func inheritReportContext(next context.Context, current context.Context) context
 	if next == nil {
 		return current
 	}
+	next = inheritModelCallRecorder(next, current)
+	next = inheritTriggerRecorder(next, current)
+	next = inheritEventSelectionRecorder(next, current)
 	report, ok := reportFromContext(current)
 	if !ok {
 		return next
@@ -2343,6 +2357,36 @@ func inheritReportContext(next context.Context, current context.Context) context
 		return next
 	}
 	return ContextWithReport(next, report)
+}
+
+func inheritModelCallRecorder(next, current context.Context) context.Context {
+	if isummarycontext.ModelCallFromContext(next) != nil {
+		return next
+	}
+	if call := isummarycontext.ModelCallFromContext(current); call != nil {
+		return isummarycontext.WithModelCallRecorder(next, call)
+	}
+	return next
+}
+
+func inheritTriggerRecorder(next, current context.Context) context.Context {
+	if isummarycontext.TriggerFromContext(next) != nil {
+		return next
+	}
+	if obs := isummarycontext.TriggerFromContext(current); obs != nil {
+		return isummarycontext.WithTriggerRecorder(next, obs)
+	}
+	return next
+}
+
+func inheritEventSelectionRecorder(next, current context.Context) context.Context {
+	if isummarycontext.EventSelectionFromContext(next) != nil {
+		return next
+	}
+	if selection := isummarycontext.EventSelectionFromContext(current); selection != nil {
+		return isummarycontext.WithEventSelectionRecorder(next, selection)
+	}
+	return next
 }
 
 func (s *sessionSummarizer) collectSummaryFromResponses(

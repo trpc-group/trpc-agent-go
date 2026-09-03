@@ -9,7 +9,7 @@
 
 // Package summaryinject carries the session summary selected while building
 // one model request so the final request boundary can report whether the
-// selected summary is still present in the framework request after
+// recorded summary block text still appears in any message Content after
 // GenerateContent returns.
 package summaryinject
 
@@ -76,11 +76,12 @@ type Selection struct {
 	// SessionEvents is the number of stored session events at selection time.
 	SessionEvents int
 	// HistoryMessages is the number of history messages that survived the
-	// summary cutoff and were appended to the request.
+	// summary cutoff, counted before any synthetic user-context message is
+	// prepended.
 	HistoryMessages int
 	// Block is the formatted summary block written into the request. It is
-	// retained only to detect the block in the assembled request and is never
-	// logged.
+	// retained only to detect the same text in any message Content and is
+	// never logged.
 	Block string
 }
 
@@ -122,10 +123,11 @@ func FromInvocation(inv *agent.Invocation) (Selection, bool) {
 	return *stored, true
 }
 
-// BlockPresent reports whether the recorded summary block is still present in
-// the assembled request. It only compares the recorded block against message
-// content and never derives anything else from the request. The scan is
-// O(total message bytes) and does not copy the request.
+// BlockPresent reports whether the recorded summary block text still appears
+// as a substring of any message Content in the assembled request. A match
+// does not prove the original injection slot is intact and does not describe
+// a provider payload. The scan is O(total message bytes) and does not copy
+// the request.
 func (s Selection) BlockPresent(messages []model.Message) bool {
 	if !s.Selected || s.Block == "" {
 		return false

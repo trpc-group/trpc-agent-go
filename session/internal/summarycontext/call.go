@@ -39,9 +39,22 @@ func RecordModelCall(ctx context.Context, mode string) {
 	if ctx == nil {
 		return
 	}
-	recorder, ok := ctx.Value(modelCallKey{}).(*ModelCall)
-	if !ok || recorder == nil {
+	recorder := ModelCallFromContext(ctx)
+	if recorder == nil {
 		return
 	}
 	recorder.Mode = mode
+}
+
+// ModelCallFromContext returns the attempt-local model-call recorder, or nil
+// when none is attached.
+func ModelCallFromContext(ctx context.Context) *ModelCall {
+	if ctx == nil {
+		return nil
+	}
+	recorder, ok := ctx.Value(modelCallKey{}).(*ModelCall)
+	if !ok {
+		return nil
+	}
+	return recorder
 }

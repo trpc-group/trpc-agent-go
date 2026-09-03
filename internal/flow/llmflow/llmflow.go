@@ -83,13 +83,13 @@ const (
 
 	// Session summary injection outcomes report whether a stored summary
 	// selected for this request is still observable in the same framework
-	// model.Request after GenerateContent returns. They do not describe a
-	// provider's final payload.
-	summaryInjectionOutcomeInjected             = "injected"
-	summaryInjectionOutcomeSelectedBlockMissing = "selected_block_missing"
-	summaryInjectionOutcomeNotSelected          = "not_selected"
-	summaryInjectionOutcomeLookupMiss           = "lookup_miss"
-	summaryInjectionOutcomeScopeMismatch        = "scope_mismatch"
+	// model.Request after the response sequence has been observed. They do
+	// not describe a provider's final payload.
+	summaryInjectionOutcomeBlockTextPresent = "block_text_present"
+	summaryInjectionOutcomeBlockTextMissing = "block_text_missing"
+	summaryInjectionOutcomeNotSelected      = "not_selected"
+	summaryInjectionOutcomeLookupMiss       = "lookup_miss"
+	summaryInjectionOutcomeScopeMismatch    = "scope_mismatch"
 )
 
 // InvocationHasFilteredUserTools reports whether the cached filtered tool
@@ -1735,31 +1735,35 @@ func (f *Flow) runContextCompaction(
 	if viewPresent {
 		summaryCtx = summaryview.ContextWithView(summaryCtx, view)
 	}
-	var viewFinalized bool
+	var usedRebuild bool
 	logResult := func(
 		outcome string,
 		result *model.Request,
 		postRequestTokens int,
 	) {
-		// After a post-rebuild Finalize the invocation holds the latest
-		// binding. Paths that never Finalize keep the snapshot frozen
-		// before summarization.
+		// After a rebuild, even when the post-rebuild token count fails,
+		// the invocation holds the latest view. Paths that never rebuild
+		// keep the snapshot frozen before summarization.
 		binding := summaryview.BindingFromContext(summaryCtx)
-		if viewFinalized {
+		if usedRebuild {
 			binding = summaryview.BindingFromInvocation(invocation)
 		}
 		filterKeyDisplay, filterKeyTruncated :=
 			summarydiag.FormatFilterKey(filterKey)
 		format := "Pre-LLM context compaction result: schema_version=%d, " +
-			"outcome=%s, agent=%s, filter_key=%q, filter_key_truncated=%t, " +
+			"outcome=%s, agent=%q, agent_truncated=%t, filter_key=%q, " +
+			"filter_key_truncated=%t, " +
 			"request_tokens=%d, threshold=%d, " +
 			"context_window=%d, messages=%d->%d, post_request_tokens=%d, " +
 			"summary_view_present=%t, summary_view_bound=%t, " +
 			"summary_view_items=%d, binding_reason=%s, duration_ms=%d"
+		agentName, agentTruncated :=
+			summarydiag.FormatAgentName(invocation.AgentName)
 		args := []any{
 			summarydiag.SchemaVersion,
 			outcome,
-			invocation.AgentName,
+			agentName,
+			agentTruncated,
 			filterKeyDisplay,
 			filterKeyTruncated,
 			decision.tokenCount,
@@ -1844,6 +1848,7 @@ func (f *Flow) runContextCompaction(
 		)
 		return req
 	}
+	usedRebuild = true
 	postDecisionRequest := requestWithCallLimitFinalizationMessage(
 		rebuilt,
 		rebuildPlan.callLimitFinalizationMessage,
@@ -1862,7 +1867,6 @@ func (f *Flow) runContextCompaction(
 			postDecisionRequest,
 			postDecision.tokenCount,
 		)
-		viewFinalized = true
 	} else {
 		log.DebugfContext(
 			ctx,
@@ -2542,12 +2546,21 @@ func (f *Flow) callLLM(
 	// Run before model callbacks if they exist.
 	ctx, customResp, err := f.runBeforeModelCallbacks(ctx, invocation, llmRequest)
 	if err != nil {
+		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, false, err
 	}
 	if customResp != nil {
-		return ctx, func(yield func(*model.Response) bool) {
-			yield(customResp)
-		}, false, nil
+		// Keep the original callLLM return and span-on-return contract.
+		// The seq finalizer reports once on drain or early stop. An
+		// unused seq is never consumed, so it reports nothing.
+		return ctx, withResponseSeqFinalizer(
+			func(yield func(*model.Response) bool) {
+				yield(customResp)
+			},
+			func() {
+				reportSummaryInjection(ctx, invocation, llmRequest)
+			},
+		), false, nil
 	}
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		err = errors.New(errMsgNoLLMMessages)
@@ -2794,13 +2807,13 @@ func finalizeSummaryView(
 
 // reportSummaryInjection reports whether the session summary selected while
 // building this request is still present in the same model.Request after the
-// model call has been observed. Eager GenerateContent mutates that request
-// before returning a seq; a lazy IterModel may mutate it only while the seq
-// runs. Built-in providers, including the OpenAI adapter, mutate the request
-// in place during token tailoring, so the record then reflects the tailored
-// framework request. A custom Model may copy the request, in which case the
-// record does not claim to describe the payload that Model sent. Requests
-// that do not use session summaries report nothing.
+// response sequence has been observed. Eager GenerateContent mutates that
+// request before returning a seq; a lazy IterModel may mutate it only while
+// the seq runs. Built-in providers, including the OpenAI adapter, mutate the
+// request in place during token tailoring, so the record then reflects the
+// tailored framework request. A custom Model may copy the request, in which
+// case the record does not claim to describe the payload that Model sent.
+// Requests that do not use session summaries report nothing.
 func reportSummaryInjection(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -2817,16 +2830,20 @@ func reportSummaryInjection(
 	outcome := summaryInjectionOutcome(selection, blockPresent)
 	filterKey, filterKeyTruncated :=
 		summarydiag.FormatFilterKey(invocation.GetEventFilterKey())
+	agentName, agentTruncated :=
+		summarydiag.FormatAgentName(invocation.AgentName)
 	format := "Session summary injection result: schema_version=%d, " +
-		"outcome=%s, agent=%s, filter_key=%q, filter_key_truncated=%t, " +
-		"lookup_strategy=%s, lookup_result=%s, selected=%t, " +
-		"selected_block_present=%t, boundary_present=%t, stored_summaries=%d, " +
-		"matching_candidates=%d, full_session_summary=%t, session_events=%d, " +
-		"history_messages=%d, request_messages=%d"
+		"outcome=%s, agent=%q, agent_truncated=%t, filter_key=%q, " +
+		"filter_key_truncated=%t, lookup_strategy=%s, lookup_result=%s, " +
+		"selected=%t, block_text_present=%t, boundary_present=%t, " +
+		"stored_summaries=%d, matching_candidates=%d, " +
+		"full_session_summary=%t, session_events=%d, history_messages=%d, " +
+		"request_messages=%d"
 	args := []any{
 		summarydiag.SchemaVersion,
 		outcome,
-		invocation.AgentName,
+		agentName,
+		agentTruncated,
 		filterKey,
 		filterKeyTruncated,
 		selection.LookupStrategy,
@@ -2842,12 +2859,12 @@ func reportSummaryInjection(
 		len(req.Messages),
 	}
 	switch outcome {
-	case summaryInjectionOutcomeSelectedBlockMissing:
-		// A selected summary whose original block is missing from the final
-		// framework request is the only injection defect that Warns. This is
-		// an observation of the same model.Request after the model call has
-		// been observed; it does not claim what a provider sent, or that the
-		// summary was never written into the request.
+	case summaryInjectionOutcomeBlockTextMissing:
+		// A selected summary whose recorded block text is missing from every
+		// framework request message is the only injection defect that Warns.
+		// This is a substring observation of the same model.Request after
+		// the response sequence has been observed; it does not claim what
+		// a provider sent, or that the original injection slot is intact.
 		log.WarnfContext(ctx, format, args...)
 	default:
 		// Requests that found no in-scope summary, including a branch miss
@@ -2857,20 +2874,21 @@ func reportSummaryInjection(
 }
 
 // summaryInjectionOutcome classifies one request's summary injection. A
-// selected summary whose original block is missing from the same framework
-// model.Request after the model call has been observed is reported as
-// selected_block_missing. That observation does not describe a provider's
-// final payload. A scope mismatch names the unused full-session summary; it
-// does not mean the scoped history was dropped from this request.
+// selected summary whose recorded block text is missing from every message
+// Content in the same framework model.Request is reported as
+// block_text_missing. That observation does not describe a provider's
+// final payload or prove the original injection slot. A scope mismatch
+// names the unused full-session summary; it does not mean the scoped
+// history was dropped from this request.
 func summaryInjectionOutcome(
 	selection summaryinject.Selection,
 	blockPresent bool,
 ) string {
 	if selection.Selected {
 		if blockPresent {
-			return summaryInjectionOutcomeInjected
+			return summaryInjectionOutcomeBlockTextPresent
 		}
-		return summaryInjectionOutcomeSelectedBlockMissing
+		return summaryInjectionOutcomeBlockTextMissing
 	}
 	if selection.ScopeMismatch() {
 		return summaryInjectionOutcomeScopeMismatch

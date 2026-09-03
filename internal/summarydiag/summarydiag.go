@@ -54,6 +54,15 @@ func FormatFilterKey(key string) (display string, truncated bool) {
 	return key, false
 }
 
+// FormatAgentName prepares a caller-supplied agent name for diagnostic
+// display. The rules match FormatFilterKey: UTF-8-safe truncation to
+// FilterKeyMaxRunes with a visible marker. Names are quoted by callers with
+// %q so unsafe bytes stay in a single field. This is safe quoting, not
+// privacy redaction, and it does not change the original business name.
+func FormatAgentName(name string) (display string, truncated bool) {
+	return FormatFilterKey(name)
+}
+
 // filterKeyPrefixLimit is how many original runes fit when the marker must
 // also be included in FilterKeyMaxRunes.
 func filterKeyPrefixLimit() int {
