@@ -392,9 +392,8 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string, op
 		allCaseResults = append(allCaseResults, caseResults...)
 	}
 	evalSetResult := &evalresult.EvalSetResult{
-		EvalSetID:         evalSetID,
-		InferenceDuration: opts.inferenceDurationValue(),
-		EvalCaseResults:   allCaseResults,
+		EvalSetID:       evalSetID,
+		EvalCaseResults: allCaseResults,
 	}
 	if err := multirun.SummarizeMultiRun(evalSetResult, opts.numRuns); err != nil {
 		return nil, fmt.Errorf("summarize eval set result: %w", err)
@@ -490,7 +489,6 @@ func (a *agentEvaluator) runEvaluationOnce(
 		return nil, fmt.Errorf("run %d inference: %w", runID, err)
 	}
 	inferenceDuration := inferenceDurationForInferenceResults(runInferenceResults)
-	opts.addInferenceDuration(inferenceDuration)
 	if opts.runDetailsCollector != nil {
 		opts.runDetailsCollector.add(runID, runInferenceResults)
 	}
@@ -535,17 +533,6 @@ func (a *agentEvaluator) runEvaluationOnce(
 	if runResult == nil {
 		return nil, errors.New("eval set run result is nil")
 	}
-	if inferenceDuration == 0 {
-		runInferenceDuration := runResult.InferenceDuration
-		if runInferenceDuration == 0 {
-			for _, caseResult := range runResult.EvalCaseResults {
-				if caseResult != nil {
-					runInferenceDuration += caseResult.InferenceDuration
-				}
-			}
-		}
-		opts.addInferenceDuration(runInferenceDuration)
-	}
 	caseResults := make([]*evalresult.EvalCaseResult, 0, len(runResult.EvalCaseResults))
 	inferenceDurations := make(map[string]time.Duration)
 	for _, inferenceResult := range runInferenceResults {
@@ -554,6 +541,7 @@ func (a *agentEvaluator) runEvaluationOnce(
 		}
 		inferenceDurations[inferenceResult.EvalCaseID] += inferenceDurationForInferenceResult(inferenceResult)
 	}
+	mergedCaseDuration := time.Duration(0)
 	for _, caseResult := range runResult.EvalCaseResults {
 		if caseResult == nil {
 			continue
@@ -562,8 +550,21 @@ func (a *agentEvaluator) runEvaluationOnce(
 		if elapsed, ok := inferenceDurations[caseResult.EvalID]; ok && elapsed > 0 {
 			caseResult.InferenceDuration = elapsed
 		}
+		delete(inferenceDurations, caseResult.EvalID)
+		mergedCaseDuration += caseResult.InferenceDuration
 		caseResults = append(caseResults, caseResult)
 	}
+	for _, elapsed := range inferenceDurations {
+		mergedCaseDuration += elapsed
+	}
+	runInferenceDuration := mergedCaseDuration
+	if runResult.InferenceDuration > runInferenceDuration {
+		runInferenceDuration = runResult.InferenceDuration
+	}
+	if inferenceDuration > runInferenceDuration {
+		runInferenceDuration = inferenceDuration
+	}
+	opts.addInferenceDuration(runInferenceDuration)
 	return caseResults, nil
 }
 

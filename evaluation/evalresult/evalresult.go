@@ -29,8 +29,6 @@ type EvalSetResult struct {
 	EvalSetResultName string `json:"evalSetResultName,omitempty"`
 	// EvalSetID identifies the eval set.
 	EvalSetID string `json:"evalSetId,omitempty"`
-	// InferenceDuration is the total time spent executing the actual agent across all cases and runs.
-	InferenceDuration time.Duration `json:"inferenceDuration,omitempty"`
 	// EvalCaseResults contains results for each eval case.
 	EvalCaseResults []*EvalCaseResult `json:"evalCaseResults,omitempty"`
 	// Summary provides aggregated statistics for multi-run results.

@@ -53,7 +53,7 @@ type EvaluationInferenceDetails struct {
 }
 ```
 
-`EvalResult` 包含可由 EvalResultManager 持久化的聚合 EvalSetResult。`RunDetails` 只会在开启 run details 后填充，每条明细都对应一次具体运行。
+`EvalResult` 包含可由 EvalResultManager 持久化的聚合 EvalSetResult。集合级 `InferenceDuration` 通过 `EvaluationResult` 返回；持久化的 EvalSetResult 保留 case/run 级耗时，因此不需要修改数据库结构。`RunDetails` 只会在开启 run details 后填充，每条明细都对应一次具体运行。
 
 `ExecutionTime` 是完整评测流程耗时，包含推理和指标评估；`InferenceDuration` 按所有 case/run 累加实际 agent 推理耗时。开启 run 级并发时，它可能大于端到端的墙钟耗时。
 

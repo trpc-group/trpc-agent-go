@@ -53,7 +53,7 @@ type EvaluationInferenceDetails struct {
 }
 ```
 
-`EvalResult` contains the aggregated EvalSetResult that can be persisted by EvalResultManager. `RunDetails` is filled only when run details are enabled, and each item is associated with a specific run ID.
+`EvalResult` contains the aggregated EvalSetResult that can be persisted by EvalResultManager. The set-level `InferenceDuration` is returned on `EvaluationResult`; persisted EvalSetResult values retain case/run durations, so no database schema change is required. `RunDetails` is filled only when run details are enabled, and each item is associated with a specific run ID.
 
 `ExecutionTime` covers the complete evaluation flow, including inference and metric evaluation. `InferenceDuration` sums actual agent inference time across cases and runs. With run-level parallelism, it can exceed the end-to-end wall-clock duration.
 
