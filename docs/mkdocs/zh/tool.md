@@ -928,9 +928,44 @@ agent := llmagent.New("mcp-assistant",
 
 ### 工具名前缀
 
-通过 `WithToolSets` 把 MCP ToolSet 挂到 `LLMAgent` 上时，框架会用
-`NamedToolSet` 包装它。模型侧看到的工具名为
-`{toolSetName}_{远端工具名}`，实际 MCP `tools/call` 仍使用远端原始名称。
+通过 `WithToolSets` 或 `WithActivatableToolSets` 把 ToolSet（包括 MCP
+ToolSet）挂到 `LLMAgent` 上时，框架会用 `NamedToolSet` 包装它。默认情况下，
+名称为 `github` 的 ToolSet 中声明了 `search` 工具，模型侧看到的是
+`github_search`，底层 Tool 仍会收到原始工具名。
+
+可以使用 `llmagent.WithToolSetToolNameMode` 为某个已注册的 ToolSet 配置
+模型侧工具名：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+// githubToolSet 是任意 Name() 返回 "github" 的 tool.ToolSet 实现。
+agent := llmagent.New("assistant",
+    llmagent.WithToolSets([]tool.ToolSet{githubToolSet}),
+    llmagent.WithToolSetToolNameMode(
+        "github",
+        tool.ToolSetToolNameModeOriginal,
+    ),
+)
+```
+
+可选模式如下：
+
+- `tool.ToolSetToolNameModeQualified`（默认）：暴露为
+  `{toolSetName}_{toolName}`。
+- `tool.ToolSetToolNameModeOriginal`：使用 Tool 原始声明中的名称，不加
+  ToolSet 前缀。
+
+该选项同样适用于可激活 ToolSet，以及工具列表刷新后的 ToolSet。它只改变
+模型可见的声明名称；`ToolSet.Name()` 仍作为激活、策略和追踪使用的身份标识，
+实际调用仍会转发到底层 Tool。使用原始名称时，调用方需要保证同一次模型请求
+中所有可见工具的名称唯一。Agent 构建时会拒绝空 ToolSet 名称、未注册的
+ToolSet 名称以及不支持的 mode。
+
+对于 MCP ToolSet：
 
 - 默认 ToolSet 名为 `"mcp"`，远端工具 `search` 会暴露为 `mcp_search`。
 - 挂载多个 MCP ToolSet 时，请用 `mcp.WithName(...)` 为每个 ToolSet 设置

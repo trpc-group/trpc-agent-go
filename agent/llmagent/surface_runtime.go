@@ -483,6 +483,7 @@ func (a *LLMAgent) userToolsForInvocation(
 	}
 	baseTools := append([]tool.Tool(nil), a.option.Tools...)
 	toolSets := append([]tool.ToolSet(nil), a.option.ToolSets...)
+	toolSetToolNameModes := a.option.toolSetToolNameModes
 	a.mu.RUnlock()
 
 	if patchedTools, ok := patch.Tools(); ok {
@@ -500,7 +501,10 @@ func (a *LLMAgent) userToolsForInvocation(
 	userTools := append([]tool.Tool(nil), baseTools...)
 	userToolNames = collectUserToolNames(baseTools)
 	for _, toolSet := range toolSets {
-		namedToolSet := itool.NewNamedToolSet(toolSet)
+		namedToolSet := itool.NewNamedToolSetWithMode(
+			toolSet,
+			toolSetToolNameMode(toolSetToolNameModes, toolSet),
+		)
 		for _, t := range namedToolSet.Tools(ctx) {
 			userTools = append(userTools, t)
 			userToolNames[t.Declaration().Name] = true

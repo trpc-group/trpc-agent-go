@@ -12,6 +12,7 @@ package llmagent
 
 import (
 	"reflect"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/extension"
@@ -295,6 +296,9 @@ type Options struct {
 	Tools []tool.Tool
 	// ToolSets is the list of tool sets available to the agent.
 	ToolSets []tool.ToolSet
+	// toolSetToolNameModes configures model-facing tool names by ToolSet name.
+	// ToolSet.Name remains the stable identity used by activation and policy.
+	toolSetToolNameModes map[string]tool.ToolSetToolNameMode
 	// activatableToolSets is the list of tool sets available for runtime activation.
 	activatableToolSets []tool.ToolSet
 	// toolActivationRules stores runtime tool activation rules.
@@ -932,6 +936,23 @@ func WithTools(tools []tool.Tool) Option {
 func WithToolSets(toolSets []tool.ToolSet) Option {
 	return func(opts *Options) {
 		opts.ToolSets = toolSets
+	}
+}
+
+// WithToolSetToolNameMode sets how tools from the named ToolSet are exposed to
+// the model. ToolSetToolNameModeQualified is the default and exposes names as
+// {toolSetName}_{toolName}; ToolSetToolNameModeOriginal keeps the tool declarations'
+// original names. The ToolSet name itself is unchanged and this option applies
+// to both ToolSets and activatable ToolSets. Callers selecting original names
+// must ensure that those names are unique across the model request.
+// New panics during agent construction if the ToolSet name is blank, the mode
+// is unsupported, or no registered ToolSet has the given name.
+func WithToolSetToolNameMode(toolSetName string, mode tool.ToolSetToolNameMode) Option {
+	return func(opts *Options) {
+		if opts.toolSetToolNameModes == nil {
+			opts.toolSetToolNameModes = make(map[string]tool.ToolSetToolNameMode)
+		}
+		opts.toolSetToolNameModes[strings.TrimSpace(toolSetName)] = mode
 	}
 }
 

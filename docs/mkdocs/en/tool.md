@@ -968,10 +968,47 @@ agent := llmagent.New("mcp-assistant",
 
 ### Tool Name Prefixing
 
-When an MCP ToolSet is wired into an `LLMAgent` via `WithToolSets`, the
-framework wraps it with `NamedToolSet`. The model sees each remote tool under
-`{toolSetName}_{remoteToolName}` while the underlying MCP `tools/call` still
-uses the original remote name.
+When a ToolSet (including an MCP ToolSet) is wired into an `LLMAgent` via
+`WithToolSets` or `WithActivatableToolSets`, the framework wraps it with
+`NamedToolSet`. By default, a ToolSet named `github` whose tool declaration is
+`search` is exposed to the model as `github_search`. The underlying Tool still
+receives the original tool name.
+
+Use `llmagent.WithToolSetToolNameMode` to configure the model-facing names for
+an individual registered ToolSet:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+// githubToolSet is any tool.ToolSet implementation whose Name() is "github".
+agent := llmagent.New("assistant",
+    llmagent.WithToolSets([]tool.ToolSet{githubToolSet}),
+    llmagent.WithToolSetToolNameMode(
+        "github",
+        tool.ToolSetToolNameModeOriginal,
+    ),
+)
+```
+
+The available modes are:
+
+- `tool.ToolSetToolNameModeQualified` (default): exposes names as
+  `{toolSetName}_{toolName}`.
+- `tool.ToolSetToolNameModeOriginal`: exposes each Tool's original declaration
+  name without the ToolSet prefix.
+
+The option also applies to activatable ToolSets and ToolSets refreshed after
+their tool list changes. It changes only the model-visible declaration name;
+`ToolSet.Name()` remains the identity used for activation, policy, and tracing,
+and calls still reach the underlying Tool. When using original names, callers
+must ensure that names are unique across all tools visible in a model request.
+Agent construction rejects blank or unregistered ToolSet names and unsupported
+modes.
+
+For MCP ToolSets specifically:
 
 - Default ToolSet name is `"mcp"`, so a remote tool `search` becomes
   `mcp_search`.
