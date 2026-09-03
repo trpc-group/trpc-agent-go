@@ -12,6 +12,7 @@ package evaluation
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -74,6 +75,19 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.Nil(t, opts.evalCaseParallelInferenceEnabled)
 	assert.Nil(t, opts.evalCaseParallelEvaluationEnabled)
 	assert.False(t, opts.runDetailsEnabled)
+}
+
+func TestOptionsInferenceDuration(t *testing.T) {
+	opts := newOptions()
+	opts.addInferenceDuration(2 * time.Second)
+	opts.addInferenceDuration(3 * time.Second)
+	opts.addInferenceDuration(0)
+	opts.addInferenceDuration(-time.Second)
+	assert.Equal(t, 5*time.Second, opts.inferenceDurationValue())
+
+	var nilOpts *options
+	nilOpts.addInferenceDuration(time.Second)
+	assert.Zero(t, nilOpts.inferenceDurationValue())
 }
 
 func TestWithEvalSetManager(t *testing.T) {

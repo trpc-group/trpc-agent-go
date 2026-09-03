@@ -1699,6 +1699,7 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-xyz")
 	actual := makeActualInvocation("generated", "calc add 1 2", "calc result: 3")
 	inference := makeInferenceResult(appName, evalSetID, caseID, "session-xyz", []*evalset.Invocation{actual})
+	inference.InferenceDuration = 42 * time.Millisecond
 	req := &service.EvaluateRequest{
 		AppName:          appName,
 		EvalSetID:        evalSetID,
@@ -1714,8 +1715,10 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	assert.Equal(t, appName, result.AppName)
 	assert.Equal(t, evalSetID, result.EvalSetID)
 	assert.Len(t, result.EvalCaseResults, 1)
+	assert.Equal(t, 42*time.Millisecond, result.InferenceDuration)
 
 	caseResult := result.EvalCaseResults[0]
+	assert.Equal(t, 42*time.Millisecond, caseResult.InferenceDuration)
 	assert.Equal(t, caseID, caseResult.EvalID)
 	assert.Equal(t, status.EvalStatusPassed, caseResult.FinalEvalStatus)
 	assert.Len(t, caseResult.OverallEvalMetricResults, 1)
@@ -1730,6 +1733,30 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	assert.Equal(t, score.KindCategorical, perMetric.Details.Value.Kind)
 	assert.Equal(t, "correct", perMetric.Details.Value.Categorical)
 	assert.Equal(t, "demo-user", caseResult.UserID)
+}
+
+func TestInferenceDurationForInferenceResultFallbacks(t *testing.T) {
+	start := time.Now()
+	assert.Zero(t, inferenceDurationForInferenceResult(nil))
+	assert.Equal(t, 42*time.Millisecond, inferenceDurationForInferenceResult(&service.InferenceResult{
+		InferenceDuration: 42 * time.Millisecond,
+	}))
+	assert.Zero(t, inferenceDurationForInferenceResult(&service.InferenceResult{
+		EvalMode:          evalset.EvalModeTrace,
+		InferenceDuration: 42 * time.Millisecond,
+		ExecutionTraces: []*agenttrace.Trace{{
+			StartedAt: start,
+			EndedAt:   start.Add(time.Second),
+		}},
+	}))
+	assert.Equal(t, 5*time.Millisecond, inferenceDurationForInferenceResult(&service.InferenceResult{
+		ExecutionTraces: []*agenttrace.Trace{
+			nil,
+			{},
+			{StartedAt: start, EndedAt: start.Add(5 * time.Millisecond)},
+			{StartedAt: start.Add(10 * time.Millisecond), EndedAt: start.Add(5 * time.Millisecond)},
+		},
+	}))
 }
 
 func TestLocalEvaluateParallelEvaluationPreservesOrder(t *testing.T) {

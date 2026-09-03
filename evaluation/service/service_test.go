@@ -12,6 +12,7 @@ package service
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -50,10 +51,15 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 		UserID:             "user-123",
 		Status:             status.EvalStatusPassed,
 		ErrorMessage:       "",
+		InferenceDuration:  42 * time.Millisecond,
 	}
 
 	data, err := json.Marshal(result)
 	assert.NoError(t, err)
+	var payload map[string]json.RawMessage
+	assert.NoError(t, json.Unmarshal(data, &payload))
+	assert.Contains(t, payload, "inferenceDuration")
+	assert.NotContains(t, payload, "agentExecutionTime")
 
 	var decoded InferenceResult
 	err = json.Unmarshal(data, &decoded)
@@ -65,6 +71,7 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, result.SessionID, decoded.SessionID)
 	assert.Equal(t, result.UserID, decoded.UserID)
 	assert.Equal(t, result.Status, decoded.Status)
+	assert.Equal(t, result.InferenceDuration, decoded.InferenceDuration)
 	assert.Len(t, decoded.Inferences, 1)
 	if len(decoded.Inferences) == 1 {
 		assert.Equal(t, "inv-1", decoded.Inferences[0].InvocationID)
