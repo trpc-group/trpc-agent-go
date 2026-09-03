@@ -12,10 +12,10 @@ package jupyter
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"os/exec"
 	"regexp"
@@ -103,6 +103,7 @@ type CodeExecutor struct {
 	startTimeout     time.Duration
 	waitReadyTimeout time.Duration
 	subprocess       *exec.Cmd
+	stderrPipe       io.ReadCloser // read end of the subprocess stderr pipe; closed by cleanup
 	cli              *Client
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -182,36 +183,72 @@ func New(opts ...Option) (*CodeExecutor, error) {
 
 	c.subprocess = exec.CommandContext(c.ctx, "python", args...)
 
-	buff := bytes.NewBuffer(make([]byte, 1024))
-	c.subprocess.Stderr = buff
+	// StderrPipe connects subprocess stderr to an OS pipe whose read end we
+	// own. Unlike assigning a *bytes.Buffer to cmd.Stderr, this never shares
+	// a non-goroutine-safe data structure between the os/exec background
+	// goroutine (writing) and the startup scanner below (reading).
+	// See issue #2573 for the data race this replaces.
+	stderrPipe, err := c.subprocess.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stderr pipe: %v", err)
+	}
+	c.stderrPipe = stderrPipe
 
 	if err := c.subprocess.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start jupyter gateway: %v", err)
 	}
 
+	// lines carries stderr lines from a dedicated scanner goroutine so the
+	// select loop below never blocks on I/O. The goroutine exits when:
+	//   • the subprocess closes its stderr (normal exit), OR
+	//   • stderrPipe is closed by cleanup().
+	// After startup, if New() returned successfully, unread lines are
+	// discarded via the context-aware default branch to avoid blocking the
+	// goroutine indefinitely while the gateway runs.
+	lines := make(chan string, 64)
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(stderrPipe)
+		for sc.Scan() {
+			select {
+			case lines <- sc.Text():
+			case <-c.ctx.Done():
+				// Context cancelled (cleanup in progress): drain remaining
+				// buffered data so the subprocess can flush, then exit.
+				for sc.Scan() {
+				}
+				return
+			default:
+				// lines channel is full (startup poll loop has exited after
+				// New() returned successfully). Discard the line so we keep
+				// draining stderr and the subprocess never blocks on a full
+				// pipe buffer.
+			}
+		}
+	}()
+
 	timeout := time.After(c.startTimeout)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	scan := bufio.NewReader(buff)
 	for {
 		select {
 		case <-timeout:
 			c.cleanup()
 			return nil, fmt.Errorf("jupyter gateway startup timeout")
-		case <-ticker.C:
-			if c.subprocess.ProcessState != nil && c.subprocess.ProcessState.Exited() {
-				exitCode := c.subprocess.ProcessState.ExitCode()
+		case line, ok := <-lines:
+			if !ok {
+				// Scanner reached EOF: subprocess has closed stderr (exited).
+				exitCode := -1
+				if c.subprocess.ProcessState != nil {
+					exitCode = c.subprocess.ProcessState.ExitCode()
+				}
 				c.cleanup()
 				return nil, fmt.Errorf("jupyter gateway exited with code %d", exitCode)
 			}
-
-			line, _, _ := scan.ReadLine()
-			if strings.Contains(string(line), "ERROR:") {
-				errorInfo := strings.Split(string(line), "ERROR:")[1]
+			if strings.Contains(line, "ERROR:") {
+				errorInfo := strings.Split(line, "ERROR:")[1]
 				c.cleanup()
 				return nil, fmt.Errorf("jupyter gateway error: %s", errorInfo)
 			}
-			if strings.Contains(string(line), "is available at") {
+			if strings.Contains(line, "is available at") {
 				c.cli, err = NewClient(ConnectionInfo{
 					Host:             c.ip,
 					Port:             c.port,
@@ -367,6 +404,12 @@ func (c *CodeExecutor) cleanup() {
 	if c.subprocess != nil {
 		if err := c.subprocess.Process.Signal(syscall.SIGINT); err != nil {
 			c.subprocess.Process.Kill()
+		}
+		// Close the stderr pipe read end so the scanner goroutine unblocks
+		// and exits before we call Wait(). This avoids the "wait before all
+		// reads complete" violation documented in os/exec.Cmd.StderrPipe.
+		if c.stderrPipe != nil {
+			c.stderrPipe.Close()
 		}
 		c.subprocess.Wait()
 	}

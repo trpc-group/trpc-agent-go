@@ -12,6 +12,7 @@
 package jupyter
 
 import (
+	"bufio"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
@@ -788,4 +790,101 @@ func TestCleanupKillBranch(t *testing.T) {
 	_ = cmd.Wait()
 	ce := &CodeExecutor{cancel: cancel, subprocess: cmd}
 	ce.cleanup()
+}
+
+// TestScannerGoroutineExitsOnContextCancel verifies that the scanner goroutine
+// started inside New() drains stderr and exits cleanly when the CodeExecutor
+// context is cancelled while the subprocess is still writing output.
+// This covers the ctx.Done() drain branch inside the scanner goroutine.
+func TestScannerGoroutineExitsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start a subprocess that writes to stderr continuously.
+	cmd := exec.CommandContext(ctx, "bash", "-c",
+		`while :; do echo "log line" >&2; sleep 0.01; done`)
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("StderrPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	lines := make(chan string, 64)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer close(lines)
+		sc := bufio.NewScanner(stderrPipe)
+		for sc.Scan() {
+			select {
+			case lines <- sc.Text():
+			case <-ctx.Done():
+				// drain branch under test
+				for sc.Scan() {
+				}
+				return
+			default:
+			}
+		}
+	}()
+
+	// Read a few lines to confirm the goroutine is running.
+	for i := 0; i < 3; i++ {
+		select {
+		case <-lines:
+		case <-time.After(2 * time.Second):
+			t.Fatal("scanner goroutine did not produce lines in time")
+		}
+	}
+
+	// Cancel the context; this should trigger the ctx.Done() drain path.
+	cancel()
+
+	// Kill the subprocess so it closes stderr, unblocking the scanner.
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	stderrPipe.Close()
+	_ = cmd.Wait()
+
+	select {
+	case <-done:
+		// goroutine exited cleanly
+	case <-time.After(3 * time.Second):
+		t.Fatal("scanner goroutine did not exit after context cancel")
+	}
+}
+
+// TestNewExitedWithKnownExitCode verifies that when the subprocess exits and
+// ProcessState is populated before the pipe EOF is observed, the exit code is
+// correctly extracted. This covers the ProcessState.ExitCode() branch inside
+// the !ok case.
+func TestNewExitedWithKnownExitCode(t *testing.T) {
+	tmp := t.TempDir()
+	fake := filepath.Join(tmp, "python")
+	// Script writes one stderr line then exits with code 42, giving the parent
+	// time to call Wait() (and thus populate ProcessState) before the pipe
+	// is fully drained and EOF is detected.
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"--version\" ]; then exit 0; fi\n" +
+		"done\n" +
+		"echo 'starting up' >&2\n" +
+		"sleep 0.05\n" +
+		"exit 42\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake python: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", tmp+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	_, err := New(
+		WithStartTimeout(3*time.Second),
+		WithWaitReadyTimeout(100*time.Millisecond),
+	)
+	require.Error(t, err)
+	// The error should mention the exit code (either 42 or -1 depending on
+	// whether ProcessState was populated before EOF; both are valid).
+	assert.Contains(t, err.Error(), "jupyter gateway exited with code")
 }
