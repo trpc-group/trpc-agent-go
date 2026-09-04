@@ -216,9 +216,31 @@ standalone 重试；这次重试也可以按相同的边界规则选择更小的
 
 这里有一个重要的 branch 摘要行为：开启 `WithCacheSafeForking(true)` 后，非空
 branch 触发摘要时，可以用当前父请求 fork 来生成 branch 摘要；但同一轮 summary
-pass 不会再跑级联出来的全量会话摘要。框架会直接跳过这个全量摘要目标，而不是
-回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的 fork request。如果
-需要覆盖所有 branch 的全量摘要，需要单独触发一次全量会话摘要。
+pass 不会再发第二次独立的全量会话 LLM 调用。这既适用于最常见的单
+`filterKey` 会话，也适用于包含多个 filterKey 的会话。框架会跳过这次额外的
+LLM 目标，而不是回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的
+fork request。当 session 当前加载的所有事件都属于同一个 `filterKey` 时，如果
+本轮实际产出了 branch 摘要，该摘要会复制到 `SummaryFilterKeyAllContents`。这是
+基于当前加载窗口的优化：存储层事件数量限制可能省略其他 branch 的更早事件，
+因此不能仅凭这次复制推断 branch/full 的完整历史等价。多 filterKey 会话里，
+全量摘要 key 在这一轮保持不动；如果需要覆盖所有 branch 的全量摘要，请单独
+触发一次全量会话摘要。
+
+更一般地，branch 触发的全量摘要级联依赖 branch 目标在本轮实际产出摘要。如果
+branch gate 决定不更新摘要，框架会停止级联，不会独立推进全量会话摘要。后续
+目标失败时会返回错误，但不会创建独立的持久化恢复协议；后续普通调用必须重新
+通过 branch gate。如果 gate 没有触发，该调用可能返回 `nil`，但此前失败的全量
+目标仍未补齐。需要立即恢复时，应直接对 `SummaryFilterKeyAllContents` 强制生成
+摘要，或者在不携带 cache-safe parent fork 的 context 中用 `force=true` 重试
+branch cascade。携带 cache-safe parent 时，即使强制 branch cascade，后续全量
+LLM 目标仍会按设计跳过。
+
+异步 worker 会在执行结束后记录后续目标的错误；enqueue 成功只表示任务已接收，
+不会把 worker 稍后产生的错误同步返回给已经结束的 enqueue 调用。
+
+`WithSummaryJobTimeout(...)` 是整条 summary job 的 deadline。多 filterKey 级联会
+串行执行 branch 与全量摘要目标，两个目标共享同一个 deadline；配置时需要覆盖
+两段模型调用和持久化的总延迟。
 
 Prompt 规则：
 
@@ -512,9 +534,10 @@ summarizer := summary.NewSummarizer(
 
 高级集成如果要在高层 summary 流程前放入同一个 report，可以使用
 `summary.ContextWithReport(ctx, report)`，需要从 context 取出时使用
-`summary.ReportFromContext(ctx)`。单一路径会复用这个 report；cascade 并行生成多个
-summary 时，框架会给每个 worker 克隆一份 report，避免不同分支同时写同一个对象。
-这些 fork 出来的 report 会通过各自调用的 hook 发出，不会再合并回 root report。
+`summary.ReportFromContext(ctx)`。单一路径会复用这个 report；多 filterKey cascade
+中的独立 branch 和全量目标会各自获得一份克隆的 report，以隔离各自的写入。这些
+fork 出来的 report 会通过各自调用的 hook 发出，不会再合并回 root report。单
+filterKey 的 copy-persistence 优化不会产生这一对 target report。
 
 对于私有部署、endpoint ID、微调模型、新模型或多租户自定义模型配置，优先使用模型实例或单次运行 option，
 避免不同用户覆盖同一个进程级注册表：
@@ -1505,9 +1528,20 @@ sessionService := inmemory.NewSessionService(
 - `WithCascadeFullSessionSummary(...)` 控制非空分支触发摘要时，是否同时刷新
   全量会话摘要。
 - 开启 `WithCacheSafeForking(true)` 后，如果当前有父请求可 fork，branch 触发的
-  summary pass 只会生成 branch 摘要；级联出来的全量会话摘要目标会被跳过，不会
-  回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的 fork request。如果
-  确实需要覆盖所有 branch 的全量摘要，请单独触发一次全量会话摘要。
+  summary pass 只会跑 branch 摘要的 LLM 目标，不会回退到独立的全量摘要
+  prompt，也不会把这个 branch 视角的 fork request 再拿去发第二次 LLM 调用。
+  当 session 当前加载的所有事件都属于同一个 `filterKey` 时，如果本轮实际产出
+  了 branch 摘要，该摘要会复制到 `SummaryFilterKeyAllContents`。这是基于当前
+  加载窗口的优化，不能证明更早但未加载的历史中没有其他 branch。多 filterKey
+  会话里，级联出来的全量摘要目标会被跳过；如果确实需要覆盖所有 branch 的全量
+  摘要，请单独触发一次全量会话摘要。
+- 全量摘要级联以本轮 branch 目标实际产出摘要为前提；如果 branch 没有更新，
+  不会独立运行全量摘要目标。失败的后续目标不会根据推断或框架持久化的恢复状态
+  自动重试；后续调用必须重新产出 branch 摘要。需要立即恢复时，应直接强制生成
+  全量 key，或在不携带 cache-safe parent fork 的 context 中强制 branch cascade。
+- 异步 enqueue 成功不会返回 worker 稍后发生的错误；后续目标错误由 worker 记录。
+- `WithSummaryJobTimeout(...)` 作用于整条 summary job。branch 与全量摘要目标会
+  串行执行并共享同一个 deadline，因此配置时需要覆盖两段模型调用和持久化的总延迟。
 - 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入
   空 allowlist，并保持默认 cascade 开启：
 
