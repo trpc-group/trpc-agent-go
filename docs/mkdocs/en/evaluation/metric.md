@@ -1,6 +1,6 @@
 # EvalMetric
 
-EvalMetric defines evaluation metrics. It identifies the metric with `metricName`, describes criteria with `criterion`, and defines thresholds with `threshold`. A single evaluation can configure multiple metrics. The evaluation run applies them in order and produces scores and statuses for each.
+EvalMetric defines evaluation metrics. It identifies the metric with `metricName`, describes criteria with `criterion`, and defines thresholds with `threshold`. A single evaluation can configure multiple metrics. The evaluation run applies them in order and produces scores and statuses for each. When `requireExplicitSelection` is omitted or false, the metric runs by default; when it is true, the metric runs only after it is explicitly selected by an Invocation.
 
 ## Structure Definition
 
@@ -16,11 +16,12 @@ import (
 
 // EvalMetric represents one evaluation metric.
 type EvalMetric struct {
-	MetricName    string               // MetricName is the metric instance name.
-	EvaluatorName string               // EvaluatorName is an optional evaluator implementation name.
-	Threshold     float64              // Threshold is the threshold value.
-	Criterion     *criterion.Criterion // Criterion is the evaluation criteria.
-	Extension     any                  // Extension is caller-defined metadata.
+	MetricName               string               // MetricName is the metric instance name.
+	EvaluatorName            string               // EvaluatorName is an optional evaluator implementation name.
+	Threshold                float64              // Threshold is the threshold value.
+	Criterion                *criterion.Criterion // Criterion is the evaluation criteria.
+	Extension                any                  // Extension is caller-defined metadata.
+	RequireExplicitSelection bool                 // RequireExplicitSelection controls whether explicit selection is required.
 }
 
 // Criterion represents a collection of evaluation criteria.
@@ -44,7 +45,7 @@ For common usage, `metricName` identifies the metric in results and selects the 
 - `llm_rubric_response`: LLM rubric response evaluator, requires EvalSet to provide session input and LLMJudge plus rubrics.
 - `llm_rubric_knowledge_recall`: LLM rubric knowledge recall evaluator, requires EvalSet to provide session input and LLMJudge plus rubrics.
 
-`threshold` defines the threshold. Evaluators output a `score` and determine pass or fail based on it. The definition of `score` varies slightly across evaluators, but a common approach is to compute scores per Invocation and aggregate them into an overall score. Under the same EvalSet, `metricName` must be unique. The order of metrics in the file also affects the evaluation execution order and result display order.
+`requireExplicitSelection` controls whether a metric runs by default. When it is true, the metric is excluded from invocations without `metricNames` and runs only when selected by an Invocation. `threshold` defines the threshold. Evaluators output a `score` and determine pass or fail based on it. The definition of `score` varies slightly across evaluators, but a common approach is to compute scores per Invocation and aggregate them into an overall score. Under the same EvalSet, `metricName` must be unique. The order of metrics in the file also affects the evaluation execution order and result display order.
 
 `extension` carries caller-defined metadata for an evaluation metric, such as platform-side weights, grouping, or display configuration. The framework only reads, stores, and passes this field with `EvalMetric`; it does not interpret its business meaning or guarantee deep-copy semantics for its contents. Custom evaluators, platform logic, or custom aggregation logic can read it when needed.
 
@@ -55,6 +56,17 @@ Below is an example metric file for tool trajectory.
   {
     "metricName": "tool_trajectory_avg_score",
     "threshold": 1.0
+  }
+]
+```
+
+To run a metric only for invocations that explicitly select it, set `requireExplicitSelection`:
+
+```json
+[
+  {
+    "metricName": "turn_specific_quality",
+    "requireExplicitSelection": true
   }
 ]
 ```

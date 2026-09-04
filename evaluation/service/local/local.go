@@ -710,20 +710,24 @@ type caseEvaluationInputs struct {
 }
 
 // buildMetricInvocationIndexes resolves the metrics that apply to each invocation.
-// An invocation without an explicit metric list inherits all configured metrics.
+// An invocation without an explicit metric list inherits metrics that do not require explicit selection.
 func buildMetricInvocationIndexes(
 	evalCaseID string,
 	actuals, expecteds []*evalset.Invocation,
 	evalMetrics []*metric.EvalMetric,
 ) (map[string][]int, error) {
 	configuredMetricNames := make(map[string]struct{}, len(evalMetrics))
+	defaultMetricNames := make(map[string]struct{}, len(evalMetrics))
 	for _, evalMetric := range evalMetrics {
 		if evalMetric == nil {
 			continue
 		}
 		configuredMetricNames[evalMetric.MetricName] = struct{}{}
+		if !evalMetric.RequireExplicitSelection {
+			defaultMetricNames[evalMetric.MetricName] = struct{}{}
+		}
 	}
-	indexesByMetric := make(map[string][]int, len(configuredMetricNames))
+	indexesByMetric := make(map[string][]int, len(defaultMetricNames))
 	for invocationIndex := range actuals {
 		var metricNames []string
 		if invocationIndex < len(expecteds) && expecteds[invocationIndex] != nil {
@@ -733,7 +737,7 @@ func buildMetricInvocationIndexes(
 			metricNames = actuals[invocationIndex].MetricNames
 		}
 		if len(metricNames) == 0 {
-			for metricName := range configuredMetricNames {
+			for metricName := range defaultMetricNames {
 				indexesByMetric[metricName] = append(indexesByMetric[metricName], invocationIndex)
 			}
 			continue

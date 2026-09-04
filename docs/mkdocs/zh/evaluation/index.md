@@ -230,7 +230,7 @@ data/
 
 ##### 评估指标文件
 
-评估指标文件路径为 `data/math-eval-app/math-basic.metrics.json`，用于描述评估指标，按照 `metricName` 选择评估器，通过 `criterion` 描述评估准则，根据 `threshold` 定义阈值。一个文件可以配置多条指标，框架会依次执行。`metricNames` 可选，未配置的 Invocation 会继承全部已配置指标；如果只希望某个指标作用于指定对话轮次，需要为所有相关 Invocation 配置 `metricNames`，并在不应执行该指标的轮次中省略它。
+评估指标文件路径为 `data/math-eval-app/math-basic.metrics.json`，用于描述评估指标，按照 `metricName` 选择评估器，通过 `criterion` 描述评估准则，根据 `threshold` 定义阈值。一个文件可以配置多条指标，`requireExplicitSelection` 未设置或为 `false` 的指标会默认执行；设置为 `true` 的指标只有在某轮 Invocation 的 `metricNames` 中显式列出时才执行。Invocation 配置 `metricNames` 后，该列表作为本轮完整白名单。
 
 本节只配置工具轨迹评估器 `tool_trajectory_avg_score`，对比每轮工具轨迹，工具 `id` 通常是运行时生成的，不作为匹配依据。
 

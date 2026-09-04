@@ -18,11 +18,12 @@ import (
 
 // EvalMetric represents a metric used to evaluate a particular aspect of an eval case.
 type EvalMetric struct {
-	MetricName    string               `json:"metricName,omitempty"`    // MetricName identifies the metric instance.
-	EvaluatorName string               `json:"evaluatorName,omitempty"` // EvaluatorName routes to the evaluator implementation.
-	Threshold     float64              `json:"threshold,omitempty"`     // Threshold value for this metric.
-	Criterion     *criterion.Criterion `json:"criterion,omitempty"`     // Evaluation criterion used by the metric.
-	Extension     any                  `json:"extension,omitempty"`     // Extension stores caller-defined metadata for this metric.
+	MetricName               string               `json:"metricName,omitempty"`               // MetricName identifies the metric instance.
+	EvaluatorName            string               `json:"evaluatorName,omitempty"`            // EvaluatorName routes to the evaluator implementation.
+	Threshold                float64              `json:"threshold,omitempty"`                // Threshold value for this metric.
+	Criterion                *criterion.Criterion `json:"criterion,omitempty"`                // Evaluation criterion used by the metric.
+	Extension                any                  `json:"extension,omitempty"`                // Extension stores caller-defined metadata for this metric.
+	RequireExplicitSelection bool                 `json:"requireExplicitSelection,omitempty"` // RequireExplicitSelection excludes this metric from the default metric set.
 }
 
 // Manager defines the interface for managing evaluation metrics.

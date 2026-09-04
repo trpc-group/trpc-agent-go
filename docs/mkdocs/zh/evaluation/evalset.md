@@ -62,7 +62,7 @@ type ConversationScenario struct {
 // Invocation 表示对话中的一轮交互
 type Invocation struct {
 	InvocationID          string               // InvocationID 是本轮标识，可选
-	MetricNames           []string             // MetricNames 指定本轮使用的评估指标。为空时使用评估请求中配置的全部指标
+	MetricNames           []string             // MetricNames 指定本轮使用的评估指标。为空时使用未要求显式选择的指标
 	ContextMessages       []*model.Message     // ContextMessages 是本轮上下文消息，可选
 	UserContent           *model.Message       // UserContent 是本轮用户输入，必填
 	FinalResponse         *model.Message       // FinalResponse 是最终响应，可选
@@ -94,9 +94,9 @@ EvalSet 由 `evalSetId` 标识，包含多个 EvalCase，每个用例用 `evalId
 
 EvalSet 中的 `tools` 与 `finalResponse` 用于描述工具轨迹与最终响应，是否需要填写取决于所选评估指标。
 
-可以通过 `metricNames` 为单独一轮 Invocation 绑定评估指标。不配置或为空时，该轮继承 `EvaluateConfig` 中配置的全部指标；配置一个或多个指标名时，该列表作为本轮白名单，未列出的指标会跳过。列表中的每个名称都必须对应 `EvaluateConfig` 中已配置的指标。在 Trace 模式下，如果 `conversation` 与 `actualConversation` 都配置了指标名，则优先使用预期侧 `conversation` 的绑定；仅当预期侧没有配置指标名时，才回退到实际侧选择。
+可以通过 `metricNames` 为单独一轮 Invocation 绑定评估指标。不配置或为空时，该轮继承 `EvaluateConfig` 中 `requireExplicitSelection` 未设置或为 `false` 的指标；配置一个或多个指标名时，该列表作为本轮白名单，未列出的指标会跳过。列表中的每个名称都必须对应 `EvaluateConfig` 中已配置的指标。在 Trace 模式下，如果 `conversation` 与 `actualConversation` 都配置了指标名，则优先使用预期侧 `conversation` 的绑定；仅当预期侧没有配置指标名时，才回退到实际侧选择。
 
-`conversationScenario` 动态生成的轮次没有预先声明的 Invocation，因此仍会继承全部已配置指标。
+`conversationScenario` 动态生成的轮次没有预先声明的 Invocation，因此仍会继承未要求显式选择的指标。
 
 `toolMock` 用于推理阶段替换工具执行返回，不是评估阶段的预期输出。它只作用于所在 invocation；配置后模型仍基于真实工具声明决定是否发起 tool call，框架只在工具执行点替换返回值，并把 mock 结果继续写入实际工具轨迹。
 

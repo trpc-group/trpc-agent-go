@@ -62,7 +62,7 @@ type ConversationScenario struct {
 // Invocation represents one turn in a conversation.
 type Invocation struct {
 	InvocationID          string               // InvocationID is the turn identifier, optional.
-	MetricNames           []string             // MetricNames selects the metrics for this turn. When empty, all metrics configured for the evaluation request apply.
+	MetricNames           []string             // MetricNames selects the metrics for this turn. When empty, metrics that do not require explicit selection apply.
 	ContextMessages       []*model.Message     // ContextMessages are per-turn context messages, optional.
 	UserContent           *model.Message       // UserContent is the user input for this turn, required.
 	FinalResponse         *model.Message       // FinalResponse is the final response, optional.
@@ -94,9 +94,9 @@ In default mode, inference can be organized in two ways. With `conversation`, th
 
 `tools` and `finalResponse` in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics.
 
-`metricNames` can bind metrics to an individual invocation. When it is omitted or empty, the invocation inherits all metrics configured in `EvaluateConfig`. When it contains one or more metric names, only those configured metrics are evaluated for that turn; metrics not listed for the invocation are skipped. Each name must refer to a metric configured in `EvaluateConfig`. In trace mode, when both `conversation` and `actualConversation` provide metric names, the expected-side `conversation` takes precedence; the actual-side selection is used only when the expected side has no metric names.
+`metricNames` can bind metrics to an individual invocation. When it is omitted or empty, the invocation inherits metrics configured in `EvaluateConfig` whose `requireExplicitSelection` is false or omitted. When it contains one or more metric names, only those configured metrics are evaluated for that turn; metrics not listed for the invocation are skipped. Each name must refer to a metric configured in `EvaluateConfig`. In trace mode, when both `conversation` and `actualConversation` provide metric names, the expected-side `conversation` takes precedence; the actual-side selection is used only when the expected side has no metric names.
 
-Turns generated dynamically by `conversationScenario` have no predeclared `Invocation`, so they continue to inherit all configured metrics.
+Turns generated dynamically by `conversationScenario` have no predeclared `Invocation`, so they continue to inherit metrics that do not require explicit selection.
 
 `toolMock` replaces tool execution results during inference. It is not an expected output for the evaluation phase. It only applies to the invocation where it is configured; the model still decides whether to call tools based on the real tool declarations, and the framework only replaces the return value at the tool execution point. The mocked result is still captured in the actual tool trace.
 

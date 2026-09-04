@@ -1806,16 +1806,29 @@ func TestEvaluatePerCaseUsesInvocationMetricNames(t *testing.T) {
 }
 
 func TestBuildMetricInvocationIndexes(t *testing.T) {
-	metrics := []*metric.EvalMetric{{MetricName: "first"}, {MetricName: "second"}}
+	metrics := []*metric.EvalMetric{
+		{MetricName: "first"},
+		{MetricName: "second", RequireExplicitSelection: true},
+	}
 
-	t.Run("empty list inherits all metrics", func(t *testing.T) {
+	t.Run("empty list inherits default metrics", func(t *testing.T) {
 		indexes, err := buildMetricInvocationIndexes("case", []*evalset.Invocation{
 			{}, {},
 		}, []*evalset.Invocation{
 			{}, {MetricNames: []string{}},
 		}, metrics)
 		require.NoError(t, err)
-		assert.Equal(t, map[string][]int{"first": {0, 1}, "second": {0, 1}}, indexes)
+		assert.Equal(t, map[string][]int{"first": {0, 1}}, indexes)
+	})
+
+	t.Run("explicit list enables opt-in metrics", func(t *testing.T) {
+		indexes, err := buildMetricInvocationIndexes("case", []*evalset.Invocation{
+			{},
+		}, []*evalset.Invocation{
+			{MetricNames: []string{"second"}},
+		}, metrics)
+		require.NoError(t, err)
+		assert.Equal(t, map[string][]int{"second": {0}}, indexes)
 	})
 
 	t.Run("duplicate configured names do not duplicate inherited indexes", func(t *testing.T) {
