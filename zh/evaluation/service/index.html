@@ -3780,7 +3780,7 @@
 </span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="w">    </span><span class="nx">UserID</span><span class="w">       </span><span class="kt">string</span><span class="w">                </span><span class="c1">// UserID 是推理阶段用户标识</span>
 </span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="nx">Status</span><span class="w">       </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatus</span><span class="w">     </span><span class="c1">// Status 是推理状态</span>
 </span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a><span class="w">    </span><span class="nx">ErrorMessage</span><span class="w"> </span><span class="kt">string</span><span class="w">                </span><span class="c1">// ErrorMessage 是推理失败原因</span>
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="w">    </span><span class="nx">InferenceDuration</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span><span class="w">   </span><span class="c1">// InferenceDuration 是实际 agent 推理耗时</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="w">    </span><span class="nx">InferenceStats</span><span class="w"> </span><span class="o">*</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">InferenceStats</span><span class="w"> </span><span class="c1">// InferenceStats 包含实际 agent 推理资源消耗</span>
 </span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="p">}</span>
 </span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a>
 </span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a><span class="c1">// EvaluateRequest 是评估请求</span>
@@ -3800,7 +3800,7 @@
 </span><span id="__span-0-51"><a id="__codelineno-0-51" name="__codelineno-0-51"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvalSetRunResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-0-52"><a id="__codelineno-0-52" name="__codelineno-0-52"></a><span class="w">    </span><span class="nx">AppName</span><span class="w">         </span><span class="kt">string</span><span class="w">                       </span><span class="c1">// AppName 是应用名</span>
 </span><span id="__span-0-53"><a id="__codelineno-0-53" name="__codelineno-0-53"></a><span class="w">    </span><span class="nx">EvalSetID</span><span class="w">       </span><span class="kt">string</span><span class="w">                       </span><span class="c1">// EvalSetID 是评估集标识</span>
-</span><span id="__span-0-54"><a id="__codelineno-0-54" name="__codelineno-0-54"></a><span class="w">    </span><span class="nx">InferenceDuration</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span><span class="w">             </span><span class="c1">// InferenceDuration 是本次 run 的实际 agent 推理耗时</span>
+</span><span id="__span-0-54"><a id="__codelineno-0-54" name="__codelineno-0-54"></a><span class="w">    </span><span class="nx">InferenceStats</span><span class="w"> </span><span class="o">*</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">InferenceStats</span><span class="w">   </span><span class="c1">// InferenceStats 包含本次 run 的实际 agent 推理资源消耗</span>
 </span><span id="__span-0-55"><a id="__codelineno-0-55" name="__codelineno-0-55"></a><span class="w">    </span><span class="nx">EvalCaseResults</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">EvalCaseResult</span><span class="w"> </span><span class="c1">// EvalCaseResults 是评估用例结果</span>
 </span><span id="__span-0-56"><a id="__codelineno-0-56" name="__codelineno-0-56"></a><span class="p">}</span>
 </span><span id="__span-0-57"><a id="__codelineno-0-57" name="__codelineno-0-57"></a>
@@ -3830,6 +3830,7 @@
 <p>推理阶段由 <code>Inference</code> 方法负责，读取 EvalSet 并按 <code>EvalCaseIDs</code> 过滤用例，然后为每个用例生成一个独立的 <code>SessionID</code> 并执行推理。</p>
 <p>当 <code>evalMode</code> 为空值时，推理阶段会根据用例配置选择输入来源：若配置了 <code>conversationScenario</code>，则由 UserSimulation 动态生成每轮用户输入；否则按 <code>conversation</code> 的轮次依次调用 Runner，并把每轮采集到的实际 Invocation 写入 <code>Inferences</code>。</p>
 <p>当 <code>evalMode</code> 为 <code>trace</code> 时，推理阶段不会运行 Runner；若配置了 <code>actualConversation</code>，则直接将其作为实际轨迹返回，否则会将 <code>conversation</code> 视为实际轨迹返回。</p>
+<p><code>InferenceStats</code> 包含推理过程中目标 Agent 上报的耗时和 token 消耗。<code>InferenceResult.InferenceStats</code> 记录单个用例，<code>EvalSetRunResult.InferenceStats</code> 汇总本次 run 中各用例的该值。这里只统计目标 Agent，不包含评估器、预期 runner 或 trace 回放产生的消耗；如果模型没有上报 token usage，则 <code>TokenUsage</code> 为 nil。</p>
 <p>Local 实现支持 EvalCase 级并发推理。开启后会并行运行多个用例，单个用例内部仍按轮次顺序执行。</p>
 <h2 id="_3">评估阶段</h2>
 <p>评估阶段由 <code>Evaluate</code> 方法负责，以 <code>InferenceResult</code> 为输入，加载对应的 EvalCase，构造 actuals 与 expecteds 两组 Invocation 列表。默认情况下，expecteds 来自 EvalSet 的 <code>conversation</code>；若用例使用 <code>conversationScenario</code> 且未开启 <code>expectedRunnerEnabled</code>，则会基于实际轨迹构造仅保留 <code>userContent</code> 的占位 expecteds；当 EvalCase 开启 <code>expectedRunnerEnabled</code> 时，评估阶段直接复用推理阶段已经生成好的 <code>ExpectedInferences</code>。然后按 <code>EvaluateConfig.EvalMetrics</code> 逐条执行评估器。</p>
@@ -4188,7 +4189,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年9月3日 09:06:20 UTC">2026-09-03 09:06:20</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年9月4日 09:13:07 UTC">2026-09-04 09:13:07</span>
   </span>
 
     
