@@ -26,6 +26,7 @@ import (
 type mockClient struct {
 	putObjectFunc     func(ctx context.Context, key string, data []byte, contentType string) error
 	getObjectFunc     func(ctx context.Context, key string) ([]byte, string, error)
+	headObjectFunc    func(ctx context.Context, req *HeadObjectRequest, opts ...HeadObjectOption) (*HeadObjectResponse, error)
 	listObjectsFunc   func(ctx context.Context, prefix string) ([]string, error)
 	deleteObjectsFunc func(ctx context.Context, keys []string) error
 	closeFunc         func() error
@@ -43,6 +44,13 @@ func (m *mockClient) GetObject(ctx context.Context, key string) ([]byte, string,
 		return m.getObjectFunc(ctx, key)
 	}
 	return nil, "", nil
+}
+
+func (m *mockClient) HeadObject(ctx context.Context, req *HeadObjectRequest, opts ...HeadObjectOption) (*HeadObjectResponse, error) {
+	if m.headObjectFunc != nil {
+		return m.headObjectFunc(ctx, req, opts...)
+	}
+	return nil, nil
 }
 
 func (m *mockClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
@@ -168,6 +176,7 @@ func TestClientBuilderOpts(t *testing.T) {
 type mockS3API struct {
 	putObjectFunc     func(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	getObjectFunc     func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	headObjectFunc    func(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 	deleteObjectsFunc func(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
 	listObjectsV2Func func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
@@ -184,6 +193,16 @@ func (m *mockS3API) GetObject(ctx context.Context, params *s3.GetObjectInput, op
 		return m.getObjectFunc(ctx, params, optFns...)
 	}
 	return &s3.GetObjectOutput{}, nil
+}
+
+func (m *mockS3API) HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if m.headObjectFunc != nil {
+		return m.headObjectFunc(ctx, params, optFns...)
+	}
+	return &s3.HeadObjectOutput{}, nil
 }
 
 func (m *mockS3API) DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
@@ -298,6 +317,46 @@ func TestClient_GetObject(t *testing.T) {
 
 		_, _, err := c.GetObject(context.Background(), "test-key")
 		assert.Error(t, err)
+	})
+}
+
+func TestClient_HeadObject(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		mock := &mockS3API{
+			headObjectFunc: func(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+				assert.Equal(t, "test-bucket", aws.ToString(params.Bucket))
+				assert.Equal(t, "test-key", aws.ToString(params.Key))
+				return &s3.HeadObjectOutput{
+					ContentLength: aws.Int64(123),
+					ContentType:   aws.String("text/plain"),
+				}, nil
+			},
+		}
+		c := newTestClient(mock)
+
+		res, err := c.HeadObject(context.Background(), &HeadObjectRequest{Key: "test-key"})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, int64(123), res.Size)
+		assert.Equal(t, "text/plain", res.ContentType)
+	})
+
+	t.Run("nil request", func(t *testing.T) {
+		c := newTestClient(&mockS3API{})
+		_, err := c.HeadObject(context.Background(), nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("not found wraps ErrNotFound", func(t *testing.T) {
+		mock := &mockS3API{
+			headObjectFunc: func(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+				return nil, &types.NoSuchKey{}
+			},
+		}
+		c := newTestClient(mock)
+
+		_, err := c.HeadObject(context.Background(), &HeadObjectRequest{Key: "missing"})
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 }
 
