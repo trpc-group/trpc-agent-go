@@ -119,13 +119,17 @@ func runnerRunAttrs(
 	}
 }
 
-func runnerInvocationAttrs(inv *agent.Invocation) []attribute.KeyValue {
+// runnerInvocationAttrs builds invocation telemetry attributes. agentName must
+// be the pre-run snapshot captured before agent.Run: agents mutate
+// invocation.AgentName from their own goroutine (setupInvocation), so reading
+// the live field can race the agent after it has started.
+func runnerInvocationAttrs(inv *agent.Invocation, agentName string) []attribute.KeyValue {
 	if inv == nil {
 		return nil
 	}
 	return []attribute.KeyValue{
 		attribute.String("runner.invocation_id", inv.InvocationID),
-		attribute.String("runner.agent", inv.AgentName),
+		attribute.String("runner.agent", agentName),
 		attribute.String("runner.request_id", inv.RunOptions.RequestID),
 	}
 }

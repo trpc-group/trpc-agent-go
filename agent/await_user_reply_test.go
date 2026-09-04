@@ -384,7 +384,7 @@ func TestAttachAwaitUserReplyRoute_WithoutPendingRoute(t *testing.T) {
 		},
 	)
 
-	attachAwaitUserReplyRoute(inv, evt)
+	attachAwaitUserReplyRoute(inv, evt, inv.AgentName)
 
 	sess := session.NewSession("app", "user", "sess")
 	sess.ApplyEventStateDelta(evt)

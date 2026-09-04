@@ -1673,3 +1673,97 @@ func TestWithUserMessageRewriter(t *testing.T) {
 		model.NewUserMessage("rewritten"),
 	}, msgs)
 }
+
+// TestInvocation_RefreshViewState_Guards verifies that RefreshViewState is a
+// no-op when the receiver or source is nil, or when both point to the same
+// Invocation, and that it never panics or deadlocks in those cases.
+func TestInvocation_RefreshViewState_Guards(t *testing.T) {
+	live := NewInvocation()
+	live.SetState("key", "original")
+
+	// nil receiver must not panic
+	var nilInv *Invocation
+	nilInv.RefreshViewState(live)
+
+	// nil src must not panic; dst state must be unchanged
+	snapshot := live.View()
+	snapshot.RefreshViewState(nil)
+	v, ok := snapshot.GetState("key")
+	require.True(t, ok, "state must be unchanged after nil-src RefreshViewState")
+	require.Equal(t, "original", v)
+
+	// self must not panic or deadlock; state must be unchanged
+	live.RefreshViewState(live)
+	v, ok = live.GetState("key")
+	require.True(t, ok, "state must be unchanged after self RefreshViewState")
+	require.Equal(t, "original", v)
+}
+
+// TestInvocation_RefreshViewState_CopiesStateFromSrc verifies that
+// RefreshViewState replaces the destination's state map with a deep copy of
+// the source's view-visible state, leaving identity fields (AgentName, etc.)
+// untouched.
+func TestInvocation_RefreshViewState_CopiesStateFromSrc(t *testing.T) {
+	src := NewInvocation(WithInvocationAgent(&mockAgent{name: "src-agent"}))
+	src.AgentName = "src-agent"
+	src.SetState("billing", "charged")
+	src.SetState("audit", "logged")
+
+	dst := src.View()
+	// Overwrite dst state to simulate snapshot taken before BeforeAgent ran.
+	dst.stateMu.Lock()
+	dst.state = nil
+	dst.stateMu.Unlock()
+
+	dst.AgentName = "dst-agent" // identity must survive the refresh
+
+	dst.RefreshViewState(src)
+
+	// State from src must be visible in dst.
+	v, ok := dst.GetState("billing")
+	require.True(t, ok)
+	require.Equal(t, "charged", v)
+
+	v, ok = dst.GetState("audit")
+	require.True(t, ok)
+	require.Equal(t, "logged", v)
+
+	// Identity fields must be unchanged.
+	require.Equal(t, "dst-agent", dst.AgentName,
+		"RefreshViewState must not overwrite identity fields")
+
+	// Mutation of dst state must not affect src (deep copy).
+	dst.SetState("billing", "refunded")
+	v, _ = src.GetState("billing")
+	require.Equal(t, "charged", v,
+		"RefreshViewState must produce an independent copy, not a shared reference")
+}
+
+// TestInvocation_RefreshViewState_RaceWithConcurrentSetState checks that
+// RefreshViewState is race-free when the source receives concurrent SetState
+// calls while the copy is in progress.
+func TestInvocation_RefreshViewState_RaceWithConcurrentSetState(t *testing.T) {
+	src := NewInvocation()
+	dst := src.View()
+
+	const iterations = 200
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			src.SetState("counter", i)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			dst.RefreshViewState(src)
+		}
+	}()
+
+	wg.Wait()
+	// No assertion beyond "did not race" — the race detector enforces that.
+}
