@@ -176,11 +176,11 @@ func expectFullSessionEventsList(
 	key session.Key,
 	rows ...limitedEventRow,
 ) *sqlmock.ExpectedQuery {
-	sqlRows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"})
-	for _, row := range rows {
-		sqlRows.AddRow(key.AppName, key.UserID, key.SessionID, row.event, row.createdAt)
+	sqlRows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at", "id"})
+	for i, row := range rows {
+		sqlRows.AddRow(key.AppName, key.UserID, key.SessionID, row.event, row.createdAt, int64(i+1))
 	}
-	return mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM")).
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at, id FROM")).
 		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
 		WillReturnRows(sqlRows)
 }
@@ -222,7 +222,8 @@ func expectPreviousEventRefs(
 ) *sqlmock.ExpectedQuery {
 	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
 	if before != nil {
-		args = append(args, before.createdAt)
+		// Composite keyset cursor binds (created_at, created_at, id).
+		args = append(args, before.createdAt, before.createdAt, before.id)
 	}
 	args = append(args, userAnchorSearchBatchSize)
 	rows := sqlmock.NewRows([]string{"id", "created_at"})
@@ -2415,9 +2416,9 @@ func TestListSessions_WithEvents(t *testing.T) {
 	eventBytes, _ := json.Marshal(evt)
 
 	// Mock: Batch load events with data
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM")).
-		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
-			AddRow(userKey.AppName, userKey.UserID, "session-1", eventBytes, time.Now()))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at, id FROM")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at", "id"}).
+			AddRow(userKey.AppName, userKey.UserID, "session-1", eventBytes, time.Now(), int64(1)))
 
 	// Prepare mock summary
 	summary := session.Summary{Summary: "test summary", Topics: []string{}}
@@ -2606,7 +2607,7 @@ func TestGetTrackEvents_ZeroAfterTimeOmitsCreatedAtFilter(t *testing.T) {
 		`WHERE app_name = \? AND user_id = \? AND session_id = \? AND track = \?\s+`+
 		`AND \(expires_at IS NULL OR expires_at > \?\)\s+`+
 		`AND deleted_at IS NULL\s+`+
-		`ORDER BY created_at DESC$`).
+		`ORDER BY created_at DESC, id DESC$`).
 		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
@@ -2647,7 +2648,7 @@ func TestGetTrackEvents_AfterTimeBindsCreatedAtFilter(t *testing.T) {
 		`AND \(expires_at IS NULL OR expires_at > \?\)\s+`+
 		`AND deleted_at IS NULL\s+`+
 		`AND created_at > \?\s+`+
-		`ORDER BY created_at DESC$`).
+		`ORDER BY created_at DESC, id DESC$`).
 		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), afterTime).
 		WillReturnRows(sqlmock.NewRows([]string{"event"}))
 
