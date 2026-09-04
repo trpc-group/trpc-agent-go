@@ -60,6 +60,31 @@ Below is an example metric file for tool trajectory.
 ]
 ```
 
+## Metric Scope
+
+Metrics apply to all Invocations in an evaluation by default. To run a metric only on turns that explicitly select it, set `requireExplicitSelection` to `true` in the metric configuration. Metrics whose field is omitted or false run for Invocations without `metricNames`. Once an Invocation configures `metricNames`, the list is the complete allowlist for that turn; unlisted metrics are skipped, and every name must refer to a metric configured for the evaluation request.
+
+For example, configure the metric as follows:
+
+```json
+[
+  {
+    "metricName": "turn_specific_quality",
+    "requireExplicitSelection": true
+  }
+]
+```
+
+Then select it only on the turns that need it:
+
+```json
+{
+  "metricNames": ["turn_specific_quality"]
+}
+```
+
+In trace mode, when both `conversation` and `actualConversation` provide metric names, the expected-side `conversation` binding takes precedence; the actual-side selection is used only when the expected side has no metric names. Turns generated dynamically by `conversationScenario` have no predeclared Invocation, so they inherit metrics that do not require explicit selection.
+
 ## Criterion
 
 Criterion describes evaluation criteria. Each evaluator reads only the sub-criteria it cares about, and you can combine them as needed.

@@ -60,6 +60,31 @@ type Criterion struct {
 ]
 ```
 
+## 指标作用范围
+
+指标默认应用于评测请求中的所有 Invocation。若某个指标只需要在显式选择的轮次执行，可以在指标配置中将 `requireExplicitSelection` 设置为 `true`。未设置或为 `false` 的指标，会在没有配置 `metricNames` 的 Invocation 中执行。Invocation 配置 `metricNames` 后，该列表作为本轮完整白名单，未列出的指标会跳过；列表中的每个名称都必须对应评测请求中已配置的指标。
+
+例如，在指标文件中配置：
+
+```json
+[
+  {
+    "metricName": "turn_specific_quality",
+    "requireExplicitSelection": true
+  }
+]
+```
+
+然后只在需要的轮次中显式选择：
+
+```json
+{
+  "metricNames": ["turn_specific_quality"]
+}
+```
+
+在 Trace 模式下，如果 `conversation` 与 `actualConversation` 都配置了指标名，优先使用预期侧 `conversation` 的绑定；仅当预期侧没有配置指标名时，才回退到实际侧选择。`conversationScenario` 动态生成的轮次没有预先声明的 Invocation，因此会继承未要求显式选择的指标。
+
 ## 评估准则 Criterion
 
 Criterion 用于描述评估准则，不同评估器只会读取自己关心的子准则，可按需组合使用。

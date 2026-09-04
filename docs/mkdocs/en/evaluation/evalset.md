@@ -94,31 +94,6 @@ In default mode, inference can be organized in two ways. With `conversation`, th
 
 `tools` and `finalResponse` in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics.
 
-### Select Metrics Per Turn
-
-`metricNames` can bind metrics to an individual invocation. When it is omitted or empty, the invocation inherits metrics configured in `EvaluateConfig` whose `requireExplicitSelection` is false or omitted. Set `requireExplicitSelection` to true for a metric that should run only when an invocation explicitly lists its name. When `metricNames` contains one or more metric names, it is the complete allowlist for that turn. Each name must refer to a metric configured in `EvaluateConfig`. In trace mode, when both `conversation` and `actualConversation` provide metric names, the expected-side `conversation` takes precedence; the actual-side selection is used only when the expected side has no metric names.
-
-For example, configure the metric as follows:
-
-```json
-[
-  {
-    "metricName": "turn_specific_quality",
-    "requireExplicitSelection": true
-  }
-]
-```
-
-Then select it only on the turns that need it:
-
-```json
-{
-  "metricNames": ["turn_specific_quality"]
-}
-```
-
-Turns generated dynamically by `conversationScenario` have no predeclared `Invocation`, so they continue to inherit metrics that do not require explicit selection.
-
 `toolMock` replaces tool execution results during inference. It is not an expected output for the evaluation phase. It only applies to the invocation where it is configured; the model still decides whether to call tools based on the real tool declarations, and the framework only replaces the return value at the tool execution point. The mocked result is still captured in the actual tool trace.
 
 In trace mode, you can configure actual output traces explicitly via `actualConversation`.
