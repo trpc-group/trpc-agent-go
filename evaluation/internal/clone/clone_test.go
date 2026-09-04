@@ -242,6 +242,7 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 		Conversation: []*evalset.Invocation{
 			{
 				InvocationID: "inv-1",
+				MetricNames:  []string{"llm_rubric_response"},
 				ContextMessages: []*model.Message{
 					{
 						Role:    model.RoleSystem,
@@ -397,6 +398,9 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.Conversation[0].Tools[0].Arguments.(map[string]any)["a"] = 2
 	assert.Equal(t, 1, src.Conversation[0].Tools[0].Arguments.(map[string]any)["a"])
+
+	dst.Conversation[0].MetricNames[0] = "changed"
+	assert.Equal(t, "llm_rubric_response", src.Conversation[0].MetricNames[0])
 
 	dst.Conversation[0].ToolMock.Actual[0].Arguments.Expected.(map[string]any)["a"] = 2
 	assert.Equal(t, 1, src.Conversation[0].ToolMock.Actual[0].Arguments.Expected.(map[string]any)["a"])

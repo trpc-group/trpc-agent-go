@@ -456,6 +456,15 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	if err != nil {
 		return nil, err
 	}
+	metricInvocationIndexes, err := buildMetricInvocationIndexes(
+		inferenceResult.EvalCaseID,
+		inputs.actuals,
+		inputs.expecteds,
+		evaluateConfig.EvalMetrics,
+	)
+	if err != nil {
+		return nil, err
+	}
 	// overallMetricResults collects the metric results for the entire eval case.
 	overallMetricResults := make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics))
 	effectiveMetrics := make([]*metric.EvalMetric, 0, len(evaluateConfig.EvalMetrics))
@@ -469,6 +478,14 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	}
 	// Iterate through every configured metric and run the evaluation.
 	for _, configuredMetric := range evaluateConfig.EvalMetrics {
+		if configuredMetric == nil {
+			return nil, errors.New("eval metric is nil")
+		}
+		invocationIndexes := metricInvocationIndexes[configuredMetric.MetricName]
+		if len(invocationIndexes) == 0 {
+			continue
+		}
+		// Evaluators receive only the invocations that selected this metric.
 		metricEvaluator, err := lookupMetricEvaluator(opts.Registry, configuredMetric)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -485,20 +502,23 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		if err != nil {
 			return nil, err
 		}
-		result, err := metricEvaluator.Evaluate(ctx, inputs.actuals, inputs.expecteds, evalMetric)
+		selectedActuals := selectInvocations(inputs.actuals, invocationIndexes)
+		selectedExpecteds := selectInvocations(inputs.expecteds, invocationIndexes)
+		result, err := metricEvaluator.Evaluate(ctx, selectedActuals, selectedExpecteds, evalMetric)
 		if err != nil {
 			return nil, fmt.Errorf("run evaluation for metric %s: %w", evalMetric.MetricName, err)
 		}
 		effectiveMetrics = append(effectiveMetrics, evalMetric)
-		if len(result.PerInvocationResults) != len(perInvocation) {
+		if len(result.PerInvocationResults) != len(invocationIndexes) {
 			return nil, fmt.Errorf("metric %s returned %d per-invocation results, expected %d", evalMetric.MetricName,
-				len(result.PerInvocationResults), len(perInvocation))
+				len(result.PerInvocationResults), len(invocationIndexes))
 		}
 		reasons := make([]string, 0, len(result.PerInvocationResults))
 		rubricScores := make([]*evalresult.RubricScore, 0, len(result.PerInvocationResults))
 		for i, invocationResult := range result.PerInvocationResults {
+			invocationIndex := invocationIndexes[i]
 			resultCriterion, err := materializeResultCriterion(
-				ctx, evalMetric, inputs.actuals[:i+1], inputs.expecteds[:i+1],
+				ctx, evalMetric, inputs.actuals[:invocationIndex+1], inputs.expecteds[:invocationIndex+1],
 			)
 			if err != nil {
 				return nil, fmt.Errorf("materialize criterion for metric %s invocation %d: %w",
@@ -522,9 +542,9 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 				reasons = append(reasons, invocationResult.Details.Reason)
 				rubricScores = append(rubricScores, invocationResult.Details.RubricScores...)
 			}
-			perInvocation[i].EvalMetricResults = append(perInvocation[i].EvalMetricResults, evalMetricResult)
+			perInvocation[invocationIndex].EvalMetricResults = append(perInvocation[invocationIndex].EvalMetricResults, evalMetricResult)
 		}
-		overallCriterion, err := materializeOverallCriterion(ctx, evalMetric, inputs.actuals, inputs.expecteds)
+		overallCriterion, err := materializeOverallCriterion(ctx, evalMetric, selectedActuals, selectedExpecteds)
 		if err != nil {
 			return nil, fmt.Errorf("materialize overall criterion for metric %s: %w",
 				evalMetric.MetricName, err)
@@ -687,6 +707,66 @@ type caseEvaluationInputs struct {
 	actuals   []*evalset.Invocation
 	expecteds []*evalset.Invocation
 	userID    string
+}
+
+// buildMetricInvocationIndexes resolves the metrics that apply to each invocation.
+// An invocation without an explicit metric list inherits metrics that do not require explicit selection.
+func buildMetricInvocationIndexes(
+	evalCaseID string,
+	actuals, expecteds []*evalset.Invocation,
+	evalMetrics []*metric.EvalMetric,
+) (map[string][]int, error) {
+	configuredMetricNames := make(map[string]struct{}, len(evalMetrics))
+	defaultMetricNames := make(map[string]struct{}, len(evalMetrics))
+	for _, evalMetric := range evalMetrics {
+		if evalMetric == nil {
+			continue
+		}
+		configuredMetricNames[evalMetric.MetricName] = struct{}{}
+		if !evalMetric.RequireExplicitSelection {
+			defaultMetricNames[evalMetric.MetricName] = struct{}{}
+		}
+	}
+	indexesByMetric := make(map[string][]int, len(defaultMetricNames))
+	for invocationIndex := range actuals {
+		var metricNames []string
+		if invocationIndex < len(expecteds) && expecteds[invocationIndex] != nil {
+			metricNames = expecteds[invocationIndex].MetricNames
+		}
+		if len(metricNames) == 0 && actuals[invocationIndex] != nil {
+			metricNames = actuals[invocationIndex].MetricNames
+		}
+		if len(metricNames) == 0 {
+			for metricName := range defaultMetricNames {
+				indexesByMetric[metricName] = append(indexesByMetric[metricName], invocationIndex)
+			}
+			continue
+		}
+		seenMetricNames := make(map[string]struct{}, len(metricNames))
+		for metricIndex, metricName := range metricNames {
+			metricName = strings.TrimSpace(metricName)
+			if metricName == "" {
+				return nil, fmt.Errorf("eval case %s invocation %d metric name %d is empty", evalCaseID, invocationIndex, metricIndex)
+			}
+			if _, ok := configuredMetricNames[metricName]; !ok {
+				return nil, fmt.Errorf("eval case %s invocation %d metric %s is not configured", evalCaseID, invocationIndex, metricName)
+			}
+			if _, ok := seenMetricNames[metricName]; ok {
+				return nil, fmt.Errorf("eval case %s invocation %d metric %s is duplicated", evalCaseID, invocationIndex, metricName)
+			}
+			seenMetricNames[metricName] = struct{}{}
+			indexesByMetric[metricName] = append(indexesByMetric[metricName], invocationIndex)
+		}
+	}
+	return indexesByMetric, nil
+}
+
+func selectInvocations(invocations []*evalset.Invocation, indexes []int) []*evalset.Invocation {
+	selected := make([]*evalset.Invocation, 0, len(indexes))
+	for _, index := range indexes {
+		selected = append(selected, invocations[index])
+	}
+	return selected
 }
 
 func (s *local) prepareCaseEvaluationInputs(
@@ -885,8 +965,8 @@ func resolveEvaluatorName(evalMetric *metric.EvalMetric) string {
 	return evalMetric.MetricName
 }
 
-// userInputOnlyInvocationsForEval builds placeholder invocations that only preserve user inputs.
-// This whitelist prevents trace outputs from being treated as reference answers and stays correct when Invocation gains new fields.
+// userInputOnlyInvocationsForEval builds placeholder invocations that preserve user inputs and metric bindings.
+// This whitelist prevents trace outputs from being treated as reference answers.
 func userInputOnlyInvocationsForEval(conversation []*evalset.Invocation) []*evalset.Invocation {
 	expecteds := make([]*evalset.Invocation, len(conversation))
 	for i, invocation := range conversation {
@@ -896,6 +976,7 @@ func userInputOnlyInvocationsForEval(conversation []*evalset.Invocation) []*eval
 		}
 		expecteds[i] = &evalset.Invocation{
 			InvocationID: invocation.InvocationID,
+			MetricNames:  append([]string(nil), invocation.MetricNames...),
 			UserContent:  invocation.UserContent,
 		}
 	}
