@@ -21,7 +21,7 @@ type EvalMetric struct {
 	Threshold                float64              // Threshold 是阈值
 	Criterion                *criterion.Criterion // Criterion 是评估准则
 	Extension                any                  // Extension 是调用方自定义元数据
-	RequireExplicitSelection bool                 // RequireExplicitSelection 表示是否必须显式选择该指标
+	RequireExplicitSelection bool                 // RequireExplicitSelection 表示是否必须显式选择该指标。设置为 true 时，该指标默认不执行
 }
 
 // Criterion 表示评估准则集合

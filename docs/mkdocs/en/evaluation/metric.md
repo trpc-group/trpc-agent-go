@@ -21,7 +21,7 @@ type EvalMetric struct {
 	Threshold                float64              // Threshold is the threshold value.
 	Criterion                *criterion.Criterion // Criterion is the evaluation criteria.
 	Extension                any                  // Extension is caller-defined metadata.
-	RequireExplicitSelection bool                 // RequireExplicitSelection controls whether explicit selection is required.
+	RequireExplicitSelection bool                 // RequireExplicitSelection indicates whether explicit selection is required. When true, the metric is not enabled by default.
 }
 
 // Criterion represents a collection of evaluation criteria.

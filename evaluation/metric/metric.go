@@ -23,7 +23,7 @@ type EvalMetric struct {
 	Threshold                float64              `json:"threshold,omitempty"`                // Threshold value for this metric.
 	Criterion                *criterion.Criterion `json:"criterion,omitempty"`                // Evaluation criterion used by the metric.
 	Extension                any                  `json:"extension,omitempty"`                // Extension stores caller-defined metadata for this metric.
-	RequireExplicitSelection bool                 `json:"requireExplicitSelection,omitempty"` // RequireExplicitSelection excludes this metric from the default metric set.
+	RequireExplicitSelection bool                 `json:"requireExplicitSelection,omitempty"` // RequireExplicitSelection indicates whether the metric must be explicitly selected. When true, the metric is not enabled by default.
 }
 
 // Manager defines the interface for managing evaluation metrics.
