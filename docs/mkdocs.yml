@@ -78,6 +78,7 @@ nav:
               - Elasticsearch: knowledge/vectorstore/elasticsearch.md
               - Qdrant: knowledge/vectorstore/qdrant.md
               - Milvus: knowledge/vectorstore/milvus.md
+              - ChromaDB: knowledge/vectorstore/chromadb.md
           - Troubleshooting: knowledge/troubleshooting.md
       - Planner: planner.md
       - Event: event.md
@@ -210,6 +211,7 @@ plugins:
                         - Elasticsearch: knowledge/vectorstore/elasticsearch.md
                         - Qdrant: knowledge/vectorstore/qdrant.md
                         - Milvus: knowledge/vectorstore/milvus.md
+                        - ChromaDB: knowledge/vectorstore/chromadb.md
                     - 故障排除: knowledge/troubleshooting.md
                 - Planner: planner.md
                 - Event: event.md
