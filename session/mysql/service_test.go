@@ -38,6 +38,24 @@ type mockMySQLClient struct {
 	db *sql.DB
 }
 
+type txOptionsClient struct {
+	storage.Client
+	isolation sql.IsolationLevel
+}
+
+func (c *txOptionsClient) Transaction(
+	ctx context.Context,
+	fn storage.TxFunc,
+	opts ...storage.TxOption,
+) error {
+	var options sql.TxOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	c.isolation = options.Isolation
+	return c.Client.Transaction(ctx, fn, opts...)
+}
+
 func (m *mockMySQLClient) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return m.db.ExecContext(ctx, query, args...)
 }
@@ -114,6 +132,50 @@ func createTestService(t *testing.T, db *sql.DB, opts ...ServiceOpt) *Service {
 		tableAppStates:        "app_states",
 		tableUserStates:       "user_states",
 	}
+}
+
+func expectNoDuplicateSessionStateTombstones(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT DISTINCT duplicate.id, duplicate.user_id FROM session_states AS duplicate",
+	)).WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
+}
+
+func expectNoUnexpiredSessionStates(mock sqlmock.Sqlmock, args ...driver.Value) {
+	expectUnexpiredSessionStateOrdinals(mock, nil, args...)
+}
+
+func expectUnexpiredSessionStateOrdinals(mock sqlmock.Sqlmock, ordinals []int64, args ...driver.Value) {
+	rows := sqlmock.NewRows([]string{"request_ordinal"})
+	for _, ordinal := range ordinals {
+		rows.AddRow(ordinal)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_keys.request_ordinal FROM (")).
+		WithArgs(unexpiredSessionStateArgs(args...)...).
+		WillReturnRows(rows)
+}
+
+func unexpiredSessionStateArgs(args ...driver.Value) []driver.Value {
+	if len(args) == 0 {
+		return nil
+	}
+	hasShardArg := false
+	keyArgCount := len(args) - 1
+	if keyArgCount%3 != 0 {
+		hasShardArg = true
+		keyArgCount = len(args) - 2
+	}
+	keyCount := keyArgCount / 3
+
+	result := make([]driver.Value, 0, keyCount*4+1)
+	for i := 0; i < keyCount; i++ {
+		base := i * 3
+		result = append(result, int64(i), args[base], args[base+1], args[base+2])
+	}
+	result = append(result, args[len(args)-1])
+	if hasShardArg {
+		result = append(result, args[len(args)-2])
+	}
+	return result
 }
 
 type limitedEventRow struct {
@@ -317,6 +379,8 @@ func TestCreateSession_Success(t *testing.T) {
 	defer db.Close()
 
 	s := createTestService(t, db, WithSessionTTL(1*time.Hour))
+	client := &txOptionsClient{Client: s.mysqlClient}
+	s.mysqlClient = client
 	ctx := context.Background()
 
 	key := session.Key{
@@ -331,6 +395,7 @@ func TestCreateSession_Success(t *testing.T) {
 	}
 
 	// Mock: Check if session exists (should return no rows)
+	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
@@ -347,6 +412,7 @@ func TestCreateSession_Success(t *testing.T) {
 			sqlmock.AnyArg(), // expires_at
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	// Mock: List app states (empty)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
@@ -363,8 +429,85 @@ func TestCreateSession_Success(t *testing.T) {
 	assert.NotNil(t, sess)
 	assert.Equal(t, key.SessionID, sess.ID)
 	assert.Equal(t, state, sess.State)
+	assert.Equal(t, sql.LevelSerializable, client.isolation)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSession_RetriesLockErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		number  uint16
+		message string
+	}{
+		{
+			name:    "lock wait timeout",
+			number:  sqldb.MySQLErrLockWaitTimeout,
+			message: "lock wait timeout exceeded",
+		},
+		{
+			name:    "deadlock",
+			number:  sqldb.MySQLErrLockDeadlock,
+			message: "deadlock found when trying to get lock",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+
+			s := createTestService(t, db, WithSessionTTL(time.Hour))
+			key := session.Key{
+				AppName:   "test-app",
+				UserID:    "user-123",
+				SessionID: "session-456",
+			}
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT expires_at FROM session_states
+		WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL
+		FOR UPDATE`)).
+				WithArgs(key.AppName, key.UserID, key.SessionID).
+				WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
+			mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
+				WillReturnError(&mysql.MySQLError{
+					Number:  tt.number,
+					Message: tt.message,
+				})
+			mock.ExpectRollback()
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT expires_at FROM session_states
+		WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL
+		FOR UPDATE`)).
+				WithArgs(key.AppName, key.UserID, key.SessionID).
+				WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
+			mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
+				WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectCommit()
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
+				WithArgs(key.AppName, sqlmock.AnyArg()).
+				WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
+				WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+				WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+			sess, err := s.CreateSession(context.Background(), key, nil)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestSleepBeforeCreateSessionRetryCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := sleepBeforeCreateSessionRetry(ctx, 0)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestGetSession_EventPageValidation(t *testing.T) {
@@ -430,6 +573,7 @@ func TestCreateSession_CopiesStateValueAndKeepsNil(t *testing.T) {
 	}
 
 	// Mock: Check if session exists (should return no rows)
+	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
@@ -446,6 +590,7 @@ func TestCreateSession_CopiesStateValueAndKeepsNil(t *testing.T) {
 			sqlmock.AnyArg(), // expires_at
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	// Mock: List app states (empty)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
@@ -493,9 +638,11 @@ func TestCreateSession_AlreadyExists(t *testing.T) {
 
 	// Mock: Session exists and not expired
 	futureTime := time.Now().Add(1 * time.Hour)
+	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).AddRow(futureTime))
+	mock.ExpectRollback()
 
 	sess, err := s.CreateSession(ctx, key, session.StateMap{})
 	assert.Error(t, err)
@@ -1160,6 +1307,57 @@ func TestDeleteSession_SoftDelete(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestDeleteSession_SoftDeleteFallsBackForLegacyStateDuplicates(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSoftDelete(true))
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+	duplicateErr := &mysql.MySQLError{
+		Number:  sqldb.MySQLErrDuplicateEntry,
+		Message: "duplicate active session state",
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnError(duplicateErr)
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT id, user_id FROM session_states WHERE (app_name = ? AND user_id = ? AND session_id = ?) AND deleted_at IS NULL ORDER BY id ASC FOR UPDATE",
+	)).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).
+			AddRow(int64(101), key.UserID).
+			AddRow(int64(102), key.UserID))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), int64(101), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), int64(102), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	err = s.DeleteSession(ctx, key)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestCleanupExpiredSessions(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1187,8 +1385,10 @@ func TestCleanupExpiredSessions(t *testing.T) {
 				WithArgs("app-1", "user-1", "session-1", sqlmock.AnyArg()).
 				WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 					AddRow("app-1", "user-1", "session-1"))
+			expectNoUnexpiredSessionStates(mock, "app-1", "user-1", "session-1", sqlmock.AnyArg())
 
 			if tt.softDelete {
+				expectNoDuplicateSessionStateTombstones(mock)
 				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
 					WithArgs(sqlmock.AnyArg(), "app-1", "user-1", "session-1", sqlmock.AnyArg()).
 					WillReturnResult(sqlmock.NewResult(0, 1))
@@ -1222,6 +1422,207 @@ func TestCleanupExpiredSessions(t *testing.T) {
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+func TestCleanupExpiredSessions_TombstonesDuplicateActiveStates(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSoftDelete(true), WithSessionTTL(time.Hour))
+	ctx := context.Background()
+	now := time.Now()
+	key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states")).
+		WithArgs(now).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+			AddRow(key.AppName, key.UserID, key.SessionID).
+			AddRow(key.AppName, key.UserID, key.SessionID))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+			AddRow(key.AppName, key.UserID, key.SessionID).
+			AddRow(key.AppName, key.UserID, key.SessionID))
+	expectNoUnexpiredSessionStates(mock, key.AppName, key.UserID, key.SessionID, now)
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT DISTINCT duplicate.id, duplicate.user_id FROM session_states AS duplicate",
+	)).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).AddRow(int64(12), key.UserID))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), int64(12), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID, now).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	s.cleanupExpiredSessions(ctx, now)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionsPreservesChildrenWhenDuplicateStateStillLive(t *testing.T) {
+	tests := []struct {
+		name       string
+		softDelete bool
+	}{
+		{"SoftDelete", true},
+		{"HardDelete", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+
+			s := createTestService(t, db, WithSoftDelete(tt.softDelete), WithSessionTTL(time.Hour))
+			ctx := context.Background()
+			now := time.Now()
+			key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+				WithArgs(key.AppName, key.UserID, key.SessionID, now).
+				WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+					AddRow(key.AppName, key.UserID, key.SessionID))
+			expectUnexpiredSessionStateOrdinals(mock, []int64{0}, key.AppName, key.UserID, key.SessionID, now)
+			if tt.softDelete {
+				expectNoDuplicateSessionStateTombstones(mock)
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+					WithArgs(now, key.AppName, key.UserID, key.SessionID, now).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+			} else {
+				mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
+					WithArgs(key.AppName, key.UserID, key.SessionID, now).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			mock.ExpectCommit()
+
+			tx, err := db.Begin()
+			require.NoError(t, err)
+			n, err := s.deleteSessions(ctx, tx, []session.Key{key}, now)
+			require.NoError(t, err)
+			assert.Equal(t, 1, n)
+			require.NoError(t, tx.Commit())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestDeleteSessionsReturnsStateOnlyTombstoneError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSoftDelete(true), WithSessionTTL(time.Hour))
+	ctx := context.Background()
+	now := time.Now()
+	key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+			AddRow(key.AppName, key.UserID, key.SessionID))
+	expectUnexpiredSessionStateOrdinals(mock, []int64{0}, key.AppName, key.UserID, key.SessionID, now)
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT DISTINCT duplicate.id, duplicate.user_id FROM session_states AS duplicate",
+	)).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID, now).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	n, err := s.deleteSessions(ctx, tx, []session.Key{key}, now)
+	require.ErrorContains(t, err, "query duplicate session states")
+	assert.Zero(t, n)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionsReturnsStateOnlyRetireError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSoftDelete(true), WithSessionTTL(time.Hour))
+	ctx := context.Background()
+	now := time.Now()
+	key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+			AddRow(key.AppName, key.UserID, key.SessionID))
+	expectUnexpiredSessionStateOrdinals(mock, []int64{0}, key.AppName, key.UserID, key.SessionID, now)
+	expectNoDuplicateSessionStateTombstones(mock)
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID, now).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	n, err := s.deleteSessions(ctx, tx, []session.Key{key}, now)
+	require.Error(t, err)
+	assert.Zero(t, n)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTombstoneDuplicateSessionStatesRetriesDistinctTombstoneOnLegacyPrecisionConflict(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+	now := time.Now()
+	deletedAtBase := now.Truncate(time.Second)
+	key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT DISTINCT duplicate.id, duplicate.user_id FROM session_states AS duplicate",
+	)).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).
+			AddRow(int64(12), key.UserID).
+			AddRow(int64(13), key.UserID))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-time.Second), int64(12), key.UserID).
+		WillReturnError(&mysql.MySQLError{
+			Number:  sqldb.MySQLErrDuplicateEntry,
+			Message: "duplicate active session state",
+		})
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-2*time.Second), int64(12), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-3*time.Second), int64(13), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	err = s.tombstoneDuplicateSessionStates(ctx, tx, []session.Key{key}, now)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestSessionKeysWhereClause(t *testing.T) {
@@ -1260,13 +1661,13 @@ func TestLockExpiredSessionKeysErrors(t *testing.T) {
 	}{
 		{
 			name: "ScanError",
-			rows: sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
-				AddRow(nil, "user-1", "session-1"),
+			rows: sqlmock.NewRows([]string{"request_ordinal"}).
+				AddRow("bad"),
 		},
 		{
 			name: "RowsError",
-			rows: sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
-				AddRow("app-1", "user-1", "session-1").
+			rows: sqlmock.NewRows([]string{"request_ordinal"}).
+				AddRow(int64(0)).
 				RowError(0, assert.AnError),
 		},
 	}
@@ -1318,6 +1719,82 @@ func TestLockExpiredSessionKeysQueryError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestLockUnexpiredSessionKeysErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		rows *sqlmock.Rows
+	}{
+		{
+			name: "ScanError",
+			rows: sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+				AddRow(nil, "user-1", "session-1"),
+		},
+		{
+			name: "RowsError",
+			rows: sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+				AddRow("app-1", "user-1", "session-1").
+				RowError(0, assert.AnError),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+
+			s := createTestService(t, db)
+			now := time.Now()
+			key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT request_keys.request_ordinal FROM (")).
+				WithArgs(int64(0), key.AppName, key.UserID, key.SessionID, now).
+				WillReturnRows(tt.rows)
+			mock.ExpectRollback()
+
+			tx, err := db.Begin()
+			require.NoError(t, err)
+			liveKeys, err := s.lockUnexpiredSessionKeys(context.Background(), tx, []session.Key{key}, now)
+			require.Error(t, err)
+			assert.Nil(t, liveKeys)
+			require.NoError(t, tx.Rollback())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestLockUnexpiredSessionKeysNoKeys(t *testing.T) {
+	s := &Service{}
+	liveKeys, err := s.lockUnexpiredSessionKeys(context.Background(), nil, nil, time.Now())
+	require.NoError(t, err)
+	assert.Nil(t, liveKeys)
+
+	err = s.retireExpiredSessionStates(context.Background(), nil, nil, time.Now())
+	require.NoError(t, err)
+}
+
+func TestLockUnexpiredSessionKeysUsesRequestKeySpelling(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	now := time.Now()
+	key := session.Key{AppName: "App-1", UserID: "User-1", SessionID: "Session-1"}
+
+	mock.ExpectBegin()
+	expectUnexpiredSessionStateOrdinals(mock, []int64{0}, key.AppName, key.UserID, key.SessionID, now)
+	mock.ExpectCommit()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	liveKeys, err := s.lockUnexpiredSessionKeys(context.Background(), tx, []session.Key{key}, now)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	require.Contains(t, liveKeys, key)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestDeleteSessionsRecheckError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -1342,6 +1819,73 @@ func TestDeleteSessionsRecheckError(t *testing.T) {
 	assert.Zero(t, n)
 	assert.NoError(t, tx.Rollback())
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionsReturnsUnexpiredRecheckError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+	now := time.Now()
+	key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+			AddRow(key.AppName, key.UserID, key.SessionID))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT request_keys.request_ordinal FROM (")).
+		WithArgs(int64(0), key.AppName, key.UserID, key.SessionID, now).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	n, err := s.deleteSessions(ctx, tx, []session.Key{key}, now)
+	require.ErrorContains(t, err, "recheck unexpired sessions failed")
+	assert.Zero(t, n)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteSessionsReturnsTombstoneUpdateError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+	now := time.Now()
+	deletedAtBase := now.Truncate(time.Second)
+	key := session.Key{AppName: "app-1", UserID: "user-1", SessionID: "session-1"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
+			AddRow(key.AppName, key.UserID, key.SessionID))
+	expectNoUnexpiredSessionStates(mock, key.AppName, key.UserID, key.SessionID, now)
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT DISTINCT duplicate.id, duplicate.user_id FROM session_states AS duplicate",
+	)).
+		WithArgs(now, key.AppName, key.UserID, key.SessionID, now).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).
+			AddRow(int64(12), key.UserID))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-time.Second), int64(12), key.UserID).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	n, err := s.deleteSessions(ctx, tx, []session.Key{key}, now)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "soft delete session state 12 with distinct tombstone")
+	assert.Zero(t, n)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestSoftDeleteSessionsChildErrors(t *testing.T) {
@@ -1411,6 +1955,68 @@ func TestSoftDeleteSessionsChildErrors(t *testing.T) {
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+func TestSoftDeleteSessionsFallsBackForLegacyStateDuplicates(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	now := time.Now()
+	deletedAtBase := now.Truncate(time.Second)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(now, "app-1", now).
+		WillReturnError(&mysql.MySQLError{
+			Number:  sqldb.MySQLErrDuplicateEntry,
+			Message: "duplicate active session state",
+		})
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT id, user_id FROM session_states WHERE (app_name = ? AND expires_at IS NOT NULL AND expires_at <= ?) AND deleted_at IS NULL ORDER BY id ASC FOR UPDATE",
+	)).
+		WithArgs("app-1", now).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).
+			AddRow(int64(101), "user-1").
+			AddRow(int64(102), "user-1").
+			AddRow(int64(201), "user-2"))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-time.Second), int64(101), "user-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-2*time.Second), int64(102), "user-1").
+		WillReturnError(&mysql.MySQLError{
+			Number:  sqldb.MySQLErrDuplicateEntry,
+			Message: "duplicate active session state",
+		})
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-3*time.Second), int64(102), "user-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(deletedAtBase.Add(-4*time.Second), int64(201), "user-2").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_events SET deleted_at = ?")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_track_events SET deleted_at = ?")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	err = s.softDeleteSessions(
+		context.Background(),
+		tx,
+		"app_name = ? AND expires_at IS NOT NULL AND expires_at <= ?",
+		[]any{"app-1", now},
+		"app_name = ?",
+		[]any{"app-1"},
+		now,
+	)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestSoftDeleteSessionsFallsBackForLegacySummaryDuplicates(t *testing.T) {
@@ -2032,6 +2638,7 @@ func TestCreateSession_WithAutoGeneratedID(t *testing.T) {
 	state := session.StateMap{"key1": []byte(`"value1"`)}
 
 	// Mock: Check if session exists (will use auto-generated ID)
+	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WithArgs("test-app", "user-123", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
@@ -2048,6 +2655,7 @@ func TestCreateSession_WithAutoGeneratedID(t *testing.T) {
 			sqlmock.AnyArg(), // expires_at
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	// Mock: List app states
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
@@ -2678,9 +3286,11 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 
 	// Mock: Session exists but expired
 	expiredTime := time.Now().Add(-2 * time.Hour)
+	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).AddRow(expiredTime))
+	expectNoDuplicateSessionStateTombstones(mock)
 
 	// Mock: Update (overwrite) expired session
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL")).
@@ -2694,6 +3304,7 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 			key.SessionID,
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	// Mock: List app states
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
@@ -2711,6 +3322,152 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestCreateSession_ExistingExpiredDuplicateActiveRows(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour))
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+	expiredTime := time.Now().Add(-2 * time.Hour)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).
+			AddRow(expiredTime).
+			AddRow(expiredTime))
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT DISTINCT duplicate.id, duplicate.user_id FROM session_states AS duplicate",
+	)).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).AddRow(int64(12), key.UserID))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
+		WithArgs(sqlmock.AnyArg(), int64(12), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
+		WithArgs(key.AppName, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
+		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	sess, err := s.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSession_ExistingExpiredDuplicateActiveRowsHardDeletesDuplicates(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour), WithSoftDelete(false))
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+	expiredTime := time.Now().Add(-2 * time.Hour)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).
+			AddRow(expiredTime).
+			AddRow(expiredTime))
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT DISTINCT duplicate.id, duplicate.user_id FROM session_states AS duplicate",
+	)).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).AddRow(int64(12), key.UserID))
+	mock.ExpectExec(regexp.QuoteMeta(
+		"DELETE FROM session_states WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+	)).
+		WithArgs(int64(12), key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL")).
+		WithArgs(
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
+		WithArgs(key.AppName, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM user_states")).
+		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	sess, err := s.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateSession_ExistingExpiredDuplicateHardDeleteError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db, WithSessionTTL(1*time.Hour), WithSoftDelete(false))
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+	expiredTime := time.Now().Add(-2 * time.Hour)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).
+			AddRow(expiredTime).
+			AddRow(expiredTime))
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT DISTINCT duplicate.id, duplicate.user_id FROM session_states AS duplicate",
+	)).
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).AddRow(int64(12), key.UserID))
+	mock.ExpectExec(regexp.QuoteMeta(
+		"DELETE FROM session_states WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+	)).
+		WithArgs(int64(12), key.UserID).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	sess, err := s.CreateSession(ctx, key, nil)
+	require.ErrorContains(t, err, "delete duplicate session state 12")
+	require.Nil(t, sess)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestCreateSession_ExistingNotExpired(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -2726,9 +3483,11 @@ func TestCreateSession_ExistingNotExpired(t *testing.T) {
 	}
 
 	// Mock: Session exists with NULL expires_at (never expires)
+	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).AddRow(nil))
+	mock.ExpectRollback()
 
 	sess, err := s.CreateSession(ctx, key, session.StateMap{})
 	assert.Error(t, err)
@@ -3031,8 +3790,10 @@ func TestCleanupExpiredData(t *testing.T) {
 		WithArgs("app-1", "user-1", "session-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 			AddRow("app-1", "user-1", "session-1"))
+	expectNoUnexpiredSessionStates(mock, "app-1", "user-1", "session-1", sqlmock.AnyArg())
 
 	// 2. Soft delete session states
+	expectNoDuplicateSessionStateTombstones(mock)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
 		WithArgs(sqlmock.AnyArg(), "app-1", "user-1", "session-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -3123,6 +3884,7 @@ func TestCleanupExpiredSessions_HardDelete(t *testing.T) {
 		WithArgs("app-1", "user-1", "session-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 			AddRow("app-1", "user-1", "session-1"))
+	expectNoUnexpiredSessionStates(mock, "app-1", "user-1", "session-1", sqlmock.AnyArg())
 
 	// Mock hard delete sessions, events, and summaries in transaction
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM session_states")).
@@ -3759,6 +4521,494 @@ func TestConcurrentSessionStateUpdates_PreserveEventDeltaAndTrack(t *testing.T) 
 	require.Len(t, sess.Tracks[session.Track("agui")].Events, 1)
 }
 
+func TestConcurrentCreateSessionSerializesAbsentKey(t *testing.T) {
+	dsn := os.Getenv("TRPC_AGENT_GO_MYSQL_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set TRPC_AGENT_GO_MYSQL_TEST_DSN to run MySQL integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	prefix := fmt.Sprintf("it_%d_", time.Now().UnixNano())
+	bootstrap, err := NewService(
+		WithMySQLClientDSN(dsn),
+		WithTablePrefix(prefix),
+		WithSessionTTL(time.Hour),
+		WithCleanupInterval(10*time.Minute),
+	)
+	require.NoError(t, err)
+
+	rawDB, err := sql.Open("mysql", dsn)
+	require.NoError(t, err)
+	require.NoError(t, rawDB.PingContext(ctx))
+	t.Cleanup(func() {
+		require.NoError(t, bootstrap.Close())
+		for _, table := range []string{
+			bootstrap.tableSessionTracks,
+			bootstrap.tableSessionEvents,
+			bootstrap.tableSessionSummaries,
+			bootstrap.tableSessionStates,
+			bootstrap.tableAppStates,
+			bootstrap.tableUserStates,
+		} {
+			_, _ = rawDB.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", table))
+		}
+		_ = rawDB.Close()
+	})
+
+	dbs := make([]*sql.DB, 2)
+	services := make([]*Service, 2)
+	connectionIDs := make([]int64, 2)
+	for i := range dbs {
+		dbs[i], err = sql.Open("mysql", dsn)
+		require.NoError(t, err)
+		dbs[i].SetMaxOpenConns(1)
+		dbs[i].SetMaxIdleConns(1)
+		require.NoError(t, dbs[i].PingContext(ctx))
+		require.NoError(t, dbs[i].QueryRowContext(ctx, "SELECT CONNECTION_ID()").Scan(&connectionIDs[i]))
+		services[i] = &Service{
+			opts:                  bootstrap.opts,
+			mysqlClient:           storage.WrapSQLDB(dbs[i]),
+			tableSessionStates:    bootstrap.tableSessionStates,
+			tableSessionEvents:    bootstrap.tableSessionEvents,
+			tableSessionTracks:    bootstrap.tableSessionTracks,
+			tableSessionSummaries: bootstrap.tableSessionSummaries,
+			tableAppStates:        bootstrap.tableAppStates,
+			tableUserStates:       bootstrap.tableUserStates,
+		}
+	}
+	t.Cleanup(func() {
+		for _, db := range dbs {
+			assert.NoError(t, db.Close())
+		}
+	})
+
+	key := session.Key{AppName: "absent-app", UserID: "absent-user", SessionID: "absent-session"}
+	var existing int
+	err = rawDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?`,
+		bootstrap.tableSessionStates,
+	), key.AppName, key.UserID, key.SessionID).Scan(&existing)
+	require.NoError(t, err)
+	require.Zero(t, existing)
+
+	gateConn, err := rawDB.Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, gateConn.Close())
+	})
+	gateLock := prefix + "insert_gate"
+	var gotLock int
+	err = gateConn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 10)", gateLock).Scan(&gotLock)
+	require.NoError(t, err)
+	require.Equal(t, 1, gotLock)
+	t.Cleanup(func() {
+		var released sql.NullInt64
+		_ = gateConn.QueryRowContext(context.Background(), "SELECT RELEASE_LOCK(?)", gateLock).Scan(&released)
+	})
+
+	triggerName := prefix + "insert_gate"
+	_, err = rawDB.ExecContext(ctx, fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON %s
+		FOR EACH ROW
+		BEGIN
+			IF NEW.app_name = 'absent-app'
+				AND NEW.user_id = 'absent-user'
+				AND NEW.session_id = 'absent-session' THEN
+				SET @trpc_agent_go_insert_gate = GET_LOCK('%s', 30);
+				SET @trpc_agent_go_insert_gate = RELEASE_LOCK('%s');
+			END IF;
+		END`, triggerName, bootstrap.tableSessionStates, gateLock, gateLock))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = rawDB.ExecContext(context.Background(), fmt.Sprintf("DROP TRIGGER IF EXISTS %s", triggerName))
+	})
+
+	started := make(chan struct{}, len(services))
+	results := make(chan error, len(services))
+	var wg sync.WaitGroup
+	for _, svc := range services {
+		wg.Add(1)
+		go func(service *Service) {
+			defer wg.Done()
+			started <- struct{}{}
+			_, createErr := service.CreateSession(ctx, key, nil)
+			results <- createErr
+		}(svc)
+	}
+	for i := 0; i < len(services); i++ {
+		<-started
+	}
+
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	var gateWaits int
+	var lastErr error
+	for gateWaits != len(services) {
+		lastErr = rawDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST
+			WHERE ID IN (?, ?) AND STATE = 'User lock'`,
+			connectionIDs[0], connectionIDs[1]).Scan(&gateWaits)
+		if lastErr == nil && gateWaits == len(services) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			require.NoError(t, ctx.Err())
+		case <-deadline.C:
+			require.NoError(t, lastErr)
+			require.Equal(t, len(services), gateWaits)
+		case <-ticker.C:
+		}
+	}
+	var released sql.NullInt64
+	err = gateConn.QueryRowContext(ctx, "SELECT RELEASE_LOCK(?)", gateLock).Scan(&released)
+	require.NoError(t, err)
+	require.True(t, released.Valid)
+	require.Equal(t, int64(1), released.Int64)
+
+	wg.Wait()
+	close(results)
+
+	var successes int
+	var alreadyExists int
+	for createErr := range results {
+		switch {
+		case createErr == nil:
+			successes++
+		case createErr.Error() == "session already exists and has not expired":
+			alreadyExists++
+		default:
+			require.NoError(t, createErr)
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, alreadyExists)
+
+	var total int
+	var active int
+	err = rawDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*),
+		SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?`,
+		bootstrap.tableSessionStates,
+	), key.AppName, key.UserID, key.SessionID).Scan(&total, &active)
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	assert.Equal(t, 1, active)
+}
+
+func TestConcurrentCreateSessionSerializesAndCleanupTombstonesDuplicates(t *testing.T) {
+	dsn := os.Getenv("TRPC_AGENT_GO_MYSQL_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set TRPC_AGENT_GO_MYSQL_TEST_DSN to run MySQL integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	prefix := fmt.Sprintf("it_%d_", time.Now().UnixNano())
+	bootstrap, err := NewService(
+		WithMySQLClientDSN(dsn),
+		WithTablePrefix(prefix),
+		WithSessionTTL(time.Hour),
+		WithCleanupInterval(10*time.Minute),
+	)
+	require.NoError(t, err)
+
+	rawDB, err := sql.Open("mysql", dsn)
+	require.NoError(t, err)
+	require.NoError(t, rawDB.PingContext(ctx))
+	t.Cleanup(func() {
+		require.NoError(t, bootstrap.Close())
+		for _, table := range []string{
+			bootstrap.tableSessionTracks,
+			bootstrap.tableSessionEvents,
+			bootstrap.tableSessionSummaries,
+			bootstrap.tableSessionStates,
+			bootstrap.tableAppStates,
+			bootstrap.tableUserStates,
+		} {
+			_, _ = rawDB.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", table))
+		}
+		_ = rawDB.Close()
+	})
+
+	dbs := make([]*sql.DB, 2)
+	services := make([]*Service, 2)
+	connectionIDs := make([]int64, 2)
+	for i := range dbs {
+		dbs[i], err = sql.Open("mysql", dsn)
+		require.NoError(t, err)
+		dbs[i].SetMaxOpenConns(1)
+		dbs[i].SetMaxIdleConns(1)
+		require.NoError(t, dbs[i].PingContext(ctx))
+		require.NoError(t, dbs[i].QueryRowContext(ctx, "SELECT CONNECTION_ID()").Scan(&connectionIDs[i]))
+		services[i] = &Service{
+			opts:                  bootstrap.opts,
+			mysqlClient:           storage.WrapSQLDB(dbs[i]),
+			tableSessionStates:    bootstrap.tableSessionStates,
+			tableSessionEvents:    bootstrap.tableSessionEvents,
+			tableSessionTracks:    bootstrap.tableSessionTracks,
+			tableSessionSummaries: bootstrap.tableSessionSummaries,
+			tableAppStates:        bootstrap.tableAppStates,
+			tableUserStates:       bootstrap.tableUserStates,
+		}
+	}
+	t.Cleanup(func() {
+		for _, db := range dbs {
+			assert.NoError(t, db.Close())
+		}
+	})
+
+	key := session.Key{AppName: "test-app", UserID: "test-user", SessionID: "same-session"}
+	seedExpired := time.Now().Add(-time.Minute)
+	_, err = rawDB.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s
+		(app_name, user_id, session_id, state, created_at, updated_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, bootstrap.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID,
+		`{"id":"same-session","state":{}}`, seedExpired, seedExpired, seedExpired)
+	require.NoError(t, err)
+
+	lockTx, err := rawDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer lockTx.Rollback()
+	var lockedID int64
+	err = lockTx.QueryRowContext(ctx, fmt.Sprintf(`SELECT id FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND deleted_at IS NULL
+		FOR UPDATE`, bootstrap.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID).Scan(&lockedID)
+	require.NoError(t, err)
+
+	started := make(chan struct{}, len(services))
+	results := make(chan error, len(services))
+	var wg sync.WaitGroup
+	for _, svc := range services {
+		wg.Add(1)
+		go func(service *Service) {
+			defer wg.Done()
+			started <- struct{}{}
+			_, createErr := service.CreateSession(ctx, key, nil)
+			results <- createErr
+		}(svc)
+	}
+	for i := 0; i < len(services); i++ {
+		<-started
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	var lockWaits int
+	var lastErr error
+	for lockWaits != len(services) {
+		lastErr = rawDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM INFORMATION_SCHEMA.INNODB_TRX
+			WHERE trx_mysql_thread_id IN (?, ?) AND trx_state = 'LOCK WAIT'`,
+			connectionIDs[0], connectionIDs[1]).Scan(&lockWaits)
+		if lastErr == nil && lockWaits == len(services) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			require.NoError(t, ctx.Err())
+		case <-deadline.C:
+			require.NoError(t, lastErr)
+			require.Equal(t, len(services), lockWaits)
+		case <-ticker.C:
+		}
+	}
+	require.NoError(t, lockTx.Commit())
+
+	wg.Wait()
+	close(results)
+
+	var successes int
+	var alreadyExists int
+	for createErr := range results {
+		switch {
+		case createErr == nil:
+			successes++
+		case createErr.Error() == "session already exists and has not expired":
+			alreadyExists++
+		default:
+			require.NoError(t, createErr)
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, alreadyExists)
+
+	var active int
+	err = rawDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+		bootstrap.tableSessionStates,
+	), key.AppName, key.UserID, key.SessionID).Scan(&active)
+	require.NoError(t, err)
+	assert.Equal(t, 1, active)
+
+	dupKey := session.Key{AppName: "dup-app", UserID: "dup-user", SessionID: "dup-session"}
+	now := time.Now()
+	expired := now.Add(-time.Minute)
+	for i := 0; i < 2; i++ {
+		_, err = rawDB.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s
+			(app_name, user_id, session_id, state, created_at, updated_at, expires_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`, bootstrap.tableSessionStates),
+			dupKey.AppName, dupKey.UserID, dupKey.SessionID,
+			`{"id":"dup-session","state":{}}`, expired, expired, expired)
+		require.NoError(t, err)
+	}
+
+	bootstrap.cleanupExpiredSessions(ctx, now)
+
+	var total int
+	var distinctDeleted int
+	err = rawDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*), COUNT(DISTINCT deleted_at) FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?`,
+		bootstrap.tableSessionStates,
+	), dupKey.AppName, dupKey.UserID, dupKey.SessionID).Scan(&total, &distinctDeleted)
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	assert.Equal(t, 2, distinctDeleted)
+	err = rawDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+		bootstrap.tableSessionStates,
+	), dupKey.AppName, dupKey.UserID, dupKey.SessionID).Scan(&active)
+	require.NoError(t, err)
+	assert.Zero(t, active)
+}
+
+func TestCleanupExpiredSessionsPreservesActiveEventWhenDuplicateStateStillLive(t *testing.T) {
+	dsn := os.Getenv("TRPC_AGENT_GO_MYSQL_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set TRPC_AGENT_GO_MYSQL_TEST_DSN to run MySQL integration test")
+	}
+
+	sameKey := session.Key{
+		AppName:   "mixed-app",
+		UserID:    "mixed-user",
+		SessionID: "mixed-session",
+	}
+	collationExpiredKey := session.Key{
+		AppName:   "Mixed-App",
+		UserID:    "Mixed-User",
+		SessionID: "Mixed-Session",
+	}
+	collationLiveKey := session.Key{
+		AppName:   "mixed-app",
+		UserID:    "mixed-user",
+		SessionID: "mixed-session",
+	}
+	tests := []struct {
+		name       string
+		softDelete bool
+		expiredKey session.Key
+		liveKey    session.Key
+	}{
+		{"SoftDelete", true, sameKey, sameKey},
+		{"HardDelete", false, sameKey, sameKey},
+		{"SoftDeleteCollationEquivalent", true, collationExpiredKey, collationLiveKey},
+		{"HardDeleteCollationEquivalent", false, collationExpiredKey, collationLiveKey},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			prefix := fmt.Sprintf("it_%d_", time.Now().UnixNano())
+			svc, err := NewService(
+				WithMySQLClientDSN(dsn),
+				WithTablePrefix(prefix),
+				WithSessionTTL(time.Hour),
+				WithCleanupInterval(10*time.Minute),
+				WithSoftDelete(tt.softDelete),
+			)
+			require.NoError(t, err)
+
+			rawDB, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			require.NoError(t, rawDB.PingContext(ctx))
+			t.Cleanup(func() {
+				require.NoError(t, svc.Close())
+				for _, table := range []string{
+					svc.tableSessionTracks,
+					svc.tableSessionEvents,
+					svc.tableSessionSummaries,
+					svc.tableSessionStates,
+					svc.tableAppStates,
+					svc.tableUserStates,
+				} {
+					_, _ = rawDB.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", table))
+				}
+				_ = rawDB.Close()
+			})
+
+			now := time.Now()
+			expired := now.Add(-time.Minute)
+			unexpired := now.Add(time.Hour)
+			for _, row := range []struct {
+				key       session.Key
+				expiresAt time.Time
+			}{
+				{tt.expiredKey, expired},
+				{tt.liveKey, unexpired},
+			} {
+				_, err = rawDB.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s
+					(app_name, user_id, session_id, state, created_at, updated_at, expires_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?)`, svc.tableSessionStates),
+					row.key.AppName, row.key.UserID, row.key.SessionID,
+					fmt.Sprintf(`{"id":%q,"state":{}}`, row.key.SessionID), now, now, row.expiresAt)
+				require.NoError(t, err)
+			}
+			_, err = rawDB.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s
+				(app_name, user_id, session_id, event, created_at, updated_at, expires_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`, svc.tableSessionEvents),
+				tt.liveKey.AppName, tt.liveKey.UserID, tt.liveKey.SessionID,
+				`{"id":"event-1"}`, now, now, unexpired)
+			require.NoError(t, err)
+
+			svc.cleanupExpiredSessions(ctx, now)
+
+			var activeStates int
+			err = rawDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s
+				WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+				svc.tableSessionStates,
+			), tt.liveKey.AppName, tt.liveKey.UserID, tt.liveKey.SessionID).Scan(&activeStates)
+			require.NoError(t, err)
+			assert.Equal(t, 1, activeStates)
+
+			var retiredExpiredStates int
+			if tt.softDelete {
+				err = rawDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s
+					WHERE app_name = ? AND user_id = ? AND session_id = ?
+					AND expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NOT NULL`,
+					svc.tableSessionStates,
+				), tt.expiredKey.AppName, tt.expiredKey.UserID, tt.expiredKey.SessionID, now).Scan(&retiredExpiredStates)
+			} else {
+				err = rawDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s
+					WHERE app_name = ? AND user_id = ? AND session_id = ?
+					AND expires_at IS NOT NULL AND expires_at <= ?`,
+					svc.tableSessionStates,
+				), tt.expiredKey.AppName, tt.expiredKey.UserID, tt.expiredKey.SessionID, now).Scan(&retiredExpiredStates)
+			}
+			require.NoError(t, err)
+			if tt.softDelete {
+				assert.Equal(t, 1, retiredExpiredStates)
+			} else {
+				assert.Zero(t, retiredExpiredStates)
+			}
+
+			var activeEvents int
+			err = rawDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s
+				WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+				svc.tableSessionEvents,
+			), tt.liveKey.AppName, tt.liveKey.UserID, tt.liveKey.SessionID).Scan(&activeEvents)
+			require.NoError(t, err)
+			assert.Equal(t, 1, activeEvents)
+		})
+	}
+}
+
 // mockDBInit mocks the database initialization process
 func mockDBInit(mock sqlmock.Sqlmock) {
 	mockDBInitWithPrefix(mock, "")
@@ -4316,7 +5566,13 @@ func TestTDSQLCleanupExpiredSessions(t *testing.T) {
 				WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 					AddRow("app-1", "user-1", "session-1").
 					AddRow("app-1", "user-1", "session-2"))
+			expectNoUnexpiredSessionStates(mock,
+				"app-1", "user-1", "session-1",
+				"app-1", "user-1", "session-2",
+				"user-1", sqlmock.AnyArg(),
+			)
 			if tt.softDelete {
+				expectNoDuplicateSessionStateTombstones(mock)
 				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
 					WillReturnResult(sqlmock.NewResult(0, 2))
 				mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
@@ -4441,6 +5697,8 @@ func TestTDSQLCleanupExpiredSessions_DeleteError(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 			AddRow("app-1", "user-1", "session-1"))
+	expectNoUnexpiredSessionStates(mock, "app-1", "user-1", "session-1", "user-1", sqlmock.AnyArg())
+	expectNoDuplicateSessionStateTombstones(mock)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
 		WillReturnError(assert.AnError)
 	mock.ExpectRollback()
@@ -4692,6 +5950,8 @@ func TestTDSQLCleanupExpiredData(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 			AddRow("app-1", "user-1", "session-1"))
+	expectNoUnexpiredSessionStates(mock, "app-1", "user-1", "session-1", "user-1", sqlmock.AnyArg())
+	expectNoDuplicateSessionStateTombstones(mock)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_summaries SET deleted_at = ?")).
