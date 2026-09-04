@@ -184,7 +184,8 @@ func New(
 	}
 }
 
-// Run executes the flow in a loop until completion.
+// Run executes the flow in a loop until the invocation completes or the
+// context is cancelled.
 func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, f.channelBufferSize) // Configurable buffered channel for events.
 
@@ -220,8 +221,18 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		firstIteration := true
 		for {
 			// emit start event and wait for completion notice.
-			if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
+			if err := f.emitStartEventAndWait(ctx, invocation, eventChan, eventCompletionTimeout); err != nil {
 				runErr = err
+				// Emit an error event so the caller can observe the termination
+				// reason instead of seeing only a closed channel. Use a fresh
+				// context because the original ctx may already be cancelled.
+				errorEvent := event.NewErrorEvent(
+					flowInvocationID(invocation),
+					flowAgentName(invocation),
+					model.ErrorTypeCancelled,
+					err.Error(),
+				)
+				agent.EmitEvent(context.Background(), invocation, eventChan, errorEvent)
 				return
 			}
 
@@ -561,17 +572,23 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 	}
 }
 
+// emitStartEventAndWait emits the invocation-start event into eventChan and
+// waits for a completion notice from the notice channel. If the notice does
+// not arrive within timeout, the wait times out; the error is forwarded to
+// handleStartEventWaitError which decides whether it is fatal or recoverable.
+// A context cancellation or deadline is always propagated as-is.
 func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invocation,
-	eventChan chan<- *event.Event) error {
+	eventChan chan<- *event.Event, timeout time.Duration) (result error) {
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,
 		latencySpanEmitStartWait,
 	)
-	var err error
-	defer func() {
-		finishLatencySpan(span, started, err)
-	}()
+	// Use a named return and defer so finishLatencySpan runs on both normal
+	// returns and any panic paths. The deferred closure reads `result` after
+	// it has been assigned, so the span records the mapped error (what the
+	// caller receives) rather than the raw AddNoticeChannelAndWait result.
+	defer func() { finishLatencySpan(span, started, result) }()
 
 	invocationID, agentName := "", ""
 	if invocation != nil {
@@ -585,10 +602,38 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 	// Wait for completion notice.
 	// Ensure that the events of the previous agent or the previous step have been synchronized to the session.
 	completionID := agent.GetAppendEventNoticeKey(startEvent.ID)
-	err = invocation.AddNoticeChannelAndWait(ctx, completionID, eventCompletionTimeout)
-	if errors.Is(err, context.Canceled) {
+	waitErr := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
+	// Map the wait result; the deferred finishLatencySpan will record this
+	// value because `result` is the named return variable.
+	result = handleStartEventWaitError(ctx, waitErr)
+	return result
+}
+
+// handleStartEventWaitError maps the completion-wait result to a flow error.
+// Cancellation and deadline errors are propagated as-is. Any other non-nil
+// error (e.g. a notice timeout or a channel-creation failure) is treated as
+// recoverable when the context is still live — only a warning is logged and
+// nil is returned so the flow can continue. When the context has already
+// expired, the context error is returned regardless of the wait result to
+// prevent the flow from advancing with a dead context.
+func handleStartEventWaitError(ctx context.Context, err error) error {
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
+	if err == nil {
+		return nil
+	}
+	// The timeout branch may win the select race against a context that
+	// expired at the same moment; never continue with an expired context.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	log.WarnfContext(
+		ctx,
+		"Wait for start event completion failed: %v",
+		err,
+	)
 	return nil
 }
 

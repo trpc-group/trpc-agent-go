@@ -4984,3 +4984,120 @@ func TestWaitEventTimeout_NoDeadline(t *testing.T) {
 	timeout := WaitEventTimeout(ctx)
 	require.Equal(t, 5*time.Second, timeout)
 }
+
+// TestEmitStartEventAndWaitDeadlineExceeded verifies that emitStartEventAndWait
+// propagates context.DeadlineExceeded when the parent deadline expires before
+// the completion notice arrives.
+func TestEmitStartEventAndWaitDeadlineExceeded(t *testing.T) {
+	f := &Flow{}
+	inv := agent.NewInvocation(agent.WithInvocationID("deadline-repro"))
+	eventChan := make(chan *event.Event, 4)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err := f.emitStartEventAndWait(ctx, inv, eventChan, 200*time.Millisecond)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+// TestEmitStartEventAndWaitNoticeTimeoutContinues verifies that when no
+// completion notice arrives within the timeout window, emitStartEventAndWait
+// returns nil (recoverable) on a live context and does not block the flow.
+func TestEmitStartEventAndWaitNoticeTimeoutContinues(t *testing.T) {
+	f := &Flow{}
+	inv := agent.NewInvocation(agent.WithInvocationID("notice-timeout-repro"))
+	eventChan := make(chan *event.Event, 4)
+
+	// The completion notice never arrives; the wait must time out without
+	// blocking the flow, and the timeout must not fail the run.
+	const waitTimeout = 200 * time.Millisecond
+	start := time.Now()
+	err := f.emitStartEventAndWait(context.Background(), inv, eventChan, waitTimeout)
+	require.NoError(t, err)
+
+	// Prove the timeout path actually ran: the call must have waited for the
+	// injected timeout instead of returning immediately.
+	require.GreaterOrEqual(t, time.Since(start), 150*time.Millisecond)
+}
+
+// TestHandleStartEventWaitError is a table-driven suite that covers all
+// branches of handleStartEventWaitError: propagation of cancellation and
+// deadline errors, nil pass-through, timeout racing an expired context, and
+// timeout on a still-live context treated as recoverable.
+func TestHandleStartEventWaitError(t *testing.T) {
+	t.Run("propagates cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		require.ErrorIs(t, handleStartEventWaitError(ctx, context.Canceled), context.Canceled)
+	})
+
+	t.Run("propagates deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+
+		require.ErrorIs(t, handleStartEventWaitError(ctx, context.DeadlineExceeded), context.DeadlineExceeded)
+	})
+
+	t.Run("nil is fine", func(t *testing.T) {
+		require.NoError(t, handleStartEventWaitError(context.Background(), nil))
+	})
+
+	t.Run("timeout racing an expired context is propagated", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+		time.Sleep(2 * time.Millisecond)
+
+		err := handleStartEventWaitError(ctx, agent.NewWaitNoticeTimeoutError("boom"))
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("timeout on a live context is recoverable", func(t *testing.T) {
+		err := handleStartEventWaitError(context.Background(), agent.NewWaitNoticeTimeoutError("boom"))
+		require.NoError(t, err)
+	})
+}
+
+// TestFlowRun_DeadlineBeforeStartWait is a regression test for
+// https://github.com/trpc-group/trpc-agent-go/issues/2559.
+//
+// When emitStartEventAndWait returns a context error (Canceled or
+// DeadlineExceeded), Flow.Run must:
+//  1. Stop immediately and not proceed to runOneStep.
+//  2. Emit an error event into the channel so the caller can observe the
+//     termination reason rather than just seeing a closed channel.
+//
+// The test cancels the context before delivering the completion notice, so
+// the very first emitStartEventAndWait returns context.Canceled.  The caller
+// must receive an error event and the channel must close cleanly.
+func TestFlowRun_DeadlineBeforeStartWait(t *testing.T) {
+	f := New(nil, nil, Options{ChannelBufferSize: 16})
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("deadline-regression"),
+		agent.WithInvocationAgent(&minimalAgent{}),
+	)
+
+	// Cancel the context immediately after Run returns so the first
+	// emitStartEventAndWait sees a cancelled context when it calls
+	// AddNoticeChannelAndWait.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancelled before any notice arrives
+
+	eventChan, err := f.Run(ctx, inv)
+	require.NoError(t, err)
+
+	var errorEvents []*event.Event
+	for evt := range eventChan {
+		if evt == nil {
+			continue
+		}
+		if evt.IsError() {
+			errorEvents = append(errorEvents, evt)
+		}
+	}
+
+	// An error event must have been emitted so the caller can observe why the
+	// run ended, rather than only seeing a closed channel.
+	require.NotEmpty(t, errorEvents,
+		"Flow.Run must emit an error event when emitStartEventAndWait fails with a context error")
+}
