@@ -1,6 +1,6 @@
 # 评估指标 EvalMetric
 
-EvalMetric 用于定义评估指标，它通过 `metricName` 标识指标，通过 `criterion` 描述评估准则，并通过 `threshold` 定义阈值。一次评估可以同时配置多条评估指标，评估执行会逐条应用这些指标，并分别产出分数与状态。`requireExplicitSelection` 未设置或为 `false` 时，指标默认执行；设置为 `true` 时，只有在 Invocation 中显式选择后才执行。
+EvalMetric 用于定义评估指标，它通过 `metricName` 标识指标，通过 `criterion` 描述评估准则，并通过 `threshold` 定义阈值。一次评估可以同时配置多条评估指标，评估执行会逐条应用这些指标，并分别产出分数与状态。
 
 ## 结构定义
 
@@ -45,7 +45,7 @@ type Criterion struct {
 - `llm_rubric_response`：LLM 细则响应评估器，需要评估集提供会话输入并配置 LLMJudge 和评估细则 rubrics。
 - `llm_rubric_knowledge_recall`：LLM rubric 知识召回评估器，需要评估集提供会话输入并配置 LLMJudge 和评估细则 rubrics。
 
-`metricName` 需要在同一份指标文件中保持唯一，因为它同时作为结果中的指标标识。`requireExplicitSelection` 用于控制指标是否默认执行；设置为 `true` 的指标不会自动应用到未配置 `metricNames` 的轮次，只有被 Invocation 显式选择时才会执行。`threshold` 用于定义阈值，评估器会输出 `score` 并据此判断通过或失败。不同评估器对 `score` 的定义略有差异，但常见做法是对每轮 Invocation 计算分数，再对多轮结果做聚合得到整体分数。指标文件的数组顺序也会影响评估执行顺序与结果展示顺序。
+`metricName` 需要在同一份指标文件中保持唯一，因为它同时作为结果中的指标标识。`threshold` 用于定义阈值，评估器会输出 `score` 并据此判断通过或失败。不同评估器对 `score` 的定义略有差异，但常见做法是对每轮 Invocation 计算分数，再对多轮结果做聚合得到整体分数。指标文件的数组顺序也会影响评估执行顺序与结果展示顺序。
 
 `extension` 用于携带调用方自定义的评估指标元数据，例如平台侧的权重、分组或展示配置。框架只负责随 `EvalMetric` 读取、存储和传递该字段，不解释其中的业务语义，也不承诺对其内容做深拷贝；自定义评估器、平台逻辑或自定义聚合逻辑可以按需读取。
 
@@ -56,17 +56,6 @@ type Criterion struct {
   {
     "metricName": "tool_trajectory_avg_score",
     "threshold": 1.0
-  }
-]
-```
-
-如果指标只需要在显式绑定的 Invocation 中执行，可以设置 `requireExplicitSelection`：
-
-```json
-[
-  {
-    "metricName": "turn_specific_quality",
-    "requireExplicitSelection": true
   }
 ]
 ```

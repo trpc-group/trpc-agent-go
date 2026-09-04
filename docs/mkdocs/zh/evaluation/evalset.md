@@ -62,7 +62,7 @@ type ConversationScenario struct {
 // Invocation 表示对话中的一轮交互
 type Invocation struct {
 	InvocationID          string               // InvocationID 是本轮标识，可选
-	MetricNames           []string             // MetricNames 指定本轮使用的评估指标。为空时使用未要求显式选择的指标
+	MetricNames           []string             // MetricNames 指定本轮使用的评估指标
 	ContextMessages       []*model.Message     // ContextMessages 是本轮上下文消息，可选
 	UserContent           *model.Message       // UserContent 是本轮用户输入，必填
 	FinalResponse         *model.Message       // FinalResponse 是最终响应，可选
@@ -94,7 +94,28 @@ EvalSet 由 `evalSetId` 标识，包含多个 EvalCase，每个用例用 `evalId
 
 EvalSet 中的 `tools` 与 `finalResponse` 用于描述工具轨迹与最终响应，是否需要填写取决于所选评估指标。
 
-可以通过 `metricNames` 为单独一轮 Invocation 绑定评估指标。不配置或为空时，该轮继承 `EvaluateConfig` 中 `requireExplicitSelection` 未设置或为 `false` 的指标；配置一个或多个指标名时，该列表作为本轮白名单，未列出的指标会跳过。列表中的每个名称都必须对应 `EvaluateConfig` 中已配置的指标。在 Trace 模式下，如果 `conversation` 与 `actualConversation` 都配置了指标名，则优先使用预期侧 `conversation` 的绑定；仅当预期侧没有配置指标名时，才回退到实际侧选择。
+### 按轮选择评估指标
+
+可以通过 `metricNames` 为单独一轮 Invocation 绑定评估指标。不配置或为空时，该轮继承 `EvaluateConfig` 中 `requireExplicitSelection` 未设置或为 `false` 的指标。如果某个指标只应在显式选择的轮次执行，可以将 `requireExplicitSelection` 设置为 `true`。Invocation 配置一个或多个指标名时，该列表作为本轮完整白名单，未列出的指标会跳过。列表中的每个名称都必须对应 `EvaluateConfig` 中已配置的指标。在 Trace 模式下，如果 `conversation` 与 `actualConversation` 都配置了指标名，则优先使用预期侧 `conversation` 的绑定；仅当预期侧没有配置指标名时，才回退到实际侧选择。
+
+例如，在指标文件中配置：
+
+```json
+[
+  {
+    "metricName": "turn_specific_quality",
+    "requireExplicitSelection": true
+  }
+]
+```
+
+然后只在需要的轮次中显式选择：
+
+```json
+{
+  "metricNames": ["turn_specific_quality"]
+}
+```
 
 `conversationScenario` 动态生成的轮次没有预先声明的 Invocation，因此仍会继承未要求显式选择的指标。
 

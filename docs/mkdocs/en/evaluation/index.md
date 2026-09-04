@@ -230,7 +230,7 @@ The example below defines an evaluation set named `math-basic`. During evaluatio
 
 ##### Evaluation Metric File
 
-The evaluation metric file path is `data/math-eval-app/math-basic.metrics.json`. It describes metrics, selects the evaluator via `metricName`, defines criteria via `criterion`, and sets thresholds via `threshold`. A file can configure multiple metrics, and the framework will run metrics whose `requireExplicitSelection` is false or omitted by default. A metric with `requireExplicitSelection: true` runs only when its name is included in an invocation's `metricNames`. When `metricNames` is configured, it is the complete allowlist for that invocation.
+The evaluation metric file path is `data/math-eval-app/math-basic.metrics.json`. It describes metrics, selects the evaluator via `metricName`, defines criteria via `criterion`, and sets thresholds via `threshold`. A file can configure multiple metrics, and the framework will run them in order. See the EvalSet documentation for per-turn metric selection.
 
 This section configures only the tool trajectory evaluator `tool_trajectory_avg_score`. It compares tool traces per turn; tool `id` is usually generated at runtime and is not used for matching.
 
