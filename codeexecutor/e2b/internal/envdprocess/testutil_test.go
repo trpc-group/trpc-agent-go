@@ -100,11 +100,27 @@ func newTestClient(
 	headers http.Header,
 	options ...ClientOption,
 ) *Client {
+	return newTestClientWithHTTPConfiguration(
+		t, handler, headers, nil, options...,
+	)
+}
+
+func newTestClientWithHTTPConfiguration(
+	t *testing.T,
+	handler processconnect.ProcessHandler,
+	headers http.Header,
+	configure func(*http.Client),
+	options ...ClientOption,
+) *Client {
 	t.Helper()
 	_, rpcHandler := processconnect.NewProcessHandler(handler)
 	server := httptest.NewTLSServer(rpcHandler)
 	t.Cleanup(server.Close)
-	client, err := NewClient(server.URL, server.Client(), headers, options...)
+	httpClient := server.Client()
+	if configure != nil {
+		configure(httpClient)
+	}
+	client, err := NewClient(server.URL, httpClient, headers, options...)
 	require.NoError(t, err)
 	return client
 }

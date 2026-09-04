@@ -15,8 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"connectrpc.com/connect"
-
 	process "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec"
 )
 
@@ -71,17 +69,12 @@ type Result struct {
 
 func handleIncomingEvent(
 	processStreamCtx context.Context,
-	hasRemoteTimeout bool,
 	state *processState,
 	received receivedEvent,
 	ok bool,
 ) runEventOutcome {
 	if processStreamCtx.Err() != nil {
 		return runEventOutcome{action: runEventStop}
-	}
-	if received.err != nil && hasRemoteTimeout &&
-		isRemoteTimeout(received.err) {
-		return runEventOutcome{action: runEventTimedOut}
 	}
 	return handleReceivedEvent(state, received, ok)
 }
@@ -99,9 +92,6 @@ func finishProcessEvent(
 		return nil, true
 	case runEventStop:
 		return finishStoppedProcess(processStreamCtx, state), true
-	case runEventTimedOut:
-		state.timedOut = true
-		return nil, true
 	case runEventFail:
 		return outcome.err, true
 	default:
@@ -166,17 +156,12 @@ func finishStoppedProcess(
 	return processStreamCtx.Err()
 }
 
-func isRemoteTimeout(err error) bool {
-	return connect.CodeOf(err) == connect.CodeDeadlineExceeded
-}
-
 type runEventAction uint8
 
 const (
 	runEventContinue runEventAction = iota
 	runEventComplete
 	runEventStop
-	runEventTimedOut
 	runEventFail
 )
 

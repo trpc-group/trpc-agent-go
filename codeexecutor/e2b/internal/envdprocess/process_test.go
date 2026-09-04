@@ -163,6 +163,33 @@ func TestProcessCallerCancellationDisconnectsStream(t *testing.T) {
 	<-disconnected
 }
 
+func TestConnectedProcessDeadlineIsNotRemoteProcessTimeout(t *testing.T) {
+	handler := &testProcessHandler{}
+	handler.connect = func(
+		ctx context.Context,
+		_ *connect.Request[processrpc.ConnectRequest],
+		stream *connect.ServerStream[processrpc.ConnectResponse],
+	) error {
+		if err := stream.Send(&processrpc.ConnectResponse{
+			Event: startProcessEvent(208),
+		}); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	client := newTestClient(t, handler, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	proc, err := client.Connect(ctx, 208)
+	require.NoError(t, err)
+	result, err := proc.Wait(context.Background())
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, uint32(208), result.PID)
+	assert.False(t, result.TimedOut)
+}
+
 func TestProcessWaitCancellationDoesNotDisconnect(t *testing.T) {
 	release := make(chan struct{})
 	handler := &testProcessHandler{}
@@ -237,6 +264,45 @@ func TestStartStdinFailureReturnsProcessForCleanup(t *testing.T) {
 	killedProcess, killErr := proc.Kill(context.Background())
 	require.NoError(t, killErr)
 	assert.True(t, killedProcess)
+}
+
+func TestStartDelayedEndEventTakesPrecedenceOverSendInputNotFound(t *testing.T) {
+	inputAttempted := make(chan struct{})
+	handler := &testProcessHandler{}
+	handler.start = func(
+		_ context.Context,
+		_ *connect.Request[processrpc.StartRequest],
+		stream *connect.ServerStream[processrpc.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(209)); err != nil {
+			return err
+		}
+		<-inputAttempted
+		time.Sleep(100 * time.Millisecond)
+		return stream.Send(&processrpc.StartResponse{Event: endEvent(0)})
+	}
+	handler.sendInput = func(
+		context.Context,
+		*connect.Request[processrpc.SendInputRequest],
+	) (*connect.Response[processrpc.SendInputResponse], error) {
+		close(inputAttempted)
+		return nil, connect.NewError(
+			connect.CodeNotFound, errors.New("process already exited"),
+		)
+	}
+
+	client := newTestClient(t, handler, nil)
+	proc, err := client.Start(context.Background(), Request{
+		Cmd:           "true",
+		Stdin:         "unused",
+		KeepStdinOpen: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, proc)
+	result, err := proc.Wait(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, uint32(209), result.PID)
+	assert.Equal(t, 0, result.ExitCode)
 }
 
 func TestUninitializedProcessMethods(t *testing.T) {

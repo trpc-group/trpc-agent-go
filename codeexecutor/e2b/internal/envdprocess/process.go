@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -181,15 +182,13 @@ func (p *Process) completeStartup() {
 // and stdin can make progress independently.
 func (p *Process) startConsumer(
 	processStreamCtx context.Context,
-	hasRemoteTimeout bool,
 	stream processEventStream,
 ) {
-	go p.consume(processStreamCtx, hasRemoteTimeout, stream)
+	go p.consume(processStreamCtx, stream)
 }
 
 func (p *Process) consume(
 	processStreamCtx context.Context,
-	hasRemoteTimeout bool,
 	stream processEventStream,
 ) {
 	// Defers run in reverse order: disconnect the attachment and cancel its RPC
@@ -206,7 +205,6 @@ func (p *Process) consume(
 	for stream.Receive() {
 		if p.consumeEvent(
 			processStreamCtx,
-			hasRemoteTimeout,
 			receivedEvent{event: stream.Event()},
 			true,
 		) {
@@ -216,7 +214,6 @@ func (p *Process) consume(
 	streamErr := stream.Err()
 	p.consumeEvent(
 		processStreamCtx,
-		hasRemoteTimeout,
 		receivedEvent{err: streamErr},
 		streamErr != nil,
 	)
@@ -226,14 +223,12 @@ func (p *Process) consume(
 // consumer guarantees that done is closed exactly once for a terminal event.
 func (p *Process) consumeEvent(
 	processStreamCtx context.Context,
-	hasRemoteTimeout bool,
 	received receivedEvent,
 	ok bool,
 ) bool {
 	p.mu.Lock()
 	outcome := handleIncomingEvent(
 		processStreamCtx,
-		hasRemoteTimeout,
 		&p.state,
 		received,
 		ok,
@@ -262,6 +257,28 @@ func (p *Process) remoteExecutionFinished() bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.state.remoteEnded || p.state.timedOut
+}
+
+// waitForConfirmedTermination gives an EndEvent that is already in flight a
+// bounded opportunity to reach the process stream. An EndEvent or the
+// configured process timeout is authoritative; a closed stream without either
+// is not evidence that the remote process terminated.
+func (p *Process) waitForConfirmedTermination(timeout time.Duration) bool {
+	if p.remoteExecutionFinished() {
+		return true
+	}
+	if timeout <= 0 {
+		return false
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-p.done:
+		return p.remoteExecutionFinished()
+	case <-timer.C:
+		// Prefer a terminal event that raced with the timer.
+		return p.remoteExecutionFinished()
+	}
 }
 
 func (p *Process) snapshot() (Result, error) {

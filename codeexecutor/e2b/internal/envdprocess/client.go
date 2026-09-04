@@ -221,9 +221,11 @@ func (c *Client) Run(
 // Start starts a non-PTY process and returns a handle after envd reports its
 // PID. The returned Process can be non-nil together with an error when startup
 // I/O fails; ownership still transfers to the caller, which can inspect, kill,
-// or disconnect the handle. A non-positive Request.Timeout uses a 60-second
-// remote process deadline. LaunchOption values configure this invocation
-// without changing the Client.
+// or disconnect the handle. If initial stdin reports that the process no
+// longer exists, Start briefly waits for a terminal event already in flight
+// before returning the I/O error. A non-positive Request.Timeout uses a
+// 60-second remote process deadline. LaunchOption values configure this
+// invocation without changing the Client.
 func (c *Client) Start(
 	ctx context.Context,
 	req Request,
@@ -273,12 +275,21 @@ func (c *Client) start(
 	// Start draining process output before sending initial stdin. envd writes
 	// stdin synchronously, so serializing these directions can deadlock when
 	// both the process stdout pipe and the response stream apply backpressure.
-	proc.startConsumer(processStreamCtx, true, eventStream)
+	proc.startConsumer(processStreamCtx, eventStream)
 	stdinErr := initializeProcessStdin(processStreamCtx, proc, req)
 	if stdinErr != nil {
 		if proc.remoteExecutionFinished() {
 			_, terminalErr := proc.snapshot()
 			return proc, true, terminalErr
+		}
+		if connect.CodeOf(stdinErr) == connect.CodeNotFound {
+			if proc.waitForConfirmedTermination(initialStdinEndEventGracePeriod) {
+				_, terminalErr := proc.snapshot()
+				return proc, true, terminalErr
+			}
+			if ctx.Err() != nil {
+				return proc, true, ctx.Err()
+			}
 		}
 		return proc, true, stdinErr
 	}
@@ -345,7 +356,7 @@ func (c *Client) Connect(ctx context.Context, pid uint32) (*Process, error) {
 	}
 	proc := newProcess(c, pid, disconnect)
 	proc.completeStartup()
-	proc.startConsumer(streamCtx, false, eventStream)
+	proc.startConsumer(streamCtx, eventStream)
 	return proc, nil
 }
 
@@ -509,8 +520,12 @@ func (c *Client) kill(
 }
 
 const (
-	runCleanupTimeout       = time.Second
-	tagCleanupRetryInterval = 25 * time.Millisecond
+	// initialStdinEndEventGracePeriod reconciles a process NotFound response
+	// from an initial stdin RPC with a trailing EndEvent on the independent
+	// Start response stream.
+	initialStdinEndEventGracePeriod = time.Second
+	runCleanupTimeout               = time.Second
+	tagCleanupRetryInterval         = 25 * time.Millisecond
 )
 
 // cleanupRunProcess uses a detached, bounded context because the caller

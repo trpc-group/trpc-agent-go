@@ -50,6 +50,7 @@ const (
 	integrationTestTimeout                   = 5 * time.Minute
 	integrationOperationTimeout              = 30 * time.Second
 	integrationSandboxTimeout                = 5 * time.Minute
+	integrationHTTPClientTimeout             = 2 * time.Second
 )
 
 // TestIntegrationEnvdProcess creates a sandbox through the E2B-compatible
@@ -92,6 +93,13 @@ func TestIntegrationEnvdProcess(t *testing.T) {
 		WithStderrCaptureLimit(4),
 	)
 	require.NoError(t, err)
+	httpTimeoutRunner, err := NewClient(
+		sandbox.baseURL,
+		&http.Client{Timeout: integrationHTTPClientTimeout},
+		sandbox.headers,
+		WithEnvdVersion(sandbox.envdVersion),
+	)
+	require.NoError(t, err)
 	supportsCloseStdin := integrationSupportsCloseStdin(
 		ctx,
 		t,
@@ -105,6 +113,7 @@ func TestIntegrationEnvdProcess(t *testing.T) {
 		rpc:                  rpc,
 		runner:               runner,
 		captureLimitedRunner: captureLimitedRunner,
+		httpTimeoutRunner:    httpTimeoutRunner,
 		headers:              sandbox.headers,
 		user:                 config.envdUser,
 		supportsCloseStdin:   supportsCloseStdin,
@@ -140,6 +149,9 @@ func TestIntegrationEnvdProcess(t *testing.T) {
 	})
 	t.Run("RunTimeout", func(t *testing.T) {
 		testEnv.testRunTimeout(ctx, t)
+	})
+	t.Run("RunHTTPClientTimeoutCleanup", func(t *testing.T) {
+		testEnv.testRunHTTPClientTimeoutCleanup(ctx, t)
 	})
 	t.Run("RunCancellationCleanup", func(t *testing.T) {
 		testEnv.testRunCancellationCleanup(ctx, t)
@@ -335,6 +347,7 @@ type integrationEnvironment struct {
 	rpc                  processconnect.ProcessClient
 	runner               *Client
 	captureLimitedRunner *Client
+	httpTimeoutRunner    *Client
 	headers              http.Header
 	user                 string
 	supportsCloseStdin   bool
@@ -734,6 +747,29 @@ func (e *integrationEnvironment) testRunTimeout(
 	require.NoError(t, err)
 	assert.True(t, result.TimedOut)
 	require.NoError(t, e.waitForProcessConfigToDisappear(ctx, marker))
+}
+
+func (e *integrationEnvironment) testRunHTTPClientTimeoutCleanup(
+	parent context.Context,
+	t *testing.T,
+) {
+	ctx, cancel := context.WithTimeout(parent, integrationOperationTimeout)
+	defer cancel()
+
+	tag := integrationTag("http-timeout")
+	result, err := e.httpTimeoutRunner.Run(ctx, Request{
+		Cmd:     "/bin/sh",
+		Args:    []string{"-c", "exec sleep 60"},
+		User:    e.user,
+		Timeout: 20 * time.Second,
+	}, WithTag(tag))
+	require.Error(t, err)
+	require.NotZero(t, result.PID,
+		"HTTP client timeout must occur after envd returns StartEvent")
+	assert.False(t, result.TimedOut)
+	e.trackPID(result.PID)
+	require.NoError(t, e.waitForProcessToDisappear(ctx, result.PID))
+	e.forgetPID(result.PID)
 }
 
 func (e *integrationEnvironment) testRunCancellationCleanup(

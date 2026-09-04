@@ -390,6 +390,85 @@ func TestRunDoesNotMapUnrelatedDeadlineErrorToProcessTimeout(t *testing.T) {
 	assert.NotEmpty(t, (<-killRequests).Msg.Process.GetTag())
 }
 
+func TestRunDoesNotMapStreamDeadlineAfterStartToProcessTimeout(t *testing.T) {
+	killRequests := make(chan *connect.Request[process.SendSignalRequest], 1)
+	handler := &testProcessHandler{}
+	handler.start = func(
+		_ context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(76)); err != nil {
+			return err
+		}
+		return connect.NewError(
+			connect.CodeDeadlineExceeded, errors.New("gateway deadline"),
+		)
+	}
+	handler.sendSignal = func(
+		_ context.Context,
+		req *connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		killRequests <- req
+		return connect.NewResponse(&process.SendSignalResponse{}), nil
+	}
+
+	client := newTestClient(t, handler, nil)
+	result, err := client.Run(context.Background(), Request{
+		Cmd:     "sleep",
+		Timeout: 2 * time.Second,
+	})
+	require.ErrorContains(t, err, "gateway deadline")
+	assert.Equal(t, uint32(76), result.PID)
+	assert.False(t, result.TimedOut)
+	assert.Equal(t, uint32(76), (<-killRequests).Msg.Process.GetPid())
+}
+
+func TestRunHTTPClientTimeoutAfterStartKillsProcess(t *testing.T) {
+	killRequests := make(chan *connect.Request[process.SendSignalRequest], 1)
+	handler := &testProcessHandler{}
+	handler.start = func(
+		ctx context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(75)); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	handler.sendSignal = func(
+		_ context.Context,
+		req *connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		killRequests <- req
+		return connect.NewResponse(&process.SendSignalResponse{}), nil
+	}
+
+	client := newTestClientWithHTTPConfiguration(
+		t,
+		handler,
+		nil,
+		func(httpClient *http.Client) {
+			httpClient.Timeout = 50 * time.Millisecond
+		},
+	)
+	result, err := client.Run(context.Background(), Request{
+		Cmd:     "sleep",
+		Timeout: 2 * time.Second,
+	})
+	require.Error(t, err)
+	assert.Equal(t, uint32(75), result.PID)
+	assert.False(t, result.TimedOut)
+	select {
+	case killReq := <-killRequests:
+		assert.Equal(t, uint32(75), killReq.Msg.Process.GetPid())
+	case <-time.After(time.Second):
+		t.Fatal("Run did not kill the process after the HTTP client timeout")
+	}
+}
+
 func TestRunCallerCancellationKillsProcess(t *testing.T) {
 	stdinClosed := make(chan struct{})
 	startRequests := make(chan *connect.Request[process.StartRequest], 1)
@@ -619,6 +698,252 @@ func TestRunNormalEndTakesPrecedenceOverConcurrentSendInputError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint32(81), result.PID)
 	assert.Equal(t, 0, result.ExitCode)
+}
+
+func TestRunDelayedEndEventTakesPrecedenceOverSendInputNotFound(t *testing.T) {
+	tests := []struct {
+		name      string
+		end       *process.ProcessEvent
+		wantExit  int
+		wantError string
+	}{
+		{
+			name:     "ExitZero",
+			end:      endEvent(0),
+			wantExit: 0,
+		},
+		{
+			name:     "NonzeroExit",
+			end:      endEvent(7),
+			wantExit: 7,
+		},
+		{
+			name: "FailedEndEvent",
+			end: &process.ProcessEvent{Event: &process.ProcessEvent_End{
+				End: &process.ProcessEvent_EndEvent{
+					Status: "failed before reading stdin",
+				},
+			}},
+			wantError: "failed before reading stdin",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputAttempted := make(chan struct{})
+			handler := &testProcessHandler{}
+			handler.start = func(
+				_ context.Context,
+				_ *connect.Request[process.StartRequest],
+				stream *connect.ServerStream[process.StartResponse],
+			) error {
+				if err := stream.Send(startEvent(84)); err != nil {
+					return err
+				}
+				<-inputAttempted
+				// SendInput and the Start stream are independent RPCs. Delay the
+				// EndEvent until after the NotFound response can reach the client.
+				time.Sleep(100 * time.Millisecond)
+				return stream.Send(&process.StartResponse{Event: tt.end})
+			}
+			handler.sendInput = func(
+				context.Context,
+				*connect.Request[process.SendInputRequest],
+			) (*connect.Response[process.SendInputResponse], error) {
+				close(inputAttempted)
+				return nil, connect.NewError(
+					connect.CodeNotFound, errors.New("process already exited"),
+				)
+			}
+			handler.sendSignal = unexpectedSendSignal(t)
+
+			client := newTestClient(t, handler, nil)
+			result, err := client.Run(context.Background(), Request{
+				Cmd:           "true",
+				Stdin:         "unused",
+				KeepStdinOpen: true,
+			})
+			if tt.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tt.wantError)
+			}
+			assert.Equal(t, uint32(84), result.PID)
+			assert.Equal(t, tt.wantExit, result.ExitCode)
+		})
+	}
+}
+
+func TestRunDelayedEndEventTakesPrecedenceOverCloseStdinNotFound(t *testing.T) {
+	closeAttempted := make(chan struct{})
+	handler := &testProcessHandler{}
+	handler.start = func(
+		_ context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(85)); err != nil {
+			return err
+		}
+		<-closeAttempted
+		time.Sleep(100 * time.Millisecond)
+		return stream.Send(&process.StartResponse{Event: endEvent(0)})
+	}
+	handler.sendInput = func(
+		context.Context,
+		*connect.Request[process.SendInputRequest],
+	) (*connect.Response[process.SendInputResponse], error) {
+		return connect.NewResponse(&process.SendInputResponse{}), nil
+	}
+	handler.closeStdin = func(
+		context.Context,
+		*connect.Request[process.CloseStdinRequest],
+	) (*connect.Response[process.CloseStdinResponse], error) {
+		close(closeAttempted)
+		return nil, connect.NewError(
+			connect.CodeNotFound, errors.New("process already exited"),
+		)
+	}
+	handler.sendSignal = unexpectedSendSignal(t)
+
+	client := newTestClient(t, handler, nil)
+	result, err := client.Run(context.Background(), Request{
+		Cmd:   "true",
+		Stdin: "unused",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(85), result.PID)
+	assert.Equal(t, 0, result.ExitCode)
+}
+
+func TestRunStdinNotFoundWithoutEndEventReturnsErrorAndCleansUp(t *testing.T) {
+	killRequests := make(chan *connect.Request[process.SendSignalRequest], 1)
+	handler := &testProcessHandler{}
+	handler.start = func(
+		ctx context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(86)); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	handler.sendInput = func(
+		context.Context,
+		*connect.Request[process.SendInputRequest],
+	) (*connect.Response[process.SendInputResponse], error) {
+		return nil, connect.NewError(
+			connect.CodeNotFound, errors.New("process missing"),
+		)
+	}
+	handler.sendSignal = func(
+		_ context.Context,
+		req *connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		killRequests <- req
+		return nil, connect.NewError(
+			connect.CodeNotFound, errors.New("process missing"),
+		)
+	}
+
+	client := newTestClient(t, handler, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	result, err := client.Run(ctx, Request{
+		Cmd:           "true",
+		Stdin:         "unused",
+		KeepStdinOpen: true,
+	})
+	require.ErrorContains(t, err, "write stdin")
+	assert.Equal(t, uint32(86), result.PID)
+	assert.False(t, result.TimedOut)
+	assert.Equal(t, uint32(86), (<-killRequests).Msg.Process.GetPid())
+}
+
+func TestRunCancellationDuringStdinNotFoundGraceCleansUp(t *testing.T) {
+	inputAttempted := make(chan struct{})
+	killRequests := make(chan *connect.Request[process.SendSignalRequest], 1)
+	handler := &testProcessHandler{}
+	handler.start = func(
+		ctx context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(87)); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	handler.sendInput = func(
+		context.Context,
+		*connect.Request[process.SendInputRequest],
+	) (*connect.Response[process.SendInputResponse], error) {
+		close(inputAttempted)
+		return nil, connect.NewError(
+			connect.CodeNotFound, errors.New("process missing"),
+		)
+	}
+	handler.sendSignal = func(
+		_ context.Context,
+		req *connect.Request[process.SendSignalRequest],
+	) (*connect.Response[process.SendSignalResponse], error) {
+		killRequests <- req
+		return connect.NewResponse(&process.SendSignalResponse{}), nil
+	}
+
+	client := newTestClient(t, handler, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-inputAttempted
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	result, err := client.Run(ctx, Request{
+		Cmd:           "true",
+		Stdin:         "unused",
+		KeepStdinOpen: true,
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, uint32(87), result.PID)
+	assert.False(t, result.TimedOut)
+	assert.Equal(t, uint32(87), (<-killRequests).Msg.Process.GetPid())
+}
+
+func TestRunProcessTimeoutDuringStdinNotFoundGrace(t *testing.T) {
+	handler := &testProcessHandler{}
+	handler.start = func(
+		ctx context.Context,
+		_ *connect.Request[process.StartRequest],
+		stream *connect.ServerStream[process.StartResponse],
+	) error {
+		if err := stream.Send(startEvent(88)); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	handler.sendInput = func(
+		context.Context,
+		*connect.Request[process.SendInputRequest],
+	) (*connect.Response[process.SendInputResponse], error) {
+		return nil, connect.NewError(
+			connect.CodeNotFound, errors.New("process missing"),
+		)
+	}
+	handler.sendSignal = unexpectedSendSignal(t)
+
+	client := newTestClient(t, handler, nil)
+	result, err := client.Run(context.Background(), Request{
+		Cmd:           "true",
+		Stdin:         "unused",
+		KeepStdinOpen: true,
+		Timeout:       100 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(88), result.PID)
+	assert.True(t, result.TimedOut)
 }
 
 func TestRunCallerDeadlineDoesNotShortenRemoteProcessDeadline(t *testing.T) {
