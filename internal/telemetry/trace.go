@@ -51,6 +51,7 @@ const (
 	OperationCreateAgent     = "create_agent"
 	OperationEmbeddings      = "embeddings"
 	OperationWorkflow        = "workflow"
+	OperationInvokeSkill     = "invoke_skill"
 )
 
 // NewChatSpanName creates a new chat span name.
@@ -61,6 +62,14 @@ func NewChatSpanName(requestModel string) string {
 // NewExecuteToolSpanName creates a new execute tool span name.
 func NewExecuteToolSpanName(toolName string) string {
 	return OperationExecuteTool + " " + toolName
+}
+
+// NewInvokeSkillSpanName creates a new invoke skill span name.
+func NewInvokeSkillSpanName(skillName string) string {
+	if skillName == "" {
+		return OperationInvokeSkill
+	}
+	return OperationInvokeSkill + " " + skillName
 }
 
 // WorkflowType is the normalized type vocabulary used by workflow spans.
@@ -92,9 +101,105 @@ type Workflow struct {
 	Error    error
 }
 
+// InvokeSkillAttributes contains the attributes for an invoke_skill span.
+//
+// In trpc-agent-go, invoke_skill represents skill activation/materialization:
+// the framework has selected a skill and materialized its SKILL.md/docs into
+// agent context. It deliberately does not cover later chat/tool execution.
+type InvokeSkillAttributes struct {
+	Invocation       *agent.Invocation
+	SkillName        string
+	SkillID          string
+	SkillVersion     string
+	SkillDescription string
+	Phase            string
+	Request          string
+	Response         string
+	Error            error
+	ErrorType        string
+}
+
 // NewWorkflowSpanName creates a new workflow span name.
 func NewWorkflowSpanName(workflowName string) string {
 	return OperationWorkflow + " " + workflowName
+}
+
+// TraceInvokeSkill traces skill activation/materialization.
+func TraceInvokeSkill(span trace.Span, attrs *InvokeSkillAttributes) {
+	if !span.IsRecording() {
+		return
+	}
+	kvs := []attribute.KeyValue{
+		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
+		attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeSkill),
+	}
+	if attrs == nil {
+		span.SetAttributes(kvs...)
+		return
+	}
+	kvs = append(kvs,
+		attribute.String(semconvtrace.KeyGenAISkillName, attrs.SkillName),
+		attribute.String(semconvtrace.KeyGenAISkillID, attrs.SkillID),
+	)
+	if attrs.SkillVersion != "" {
+		kvs = append(kvs, attribute.String(semconvtrace.KeyGenAISkillVersion, attrs.SkillVersion))
+	}
+	if attrs.SkillDescription != "" {
+		kvs = append(kvs, attribute.String(semconvtrace.KeyGenAISkillDescription, attrs.SkillDescription))
+	}
+	if attrs.Phase != "" {
+		kvs = append(kvs, attribute.String(semconvtrace.KeyGenAISkillPhase, attrs.Phase))
+	}
+	kvs = append(kvs, buildInvokeSkillInvocationAttributes(attrs.Invocation)...)
+	if attrs.ErrorType != "" {
+		kvs = append(kvs, attribute.String(semconvtrace.KeyErrorType, attrs.ErrorType))
+	} else if attrs.Error != nil {
+		kvs = append(kvs, attribute.String(semconvtrace.KeyErrorType, ToErrorType(attrs.Error, semconvtrace.ValueDefaultErrorType)))
+	}
+	if attrs.Error != nil {
+		kvs = append(kvs, attribute.String(semconvtrace.KeyErrorMessage, attrs.Error.Error()))
+		span.SetStatus(codes.Error, attrs.Error.Error())
+		span.RecordError(attrs.Error)
+	}
+	if attrs.Request != "" {
+		kvs = appendStringAttribute(kvs, OperationInvokeSkill, semconvtrace.KeyGenAIInvokeSkillRequest, "", func() ([]byte, error) {
+			return []byte(attrs.Request), nil
+		})
+	}
+	if attrs.Response != "" {
+		kvs = appendStringAttribute(kvs, OperationInvokeSkill, semconvtrace.KeyGenAIInvokeSkillResponse, "", func() ([]byte, error) {
+			return []byte(attrs.Response), nil
+		})
+	}
+	span.SetAttributes(kvs...)
+}
+
+func buildInvokeSkillInvocationAttributes(inv *agent.Invocation) []attribute.KeyValue {
+	if inv == nil {
+		return nil
+	}
+	var attrs []attribute.KeyValue
+	agentName, agentID := resolveInvocationAgentIdentity(inv)
+	if agentName != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentName, agentName))
+	}
+	if agentID != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentID, agentID))
+	}
+	if inv.Session != nil {
+		if inv.Session.ID != "" {
+			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIConversationID, inv.Session.ID))
+		}
+		if inv.Session.AppName != "" {
+			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAppName, inv.Session.AppName))
+		}
+		if inv.Session.UserID != "" {
+			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIUserID, inv.Session.UserID))
+		}
+	} else if inv.RunOptions.AppName != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAppName, inv.RunOptions.AppName))
+	}
+	return attrs
 }
 
 type telemetryMessage struct {
