@@ -1129,11 +1129,16 @@ func filterRefsByEventTimestamp(refs []eventRef, afterTime time.Time) []eventRef
 	return filtered
 }
 
-// oldestEventRef returns the earliest ref in the current bounded event window.
+// oldestEventRef returns the earliest ref in the current bounded event window,
+// ordered by the (created_at, id) composite key. Callers use the result as an
+// exclusive keyset cursor, so ties must resolve to the smallest id: comparing
+// created_at alone would leave the lower ids of a boundary timestamp behind the
+// cursor and replay them in the next batch.
 func oldestEventRef(refs []eventRef) eventRef {
 	oldest := refs[0]
 	for _, ref := range refs[1:] {
-		if ref.createdAt.Before(oldest.createdAt) {
+		c := ref.createdAt.Compare(oldest.createdAt)
+		if c < 0 || (c == 0 && ref.id < oldest.id) {
 			oldest = ref
 		}
 	}

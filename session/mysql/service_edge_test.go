@@ -1026,6 +1026,23 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 		assert.Equal(t, now.Add(-time.Minute), oldest.createdAt)
 	})
 
+	t.Run("OldestRefBreaksTiesBySmallestID", func(t *testing.T) {
+		// The result is used as an exclusive keyset cursor. When several refs
+		// share the boundary timestamp, returning anything but the smallest id
+		// leaves the lower ids behind the cursor, so the next batch replays
+		// them. Descending scan order is reproduced here on purpose.
+		now := time.Now()
+		oldest := oldestEventRef([]eventRef{
+			{id: 12, createdAt: now},
+			{id: 10, createdAt: now.Add(-time.Minute)},
+			{id: 9, createdAt: now.Add(-time.Minute)},
+			{id: 8, createdAt: now.Add(-time.Minute)},
+		})
+		assert.Equal(t, now.Add(-time.Minute), oldest.createdAt)
+		assert.Equal(t, int64(8), oldest.id,
+			"cursor must advance past the whole boundary timestamp")
+	})
+
 	t.Run("TimestampFilterAndLoadedAnchor", func(t *testing.T) {
 		afterTime := time.Now()
 		user := event.NewResponseEvent("inv-user", "author1", &model.Response{
