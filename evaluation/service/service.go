@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // Service defines the interface that an evaluation service must satisfy.
@@ -68,6 +69,8 @@ type InferenceResult struct {
 	ErrorMessage string `json:"errorMessage,omitempty"`
 	// InferenceDuration is the total time spent executing the actual agent for this eval case.
 	InferenceDuration time.Duration `json:"inferenceDuration,omitempty"`
+	// InferenceTokenUsage is the total token usage reported by the actual agent for this eval case.
+	InferenceTokenUsage *model.Usage `json:"inferenceTokenUsage,omitempty"`
 	// ExecutionTraces contains the per-run execution traces collected during inference.
 	ExecutionTraces []*trace.Trace `json:"-"`
 }
@@ -98,6 +101,8 @@ type EvalSetRunResult struct {
 	EvalSetID string `json:"evalSetId,omitempty"`
 	// InferenceDuration is the total time spent executing the actual agent for this run.
 	InferenceDuration time.Duration `json:"inferenceDuration,omitempty"`
+	// InferenceTokenUsage is the total token usage reported by the actual agent for this run.
+	InferenceTokenUsage *model.Usage `json:"inferenceTokenUsage,omitempty"`
 	// EvalCaseResults are the evaluation results produced in this run.
 	EvalCaseResults []*evalresult.EvalCaseResult `json:"evalCaseResults,omitempty"`
 }

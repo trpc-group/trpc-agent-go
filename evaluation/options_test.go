@@ -23,6 +23,7 @@ import (
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 type stubService struct{}
@@ -88,6 +89,18 @@ func TestOptionsInferenceDuration(t *testing.T) {
 	var nilOpts *options
 	nilOpts.addInferenceDuration(time.Second)
 	assert.Zero(t, nilOpts.inferenceDurationValue())
+}
+
+func TestOptionsInferenceTokenUsage(t *testing.T) {
+	opts := newOptions()
+	opts.addInferenceTokenUsage(&model.Usage{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5})
+	opts.addInferenceTokenUsage(&model.Usage{PromptTokens: 7, CompletionTokens: 11, TotalTokens: 18})
+	got := opts.inferenceTokenUsageValue()
+	assert.Equal(t, &model.Usage{PromptTokens: 9, CompletionTokens: 14, TotalTokens: 23}, got)
+
+	var nilOpts *options
+	nilOpts.addInferenceTokenUsage(&model.Usage{TotalTokens: 1})
+	assert.Nil(t, nilOpts.inferenceTokenUsageValue())
 }
 
 func TestWithEvalSetManager(t *testing.T) {

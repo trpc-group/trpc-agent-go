@@ -41,6 +41,7 @@ type InferenceResult struct {
 	Status       status.EvalStatus     // Status is the inference status.
 	ErrorMessage string                // ErrorMessage is the inference failure reason.
 	InferenceDuration time.Duration   // InferenceDuration is actual agent inference time.
+	InferenceTokenUsage *model.Usage    // InferenceTokenUsage is actual agent token usage.
 }
 
 // EvaluateRequest is the evaluation request.
@@ -61,6 +62,7 @@ type EvalSetRunResult struct {
 	AppName         string                       // AppName is the application name.
 	EvalSetID       string                       // EvalSetID is the evaluation set identifier.
 	InferenceDuration time.Duration             // InferenceDuration is actual agent inference time for this run.
+	InferenceTokenUsage *model.Usage            // InferenceTokenUsage is actual agent token usage for this run.
 	EvalCaseResults []*evalresult.EvalCaseResult // EvalCaseResults are the evaluation case results.
 }
 
@@ -95,6 +97,8 @@ The inference phase is handled by `Inference`. It reads EvalSet, filters cases b
 When `evalMode` is empty, the inference phase chooses the input source from the EvalCase: if `conversationScenario` is configured, UserSimulation generates each user turn dynamically; otherwise it runs the Runner turn by turn based on `conversation` and writes actual Invocations into `Inferences`.
 
 When `evalMode` is `trace`, it does not run the Runner. If `actualConversation` is configured, it returns that as the actual trace; otherwise it treats `conversation` as the actual trace.
+
+`InferenceResult.InferenceTokenUsage` records the token usage reported by the target Agent during inference. `EvalSetRunResult.InferenceTokenUsage` aggregates this value across cases for the run. These fields cover the target Agent only; evaluator, expected-runner, and trace-replay token usage are not included. If the model does not report usage, the value is nil.
 
 The local implementation supports EvalCase-level concurrent inference. When enabled, multiple cases are run in parallel, while turns within a case remain sequential.
 

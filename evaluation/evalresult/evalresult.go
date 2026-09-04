@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // EvalSetResult represents the evaluation result for an entire eval set.
@@ -61,6 +62,8 @@ type EvalCaseResult struct {
 	UserID string `json:"userId,omitempty"`
 	// InferenceDuration is the total time spent executing the actual agent for this eval case run.
 	InferenceDuration time.Duration `json:"inferenceDuration,omitempty"`
+	// InferenceTokenUsage is the total token usage reported by the actual agent for this eval case run.
+	InferenceTokenUsage *model.Usage `json:"inferenceTokenUsage,omitempty"`
 }
 
 // EvalMetricResult represents the result of a single metric evaluation.

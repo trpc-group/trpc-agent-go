@@ -20,11 +20,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	tokenusage "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/usage"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -57,6 +59,8 @@ type options struct {
 	runOptions                        []agent.RunOption
 	inferenceDuration                 time.Duration
 	inferenceDurationMu               sync.Mutex
+	inferenceTokenUsage               *model.Usage
+	inferenceTokenUsageMu             sync.Mutex
 }
 
 // newOptions creates a new options with the default values.
@@ -279,4 +283,22 @@ func (o *options) inferenceDurationValue() time.Duration {
 	o.inferenceDurationMu.Lock()
 	defer o.inferenceDurationMu.Unlock()
 	return o.inferenceDuration
+}
+
+func (o *options) addInferenceTokenUsage(usage *model.Usage) {
+	if o == nil || usage == nil {
+		return
+	}
+	o.inferenceTokenUsageMu.Lock()
+	o.inferenceTokenUsage = tokenusage.Add(o.inferenceTokenUsage, usage)
+	o.inferenceTokenUsageMu.Unlock()
+}
+
+func (o *options) inferenceTokenUsageValue() *model.Usage {
+	if o == nil {
+		return nil
+	}
+	o.inferenceTokenUsageMu.Lock()
+	defer o.inferenceTokenUsageMu.Unlock()
+	return tokenusage.Clone(o.inferenceTokenUsage)
 }

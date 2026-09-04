@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestInferenceRequestJSONRoundTrip(t *testing.T) {
@@ -52,6 +53,11 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 		Status:             status.EvalStatusPassed,
 		ErrorMessage:       "",
 		InferenceDuration:  42 * time.Millisecond,
+		InferenceTokenUsage: &model.Usage{
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+		},
 	}
 
 	data, err := json.Marshal(result)
@@ -72,6 +78,7 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, result.UserID, decoded.UserID)
 	assert.Equal(t, result.Status, decoded.Status)
 	assert.Equal(t, result.InferenceDuration, decoded.InferenceDuration)
+	assert.Equal(t, result.InferenceTokenUsage, decoded.InferenceTokenUsage)
 	assert.Len(t, decoded.Inferences, 1)
 	if len(decoded.Inferences) == 1 {
 		assert.Equal(t, "inv-1", decoded.Inferences[0].InvocationID)

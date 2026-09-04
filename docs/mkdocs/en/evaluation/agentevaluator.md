@@ -24,6 +24,7 @@ type EvaluationResult struct {
 	OverallStatus status.EvalStatus         // OverallStatus is the overall status.
 	ExecutionTime time.Duration             // ExecutionTime is the execution duration.
 	InferenceDuration time.Duration        // InferenceDuration is actual agent inference time.
+	InferenceTokenUsage *model.Usage       // InferenceTokenUsage is actual agent token usage.
 	EvalCases     []*EvaluationCaseResult   // EvalCases are the list of case results.
 	EvalResult    *evalresult.EvalSetResult // EvalResult is the persisted EvalSetResult.
 }
@@ -32,6 +33,7 @@ type EvaluationCaseResult struct {
 	EvalCaseID      string                         // EvalCaseID is the case identifier.
 	OverallStatus   status.EvalStatus              // OverallStatus is the aggregated status for this case.
 	InferenceDuration time.Duration              // InferenceDuration is actual agent inference time across runs for this case.
+	InferenceTokenUsage *model.Usage             // InferenceTokenUsage is actual agent token usage across runs for this case.
 	EvalCaseResults []*evalresult.EvalCaseResult   // EvalCaseResults are the per-run case results.
 	MetricResults   []*evalresult.EvalMetricResult // MetricResults are the aggregated metric results.
 	RunDetails      []*EvaluationCaseRunDetails    // RunDetails are optional per-run inference details.
@@ -48,12 +50,15 @@ type EvaluationInferenceDetails struct {
 	Status          status.EvalStatus     // Status records inference status.
 	ErrorMessage    string                // ErrorMessage records inference failure when present.
 	InferenceDuration time.Duration      // InferenceDuration is actual agent inference time for this run.
+	InferenceTokenUsage *model.Usage     // InferenceTokenUsage is actual agent token usage for this run.
 	Inferences      []*evalset.Invocation // Inferences stores invocation outputs.
 	ExecutionTraces []*trace.Trace        // ExecutionTraces stores execution traces.
 }
 ```
 
 `EvalResult` contains the aggregated EvalSetResult that can be persisted by EvalResultManager. The set-level `InferenceDuration` is returned on `EvaluationResult`; persisted EvalSetResult values retain case/run durations, so no database schema change is required. `RunDetails` is filled only when run details are enabled, and each item is associated with a specific run ID.
+
+`InferenceTokenUsage` follows the same aggregation levels: `EvaluationInferenceDetails` contains one run's usage, `EvaluationCaseResult` sums usage across runs for one case, and `EvaluationResult` sums usage across cases. It reports token usage from the target Agent only; evaluator, expected-runner, and trace-replay usage are not included. The persisted EvalSetResult keeps usage in its case/run results and does not add a set-level field.
 
 `ExecutionTime` covers the complete evaluation flow, including inference and metric evaluation. `InferenceDuration` sums actual agent inference time across cases and runs. With run-level parallelism, it can exceed the end-to-end wall-clock duration.
 

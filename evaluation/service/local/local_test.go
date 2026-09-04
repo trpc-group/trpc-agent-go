@@ -1700,6 +1700,7 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	actual := makeActualInvocation("generated", "calc add 1 2", "calc result: 3")
 	inference := makeInferenceResult(appName, evalSetID, caseID, "session-xyz", []*evalset.Invocation{actual})
 	inference.InferenceDuration = 42 * time.Millisecond
+	inference.InferenceTokenUsage = &model.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}
 	req := &service.EvaluateRequest{
 		AppName:          appName,
 		EvalSetID:        evalSetID,
@@ -1716,9 +1717,11 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	assert.Equal(t, evalSetID, result.EvalSetID)
 	assert.Len(t, result.EvalCaseResults, 1)
 	assert.Equal(t, 42*time.Millisecond, result.InferenceDuration)
+	assert.Equal(t, inference.InferenceTokenUsage, result.InferenceTokenUsage)
 
 	caseResult := result.EvalCaseResults[0]
 	assert.Equal(t, 42*time.Millisecond, caseResult.InferenceDuration)
+	assert.Equal(t, inference.InferenceTokenUsage, caseResult.InferenceTokenUsage)
 	assert.Equal(t, caseID, caseResult.EvalID)
 	assert.Equal(t, status.EvalStatusPassed, caseResult.FinalEvalStatus)
 	assert.Len(t, caseResult.OverallEvalMetricResults, 1)
@@ -1757,6 +1760,34 @@ func TestInferenceDurationForInferenceResultFallbacks(t *testing.T) {
 			{StartedAt: start.Add(10 * time.Millisecond), EndedAt: start.Add(5 * time.Millisecond)},
 		},
 	}))
+}
+
+func TestInferenceTokenUsageForInferenceResultFallbacks(t *testing.T) {
+	assert.Nil(t, inferenceTokenUsageForInferenceResult(nil))
+	explicit := &model.Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5}
+	got := inferenceTokenUsageForInferenceResult(&service.InferenceResult{
+		InferenceTokenUsage: explicit,
+	})
+	assert.Equal(t, explicit, got)
+	assert.NotSame(t, explicit, got)
+
+	assert.Nil(t, inferenceTokenUsageForInferenceResult(&service.InferenceResult{
+		EvalMode: evalset.EvalModeTrace,
+		InferenceTokenUsage: &model.Usage{
+			TotalTokens: 5,
+		},
+	}))
+
+	got = inferenceTokenUsageForInferenceResult(&service.InferenceResult{
+		ExecutionTraces: []*agenttrace.Trace{
+			{Usage: &model.Usage{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 5}},
+			{Usage: &model.Usage{PromptTokens: 6, CompletionTokens: 2, TotalTokens: 8}},
+		},
+	})
+	require.NotNil(t, got)
+	assert.Equal(t, 10, got.PromptTokens)
+	assert.Equal(t, 3, got.CompletionTokens)
+	assert.Equal(t, 13, got.TotalTokens)
 }
 
 func TestLocalEvaluateParallelEvaluationPreservesOrder(t *testing.T) {

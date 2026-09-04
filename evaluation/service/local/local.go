@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/callback"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
+	tokenusage "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/usage"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -255,10 +256,11 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt 
 		return nil, fmt.Errorf("evaluate case results (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
 	}
 	runResult = &service.EvalSetRunResult{
-		AppName:           req.AppName,
-		EvalSetID:         req.EvalSetID,
-		InferenceDuration: inferenceDurationForInferenceResults(req.InferenceResults),
-		EvalCaseResults:   evalCaseResults,
+		AppName:             req.AppName,
+		EvalSetID:           req.EvalSetID,
+		InferenceDuration:   inferenceDurationForInferenceResults(req.InferenceResults),
+		InferenceTokenUsage: inferenceTokenUsageForInferenceResults(req.InferenceResults),
+		EvalCaseResults:     evalCaseResults,
 	}
 	return runResult, nil
 }
@@ -292,6 +294,35 @@ func inferenceDurationForInferenceResult(result *service.InferenceResult) time.D
 		}
 	}
 	return elapsed
+}
+
+func inferenceTokenUsageForInferenceResults(results []*service.InferenceResult) *model.Usage {
+	var total *model.Usage
+	for _, result := range results {
+		total = tokenusage.Add(total, inferenceTokenUsageForInferenceResult(result))
+	}
+	return total
+}
+
+func inferenceTokenUsageForInferenceResult(result *service.InferenceResult) *model.Usage {
+	if result == nil {
+		return nil
+	}
+	// Trace-mode cases replay recorded invocations without executing the agent.
+	if result.EvalMode == evalset.EvalModeTrace {
+		return nil
+	}
+	if result.InferenceTokenUsage != nil {
+		return tokenusage.Add(nil, result.InferenceTokenUsage)
+	}
+	var total *model.Usage
+	for _, executionTrace := range result.ExecutionTraces {
+		if executionTrace == nil {
+			continue
+		}
+		total = tokenusage.Add(total, executionTrace.Usage)
+	}
+	return total
 }
 
 func (s *local) resolveMetricExtensions(
@@ -406,13 +437,14 @@ func (s *local) evaluateCase(ctx context.Context, req *service.EvaluateRequest, 
 
 func (s *local) failedEvalCaseResult(evalSetID string, inferenceResult *service.InferenceResult, errorMessage string) *evalresult.EvalCaseResult {
 	return &evalresult.EvalCaseResult{
-		EvalSetID:         evalSetID,
-		EvalID:            inferenceResult.EvalCaseID,
-		FinalEvalStatus:   evalstatus.EvalStatusFailed,
-		ErrorMessage:      errorMessage,
-		SessionID:         inferenceResult.SessionID,
-		UserID:            inferenceResult.UserID,
-		InferenceDuration: inferenceDurationForInferenceResult(inferenceResult),
+		EvalSetID:           evalSetID,
+		EvalID:              inferenceResult.EvalCaseID,
+		FinalEvalStatus:     evalstatus.EvalStatusFailed,
+		ErrorMessage:        errorMessage,
+		SessionID:           inferenceResult.SessionID,
+		UserID:              inferenceResult.UserID,
+		InferenceDuration:   inferenceDurationForInferenceResult(inferenceResult),
+		InferenceTokenUsage: inferenceTokenUsageForInferenceResult(inferenceResult),
 	}
 }
 
@@ -574,6 +606,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		SessionID:                     inferenceResult.SessionID,
 		UserID:                        inputs.userID,
 		InferenceDuration:             inferenceDurationForInferenceResult(inferenceResult),
+		InferenceTokenUsage:           inferenceTokenUsageForInferenceResult(inferenceResult),
 	}, nil
 }
 

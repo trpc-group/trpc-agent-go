@@ -277,6 +277,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 			result.Inferences = inferenceResult.Invocations
 			result.ExecutionTraces = inferenceResult.ExecutionTraces
 			result.InferenceDuration = inferenceResult.InferenceDuration
+			result.InferenceTokenUsage = inferenceResult.InferenceTokenUsage
 		}
 		attachContextMessages(expectedInferences, evalCase.ContextMessages)
 		result.ExpectedInferences = expectedInferences
@@ -319,6 +320,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 	if inferenceResult != nil {
 		result.ExecutionTraces = inferenceResult.ExecutionTraces
 		result.InferenceDuration = inferenceResult.InferenceDuration
+		result.InferenceTokenUsage = inferenceResult.InferenceTokenUsage
 		attachContextMessages(inferenceResult.Invocations, evalCase.ContextMessages)
 		result.Inferences = inferenceResult.Invocations
 	}
