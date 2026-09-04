@@ -1850,11 +1850,14 @@ Follow the records in this order for a single request or session:
    backend-confirmed store from a stale skip, an unclassified write, or a
    failed write.
 2. **`Session summary cascade result`** explains how a branch trigger reached
-   the full-session target. A branch that is not updated in this pass stops the
-   cascade (`action=skipped`, `invariant=ok`). `mode=dependent` is a sequential
-   multi-filter cascade, not concurrent generation. `invariant=violation` is
-   reserved for a full-session target that advanced without this-pass branch
-   materialization.
+   the full-session target. `source_materialized` is this-pass branch
+   materialization only. `action=copied` requires a successful copy;
+   `action=dependent` requires that the full-session target started. Otherwise
+   the cascade is `action=skipped` and `invariant=ok`, including a branch that
+   did not update and a materialized source that never copied or started the
+   dependent target. `mode=dependent` is a sequential multi-filter cascade, not
+   concurrent generation. `invariant=violation` is reserved for a full-session
+   target that advanced without this-pass branch materialization.
 3. **`Session summary injection result`** answers whether a later request
    still carries the stored summary in the framework `model.Request` after
    the returned response sequence finishes or is stopped early. If the model

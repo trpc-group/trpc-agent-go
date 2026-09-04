@@ -579,17 +579,19 @@ const (
 	// target first and only then the dependent full-session target.
 	cascadeModeDependent = "dependent"
 
-	// cascadeActionCopied marks a materialized branch summary reused for the
-	// full-session target.
+	// cascadeActionCopied marks a materialized branch summary that was
+	// successfully copied to the full-session target.
 	cascadeActionCopied = "copied"
-	// cascadeActionDependent marks a full-session target that ran only after
-	// this pass materialized the branch source.
+	// cascadeActionDependent marks a full-session target that actually
+	// started only after this pass materialized the branch source.
 	cascadeActionDependent = "dependent"
 	// cascadeActionIndependent marks a full-session target updated without a
 	// materialized branch source.
 	cascadeActionIndependent = "independent"
-	// cascadeActionSkipped marks a cascade that updated no target, including
-	// a normal upstream stop when this pass did not materialize the branch.
+	// cascadeActionSkipped marks a cascade that started no full-session
+	// action, including a normal upstream stop when this pass did not
+	// materialize the branch, a failed copy, or a source-side error that
+	// blocked the full target.
 	cascadeActionSkipped = "skipped"
 
 	// cascadeInvariantOK marks a cascade whose full-session target is backed
@@ -611,6 +613,8 @@ type cascadeAttempt struct {
 	filterKey          string
 	targets            int
 	sourceMaterialized bool
+	copied             bool
+	dependentStarted   bool
 	fullUpdated        bool
 	failed             bool
 }
@@ -625,11 +629,11 @@ func beginCascade(mode, filterKey string, targets int) *cascadeAttempt {
 }
 
 func (c *cascadeAttempt) action() string {
-	if c.sourceMaterialized {
-		if c.mode == cascadeModeDependent {
-			return cascadeActionDependent
-		}
+	if c.copied {
 		return cascadeActionCopied
+	}
+	if c.dependentStarted {
+		return cascadeActionDependent
 	}
 	if c.fullUpdated {
 		return cascadeActionIndependent

@@ -957,24 +957,29 @@ func cascadeSingleFilterSummary(
 	defer func() { cascade.report(ctx) }()
 	branchCtx, materialization :=
 		contextWithSummaryMaterializationObserver(ctx, filterKey)
-	if err := createSummaryFunc(branchCtx, sess, filterKey, force); err != nil {
+	err := createSummaryFunc(branchCtx, sess, filterKey, force)
+	// Sample before any error return so a persist failure after
+	// SummarizeSession updated=true still records this-pass materialization.
+	cascade.sourceMaterialized = materialization.didMaterialize()
+	if err != nil {
 		cascade.failed = true
 		return fmt.Errorf("create session summary for filterKey %q failed: %w",
 			filterKey, err)
 	}
 	// A nil error may mean the branch summary was intentionally not updated.
 	// Stop here so the full-session target cannot advance independently.
-	cascade.sourceMaterialized = materialization.didMaterialize()
 	if !cascade.sourceMaterialized {
 		return nil
 	}
 	// Copy to in-memory session for immediate access. A concurrent removal is
-	// treated as a missing source and also stops the cascade.
-	if !copySummaryToKey(
+	// treated as a missing source and also stops the cascade. Copy success is
+	// recorded separately so a failed copy cannot be classified as copied.
+	cascade.copied = copySummaryToKey(
 		sess,
 		filterKey,
 		session.SummaryFilterKeyAllContents,
-	) {
+	)
+	if !cascade.copied {
 		return nil
 	}
 	fullBefore := markSummaryBoundary(sess, session.SummaryFilterKeyAllContents)
@@ -985,7 +990,7 @@ func cascadeSingleFilterSummary(
 		filterKey,
 		session.SummaryFilterKeyAllContents,
 	)
-	err := createSummaryFunc(fullCtx, sess, session.SummaryFilterKeyAllContents, false)
+	err = createSummaryFunc(fullCtx, sess, session.SummaryFilterKeyAllContents, false)
 	cascade.fullUpdated = markSummaryBoundary(
 		sess,
 		session.SummaryFilterKeyAllContents,
@@ -1016,7 +1021,11 @@ func cascadeDependentSummary(
 	)
 	branchCtx, materialization :=
 		contextWithSummaryMaterializationObserver(branchCtx, filterKey)
-	if err := createSummaryFunc(branchCtx, sess, filterKey, force); err != nil {
+	err := createSummaryFunc(branchCtx, sess, filterKey, force)
+	// Sample before any error return so a persist failure after
+	// SummarizeSession updated=true still records this-pass materialization.
+	cascade.sourceMaterialized = materialization.didMaterialize()
+	if err != nil {
 		cascade.failed = true
 		return fmt.Errorf(
 			"create session summary for filterKey %q failed: %w",
@@ -1024,7 +1033,6 @@ func cascadeDependentSummary(
 			err,
 		)
 	}
-	cascade.sourceMaterialized = materialization.didMaterialize()
 	if !cascade.sourceMaterialized {
 		return nil
 	}
@@ -1035,7 +1043,8 @@ func cascadeDependentSummary(
 		filterKey,
 		session.SummaryFilterKeyAllContents,
 	)
-	err := createSummaryFunc(
+	cascade.dependentStarted = true
+	err = createSummaryFunc(
 		fullCtx,
 		sess,
 		session.SummaryFilterKeyAllContents,

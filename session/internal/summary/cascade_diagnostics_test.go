@@ -54,6 +54,25 @@ func cascadePolicy() SummaryDispatchPolicy {
 	return NewSummaryDispatchPolicy(nil, true)
 }
 
+// cascadeMultiFilterSession adds a second filter key so the dependent
+// cascade path runs instead of the single-filter copy.
+func cascadeMultiFilterSession() *session.Session {
+	sess := cascadeSession()
+	sess.Events = append(sess.Events, event.Event{
+		Author:    "user",
+		Timestamp: time.Now(),
+		FilterKey: "other",
+		Version:   event.CurrentVersion,
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: secretEventText,
+			},
+		}}},
+	})
+	return sess
+}
+
 // cascadeLine returns the single cascade record captured at the given level.
 func cascadeLine(t *testing.T, logs *capturedLogs, level string) string {
 	t.Helper()
@@ -241,6 +260,57 @@ func TestCascadeAttemptIndependentIsViolation(t *testing.T) {
 	})
 }
 
+func TestCascadeAttemptActionUsesCopyAndDependentStart(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    string
+		copied  bool
+		started bool
+		want    string
+	}{
+		{
+			name:   "copied only after successful copy",
+			mode:   cascadeModeSingleFilter,
+			copied: true,
+			want:   cascadeActionCopied,
+		},
+		{
+			name:    "dependent only after target started",
+			mode:    cascadeModeDependent,
+			started: true,
+			want:    cascadeActionDependent,
+		},
+		{
+			name: "materialized single-filter source without copy is skipped",
+			mode: cascadeModeSingleFilter,
+			want: cascadeActionSkipped,
+		},
+		{
+			name: "materialized dependent source without start is skipped",
+			mode: cascadeModeDependent,
+			want: cascadeActionSkipped,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			c := beginCascade(tt.mode, cascadeBranchKey, 2)
+			c.sourceMaterialized = true
+			c.copied = tt.copied
+			c.dependentStarted = tt.started
+			c.report(context.Background())
+
+			line := cascadeLine(t, logs, "debug")
+			requireFields(t, line, map[string]string{
+				"source_materialized": "true",
+				"action":              tt.want,
+				"invariant":           cascadeInvariantOK,
+			})
+			requireNoCascadeWarning(t, logs)
+		})
+	}
+}
+
 func TestCascadeReportsSkippedWhenNoTargetUpdates(t *testing.T) {
 	logs := captureLogs(t)
 	sess := cascadeSession()
@@ -292,19 +362,7 @@ func TestCascadeReportsError(t *testing.T) {
 // pass materializes the branch. That is dependent generation, not reuse.
 func TestCascadeReportsDependentMode(t *testing.T) {
 	logs := captureLogs(t)
-	sess := cascadeSession()
-	sess.Events = append(sess.Events, event.Event{
-		Author:    "user",
-		Timestamp: time.Now(),
-		FilterKey: "other",
-		Version:   event.CurrentVersion,
-		Response: &model.Response{Choices: []model.Choice{{
-			Message: model.Message{
-				Role:    model.RoleUser,
-				Content: secretEventText,
-			},
-		}}},
-	})
+	sess := cascadeMultiFilterSession()
 
 	err := CreateSessionSummaryWithCascade(
 		context.Background(), sess, cascadeBranchKey, false, cascadePolicy(),
@@ -338,19 +396,7 @@ func TestCascadeReportsDependentMode(t *testing.T) {
 
 func TestCascadeReportsDependentSkippedWhenBranchNotMaterialized(t *testing.T) {
 	logs := captureLogs(t)
-	sess := cascadeSession()
-	sess.Events = append(sess.Events, event.Event{
-		Author:    "user",
-		Timestamp: time.Now(),
-		FilterKey: "other",
-		Version:   event.CurrentVersion,
-		Response: &model.Response{Choices: []model.Choice{{
-			Message: model.Message{
-				Role:    model.RoleUser,
-				Content: secretEventText,
-			},
-		}}},
-	})
+	sess := cascadeMultiFilterSession()
 
 	err := CreateSessionSummaryWithCascade(
 		context.Background(), sess, cascadeBranchKey, false, cascadePolicy(),
@@ -383,6 +429,123 @@ func TestCascadeReportsDependentSkippedWhenBranchNotMaterialized(t *testing.T) {
 	defer sess.SummariesMu.RUnlock()
 	require.Nil(t, sess.Summaries[session.SummaryFilterKeyAllContents],
 		"a suppressed dependent cascade must not persist a full summary")
+}
+
+// TestCascadeReportsSkippedWhenCopyLosesMaterializedSource covers a
+// single-filter branch that materialized this pass, then lost the source
+// summary before copy. Full must not run; action stays skipped.
+func TestCascadeReportsSkippedWhenCopyLosesMaterializedSource(t *testing.T) {
+	logs := captureLogs(t)
+	sess := cascadeSession()
+	var fullCalls int
+
+	err := CreateSessionSummaryWithCascade(
+		context.Background(), sess, cascadeBranchKey, false, cascadePolicy(),
+		func(
+			ctx context.Context, s *session.Session, fk string, force bool,
+		) error {
+			if fk == session.SummaryFilterKeyAllContents {
+				fullCalls++
+				return nil
+			}
+			err := summarizeAndPersist(
+				ctx,
+				&diagSummarizer{
+					fired:    true,
+					callMode: "standalone",
+					text:     secretSummaryText,
+				},
+				s, fk, force,
+				func(context.Context, *session.Summary) error { return nil },
+			)
+			if err != nil {
+				return err
+			}
+			s.SummariesMu.Lock()
+			delete(s.Summaries, fk)
+			s.SummariesMu.Unlock()
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Zero(t, fullCalls)
+
+	line := cascadeLine(t, logs, "debug")
+	requireFields(t, line, map[string]string{
+		"outcome":             cascadeOutcomeSuccess,
+		"mode":                cascadeModeSingleFilter,
+		"source_materialized": "true",
+		"action":              cascadeActionSkipped,
+		"invariant":           cascadeInvariantOK,
+	})
+	requireNoCascadeWarning(t, logs)
+	requireNoSensitiveText(t, logs.all())
+}
+
+// TestCascadeReportsSkippedWhenSourcePersistFailsAfterUpdate covers a
+// real SummarizeSession update whose persist callback fails. Full must
+// not run; the original persist error is returned.
+func TestCascadeReportsSkippedWhenSourcePersistFailsAfterUpdate(t *testing.T) {
+	persistErr := errors.New("injected persist error")
+	tests := []struct {
+		name string
+		sess *session.Session
+		mode string
+	}{
+		{
+			name: "single filter",
+			sess: cascadeSession(),
+			mode: cascadeModeSingleFilter,
+		},
+		{
+			name: "dependent multi filter",
+			sess: cascadeMultiFilterSession(),
+			mode: cascadeModeDependent,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			var fullCalls int
+
+			err := CreateSessionSummaryWithCascade(
+				context.Background(), tt.sess, cascadeBranchKey, false,
+				cascadePolicy(),
+				func(
+					ctx context.Context, s *session.Session, fk string, force bool,
+				) error {
+					if fk == session.SummaryFilterKeyAllContents {
+						fullCalls++
+						return nil
+					}
+					return summarizeAndPersist(
+						ctx,
+						&diagSummarizer{
+							fired:    true,
+							callMode: "standalone",
+							text:     secretSummaryText,
+						},
+						s, fk, force,
+						func(context.Context, *session.Summary) error {
+							return persistErr
+						},
+					)
+				},
+			)
+			require.ErrorIs(t, err, persistErr)
+			require.Zero(t, fullCalls)
+
+			line := cascadeLine(t, logs, "warn")
+			requireFields(t, line, map[string]string{
+				"outcome":             cascadeOutcomeError,
+				"mode":                tt.mode,
+				"source_materialized": "true",
+				"action":              cascadeActionSkipped,
+				"invariant":           cascadeInvariantOK,
+			})
+			requireNoSensitiveText(t, logs.all())
+		})
+	}
 }
 
 // TestCascadeMarksAsyncDispatch verifies that per-target summary records

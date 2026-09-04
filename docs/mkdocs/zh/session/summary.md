@@ -1741,10 +1741,12 @@ SessionService API，也不新增诊断开关。
    `binding_reason` 解释 `unsafe_view` 的成因；`persist_result` 区分后端确认写入、
    stale 跳过、无法分类的写入，以及写入失败。
 2. **`Session summary cascade result`** 解释分支触发如何到达全会话目标。
-   本轮分支未更新会停止级联（`action=skipped`，`invariant=ok`）。
-   `mode=dependent` 表示多 filter 顺序级联，而不是并发生成。
-   `invariant=violation` 仅表示全会话目标在本轮没有分支 materialization
-   的情况下推进了。
+   `source_materialized` 只记录本轮分支是否物化。`action=copied` 需要 copy
+   成功；`action=dependent` 需要全会话目标实际开始。否则都是
+   `action=skipped` 且 `invariant=ok`，包括本轮分支未更新，以及源已物化但
+   copy 未成功或 dependent 目标未开始。`mode=dependent` 表示多 filter
+   顺序级联，而不是并发生成。`invariant=violation` 仅表示全会话目标在本轮
+   没有分支 materialization 的情况下推进了。
 3. **`Session summary injection result`** 回答后续请求在返回的响应序列
    结束或被提前停止之后，框架这份 `model.Request` 里是否还带着已存储的摘要。
    若模型调用在返回响应序列之前失败，则立即观察。对比
