@@ -1286,6 +1286,12 @@ func TestStateCasePersistsScopedEventDelta(t *testing.T) {
 	if _, exists := snapshot.State["session"]["event_counter"]; !exists {
 		t.Fatalf("session state omitted event delta: %#v", snapshot.State["session"])
 	}
+	if len(snapshot.State["app"]) != 0 {
+		t.Fatalf("app state was not cleared: %#v", snapshot.State["app"])
+	}
+	if len(snapshot.State["user"]) != 0 {
+		t.Fatalf("user state was not cleared: %#v", snapshot.State["user"])
+	}
 }
 
 func TestRunnerRejectsDuplicateCases(t *testing.T) {
@@ -1330,6 +1336,25 @@ func TestRunnerInMemoryMatrix(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed >= 30*time.Second {
 		t.Fatalf("lightweight in-memory matrix took %v, want < 30s", elapsed)
+	}
+}
+
+func TestPublicMatrixFalsePositiveRate(t *testing.T) {
+	left := InMemoryBackend()
+	left.Name = "inmemory-clean-a"
+	right := InMemoryBackend()
+	right.Name = "inmemory-clean-b"
+	report, err := (Runner{Reference: left.Name}).Run(
+		context.Background(),
+		PublicCases(),
+		[]Backend{left, right},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	falsePositiveRate := float64(report.BlockingDiffs) / float64(report.TotalCases)
+	if falsePositiveRate > 0.05 {
+		t.Fatalf("normal matrix false-positive rate = %.2f%%, want <= 5%%", falsePositiveRate*100)
 	}
 }
 
@@ -1849,7 +1874,7 @@ func TestReplayRejectsMemoryOwnershipDrift(t *testing.T) {
 			name:       "search content",
 			replayCase: memorySearchCase(),
 			content:    true,
-			want:       `memory search "rank-replay-reports" result 0 does not match catalog entry`,
+			want:       `memory search "rank-replay-reports" result id "`,
 		},
 		{
 			name:       "search invalid UTF-8",
@@ -1990,6 +2015,33 @@ func TestRunnerDetectsMemorySearchOrderDrift(t *testing.T) {
 		}
 	}
 	t.Fatalf("memory search order drift lacks a memory locator: %+v", report.Cases[0].Diffs)
+}
+
+func TestReplayAllowsMemoryUpsertAfterSearch(t *testing.T) {
+	replayCase := Case{
+		Name: "memory-search-before-upsert",
+		Requires: []Capability{
+			CapabilitySession,
+			CapabilityMemory,
+			CapabilityMemorySearch,
+		},
+		Steps: []Step{
+			{Name: "add", Kind: StepAddMemory, Memory: &MemoryInput{
+				Memory: "same memory",
+				Topics: []string{"before"},
+			}},
+			{Name: "search", Kind: StepSearchMemory, MemorySearch: &MemorySearchInput{
+				Query: "same memory",
+			}},
+			{Name: "upsert", Kind: StepAddMemory, Memory: &MemoryInput{
+				Memory: "same memory",
+				Topics: []string{"after"},
+			}},
+		},
+	}
+	if _, err := Replay(context.Background(), replayCase, InMemoryBackend()); err != nil {
+		t.Fatalf("Replay() rejected a search followed by an upsert: %v", err)
+	}
 }
 
 func TestEveryPublicCaseDetectsInjectedFault(t *testing.T) {
@@ -2655,6 +2707,30 @@ func TestTimestampOnlySummaryCutoffRemainsSemantic(t *testing.T) {
 	}
 }
 
+func TestTimestampOnlySummaryCutoffRetainsEqualTimestampEvent(t *testing.T) {
+	evt := event.Event{ID: "physical-event", Timestamp: caseEpoch.Add(2 * time.Second), Response: &model.Response{}}
+	if err := event.SetExtension(&evt, logicalEventIDExtension, "logical-event"); err != nil {
+		t.Fatalf("SetExtension() error = %v", err)
+	}
+	retained := retainedEventIDs(
+		[]event.Event{evt},
+		&session.Summary{Boundary: session.NewSummaryBoundary("", evt.Timestamp)},
+		"",
+		map[string]string{evt.ID: "logical-event"},
+	)
+	if !reflect.DeepEqual(retained, []string{"logical-event"}) {
+		t.Fatalf("retained event IDs = %v, want equal-timestamp event", retained)
+	}
+}
+
+func TestRunnerRejectsReservedWildcardBackendName(t *testing.T) {
+	backend := InMemoryBackend()
+	backend.Name = "*"
+	if _, err := (Runner{}).Run(context.Background(), []Case{PublicCases()[0]}, []Backend{backend}); err == nil {
+		t.Fatal("Runner accepted reserved wildcard backend name")
+	}
+}
+
 func TestCausalEventNormalizationIgnoresGlobalInterleaving(t *testing.T) {
 	root := causalEvent(t, "root", "", "root")
 	branchA1 := causalEvent(t, "a-1", "branch/a", "a-1")
@@ -2764,8 +2840,8 @@ func TestNormalizeMemorySearchesPreservesRankAndScore(t *testing.T) {
 			test.mutate(result)
 			if _, err := normalizeMemorySearches(map[string][]*memory.Entry{
 				"query": {result},
-			}, ids); err == nil || !strings.Contains(err.Error(), "does not match catalog") {
-				t.Fatalf("normalizeMemorySearches() error = %v, want catalog mismatch", err)
+			}, ids); err == nil || !strings.Contains(err.Error(), "does not match its search-time reference") {
+				t.Fatalf("normalizeMemorySearches() error = %v, want search-time mismatch", err)
 			}
 		})
 	}

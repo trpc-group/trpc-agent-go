@@ -24,6 +24,9 @@ State inputs use explicit scopes. Application and user keys are non-empty and
 unprefixed; session keys may use `temp:` but not `app:` or `user:`. Every event
 state delta is applied to session state, including when the event itself is not
 persisted; `app:` and `user:` additionally select their scoped state domains.
+Application and user updates may set `Clear: true` to delete the complete
+selected scope after applying values. Session clear-all is rejected because
+the portable `session.Service` contract does not expose it.
 The harness derives those domains and preserved session keys from the replay
 input rather than only from stored events, so it does not hide differences in
 how adapters apply scoped deltas. Normalized state distinguishes nil, JSON

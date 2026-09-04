@@ -467,12 +467,13 @@ func replayWithServices(
 		return Snapshot{}, fmt.Errorf("create session: %w", err)
 	}
 	exec := execution{
-		services:       services,
-		key:            key,
-		session:        sess,
-		required:       required,
-		eventStateKeys: collectEventStateKeys(replayCase.Steps),
-		memorySearches: make(map[string][]*memory.Entry),
+		services:               services,
+		key:                    key,
+		session:                sess,
+		required:               required,
+		eventStateKeys:         collectEventStateKeys(replayCase.Steps),
+		memorySearches:         make(map[string][]*memory.Entry),
+		memorySearchReferences: make(map[string]map[string]string),
 	}
 	for _, step := range replayCase.Steps {
 		if err := exec.runStep(ctx, step); err != nil {
@@ -507,12 +508,13 @@ func replayWithServices(
 }
 
 type execution struct {
-	services       *Services
-	key            session.Key
-	session        *session.Session
-	required       Capabilities
-	eventStateKeys map[string]struct{}
-	memorySearches map[string][]*memory.Entry
+	services               *Services
+	key                    session.Key
+	session                *session.Session
+	required               Capabilities
+	eventStateKeys         map[string]struct{}
+	memorySearches         map[string][]*memory.Entry
+	memorySearchReferences map[string]map[string]string
 }
 
 func (e *execution) runStep(ctx context.Context, step Step) error {
@@ -1067,6 +1069,14 @@ func (e *execution) updateState(ctx context.Context, input *StateInput) error {
 	}
 	switch input.Scope {
 	case StateScopeApp:
+		if input.Clear {
+			current, err := e.services.Session.ListAppStates(ctx, e.key.AppName)
+			if err != nil {
+				return err
+			}
+			input = cloneStateInput(input)
+			input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
+		}
 		if len(input.Values) > 0 {
 			if err := e.services.Session.UpdateAppState(ctx, e.key.AppName, cloneState(input.Values)); err != nil {
 				return err
@@ -1085,6 +1095,14 @@ func (e *execution) updateState(ctx context.Context, input *StateInput) error {
 		}
 	case StateScopeUser:
 		userKey := session.UserKey{AppName: e.key.AppName, UserID: e.key.UserID}
+		if input.Clear {
+			current, err := e.services.Session.ListUserStates(ctx, userKey)
+			if err != nil {
+				return err
+			}
+			input = cloneStateInput(input)
+			input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
+		}
 		if len(input.Values) > 0 {
 			if err := e.services.Session.UpdateUserState(ctx, userKey, cloneState(input.Values)); err != nil {
 				return err
@@ -1102,6 +1120,9 @@ func (e *execution) updateState(ctx context.Context, input *StateInput) error {
 			}
 		}
 	case StateScopeSession:
+		if input.Clear {
+			return errors.New("session state clear is not exposed by session.Service")
+		}
 		if len(input.DeleteKeys) > 0 {
 			return errors.New("session state deletion is not exposed by session.Service")
 		}
@@ -1112,6 +1133,22 @@ func (e *execution) updateState(ctx context.Context, input *StateInput) error {
 		return fmt.Errorf("unknown state scope %q", input.Scope)
 	}
 	return nil
+}
+
+func cloneStateInput(input *StateInput) *StateInput {
+	clone := *input
+	clone.Values = cloneState(input.Values)
+	clone.DeleteKeys = append([]string(nil), input.DeleteKeys...)
+	return &clone
+}
+
+func stateKeys(state session.StateMap) []string {
+	keys := make([]string, 0, len(state))
+	for key := range state {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (e *execution) addMemory(ctx context.Context, input *MemoryInput) error {
@@ -1153,16 +1190,52 @@ func (e *execution) searchMemory(
 		value := *input.Options.TimeBefore
 		options.TimeBefore = &value
 	}
+	userKey := memory.UserKey{AppName: e.key.AppName, UserID: e.key.UserID}
 	results, err := e.services.Memory.SearchMemories(
 		ctx,
-		memory.UserKey{AppName: e.key.AppName, UserID: e.key.UserID},
+		userKey,
 		input.Query,
 		memory.WithSearchOptions(options),
 	)
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateMemoryOwnership(results, userKey, fmt.Sprintf("memory search %q", name)); err != nil {
+		return err
+	}
+	catalog, err := e.services.Memory.ReadMemories(ctx, userKey, 0)
+	if err != nil {
+		return fmt.Errorf("read memory catalog after search: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateMemoryOwnership(catalog, userKey, "memory catalog"); err != nil {
+		return err
+	}
+	references := make(map[string]string, len(catalog))
+	for index, entry := range catalog {
+		fingerprint, err := memoryEntryFingerprint(entry, fmt.Sprintf("memory catalog %d", index))
+		if err != nil {
+			return err
+		}
+		if _, exists := references[entry.ID]; exists {
+			return fmt.Errorf("memory catalog repeats id %q", entry.ID)
+		}
+		references[entry.ID] = fingerprint
+	}
+	seen := make(map[string]struct{}, len(results))
+	for _, entry := range results {
+		if _, exists := seen[entry.ID]; exists {
+			return fmt.Errorf("memory search %q repeats id %q", name, entry.ID)
+		}
+		seen[entry.ID] = struct{}{}
+	}
 	e.memorySearches[name] = cloneMemoryEntries(results)
+	e.memorySearchReferences[name] = references
 	return nil
 }
 
@@ -1396,7 +1469,7 @@ func (e *execution) snapshot(
 			return Snapshot{}, err
 		}
 	}
-	if err := validateMemorySearchConsistency(memories, e.memorySearches, memoryKey); err != nil {
+	if err := validateMemorySearchReferences(memories, e.memorySearches, memoryKey); err != nil {
 		return Snapshot{}, err
 	}
 	return normalizeSnapshot(
@@ -1411,6 +1484,7 @@ func (e *execution) snapshot(
 		userState,
 		memories,
 		e.memorySearches,
+		e.memorySearchReferences,
 	)
 }
 
@@ -1438,7 +1512,7 @@ func validateMemoryOwnership(
 	return nil
 }
 
-func validateMemorySearchConsistency(
+func validateMemorySearchReferences(
 	catalog []*memory.Entry,
 	searches map[string][]*memory.Entry,
 	key memory.UserKey,
@@ -1446,16 +1520,15 @@ func validateMemorySearchConsistency(
 	if len(searches) == 0 {
 		return nil
 	}
-	catalogEntries := make(map[string]string, len(catalog))
+	catalogEntries := make(map[string]struct{}, len(catalog))
 	for index, entry := range catalog {
-		fingerprint, err := memoryEntryFingerprint(entry, fmt.Sprintf("memory catalog %d", index))
-		if err != nil {
+		if _, err := memoryEntryFingerprint(entry, fmt.Sprintf("memory catalog %d", index)); err != nil {
 			return err
 		}
 		if _, exists := catalogEntries[entry.ID]; exists {
 			return fmt.Errorf("duplicate memory id %q", entry.ID)
 		}
-		catalogEntries[entry.ID] = fingerprint
+		catalogEntries[entry.ID] = struct{}{}
 	}
 	names := make([]string, 0, len(searches))
 	for name := range searches {
@@ -1468,20 +1541,10 @@ func validateMemorySearchConsistency(
 		if err := validateMemoryOwnership(results, key, owner); err != nil {
 			return err
 		}
-		for index, entry := range results {
-			fingerprint, err := memoryEntryFingerprint(
-				entry,
-				fmt.Sprintf("%s result %d", owner, index),
-			)
-			if err != nil {
-				return err
-			}
-			catalogFingerprint, exists := catalogEntries[entry.ID]
+		for _, entry := range results {
+			_, exists := catalogEntries[entry.ID]
 			if !exists {
 				return fmt.Errorf("%s returned unknown id %q", owner, entry.ID)
-			}
-			if fingerprint != catalogFingerprint {
-				return fmt.Errorf("%s result %d does not match catalog entry %q", owner, index, entry.ID)
 			}
 		}
 	}
@@ -1592,6 +1655,9 @@ func validateBackends(backends []Backend) error {
 func validateBackend(backend Backend) error {
 	if backend.Name == "" || backend.Open == nil {
 		return errors.New("replaytest: backend name and factory are required")
+	}
+	if backend.Name == "*" {
+		return errors.New("replaytest: backend name \"*\" is reserved")
 	}
 	if err := validateUTF8String("backend name", backend.Name); err != nil {
 		return fmt.Errorf("replaytest: %w", err)
@@ -2628,7 +2694,7 @@ func validateEventStateDelta(stepName string, stateDelta session.StateMap) error
 }
 
 func validateStateStep(step Step) error {
-	if len(step.State.Values) == 0 && len(step.State.DeleteKeys) == 0 {
+	if len(step.State.Values) == 0 && len(step.State.DeleteKeys) == 0 && !step.State.Clear {
 		return fmt.Errorf("step %q has no state mutations", step.Name)
 	}
 	switch step.State.Scope {
@@ -2640,6 +2706,9 @@ func validateStateStep(step Step) error {
 			step.State.DeleteKeys,
 		)
 	case StateScopeSession:
+		if step.State.Clear {
+			return fmt.Errorf("step %q cannot clear session state", step.Name)
+		}
 		if len(step.State.DeleteKeys) > 0 {
 			return fmt.Errorf("step %q cannot delete session state", step.Name)
 		}

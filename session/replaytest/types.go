@@ -305,6 +305,10 @@ type StateInput struct {
 	// unprefixed, non-empty key rule as Values. Deletion is the final operation,
 	// so a key present in both fields is expected to be absent afterward.
 	DeleteKeys []string
+	// Clear removes every existing key in the selected app or user scope after
+	// applying Values. It is not supported for session scope because
+	// session.Service has no persistent clear-all operation.
+	Clear bool
 }
 
 // MemoryInput adds an idempotent memory entry.

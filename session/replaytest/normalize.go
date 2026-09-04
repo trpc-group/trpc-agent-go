@@ -53,6 +53,7 @@ func normalizeSnapshot(
 	userState session.StateMap,
 	memories []*memory.Entry,
 	memorySearches map[string][]*memory.Entry,
+	searchReferences ...map[string]map[string]string,
 ) (Snapshot, error) {
 	if sess == nil {
 		return Snapshot{}, session.ErrNilSession
@@ -97,6 +98,7 @@ func normalizeSnapshot(
 		normalizedMemorySearches, err = normalizeMemorySearches(
 			memorySearches,
 			memoryIdentities,
+			searchReferences...,
 		)
 		if err != nil {
 			return Snapshot{}, err
@@ -527,7 +529,12 @@ func normalizeMemoryCatalog(
 func normalizeMemorySearches(
 	searches map[string][]*memory.Entry,
 	identities map[string]normalizedMemoryIdentity,
+	searchReferences ...map[string]map[string]string,
 ) (map[string][]CanonicalMap, error) {
+	references := map[string]map[string]string(nil)
+	if len(searchReferences) > 0 {
+		references = searchReferences[0]
+	}
 	output := make(map[string][]CanonicalMap, len(searches))
 	for name, entries := range searches {
 		if name == "" {
@@ -555,8 +562,16 @@ func normalizeMemorySearches(
 			if err != nil {
 				return nil, fmt.Errorf("fingerprint memory search %q result %d: %w", name, index, err)
 			}
-			if fingerprint != identity.fingerprint {
-				return nil, fmt.Errorf("memory search %q result id %q does not match catalog entry", name, entry.ID)
+			referenceFingerprint := identity.fingerprint
+			if references != nil {
+				var ok bool
+				referenceFingerprint, ok = references[name][entry.ID]
+				if !ok {
+					return nil, fmt.Errorf("memory search %q result id %q has no search-time reference", name, entry.ID)
+				}
+			}
+			if fingerprint != referenceFingerprint {
+				return nil, fmt.Errorf("memory search %q result id %q does not match its search-time reference", name, entry.ID)
 			}
 			value["id"] = identity.logicalID
 			value["score"] = entry.Score
@@ -779,7 +794,7 @@ func retainedEventIDs(
 	retained := make([]string, 0)
 	for index := start; index < len(events); index++ {
 		evt := &events[index]
-		if boundary.LastEventID == "" && !boundary.CutoffAt.IsZero() && !evt.Timestamp.After(boundary.CutoffAt) {
+		if boundary.LastEventID == "" && !boundary.CutoffAt.IsZero() && evt.Timestamp.Before(boundary.CutoffAt) {
 			continue
 		}
 		if !evt.Filter(filterKey) {
