@@ -162,6 +162,32 @@ validate_resolvable_version() {
   return 1
 }
 
+is_locally_replaced() {
+  local go_mod="$1"
+  local dep_path="$2"
+  local dep_ver="$3"
+  local replacement_path
+
+  if ! replacement_path="$(
+    cd "$(dirname "${go_mod}")" &&
+      go mod edit -json 2>/dev/null |
+      jq -r --arg dep_path "${dep_path}" --arg dep_ver "${dep_ver}" '
+        .Replace[]?
+        | select(
+            .Old.Path == $dep_path
+            and ((.Old.Version // "") == "" or .Old.Version == $dep_ver)
+            and (.New.Path // "") != ""
+            and (.New.Version // "") == ""
+          )
+        | .New.Path
+      ' 2>/dev/null
+  )"; then
+    return 1
+  fi
+
+  [ -n "${replacement_path}" ]
+}
+
 require_line_number() {
   local go_mod="$1"
   local dep_path="$2"
@@ -229,7 +255,9 @@ for go_mod in "${go_mod_files[@]}"; do
     line_number="$(require_line_number "${go_mod}" "${dep_path}")"
     [ -z "${line_number}" ] && line_number=1
 
-    if ! validate_resolvable_version "${rel_path}" "${line_number}" "${dep_path}" "${dep_ver}"; then
+    if is_locally_replaced "${go_mod}" "${dep_path}" "${dep_ver}"; then
+      echo "Skipping download validation for locally replaced module '${dep_path}' at version '${dep_ver}'."
+    elif ! validate_resolvable_version "${rel_path}" "${line_number}" "${dep_path}" "${dep_ver}"; then
       has_error=true
       has_match=true
     fi
