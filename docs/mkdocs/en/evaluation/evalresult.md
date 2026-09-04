@@ -37,8 +37,12 @@ type EvalCaseResult struct {
 	EvalMetricResultPerInvocation []*EvalMetricResultPerInvocation // EvalMetricResultPerInvocation is the list of per-turn metric results.
 	SessionID                     string                           // SessionID is the session identifier.
 	UserID                        string                           // UserID is the user identifier.
-	InferenceDuration            time.Duration                    // InferenceDuration is the actual agent inference time for this case run.
-	InferenceTokenUsage          *model.Usage                      // InferenceTokenUsage is the actual agent token usage for this case run.
+	InferenceStats               *InferenceStats                   // InferenceStats contains actual agent inference resource usage for this case run.
+}
+
+type InferenceStats struct {
+	Duration   time.Duration // Duration is the actual agent inference time.
+	TokenUsage *model.Usage  // TokenUsage is the actual agent token usage.
 }
 
 // EvalMetricResult represents the result of one evaluation metric.
@@ -74,11 +78,11 @@ type RubricScore struct {
 }
 ```
 
-Overall results write each metric output into `overallEvalMetricResults`. Per-turn details are written into `evalMetricResultPerInvocation` and retain both `actualInvocation` and `expectedInvocation` traces for troubleshooting. `EvalCaseResult.score` is the evaluation case-level aggregated score, `finalEvalStatus` is the evaluation case-level final status, `inferenceDuration` is the actual agent inference time for this case run, and `inferenceTokenUsage` is the token usage reported by the actual agent for this case run. Both score and status are computed by the Service case result aggregator.
+Overall results write each metric output into `overallEvalMetricResults`. Per-turn details are written into `evalMetricResultPerInvocation` and retain both `actualInvocation` and `expectedInvocation` traces for troubleshooting. `EvalCaseResult.score` is the evaluation case-level aggregated score, `finalEvalStatus` is the evaluation case-level final status, and `inferenceStats` contains the actual agent inference time and token usage for this case run. Both score and status are computed by the Service case result aggregator.
 
-When encoded with Go's standard JSON encoder, `inferenceDuration` is an integer number of nanoseconds; for example, `1.2s` is encoded as `1200000000`. The persisted EvalSetResult does not contain a separate set-level `inferenceDuration`; sum the case-level values when needed.
+When encoded with Go's standard JSON encoder, `inferenceStats.duration` is an integer number of nanoseconds; for example, `1.2s` is encoded as `1200000000`. The persisted EvalSetResult does not contain a separate set-level `inferenceStats`; sum the case-level values when needed.
 
-`inferenceTokenUsage` uses the provider-agnostic `model.Usage` shape, including `prompt_tokens`, `completion_tokens`, `total_tokens`, and provider-reported token details. It is omitted when the model does not report usage. The persisted EvalSetResult keeps this value in each case/run result; it does not add a separate set-level field.
+`inferenceStats.tokenUsage` uses the provider-agnostic `model.Usage` shape, including `prompt_tokens`, `completion_tokens`, `total_tokens`, and provider-reported token details. It is omitted when the model does not report usage. The persisted EvalSetResult keeps this value in each case/run result; it does not add a separate set-level field.
 
 `details.value` in metric details is typed score detail. It does not replace `score` and does not participate in the framework's default threshold checks. The default pass logic is still determined by the evaluator's numeric `score` and `threshold`. If `details.value` is present, `kind` selects the corresponding field to read; an omitted `details.value` means the evaluator did not provide typed detail. Numeric zero and boolean false are valid values. Typed values are intended for per-turn metric details; overall metric details keep aggregated numeric results and do not aggregate typed values by default. Platforms that need to distinguish numeric scores, boolean conclusions, or categorical labels can read `details.value.kind` and the corresponding field:
 
@@ -100,11 +104,13 @@ Below is an example result file snippet.
   "evalCaseResults": [
     {
       "evalId": "calc_add",
-      "inferenceDuration": 120000000,
-      "inferenceTokenUsage": {
-        "prompt_tokens": 42,
-        "completion_tokens": 8,
-        "total_tokens": 50
+      "inferenceStats": {
+        "duration": 120000000,
+        "tokenUsage": {
+          "prompt_tokens": 42,
+          "completion_tokens": 8,
+          "total_tokens": 50
+        }
       },
       "score": 1,
       "finalEvalStatus": "passed",

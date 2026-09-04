@@ -24,7 +24,7 @@ func TestOpenAPISpecIsValid(t *testing.T) {
 	require.NoError(t, doc.Validate(context.Background()))
 }
 
-func TestOpenAPISpecDocumentsInferenceDuration(t *testing.T) {
+func TestOpenAPISpecDocumentsInferenceStats(t *testing.T) {
 	loader := &openapi3.Loader{Context: context.Background(), IsExternalRefsAllowed: false}
 	doc, err := loader.LoadFromFile(filepath.Join(".", "openapi.yaml"))
 	require.NoError(t, err)
@@ -33,34 +33,30 @@ func TestOpenAPISpecDocumentsInferenceDuration(t *testing.T) {
 		schemaRef, ok := doc.Components.Schemas[schemaName]
 		require.Truef(t, ok, "schema %s is missing", schemaName)
 		require.NotNil(t, schemaRef.Value)
-		property, ok := schemaRef.Value.Properties["inferenceDuration"]
-		require.Truef(t, ok, "schema %s does not document inferenceDuration", schemaName)
+		property, ok := schemaRef.Value.Properties["inferenceStats"]
+		require.Truef(t, ok, "schema %s does not document inferenceStats", schemaName)
 		require.NotNil(t, property.Value)
-		require.True(t, property.Value.Type.Is("integer"))
-		require.Equal(t, "int64", property.Value.Format)
+		require.Equal(t, "#/components/schemas/InferenceStats", property.Ref)
 	}
 
 	evalSetResult := doc.Components.Schemas["EvalSetResult"]
 	require.NotNil(t, evalSetResult)
 	require.NotNil(t, evalSetResult.Value)
-	_, hasSetDuration := evalSetResult.Value.Properties["inferenceDuration"]
-	require.False(t, hasSetDuration, "EvalSetResult should not expose a persisted set-level inferenceDuration")
-}
+	_, hasSetStats := evalSetResult.Value.Properties["inferenceStats"]
+	require.False(t, hasSetStats, "EvalSetResult should not expose a persisted set-level inferenceStats")
 
-func TestOpenAPISpecDocumentsInferenceTokenUsage(t *testing.T) {
-	loader := &openapi3.Loader{Context: context.Background(), IsExternalRefsAllowed: false}
-	doc, err := loader.LoadFromFile(filepath.Join(".", "openapi.yaml"))
-	require.NoError(t, err)
-
-	for _, schemaName := range []string{"EvaluationResult", "EvaluationCaseResult", "EvalCaseResult"} {
-		schemaRef, ok := doc.Components.Schemas[schemaName]
-		require.Truef(t, ok, "schema %s is missing", schemaName)
-		require.NotNil(t, schemaRef.Value)
-		property, ok := schemaRef.Value.Properties["inferenceTokenUsage"]
-		require.Truef(t, ok, "schema %s does not document inferenceTokenUsage", schemaName)
-		require.NotNil(t, property.Value)
-		require.Equal(t, "#/components/schemas/TokenUsage", property.Ref)
-	}
+	statsSchema := doc.Components.Schemas["InferenceStats"]
+	require.NotNil(t, statsSchema)
+	require.NotNil(t, statsSchema.Value)
+	duration, ok := statsSchema.Value.Properties["duration"]
+	require.True(t, ok)
+	require.NotNil(t, duration.Value)
+	require.True(t, duration.Value.Type.Is("integer"))
+	require.Equal(t, "int64", duration.Value.Format)
+	tokenUsage, ok := statsSchema.Value.Properties["tokenUsage"]
+	require.True(t, ok)
+	require.NotNil(t, tokenUsage.Value)
+	require.Equal(t, "#/components/schemas/TokenUsage", tokenUsage.Ref)
 
 	usageSchema := doc.Components.Schemas["TokenUsage"]
 	require.NotNil(t, usageSchema)

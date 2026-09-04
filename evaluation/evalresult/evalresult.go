@@ -38,6 +38,15 @@ type EvalSetResult struct {
 	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp,omitempty"`
 }
 
+// InferenceStats contains resource measurements for the actual agent
+// inference that produced an evaluation result.
+type InferenceStats struct {
+	// Duration is the total time spent executing the actual agent.
+	Duration time.Duration `json:"duration,omitempty"`
+	// TokenUsage is the total token usage reported by the actual agent.
+	TokenUsage *model.Usage `json:"tokenUsage,omitempty"`
+}
+
 // EvalCaseResult represents the result of a single evaluation case.
 type EvalCaseResult struct {
 	// EvalSetID identifies the eval set.
@@ -60,10 +69,8 @@ type EvalCaseResult struct {
 	SessionID string `json:"sessionId,omitempty"`
 	// UserID is the user id used during inferencing stage of the eval.
 	UserID string `json:"userId,omitempty"`
-	// InferenceDuration is the total time spent executing the actual agent for this eval case run.
-	InferenceDuration time.Duration `json:"inferenceDuration,omitempty"`
-	// InferenceTokenUsage is the total token usage reported by the actual agent for this eval case run.
-	InferenceTokenUsage *model.Usage `json:"inferenceTokenUsage,omitempty"`
+	// InferenceStats contains resource measurements for the actual agent for this eval case run.
+	InferenceStats *InferenceStats `json:"inferenceStats,omitempty"`
 }
 
 // EvalMetricResult represents the result of a single metric evaluation.

@@ -23,8 +23,7 @@ type EvaluationResult struct {
 	EvalSetID     string                    // EvalSetID 是评估集标识
 	OverallStatus status.EvalStatus         // OverallStatus 是整体状态
 	ExecutionTime time.Duration             // ExecutionTime 是执行耗时
-	InferenceDuration time.Duration        // InferenceDuration 是实际 agent 推理耗时
-	InferenceTokenUsage *model.Usage       // InferenceTokenUsage 是实际 agent token 消耗
+	InferenceStats *evalresult.InferenceStats // InferenceStats 包含实际 agent 推理资源消耗
 	EvalCases     []*EvaluationCaseResult   // EvalCases 是用例结果列表
 	EvalResult    *evalresult.EvalSetResult // EvalResult 是持久化的 EvalSetResult
 }
@@ -32,8 +31,7 @@ type EvaluationResult struct {
 type EvaluationCaseResult struct {
 	EvalCaseID      string                         // EvalCaseID 是用例标识
 	OverallStatus   status.EvalStatus              // OverallStatus 是该用例的聚合状态
-	InferenceDuration time.Duration              // InferenceDuration 是该用例所有 run 的实际 agent 推理耗时
-	InferenceTokenUsage *model.Usage             // InferenceTokenUsage 是该用例所有 run 的实际 agent token 消耗
+	InferenceStats *evalresult.InferenceStats     // InferenceStats 包含该用例所有 run 的实际 agent 推理资源消耗
 	EvalCaseResults []*evalresult.EvalCaseResult   // EvalCaseResults 是每次运行的用例结果
 	MetricResults   []*evalresult.EvalMetricResult // MetricResults 是聚合后的指标结果
 	RunDetails      []*EvaluationCaseRunDetails    // RunDetails 是可选的逐 run 推理详情
@@ -49,18 +47,17 @@ type EvaluationInferenceDetails struct {
 	UserID          string                // UserID 是本次运行使用的用户标识
 	Status          status.EvalStatus     // Status 是推理状态
 	ErrorMessage    string                // ErrorMessage 是推理失败信息
-	InferenceDuration time.Duration      // InferenceDuration 是本次 run 的实际 agent 推理耗时
-	InferenceTokenUsage *model.Usage     // InferenceTokenUsage 是本次 run 的实际 agent token 消耗
+	InferenceStats   *evalresult.InferenceStats // InferenceStats 包含本次 run 的实际 agent 推理资源消耗
 	Inferences      []*evalset.Invocation // Inferences 是推理输出
 	ExecutionTraces []*trace.Trace        // ExecutionTraces 是执行轨迹
 }
 ```
 
-`EvalResult` 包含可由 EvalResultManager 持久化的聚合 EvalSetResult。集合级 `InferenceDuration` 通过 `EvaluationResult` 返回；持久化的 EvalSetResult 保留 case/run 级耗时，因此不需要修改数据库结构。`RunDetails` 只会在开启 run details 后填充，每条明细都对应一次具体运行。
+`EvalResult` 包含可由 EvalResultManager 持久化的聚合 EvalSetResult。集合级 `InferenceStats` 通过 `EvaluationResult` 返回；持久化的 EvalSetResult 保留 case/run 级统计，因此不需要修改数据库结构。`RunDetails` 只会在开启 run details 后填充，每条明细都对应一次具体运行。
 
-`InferenceTokenUsage` 与耗时采用相同的聚合层级：`EvaluationInferenceDetails` 记录单次 run 的 token 消耗，`EvaluationCaseResult` 汇总一个用例的多次 run，`EvaluationResult` 汇总所有用例。它只统计目标 Agent 上报的 token，不包含评估器、预期 runner 或 trace 回放的消耗；持久化的 EvalSetResult 只在 case/run 结果中保留该字段，不增加集合级字段。
+`InferenceStats` 与耗时采用相同的聚合层级：`EvaluationInferenceDetails` 记录单次 run 的统计，`EvaluationCaseResult` 汇总一个用例的多次 run，`EvaluationResult` 汇总所有用例。它只统计目标 Agent 的推理消耗，不包含评估器、预期 runner 或 trace 回放的消耗；持久化的 EvalSetResult 只在 case/run 结果中保留该字段，不增加集合级字段。
 
-`ExecutionTime` 是完整评测流程耗时，包含推理和指标评估；`InferenceDuration` 按所有 case/run 累加实际 agent 推理耗时。开启 run 级并发时，它可能大于端到端的墙钟耗时。
+`ExecutionTime` 是完整评测流程耗时，包含推理和指标评估；`InferenceStats.Duration` 按所有 case/run 累加实际 agent 推理耗时。开启 run 级并发时，它可能大于端到端的墙钟耗时。
 
 默认情况下，`evaluation.New` 会创建 AgentEvaluator 并使用 InMemory 的 EvalSetManager、MetricManager、EvalResultManager 与默认 Registry，同时创建本地 Service。若希望从本地文件读取 EvalSet 与指标配置，并将结果写入文件，需要显式注入 Local Manager。
 

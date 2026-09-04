@@ -20,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	itoolmock "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/toolmock"
 	tokenusage "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/usage"
@@ -35,10 +36,8 @@ import (
 type Result struct {
 	Invocations     []*evalset.Invocation
 	ExecutionTraces []*trace.Trace
-	// InferenceDuration is the total time spent executing the target agent.
-	InferenceDuration time.Duration
-	// InferenceTokenUsage is the total token usage reported by the target agent.
-	InferenceTokenUsage *model.Usage
+	// InferenceStats contains resource measurements for the target agent.
+	InferenceStats *evalresult.InferenceStats
 }
 
 // Inference executes the agent against the provided invocations.
@@ -61,37 +60,33 @@ func Inference(
 	// Accumulate each invocation response.
 	responseInvocations := make([]*evalset.Invocation, 0, len(invocations))
 	executionTraces := make([]*trace.Trace, 0, len(invocations))
-	var inferenceDuration time.Duration
-	var inferenceTokenUsage *model.Usage
+	inferenceStats := &evalresult.InferenceStats{}
 	for _, invocation := range invocations {
 		startTime := time.Now()
 		responseInvocation, executionTrace, invocationTokenUsage, err := inferenceInvocationWithUsage(ctx, runner, sessionID, initialSession, invocation, runOptions, opts)
-		inferenceDuration += time.Since(startTime)
-		inferenceTokenUsage = tokenusage.Add(inferenceTokenUsage, invocationTokenUsage)
+		inferenceStats.Duration += time.Since(startTime)
+		inferenceStats.TokenUsage = tokenusage.Add(inferenceStats.TokenUsage, invocationTokenUsage)
 		if err != nil && responseInvocation == nil && executionTrace == nil {
 			return &Result{
-				Invocations:         responseInvocations,
-				ExecutionTraces:     executionTraces,
-				InferenceDuration:   inferenceDuration,
-				InferenceTokenUsage: inferenceTokenUsage,
+				Invocations:     responseInvocations,
+				ExecutionTraces: executionTraces,
+				InferenceStats:  inferenceStats,
 			}, err
 		}
 		responseInvocations = append(responseInvocations, responseInvocation)
 		executionTraces = append(executionTraces, executionTrace)
 		if err != nil {
 			return &Result{
-				Invocations:         responseInvocations,
-				ExecutionTraces:     executionTraces,
-				InferenceDuration:   inferenceDuration,
-				InferenceTokenUsage: inferenceTokenUsage,
+				Invocations:     responseInvocations,
+				ExecutionTraces: executionTraces,
+				InferenceStats:  inferenceStats,
 			}, err
 		}
 	}
 	return &Result{
-		Invocations:         responseInvocations,
-		ExecutionTraces:     executionTraces,
-		InferenceDuration:   inferenceDuration,
-		InferenceTokenUsage: inferenceTokenUsage,
+		Invocations:     responseInvocations,
+		ExecutionTraces: executionTraces,
+		InferenceStats:  inferenceStats,
 	}, nil
 }
 
@@ -130,12 +125,10 @@ func InferenceWithConversationScenario(
 	if conversation == nil {
 		return nil, errors.New("user simulator conversation is nil")
 	}
-	var inferenceDuration time.Duration
-	var inferenceTokenUsage *model.Usage
+	inferenceStats := &evalresult.InferenceStats{}
 	defer func() {
 		if result != nil {
-			result.InferenceDuration = inferenceDuration
-			result.InferenceTokenUsage = inferenceTokenUsage
+			result.InferenceStats = inferenceStats
 		}
 		closeErr := conversation.Close()
 		if closeErr != nil {
@@ -145,6 +138,7 @@ func InferenceWithConversationScenario(
 	result = &Result{
 		Invocations:     make([]*evalset.Invocation, 0),
 		ExecutionTraces: make([]*trace.Trace, 0),
+		InferenceStats:  inferenceStats,
 	}
 	var lastTargetResponse *model.Message
 	for {
@@ -172,8 +166,8 @@ func InferenceWithConversationScenario(
 		responseInvocation, executionTrace, invocationTokenUsage, nextErr := inferenceInvocationWithUsage(ctx, r, sessionID, initialSession, &evalset.Invocation{
 			UserContent: &userMessage,
 		}, runOptions, nil)
-		inferenceDuration += time.Since(startTime)
-		inferenceTokenUsage = tokenusage.Add(inferenceTokenUsage, invocationTokenUsage)
+		inferenceStats.Duration += time.Since(startTime)
+		inferenceStats.TokenUsage = tokenusage.Add(inferenceStats.TokenUsage, invocationTokenUsage)
 		if nextErr != nil {
 			return result, nextErr
 		}
@@ -183,7 +177,6 @@ func InferenceWithConversationScenario(
 		result.Invocations = append(result.Invocations, responseInvocation)
 		result.ExecutionTraces = append(result.ExecutionTraces, executionTrace)
 		lastTargetResponse = responseInvocation.FinalResponse
-		result.InferenceDuration = inferenceDuration
 	}
 }
 

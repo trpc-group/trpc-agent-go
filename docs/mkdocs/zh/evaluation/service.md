@@ -40,8 +40,7 @@ type InferenceResult struct {
 	UserID       string                // UserID 是推理阶段用户标识
 	Status       status.EvalStatus     // Status 是推理状态
 	ErrorMessage string                // ErrorMessage 是推理失败原因
-	InferenceDuration time.Duration   // InferenceDuration 是实际 agent 推理耗时
-	InferenceTokenUsage *model.Usage  // InferenceTokenUsage 是实际 agent token 消耗
+	InferenceStats *evalresult.InferenceStats // InferenceStats 包含实际 agent 推理资源消耗
 }
 
 // EvaluateRequest 是评估请求
@@ -61,8 +60,7 @@ type EvaluateConfig struct {
 type EvalSetRunResult struct {
 	AppName         string                       // AppName 是应用名
 	EvalSetID       string                       // EvalSetID 是评估集标识
-	InferenceDuration time.Duration             // InferenceDuration 是本次 run 的实际 agent 推理耗时
-	InferenceTokenUsage *model.Usage            // InferenceTokenUsage 是本次 run 的实际 agent token 消耗
+	InferenceStats *evalresult.InferenceStats   // InferenceStats 包含本次 run 的实际 agent 推理资源消耗
 	EvalCaseResults []*evalresult.EvalCaseResult // EvalCaseResults 是评估用例结果
 }
 
@@ -98,7 +96,7 @@ type EvalCaseResultAggregationResult struct {
 
 当 `evalMode` 为 `trace` 时，推理阶段不会运行 Runner；若配置了 `actualConversation`，则直接将其作为实际轨迹返回，否则会将 `conversation` 视为实际轨迹返回。
 
-`InferenceResult.InferenceTokenUsage` 记录推理过程中目标 Agent 上报的 token 消耗，`EvalSetRunResult.InferenceTokenUsage` 汇总本次 run 中各用例的该值。这里只统计目标 Agent，不包含评估器、预期 runner 或 trace 回放产生的 token；如果模型没有上报 usage，则该字段为 nil。
+`InferenceStats` 包含推理过程中目标 Agent 上报的耗时和 token 消耗。`InferenceResult.InferenceStats` 记录单个用例，`EvalSetRunResult.InferenceStats` 汇总本次 run 中各用例的该值。这里只统计目标 Agent，不包含评估器、预期 runner 或 trace 回放产生的消耗；如果模型没有上报 token usage，则 `TokenUsage` 为 nil。
 
 Local 实现支持 EvalCase 级并发推理。开启后会并行运行多个用例，单个用例内部仍按轮次顺序执行。
 

@@ -1699,8 +1699,10 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-xyz")
 	actual := makeActualInvocation("generated", "calc add 1 2", "calc result: 3")
 	inference := makeInferenceResult(appName, evalSetID, caseID, "session-xyz", []*evalset.Invocation{actual})
-	inference.InferenceDuration = 42 * time.Millisecond
-	inference.InferenceTokenUsage = &model.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}
+	inference.InferenceStats = &evalresult.InferenceStats{
+		Duration:   42 * time.Millisecond,
+		TokenUsage: &model.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+	}
 	req := &service.EvaluateRequest{
 		AppName:          appName,
 		EvalSetID:        evalSetID,
@@ -1716,12 +1718,12 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	assert.Equal(t, appName, result.AppName)
 	assert.Equal(t, evalSetID, result.EvalSetID)
 	assert.Len(t, result.EvalCaseResults, 1)
-	assert.Equal(t, 42*time.Millisecond, result.InferenceDuration)
-	assert.Equal(t, inference.InferenceTokenUsage, result.InferenceTokenUsage)
+	assert.Equal(t, 42*time.Millisecond, result.InferenceStats.Duration)
+	assert.Equal(t, inference.InferenceStats, result.InferenceStats)
 
 	caseResult := result.EvalCaseResults[0]
-	assert.Equal(t, 42*time.Millisecond, caseResult.InferenceDuration)
-	assert.Equal(t, inference.InferenceTokenUsage, caseResult.InferenceTokenUsage)
+	assert.Equal(t, 42*time.Millisecond, caseResult.InferenceStats.Duration)
+	assert.Equal(t, inference.InferenceStats, caseResult.InferenceStats)
 	assert.Equal(t, caseID, caseResult.EvalID)
 	assert.Equal(t, status.EvalStatusPassed, caseResult.FinalEvalStatus)
 	assert.Len(t, caseResult.OverallEvalMetricResults, 1)
@@ -1738,56 +1740,57 @@ func TestLocalEvaluateSuccess(t *testing.T) {
 	assert.Equal(t, "demo-user", caseResult.UserID)
 }
 
-func TestInferenceDurationForInferenceResultFallbacks(t *testing.T) {
+func TestInferenceStatsForInferenceResultDurationFallbacks(t *testing.T) {
 	start := time.Now()
-	assert.Zero(t, inferenceDurationForInferenceResult(nil))
-	assert.Equal(t, 42*time.Millisecond, inferenceDurationForInferenceResult(&service.InferenceResult{
-		InferenceDuration: 42 * time.Millisecond,
-	}))
-	assert.Zero(t, inferenceDurationForInferenceResult(&service.InferenceResult{
-		EvalMode:          evalset.EvalModeTrace,
-		InferenceDuration: 42 * time.Millisecond,
+	assert.Nil(t, inferenceStatsForInferenceResult(nil))
+	assert.Equal(t, 42*time.Millisecond, inferenceStatsForInferenceResult(&service.InferenceResult{
+		InferenceStats: &evalresult.InferenceStats{Duration: 42 * time.Millisecond},
+	}).Duration)
+	assert.Nil(t, inferenceStatsForInferenceResult(&service.InferenceResult{
+		EvalMode:       evalset.EvalModeTrace,
+		InferenceStats: &evalresult.InferenceStats{Duration: 42 * time.Millisecond},
 		ExecutionTraces: []*agenttrace.Trace{{
 			StartedAt: start,
 			EndedAt:   start.Add(time.Second),
 		}},
 	}))
-	assert.Equal(t, 5*time.Millisecond, inferenceDurationForInferenceResult(&service.InferenceResult{
+	assert.Equal(t, 5*time.Millisecond, inferenceStatsForInferenceResult(&service.InferenceResult{
 		ExecutionTraces: []*agenttrace.Trace{
 			nil,
 			{},
 			{StartedAt: start, EndedAt: start.Add(5 * time.Millisecond)},
 			{StartedAt: start.Add(10 * time.Millisecond), EndedAt: start.Add(5 * time.Millisecond)},
 		},
-	}))
+	}).Duration)
 }
 
-func TestInferenceTokenUsageForInferenceResultFallbacks(t *testing.T) {
-	assert.Nil(t, inferenceTokenUsageForInferenceResult(nil))
+func TestInferenceStatsForInferenceResultTokenUsageFallbacks(t *testing.T) {
+	assert.Nil(t, inferenceStatsForInferenceResult(nil))
 	explicit := &model.Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5}
-	got := inferenceTokenUsageForInferenceResult(&service.InferenceResult{
-		InferenceTokenUsage: explicit,
+	got := inferenceStatsForInferenceResult(&service.InferenceResult{
+		InferenceStats: &evalresult.InferenceStats{TokenUsage: explicit},
 	})
-	assert.Equal(t, explicit, got)
-	assert.NotSame(t, explicit, got)
+	assert.Equal(t, explicit, got.TokenUsage)
+	assert.NotSame(t, explicit, got.TokenUsage)
 
-	assert.Nil(t, inferenceTokenUsageForInferenceResult(&service.InferenceResult{
+	assert.Nil(t, inferenceStatsForInferenceResult(&service.InferenceResult{
 		EvalMode: evalset.EvalModeTrace,
-		InferenceTokenUsage: &model.Usage{
+		InferenceStats: &evalresult.InferenceStats{TokenUsage: &model.Usage{
 			TotalTokens: 5,
+		},
 		},
 	}))
 
-	got = inferenceTokenUsageForInferenceResult(&service.InferenceResult{
+	got = inferenceStatsForInferenceResult(&service.InferenceResult{
 		ExecutionTraces: []*agenttrace.Trace{
 			{Usage: &model.Usage{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 5}},
 			{Usage: &model.Usage{PromptTokens: 6, CompletionTokens: 2, TotalTokens: 8}},
 		},
 	})
 	require.NotNil(t, got)
-	assert.Equal(t, 10, got.PromptTokens)
-	assert.Equal(t, 3, got.CompletionTokens)
-	assert.Equal(t, 13, got.TotalTokens)
+	assert.Equal(t, 10, got.TokenUsage.PromptTokens)
+	assert.Equal(t, 3, got.TokenUsage.CompletionTokens)
+	assert.Equal(t, 13, got.TokenUsage.TotalTokens)
 }
 
 func TestLocalEvaluateParallelEvaluationPreservesOrder(t *testing.T) {

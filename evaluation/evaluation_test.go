@@ -1435,31 +1435,35 @@ func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
 			{
 				nil,
 				{
-					AppName:           appName,
-					EvalSetID:         evalSetID,
-					EvalCaseID:        caseID,
-					Inferences:        []*evalset.Invocation{{InvocationID: "inv-1"}},
-					SessionID:         "session-1",
-					UserID:            "user-1",
-					Status:            status.EvalStatusPassed,
-					InferenceDuration: 3 * time.Second,
-					InferenceTokenUsage: &model.Usage{
-						PromptTokens: 10, CompletionTokens: 4, TotalTokens: 14,
+					AppName:    appName,
+					EvalSetID:  evalSetID,
+					EvalCaseID: caseID,
+					Inferences: []*evalset.Invocation{{InvocationID: "inv-1"}},
+					SessionID:  "session-1",
+					UserID:     "user-1",
+					Status:     status.EvalStatusPassed,
+					InferenceStats: &evalresult.InferenceStats{
+						Duration: 3 * time.Second,
+						TokenUsage: &model.Usage{
+							PromptTokens: 10, CompletionTokens: 4, TotalTokens: 14,
+						},
 					},
 					ExecutionTraces: []*agenttrace.Trace{runOneTrace},
 				},
 			},
 			{{
-				AppName:           appName,
-				EvalSetID:         evalSetID,
-				EvalCaseID:        caseID,
-				Inferences:        []*evalset.Invocation{{InvocationID: "inv-2"}},
-				SessionID:         "session-2",
-				UserID:            "user-2",
-				Status:            status.EvalStatusPassed,
-				InferenceDuration: 5 * time.Second,
-				InferenceTokenUsage: &model.Usage{
-					PromptTokens: 20, CompletionTokens: 6, TotalTokens: 26,
+				AppName:    appName,
+				EvalSetID:  evalSetID,
+				EvalCaseID: caseID,
+				Inferences: []*evalset.Invocation{{InvocationID: "inv-2"}},
+				SessionID:  "session-2",
+				UserID:     "user-2",
+				Status:     status.EvalStatusPassed,
+				InferenceStats: &evalresult.InferenceStats{
+					Duration: 5 * time.Second,
+					TokenUsage: &model.Usage{
+						PromptTokens: 20, CompletionTokens: 6, TotalTokens: 26,
+					},
 				},
 				ExecutionTraces: []*agenttrace.Trace{runTwoTrace},
 			}},
@@ -1499,25 +1503,29 @@ func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
 	}()
 	evaluationResult, err := ae.Evaluate(ctx, evalSetID, WithRunDetailsEnabled(true))
 	assert.NoError(t, err)
-	assert.Equal(t, 8*time.Second, evaluationResult.InferenceDuration)
-	require.NotNil(t, evaluationResult.InferenceTokenUsage)
-	assert.Equal(t, 30, evaluationResult.InferenceTokenUsage.PromptTokens)
-	assert.Equal(t, 10, evaluationResult.InferenceTokenUsage.CompletionTokens)
-	assert.Equal(t, 40, evaluationResult.InferenceTokenUsage.TotalTokens)
+	require.NotNil(t, evaluationResult.InferenceStats)
+	assert.Equal(t, 8*time.Second, evaluationResult.InferenceStats.Duration)
+	require.NotNil(t, evaluationResult.InferenceStats.TokenUsage)
+	assert.Equal(t, 30, evaluationResult.InferenceStats.TokenUsage.PromptTokens)
+	assert.Equal(t, 10, evaluationResult.InferenceStats.TokenUsage.CompletionTokens)
+	assert.Equal(t, 40, evaluationResult.InferenceStats.TokenUsage.TotalTokens)
 	if !assert.Len(t, evaluationResult.EvalCases, 1) {
 		return
 	}
 	caseResult := evaluationResult.EvalCases[0]
-	assert.Equal(t, 8*time.Second, caseResult.InferenceDuration)
-	require.NotNil(t, caseResult.InferenceTokenUsage)
-	assert.Equal(t, 30, caseResult.InferenceTokenUsage.PromptTokens)
-	assert.Equal(t, 10, caseResult.InferenceTokenUsage.CompletionTokens)
-	assert.Equal(t, 40, caseResult.InferenceTokenUsage.TotalTokens)
+	require.NotNil(t, caseResult.InferenceStats)
+	assert.Equal(t, 8*time.Second, caseResult.InferenceStats.Duration)
+	require.NotNil(t, caseResult.InferenceStats.TokenUsage)
+	assert.Equal(t, 30, caseResult.InferenceStats.TokenUsage.PromptTokens)
+	assert.Equal(t, 10, caseResult.InferenceStats.TokenUsage.CompletionTokens)
+	assert.Equal(t, 40, caseResult.InferenceStats.TokenUsage.TotalTokens)
 	if assert.Len(t, caseResult.EvalCaseResults, 2) {
-		require.NotNil(t, caseResult.EvalCaseResults[0].InferenceTokenUsage)
-		assert.Equal(t, 10, caseResult.EvalCaseResults[0].InferenceTokenUsage.PromptTokens)
-		require.NotNil(t, caseResult.EvalCaseResults[1].InferenceTokenUsage)
-		assert.Equal(t, 20, caseResult.EvalCaseResults[1].InferenceTokenUsage.PromptTokens)
+		require.NotNil(t, caseResult.EvalCaseResults[0].InferenceStats)
+		require.NotNil(t, caseResult.EvalCaseResults[0].InferenceStats.TokenUsage)
+		assert.Equal(t, 10, caseResult.EvalCaseResults[0].InferenceStats.TokenUsage.PromptTokens)
+		require.NotNil(t, caseResult.EvalCaseResults[1].InferenceStats)
+		require.NotNil(t, caseResult.EvalCaseResults[1].InferenceStats.TokenUsage)
+		assert.Equal(t, 20, caseResult.EvalCaseResults[1].InferenceStats.TokenUsage.PromptTokens)
 	}
 	if !assert.Len(t, caseResult.RunDetails, 2) {
 		return
@@ -1528,9 +1536,10 @@ func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
 		assert.Equal(t, "session-1", caseResult.RunDetails[0].Inference.SessionID)
 		assert.Equal(t, "user-1", caseResult.RunDetails[0].Inference.UserID)
 		assert.Equal(t, status.EvalStatusPassed, caseResult.RunDetails[0].Inference.Status)
-		assert.Equal(t, 3*time.Second, caseResult.RunDetails[0].Inference.InferenceDuration)
-		require.NotNil(t, caseResult.RunDetails[0].Inference.InferenceTokenUsage)
-		assert.Equal(t, 10, caseResult.RunDetails[0].Inference.InferenceTokenUsage.PromptTokens)
+		require.NotNil(t, caseResult.RunDetails[0].Inference.InferenceStats)
+		assert.Equal(t, 3*time.Second, caseResult.RunDetails[0].Inference.InferenceStats.Duration)
+		require.NotNil(t, caseResult.RunDetails[0].Inference.InferenceStats.TokenUsage)
+		assert.Equal(t, 10, caseResult.RunDetails[0].Inference.InferenceStats.TokenUsage.PromptTokens)
 		if assert.Len(t, caseResult.RunDetails[0].Inference.Inferences, 1) {
 			assert.Equal(t, "inv-1", caseResult.RunDetails[0].Inference.Inferences[0].InvocationID)
 		}
@@ -1544,9 +1553,10 @@ func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
 	if assert.NotNil(t, caseResult.RunDetails[1].Inference) {
 		assert.Equal(t, "session-2", caseResult.RunDetails[1].Inference.SessionID)
 		assert.Equal(t, "user-2", caseResult.RunDetails[1].Inference.UserID)
-		assert.Equal(t, 5*time.Second, caseResult.RunDetails[1].Inference.InferenceDuration)
-		require.NotNil(t, caseResult.RunDetails[1].Inference.InferenceTokenUsage)
-		assert.Equal(t, 20, caseResult.RunDetails[1].Inference.InferenceTokenUsage.PromptTokens)
+		require.NotNil(t, caseResult.RunDetails[1].Inference.InferenceStats)
+		assert.Equal(t, 5*time.Second, caseResult.RunDetails[1].Inference.InferenceStats.Duration)
+		require.NotNil(t, caseResult.RunDetails[1].Inference.InferenceStats.TokenUsage)
+		assert.Equal(t, 20, caseResult.RunDetails[1].Inference.InferenceStats.TokenUsage.PromptTokens)
 		if assert.Len(t, caseResult.RunDetails[1].Inference.Inferences, 1) {
 			assert.Equal(t, "inv-2", caseResult.RunDetails[1].Inference.Inferences[0].InvocationID)
 		}
@@ -1557,50 +1567,54 @@ func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestInferenceDurationForInferenceResultFallbacks(t *testing.T) {
+func TestInferenceStatsForInferenceResultDurationFallbacks(t *testing.T) {
 	start := time.Now()
-	assert.Zero(t, inferenceDurationForInferenceResult(nil))
-	assert.Equal(t, 42*time.Millisecond, inferenceDurationForInferenceResult(&service.InferenceResult{
-		InferenceDuration: 42 * time.Millisecond,
-	}))
-	assert.Zero(t, inferenceDurationForInferenceResult(&service.InferenceResult{
-		EvalMode:          evalset.EvalModeTrace,
-		InferenceDuration: 42 * time.Millisecond,
+	assert.Nil(t, inferenceStatsForInferenceResult(nil))
+	assert.Equal(t, 42*time.Millisecond, inferenceStatsForInferenceResult(&service.InferenceResult{
+		InferenceStats: &evalresult.InferenceStats{Duration: 42 * time.Millisecond},
+	}).Duration)
+	assert.Nil(t, inferenceStatsForInferenceResult(&service.InferenceResult{
+		EvalMode:       evalset.EvalModeTrace,
+		InferenceStats: &evalresult.InferenceStats{Duration: 42 * time.Millisecond},
 		ExecutionTraces: []*agenttrace.Trace{{
 			StartedAt: start,
 			EndedAt:   start.Add(time.Second),
 		}},
 	}))
-	assert.Equal(t, 5*time.Millisecond, inferenceDurationForInferenceResult(&service.InferenceResult{
+	assert.Equal(t, 5*time.Millisecond, inferenceStatsForInferenceResult(&service.InferenceResult{
 		ExecutionTraces: []*agenttrace.Trace{
 			nil,
 			{},
 			{StartedAt: start, EndedAt: start.Add(5 * time.Millisecond)},
 			{StartedAt: start.Add(10 * time.Millisecond), EndedAt: start.Add(5 * time.Millisecond)},
 		},
-	}))
+	}).Duration)
 }
 
-func TestAgentEvaluatorPreservesServiceCaseInferenceDuration(t *testing.T) {
+func TestAgentEvaluatorPreservesServiceCaseInferenceStats(t *testing.T) {
 	const (
 		appName   = "app"
 		evalSetID = "set"
 		caseID    = "case"
 	)
 	serviceCaseDuration := 7 * time.Second
+	serviceCaseUsage := &model.Usage{PromptTokens: 9, CompletionTokens: 3, TotalTokens: 12}
 	svc := &fakeService{
 		inferenceResults: [][]*service.InferenceResult{{{
 			AppName:    appName,
 			EvalSetID:  evalSetID,
 			EvalCaseID: caseID,
+			InferenceStats: &evalresult.InferenceStats{
+				Duration: serviceCaseDuration,
+			},
 		}}},
 		evaluateResults: []*service.EvalSetRunResult{{
 			AppName:   appName,
 			EvalSetID: evalSetID,
 			EvalCaseResults: []*evalresult.EvalCaseResult{{
-				EvalSetID:         evalSetID,
-				EvalID:            caseID,
-				InferenceDuration: serviceCaseDuration,
+				EvalSetID:      evalSetID,
+				EvalID:         caseID,
+				InferenceStats: &evalresult.InferenceStats{TokenUsage: serviceCaseUsage},
 			}},
 		}},
 	}
@@ -1611,18 +1625,20 @@ func TestAgentEvaluatorPreservesServiceCaseInferenceDuration(t *testing.T) {
 	results, err := ae.runEvaluationOnce(context.Background(), evalSetID, opts, nil, 1)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	assert.Equal(t, serviceCaseDuration, results[0].InferenceDuration)
-	assert.Equal(t, serviceCaseDuration, opts.inferenceDurationValue())
+	assert.Equal(t, serviceCaseDuration, results[0].InferenceStats.Duration)
+	assert.Equal(t, serviceCaseUsage, results[0].InferenceStats.TokenUsage)
+	assert.Equal(t, serviceCaseDuration, opts.inferenceStatsValue().Duration)
+	assert.Equal(t, serviceCaseUsage, opts.inferenceStatsValue().TokenUsage)
 }
 
-func TestAgentEvaluatorMergesMixedCaseInferenceDurations(t *testing.T) {
+func TestAgentEvaluatorMergesMixedCaseInferenceStats(t *testing.T) {
 	const (
 		appName   = "app"
 		evalSetID = "set"
 	)
 	svc := &fakeService{
 		inferenceResults: [][]*service.InferenceResult{{
-			{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-a", InferenceDuration: 2 * time.Second},
+			{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-a", InferenceStats: &evalresult.InferenceStats{Duration: 2 * time.Second}},
 			{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-b"},
 		}},
 		evaluateResults: []*service.EvalSetRunResult{{
@@ -1630,7 +1646,7 @@ func TestAgentEvaluatorMergesMixedCaseInferenceDurations(t *testing.T) {
 			EvalSetID: evalSetID,
 			EvalCaseResults: []*evalresult.EvalCaseResult{
 				{EvalSetID: evalSetID, EvalID: "case-a"},
-				{EvalSetID: evalSetID, EvalID: "case-b", InferenceDuration: 3 * time.Second},
+				{EvalSetID: evalSetID, EvalID: "case-b", InferenceStats: &evalresult.InferenceStats{Duration: 3 * time.Second}},
 			},
 		}},
 	}
@@ -1641,28 +1657,28 @@ func TestAgentEvaluatorMergesMixedCaseInferenceDurations(t *testing.T) {
 	results, err := ae.runEvaluationOnce(context.Background(), evalSetID, opts, nil, 1)
 	require.NoError(t, err)
 	require.Len(t, results, 2)
-	assert.Equal(t, 2*time.Second, results[0].InferenceDuration)
-	assert.Equal(t, 3*time.Second, results[1].InferenceDuration)
-	assert.Equal(t, 5*time.Second, opts.inferenceDurationValue())
+	assert.Equal(t, 2*time.Second, results[0].InferenceStats.Duration)
+	assert.Equal(t, 3*time.Second, results[1].InferenceStats.Duration)
+	assert.Equal(t, 5*time.Second, opts.inferenceStatsValue().Duration)
 }
 
-func TestAgentEvaluatorMergesInferenceDurationForMissingCaseResult(t *testing.T) {
+func TestAgentEvaluatorMergesInferenceStatsForMissingCaseResult(t *testing.T) {
 	const (
 		appName   = "app"
 		evalSetID = "set"
 	)
 	svc := &fakeService{
 		inferenceResults: [][]*service.InferenceResult{{
-			{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-a", InferenceDuration: 2 * time.Second},
-			{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-b", InferenceDuration: 3 * time.Second},
+			{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-a", InferenceStats: &evalresult.InferenceStats{Duration: 2 * time.Second}},
+			{AppName: appName, EvalSetID: evalSetID, EvalCaseID: "case-b", InferenceStats: &evalresult.InferenceStats{Duration: 3 * time.Second}},
 		}},
 		evaluateResults: []*service.EvalSetRunResult{{
 			AppName:   appName,
 			EvalSetID: evalSetID,
 			EvalCaseResults: []*evalresult.EvalCaseResult{{
-				EvalSetID:         evalSetID,
-				EvalID:            "case-b",
-				InferenceDuration: 3 * time.Second,
+				EvalSetID:      evalSetID,
+				EvalID:         "case-b",
+				InferenceStats: &evalresult.InferenceStats{Duration: 3 * time.Second},
 			}},
 		}},
 	}
@@ -1674,8 +1690,8 @@ func TestAgentEvaluatorMergesInferenceDurationForMissingCaseResult(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, "case-b", results[0].EvalID)
-	assert.Equal(t, 3*time.Second, results[0].InferenceDuration)
-	assert.Equal(t, 5*time.Second, opts.inferenceDurationValue())
+	assert.Equal(t, 3*time.Second, results[0].InferenceStats.Duration)
+	assert.Equal(t, 5*time.Second, opts.inferenceStatsValue().Duration)
 }
 
 func TestAgentEvaluatorEvaluateInferenceError(t *testing.T) {

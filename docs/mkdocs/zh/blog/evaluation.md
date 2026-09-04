@@ -1833,14 +1833,14 @@ type EvaluationResult struct {
 	EvalSetID     string                  // EvalSetID 是评估集标识
 	OverallStatus status.EvalStatus       // OverallStatus 是整体状态
 	ExecutionTime time.Duration           // ExecutionTime 是执行耗时
-	InferenceDuration time.Duration      // InferenceDuration 是实际 agent 推理耗时
+	InferenceStats *evalresult.InferenceStats // InferenceStats 包含实际 agent 推理资源消耗
 	EvalCases     []*EvaluationCaseResult // EvalCases 是用例结果列表
 }
 
 type EvaluationCaseResult struct {
 	EvalCaseID         string                         // EvalCaseID 是用例标识
 	OverallStatus      status.EvalStatus              // OverallStatus 是该用例的聚合状态
-	InferenceDuration time.Duration                  // InferenceDuration 是该用例所有 run 的实际 agent 推理耗时
+	InferenceStats *evalresult.InferenceStats         // InferenceStats 包含该用例所有 run 的实际 agent 推理资源消耗
 	EvalCaseResults    []*evalresult.EvalCaseResult   // EvalCaseResults 是每次运行的用例结果
 	MetricResults      []*evalresult.EvalMetricResult // MetricResults 是聚合后的指标结果
 }

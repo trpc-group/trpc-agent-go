@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
@@ -78,29 +79,23 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.False(t, opts.runDetailsEnabled)
 }
 
-func TestOptionsInferenceDuration(t *testing.T) {
+func TestOptionsInferenceStats(t *testing.T) {
 	opts := newOptions()
-	opts.addInferenceDuration(2 * time.Second)
-	opts.addInferenceDuration(3 * time.Second)
-	opts.addInferenceDuration(0)
-	opts.addInferenceDuration(-time.Second)
-	assert.Equal(t, 5*time.Second, opts.inferenceDurationValue())
+	opts.addInferenceStats(&evalresult.InferenceStats{Duration: 2 * time.Second})
+	opts.addInferenceStats(&evalresult.InferenceStats{Duration: 3 * time.Second})
+	opts.addInferenceStats(&evalresult.InferenceStats{})
+	got := opts.inferenceStatsValue()
+	assert.Equal(t, 5*time.Second, got.Duration)
 
 	var nilOpts *options
-	nilOpts.addInferenceDuration(time.Second)
-	assert.Zero(t, nilOpts.inferenceDurationValue())
-}
+	nilOpts.addInferenceStats(&evalresult.InferenceStats{Duration: time.Second})
+	assert.Nil(t, nilOpts.inferenceStatsValue())
 
-func TestOptionsInferenceTokenUsage(t *testing.T) {
-	opts := newOptions()
-	opts.addInferenceTokenUsage(&model.Usage{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5})
-	opts.addInferenceTokenUsage(&model.Usage{PromptTokens: 7, CompletionTokens: 11, TotalTokens: 18})
-	got := opts.inferenceTokenUsageValue()
-	assert.Equal(t, &model.Usage{PromptTokens: 9, CompletionTokens: 14, TotalTokens: 23}, got)
-
-	var nilOpts *options
-	nilOpts.addInferenceTokenUsage(&model.Usage{TotalTokens: 1})
-	assert.Nil(t, nilOpts.inferenceTokenUsageValue())
+	opts = newOptions()
+	opts.addInferenceStats(&evalresult.InferenceStats{TokenUsage: &model.Usage{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5}})
+	opts.addInferenceStats(&evalresult.InferenceStats{TokenUsage: &model.Usage{PromptTokens: 7, CompletionTokens: 11, TotalTokens: 18}})
+	got = opts.inferenceStatsValue()
+	assert.Equal(t, &model.Usage{PromptTokens: 9, CompletionTokens: 14, TotalTokens: 23}, got.TokenUsage)
 }
 
 func TestWithEvalSetManager(t *testing.T) {

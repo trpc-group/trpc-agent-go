@@ -256,55 +256,23 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt 
 		return nil, fmt.Errorf("evaluate case results (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
 	}
 	runResult = &service.EvalSetRunResult{
-		AppName:             req.AppName,
-		EvalSetID:           req.EvalSetID,
-		InferenceDuration:   inferenceDurationForInferenceResults(req.InferenceResults),
-		InferenceTokenUsage: inferenceTokenUsageForInferenceResults(req.InferenceResults),
-		EvalCaseResults:     evalCaseResults,
+		AppName:         req.AppName,
+		EvalSetID:       req.EvalSetID,
+		InferenceStats:  inferenceStatsForInferenceResults(req.InferenceResults),
+		EvalCaseResults: evalCaseResults,
 	}
 	return runResult, nil
 }
 
-func inferenceDurationForInferenceResults(results []*service.InferenceResult) time.Duration {
-	var elapsed time.Duration
+func inferenceStatsForInferenceResults(results []*service.InferenceResult) *evalresult.InferenceStats {
+	var total *evalresult.InferenceStats
 	for _, result := range results {
-		elapsed += inferenceDurationForInferenceResult(result)
-	}
-	return elapsed
-}
-
-func inferenceDurationForInferenceResult(result *service.InferenceResult) time.Duration {
-	if result == nil {
-		return 0
-	}
-	// Trace-mode cases replay recorded invocations without executing the agent.
-	if result.EvalMode == evalset.EvalModeTrace {
-		return 0
-	}
-	if result.InferenceDuration > 0 {
-		return result.InferenceDuration
-	}
-	var elapsed time.Duration
-	for _, executionTrace := range result.ExecutionTraces {
-		if executionTrace == nil || executionTrace.StartedAt.IsZero() || executionTrace.EndedAt.IsZero() {
-			continue
-		}
-		if duration := executionTrace.EndedAt.Sub(executionTrace.StartedAt); duration > 0 {
-			elapsed += duration
-		}
-	}
-	return elapsed
-}
-
-func inferenceTokenUsageForInferenceResults(results []*service.InferenceResult) *model.Usage {
-	var total *model.Usage
-	for _, result := range results {
-		total = tokenusage.Add(total, inferenceTokenUsageForInferenceResult(result))
+		total = addInferenceStats(total, inferenceStatsForInferenceResult(result))
 	}
 	return total
 }
 
-func inferenceTokenUsageForInferenceResult(result *service.InferenceResult) *model.Usage {
+func inferenceStatsForInferenceResult(result *service.InferenceResult) *evalresult.InferenceStats {
 	if result == nil {
 		return nil
 	}
@@ -312,16 +280,43 @@ func inferenceTokenUsageForInferenceResult(result *service.InferenceResult) *mod
 	if result.EvalMode == evalset.EvalModeTrace {
 		return nil
 	}
-	if result.InferenceTokenUsage != nil {
-		return tokenusage.Add(nil, result.InferenceTokenUsage)
+	stats := &evalresult.InferenceStats{}
+	if result.InferenceStats != nil {
+		stats.Duration = result.InferenceStats.Duration
+		stats.TokenUsage = tokenusage.Clone(result.InferenceStats.TokenUsage)
 	}
-	var total *model.Usage
-	for _, executionTrace := range result.ExecutionTraces {
-		if executionTrace == nil {
-			continue
+	if stats.Duration <= 0 {
+		for _, executionTrace := range result.ExecutionTraces {
+			if executionTrace == nil || executionTrace.StartedAt.IsZero() || executionTrace.EndedAt.IsZero() {
+				continue
+			}
+			if duration := executionTrace.EndedAt.Sub(executionTrace.StartedAt); duration > 0 {
+				stats.Duration += duration
+			}
 		}
-		total = tokenusage.Add(total, executionTrace.Usage)
 	}
+	if stats.TokenUsage == nil {
+		for _, executionTrace := range result.ExecutionTraces {
+			if executionTrace != nil {
+				stats.TokenUsage = tokenusage.Add(stats.TokenUsage, executionTrace.Usage)
+			}
+		}
+	}
+	if stats.Duration <= 0 && stats.TokenUsage == nil {
+		return nil
+	}
+	return stats
+}
+
+func addInferenceStats(total, stats *evalresult.InferenceStats) *evalresult.InferenceStats {
+	if stats == nil {
+		return total
+	}
+	if total == nil {
+		total = &evalresult.InferenceStats{}
+	}
+	total.Duration += stats.Duration
+	total.TokenUsage = tokenusage.Add(total.TokenUsage, stats.TokenUsage)
 	return total
 }
 
@@ -437,14 +432,13 @@ func (s *local) evaluateCase(ctx context.Context, req *service.EvaluateRequest, 
 
 func (s *local) failedEvalCaseResult(evalSetID string, inferenceResult *service.InferenceResult, errorMessage string) *evalresult.EvalCaseResult {
 	return &evalresult.EvalCaseResult{
-		EvalSetID:           evalSetID,
-		EvalID:              inferenceResult.EvalCaseID,
-		FinalEvalStatus:     evalstatus.EvalStatusFailed,
-		ErrorMessage:        errorMessage,
-		SessionID:           inferenceResult.SessionID,
-		UserID:              inferenceResult.UserID,
-		InferenceDuration:   inferenceDurationForInferenceResult(inferenceResult),
-		InferenceTokenUsage: inferenceTokenUsageForInferenceResult(inferenceResult),
+		EvalSetID:       evalSetID,
+		EvalID:          inferenceResult.EvalCaseID,
+		FinalEvalStatus: evalstatus.EvalStatusFailed,
+		ErrorMessage:    errorMessage,
+		SessionID:       inferenceResult.SessionID,
+		UserID:          inferenceResult.UserID,
+		InferenceStats:  inferenceStatsForInferenceResult(inferenceResult),
 	}
 }
 
@@ -605,8 +599,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		EvalMetricResultPerInvocation: perInvocation,
 		SessionID:                     inferenceResult.SessionID,
 		UserID:                        inputs.userID,
-		InferenceDuration:             inferenceDurationForInferenceResult(inferenceResult),
-		InferenceTokenUsage:           inferenceTokenUsageForInferenceResult(inferenceResult),
+		InferenceStats:                inferenceStatsForInferenceResult(inferenceResult),
 	}, nil
 }
 

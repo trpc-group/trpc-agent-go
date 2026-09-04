@@ -336,12 +336,8 @@ components:
         executionTime:
           type: integer
           description: Nanoseconds encoded by Go duration JSON marshaling.
-        inferenceDuration:
-          type: integer
-          format: int64
-          description: Nanoseconds encoded by Go duration JSON marshaling.
-        inferenceTokenUsage:
-          $ref: "#/components/schemas/TokenUsage"
+        inferenceStats:
+          $ref: "#/components/schemas/InferenceStats"
         evalCases:
           type: array
           items:
@@ -355,12 +351,8 @@ components:
           type: string
         overallStatus:
           $ref: "#/components/schemas/EvalStatus"
-        inferenceDuration:
-          type: integer
-          format: int64
-          description: Nanoseconds encoded by Go duration JSON marshaling.
-        inferenceTokenUsage:
-          $ref: "#/components/schemas/TokenUsage"
+        inferenceStats:
+          $ref: "#/components/schemas/InferenceStats"
         evalCaseResults:
           type: array
           items:
@@ -629,11 +621,16 @@ components:
           type: string
         userId:
           type: string
-        inferenceDuration:
+        inferenceStats:
+          $ref: "#/components/schemas/InferenceStats"
+    InferenceStats:
+      type: object
+      properties:
+        duration:
           type: integer
           format: int64
           description: Nanoseconds encoded by Go duration JSON marshaling.
-        inferenceTokenUsage:
+        tokenUsage:
           $ref: "#/components/schemas/TokenUsage"
     TokenUsage:
       type: object

@@ -609,7 +609,7 @@ func TestInferenceTracksInferenceDuration(t *testing.T) {
 	}}, &evalset.SessionInput{UserID: "user"}, "session", nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.GreaterOrEqual(t, result.InferenceDuration, delay)
+	assert.GreaterOrEqual(t, result.InferenceStats.Duration, delay)
 }
 
 func TestInferenceCollectsInferenceTokenUsage(t *testing.T) {
@@ -644,13 +644,14 @@ func TestInferenceCollectsInferenceTokenUsage(t *testing.T) {
 	}, &evalset.SessionInput{UserID: "user"}, "session", nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.NotNil(t, result.InferenceTokenUsage)
-	assert.Equal(t, 24, result.InferenceTokenUsage.PromptTokens)
-	assert.Equal(t, 12, result.InferenceTokenUsage.CompletionTokens)
-	assert.Equal(t, 36, result.InferenceTokenUsage.TotalTokens)
-	assert.Equal(t, 3, result.InferenceTokenUsage.PromptTokensDetails.CachedTokens)
-	assert.Equal(t, 4, result.InferenceTokenUsage.PromptTokensDetails.CacheReadTokens)
-	assert.Equal(t, 2, result.InferenceTokenUsage.CompletionTokensDetails.ReasoningTokens)
+	require.NotNil(t, result.InferenceStats)
+	require.NotNil(t, result.InferenceStats.TokenUsage)
+	assert.Equal(t, 24, result.InferenceStats.TokenUsage.PromptTokens)
+	assert.Equal(t, 12, result.InferenceStats.TokenUsage.CompletionTokens)
+	assert.Equal(t, 36, result.InferenceStats.TokenUsage.TotalTokens)
+	assert.Equal(t, 3, result.InferenceStats.TokenUsage.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 4, result.InferenceStats.TokenUsage.PromptTokensDetails.CacheReadTokens)
+	assert.Equal(t, 2, result.InferenceStats.TokenUsage.CompletionTokensDetails.ReasoningTokens)
 }
 
 func TestInferenceFallsBackToExecutionTraceTokenUsage(t *testing.T) {
@@ -666,8 +667,9 @@ func TestInferenceFallsBackToExecutionTraceTokenUsage(t *testing.T) {
 	}}, &evalset.SessionInput{UserID: "user"}, "session", nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, traceUsage, result.InferenceTokenUsage)
-	require.NotSame(t, traceUsage, result.InferenceTokenUsage)
+	require.NotNil(t, result.InferenceStats)
+	require.Equal(t, traceUsage, result.InferenceStats.TokenUsage)
+	require.NotSame(t, traceUsage, result.InferenceStats.TokenUsage)
 }
 
 func TestInference_CollectsExecutionTracesInInvocationOrder(t *testing.T) {
@@ -1284,7 +1286,7 @@ func TestInferenceWithConversationScenarioInferenceError(t *testing.T) {
 	)
 	assert.Error(t, err)
 	require.NotNil(t, result)
-	assert.GreaterOrEqual(t, result.InferenceDuration, delay)
+	assert.GreaterOrEqual(t, result.InferenceStats.Duration, delay)
 	assert.True(t, conv.closed)
 }
 

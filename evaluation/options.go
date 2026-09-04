@@ -12,7 +12,6 @@ package evaluation
 import (
 	"errors"
 	"sync"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -26,7 +25,6 @@ import (
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -57,10 +55,8 @@ type options struct {
 	runDetailsEnabled                 bool
 	runDetailsCollector               *runDetailsCollector
 	runOptions                        []agent.RunOption
-	inferenceDuration                 time.Duration
-	inferenceDurationMu               sync.Mutex
-	inferenceTokenUsage               *model.Usage
-	inferenceTokenUsageMu             sync.Mutex
+	inferenceStats                    *evalresult.InferenceStats
+	inferenceStatsMu                  sync.Mutex
 }
 
 // newOptions creates a new options with the default values.
@@ -267,38 +263,30 @@ func (o *options) validate(requireEvalService bool) error {
 	return nil
 }
 
-func (o *options) addInferenceDuration(elapsed time.Duration) {
-	if o == nil || elapsed <= 0 {
+func (o *options) addInferenceStats(stats *evalresult.InferenceStats) {
+	if o == nil || stats == nil || (stats.Duration <= 0 && stats.TokenUsage == nil) {
 		return
 	}
-	o.inferenceDurationMu.Lock()
-	o.inferenceDuration += elapsed
-	o.inferenceDurationMu.Unlock()
-}
-
-func (o *options) inferenceDurationValue() time.Duration {
-	if o == nil {
-		return 0
+	o.inferenceStatsMu.Lock()
+	defer o.inferenceStatsMu.Unlock()
+	if o.inferenceStats == nil {
+		o.inferenceStats = &evalresult.InferenceStats{}
 	}
-	o.inferenceDurationMu.Lock()
-	defer o.inferenceDurationMu.Unlock()
-	return o.inferenceDuration
+	o.inferenceStats.Duration += stats.Duration
+	o.inferenceStats.TokenUsage = tokenusage.Add(o.inferenceStats.TokenUsage, stats.TokenUsage)
 }
 
-func (o *options) addInferenceTokenUsage(usage *model.Usage) {
-	if o == nil || usage == nil {
-		return
-	}
-	o.inferenceTokenUsageMu.Lock()
-	o.inferenceTokenUsage = tokenusage.Add(o.inferenceTokenUsage, usage)
-	o.inferenceTokenUsageMu.Unlock()
-}
-
-func (o *options) inferenceTokenUsageValue() *model.Usage {
+func (o *options) inferenceStatsValue() *evalresult.InferenceStats {
 	if o == nil {
 		return nil
 	}
-	o.inferenceTokenUsageMu.Lock()
-	defer o.inferenceTokenUsageMu.Unlock()
-	return tokenusage.Clone(o.inferenceTokenUsage)
+	o.inferenceStatsMu.Lock()
+	defer o.inferenceStatsMu.Unlock()
+	if o.inferenceStats == nil {
+		return nil
+	}
+	return &evalresult.InferenceStats{
+		Duration:   o.inferenceStats.Duration,
+		TokenUsage: tokenusage.Clone(o.inferenceStats.TokenUsage),
+	}
 }
