@@ -34,6 +34,14 @@ null, empty bytes, and arbitrary non-JSON bytes with an explicit `nil`, `json`,
 or `bytes` kind for every value. JSON objects with duplicate keys also remain
 bytes because collapsing them would hide a backend transformation.
 
+Summary retention is intentionally expressed as a portable boundary contract:
+the normalized summary records its text, cutoff boundary, and the logical IDs
+of events after that boundary that remain part of the current context. The
+portable `session.Service` interface does not expose a physical history
+truncate operation, so this case does not claim that older events were deleted
+from storage. Summary ownership is checked through the isolated session
+identity and a fresh-session probe; `Summary` itself has no owner field.
+
 Write recovery is explicit per step. `RecoveryVerify` performs a
 read-after-write check after an error and accepts the operation only when the
 requested event, state, memory, summary change, or track append is observed.

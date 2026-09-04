@@ -1352,9 +1352,43 @@ func TestPublicMatrixFalsePositiveRate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	falsePositiveRate := float64(report.BlockingDiffs) / float64(report.TotalCases)
+	// A false positive is a normal case reported as failed. Blocking diff
+	// counts are path-level evidence and are not comparable with case count.
+	falsePositiveRate := float64(report.FailedCases) / float64(report.TotalCases)
 	if falsePositiveRate > 0.05 {
 		t.Fatalf("normal matrix false-positive rate = %.2f%%, want <= 5%%", falsePositiveRate*100)
+	}
+}
+
+func TestSummaryRetainedTailCarriesBoundaryAndTail(t *testing.T) {
+	snapshot, err := Replay(context.Background(), summaryTruncationCase(), InMemoryBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	if len(snapshot.Events) != 4 {
+		t.Fatalf("snapshot retained %d physical events, want 4; replay does not claim backend truncation", len(snapshot.Events))
+	}
+	summary, ok := snapshot.Summaries[session.SummaryFilterKeyAllContents]
+	if !ok || summary == nil {
+		t.Fatalf("full-session summary missing: %+v", snapshot.Summaries)
+	}
+	textValue, ok := summary["text"].(string)
+	if !ok || !strings.Contains(textValue, "old question") || !strings.Contains(textValue, "old answer") {
+		t.Fatalf("summary text = %q, want the pre-boundary history", textValue)
+	}
+	if strings.Contains(textValue, "new question") || strings.Contains(textValue, "new answer") {
+		t.Fatalf("summary text = %q, unexpectedly includes retained tail", textValue)
+	}
+	boundary, ok := summary["boundary"].(CanonicalMap)
+	if !ok {
+		t.Fatalf("summary boundary = %#v, want canonical boundary", summary["boundary"])
+	}
+	if boundary["last_event_id"] != "history-assistant" {
+		t.Fatalf("summary boundary last_event_id = %v, want history-assistant", boundary["last_event_id"])
+	}
+	retained, ok := summary["retained_event_ids"].([]string)
+	if !ok || !reflect.DeepEqual(retained, []string{"tail-user", "tail-assistant"}) {
+		t.Fatalf("retained_event_ids = %#v, want [tail-user tail-assistant]", summary["retained_event_ids"])
 	}
 }
 
@@ -1923,6 +1957,31 @@ func TestReplayRejectsCrossSessionSummaryLeak(t *testing.T) {
 	}
 	if _, err := Replay(context.Background(), summaryUpdateCase(), backend); err == nil {
 		t.Fatal("Replay() unexpectedly accepted a cross-session summary leak")
+	}
+}
+
+func TestSummaryIsolationCleansProbeAfterReadFailure(t *testing.T) {
+	base := InMemoryBackend()
+	var wrapped *probeReadFailureService
+	base.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := InMemoryBackend().Open(ctx, caseName)
+		if err != nil {
+			return services, err
+		}
+		wrapped = &probeReadFailureService{Service: services.Session}
+		services.Session = wrapped
+		return services, nil
+	}
+	if _, err := Replay(context.Background(), summaryUpdateCase(), base); err == nil ||
+		!strings.Contains(err.Error(), "get probe session") {
+		t.Fatalf("Replay() error = %v, want probe read failure", err)
+	}
+	if wrapped == nil || wrapped.deleteCalls != 1 {
+		calls := 0
+		if wrapped != nil {
+			calls = wrapped.deleteCalls
+		}
+		t.Fatalf("probe DeleteSession() calls = %d, want 1", calls)
 	}
 }
 
@@ -3073,6 +3132,11 @@ type summaryLeakService struct {
 	session.Service
 }
 
+type probeReadFailureService struct {
+	session.Service
+	deleteCalls int
+}
+
 type ignoredSummaryUpdateService struct {
 	session.Service
 	calls int
@@ -3195,6 +3259,28 @@ func (s *summaryLeakService) GetSession(
 		session.SummaryFilterKeyAllContents: {Summary: "leaked summary"},
 	}
 	return sess, nil
+}
+
+func (s *probeReadFailureService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) (*session.Session, error) {
+	if strings.HasSuffix(key.SessionID, summaryIsolationSessionSuffix) {
+		return nil, errors.New("injected probe read failure")
+	}
+	return s.Service.GetSession(ctx, key, options...)
+}
+
+func (s *probeReadFailureService) DeleteSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) error {
+	if strings.HasSuffix(key.SessionID, summaryIsolationSessionSuffix) {
+		s.deleteCalls++
+	}
+	return s.Service.DeleteSession(ctx, key, options...)
 }
 
 func (s *unexpectedStateReadService) ListAppStates(context.Context, string) (session.StateMap, error) {

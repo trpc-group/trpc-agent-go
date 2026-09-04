@@ -10,8 +10,11 @@ IDs, generated timestamps become presence markers, maps are canonicalized, and
 stored memories are content-sorted. Ranked searches retain order and score.
 Tagged State representations keep nil, JSON null, empty bytes, invalid JSON,
 and lossy JSON objects distinct. Summary comparison includes text, filter key,
-boundary, retained events, and ownership; Track payloads and session-relative
-timing remain observable.
+boundary, and retained events. Retention is a boundary/tail reconstruction
+contract rather than a claim of physical history deletion because the portable
+Session service has no truncate API. Summary ownership is established by the
+outer session identity and a fresh-session isolation probe; Track payloads and
+session-relative timing remain observable.
 
 Write recovery is opt-in. After an error, a domain witness checks event count
 and fingerprint, State postconditions, semantic Memory identity, Summary

@@ -1314,13 +1314,25 @@ func (e *execution) reload(ctx context.Context) error {
 	return nil
 }
 
-func (e *execution) verifySummaryIsolation(ctx context.Context) error {
+func (e *execution) verifySummaryIsolation(ctx context.Context) (err error) {
 	probeKey := e.key
 	probeKey.SessionID += summaryIsolationSessionSuffix
 	probe, err := e.services.Session.CreateSession(ctx, probeKey, nil)
 	if err != nil {
 		return fmt.Errorf("create probe session: %w", err)
 	}
+	// Probe creation can succeed while a later read or validation fails. Always
+	// remove the probe for ordinary failures. Cancellation remains the caller's
+	// explicit stop signal and must not trigger an extra backend operation.
+	defer func() {
+		if ctx.Err() != nil {
+			return
+		}
+		cleanupErr := e.services.Session.DeleteSession(context.WithoutCancel(ctx), probeKey)
+		if cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("delete probe session: %w", cleanupErr))
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1348,9 +1360,6 @@ func (e *execution) verifySummaryIsolation(ctx context.Context) error {
 	probe.SummariesMu.RUnlock()
 	if summaryCount != 0 {
 		return fmt.Errorf("fresh probe session contains %d summaries", summaryCount)
-	}
-	if err := e.services.Session.DeleteSession(ctx, probeKey); err != nil {
-		return fmt.Errorf("delete probe session: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
