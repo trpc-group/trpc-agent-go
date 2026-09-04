@@ -611,7 +611,67 @@ func TestInferenceTracksInferenceDuration(t *testing.T) {
 	}}, &evalset.SessionInput{UserID: "user"}, "session", nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.GreaterOrEqual(t, result.InferenceDuration, delay)
+	assert.GreaterOrEqual(t, result.InferenceStats.Duration, delay)
+}
+
+func TestInferenceCollectsInferenceTokenUsage(t *testing.T) {
+	usage1 := &model.Usage{
+		PromptTokens:     11,
+		CompletionTokens: 7,
+		TotalTokens:      18,
+		PromptTokensDetails: model.PromptTokensDetails{
+			CachedTokens: 3,
+		},
+		CompletionTokensDetails: model.CompletionTokensDetails{
+			ReasoningTokens: 2,
+		},
+	}
+	usage2 := &model.Usage{
+		PromptTokens:     13,
+		CompletionTokens: 5,
+		TotalTokens:      18,
+		PromptTokensDetails: model.PromptTokensDetails{
+			CacheReadTokens: 4,
+		},
+	}
+	r := &fakeRunner{
+		eventRuns: [][]*event.Event{
+			{makePartialEventWithUsage(usage1), makeFinalEventWithUsage("answer-1", usage1), makeRunnerCompletionEvent("generated-inv-1", nil)},
+			{makeFinalEventWithUsage("answer-2", usage2), makeRunnerCompletionEvent("generated-inv-2", nil)},
+		},
+	}
+	result, err := Inference(context.Background(), r, []*evalset.Invocation{
+		{UserContent: &model.Message{Role: model.RoleUser, Content: "question-1"}},
+		{UserContent: &model.Message{Role: model.RoleUser, Content: "question-2"}},
+	}, &evalset.SessionInput{UserID: "user"}, "session", nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.InferenceStats)
+	require.NotNil(t, result.InferenceStats.TokenUsage)
+	assert.Equal(t, 24, result.InferenceStats.TokenUsage.PromptTokens)
+	assert.Equal(t, 12, result.InferenceStats.TokenUsage.CompletionTokens)
+	assert.Equal(t, 36, result.InferenceStats.TokenUsage.TotalTokens)
+	assert.Equal(t, 3, result.InferenceStats.TokenUsage.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 4, result.InferenceStats.TokenUsage.PromptTokensDetails.CacheReadTokens)
+	assert.Equal(t, 2, result.InferenceStats.TokenUsage.CompletionTokensDetails.ReasoningTokens)
+}
+
+func TestInferenceFallsBackToExecutionTraceTokenUsage(t *testing.T) {
+	traceUsage := &model.Usage{PromptTokens: 4, CompletionTokens: 3, TotalTokens: 7}
+	r := &fakeRunner{
+		eventRuns: [][]*event.Event{{
+			makeFinalEvent("answer"),
+			makeRunnerCompletionEvent("generated-inv", &trace.Trace{Usage: traceUsage}),
+		}},
+	}
+	result, err := Inference(context.Background(), r, []*evalset.Invocation{{
+		UserContent: &model.Message{Role: model.RoleUser, Content: "question"},
+	}}, &evalset.SessionInput{UserID: "user"}, "session", nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.InferenceStats)
+	require.Equal(t, traceUsage, result.InferenceStats.TokenUsage)
+	require.NotSame(t, traceUsage, result.InferenceStats.TokenUsage)
 }
 
 func TestInference_CollectsExecutionTracesInInvocationOrder(t *testing.T) {
@@ -1228,7 +1288,7 @@ func TestInferenceWithConversationScenarioInferenceError(t *testing.T) {
 	)
 	assert.Error(t, err)
 	require.NotNil(t, result)
-	assert.GreaterOrEqual(t, result.InferenceDuration, delay)
+	assert.GreaterOrEqual(t, result.InferenceStats.Duration, delay)
 	assert.True(t, conv.closed)
 }
 
@@ -1494,6 +1554,16 @@ func makeFinalEvent(content string) *event.Event {
 			},
 		},
 	}
+}
+
+func makeFinalEventWithUsage(content string, usage *model.Usage) *event.Event {
+	event := makeFinalEvent(content)
+	event.Response.Usage = usage
+	return event
+}
+
+func makePartialEventWithUsage(usage *model.Usage) *event.Event {
+	return &event.Event{Response: &model.Response{IsPartial: true, Usage: usage}}
 }
 
 func makeRunnerCompletionEvent(invocationID string, executionTrace *trace.Trace) *event.Event {

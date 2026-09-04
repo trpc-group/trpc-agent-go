@@ -1,6 +1,6 @@
 # 评估结果 EvalResult
 
-EvalResult 用于承载评估输出。一次评估运行会生成一个 EvalSetResult，按 EvalCase 组织结果，并记录每条评估指标的分数、状态与逐轮明细。持久化的 EvalSetResult 保留 case/run 级别的推理耗时；如需集合级总耗时，可对各 case 结果求和。
+EvalResult 用于承载评估输出。一次评估运行会生成一个 EvalSetResult，按 EvalCase 组织结果，并记录每条评估指标的分数、状态、逐轮明细和实际 Agent 的 token 消耗。持久化的 EvalSetResult 保留 case/run 级别的推理耗时与 token 消耗；如需集合级总量，可对各 case 结果求和。
 
 ## 结构定义
 
@@ -14,6 +14,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // EvalSetResult 表示一次评估集运行的结果
@@ -37,7 +38,12 @@ type EvalCaseResult struct {
 	EvalMetricResultPerInvocation []*EvalMetricResultPerInvocation // EvalMetricResultPerInvocation 是逐轮指标结果列表
 	SessionID                     string                           // SessionID 是会话标识
 	UserID                        string                           // UserID 是用户标识
-	InferenceDuration            time.Duration                    // InferenceDuration 是本次用例运行的实际 agent 推理耗时
+	InferenceStats               *InferenceStats                   // InferenceStats 包含本次用例运行的实际 agent 推理资源消耗
+}
+
+type InferenceStats struct {
+	Duration   time.Duration // Duration 是实际 agent 推理耗时
+	TokenUsage *model.Usage  // TokenUsage 是实际 agent token 消耗
 }
 
 // EvalMetricResult 表示单条评估指标的结果
@@ -73,9 +79,11 @@ type RubricScore struct {
 }
 ```
 
-整体结果会将每个指标的输出写入 `overallEvalMetricResults`，逐轮明细会写入 `evalMetricResultPerInvocation` 并保留 `actualInvocation` 与 `expectedInvocation` 两侧轨迹，便于问题定位。`EvalCaseResult.score` 表示评估用例级别的聚合分数，`finalEvalStatus` 表示评估用例级别的最终状态，`inferenceDuration` 表示本次用例运行的实际 agent 推理耗时；分数和状态由 Service 的用例结果聚合器计算。
+整体结果会将每个指标的输出写入 `overallEvalMetricResults`，逐轮明细会写入 `evalMetricResultPerInvocation` 并保留 `actualInvocation` 与 `expectedInvocation` 两侧轨迹，便于问题定位。`EvalCaseResult.score` 表示评估用例级别的聚合分数，`finalEvalStatus` 表示评估用例级别的最终状态，`inferenceStats` 包含本次用例运行的实际 agent 推理耗时和 token 消耗；分数和状态由 Service 的用例结果聚合器计算。
 
-通过 Go 标准 JSON 编码时，`inferenceDuration` 表示为纳秒整数，例如 `1.2s` 编码为 `1200000000`。持久化的 EvalSetResult 不包含独立的集合级 `inferenceDuration`；如需集合级总耗时，可对各 case 级耗时求和。
+通过 Go 标准 JSON 编码时，`inferenceStats.duration` 表示为纳秒整数，例如 `1.2s` 编码为 `1200000000`。持久化的 EvalSetResult 不包含独立的集合级 `inferenceStats`；如需集合级统计，可对各 case 级统计求和。
+
+`inferenceStats.tokenUsage` 使用与模型无关的 `model.Usage` 结构，包含 `prompt_tokens`、`completion_tokens`、`total_tokens` 以及模型上报的 token 明细。如果模型没有上报 usage，则省略该字段。持久化的 EvalSetResult 会在每个 case/run 结果中保留该字段，不增加独立的集合级字段。
 
 指标明细中的 `details.value` 表示类型化分数明细。它不替代 `score`，也不参与框架默认的阈值判断；默认通过逻辑仍然由评估器产出的数值 `score` 与 `threshold` 决定。`details.value` 存在时，由 `kind` 决定读取哪个字段；没有 `details.value` 表示评估器没有提供类型化明细。数值 0 和布尔值 false 都是有效值。类型化分数主要用于逐轮指标明细；整体指标明细保留聚合后的数值结果，不默认聚合类型化分数。平台如果需要区分“数值分”“布尔结论”或“分类标签”，可以读取 `details.value.kind` 与对应字段：
 
@@ -97,7 +105,14 @@ type RubricScore struct {
   "evalCaseResults": [
     {
       "evalId": "calc_add",
-      "inferenceDuration": 120000000,
+      "inferenceStats": {
+        "duration": 120000000,
+        "tokenUsage": {
+          "prompt_tokens": 42,
+          "completion_tokens": 8,
+          "total_tokens": 50
+        }
+      },
       "score": 1,
       "finalEvalStatus": "passed",
       "overallEvalMetricResults": [

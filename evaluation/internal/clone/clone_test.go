@@ -737,6 +737,12 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 				EvalSetID: "set-1",
 				EvalID:    "case-1",
 				RunID:     1,
+				InferenceStats: &evalresult.InferenceStats{
+					TokenUsage: &model.Usage{
+						PromptTokens: 10,
+						TimingInfo:   &model.TimingInfo{FirstTokenDuration: time.Millisecond},
+					},
+				},
 				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
 					{
 						MetricName: "metric-1",
@@ -852,6 +858,11 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 
 	dst.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation.Tools[0].Arguments.(map[string]any)["k"] = "changed"
 	assert.Equal(t, "v", src.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation.Tools[0].Arguments.(map[string]any)["k"])
+
+	dst.EvalCaseResults[0].InferenceStats.TokenUsage.PromptTokens = 20
+	dst.EvalCaseResults[0].InferenceStats.TokenUsage.TimingInfo.FirstTokenDuration = 2 * time.Millisecond
+	assert.Equal(t, 10, src.EvalCaseResults[0].InferenceStats.TokenUsage.PromptTokens)
+	assert.Equal(t, time.Millisecond, src.EvalCaseResults[0].InferenceStats.TokenUsage.TimingInfo.FirstTokenDuration)
 
 	dst.Summary.RunStatusCounts.Passed = 2
 	assert.Equal(t, 1, src.Summary.RunStatusCounts.Passed)

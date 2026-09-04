@@ -336,10 +336,8 @@ components:
         executionTime:
           type: integer
           description: Nanoseconds encoded by Go duration JSON marshaling.
-        inferenceDuration:
-          type: integer
-          format: int64
-          description: Nanoseconds encoded by Go duration JSON marshaling.
+        inferenceStats:
+          $ref: "#/components/schemas/InferenceStats"
         evalCases:
           type: array
           items:
@@ -353,10 +351,8 @@ components:
           type: string
         overallStatus:
           $ref: "#/components/schemas/EvalStatus"
-        inferenceDuration:
-          type: integer
-          format: int64
-          description: Nanoseconds encoded by Go duration JSON marshaling.
+        inferenceStats:
+          $ref: "#/components/schemas/InferenceStats"
         evalCaseResults:
           type: array
           items:
@@ -625,10 +621,40 @@ components:
           type: string
         userId:
           type: string
-        inferenceDuration:
+        inferenceStats:
+          $ref: "#/components/schemas/InferenceStats"
+    InferenceStats:
+      type: object
+      properties:
+        duration:
           type: integer
           format: int64
           description: Nanoseconds encoded by Go duration JSON marshaling.
+        tokenUsage:
+          $ref: "#/components/schemas/TokenUsage"
+    TokenUsage:
+      type: object
+      properties:
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+        prompt_tokens_details:
+          type: object
+          properties:
+            cached_tokens:
+              type: integer
+            cache_creation_tokens:
+              type: integer
+            cache_read_tokens:
+              type: integer
+        completion_tokens_details:
+          type: object
+          properties:
+            reasoning_tokens:
+              type: integer
     EvalMetricResult:
       type: object
       properties:

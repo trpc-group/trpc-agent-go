@@ -23,7 +23,7 @@ type EvaluationResult struct {
 	EvalSetID     string                    // EvalSetID is the evaluation set identifier.
 	OverallStatus status.EvalStatus         // OverallStatus is the overall status.
 	ExecutionTime time.Duration             // ExecutionTime is the execution duration.
-	InferenceDuration time.Duration        // InferenceDuration is actual agent inference time.
+	InferenceStats *evalresult.InferenceStats // InferenceStats contains actual agent inference resource usage.
 	EvalCases     []*EvaluationCaseResult   // EvalCases are the list of case results.
 	EvalResult    *evalresult.EvalSetResult // EvalResult is the persisted EvalSetResult.
 }
@@ -31,7 +31,7 @@ type EvaluationResult struct {
 type EvaluationCaseResult struct {
 	EvalCaseID      string                         // EvalCaseID is the case identifier.
 	OverallStatus   status.EvalStatus              // OverallStatus is the aggregated status for this case.
-	InferenceDuration time.Duration              // InferenceDuration is actual agent inference time across runs for this case.
+	InferenceStats *evalresult.InferenceStats     // InferenceStats contains actual agent inference resource usage across runs for this case.
 	EvalCaseResults []*evalresult.EvalCaseResult   // EvalCaseResults are the per-run case results.
 	MetricResults   []*evalresult.EvalMetricResult // MetricResults are the aggregated metric results.
 	RunDetails      []*EvaluationCaseRunDetails    // RunDetails are optional per-run inference details.
@@ -47,15 +47,17 @@ type EvaluationInferenceDetails struct {
 	UserID          string                // UserID identifies the user used for this run.
 	Status          status.EvalStatus     // Status records inference status.
 	ErrorMessage    string                // ErrorMessage records inference failure when present.
-	InferenceDuration time.Duration      // InferenceDuration is actual agent inference time for this run.
+	InferenceStats   *evalresult.InferenceStats // InferenceStats contains actual agent inference resource usage for this run.
 	Inferences      []*evalset.Invocation // Inferences stores invocation outputs.
 	ExecutionTraces []*trace.Trace        // ExecutionTraces stores execution traces.
 }
 ```
 
-`EvalResult` contains the aggregated EvalSetResult that can be persisted by EvalResultManager. The set-level `InferenceDuration` is returned on `EvaluationResult`; persisted EvalSetResult values retain case/run durations, so no database schema change is required. `RunDetails` is filled only when run details are enabled, and each item is associated with a specific run ID.
+`EvalResult` contains the aggregated EvalSetResult that can be persisted by EvalResultManager. The set-level `InferenceStats` is returned on `EvaluationResult`; persisted EvalSetResult values retain case/run statistics, so no database schema change is required. `RunDetails` is filled only when run details are enabled, and each item is associated with a specific run ID.
 
-`ExecutionTime` covers the complete evaluation flow, including inference and metric evaluation. `InferenceDuration` sums actual agent inference time across cases and runs. With run-level parallelism, it can exceed the end-to-end wall-clock duration.
+`InferenceStats` follows the same aggregation levels: `EvaluationInferenceDetails` contains one run's statistics, `EvaluationCaseResult` sums statistics across runs for one case, and `EvaluationResult` sums statistics across cases. It reports usage from the target Agent only; evaluator, expected-runner, and trace-replay usage are not included. The persisted EvalSetResult keeps statistics in its case/run results and does not add a set-level field.
+
+`ExecutionTime` covers the complete evaluation flow, including inference and metric evaluation. `InferenceStats.Duration` sums actual agent inference time across cases and runs. With run-level parallelism, it can exceed the end-to-end wall-clock duration.
 
 By default, `evaluation.New` creates AgentEvaluator and uses in-memory EvalSetManager, MetricManager, EvalResultManager, and the default Registry, and also creates a local Service. If you want to read EvalSet and metric configuration from local files and write results to files, you need to inject Local Managers explicitly.
 
