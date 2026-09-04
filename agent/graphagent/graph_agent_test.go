@@ -2113,6 +2113,202 @@ func TestGraphAgent_CreateInitialStateWithToolMessageNoSession(t *testing.T) {
 	require.Equal(t, "result", messages[0].Content)
 }
 
+func TestGraphAgent_CreateInitialStateProjectsUserInput(t *testing.T) {
+	hello, world, fromParts, resume, empty := "hello", "world", "from-parts", "resume", ""
+	imagePart := model.ContentPart{
+		Type:  model.ContentTypeImage,
+		Image: &model.Image{URL: "https://example.com/a.png"},
+	}
+	staleState := graph.State{graph.StateKeyUserInput: "stale"}
+	resumeState := graph.State{graph.CfgKeyCheckpointID: "checkpoint-123"}
+
+	schema := graph.NewStateSchema().
+		AddField(graph.StateKeyUserInput, graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name          string
+		message       model.Message
+		session       *session.Session
+		runtimeState  graph.State
+		wantUserInput string
+		wantHasInput  bool
+	}{
+		{
+			name: "content wins and keeps whitespace over parts",
+			message: model.Message{
+				Role:    model.RoleUser,
+				Content: "  from-content  ",
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &fromParts},
+					imagePart,
+				},
+			},
+			wantUserInput: "  from-content  ",
+			wantHasInput:  true,
+		},
+		{
+			name: "no-session text parts join in order and skip empty",
+			message: model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText},
+					{Type: model.ContentTypeText, Text: &empty},
+					{Type: model.ContentTypeText, Text: &hello},
+					imagePart,
+					{Type: model.ContentTypeText, Text: &world},
+				},
+			},
+			wantUserInput: "hello\nworld",
+			wantHasInput:  true,
+		},
+		{
+			name: "session text parts project user_input",
+			message: model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &hello},
+				},
+			},
+			session:       &session.Session{ID: "sid"},
+			wantUserInput: "hello",
+			wantHasInput:  true,
+		},
+		{
+			name:          "non-user does not overwrite inherited user_input",
+			message:       model.NewAssistantMessage("hello"),
+			runtimeState:  staleState,
+			wantUserInput: "stale",
+			wantHasInput:  true,
+		},
+		{
+			name: "pure media keeps inherited user_input",
+			message: model.Message{
+				Role:         model.RoleUser,
+				ContentParts: []model.ContentPart{imagePart},
+			},
+			runtimeState:  staleState,
+			wantUserInput: "stale",
+			wantHasInput:  true,
+		},
+		{
+			name: "resume content sentinel is skipped even with image",
+			message: model.Message{
+				Role:         model.RoleUser,
+				Content:      "resume",
+				ContentParts: []model.ContentPart{imagePart},
+			},
+			runtimeState: resumeState,
+			wantHasInput: false,
+		},
+		{
+			name: "resume text-only content parts sentinel is skipped",
+			message: model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &resume},
+				},
+			},
+			runtimeState: resumeState,
+			wantHasInput: false,
+		},
+		{
+			name: "resume text parts with image are not a sentinel",
+			message: model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &resume},
+					imagePart,
+				},
+			},
+			runtimeState:  resumeState,
+			wantUserInput: "resume",
+			wantHasInput:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := []agent.InvocationOptions{
+				agent.WithInvocationID("inv"),
+				agent.WithInvocationMessage(tt.message),
+			}
+			if tt.session != nil {
+				opts = append(opts, agent.WithInvocationSession(tt.session))
+			}
+			invocation := agent.NewInvocation(opts...)
+			if tt.runtimeState != nil {
+				invocation.RunOptions.RuntimeState = tt.runtimeState
+			}
+			graphAgent.setupInvocation(invocation)
+
+			state := graphAgent.createInitialState(context.Background(), invocation)
+			userInput, hasInput := state[graph.StateKeyUserInput]
+			require.Equal(t, tt.wantHasInput, hasInput)
+			if tt.wantHasInput {
+				require.Equal(t, tt.wantUserInput, userInput)
+			}
+		})
+	}
+}
+
+func TestGraphAgent_RunProjectsContentPartsTextToUserInput(t *testing.T) {
+	var got string
+	var has bool
+	schema := graph.NewStateSchema().
+		AddField(graph.StateKeyUserInput, graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+	g, err := graph.NewStateGraph(schema).
+		AddNode("read_input", func(ctx context.Context, state graph.State) (any, error) {
+			got, has = state[graph.StateKeyUserInput].(string)
+			return nil, nil
+		}).
+		SetEntryPoint("read_input").
+		SetFinishPoint("read_input").
+		Compile()
+	require.NoError(t, err)
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+
+	text := "from content parts"
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv"),
+		agent.WithInvocationMessage(model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeText,
+				Text: &text,
+			}},
+		}),
+	)
+	events, err := graphAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	for evt := range events {
+		if evt != nil && evt.RequiresCompletion {
+			require.NoError(t, invocation.NotifyCompletion(
+				context.Background(),
+				agent.GetAppendEventNoticeKey(evt.ID),
+			))
+		}
+	}
+	require.True(t, has)
+	require.Equal(t, "from content parts", got)
+}
+
 // mockCheckpointSaver is a mock implementation of graph.CheckpointSaver.
 type mockCheckpointSaver struct{}
 
