@@ -314,6 +314,7 @@ func inferenceInvocationWithUsage(
 	}
 	result := &evalset.Invocation{
 		InvocationID:  invocationID,
+		MetricNames:   append([]string(nil), invocation.MetricNames...),
 		UserContent:   invocation.UserContent,
 		FinalResponse: finalResponse,
 		Tools:         tools,

@@ -44,6 +44,7 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
       "conversation": [
         {
           "invocationId": "invoke-1",
+          "metricNames": ["tool_metric"],
           "userContent": {
             "role": "user",
             "content": "Hello agent."
@@ -120,6 +121,7 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
 	assert.Len(t, firstCase.Conversation, 1)
 	firstInvocation := firstCase.Conversation[0]
 	assert.Equal(t, "invoke-1", firstInvocation.InvocationID)
+	assert.Equal(t, []string{"tool_metric"}, firstInvocation.MetricNames)
 	assert.Equal(t, model.RoleUser, firstInvocation.UserContent.Role)
 	assert.Equal(t, "Hello agent.", firstInvocation.UserContent.Content)
 	assert.Equal(t, model.RoleAssistant, firstInvocation.FinalResponse.Role)

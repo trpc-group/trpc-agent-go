@@ -450,9 +450,13 @@ func traceExpectedRunnerInputs(actuals, expecteds []*evalset.Invocation) []*eval
 		}
 		input := &evalset.Invocation{
 			InvocationID: actual.InvocationID,
+			MetricNames:  append([]string(nil), actual.MetricNames...),
 			UserContent:  actual.UserContent,
 		}
 		if expecteds[i] != nil {
+			if len(expecteds[i].MetricNames) != 0 {
+				input.MetricNames = append([]string(nil), expecteds[i].MetricNames...)
+			}
 			input.ToolMock = expecteds[i].ToolMock
 		}
 		inputs[i] = input
