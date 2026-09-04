@@ -1887,6 +1887,14 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+When cache-safe asynchronous session summaries are enabled, the framework also
+tracks whether token tailoring preserved the model-visible request history.
+Built-in one-to-one message normalization is rebased onto the summary view and
+fork snapshot. A transform that removes messages, or a custom same-size
+transform whose source mapping cannot be proven, invalidates those snapshots so
+an asynchronous summary cannot advance from history that differs from the
+request sent to the model.
+
 **Advanced Configuration (Custom Budget Parameters)**:
 
 If the default token allocation strategy does not meet your needs, you can customize the budget parameters using `WithTokenTailoringConfig`. **Note: It is recommended to keep the default values unless you have specific requirements.**

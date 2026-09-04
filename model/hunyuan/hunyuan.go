@@ -297,7 +297,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			m.name, maxInputTokens)
 	}
 	finishObservation := modeltailoring.ObserveChanges(
-		ctx, "hunyuan.Model", request, maxInputTokens,
+		ctx, "hunyuan.Model", request, maxInputTokens, m.tailoringStrategy,
 	)
 	defer finishObservation()
 
