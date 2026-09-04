@@ -62,28 +62,91 @@ Below is an example metric file for tool trajectory.
 
 ## Metric Scope
 
-Metrics apply to all Invocations in an evaluation by default. To run a metric only on turns that explicitly select it, set `requireExplicitSelection` to `true` in the metric configuration. Metrics whose field is omitted or false run for Invocations without `metricNames`. Once an Invocation configures `metricNames`, the list is the complete allowlist for that turn; unlisted metrics are skipped, and every name must refer to a metric configured for the evaluation request.
+The framework determines which metrics run on each turn as follows:
 
-For example, configure the metric as follows:
+| Invocation `metricNames` | Metric `requireExplicitSelection` | Result |
+|--------------------------|-----------------------------------|--------|
+| Omitted or empty         | Omitted or `false`                | Run the metric |
+| Omitted or empty         | `true`                            | Skip the metric |
+| Configured               | Any value                         | Run the metric only when its name is in the list |
+
+Therefore, to evaluate a metric only on selected turns, configure both of the following:
+
+1. Set `requireExplicitSelection` to `true` in the metric file.
+2. Select the metric through `metricNames` on each Invocation where it should run.
+
+The following example runs `final_response_avg_score` only on the second turn.
+
+Metric file `turn-specific.metrics.json`:
 
 ```json
 [
   {
-    "metricName": "turn_specific_quality",
-    "requireExplicitSelection": true
+    "metricName": "final_response_avg_score",
+    "threshold": 1,
+    "requireExplicitSelection": true,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "exact"
+        }
+      }
+    }
   }
 ]
 ```
 
-Then select it only on the turns that need it:
+EvalSet file `turn-specific.evalset.json`:
 
 ```json
 {
-  "metricNames": ["turn_specific_quality"]
+  "evalSetId": "turn-specific",
+  "name": "turn-specific",
+  "evalCases": [
+    {
+      "evalId": "two-turn-conversation",
+      "conversation": [
+        {
+          "invocationId": "turn-1",
+          "userContent": {
+            "role": "user",
+            "content": "What is 1 + 1?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "2"
+          }
+        },
+        {
+          "invocationId": "turn-2",
+          "metricNames": [
+            "final_response_avg_score"
+          ],
+          "userContent": {
+            "role": "user",
+            "content": "What is 2 + 2?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "4"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "math-eval-app",
+        "userId": "user"
+      }
+    }
+  ]
 }
 ```
 
-In trace mode, when both `conversation` and `actualConversation` provide metric names, the expected-side `conversation` binding takes precedence; the actual-side selection is used only when the expected side has no metric names. Turns generated dynamically by `conversationScenario` have no predeclared Invocation, so they inherit metrics that do not require explicit selection.
+The first turn has no `metricNames`, so it does not run `final_response_avg_score`, which requires explicit selection. The second turn selects the metric and runs it. Removing `requireExplicitSelection` from the metric makes it apply to both turns by default.
+
+Additional details:
+
+- In trace mode, when both `conversation` and `actualConversation` configure `metricNames`, the configuration in `conversation` takes precedence.
+- Turns generated dynamically by `conversationScenario` have no predeclared Invocation and use only metrics that do not require explicit selection.
 
 ## Criterion
 

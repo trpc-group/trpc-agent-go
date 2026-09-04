@@ -62,28 +62,91 @@ type Criterion struct {
 
 ## 指标作用范围
 
-指标默认应用于评测请求中的所有 Invocation。若某个指标只需要在显式选择的轮次执行，可以在指标配置中将 `requireExplicitSelection` 设置为 `true`。未设置或为 `false` 的指标，会在没有配置 `metricNames` 的 Invocation 中执行。Invocation 配置 `metricNames` 后，该列表作为本轮完整白名单，未列出的指标会跳过；列表中的每个名称都必须对应评测请求中已配置的指标。
+框架按照以下规则确定每轮执行的指标：
 
-例如，在指标文件中配置：
+| Invocation 的 `metricNames` | Metric 的 `requireExplicitSelection` | 是否执行该 Metric |
+|------------------------------|---------------------------------------|-------------------|
+| 未配置或为空                 | 未配置或为 `false`                    | 执行              |
+| 未配置或为空                 | `true`                                | 不执行            |
+| 已配置                       | 任意                                  | 名称在列表中则执行，否则不执行 |
+
+因此，如果某个指标只需要评估指定轮次，需要完成两项配置：
+
+1. 在指标文件中将 `requireExplicitSelection` 设置为 `true`。
+2. 在需要执行该指标的 Invocation 中，通过 `metricNames` 显式选择它。
+
+下面的示例只在第二轮执行 `final_response_avg_score`。
+
+指标文件 `turn-specific.metrics.json`：
 
 ```json
 [
   {
-    "metricName": "turn_specific_quality",
-    "requireExplicitSelection": true
+    "metricName": "final_response_avg_score",
+    "threshold": 1,
+    "requireExplicitSelection": true,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "exact"
+        }
+      }
+    }
   }
 ]
 ```
 
-然后只在需要的轮次中显式选择：
+评测集文件 `turn-specific.evalset.json`：
 
 ```json
 {
-  "metricNames": ["turn_specific_quality"]
+  "evalSetId": "turn-specific",
+  "name": "turn-specific",
+  "evalCases": [
+    {
+      "evalId": "two-turn-conversation",
+      "conversation": [
+        {
+          "invocationId": "turn-1",
+          "userContent": {
+            "role": "user",
+            "content": "1 + 1 等于多少？"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "2"
+          }
+        },
+        {
+          "invocationId": "turn-2",
+          "metricNames": [
+            "final_response_avg_score"
+          ],
+          "userContent": {
+            "role": "user",
+            "content": "2 + 2 等于多少？"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "4"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "math-eval-app",
+        "userId": "user"
+      }
+    }
+  ]
 }
 ```
 
-在 Trace 模式下，如果 `conversation` 与 `actualConversation` 都配置了指标名，优先使用预期侧 `conversation` 的绑定；仅当预期侧没有配置指标名时，才回退到实际侧选择。`conversationScenario` 动态生成的轮次没有预先声明的 Invocation，因此会继承未要求显式选择的指标。
+第一轮没有配置 `metricNames`，因此不会执行要求显式选择的 `final_response_avg_score`；第二轮显式选择了该指标，因此会执行。如果删除指标中的 `requireExplicitSelection`，该指标会默认应用于两轮。
+
+补充说明：
+
+- Trace 模式下，如果 `conversation` 与 `actualConversation` 都配置了 `metricNames`，优先使用 `conversation` 中的配置。
+- `conversationScenario` 动态生成的轮次没有预先声明的 Invocation，只会使用不要求显式选择的指标。
 
 ## 评估准则 Criterion
 
