@@ -1069,56 +1069,9 @@ func (e *execution) updateState(ctx context.Context, input *StateInput) error {
 	}
 	switch input.Scope {
 	case StateScopeApp:
-		if input.Clear {
-			current, err := e.services.Session.ListAppStates(ctx, e.key.AppName)
-			if err != nil {
-				return err
-			}
-			input = cloneStateInput(input)
-			input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
-		}
-		if len(input.Values) > 0 {
-			if err := e.services.Session.UpdateAppState(ctx, e.key.AppName, cloneState(input.Values)); err != nil {
-				return err
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-		}
-		for _, key := range input.DeleteKeys {
-			if err := e.services.Session.DeleteAppState(ctx, e.key.AppName, key); err != nil {
-				return err
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-		}
+		return e.updateAppState(ctx, input)
 	case StateScopeUser:
-		userKey := session.UserKey{AppName: e.key.AppName, UserID: e.key.UserID}
-		if input.Clear {
-			current, err := e.services.Session.ListUserStates(ctx, userKey)
-			if err != nil {
-				return err
-			}
-			input = cloneStateInput(input)
-			input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
-		}
-		if len(input.Values) > 0 {
-			if err := e.services.Session.UpdateUserState(ctx, userKey, cloneState(input.Values)); err != nil {
-				return err
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-		}
-		for _, key := range input.DeleteKeys {
-			if err := e.services.Session.DeleteUserState(ctx, userKey, key); err != nil {
-				return err
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-		}
+		return e.updateUserState(ctx, input)
 	case StateScopeSession:
 		if input.Clear {
 			return errors.New("session state clear is not exposed by session.Service")
@@ -1131,6 +1084,63 @@ func (e *execution) updateState(ctx context.Context, input *StateInput) error {
 		}
 	default:
 		return fmt.Errorf("unknown state scope %q", input.Scope)
+	}
+	return nil
+}
+
+func (e *execution) updateAppState(ctx context.Context, input *StateInput) error {
+	if input.Clear {
+		current, err := e.services.Session.ListAppStates(ctx, e.key.AppName)
+		if err != nil {
+			return err
+		}
+		input = cloneStateInput(input)
+		input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
+	}
+	if len(input.Values) > 0 {
+		if err := e.services.Session.UpdateAppState(ctx, e.key.AppName, cloneState(input.Values)); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	for _, key := range input.DeleteKeys {
+		if err := e.services.Session.DeleteAppState(ctx, e.key.AppName, key); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *execution) updateUserState(ctx context.Context, input *StateInput) error {
+	userKey := session.UserKey{AppName: e.key.AppName, UserID: e.key.UserID}
+	if input.Clear {
+		current, err := e.services.Session.ListUserStates(ctx, userKey)
+		if err != nil {
+			return err
+		}
+		input = cloneStateInput(input)
+		input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
+	}
+	if len(input.Values) > 0 {
+		if err := e.services.Session.UpdateUserState(ctx, userKey, cloneState(input.Values)); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	for _, key := range input.DeleteKeys {
+		if err := e.services.Session.DeleteUserState(ctx, userKey, key); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
