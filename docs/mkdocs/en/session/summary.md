@@ -577,7 +577,13 @@ For cache-safe forking, `report.Call.Mode` is `cache_safe_fork` and the request
 estimate is computed from the forked parent request plus the appended summary
 instruction. For standalone summary prompts, the mode is `standalone`. If a
 `BeforeModel` callback returns a custom response and no summary model request is
-sent, the mode is `custom_response` and the prompt estimate remains zero.
+sent for that attempt, the mode is `custom_response` and the prompt estimate
+remains zero. `Report.Call.Mode` describes the last summary attempt. In a mixed
+retry where an earlier attempt called the provider and the final attempt used a
+custom response, it is therefore `custom_response`; usage fields may still
+contain provider usage observed on the earlier attempt. The structured
+`model_call_status` diagnostic instead aggregates the whole summary operation
+and reports `called` when any attempt called the provider.
 
 Advanced integrations can attach a report before entering a higher-level
 summary flow with `summary.ContextWithReport(ctx, report)` and retrieve it with
@@ -1852,12 +1858,13 @@ Follow the records in this order for a single request or session:
 2. **`Session summary cascade result`** explains how a branch trigger reached
    the full-session target. `source_materialized` is this-pass branch
    materialization only. `action=copied` requires a successful copy;
-   `action=dependent` requires that the full-session target started. Otherwise
-   the cascade is `action=skipped` and `invariant=ok`, including a branch that
-   did not update and a materialized source that never copied or started the
-   dependent target. `mode=dependent` is a sequential multi-filter cascade, not
-   concurrent generation. `invariant=violation` is reserved for a full-session
-   target that advanced without this-pass branch materialization.
+   `action=dependent` requires that the full-session target started. Otherwise,
+   when the full-session target did not advance independently, the cascade is
+   `action=skipped` and `invariant=ok`, including a branch that did not update
+   and a materialized source that never copied or started the dependent target.
+   `mode=dependent` is a sequential multi-filter cascade, not concurrent
+   generation. `invariant=violation` is reserved for a full-session target that
+   advanced without this-pass branch materialization.
 3. **`Session summary injection result`** answers whether a later request
    still carries the stored summary in the framework `model.Request` after
    the returned response sequence finishes or is stopped early. If the model

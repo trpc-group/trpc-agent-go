@@ -529,8 +529,12 @@ summarizer := summary.NewSummarizer(
 
 开启 cache-safe forking 时，`report.Call.Mode` 为 `cache_safe_fork`，请求估算值来自 fork
 后的父请求加上追加的 summary 指令。普通独立 summary prompt 模式下，mode 为 `standalone`。
-如果 `BeforeModel` callback 返回 custom response，实际没有发送 summary 模型请求，mode 为
-`custom_response`，prompt 估算值保持为 0。
+如果 `BeforeModel` callback 返回 custom response，该次尝试没有发送 summary 模型请求，
+mode 为 `custom_response`，prompt 估算值保持为 0。`Report.Call.Mode` 表示最后
+一次 summary 尝试的状态；若混合重试中较早一次已经调用 provider、最后一次改由
+callback 返回 custom response，它仍为 `custom_response`，usage 字段也可能保留
+较早一次 provider 调用的数据。结构化诊断字段 `model_call_status` 则聚合整次
+summary 操作：任意一次尝试调用过 provider，就上报为 `called`。
 
 高级集成如果要在高层 summary 流程前放入同一个 report，可以使用
 `summary.ContextWithReport(ctx, report)`，需要从 context 取出时使用
@@ -1742,11 +1746,12 @@ SessionService API，也不新增诊断开关。
    stale 跳过、无法分类的写入，以及写入失败。
 2. **`Session summary cascade result`** 解释分支触发如何到达全会话目标。
    `source_materialized` 只记录本轮分支是否物化。`action=copied` 需要 copy
-   成功；`action=dependent` 需要全会话目标实际开始。否则都是
-   `action=skipped` 且 `invariant=ok`，包括本轮分支未更新，以及源已物化但
-   copy 未成功或 dependent 目标未开始。`mode=dependent` 表示多 filter
-   顺序级联，而不是并发生成。`invariant=violation` 仅表示全会话目标在本轮
-   没有分支 materialization 的情况下推进了。
+   成功；`action=dependent` 需要全会话目标实际开始。否则，只有在全会话目标
+   没有独立推进时，才是 `action=skipped` 且 `invariant=ok`，包括本轮分支未
+   更新，以及源已物化但 copy 未成功或 dependent 目标未开始。
+   `mode=dependent` 表示多 filter 顺序级联，而不是并发生成。
+   `invariant=violation` 仅表示全会话目标在本轮没有分支 materialization 的
+   情况下推进了。
 3. **`Session summary injection result`** 回答后续请求在返回的响应序列
    结束或被提前停止之后，框架这份 `model.Request` 里是否还带着已存储的摘要。
    若模型调用在返回响应序列之前失败，则立即观察。对比
