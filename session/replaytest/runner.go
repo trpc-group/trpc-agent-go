@@ -34,9 +34,10 @@ type Runner struct {
 	// Reference names the reference backend. An empty value selects the first
 	// backend in reference mode; consensus mode requires Reference to be empty.
 	Reference string
-	// Mode selects reference comparison by default or pairwise consensus.
+	// Mode selects the comparison strategy. Its zero value selects
+	// ComparisonReference; ComparisonConsensus requires Reference to be empty.
 	Mode ComparisonMode
-	// Now supplies the report timestamp and defaults to time.Now.
+	// Now supplies the report timestamp. A nil value uses time.Now.
 	Now func() time.Time
 }
 
