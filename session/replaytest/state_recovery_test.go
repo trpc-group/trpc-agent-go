@@ -147,11 +147,65 @@ func TestCaseValidationRejectsConcurrentStateClear(t *testing.T) {
 	}
 }
 
+func TestStateClearStopsAfterCanceledRead(t *testing.T) {
+	for _, scope := range []StateScope{StateScopeApp, StateScopeUser} {
+		t.Run(string(scope), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var service *stateClearErrorService
+			backend := InMemoryBackend()
+			open := backend.Open
+			backend.Open = func(ctx context.Context, name string) (*Services, error) {
+				services, err := open(ctx, name)
+				if err == nil {
+					service = &stateClearErrorService{Service: services.Session, cancelOnRead: cancel}
+					services.Session = service
+				}
+				return services, err
+			}
+			_, err := Replay(ctx, Case{
+				Name:     "cancel-clear",
+				Requires: []Capability{CapabilitySession, CapabilityAppState, CapabilityUserState},
+				Steps: []Step{
+					stateStep("seed", scope, session.StateMap{"stale": []byte("1")}, nil),
+					{Name: "clear", Kind: StepUpdateState, State: &StateInput{Scope: scope, Clear: true}},
+				},
+			}, backend)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Replay() error = %v, want context.Canceled", err)
+			}
+			if service == nil || service.calls != 0 {
+				t.Fatalf("delete service = %#v, want no writes after cancellation", service)
+			}
+		})
+	}
+}
+
 type stateClearErrorService struct {
 	session.Service
-	failAt int
-	after  bool
-	calls  int
+	failAt       int
+	after        bool
+	calls        int
+	cancelOnRead context.CancelFunc
+}
+
+func (s *stateClearErrorService) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
+	state, err := s.Service.ListAppStates(ctx, appName)
+	s.cancelRead()
+	return state, err
+}
+
+func (s *stateClearErrorService) ListUserStates(ctx context.Context, key session.UserKey) (session.StateMap, error) {
+	state, err := s.Service.ListUserStates(ctx, key)
+	s.cancelRead()
+	return state, err
+}
+
+func (s *stateClearErrorService) cancelRead() {
+	if s.cancelOnRead != nil {
+		s.cancelOnRead()
+		s.cancelOnRead = nil
+	}
 }
 
 func (s *stateClearErrorService) DeleteAppState(ctx context.Context, appName, key string) error {
