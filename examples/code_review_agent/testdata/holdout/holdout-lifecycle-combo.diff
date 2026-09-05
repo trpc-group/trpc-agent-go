@@ -1,0 +1,16 @@
+diff --git a/worker.go b/worker.go
+--- a/worker.go
++++ b/worker.go
+@@ -1,3 +1,15 @@
+ package sample
+ 
+ import "context"
++
++func Run(ctx context.Context) {
++	child, _ := context.WithTimeout(ctx, timeout)
++	_ = child
++	file, _ := os.Open("data.txt")
++	_ = file
++	tx, _ := db.BeginTx(ctx, nil)
++	_ = tx
++}
