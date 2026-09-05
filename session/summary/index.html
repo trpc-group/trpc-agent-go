@@ -2044,6 +2044,57 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#diagnosing-summaries-in-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      Diagnosing Summaries in Production
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Diagnosing Summaries in Production">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#diagnostic-cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      Diagnostic cost
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#record-names-and-key-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      Record names and key fields
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-much-history-was-selected-before-the-summary-hook" class="md-nav__link">
+    <span class="md-ellipsis">
+      How much history was selected before the summary hook
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tracing-one-incident" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tracing one incident
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#performance-considerations" class="md-nav__link">
     <span class="md-ellipsis">
       Performance Considerations
@@ -4449,6 +4500,57 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#diagnosing-summaries-in-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      Diagnosing Summaries in Production
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Diagnosing Summaries in Production">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#diagnostic-cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      Diagnostic cost
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#record-names-and-key-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      Record names and key fields
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-much-history-was-selected-before-the-summary-hook" class="md-nav__link">
+    <span class="md-ellipsis">
+      How much history was selected before the summary hook
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tracing-one-incident" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tracing one incident
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#performance-considerations" class="md-nav__link">
     <span class="md-ellipsis">
       Performance Considerations
@@ -5228,7 +5330,13 @@ was triggered and how large the summary model request was:</p>
 estimate is computed from the forked parent request plus the appended summary
 instruction. For standalone summary prompts, the mode is <code>standalone</code>. If a
 <code>BeforeModel</code> callback returns a custom response and no summary model request is
-sent, the mode is <code>custom_response</code> and the prompt estimate remains zero.</p>
+sent for that attempt, the mode is <code>custom_response</code> and the prompt estimate
+remains zero. <code>Report.Call.Mode</code> describes the last summary attempt. In a mixed
+retry where an earlier attempt called the provider and the final attempt used a
+custom response, it is therefore <code>custom_response</code>; usage fields may still
+contain provider usage observed on the earlier attempt. The structured
+<code>model_call_status</code> diagnostic instead aggregates the whole summary operation
+and reports <code>called</code> when any attempt called the provider.</p>
 <p>Advanced integrations can attach a report before entering a higher-level
 summary flow with <code>summary.ContextWithReport(ctx, report)</code> and retrieve it with
 <code>summary.ReportFromContext(ctx)</code>. The framework reuses that report for a single
@@ -6684,6 +6792,10 @@ large historical <code>tool result</code> payloads were replaced with placeholde
 </span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="c1">// Wrong: no prefix, events will be filtered out</span>
 </span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a><span class="nx">evt</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"user-messages"</span>
 </span></code></pre></div></td></tr></table></div>
+<p><code>EventFilterKey</code> / <code>filter_key</code> is a caller-supplied scope identifier. Do not
+put credentials, secrets, or user-private data in it. Diagnostic logs may
+include the original value, subject to the length limit described in
+<a href="#diagnosing-summaries-in-production">Diagnosing Summaries in Production</a>.</p>
 <h3 id="generating-summaries-by-type">Generating Summaries by Type</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-42-1">1</a></span>
 <span class="normal"><a href="#__codelineno-42-2">2</a></span>
@@ -6805,6 +6917,360 @@ cascade:</p>
 <li><strong>Balance word limits</strong>: Set <code>WithMaxSummaryWords</code> to balance context preservation and token usage. Typical range is 100-300 words</li>
 <li><strong>Test trigger conditions</strong>: Experiment with different <code>WithChecksAny</code> and <code>WithChecksAll</code> combinations to find the optimal balance between summary frequency and cost</li>
 </ol>
+<h2 id="diagnosing-summaries-in-production">Diagnosing Summaries in Production</h2>
+<p>Summary generation and persistence diagnostics are not returned as the
+user-visible model response. Generation may run in a background async worker
+or synchronously inside a request, for example pre-LLM context compaction.
+The framework emits four stable log records that let you follow one session
+summary from generation to injection. All of them are emitted on the request
+or job context, so they share your existing trace correlation.</p>
+<p><strong>No record contains prompt text, summary text, event content, model output,
+raw error text, connection strings, or credentials.</strong> Framework-owned user
+and session identifiers are never logged. Caller-supplied <code>filter_key</code> values
+are logged and are outside that guarantee. Caller-supplied <code>agent</code> names are
+also logged. Do not put credentials, secrets, or user-private data in an agent
+name. The framework does not hash or redact these names.</p>
+<p><code>EventFilterKey</code> / <code>filter_key</code> is a caller-supplied scope identifier. It must
+not contain credentials, secrets, or user-private data. Diagnostic records log
+the original value (never hashed). The displayed value is at most 255 Unicode
+code points, matching the common <code>session_summaries.filter_key VARCHAR(255)</code>
+schema, and that budget includes the truncation marker. Keys within the limit
+are logged unchanged. Oversize keys keep a leading prefix so that prefix plus
+the <code>...</code> marker still totals 255 code points, and the record sets
+<code>filter_key_truncated=true</code> (or <code>trigger_filter_key_truncated=true</code> on cascade
+records). Empty keys stay visible as <code>filter_key=""</code>. Truncation affects
+diagnostic display only; stored keys and queries are unchanged. <code>agent</code> uses
+the same bounded <code>%q</code> display rules and an <code>agent_truncated</code> flag.</p>
+<p>Every record starts with <code>schema_version=1</code> immediately after the record name
+so collectors can detect a later incompatible field change. The version stays
+at 1 until this diagnostic schema is formally published.</p>
+<p>These records observe generation, persistence, cascade, injection, and pre-LLM
+compaction. They do not add a public SessionService API and they do not add a
+diagnostics enable switch.</p>
+<p>Proven return contracts against the pre-diagnostics Redis path:</p>
+<ul>
+<li><code>CreateSessionSummary</code> still returns a nil error when the set-if-newer Lua
+  script itself succeeds, including when the reply is not <code>int64</code> 0 or 1. An
+  unrecognized reply is classified as <code>persist_result=unknown</code> /
+  <code>outcome=unknown_write</code> at Debug. It is not stored, stale, <code>success</code>, or
+  <code>persistence_error</code>, and it does not change the method's return value.</li>
+<li>A real script, marshal, or expire failure still returns an error and is
+  reported as <code>persist_result=error</code> / <code>outcome=persistence_error</code>.</li>
+</ul>
+<p>Summary selection, cutoff, cascade call order, <code>force</code> values, error wrapping,
+injection text, and compaction decisions stay on their existing code paths.</p>
+<h3 id="diagnostic-cost">Diagnostic cost</h3>
+<ul>
+<li>An ordinary summary-attempt record is constant-size metadata: counts, enums,
+  timings, and a truncated filter-key display. It does not copy events,
+  prompts, or summary text.</li>
+<li>Checking whether a selected injection block is still present is
+  <code>O(total request message bytes)</code>. That scan runs only when session-summary
+  injection is enabled for the request. The request is not copied.</li>
+</ul>
+<h3 id="record-names-and-key-fields">Record names and key fields</h3>
+<table>
+<thead>
+<tr>
+<th>Record</th>
+<th>Emitted when</th>
+<th>Key fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Session summary result</code></td>
+<td>Once per summary target, after the summary attempt completes</td>
+<td><code>schema_version</code>, <code>outcome</code>, <code>dispatch</code>, <code>target_kind</code>, <code>filter_key</code>, <code>filter_key_truncated</code>, <code>triggered</code>, <code>trigger</code>, <code>trigger_metric</code>, <code>trigger_value</code>, <code>trigger_threshold</code>, <code>threshold_ratio</code>, <code>context_window</code>, <code>summary_view_present</code>, <code>summary_view_bound</code>, <code>binding_reason</code>, <code>input_source</code>, <code>selection_reason</code>, <code>eligible_events</code>, <code>skip_recent_requested</code>, <code>skip_recent_applied</code>, <code>selected_events</code>, <code>model_call_status</code>, <code>updated</code>, <code>boundary_advanced</code>, <code>persist_result</code></td>
+</tr>
+<tr>
+<td><code>Session summary cascade result</code></td>
+<td>Once per cascade dispatch that fans a branch trigger out to the full-session target</td>
+<td><code>schema_version</code>, <code>outcome</code>, <code>mode</code>, <code>trigger_filter_key</code>, <code>trigger_filter_key_truncated</code>, <code>targets</code>, <code>source_materialized</code>, <code>action</code>, <code>invariant</code></td>
+</tr>
+<tr>
+<td><code>Session summary injection result</code></td>
+<td>Once per model request that uses session summaries, after the returned response sequence finishes or is stopped early; if the model call fails before returning a response sequence, the record is emitted immediately</td>
+<td><code>schema_version</code>, <code>outcome</code>, <code>agent</code>, <code>agent_truncated</code>, <code>filter_key</code>, <code>filter_key_truncated</code>, <code>lookup_strategy</code>, <code>lookup_result</code>, <code>selected</code>, <code>block_text_present</code>, <code>stored_summaries</code>, <code>matching_candidates</code>, <code>full_session_summary</code>, <code>session_events</code>, <code>history_messages</code>, <code>request_messages</code></td>
+</tr>
+<tr>
+<td><code>Pre-LLM context compaction result</code></td>
+<td>Once per synchronous compaction attempt before an LLM call</td>
+<td><code>schema_version</code>, <code>outcome</code>, <code>agent</code>, <code>agent_truncated</code>, <code>filter_key</code>, <code>filter_key_truncated</code>, <code>request_tokens</code>, <code>threshold</code>, <code>context_window</code>, <code>messages</code>, <code>summary_view_bound</code>, <code>binding_reason</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>Session summary result</code> outcomes:</p>
+<table>
+<thead>
+<tr>
+<th>Outcome</th>
+<th>Level</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>success</code></td>
+<td>Info</td>
+<td>A new summary was generated and the backend confirmed the write</td>
+</tr>
+<tr>
+<td><code>copied</code></td>
+<td>Debug</td>
+<td>A cascade reused an existing summary for this target without a model call</td>
+</tr>
+<tr>
+<td><code>below_threshold</code></td>
+<td>Debug</td>
+<td>A trigger check ran and stayed below its threshold</td>
+</tr>
+<tr>
+<td><code>no_delta</code></td>
+<td>Debug</td>
+<td>No event was appended after the recorded summary boundary</td>
+</tr>
+<tr>
+<td><code>no_content</code></td>
+<td>Debug</td>
+<td>The built-in summarizer published a trigger observation and no eligible content reached the summary model</td>
+</tr>
+<tr>
+<td><code>unobserved</code></td>
+<td>Debug</td>
+<td>The gate did not fire and this attempt published no trigger observation. This is diagnostic uncertainty, not <code>no_content</code> or <code>below_threshold</code></td>
+</tr>
+<tr>
+<td><code>cascade_suppressed</code></td>
+<td>Debug</td>
+<td>A full-session target was skipped because it was only requested as a branch cascade</td>
+</tr>
+<tr>
+<td><code>unsafe_view</code></td>
+<td>Warn</td>
+<td>Content existed, but the model-visible view was not bound to the request the model answered, so nothing could be summarized safely</td>
+</tr>
+<tr>
+<td><code>summary_error</code></td>
+<td>Warn</td>
+<td>The summarization stage failed. <code>model_call_status</code> separates a failed model call from a pre-model build, a custom response, or an unobserved custom summarizer</td>
+</tr>
+<tr>
+<td><code>context_error</code></td>
+<td>Warn</td>
+<td>The summary context was canceled or expired</td>
+</tr>
+<tr>
+<td><code>persistence_error</code></td>
+<td>Warn</td>
+<td>The backend write failed</td>
+</tr>
+<tr>
+<td><code>stale_write</code></td>
+<td>Debug</td>
+<td>The backend skipped the payload write because a newer summary is already persisted. This is a successful set-if-newer skip and can happen under normal concurrency. The Redis zset path may still refresh the summary key TTL; the hashidx path keeps the remaining TTL. TTL refresh is not a stored write</td>
+</tr>
+<tr>
+<td><code>unknown_write</code></td>
+<td>Debug</td>
+<td>The backend write finished without error, but the result could not be classified as stored or stale. This includes an unrecognized set-if-newer reply and a Mongo nil or zero-count UpdateResult. This is diagnostic uncertainty, not a business failure</td>
+</tr>
+<tr>
+<td><code>not_stored</code></td>
+<td>Warn</td>
+<td>A summary was generated but the backend neither stored nor rejected it</td>
+</tr>
+<tr>
+<td><code>no_update</code></td>
+<td>Warn</td>
+<td>A triggered attempt produced no summary to store</td>
+</tr>
+</tbody>
+</table>
+<p><code>model_call_status</code> is a closed three-state field. Do not treat
+<code>unobserved</code> as "the model was not called":</p>
+<table>
+<thead>
+<tr>
+<th><code>model_call_status</code></th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>called</code></td>
+<td>The built-in summarizer reached the summary model (<code>standalone</code> or <code>cache_safe_fork</code>)</td>
+</tr>
+<tr>
+<td><code>custom_response</code></td>
+<td>A before-model callback supplied the summary response, so the provider was not called</td>
+</tr>
+<tr>
+<td><code>unobserved</code></td>
+<td>This attempt's ModelCall recorder published no call mode, so a model call cannot be proven. Typical of a custom summarizer that does not publish the recorder. Do not treat a leftover <code>Report.Call.Mode</code> as this attempt's observation</td>
+</tr>
+</tbody>
+</table>
+<p><code>Session summary injection result</code> outcomes:</p>
+<table>
+<thead>
+<tr>
+<th>Outcome</th>
+<th>Level</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>block_text_present</code></td>
+<td>Debug</td>
+<td>After the returned response sequence finishes or is stopped early, the recorded summary block text still appears as a substring of some message <code>Content</code> in the same framework <code>model.Request</code> (<code>block_text_present=true</code>). This does not prove the original injection slot is intact and does not describe a provider payload. If the model call fails before returning a response sequence, this is observed immediately</td>
+</tr>
+<tr>
+<td><code>not_selected</code></td>
+<td>Debug</td>
+<td>The session stores no summary yet</td>
+</tr>
+<tr>
+<td><code>lookup_miss</code></td>
+<td>Debug</td>
+<td>Summaries exist for other branches, but none in this request's scope</td>
+</tr>
+<tr>
+<td><code>scope_mismatch</code></td>
+<td>Debug</td>
+<td>A branch-scoped request found nothing in scope while a full-session summary exists outside it. Because no in-scope summary was selected, this request's summary cutoff stays zero, so the raw scoped history is kept at this stage. That does not depend on whether the unused full-session summary has a boundary</td>
+</tr>
+<tr>
+<td><code>block_text_missing</code></td>
+<td>Warn</td>
+<td>A summary was selected (<code>selected=true</code>), but the recorded block text is not observable in any message <code>Content</code> of the same framework <code>model.Request</code> after the returned response sequence finishes or is stopped early. If the model call fails before returning a response sequence, this is observed immediately. This does not claim the provider's final payload, and it does not mean the summary was never written into the request. For built-in providers that mutate the shared request in place, including OpenAI, this is usually in-place token tailoring</td>
+</tr>
+</tbody>
+</table>
+<h3 id="how-much-history-was-selected-before-the-summary-hook">How much history was selected before the summary hook</h3>
+<p>When <code>outcome</code> is <code>no_content</code> or <code>unsafe_view</code>, <code>selection_reason</code> names the
+exact stage that emptied the input, which is otherwise indistinguishable from
+an idle session:</p>
+<table>
+<thead>
+<tr>
+<th><code>selection_reason</code></th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>selected</code></td>
+<td>Events were selected before the hook; this does not prove they were the later model payload</td>
+</tr>
+<tr>
+<td><code>no_candidates</code></td>
+<td>The stage had no candidate event to consider at all</td>
+</tr>
+<tr>
+<td><code>skip_recent_all</code></td>
+<td>The <code>WithSkipRecent</code> callback asked to skip at least as many events as were available</td>
+</tr>
+<tr>
+<td><code>unsafe_prefix</code></td>
+<td>Events remained after skip-recent, but the retained prefix had neither a user message nor a prepended previous summary to anchor the summary, so it was dropped</td>
+</tr>
+<tr>
+<td><code>session_filter_empty</code></td>
+<td>Candidates survived skip-recent and were then all removed by the summary's branch scoping</td>
+</tr>
+<tr>
+<td><code>unbound_view</code></td>
+<td>A model-visible view existed but was not bound to the request the model answered</td>
+</tr>
+<tr>
+<td><code>boundary_unmapped</code></td>
+<td>Selected items had no structural mapping to a stored event, so the summary was dropped rather than advance the boundary past content that cannot be located again</td>
+</tr>
+<tr>
+<td><code>custom</code></td>
+<td>The summary call did not publish the built-in event selection, so counts are unknown</td>
+</tr>
+<tr>
+<td><code>none</code></td>
+<td>No summarizer ran, so no selection was observed</td>
+</tr>
+</tbody>
+</table>
+<p>The accompanying counts describe the stage that receives the <code>WithSkipRecent</code>
+callback:</p>
+<ul>
+<li><code>eligible_events</code> is the number of candidate events handed to that stage,
+  counted before skip-recent runs. For a bound model-visible view it includes a
+  prepended previous summary; for an unbound view it is the number of view items
+  that were not considered.</li>
+<li><code>skip_recent_requested</code> is the raw count your callback returned, so a callback
+  returning a nonsensical value stays visible. It is <code>0</code> when no callback is
+  configured.</li>
+<li><code>skip_recent_applied</code> is how many events skip-recent itself removed:
+  <code>clamp(skip_recent_requested, 0, eligible_events)</code>. An unsafe retained prefix,
+  session scoping, or an unmapped boundary is named by <code>selection_reason</code> and
+  <code>selected_events</code>, not counted here. For example <code>eligible_events=3</code>,
+  <code>skip_recent_requested=1</code>, <code>unsafe_prefix</code> reports <code>skip_recent_applied=1</code> and
+  <code>selected_events=0</code>.</li>
+<li><code>selected_events</code> is the event count chosen after skip-recent, branch
+  scoping, and boundary mapping, before a <code>PreSummaryHook</code> or before-model
+  callback may rewrite the prompt. It is not a count of the payload that later
+  reached the summary model.</li>
+</ul>
+<p>All four counts are <code>-1</code> when <code>selection_reason</code> is <code>custom</code> or <code>none</code>.</p>
+<p><code>trigger</code> and <code>trigger_metric</code> are taken only from this attempt's internal
+trigger recorder. Writing <code>summary.Report.Trigger</code> from a custom summarizer or
+a caller-supplied report is not an observation: a fired unpublished gate
+reports <code>triggered=true</code> with <code>trigger=none</code>, and an unfired unpublished gate
+reports <code>outcome=unobserved</code> and <code>trigger=none</code>. Leftover <code>Report.Trigger</code>
+values are never copied into the record. When a trigger observation is
+published, names and metrics outside the framework vocabulary are normalized
+to <code>custom</code>, so these fields stay bounded and never carry application
+strings. <code>trigger_value</code>, <code>trigger_threshold</code>, <code>threshold_ratio</code>, and
+<code>context_window</code> are reported unchanged.</p>
+<h3 id="tracing-one-incident">Tracing one incident</h3>
+<p>Follow the records in this order for a single request or session:</p>
+<ol>
+<li><strong><code>Session summary result</code></strong> answers whether a summary was produced at all.
+   <code>triggered</code> plus the <code>trigger*</code> fields explain the gate decision;
+   <code>input_source</code>, <code>selection_reason</code>, and the event counts explain how much
+   history was selected before the hook and which stage removed the rest;
+   <code>binding_reason</code> explains an <code>unsafe_view</code>; <code>persist_result</code> distinguishes a
+   backend-confirmed store from a stale skip, an unclassified write, or a
+   failed write.</li>
+<li><strong><code>Session summary cascade result</code></strong> explains how a branch trigger reached
+   the full-session target. <code>source_materialized</code> is this-pass branch
+   materialization only. <code>action=copied</code> requires a successful copy;
+   <code>action=dependent</code> requires that the full-session target started. Otherwise,
+   when the full-session target did not advance independently, the cascade is
+   <code>action=skipped</code> and <code>invariant=ok</code>, including a branch that did not update
+   and a materialized source that never copied or started the dependent target.
+   <code>mode=dependent</code> is a sequential multi-filter cascade, not concurrent
+   generation. <code>invariant=violation</code> is reserved for a full-session target that
+   advanced without this-pass branch materialization.</li>
+<li><strong><code>Session summary injection result</code></strong> answers whether a later request
+   still carries the stored summary in the framework <code>model.Request</code> after
+   the returned response sequence finishes or is stopped early. If the model
+   call fails before returning a response sequence, this is observed
+   immediately. Compare <code>lookup_strategy</code> (the scope you
+   configured, driven by <code>WithBranchFilterMode</code>) with <code>lookup_result</code> (what
+   that scope found) and <code>full_session_summary</code>. <code>scope_mismatch</code> means a
+   full-session summary was unused, not that scoped history was dropped:
+   because nothing in scope was selected, this request's summary cutoff stays
+   zero and the raw scoped history is kept at this stage.</li>
+<li><strong><code>Pre-LLM context compaction result</code></strong> and the token tailoring records
+   explain what happened to the request after injection. A
+   <code>block_text_missing</code> record next to a tailoring record, for a built-in
+   provider that mutates the shared request in place, means the original
+   summary block is no longer observable in the framework <code>model.Request</code>. A
+   custom <code>Model</code> that copies the request may leave the framework copy
+   unchanged, so this record still does not describe the provider payload.</li>
+</ol>
+<p>Routine Debug records such as <code>block_text_present</code>, healthy cascade results, <code>copied</code>,
+and <code>below_threshold</code> require the framework log level to be <code>debug</code>. At the
+normal Info level only the Info and Warn outcomes listed above are visible.</p>
 <h2 id="performance-considerations">Performance Considerations</h2>
 <ul>
 <li><strong>LLM cost</strong>: Each summary generation calls the LLM. Monitor trigger conditions to balance cost and context preservation</li>
@@ -6962,7 +7428,7 @@ cascade:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 4, 2026 02:41:23 UTC">2026-09-04 02:41:23</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 5, 2026 14:14:18 UTC">2026-09-05 14:14:18</span>
   </span>
 
     

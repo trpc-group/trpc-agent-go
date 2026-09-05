@@ -2046,6 +2046,57 @@
         <li class="md-nav__item">
   <a href="#_29" class="md-nav__link">
     <span class="md-ellipsis">
+      生产环境摘要诊断
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="生产环境摘要诊断">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_30" class="md-nav__link">
+    <span class="md-ellipsis">
+      诊断开销
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_31" class="md-nav__link">
+    <span class="md-ellipsis">
+      记录名称与关键字段
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hook_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      有多少历史在 hook 前被选定
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_32" class="md-nav__link">
+    <span class="md-ellipsis">
+      排查一次问题
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_33" class="md-nav__link">
+    <span class="md-ellipsis">
       性能考虑
     </span>
   </a>
@@ -2053,7 +2104,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_30" class="md-nav__link">
+  <a href="#_34" class="md-nav__link">
     <span class="md-ellipsis">
       完整示例
     </span>
@@ -2062,7 +2113,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_31" class="md-nav__link">
+  <a href="#_35" class="md-nav__link">
     <span class="md-ellipsis">
       参考资源
     </span>
@@ -4451,6 +4502,57 @@
         <li class="md-nav__item">
   <a href="#_29" class="md-nav__link">
     <span class="md-ellipsis">
+      生产环境摘要诊断
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="生产环境摘要诊断">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_30" class="md-nav__link">
+    <span class="md-ellipsis">
+      诊断开销
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_31" class="md-nav__link">
+    <span class="md-ellipsis">
+      记录名称与关键字段
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hook_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      有多少历史在 hook 前被选定
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_32" class="md-nav__link">
+    <span class="md-ellipsis">
+      排查一次问题
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_33" class="md-nav__link">
+    <span class="md-ellipsis">
       性能考虑
     </span>
   </a>
@@ -4458,7 +4560,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_30" class="md-nav__link">
+  <a href="#_34" class="md-nav__link">
     <span class="md-ellipsis">
       完整示例
     </span>
@@ -4467,7 +4569,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_31" class="md-nav__link">
+  <a href="#_35" class="md-nav__link">
     <span class="md-ellipsis">
       参考资源
     </span>
@@ -5186,8 +5288,12 @@ checker 只有在估算 token 数<strong>大于</strong>阈值时才触发。如
 </ul>
 <p>开启 cache-safe forking 时，<code>report.Call.Mode</code> 为 <code>cache_safe_fork</code>，请求估算值来自 fork
 后的父请求加上追加的 summary 指令。普通独立 summary prompt 模式下，mode 为 <code>standalone</code>。
-如果 <code>BeforeModel</code> callback 返回 custom response，实际没有发送 summary 模型请求，mode 为
-<code>custom_response</code>，prompt 估算值保持为 0。</p>
+如果 <code>BeforeModel</code> callback 返回 custom response，该次尝试没有发送 summary 模型请求，
+mode 为 <code>custom_response</code>，prompt 估算值保持为 0。<code>Report.Call.Mode</code> 表示最后
+一次 summary 尝试的状态；若混合重试中较早一次已经调用 provider、最后一次改由
+callback 返回 custom response，它仍为 <code>custom_response</code>，usage 字段也可能保留
+较早一次 provider 调用的数据。结构化诊断字段 <code>model_call_status</code> 则聚合整次
+summary 操作：任意一次尝试调用过 provider，就上报为 <code>called</code>。</p>
 <p>高级集成如果要在高层 summary 流程前放入同一个 report，可以使用
 <code>summary.ContextWithReport(ctx, report)</code>，需要从 context 取出时使用
 <code>summary.ReportFromContext(ctx)</code>。单一路径会复用这个 report；多 filterKey cascade
@@ -6614,6 +6720,9 @@ request，用来检查历史大 <code>tool result</code> 是否按预期被替�
 </span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="c1">// ❌ 错误：没有前缀，事件会被过滤掉</span>
 </span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a><span class="nx">evt</span><span class="p">.</span><span class="nx">FilterKey</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"user-messages"</span>
 </span></code></pre></div></td></tr></table></div>
+<p><code>EventFilterKey</code> / <code>filter_key</code> 是业务提供的作用域标识，不应包含凭据、秘密或
+用户隐私。诊断日志可能输出原始值，但会按
+<a href="#生产环境摘要诊断">生产环境摘要诊断</a> 中的长度限制截断显示。</p>
 <h3 id="_25">为不同类型生成摘要</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-42-1">1</a></span>
 <span class="normal"><a href="#__codelineno-42-2">2</a></span>
@@ -6726,14 +6835,340 @@ request，用来检查历史大 <code>tool result</code> 是否按预期被替�
 <li><strong>平衡字数限制</strong>：设置 <code>WithMaxSummaryWords</code> 以在保留上下文和减少 token 使用之间取得平衡。典型值范围为 100-300 字</li>
 <li><strong>测试触发条件</strong>：尝试不同的 <code>WithChecksAny</code> 和 <code>WithChecksAll</code> 组合，找到摘要频率和成本之间的最佳平衡</li>
 </ol>
-<h2 id="_29">性能考虑</h2>
+<h2 id="_29">生产环境摘要诊断</h2>
+<p>摘要的生成与持久化诊断结果不会作为用户可见的模型响应直接返回。处理可能在后台
+异步执行，也可能在请求内同步完成（例如 LLM 调用前的 context compaction）。框
+架会输出四条稳定的日志记录，让你可以从生成一路追踪到注入。这些记录都在请求或
+任务的 context 上输出，因此与你现有的 trace 关联方式一致。</p>
+<p><strong>任何记录都不包含提示词、摘要正文、事件内容、模型输出、原始错误文本、连接串
+或凭据。</strong> 框架自身的用户 ID 和会话 ID 不会被记录。调用方提供的 <code>filter_key</code>
+会被记录，不在该保证范围内。调用方提供的 <code>agent</code> 名称同样会被记录，不应包含
+凭据、秘密或用户隐私。框架不会 hash 或脱敏这些名称。</p>
+<p><code>EventFilterKey</code> / <code>filter_key</code> 是业务提供的作用域标识，不应包含凭据、秘密或
+用户隐私。诊断记录会记录原始值（不会 hash）。显示值最多 255 个 Unicode code
+point，与常见的 <code>session_summaries.filter_key VARCHAR(255)</code> 一致，且该上限包含
+截断标记。未超限的 key 原样输出；超限时保留前缀，使前缀加上 <code>...</code> 标记总计仍
+为 255，并设置 <code>filter_key_truncated=true</code>（级联记录为
+<code>trigger_filter_key_truncated=true</code>）。空 key 仍清楚显示为 <code>filter_key=""</code>。截
+断只影响诊断显示，不会改变真实业务 key、数据库 key 或查询。<code>agent</code> 使用同一
+套有界 <code>%q</code> 显示规则，并带 <code>agent_truncated</code>。</p>
+<p>每条记录都在记录名之后立即带上 <code>schema_version=1</code>，便于采集侧识别后续不兼容
+的字段变化。在该诊断 schema 正式发布之前，版本保持为 1。</p>
+<p>这些记录用于观察生成、持久化、级联、注入和 LLM 调用前压缩。它们不新增公开的
+SessionService API，也不新增诊断开关。</p>
+<p>相对加入诊断前的 Redis 路径，已验证的返回契约：</p>
+<ul>
+<li>当 set-if-newer Lua 脚本本身执行成功时，<code>CreateSessionSummary</code> 仍然返回
+  nil error，即使回复不是 <code>int64</code> 的 0 或 1。无法识别的回复会记为
+  <code>persist_result=unknown</code> / <code>outcome=unknown_write</code>（Debug）。它不会被当成
+  stored、stale、<code>success</code> 或 <code>persistence_error</code>，也不会改变该方法的返回值。</li>
+<li>真正的脚本、序列化或过期设置失败仍然返回 error，并记为
+  <code>persist_result=error</code> / <code>outcome=persistence_error</code>。</li>
+</ul>
+<p>摘要选择、cutoff、级联调用顺序、<code>force</code> 值、错误包装、注入文本和 compaction
+判定仍走原有代码路径。</p>
+<h3 id="_30">诊断开销</h3>
+<ul>
+<li>一次普通的 summary attempt 记录是常数级元数据：计数、枚举、耗时，以及截断后
+  的 filter key 显示。它不会复制事件、提示词或摘要正文。</li>
+<li>检查选中的注入 block 是否仍在请求中，复杂度是
+  <code>O(请求消息总字节数)</code>。该扫描只在该请求启用了 session summary injection 时
+  执行。不会复制完整请求。</li>
+</ul>
+<h3 id="_31">记录名称与关键字段</h3>
+<table>
+<thead>
+<tr>
+<th>记录</th>
+<th>输出时机</th>
+<th>关键字段</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Session summary result</code></td>
+<td>每个摘要目标一条，摘要尝试完成之后</td>
+<td><code>schema_version</code>、<code>outcome</code>、<code>dispatch</code>、<code>target_kind</code>、<code>filter_key</code>、<code>filter_key_truncated</code>、<code>triggered</code>、<code>trigger</code>、<code>trigger_metric</code>、<code>trigger_value</code>、<code>trigger_threshold</code>、<code>threshold_ratio</code>、<code>context_window</code>、<code>summary_view_present</code>、<code>summary_view_bound</code>、<code>binding_reason</code>、<code>input_source</code>、<code>selection_reason</code>、<code>eligible_events</code>、<code>skip_recent_requested</code>、<code>skip_recent_applied</code>、<code>selected_events</code>、<code>model_call_status</code>、<code>updated</code>、<code>boundary_advanced</code>、<code>persist_result</code></td>
+</tr>
+<tr>
+<td><code>Session summary cascade result</code></td>
+<td>分支触发扩散到全会话目标的每次级联一条</td>
+<td><code>schema_version</code>、<code>outcome</code>、<code>mode</code>、<code>trigger_filter_key</code>、<code>trigger_filter_key_truncated</code>、<code>targets</code>、<code>source_materialized</code>、<code>action</code>、<code>invariant</code></td>
+</tr>
+<tr>
+<td><code>Session summary injection result</code></td>
+<td>使用会话摘要的每个模型请求一条，在返回的响应序列结束或被提前停止之后记录；若模型调用在返回响应序列之前失败，则立即记录</td>
+<td><code>schema_version</code>、<code>outcome</code>、<code>agent</code>、<code>agent_truncated</code>、<code>filter_key</code>、<code>filter_key_truncated</code>、<code>lookup_strategy</code>、<code>lookup_result</code>、<code>selected</code>、<code>block_text_present</code>、<code>stored_summaries</code>、<code>matching_candidates</code>、<code>full_session_summary</code>、<code>session_events</code>、<code>history_messages</code>、<code>request_messages</code></td>
+</tr>
+<tr>
+<td><code>Pre-LLM context compaction result</code></td>
+<td>LLM 调用前的每次同步压缩尝试一条</td>
+<td><code>schema_version</code>、<code>outcome</code>、<code>agent</code>、<code>agent_truncated</code>、<code>filter_key</code>、<code>filter_key_truncated</code>、<code>request_tokens</code>、<code>threshold</code>、<code>context_window</code>、<code>messages</code>、<code>summary_view_bound</code>、<code>binding_reason</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>Session summary result</code> 的 outcome：</p>
+<table>
+<thead>
+<tr>
+<th>Outcome</th>
+<th>级别</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>success</code></td>
+<td>Info</td>
+<td>生成了新摘要且后端确认写入</td>
+</tr>
+<tr>
+<td><code>copied</code></td>
+<td>Debug</td>
+<td>级联复用已有摘要，未调用摘要模型</td>
+</tr>
+<tr>
+<td><code>below_threshold</code></td>
+<td>Debug</td>
+<td>触发检查已执行但未达到阈值</td>
+</tr>
+<tr>
+<td><code>no_delta</code></td>
+<td>Debug</td>
+<td>摘要边界之后没有新增事件</td>
+</tr>
+<tr>
+<td><code>no_content</code></td>
+<td>Debug</td>
+<td>内建 summarizer 本轮发布了 trigger 观测，且没有可用内容进入摘要模型</td>
+</tr>
+<tr>
+<td><code>unobserved</code></td>
+<td>Debug</td>
+<td>本轮门控未触发，且没有发布 attempt-local trigger 观测。这是诊断不确定性，不能当成 <code>no_content</code> 或 <code>below_threshold</code></td>
+</tr>
+<tr>
+<td><code>cascade_suppressed</code></td>
+<td>Debug</td>
+<td>全会话目标仅因分支级联被请求，因此跳过</td>
+</tr>
+<tr>
+<td><code>unsafe_view</code></td>
+<td>Warn</td>
+<td>存在可摘要内容，但模型可见视图未绑定到模型真正回答的请求，无法安全摘要</td>
+</tr>
+<tr>
+<td><code>summary_error</code></td>
+<td>Warn</td>
+<td>摘要阶段失败；<code>model_call_status</code> 区分模型调用失败、模型调用前的构建失败、custom response，以及自定义 summarizer 未观测</td>
+</tr>
+<tr>
+<td><code>context_error</code></td>
+<td>Warn</td>
+<td>摘要 context 被取消或超时</td>
+</tr>
+<tr>
+<td><code>persistence_error</code></td>
+<td>Warn</td>
+<td>后端写入失败</td>
+</tr>
+<tr>
+<td><code>stale_write</code></td>
+<td>Debug</td>
+<td>已存在更新的摘要，后端跳过了本次 payload 写入。这是 set-if-newer 保护下的成功跳过，正常并发下可能发生。Redis zset 路径仍可能刷新 summary key 的 TTL；hashidx 路径保留剩余 TTL。文档不把 TTL 续期写成写入成功</td>
+</tr>
+<tr>
+<td><code>unknown_write</code></td>
+<td>Debug</td>
+<td>后端写入完成且没有 error，但结果无法判定为 stored 或 stale。包括无法识别的 set-if-newer 回复，以及 Mongo nil / 零计数 UpdateResult。这是诊断不确定性，不是业务失败</td>
+</tr>
+<tr>
+<td><code>not_stored</code></td>
+<td>Warn</td>
+<td>摘要已生成，但后端既未写入也未拒绝</td>
+</tr>
+<tr>
+<td><code>no_update</code></td>
+<td>Warn</td>
+<td>已触发的尝试没有产出可存储的摘要</td>
+</tr>
+</tbody>
+</table>
+<p><code>model_call_status</code> 是稳定三态字段，不要把 <code>unobserved</code> 当成“模型未被调用”：</p>
+<table>
+<thead>
+<tr>
+<th><code>model_call_status</code></th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>called</code></td>
+<td>内建 summarizer 真正调用了摘要模型（<code>standalone</code> 或 <code>cache_safe_fork</code>）</td>
+</tr>
+<tr>
+<td><code>custom_response</code></td>
+<td>before-model callback 直接给出了摘要响应，因此没有调用 provider</td>
+</tr>
+<tr>
+<td><code>unobserved</code></td>
+<td>本轮 attempt-local ModelCall recorder 没有发布调用模式，无法证明是否发生模型调用。常见于未发布 recorder 的自定义 summarizer；不要把 leftover <code>Report.Call.Mode</code> 当成这一次观测</td>
+</tr>
+</tbody>
+</table>
+<p><code>Session summary injection result</code> 的 outcome：</p>
+<table>
+<thead>
+<tr>
+<th>Outcome</th>
+<th>级别</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>block_text_present</code></td>
+<td>Debug</td>
+<td>在返回的响应序列结束或被提前停止之后，同一份框架 <code>model.Request</code> 的任意消息 <code>Content</code> 中仍能找到与记录 block 相同的文本（<code>block_text_present=true</code>）。这不能证明原注入位置还在，也不描述 provider payload。若模型调用在返回响应序列之前失败，则立即观察</td>
+</tr>
+<tr>
+<td><code>not_selected</code></td>
+<td>Debug</td>
+<td>会话尚未存储任何摘要</td>
+</tr>
+<tr>
+<td><code>lookup_miss</code></td>
+<td>Debug</td>
+<td>其他分支存在摘要，但本次请求的作用域内没有</td>
+</tr>
+<tr>
+<td><code>scope_mismatch</code></td>
+<td>Debug</td>
+<td>分支作用域的请求在作用域内没有命中，而作用域之外存在全会话摘要。因为本次没有选中 in-scope 摘要，本次 summaryCutoff 保持为零，所以这一阶段仍会保留原始分支历史。这与作用域外的全会话摘要自身有没有 boundary/cutoff 无关</td>
+</tr>
+<tr>
+<td><code>block_text_missing</code></td>
+<td>Warn</td>
+<td>摘要已选中（<code>selected=true</code>），但在返回的响应序列结束或被提前停止之后，同一份框架 <code>model.Request</code> 的任意消息 <code>Content</code> 中都观察不到记录的 block 文本。这不表示 provider 的最终 payload，也不表示摘要从未写入请求。对会原地修改共享请求的内置 provider（包括 OpenAI），这通常是 token 裁剪导致的</td>
+</tr>
+</tbody>
+</table>
+<h3 id="hook_2">有多少历史在 hook 前被选定</h3>
+<p>当 <code>outcome</code> 为 <code>no_content</code> 或 <code>unsafe_view</code> 时，<code>selection_reason</code> 指出究竟是
+哪个阶段清空了输入，否则这与"会话本来就没有内容"无法区分：</p>
+<table>
+<thead>
+<tr>
+<th><code>selection_reason</code></th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>selected</code></td>
+<td>hook 前选定了事件；这不证明这些事件就是后来送进模型的 payload</td>
+</tr>
+<tr>
+<td><code>no_candidates</code></td>
+<td>该阶段本来就没有候选事件</td>
+</tr>
+<tr>
+<td><code>skip_recent_all</code></td>
+<td><code>WithSkipRecent</code> 回调要求跳过的数量不少于可用事件数</td>
+</tr>
+<tr>
+<td><code>unsafe_prefix</code></td>
+<td>skip-recent 之后仍有事件，但保留的前缀既没有用户消息也没有前置的历史摘要作为锚点，因此被丢弃</td>
+</tr>
+<tr>
+<td><code>session_filter_empty</code></td>
+<td>候选事件通过了 skip-recent，随后被摘要的分支作用域全部过滤掉</td>
+</tr>
+<tr>
+<td><code>unbound_view</code></td>
+<td>存在模型可见视图，但未绑定到模型真正回答的请求</td>
+</tr>
+<tr>
+<td><code>boundary_unmapped</code></td>
+<td>选中的条目没有对应到已存储事件的结构映射，因此丢弃摘要，而不是让边界越过无法再次定位的内容</td>
+</tr>
+<tr>
+<td><code>custom</code></td>
+<td>本次摘要调用没有发布内置事件选择，计数未知</td>
+</tr>
+<tr>
+<td><code>none</code></td>
+<td>没有 summarizer 运行，未观测到任何选择</td>
+</tr>
+</tbody>
+</table>
+<p>配套的计数描述的是接收 <code>WithSkipRecent</code> 回调的那个阶段：</p>
+<ul>
+<li><code>eligible_events</code>：交给该阶段的候选事件数，在 skip-recent 执行之前统计。对已
+  绑定的模型可见视图，它包含前置的历史摘要；对未绑定视图，它是未被考虑的视图条
+  目数。</li>
+<li><code>skip_recent_requested</code>：回调返回的原始数值，因此回调返回异常值时依然可见。未
+  配置回调时为 <code>0</code>。</li>
+<li><code>skip_recent_applied</code>：skip-recent 自身实际移除的事件数，即
+  <code>clamp(skip_recent_requested, 0, eligible_events)</code>。后续的不安全前缀、分支作用
+  域或边界无法映射，由 <code>selection_reason</code> 与 <code>selected_events</code> 说明，不计入此字
+  段。例如 <code>eligible_events=3</code>、<code>skip_recent_requested=1</code>、<code>unsafe_prefix</code> 时，
+  <code>skip_recent_applied=1</code> 且 <code>selected_events=0</code>。</li>
+<li><code>selected_events</code>：经过 skip-recent、分支作用域与边界映射之后，PreSummaryHook
+  运行前选定的事件数。它不是 hook 或 before-model callback 改写之后真正送进模型
+  的 payload 计数。</li>
+</ul>
+<p>当 <code>selection_reason</code> 为 <code>custom</code> 或 <code>none</code> 时，这四个计数均为 <code>-1</code>。</p>
+<p><code>trigger</code> 与 <code>trigger_metric</code> 只来自本轮 attempt 的内部 trigger recorder。
+自定义 summarizer 或调用方只写入 <code>summary.Report.Trigger</code> 不会被诊断采用：
+门控为 true 但未发布时上报 <code>triggered=true</code> 且 <code>trigger=none</code>；门控为 false
+且未发布时上报 <code>outcome=unobserved</code> 且 <code>trigger=none</code>。leftover
+<code>Report.Trigger</code> 不会被拷进记录。当内部 recorder 已发布触发观测时，框架词
+汇表之外的 name/metric 会归一化为 <code>custom</code>，因此这两个字段始终有界，且不
+会携带应用侧字符串。<code>trigger_value</code>、<code>trigger_threshold</code>、
+<code>threshold_ratio</code> 与 <code>context_window</code> 原样上报。</p>
+<h3 id="_32">排查一次问题</h3>
+<p>针对同一个请求或会话，按以下顺序查看记录：</p>
+<ol>
+<li><strong><code>Session summary result</code></strong> 回答是否产出了摘要。<code>triggered</code> 与 <code>trigger*</code>
+   字段解释门控判定；<code>input_source</code>、<code>selection_reason</code> 与各项事件计数说明有多
+   少历史在 hook 前被选定，以及是哪个阶段移除了其余部分；
+   <code>binding_reason</code> 解释 <code>unsafe_view</code> 的成因；<code>persist_result</code> 区分后端确认写入、
+   stale 跳过、无法分类的写入，以及写入失败。</li>
+<li><strong><code>Session summary cascade result</code></strong> 解释分支触发如何到达全会话目标。
+   <code>source_materialized</code> 只记录本轮分支是否物化。<code>action=copied</code> 需要 copy
+   成功；<code>action=dependent</code> 需要全会话目标实际开始。否则，只有在全会话目标
+   没有独立推进时，才是 <code>action=skipped</code> 且 <code>invariant=ok</code>，包括本轮分支未
+   更新，以及源已物化但 copy 未成功或 dependent 目标未开始。
+   <code>mode=dependent</code> 表示多 filter 顺序级联，而不是并发生成。
+   <code>invariant=violation</code> 仅表示全会话目标在本轮没有分支 materialization 的
+   情况下推进了。</li>
+<li><strong><code>Session summary injection result</code></strong> 回答后续请求在返回的响应序列
+   结束或被提前停止之后，框架这份 <code>model.Request</code> 里是否还带着已存储的摘要。
+   若模型调用在返回响应序列之前失败，则立即观察。对比
+   <code>lookup_strategy</code>（由 <code>WithBranchFilterMode</code> 决定的配置作用域）与
+   <code>lookup_result</code>（该作用域实际找到的结果）以及 <code>full_session_summary</code>。
+   <code>scope_mismatch</code> 表示全会话摘要未被使用，并不表示分支历史已被丢弃：因为本
+   次没有选中 in-scope 摘要，本次 summaryCutoff 保持为零，这一阶段仍会保留原
+   始分支历史。</li>
+<li><strong><code>Pre-LLM context compaction result</code></strong> 与 token 裁剪记录解释注入之后请求
+   发生了什么。对会原地修改共享请求的内置 provider，<code>block_text_missing</code>
+   与裁剪记录同时出现，说明同一份框架 <code>model.Request</code> 里已经观察不到原始摘要
+   block。自定义 <code>Model</code> 如果复制了请求，框架这份拷贝可能不会反映它实际发送
+   的内容，因此该记录仍然不描述 provider 最终 payload。</li>
+</ol>
+<p><code>block_text_present</code>、healthy cascade、<code>copied</code>、<code>below_threshold</code> 等常规 Debug 记录
+需要把框架日志级别设为 <code>debug</code>。在正常的 Info 级别下，只能看到上表中的
+Info 与 Warn outcome。</p>
+<h2 id="_33">性能考虑</h2>
 <ul>
 <li><strong>LLM 成本</strong>：每次摘要生成都会调用 LLM，监控触发条件以平衡成本和上下文保留</li>
 <li><strong>内存使用</strong>：摘要与事件一起存储，配置适当的 TTL 以管理长时间运行会话中的内存</li>
 <li><strong>异步 Worker</strong>：更多 worker 会提高吞吐量但消耗更多资源，从 2-4 个 worker 开始，根据负载进行扩展</li>
 <li><strong>队列容量</strong>：根据预期的并发量和摘要生成时间调整队列大小</li>
 </ul>
-<h2 id="_30">完整示例</h2>
+<h2 id="_34">完整示例</h2>
 <p>以下是演示所有组件如何协同工作的完整示例：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-45-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-45-2"> 2</a></span>
@@ -6855,7 +7290,7 @@ request，用来检查历史大 <code>tool result</code> 是否按预期被替�
 </span><span id="__span-45-59"><a id="__codelineno-45-59" name="__codelineno-45-59"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-45-60"><a id="__codelineno-45-60" name="__codelineno-45-60"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_31">参考资源</h2>
+<h2 id="_35">参考资源</h2>
 <ul>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary">摘要示例</a></li>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey">FilterKey 示例</a></li>
@@ -6883,7 +7318,7 @@ request，用来检查历史大 <code>tool result</code> 是否按预期被替�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年9月4日 02:41:23 UTC">2026-09-04 02:41:23</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年9月5日 14:14:18 UTC">2026-09-05 14:14:18</span>
   </span>
 
     
