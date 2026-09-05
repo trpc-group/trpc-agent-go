@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,6 +36,7 @@ var _ artifact.Service = (*Service)(nil)
 // Service is an S3-compatible implementation of the artifact service.
 // It supports AWS S3, MinIO, DigitalOcean Spaces, Cloudflare R2, and other
 // S3-compatible object storage services.
+// Artifact filenames may be canonical, forward-slash-separated relative paths.
 //
 // The object name format used depends on whether the filename has a user namespace:
 //   - For files with user namespace (starting with "user:"):
@@ -253,7 +255,17 @@ func (s *Service) DeleteArtifact(
 		return nil
 	}
 
-	if err := s.client.DeleteObjects(ctx, keys); err != nil {
+	versionKeys := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if _, ok := extractVersion(key, prefix); ok {
+			versionKeys = append(versionKeys, key)
+		}
+	}
+	if len(versionKeys) == 0 {
+		return nil
+	}
+
+	if err := s.client.DeleteObjects(ctx, versionKeys); err != nil {
 		return fmt.Errorf("failed to delete artifact: %w", err)
 	}
 
@@ -291,10 +303,8 @@ func (s *Service) listVersions(
 
 	versions := make([]int, 0, len(keys))
 	for _, key := range keys {
-		if idx := strings.LastIndex(key, "/"); idx != -1 {
-			if v, err := strconv.Atoi(key[idx+1:]); err == nil {
-				versions = append(versions, v)
-			}
+		if version, ok := extractVersion(key, prefix); ok {
+			versions = append(versions, version)
 		}
 	}
 
@@ -311,11 +321,48 @@ func extractFilename(objectKey, prefix string) string {
 	}
 
 	relative := strings.TrimPrefix(objectKey, prefix)
-	if filename, _, ok := strings.Cut(relative, "/"); ok && filename != "" {
-		return filename
+	separator := strings.LastIndexByte(relative, '/')
+	if separator <= 0 {
+		return ""
+	}
+	if _, ok := parseVersion(relative[separator+1:]); !ok {
+		return ""
 	}
 
-	return ""
+	filename := relative[:separator]
+	if err := validateFilename(filename); err != nil {
+		return ""
+	}
+	return filename
+}
+
+// extractVersion extracts a direct version suffix from an object key.
+// Descendant artifact keys that merely share the prefix are ignored.
+func extractVersion(objectKey, prefix string) (int, bool) {
+	if !strings.HasPrefix(objectKey, prefix) {
+		return 0, false
+	}
+
+	relative := strings.TrimPrefix(objectKey, prefix)
+	if relative == "" || strings.Contains(relative, "/") {
+		return 0, false
+	}
+
+	return parseVersion(relative)
+}
+
+func parseVersion(value string) (int, bool) {
+	if value == "" {
+		return 0, false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return 0, false
+		}
+	}
+
+	version, err := strconv.Atoi(value)
+	return version, err == nil
 }
 
 // validateSessionInfo checks that all required session info fields are present.
@@ -326,20 +373,23 @@ func validateSessionInfo(info artifact.SessionInfo) error {
 	return nil
 }
 
-// validateFilename checks that the filename is valid and safe.
-// It rejects empty filenames, path traversal attempts, and other dangerous patterns.
+// validateFilename checks that the filename is a safe relative artifact path.
 func validateFilename(filename string) error {
 	if filename == "" {
 		return ErrEmptyFilename
 	}
 
-	// Check for path traversal and invalid characters
-	// Note: "user:" prefix is allowed for user-scoped artifacts
-	if strings.Contains(filename, "/") ||
+	// Note: "user:" prefix is allowed for user-scoped artifacts.
+	if path.IsAbs(filename) ||
+		path.Clean(filename) != filename ||
 		strings.Contains(filename, "\\") ||
-		strings.Contains(filename, "..") ||
 		strings.Contains(filename, "\x00") {
 		return ErrInvalidFilename
+	}
+	for _, segment := range strings.Split(filename, "/") {
+		if segment == ".." {
+			return ErrInvalidFilename
+		}
 	}
 
 	return nil
