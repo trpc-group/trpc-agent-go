@@ -120,6 +120,34 @@ func NewRuntimeWithOptions(
 	return r
 }
 
+// sanitizeIDForPath maps id to a filesystem-safe string by replacing
+// every rune outside [A-Za-z0-9_-] with '_'. If the sanitized result is
+// empty (id is empty or contains only illegal characters), fallback is
+// returned so callers can keep generated names well-formed.
+func sanitizeIDForPath(id, fallback string) string {
+	safe := strings.Map(func(r rune) rune {
+		switch r {
+		case 'a', 'b', 'c', 'd', 'e', 'f', 'g',
+			'h', 'i', 'j', 'k', 'l', 'm', 'n',
+			'o', 'p', 'q', 'r', 's', 't', 'u',
+			'v', 'w', 'x', 'y', 'z',
+			'A', 'B', 'C', 'D', 'E', 'F', 'G',
+			'H', 'I', 'J', 'K', 'L', 'M', 'N',
+			'O', 'P', 'Q', 'R', 'S', 'T', 'U',
+			'V', 'W', 'X', 'Y', 'Z',
+			'0', '1', '2', '3', '4', '5', '6',
+			'7', '8', '9', '-', '_':
+			return r
+		default:
+			return '_' // replace others
+		}
+	}, id)
+	if safe == "" {
+		return fallback
+	}
+	return safe
+}
+
 // CreateWorkspace creates an execution workspace directory.
 func (r *Runtime) CreateWorkspace(
 	ctx context.Context,
@@ -142,23 +170,7 @@ func (r *Runtime) CreateWorkspace(
 	}
 
 	// Sanitize execID to be filesystem friendly.
-	safe := strings.Map(func(r rune) rune {
-		switch r {
-		case 'a', 'b', 'c', 'd', 'e', 'f', 'g',
-			'h', 'i', 'j', 'k', 'l', 'm', 'n',
-			'o', 'p', 'q', 'r', 's', 't', 'u',
-			'v', 'w', 'x', 'y', 'z',
-			'A', 'B', 'C', 'D', 'E', 'F', 'G',
-			'H', 'I', 'J', 'K', 'L', 'M', 'N',
-			'O', 'P', 'Q', 'R', 'S', 'T', 'U',
-			'V', 'W', 'X', 'Y', 'Z',
-			'0', '1', '2', '3', '4', '5', '6',
-			'7', '8', '9', '-', '_':
-			return r
-		default:
-			return '_' // replace others
-		}
-	}, execID)
+	safe := sanitizeIDForPath(execID, "")
 
 	// Make workspace path unique to avoid collisions between runs.
 	suf := time.Now().UnixNano()

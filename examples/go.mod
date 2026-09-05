@@ -5,6 +5,7 @@ go 1.24.4
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter => ../codeexecutor/jupyter
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/opensandbox => ../codeexecutor/opensandbox
 	trpc.group/trpc-go/trpc-agent-go/evaluation => ../evaluation
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../model/anthropic
 	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../model/gemini
@@ -25,8 +26,9 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb
 	trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.3.0.20260813112030-aed2c1f02f9c
-	trpc.group/trpc-go/trpc-agent-go v0.8.0
+	trpc.group/trpc-go/trpc-agent-go v1.11.1
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter v1.1.2-0.20260108033914-7a20241f1ad5
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/opensandbox v1.11.1
 	trpc.group/trpc-go/trpc-agent-go/evaluation v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-agent-go/tool/openapi v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-agent-go/tool/wikipedia v1.1.2-0.20260108033914-7a20241f1ad5
@@ -39,6 +41,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0 // indirect
+	github.com/alibaba/OpenSandbox/sdks/sandbox/go v1.0.3 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.37.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
