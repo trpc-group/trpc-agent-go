@@ -179,7 +179,8 @@ func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 		go func() {
 			defer close(olderDone)
 			close(olderStarted)
-			olderErr <- svc.upsertSessionSummary(ctx, key, "", olderBytes, olderUpdatedAt)
+			_, err := svc.upsertSessionSummary(ctx, key, "", olderBytes, olderUpdatedAt)
+			olderErr <- err
 		}()
 		<-olderStarted
 		select {
@@ -200,9 +201,10 @@ func TestSessionSummarySchemaCompatibilityIntegration(t *testing.T) {
 		requireSummaryIntegrationRows(t, ctx, db, tableName, key, "newer", newerUpdatedAt, 2)
 
 		regeneratedBytes := marshalSummaryIntegration(t, "regenerated", newerUpdatedAt)
-		require.NoError(t, svc.upsertSessionSummary(
+		_, err = svc.upsertSessionSummary(
 			ctx, key, "", regeneratedBytes, newerUpdatedAt,
-		))
+		)
+		require.NoError(t, err)
 		requireSummaryIntegrationRows(t, ctx, db, tableName, key, "regenerated", newerUpdatedAt, 2)
 	})
 }

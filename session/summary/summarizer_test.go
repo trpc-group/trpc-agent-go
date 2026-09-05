@@ -2011,6 +2011,28 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 		assert.Len(t, filtered, 5)
 	})
 
+	t.Run("unsafe prefix does not attribute extra drops to skip-recent", func(t *testing.T) {
+		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 1 }}
+		events := []event.Event{
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "a1"}}}}},
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "a2"}}}}},
+			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "recent"}}}}},
+		}
+		filtered, decision := s.filterEventsForSummaryObserved(events)
+		assert.Empty(t, filtered)
+		assert.Equal(t, 3, decision.eligible)
+		assert.Equal(t, 1, decision.requested)
+		assert.Equal(t, 1, decision.applied)
+		assert.Equal(t, isummarycontext.ReasonUnsafePrefix, decision.reason)
+	})
+}
+
+func TestSkipRecentApplied(t *testing.T) {
+	assert.Equal(t, 0, skipRecentApplied(-3, 5))
+	assert.Equal(t, 0, skipRecentApplied(0, 5))
+	assert.Equal(t, 1, skipRecentApplied(1, 3))
+	assert.Equal(t, 3, skipRecentApplied(5, 3))
+	assert.Equal(t, 0, skipRecentApplied(1, 0))
 }
 
 func TestSummaryEventHelpers(t *testing.T) {

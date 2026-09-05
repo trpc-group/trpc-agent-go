@@ -529,8 +529,12 @@ summarizer := summary.NewSummarizer(
 
 开启 cache-safe forking 时，`report.Call.Mode` 为 `cache_safe_fork`，请求估算值来自 fork
 后的父请求加上追加的 summary 指令。普通独立 summary prompt 模式下，mode 为 `standalone`。
-如果 `BeforeModel` callback 返回 custom response，实际没有发送 summary 模型请求，mode 为
-`custom_response`，prompt 估算值保持为 0。
+如果 `BeforeModel` callback 返回 custom response，该次尝试没有发送 summary 模型请求，
+mode 为 `custom_response`，prompt 估算值保持为 0。`Report.Call.Mode` 表示最后
+一次 summary 尝试的状态；若混合重试中较早一次已经调用 provider、最后一次改由
+callback 返回 custom response，它仍为 `custom_response`，usage 字段也可能保留
+较早一次 provider 调用的数据。结构化诊断字段 `model_call_status` 则聚合整次
+summary 操作：任意一次尝试调用过 provider，就上报为 `called`。
 
 高级集成如果要在高层 summary 流程前放入同一个 report，可以使用
 `summary.ContextWithReport(ctx, report)`，需要从 context 取出时使用
@@ -1490,6 +1494,10 @@ evt.FilterKey = "my-app/user-messages"
 evt.FilterKey = "user-messages"
 ```
 
+`EventFilterKey` / `filter_key` 是业务提供的作用域标识，不应包含凭据、秘密或
+用户隐私。诊断日志可能输出原始值，但会按
+[生产环境摘要诊断](#生产环境摘要诊断) 中的长度限制截断显示。
+
 ### 为不同类型生成摘要
 
 ```go
@@ -1588,6 +1596,179 @@ sessionService, err := mysql.NewService(
 4. **自定义提示词**：根据应用需求定制摘要提示词。例如，如果你正在构建客户支持 Agent，应关注关键问题和解决方案
 5. **平衡字数限制**：设置 `WithMaxSummaryWords` 以在保留上下文和减少 token 使用之间取得平衡。典型值范围为 100-300 字
 6. **测试触发条件**：尝试不同的 `WithChecksAny` 和 `WithChecksAll` 组合，找到摘要频率和成本之间的最佳平衡
+
+## 生产环境摘要诊断
+
+摘要的生成与持久化诊断结果不会作为用户可见的模型响应直接返回。处理可能在后台
+异步执行，也可能在请求内同步完成（例如 LLM 调用前的 context compaction）。框
+架会输出四条稳定的日志记录，让你可以从生成一路追踪到注入。这些记录都在请求或
+任务的 context 上输出，因此与你现有的 trace 关联方式一致。
+
+**任何记录都不包含提示词、摘要正文、事件内容、模型输出、原始错误文本、连接串
+或凭据。** 框架自身的用户 ID 和会话 ID 不会被记录。调用方提供的 `filter_key`
+会被记录，不在该保证范围内。调用方提供的 `agent` 名称同样会被记录，不应包含
+凭据、秘密或用户隐私。框架不会 hash 或脱敏这些名称。
+
+`EventFilterKey` / `filter_key` 是业务提供的作用域标识，不应包含凭据、秘密或
+用户隐私。诊断记录会记录原始值（不会 hash）。显示值最多 255 个 Unicode code
+point，与常见的 `session_summaries.filter_key VARCHAR(255)` 一致，且该上限包含
+截断标记。未超限的 key 原样输出；超限时保留前缀，使前缀加上 `...` 标记总计仍
+为 255，并设置 `filter_key_truncated=true`（级联记录为
+`trigger_filter_key_truncated=true`）。空 key 仍清楚显示为 `filter_key=""`。截
+断只影响诊断显示，不会改变真实业务 key、数据库 key 或查询。`agent` 使用同一
+套有界 `%q` 显示规则，并带 `agent_truncated`。
+
+每条记录都在记录名之后立即带上 `schema_version=1`，便于采集侧识别后续不兼容
+的字段变化。在该诊断 schema 正式发布之前，版本保持为 1。
+
+这些记录用于观察生成、持久化、级联、注入和 LLM 调用前压缩。它们不新增公开的
+SessionService API，也不新增诊断开关。
+
+相对加入诊断前的 Redis 路径，已验证的返回契约：
+
+- 当 set-if-newer Lua 脚本本身执行成功时，`CreateSessionSummary` 仍然返回
+  nil error，即使回复不是 `int64` 的 0 或 1。无法识别的回复会记为
+  `persist_result=unknown` / `outcome=unknown_write`（Debug）。它不会被当成
+  stored、stale、`success` 或 `persistence_error`，也不会改变该方法的返回值。
+- 真正的脚本、序列化或过期设置失败仍然返回 error，并记为
+  `persist_result=error` / `outcome=persistence_error`。
+
+摘要选择、cutoff、级联调用顺序、`force` 值、错误包装、注入文本和 compaction
+判定仍走原有代码路径。
+
+### 诊断开销
+
+- 一次普通的 summary attempt 记录是常数级元数据：计数、枚举、耗时，以及截断后
+  的 filter key 显示。它不会复制事件、提示词或摘要正文。
+- 检查选中的注入 block 是否仍在请求中，复杂度是
+  `O(请求消息总字节数)`。该扫描只在该请求启用了 session summary injection 时
+  执行。不会复制完整请求。
+
+### 记录名称与关键字段
+
+| 记录 | 输出时机 | 关键字段 |
+| --- | --- | --- |
+| `Session summary result` | 每个摘要目标一条，摘要尝试完成之后 | `schema_version`、`outcome`、`dispatch`、`target_kind`、`filter_key`、`filter_key_truncated`、`triggered`、`trigger`、`trigger_metric`、`trigger_value`、`trigger_threshold`、`threshold_ratio`、`context_window`、`summary_view_present`、`summary_view_bound`、`binding_reason`、`input_source`、`selection_reason`、`eligible_events`、`skip_recent_requested`、`skip_recent_applied`、`selected_events`、`model_call_status`、`updated`、`boundary_advanced`、`persist_result` |
+| `Session summary cascade result` | 分支触发扩散到全会话目标的每次级联一条 | `schema_version`、`outcome`、`mode`、`trigger_filter_key`、`trigger_filter_key_truncated`、`targets`、`source_materialized`、`action`、`invariant` |
+| `Session summary injection result` | 使用会话摘要的每个模型请求一条，在返回的响应序列结束或被提前停止之后记录；若模型调用在返回响应序列之前失败，则立即记录 | `schema_version`、`outcome`、`agent`、`agent_truncated`、`filter_key`、`filter_key_truncated`、`lookup_strategy`、`lookup_result`、`selected`、`block_text_present`、`stored_summaries`、`matching_candidates`、`full_session_summary`、`session_events`、`history_messages`、`request_messages` |
+| `Pre-LLM context compaction result` | LLM 调用前的每次同步压缩尝试一条 | `schema_version`、`outcome`、`agent`、`agent_truncated`、`filter_key`、`filter_key_truncated`、`request_tokens`、`threshold`、`context_window`、`messages`、`summary_view_bound`、`binding_reason` |
+
+`Session summary result` 的 outcome：
+
+| Outcome | 级别 | 含义 |
+| --- | --- | --- |
+| `success` | Info | 生成了新摘要且后端确认写入 |
+| `copied` | Debug | 级联复用已有摘要，未调用摘要模型 |
+| `below_threshold` | Debug | 触发检查已执行但未达到阈值 |
+| `no_delta` | Debug | 摘要边界之后没有新增事件 |
+| `no_content` | Debug | 内建 summarizer 本轮发布了 trigger 观测，且没有可用内容进入摘要模型 |
+| `unobserved` | Debug | 本轮门控未触发，且没有发布 attempt-local trigger 观测。这是诊断不确定性，不能当成 `no_content` 或 `below_threshold` |
+| `cascade_suppressed` | Debug | 全会话目标仅因分支级联被请求，因此跳过 |
+| `unsafe_view` | Warn | 存在可摘要内容，但模型可见视图未绑定到模型真正回答的请求，无法安全摘要 |
+| `summary_error` | Warn | 摘要阶段失败；`model_call_status` 区分模型调用失败、模型调用前的构建失败、custom response，以及自定义 summarizer 未观测 |
+| `context_error` | Warn | 摘要 context 被取消或超时 |
+| `persistence_error` | Warn | 后端写入失败 |
+| `stale_write` | Debug | 已存在更新的摘要，后端跳过了本次 payload 写入。这是 set-if-newer 保护下的成功跳过，正常并发下可能发生。Redis zset 路径仍可能刷新 summary key 的 TTL；hashidx 路径保留剩余 TTL。文档不把 TTL 续期写成写入成功 |
+| `unknown_write` | Debug | 后端写入完成且没有 error，但结果无法判定为 stored 或 stale。包括无法识别的 set-if-newer 回复，以及 Mongo nil / 零计数 UpdateResult。这是诊断不确定性，不是业务失败 |
+| `not_stored` | Warn | 摘要已生成，但后端既未写入也未拒绝 |
+| `no_update` | Warn | 已触发的尝试没有产出可存储的摘要 |
+
+`model_call_status` 是稳定三态字段，不要把 `unobserved` 当成“模型未被调用”：
+
+| `model_call_status` | 含义 |
+| --- | --- |
+| `called` | 内建 summarizer 真正调用了摘要模型（`standalone` 或 `cache_safe_fork`） |
+| `custom_response` | before-model callback 直接给出了摘要响应，因此没有调用 provider |
+| `unobserved` | 本轮 attempt-local ModelCall recorder 没有发布调用模式，无法证明是否发生模型调用。常见于未发布 recorder 的自定义 summarizer；不要把 leftover `Report.Call.Mode` 当成这一次观测 |
+
+`Session summary injection result` 的 outcome：
+
+| Outcome | 级别 | 含义 |
+| --- | --- | --- |
+| `block_text_present` | Debug | 在返回的响应序列结束或被提前停止之后，同一份框架 `model.Request` 的任意消息 `Content` 中仍能找到与记录 block 相同的文本（`block_text_present=true`）。这不能证明原注入位置还在，也不描述 provider payload。若模型调用在返回响应序列之前失败，则立即观察 |
+| `not_selected` | Debug | 会话尚未存储任何摘要 |
+| `lookup_miss` | Debug | 其他分支存在摘要，但本次请求的作用域内没有 |
+| `scope_mismatch` | Debug | 分支作用域的请求在作用域内没有命中，而作用域之外存在全会话摘要。因为本次没有选中 in-scope 摘要，本次 summaryCutoff 保持为零，所以这一阶段仍会保留原始分支历史。这与作用域外的全会话摘要自身有没有 boundary/cutoff 无关 |
+| `block_text_missing` | Warn | 摘要已选中（`selected=true`），但在返回的响应序列结束或被提前停止之后，同一份框架 `model.Request` 的任意消息 `Content` 中都观察不到记录的 block 文本。这不表示 provider 的最终 payload，也不表示摘要从未写入请求。对会原地修改共享请求的内置 provider（包括 OpenAI），这通常是 token 裁剪导致的 |
+
+### 有多少历史在 hook 前被选定
+
+当 `outcome` 为 `no_content` 或 `unsafe_view` 时，`selection_reason` 指出究竟是
+哪个阶段清空了输入，否则这与"会话本来就没有内容"无法区分：
+
+| `selection_reason` | 含义 |
+| --- | --- |
+| `selected` | hook 前选定了事件；这不证明这些事件就是后来送进模型的 payload |
+| `no_candidates` | 该阶段本来就没有候选事件 |
+| `skip_recent_all` | `WithSkipRecent` 回调要求跳过的数量不少于可用事件数 |
+| `unsafe_prefix` | skip-recent 之后仍有事件，但保留的前缀既没有用户消息也没有前置的历史摘要作为锚点，因此被丢弃 |
+| `session_filter_empty` | 候选事件通过了 skip-recent，随后被摘要的分支作用域全部过滤掉 |
+| `unbound_view` | 存在模型可见视图，但未绑定到模型真正回答的请求 |
+| `boundary_unmapped` | 选中的条目没有对应到已存储事件的结构映射，因此丢弃摘要，而不是让边界越过无法再次定位的内容 |
+| `custom` | 本次摘要调用没有发布内置事件选择，计数未知 |
+| `none` | 没有 summarizer 运行，未观测到任何选择 |
+
+配套的计数描述的是接收 `WithSkipRecent` 回调的那个阶段：
+
+- `eligible_events`：交给该阶段的候选事件数，在 skip-recent 执行之前统计。对已
+  绑定的模型可见视图，它包含前置的历史摘要；对未绑定视图，它是未被考虑的视图条
+  目数。
+- `skip_recent_requested`：回调返回的原始数值，因此回调返回异常值时依然可见。未
+  配置回调时为 `0`。
+- `skip_recent_applied`：skip-recent 自身实际移除的事件数，即
+  `clamp(skip_recent_requested, 0, eligible_events)`。后续的不安全前缀、分支作用
+  域或边界无法映射，由 `selection_reason` 与 `selected_events` 说明，不计入此字
+  段。例如 `eligible_events=3`、`skip_recent_requested=1`、`unsafe_prefix` 时，
+  `skip_recent_applied=1` 且 `selected_events=0`。
+- `selected_events`：经过 skip-recent、分支作用域与边界映射之后，PreSummaryHook
+  运行前选定的事件数。它不是 hook 或 before-model callback 改写之后真正送进模型
+  的 payload 计数。
+
+当 `selection_reason` 为 `custom` 或 `none` 时，这四个计数均为 `-1`。
+
+`trigger` 与 `trigger_metric` 只来自本轮 attempt 的内部 trigger recorder。
+自定义 summarizer 或调用方只写入 `summary.Report.Trigger` 不会被诊断采用：
+门控为 true 但未发布时上报 `triggered=true` 且 `trigger=none`；门控为 false
+且未发布时上报 `outcome=unobserved` 且 `trigger=none`。leftover
+`Report.Trigger` 不会被拷进记录。当内部 recorder 已发布触发观测时，框架词
+汇表之外的 name/metric 会归一化为 `custom`，因此这两个字段始终有界，且不
+会携带应用侧字符串。`trigger_value`、`trigger_threshold`、
+`threshold_ratio` 与 `context_window` 原样上报。
+
+### 排查一次问题
+
+针对同一个请求或会话，按以下顺序查看记录：
+
+1. **`Session summary result`** 回答是否产出了摘要。`triggered` 与 `trigger*`
+   字段解释门控判定；`input_source`、`selection_reason` 与各项事件计数说明有多
+   少历史在 hook 前被选定，以及是哪个阶段移除了其余部分；
+   `binding_reason` 解释 `unsafe_view` 的成因；`persist_result` 区分后端确认写入、
+   stale 跳过、无法分类的写入，以及写入失败。
+2. **`Session summary cascade result`** 解释分支触发如何到达全会话目标。
+   `source_materialized` 只记录本轮分支是否物化。`action=copied` 需要 copy
+   成功；`action=dependent` 需要全会话目标实际开始。否则，只有在全会话目标
+   没有独立推进时，才是 `action=skipped` 且 `invariant=ok`，包括本轮分支未
+   更新，以及源已物化但 copy 未成功或 dependent 目标未开始。
+   `mode=dependent` 表示多 filter 顺序级联，而不是并发生成。
+   `invariant=violation` 仅表示全会话目标在本轮没有分支 materialization 的
+   情况下推进了。
+3. **`Session summary injection result`** 回答后续请求在返回的响应序列
+   结束或被提前停止之后，框架这份 `model.Request` 里是否还带着已存储的摘要。
+   若模型调用在返回响应序列之前失败，则立即观察。对比
+   `lookup_strategy`（由 `WithBranchFilterMode` 决定的配置作用域）与
+   `lookup_result`（该作用域实际找到的结果）以及 `full_session_summary`。
+   `scope_mismatch` 表示全会话摘要未被使用，并不表示分支历史已被丢弃：因为本
+   次没有选中 in-scope 摘要，本次 summaryCutoff 保持为零，这一阶段仍会保留原
+   始分支历史。
+4. **`Pre-LLM context compaction result`** 与 token 裁剪记录解释注入之后请求
+   发生了什么。对会原地修改共享请求的内置 provider，`block_text_missing`
+   与裁剪记录同时出现，说明同一份框架 `model.Request` 里已经观察不到原始摘要
+   block。自定义 `Model` 如果复制了请求，框架这份拷贝可能不会反映它实际发送
+   的内容，因此该记录仍然不描述 provider 最终 payload。
+
+`block_text_present`、healthy cascade、`copied`、`below_threshold` 等常规 Debug 记录
+需要把框架日志级别设为 `debug`。在正常的 Info 级别下，只能看到上表中的
+Info 与 Warn outcome。
 
 ## 性能考虑
 

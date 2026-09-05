@@ -333,3 +333,20 @@ func TestProcessStateCmd_Error(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+// TestParseSummaryWriteResult pins the set-if-newer reply classification
+// shared by both storage layouts. Only int64 0 and 1 are stored or stale;
+// anything else is unknown so callers never guess, and never turn a successful
+// script execution into an error.
+func TestParseSummaryWriteResult(t *testing.T) {
+	assert.Equal(t, SummaryWriteApplied, ParseSummaryWriteResult(int64(1)),
+		"1 means the write was applied")
+	assert.Equal(t, SummaryWriteStale, ParseSummaryWriteResult(int64(0)),
+		"0 means a stale write was skipped")
+
+	for _, result := range []any{int64(2), int64(-1), int(1), uint64(1), "1", nil} {
+		write := ParseSummaryWriteResult(result)
+		assert.Equal(t, SummaryWriteUnknown, write, "result %#v", result)
+		assert.False(t, write.Applied(), "an unrecognized reply must not report applied")
+	}
+}
