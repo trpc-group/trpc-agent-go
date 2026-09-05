@@ -1,0 +1,8 @@
+{
+  "target": "regression-writer#instruction",
+  "maxRounds": 1,
+  "minScoreGain": 0.02,
+  "optimizer": "evaluation/workflow/promptiter",
+  "trainOnlyOptimization": true,
+  "candidateValidationRuns": 3
+}
