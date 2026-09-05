@@ -1,0 +1,1253 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2026 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package safety
+
+import (
+	"net"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+var explicitURLPattern = regexp.MustCompile(
+	`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`,
+)
+
+var networkCommands = map[string]struct{}{
+	"curl": {}, "wget": {}, "nc": {}, "netcat": {}, "ssh": {},
+	"scp": {}, "sftp": {}, "ftp": {}, "git": {}, "ssh.exe": {},
+	"scp.exe": {}, "sftp.exe": {}, "git.exe": {}, "git-submodule": {},
+	"git-submodule.exe": {}, "rsync": {}, "rsync.exe": {},
+}
+
+var nonNetworkCommands = map[string]struct{}{
+	"cat": {}, "echo": {}, "false": {}, "grep": {}, "head": {},
+	"ls": {}, "pwd": {}, "tail": {}, "test": {}, "true": {}, "wc": {},
+}
+
+func scanNetwork(
+	policy Policy,
+	environment map[string]string,
+	segments [][]string,
+) []Finding {
+	var findings []Finding
+	for _, argv := range segments {
+		if len(argv) == 0 {
+			continue
+		}
+		classification := classifyNetworkCommand(argv[0])
+		if classification == networkCommandNone {
+			continue
+		}
+		if classification == networkCommandUnknown {
+			if unknownNetworkSignal(argv) {
+				findings = append(findings, newFinding(
+					DecisionNeedsHumanReview, RiskMedium, "network.unknown_client",
+					"unknown executable receives network-shaped arguments",
+					"review the executable semantics or use a recognized network tool",
+				))
+			}
+			continue
+		}
+		if finding, ok := destinationOverrideFinding(argv); ok {
+			findings = append(findings, finding)
+		}
+		if finding, ok := networkConfigFinding(argv); ok {
+			findings = append(findings, finding)
+		}
+		if commandBase(argv[0]) == "wget" {
+			findings = append(findings, scanWgetInputFiles(policy, argv)...)
+		}
+		destinations, unresolved := networkDestinations(argv)
+		var rewritePrefixes []string
+		base := commandBase(argv[0])
+		if base == "git" || base == "git.exe" {
+			var rewriteFindings []Finding
+			rewriteFindings, rewritePrefixes = scanGitURLRewrites(
+				policy, environment, argv, destinations,
+			)
+			findings = append(findings, rewriteFindings...)
+		}
+		for _, destination := range destinations {
+			if destinationUsesRewrite(destination, rewritePrefixes) {
+				continue
+			}
+			if isFileURL(destination) {
+				continue
+			}
+			host, ok := knownDestinationHost(destination)
+			if !ok {
+				unresolved = true
+				continue
+			}
+			if finding, denied := networkDestinationFinding(policy, host); denied {
+				findings = append(findings, finding)
+			}
+		}
+		if unresolved {
+			findings = append(findings, newFinding(
+				DecisionNeedsHumanReview, RiskMedium, "network.destination_unparsed",
+				"network destination could not be parsed conservatively",
+				"use an explicit allowlisted hostname or URL",
+			))
+		}
+	}
+	return findings
+}
+
+// networkDestinations isolates only the operands that each supported client
+// interprets as remote destinations. Local output and checkout operands must
+// not be fed to hostname classification.
+func networkDestinations(argv []string) ([]string, bool) {
+	if len(argv) == 0 {
+		return nil, false
+	}
+	switch commandBase(argv[0]) {
+	case "ssh", "ssh.exe":
+		return firstPositional(argv[1:], sshValueOptions), false
+	case "scp", "scp.exe":
+		return scpRemoteDestinations(argv[1:], scpValueOptions), false
+	case "sftp", "sftp.exe":
+		return firstPositional(argv[1:], sftpValueOptions), false
+	case "git", "git.exe":
+		return gitNetworkDestinations(argv[1:])
+	case "git-submodule", "git-submodule.exe":
+		return gitSubmoduleNetworkDestinations(
+			parseDirectGitSubmoduleInvocation(argv[1:]),
+		)
+	case "rsync", "rsync.exe":
+		return rsyncNetworkDestinations(argv[1:])
+	case "nc", "netcat":
+		return netcatDestination(argv[1:]), false
+	case "ftp":
+		return firstPositional(argv[1:], ftpValueOptions), false
+	default:
+		return webClientDestinations(commandBase(argv[0]), argv[1:])
+	}
+}
+
+var sshValueOptions = map[string]struct{}{
+	"-B": {}, "-b": {}, "-c": {}, "-D": {}, "-E": {}, "-e": {}, "-F": {},
+	"-I": {}, "-i": {}, "-J": {}, "-L": {}, "-l": {}, "-m": {},
+	"-O": {}, "-o": {}, "-p": {}, "-Q": {}, "-R": {}, "-S": {},
+	"-W": {}, "-w": {},
+}
+
+var scpValueOptions = map[string]struct{}{
+	"-c": {}, "-D": {}, "-F": {}, "-i": {}, "-J": {}, "-l": {},
+	"-o": {}, "-P": {}, "-S": {}, "-X": {},
+}
+
+var sftpValueOptions = map[string]struct{}{
+	"-B": {}, "-b": {}, "-c": {}, "-D": {}, "-F": {}, "-i": {},
+	"-J": {}, "-l": {}, "-o": {}, "-P": {}, "-R": {}, "-S": {}, "-X": {},
+}
+
+var ftpValueOptions = map[string]struct{}{
+	"-P": {}, "-p": {},
+}
+
+func firstPositional(args []string, valueOptions map[string]struct{}) []string {
+	positionals := positionalTokens(args, valueOptions)
+	if len(positionals) == 0 {
+		return nil
+	}
+	return positionals[:1]
+}
+
+func positionalTokens(args []string, valueOptions map[string]struct{}) []string {
+	var positionals []string
+	options := true
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if options && arg == "--" {
+			options = false
+			continue
+		}
+		if options && strings.HasPrefix(arg, "-") && arg != "-" {
+			if _, consumes := valueOptions[arg]; consumes && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		positionals = append(positionals, arg)
+	}
+	return positionals
+}
+
+func webClientDestinations(base string, args []string) ([]string, bool) {
+	valueOptions, flagOptions, shortFlags := webClientOptionMetadata(base)
+	return parseWebClientDestinations(args, valueOptions, flagOptions, shortFlags)
+}
+
+func scanWgetInputFiles(policy Policy, argv []string) []Finding {
+	references, unresolved := wgetInputFileReferences(argv[1:])
+	var findings []Finding
+	if unresolved {
+		findings = append(findings, wgetInputFileFinding())
+	}
+	for _, reference := range references {
+		if host, ok := explicitHost(reference); ok {
+			if finding, denied := networkDestinationFinding(policy, host); denied {
+				findings = append(findings, finding)
+				continue
+			}
+		}
+		findings = append(findings, wgetInputFileFinding())
+	}
+	return findings
+}
+
+func wgetInputFileReferences(args []string) ([]string, bool) {
+	const shortValueOptions = "aABDeilOoPQRtTUw"
+	var references []string
+	unresolved := false
+	options := true
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if options && arg == "--" {
+			options = false
+			continue
+		}
+		if !options || len(arg) == 0 || arg == "-" || !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if strings.HasPrefix(arg, "--") {
+			name, value, attached := strings.Cut(arg, "=")
+			if name != "--input-file" &&
+				!isLongOptionAbbreviation(name, "--input-file") {
+				continue
+			}
+			if attached {
+				references = append(references, value)
+				continue
+			}
+			if index+1 == len(args) {
+				unresolved = true
+				continue
+			}
+			references = append(references, args[index+1])
+			index++
+			continue
+		}
+
+		shortOptions := arg[1:]
+		for optionIndex := 0; optionIndex < len(shortOptions); optionIndex++ {
+			option := shortOptions[optionIndex]
+			if option == 'i' {
+				if optionIndex+1 < len(shortOptions) {
+					references = append(references,
+						strings.TrimPrefix(shortOptions[optionIndex+1:], "="),
+					)
+				} else if index+1 == len(args) {
+					unresolved = true
+				} else {
+					references = append(references, args[index+1])
+					index++
+				}
+				break
+			}
+			if !strings.ContainsRune(shortValueOptions, rune(option)) {
+				continue
+			}
+			if optionIndex+1 < len(shortOptions) {
+				break
+			}
+			if index+1 == len(args) {
+				unresolved = true
+			} else {
+				index++
+			}
+			break
+		}
+	}
+	return references, unresolved
+}
+
+func wgetInputFileFinding() Finding {
+	return newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "network.input_file",
+		"wget reads additional network destinations from an input file or stdin",
+		"review every URL in the input source before executing wget",
+	)
+}
+
+func webClientOptionMetadata(
+	base string,
+) (map[string]struct{}, map[string]struct{}, string) {
+	valueOptions := map[string]struct{}{
+		"--cacert": {}, "--capath": {}, "--cert": {}, "--config": {},
+		"--connect-timeout": {}, "--connect-to": {}, "--cookie": {}, "--cookie-jar": {},
+		"--data": {}, "--data-ascii": {}, "--data-binary": {}, "--data-raw": {},
+		"--data-urlencode":   {},
+		"--directory-prefix": {}, "--execute": {}, "--expand-variable": {},
+		"--form": {}, "--form-string": {},
+		"--header": {}, "--interface": {}, "--json": {}, "--key": {},
+		"--limit-rate": {}, "--max-filesize": {}, "--max-redirs": {}, "--max-time": {},
+		"--method": {}, "--output": {}, "--post-data": {}, "--post-file": {},
+		"--output-document": {}, "--preproxy": {}, "--proxy": {}, "--proxy-header": {},
+		"--read-timeout": {}, "--referer": {}, "--request": {}, "--resolve": {},
+		"--retry": {}, "--retry-delay": {}, "--speed-limit": {}, "--speed-time": {},
+		"--timeout": {}, "--tries": {}, "--upload-file": {}, "--url-query": {},
+		"--user": {}, "--variable": {},
+		"--user-agent": {}, "--wait": {}, "--waitretry": {},
+	}
+	curlValues := []string{
+		"-A", "-b", "-c", "-C", "-d", "-D", "-e", "-E", "-F", "-H", "-K",
+		"-m", "-o", "-P", "-Q", "-r", "-T", "-u", "-w", "-x", "-X", "-Y",
+	}
+	wgetValues := []string{
+		"-a", "-A", "-B", "-D", "-e", "-i", "-l", "-O", "-o", "-P",
+		"-Q", "-R", "-t", "-T", "-U", "-w",
+	}
+	values := curlValues
+	if base == "wget" {
+		values = wgetValues
+	} else if base != "curl" {
+		values = append(append([]string{}, curlValues...), wgetValues...)
+	}
+	for _, option := range values {
+		valueOptions[option] = struct{}{}
+	}
+	if base == "wget" {
+		valueOptions["--input-file"] = struct{}{}
+	}
+	flagOptions := map[string]struct{}{
+		"--compressed": {}, "--content-disposition": {}, "--continue": {},
+		"--fail": {}, "--fail-with-body": {}, "--globoff": {}, "--head": {},
+		"--help": {}, "--include": {}, "--insecure": {}, "--inet4-only": {},
+		"--inet6-only": {}, "--ipv4": {}, "--ipv6": {}, "--location": {},
+		"--no-buffer": {}, "--no-check-certificate": {}, "--no-clobber": {},
+		"--no-verbose": {}, "--parallel": {}, "--quiet": {}, "--recursive": {},
+		"--remote-header-name": {}, "--remote-name": {}, "--show-error": {},
+		"--silent": {}, "--spider": {}, "--trust-server-names": {},
+		"--verbose": {}, "--version": {},
+	}
+	curlShortFlags := "012346VZfghiIkLNOnpqRrsSv"
+	wgetShortFlags := "cdHhNpqrSV"
+	shortFlags := curlShortFlags
+	if base == "wget" {
+		shortFlags = wgetShortFlags
+	} else if base != "curl" {
+		shortFlags += wgetShortFlags
+	}
+	return valueOptions, flagOptions, shortFlags
+}
+
+func parseWebClientDestinations(
+	args []string,
+	valueOptions map[string]struct{},
+	flagOptions map[string]struct{},
+	shortFlags string,
+) ([]string, bool) {
+	var destinations []string
+	unresolved := false
+	options := true
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !options {
+			destinations = append(destinations, arg)
+			continue
+		}
+		if arg == "--" {
+			options = false
+			continue
+		}
+		if destination, next, ok := webClientURLArgument(args, i); ok {
+			destinations = append(destinations, destination)
+			i = next
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			destinations = append(destinations, arg)
+			continue
+		}
+		next, recognized := consumeWebClientOption(
+			args, i, valueOptions, flagOptions, shortFlags,
+		)
+		if !recognized {
+			unresolved = true
+		}
+		i = next
+	}
+	return destinations, unresolved
+}
+
+func webClientURLArgument(args []string, index int) (string, int, bool) {
+	arg := args[index]
+	if (arg == "--url" || arg == "-url") && index+1 < len(args) {
+		return args[index+1], index + 1, true
+	}
+	if strings.HasPrefix(arg, "--url=") {
+		return strings.TrimPrefix(arg, "--url="), index, true
+	}
+	return "", index, false
+}
+
+func consumeWebClientOption(
+	args []string,
+	index int,
+	valueOptions map[string]struct{},
+	flagOptions map[string]struct{},
+	shortFlags string,
+) (int, bool) {
+	arg := args[index]
+	if strings.HasPrefix(arg, "--") {
+		return consumeWebClientLongOption(args, index, valueOptions, flagOptions)
+	}
+	consumesNext, recognized := parseShortOptions(arg, valueOptions, shortFlags)
+	if recognized && consumesNext && index+1 < len(args) {
+		return index + 1, true
+	}
+	if recognized {
+		return index, true
+	}
+	return consumeUnknownWebClientOption(args, index), false
+}
+
+func consumeWebClientLongOption(
+	args []string,
+	index int,
+	valueOptions map[string]struct{},
+	flagOptions map[string]struct{},
+) (int, bool) {
+	arg := args[index]
+	name := strings.SplitN(arg, "=", 2)[0]
+	if _, consumes := valueOptions[name]; consumes {
+		if !strings.Contains(arg, "=") && index+1 < len(args) {
+			return index + 1, true
+		}
+		return index, true
+	}
+	if _, flag := flagOptions[arg]; flag {
+		return index, true
+	}
+	return consumeUnknownWebClientOption(args, index), false
+}
+
+func consumeUnknownWebClientOption(args []string, index int) int {
+	if !strings.Contains(args[index], "=") && index+1 < len(args) &&
+		!strings.HasPrefix(args[index+1], "-") {
+		return index + 1
+	}
+	return index
+}
+
+func parseShortOptions(
+	arg string,
+	valueOptions map[string]struct{},
+	allowedFlags string,
+) (bool, bool) {
+	if len(arg) < 2 || !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+		return false, false
+	}
+	options := arg[1:]
+	for index, flag := range options {
+		if _, consumes := valueOptions["-"+string(flag)]; consumes {
+			return index == len(options)-1, true
+		}
+		if !strings.ContainsRune(allowedFlags, flag) {
+			return false, false
+		}
+	}
+	return false, true
+}
+
+func scpRemoteDestinations(args []string, valueOptions map[string]struct{}) []string {
+	positionals := positionalTokens(args, valueOptions)
+	var destinations []string
+	for _, operand := range positionals {
+		if _, ok := scpRemoteHost(operand); ok {
+			destinations = append(destinations, operand)
+		}
+	}
+	return destinations
+}
+
+func gitNetworkDestinations(args []string) ([]string, bool) {
+	if invocation := parseGitSubmoduleInvocation(args); invocation.matched {
+		return gitSubmoduleNetworkDestinations(invocation)
+	}
+	subcommand, rest, ok, commandUnresolved := gitCommandAndRest(args)
+	if commandUnresolved {
+		return nil, true
+	}
+	if !ok {
+		return nil, false
+	}
+	valueOptions := map[string]struct{}{
+		"-b": {}, "-c": {}, "-j": {}, "-o": {}, "-u": {}, "--branch": {}, "--config": {},
+		"--deepen": {}, "--depth": {}, "--filter": {}, "--jobs": {}, "--origin": {},
+		"--reference": {}, "--reference-if-able": {}, "--separate-git-dir": {},
+		"--server-option": {}, "--shallow-exclude": {}, "--shallow-since": {},
+		"--template": {}, "--upload-pack": {},
+	}
+	positionals := positionalTokens(rest, valueOptions)
+	switch subcommand {
+	case "clone":
+		if len(positionals) == 0 {
+			return nil, false
+		}
+		remote := positionals[0]
+		if isExplicitNetworkURL(remote) {
+			return []string{remote}, false
+		}
+		if _, ok := scpRemoteHost(remote); ok {
+			return []string{remote}, false
+		}
+		return nil, false
+	case "fetch", "pull", "push", "ls-remote":
+		if len(positionals) == 0 {
+			return nil, true
+		}
+		remote := positionals[0]
+		if isExplicitNetworkURL(remote) {
+			return []string{remote}, false
+		}
+		if _, ok := scpRemoteHost(remote); ok {
+			return []string{remote}, false
+		}
+		return nil, true
+	case "archive":
+		return gitArchiveNetworkDestinations(rest)
+	default:
+		return nil, false
+	}
+}
+
+func gitArchiveNetworkDestinations(args []string) ([]string, bool) {
+	var repositories []string
+	unresolved := false
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			break
+		}
+		repository, consumesNext, remoteOption := gitArchiveRemoteOption(arg)
+		if !remoteOption {
+			continue
+		}
+		if consumesNext {
+			if index+1 == len(args) {
+				unresolved = true
+				continue
+			}
+			repository = args[index+1]
+			index++
+		}
+		repositories = append(repositories, repository)
+	}
+	var destinations []string
+	for _, repository := range repositories {
+		matched, repositoryUnresolved :=
+			gitSubmoduleRepositoryNetworkDestinations(repository, false)
+		destinations = append(destinations, matched...)
+		unresolved = unresolved || repositoryUnresolved
+	}
+	return destinations, unresolved
+}
+
+func gitArchiveRemoteOption(arg string) (string, bool, bool) {
+	name, value, attached := strings.Cut(arg, "=")
+	if len(name) < len("--r") || !strings.HasPrefix("--remote", name) {
+		return "", false, false
+	}
+	if attached {
+		return value, false, true
+	}
+	return "", true, true
+}
+
+type gitURLRewriteRule struct {
+	base     string
+	prefix   string
+	pushOnly bool
+}
+
+func scanGitURLRewrites(
+	policy Policy,
+	environment map[string]string,
+	argv []string,
+	destinations []string,
+) ([]Finding, []string) {
+	var findings []Finding
+	var rules []gitURLRewriteRule
+	push := false
+	if subcommand, _, ok, _ := gitCommandAndRest(argv[1:]); ok {
+		push = subcommand == "push"
+	}
+	for _, config := range gitConfigValues(argv[1:]) {
+		rule, configFindings, matched := parseGitURLRewriteConfig(config, push)
+		if !matched {
+			continue
+		}
+		findings = append(findings, configFindings...)
+		if rule.prefix != "" {
+			rules = append(rules, rule)
+		}
+	}
+	for _, config := range gitConfigEnvironmentValues(argv[1:]) {
+		key, envName, ok := strings.Cut(config, "=")
+		if !ok {
+			continue
+		}
+		if _, _, matched := gitURLRewriteConfigBase(key, push); !matched {
+			continue
+		}
+		value, exists := environment[envName]
+		if !exists {
+			findings = append(findings, gitRewriteUnparsedFinding())
+			continue
+		}
+		rule, configFindings, matched := parseGitURLRewriteConfig(
+			key+"="+value, push,
+		)
+		if !matched {
+			continue
+		}
+		findings = append(findings, configFindings...)
+		if rule.prefix != "" {
+			rules = append(rules, rule)
+		}
+	}
+	var prefixes []string
+	for _, destination := range destinations {
+		matched := effectiveGitURLRewriteRules(rules, destination, push)
+		if len(matched) == 0 {
+			continue
+		}
+		prefixes = append(prefixes, matched[0].prefix)
+		for _, rule := range matched {
+			findings = append(findings, scanGitURLRewriteRule(policy, rule)...)
+		}
+	}
+	return findings, prefixes
+}
+
+func parseGitURLRewriteConfig(
+	config string,
+	push bool,
+) (gitURLRewriteRule, []Finding, bool) {
+	key, prefix, ok := strings.Cut(config, "=")
+	base, pushOnly, matched := gitURLRewriteConfigBase(key, push)
+	if !matched {
+		return gitURLRewriteRule{}, nil, false
+	}
+	if !ok || prefix == "" {
+		return gitURLRewriteRule{}, []Finding{gitRewriteUnparsedFinding()}, true
+	}
+	return gitURLRewriteRule{
+		base: base, prefix: prefix, pushOnly: pushOnly,
+	}, nil, true
+}
+
+func scanGitURLRewriteRule(
+	policy Policy,
+	rule gitURLRewriteRule,
+) []Finding {
+	if rule.base == "" || isFileURL(rule.base) {
+		return []Finding{gitRewriteUnparsedFinding()}
+	}
+	host, parsed := knownDestinationHost(rule.base)
+	if !parsed {
+		return []Finding{gitRewriteUnparsedFinding()}
+	}
+	if !networkHostAllowed(host, policy.NetworkAllowlist) {
+		return []Finding{newFinding(
+			DecisionDeny, RiskHigh, "network.destination_override",
+			"Git URL rewrite changes the effective destination to a non-allowlisted host",
+			"remove the rewrite or use an allowlisted remote directly",
+		)}
+	}
+	return []Finding{newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "network.destination_override",
+		"Git URL rewrite changes the effective destination",
+		"review the rewrite and use the allowlisted remote directly",
+	)}
+}
+
+func gitURLRewriteConfigBase(key string, push bool) (string, bool, bool) {
+	key = strings.TrimSpace(key)
+	lower := strings.ToLower(key)
+	if !strings.HasPrefix(lower, "url.") {
+		return "", false, false
+	}
+	suffix := ".insteadof"
+	pushOnly := false
+	if strings.HasSuffix(lower, ".pushinsteadof") {
+		if !push {
+			return "", false, false
+		}
+		suffix = ".pushinsteadof"
+		pushOnly = true
+	} else if !strings.HasSuffix(lower, suffix) {
+		return "", false, false
+	}
+	baseEnd := len(key) - len(suffix)
+	if baseEnd < len("url.") {
+		return "", pushOnly, true
+	}
+	return key[len("url."):baseEnd], pushOnly, true
+}
+
+func effectiveGitURLRewriteRules(
+	rules []gitURLRewriteRule,
+	destination string,
+	push bool,
+) []gitURLRewriteRule {
+	// Git gives pushInsteadOf priority over insteadOf for push URLs.
+	if push {
+		if matched := longestGitURLRewriteRules(rules, destination, true); len(matched) > 0 {
+			return matched
+		}
+	}
+	return longestGitURLRewriteRules(rules, destination, false)
+}
+
+func longestGitURLRewriteRules(
+	rules []gitURLRewriteRule,
+	destination string,
+	pushOnly bool,
+) []gitURLRewriteRule {
+	longest := -1
+	var matched []gitURLRewriteRule
+	for _, rule := range rules {
+		if rule.pushOnly != pushOnly || !strings.HasPrefix(destination, rule.prefix) {
+			continue
+		}
+		if len(rule.prefix) > longest {
+			longest = len(rule.prefix)
+			matched = matched[:0]
+		}
+		if len(rule.prefix) == longest {
+			matched = append(matched, rule)
+		}
+	}
+	return matched
+}
+
+func gitConfigValues(args []string) []string {
+	var configs []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-c" {
+			if i+1 < len(args) {
+				configs = append(configs, args[i+1])
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-c") && len(arg) > 2 {
+			configs = append(configs, strings.TrimPrefix(arg, "-c"))
+		}
+	}
+	return configs
+}
+
+func destinationUsesRewrite(destination string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if prefix != "" && strings.HasPrefix(destination, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func gitRewriteUnparsedFinding() Finding {
+	return newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "network.destination_unparsed",
+		"Git URL rewrite destination could not be parsed conservatively",
+		"remove the rewrite or use an explicit allowlisted remote",
+	)
+}
+
+func gitCommandAndRest(args []string) (string, []string, bool, bool) {
+	valueOptions := map[string]struct{}{
+		"-C": {}, "-c": {}, "--attr-source": {}, "--config-env": {},
+		"--git-dir": {}, "--namespace": {}, "--shallow-file": {},
+		"--work-tree": {},
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			if _, consumes := valueOptions[arg]; consumes {
+				if i+1 == len(args) {
+					return "", nil, false, true
+				}
+				i++
+				continue
+			}
+			if gitRecognizedGlobalOption(arg) {
+				continue
+			}
+			return "", nil, false, true
+		}
+		return strings.ToLower(arg), args[i+1:], true, false
+	}
+	return "", nil, false, false
+}
+
+func gitRecognizedGlobalOption(arg string) bool {
+	if len(arg) > 2 && (strings.HasPrefix(arg, "-C") || strings.HasPrefix(arg, "-c")) {
+		return true
+	}
+	for _, name := range []string{
+		"--attr-source", "--config-env", "--exec-path", "--git-dir",
+		"--namespace", "--shallow-file", "--work-tree",
+	} {
+		if strings.HasPrefix(arg, name+"=") {
+			return true
+		}
+	}
+	if strings.HasPrefix(arg, "--list-cmds=") {
+		return true
+	}
+	switch arg {
+	case "-h", "--help", "-v", "--version", "--exec-path", "--html-path",
+		"--man-path", "--info-path", "-p", "--paginate", "-P", "--no-pager",
+		"--no-replace-objects", "--no-lazy-fetch", "--no-optional-locks",
+		"--no-advice", "--bare", "--literal-pathspecs", "--glob-pathspecs",
+		"--noglob-pathspecs", "--icase-pathspecs":
+		return true
+	default:
+		return false
+	}
+}
+
+func netcatDestination(args []string) []string {
+	values := map[string]struct{}{
+		"-i": {}, "-P": {}, "-p": {}, "-q": {}, "-s": {}, "-w": {}, "-x": {}, "-X": {},
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--listen" || netcatShortFlag(arg, 'l', values) {
+			return nil
+		}
+		if arg == "--" {
+			if i+1 < len(args) {
+				return args[i+1 : i+2]
+			}
+			return nil
+		}
+		if strings.HasPrefix(arg, "--") {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			consumesNext, recognized := parseShortOptions(
+				arg, values, "46bCDdhklnrtUuvz",
+			)
+			if recognized && consumesNext && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		return args[i : i+1]
+	}
+	return nil
+}
+
+func netcatShortFlag(arg string, target rune, valueOptions map[string]struct{}) bool {
+	if len(arg) < 2 || !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+		return false
+	}
+	for _, option := range arg[1:] {
+		if option == target {
+			return true
+		}
+		if _, consumes := valueOptions["-"+string(option)]; consumes {
+			return false
+		}
+	}
+	return false
+}
+
+func knownDestinationHost(candidate string) (string, bool) {
+	if host, ok := explicitHost(candidate); ok {
+		return host, true
+	}
+	if host, ok := scpRemoteHost(candidate); ok {
+		return normalizeHost(host), true
+	}
+	candidate = strings.TrimSpace(strings.Trim(candidate, `"'`))
+	if candidate == "" || strings.HasPrefix(candidate, "-") || strings.Contains(candidate, "=") {
+		return "", false
+	}
+	parsed, err := url.Parse("//" + candidate)
+	if err == nil && validKnownHost(parsed.Hostname()) {
+		return normalizeHost(parsed.Hostname()), true
+	}
+	hostPort := strings.SplitN(candidate, "/", 2)[0]
+	if validNumericHost(hostPort) || validHostname(hostPort) {
+		return normalizeHost(hostPort), true
+	}
+	return "", false
+}
+
+func scpRemoteHost(candidate string) (string, bool) {
+	candidate = strings.TrimSpace(candidate)
+	if strings.HasPrefix(candidate, "[") {
+		if end := strings.Index(candidate, "]:"); end > 1 {
+			return candidate[1:end], true
+		}
+	}
+	colon := strings.Index(candidate, ":")
+	if colon <= 0 || strings.Contains(candidate[:colon], "/") {
+		return "", false
+	}
+	host := candidate[:colon]
+	if at := strings.LastIndex(host, "@"); at >= 0 {
+		host = host[at+1:]
+	}
+	return host, validKnownHost(host)
+}
+
+func validKnownHost(host string) bool {
+	return probableHost(host) || validHostname(host) || validNumericHost(host)
+}
+
+func validHostname(host string) bool {
+	host = strings.TrimSuffix(host, ".")
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") ||
+			strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, char := range label {
+			if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+				(char < '0' || char > '9') && char != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validNumericHost(host string) bool {
+	if strings.HasPrefix(strings.ToLower(host), "0x") {
+		_, err := strconv.ParseUint(host[2:], 16, 32)
+		return err == nil
+	}
+	if host == "" {
+		return false
+	}
+	for _, char := range host {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	_, err := strconv.ParseUint(host, 10, 32)
+	return err == nil
+}
+
+func isFileURL(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	return err == nil && strings.EqualFold(parsed.Scheme, "file")
+}
+
+func isExplicitNetworkURL(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	return err == nil && parsed.Scheme != "" && parsed.Hostname() != "" &&
+		!strings.EqualFold(parsed.Scheme, "file")
+}
+
+type networkCommandClassification int
+
+const (
+	networkCommandUnknown networkCommandClassification = iota
+	networkCommandNone
+	networkCommandKnown
+)
+
+func classifyNetworkCommand(command string) networkCommandClassification {
+	base := commandBase(command)
+	if _, ok := networkCommands[base]; ok || strings.Contains(base, "fetch") ||
+		strings.Contains(base, "download") {
+		return networkCommandKnown
+	}
+	if _, ok := nonNetworkCommands[base]; ok {
+		return networkCommandNone
+	}
+	return networkCommandUnknown
+}
+
+func unknownNetworkSignal(argv []string) bool {
+	for _, arg := range argv[1:] {
+		if _, ok := explicitHost(arg); ok || unknownHostPortSignal(arg) {
+			return true
+		}
+		name := strings.ToLower(strings.SplitN(arg, "=", 2)[0])
+		switch name {
+		case "--resolve", "--connect-to", "--proxy", "--preproxy",
+			"--proxy-command", "--proxycommand":
+			return true
+		}
+	}
+	return false
+}
+
+func unknownHostPortSignal(arg string) bool {
+	candidate := strings.TrimSpace(strings.Trim(arg, `"'`))
+	if name, value, ok := strings.Cut(candidate, "="); ok {
+		if !strings.EqualFold(strings.TrimLeft(name, "-"), "connect") {
+			return false
+		}
+		candidate = value
+	}
+	host, port, err := net.SplitHostPort(candidate)
+	if err != nil || !validKnownHost(host) {
+		return false
+	}
+	_, err = strconv.ParseUint(port, 10, 16)
+	return err == nil
+}
+
+func scanNetworkText(policy Policy, text string) []Finding {
+	var findings []Finding
+	for _, candidate := range explicitURLPattern.FindAllString(text, -1) {
+		candidate = strings.TrimRight(candidate, ".,;:)]}")
+		if host, ok := explicitHost(candidate); ok {
+			if finding, denied := networkDestinationFinding(policy, host); denied {
+				findings = append(findings, finding)
+			}
+		}
+	}
+	return findings
+}
+
+func destinationOverrideFinding(argv []string) (Finding, bool) {
+	base := commandBase(argv[0])
+	sshClient := isSSHNetworkClient(base)
+	args := argv[1:]
+	if sshClient {
+		args = parseSSHArguments(
+			strings.TrimSuffix(base, ".exe"), args,
+		).localArguments
+	}
+	for i := 0; i < len(args); i++ {
+		rawArg := args[i]
+		arg := strings.ToLower(rawArg)
+		if sshClient && sshDestinationOverrideArgument(args, i) {
+			return sshDestinationOverrideFinding(), true
+		}
+		if genericDestinationOverrideArgument(arg) {
+			return genericDestinationOverrideFinding(), true
+		}
+		if base == "curl" && curlProxyOption(rawArg) {
+			return genericDestinationOverrideFinding(), true
+		}
+		if netcatDestinationOverrideArgument(base, rawArg, arg) {
+			return netcatDestinationOverrideFinding(), true
+		}
+	}
+	return Finding{}, false
+}
+
+func sshDestinationOverrideArgument(argv []string, index int) bool {
+	arg := strings.ToLower(argv[index])
+	if arg == "-j" || strings.HasPrefix(arg, "-j") {
+		return true
+	}
+	value, consumesNext, found := sshConfigurationOption(argv[index])
+	if !found {
+		return false
+	}
+	if consumesNext {
+		return index+1 < len(argv) && sshDestinationOverrideOption(argv[index+1])
+	}
+	return sshDestinationOverrideOption(value)
+}
+
+func genericDestinationOverrideArgument(arg string) bool {
+	name := strings.SplitN(arg, "=", 2)[0]
+	switch name {
+	case "--resolve", "--connect-to", "--proxy", "--preproxy",
+		"--proxy-command", "--proxycommand":
+		return true
+	default:
+		return false
+	}
+}
+
+func netcatDestinationOverrideArgument(base, rawArg, arg string) bool {
+	if base != "nc" && base != "netcat" {
+		return false
+	}
+	name := strings.SplitN(arg, "=", 2)[0]
+	rawName := strings.SplitN(rawArg, "=", 2)[0]
+	return name == "-x" || strings.HasPrefix(arg, "-x") || rawName == "-X"
+}
+
+func sshDestinationOverrideFinding() Finding {
+	return newFinding(
+		DecisionDeny, RiskHigh, "network.destination_override",
+		"SSH option can replace or relay the network destination",
+		"remove ProxyCommand or ProxyJump and connect directly to an allowlisted host",
+	)
+}
+
+func genericDestinationOverrideFinding() Finding {
+	return newFinding(
+		DecisionDeny, RiskHigh, "network.destination_override",
+		"network option can replace the effective destination",
+		"remove destination-changing options and use an allowlisted URL directly",
+	)
+}
+
+func netcatDestinationOverrideFinding() Finding {
+	return newFinding(
+		DecisionDeny, RiskHigh, "network.destination_override",
+		"netcat proxy options replace the effective destination",
+		"remove proxy options and connect directly to an allowlisted host",
+	)
+}
+
+func curlProxyOption(arg string) bool {
+	if len(arg) < 2 || !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+		return false
+	}
+	for _, option := range arg[1:] {
+		if option == 'x' {
+			return true
+		}
+		if strings.ContainsRune("AbcCdDeEFHKmoPQrTuwXY", option) {
+			return false
+		}
+		if !strings.ContainsRune("012346VZfghiIkLNOnpqRrsSv", option) {
+			return false
+		}
+	}
+	return false
+}
+
+func sshDestinationOverrideOption(value string) bool {
+	name, _, ok := sshConfigurationOptionNameValue(value)
+	if !ok {
+		return false
+	}
+	return strings.EqualFold(name, "ProxyCommand") ||
+		strings.EqualFold(name, "ProxyJump") ||
+		strings.EqualFold(name, "Hostname")
+}
+
+func networkConfigFinding(argv []string) (Finding, bool) {
+	base := commandBase(argv[0])
+	if isSSHNetworkClient(base) {
+		args := parseSSHArguments(
+			strings.TrimSuffix(base, ".exe"), argv[1:],
+		).localArguments
+		for _, arg := range args {
+			if arg == "-F" || strings.HasPrefix(arg, "-F") {
+				return newFinding(
+					DecisionNeedsHumanReview, RiskMedium, "network.config",
+					"SSH loads options from a configuration file",
+					"review the SSH configuration and connect directly to an allowlisted host",
+				), true
+			}
+		}
+		return Finding{}, false
+	}
+	if base != "curl" && base != "wget" {
+		return Finding{}, false
+	}
+	for _, arg := range argv[1:] {
+		if base == "wget" && wgetExecutableConfigOption(arg) {
+			return newFinding(
+				DecisionNeedsHumanReview, RiskHigh, "network.config",
+				"wget executes configuration directives that can change network routing",
+				"remove executable configuration and use an allowlisted URL directly",
+			), true
+		}
+		longName := strings.ToLower(strings.SplitN(arg, "=", 2)[0])
+		shortConfig := base == "curl" && (arg == "-K" || strings.HasPrefix(arg, "-K"))
+		if longName == "--config" || shortConfig {
+			return newFinding(
+				DecisionNeedsHumanReview, RiskMedium, "network.config",
+				"network client loads options from a configuration file",
+				"review the configuration file or specify the allowlisted destination directly",
+			), true
+		}
+	}
+	return Finding{}, false
+}
+
+func isSSHNetworkClient(base string) bool {
+	base = strings.TrimSuffix(base, ".exe")
+	return base == "ssh" || base == "scp" || base == "sftp"
+}
+
+func wgetExecutableConfigOption(arg string) bool {
+	if arg == "--execute" || strings.HasPrefix(arg, "--execute=") {
+		return true
+	}
+	if len(arg) < 2 || !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+		return false
+	}
+	for _, option := range arg[1:] {
+		if option == 'e' {
+			return true
+		}
+		if strings.ContainsRune("aABDilOoPQRTUtw", option) {
+			return false
+		}
+		if !strings.ContainsRune("cdHhNpqrSV", option) {
+			return false
+		}
+	}
+	return false
+}
+
+func explicitHost(candidate string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(candidate))
+	if err != nil || parsed.Scheme == "" || parsed.Hostname() == "" {
+		return "", false
+	}
+	return normalizeHost(parsed.Hostname()), true
+}
+
+func probableHost(host string) bool {
+	host = normalizeHost(host)
+	if host == "" {
+		return false
+	}
+	if net.ParseIP(strings.Trim(host, "[]")) != nil || host == "localhost" {
+		return true
+	}
+	return strings.Contains(host, ".") && !strings.ContainsAny(host, " \\/")
+}
+
+func normalizeHost(host string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+}
+
+func networkDestinationFinding(policy Policy, host string) (Finding, bool) {
+	if networkHostAllowed(host, policy.NetworkAllowlist) {
+		return Finding{}, false
+	}
+	return newFinding(
+		DecisionDeny, RiskHigh, "network.destination",
+		"network destination is not allowlisted: "+host,
+		"add the trusted host to network_allowlist or remove the network request",
+	), true
+}
+
+func networkHostAllowed(host string, allowlist []string) bool {
+	host = normalizeHost(host)
+	for _, allowed := range allowlist {
+		allowed = normalizeHost(allowed)
+		if allowed != "" && (host == allowed || strings.HasSuffix(host, "."+allowed)) {
+			return true
+		}
+	}
+	return false
+}
