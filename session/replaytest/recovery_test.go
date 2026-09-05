@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -164,6 +165,17 @@ func TestPreCommitFailureInjection(t *testing.T) {
 }
 
 func TestPreCommitFailureInjectionIsBranchLocal(t *testing.T) {
+	var service *countingMemoryReadService
+	backend := InMemoryBackend()
+	open := backend.Open
+	backend.Open = func(ctx context.Context, name string) (*Services, error) {
+		services, err := open(ctx, name)
+		if err == nil {
+			service = &countingMemoryReadService{Service: services.Memory}
+			services.Memory = service
+		}
+		return services, err
+	}
 	step := func(name string) Step {
 		return Step{
 			Name: name, Kind: StepAddMemory, Recovery: RecoveryRetryIdempotent, FailBeforeWrite: true,
@@ -176,10 +188,25 @@ func TestPreCommitFailureInjectionIsBranchLocal(t *testing.T) {
 			CapabilitySession, CapabilityMemory, CapabilityConcurrent, CapabilityConcurrentMemory,
 		},
 		Steps: []Step{{Name: "concurrent", Kind: StepConcurrent, Concurrent: [][]Step{{step("first")}, {step("second")}}}},
-	}, InMemoryBackend())
+	}, backend)
 	if err != nil || len(snapshot.Memories) != 2 {
 		t.Fatalf("Replay() memories = %d, error = %v, want two memories", len(snapshot.Memories), err)
 	}
+	// Each branch verifies its failed write before retrying; the final snapshot
+	// performs the third read. Skipping injection in either branch loses a read.
+	if service.reads.Load() != 3 {
+		t.Fatalf("memory reads = %d, want both recovery reads and the final snapshot", service.reads.Load())
+	}
+}
+
+type countingMemoryReadService struct {
+	memory.Service
+	reads atomic.Int64
+}
+
+func (s *countingMemoryReadService) ReadMemories(ctx context.Context, key memory.UserKey, limit int) ([]*memory.Entry, error) {
+	s.reads.Add(1)
+	return s.Service.ReadMemories(ctx, key, limit)
 }
 
 func TestRecoveryRetriesIdempotentMemoryWrite(t *testing.T) {
