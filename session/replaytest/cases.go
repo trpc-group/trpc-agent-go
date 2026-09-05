@@ -225,10 +225,13 @@ func memoryRetryRecoveryCase() Case {
 	}
 	return Case{
 		Name:        "memory_retry_recovery",
-		Description: "retrying an identical idempotent memory write produces one durable entry",
+		Description: "recovering from a pre-commit failure and repeating the memory write produces one durable entry",
 		Requires:    []Capability{CapabilitySession, CapabilityMemory},
 		Steps: []Step{
-			{Name: "initial-memory-write", Kind: StepAddMemory, Recovery: RecoveryRetryIdempotent, Memory: retryable},
+			{
+				Name: "initial-memory-write", Kind: StepAddMemory, Memory: retryable,
+				Recovery: RecoveryRetryIdempotent, FailBeforeWrite: true,
+			},
 			{Name: "retry-memory-write", Kind: StepAddMemory, Memory: retryable},
 		},
 		Fault: FaultDuplicateMemory,

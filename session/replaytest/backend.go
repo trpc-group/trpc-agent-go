@@ -10,11 +10,9 @@ package replaytest
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -28,40 +26,17 @@ func InMemoryBackend() Backend {
 	return Backend{
 		Name:         "inmemory",
 		Capabilities: FullCapabilities(),
-		Open: func(_ context.Context, caseName string) (*Services, error) {
+		Open: func(_ context.Context, _ string) (*Services, error) {
 			summarizer := &DeterministicSummarizer{}
-			memoryService := memory.Service(memoryinmemory.NewMemoryService())
-			if caseName == "memory_retry_recovery" {
-				memoryService = &failOnceMemoryService{Service: memoryService}
-			}
 			return &Services{
 				Session: sessioninmemory.NewSessionService(
 					sessioninmemory.WithSummarizer(summarizer),
 					sessioninmemory.WithCascadeFullSessionSummary(false),
 				),
-				Memory: memoryService,
+				Memory: memoryinmemory.NewMemoryService(),
 			}, nil
 		},
 	}
-}
-
-type failOnceMemoryService struct {
-	memory.Service
-	failed bool
-}
-
-func (s *failOnceMemoryService) AddMemory(
-	ctx context.Context,
-	key memory.UserKey,
-	value string,
-	topics []string,
-	options ...memory.AddOption,
-) error {
-	if !s.failed {
-		s.failed = true
-		return errors.New("replaytest: injected pre-commit memory failure")
-	}
-	return s.Service.AddMemory(ctx, key, value, topics, options...)
 }
 
 // DeterministicSummarizer makes summary persistence testable without an LLM.

@@ -526,7 +526,12 @@ func (e *execution) runStep(ctx context.Context, step Step) error {
 	if err != nil {
 		return fmt.Errorf("capture recovery witness: %w", err)
 	}
-	writeErr := e.runStepOnce(ctx, step)
+	var writeErr error
+	if step.FailBeforeWrite {
+		writeErr = errors.New("replaytest: injected pre-commit write failure")
+	} else {
+		writeErr = e.runStepOnce(ctx, step)
+	}
 	if writeErr == nil {
 		return nil
 	}
@@ -1090,14 +1095,6 @@ func (e *execution) updateState(ctx context.Context, input *StateInput) error {
 }
 
 func (e *execution) updateAppState(ctx context.Context, input *StateInput) error {
-	if input.Clear {
-		current, err := e.services.Session.ListAppStates(ctx, e.key.AppName)
-		if err != nil {
-			return err
-		}
-		input = cloneStateInput(input)
-		input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
-	}
 	if len(input.Values) > 0 {
 		if err := e.services.Session.UpdateAppState(ctx, e.key.AppName, cloneState(input.Values)); err != nil {
 			return err
@@ -1105,6 +1102,17 @@ func (e *execution) updateAppState(ctx context.Context, input *StateInput) error
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+	}
+	if input.Clear {
+		current, err := e.services.Session.ListAppStates(ctx, e.key.AppName)
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		input = cloneStateInput(input)
+		input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
 	}
 	for _, key := range input.DeleteKeys {
 		if err := e.services.Session.DeleteAppState(ctx, e.key.AppName, key); err != nil {
@@ -1119,14 +1127,6 @@ func (e *execution) updateAppState(ctx context.Context, input *StateInput) error
 
 func (e *execution) updateUserState(ctx context.Context, input *StateInput) error {
 	userKey := session.UserKey{AppName: e.key.AppName, UserID: e.key.UserID}
-	if input.Clear {
-		current, err := e.services.Session.ListUserStates(ctx, userKey)
-		if err != nil {
-			return err
-		}
-		input = cloneStateInput(input)
-		input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
-	}
 	if len(input.Values) > 0 {
 		if err := e.services.Session.UpdateUserState(ctx, userKey, cloneState(input.Values)); err != nil {
 			return err
@@ -1134,6 +1134,17 @@ func (e *execution) updateUserState(ctx context.Context, input *StateInput) erro
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+	}
+	if input.Clear {
+		current, err := e.services.Session.ListUserStates(ctx, userKey)
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		input = cloneStateInput(input)
+		input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
 	}
 	for _, key := range input.DeleteKeys {
 		if err := e.services.Session.DeleteUserState(ctx, userKey, key); err != nil {
@@ -1986,6 +1997,9 @@ func validateStep(step Step) error {
 }
 
 func validateRecoveryMode(step Step) error {
+	if step.FailBeforeWrite && step.Recovery == RecoveryNone {
+		return fmt.Errorf("step %q pre-commit failure requires recovery", step.Name)
+	}
 	switch step.Recovery {
 	case RecoveryNone:
 		return nil
@@ -2882,6 +2896,9 @@ func (o *concurrentWriteOwners) validateState(
 	branchIndex int,
 	input *StateInput,
 ) error {
+	if input.Clear {
+		return fmt.Errorf("step %q branch %d cannot concurrently clear %s state", stepName, branchIndex, input.Scope)
+	}
 	for key := range input.Values {
 		if err := o.claimState(stepName, branchIndex, input.Scope, key); err != nil {
 			return err

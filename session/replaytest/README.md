@@ -52,13 +52,18 @@ unobserved outcome returns `ErrUncertainCommit`. Event verification is limited
 to persisted appends without state deltas so the witness covers the complete
 durable effect.
 
+`Step.FailBeforeWrite` explicitly injects a pre-commit error on the initial
+attempt and requires a recovery mode. An idempotent retry then calls the actual
+backend. The public memory recovery case declares this fault in its steps, so
+every adapter exercises the same retry path; case names only identify workloads.
+
 Concurrent event branches require `EventOrderCausal` and use stable internal
 execution lanes. A lane is independent of the event's business `filter key`,
 so branches may share one. Each concurrent step has one write domain. State,
 memory, summary, and track concurrency does not affect event order, but
 requires a domain-specific capability and disjoint footprints: state scopes and
 keys, memory content, summary filter keys, and track names cannot overlap
-across branches. Full-session summaries, searches, reloads, nested concurrent
+across branches. State clear-all, full-session summaries, searches, reloads, nested concurrent
 steps, and event state deltas remain sequential
 because they have no portable conflict-free contract. Backends may omit
 `CapabilityConcurrentState`, `CapabilityConcurrentMemory`,

@@ -234,6 +234,10 @@ type Step struct {
 	// Recovery selects explicit uncertain-commit handling for this write. Its
 	// zero value disables recovery.
 	Recovery RecoveryMode
+	// FailBeforeWrite injects a pre-commit error on this step's first attempt,
+	// without calling the backend write. It requires an enabled Recovery mode;
+	// an idempotent retry calls the real backend. The zero value injects no fault.
+	FailBeforeWrite bool
 	// Event is populated only for event append steps.
 	Event *EventInput
 	// State is populated only for state update steps.
@@ -307,7 +311,8 @@ type StateInput struct {
 	DeleteKeys []string
 	// Clear removes every existing key in the selected app or user scope after
 	// applying Values. It is not supported for session scope because
-	// session.Service has no persistent clear-all operation.
+	// session.Service has no persistent clear-all operation. Clear must run
+	// sequentially because it cannot establish a disjoint concurrent footprint.
 	Clear bool
 }
 

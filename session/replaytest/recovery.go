@@ -280,6 +280,9 @@ func (e *execution) stateWriteMatches(
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	if input.Clear {
+		return len(state) == 0, nil
+	}
 	deleted := make(map[string]struct{}, len(input.DeleteKeys))
 	for _, key := range input.DeleteKeys {
 		deleted[key] = struct{}{}

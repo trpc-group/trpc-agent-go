@@ -116,6 +116,72 @@ func TestRecoveryVerifiesCommittedWrites(t *testing.T) {
 	}
 }
 
+func TestInMemoryBackendDoesNotInterpretCaseNames(t *testing.T) {
+	for _, name := range []string{"custom-memory-case", "memory_retry_recovery"} {
+		t.Run(name, func(t *testing.T) {
+			snapshot, err := Replay(context.Background(), Case{
+				Name: name, Requires: []Capability{CapabilitySession, CapabilityMemory},
+				Steps: []Step{{Name: "write", Kind: StepAddMemory, Memory: &MemoryInput{Memory: "remember once"}}},
+			}, InMemoryBackend())
+			if err != nil {
+				t.Fatalf("Replay() error = %v", err)
+			}
+			if len(snapshot.Memories) != 1 {
+				t.Fatalf("memories = %d, want 1", len(snapshot.Memories))
+			}
+		})
+	}
+}
+
+func TestPreCommitFailureInjection(t *testing.T) {
+	for _, mode := range []RecoveryMode{RecoveryVerify, RecoveryRetryIdempotent} {
+		t.Run(string(mode), func(t *testing.T) {
+			var service *committedErrorMemoryService
+			backend := committedErrorBackend(nil, func(s *committedErrorMemoryService) { service = s })
+			snapshot, err := Replay(context.Background(), Case{
+				Name: "explicit-failure", Requires: []Capability{CapabilitySession, CapabilityMemory},
+				Steps: []Step{{
+					Name: "write", Kind: StepAddMemory, Recovery: mode, FailBeforeWrite: true,
+					Memory: &MemoryInput{Memory: "remember once"},
+				}},
+			}, backend)
+			wantCalls := 0
+			if mode == RecoveryVerify {
+				if !errors.Is(err, ErrUncertainCommit) {
+					t.Fatalf("Replay() error = %v, want ErrUncertainCommit", err)
+				}
+			} else {
+				wantCalls = 1
+				if err != nil || len(snapshot.Memories) != 1 {
+					t.Fatalf("Replay() memories = %d, error = %v, want one memory", len(snapshot.Memories), err)
+				}
+			}
+			if service == nil || service.addMemoryCalls != wantCalls {
+				t.Fatalf("memory service = %#v, want %d writes", service, wantCalls)
+			}
+		})
+	}
+}
+
+func TestPreCommitFailureInjectionIsBranchLocal(t *testing.T) {
+	step := func(name string) Step {
+		return Step{
+			Name: name, Kind: StepAddMemory, Recovery: RecoveryRetryIdempotent, FailBeforeWrite: true,
+			Memory: &MemoryInput{Memory: name},
+		}
+	}
+	snapshot, err := Replay(context.Background(), Case{
+		Name: "memory_retry_recovery",
+		Requires: []Capability{
+			CapabilitySession, CapabilityMemory, CapabilityConcurrent, CapabilityConcurrentMemory,
+		},
+		Steps: []Step{{Name: "concurrent", Kind: StepConcurrent, Concurrent: [][]Step{{step("first")}, {step("second")}}}},
+	}, InMemoryBackend())
+	if err != nil || len(snapshot.Memories) != 2 {
+		t.Fatalf("Replay() memories = %d, error = %v, want two memories", len(snapshot.Memories), err)
+	}
+}
+
 func TestRecoveryRetriesIdempotentMemoryWrite(t *testing.T) {
 	backend := committedErrorBackend(nil, func(service *committedErrorMemoryService) {
 		service.failBeforeAddMemory = true
@@ -604,6 +670,14 @@ func TestRecoveryValidationRejectsInvalidModes(t *testing.T) {
 		step Step
 		want string
 	}{
+		{
+			name: "injection without recovery",
+			step: Step{
+				Name: "write", Kind: StepAddMemory, FailBeforeWrite: true,
+				Memory: &MemoryInput{Memory: "value"},
+			},
+			want: "pre-commit failure requires recovery",
+		},
 		{name: "unknown", step: unknown, want: "unknown recovery mode"},
 		{
 			name: "verify read",
