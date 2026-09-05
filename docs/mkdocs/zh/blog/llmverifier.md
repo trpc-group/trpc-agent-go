@@ -454,7 +454,7 @@ tRPC-Agent-Go 将 Evaluation 的评估结果引入在线 Agent 运行链路，�
 ## 参考资料
 
 - [tRPC-Agent-Go Runner: 在线 Best-of-N 候选选择](../runner.md)
-- [tRPC-Agent-Go Evaluation: LLM Verifier](../evaluation.md#llm-verifier)
+- [tRPC-Agent-Go Evaluation: LLM Verifier](../evaluation/methods.md#llm-verifier)
 - [examples/evaluation/llmverifier](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llmverifier)
 - [tRPC-Agent-Go-Benchmark：GAIA](https://github.com/trpc-group/trpc-agent-go-benchmark/tree/main/gaia)
 - [LLM-as-a-Verifier](https://llm-as-a-verifier.notion.site/)

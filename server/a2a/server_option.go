@@ -11,9 +11,13 @@ package a2a
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
@@ -30,13 +34,21 @@ import (
 // serverUserIDHeader is the default header that a2a server get UserID of invocation.
 var serverUserIDHeader = "X-User-ID"
 
+const anonymousUserIDPrefix = "A2A_ANONYMOUS_"
+const anonymousUserIDCookie = "trpc_agent_a2a_anon"
+
+const anonymousAuthProvenanceClaim = "trpc_agent_a2a_builtin_anonymous"
+const anonymousUserIDScopeSeparator = "_"
+
+var anonymousRandRead = rand.Read
+
 // UserIDFromContext returns the user ID from the context.
 func UserIDFromContext(ctx context.Context) (string, bool) {
 	if ctx == nil {
 		return "", false
 	}
 	user, ok := ctx.Value(auth.AuthUserKey).(*auth.User)
-	if !ok {
+	if !ok || user == nil {
 		return "", false
 	}
 	return user.ID, true
@@ -112,24 +124,263 @@ type EventToA2APartMapper func(ctx context.Context, event *event.Event) ([]proto
 
 type defaultAuthProvider struct {
 	userIDHeader string
+	cookieScope  string
+}
+
+// preAuthIdentityKey stores the provisional identity used internally to detect
+// whether pre-auth middleware supplied a replacement authenticated user.
+type preAuthIdentityKey struct{}
+
+// anonymousAuthProvenanceKey stores whether built-in anonymous authentication
+// produced the current request identity. The marker is independent of the
+// auth.User pointer so post-auth middleware can clone or enrich that user.
+type anonymousAuthProvenanceKey struct{}
+
+type preAuthIdentityMiddleware struct {
+	userIDHeader string
+}
+
+func (m preAuthIdentityMiddleware) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := r.Context().Value(auth.AuthUserKey).(*auth.User); ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		user := &auth.User{ID: strings.TrimSpace(r.Header.Get(m.userIDHeader))}
+		ctx := context.WithValue(r.Context(), preAuthIdentityKey{}, user)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+type anonymousUserCookieMiddleware struct {
+	userIDHeader string
+	cookieScope  string
+}
+
+type anonymousCookieStateKey struct{}
+
+type anonymousCookieState struct {
+	userID string
+}
+
+func (m anonymousUserCookieMiddleware) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		preAuthUser, _ := r.Context().Value(preAuthIdentityKey{}).(*auth.User)
+		if userID, ok := UserIDFromContext(r.Context()); ok && strings.TrimSpace(userID) != "" {
+			user, _ := r.Context().Value(auth.AuthUserKey).(*auth.User)
+			if user != preAuthUser {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		if strings.TrimSpace(r.Header.Get(m.userIDHeader)) == "" {
+			userID, err := anonymousUserIDFromRequest(r, m.cookieScope)
+			if err != nil {
+				http.Error(w, "failed to create anonymous user", http.StatusInternalServerError)
+				return
+			}
+			ctx := context.WithValue(r.Context(), anonymousCookieStateKey{}, &anonymousCookieState{
+				userID: userID,
+			})
+			r = r.Clone(ctx)
+			r.AddCookie(&http.Cookie{Name: anonymousUserIDCookie, Value: userID})
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+type anonymousUserCookieResponseMiddleware struct {
+	secureCookie bool
+	cookiePath   string
+	cookieScope  string
+}
+
+type anonymousAuthUserMiddleware struct{}
+
+func (anonymousAuthUserMiddleware) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := r.Context().Value(auth.AuthUserKey).(*auth.User)
+		ctx := context.WithValue(
+			r.Context(),
+			anonymousAuthProvenanceKey{},
+			isBuiltInAnonymousAuthUser(user),
+		)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (m anonymousUserCookieResponseMiddleware) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		state, _ := r.Context().Value(anonymousCookieStateKey{}).(*anonymousCookieState)
+		user, _ := r.Context().Value(auth.AuthUserKey).(*auth.User)
+		builtInAnonymous, _ := r.Context().Value(anonymousAuthProvenanceKey{}).(bool)
+		// Do not let an empty custom-auth result fall through to the processor's
+		// request-local random anonymous fallback.
+		if user == nil || strings.TrimSpace(user.ID) == "" {
+			http.Error(w, "authenticated user ID is empty", http.StatusUnauthorized)
+			return
+		}
+		// The context marker survives post-auth user clones; the claim check
+		// preserves the rule that custom auth providers cannot forge this cookie.
+		if state != nil && builtInAnonymous && isBuiltInAnonymousAuthUser(user) &&
+			user.ID == state.userID && isAnonymousUserIDForScope(user.ID, m.cookieScope) {
+			http.SetCookie(w, &http.Cookie{
+				Name:     anonymousUserIDCookie,
+				Value:    state.userID,
+				Path:     anonymousCookiePathForBasePath(m.cookiePath),
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+				Secure:   m.secureCookie || r.TLS != nil,
+			})
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) {
 	if r == nil {
 		return nil, errors.New("request is nil")
 	}
-	userID := r.Header.Get(d.userIDHeader)
+	preAuthUser, _ := r.Context().Value(preAuthIdentityKey{}).(*auth.User)
+	if user, ok := r.Context().Value(auth.AuthUserKey).(*auth.User); ok &&
+		user != nil && strings.TrimSpace(user.ID) != "" &&
+		user != preAuthUser {
+		return user, nil
+	}
+	userID := strings.TrimSpace(r.Header.Get(d.userIDHeader))
 	if userID == "" {
+		var err error
+		userID, err = anonymousUserIDFromRequest(r, d.cookieScope)
+		if err != nil {
+			return nil, err
+		}
 		log.DebugfContext(
 			r.Context(),
-			"UserID(Header %s) not set, will be generated from "+
-				"context ID. You can use WithUserIDHeader in "+
+			"UserID(Header %s) not set, using anonymous request principal. "+
+				"You can use WithUserIDHeader in "+
 				"A2AAgent and A2AServer to specify the header "+
 				"that transfers user info.",
 			d.userIDHeader,
 		)
+		return &auth.User{
+			ID: userID,
+			Claims: map[string]any{
+				anonymousAuthProvenanceClaim: true,
+			},
+		}, nil
 	}
 	return &auth.User{ID: userID}, nil
+}
+
+func anonymousUserIDFromRequest(r *http.Request, scopes ...string) (string, error) {
+	cookieScope := ""
+	if len(scopes) > 0 {
+		cookieScope = scopes[0]
+	}
+	for _, cookie := range r.Cookies() {
+		if cookie.Name != anonymousUserIDCookie {
+			continue
+		}
+		if userID := strings.TrimSpace(cookie.Value); isAnonymousUserIDForScope(userID, cookieScope) {
+			return userID, nil
+		}
+	}
+	return newAnonymousUserIDForScope(cookieScope)
+}
+
+func newAnonymousUserID() (string, error) {
+	var raw [16]byte
+	if _, err := anonymousRandRead(raw[:]); err != nil {
+		return "", fmt.Errorf("generate anonymous user ID: %w", err)
+	}
+	return anonymousUserIDPrefix + hex.EncodeToString(raw[:]), nil
+}
+
+func isAnonymousUserID(userID string) bool {
+	if !strings.HasPrefix(userID, anonymousUserIDPrefix) {
+		return false
+	}
+	encoded := strings.TrimPrefix(userID, anonymousUserIDPrefix)
+	if decoded, err := hex.DecodeString(encoded); err == nil && len(decoded) == 16 {
+		return true
+	}
+	parts := strings.Split(encoded, anonymousUserIDScopeSeparator)
+	if len(parts) != 2 {
+		return false
+	}
+	scope, scopeErr := hex.DecodeString(parts[0])
+	principal, principalErr := hex.DecodeString(parts[1])
+	return scopeErr == nil && len(scope) == sha256.Size &&
+		principalErr == nil && len(principal) == 16
+}
+
+func isAnonymousUserIDForScope(userID, cookieScope string) bool {
+	if strings.TrimSpace(cookieScope) == "" {
+		return isAnonymousUserID(userID)
+	}
+	if !isAnonymousUserID(userID) {
+		return false
+	}
+	encoded := strings.TrimPrefix(userID, anonymousUserIDPrefix)
+	parts := strings.Split(encoded, anonymousUserIDScopeSeparator)
+	return len(parts) == 2 && strings.EqualFold(parts[0], cookieScope)
+}
+
+func isBuiltInAnonymousAuthUser(user *auth.User) bool {
+	if user == nil || user.Claims == nil {
+		return false
+	}
+	marked, ok := user.Claims[anonymousAuthProvenanceClaim].(bool)
+	return ok && marked
+}
+
+func newAnonymousUserIDForScope(cookieScope string) (string, error) {
+	if strings.TrimSpace(cookieScope) == "" {
+		return newAnonymousUserID()
+	}
+	var raw [16]byte
+	if _, err := anonymousRandRead(raw[:]); err != nil {
+		return "", fmt.Errorf("generate anonymous user ID: %w", err)
+	}
+	return anonymousUserIDPrefix + cookieScope + anonymousUserIDScopeSeparator +
+		hex.EncodeToString(raw[:]), nil
+}
+
+func anonymousCookieScopeFromAgentURL(agentURL string) string {
+	normalized := strings.TrimSpace(agentURL)
+	parsed, err := url.Parse(normalized)
+	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		parsed.Scheme = strings.ToLower(parsed.Scheme)
+		parsed.Host = strings.ToLower(parsed.Host)
+		parsed.Path = anonymousCookiePathForBasePath(parsed.Path)
+		parsed.RawPath = ""
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+		normalized = parsed.String()
+	} else {
+		normalized = strings.TrimRight(normalized, "/")
+	}
+	scope := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(scope[:])
+}
+
+func anonymousCookieSecureForAgentURL(agentURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(agentURL))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Scheme, "https")
+}
+
+func anonymousCookiePathForBasePath(basePath string) string {
+	basePath = strings.TrimSpace(basePath)
+	if basePath == "" || basePath == "/" {
+		return "/"
+	}
+	if !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+	return strings.TrimRight(basePath, "/")
 }
 
 type options struct {
@@ -153,6 +404,7 @@ type options struct {
 	errorHandler              ErrorHandler
 	debugLogging              bool
 	userIDHeader              string
+	preAuthMiddlewares        []a2a.Middleware
 	adkCompatibility          bool
 	structuredTaskErrors      bool
 }
@@ -285,9 +537,20 @@ func WithUserIDHeader(header string) Option {
 // WithExtraA2AOptions passes extra options to the underlying A2A server.
 // For example, it can be combined with a2a.WithAgentCardHandler and
 // NewAgentCardHandler(...) to serve a dynamically updated AgentCard.
+// Custom middleware options run after the built-in identity middleware and
+// authentication provider, so they observe the final auth.AuthUserKey value.
 func WithExtraA2AOptions(opts ...a2a.Option) Option {
 	return func(options *options) {
 		options.extraOptions = append(options.extraOptions, opts...)
+	}
+}
+
+// WithPreAuthA2AMiddleware adds middleware that runs before the built-in
+// anonymous-cookie and authentication middleware. Use it only for request
+// normalization that must happen before the authenticated identity is created.
+func WithPreAuthA2AMiddleware(middlewares ...a2a.Middleware) Option {
+	return func(options *options) {
+		options.preAuthMiddlewares = append(options.preAuthMiddlewares, middlewares...)
 	}
 }
 

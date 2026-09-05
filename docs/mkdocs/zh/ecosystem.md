@@ -765,7 +765,8 @@ func (p *PostgreSQLMemoryService) unmarshalTopics(data []byte) []string {
 建议：
 
 - 将包放回 `memory/mem0/`，在 memory 领域下更直观、更易发现。
-- 让 Runner 在每轮对话结束后，通过 `runner.WithSessionIngestor(...)` 把完整 session transcript 交给外部长时记忆平台。
+- 让 Runner 在每轮对话结束后，通过 `runner.WithSessionIngestor(...)` 把当前
+  Session 交给 ingestor；mem0 适配层只转发新增且非空的 user/assistant 增量。
 - 只暴露真正符合平台能力边界的工具。对 mem0 来说，通常是只读的 `memory_search`，以及可选的 `memory_load`。
 - 平台特有的 ingest、轮询、鉴权、重试逻辑，都收敛在 `memory/mem0` 内部，不污染 core memory 抽象。
 

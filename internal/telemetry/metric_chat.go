@@ -309,15 +309,18 @@ func mergeMetricsSessionView(
 	if current == nil {
 		return previous
 	}
-	sessionView := &session.Session{
-		ID:      firstNonEmptyString(previous.ID, current.ID),
-		UserID:  firstNonEmptyString(previous.UserID, current.UserID),
-		AppName: firstNonEmptyString(previous.AppName, current.AppName),
-	}
-	if sameMetricsSessionView(previous, sessionView) {
+	id := firstNonEmptyString(previous.ID, current.ID)
+	userID := firstNonEmptyString(previous.UserID, current.UserID)
+	appName := firstNonEmptyString(previous.AppName, current.AppName)
+	if previous.ID == id && previous.UserID == userID &&
+		previous.AppName == appName {
 		return previous
 	}
-	return sessionView
+	return &session.Session{
+		ID:      id,
+		UserID:  userID,
+		AppName: appName,
+	}
 }
 
 func mergeInvocationForMetrics(

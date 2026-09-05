@@ -12,8 +12,10 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +27,7 @@ import (
 // TestEmbedderInterface verifies that our Embedder implements the interface.
 func TestEmbedderInterface(t *testing.T) {
 	var _ embedder.Embedder = (*Embedder)(nil)
+	var _ embedder.BatchEmbedder = (*Embedder)(nil)
 }
 
 // TestNewEmbedder tests the constructor with various options.
@@ -355,6 +358,288 @@ func TestEmbedder_GetEmbedding(t *testing.T) {
 	)
 	if _, err := emb3.GetEmbedding(context.Background(), "test"); err != nil {
 		t.Fatalf("ada embedding failed: %v", err)
+	}
+}
+
+// embeddingItem builds one data item of an OpenAI-compatible batch response.
+func embeddingItem(index int, vector []float64) map[string]any {
+	return map[string]any{"object": "embedding", "index": index, "embedding": vector}
+}
+
+// embeddingItemWithoutIndex builds a data item that omits the required index
+// field, as a non-conforming gateway may do.
+func embeddingItemWithoutIndex(vector []float64) map[string]any {
+	return map[string]any{"object": "embedding", "embedding": vector}
+}
+
+// newBatchServer serves the given data items for every embeddings request and
+// records the decoded request bodies.
+func newBatchServer(t *testing.T, data func(inputs []string) []map[string]any) (*httptest.Server, *[][]string) {
+	t.Helper()
+	var requests [][]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/embeddings") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		var body struct {
+			Input json.RawMessage `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// A batch request must carry a JSON array of strings, not a single
+		// string, otherwise the provider computes only one vector.
+		var inputs []string
+		if err := json.Unmarshal(body.Input, &inputs); err != nil {
+			http.Error(w, "input is not an array of strings: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, inputs)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"object": "list",
+			"data":   data(inputs),
+			"model":  "bge-m3",
+			"usage":  map[string]any{"prompt_tokens": len(inputs), "total_tokens": len(inputs)},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &requests
+}
+
+// TestEmbedder_GetEmbeddings_SendsOneArrayRequest verifies that a batch is sent
+// as a single request whose input is the array of texts in caller order.
+func TestEmbedder_GetEmbeddings_SendsOneArrayRequest(t *testing.T) {
+	texts := []string{"first", "second", "third"}
+	srv, requests := newBatchServer(t, func(inputs []string) []map[string]any {
+		items := make([]map[string]any, len(inputs))
+		for i := range inputs {
+			items[i] = embeddingItem(i, []float64{float64(i)})
+		}
+		return items
+	})
+
+	emb := New(WithBaseURL(srv.URL), WithAPIKey("dummy"), WithModel("bge-m3"), WithDimensions(1))
+	vectors, err := emb.GetEmbeddings(context.Background(), texts)
+	if err != nil {
+		t.Fatalf("GetEmbeddings() error = %v", err)
+	}
+
+	if len(*requests) != 1 {
+		t.Fatalf("http requests = %d, want 1", len(*requests))
+	}
+	if !slices.Equal((*requests)[0], texts) {
+		t.Errorf("request input = %v, want %v", (*requests)[0], texts)
+	}
+	if len(vectors) != len(texts) {
+		t.Fatalf("vectors = %d, want %d", len(vectors), len(texts))
+	}
+}
+
+// TestEmbedder_GetEmbeddings_RestoresInputOrder verifies that vectors are
+// returned in input order even when the provider replies out of order.
+func TestEmbedder_GetEmbeddings_RestoresInputOrder(t *testing.T) {
+	srv, _ := newBatchServer(t, func(inputs []string) []map[string]any {
+		return []map[string]any{
+			embeddingItem(2, []float64{30}),
+			embeddingItem(0, []float64{10}),
+			embeddingItem(1, []float64{20}),
+		}
+	})
+
+	emb := New(WithBaseURL(srv.URL), WithAPIKey("dummy"), WithModel("bge-m3"), WithDimensions(1))
+	vectors, err := emb.GetEmbeddings(context.Background(), []string{"a", "b", "c"})
+	if err != nil {
+		t.Fatalf("GetEmbeddings() error = %v", err)
+	}
+
+	want := [][]float64{{10}, {20}, {30}}
+	for i := range want {
+		if !slices.Equal(vectors[i], want[i]) {
+			t.Errorf("vectors[%d] = %v, want %v", i, vectors[i], want[i])
+		}
+	}
+}
+
+// TestEmbedder_GetEmbeddings_RejectsUnmappableResponse verifies that responses
+// which cannot be bound back to the input are rejected instead of guessed.
+func TestEmbedder_GetEmbeddings_RejectsUnmappableResponse(t *testing.T) {
+	tests := []struct {
+		name string
+		data func(inputs []string) []map[string]any
+	}{
+		{
+			name: "count mismatch",
+			data: func(inputs []string) []map[string]any {
+				return []map[string]any{embeddingItem(0, []float64{1})}
+			},
+		},
+		{
+			name: "duplicate index",
+			data: func(inputs []string) []map[string]any {
+				return []map[string]any{
+					embeddingItem(0, []float64{1}),
+					embeddingItem(0, []float64{2}),
+				}
+			},
+		},
+		{
+			name: "index out of range",
+			data: func(inputs []string) []map[string]any {
+				return []map[string]any{
+					embeddingItem(0, []float64{1}),
+					embeddingItem(7, []float64{2}),
+				}
+			},
+		},
+		{
+			// Where int is 32 bits, narrowing this index before the range
+			// check wraps it to the valid slot 0, so the check compares the
+			// response value itself. The literal is typed to keep the test
+			// buildable on those targets.
+			name: "index beyond the 32-bit range",
+			data: func(inputs []string) []map[string]any {
+				return []map[string]any{
+					{"object": "embedding", "index": int64(1) << 32, "embedding": []float64{1}},
+					embeddingItem(1, []float64{2}),
+				}
+			},
+		},
+		{
+			name: "empty vector",
+			data: func(inputs []string) []map[string]any {
+				return []map[string]any{
+					embeddingItem(0, []float64{1}),
+					embeddingItem(1, []float64{}),
+				}
+			},
+		},
+		{
+			// An omitted index decodes to zero, which the remaining checks
+			// cannot tell apart from a supplied zero. The mapping is then
+			// inferred rather than provided, so the response is rejected.
+			name: "missing index",
+			data: func(inputs []string) []map[string]any {
+				return []map[string]any{
+					embeddingItemWithoutIndex([]float64{1}),
+					embeddingItem(1, []float64{2}),
+				}
+			},
+		},
+		{
+			name: "null index",
+			data: func(inputs []string) []map[string]any {
+				return []map[string]any{
+					{"object": "embedding", "index": nil, "embedding": []float64{1}},
+					embeddingItem(1, []float64{2}),
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _ := newBatchServer(t, tt.data)
+			emb := New(
+				WithBaseURL(srv.URL),
+				WithAPIKey("dummy"),
+				WithModel("bge-m3"),
+				WithDimensions(1),
+				WithMaxRetries(0),
+			)
+			if _, err := emb.GetEmbeddings(context.Background(), []string{"a", "b"}); err == nil {
+				t.Fatal("GetEmbeddings() error = nil, want an error")
+			}
+		})
+	}
+}
+
+// TestEmbedder_GetEmbeddings_RetriesWholeBatch verifies that a rejected batch
+// response is retried as one request carrying the complete input. Retrying a
+// failed batch as per-text requests would multiply the request count that
+// batching is meant to reduce.
+func TestEmbedder_GetEmbeddings_RetriesWholeBatch(t *testing.T) {
+	texts := []string{"first", "second", "third"}
+	attempts := 0
+	srv, requests := newBatchServer(t, func(inputs []string) []map[string]any {
+		attempts++
+		if attempts == 1 {
+			// Fewer vectors than inputs cannot be mapped back to the batch.
+			return []map[string]any{embeddingItem(0, []float64{1})}
+		}
+		items := make([]map[string]any, len(inputs))
+		for i := range inputs {
+			items[i] = embeddingItem(i, []float64{float64(i)})
+		}
+		return items
+	})
+
+	emb := New(
+		WithBaseURL(srv.URL),
+		WithAPIKey("dummy"),
+		WithModel("bge-m3"),
+		WithDimensions(1),
+		WithMaxRetries(1),
+		WithRetryBackoff([]time.Duration{time.Millisecond}),
+	)
+
+	vectors, err := emb.GetEmbeddings(context.Background(), texts)
+	if err != nil {
+		t.Fatalf("GetEmbeddings() error = %v", err)
+	}
+	if len(vectors) != len(texts) {
+		t.Fatalf("vectors = %d, want %d", len(vectors), len(texts))
+	}
+	if len(*requests) != 2 {
+		t.Fatalf("http requests = %d, want 2 (first attempt and retry)", len(*requests))
+	}
+	for i, inputs := range *requests {
+		if !slices.Equal(inputs, texts) {
+			t.Errorf("request %d input = %v, want the whole batch %v", i, inputs, texts)
+		}
+	}
+}
+
+// TestEmbedder_GetEmbeddings_RejectsEmptyInput verifies input validation before
+// any request is sent.
+func TestEmbedder_GetEmbeddings_RejectsEmptyInput(t *testing.T) {
+	emb := New(WithMaxRetries(0))
+
+	if _, err := emb.GetEmbeddings(context.Background(), nil); err == nil {
+		t.Error("GetEmbeddings(nil) error = nil, want an error")
+	}
+	if _, err := emb.GetEmbeddings(context.Background(), []string{}); err == nil {
+		t.Error("GetEmbeddings(empty) error = nil, want an error")
+	}
+	if _, err := emb.GetEmbeddings(context.Background(), []string{"ok", ""}); err == nil {
+		t.Error("GetEmbeddings() accepted an empty text, want an error")
+	}
+}
+
+// TestEmbedder_GetEmbeddings_HonorsContextCancellation verifies that a
+// cancelled context aborts the batch request.
+func TestEmbedder_GetEmbeddings_HonorsContextCancellation(t *testing.T) {
+	srv, _ := newBatchServer(t, func(inputs []string) []map[string]any {
+		items := make([]map[string]any, len(inputs))
+		for i := range inputs {
+			items[i] = embeddingItem(i, []float64{float64(i)})
+		}
+		return items
+	})
+
+	emb := New(WithBaseURL(srv.URL), WithAPIKey("dummy"), WithModel("bge-m3"), WithMaxRetries(0))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := emb.GetEmbeddings(ctx, []string{"a", "b"})
+	if err == nil {
+		t.Fatal("GetEmbeddings() error = nil, want a cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("GetEmbeddings() error = %v, want it to wrap context.Canceled", err)
 	}
 }
 

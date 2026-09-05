@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ type preparedMessageRun struct {
 	userID                   string
 	sessionID                string
 	requestID                string
+	modelName                string
 	requestSystemPrompt      string
 	requestLateContextPrompt string
 	inbound                  InboundMessage
@@ -271,10 +273,28 @@ func (s *Server) prepareMessageRun(
 		}
 	}
 
+	modelName := strings.TrimSpace(req.Model)
+	if modelName != "" && len(s.selectableModels) > 0 {
+		if _, ok := s.selectableModels[modelName]; !ok {
+			errMsg := fmt.Sprintf("model %q is not available", modelName)
+			if trace != nil {
+				_ = trace.RecordError(errString(errMsg))
+			}
+			rsp := gwproto.MessageResponse{
+				Error: &gwproto.APIError{
+					Type:    errTypeInvalidModel,
+					Message: errMsg,
+				},
+			}
+			return preparedMessageRun{}, &rsp, http.StatusBadRequest
+		}
+	}
+
 	return preparedMessageRun{
 		userID:                   userID,
 		sessionID:                sessionID,
 		requestID:                strings.TrimSpace(req.RequestID),
+		modelName:                modelName,
 		requestSystemPrompt:      strings.TrimSpace(req.RequestSystemPrompt),
 		requestLateContextPrompt: strings.TrimSpace(req.RequestLateContextPrompt),
 		inbound:                  msg,

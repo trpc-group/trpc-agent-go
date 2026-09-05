@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -44,6 +45,10 @@ Verdict: yes
 	require.NoError(t, err)
 	require.Len(t, result.RubricScores, 3)
 	assert.InDelta(t, 2.0/3.0, result.Score, 1e-9)
+	require.NotNil(t, result.Value)
+	assert.Equal(t, score.KindNumeric, result.Value.Kind)
+	require.NotNil(t, result.Value.Numeric)
+	assert.InDelta(t, result.Score, *result.Value.Numeric, 1e-9)
 	assert.Equal(t, "1", result.RubricScores[0].ID)
 	assert.Equal(t, 1.0, result.RubricScores[0].Score)
 	assert.Equal(t, 0.0, result.RubricScores[1].Score)

@@ -15,7 +15,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type modelRetryTestContextKey struct{}
@@ -110,6 +113,63 @@ func TestModelRetryCallbacks_RunNormalCallbackChain(t *testing.T) {
 	require.NotNil(t, ctx)
 	require.Equal(t, 1, beforeCalls)
 	require.Equal(t, 1, afterCalls)
+}
+
+func TestModelRetryCallbacks_FinalizationRemainsToolFree(t *testing.T) {
+	const instruction = "finish with available results"
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(
+			ctx context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			require.True(t, imodelrequest.ToolsDisabled(ctx))
+			require.Nil(t, args.Request.Tools)
+			require.NotContains(t, args.Request.ExtraFields, "tool_choice")
+
+			args.Request.Tools = map[string]tool.Tool{"lookup": nil}
+			args.Request.ExtraFields["tool_choice"] = "required"
+			return &model.BeforeModelResult{
+				Context: context.Background(),
+			}, nil
+		},
+	)
+	flow := New(nil, nil, Options{ModelCallbacks: callbacks})
+	invocation := agent.NewInvocation()
+	toolInstruction := instruction
+	calllimit.Configure(invocation, nil, &toolInstruction)
+	calllimit.ScheduleToolFinalization(invocation)
+	_, finalizing := calllimit.ActivateForLLM(invocation, false)
+	require.True(t, finalizing)
+
+	ctx := contextWithModelRetryCallbacks(
+		context.Background(),
+		flow,
+		invocation,
+		modelRetryTestBinder{},
+	)
+	bound, ok := ctx.Value(modelRetryTestCallbacksKey{}).(modelRetryTestCallbacks)
+	require.True(t, ok)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("question"),
+			model.NewUserMessage(instruction),
+		},
+		Tools: map[string]tool.Tool{"lookup": nil},
+		ExtraFields: map[string]any{
+			"tool_choice": "required",
+			"keep":        "value",
+		},
+	}
+
+	ctx, customResponse, err := bound.before(ctx, req)
+
+	require.NoError(t, err)
+	require.Nil(t, customResponse)
+	require.True(t, imodelrequest.ToolsDisabled(ctx))
+	require.Nil(t, req.Tools)
+	require.NotContains(t, req.ExtraFields, "tool_choice")
+	require.Equal(t, "value", req.ExtraFields["keep"])
+	require.Equal(t, instruction, req.Messages[len(req.Messages)-1].Content)
 }
 
 func TestModelRetryCallbacks_UnsupportedModel(t *testing.T) {

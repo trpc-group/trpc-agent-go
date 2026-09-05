@@ -1,0 +1,80 @@
+name: Update Star History
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/scripts/update-star-history.mjs"
+      - ".github/star-history-seed.json"
+      - ".github/workflows/update-star-history.yml"
+  schedule:
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-star-history
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: update
+    if: github.repository == 'trpc-group/trpc-agent-go'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Test generator
+        run: node .github/scripts/update-star-history.mjs test
+
+      - name: Prepare asset branch
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset_dir="${RUNNER_TEMP}/star-history"
+          if git ls-remote --exit-code --heads origin star-history \
+            > /dev/null; then
+            git fetch origin \
+              +refs/heads/star-history:refs/remotes/origin/star-history
+            git worktree add --detach "${asset_dir}" origin/star-history
+            git -C "${asset_dir}" switch -C star-history
+          else
+            git worktree add --detach "${asset_dir}" HEAD
+            git -C "${asset_dir}" switch --orphan star-history
+            cp .github/star-history-seed.json "${asset_dir}/history.json"
+          fi
+          echo "asset_dir=${asset_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node .github/scripts/update-star-history.mjs snapshot \
+            "${GITHUB_REPOSITORY}" \
+            "${{ steps.prepare.outputs.asset_dir }}/history.json" \
+            "${{ steps.prepare.outputs.asset_dir }}/star-history.svg"
+
+      - name: Publish asset branch
+        env:
+          ASSET_DIR: ${{ steps.prepare.outputs.asset_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C "${ASSET_DIR}" config user.name "github-actions[bot]"
+          git -C "${ASSET_DIR}" config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "${ASSET_DIR}" add history.json star-history.svg
+          if git -C "${ASSET_DIR}" diff --cached --quiet; then
+            echo "Star history is already up to date"
+            exit 0
+          fi
+          git -C "${ASSET_DIR}" commit \
+            -m "chore: update star history [skip ci]"
+          git -C "${ASSET_DIR}" push origin HEAD:star-history

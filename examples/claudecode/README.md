@@ -10,6 +10,8 @@ The agent executes the CLI in `--print` mode and parses the JSON output to emit:
 
 It also uses `--resume <session-id>` and falls back to `--session-id <session-id>` to support multi-turn conversations in the same session.
 
+For deployments that build prompts from centralized framework history, configure `claudecode.WithMessageBuilder` and usually pair it with `claudecode.WithResumeEnabled(false)` so the CLI does not also restore local session context.
+
 The example includes a project-scoped MCP configuration file named `.mcp.json` that registers a local STDIO MCP server. The server exposes a calculator tool so you can see MCP tool calls in the JSON output.
 
 It also includes a project-level weather skill at `.claude/skills/weather-query/SKILL.md` and a project-level news subagent at `.claude/agents/news-query-agent.md` so you can see Skill/Task events in the JSON output without relying on pre-existing CLI configuration.

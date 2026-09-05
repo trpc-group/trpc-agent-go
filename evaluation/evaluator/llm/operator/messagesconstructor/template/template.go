@@ -10,14 +10,18 @@
 package template
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/templateresolver"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/internal/content"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/jsonpath"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metricllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -25,11 +29,41 @@ import (
 )
 
 type templateMessagesConstructor struct {
+	operatorRegistry operatorregistry.Registry
+}
+
+type traceStepToolPromptValue struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments any    `json:"arguments,omitempty"`
+	Result    any    `json:"result,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type traceStepSkillPromptValue struct {
+	Name string `json:"name,omitempty"`
+}
+
+// Option configures the template messages constructor.
+type Option func(*templateMessagesConstructor)
+
+// WithOperatorRegistry sets the LLM operator registry.
+func WithOperatorRegistry(registry operatorregistry.Registry) Option {
+	return func(c *templateMessagesConstructor) {
+		c.operatorRegistry = registry
+	}
 }
 
 // New returns a messages constructor for template prompts.
-func New() messagesconstructor.MessagesConstructor {
-	return &templateMessagesConstructor{}
+func New(opt ...Option) messagesconstructor.MessagesConstructor {
+	c := &templateMessagesConstructor{}
+	for _, o := range opt {
+		o(c)
+	}
+	if c.operatorRegistry == nil {
+		c.operatorRegistry = operatorregistry.New()
+	}
+	return c
 }
 
 // ConstructMessages renders the configured judge template into a user message.
@@ -39,13 +73,13 @@ func (c *templateMessagesConstructor) ConstructMessages(ctx context.Context, act
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(templateOptions.Prompt) == "" {
+	if templateOptions.Prompt == "" {
 		return nil, fmt.Errorf("template prompt is empty")
 	}
-	if strings.TrimSpace(templateOptions.ResponseScorerName) == "" {
+	if templateOptions.ResponseScorerName == "" {
 		return nil, fmt.Errorf("template responseScorerName is empty")
 	}
-	values, err := resolveTemplateValues(actuals, expecteds, templateOptions.VariableBindings)
+	values, err := resolveTemplateValues(actuals, expecteds, evalMetric, templateOptions.VariableBindings)
 	if err != nil {
 		return nil, err
 	}
@@ -64,14 +98,14 @@ func (c *templateMessagesConstructor) ConstructMessages(ctx context.Context, act
 	}}, nil
 }
 
-// StructuredOutput returns the structured output schema for the configured response scorer.
+// StructuredOutput returns the configured structured output schema.
 func (c *templateMessagesConstructor) StructuredOutput(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) (*model.StructuredOutput, error) {
-	templateOptions, err := judgeTemplateOptions(evalMetric)
-	if err != nil {
+	operators, err := c.operatorRegistry.Resolve(evalMetric)
+	if err != nil || operators.StructuredOutputProvider == nil {
 		return nil, err
 	}
-	return templateresolver.StructuredOutput(templateOptions.ResponseScorerName)
+	return operators.StructuredOutputProvider.StructuredOutput(ctx, actuals, expecteds, evalMetric)
 }
 
 func judgeTemplateOptions(evalMetric *metric.EvalMetric) (*metricllm.JudgeTemplateOptions, error) {
@@ -84,7 +118,7 @@ func judgeTemplateOptions(evalMetric *metric.EvalMetric) (*metricllm.JudgeTempla
 	return evalMetric.Criterion.LLMJudge.Template, nil
 }
 
-func resolveTemplateValues(actuals, expecteds []*evalset.Invocation,
+func resolveTemplateValues(actuals, expecteds []*evalset.Invocation, evalMetric *metric.EvalMetric,
 	bindings []*metricllm.TemplateVariableBinding) (prompt.Vars, error) {
 	values := make(prompt.Vars, len(bindings))
 	seen := make(map[string]struct{}, len(bindings))
@@ -92,7 +126,7 @@ func resolveTemplateValues(actuals, expecteds []*evalset.Invocation,
 		if binding == nil {
 			return nil, fmt.Errorf("template binding is nil")
 		}
-		name := strings.TrimSpace(binding.TemplateVariable)
+		name := binding.TemplateVariable
 		if name == "" {
 			return nil, fmt.Errorf("templateVariable is empty")
 		}
@@ -100,7 +134,7 @@ func resolveTemplateValues(actuals, expecteds []*evalset.Invocation,
 			return nil, fmt.Errorf("templateVariable %q is duplicated", name)
 		}
 		seen[name] = struct{}{}
-		value, err := resolveBindingValue(actuals, expecteds, binding.Source)
+		value, err := resolveBindingValue(actuals, expecteds, evalMetric, binding.Source)
 		if err != nil {
 			return nil, fmt.Errorf("resolve template variable %q: %w", name, err)
 		}
@@ -109,19 +143,30 @@ func resolveTemplateValues(actuals, expecteds []*evalset.Invocation,
 	return values, nil
 }
 
-func resolveBindingValue(actuals, expecteds []*evalset.Invocation,
+func resolveBindingValue(actuals, expecteds []*evalset.Invocation, evalMetric *metric.EvalMetric,
 	source *metricllm.TemplateVariableSource) (string, error) {
 	if source == nil {
 		return "", fmt.Errorf("source is nil")
 	}
+	var value string
+	var err error
 	switch source.Scope {
 	case metricllm.TemplateVariableScopeActual:
-		return resolveActualValue(actuals, source)
+		value, err = resolveActualValue(actuals, source)
 	case metricllm.TemplateVariableScopeExpected:
-		return resolveExpectedValue(expecteds, source)
+		value, err = resolveExpectedValue(expecteds, source)
+	case metricllm.TemplateVariableScopeMetric:
+		value, err = resolveMetricValue(evalMetric, source)
 	default:
 		return "", fmt.Errorf("unsupported source %s.%s", source.Scope, source.Field)
 	}
+	if err != nil {
+		return "", err
+	}
+	if source.Path == "" {
+		return value, nil
+	}
+	return jsonpath.Extract(value, source.Path)
 }
 
 func resolveActualValue(actuals []*evalset.Invocation, source *metricllm.TemplateVariableSource) (string, error) {
@@ -141,6 +186,10 @@ func resolveActualValue(actuals []*evalset.Invocation, source *metricllm.Templat
 		return resolveTraceStepSnapshot(actuals, source, true)
 	case metricllm.TemplateVariableFieldTraceStepOutput:
 		return resolveTraceStepSnapshot(actuals, source, false)
+	case metricllm.TemplateVariableFieldTraceStepTools:
+		return resolveTraceStepTools(actuals, source)
+	case metricllm.TemplateVariableFieldTraceStepSkills:
+		return resolveTraceStepSkills(actuals, source)
 	default:
 		return "", fmt.Errorf("unsupported source %s.%s",
 			metricllm.TemplateVariableScopeActual, source.Field)
@@ -167,18 +216,131 @@ func resolveExpectedValue(expecteds []*evalset.Invocation, source *metricllm.Tem
 	}
 }
 
+func resolveMetricValue(evalMetric *metric.EvalMetric, source *metricllm.TemplateVariableSource) (string, error) {
+	if evalMetric == nil || evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
+		return "", fmt.Errorf("llm judge criterion is required")
+	}
+	switch source.Field {
+	case metricllm.TemplateVariableFieldRubrics:
+		rubrics := visibleRubrics(evalMetric.Criterion.LLMJudge.Rubrics)
+		if len(rubrics) == 0 {
+			return "", fmt.Errorf("metric rubrics are empty")
+		}
+		raw, err := encodeJSONForPrompt(rubrics)
+		if err != nil {
+			return "", fmt.Errorf("marshal metric rubrics: %w", err)
+		}
+		return raw, nil
+	default:
+		return "", fmt.Errorf("unsupported source %s.%s",
+			metricllm.TemplateVariableScopeMetric, source.Field)
+	}
+}
+
+func encodeJSONForPrompt(value any) (string, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(buf.String(), "\n"), nil
+}
+
+func visibleRubrics(rubrics []*metricllm.Rubric) []*metricllm.Rubric {
+	visible := make([]*metricllm.Rubric, 0, len(rubrics))
+	for _, rubric := range rubrics {
+		if rubric == nil || rubric.Content == nil {
+			continue
+		}
+		visible = append(visible, rubric)
+	}
+	return visible
+}
+
 func resolveTraceStepSnapshot(actuals []*evalset.Invocation, source *metricllm.TemplateVariableSource, input bool) (string, error) {
+	step, index, nodeID, err := resolveTraceStep(actuals, source)
+	if err != nil {
+		return "", err
+	}
+	snapshot := step.Output
+	if input {
+		snapshot = step.Input
+	}
+	if snapshot == nil || snapshot.Text == "" {
+		return "", fmt.Errorf("trace snapshot is empty for %s.%s nodeID %q at invocation index %d",
+			source.Scope, source.Field, nodeID, index)
+	}
+	return snapshot.Text, nil
+}
+
+func resolveTraceStepTools(actuals []*evalset.Invocation, source *metricllm.TemplateVariableSource) (string, error) {
+	step, _, _, err := resolveTraceStep(actuals, source)
+	if err != nil {
+		return "", err
+	}
+	raw, err := encodeJSONForPrompt(traceStepToolPromptValues(step.Tools))
+	if err != nil {
+		return "", fmt.Errorf("marshal trace step tools: %w", err)
+	}
+	return raw, nil
+}
+
+func resolveTraceStepSkills(actuals []*evalset.Invocation, source *metricllm.TemplateVariableSource) (string, error) {
+	step, _, _, err := resolveTraceStep(actuals, source)
+	if err != nil {
+		return "", err
+	}
+	raw, err := encodeJSONForPrompt(traceStepSkillPromptValues(step.Skills))
+	if err != nil {
+		return "", fmt.Errorf("marshal trace step skills: %w", err)
+	}
+	return raw, nil
+}
+
+func traceStepToolPromptValues(tools []agenttrace.Tool) []traceStepToolPromptValue {
+	if tools == nil {
+		return []traceStepToolPromptValue{}
+	}
+	values := make([]traceStepToolPromptValue, len(tools))
+	for i, tool := range tools {
+		values[i] = traceStepToolPromptValue{
+			ID:        tool.ID,
+			Name:      tool.Name,
+			Arguments: tool.Arguments,
+			Result:    tool.Result,
+			Error:     tool.Error,
+		}
+	}
+	return values
+}
+
+func traceStepSkillPromptValues(skills []agenttrace.Skill) []traceStepSkillPromptValue {
+	if skills == nil {
+		return []traceStepSkillPromptValue{}
+	}
+	values := make([]traceStepSkillPromptValue, len(skills))
+	for i, skill := range skills {
+		values[i] = traceStepSkillPromptValue{Name: skill.Name}
+	}
+	return values
+}
+
+func resolveTraceStep(
+	actuals []*evalset.Invocation,
+	source *metricllm.TemplateVariableSource,
+) (agenttrace.Step, int, string, error) {
 	nodeID := ""
 	if source.Selector != nil {
-		nodeID = strings.TrimSpace(source.Selector.NodeID)
+		nodeID = source.Selector.NodeID
 	}
 	if nodeID == "" {
-		return "", fmt.Errorf("trace selector nodeID is required")
+		return agenttrace.Step{}, 0, "", fmt.Errorf("trace selector nodeID is required")
 	}
 	index := len(actuals) - 1
 	actual := actuals[index]
 	if actual.ExecutionTrace == nil {
-		return "", fmt.Errorf("executionTrace is empty for %s.%s at invocation index %d",
+		return agenttrace.Step{}, index, nodeID, fmt.Errorf("executionTrace is empty for %s.%s at invocation index %d",
 			source.Scope, source.Field, index)
 	}
 	stepIndex := -1
@@ -188,17 +350,8 @@ func resolveTraceStepSnapshot(actuals []*evalset.Invocation, source *metricllm.T
 		}
 	}
 	if stepIndex < 0 {
-		return "", fmt.Errorf("trace step not found for %s.%s nodeID %q at invocation index %d",
+		return agenttrace.Step{}, index, nodeID, fmt.Errorf("trace step not found for %s.%s nodeID %q at invocation index %d",
 			source.Scope, source.Field, nodeID, index)
 	}
-	step := actual.ExecutionTrace.Steps[stepIndex]
-	snapshot := step.Output
-	if input {
-		snapshot = step.Input
-	}
-	if snapshot == nil || strings.TrimSpace(snapshot.Text) == "" {
-		return "", fmt.Errorf("trace snapshot is empty for %s.%s nodeID %q at invocation index %d",
-			source.Scope, source.Field, nodeID, index)
-	}
-	return snapshot.Text, nil
+	return actual.ExecutionTrace.Steps[stepIndex], index, nodeID, nil
 }

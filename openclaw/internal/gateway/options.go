@@ -33,6 +33,7 @@ type RunOptionInput struct {
 	UserID     string
 	SessionID  string
 	RequestID  string
+	ModelName  string
 	Message    model.Message
 	Trace      *debugrecorder.Trace
 	Extensions map[string]json.RawMessage
@@ -69,12 +70,31 @@ type options struct {
 	mentionPatterns []string
 
 	runOptionResolver RunOptionResolver
+	selectableModels  map[string]struct{}
 
 	recorder *debugrecorder.Recorder
 	uploads  *uploads.Store
 
 	personaStore    *persona.Store
 	memoryFileStore *memoryfile.Store
+}
+
+// WithSelectableModels configures the model aliases accepted from gateway
+// requests. When configured, a non-empty MessageRequest.model must match one
+// of these aliases.
+func WithSelectableModels(names ...string) Option {
+	return func(o *options) {
+		if len(names) == 0 {
+			o.selectableModels = nil
+			return
+		}
+		o.selectableModels = make(map[string]struct{}, len(names))
+		for _, rawName := range names {
+			if name := strings.TrimSpace(rawName); name != "" {
+				o.selectableModels[name] = struct{}{}
+			}
+		}
+	}
 }
 
 // Option is a function that configures a gateway server.

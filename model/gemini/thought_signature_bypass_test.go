@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genai"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -197,6 +198,62 @@ func TestModel_GenerateContent_SendsLiteralBypassThoughtSignature(t *testing.T) 
 	bodyStr, err := json.Marshal(payload)
 	require.NoError(t, err)
 	assert.True(t, strings.Contains(string(bodyStr), geminiSkipThoughtSignatureValidator))
+}
+
+func TestModel_GenerateContent_ToolsDisabledFiltersExtraBody(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"candidates": [{
+				"content": {"parts": [{"text": "ok"}]},
+				"finishReason": "STOP"
+			}]
+		}`))
+	}))
+	t.Cleanup(server.Close)
+
+	ctx := imodelrequest.WithToolsDisabled(t.Context())
+	m, err := New(ctx, "gemini-3-flash-preview", WithGeminiClientConfig(
+		&genai.ClientConfig{
+			APIKey:  "test-api-key",
+			Backend: genai.BackendGeminiAPI,
+			HTTPOptions: genai.HTTPOptions{
+				BaseURL:    server.URL,
+				APIVersion: "v1beta",
+				ExtraBody: map[string]any{
+					"tools": []any{
+						map[string]any{
+							"functionDeclarations": []any{},
+						},
+					},
+					"toolConfig": map[string]any{
+						"functionCallingConfig": map[string]any{
+							"mode": "ANY",
+						},
+					},
+					"client_field": "preserved",
+				},
+			},
+		},
+	))
+	require.NoError(t, err)
+
+	responseChan, err := m.GenerateContent(ctx, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+	})
+	require.NoError(t, err)
+	for range responseChan {
+	}
+
+	require.NotNil(t, captured)
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "toolConfig")
+	require.Equal(t, "preserved", captured["client_field"])
 }
 
 func TestChainExtrasRequestProvider_RunsBothProviders(t *testing.T) {

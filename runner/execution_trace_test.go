@@ -139,7 +139,7 @@ func TestRunnerCompletion_LLMRunProducesOneRealExecutionStep(t *testing.T) {
 	assert.Equal(t, completion.InvocationID, step.InvocationID)
 	assert.Equal(t, "assistant", step.AgentName)
 	assert.Equal(t, "assistant", step.NodeID)
-	assert.Equal(t, "llm", step.NodeType)
+	assert.Equal(t, "agent", step.NodeType)
 	assert.Empty(t, step.PredecessorStepIDs)
 	require.NotNil(t, step.Input)
 	require.NotNil(t, step.Output)

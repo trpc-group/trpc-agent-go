@@ -504,19 +504,40 @@ func (s *Service) getTrackEvents(
 	if len(sessionStates) != len(sessionKeys) {
 		return nil, fmt.Errorf("session states count mismatch: %d != %d", len(sessionStates), len(sessionKeys))
 	}
-	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
-		afterTime = time.Now().Add(-s.opts.sessionTTL)
-	}
-
-	results := make([]map[session.Track][]session.TrackEvent, len(sessionKeys))
-	sessionIDs := make([]string, 0, len(sessionKeys))
-	trackSet := make(map[session.Track]struct{})
-	allowed := make(map[string]map[session.Track]int)
-	for i, key := range sessionKeys {
+	trackLists := make([][]session.Track, len(sessionKeys))
+	for i := range sessionKeys {
 		tracks, err := session.TracksFromState(bsonToStateMap(sessionStates[i].State))
 		if err != nil {
 			return nil, fmt.Errorf("get track list failed: %w", err)
 		}
+		trackLists[i] = tracks
+	}
+	return s.getTrackEventsByTrackLists(ctx, sessionKeys, trackLists, limit, afterTime)
+}
+
+func (s *Service) getTrackEventsByTrackLists(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	trackLists [][]session.Track,
+	limit int,
+	afterTime time.Time,
+) ([]map[session.Track][]session.TrackEvent, error) {
+	if len(sessionKeys) == 0 {
+		return nil, nil
+	}
+	if len(trackLists) != len(sessionKeys) {
+		return nil, fmt.Errorf("track lists count mismatch: %d != %d", len(trackLists), len(sessionKeys))
+	}
+	if trackTTL := s.opts.effectiveTrackEventTTL(); afterTime.IsZero() && trackTTL > 0 {
+		afterTime = time.Now().Add(-trackTTL)
+	}
+	results := make([]map[session.Track][]session.TrackEvent, len(sessionKeys))
+	sessionIDs := make([]string, 0, len(sessionKeys))
+	trackSet := make(map[session.Track]struct{})
+	allowed := make(map[string]map[session.Track]int)
+	queryPairCount := 0
+	for i, key := range sessionKeys {
+		tracks := trackLists[i]
 		results[i] = make(map[session.Track][]session.TrackEvent)
 		if len(tracks) == 0 {
 			continue
@@ -528,12 +549,12 @@ func (s *Service) getTrackEvents(
 		for _, track := range tracks {
 			allowed[key.SessionID][track] = i
 			trackSet[track] = struct{}{}
+			queryPairCount++
 		}
 	}
 	if len(sessionIDs) == 0 || len(trackSet) == 0 {
 		return results, nil
 	}
-
 	tracks := make([]session.Track, 0, len(trackSet))
 	for track := range trackSet {
 		tracks = append(tracks, track)
@@ -551,12 +572,14 @@ func (s *Service) getTrackEvents(
 		{Key: "created_at", Value: -1},
 		{Key: "_id", Value: -1},
 	})
+	if limit > 0 && queryPairCount == 1 {
+		findOpts.SetLimit(int64(limit))
+	}
 	cursor, err := s.client.Find(ctx, s.database, s.collSessionTracks, filter, findOpts)
 	if err != nil {
 		return nil, fmt.Errorf("query track events: %w", err)
 	}
 	defer cursor.Close(ctx)
-
 	for cursor.Next(ctx) {
 		var doc sessionTrackDoc
 		if err := cursor.Decode(&doc); err != nil {

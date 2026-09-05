@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	toolsessionrecall "trpc.group/trpc-go/trpc-agent-go/internal/session/tool/recall"
@@ -38,6 +39,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/internal/tool/currenttime"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
@@ -157,6 +159,9 @@ func New(name string, opts ...Option) *LLMAgent {
 		}
 	}
 	if err := validateAndNormalizeToolActivationOptions(&options); err != nil {
+		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
+	}
+	if err := validateAndNormalizeToolSetToolNameModes(&options); err != nil {
 		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
 	}
 
@@ -387,6 +392,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			options.skillsFilePathHints,
 		),
 	)
+	if len(options.toolActivationRules) > 0 {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillLoadStateDeltaHook(
+				a.handleToolActivationPostToolResult,
+			),
+		)
+	}
 	if options.MaxLoadedSkills > 0 {
 		skillsOpts = append(
 			skillsOpts,
@@ -455,6 +468,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		),
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
 		processor.WithPreserveForeignMessages(options.PreserveForeignMessages),
+		processor.WithIncludeSyntheticErrorMessages(
+			options.includeSyntheticErrorMessages,
+		),
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
 		processor.WithPreloadMemory(options.PreloadMemory),
@@ -880,7 +896,10 @@ func appendStaticToolSetTools(
 
 	ctx := context.Background()
 	for _, toolSet := range options.ToolSets {
-		namedToolSet := itool.NewNamedToolSet(toolSet)
+		namedToolSet := itool.NewNamedToolSetWithMode(
+			toolSet,
+			toolSetToolNameMode(options.toolSetToolNameModes, toolSet),
+		)
 		for _, t := range namedToolSet.Tools(ctx) {
 			allTools = append(allTools, t)
 			userToolNames[t.Declaration().Name] = true
@@ -1147,6 +1166,15 @@ func appendWorkspaceExecToolWithExecutor(
 		toolOpts = append(toolOpts,
 			toolworkspaceexec.WithDeniedCommands(
 				options.workspaceExecDeniedCommands...,
+			),
+		)
+	}
+	if options != nil &&
+		options.workspaceExecOutputLimits.MaxOutputBytes > 0 {
+		toolOpts = append(
+			toolOpts,
+			toolworkspaceexec.WithOutputLimits(
+				options.workspaceExecOutputLimits,
 			),
 		)
 	}
@@ -1513,21 +1541,22 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	a.setupInvocation(invocation)
 	var traceLease tracecapture.StepLease
 	if invocation.RunOptions.ExecutionTraceEnabled {
-		traceNodeID := agent.InvocationTraceNodeID(invocation)
-		traceCtx := agent.NewInvocationContext(ctx, invocation)
-		traceLease = tracecapture.EnsureInvocationStep(
-			traceCtx,
-			func() string {
-				return agent.StartExecutionTraceStep(
-					invocation,
-					traceNodeID,
-					llmAgentTraceInputSnapshot(invocation),
-					nil,
-				)
-			},
-		)
-		if traceLease.Owns {
-			tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "llm")
+		if traceNodeID := executionTraceStepNodeID(invocation); traceNodeID != "" {
+			traceCtx := agent.NewInvocationContext(ctx, invocation)
+			traceLease = tracecapture.EnsureInvocationStep(
+				traceCtx,
+				func() string {
+					return agent.StartExecutionTraceStep(
+						invocation,
+						traceNodeID,
+						llmAgentTraceInputSnapshot(invocation),
+						nil,
+					)
+				},
+			)
+			if traceLease.Owns {
+				tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "agent")
+			}
 		}
 	}
 	ctx = a.withWorkspace(ctx, invocation)
@@ -1634,6 +1663,11 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 		}
 	}
 
+	if err := a.prepareSkillLoads(ctx, invocation); err != nil {
+		return ctx, nil, fmt.Errorf("prepare skill loads: %w", err)
+	}
+	ctx = a.withToolConcurrencyLimiter(ctx)
+
 	// Use the underlying flow to execute the agent logic.
 	flowEventChan, err := a.flow.Run(ctx, invocation)
 	if err != nil {
@@ -1641,6 +1675,16 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 	}
 
 	return ctx, flowEventChan, nil
+}
+
+func (a *LLMAgent) withToolConcurrencyLimiter(
+	ctx context.Context,
+) context.Context {
+	var limiter *toolcall.Limiter
+	if a.option.EnableParallelTools {
+		limiter = toolcall.NewLimiter(a.option.ToolConcurrencyConfig)
+	}
+	return toolcall.WithLimiter(ctx, limiter)
 }
 
 // haveCustomResponseError represents an early return due to a custom response from before agent callbacks.
@@ -1724,6 +1768,11 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// treat them as "no limit", preserving existing behavior.
 	invocation.MaxLLMCalls = a.option.MaxLLMCalls
 	invocation.MaxToolIterations = a.option.MaxToolIterations
+	calllimit.Configure(
+		invocation,
+		a.option.llmCallLimitFinalizationInstruction,
+		a.option.toolIterationLimitFinalizationInstruction,
+	)
 }
 
 // withWorkspace installs a workspaceio.Workspace into ctx so that
@@ -2040,7 +2089,10 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 	if a.option.RefreshToolSetsOnRun && len(a.option.ToolSets) > 0 {
 		dynamic := make([]tool.Tool, 0)
 		for _, toolSet := range a.option.ToolSets {
-			namedToolSet := itool.NewNamedToolSet(toolSet)
+			namedToolSet := itool.NewNamedToolSetWithMode(
+				toolSet,
+				toolSetToolNameMode(a.option.toolSetToolNameModes, toolSet),
+			)
 			setTools := namedToolSet.Tools(ctx)
 			dynamic = append(dynamic, setTools...)
 		}

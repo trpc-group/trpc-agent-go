@@ -835,7 +835,11 @@ func TestRunAfterTool_PreservesSkipSummarizationAcrossCallbacks(t *testing.T) {
 		ctx context.Context,
 		args *tool.AfterToolArgs,
 	) (*tool.AfterToolResult, error) {
-		return &tool.AfterToolResult{CustomResult: marker}, nil
+		return &tool.AfterToolResult{
+			CustomResult:        marker,
+			SkipResultFormatter: true,
+			SkipStateDelta:      true,
+		}, nil
 	})
 	callbacks.RegisterAfterTool(func(
 		ctx context.Context,
@@ -857,7 +861,40 @@ func TestRunAfterTool_PreservesSkipSummarizationAcrossCallbacks(t *testing.T) {
 	require.True(t, secondCalled)
 	require.NotNil(t, result)
 	require.True(t, result.SkipSummarization)
+	require.True(t, result.SkipResultFormatter)
+	require.True(t, result.SkipStateDelta)
 	require.Equal(t, marker, result.CustomResult)
+}
+
+func TestRunAfterTool_SkipResultFormatterFollowsLastCustomResult(t *testing.T) {
+	callbacks := tool.NewCallbacks(tool.WithContinueOnResponse(true))
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult:        "protocol envelope",
+			SkipResultFormatter: true,
+			SkipStateDelta:      true,
+		}, nil
+	})
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: "declared result"}, nil
+	})
+
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{Result: "original"},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "declared result", result.CustomResult)
+	require.False(t, result.SkipResultFormatter)
+	require.False(t, result.SkipStateDelta)
 }
 
 func TestRunAfterTool_NoCallbacksPreservesOriginalResultShape(t *testing.T) {
@@ -1143,6 +1180,45 @@ func TestToolCallbacks_After_NoCallbacks_WithoutResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Nil(t, result.CustomResult)
+}
+
+// TestToolCallbacks_After_NilResultDoesNotEchoOriginal tests that a pass-through
+// AfterTool callback does not wrap args.Result as CustomResult.
+func TestToolCallbacks_After_NilResultDoesNotEchoOriginal(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		return nil, nil
+	})
+	originalResult := map[string]string{"original": "result"}
+	args := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      originalResult,
+		Error:       nil,
+	}
+	result, err := callbacks.RunAfterTool(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Nil(t, result.CustomResult)
+}
+
+func TestRunAfterTool_EmptyMapCustomResultIsReplacement(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	empty := map[string]any{}
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: empty}, nil
+	})
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{Result: map[string]any{"original": true}},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, empty, result.CustomResult)
 }
 
 // TestToolCallbacks_After_NilResult tests that when a callback returns

@@ -184,19 +184,40 @@ request by:
 The request prefix remains the same as the parent request prefix, so providers
 with prompt caching can reuse more cached input. If no parent request is
 available, for example in manual or external summary calls, the summarizer
-falls back to the standalone request path.
+falls back to the standalone request path. With cache-safe forking enabled,
+that standalone user message contains the rendered `WithPrompt(...)` output,
+followed by a fixed source-data boundary and the instruction rendered from
+`WithCacheSafeForkPrompt(...)`. The boundary tells the model to treat the
+preceding conversation as source data rather than as a task to continue. The
+same construction is used for other standalone fallbacks, including bounded
+and retry requests.
 
 Before sending either form of request, the summarizer admits it against the
 summary model's effective input budget. The framework uses the smaller of the
 provider-specific input budget, when the model exposes one, and a conservative
 ceiling of 70% of the model context window. An oversized fork is reduced without
-mutating the parent request: unused tool schemas are removed first, older
-complete source rounds can be dropped while the latest round is protected, and
-large tool argument/result payloads are replaced as needed. If the fork still
-cannot fit, the summarizer rebuilds a bounded standalone request. This fallback
-truncates the `{conversation_text}` and `{previous_summary}` payloads with
-head-and-tail preservation; the fixed system prompt and user-prompt template
+mutating the parent request: unused tool schemas are removed first, and large
+tool argument/result payloads are replaced with explicit omission markers as
+needed. Source conversation turns are not dropped. The complete rendered fork
+prompt, including a custom one, counts against this input budget in both fork
+and standalone forms. If the fork still cannot fit, the summarizer rebuilds a
+bounded standalone request. When that request can fit all newly uncovered
+conversation, the standalone path preserves it in full and, when
+`{previous_summary}` is used, may bound only that previous rolling summary; the
+fixed system prompt, user-prompt template, source boundary, and fork prompt
 remain intact.
+
+If all newly uncovered conversation cannot fit in one standalone request, the
+summarizer can process a complete older prefix and leave the remaining events
+uncovered for a later summary pass. A prefix must end at a stable event boundary
+and cannot split response chunks or an open tool call/result round. The summary
+boundary advances only through the selected prefix after model generation and
+post-summary processing are complete. If even the smallest complete prefix does
+not fit, the request fails before calling the model and the existing boundary
+remains unchanged. Partial-prefix fallback is disabled when
+`WithPreSummaryHook(...)` is configured because hook-rewritten text cannot be
+mapped safely back to an event boundary. Prefix summaries always use a
+standalone request; they do not reuse the cache-safe fork.
 
 Budget fitting and the fork-to-standalone decision happen before the
 `BeforeModel` callback. The callback therefore receives the actual request that
@@ -205,15 +226,43 @@ callback makes it exceed the budget, the call fails explicitly instead of
 silently replacing the callback-modified request. If a provider still returns a
 context-length error, or a non-custom model call returns an empty summary, the
 summarizer makes one bounded standalone retry at half of the first attempt's
-input budget.
+input budget. That retry may select a smaller complete prefix under the same
+boundary rules.
 
 One important branch-summary behavior: after `WithCacheSafeForking(true)` is
 enabled, a non-empty branch trigger may fork the current parent request for the
-branch summary, but it will not also run the cascaded full-session summary in
-that same summary pass. The framework skips that full-session target instead of
-falling back to a standalone full-session prompt or reusing the branch-scoped
-fork request. Trigger a full-session summary separately when you need an
-all-branch summary.
+branch summary, but that same summary pass does not make a second standalone
+full-session LLM call. This applies to the common single-`filterKey` session as
+well as sessions that contain multiple filter keys. The framework skips that
+extra LLM target instead of falling back to a standalone full-session prompt or
+reusing the branch-scoped fork request. When every event loaded on the session
+has the same `filterKey`, a materialized branch summary is copied to
+`SummaryFilterKeyAllContents` in the same pass. This is a loaded-window
+optimization: a storage event limit can omit older events from other branches,
+so do not infer historical branch/full equivalence from the copy. On a
+multi-`filterKey` session, the full-session key is left untouched in that pass;
+trigger a full-session summary separately when you need an all-branch summary.
+
+More generally, a branch-triggered full-session cascade depends on the branch
+target producing a summary in that pass. If the branch gate declines to update
+its summary, the framework stops the cascade instead of independently advancing
+the full-session summary. A failed dependent target returns an error but does
+not create a separate durable recovery protocol. A later ordinary call must
+pass the branch gate again and can return `nil` without completing the earlier
+full target when that gate does not fire. To recover immediately, directly
+force `SummaryFilterKeyAllContents`, or retry the branch cascade with
+`force=true` from a context that does not carry a cache-safe parent fork.
+Forcing a branch cascade with a cache-safe parent still intentionally skips its
+dependent full-session LLM target.
+
+Asynchronous workers log dependent-target errors after processing. A successful
+enqueue only confirms that the job was accepted; it does not synchronously
+return errors produced later by the worker.
+
+`WithSummaryJobTimeout(...)` is the deadline for the entire summary job. A
+multi-`filterKey` cascade runs the branch and full-session targets sequentially,
+and both targets share that deadline. Size the timeout for their combined model
+and persistence latency.
 
 Prompt rules:
 
@@ -228,10 +277,14 @@ Prompt rules:
 - `WithSystemPrompt(...)` configures the optional standalone system message. It
   must not include `{conversation_text}` or `{previous_summary}`. It may include
   `{max_summary_words}`.
-- `WithCacheSafeForkPrompt(...)` configures only the user message appended in
-  fork mode. It must not include `{conversation_text}` or
-  `{previous_summary}` because the cloned parent request already contains the
-  conversation and any injected summary. It may include `{max_summary_words}`.
+- `WithCacheSafeForkPrompt(...)` configures the final summary instruction used
+  when cache-safe forking is enabled. In fork mode it is appended as a user
+  message to the cloned parent request. In standalone fallback it is appended
+  after a fixed source-data boundary in the standalone user message. It must
+  not include `{conversation_text}` or `{previous_summary}` because the source
+  conversation is already present before it in either request form. It may
+  include `{max_summary_words}`, and its complete rendered text counts against
+  the summary model's input budget.
 
 Keep the standalone prompt valid even when cache-safe forking is enabled,
 because fallback paths still use it. When writing a custom fork prompt, ask the
@@ -529,10 +582,11 @@ sent, the mode is `custom_response` and the prompt estimate remains zero.
 Advanced integrations can attach a report before entering a higher-level
 summary flow with `summary.ContextWithReport(ctx, report)` and retrieve it with
 `summary.ReportFromContext(ctx)`. The framework reuses that report for a single
-summary path; when a cascade generates multiple summaries in parallel, each
-worker receives a cloned report so branch-specific writes do not race. Those
-forked reports are emitted through their per-call hooks and are not merged back
-into the root report.
+summary path. Distinct branch and full-session targets in a multi-`filterKey`
+cascade each receive a cloned report so target-specific writes remain isolated.
+Those forked reports are emitted through their per-call hooks and are not merged
+back into the root report. The single-`filterKey` copy-persistence optimization
+does not create this pair of target reports.
 
 For private deployments, endpoint IDs, fine-tuned models, newly released
 models, or multi-tenant custom model configuration, prefer the instance or
@@ -616,7 +670,7 @@ summary.WithChecksAny(
 | `WithPrompt(prompt string)` | Custom summary prompt; must contain `{conversation_text}` and may contain `{previous_summary}` |
 | `WithSystemPrompt(prompt string)` | Add a separate system message for summarization instructions; must not contain `{conversation_text}` or `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | Opt in to cache-safe summary request forking when a parent request is available. Disabled by default |
-| `WithCacheSafeForkPrompt(prompt string)` | Customize the compacting user message appended in cache-safe fork mode. May include `{max_summary_words}`, but not `{conversation_text}` or `{previous_summary}` |
+| `WithCacheSafeForkPrompt(prompt string)` | Customize the final instruction used by cache-safe fork requests and appended after a source-data boundary in standalone fallbacks. Its rendered text counts against the input budget. May include `{max_summary_words}`, but not `{conversation_text}` or `{previous_summary}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | Custom function to skip recent events |
 
 ### Hook Options
@@ -954,6 +1008,12 @@ type PostSummaryHookContext struct {
 
 type PostSummaryHook func(in *PostSummaryHookContext) error
 ```
+
+The hook observes the provisional boundary for the source used to generate the
+summary. When the hook succeeds, or when its error is configured as non-aborting,
+the summarizer restores that exact source boundary after the hook; hook writes to
+the summary boundary state therefore do not persist. An aborting error or panic
+restores the boundary that existed before the summary attempt.
 
 ### Usage Example
 
@@ -1547,11 +1607,25 @@ Behavior notes:
 - `WithCascadeFullSessionSummary(...)` controls whether a non-empty branch
   trigger also refreshes the full-session summary.
 - With `WithCacheSafeForking(true)`, a branch-triggered summary pass only runs
-  the branch summary target when a parent fork request is available. The
-  full-session cascade target is skipped in that pass; it does not fall back to
-  the standalone full-session prompt and does not reuse the branch-scoped fork
-  request. Request a full-session summary separately when you need one for all
-  branches.
+  the branch summary LLM target when a parent fork request is available. It
+  does not fall back to a standalone full-session prompt and does not reuse the
+  branch-scoped fork request for a second LLM call. When every event loaded on
+  the session has the same `filterKey`, a materialized branch summary is copied
+  to `SummaryFilterKeyAllContents` in that pass. This loaded-window optimization
+  does not prove that older, unloaded history contains no other branches. On a
+  multi-`filterKey` session, the full-session cascade target is skipped; request
+  a full-session summary separately when you need one for all branches.
+- A full-session cascade is conditional on the branch target producing a
+  summary in the same pass. If the branch is not updated, the full-session
+  target is not run independently. Failed dependent targets are not retried
+  from inferred or framework-persisted recovery state; a later pass must
+  materialize the branch again. For immediate recovery, force the full-session
+  key directly, or force the branch cascade without a cache-safe parent fork.
+- Async enqueue success does not report later worker failures; dependent-target
+  errors are logged by the worker.
+- `WithSummaryJobTimeout(...)` applies to the complete summary job. Branch and
+  full-session targets run sequentially and share the same deadline, so allow
+  for their combined model and persistence latency.
 - To keep only full-session summaries from branch-triggered automatic summary,
   pass an explicit empty allowlist and leave cascade enabled:
 

@@ -13,17 +13,28 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
 
+const (
+	eventLoadBatchSize       = 512
+	userEventAnchorBatchSize = 64
+)
+
 // Config holds configuration for HashIdx session storage client.
 type Config struct {
-	SessionTTL        time.Duration
+	SessionTTL time.Duration
+	// TrackEventTTL controls track event expiration. Nil falls back to
+	// SessionTTL, and non-positive values disable expiration.
+	TrackEventTTL     *time.Duration
 	AppStateTTL       time.Duration
 	UserStateTTL      time.Duration
 	SessionEventLimit int
@@ -34,6 +45,18 @@ type Config struct {
 	// on the user session index.
 	// When false (default), no index is maintained and ListSessions falls back to SCAN.
 	EnableUserSessionIndex bool
+	// DisableScriptCache runs all Lua scripts via EVAL instead of the default
+	// EVALSHA-first Script.Run. Enable for proxy/cluster backends whose script
+	// cache is not reliably maintained (e.g. a Tendis cluster fronted by twemproxy),
+	// avoiding repeated NOSCRIPT round-trips and the resulting monitoring noise.
+	DisableScriptCache bool
+}
+
+func (cfg Config) effectiveTrackEventTTL() time.Duration {
+	if cfg.TrackEventTTL != nil {
+		return *cfg.TrackEventTTL
+	}
+	return cfg.SessionTTL
 }
 
 // Client implements HashIdx session storage logic.
@@ -52,14 +75,32 @@ func NewClient(client redis.UniversalClient, cfg Config) *Client {
 	}
 }
 
+// runScript executes a Lua script against the redis client. By default it uses
+// Script.Run (EVALSHA first, with automatic EVAL fallback on NOSCRIPT). When
+// cfg.DisableScriptCache is set it uses Script.Eval directly, sending the full
+// script body every time and skipping EVALSHA — suited to proxy/cluster backends
+// whose script cache is not reliably kept (e.g. a Tendis cluster fronted by
+// twemproxy, which recommends EVAL over EVALSHA).
+func (c *Client) runScript(
+	ctx context.Context, script *redis.Script, keys []string, args ...any,
+) *redis.Cmd {
+	if c.cfg.DisableScriptCache {
+		return script.Eval(ctx, c.client, keys, args...)
+	}
+	return script.Run(ctx, c.client, keys, args...)
+}
+
 // sessionMeta is the session metadata structure for HashIdx.
 type sessionMeta struct {
-	ID        string           `json:"id"`
-	AppName   string           `json:"appName"`
-	UserID    string           `json:"userID"`
-	State     session.StateMap `json:"state"`
-	CreatedAt time.Time        `json:"createdAt"`
-	UpdatedAt time.Time        `json:"updatedAt"`
+	ID      string           `json:"id"`
+	AppName string           `json:"appName"`
+	UserID  string           `json:"userID"`
+	State   session.StateMap `json:"state"`
+	// Generation fences coordinated state initialization across session recreation.
+	// An empty value identifies a legacy record and is populated on first use.
+	Generation string    `json:"generation,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // CreateSession creates a new session using HashIdx logic.
@@ -79,12 +120,13 @@ func (c *Client) CreateSession(
 
 	now := time.Now()
 	meta := sessionMeta{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     copiedState,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:         key.SessionID,
+		AppName:    key.AppName,
+		UserID:     key.UserID,
+		State:      copiedState,
+		Generation: uuid.NewString(),
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 
 	metaJSON, err := json.Marshal(meta)
@@ -141,11 +183,12 @@ func (c *Client) GetSession(
 // loadSessionComplete loads session data with all post-processing (matches zset behavior).
 // This includes: events, app/user state merge, track events, summaries.
 //
-// Uses 3 Redis round-trips:
+// Uses bounded Redis reads for events, followed by the existing state loaders:
 //
-//	RT1: luaLoadSessionData — events + userState + summary (same {userID} slot)
-//	RT2: pipeline ZRANGE for each track (same {userID} slot)
-//	RT3: pipeline HGETALL for appState (different {appName} slot)
+//   - luaLoadEvents — one or more bounded event batches (same {userID} slot)
+//   - luaLoadSessionData — userState + summary (same {userID} slot)
+//   - luaLoadTrackEvents for each track (same {userID} slot)
+//   - pipeline HGETALL for appState (different {appName} slot)
 func (c *Client) loadSessionComplete(
 	ctx context.Context,
 	key session.Key,
@@ -166,23 +209,18 @@ func (c *Client) loadSessionComplete(
 	// Parse track names from session state (pure memory, no Redis call)
 	tracks, _ := session.TracksFromState(meta.State)
 
-	// --- RT1: Lua script for events + userState + summary + TTL refresh ---
+	// Load events from the time index in bounded batches before materializing payloads.
+	events, err := c.loadSessionEvents(ctx, key, limit, afterTime)
+	if err != nil {
+		return nil, fmt.Errorf("load session data: %w", err)
+	}
+	sess.Events = events
+
+	// Load userState and summary.
 	sessionData, err := c.loadSessionDataViaLua(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("load session data: %w", err)
 	}
-
-	// Populate events
-	for _, evtJSON := range sessionData.parseEvents() {
-		var evt event.Event
-		if err := json.Unmarshal([]byte(evtJSON), &evt); err != nil {
-			continue
-		}
-		sess.Events = append(sess.Events, evt)
-	}
-
-	// Apply event filtering (matches zset behavior)
-	sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
 
 	// Merge user state from Lua result
 	for k, v := range sessionData.UserState {
@@ -197,10 +235,10 @@ func (c *Client) loadSessionComplete(
 		}
 	}
 
-	// --- RT2: load track events (same {userID} slot) ---
+	// Load track events (same {userID} slot).
 	c.loadAndAttachTrackEvents(ctx, key, sess, tracks, limit, afterTime)
 
-	// --- RT3: appState (different hash tag {appName}, cannot be in same Lua) ---
+	// Load appState (different hash tag {appName}, cannot be in the same Lua script).
 	c.loadAndMergeAppState(ctx, key, sess)
 
 	// Inject HashIdx version tag into ServiceMeta (not persisted, memory only)
@@ -210,44 +248,23 @@ func (c *Client) loadSessionComplete(
 }
 
 // sessionDataResult holds the decoded result from luaLoadSessionData.
-// Events use json.RawMessage because Lua cjson encodes empty arrays as {} (JSON objects).
-// Tracks are no longer in this result — they are loaded via a separate pipeline call.
 type sessionDataResult struct {
-	Events    json.RawMessage   `json:"events"`
 	Summary   string            `json:"summary"`
 	UserState map[string]string `json:"userState"`
 }
 
-// parseEvents parses the events field from the Lua result.
-// Handles Lua cjson's empty-array-as-object quirk for []string.
-func (r *sessionDataResult) parseEvents() []string {
-	if len(r.Events) == 0 {
-		return nil
-	}
-	var result []string
-	if err := json.Unmarshal(r.Events, &result); err == nil {
-		return result
-	}
-	// Empty object {} from cjson = empty array
-	return nil
-}
-
-// loadSessionDataViaLua executes luaLoadSessionData to load events, userState,
-// and summary in a single Redis round-trip (RT1).
-// Track events are loaded separately via pipeline (RT2).
+// loadSessionDataViaLua executes luaLoadSessionData to load userState and
+// summary in a single Redis round-trip.
 func (c *Client) loadSessionDataViaLua(
 	ctx context.Context,
 	key session.Key,
 ) (*sessionDataResult, error) {
 	keys := []string{
-		c.keys.EventDataKey(key),
-		c.keys.EventTimeIndexKey(key),
-		c.keys.SessionMetaKey(key),
 		c.keys.SummaryKey(key),
 		c.keys.UserStateKey(key.AppName, key.UserID),
 	}
 
-	raw, err := luaLoadSessionData.Run(ctx, c.client, keys).Text()
+	raw, err := c.runScript(ctx, luaLoadSessionData, keys).Text()
 	if err != nil {
 		return nil, err
 	}
@@ -257,6 +274,144 @@ func (c *Client) loadSessionDataViaLua(
 		return nil, fmt.Errorf("unmarshal lua result: %w", err)
 	}
 	return &result, nil
+}
+
+// loadSessionEvents loads the requested event window in fixed-size batches.
+// It preserves ApplyEventFiltering's behavior of adding the latest older user
+// event when the selected window does not contain a user message.
+func (c *Client) loadSessionEvents(
+	ctx context.Context,
+	key session.Key,
+	limit int,
+	afterTime time.Time,
+) ([]event.Event, error) {
+	events, err := c.loadRecentEvents(ctx, key, afterTime, limit)
+	if err != nil {
+		return nil, err
+	}
+	originalEvents := slices.Clone(events)
+	sess := &session.Session{Events: events}
+	sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+	if len(sess.Events) > 0 {
+		return sess.Events, nil
+	}
+	if limit <= 0 && afterTime.IsZero() {
+		return sess.Events, nil
+	}
+
+	anchor, ok, err := c.loadLatestUserEvent(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return sess.Events, nil
+	}
+	sess.Events = append([]event.Event{anchor}, originalEvents...)
+	sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+	return sess.Events, nil
+}
+
+func (c *Client) loadRecentEvents(
+	ctx context.Context,
+	key session.Key,
+	afterTime time.Time,
+	limit int,
+) ([]event.Event, error) {
+	minScore := "-inf"
+	if !afterTime.IsZero() {
+		minScore = fmt.Sprintf("%d", afterTime.UnixNano())
+	}
+
+	var events []event.Event
+	for offset := int64(0); ; {
+		batchSize := eventLoadBatchSize
+		if offset == 0 && limit > 0 && limit < batchSize {
+			batchSize = limit
+		}
+		if batchSize <= 0 {
+			break
+		}
+
+		rawEvents, scanned, err := c.loadEventBatch(ctx, key, minScore, offset, int64(batchSize))
+		if err != nil {
+			return nil, err
+		}
+		for _, raw := range rawEvents {
+			var evt event.Event
+			if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+				continue
+			}
+			if !afterTime.IsZero() && evt.Timestamp.Before(afterTime) {
+				continue
+			}
+			events = append(events, evt)
+			if limit > 0 && len(events) == limit {
+				break
+			}
+		}
+		offset += scanned
+		if scanned < int64(batchSize) || (limit > 0 && len(events) == limit) {
+			break
+		}
+	}
+	slices.Reverse(events)
+	return events, nil
+}
+
+func (c *Client) loadLatestUserEvent(
+	ctx context.Context,
+	key session.Key,
+) (event.Event, bool, error) {
+	for offset := int64(0); ; offset += userEventAnchorBatchSize {
+		rawEvents, scanned, err := c.loadEventBatch(
+			ctx, key, "-inf", offset, userEventAnchorBatchSize,
+		)
+		if err != nil {
+			return event.Event{}, false, err
+		}
+		for _, raw := range rawEvents {
+			var evt event.Event
+			if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+				continue
+			}
+			if evt.IsUserMessage() {
+				return evt, true, nil
+			}
+		}
+		if scanned < userEventAnchorBatchSize {
+			return event.Event{}, false, nil
+		}
+	}
+}
+
+func (c *Client) loadEventBatch(
+	ctx context.Context,
+	key session.Key,
+	minScore string,
+	offset int64,
+	batchSize int64,
+) ([]string, int64, error) {
+	result, err := c.runScript(ctx, luaLoadEvents,
+		[]string{
+			c.keys.EventDataKey(key),
+			c.keys.EventTimeIndexKey(key),
+		},
+		minScore, offset, batchSize,
+	).StringSlice()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	if len(result) == 0 {
+		return nil, 0, nil
+	}
+	scanned, err := strconv.ParseInt(result[0], 10, 64)
+	if err != nil {
+		return nil, 0, fmt.Errorf("parse scanned event count: %w", err)
+	}
+	return result[1:], scanned, nil
 }
 
 // loadAndMergeAppState loads and merges app state.
@@ -350,7 +505,7 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Ev
 		boolToInt(shouldStoreEvent),
 	}
 
-	result, err := luaAppendEvent.Run(ctx, c.client, keys, args...).Int()
+	result, err := c.runScript(ctx, luaAppendEvent, keys, args...).Int()
 	if err != nil {
 		return fmt.Errorf("append event: %w", err)
 	}
@@ -378,26 +533,61 @@ func boolToInt(b bool) int {
 }
 
 // DeleteSession deletes a session and all associated data in HashIdx storage,
-// including track keys discovered from session state.
+// including track keys discovered from session state and the track index.
 // When EnableUserSessionIndex is true, also removes the session index entry.
 func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 	keys := c.keys.SessionKeys(key)
-
-	tracks, _ := c.ListTracksForSession(ctx, key)
+	tracks, err := c.listTracksForDelete(ctx, key)
+	if err != nil {
+		return fmt.Errorf("delete session: list tracks: %w", err)
+	}
 	for _, t := range tracks {
 		keys = append(keys, c.keys.TrackKeys(key, t)...)
 	}
-
+	keys = append(keys, c.keys.TrackIndexKey(key))
 	if c.cfg.EnableUserSessionIndex {
 		if err := c.removeSessionFromUserIndex(ctx, keys, key); err != nil {
 			return err
 		}
 	} else {
-		if _, err := luaDeleteSessionLegacy.Run(ctx, c.client, keys).Result(); err != nil {
+		if _, err := c.runScript(ctx, luaDeleteSessionLegacy, keys).Result(); err != nil {
 			return fmt.Errorf("delete session: %w", err)
 		}
 	}
 	return nil
+}
+
+func (c *Client) listTracksForDelete(ctx context.Context, key session.Key) ([]session.Track, error) {
+	tracks, _ := c.ListTracksForSession(ctx, key)
+	indexedTracks, err := c.client.SMembers(ctx, c.keys.TrackIndexKey(key)).Result()
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+	return mergeTrackNames(tracks, indexedTracks), nil
+}
+
+func mergeTrackNames(tracks []session.Track, indexedTracks []string) []session.Track {
+	if len(indexedTracks) == 0 {
+		return tracks
+	}
+	result := make([]session.Track, 0, len(tracks)+len(indexedTracks))
+	seen := make(map[session.Track]struct{}, len(tracks)+len(indexedTracks))
+	for _, track := range tracks {
+		if _, ok := seen[track]; ok {
+			continue
+		}
+		seen[track] = struct{}{}
+		result = append(result, track)
+	}
+	for _, indexedTrack := range indexedTracks {
+		track := session.Track(indexedTrack)
+		if _, ok := seen[track]; ok {
+			continue
+		}
+		seen[track] = struct{}{}
+		result = append(result, track)
+	}
+	return result
 }
 
 // TrimConversations trims the most recent N conversations from the session (HashIdx).
@@ -411,7 +601,7 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 		c.keys.EventTimeIndexKey(key),
 	}
 
-	result, err := luaTrimConversations.Run(ctx, c.client, keys, count).StringSlice()
+	result, err := c.runScript(ctx, luaTrimConversations, keys, count).StringSlice()
 	if err != nil {
 		return nil, fmt.Errorf("trim conversations: %w", err)
 	}
@@ -434,7 +624,7 @@ func (c *Client) DeleteEvent(ctx context.Context, key session.Key, eventID strin
 		c.keys.EventTimeIndexKey(key),
 	}
 
-	if _, err := luaDeleteEvent.Run(ctx, c.client, keys, eventID).Result(); err != nil {
+	if _, err := c.runScript(ctx, luaDeleteEvent, keys, eventID).Result(); err != nil {
 		return fmt.Errorf("delete event: %w", err)
 	}
 	return nil
@@ -615,26 +805,11 @@ func (c *Client) loadSessionBasic(
 	sess.UpdatedAt = meta.UpdatedAt
 
 	if !listOnlyMeta {
-		result, err := luaLoadEvents.Run(ctx, c.client,
-			[]string{
-				c.keys.EventDataKey(key),
-				c.keys.EventTimeIndexKey(key),
-			},
-			0, int64(-1), 0,
-		).StringSlice()
-		if err != nil && err != redis.Nil {
+		events, err := c.loadSessionEvents(ctx, key, limit, afterTime)
+		if err != nil {
 			return nil, fmt.Errorf("load events: %w", err)
 		}
-
-		for _, evtJSON := range result {
-			var evt event.Event
-			if err := json.Unmarshal([]byte(evtJSON), &evt); err != nil {
-				continue
-			}
-			sess.Events = append(sess.Events, evt)
-		}
-
-		sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+		sess.Events = events
 	}
 
 	sess.ServiceMeta = map[string]string{util.ServiceMetaStorageTypeKey: util.StorageTypeHashIdx}

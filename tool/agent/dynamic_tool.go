@@ -35,21 +35,27 @@ import (
 // short-lived sub-agent and returns its result synchronously.
 const DefaultDynamicToolName = "dynamic_agent"
 
-// defaultDynamicDescription is the default tool description exposed to the
-// model. It pins the semantic boundary so the model does not confuse this with
-// a transfer, a background task, or running a pre-registered sub-agent. It
-// deliberately does not name the optional "tools"/"skills" fields (those are
-// only present when exposed via the schema); it states the boundary as a fact
-// that holds whether or not the model can narrow the surface.
-const defaultDynamicDescription = "Run one short-lived sub-agent for a " +
+// defaultDynamicDescriptionPrefix is shared by the default descriptions with
+// and without model profiles. It pins the semantic boundary so the model does
+// not confuse this with a transfer, a background task, or running a
+// pre-registered sub-agent. Field-specific hints are appended separately so
+// they stay aligned with the generated schema.
+const defaultDynamicDescriptionPrefix = "Run one short-lived sub-agent for a " +
 	"single focused task and return its result. The sub-agent is created on the " +
 	"fly for this call only and is destroyed afterward. It does NOT transfer " +
 	"control, does NOT run a pre-registered agent by name, and does NOT start a " +
 	"background task. To run several tasks, call this tool multiple times. Its " +
 	"tools and skills stay within a code-defined capability boundary, which by " +
 	"default is derived from what the current agent is already allowed to use " +
-	"(or set explicitly in code), and it cannot select arbitrary agents, models, " +
+	"(or set explicitly in code)"
+
+const defaultDynamicDescription = defaultDynamicDescriptionPrefix +
+	", and it cannot select arbitrary agents, models, " +
 	"or executors."
+
+const defaultDynamicDescriptionWithModelProfiles = defaultDynamicDescriptionPrefix + ". It cannot select " +
+	"arbitrary agents, models, or executors; it may select only a " +
+	"host-authorized model profile configured for this tool."
 
 const (
 	defaultRequestDescription = "The task for the sub-agent. Include all the " +
@@ -68,6 +74,7 @@ const (
 	fieldInstruction = "instruction"
 	fieldTools       = "tools"
 	fieldSkills      = "skills"
+	fieldModel       = "model"
 )
 
 // skillRepository is a local alias so the dynamic option struct (declared in
@@ -156,8 +163,8 @@ type DetailedCapabilitySurfaceProvider func(
 ) CapabilitySurface
 
 // WithTemplateAgent sets the base/template agent that defines the execution
-// boundary for the dynamic sub-agent (model, executor, callbacks, permission
-// policy, max calls, ...).
+// boundary for the dynamic sub-agent (default model, executor, callbacks,
+// permission policy, max calls, ...).
 //
 // When omitted, the dynamic tool lazily derives the base agent from the parent
 // invocation at call time. The model can never select an arbitrary agent; it
@@ -310,7 +317,8 @@ func WithSkillsDescription(description string) Option {
 
 // NewDynamicTool creates a dynamic AgentTool: a single, code-defined entrypoint
 // that runs a short-lived sub-agent whose capability surface (tools,
-// skills, instruction) is selected per invocation within a safety boundary.
+// skills, instruction and, when configured, a model profile) is selected per
+// invocation within a safety boundary.
 //
 // The default behavior is to lazily derive the sub-agent from the parent
 // invocation at call time:
@@ -321,10 +329,12 @@ func WithSkillsDescription(description string) Option {
 //   - skills: the parent invocation's effective skills, optionally narrowed by
 //     the model's "skills" field,
 //   - instruction: the model's "instruction" field (when exposed),
+//   - model: an optional host-authorized profile registered with
+//     WithAgentModelProfile; omitted by default,
 //   - context: isolated by default (HistoryScopeIsolated).
 //
 // The model cannot pick an arbitrary agent, model, or executor; it can only run
-// within the configured boundary.
+// within the configured boundary and any explicitly registered model profiles.
 //
 // Minimal usage exposes a tool named "dynamic_agent":
 //
@@ -353,6 +363,9 @@ func NewDynamicTool(opts ...Option) *Tool {
 		)
 	}
 	dynamicCfg := options.ensureDynamicOptions()
+	dynamicCfg.modelProfiles = mustNormalizeAgentModelProfiles(
+		dynamicCfg.modelProfiles,
+	)
 	description := buildDynamicDescription(dynamicCfg, options.historyScope)
 	if options.description != nil {
 		description = *options.description
@@ -387,7 +400,11 @@ func NewDynamicTool(opts ...Option) *Tool {
 // schema omits.
 func buildDynamicDescription(cfg *dynamicOptions, historyScope HistoryScope) string {
 	var b strings.Builder
-	b.WriteString(defaultDynamicDescription)
+	if len(cfg.modelProfiles) > 0 {
+		b.WriteString(defaultDynamicDescriptionWithModelProfiles)
+	} else {
+		b.WriteString(defaultDynamicDescription)
+	}
 	if historyScope == HistoryScopeParentBranch {
 		b.WriteString(" It can see the current conversation's history; still " +
 			"describe the task in 'request'. Use it when delegated tool work " +
@@ -411,6 +428,10 @@ func buildDynamicDescription(cfg *dynamicOptions, historyScope HistoryScope) str
 	if cfg.exposeSkillSelection {
 		b.WriteString(" Optionally set 'skills' to the exact subset of skill " +
 			"names it may use; omit to allow all permitted skills.")
+	}
+	if len(cfg.modelProfiles) > 0 {
+		b.WriteString(" Optionally set 'model' to a configured profile for this " +
+			"sub-agent only; omit it to keep the base/template model selection.")
 	}
 	return b.String()
 }
@@ -460,6 +481,9 @@ func buildDynamicInputSchema(name string, cfg *dynamicOptions) *tool.Schema {
 			Description: optionalString(cfg.skillsDescription, defaultSkillsDescription),
 			Items:       &tool.Schema{Type: "string"},
 		}
+	}
+	if len(cfg.modelProfiles) > 0 {
+		properties[fieldModel] = agentModelProfileSchema(cfg.modelProfiles)
 	}
 	return &tool.Schema{
 		Type:        "object",
@@ -521,6 +545,7 @@ type dynamicArgs struct {
 	Instruction string    `json:"instruction"`
 	Tools       *[]string `json:"tools"`
 	Skills      *[]string `json:"skills"`
+	Model       string    `json:"model"`
 }
 
 // dynamicSpec is the parsed, validated form of a single dynamic invocation.
@@ -531,6 +556,7 @@ type dynamicSpec struct {
 	toolsProvided  bool
 	skills         []string
 	skillsProvided bool
+	model          string
 }
 
 func (at *Tool) parseDynamicArgs(jsonArgs []byte) dynamicSpec {
@@ -551,6 +577,9 @@ func (at *Tool) parseDynamicArgs(jsonArgs []byte) dynamicSpec {
 	if at.dynamicCfg.exposeSkillSelection && raw.Skills != nil {
 		spec.skillsProvided = true
 		spec.skills = dedupeNonEmpty(*raw.Skills)
+	}
+	if len(at.dynamicCfg.modelProfiles) > 0 {
+		spec.model = strings.TrimSpace(raw.Model)
 	}
 	return spec
 }
@@ -677,14 +706,21 @@ func (at *Tool) buildDynamicSubInvocation(
 	childKey := at.buildDynamicChildFilterKey(parentInv, baseAgent)
 	nodeID := dynamicSurfaceNodeID(at.name)
 	subInv := parentInv.Clone(
-		at.dynamicChildInvocationOptions(baseAgent, message, childKey, nodeID, patch)...,
+		at.dynamicChildInvocationOptions(
+			baseAgent,
+			message,
+			childKey,
+			nodeID,
+			patch,
+			spec.model != "",
+		)...,
 	)
 	subCtx := agent.NewInvocationContext(ctx, subInv)
 	return subCtx, subInv, warnings, nil
 }
 
 // buildDynamicPatch builds the surface patch that scopes the child invocation's
-// tools, skills and instruction.
+// tools, skills, instruction and an optional model profile.
 func (at *Tool) buildDynamicPatch(
 	ctx context.Context,
 	parentInv *agent.Invocation,
@@ -695,6 +731,14 @@ func (at *Tool) buildDynamicPatch(
 
 	if at.dynamicCfg.exposeInstruction && spec.instruction != "" {
 		patch.SetInstruction(spec.instruction)
+	}
+
+	selectedModel, err := at.resolveAgentModelProfile(spec.model)
+	if err != nil {
+		return agent.SurfacePatch{}, nil, err
+	}
+	if selectedModel != nil {
+		patch.SetModel(selectedModel)
 	}
 
 	// Tools: always set so the dynamic tool itself (and transfer_to_agent) are
@@ -1020,6 +1064,7 @@ func (at *Tool) dynamicChildInvocationOptions(
 	childKey string,
 	nodeID string,
 	patch agent.SurfacePatch,
+	modelProfileSelected bool,
 ) []agent.InvocationOptions {
 	// With a template agent the template defines the execution boundary
 	// (model, executor, ...), so parent run-scoped overrides must not leak in.
@@ -1033,7 +1078,11 @@ func (at *Tool) dynamicChildInvocationOptions(
 			agent.SetInvocationSurfaceRootNodeID(inv, nodeID)
 			runOpts := inv.RunOptions
 			agent.WithSurfacePatchForNode(nodeID, patch)(&runOpts)
-			at.sanitizeChildRunOptions(&runOpts, enforceTemplateBoundary)
+			at.sanitizeChildRunOptions(
+				&runOpts,
+				enforceTemplateBoundary,
+				modelProfileSelected,
+			)
 			inv.RunOptions = runOpts
 		},
 	}
@@ -1050,11 +1099,17 @@ func (at *Tool) dynamicChildInvocationOptions(
 // WithCapabilityTools/WithCapabilityProvider tools that never passed through it
 // (the parent filter was already applied when deriving the candidate surface).
 //
-// Template boundary (cleared only when a template agent is configured): the
-// template defines model, prompt and execution, so parent run-scoped overrides
-// must not leak in:
-//   - model: Model/ModelName/ModelSelector all outrank the template's own
-//     model resolution;
+// Model boundary: Model/ModelName/ModelSelector are cleared when a template is
+// configured or the call explicitly selects a model profile. A template owns
+// its default model. A selected profile owns this child call; in particular,
+// a run-level ModelSelector would otherwise run after surface resolution and
+// replace the selected profile. A selected profile also clears inherited
+// provider-specific request options and the explicit context window so parent
+// settings cannot rewrite or leak into a different profile model.
+//
+// Remaining template boundary (cleared only when a template agent is
+// configured): the template defines prompt and execution, so parent run-scoped
+// overrides must not leak in:
 //   - prompt: Instruction/GlobalInstruction outrank the template prompt — a
 //     model-provided instruction still applies because it travels via the
 //     surface patch, which is resolved before RunOptions;
@@ -1065,17 +1120,25 @@ func (at *Tool) dynamicChildInvocationOptions(
 func (at *Tool) sanitizeChildRunOptions(
 	runOpts *agent.RunOptions,
 	enforceTemplateBoundary bool,
+	modelProfileSelected bool,
 ) {
 	runOpts.AdditionalTools = nil
 	runOpts.ExternalTools = nil
 	runOpts.ExternalToolNames = nil
 	runOpts.ToolFilter = nil
+	if enforceTemplateBoundary || modelProfileSelected {
+		runOpts.Model = nil
+		runOpts.ModelName = ""
+		runOpts.ModelSelector = nil
+	}
+	if modelProfileSelected {
+		runOpts.ModelContextWindow = 0
+		runOpts.ModelRequestExtraFields = nil
+		runOpts.ModelRequestHeaders = nil
+	}
 	if !enforceTemplateBoundary {
 		return
 	}
-	runOpts.Model = nil
-	runOpts.ModelName = ""
-	runOpts.ModelSelector = nil
 	runOpts.Instruction = ""
 	runOpts.GlobalInstruction = ""
 	runOpts.CodeExecutor = nil

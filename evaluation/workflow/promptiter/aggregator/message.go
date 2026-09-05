@@ -32,6 +32,7 @@ Requirements:
 - Keep the response as raw JSON only.
 - Do not wrap the response in markdown code fences.
 - Return only merged gradient items. The caller will attach the target surface identity and type.
+- Never return an empty Gradients array.
 - Merge duplicated or overlapping gradients when appropriate.
 - Drop clearly empty or redundant gradient items.
 

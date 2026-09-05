@@ -11,6 +11,7 @@
 package csv
 
 import (
+	"encoding/csv"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,7 +46,7 @@ type Reader struct {
 }
 
 // New creates a new CSV reader with the given options.
-// CSV reader uses FixedSizeChunking by default.
+// CSV reader uses line-preserving FixedSizeChunking by default.
 func New(opts ...reader.Option) reader.Reader {
 	// Build config from options
 	config := &reader.Config{
@@ -67,13 +68,14 @@ func New(opts ...reader.Option) reader.Reader {
 }
 
 // buildDefaultChunkingStrategy builds the default chunking strategy for CSV reader.
-// CSV uses FixedSizeChunking with configurable size and overlap.
+// Newlines keep complete records together whenever one record fits the budget.
+// Oversized records are refined by natural text boundaries.
 func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
-	var opts []chunking.Option
-	if chunkSize > 0 {
+	opts := []chunking.Option{chunking.WithPreserveLines()}
+	if chunkSize != 0 {
 		opts = append(opts, chunking.WithChunkSize(chunkSize))
 	}
-	if overlap > 0 {
+	if overlap != 0 {
 		opts = append(opts, chunking.WithOverlap(overlap))
 	}
 	return chunking.NewFixedSizeChunking(opts...)
@@ -87,7 +89,10 @@ func (r *Reader) ReadFromReader(name string, rd io.Reader) ([]*document.Document
 		return nil, err
 	}
 	// Convert CSV to text.
-	textContent := r.csvToText(string(content))
+	textContent, err := r.csvToText(string(content))
+	if err != nil {
+		return nil, err
+	}
 	// Create document.
 	doc := idocument.CreateDocument(textContent, name)
 
@@ -124,7 +129,10 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 	// Get file name without extension.
 	fileName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
 	// Convert CSV to text.
-	textContent := r.csvToText(string(content))
+	textContent, err := r.csvToText(string(content))
+	if err != nil {
+		return nil, err
+	}
 	// Create document.
 	doc := idocument.CreateDocument(textContent, fileName)
 
@@ -173,36 +181,36 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 	return r.ReadFromReader(fileName, resp.Body)
 }
 
-// csvToText converts CSV content to a readable text format.
-func (r *Reader) csvToText(csvContent string) string {
-	// Split content into lines.
-	lines := strings.Split(csvContent, "\n")
-	// Process each line to handle CSV formatting.
-	var processedLines []string
-	for _, line := range lines {
-		// Skip empty lines.
-		if strings.TrimSpace(line) == "" {
+// csvToText converts CSV records to one normalized text line per record.
+func (r *Reader) csvToText(csvContent string) (string, error) {
+	csvReader := csv.NewReader(strings.NewReader(csvContent))
+	csvReader.FieldsPerRecord = -1
+	records, err := csvReader.ReadAll()
+	if err != nil {
+		return "", fmt.Errorf("parse csv: %w", err)
+	}
+
+	processedLines := make([]string, 0, len(records))
+	for _, record := range records {
+		if len(record) == 0 {
 			continue
 		}
-		// Split by comma and clean up each field.
-		fields := strings.Split(line, ",")
-		for i, field := range fields {
-			// Remove quotes and trim whitespace.
-			field = strings.Trim(field, `"'`)
-			field = strings.TrimSpace(field)
-			fields[i] = field
+		fields := make([]string, len(record))
+		for i, field := range record {
+			field = strings.ReplaceAll(field, "\r\n", "\n")
+			field = strings.ReplaceAll(field, "\r", "\n")
+			field = strings.ReplaceAll(field, "\n", " ")
+			fields[i] = strings.TrimSpace(field)
 		}
-		// Join fields with a more readable separator.
-		processedLine := strings.Join(fields, " | ")
-		processedLines = append(processedLines, processedLine)
+		processedLines = append(processedLines, strings.Join(fields, " | "))
 	}
-	return strings.Join(processedLines, "\n")
+	return strings.Join(processedLines, "\n"), nil
 }
 
 // chunkDocuments applies chunking to documents.
 func (r *Reader) chunkDocuments(docs []*document.Document) ([]*document.Document, error) {
 	if r.chunkingStrategy == nil {
-		r.chunkingStrategy = chunking.NewFixedSizeChunking()
+		r.chunkingStrategy = buildDefaultChunkingStrategy(0, 0)
 	}
 
 	var result []*document.Document

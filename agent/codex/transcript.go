@@ -25,6 +25,8 @@ const (
 	codexEventItemStarted    = "item.started"
 	codexEventItemCompleted  = "item.completed"
 	codexEventTurnCompleted  = "turn.completed"
+	codexEventTurnFailed     = "turn.failed"
+	codexEventError          = "error"
 	codexItemAgentMessage    = "agent_message"
 	codexItemCommand         = "command_execution"
 	codexItemMCPToolCall     = "mcp_tool_call"
@@ -34,14 +36,18 @@ const (
 	codexItemImageGeneration = "image_generation"
 	codexItemSkill           = "skill"
 	frameworkToolSkillRun    = "skill_run"
+	codexErrorObservationID  = "codex-error-observation"
 )
 
 // codexEvent represents one top-level JSONL event produced by Codex CLI.
 type codexEvent struct {
-	Type     string      `json:"type,omitempty"`
-	ThreadID string      `json:"thread_id,omitempty"`
-	Item     *codexItem  `json:"item,omitempty"`
-	Usage    *codexUsage `json:"usage,omitempty"`
+	Type     string          `json:"type,omitempty"`
+	ThreadID string          `json:"thread_id,omitempty"`
+	Item     *codexItem      `json:"item,omitempty"`
+	Usage    *codexUsage     `json:"usage,omitempty"`
+	Message  string          `json:"message,omitempty"`
+	Code     string          `json:"code,omitempty"`
+	Error    json.RawMessage `json:"error,omitempty"`
 }
 
 // codexItem carries one Codex turn item.
@@ -86,39 +92,90 @@ type codexUsage struct {
 	ReasoningOutputTokens int `json:"reasoning_output_tokens,omitempty"`
 }
 
-// transcriptResult is the framework event projection of one Codex JSONL transcript.
-type transcriptResult struct {
-	Events       []*event.Event
-	FinalMessage string
-	ThreadID     string
-	Usage        *model.Usage
+// codexError carries error details from Codex JSONL events.
+type codexError struct {
+	Type    string `json:"type,omitempty"`
+	Message string `json:"message,omitempty"`
+	Code    string `json:"code,omitempty"`
 }
 
-// parseTranscriptEvents parses Codex CLI JSONL events into framework events.
-func parseTranscriptEvents(stdout []byte, invocationID, author string) (*transcriptResult, error) {
-	records, err := parseTranscriptRecords(stdout)
-	if err != nil {
+// transcriptResult is the framework event projection of one Codex JSONL transcript.
+type transcriptResult struct {
+	Events         []*event.Event
+	FinalMessage   string
+	FinalMessageID string
+	ThreadID       string
+	Usage          *model.Usage
+	Error          *model.ResponseError
+}
+
+// transcriptStream incrementally maps Codex JSONL records to framework events.
+type transcriptStream struct {
+	invocationID string
+	author       string
+	result       *transcriptResult
+	toolNames    map[string]string
+}
+
+// newTranscriptStream creates an incremental transcript mapper.
+func newTranscriptStream(invocationID, author string) *transcriptStream {
+	return &transcriptStream{
+		invocationID: invocationID,
+		author:       author,
+		result:       &transcriptResult{},
+		toolNames:    make(map[string]string),
+	}
+}
+
+// Result returns the accumulated transcript state.
+func (s *transcriptStream) Result() *transcriptResult {
+	if s == nil || s.result == nil {
+		return &transcriptResult{}
+	}
+	return s.result
+}
+
+// HandleLine processes one Codex JSONL stdout line.
+func (s *transcriptStream) HandleLine(line []byte) ([]*event.Event, error) {
+	trimmed := bytes.TrimSpace(line)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	var rec codexEvent
+	if err := json.Unmarshal(trimmed, &rec); err != nil {
 		return nil, err
 	}
-	result := &transcriptResult{}
-	toolNames := make(map[string]string)
-	for _, rec := range records {
-		switch rec.Type {
-		case codexEventThreadStarted:
-			result.ThreadID = strings.TrimSpace(rec.ThreadID)
-		case codexEventTurnCompleted:
-			result.Usage = rec.Usage.toModelUsage()
-		case codexEventItemStarted:
-			evt := toolCallEventFromItem(invocationID, author, rec.Item, toolNames)
-			if evt != nil {
-				result.Events = append(result.Events, evt)
-			}
-		case codexEventItemCompleted:
-			events := completedEventsFromItem(invocationID, author, rec.Item, toolNames, result)
-			result.Events = append(result.Events, events...)
-		}
+	return s.HandleRecord(rec), nil
+}
+
+// HandleRecord processes one decoded Codex event record.
+func (s *transcriptStream) HandleRecord(rec codexEvent) []*event.Event {
+	if s == nil {
+		return nil
 	}
-	return result, nil
+	switch rec.Type {
+	case codexEventThreadStarted:
+		s.result.ThreadID = strings.TrimSpace(rec.ThreadID)
+	case codexEventTurnCompleted:
+		s.result.Usage = rec.Usage.toModelUsage()
+	case codexEventItemStarted:
+		evt := toolCallEventFromItem(s.invocationID, s.author, rec.Item, s.toolNames)
+		if evt != nil {
+			s.result.Events = append(s.result.Events, evt)
+			return []*event.Event{evt}
+		}
+	case codexEventItemCompleted:
+		events := completedEventsFromItem(s.invocationID, s.author, rec.Item, s.toolNames, s.result)
+		s.result.Events = append(s.result.Events, events...)
+		return events
+	case codexEventTurnFailed, codexEventError:
+		responseErr := responseErrorFromRecord(rec)
+		evt := errorEventFromResponseError(s.invocationID, s.author, responseErr, false)
+		s.result.Error = cloneCodexResponseError(responseErr)
+		s.result.Events = append(s.result.Events, evt)
+		return []*event.Event{evt}
+	}
+	return nil
 }
 
 // parseTranscriptRecords decodes Codex JSONL output.
@@ -167,7 +224,7 @@ func toolCallEventFromItem(invocationID, author string, item *codexItem, toolNam
 		return nil
 	}
 	toolNames[toolID] = toolName
-	return newToolCallEvent(invocationID, author, toolID, toolName, toolArguments(item))
+	return newToolCallEvent(invocationID, author, toolID, toolName, toolArguments(item), true)
 }
 
 // completedEventsFromItem creates framework events for an item.completed record.
@@ -177,7 +234,12 @@ func completedEventsFromItem(invocationID, author string, item *codexItem, toolN
 	}
 	if item.Type == codexItemAgentMessage {
 		result.FinalMessage = item.Text
-		return nil
+		result.FinalMessageID = scopedCodexResponseID(invocationID, item.ID)
+		evt := newAssistantMessageEvent(invocationID, author, result.FinalMessageID, item.Text)
+		if evt == nil {
+			return nil
+		}
+		return []*event.Event{evt}
 	}
 	if !isToolItem(item.Type) || strings.TrimSpace(item.ID) == "" {
 		return nil
@@ -191,10 +253,160 @@ func completedEventsFromItem(invocationID, author string, item *codexItem, toolN
 			return nil
 		}
 		toolNames[toolID] = toolName
-		events = append(events, newToolCallEvent(invocationID, author, toolID, toolName, toolArguments(item)))
 	}
+	events = append(events, newToolCallEvent(invocationID, author, toolID, toolName, toolArguments(item), false))
 	events = append(events, newToolResultEvent(invocationID, author, toolID, toolName, toolResult(item)))
 	return events
+}
+
+// errorEventFromResponseError creates a framework error event from parsed error details.
+func errorEventFromResponseError(invocationID, author string, responseErr *model.ResponseError, terminal bool) *event.Event {
+	if responseErr == nil {
+		return nil
+	}
+	object := model.ObjectTypeChatCompletionChunk
+	done := false
+	partial := true
+	choice := model.Choice{
+		Index: 0,
+		Delta: model.Message{
+			Role:    model.RoleAssistant,
+			Content: responseErr.Message,
+		},
+	}
+	var eventErr *model.ResponseError
+	if terminal {
+		object = model.ObjectTypeError
+		done = true
+		partial = false
+		eventErr = cloneCodexResponseError(responseErr)
+		choice = model.Choice{
+			Index: 0,
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: responseErr.Message,
+			},
+		}
+	}
+	responseID := ""
+	if !terminal {
+		responseID = scopedCodexResponseID(invocationID, codexErrorObservationID)
+	}
+	rsp := &model.Response{
+		ID:        responseID,
+		Object:    object,
+		Done:      done,
+		IsPartial: partial,
+		Choices:   []model.Choice{choice},
+		Error:     eventErr,
+	}
+	return event.NewResponseEvent(invocationID, author, rsp)
+}
+
+// scopedCodexResponseID qualifies Codex-local item IDs with the framework invocation ID.
+func scopedCodexResponseID(invocationID, itemID string) string {
+	itemID = strings.TrimSpace(itemID)
+	invocationID = strings.TrimSpace(invocationID)
+	if itemID == "" {
+		return ""
+	}
+	if invocationID == "" {
+		return itemID
+	}
+	return invocationID + ":" + itemID
+}
+
+// newAssistantMessageEvent creates a partial response segment for one complete Codex assistant item.
+func newAssistantMessageEvent(invocationID, author, responseID, text string) *event.Event {
+	content := strings.TrimSpace(text)
+	if content == "" {
+		return nil
+	}
+	rsp := &model.Response{
+		ID:        strings.TrimSpace(responseID),
+		Object:    model.ObjectTypeChatCompletionChunk,
+		Done:      false,
+		IsPartial: true,
+		Choices: []model.Choice{
+			{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: content,
+				},
+			},
+		},
+	}
+	return event.NewResponseEvent(invocationID, author, rsp)
+}
+
+// responseErrorFromRecord extracts error details from a Codex failure record.
+func responseErrorFromRecord(rec codexEvent) *model.ResponseError {
+	msg := strings.TrimSpace(rec.Message)
+	errType := strings.TrimSpace(rec.Type)
+	code := strings.TrimSpace(rec.Code)
+	if len(normalizeJSON(rec.Error)) > 0 {
+		payloadMsg, payloadType, payloadCode := decodeErrorPayload(rec.Error)
+		if strings.TrimSpace(payloadMsg) != "" {
+			msg = payloadMsg
+		}
+		if strings.TrimSpace(payloadType) != "" {
+			errType = payloadType
+		}
+		if strings.TrimSpace(payloadCode) != "" {
+			code = payloadCode
+		}
+	}
+	if msg == "" {
+		msg = strings.TrimSpace(rec.Type)
+	}
+	rspErr := &model.ResponseError{
+		Type:    model.ErrorTypeRunError,
+		Message: msg,
+	}
+	if errType != "" && errType != codexEventTurnFailed && errType != codexEventError {
+		rspErr.Type = errType
+	}
+	if code != "" {
+		rspErr.Code = &code
+	}
+	return rspErr
+}
+
+// cloneCodexResponseError returns an owned copy of a Codex response error.
+func cloneCodexResponseError(responseErr *model.ResponseError) *model.ResponseError {
+	if responseErr == nil {
+		return nil
+	}
+	cloned := *responseErr
+	if responseErr.Param != nil {
+		param := *responseErr.Param
+		cloned.Param = &param
+	}
+	if responseErr.Code != nil {
+		code := *responseErr.Code
+		cloned.Code = &code
+	}
+	return &cloned
+}
+
+// decodeErrorPayload decodes a Codex error payload into message, type, and code.
+func decodeErrorPayload(raw json.RawMessage) (string, string, string) {
+	trimmed := normalizeJSON(raw)
+	if len(trimmed) == 0 {
+		return "", "", ""
+	}
+	if trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err == nil {
+			return text, "", ""
+		}
+	}
+	var payload codexError
+	if err := json.Unmarshal(trimmed, &payload); err == nil {
+		return payload.Message, payload.Type, payload.Code
+	}
+	return string(trimmed), "", ""
 }
 
 // isToolItem reports whether a Codex item should be mapped as a framework tool event.
@@ -462,7 +674,7 @@ func decodeRawJSON(raw json.RawMessage) string {
 }
 
 // newToolCallEvent creates a tool-call event for one Codex item.
-func newToolCallEvent(invocationID, author, toolID, toolName string, args []byte) *event.Event {
+func newToolCallEvent(invocationID, author, toolID, toolName string, args []byte, partial bool) *event.Event {
 	toolCall := model.ToolCall{
 		Type: "function",
 		ID:   toolID,
@@ -472,8 +684,9 @@ func newToolCallEvent(invocationID, author, toolID, toolName string, args []byte
 		},
 	}
 	rsp := &model.Response{
-		Object: model.ObjectTypeChatCompletion,
-		Done:   false,
+		Object:    model.ObjectTypeChatCompletion,
+		Done:      false,
+		IsPartial: partial,
 		Choices: []model.Choice{
 			{
 				Index: 0,

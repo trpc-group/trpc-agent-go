@@ -200,6 +200,101 @@ func TestCancelCancelsRunningRun(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRunNotFound)
 }
 
+func TestCancelPreservesRunFinishedWhenRunHookReturnsContextError(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	hookStarted := make(chan struct{})
+	underlying := &waitCancelRunner{ctxCh: ctxCh}
+	r := New(
+		underlying,
+		WithRunHook(func(ctx context.Context, run *Run) error {
+			close(hookStarted)
+			<-ctx.Done()
+			return ctx.Err()
+		}),
+	).(*runner)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	events, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	select {
+	case evt := <-events:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(3 * time.Second):
+		assert.FailNow(t, "timeout waiting for RUN_STARTED")
+	}
+	select {
+	case <-hookStarted:
+	case <-time.After(3 * time.Second):
+		assert.FailNow(t, "timeout waiting for run hook")
+	}
+	err = r.Cancel(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	assert.NoError(t, err)
+	remaining := collectEvents(t, events)
+	terminalCount := 0
+	for _, evt := range remaining {
+		terminal, _ := terminalRunSignal(evt)
+		if terminal {
+			terminalCount++
+		}
+	}
+	assert.Equal(t, 1, terminalCount)
+	assert.True(t, hasRunFinishedEvent(remaining))
+	assert.False(t, hasRunErrorEvent(remaining))
+}
+
+func TestRunEventLoopGivesCancellationPrecedenceOverRunnerError(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(errExplicitCancel)
+		events := make(chan aguievents.Event, 1)
+		agentRun := make(chan runAgentResult, 1)
+		agentRun <- runAgentResult{err: context.Canceled}
+		input := &runInput{threadID: "thread", runID: "run"}
+		r := &runner{}
+		r.runEventLoop(ctx, cancel, func() {}, events, input, agentRun, nil, nil, 0)
+		evt := waitForNextEvent(t, events)
+		assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), evt)
+		assert.False(t, hasRunErrorEvent([]aguievents.Event{evt}))
+	}
+}
+
+func TestRunEventLoopEmitsTerminalWhenHookEventWriteCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	events := make(chan aguievents.Event)
+	agentRun := make(chan runAgentResult)
+	hookEvents := make(chan hookEvent, 1)
+	hookDone := make(chan error)
+	reply := make(chan error, 1)
+	input := &runInput{threadID: "thread", runID: "run"}
+	r := &runner{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.runEventLoop(ctx, cancel, func() {}, events, input, agentRun, hookEvents, hookDone, 0)
+	}()
+	hookEvents <- hookEvent{event: aguievents.NewCustomEvent("background.report"), reply: reply}
+	require.Eventually(t, func() bool {
+		return len(hookEvents) == 0
+	}, time.Second, time.Millisecond)
+	cancel(errExplicitCancel)
+	select {
+	case err := <-reply:
+		require.ErrorIs(t, err, errRunClosed)
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for hook event reply")
+	}
+	evt := waitForNextEvent(t, events)
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), evt)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for run event loop")
+	}
+}
+
 func TestCancelIgnoresRunID(t *testing.T) {
 	ctxCh := make(chan context.Context, 1)
 	underlying := &waitCancelRunner{ctxCh: ctxCh}
@@ -829,6 +924,58 @@ func TestCancelDoesNotReleaseSessionUntilRunExits(t *testing.T) {
 	err = r.Cancel(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	assert.NoError(t, err)
 
+	input2 := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run-2",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi again"}},
+	}
+	events2, err := r.Run(context.Background(), input2)
+	assert.Nil(t, events2)
+	assert.ErrorIs(t, err, ErrRunAlreadyExists)
+
+	close(underlying.unblock)
+	collectEvents(t, events1)
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&underlying.calls))
+}
+
+func TestTimeoutDoesNotReleaseSessionUntilRunExits(t *testing.T) {
+	underlying := &blockingRunRunner{
+		entered: make(chan struct{}, 1),
+		unblock: make(chan struct{}),
+	}
+	r := New(underlying, WithTimeout(20*time.Millisecond)).(*runner)
+
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+
+	events1, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+
+	select {
+	case evt := <-events1:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(3 * time.Second):
+		assert.FailNow(t, "timeout waiting for RUN_STARTED")
+	}
+
+	select {
+	case <-underlying.entered:
+	case <-time.After(3 * time.Second):
+		assert.FailNow(t, "timeout waiting for runner Run")
+	}
+
+	select {
+	case evt := <-events1:
+		assert.IsType(t, (*aguievents.RunErrorEvent)(nil), evt)
+	case <-time.After(3 * time.Second):
+		assert.FailNow(t, "timeout waiting for timeout RUN_ERROR")
+	}
+
+	time.Sleep(20 * time.Millisecond)
 	input2 := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run-2",

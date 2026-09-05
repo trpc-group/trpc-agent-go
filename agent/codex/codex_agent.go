@@ -26,15 +26,17 @@ import (
 
 // codexAgent invokes a locally installed Codex CLI and maps its JSONL events into trpc-agent-go events.
 type codexAgent struct {
-	name          string
-	description   string
-	bin           string
-	globalArgs    []string
-	args          []string
-	env           []string
-	workDir       string
-	commandRunner commandRunner
-	rawOutputHook RawOutputHook
+	name           string
+	description    string
+	bin            string
+	globalArgs     []string
+	args           []string
+	env            []string
+	workDir        string
+	commandRunner  commandRunner
+	rawOutputHook  RawOutputHook
+	messageBuilder MessageBuilder
+	resumeEnabled  bool
 }
 
 // New creates a Codex CLI agent with the provided options.
@@ -44,15 +46,17 @@ func New(opt ...Option) (agent.Agent, error) {
 		return nil, err
 	}
 	return &codexAgent{
-		name:          opts.name,
-		description:   opts.description,
-		bin:           opts.bin,
-		globalArgs:    opts.globalArgs,
-		args:          opts.args,
-		env:           opts.env,
-		workDir:       opts.workDir,
-		commandRunner: opts.commandRunner,
-		rawOutputHook: opts.rawOutputHook,
+		name:           opts.name,
+		description:    opts.description,
+		bin:            opts.bin,
+		globalArgs:     opts.globalArgs,
+		args:           opts.args,
+		env:            opts.env,
+		workDir:        opts.workDir,
+		commandRunner:  opts.commandRunner,
+		rawOutputHook:  opts.rawOutputHook,
+		messageBuilder: opts.messageBuilder,
+		resumeEnabled:  opts.resumeEnabled,
 	}, nil
 }
 
@@ -84,57 +88,109 @@ func (a *codexAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 	if invocation.Session.ID == "" {
 		return nil, errors.New("invocation session id is empty")
 	}
-	if invocation.Message.Content == "" {
-		return nil, errors.New("invocation prompt is empty")
+	prompt, err := a.buildPrompt(ctx, invocation)
+	if err != nil {
+		return nil, err
 	}
 	out := make(chan *event.Event)
 	runCtx := agent.CloneContext(ctx)
-	go a.runInvocation(runCtx, invocation, out)
+	go a.runInvocation(runCtx, invocation, prompt, out)
 	return out, nil
 }
 
-// runInvocation executes the CLI invocation and emits tool events and the final response event.
-func (a *codexAgent) runInvocation(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event) {
-	defer close(out)
-	resumeThreadID := sessionThreadID(invocation.Session)
-	stdout, stderr, runErr := a.runWithSession(ctx, resumeThreadID, invocation.Message.Content)
-	combinedRaw := append([]byte(nil), stdout...)
-	if len(stdout) > 0 && len(stderr) > 0 {
-		combinedRaw = append(combinedRaw, '\n')
+func (a *codexAgent) buildPrompt(ctx context.Context, invocation *agent.Invocation) (string, error) {
+	if a.messageBuilder == nil {
+		if invocation.Message.Content == "" {
+			return "", errors.New("invocation prompt is empty")
+		}
+		return invocation.Message.Content, nil
 	}
-	combinedRaw = append(combinedRaw, stderr...)
-	combined := bytes.TrimSpace(combinedRaw)
-	observedThreadID := extractThreadID(stdout)
-	if hookErr := a.handleRawOutputHook(ctx, invocation, resumeThreadID, observedThreadID, stdout, stderr, runErr); hookErr != nil {
+	prompt, err := a.messageBuilder(ctx, &MessageBuilderArgs{
+		InvocationID: invocation.InvocationID,
+		AppName:      invocation.Session.AppName,
+		UserID:       invocation.Session.UserID,
+		SessionID:    invocation.Session.ID,
+		Message:      invocation.Message,
+		Events:       invocation.Session.GetEvents(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("build message: %w", err)
+	}
+	if prompt == "" {
+		return "", errors.New("built prompt is empty")
+	}
+	return prompt, nil
+}
+
+// runInvocation executes the CLI invocation and emits tool events and the final response event.
+func (a *codexAgent) runInvocation(ctx context.Context, invocation *agent.Invocation, prompt string, out chan<- *event.Event) {
+	defer close(out)
+	var resumeThreadID string
+	if a.resumeEnabled {
+		resumeThreadID = sessionThreadID(invocation.Session)
+	}
+	streamer := newCodexStreamEmitter(ctx, a, invocation, out)
+	cmdResult := a.runWithSession(ctx, resumeThreadID, prompt, streamer)
+	combined := bytes.TrimSpace(combineOutput(cmdResult.stdout, cmdResult.stderr))
+	result := streamer.Result()
+	observedThreadID := result.ThreadID
+	if observedThreadID == "" {
+		observedThreadID = extractThreadID(cmdResult.stdout)
+	}
+	if hookErr := a.handleRawOutputHook(ctx, invocation, resumeThreadID, observedThreadID, prompt, cmdResult.stdout, cmdResult.stderr, cmdResult.err()); hookErr != nil {
 		err := fmt.Errorf("raw output hook: %w", hookErr)
-		if runErr != nil {
-			err = errors.Join(err, fmt.Errorf("command error: %w", runErr))
+		if cmdErr := cmdResult.err(); cmdErr != nil {
+			err = errors.Join(err, fmt.Errorf("command error: %w", cmdErr))
 		}
 		a.emitFlowError(ctx, invocation, out, combined, err)
 		return
 	}
-	if runErr != nil {
-		a.emitRunError(ctx, invocation, out, combined, runErr)
+	if cmdResult.outputErr != nil {
+		a.emitFlowError(ctx, invocation, out, combined, fmt.Errorf("stream codex transcript: %w", cmdResult.outputErr))
 		return
 	}
-	result := &transcriptResult{}
-	if len(stdout) > 0 {
-		parsed, err := parseTranscriptEvents(stdout, invocation.InvocationID, a.name)
-		if err != nil {
-			decodeErr := fmt.Errorf("parse codex transcript: %w", err)
-			a.emitFlowError(ctx, invocation, out, combined, decodeErr)
+	if cmdResult.runErr != nil {
+		if result.Error != nil {
+			a.emitCodexError(ctx, invocation, out, result.Error)
 			return
 		}
-		result = parsed
-		for _, e := range parsed.Events {
-			a.emitEvent(ctx, invocation, out, e)
-		}
+		a.emitRunError(ctx, invocation, out, combined, cmdResult.runErr)
+		return
 	}
+	if result.Error != nil {
+		a.emitCodexError(ctx, invocation, out, result.Error)
+		return
+	}
+	a.emitFinalResponse(ctx, invocation, out, combined, result, observedThreadID, resumeThreadID, a.resumeEnabled)
+}
+
+// combineOutput joins stdout and stderr with the same display rules as the previous buffered path.
+func combineOutput(stdout []byte, stderr []byte) []byte {
+	combined := append([]byte(nil), stdout...)
+	if len(stdout) > 0 && len(stderr) > 0 {
+		combined = append(combined, '\n')
+	}
+	combined = append(combined, stderr...)
+	return combined
+}
+
+// emitFinalResponse emits the final assistant response after the Codex turn completes.
+func (a *codexAgent) emitFinalResponse(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	out chan<- *event.Event,
+	combined []byte,
+	result *transcriptResult,
+	threadID string,
+	resumeThreadID string,
+	persistThreadID bool,
+) {
 	finalContent := string(combined)
 	if strings.TrimSpace(result.FinalMessage) != "" {
 		finalContent = strings.TrimSpace(result.FinalMessage)
 	}
 	rsp := &model.Response{
+		ID:     strings.TrimSpace(result.FinalMessageID),
 		Object: model.ObjectTypeChatCompletion,
 		Done:   true,
 		Usage:  result.Usage,
@@ -149,13 +205,64 @@ func (a *codexAgent) runInvocation(ctx context.Context, invocation *agent.Invoca
 		},
 	}
 	evt := event.NewResponseEvent(invocation.InvocationID, a.name, rsp)
-	if result.ThreadID == "" {
-		result.ThreadID = observedThreadID
-	}
-	if result.ThreadID != "" && result.ThreadID != resumeThreadID {
-		evt.StateDelta = map[string][]byte{StateKeyThreadID: []byte(result.ThreadID)}
+	if persistThreadID && threadID != "" && threadID != resumeThreadID {
+		evt.StateDelta = map[string][]byte{StateKeyThreadID: []byte(threadID)}
 	}
 	a.emitEvent(ctx, invocation, out, evt)
+}
+
+// codexStreamEmitter owns one incremental transcript parser for a CLI attempt.
+type codexStreamEmitter struct {
+	ctx     context.Context
+	agent   *codexAgent
+	inv     *agent.Invocation
+	out     chan<- *event.Event
+	stream  *transcriptStream
+	emitted bool
+}
+
+// newCodexStreamEmitter creates an emitter for a Codex invocation.
+func newCodexStreamEmitter(ctx context.Context, a *codexAgent, inv *agent.Invocation, out chan<- *event.Event) *codexStreamEmitter {
+	e := &codexStreamEmitter{
+		ctx:   ctx,
+		agent: a,
+		inv:   inv,
+		out:   out,
+	}
+	e.Reset()
+	return e
+}
+
+// Reset discards buffered transcript state for a fresh CLI attempt.
+func (e *codexStreamEmitter) Reset() {
+	e.stream = newTranscriptStream(e.inv.InvocationID, e.agent.name)
+	e.emitted = false
+}
+
+// HandleLine parses and emits events from one Codex JSONL stdout line.
+func (e *codexStreamEmitter) HandleLine(line []byte) error {
+	events, err := e.stream.HandleLine(line)
+	if err != nil {
+		return err
+	}
+	for _, evt := range events {
+		if evt == nil {
+			continue
+		}
+		e.emitted = true
+		if err := agent.EmitEvent(e.ctx, e.inv, e.out, evt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Result returns the accumulated transcript state.
+func (e *codexStreamEmitter) Result() *transcriptResult {
+	if e == nil || e.stream == nil {
+		return &transcriptResult{}
+	}
+	return e.stream.Result()
 }
 
 // handleRawOutputHook invokes the configured raw output hook.
@@ -164,6 +271,7 @@ func (a *codexAgent) handleRawOutputHook(
 	invocation *agent.Invocation,
 	resumeThreadID string,
 	threadID string,
+	prompt string,
 	stdout []byte,
 	stderr []byte,
 	runErr error,
@@ -176,7 +284,7 @@ func (a *codexAgent) handleRawOutputHook(
 		SessionID:      invocation.Session.ID,
 		ResumeThreadID: resumeThreadID,
 		ThreadID:       threadID,
-		Prompt:         invocation.Message.Content,
+		Prompt:         prompt,
 		Stdout:         stdout,
 		Stderr:         stderr,
 		Error:          runErr,
@@ -209,6 +317,11 @@ func (a *codexAgent) emitRunError(ctx context.Context, invocation *agent.Invocat
 	a.emitEvent(ctx, invocation, out, event.NewResponseEvent(invocation.InvocationID, a.name, rsp))
 }
 
+// emitCodexError emits the terminal error response observed in the Codex transcript.
+func (a *codexAgent) emitCodexError(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event, responseErr *model.ResponseError) {
+	a.emitEvent(ctx, invocation, out, errorEventFromResponseError(invocation.InvocationID, a.name, responseErr, true))
+}
+
 // emitFlowError emits an error response event and stops further invocation processing.
 func (a *codexAgent) emitFlowError(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event, combined []byte, flowErr error) {
 	rsp := &model.Response{
@@ -231,26 +344,34 @@ func (a *codexAgent) emitFlowError(ctx context.Context, invocation *agent.Invoca
 	a.emitEvent(ctx, invocation, out, event.NewResponseEvent(invocation.InvocationID, a.name, rsp))
 }
 
-// runWithSession executes the CLI with resume-first semantics and returns stdout/stderr.
-func (a *codexAgent) runWithSession(ctx context.Context, threadID, prompt string) ([]byte, []byte, error) {
+// runWithSession executes the CLI with resume-first semantics and streams stdout events.
+func (a *codexAgent) runWithSession(ctx context.Context, threadID, prompt string, streamer *codexStreamEmitter) commandResult {
 	if strings.TrimSpace(threadID) != "" {
-		stdout, stderr, runErr := a.runResume(ctx, threadID, prompt)
-		if runErr == nil {
-			return stdout, stderr, nil
+		streamer.Reset()
+		resumeResult := a.runResume(ctx, threadID, prompt, streamer.HandleLine)
+		if resumeResult.err() == nil {
+			return resumeResult
 		}
-		createStdout, createStderr, createErr := a.runCreate(ctx, prompt)
-		if createErr == nil {
-			return createStdout, createStderr, nil
+		if resumeResult.outputErr != nil || streamer.emitted {
+			return resumeResult
 		}
-		overallErr := fmt.Errorf("run resume %v: %w", threadID, runErr)
-		overallErr = errors.Join(overallErr, fmt.Errorf("run exec: %w", createErr))
-		return createStdout, createStderr, overallErr
+		streamer.Reset()
+		createResult := a.runCreate(ctx, prompt, streamer.HandleLine)
+		if createResult.err() == nil {
+			return createResult
+		}
+		if createResult.runErr != nil {
+			overallErr := fmt.Errorf("run resume %v: %w", threadID, resumeResult.runErr)
+			createResult.runErr = errors.Join(overallErr, fmt.Errorf("run exec: %w", createResult.runErr))
+		}
+		return createResult
 	}
-	return a.runCreate(ctx, prompt)
+	streamer.Reset()
+	return a.runCreate(ctx, prompt, streamer.HandleLine)
 }
 
 // runCreate starts a new Codex exec session.
-func (a *codexAgent) runCreate(ctx context.Context, prompt string) ([]byte, []byte, error) {
+func (a *codexAgent) runCreate(ctx context.Context, prompt string, onStdoutLine commandOutputHandler) commandResult {
 	cmdArgs := make([]string, 0, len(a.globalArgs)+len(a.args)+1)
 	cmdArgs = append(cmdArgs, a.globalArgs...)
 	cmdArgs = append(cmdArgs, "exec")
@@ -261,11 +382,11 @@ func (a *codexAgent) runCreate(ctx context.Context, prompt string) ([]byte, []by
 		stdin: []byte(prompt),
 		env:   a.env,
 		dir:   a.workDir,
-	})
+	}, onStdoutLine)
 }
 
 // runResume resumes an existing Codex thread.
-func (a *codexAgent) runResume(ctx context.Context, threadID, prompt string) ([]byte, []byte, error) {
+func (a *codexAgent) runResume(ctx context.Context, threadID, prompt string, onStdoutLine commandOutputHandler) commandResult {
 	cmdArgs := make([]string, 0, len(a.globalArgs)+len(a.args)+3)
 	cmdArgs = append(cmdArgs, a.globalArgs...)
 	cmdArgs = append(cmdArgs, "exec", "resume")
@@ -277,7 +398,7 @@ func (a *codexAgent) runResume(ctx context.Context, threadID, prompt string) ([]
 		stdin: []byte(prompt),
 		env:   a.env,
 		dir:   a.workDir,
-	})
+	}, onStdoutLine)
 }
 
 // emitEvent forwards an event to the caller and logs emission failures.

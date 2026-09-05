@@ -236,9 +236,12 @@ type runOptions struct {
 	OpenAITimeout                time.Duration
 	OpenAIMaxRetries             int
 	OpenAIMaxRetriesSet          bool
+	OpenAIUseVariantAPIKey       bool
 	OpenAIHeaders                map[string]string
 	GenerationConfig             *model.GenerationConfig
 	ModelConfig                  *yaml.Node
+	ModelDefault                 string
+	ModelEntries                 map[string]modelEntryConfig
 	KnowledgesConfig             []knowledgeEntry
 	SkillsRoot                   string
 	SkillsExtraDir               string
@@ -1305,16 +1308,78 @@ type ralphLoopVerifyConfig struct {
 }
 
 type modelConfig struct {
-	Mode             *string               `yaml:"mode,omitempty"`
-	Name             *string               `yaml:"name,omitempty"`
-	BaseURL          *string               `yaml:"base_url,omitempty"`
-	OpenAIVariant    *string               `yaml:"openai_variant,omitempty"`
-	TextOnlyContent  *bool                 `yaml:"text_only_content,omitempty"`
-	Timeout          *string               `yaml:"timeout,omitempty"`
-	MaxRetries       *int                  `yaml:"max_retries,omitempty"`
-	Headers          map[string]string     `yaml:"headers,omitempty"`
-	GenerationConfig *generationConfigYAML `yaml:"generation_config,omitempty"`
-	Config           *rawYAMLNode          `yaml:"config,omitempty"`
+	Mode             *string                     `yaml:"mode,omitempty"`
+	Name             *string                     `yaml:"name,omitempty"`
+	BaseURL          *string                     `yaml:"base_url,omitempty"`
+	OpenAIVariant    *string                     `yaml:"openai_variant,omitempty"`
+	TextOnlyContent  *bool                       `yaml:"text_only_content,omitempty"`
+	Timeout          *string                     `yaml:"timeout,omitempty"`
+	MaxRetries       *int                        `yaml:"max_retries,omitempty"`
+	Headers          map[string]string           `yaml:"headers,omitempty"`
+	GenerationConfig *generationConfigYAML       `yaml:"generation_config,omitempty"`
+	Config           *rawYAMLNode                `yaml:"config,omitempty"`
+	Default          *string                     `yaml:"default,omitempty"`
+	Models           map[string]modelEntryConfig `yaml:"models,omitempty"`
+}
+
+type modelEntryConfig struct {
+	Mode            *string           `yaml:"mode,omitempty"`
+	Name            *string           `yaml:"name,omitempty"`
+	BaseURL         *string           `yaml:"base_url,omitempty"`
+	OpenAIVariant   *string           `yaml:"openai_variant,omitempty"`
+	TextOnlyContent *bool             `yaml:"text_only_content,omitempty"`
+	Timeout         *string           `yaml:"timeout,omitempty"`
+	MaxRetries      *int              `yaml:"max_retries,omitempty"`
+	Headers         map[string]string `yaml:"headers,omitempty"`
+	Config          *rawYAMLNode      `yaml:"config,omitempty"`
+}
+
+// modelConfigHasLegacyFields intentionally excludes GenerationConfig because
+// one generation_config is shared by all catalog entries.
+func modelConfigHasLegacyFields(cfg *modelConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	return cfg.Mode != nil ||
+		cfg.Name != nil ||
+		cfg.BaseURL != nil ||
+		cfg.OpenAIVariant != nil ||
+		cfg.TextOnlyContent != nil ||
+		cfg.Timeout != nil ||
+		cfg.MaxRetries != nil ||
+		len(cfg.Headers) > 0 ||
+		cfg.Config != nil
+}
+
+func modelFlagsWereSet(set map[string]struct{}) bool {
+	for _, name := range []string{
+		"mode",
+		"model",
+		"openai-base-url",
+		"openai-variant",
+		flagOpenAITextOnlyMessageContent,
+		flagOpenAITimeout,
+		flagOpenAIMaxRetries,
+	} {
+		if flagWasSet(set, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneModelEntryConfigs(
+	src map[string]modelEntryConfig,
+) map[string]modelEntryConfig {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]modelEntryConfig, len(src))
+	for name, entry := range src {
+		entry.Headers = cleanHeaderMap(entry.Headers)
+		out[name] = entry
+	}
+	return out
 }
 
 type generationConfigYAML struct {
@@ -1922,6 +1987,31 @@ func (cfg *fileConfig) apply(
 	}
 
 	if cfg.Model != nil {
+		if cfg.Model.Default != nil && len(cfg.Model.Models) == 0 {
+			return fmt.Errorf(
+				"model.default requires model.models",
+			)
+		}
+		if len(cfg.Model.Models) > 0 {
+			if modelConfigHasLegacyFields(cfg.Model) ||
+				modelFlagsWereSet(set) {
+				return fmt.Errorf(
+					"model.models cannot be combined with legacy model " +
+						"fields or model CLI flags",
+				)
+			}
+			defaultName := ""
+			if cfg.Model.Default != nil {
+				defaultName = strings.TrimSpace(*cfg.Model.Default)
+			}
+			if defaultName == "" {
+				return fmt.Errorf(
+					"model.default is required when model.models is configured",
+				)
+			}
+			opts.ModelDefault = defaultName
+			opts.ModelEntries = cloneModelEntryConfigs(cfg.Model.Models)
+		}
 		if cfg.Model.Mode != nil && !flagWasSet(set, "mode") {
 			opts.ModelMode = strings.TrimSpace(*cfg.Model.Mode)
 		}

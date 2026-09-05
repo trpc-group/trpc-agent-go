@@ -360,6 +360,7 @@ sessionService := inmemory.NewSessionService(
 **支持的 TTL 类型：**
 
 - **SessionTTL**：会话状态和事件的过期时间
+- **TrackEventTTL**：支持的存储后端中 Track event 的过期时间。默认继承 SessionTTL，显式设置为非正数表示 Track event 不过期
 - **AppStateTTL**：应用级状态的过期时间
 - **UserStateTTL**：用户级状态的过期时间
 
@@ -698,7 +699,8 @@ Track 事件是 Session 中独立于主对话事件的轨迹存储机制，目�
 
 **接口说明**：
 
-Track 事件的 API 定义在 `session.TrackService` 接口上，它独立于 `session.Service`：
+Track 事件写入定义在可选的 `session.TrackService` 接口上。支持 Track
+历史的存储后端会随 session 数据持久化这些事件。
 
 ```go
 type TrackService interface {
@@ -706,7 +708,7 @@ type TrackService interface {
 }
 ```
 
-并非所有存储后端都实现了 `TrackService`。使用时需要通过类型断言获取：
+并非所有存储后端都实现了 Track event 写入。使用时需要通过类型断言获取：
 
 | 存储后端 | 是否实现 TrackService |
 | --- | --- |
@@ -736,9 +738,13 @@ err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
     Timestamp: time.Now(),
 })
 
-// 从会话中获取 Track 事件
+// 读取当前内存中 session 快照里的 Track 事件
 trackEvents, err := sess.GetTrackEvents("ui-events")
 ```
+
+`Session.GetTrackEvents` 只读取已经加载到 session 快照中的 Track 事件。
+把 session 当作历史快照使用前，需要先重新加载 session。AG-UI 历史记录会在配置的
+session service 支持时内部使用持久化 Track 历史，否则回退到 session 快照。
 
 ## 语义召回（仅 PGVector）
 
