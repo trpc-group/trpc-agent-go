@@ -31,6 +31,7 @@ func startPTY(
 	if err := applySpawnHook(cmd, hook); err != nil {
 		return nil, nil, err
 	}
+	preparePTYCommand(cmd)
 	master, err := pty.Start(cmd)
 	if err != nil {
 		return nil, nil, err

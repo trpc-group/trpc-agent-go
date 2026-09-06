@@ -14,6 +14,7 @@ package hostexec
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"syscall"
 	"testing"
@@ -186,4 +187,72 @@ func TestSpawnHook_NilIsNoop(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "original", outputField(out.(map[string]any)))
+}
+
+func TestSpawnHook_ReplacedSysProcAttrKeepsProcessGroup(t *testing.T) {
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet(WithSpawnHook(func(cmd *exec.Cmd) error {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		return nil
+	}))
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, _, _, mgr := toolSetTools(t, set)
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command":    "sleep 30",
+			"background": true,
+		}),
+	)
+	require.NoError(t, err)
+
+	sessionID := out.(map[string]any)["session_id"].(string)
+	mgr.mu.Lock()
+	sess := mgr.sessions[sessionID]
+	mgr.mu.Unlock()
+	require.NotNil(t, sess)
+	require.True(t, sess.cmd.SysProcAttr.Setpgid)
+	require.Equal(t, sess.cmd.Process.Pid, sess.processGroupID)
+	require.NoError(t, mgr.kill(sessionID))
+	pollUntilExited(t, mgr, sessionID)
+	require.False(t, processTreeAlive(sess.cmd.Process, sess.processGroupID))
+}
+
+func TestSpawnHook_ErrorOpensNoPipes(t *testing.T) {
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet(WithSpawnHook(func(*exec.Cmd) error {
+		return errors.New("hook refused")
+	}))
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, _, _, _ := toolSetTools(t, set)
+	before := openFDCount(t)
+	for i := 0; i < 32; i++ {
+		_, err := execTool.Call(
+			context.Background(),
+			mustJSON(t, map[string]any{"command": "echo never", "yieldMs": 0}),
+		)
+		require.Error(t, err)
+	}
+	require.LessOrEqual(t, openFDCount(t), before+2)
+}
+
+func openFDCount(t *testing.T) int {
+	t.Helper()
+
+	dir, err := os.Open("/dev/fd")
+	require.NoError(t, err)
+	defer dir.Close()
+	names, err := dir.Readdirnames(-1)
+	require.NoError(t, err)
+	return len(names)
 }

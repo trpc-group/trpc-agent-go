@@ -98,9 +98,18 @@ func WithBaseEnv(env map[string]string) Option {
 }
 
 // WithSpawnHook sets a function that is called on every command right before
-// it is started, after the tool set has applied its own process attributes.
-// The hook may change Path, Args and SysProcAttr to wrap the command, for
-// example in a namespace or under a sandbox; an error aborts the call.
+// it is started, after the tool set has applied its own process attributes
+// and before any pipe or PTY is allocated. The hook may change Path, Args and
+// SysProcAttr to wrap the command, for example in a namespace or under a
+// sandbox; it must not start the command or touch its stdio. The process
+// group attributes the tool set owns (Setsid, Setpgid, Pdeathsig) are
+// reapplied after the hook returns, so replacing SysProcAttr cannot detach
+// the command from the cleanup that signals its process group. An error
+// aborts the call: nothing is started and no session is registered.
+//
+// A nil hook keeps the default behaviour. Commands can start concurrently,
+// so the hook may be invoked concurrently and must synchronize any state it
+// shares between calls.
 func WithSpawnHook(hook func(*exec.Cmd) error) Option {
 	return func(c *config) {
 		c.spawnHook = hook

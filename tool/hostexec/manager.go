@@ -211,6 +211,8 @@ func runForeground(
 	return out, code, nil
 }
 
+// applySpawnHook runs the caller's spawn hook, if any, on a fully prepared
+// command. A nil hook is a no-op.
 func applySpawnHook(
 	cmd *exec.Cmd,
 	hook func(*exec.Cmd) error,
@@ -372,12 +374,23 @@ func startSession(
 			sess.readFrom(master)
 		}()
 	} else {
+		// The hook runs before any pipe exists: a rejection then leaves nothing
+		// to close, whereas after startPipes the child ends would stay open
+		// until garbage collection. It also runs after preparePipeCommand so
+		// it sees the process attributes, which are reapplied afterwards
+		// because a hook that replaces SysProcAttr must not be able to drop
+		// the group leadership terminateProcessTree relies on.
+		preparePipeCommand(cmd, detach)
+		if err := applySpawnHook(cmd, hook); err != nil {
+			cancel()
+			return nil, err
+		}
+		preparePipeCommand(cmd, detach)
 		stdin, stdout, stderr, err := startPipes(cmd, detach)
 		if err != nil {
 			cancel()
 			return nil, err
 		}
-		preparePipeCommand(cmd, detach)
 		sess.stdin = stdin
 		sess.closeIO = func() error {
 			if stdin != nil {
@@ -386,11 +399,6 @@ func startSession(
 			_ = stdout.Close()
 			_ = stderr.Close()
 			return nil
-		}
-		if err := applySpawnHook(cmd, hook); err != nil {
-			cancel()
-			_ = sess.closeIO()
-			return nil, err
 		}
 		if err := cmd.Start(); err != nil {
 			cancel()
