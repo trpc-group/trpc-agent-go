@@ -41,9 +41,10 @@ type manager struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 
-	maxLines int
-	jobTTL   time.Duration
-	baseEnv  map[string]string
+	maxLines  int
+	jobTTL    time.Duration
+	baseEnv   map[string]string
+	spawnHook func(*exec.Cmd) error
 
 	clock func() time.Time
 }
@@ -106,6 +107,7 @@ func (m *manager) exec(
 			timeout,
 			m.baseEnv,
 			m.maxLines,
+			m.spawnHook,
 		)
 		if err != nil {
 			return execResult{}, err
@@ -176,6 +178,7 @@ func runForeground(
 	timeout time.Duration,
 	baseEnv map[string]string,
 	maxLines int,
+	hook func(*exec.Cmd) error,
 ) (string, int, error) {
 	// A foreground session is never registered with the manager, so write_stdin
 	// can never reach it and no caller can answer a prompt it raises. Detach it
@@ -190,6 +193,7 @@ func runForeground(
 		timeout,
 		baseEnv,
 		maxLines,
+		hook,
 		detachStdin,
 	)
 	if err != nil {
@@ -205,6 +209,16 @@ func runForeground(
 
 	out, code := sess.allOutput()
 	return out, code, nil
+}
+
+func applySpawnHook(
+	cmd *exec.Cmd,
+	hook func(*exec.Cmd) error,
+) error {
+	if hook == nil {
+		return nil
+	}
+	return hook(cmd)
 }
 
 func timeoutDuration(timeoutS int) time.Duration {
@@ -298,6 +312,7 @@ func (m *manager) startBackground(
 		timeout,
 		m.baseEnv,
 		m.maxLines,
+		m.spawnHook,
 		keepStdin,
 	)
 	if err != nil {
@@ -323,6 +338,7 @@ func startSession(
 	timeout time.Duration,
 	baseEnv map[string]string,
 	maxLines int,
+	hook func(*exec.Cmd) error,
 	detach bool,
 ) (*session, error) {
 	runCtx, cancel := context.WithTimeout(
@@ -342,7 +358,7 @@ func startSession(
 	sess.cmd = cmd
 
 	if params.Pty {
-		master, closeIO, err := startPTY(cmd)
+		master, closeIO, err := startPTY(cmd, hook)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -370,6 +386,11 @@ func startSession(
 			_ = stdout.Close()
 			_ = stderr.Close()
 			return nil
+		}
+		if err := applySpawnHook(cmd, hook); err != nil {
+			cancel()
+			_ = sess.closeIO()
+			return nil, err
 		}
 		if err := cmd.Start(); err != nil {
 			cancel()

@@ -17,7 +17,11 @@ import (
 	"os/exec"
 )
 
-func startPTY(cmd *exec.Cmd) (*os.File, func() error, error) {
+func startPTY(
+	cmd *exec.Cmd,
+	hook func(*exec.Cmd) error,
+) (*os.File, func() error, error) {
 	_ = cmd
+	_ = hook
 	return nil, nil, errors.New("pty is not supported on windows")
 }

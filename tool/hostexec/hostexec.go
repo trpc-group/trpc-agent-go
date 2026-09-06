@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -43,11 +44,12 @@ const (
 )
 
 type config struct {
-	baseDir  string
-	name     string
-	maxLines int
-	jobTTL   time.Duration
-	baseEnv  map[string]string
+	baseDir   string
+	name      string
+	maxLines  int
+	jobTTL    time.Duration
+	baseEnv   map[string]string
+	spawnHook func(*exec.Cmd) error
 }
 
 // Option configures the hostexec tool set.
@@ -95,6 +97,16 @@ func WithBaseEnv(env map[string]string) Option {
 	}
 }
 
+// WithSpawnHook sets a function that is called on every command right before
+// it is started, after the tool set has applied its own process attributes.
+// The hook may change Path, Args and SysProcAttr to wrap the command, for
+// example in a namespace or under a sandbox; an error aborts the call.
+func WithSpawnHook(hook func(*exec.Cmd) error) Option {
+	return func(c *config) {
+		c.spawnHook = hook
+	}
+}
+
 func defaultConfig() config {
 	return config{
 		baseDir: defaultBaseDir,
@@ -126,6 +138,7 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	if len(cfg.baseEnv) > 0 {
 		mgr.baseEnv = cloneEnvMap(cfg.baseEnv)
 	}
+	mgr.spawnHook = cfg.spawnHook
 
 	set := &toolSet{
 		name:    strings.TrimSpace(cfg.name),
