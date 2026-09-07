@@ -2595,17 +2595,23 @@ func (f *Flow) callLLM(
 			finalizationMessage,
 		),
 	)
+	var tailoringStateMu sync.Mutex
+	tailoringStateValid := true
 	ctx, tailoringObserver := imodelrequest.ObserveTokenTailoring(
 		ctx,
 		func(change imodelrequest.TokenTailoringChange) {
+			tailoringStateMu.Lock()
+			defer tailoringStateMu.Unlock()
+
 			record := change.Record
-			if tokenTailoringPreservesHistory(change, llmRequest) {
+			if tailoringStateValid &&
+				tokenTailoringPreservesHistory(change, llmRequest) &&
 				summaryview.RebaseAfterTransform(
 					invocation,
 					change.Before,
 					change.After,
 					nil,
-				)
+				) {
 				summaryfork.Attach(
 					invocation,
 					requestWithoutCallLimitFinalizationMessage(
@@ -2624,6 +2630,10 @@ func (f *Flow) callLLM(
 				)
 				return
 			}
+			// Request-derived summary state is monotonic for this model call.
+			// Once one transform cannot be proven and rebased, a later local
+			// transform must not revive only one of the derived snapshots.
+			tailoringStateValid = false
 			summaryview.InvalidateBinding(invocation)
 			summaryfork.Invalidate(invocation)
 			if tokenTailoringCollapsedHistory(record) {

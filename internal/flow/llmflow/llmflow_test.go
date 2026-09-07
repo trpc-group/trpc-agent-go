@@ -1166,6 +1166,84 @@ func TestCallLLM_PreservedTailoringRebasesSummarySnapshots(t *testing.T) {
 	require.Equal(t, req.Messages, fork.Messages)
 }
 
+func TestCallLLM_PreservedTailoringRebaseFailureInvalidatesFork(t *testing.T) {
+	callModel := &preservingTailoringModel{}
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(callModel))
+	history := model.Message{
+		Role: model.RoleUser,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+		}},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		history,
+	}}
+	summaryview.AttachProjection(inv, &summaryview.View{
+		ContentRequestLength: len(req.Messages),
+		Items: []summaryview.Item{{
+			Message:      model.NewUserMessage("not in request"),
+			RequestIndex: 1,
+		}},
+	})
+
+	_, seq, modelCalled, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		callModel,
+	)
+
+	require.NoError(t, err)
+	require.True(t, modelCalled)
+	require.NotNil(t, seq)
+	view, ok := summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.False(t, view.Bound)
+	_, ok = summaryfork.Request(inv)
+	require.False(t, ok)
+}
+
+func TestCallLLM_UnsafeTailoringCannotBeRevivedByPreservedChange(t *testing.T) {
+	callModel := &unsafeThenPreservingTailoringModel{}
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(callModel))
+	history := model.Message{
+		Role: model.RoleUser,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+		}},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		history,
+	}}
+	summaryview.AttachProjection(inv, &summaryview.View{
+		ContentRequestLength: len(req.Messages),
+		Items: []summaryview.Item{{
+			Message:      history,
+			RequestIndex: 1,
+		}},
+	})
+
+	_, seq, modelCalled, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		callModel,
+	)
+
+	require.NoError(t, err)
+	require.True(t, modelCalled)
+	require.NotNil(t, seq)
+	view, ok := summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.False(t, view.Bound)
+	_, ok = summaryfork.Request(inv)
+	require.False(t, ok)
+}
+
 func TestTokenTailoringCollapsedHistory(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -2711,6 +2789,48 @@ func (m *preservingTailoringModel) GenerateContent(
 		imodelrequest.TokenTailoringChange{
 			Record: imodelrequest.TokenTailoringRecord{
 				Provider:       "preservingTailoringModel",
+				MaxInputTokens: 100,
+				BeforeMessages: len(before),
+				AfterMessages:  len(after),
+				Provenance: imodelrequest.
+					TokenTailoringProvenancePreserved,
+			},
+			Before: before,
+			After:  after,
+		},
+	)
+	return completedModelResponse(), nil
+}
+
+type unsafeThenPreservingTailoringModel struct{}
+
+func (m *unsafeThenPreservingTailoringModel) Info() model.Info {
+	return model.Info{Name: "unsafe-then-preserving-tailoring-model"}
+}
+
+func (m *unsafeThenPreservingTailoringModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	req.Messages[0].Content = "rewritten stable"
+	imodelrequest.RecordTokenTailoring(
+		ctx,
+		imodelrequest.TokenTailoringRecord{
+			Provider:       "unsafeThenPreservingTailoringModel",
+			MaxInputTokens: 100,
+			BeforeMessages: len(req.Messages),
+			AfterMessages:  len(req.Messages),
+		},
+	)
+
+	before := append([]model.Message(nil), req.Messages...)
+	req.Messages[1].Content = " "
+	after := append([]model.Message(nil), req.Messages...)
+	imodelrequest.RecordTokenTailoringChange(
+		ctx,
+		imodelrequest.TokenTailoringChange{
+			Record: imodelrequest.TokenTailoringRecord{
+				Provider:       "unsafeThenPreservingTailoringModel",
 				MaxInputTokens: 100,
 				BeforeMessages: len(before),
 				AfterMessages:  len(after),
