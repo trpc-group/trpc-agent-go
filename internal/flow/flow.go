@@ -33,6 +33,10 @@ type RequestProcessor interface {
 
 // ResponseProcessor processes LLM responses after they are received from the model.
 type ResponseProcessor interface {
-	// ProcessResponse processes the response and sends events directly to the provided channel.
-	ProcessResponse(ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event)
+	// ProcessResponse processes the response and sends events directly to the
+	// provided channel. It returns the response to be used by later processing
+	// stages. Processors that need to alter the response must return a
+	// replacement instead of mutating the shared response, which may already be
+	// published inside an emitted event and read concurrently.
+	ProcessResponse(ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event) *model.Response
 }

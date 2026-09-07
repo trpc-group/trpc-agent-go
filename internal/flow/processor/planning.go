@@ -138,30 +138,32 @@ func NewPlanningResponseProcessor(p planner.Planner) *PlanningResponseProcessor 
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
-// It processes planning responses using the configured planner.
+// It processes planning responses using the configured planner and returns
+// the planner's replacement response when one is produced, or the original
+// response otherwise.
 func (p *PlanningResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	if invocation == nil || rsp == nil || rsp.IsPartial {
-		return
+		return rsp
 	}
 	if p.Planner == nil {
 		log.DebugContext(
 			ctx,
 			"Planning response processor: no planner configured",
 		)
-		return
+		return rsp
 	}
 	if len(rsp.Choices) == 0 {
 		log.DebugContext(
 			ctx,
 			"Planning response processor: no choices in response",
 		)
-		return
+		return rsp
 	}
 
 	log.DebugfContext(
@@ -173,8 +175,6 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 	// Process the response using the planner.
 	processedResponse := p.Planner.ProcessPlanningResponse(ctx, invocation, rsp)
 	if processedResponse != nil {
-		// Update the original response with processed content.
-		*rsp = *processedResponse
 		log.DebugContext(
 			ctx,
 			"Planning response processor: processed response successfully",
@@ -200,4 +200,10 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 			"Planning response processor: context cancelled",
 		)
 	}
+	if processedResponse != nil {
+		// Return the processed response instead of overwriting the shared
+		// response, which may already be published in an emitted event.
+		return processedResponse
+	}
+	return rsp
 }

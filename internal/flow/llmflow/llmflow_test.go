@@ -2785,47 +2785,57 @@ func (p *panicRequestProcessor) ProcessRequest(
 // mockResponseProcessor implements flow.ResponseProcessor
 type mockResponseProcessor struct{}
 
+// ProcessResponse emits a "postprocessing" event and returns the original response.
 func (m *mockResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	req *model.Request,
 	resp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	evt := event.New(invocation.InvocationID, invocation.AgentName)
 	evt.Object = "postprocessing"
 	select {
 	case ch <- evt:
 	default:
 	}
+	return resp
 }
 
+// cancelResponseProcessor is a test stub that cancels the context during
+// response processing to exercise cancellation paths.
 type cancelResponseProcessor struct {
 	cancel context.CancelFunc
 }
 
+// ProcessResponse cancels the associated context and returns the original response.
 func (c *cancelResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	req *model.Request,
 	resp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	c.cancel()
+	return resp
 }
 
+// endInvocationResponseProcessor is a test stub that sets EndInvocation on
+// each response to terminate the flow after the first postprocessing step.
 type endInvocationResponseProcessor struct{}
 
+// ProcessResponse sets invocation.EndInvocation and returns the original response.
 func (p *endInvocationResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	req *model.Request,
 	resp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	if invocation != nil {
 		invocation.EndInvocation = true
 	}
+	return resp
 }
 
 func TestFlow_Interface(t *testing.T) {
@@ -4592,7 +4602,7 @@ func TestFlow_Postprocess_WithProcessor(t *testing.T) {
 	}
 	eventCh := make(chan *event.Event, 2)
 
-	f.postprocess(ctx, inv, req, resp, eventCh)
+	got := f.postprocess(ctx, inv, req, resp, eventCh)
 
 	var count int
 	for {
@@ -4606,6 +4616,24 @@ func TestFlow_Postprocess_WithProcessor(t *testing.T) {
 
 done:
 	require.Equal(t, 1, count)
+	require.Same(t, resp, got)
+}
+
+func TestFlow_Postprocess_NilResponse(t *testing.T) {
+	f := New(nil, []flow.ResponseProcessor{&mockResponseProcessor{}}, Options{})
+
+	ctx := context.Background()
+	inv := agent.NewInvocation()
+	req := &model.Request{}
+	eventCh := make(chan *event.Event, 2)
+
+	// Should not panic and should not emit events when the response is nil.
+	var got *model.Response
+	require.NotPanics(t, func() {
+		got = f.postprocess(ctx, inv, req, nil, eventCh)
+	})
+	require.Nil(t, got)
+	require.Empty(t, eventCh)
 }
 
 // Test that when RunOptions.Resume is enabled and the latest session event

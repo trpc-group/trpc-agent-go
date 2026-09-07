@@ -71,19 +71,21 @@ func NewConditionalResponseProcessor(
 	}
 }
 
-// ProcessResponse runs the wrapped response processor only when enabled for this invocation.
+// ProcessResponse runs the wrapped response processor only when enabled for
+// this invocation. It returns the (possibly replaced) response from the
+// delegate, or the original response when the predicate is false.
 func (p *ConditionalResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	if p == nil || p.delegate == nil {
-		return
+		return rsp
 	}
 	if p.predicate != nil && !p.predicate(ctx, invocation) {
-		return
+		return rsp
 	}
-	p.delegate.ProcessResponse(ctx, invocation, req, rsp, ch)
+	return p.delegate.ProcessResponse(ctx, invocation, req, rsp, ch)
 }
