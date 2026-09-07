@@ -266,7 +266,7 @@ func TestStartStdinFailureReturnsProcessForCleanup(t *testing.T) {
 	assert.True(t, killedProcess)
 }
 
-func TestStartDelayedEndEventTakesPrecedenceOverSendInputNotFound(t *testing.T) {
+func TestStartDelayedEndEventTakesPrecedenceOverSendInputError(t *testing.T) {
 	inputAttempted := make(chan struct{})
 	handler := &testProcessHandler{}
 	handler.start = func(
@@ -287,7 +287,7 @@ func TestStartDelayedEndEventTakesPrecedenceOverSendInputNotFound(t *testing.T) 
 	) (*connect.Response[processrpc.SendInputResponse], error) {
 		close(inputAttempted)
 		return nil, connect.NewError(
-			connect.CodeNotFound, errors.New("process already exited"),
+			connect.CodeInternal, errors.New("stdin pipe is closed"),
 		)
 	}
 

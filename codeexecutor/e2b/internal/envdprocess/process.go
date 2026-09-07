@@ -259,11 +259,16 @@ func (p *Process) remoteExecutionFinished() bool {
 	return p.state.remoteEnded || p.state.timedOut
 }
 
-// waitForConfirmedTermination gives an EndEvent that is already in flight a
-// bounded opportunity to reach the process stream. An EndEvent or the
-// configured process timeout is authoritative; a closed stream without either
-// is not evidence that the remote process terminated.
-func (p *Process) waitForConfirmedTermination(timeout time.Duration) bool {
+// waitForConfirmedTermination gives an EndEvent or configured process timeout
+// already in flight a bounded opportunity to reach the process stream. A
+// closed stream without either is not evidence that the remote process
+// terminated. callerCtx is observed separately from the process stream context
+// so caller cancellation remains prompt without racing ahead of timeout state
+// publication by the stream consumer.
+func (p *Process) waitForConfirmedTermination(
+	callerCtx context.Context,
+	timeout time.Duration,
+) bool {
 	if p.remoteExecutionFinished() {
 		return true
 	}
@@ -274,6 +279,9 @@ func (p *Process) waitForConfirmedTermination(timeout time.Duration) bool {
 	defer timer.Stop()
 	select {
 	case <-p.done:
+		return p.remoteExecutionFinished()
+	case <-callerCtx.Done():
+		// Prefer a terminal event that raced with caller cancellation.
 		return p.remoteExecutionFinished()
 	case <-timer.C:
 		// Prefer a terminal event that raced with the timer.

@@ -150,6 +150,9 @@ func TestIntegrationEnvdProcess(t *testing.T) {
 	t.Run("RunTimeout", func(t *testing.T) {
 		testEnv.testRunTimeout(ctx, t)
 	})
+	t.Run("RunTimeoutDuringInitialStdin", func(t *testing.T) {
+		testEnv.testRunTimeoutDuringInitialStdin(ctx, t)
+	})
 	t.Run("RunHTTPClientTimeoutCleanup", func(t *testing.T) {
 		testEnv.testRunHTTPClientTimeoutCleanup(ctx, t)
 	})
@@ -680,14 +683,15 @@ func (e *integrationEnvironment) testRunImmediateExitWithStdin(
 	// envd versions that do not implement CloseStdin.
 	result, err := e.runner.Run(ctx, Request{
 		Cmd:           "/bin/sh",
-		Args:          []string{"-c", "exit 0"},
+		Args:          []string{"-c", "printf 'before-exit'; exit 7"},
 		User:          e.user,
 		Stdin:         "unused",
 		KeepStdinOpen: true,
 		Timeout:       20 * time.Second,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 0, result.ExitCode)
+	assert.Equal(t, "before-exit", result.Stdout)
+	assert.Equal(t, 7, result.ExitCode)
 	assert.False(t, result.TimedOut)
 }
 
@@ -770,6 +774,30 @@ func (e *integrationEnvironment) testRunHTTPClientTimeoutCleanup(
 	e.trackPID(result.PID)
 	require.NoError(t, e.waitForProcessToDisappear(ctx, result.PID))
 	e.forgetPID(result.PID)
+}
+
+func (e *integrationEnvironment) testRunTimeoutDuringInitialStdin(
+	parent context.Context,
+	t *testing.T,
+) {
+	ctx, cancel := context.WithTimeout(parent, integrationOperationTimeout)
+	defer cancel()
+
+	// sleep never reads stdin, so the payload fills its pipe and keeps the
+	// SendInput RPC pending until the configured process deadline expires.
+	marker := integrationTag("stdin-timeout")
+	result, err := e.runner.Run(ctx, Request{
+		Cmd:           "/bin/sh",
+		Args:          []string{"-c", "exec sleep 60 # " + marker},
+		User:          e.user,
+		Stdin:         strings.Repeat("i", 1<<20),
+		KeepStdinOpen: true,
+		Timeout:       time.Second,
+	})
+	require.NoError(t, err)
+	require.NotZero(t, result.PID)
+	assert.True(t, result.TimedOut)
+	require.NoError(t, e.waitForProcessConfigToDisappear(ctx, marker))
 }
 
 func (e *integrationEnvironment) testRunCancellationCleanup(

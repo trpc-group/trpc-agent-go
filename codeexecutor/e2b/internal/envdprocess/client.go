@@ -173,7 +173,9 @@ func originFromURL(u *url.URL) string {
 // initial stdin, transport, or protocol failure prevents a terminal result, it
 // makes a bounded best-effort SIGKILL before returning. Request.Timeout
 // controls envd's remote process deadline and defaults to 60 seconds when
-// non-positive. LaunchOption values configure this invocation.
+// non-positive. An initial stdin failure may add up to one second while Run
+// reconciles a terminal result already in flight. LaunchOption values configure
+// this invocation.
 func (c *Client) Run(
 	ctx context.Context,
 	req Request,
@@ -221,8 +223,8 @@ func (c *Client) Run(
 // Start starts a non-PTY process and returns a handle after envd reports its
 // PID. The returned Process can be non-nil together with an error when startup
 // I/O fails; ownership still transfers to the caller, which can inspect, kill,
-// or disconnect the handle. If initial stdin reports that the process no
-// longer exists, Start briefly waits for a terminal event already in flight
+// or disconnect the handle. If initial stdin fails, Start waits up to one
+// second for a terminal event or configured process timeout already in flight
 // before returning the I/O error. A non-positive Request.Timeout uses a
 // 60-second remote process deadline. LaunchOption values configure this
 // invocation without changing the Client.
@@ -278,18 +280,20 @@ func (c *Client) start(
 	proc.startConsumer(processStreamCtx, eventStream)
 	stdinErr := initializeProcessStdin(processStreamCtx, proc, req)
 	if stdinErr != nil {
-		if proc.remoteExecutionFinished() {
+		if proc.waitForConfirmedTermination(
+			ctx, initialStdinEndEventGracePeriod,
+		) {
 			_, terminalErr := proc.snapshot()
 			return proc, true, terminalErr
 		}
-		if connect.CodeOf(stdinErr) == connect.CodeNotFound {
-			if proc.waitForConfirmedTermination(initialStdinEndEventGracePeriod) {
-				_, terminalErr := proc.snapshot()
-				return proc, true, terminalErr
+		if callerErr := ctx.Err(); callerErr != nil {
+			// Preserve the stdin operation context when caller cancellation caused
+			// that RPC to fail. Otherwise the caller error supersedes the earlier
+			// stdin error that was being reconciled.
+			if errors.Is(stdinErr, callerErr) {
+				return proc, true, stdinErr
 			}
-			if ctx.Err() != nil {
-				return proc, true, ctx.Err()
-			}
+			return proc, true, callerErr
 		}
 		return proc, true, stdinErr
 	}
@@ -520,9 +524,9 @@ func (c *Client) kill(
 }
 
 const (
-	// initialStdinEndEventGracePeriod reconciles a process NotFound response
-	// from an initial stdin RPC with a trailing EndEvent on the independent
-	// Start response stream.
+	// initialStdinEndEventGracePeriod reconciles an initial stdin RPC error with
+	// a terminal event already in flight on the independent Start response
+	// stream. It bounds the additional latency when the process is still running.
 	initialStdinEndEventGracePeriod = time.Second
 	runCleanupTimeout               = time.Second
 	tagCleanupRetryInterval         = 25 * time.Millisecond
