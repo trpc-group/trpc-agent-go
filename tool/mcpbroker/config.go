@@ -79,15 +79,8 @@ func normalizeConnectionConfig(cfg mcpcfg.ConnectionConfig, adHoc bool) (mcpcfg.
 		if command != "" {
 			return mcpcfg.ConnectionConfig{}, "", fmt.Errorf("HTTP MCP cannot specify command")
 		}
-		parsedURL, parseErr := url.Parse(serverURL)
-		if parseErr != nil {
-			return mcpcfg.ConnectionConfig{}, "", fmt.Errorf("invalid server_url %q: %w", serverURL, parseErr)
-		}
-		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-			return mcpcfg.ConnectionConfig{}, "", fmt.Errorf("HTTP MCP requires http or https URL")
-		}
-		if parsedURL.Host == "" {
-			return mcpcfg.ConnectionConfig{}, "", fmt.Errorf("HTTP MCP requires URL host")
+		if err := validateHTTPServerURL(serverURL, adHoc); err != nil {
+			return mcpcfg.ConnectionConfig{}, "", err
 		}
 	default:
 		return mcpcfg.ConnectionConfig{}, "", fmt.Errorf("unsupported transport")
@@ -103,6 +96,31 @@ func normalizeConnectionConfig(cfg mcpcfg.ConnectionConfig, adHoc bool) (mcpcfg.
 		Description: strings.TrimSpace(cfg.Description),
 		ClientInfo:  cfg.ClientInfo,
 	}, kind, nil
+}
+
+// validateHTTPServerURL checks a streamable/SSE endpoint URL.
+//
+// Named servers (adHoc == false) accept any structurally valid absolute URL
+// with a scheme and host so host code can register custom endpoint schemes.
+// Ad-hoc URLs stay restricted to http and https.
+func validateHTTPServerURL(serverURL string, adHoc bool) error {
+	parsedURL, parseErr := url.Parse(serverURL)
+	if parseErr != nil {
+		return fmt.Errorf("invalid server_url %q: %w", serverURL, parseErr)
+	}
+	if adHoc && parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("HTTP MCP requires http or https URL")
+	}
+	// A rootless URL such as "host:port/path" parses with the host as its
+	// scheme and no authority, so report both shapes as a missing absolute URL
+	// instead of claiming the host is missing.
+	if parsedURL.Scheme == "" || parsedURL.Opaque != "" {
+		return fmt.Errorf("HTTP MCP requires an absolute server_url like scheme://host/path")
+	}
+	if parsedURL.Host == "" {
+		return fmt.Errorf("HTTP MCP requires URL host")
+	}
+	return nil
 }
 
 func normalizeTransport(raw string, hasCommand, hasURL, adHoc bool) (string, transportKind, error) {

@@ -243,6 +243,17 @@ func New(opts ...Option) *Broker {
 }
 
 // WithServers adds named MCP server configurations provided by code.
+//
+// HTTP named servers accept a structurally valid absolute endpoint URL with a
+// scheme and host. Custom schemes are allowed so a host-supplied
+// tmcp.HTTPReqHandler can resolve them; the broker does not check that such a
+// handler is installed, so an unresolvable scheme fails when the server is
+// first used rather than at configuration time, and the resulting error - which
+// the broker forwards to the model - contains the endpoint URL. Use
+// WithErrorInterceptor to redact internal endpoints.
+//
+// Model-controlled ad-hoc URL selectors remain restricted to http and https;
+// see WithAllowAdHocHTTP.
 func WithServers(servers map[string]mcpcfg.ConnectionConfig) Option {
 	return func(opts *brokerOptions) {
 		if len(servers) == 0 {

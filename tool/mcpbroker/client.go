@@ -283,13 +283,22 @@ func filterNilStdioClientOptions(opts []tmcp.StdioClientOption) []tmcp.StdioClie
 	return result
 }
 
-func createClient(cfg mcpcfg.ConnectionConfig, extraHTTP []tmcp.ClientOption, extraStdio []tmcp.StdioClientOption) (tmcp.Connector, error) {
+// createClient revalidates cfg before building the underlying MCP client. adHoc
+// must describe the origin the config was resolved from so this second pass
+// applies the same scheme policy as resolution: ad-hoc URLs stay restricted to
+// http and https, while named servers may use custom schemes.
+func createClient(
+	cfg mcpcfg.ConnectionConfig,
+	adHoc bool,
+	extraHTTP []tmcp.ClientOption,
+	extraStdio []tmcp.StdioClientOption,
+) (tmcp.Connector, error) {
 	clientInfo := cfg.ClientInfo
 	if clientInfo.Name == "" {
 		clientInfo = defaultClientInfo
 	}
 
-	_, kind, err := normalizeConnectionConfig(cfg, false)
+	_, kind, err := normalizeConnectionConfig(cfg, adHoc)
 	if err != nil {
 		return nil, err
 	}
@@ -346,6 +355,7 @@ func withTimeoutContext(ctx context.Context, timeout time.Duration) (context.Con
 func withOneShotClient[T any](
 	ctx context.Context,
 	cfg mcpcfg.ConnectionConfig,
+	adHoc bool,
 	extraHTTP []tmcp.ClientOption,
 	extraStdio []tmcp.StdioClientOption,
 	fn func(context.Context, tmcp.Connector) (T, error),
@@ -359,7 +369,7 @@ func withOneShotClient[T any](
 	ctx, cancel := withTimeoutContext(ctx, cfg.Timeout)
 	defer cancel()
 
-	client, err := createClient(cfg, extraHTTP, extraStdio)
+	client, err := createClient(cfg, adHoc, extraHTTP, extraStdio)
 	if err != nil {
 		return zero, err
 	}

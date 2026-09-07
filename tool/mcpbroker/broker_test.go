@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1269,6 +1270,10 @@ func TestResolveTargetValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, OriginAdhoc, target.Origin)
 	require.Equal(t, targetTypeHTTP, target.TargetType)
+
+	_, err = New(WithAllowAdHocHTTP(true)).resolveTarget(targetInput{URL: "custom://service/mcp"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires http or https")
 }
 
 func TestSplitNamedToolSelectorBranches(t *testing.T) {
@@ -1458,9 +1463,29 @@ func TestNormalizeConnectionConfigValidation(t *testing.T) {
 
 	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
 		ServerURL: "ftp://example.com/mcp",
-	}, false)
+	}, true)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires http or https")
+
+	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
+		ServerURL: "example.com/mcp",
+	}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "absolute server_url")
+
+	// "host:port/path" parses as an opaque URL, so it must be reported as a
+	// missing absolute URL rather than as a missing host.
+	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
+		ServerURL: "localhost:3000/mcp",
+	}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "absolute server_url")
+
+	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
+		ServerURL: "custom:///mcp",
+	}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires URL host")
 
 	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
 		ServerURL: "https://example.com/mcp",
@@ -1485,6 +1510,156 @@ func TestNormalizeConnectionConfigValidation(t *testing.T) {
 	}, true)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ad-hoc MCP only supports HTTP")
+}
+
+func TestNormalizeNamedServerAllowsCustomScheme(t *testing.T) {
+	cfg, kind, err := normalizeConnectionConfig(legacymcp.ConnectionConfig{
+		ServerURL: "custom://service/mcp",
+	}, false)
+	require.NoError(t, err)
+	require.Equal(t, transportStreamable, kind)
+	// The endpoint must reach the transport verbatim: re-serializing it could
+	// rewrite a scheme that only the host-supplied handler understands.
+	require.Equal(t, "custom://service/mcp", cfg.ServerURL)
+
+	server, err := normalizeNamedServer("custom_named", legacymcp.ConnectionConfig{
+		ServerURL: "custom://service/mcp",
+		Transport: "sse",
+	}, originCode)
+	require.NoError(t, err)
+	require.Equal(t, targetTypeHTTP, server.TargetType)
+	require.Equal(t, "sse", server.Config.Transport)
+	require.Equal(t, "custom://service/mcp", server.Config.ServerURL)
+
+	// The same URL stays rejected for model-supplied ad-hoc targets.
+	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
+		ServerURL: "custom://service/mcp",
+	}, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires http or https")
+}
+
+// TestCreateClientRevalidatesOriginScheme covers the defensive revalidation in
+// createClient: it must keep applying the scheme policy of the origin the
+// config was resolved from, so a custom scheme cannot reach the transport on
+// behalf of an ad-hoc target.
+func TestCreateClientRevalidatesOriginScheme(t *testing.T) {
+	cfg := legacymcp.ConnectionConfig{
+		Transport: "streamable",
+		ServerURL: "custom://service/mcp",
+	}
+
+	client, err := createClient(cfg, false, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	require.NoError(t, client.Close())
+
+	_, err = createClient(cfg, true, nil, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires http or https")
+}
+
+// rewriteHTTPReqHandler resolves a custom endpoint scheme by redirecting the
+// request to a real HTTP test server. trpc-mcp-go can invoke Handle from
+// background goroutines (for example the GET SSE stream), so the recorded
+// schemes are mutex-guarded.
+type rewriteHTTPReqHandler struct {
+	dest string
+
+	mu      sync.Mutex
+	schemes []string
+}
+
+func (h *rewriteHTTPReqHandler) Handle(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
+	h.mu.Lock()
+	h.schemes = append(h.schemes, req.URL.Scheme)
+	h.mu.Unlock()
+
+	dest, err := url.Parse(h.dest)
+	if err != nil {
+		return nil, err
+	}
+	clone := req.Clone(ctx)
+	clone.URL = dest
+	clone.Host = dest.Host
+	clone.RequestURI = ""
+	return client.Do(clone)
+}
+
+func (h *rewriteHTTPReqHandler) Schemes() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.schemes...)
+}
+
+func TestNamedServerCustomScheme_ReachesHTTPReqHandler(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	handler := &rewriteHTTPReqHandler{dest: server.URL}
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"custom_named": {
+				ServerURL: "custom://service/mcp",
+				Transport: "streamable_http",
+				Timeout:   5 * time.Second,
+			},
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			require.Equal(t, "custom://service/mcp", req.BaseURL)
+			return &ClientOptions{
+				HTTP: []tmcp.ClientOption{
+					tmcp.WithHTTPReqHandler(handler),
+					// GET SSE stays disabled so this operation is a single
+					// request/response exchange: the background GET stream
+					// races with trpc-mcp-go's own session-ID bookkeeping.
+					tmcp.WithClientGetSSEEnabled(false),
+				},
+			}, nil
+		}),
+	)
+
+	output, err := broker.listTools(context.Background(), listToolsInput{Selector: "custom_named"})
+	require.NoError(t, err)
+	require.Len(t, output.Tools, 2)
+	require.Contains(t, handler.Schemes(), "custom")
+}
+
+// TestAdHocSelectorRejectsCustomScheme pins the model-facing half of the trust
+// boundary: only http and https selectors may become ad-hoc targets, so a
+// custom scheme must never open a connection even when ad-hoc HTTP is enabled.
+func TestAdHocSelectorRejectsCustomScheme(t *testing.T) {
+	providerCalls := 0
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			providerCalls++
+			return nil, nil
+		}),
+	)
+
+	for _, selector := range []string{"custom://service/mcp", "ftp://example.com/mcp"} {
+		_, err := broker.listTools(context.Background(), listToolsInput{Selector: selector})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unknown MCP server")
+
+		_, err = broker.inspectTools(context.Background(), inspectToolsInput{
+			Selector: selector,
+			Tools:    []string{"echo"},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unknown MCP server")
+
+		_, err = broker.callTool(context.Background(), callToolInput{
+			Selector:  selector + ".echo",
+			Arguments: map[string]any{},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unknown MCP server")
+	}
+
+	// Resolution must fail before any client is built for these selectors.
+	require.Zero(t, providerCalls)
 }
 
 // =============================================================================

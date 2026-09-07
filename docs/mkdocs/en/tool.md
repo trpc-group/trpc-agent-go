@@ -1337,6 +1337,15 @@ agent := llmagent.New(
 )
 ```
 
+Named HTTP servers configured through `WithServers` may use a structurally
+valid absolute URL with a custom scheme, as long as the host installs a
+compatible `HTTPReqHandler` (for example through
+`WithClientOptionsProvider` and `tmcp.WithHTTPReqHandler`). The broker does
+not check that such a handler exists: without one, the server fails on
+first use instead of at configuration time, and the error the model sees
+contains the endpoint URL, so use `WithErrorInterceptor` to redact internal
+endpoints. Ad-hoc URL selectors remain HTTP/HTTPS only.
+
 #### Server Description
 
 The `Description` field on `ConnectionConfig` provides a capability

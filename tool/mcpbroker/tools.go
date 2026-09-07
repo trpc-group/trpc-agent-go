@@ -142,7 +142,7 @@ func (b *Broker) listTools(ctx context.Context, input listToolsInput) (listTools
 		return listToolsOutput{}, err
 	}
 
-	mcpTools, err := withOneShotClient(ctx, cfg, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
+	mcpTools, err := withOneShotClient(ctx, cfg, target.Origin == OriginAdhoc, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
 		result, listErr := client.ListTools(opCtx, &tmcp.ListToolsRequest{})
 		if listErr != nil {
 			return nil, fmt.Errorf("list MCP tools: %w", listErr)
@@ -207,7 +207,7 @@ func (b *Broker) inspectTools(ctx context.Context, input inspectToolsInput) (ins
 		return inspectToolsOutput{}, err
 	}
 
-	mcpTools, err := withOneShotClient(ctx, cfg, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
+	mcpTools, err := withOneShotClient(ctx, cfg, target.Origin == OriginAdhoc, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
 		result, listErr := client.ListTools(opCtx, &tmcp.ListToolsRequest{})
 		if listErr != nil {
 			return nil, fmt.Errorf("list MCP tools: %w", listErr)
@@ -279,7 +279,7 @@ func (b *Broker) callTool(ctx context.Context, input callToolInput) (callToolOut
 		return callToolOutput{}, err
 	}
 
-	result, err := withOneShotClient(ctx, cfg, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) (*tmcp.CallToolResult, error) {
+	result, err := withOneShotClient(ctx, cfg, target.Origin == OriginAdhoc, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) (*tmcp.CallToolResult, error) {
 		if validateErr := validateCallToolArguments(opCtx, client, toolName, input.Arguments); validateErr != nil {
 			return nil, validateErr
 		}

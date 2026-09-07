@@ -1285,6 +1285,14 @@ agent := llmagent.New(
 )
 ```
 
+通过 `WithServers` 配置的 named HTTP server 可以使用带自定义 scheme 的、
+结构合法的绝对 URL，前提是宿主安装了兼容的 `HTTPReqHandler`（例如通过
+`WithClientOptionsProvider` 与 `tmcp.WithHTTPReqHandler`）。broker 不会检查
+这样的 handler 是否存在：缺少 handler 时，该 server 会在首次使用时失败而不是
+在配置阶段失败，并且模型看到的错误里会带上 endpoint URL，因此需要用
+`WithErrorInterceptor` 对内部 endpoint 做脱敏。ad-hoc URL selector 仍然只允许
+HTTP/HTTPS。
+
 #### Server Description（服务描述）
 
 `ConnectionConfig` 上的 `Description` 字段为 MCP server 提供一段能力摘要，
