@@ -1,0 +1,12 @@
+[
+  {
+    "metricName": "quality",
+    "evaluatorName": "deterministic_regression_quality",
+    "threshold": 0.8,
+    "criterion": {
+      "llmJudge": {
+        "rubrics": []
+      }
+    }
+  }
+]
