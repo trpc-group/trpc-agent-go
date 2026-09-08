@@ -515,10 +515,13 @@ func TestNewToolSetRejectsNonHTTPSBaseURL(t *testing.T) {
 }
 
 func TestSearchToolStripsAPIKeyOnCrossOriginRedirect(t *testing.T) {
+	var mu sync.Mutex
 	var gotKeys []string
 	final := httptest.NewTLSServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
 			gotKeys = append(gotKeys, r.Header.Get("X-API-Key"))
+			mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"results":{"web":[],"news":[]}}`))
 		},
@@ -555,11 +558,14 @@ func TestSearchToolStripsAPIKeyOnCrossOriginRedirect(t *testing.T) {
 	if _, err := searchTool.Call(context.Background(), reqJSON); err != nil {
 		t.Fatalf("search call failed: %v", err)
 	}
-	if len(gotKeys) != 1 {
-		t.Fatalf("expected 1 request at final origin, got %d", len(gotKeys))
+	mu.Lock()
+	keys := append([]string(nil), gotKeys...)
+	mu.Unlock()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 request at final origin, got %d", len(keys))
 	}
-	if gotKeys[0] != "" {
-		t.Errorf("expected X-API-Key stripped on cross-origin redirect, got %q", gotKeys[0])
+	if keys[0] != "" {
+		t.Errorf("expected X-API-Key stripped on cross-origin redirect, got %q", keys[0])
 	}
 }
 
