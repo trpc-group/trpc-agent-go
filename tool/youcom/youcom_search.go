@@ -11,6 +11,7 @@
 package youcom
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -26,8 +28,10 @@ import (
 
 // Default configuration constants.
 const (
-	// defaultBaseURL is the default endpoint for the You.com Web Search API.
-	defaultBaseURL = "https://api.you.com/api/search"
+	// defaultBaseURL is the documented endpoint for the You.com Web Search
+	// API: POST https://ydc-index.io/v1/search (see
+	// https://you.com/docs/api-reference/search/v1-search).
+	defaultBaseURL = "https://ydc-index.io/v1/search"
 	// defaultUserAgent is the default user agent for HTTP requests.
 	defaultUserAgent = "trpc-agent-go-youcom/1.0"
 	// defaultTimeout is the default timeout for HTTP requests.
@@ -147,6 +151,11 @@ func resolveHTTPClient(cfg *config) *http.Client {
 	return httpClient
 }
 
+// sameOrigin reports whether two URLs share scheme, host, and port.
+func sameOrigin(a, b *url.URL) bool {
+	return a.Scheme == b.Scheme && a.Host == b.Host
+}
+
 func clampNumResults(n int) int {
 	if n <= 0 {
 		return maxResults
@@ -212,10 +221,33 @@ func NewToolSet(opts ...Option) (*ToolSet, error) {
 	if cfg.apiKey == "" {
 		return nil, fmt.Errorf("youcom: api key is required")
 	}
+	base, err := url.Parse(cfg.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("youcom: invalid base URL %q: %w", cfg.baseURL, err)
+	}
+	if base.Scheme != "https" {
+		return nil, fmt.Errorf("youcom: base URL must be HTTPS, got %q", cfg.baseURL)
+	}
+
+	httpClient := resolveHTTPClient(cfg)
+	// Guard against the API key leaking through redirects: drop X-API-Key
+	// whenever a redirect would carry the request to a different origin.
+	baseOrigin := base
+	clonedClient := *httpClient
+	clonedClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		if !sameOrigin(baseOrigin, req.URL) {
+			req.Header.Del("X-API-Key")
+		}
+		return nil
+	}
+	httpClient = &clonedClient
 
 	searcher := &youcomSearcher{
 		cfg:        cfg,
-		httpClient: resolveHTTPClient(cfg),
+		httpClient: httpClient,
 	}
 
 	return &ToolSet{
@@ -265,17 +297,27 @@ type resultItem struct {
 }
 
 // youcomAPIResult mirrors a single result in the You.com Web Search API
-// response. Unknown fields are ignored so new upstream fields do not break
-// decoding.
+// response. Results appear in two sections — `results.web` and
+// `results.news` — with slightly different field sets; `description` is
+// present on both, so it is kept alongside `snippets`. Unknown fields are
+// ignored so new upstream fields do not break decoding.
 type youcomAPIResult struct {
 	URL          string   `json:"url"`
 	Title        string   `json:"title"`
+	Description  string   `json:"description"`
 	Snippets     []string `json:"snippets"`
 	ThumbnailURL string   `json:"thumbnail_url"`
 }
 
+// youcomAPISections models the nested `results` object of the You.com Web
+// Search API response, which groups results into `web` and `news`.
+type youcomAPISections struct {
+	Web  []youcomAPIResult `json:"web"`
+	News []youcomAPIResult `json:"news"`
+}
+
 type youcomAPIResponse struct {
-	Results []youcomAPIResult `json:"results"`
+	Results youcomAPISections `json:"results"`
 }
 
 // search executes a search query on You.com and returns the results.
@@ -322,7 +364,9 @@ func (s *youcomSearcher) search(ctx context.Context, req searchRequest) (searchR
 }
 
 // query calls the You.com Web Search API and maps the response to result
-// items.
+// items. The API is documented as POST https://ydc-index.io/v1/search with a
+// JSON body; the base URL may be overridden for testing, but only HTTPS
+// endpoints are accepted so the API key is never sent in cleartext.
 func (s *youcomSearcher) query(
 	ctx context.Context,
 	query string,
@@ -330,24 +374,32 @@ func (s *youcomSearcher) query(
 	country string,
 	safeSearch string,
 ) ([]resultItem, error) {
-	params := url.Values{}
-	params.Set("query", query)
-	params.Set("num_results", fmt.Sprintf("%d", numResults))
-	if country != "" {
-		params.Set("country", country)
+	base, err := url.Parse(s.cfg.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base URL %q: %w", s.cfg.baseURL, err)
 	}
-	if safeSearch != "" {
-		params.Set("safesearch", safeSearch)
+	if base.Scheme != "https" {
+		return nil, fmt.Errorf("youcom: base URL must be HTTPS, got %q", s.cfg.baseURL)
 	}
 
-	requestURL := s.cfg.baseURL
-	if strings.ContainsRune(requestURL, '?') {
-		requestURL += "&" + params.Encode()
-	} else {
-		requestURL += "?" + params.Encode()
+	payload := struct {
+		Query      string `json:"query"`
+		Count      int    `json:"count"`
+		Country    string `json:"country,omitempty"`
+		SafeSearch string `json:"safesearch,omitempty"`
+	}{
+		Query:      query,
+		Count:      numResults,
+		Country:    country,
+		SafeSearch: safeSearch,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	httpReq, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, base.String(), bytes.NewReader(payloadBytes))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -356,6 +408,7 @@ func (s *youcomSearcher) query(
 		httpReq.Header.Set("User-Agent", s.cfg.userAgent)
 	}
 	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
@@ -380,13 +433,23 @@ func (s *youcomSearcher) query(
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	results := make([]resultItem, 0, len(apiResp.Results))
-	for _, r := range apiResp.Results {
+	// Flatten the web and news sections, preserving API order within each
+	// section (web results first, matching the API response layout).
+	flat := make([]youcomAPIResult, 0, len(apiResp.Results.Web)+len(apiResp.Results.News))
+	flat = append(flat, apiResp.Results.Web...)
+	flat = append(flat, apiResp.Results.News...)
+
+	results := make([]resultItem, 0, len(flat))
+	for _, r := range flat {
 		item := resultItem{
 			URL:          r.URL,
 			Title:        r.Title,
 			Snippets:     trimSnippets(r.Snippets),
 			ThumbnailURL: r.ThumbnailURL,
+		}
+		// News results often carry a description instead of snippets.
+		if len(item.Snippets) == 0 && r.Description != "" {
+			item.Snippets = trimSnippets([]string{r.Description})
 		}
 		if item.URL == "" && item.Title == "" {
 			continue
@@ -405,7 +468,11 @@ func trimSnippets(snippets []string) []string {
 			continue
 		}
 		if len(snippet) > maxSnippetLength {
-			snippet = snippet[:maxSnippetLength] + "…"
+			cut := maxSnippetLength
+			for cut > 0 && !utf8.RuneStart(snippet[cut]) {
+				cut--
+			}
+			snippet = snippet[:cut] + "…"
 		}
 		trimmed = append(trimmed, snippet)
 	}

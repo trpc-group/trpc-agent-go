@@ -1336,7 +1336,10 @@ the credentialed `google` toolset.
 
 Requires a You.com API key. Set `api_key` in the config or export
 `YDC_API_KEY` (config wins when both are present). Keys are available at
-[you.com/platform/api-keys](https://you.com/platform/api-keys).
+[you.com/platform/api-keys](https://you.com/platform/api-keys). The toolset
+calls the documented Web Search API endpoint
+(`https://ydc-index.io/v1/search`); `base_url` exists for testing and must
+be HTTPS.
 
 ```yaml
 tools:

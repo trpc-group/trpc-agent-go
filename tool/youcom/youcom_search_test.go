@@ -10,14 +10,19 @@
 package youcom
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestOption(t *testing.T) {
@@ -186,27 +191,52 @@ func TestClose(t *testing.T) {
 	}
 }
 
-// newFakeYoucomAPI returns an httptest server that emits the given results
-// as a You.com Web Search API response and records the latest request.
-func newFakeYoucomAPI(t *testing.T, results []youcomAPIResult) (*httptest.Server, **http.Request) {
+// newFakeYoucomAPI returns an httptest TLS server that emits the given
+// results as a You.com Web Search API response and records the latest
+// request. The captured request is guarded by a mutex and accessed through
+// the returned function so the test does not race with the HTTP handler.
+func newFakeYoucomAPI(t *testing.T, web, news []youcomAPIResult) (*httptest.Server, func() *http.Request) {
 	t.Helper()
+	var mu sync.Mutex
 	var captured *http.Request
-	srv := httptest.NewServer(http.HandlerFunc(
+	srv := httptest.NewTLSServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			captured = r
+			bodyBytes, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read request body: %v", err)
+			}
+			mu.Lock()
+			captured = r.Clone(r.Context())
+			// r.Clone shares the original (already consumed) body; replace it
+			// with a fresh reader so tests can decode it afterwards.
+			captured.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
-			resp := youcomAPIResponse{Results: results}
+			resp := youcomAPIResponse{Results: youcomAPISections{Web: web, News: news}}
 			if err := json.NewEncoder(w).Encode(resp); err != nil {
 				t.Errorf("encode fake response: %v", err)
 			}
 		},
 	))
 	t.Cleanup(srv.Close)
-	return srv, &captured
+	return srv, func() *http.Request {
+		mu.Lock()
+		defer mu.Unlock()
+		return captured
+	}
+}
+
+// fakeTLSClient returns an HTTP client that trusts the httptest TLS server.
+func fakeTLSClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // test-only
+		},
+	}
 }
 
 func TestSearchTool(t *testing.T) {
-	fakeResults := []youcomAPIResult{
+	fakeWeb := []youcomAPIResult{
 		{
 			URL:      "https://example.com/go",
 			Title:    "Example Go page",
@@ -223,11 +253,19 @@ func TestSearchTool(t *testing.T) {
 			Snippets: []string{"orphan snippet"},
 		},
 	}
-	srv, captured := newFakeYoucomAPI(t, fakeResults)
+	fakeNews := []youcomAPIResult{
+		{
+			URL:         "https://example.com/news",
+			Title:       "News item with description only",
+			Description: "A news description used as fallback snippet.",
+		},
+	}
+	srv, captured := newFakeYoucomAPI(t, fakeWeb, fakeNews)
 
 	toolSet, err := NewToolSet(
 		WithAPIKey("key-123"),
 		WithBaseURL(srv.URL),
+		WithHTTPClient(fakeTLSClient()),
 		WithNumResults(5),
 		WithCountry("US"),
 		WithSafeSearch("moderate"),
@@ -259,8 +297,8 @@ func TestSearchTool(t *testing.T) {
 	if resp.Query != "golang testing" {
 		t.Errorf("expected query 'golang testing', got %q", resp.Query)
 	}
-	if len(resp.Results) != 2 {
-		t.Fatalf("expected 2 results, got %d", len(resp.Results))
+	if len(resp.Results) != 3 {
+		t.Fatalf("expected 3 results (2 web + 1 news), got %d", len(resp.Results))
 	}
 	if resp.Results[0].URL != "https://example.com/go" {
 		t.Errorf("unexpected URL: %q", resp.Results[0].URL)
@@ -276,23 +314,47 @@ func TestSearchTool(t *testing.T) {
 	if resp.Results[1].ThumbnailURL != "https://example.com/thumb.png" {
 		t.Errorf("unexpected thumbnail URL: %q", resp.Results[1].ThumbnailURL)
 	}
+	// News results carry a description instead of snippets; it must be used
+	// as a fallback snippet.
+	if resp.Results[2].URL != "https://example.com/news" {
+		t.Fatalf("expected news result last, got %q", resp.Results[2].URL)
+	}
+	if len(resp.Results[2].Snippets) != 1 ||
+		resp.Results[2].Snippets[0] != "A news description used as fallback snippet." {
+		t.Errorf("unexpected news snippets: %#v", resp.Results[2].Snippets)
+	}
 	if resp.Error != "" {
 		t.Errorf("unexpected error field: %q", resp.Error)
 	}
 
 	// Verify the request reached the fake API with the expected parameters.
-	req := *captured
-	if got := req.URL.Query().Get("query"); got != "golang testing" {
-		t.Errorf("expected query param 'golang testing', got %q", got)
+	req := captured()
+	if req == nil {
+		t.Fatalf("no request was captured")
 	}
-	if got := req.URL.Query().Get("num_results"); got != "5" {
-		t.Errorf("expected num_results param '5', got %q", got)
+	if req.Method != http.MethodPost {
+		t.Errorf("expected POST request, got %s", req.Method)
 	}
-	if got := req.URL.Query().Get("country"); got != "US" {
-		t.Errorf("expected country param 'US', got %q", got)
+	var body struct {
+		Query      string `json:"query"`
+		Count      int    `json:"count"`
+		Country    string `json:"country"`
+		SafeSearch string `json:"safesearch"`
 	}
-	if got := req.URL.Query().Get("safesearch"); got != "moderate" {
-		t.Errorf("expected safesearch param 'moderate', got %q", got)
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	if body.Query != "golang testing" {
+		t.Errorf("expected query 'golang testing', got %q", body.Query)
+	}
+	if body.Count != 5 {
+		t.Errorf("expected count '5', got %d", body.Count)
+	}
+	if body.Country != "US" {
+		t.Errorf("expected country 'US', got %q", body.Country)
+	}
+	if body.SafeSearch != "moderate" {
+		t.Errorf("expected safesearch 'moderate', got %q", body.SafeSearch)
 	}
 	if got := req.Header.Get("X-API-Key"); got != "key-123" {
 		t.Errorf("expected X-API-Key header, got %q", got)
@@ -302,11 +364,12 @@ func TestSearchTool(t *testing.T) {
 func TestSearchToolRequestOverrides(t *testing.T) {
 	srv, captured := newFakeYoucomAPI(t, []youcomAPIResult{
 		{URL: "https://example.com/1", Title: "One"},
-	})
+	}, nil)
 
 	toolSet, err := NewToolSet(
 		WithAPIKey("key-123"),
 		WithBaseURL(srv.URL),
+		WithHTTPClient(fakeTLSClient()),
 	)
 	if err != nil {
 		t.Fatalf("failed to create tool set: %v", err)
@@ -332,24 +395,36 @@ func TestSearchToolRequestOverrides(t *testing.T) {
 		t.Fatalf("search call failed: %v", err)
 	}
 
-	req := *captured
-	if got := req.URL.Query().Get("num_results"); got != "2" {
-		t.Errorf("expected num_results param '2', got %q", got)
+	req := captured()
+	if req == nil {
+		t.Fatalf("no request was captured")
 	}
-	if got := req.URL.Query().Get("country"); got != "DE" {
-		t.Errorf("expected country param 'DE', got %q", got)
+	var body struct {
+		Count      int    `json:"count"`
+		Country    string `json:"country"`
+		SafeSearch string `json:"safesearch"`
 	}
-	if got := req.URL.Query().Get("safesearch"); got != "strict" {
-		t.Errorf("expected safesearch param 'strict', got %q", got)
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	if body.Count != 2 {
+		t.Errorf("expected count '2', got %d", body.Count)
+	}
+	if body.Country != "DE" {
+		t.Errorf("expected country 'DE', got %q", body.Country)
+	}
+	if body.SafeSearch != "strict" {
+		t.Errorf("expected safesearch 'strict', got %q", body.SafeSearch)
 	}
 }
 
 func TestSearchToolEmptyQuery(t *testing.T) {
-	srv, _ := newFakeYoucomAPI(t, nil)
+	srv, _ := newFakeYoucomAPI(t, nil, nil)
 
 	toolSet, err := NewToolSet(
 		WithAPIKey("key-123"),
 		WithBaseURL(srv.URL),
+		WithHTTPClient(fakeTLSClient()),
 	)
 	if err != nil {
 		t.Fatalf("failed to create tool set: %v", err)
@@ -383,7 +458,7 @@ func TestSearchToolEmptyQuery(t *testing.T) {
 }
 
 func TestSearchToolServerError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(
+	srv := httptest.NewTLSServer(http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		},
@@ -393,6 +468,7 @@ func TestSearchToolServerError(t *testing.T) {
 	toolSet, err := NewToolSet(
 		WithAPIKey("key-123"),
 		WithBaseURL(srv.URL),
+		WithHTTPClient(fakeTLSClient()),
 	)
 	if err != nil {
 		t.Fatalf("failed to create tool set: %v", err)
@@ -422,5 +498,79 @@ func TestSearchToolServerError(t *testing.T) {
 	}
 	if len(resp.Results) != 0 {
 		t.Errorf("expected 0 results, got %d", len(resp.Results))
+	}
+}
+
+func TestNewToolSetRejectsNonHTTPSBaseURL(t *testing.T) {
+	_, err := NewToolSet(
+		WithAPIKey("key-123"),
+		WithBaseURL("http://api.you.com/api/search"),
+	)
+	if err == nil {
+		t.Fatalf("expected error for http base URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "HTTPS") {
+		t.Errorf("expected HTTPS error, got %v", err)
+	}
+}
+
+func TestSearchToolStripsAPIKeyOnCrossOriginRedirect(t *testing.T) {
+	var gotKeys []string
+	final := httptest.NewTLSServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotKeys = append(gotKeys, r.Header.Get("X-API-Key"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":{"web":[],"news":[]}}`))
+		},
+	))
+	defer final.Close()
+
+	origin := httptest.NewTLSServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			// Cross-origin redirect: the API key must not follow.
+			http.Redirect(w, r, final.URL+"/v1/search", http.StatusFound)
+		},
+	))
+	defer origin.Close()
+
+	toolSet, err := NewToolSet(
+		WithAPIKey("secret-key"),
+		WithBaseURL(origin.URL),
+		WithHTTPClient(fakeTLSClient()),
+	)
+	if err != nil {
+		t.Fatalf("failed to create tool set: %v", err)
+	}
+
+	searchTool, ok := toolSet.tools[0].(interface {
+		Call(context.Context, []byte) (any, error)
+	})
+	if !ok {
+		t.Fatalf("tool does not implement Call")
+	}
+	reqJSON, err := json.Marshal(searchRequest{Query: "redirect test"})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if _, err := searchTool.Call(context.Background(), reqJSON); err != nil {
+		t.Fatalf("search call failed: %v", err)
+	}
+	if len(gotKeys) != 1 {
+		t.Fatalf("expected 1 request at final origin, got %d", len(gotKeys))
+	}
+	if gotKeys[0] != "" {
+		t.Errorf("expected X-API-Key stripped on cross-origin redirect, got %q", gotKeys[0])
+	}
+}
+
+func TestTrimSnippetsRuneBoundary(t *testing.T) {
+	// 501 bytes whose 500th byte falls inside a multi-byte rune.
+	cjk := strings.Repeat("界", 200) // 600 bytes of 3-byte runes
+	got := trimSnippets([]string{cjk})
+	if len(got) != 1 {
+		t.Fatalf("expected 1 snippet, got %d", len(got))
+	}
+	if !utf8.ValidString(got[0]) {
+		t.Errorf("truncated snippet is not valid UTF-8: %q", got[0])
 	}
 }
