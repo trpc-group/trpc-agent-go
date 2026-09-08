@@ -66,6 +66,14 @@ const (
 	cancelledSessionPersistenceTimeout = time.Second
 )
 
+// cancelledAgentStreamCloseTimeout bounds how long the event loop waits for the
+// agent event stream to close before emitting the completion event after an
+// early cancellation. Agents that do not close their stream within this window
+// get degraded completion callbacks: completion plugins are skipped instead of
+// receiving the live invocation while the agent goroutine may still mutate it.
+// It is a variable so tests can shrink it.
+var cancelledAgentStreamCloseTimeout = 5 * time.Second
+
 var (
 	// ErrRunNotFound indicates that the request ID is not active anymore.
 	ErrRunNotFound = errors.New("runner: request id not running")
@@ -710,11 +718,26 @@ func (r *runner) Run(
 	queuedUserMessages := steer.NewQueue()
 	steer.Attach(invocation, queuedUserMessages)
 
+	// Capture the agent name before agent.Run: agents mutate
+	// invocation.AgentName from their own goroutine (setupInvocation), so
+	// runner-owned paths that run concurrently with the agent must use this
+	// pre-run snapshot instead of reading the live invocation.
+	agentName := ag.Info().Name
+
+	// Capture a stable invocation view before agent.Run for completion plugin
+	// callbacks. When the agent ignores cancellation and its stream never
+	// closes, the degraded completion path hands plugins this snapshot instead
+	// of the live invocation, which the agent goroutine may still be mutating.
+	// The view preserves identity and carries the plugin manager captured
+	// before the agent starts.
+	completionInvocationView := invocation.View()
+	completionInvocationView.AgentName = agentName
+
 	registerCtx, registerSpan, registerStarted := startRunnerLatencySpan(
 		execCtx,
 		invocation,
 		runnerLatencySpanRegisterRun,
-		runnerInvocationAttrs(invocation)...,
+		runnerInvocationAttrs(invocation, agentName)...,
 	)
 	handle, err := r.registerRun(
 		ro.RequestID,
@@ -775,11 +798,16 @@ func (r *runner) Run(
 	barrier.Enable(invocation)
 
 	// Run the agent and get the event channel.
+	// Snapshot the invocation telemetry attributes before the agent starts:
+	// agents mutate the invocation from their own goroutine (for example
+	// setupInvocation writes AgentName), so the event loop goroutine must not
+	// read those fields after agent.Run.
+	invocationAttrs := runnerInvocationAttrs(invocation, agentName)
 	startCtx, startSpan, startStarted := startRunnerLatencySpan(
 		execCtx,
 		invocation,
 		runnerLatencySpanStartAgent,
-		runnerInvocationAttrs(invocation)...,
+		invocationAttrs...,
 	)
 	agentEventCh, err := agent.RunWithPlugins(startCtx, invocation, ag)
 	finishRunnerLatencySpan(startSpan, startStarted, err)
@@ -791,6 +819,18 @@ func (r *runner) Run(
 		invocation.CleanupNotice(execCtx)
 		return nil, err
 	}
+
+	// BeforeAgent ran synchronously inside RunWithPlugins and may have written
+	// invocation state (billing markers, audit flags, timing data, etc.).
+	// Refresh only the state snapshot so those writes are visible to completion
+	// plugin callbacks on the timeout-degraded path (completionPluginsDegraded).
+	//
+	// We deliberately do NOT re-snapshot bare fields (AgentName, Agent, …):
+	// the agent goroutine launched inside ag.Run may already be mutating them
+	// via setupInvocation, and those fields have no lock protection.
+	// AgentName is already correctly set to the pre-run value captured above.
+	completionInvocationView.RefreshViewState(invocation)
+
 	executionTraceInput = resolveExecutionTraceInvocationInputSnapshot(invocation, executionTraceInput)
 
 	// Process the agent events and emit them to the output channel.
@@ -803,6 +843,9 @@ func (r *runner) Run(
 		handle,
 		executionTraceInput,
 		globalAfterRun,
+		invocationAttrs,
+		completionInvocationView,
+		agentName,
 	), nil
 }
 
@@ -1324,22 +1367,40 @@ func (r *runner) getOrCreateSession(
 
 // eventLoopContext bundles all channels and state required by the event loop.
 type eventLoopContext struct {
-	sess                               *session.Session
-	invocation                         *agent.Invocation
-	agentEventCh                       <-chan *event.Event
-	flushChan                          chan *flush.FlushRequest
-	processedEventCh                   chan *event.Event
-	runHandle                          *runHandle
-	baselineFinalResponseID            string
-	priorAssistantResponseIDs          map[string]struct{}
-	finalStateDelta                    map[string][]byte
-	finalChoices                       []model.Choice
-	fallbackChoices                    []model.Choice
-	fallbackResponseID                 string
-	fallbackStateDelta                 map[string][]byte
-	finalError                         *model.ResponseError
-	executionTraceInput                *trace.Snapshot
-	globalAfterRun                     *globalAfterRunState
+	sess                      *session.Session
+	invocation                *agent.Invocation
+	agentEventCh              <-chan *event.Event
+	flushChan                 chan *flush.FlushRequest
+	processedEventCh          chan *event.Event
+	runHandle                 *runHandle
+	baselineFinalResponseID   string
+	priorAssistantResponseIDs map[string]struct{}
+	finalStateDelta           map[string][]byte
+	finalChoices              []model.Choice
+	fallbackChoices           []model.Choice
+	fallbackResponseID        string
+	fallbackStateDelta        map[string][]byte
+	finalError                *model.ResponseError
+	executionTraceInput       *trace.Snapshot
+	globalAfterRun            *globalAfterRunState
+	// invocationAttrs is a snapshot of the invocation telemetry attributes
+	// captured before the agent goroutine starts mutating the invocation.
+	invocationAttrs []attribute.KeyValue
+	// agentName is the agent name captured before agent.Run. The runner
+	// completion path uses it instead of reading invocation.AgentName, which
+	// the agent goroutine mutates asynchronously (setupInvocation), so that
+	// cancellation before the first agent event cannot race that write.
+	agentName string
+	// completionPluginsDegraded is set when the agent event stream did not
+	// close within the drain grace period. The completion path then hands
+	// plugin callbacks the pre-run invocation snapshot instead of the live
+	// invocation, which the agent goroutine may still be mutating.
+	completionPluginsDegraded bool
+	// completionInvocationView is a stable snapshot of the invocation
+	// captured before agent.Run. The degraded completion path passes it to
+	// plugin callbacks so the completion OnEvent and AfterRun hooks still
+	// run with safe, pre-run state.
+	completionInvocationView           *agent.Invocation
 	graphCompletionSeen                bool
 	freshAssistantContentProduced      bool
 	persistedAssistantResponseIDs      map[string]struct{}
@@ -1467,6 +1528,9 @@ func (r *runner) processAgentEvents(
 	handle *runHandle,
 	executionTraceInput *trace.Snapshot,
 	globalAfterRun *globalAfterRunState,
+	invocationAttrs []attribute.KeyValue,
+	completionInvocationView *agent.Invocation,
+	agentName string,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	loop := &eventLoopContext{
@@ -1478,6 +1542,9 @@ func (r *runner) processAgentEvents(
 		runHandle:                 handle,
 		executionTraceInput:       executionTraceInput,
 		globalAfterRun:            globalAfterRun,
+		invocationAttrs:           invocationAttrs,
+		agentName:                 agentName,
+		completionInvocationView:  completionInvocationView,
 		baselineFinalResponseID:   baselineFinalResponseID(sess, invocation.RunOptions.RuntimeState),
 		priorAssistantResponseIDs: collectPriorAssistantResponseIDs(sess),
 		streamFilter: graph.NewStreamModeFilter(
@@ -1496,7 +1563,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		ctx,
 		loop.invocation,
 		runnerLatencySpanEventLoop,
-		runnerInvocationAttrs(loop.invocation)...,
+		loop.invocationAttrs...,
 	)
 	defer func() {
 		if started {
@@ -1532,6 +1599,13 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 			log.Errorf(log.PanicPrefix+" panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
 		}
 		// Agent event stream completed.
+		//
+		// On cancellation before the first agent event the event loop has no
+		// channel happens-before edge with the agent goroutine. Drain the
+		// stream until it closes so completion callbacks cannot race the
+		// invocation writes the agent performs at setup (e.g.
+		// Invocation.AgentName in setupInvocation).
+		waitForAgentStreamClose(loop)
 		steer.Close(loop.invocation)
 		r.safePersistInterruptedAssistant(ctx, loop)
 		r.safeEmitRunnerCompletion(ctx, loop)
@@ -2664,6 +2738,36 @@ func sessionPersistenceContext(ctx context.Context) (context.Context, context.Ca
 	)
 }
 
+// waitForAgentStreamClose drains the agent event stream until it closes before
+// the completion path runs. When the event loop exits with the stream still
+// open there is no channel happens-before edge with the agent goroutine, so
+// completion callbacks must not receive the live invocation while the agent
+// goroutine may still be writing it (setupInvocation writes
+// Invocation.AgentName). Draining until close establishes that edge. The wait
+// is bounded: agents that ignore cancellation degrade the completion callbacks
+// to the pre-run invocation snapshot instead of hanging the runner or racing.
+func waitForAgentStreamClose(loop *eventLoopContext) {
+	timer := time.NewTimer(cancelledAgentStreamCloseTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case _, ok := <-loop.agentEventCh:
+			if !ok {
+				// The stream is closed, so the agent goroutine finished and
+				// completion callbacks may safely read the invocation.
+				return
+			}
+		case <-timer.C:
+			// The agent ignored cancellation and did not close its stream
+			// within the grace period. Mark the completion as degraded so
+			// plugin callbacks receive the pre-run invocation snapshot
+			// instead of racing the agent's setup writes.
+			loop.completionPluginsDegraded = true
+			return
+		}
+	}
+}
+
 // safeEmitRunnerCompletion guards emitRunnerCompletion against panics from session services.
 func (r *runner) safeEmitRunnerCompletion(ctx context.Context, loop *eventLoopContext) {
 	ctx, span, started := startRunnerLatencySpan(
@@ -3119,9 +3223,18 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	}
 
 	agent.InjectIntoEvent(loop.invocation, runnerCompletionEvent)
+	// When the agent ignored cancellation and its stream never closed, hand
+	// plugin callbacks the pre-run invocation snapshot instead of the live
+	// invocation, which the agent goroutine may still be mutating. The
+	// snapshot carries the plugin manager and a stable AgentName, so the
+	// completion OnEvent and AfterRun hooks keep their public contract.
+	pluginInvocation := loop.invocation
+	if loop.completionPluginsDegraded {
+		pluginInvocation = loop.completionInvocationView
+	}
 	runnerCompletionEvent = r.applyEventPlugins(
 		ctx,
-		loop.invocation,
+		pluginInvocation,
 		runnerCompletionEvent,
 	)
 
@@ -3159,9 +3272,10 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		)
 	}
 	executionTraceStatus := resolveExecutionTraceStatus(loop, ctx.Err())
-	runnerCompletionEvent.ExecutionTrace = agent.BuildExecutionTrace(
+	runnerCompletionEvent.ExecutionTrace = agent.BuildExecutionTraceWithAgentName(
 		loop.invocation,
 		executionTraceStatus,
+		loop.agentName,
 	)
 	if runnerCompletionEvent.ExecutionTrace != nil {
 		traceSnapshotOnly := graph.CompletionSnapshotOnlyFromStateDelta(
@@ -3179,11 +3293,11 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			traceSnapshotOnly,
 		)
 	}
-	r.applyAfterRunPlugins(ctx, loop.invocation, runnerCompletionEvent)
+	r.applyAfterRunPlugins(ctx, pluginInvocation, runnerCompletionEvent)
 	applyGlobalAfterRunHooks(
 		ctx,
 		loop.globalAfterRun,
-		loop.invocation,
+		pluginInvocation,
 		runnerCompletionEvent,
 	)
 
@@ -3226,8 +3340,8 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			time.Second,
 		)
 		defer emitCancel()
-		if err := agent.EmitEvent(
-			emitCtx, loop.invocation, loop.processedEventCh, runnerCompletionEvent,
+		if err := agent.EmitEventWithAgentName(
+			emitCtx, loop.invocation, loop.processedEventCh, runnerCompletionEvent, loop.agentName,
 		); err != nil {
 			log.Errorf("Failed to emit runner completion event: %v", err)
 		}
@@ -3240,7 +3354,7 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	r.enqueueEvolutionLearningJob(ctx, loop.sess)
 
 	// Enqueue external session ingestion if configured.
-	r.enqueueSessionIngest(ctx, loop.sess, loop.invocation)
+	r.enqueueSessionIngest(ctx, loop.sess, loop.agentName)
 }
 
 func graphCompletionSessionStateDelta(stateDelta map[string][]byte) map[string][]byte {
@@ -3826,7 +3940,14 @@ func baselineFinalResponseID(sess *session.Session, runtimeState map[string]any)
 }
 
 func collectPriorAssistantResponseIDs(sess *session.Session) map[string]struct{} {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return nil
+	}
+	// The agent goroutine appends to sess.Events concurrently during a run,
+	// so reads must hold EventMu like every other Events access.
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	if len(sess.Events) == 0 {
 		return nil
 	}
 	var responseIDs map[string]struct{}
@@ -3863,7 +3984,12 @@ func collectPriorAssistantResponseIDsForLineage(
 	sess *session.Session,
 	lineageKey string,
 ) map[string]struct{} {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return nil
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	if len(sess.Events) == 0 {
 		return nil
 	}
 	var responseIDs map[string]struct{}
@@ -3899,7 +4025,12 @@ func collectPriorAssistantResponseIDsForLineage(
 }
 
 func collectPriorAssistantChoiceSignatures(sess *session.Session) map[string]struct{} {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return nil
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	if len(sess.Events) == 0 {
 		return nil
 	}
 	var signatures map[string]struct{}
@@ -3932,7 +4063,12 @@ func collectPriorAssistantChoiceSignaturesForLineage(
 	sess *session.Session,
 	lineageKey string,
 ) map[string]struct{} {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return nil
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	if len(sess.Events) == 0 {
 		return nil
 	}
 	var signatures map[string]struct{}
@@ -4455,12 +4591,12 @@ func (r *runner) enqueueEvolutionLearningJob(ctx context.Context, sess *session.
 func (r *runner) enqueueSessionIngest(
 	ctx context.Context,
 	sess *session.Session,
-	inv *agent.Invocation,
+	agentName string,
 ) {
 	if r.ingestor == nil || sess == nil {
 		return
 	}
-	opts := r.defaultIngestOptions(sess, inv)
+	opts := r.defaultIngestOptions(sess, agentName)
 	if err := r.ingestor.IngestSession(ctx, sess, opts...); err != nil {
 		log.DebugfContext(ctx, "Session ingest skipped or failed: %v", err)
 	}
@@ -4471,17 +4607,17 @@ func (r *runner) enqueueSessionIngest(
 // session ID through as run_id and the active invocation's agent name through
 // as agent_id, giving downstream backends (e.g. mem0) natural grouping keys
 // without requiring callers to construct options manually.
+//
+// agentName must be the pre-run snapshot captured before agent.Run; reading
+// invocation.AgentName here would race the agent goroutine's asynchronous
+// invocation setup when the run is cancelled before the first agent event.
 func (r *runner) defaultIngestOptions(
 	sess *session.Session,
-	inv *agent.Invocation,
+	agentName string,
 ) []session.IngestOption {
 	var opts []session.IngestOption
 	if sess != nil && sess.ID != "" {
 		opts = append(opts, session.WithIngestRunID(sess.ID))
-	}
-	agentName := ""
-	if inv != nil {
-		agentName = inv.AgentName
 	}
 	if agentName == "" {
 		agentName = r.defaultAgentName

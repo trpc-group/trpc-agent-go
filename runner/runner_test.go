@@ -4888,7 +4888,7 @@ func (s *panicAppendSessionService) AppendEvent(ctx context.Context, sess *sessi
 type appendErrorSessionService struct{ *mockSessionService }
 
 func (s *appendErrorSessionService) AppendEvent(ctx context.Context, sess *session.Session, e *event.Event, _ ...session.Option) error {
-	s.mockSessionService.appendEventCalls = append(s.mockSessionService.appendEventCalls, appendEventCall{sess, e, nil})
+	s.mockSessionService.AppendEvent(ctx, sess, e)
 	return errors.New("append error")
 }
 
@@ -5310,10 +5310,10 @@ func TestRunnerLatencyDiagnosticHelpers(t *testing.T) {
 	require.True(t, runnerHasAttr(runAttrs, "runner.message.has_payload", true))
 	require.True(t, runnerHasAttr(runAttrs, "runner.options.seed_messages", 1))
 
-	invAttrs := runnerInvocationAttrs(inv)
+	invAttrs := runnerInvocationAttrs(inv, "a")
 	require.True(t, runnerHasAttr(invAttrs, "runner.agent", "a"))
 	require.True(t, runnerHasAttr(invAttrs, "runner.request_id", "req-latency"))
-	require.Nil(t, runnerInvocationAttrs(nil))
+	require.Nil(t, runnerInvocationAttrs(nil, ""))
 
 	sess := session.NewSession("app", "user", "sess")
 	sess.SetState("state-key", []byte("value"))
@@ -5441,7 +5441,7 @@ func TestHandleEventPersistence_AppendErrorSkipsSummarize(t *testing.T) {
 	for range ch {
 	}
 	// Append failed -> EnqueueSummaryJob should not be called.
-	require.Len(t, base.enqueueSummaryJobCalls, 0)
+	require.Len(t, base.enqueueSummaryJobCallsSnapshot(), 0)
 }
 
 func TestEmitRunnerCompletion_AppendErrorStillEmits(t *testing.T) {
@@ -8132,9 +8132,9 @@ func TestRunner_RoutedSessionPersistsInterruptedPartialAssistant(t *testing.T) {
 		getInterruptedAssistantAccumulator(loop, routedSess),
 	))
 	rr.persistInterruptedAssistant(cancelled, loop)
-	require.Len(t, svc.appendEventCalls, 1)
-	require.Same(t, routedSess, svc.appendEventCalls[0].sess)
-	require.Equal(t, "member text", svc.appendEventCalls[0].event.Choices[0].Message.Content)
+	require.Len(t, svc.appendEventCallsSnapshot(), 1)
+	require.Same(t, routedSess, svc.appendEventCallsSnapshot()[0].sess)
+	require.Equal(t, "member text", svc.appendEventCallsSnapshot()[0].event.Choices[0].Message.Content)
 }
 
 func TestRunner_InterruptedAssistantPreservesSourceEventIdentity(t *testing.T) {
@@ -8677,9 +8677,9 @@ func TestInterruptedAssistantDeltaSeparatesSameResponseIDByLineage(t *testing.T)
 	cancel()
 	rr.persistInterruptedAssistant(cancelled, loop)
 
-	require.Len(t, svc.appendEventCalls, 2)
+	require.Len(t, svc.appendEventCallsSnapshot(), 2)
 	persisted := map[string]string{}
-	for _, call := range svc.appendEventCalls {
+	for _, call := range svc.appendEventCallsSnapshot() {
 		require.Equal(t, "shared-response", call.event.Response.ID)
 		require.Equal(t, "shared-invocation", call.event.InvocationID)
 		persisted[call.event.Branch] = call.event.Choices[0].Message.Content
@@ -8742,9 +8742,9 @@ func TestPersistInterruptedAssistantPersistsInterleavedBuffers(t *testing.T) {
 	cancel()
 	rr.persistInterruptedAssistant(cancelled, loop)
 
-	require.Len(t, svc.appendEventCalls, 2)
+	require.Len(t, svc.appendEventCallsSnapshot(), 2)
 	persisted := map[string]string{}
-	for _, call := range svc.appendEventCalls {
+	for _, call := range svc.appendEventCallsSnapshot() {
 		require.Same(t, sess, call.sess)
 		require.Len(t, call.event.Choices, 1)
 		persisted[call.event.Response.ID] = call.event.Choices[0].Message.Content
@@ -8807,11 +8807,11 @@ func TestPersistInterruptedAssistantPreservesFirstSeenOrder(t *testing.T) {
 	cancel()
 	rr.persistInterruptedAssistant(cancelled, loop)
 
-	require.Len(t, svc.appendEventCalls, 2)
-	require.Equal(t, "z-response", svc.appendEventCalls[0].event.Response.ID)
-	require.Equal(t, "first", svc.appendEventCalls[0].event.Choices[0].Message.Content)
-	require.Equal(t, "a-response", svc.appendEventCalls[1].event.Response.ID)
-	require.Equal(t, "second", svc.appendEventCalls[1].event.Choices[0].Message.Content)
+	require.Len(t, svc.appendEventCallsSnapshot(), 2)
+	require.Equal(t, "z-response", svc.appendEventCallsSnapshot()[0].event.Response.ID)
+	require.Equal(t, "first", svc.appendEventCallsSnapshot()[0].event.Choices[0].Message.Content)
+	require.Equal(t, "a-response", svc.appendEventCallsSnapshot()[1].event.Response.ID)
+	require.Equal(t, "second", svc.appendEventCallsSnapshot()[1].event.Choices[0].Message.Content)
 }
 
 func TestPersistInterruptedAssistantDedupeAfterEventPlugin(t *testing.T) {
@@ -8867,14 +8867,14 @@ func TestPersistInterruptedAssistantDedupeAfterEventPlugin(t *testing.T) {
 	)
 	final.RequestID = requestID
 	require.NoError(t, rr.processSingleAgentEvent(context.Background(), loop, final))
-	require.Len(t, svc.appendEventCalls, 1)
-	require.Equal(t, "hello!", svc.appendEventCalls[0].event.Choices[0].Message.Content)
+	require.Len(t, svc.appendEventCallsSnapshot(), 1)
+	require.Equal(t, "hello!", svc.appendEventCallsSnapshot()[0].event.Choices[0].Message.Content)
 
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	rr.persistInterruptedAssistant(cancelled, loop)
 
-	require.Len(t, svc.appendEventCalls, 1)
+	require.Len(t, svc.appendEventCallsSnapshot(), 1)
 }
 
 func TestPersistInterruptedAssistantEnqueuesSummary(t *testing.T) {
@@ -8913,11 +8913,11 @@ func TestPersistInterruptedAssistantEnqueuesSummary(t *testing.T) {
 	cancel()
 	rr.persistInterruptedAssistant(cancelled, loop)
 
-	require.Len(t, svc.appendEventCalls, 1)
-	require.Len(t, svc.enqueueSummaryJobCalls, 1)
-	require.Same(t, sess, svc.enqueueSummaryJobCalls[0].sess)
-	require.Equal(t, "summary/filter", svc.enqueueSummaryJobCalls[0].filterKey)
-	require.False(t, svc.enqueueSummaryJobCalls[0].force)
+	require.Len(t, svc.appendEventCallsSnapshot(), 1)
+	require.Len(t, svc.enqueueSummaryJobCallsSnapshot(), 1)
+	require.Same(t, sess, svc.enqueueSummaryJobCallsSnapshot()[0].sess)
+	require.Equal(t, "summary/filter", svc.enqueueSummaryJobCallsSnapshot()[0].filterKey)
+	require.False(t, svc.enqueueSummaryJobCallsSnapshot()[0].force)
 }
 
 func TestInterruptedAssistantDeltaGeneratesFallbackResponseID(t *testing.T) {
@@ -9418,7 +9418,7 @@ func TestPersistInterruptedAssistantSkipTargetsAndTieBreaker(t *testing.T) {
 			"no-session": {sequence: 1, choiceContent: builderMap("no session")},
 		},
 	})
-	require.Empty(t, emptySvc.appendEventCalls)
+	require.Empty(t, emptySvc.appendEventCallsSnapshot())
 
 	svc := &mockSessionService{}
 	rr = &runner{sessionService: svc}
@@ -9431,10 +9431,10 @@ func TestPersistInterruptedAssistantSkipTargetsAndTieBreaker(t *testing.T) {
 			"a": {sequence: 1, choiceContent: builderMap("first")},
 		},
 	})
-	require.Len(t, svc.appendEventCalls, 2)
-	require.Same(t, sess, svc.appendEventCalls[0].sess)
-	require.Equal(t, "first", svc.appendEventCalls[0].event.Choices[0].Message.Content)
-	require.Equal(t, "second", svc.appendEventCalls[1].event.Choices[0].Message.Content)
+	require.Len(t, svc.appendEventCallsSnapshot(), 2)
+	require.Same(t, sess, svc.appendEventCallsSnapshot()[0].sess)
+	require.Equal(t, "first", svc.appendEventCallsSnapshot()[0].event.Choices[0].Message.Content)
+	require.Equal(t, "second", svc.appendEventCallsSnapshot()[1].event.Choices[0].Message.Content)
 }
 
 func TestCollectPriorAssistantChoiceSignaturesSkipsAndCollects(t *testing.T) {
@@ -9683,7 +9683,7 @@ func TestPersistInterruptedAssistantGuardBranches(t *testing.T) {
 		},
 	), nil)
 	appendErrRunner.persistInterruptedAssistant(cancelled, loop)
-	require.Len(t, base.appendEventCalls, 1)
+	require.Len(t, base.appendEventCallsSnapshot(), 1)
 }
 
 func TestContextDoneReason(t *testing.T) {
@@ -9788,16 +9788,7 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 
 	agentCh := make(chan *event.Event)
 	flushCh := make(chan *flush.FlushRequest)
-	processed := rr.processAgentEvents(
-		ctx,
-		sess,
-		inv,
-		agentCh,
-		flushCh,
-		nil,
-		nil,
-		nil,
-	)
+	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil, nil, nil, runnerInvocationAttrs(inv, "a"), inv.View(), "a")
 	// Send one event, then close agentCh
 	go func() {
 		agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("x")}}}}

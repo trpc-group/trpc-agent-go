@@ -1,0 +1,268 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package runner
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+// cancellationIgnoringAgent ignores cancellation: its event stream is never
+// closed, and it writes Invocation.AgentName late, mimicking setupInvocation of
+// a misbehaving agent. It exercises the drain timeout path of the completion
+// cleanup.
+type cancellationIgnoringAgent struct {
+	name string
+}
+
+func (a *cancellationIgnoringAgent) Info() agent.Info { return agent.Info{Name: a.name} }
+func (a *cancellationIgnoringAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (a *cancellationIgnoringAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+func (a *cancellationIgnoringAgent) Tools() []tool.Tool { return nil }
+func (a *cancellationIgnoringAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	// Capture the delay before spawning the goroutine: the test restores the
+	// timeout variable when it finishes, which would race a read inside the
+	// goroutine.
+	delay := cancelledAgentStreamCloseTimeout / 2
+	go func() {
+		// Write the agent name after the runner starts draining, without any
+		// synchronization, so a completion callback reading the live
+		// invocation would race this write under -race.
+		time.Sleep(delay)
+		inv.AgentName = "late-agent"
+	}()
+	return ch, nil
+}
+
+// afterRunCountingPlugin registers only an AfterRun hook and records each
+// invocation so tests can assert the completion plugin lifecycle still runs
+// on the degraded timeout path.
+type afterRunCountingPlugin struct {
+	mu      sync.Mutex
+	calls   int
+	invName string
+}
+
+func (p *afterRunCountingPlugin) Name() string { return "after-run-counter" }
+
+func (p *afterRunCountingPlugin) Register(r *plugin.Registry) {
+	r.AfterRun(func(ctx context.Context, args *plugin.AfterRunArgs) error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.calls++
+		if args.Invocation != nil {
+			p.invName = args.Invocation.AgentName
+		}
+		return nil
+	})
+}
+
+func (p *afterRunCountingPlugin) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+func (p *afterRunCountingPlugin) invocationAgentName() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.invName
+}
+
+// TestRunnerCompletionCancelledBeforeFirstEventNoRace guards against a data
+// race between the agent goroutine's asynchronous invocation setup (which
+// writes Invocation.AgentName via setupInvocation) and the runner completion
+// cleanup. When the context is cancelled before the first agent event arrives,
+// runEventLoop returns via ctx.Done() with no channel happens-before edge
+// against the agent goroutine, so the cleanup must not read the live
+// invocation. Run with -race; the previous implementation raced inside
+// agent.EmitEvent's read of inv.AgentName, and a second window remained
+// reachable through plugin callbacks (the built-in debug-log event hook reads
+// Invocation.AgentName when an event is emitted).
+func TestRunnerCompletionCancelledBeforeFirstEventNoRace(t *testing.T) {
+	runCancelled := func(t *testing.T, opts ...Option) {
+		t.Helper()
+		ag := chainagent.New("chain")
+		successful := 0
+		for i := 0; i < 100; i++ {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			r := NewRunner("app", ag, opts...)
+			ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("hi"))
+			if err != nil {
+				continue
+			}
+			successful++
+			for range ch {
+			}
+		}
+		// Require at least one run to reach the event loop so the completion
+		// cleanup path is actually exercised.
+		require.NotZero(t, successful)
+	}
+
+	t.Run("default plugins", func(t *testing.T) {
+		runCancelled(t)
+	})
+	t.Run("debuglog event hook", func(t *testing.T) {
+		// The built-in debug-log event hook reads Invocation.AgentName when
+		// an event is emitted, exercising the plugin-interface path of the
+		// pre-first-event cancellation race.
+		runCancelled(t, WithPlugins(debuglog.New(debuglog.WithEventEnabled(true))))
+	})
+	t.Run("agent ignores cancellation", func(t *testing.T) {
+		// Shrink the drain grace period so the timeout path is exercised.
+		oldTimeout := cancelledAgentStreamCloseTimeout
+		cancelledAgentStreamCloseTimeout = 50 * time.Millisecond
+		defer func() { cancelledAgentStreamCloseTimeout = oldTimeout }()
+
+		ag := &cancellationIgnoringAgent{name: "ignore-cancel"}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		r := NewRunner("app", ag, WithPlugins(debuglog.New(debuglog.WithEventEnabled(true))))
+		ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("hi"))
+		require.NoError(t, err)
+		events := 0
+		for range ch {
+			events++
+		}
+		require.NotZero(t, events, "runner completion must still be emitted when the agent never closes its stream")
+	})
+}
+
+// TestRunnerCompletionTimeoutPathRunsAfterRunPlugins guards the completion
+// plugin lifecycle on the drain-timeout path: when an agent ignores
+// cancellation and never closes its stream, completion callbacks must still
+// run with the pre-run invocation snapshot instead of being silently skipped.
+func TestRunnerCompletionTimeoutPathRunsAfterRunPlugins(t *testing.T) {
+	oldTimeout := cancelledAgentStreamCloseTimeout
+	cancelledAgentStreamCloseTimeout = 50 * time.Millisecond
+	defer func() { cancelledAgentStreamCloseTimeout = oldTimeout }()
+
+	counter := &afterRunCountingPlugin{}
+	ag := &cancellationIgnoringAgent{name: "ignore-cancel"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := NewRunner("app", ag, WithPlugins(counter))
+	ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("hi"))
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Equal(t, 1, counter.callCount(),
+		"AfterRun hook must run on the timeout path")
+	require.Equal(t, "ignore-cancel", counter.invocationAgentName(),
+		"AfterRun hook must receive the stable pre-run agent name")
+}
+
+// stateWritingPlugin writes a marker into the invocation state during
+// BeforeAgent so the AfterRun hook can assert the state is visible on the
+// timeout-degraded completion path.
+type stateWritingPlugin struct {
+	stateKey   string
+	stateValue string
+
+	mu            sync.Mutex
+	afterRunSaw   string // value observed in AfterRun
+	afterRunCalls int
+}
+
+func (p *stateWritingPlugin) Name() string { return "state-writer" }
+
+func (p *stateWritingPlugin) Register(r *plugin.Registry) {
+	key := p.stateKey
+	value := p.stateValue
+
+	r.BeforeAgent(func(_ context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		if args.Invocation != nil {
+			args.Invocation.SetState(key, value)
+		}
+		return nil, nil
+	})
+
+	r.AfterRun(func(_ context.Context, args *plugin.AfterRunArgs) error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.afterRunCalls++
+		if args.Invocation != nil {
+			if v, ok := args.Invocation.GetState(key); ok {
+				if s, ok2 := v.(string); ok2 {
+					p.afterRunSaw = s
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func (p *stateWritingPlugin) observedValue() (string, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.afterRunSaw, p.afterRunCalls
+}
+
+// TestRunnerTimeoutPathAfterRunSeesBeforeAgentState is the P2 regression test.
+//
+// It guards against the completion-plugin snapshot being captured before
+// RunWithPlugins executes BeforeAgent: on the timeout-degraded path the
+// snapshot passed to AfterRun must reflect state written by BeforeAgent hooks
+// (billing markers, audit flags, etc.) so plugins see a consistent view of
+// the run.
+//
+// The test registers a plugin that writes an invocation state key in
+// BeforeAgent and then reads it back in AfterRun on the timeout path.
+func TestRunnerTimeoutPathAfterRunSeesBeforeAgentState(t *testing.T) {
+	oldTimeout := cancelledAgentStreamCloseTimeout
+	cancelledAgentStreamCloseTimeout = 50 * time.Millisecond
+	defer func() { cancelledAgentStreamCloseTimeout = oldTimeout }()
+
+	const (
+		stateKey   = "billing_marker"
+		stateValue = "charged"
+	)
+
+	plug := &stateWritingPlugin{stateKey: stateKey, stateValue: stateValue}
+	ag := &cancellationIgnoringAgent{name: "ignore-cancel"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	r := NewRunner("app", ag, WithPlugins(plug))
+	ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("hi"))
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	got, calls := plug.observedValue()
+	require.Equal(t, 1, calls,
+		"AfterRun hook must be called exactly once on the timeout path")
+	require.Equal(t, stateValue, got,
+		"AfterRun hook must see the invocation state written by BeforeAgent "+
+			"(got %q, want %q); snapshot was likely captured before BeforeAgent ran",
+		got, stateValue,
+	)
+}
