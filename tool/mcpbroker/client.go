@@ -11,6 +11,7 @@ package mcpbroker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -166,6 +167,65 @@ func canonicalizeHeaders(headers map[string]string) map[string]string {
 	return result
 }
 
+// resolveOperationError lets the host intercept the underlying error, then
+// hides endpoint details for custom-scheme named servers by default.
+func (b *Broker) resolveOperationError(
+	ctx context.Context,
+	target resolvedTarget,
+	meta operationMetadata,
+	err error,
+) error {
+	if err == nil {
+		return nil
+	}
+	handled, resolved := interceptHTTPOperationError(ctx, b, target, meta, err)
+	if handled {
+		return resolved
+	}
+	if isNamedCustomSchemeTarget(target) && !isModelRequestError(err) {
+		return namedServerOperationError(target.Name)
+	}
+	return resolved
+}
+
+// modelRequestError marks a safe error about the model's own request so it
+// remains available for self-correction after endpoint redaction.
+type modelRequestError struct {
+	err error
+}
+
+func (e *modelRequestError) Error() string { return e.err.Error() }
+
+func (e *modelRequestError) Unwrap() error { return e.err }
+
+// newModelRequestError marks err as describing the model's request.
+func newModelRequestError(err error) error {
+	return &modelRequestError{err: err}
+}
+
+// isModelRequestError reports whether err was raised about the model's request.
+func isModelRequestError(err error) bool {
+	var marker *modelRequestError
+	return errors.As(err, &marker)
+}
+
+// isNamedCustomSchemeTarget reports whether target is a code-configured HTTP
+// server whose endpoint uses a scheme only a host-supplied handler can resolve.
+func isNamedCustomSchemeTarget(target resolvedTarget) bool {
+	return target.Origin == OriginCode &&
+		target.TargetType == targetTypeHTTP &&
+		hasCustomEndpointScheme(target.Config.ServerURL)
+}
+
+// namedServerOperationError returns an endpoint-neutral error with no cause.
+func namedServerOperationError(serverName string) error {
+	serverName = strings.TrimSpace(serverName)
+	if serverName == "" {
+		return errors.New("MCP server request failed; failure details are withheld")
+	}
+	return fmt.Errorf("MCP server %q request failed; failure details are withheld", serverName)
+}
+
 func interceptHTTPOperationError(
 	ctx context.Context,
 	b *Broker,
@@ -317,9 +377,7 @@ func createClient(
 		opts = append(opts, extraHTTP...)
 		return tmcp.NewSSEClient(cfg.ServerURL, clientInfo, opts...)
 	case transportStreamable:
-		opts := httpHeaderOptions(cfg.Headers)
-		opts = append(opts, extraHTTP...)
-		return tmcp.NewClient(cfg.ServerURL, clientInfo, opts...)
+		return tmcp.NewClient(cfg.ServerURL, clientInfo, streamableClientOptions(cfg, extraHTTP)...)
 	default:
 		return nil, fmt.Errorf("unsupported transport: %s", cfg.Transport)
 	}
@@ -339,6 +397,20 @@ func httpHeaderOptions(headers map[string]string) []tmcp.ClientOption {
 		httpHeaders.Set(http.CanonicalHeaderKey(trimmed), value)
 	}
 	return []tmcp.ClientOption{tmcp.WithHTTPHeaders(httpHeaders)}
+}
+
+// streamableClientOptions builds the option list for a streamable client.
+//
+// Broker operations use single-use clients and do not consume server-initiated
+// messages, so the background GET stream is disabled by default. Host options
+// are applied last and can opt back in.
+func streamableClientOptions(
+	cfg mcpcfg.ConnectionConfig,
+	extraHTTP []tmcp.ClientOption,
+) []tmcp.ClientOption {
+	opts := httpHeaderOptions(cfg.Headers)
+	opts = append(opts, tmcp.WithClientGetSSEEnabled(false))
+	return append(opts, extraHTTP...)
 }
 
 func withTimeoutContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

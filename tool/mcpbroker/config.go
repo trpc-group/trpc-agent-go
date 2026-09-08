@@ -123,6 +123,21 @@ func validateHTTPServerURL(serverURL string, adHoc bool) error {
 	return nil
 }
 
+// hasCustomEndpointScheme reports whether serverURL uses a scheme other than
+// http or https, which only named servers may do. An endpoint that fails to
+// parse is reported as custom: normalization already rejects such URLs, so the
+// remaining callers prefer withholding an endpoint over disclosing one.
+func hasCustomEndpointScheme(serverURL string) bool {
+	parsedURL, err := url.Parse(strings.TrimSpace(serverURL))
+	if err != nil {
+		return true
+	}
+	scheme := parsedURL.Scheme
+	return scheme != "" &&
+		!strings.EqualFold(scheme, "http") &&
+		!strings.EqualFold(scheme, "https")
+}
+
 func normalizeTransport(raw string, hasCommand, hasURL, adHoc bool) (string, transportKind, error) {
 	value := strings.ToLower(strings.TrimSpace(raw))
 	if value == "" {

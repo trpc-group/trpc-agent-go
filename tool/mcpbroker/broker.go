@@ -30,6 +30,11 @@
 //     downstream prompts and tool chains.
 //   - Use WithErrorInterceptor to redact internal-topology details from MCP
 //     server errors that would otherwise reach the model.
+//
+// Errors from custom-scheme named servers are endpoint-neutral by default.
+// WithErrorInterceptor still receives the underlying error first and can
+// classify or replace it. Errors about the model's own request, such as an
+// unknown tool or missing arguments, remain available for self-correction.
 package mcpbroker
 
 import (
@@ -162,10 +167,11 @@ type ClientOptionsRequest struct {
 // ClientOptions carries optional HTTP and stdio client options. HTTP applies to SSE and streamable
 // transports; Stdio applies to stdio transports.
 //
-// Default broker headers are applied first; options here follow and may override or extend
-// behavior intentionally (see trpc-mcp-go ClientOption / StdioClientOption). For example, a host
-// can use tmcp.WithHTTPBeforeRequest to rewrite an Authorization header set earlier by
-// WithHTTPHeaderInjector. nil entries in HTTP / Stdio are filtered out before being applied.
+// Broker defaults are applied first; options here follow and may override or extend behavior
+// intentionally (see trpc-mcp-go ClientOption / StdioClientOption). For example, a host can use
+// tmcp.WithHTTPBeforeRequest to rewrite an Authorization header set earlier by
+// WithHTTPHeaderInjector. Streamable clients disable the background GET stream by default;
+// tmcp.WithClientGetSSEEnabled(true) opts back in. nil entries are filtered out.
 type ClientOptions struct {
 	HTTP  []tmcp.ClientOption
 	Stdio []tmcp.StdioClientOption
@@ -203,9 +209,14 @@ type HeaderInjectRequest struct {
 }
 
 // ErrorInterceptor lets business code classify and transform MCP HTTP errors.
+//
+// The interceptor runs before broker-side redaction. A handled decision
+// replaces the broker's endpoint-neutral error, so the host owns the disclosure
+// policy for the replacement.
 type ErrorInterceptor func(context.Context, *BrokerErrorRequest) (*BrokerErrorDecision, error)
 
-// BrokerErrorRequest describes an MCP HTTP operation error.
+// BrokerErrorRequest describes an MCP HTTP operation error. Err and BaseURL
+// contain the underlying details before broker-side redaction.
 type BrokerErrorRequest struct {
 	Selector  string
 	BaseURL   string
@@ -248,9 +259,11 @@ func New(opts ...Option) *Broker {
 // scheme and host. Custom schemes are allowed so a host-supplied
 // tmcp.HTTPReqHandler can resolve them; the broker does not check that such a
 // handler is installed, so an unresolvable scheme fails when the server is
-// first used rather than at configuration time, and the resulting error - which
-// the broker forwards to the model - contains the endpoint URL. Use
-// WithErrorInterceptor to redact internal endpoints.
+// first used rather than at configuration time.
+//
+// Errors from custom-scheme named servers are endpoint-neutral by default;
+// errors about the model's own request remain unchanged. WithErrorInterceptor
+// observes the underlying error first.
 //
 // Model-controlled ad-hoc URL selectors remain restricted to http and https;
 // see WithAllowAdHocHTTP.
@@ -408,7 +421,8 @@ func WithClientOptionsProvider(fn ClientOptionsProvider) Option {
 	}
 }
 
-// WithErrorInterceptor intercepts HTTP MCP execution errors and may translate them for model consumption.
+// WithErrorInterceptor intercepts HTTP MCP execution errors before broker-side redaction and
+// may translate them for model consumption.
 func WithErrorInterceptor(fn ErrorInterceptor) Option {
 	return func(opts *brokerOptions) {
 		opts.errorInterceptor = fn

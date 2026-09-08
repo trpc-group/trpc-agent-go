@@ -1338,13 +1338,23 @@ agent := llmagent.New(
 ```
 
 Named HTTP servers configured through `WithServers` may use a structurally
-valid absolute URL with a custom scheme, as long as the host installs a
-compatible `HTTPReqHandler` (for example through
-`WithClientOptionsProvider` and `tmcp.WithHTTPReqHandler`). The broker does
-not check that such a handler exists: without one, the server fails on
-first use instead of at configuration time, and the error the model sees
-contains the endpoint URL, so use `WithErrorInterceptor` to redact internal
-endpoints. Ad-hoc URL selectors remain HTTP/HTTPS only.
+valid absolute URL with a custom scheme when the host runtime provides a
+compatible `HTTPReqHandler`. The broker does not check for that handler at
+configuration time. Ad-hoc URL selectors remain HTTP/HTTPS only.
+
+For custom-scheme named servers, unhandled operation errors are replaced with
+an endpoint-neutral message. Errors about the model's request, such as an
+unknown tool or missing arguments, remain actionable. `WithErrorInterceptor`
+receives the underlying error and endpoint first, so hosts can still log,
+classify, or replace the error.
+
+#### One-Shot Clients and Server-Initiated Messages
+
+Every broker operation uses a single-use MCP client and does not consume
+server-initiated messages. Streamable HTTP clients therefore disable the
+background `GET` stream by default. Host options are applied afterward, so a
+host that needs the stream can opt back in with
+`tmcp.WithClientGetSSEEnabled(true)`.
 
 #### Server Description
 

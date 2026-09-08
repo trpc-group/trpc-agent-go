@@ -1286,12 +1286,19 @@ agent := llmagent.New(
 ```
 
 通过 `WithServers` 配置的 named HTTP server 可以使用带自定义 scheme 的、
-结构合法的绝对 URL，前提是宿主安装了兼容的 `HTTPReqHandler`（例如通过
-`WithClientOptionsProvider` 与 `tmcp.WithHTTPReqHandler`）。broker 不会检查
-这样的 handler 是否存在：缺少 handler 时，该 server 会在首次使用时失败而不是
-在配置阶段失败，并且模型看到的错误里会带上 endpoint URL，因此需要用
-`WithErrorInterceptor` 对内部 endpoint 做脱敏。ad-hoc URL selector 仍然只允许
-HTTP/HTTPS。
+结构合法的绝对 URL，前提是宿主运行时提供兼容的 `HTTPReqHandler`。broker 不会
+在配置阶段检查该 handler 是否存在。运行时直接传入的 URL 仍然只允许 HTTP/HTTPS。
+
+对于自定义 scheme 的命名 server，未被 interceptor 处理的操作错误会替换成不含
+endpoint 的固定错误。工具不存在、缺少必填参数等模型请求错误仍会照常返回，便于
+模型自纠。`WithErrorInterceptor` 会先收到原始错误和 endpoint，宿主仍可记录、
+分类或替换错误。
+
+#### 一次性客户端与服务端主动消息
+
+每次 broker 操作都会使用一个一次性 MCP client，且不会消费服务端主动消息，因此
+streamable HTTP client 默认关闭后台 `GET` 流。宿主 option 会在 broker 默认值之后
+应用；确实需要该流时，可以通过 `tmcp.WithClientGetSSEEnabled(true)` 重新开启。
 
 #### Server Description（服务描述）
 
