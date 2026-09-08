@@ -31,6 +31,7 @@ import (
 	openapitool "trpc.group/trpc-go/trpc-agent-go/tool/openapi"
 	httpfetch "trpc.group/trpc-go/trpc-agent-go/tool/webfetch/httpfetch"
 	"trpc.group/trpc-go/trpc-agent-go/tool/wikipedia"
+	youcomsearch "trpc.group/trpc-go/trpc-agent-go/tool/youcom"
 
 	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/imageinspect"
@@ -50,11 +51,13 @@ const (
 	toolSetProviderWiki    = "wikipedia"
 	toolSetProviderArxiv   = "arxivsearch"
 	toolSetProviderEmail   = "email"
+	toolSetProviderYouCom  = "youcom"
 
 	defaultHTTPTimeout = 30 * time.Second
 
 	envGoogleAPIKey   = "GOOGLE_API_KEY"
 	envGoogleEngineID = "GOOGLE_SEARCH_ENGINE_ID"
+	envYouComAPIKey   = "YDC_API_KEY"
 
 	mcpTransportStdio      = "stdio"
 	mcpTransportSSE        = "sse"
@@ -108,6 +111,10 @@ func init() {
 	must(registry.RegisterToolSetProvider(
 		toolSetProviderEmail,
 		newEmailToolSet,
+	))
+	must(registry.RegisterToolSetProvider(
+		toolSetProviderYouCom,
+		newYouComToolSet,
 	))
 }
 
@@ -787,6 +794,58 @@ func newEmailToolSet(
 	spec registry.PluginSpec,
 ) (tool.ToolSet, error) {
 	ts, err := email.NewToolSet()
+	if err != nil {
+		return nil, err
+	}
+	return overrideToolSetName(ts, spec.Name), nil
+}
+
+type youComToolSetConfig struct {
+	APIKey     string        `yaml:"api_key,omitempty"`
+	BaseURL    string        `yaml:"base_url,omitempty"`
+	NumResults int           `yaml:"num_results,omitempty"`
+	Country    string        `yaml:"country,omitempty"`
+	SafeSearch string        `yaml:"safe_search,omitempty"`
+	UserAgent  string        `yaml:"user_agent,omitempty"`
+	Timeout    time.Duration `yaml:"timeout,omitempty"`
+}
+
+func newYouComToolSet(
+	_ registry.ToolSetProviderDeps,
+	spec registry.PluginSpec,
+) (tool.ToolSet, error) {
+	var cfg youComToolSetConfig
+	if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
+		return nil, err
+	}
+
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv(envYouComAPIKey))
+	}
+
+	options := make([]youcomsearch.Option, 0, 6)
+	options = append(options, youcomsearch.WithAPIKey(apiKey))
+	if baseURL := strings.TrimSpace(cfg.BaseURL); baseURL != "" {
+		options = append(options, youcomsearch.WithBaseURL(baseURL))
+	}
+	if cfg.NumResults > 0 {
+		options = append(options, youcomsearch.WithNumResults(cfg.NumResults))
+	}
+	if country := strings.TrimSpace(cfg.Country); country != "" {
+		options = append(options, youcomsearch.WithCountry(country))
+	}
+	if safeSearch := strings.TrimSpace(cfg.SafeSearch); safeSearch != "" {
+		options = append(options, youcomsearch.WithSafeSearch(safeSearch))
+	}
+	if ua := strings.TrimSpace(cfg.UserAgent); ua != "" {
+		options = append(options, youcomsearch.WithUserAgent(ua))
+	}
+	if cfg.Timeout > 0 {
+		options = append(options, youcomsearch.WithTimeout(cfg.Timeout))
+	}
+
+	ts, err := youcomsearch.NewToolSet(options...)
 	if err != nil {
 		return nil, err
 	}

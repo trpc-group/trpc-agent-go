@@ -1147,6 +1147,60 @@ func TestNewEmailToolSet_NameOverride(t *testing.T) {
 	require.NotEmpty(t, ts.Tools(context.Background()))
 }
 
+func TestNewYouComToolSet_RequiresAPIKey(t *testing.T) {
+	t.Setenv(envYouComAPIKey, "")
+
+	_, err := newYouComToolSet(
+		registry.ToolSetProviderDeps{},
+		registry.PluginSpec{},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "api key is required")
+}
+
+func TestNewYouComToolSet_EnvFallbackAndNameOverride(t *testing.T) {
+	t.Setenv(envYouComAPIKey, "k")
+
+	cfg := yamlNode(t, `
+num_results: 5
+country: "US"
+safe_search: "moderate"
+timeout: 200ms
+`)
+	ts, err := newYouComToolSet(
+		registry.ToolSetProviderDeps{},
+		registry.PluginSpec{Name: "yc", Config: cfg},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ts)
+	require.Equal(t, "yc", ts.Name())
+	tools := ts.Tools(context.Background())
+	require.NotEmpty(t, tools)
+	require.Contains(
+		t,
+		tools[0].Declaration().Description,
+		"YOU.COM WEB SEARCH",
+	)
+}
+
+func TestNewYouComToolSet_ConfigAPIKeyWins(t *testing.T) {
+	t.Setenv(envYouComAPIKey, "from-env")
+
+	cfg := yamlNode(t, `
+api_key: "from-config"
+base_url: "https://example.invalid"
+num_results: 3
+`)
+	ts, err := newYouComToolSet(
+		registry.ToolSetProviderDeps{},
+		registry.PluginSpec{Name: "yc", Config: cfg},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ts)
+	require.Equal(t, "yc", ts.Name())
+	require.NotEmpty(t, ts.Tools(context.Background()))
+}
+
 func mcpConn(
 	transport, urlStr, command string,
 	args []string,
