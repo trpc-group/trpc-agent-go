@@ -25,6 +25,39 @@ These are Genie-facing behaviors. Prefer **ours** when a sync conflict touches t
 
 Everything else: prefer **upstream** unless a Genie pin or test proves otherwise.
 
+## OpenAI Responses (AIOS-935)
+
+Stock OpenAI reasoning + function tools should use the nested module
+`model/openai/responses` (upstream [PR #2483](https://github.com/trpc-group/trpc-agent-go/pull/2483)),
+not Chat Completions `model/openai`. Chat Completions stays the default for
+Azure and custom OpenAI-compatible hosts.
+
+```go
+import openairesponses "trpc.group/trpc-go/trpc-agent-go/model/openai/responses"
+
+m := openairesponses.New(modelName,
+    openairesponses.WithAPIKey(apiKey),
+    openairesponses.WithBaseURL(baseURL), // SDK appends "responses"
+    openairesponses.WithStore(false),     // stateless; no plaintext CoT store
+)
+```
+
+Try locally:
+
+```bash
+export OPENAI_API_KEY=sk-...
+cd examples/openairesponses
+go run ./chat -streaming=true
+go run ./tools -streaming=true
+```
+
+Nested module tests: `cd model/openai/responses && go test ./...`
+
+Genie should construct this type for qualified stock OpenAI models and keep
+mapping `reasoning_profile` → native `ReasoningEffort` on `GenerationConfig`.
+Do not silently fall back from Responses to Chat Completions after a request
+failure.
+
 ## Sync playbook (every ~2 weeks, or before a Genie bump)
 
 1. **Branch from current fork main**
