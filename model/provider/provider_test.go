@@ -531,6 +531,31 @@ func readSliceLen(obj any, name string) int {
 	return getField(obj, name).Len()
 }
 
+func TestLiteLLMFactoryDefaults(t *testing.T) {
+	// The litellm provider is registered by default.
+	_, ok := Get("litellm")
+	assert.True(t, ok)
+
+	// Without an explicit base URL, the litellm provider targets the local
+	// LiteLLM proxy and selects the OpenAI-compatible LiteLLM variant.
+	m, err := Model("litellm", "gpt-4o")
+	assert.NoError(t, err)
+	openaiModel, ok := m.(*openai.Model)
+	assert.True(t, ok)
+	assert.Equal(t, "gpt-4o", m.Info().Name)
+	assert.Equal(t, "http://localhost:4000/v1", readStringField(openaiModel, "baseURL"))
+	assert.Equal(t, string(openai.VariantLiteLLM), readStringField(openaiModel, "variant"))
+
+	// A caller-supplied base URL overrides the proxy default.
+	m2, err := Model("litellm", "gpt-4o",
+		WithBaseURL("https://litellm.example.com/v1"), WithAPIKey("sk-virtual"))
+	assert.NoError(t, err)
+	openaiModel2, ok := m2.(*openai.Model)
+	assert.True(t, ok)
+	assert.Equal(t, "https://litellm.example.com/v1", readStringField(openaiModel2, "baseURL"))
+	assert.Equal(t, "sk-virtual", readStringField(openaiModel2, "apiKey"))
+}
+
 func getField(obj any, name string) reflect.Value {
 	v := reflect.ValueOf(obj).Elem().FieldByName(name)
 	if !v.IsValid() {

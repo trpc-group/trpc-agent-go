@@ -321,6 +321,7 @@ func WithExtraFields(extraFields map[string]any) Option {
 // - VariantGLM: GLM-compatible request and response behavior.
 // - VariantMiniMax: MiniMax-compatible request behavior.
 // - VariantKimi: Kimi-compatible request and file behavior.
+// - VariantLiteLLM: LiteLLM gateway, defaults to the local LiteLLM proxy base URL.
 func WithVariant(variant Variant) Option {
 	return func(opts *options) {
 		opts.Variant = variant

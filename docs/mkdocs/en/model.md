@@ -1979,6 +1979,13 @@ The framework currently supports the following Variants:
 - Keeps MiniMax's native `<think>...</think>` content unchanged so interleaved thinking can be replayed across tool calls
 - Uses MiniMax's `/v1/files/upload` and `/v1/files/delete` endpoints, with `video_understanding` as the default purpose
 
+**8. VariantLiteLLM**
+
+- LiteLLM AI gateway adaptation. LiteLLM exposes 100+ LLM providers (OpenAI, Anthropic, Azure, Bedrock, Gemini, and more) behind a single OpenAI-compatible API
+- Default BaseURL: `http://localhost:4000/v1` (the local LiteLLM proxy); override with `WithBaseURL` to target a remote proxy
+- API Key environment variable name: `LITELLM_API_KEY` (the LiteLLM virtual/master key)
+- Reuses the default OpenAI request/response behavior, so any model routed by the proxy is addressed by its LiteLLM model name
+
 ##### 7.2. Usage
 
 **Usage Example**：
@@ -2008,6 +2015,11 @@ model = openai.New("kimi-k2.6",
 // Use the MiniMax OpenAI-compatible API
 model = openai.New("MiniMax-M3",
     openai.WithVariant(openai.VariantMiniMax), // Reads MINIMAX_API_KEY automatically
+)
+
+// Use a LiteLLM gateway (defaults to the local proxy, reads LITELLM_API_KEY)
+model = openai.New("gpt-4o-mini",
+    openai.WithVariant(openai.VariantLiteLLM),
 )
 ```
 
