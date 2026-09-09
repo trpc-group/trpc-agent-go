@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,13 @@ import (
 	"time"
 	"unicode/utf8"
 )
+
+// roundTripperFunc adapts a function to the http.RoundTripper interface.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
 
 func TestOption(t *testing.T) {
 	type testCase struct {
@@ -689,11 +697,17 @@ func TestNormalizeSafeSearchOff(t *testing.T) {
 }
 
 func TestSearchToolUnreachableEndpoint(t *testing.T) {
-	// A URL that cannot be resolved ensures the request-execution error
-	// path is exercised.
+	// A RoundTripper returning a fixed error keeps the request-execution
+	// error path deterministic — no DNS or proxy configuration involved.
+	boom := errors.New("boom: transport failure")
 	toolSet, err := NewToolSet(
 		WithAPIKey("key-123"),
-		WithBaseURL("https://invalid.invalid.test/v1/search"),
+		WithBaseURL("https://example.com/v1/search"),
+		WithHTTPClient(&http.Client{
+			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return nil, boom
+			}),
+		}),
 	)
 	if err != nil {
 		t.Fatalf("failed to create tool set: %v", err)
