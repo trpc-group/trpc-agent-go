@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -578,5 +579,184 @@ func TestTrimSnippetsRuneBoundary(t *testing.T) {
 	}
 	if !utf8.ValidString(got[0]) {
 		t.Errorf("truncated snippet is not valid UTF-8: %q", got[0])
+	}
+}
+
+func TestNewToolSetInvalidBaseURL(t *testing.T) {
+	_, err := NewToolSet(
+		WithAPIKey("key-123"),
+		WithBaseURL("://not a url"),
+	)
+	if err == nil {
+		t.Fatalf("expected error for invalid base URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid base URL") {
+		t.Errorf("expected invalid base URL error, got %v", err)
+	}
+}
+
+func TestNewToolSetEmptyBaseURLFallsBackToDefault(t *testing.T) {
+	toolSet, err := NewToolSet(
+		WithAPIKey("key-123"),
+		WithBaseURL("   "),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if toolSet == nil {
+		t.Fatal("expected tool set, got nil")
+	}
+	// The default base URL is HTTPS and valid, so construction must succeed;
+	// an invalid scheme would have failed above.
+	if len(toolSet.tools) != 1 {
+		t.Errorf("expected 1 tool after empty base URL fallback, got %d", len(toolSet.tools))
+	}
+}
+
+func TestWithTimeout(t *testing.T) {
+	cases := []struct {
+		name    string
+		timeout time.Duration
+		wantNil bool
+	}{
+		{"positive", 5 * time.Second, false},
+		{"zero disables", 0, false},
+		{"negative ignored", -1 * time.Second, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config{}
+			WithTimeout(tc.timeout)(cfg)
+			if tc.wantNil {
+				if cfg.timeout != nil {
+					t.Errorf("expected nil timeout, got %v", *cfg.timeout)
+				}
+				return
+			}
+			if cfg.timeout == nil {
+				t.Fatalf("expected timeout %v, got nil", tc.timeout)
+			}
+			if *cfg.timeout != tc.timeout {
+				t.Errorf("expected timeout %v, got %v", tc.timeout, *cfg.timeout)
+			}
+		})
+	}
+}
+
+func TestResolveHTTPClientTimeoutOverride(t *testing.T) {
+	// Default client: timeout override must be applied.
+	cfg := &config{timeout: durationPtr(7 * time.Second)}
+	client := resolveHTTPClient(cfg)
+	if client.Timeout != 7*time.Second {
+		t.Errorf("expected 7s timeout, got %v", client.Timeout)
+	}
+
+	// Custom client: the caller's client must not be mutated, and custom
+	// Transport settings must survive the shallow copy.
+	custom := &http.Client{
+		Timeout:   time.Second,
+		Transport: &http.Transport{Proxy: http.ProxyFromEnvironment},
+	}
+	cfg = &config{httpClient: custom, timeout: durationPtr(9 * time.Second)}
+	client = resolveHTTPClient(cfg)
+	if client == custom {
+		t.Fatal("expected a cloned client, got the caller's instance")
+	}
+	if client.Timeout != 9*time.Second {
+		t.Errorf("expected 9s timeout on clone, got %v", client.Timeout)
+	}
+	if custom.Timeout != time.Second {
+		t.Errorf("caller's client was mutated: timeout %v", custom.Timeout)
+	}
+	if client.Transport != custom.Transport {
+		t.Error("expected custom Transport preserved on clone")
+	}
+
+	// nil timeout: caller's timeout stays untouched.
+	cfg = &config{httpClient: custom}
+	client = resolveHTTPClient(cfg)
+	if client != custom {
+		t.Error("expected the caller's client returned unchanged")
+	}
+}
+
+func durationPtr(d time.Duration) *time.Duration { return &d }
+
+func TestNormalizeSafeSearchOff(t *testing.T) {
+	if got := normalizeSafeSearch(" OFF "); got != "off" {
+		t.Errorf("expected 'off', got %q", got)
+	}
+}
+
+func TestSearchToolUnreachableEndpoint(t *testing.T) {
+	// A URL that cannot be resolved ensures the request-execution error
+	// path is exercised.
+	toolSet, err := NewToolSet(
+		WithAPIKey("key-123"),
+		WithBaseURL("https://invalid.invalid.test/v1/search"),
+	)
+	if err != nil {
+		t.Fatalf("failed to create tool set: %v", err)
+	}
+
+	searchTool, ok := toolSet.tools[0].(interface {
+		Call(context.Context, []byte) (any, error)
+	})
+	if !ok {
+		t.Fatalf("tool does not implement Call")
+	}
+
+	reqJSON, err := json.Marshal(searchRequest{Query: "unreachable"})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	result, err := searchTool.Call(context.Background(), reqJSON)
+	if err == nil {
+		t.Fatalf("expected error for unreachable endpoint, got nil")
+	}
+	resp, ok := result.(searchResponse)
+	if !ok {
+		t.Fatalf("expected searchResponse type, got %T", result)
+	}
+	if !strings.Contains(resp.Error, "execute request") {
+		t.Errorf("unexpected error field: %q", resp.Error)
+	}
+}
+
+func TestSearchToolInvalidJSONResponse(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":`)) // truncated JSON
+		},
+	))
+	defer srv.Close()
+
+	toolSet, err := NewToolSet(
+		WithAPIKey("key-123"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(fakeTLSClient()),
+	)
+	if err != nil {
+		t.Fatalf("failed to create tool set: %v", err)
+	}
+
+	searchTool, ok := toolSet.tools[0].(interface {
+		Call(context.Context, []byte) (any, error)
+	})
+	if !ok {
+		t.Fatalf("tool does not implement Call")
+	}
+
+	reqJSON, err := json.Marshal(searchRequest{Query: "anything"})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	_, err = searchTool.Call(context.Background(), reqJSON)
+	if err == nil {
+		t.Fatalf("expected decode error, got nil")
+	}
+	if !strings.Contains(err.Error(), "decode response") {
+		t.Errorf("expected decode response error, got %v", err)
 	}
 }
