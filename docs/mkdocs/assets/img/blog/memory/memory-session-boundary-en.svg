@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Paths for the Same Information After Switching Sessions</title>
+  <desc id="desc">Session history and Summary remain with the original Session. User- or App-scoped State, Session Recall results, and long-term Memory Entries can enter a new Session's model request through their respective read paths.</desc>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#D9E6F2" stroke-width="1" opacity="0.38"/>
+    </pattern>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#3478F6"/>
+    </marker>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#21A179"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#E6A433"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="#F8FBFE"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+
+  <g font-family="Inter, Arial, sans-serif">
+    <text x="72" y="78" fill="#102E4A" font-size="38" font-weight="500">Where Does Past Information Go in a New Session?</text>
+    <text x="72" y="120" fill="#647B91" font-size="21">Different storage locations use different paths into the next model request</text>
+
+    <text x="94" y="188" fill="#174A7C" font-size="26" font-weight="500">Session A</text>
+    <text x="1344" y="188" fill="#174A7C" font-size="26" font-weight="500" text-anchor="middle">Session B</text>
+
+    <line x1="800" y1="165" x2="800" y2="824" stroke="#8EA6BA" stroke-width="3" stroke-dasharray="10 12"/>
+    <rect x="704" y="142" width="192" height="44" rx="22" fill="#E8EEF5"/>
+    <text x="800" y="172" fill="#425D73" font-size="20" font-weight="500" text-anchor="middle">Switch Session</text>
+
+    <path d="M102 228H516Q542 228 542 254V310Q542 336 516 336H184L132 374V336H102Q76 336 76 310V254Q76 228 102 228Z" fill="#EAF2FF" stroke="#9CC0FA" stroke-width="2"/>
+    <circle cx="126" cy="273" r="22" fill="#3478F6"/>
+    <path d="M116 274h20M126 264v20" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+    <text x="166" y="274" fill="#102E4A" font-size="22" font-weight="500">Migrations need rollback scripts</text>
+    <text x="166" y="307" fill="#597188" font-size="18">This becomes a Session Event</text>
+
+    <text x="112" y="442" fill="#425D73" font-size="21" font-weight="500">History / Summary</text>
+    <line x1="330" y1="432" x2="742" y2="432" stroke="#8EA6BA" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="760" cy="432" r="16" fill="#FFFFFF" stroke="#D65B59" stroke-width="4"/>
+    <path d="M751 423 769 441M769 423 751 441" stroke="#D65B59" stroke-width="4" stroke-linecap="round"/>
+    <text x="330" y="474" fill="#71879B" font-size="18">Restored when the original Session resumes</text>
+    <text x="744" y="507" fill="#B04A4A" font-size="17" text-anchor="end">Does not cross automatically</text>
+
+    <g transform="translate(112 500)">
+      <path d="M0 15C0 7 20 0 48 0s48 7 48 15v52c0 8-20 15-48 15S0 75 0 67Z" fill="#FFF2D9" stroke="#E6AE45" stroke-width="2"/>
+      <ellipse cx="48" cy="15" rx="48" ry="15" fill="#FFE7B5" stroke="#E6AE45" stroke-width="2"/>
+      <text x="120" y="36" fill="#7A5313" font-size="21" font-weight="500">State</text>
+      <text x="120" y="66" fill="#7A6746" font-size="17">Exact application value</text>
+    </g>
+    <path d="M330 542H1160" fill="none" stroke="#E6A433" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-orange)"/>
+    <text x="830" y="525" fill="#7A6746" font-size="18">User / App scope · read by key</text>
+
+    <g transform="translate(112 620)">
+      <path d="M4 8h76l20 20v62H4Z" fill="#EAF2FF" stroke="#78A9F7" stroke-width="2"/>
+      <path d="M80 8v20h20" fill="none" stroke="#78A9F7" stroke-width="2"/>
+      <path d="M25 47h54M25 66h42" stroke="#78A9F7" stroke-width="3" stroke-linecap="round"/>
+      <text x="126" y="42" fill="#174A7C" font-size="21" font-weight="500">Session Recall</text>
+      <text x="126" y="72" fill="#597188" font-size="17">Past Event</text>
+    </g>
+    <path d="M360 665H1160" fill="none" stroke="#3478F6" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+    <text x="835" y="647" fill="#2F68C4" font-size="18">Search past Sessions</text>
+
+    <g transform="translate(112 748)">
+      <circle cx="50" cy="36" r="36" fill="#DFF5EC" stroke="#63BE9C" stroke-width="2"/>
+      <path d="M34 37c0-12 7-21 17-21 8 0 14 5 16 13 8 2 13 9 13 17 0 12-10 21-22 21H43c-12 0-22-9-22-21 0-8 5-15 13-17" fill="none" stroke="#16815D" stroke-width="3" stroke-linecap="round"/>
+      <text x="112" y="31" fill="#176A50" font-size="21" font-weight="500">Long-term Memory</text>
+      <text x="112" y="61" fill="#527969" font-size="17">Organized Entry</text>
+    </g>
+    <path d="M360 786H1160" fill="none" stroke="#21A179" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow-teal)"/>
+    <text x="835" y="768" fill="#177B5B" font-size="18">Recall for the current question</text>
+
+    <path d="M1192 246H1456L1516 306V792Q1516 812 1496 812H1192Q1172 812 1172 792V266Q1172 246 1192 246Z" fill="#FFFFFF" stroke="#8FB4E8" stroke-width="3"/>
+    <path d="M1456 246V306H1516" fill="#DCEBFF" stroke="#8FB4E8" stroke-width="3"/>
+    <text x="1344" y="342" fill="#102E4A" font-size="25" font-weight="500" text-anchor="middle">Current model request</text>
+    <line x1="1210" y1="370" x2="1478" y2="370" stroke="#D7E2EC" stroke-width="2"/>
+
+    <circle cx="1228" cy="416" r="8" fill="#8EA6BA"/>
+    <text x="1250" y="423" fill="#425D73" font-size="20">Current question</text>
+
+    <rect x="1210" y="496" width="268" height="74" rx="12" fill="#FFF2D9"/>
+    <text x="1234" y="526" fill="#7A5313" font-size="18" font-weight="500">State</text>
+    <text x="1234" y="553" fill="#7A6746" font-size="16">Application value read by key</text>
+
+    <rect x="1210" y="614" width="268" height="74" rx="12" fill="#EAF2FF"/>
+    <text x="1234" y="644" fill="#174A7C" font-size="18" font-weight="500">Past Event</text>
+    <text x="1234" y="671" fill="#597188" font-size="16">Result from Session Recall</text>
+
+    <rect x="1210" y="732" width="268" height="58" rx="12" fill="#DFF5EC"/>
+    <text x="1234" y="768" fill="#176A50" font-size="18" font-weight="500">Memory Entry</text>
+  </g>
+</svg>
