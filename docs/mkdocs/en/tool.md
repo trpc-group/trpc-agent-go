@@ -1808,6 +1808,103 @@ child := agenttool.NewTool(
   `HistoryScopeIsolated` and pass the needed context through tool arguments.
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
 
+### Threaded AgentTool (`NewThreadTool`)
+
+`agenttool.NewThreadTool(agent)` is an opt-in constructor for a **fixed** wrapped
+agent. It does not change `NewTool` or `NewDynamicTool`. Use it when the parent
+model needs several **independently addressed conversation branches** with the
+same specialist inside one parent Session.
+
+It is still synchronous call-return. Each branch is exactly the set of parent
+Session events carrying a stable event-filter key
+(`agenttool:<namespace>:thread:<id>`). It adds no Controller, message queue,
+lease, background task, executor checkpointing, separate child Session, or Graph
+resume/checkpoint behavior.
+
+```go
+childTool := agenttool.NewThreadTool(specialist)
+
+// Optional: pin the branch namespace so thread IDs stay resolvable across an
+// agent rename, or so two same-named agents do not share a namespace.
+childTool = agenttool.NewThreadTool(
+    specialist,
+    agenttool.WithThreadNamespace("billing-specialist"),
+)
+```
+
+Model-facing input is `{thread_id?: string, input: <wrapped agent's schema>}`.
+The child receives only the JSON serialization of `input`. The result is
+`{thread_id?, status, output?, error?, retryable?}`. There is no `resume`
+boolean.
+
+**Turn semantics**
+
+- Omit `thread_id` to start a new branch with a cryptographically strong opaque
+  ID.
+- Passing `thread_id` **appends a new message** to that branch. It never
+  replaces or retries a previous turn.
+- Supplied IDs must match `^[A-Za-z0-9_-]{8,128}$`. Unknown or invalid IDs fail
+  instead of creating a branch.
+- A branch is known only when the parent Session already holds at least one
+  event under its filter key. A call that fails before the child agent persists
+  anything returns **no** `thread_id`; retrying simply starts a new branch. Only
+  `status` is a required output field.
+- If a previous turn was interrupted, its partial tail stays in the branch. The
+  framework's orphan tool-call sanitization keeps the next request valid, but
+  there is no interrupted-turn replacement and no checkpoint recovery.
+
+**Persistence and lifecycle**
+
+- Continuity across turns and nodes is limited by successful parent Session
+  persistence and by the parent Session's event retention window. **That window
+  is shared by the parent conversation and every branch**, so a long parent
+  Session can push older branch events out of retrieval. Size
+  `WithSessionEventLimit` on the session service accordingly.
+- Filter keys isolate event history, not Session State. Every branch still
+  shares the parent Session's State map. If the wrapped agent writes
+  conversation-local state, namespace those keys with
+  `agenttool.ThreadIDFromContext`.
+- Branches have no independent lifecycle: no TTL, no list, no delete. They live
+  and die with the parent Session.
+- The parent invocation Session is required. There is no isolated in-memory
+  runner fallback.
+
+**Concurrency and integration**
+
+- Different thread IDs may run concurrently. Same-thread calls are serialized by
+  a per-`Tool` in-process guard only; there is no cross-node mutual exclusion.
+- Nested ordinary `NewTool` calls made by the wrapped agent keep their own
+  independent filter keys; they do not inherit the branch key.
+- `StreamableCall` delegates to `Call` and emits exactly one
+  `tool.FinalResultChunk` envelope (no inner events).
+- `output` is always a string. The child call path collects assistant text and
+  does not preserve a custom agent `OutputSchema` type.
+- Graph `CallWithAgentToolGraphRuntime` uses this envelope path and does not
+  participate in graph checkpoint state or interrupt resume. A child graph
+  interrupt is reported as a failed envelope with `retryable: false`, whether
+  the wrapped agent returns the interrupt as an error or only signals it
+  through a graph executor event. The event-signalled form is only observable
+  through those events, so a thread call always enables them for the child run;
+  a caller that passed `agent.WithDisableGraphExecutorEvents(true)` still gets
+  the failed envelope, and the internal `graph.*` events are not mirrored into
+  the shared Session.
+- `retryable` is omitted when retryability is unknown. It is `false` for
+  permanent validation failures (invalid input or thread ID, unknown thread,
+  missing parent Session, unsupported graph interrupt) and `true` for context
+  cancellation, deadlines, and session flush failures. Ordinary child agent
+  failures omit it.
+- Wrapped agents keep the existing `agent.Agent` interface. Read
+  `agenttool.ThreadIDFromContext` if the child needs the branch ID; it reports
+  the nearest enclosing `NewThreadTool` invocation. Full restoration requires the
+  wrapped agent to consume Session history or map this ID to a provider
+  conversation ID. Implementations must be concurrency-safe and must not keep
+  conversation-local state across calls.
+- `WithThreadNamespace` applies only to `NewThreadTool`; `NewTool` and
+  `NewDynamicTool` ignore it. It does not change the model-facing tool name. The
+  namespace defaults to the wrapped agent's name and must match
+  `^[A-Za-z0-9_-]+$`; `NewThreadTool` panics on an invalid namespace rather than
+  rewriting it, because a lossy rewrite could silently merge two namespaces.
+
 ### Dynamic AgentTool
 
 `agenttool.NewTool(agent)` is a good fit when the tool is backed by one clear
@@ -1982,6 +2079,7 @@ Dynamic AgentTool has a different boundary from the other multi-Agent mechanisms
 | Mechanism | What the model chooses | Lifetime | Control |
 | --- | --- | --- | --- |
 | `agenttool.NewTool(agent)` | one fixed tool entrypoint | per tool call | returns a tool result to the parent Agent |
+| `agenttool.NewThreadTool(agent)` | a fixed tool entrypoint plus optional `thread_id` | per tool call, appending to one conversation branch of the parent Session | returns a `{thread_id?, status, output?, error?, retryable?}` envelope, where only `status` is always present |
 | `transfer_to_agent` | one registered sub-agent | target Agent continues the current turn | hands off control |
 | `agenttool.NewDynamicTool()` | `request`, `instruction`, a tools/skills subset, and optionally one registered model profile for this call | per tool call | returns a tool result to the parent Agent |
 

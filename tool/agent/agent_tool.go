@@ -60,6 +60,17 @@ type Tool struct {
 	// dynamicCfg holds the dynamic-mode configuration. It is only consulted
 	// when dynamic is true.
 	dynamicCfg *dynamicOptions
+
+	// thread enables the NewThreadTool mode: independently addressed
+	// conversation branches inside the parent session, each identified by a
+	// stable event-filter key.
+	thread bool
+	// threadNamespace is the validated identity segment of the thread
+	// event-filter key. It is empty for non-thread tools.
+	threadNamespace string
+	// threadLocks serializes in-process calls that share the same parent
+	// session and thread ID. It is nil for non-thread tools.
+	threadLocks *threadLockSet
 }
 
 // Option is a function that configures an AgentTool.
@@ -82,6 +93,10 @@ type agentToolOptions struct {
 	// Dynamic AgentTool options. They are only meaningful for NewDynamicTool;
 	// NewTool ignores them.
 	dynamic *dynamicOptions
+
+	// threadNamespace is only meaningful for NewThreadTool; NewTool and
+	// NewDynamicTool ignore it.
+	threadNamespace *string
 }
 
 // dynamicOptions holds the configuration knobs for the dynamic AgentTool mode.
@@ -318,6 +333,29 @@ func WithPersistentHistoryKeyFunc(fn PersistentHistoryKeyFunc) Option {
 	}
 }
 
+// WithThreadNamespace sets the identity segment of the thread event-filter key
+// (agenttool:<namespace>:thread:<id>) used by NewThreadTool.
+//
+// It applies ONLY to NewThreadTool and does not change the model-facing tool
+// name, which remains the wrapped agent's name. NewTool and NewDynamicTool
+// ignore it.
+//
+// The namespace defaults to the wrapped agent's name. Set it explicitly when
+// thread IDs must stay resolvable across an agent rename, or when two distinct
+// agents share a name within one session and must not share a branch
+// namespace.
+//
+// The namespace must match ^[A-Za-z0-9_-]+$. NewThreadTool panics on an invalid
+// namespace, and on a defaulted namespace whose agent name does not match,
+// because both are static configuration errors: the key is never rewritten to
+// a "safe" form, since lossy rewriting could silently merge two namespaces.
+func WithThreadNamespace(namespace string) Option {
+	return func(opts *agentToolOptions) {
+		copiedNamespace := namespace
+		opts.threadNamespace = &copiedNamespace
+	}
+}
+
 // WithPinModel pins the sub-agent's model so that it always uses its own
 // configured model (set via llmagent.WithModel) regardless of the caller's
 // runtime model selection propagated through RunOptions.
@@ -370,6 +408,17 @@ func WithPinStructuredOutput(enabled bool) Option {
 //
 // Best practice: Use ^[a-zA-Z0-9_-]+ only to ensure maximum compatibility.
 func NewTool(agent agent.Agent, opts ...Option) *Tool {
+	return newFixedAgentTool(agent, applyAgentToolOptions(opts))
+}
+
+// applyAgentToolOptions resolves the option set shared by the fixed-agent
+// constructors.
+//
+// Option is an exported function type, so an application-defined Option may
+// have observable side effects. Each constructor must therefore apply every
+// Option exactly once, which is why the resolved option set is passed on
+// instead of being rebuilt by a second application.
+func applyAgentToolOptions(opts []Option) *agentToolOptions {
 	// Default to allowing summarization so the parent agent can perform its
 	// normal post-tool reasoning unless opt-out is requested.
 	options := &agentToolOptions{
@@ -380,6 +429,12 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 	for _, opt := range opts {
 		opt(options)
 	}
+	return options
+}
+
+// newFixedAgentTool builds the wrapped-agent Tool shared by NewTool and
+// NewThreadTool from an already-resolved option set.
+func newFixedAgentTool(agent agent.Agent, options *agentToolOptions) *Tool {
 	info := agent.Info()
 	if options.name != nil {
 		log.Warnf(
@@ -461,6 +516,9 @@ func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if at.dynamic {
 		return at.callDynamic(ctx, jsonArgs)
 	}
+	if at.thread {
+		return at.callThread(ctx, jsonArgs)
+	}
 
 	message := model.NewUserMessage(string(jsonArgs))
 
@@ -468,7 +526,7 @@ func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	// history according to the configured history scope.
 	if parentInv, ok := agent.InvocationFromContext(ctx); ok && parentInv != nil {
 		if parentInv.Session != nil {
-			return at.callWithParentInvocation(ctx, parentInv, message, nil)
+			return at.callWithParentInvocation(ctx, parentInv, message, nil, "")
 		}
 	}
 
@@ -479,11 +537,19 @@ func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 // callWithParentInvocation executes the agent using parent invocation context.
 // This allows the child agent to inherit parent history based on the configured
 // history scope.
+//
+// childKeyOverride pins the child event-filter key for this call. It is used by
+// NewThreadTool to run a specific conversation branch. An empty value means the
+// key is resolved from the graph runtime and then from the tool's own history
+// configuration, which is what every non-thread caller passes. The override is
+// deliberately a parameter rather than a context value so that nested AgentTool
+// calls made by the child agent keep computing their own independent keys.
 func (at *Tool) callWithParentInvocation(
 	ctx context.Context,
 	parentInv *agent.Invocation,
 	message model.Message,
 	runtime *parentInvocationGraphRuntime,
+	childKeyOverride string,
 ) (string, error) {
 	var runtimeState graph.State
 	var parentNodeID string
@@ -508,9 +574,12 @@ func (at *Tool) callWithParentInvocation(
 		parentInv = parentInvocationWithLiveSession(parentInv)
 	}
 	// Build child filter key based on history scope.
-	childKey := at.buildChildFilterKey(ctx, parentInv, []byte(message.Content))
-	if hasGraphRuntime && runtime.childKey != "" {
-		childKey = runtime.childKey
+	childKey := childKeyOverride
+	if childKey == "" {
+		childKey = at.buildChildFilterKey(ctx, parentInv, []byte(message.Content))
+		if hasGraphRuntime && runtime.childKey != "" {
+			childKey = runtime.childKey
+		}
 	}
 	if runtimeState != nil {
 		if _, ok := runtimeState[graph.CfgKeyCheckpointID]; ok {
@@ -527,20 +596,49 @@ func (at *Tool) callWithParentInvocation(
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
 	capture := at.newGraphToolInterruptCapture(runtimeState, parentNodeID, toolCallID, toolCallKey, childKey, hasGraphRuntime)
-	response, err := at.collectResponse(
-		subInv,
-		at.wrapGraphToolInterruptCapture(
-			at.wrapWithCallSemantics(subCtx, subInv, evCh),
-			capture,
-		),
-	)
+	threadInterrupt := at.newThreadInterruptObserver()
+	events := at.wrapWithCallSemantics(subCtx, subInv, evCh)
+	// A thread tool never carries a graph runtime, so at most one observer is
+	// ever attached and the forwarding cost is unchanged for existing callers.
+	switch {
+	case capture != nil:
+		events = wrapEventObserver(events, capture)
+	case threadInterrupt != nil:
+		events = wrapEventObserver(events, threadInterrupt)
+	}
+	response, err := at.collectResponse(subInv, events)
 	if err != nil {
 		return "", err
 	}
 	if interruptErr := capture.finish(); interruptErr != nil {
 		return "", interruptErr
 	}
+	if interruptErr := threadInterrupt.interruptError(); interruptErr != nil {
+		return "", interruptErr
+	}
 	return response, nil
+}
+
+// eventObserver inspects forwarded child events without modifying them.
+type eventObserver interface {
+	observe(evt *event.Event)
+}
+
+// wrapEventObserver forwards src unchanged while letting observer inspect every
+// event. Observations are complete once the returned channel is closed.
+func wrapEventObserver(
+	src <-chan *event.Event,
+	observer eventObserver,
+) <-chan *event.Event {
+	out := make(chan *event.Event)
+	go func() {
+		defer close(out)
+		for evt := range src {
+			observer.observe(evt)
+			out <- evt
+		}
+	}()
+	return out
 }
 
 // parentInvocationWithLiveSession returns a view of parentInv whose Session
@@ -604,6 +702,22 @@ func (at *Tool) childInvocationOptions(
 			runOptions := inv.RunOptions
 			agent.WithDisableGraphExecutorEvents(false)(&runOptions)
 			runOptions.RuntimeState = runtimeState
+			inv.RunOptions = runOptions
+			if parentInv != nil && agent.IsGraphExecutorEventsDisabled(parentInv) {
+				inv.SetState(graphRuntimeSuppressSessionEventsStateKey, true)
+			}
+		})
+	}
+	if at.thread {
+		// A graph agent signals an interrupt only through a graph executor
+		// event, so a thread tool must always receive those events: otherwise
+		// an interrupted branch would be reported as completed. They are
+		// force-enabled for the child run, and when the caller asked not to
+		// see them they are additionally kept out of the shared parent
+		// Session, so the branch history stays what it would have been.
+		invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
+			runOptions := inv.RunOptions
+			agent.WithDisableGraphExecutorEvents(false)(&runOptions)
 			inv.RunOptions = runOptions
 			if parentInv != nil && agent.IsGraphExecutorEventsDisabled(parentInv) {
 				inv.SetState(graphRuntimeSuppressSessionEventsStateKey, true)
@@ -729,7 +843,7 @@ func (at *Tool) wrapWithCallSemantics(
 					)
 					continue
 				}
-				if !shouldSuppressGraphRuntimeSessionEvent(inv, evt) &&
+				if !at.shouldSuppressGraphSessionMirror(inv, evt) &&
 					shouldMirrorEventToSession(evt) {
 					persistedEvent := persistableSessionEvent(evt)
 					if shouldDelayVisibleCompletionSessionMirror(persistedEvent) {
@@ -767,6 +881,23 @@ func (at *Tool) wrapWithCallSemantics(
 		}
 	}(runCtx)
 	return out
+}
+
+// shouldSuppressGraphSessionMirror reports whether a child graph event must be
+// kept out of the shared session.
+//
+// It applies the graph-runtime suppression rule, plus one thread-only
+// exception: a thread tool force-enables graph executor events so it can
+// observe a child interrupt, but the graph completion snapshot is the branch's
+// only record of the child's answer, so that snapshot is still mirrored.
+func (at *Tool) shouldSuppressGraphSessionMirror(
+	inv *agent.Invocation,
+	evt *event.Event,
+) bool {
+	if !shouldSuppressGraphRuntimeSessionEvent(inv, evt) {
+		return false
+	}
+	return !at.thread || !isGraphCompletionSnapshotEvent(evt)
 }
 
 func ensureInvocationEventFields(inv *agent.Invocation, evt *event.Event) {
@@ -1316,6 +1447,10 @@ func (at *Tool) runStreamableCall(
 	defer writer.Close()
 	if at.dynamic {
 		at.streamDynamic(ctx, jsonArgs, writer)
+		return
+	}
+	if at.thread {
+		at.streamThread(ctx, jsonArgs, writer)
 		return
 	}
 	parentInv, ok := agent.InvocationFromContext(ctx)
