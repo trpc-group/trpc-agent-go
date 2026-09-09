@@ -1,0 +1,4704 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/blog/memory/">
+      
+      
+        <link rel="prev" href="../trpcagentgo/">
+      
+      
+        <link rel="next" href="../summary/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
+    
+    
+      
+        <title>tRPC-Agent-Go Memory: How Agent Memory Is Formed, Retrieved, and Connected to External Platforms - tRPC-Agent-Go</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+  
+
+
+  
+  
+
+<script id="__analytics">function __md_analytics(){function e(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],e("js",new Date),e("config",""),document.addEventListener("DOMContentLoaded",(function(){document.forms.search&&document.forms.search.query.addEventListener("blur",(function(){this.value&&e("event","search",{search_term:this.value})}));document$.subscribe((function(){var t=document.forms.feedback;if(void 0!==t)for(var a of t.querySelectorAll("[type=submit]"))a.addEventListener("click",(function(a){a.preventDefault();var n=document.location.pathname,d=this.getAttribute("data-md-value");e("event","feedback",{page:n,data:d}),t.firstElementChild.disabled=!0;var r=t.querySelector(".md-feedback__note [data-md-value='"+d+"']");r&&(r.hidden=!1)})),t.hidden=!1})),location$.subscribe((function(t){e("config","",{page_path:t.pathname})}))}));var t=document.createElement("script");t.async=!0,t.src="https://www.googletagmanager.com/gtag/js?id=",document.getElementById("__analytics").insertAdjacentElement("afterEnd",t)}</script>
+  
+    <script>"undefined"!=typeof __md_analytics&&__md_analytics()</script>
+  
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#trpc-agent-go-memory-how-agent-memory-is-formed-retrieved-and-integrated-with-external-memory-platforms" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../assets/img/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            tRPC-Agent-Go
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              tRPC-Agent-Go Memory: How Agent Memory Is Formed, Retrieved, and Connected to External Platforms
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="../../zh/blog/memory/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Overview
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agent/" class="md-tabs__link">
+          
+  
+  
+  Components
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../gateway/" class="md-tabs__link">
+          
+  
+  
+  Server
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../observability/" class="md-tabs__link">
+          
+  
+  
+  Observability
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../ecosystem/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Ecosystem
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../trpcagentgo/" class="md-tabs__link">
+          
+  
+  
+  Blog
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../assets/img/logo.png" alt="logo">
+
+    </a>
+    tRPC-Agent-Go
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Components
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Components
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            Agent
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../goal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Goal Extension
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../multiagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dynamic-workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dynamic Workflow
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../taskrun/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Task Run Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Team
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Custom Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dify Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../claudecode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Claude Code Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codex/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Codex Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Runner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Code Executor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    CodeAct
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Error Handling
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Model
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prompt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Prompt Template
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../callbacks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Callbacks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plugin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Plugins
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_10" id="__nav_2_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_10">
+            <span class="md-nav__icon md-icon"></span>
+            Memory
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Usage and Configuration
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    In-Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/sqlitevec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLiteVec
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/mysqlvec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Vector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    pgvector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/chromadb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ChromaDB
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/mem0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    mem0 Integration
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/tencentdb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TencentDB Agent Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Artifact
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Skill
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evolution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evolution
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tool
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Session
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_15">
+            <span class="md-nav__icon md-icon"></span>
+            Session
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/noop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Noop Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Session Summary
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/tdsql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TDSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ClickHouse Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mongodb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MongoDB Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16" id="__nav_2_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Knowledge
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16">
+            <span class="md-nav__icon md-icon"></span>
+            Knowledge
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/embedder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embedder
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/reranker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reranker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/query-enhancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query Enhancer
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Source
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/code-rag/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Code RAG (Beta)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Filter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Extractor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Management
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/ocr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16_11" id="__nav_2_16_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    VectorStore
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_16_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16_11">
+            <span class="md-nav__icon md-icon"></span>
+            VectorStore
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/tcvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TcVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Elasticsearch
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/qdrant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qdrant
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/milvus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Milvus
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../planner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Planner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../event/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Event
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_19" id="__nav_2_19_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Evaluation
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_19">
+            <span class="md-nav__icon md-icon"></span>
+            Evaluation
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/evalset/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    EvalSet
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/metric/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    EvalMetric
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/evaluator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluator
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/evalresult/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    EvalResult
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/service/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation Service
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/agentevaluator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation Entry Point
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/methods/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation Methods
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Online Evaluation Service
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PromptIter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Server
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Server
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Gateway
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../trpcagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    tRPC-Agent API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    AG-UI
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            AG-UI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Real-Time Conversation Route
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Messages Snapshot Route
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/cancel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Cancel Route
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2a_v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A v1.0
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2a/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A v0.2.x (Legacy)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2UI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../openclaw-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Observability
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Observability
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry-multimodal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multimodal Telemetry
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ecosystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Ecosystem
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Blog
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Blog
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trpcagentgo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Go Agent Framework for Building Intelligent AI Applications
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    tRPC-Agent-Go Memory: How Agent Memory Is Formed, Retrieved, and Connected to External Platforms
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    tRPC-Agent-Go Memory: How Agent Memory Is Formed, Retrieved, and Connected to External Platforms
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-trpc-agent-go-memory-capabilities-and-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. tRPC-Agent-Go Memory Capabilities and Design
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. tRPC-Agent-Go Memory Capabilities and Design">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-three-kinds-of-long-term-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.1 Three kinds of long-term memory
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-why-long-term-memory-is-needed" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.2 Why long-term Memory is needed
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-what-belongs-in-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.3 What belongs in Memory
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-start-with-a-memoryservice" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.4 Start with a memory.Service
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#15-auto-memory-processes-a-session-after-the-response" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.5 Auto Memory processes a Session after the response
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#16-how-memory-returns-to-the-next-request" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.6 How memory returns to the next request
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-built-in-memory-algorithm-improvements-and-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Built-in Memory: Algorithm Improvements and Results
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Built-in Memory: Algorithm Improvements and Results">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-from-memory-storage-to-answer-quality" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.1 From memory storage to answer quality
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-how-policy-handles-later-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.2 How Policy handles later changes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-assistant-replies-can-become-episodic-memories" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.3 Assistant replies can become episodic memories
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-results-across-task-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.4 Results across task types
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-quickly-integrate-agent-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Quickly Integrate Agent Memory
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Quickly Integrate Agent Memory">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-start-with-a-standard-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.1 Start with a standard Agent
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-connect-the-built-in-memory-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.2 Connect the built-in Memory service
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-register-an-adapter-for-an-external-memory-platform" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.3 Register an adapter for an external Memory platform
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      References
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-and-discussion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage and Discussion
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Context Management Design and Evaluation for Long-Running Agents
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evolution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    tRPC-Agent-Go Evolution: Online Learning, Offline Optimization, and Evaluation for Self-Improving Agents
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Seeing the Agent Runtime: Observability Design in tRPC-Agent-Go
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptcache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reducing Agent Token Cost: Prompt Cache Engineering in tRPC-Agent-Go
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    From Conversation to Execution: How tRPC-Agent-Go Code Executor Builds a Controlled Runtime for Agents
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graphagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    GraphAgent Seamlessly Combines AI Workflows and Agents
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Quickly Build AG-UI-Based Agent Services
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Go-Native Implementation of the Anthropic Agent Skills Specification
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../llmverifier/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Improving AI Agent Quality and Stability with LLM Verifier
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openclaw/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Building an Enterprise-Grade, Secure, and Controllable OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Complete Guide to Automated Prompt Iteration and Engineering Practice for AI Agents
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multiagent-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Putting Work in the Right Boundary: Multi-Agent Design in tRPC-Agent-Go
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-trpc-agent-go-memory-capabilities-and-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. tRPC-Agent-Go Memory Capabilities and Design
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. tRPC-Agent-Go Memory Capabilities and Design">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-three-kinds-of-long-term-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.1 Three kinds of long-term memory
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-why-long-term-memory-is-needed" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.2 Why long-term Memory is needed
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-what-belongs-in-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.3 What belongs in Memory
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-start-with-a-memoryservice" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.4 Start with a memory.Service
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#15-auto-memory-processes-a-session-after-the-response" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.5 Auto Memory processes a Session after the response
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#16-how-memory-returns-to-the-next-request" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.6 How memory returns to the next request
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-built-in-memory-algorithm-improvements-and-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Built-in Memory: Algorithm Improvements and Results
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Built-in Memory: Algorithm Improvements and Results">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-from-memory-storage-to-answer-quality" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.1 From memory storage to answer quality
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-how-policy-handles-later-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.2 How Policy handles later changes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-assistant-replies-can-become-episodic-memories" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.3 Assistant replies can become episodic memories
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-results-across-task-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.4 Results across task types
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-quickly-integrate-agent-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Quickly Integrate Agent Memory
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Quickly Integrate Agent Memory">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-start-with-a-standard-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.1 Start with a standard Agent
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-connect-the-built-in-memory-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.2 Connect the built-in Memory service
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-register-an-adapter-for-an-external-memory-platform" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.3 Register an adapter for an external Memory platform
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      References
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-and-discussion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage and Discussion
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/blog/memory.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/blog/memory.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="trpc-agent-go-memory-how-agent-memory-is-formed-retrieved-and-integrated-with-external-memory-platforms">tRPC-Agent-Go Memory: How Agent Memory Is Formed, Retrieved, and Integrated with External Memory Platforms</h1>
+<p><strong>Introduction:</strong> Memory systems differ in how they store information and in the capabilities their platforms provide, so it can be difficult to determine the best fit from the outset. With tRPC-Agent-Go, an existing Agent can keep its current execution flow while using the built-in Memory service with multiple storage backends, or integrate external platforms such as TencentDB Agent Memory and Mem0.</p>
+<blockquote>
+<p>tRPC-Agent-Go is a framework for building autonomous multi-Agent systems in Go. It provides tool calling, session and memory management, artifact management, multi-Agent collaboration, graph orchestration, knowledge bases, and observability, and integrates deeply with tRPC-Go to reuse its service-governance capabilities.</p>
+<p>The repository is hosted on <a href="https://github.com/trpc-group/trpc-agent-go">GitHub</a>. tRPC-Agent-Go grows with the support of its community, and stars on the project are always welcome.</p>
+</blockquote>
+<p>Memory often receives little attention when an Agent is first created for an application, because what the user just said is still available in the current context and tool results can be used directly by subsequent steps. Even without a dedicated Memory service, an Agent can usually continue from earlier content within the same Session.</p>
+<p>As an Agent is used repeatedly and begins handling long-running tasks across Sessions, the importance of Memory gradually becomes clear. Suppose a user has already specified that every database migration must include a rollback script. If that rule exists only in the original conversation, the user has to repeat it after opening a new Session. Memory can carry the rule into the new Session and solve the problem of forgetting, but once information can persist over the long term, the system must also handle how that information changes later. If the user revises the rule, the system needs to know which version should take precedence. If the user explicitly asks to delete it, the old content should no longer appear in search results. These issues emerge progressively as the Agent is used over time.</p>
+<p><img alt="Memory nine-grid" src="../../assets/img/blog/memory/memory-nine-grid-v3-en.png" /></p>
+<p><em>Figure 1: Continuing the current conversation does not mean that a new Session can use the same confirmed information. An application can use tRPC-Agent-Go's built-in Memory or delegate memory processing to an external platform.</em></p>
+<p>On top of cross-Session persistence, tRPC-Agent-Go's built-in Memory adds Preserve History and Assistant Episode. Preserve History retains historical records when information changes and merges only non-conflicting additions into the original Entry. Assistant Episode stores results previously produced by the Agent as episodic memories together with their conversational context.</p>
+<p>In tRPC-Agent-Go, configuring a Memory Service on the Runner enables built-in Memory for an existing Agent, while Options can continue to adjust automatic extraction and recall behavior. tRPC-Agent-Go also makes it straightforward to integrate external memory platforms without rewriting the application's main flow: register the platform adapter with the Runner and add a Reader, Tool, or Plugin as needed. This allows applications to integrate TencentDB Agent Memory, Mem0, and other memory platforms with minimal changes to existing Agent logic.</p>
+<p>If you want to get started quickly with tRPC-Agent-Go Memory, skip directly to Chapter 3 or see the <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory">tRPC-Agent-Go Memory examples</a>.</p>
+<h2 id="1-trpc-agent-go-memory-capabilities-and-design">1. tRPC-Agent-Go Memory Capabilities and Design</h2>
+<h3 id="11-three-kinds-of-long-term-memory">1.1 Three kinds of long-term memory</h3>
+<p>When designing long-term memory for Agents, the industry often draws on classifications of human memory and divides information that should be retained over the long term into semantic, episodic, and procedural memory. <a href="https://docs.langchain.com/oss/python/concepts/memory">LangGraph's memory concepts</a> use the same classification.</p>
+<p>Semantic memory stores relatively stable user information, preferences, and background. In tRPC-Agent-Go, it corresponds to a Fact. For example, if a user explicitly requires every database migration to include a rollback script, that requirement can be extracted as a Fact. When the user later starts a new migration task, the Agent can still retrieve this confirmed requirement.</p>
+<p>Episodic memory stores a specific experience. In the framework, it corresponds to an Episode. Continuing the migration-review example, if a submission was rejected because it lacked a rollback script, an Episode can record what happened, who was involved, and how the issue was eventually resolved. If the user later asks why that review failed, the Agent can answer from the recorded experience. To preserve the surrounding context, an Episode can also record the event time, participants, and location.</p>
+<p>Procedural memory stores methods that can be followed in the future. For example, an Agent can distill migration-review experience into a reusable checklist that specifies what to inspect first, how to handle a missing rollback script, and which conditions must be satisfied before submission. Because this kind of memory guides future actions, it is better represented as a reusable Skill.</p>
+<p>tRPC-Agent-Go assigns these three kinds of memory to different capabilities. The built-in <code>memory.Service</code> manages Facts and Episodes. Procedural memory is implemented with <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/skill.md">Skill</a> and <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/evolution.md">Evolution</a>. A Skill records when a method applies, the steps to follow, and its constraints. When Evolution is enabled, the framework analyzes earlier executions in the background and extracts reusable Skills. After a Skill is published, an Agent can load it when a similar task appears.</p>
+<p>The built-in Memory discussed below therefore refers mainly to Facts and Episodes managed by <code>memory.Service</code>.</p>
+<h3 id="12-why-long-term-memory-is-needed">1.2 Why long-term Memory is needed</h3>
+<p>To understand why an Agent needs long-term Memory, first look at what a Session already provides. In tRPC-Agent-Go, an application request typically starts with <code>Runner.Run</code>. The Runner locates the current conversation using the App, User, and Session identifiers, and the Session Service stores user messages, Assistant replies, tool calls, and state changes. When a later request uses the same Session ID, the Runner restores this content, allowing the Agent to continue from the earlier conversation.</p>
+<p>The Session ID also marks the boundary of that context. When a user chooses a new Session ID, the Runner enters a different conversation. The old messages are still stored in the Session Service, but they are not automatically included in the new Session's model request. A rule remembered inside the current Session is therefore still only session context. Long-term Memory is needed when the same rule must be available in a new Session.</p>
+<p>A Session preserves the full context of a conversation, including messages, tool events, and runtime state. It does not decide which details will remain useful later, nor does it organize those details for use by other Sessions. When the same user needs a previously confirmed rule, preference, or experience in a new Session, long-term Memory extracts that information and makes it available again.</p>
+<h3 id="13-what-belongs-in-memory">1.3 What belongs in Memory</h3>
+<p>Long-term Memory extracts information that may remain useful and carries it into a new Session. A confirmed migration requirement is a good Memory Entry because a later review may need it. tRPC-Agent-Go scopes built-in Entries with <code>memory.UserKey{AppName, UserID}</code>. Session ID is not part of this key, so a new Session for the same user can still search for the earlier Entry.</p>
+<p>Memory stores information extracted from a conversation; it does not preserve the entire conversation verbatim. If information is needed only to continue the current task, Session already stores the messages, tool events, and runtime state. Session is more complete for replaying the conversation, but it does not automatically enter a new Session.</p>
+<p>When a Session becomes long, Summary can compress older content so the full history does not have to be sent to the model every time. Summary continues the current Session; generating a summary does not turn it into a long-term Entry searchable by other Sessions. Rules, preferences, or experiences that must cross Sessions still belong in Memory.</p>
+<p>Some information needs to persist for a long time but is not suitable for semantic extraction by Memory. For example, whether a game quest has been unlocked, which rule version is currently active, or whether an approval has been granted are structured application values. Application code typically needs a deterministic result for a fixed key, so this kind of data is better stored in State. State can be scoped to a Session, User, or App and is read through an explicit key rather than semantic similarity.</p>
+<p>If a later task needs the original wording or the tool execution process, Session Recall can search persisted Events from other Sessions belonging to the same user. It returns the original conversation content. Memory returns extracted and organized Entries, which are usually more convenient as background for a new task.</p>
+<p><img alt="Session and long-term Memory boundaries" src="../../assets/img/blog/memory/memory-session-boundary-en.svg" /></p>
+<p><em>Figure 2: Long-term Memory stores organized information. Session and Summary continue the current conversation, State stores exact application values, and Session Recall retrieves original Events from other Sessions.</em></p>
+<p>The first question is therefore whether a piece of information is worth retaining for repeated use in future tasks. If so, it belongs in Memory. Use Session or Summary when only the current conversation needs to continue, State when deterministic reads and writes are required, and Session Recall when the original interaction or execution process needs to be recovered.</p>
+<h3 id="14-start-with-a-memoryservice">1.4 Start with a <code>memory.Service</code></h3>
+<p>The Facts and Episodes described above are stored as <code>memory.Entry</code> values and managed by <code>memory.Service</code>. An application creates a Service and gives it to the Runner; the existing Agent type and request entry point do not change. If the model should maintain memories itself, add the Service's tools to the Agent. If some memories should be visible before every model call, enable preload.</p>
+<p>The framework keeps read access in the smaller <code>memory.Reader</code> interface. It reads and searches existing Entries. <code>memory.Service</code> adds writing and maintenance, manages automatic extraction jobs, and owns background resources. Application code can call the Service directly, an Agent can use its tools, and the Runner can give it each completed Session.</p>
+<p>During development, start with InMemory. Switch to SQLite when data must survive a process restart. If several instances need shared data, choose Redis, MySQL, PostgreSQL, pgvector, or ChromaDB according to the infrastructure already available. Retrieval and deletion details differ by backend, but the Agent, Runner, and <code>Runner.Run</code> wiring stays the same.</p>
+<p>After creating the Service, decide how information should be written. If the application has already prepared the content and needs to confirm the result immediately, calling the Service's CRUD APIs directly is the clearest approach. By default, the agentic tools expose Add, Update, Search, and Load; Delete and Clear must be enabled explicitly. Once enabled, the Agent can call the corresponding Memory tools when the user explicitly says something such as "remember this rule" or "delete this information." Preferences and experiences that emerge gradually during ordinary conversation can instead be handled by Auto Memory after a response is completed.</p>
+<p>All three approaches can use the same Service, but they serve different purposes. Direct application writes return a result within the current call. Tool-based writes happen only when the model decides to invoke the tool. Auto Memory additionally relies on an Extractor to interpret the conversation. Creating a Service therefore enables Memory as a capability, but the application still chooses which write path to use.</p>
+<h3 id="15-auto-memory-processes-a-session-after-the-response">1.5 Auto Memory processes a Session after the response</h3>
+<p>Many useful memories appear in ordinary conversation rather than in an explicit memory command. A compatibility requirement may be discussed over several turns and only become clear in the final exchange. Auto Memory checks new conversation content after a turn and extracts information that may be useful later.</p>
+<p>To enable it, configure an Extractor on the Service. The Runner completes the Agent call, writes the completion event to the Session, and sends the response to the caller before it invokes <code>EnqueueAutoMemoryJob</code>. A background worker then gets unprocessed messages and relevant existing Entries. The Extractor returns Add, Update, Delete, or Clear Operations, and the worker applies the selected update policy before writing them to the Service.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant U as User
+    participant R as Runner
+    participant A as Agent
+    participant S as Session Service
+    participant W as Auto Memory Worker
+    participant X as Extractor
+    participant M as memory.Service
+
+    U-&gt;&gt;R: Runner.Run
+    R-&gt;&gt;A: Run the Agent turn
+    A--&gt;&gt;R: Events and answer
+    R-&gt;&gt;S: Save completion
+    R--&gt;&gt;U: Stream completion
+    R-&gt;&gt;W: EnqueueAutoMemoryJob(Session)
+    W-&gt;&gt;M: Read relevant old Entries
+    W-&gt;&gt;X: New messages + old Entries
+    X--&gt;&gt;W: Operations
+    W-&gt;&gt;M: Apply Operations one by one</code></pre>
+<p><em>Figure 3: The Runner delivers the answer first and then sends the Session to Auto Memory. The long-term Entry is normally formed in the background.</em></p>
+<p>When the answer is already visible, the long-term Entry may not exist yet. A successfully queued job means only that the worker accepted it. To verify that Auto Memory has finished, read or search the target Entry in the Service. Running the Extractor after every turn also adds model calls and may split an unfinished discussion too early. A Checker lets messages accumulate until the configured condition is met.</p>
+<p><code>CheckMessageThreshold</code> checks how many messages have not been processed. <code>CheckTimeInterval</code> checks how long it has been since the previous extraction. Multiple <code>WithChecker</code> options are combined with AND; <code>WithCheckersAny</code> changes the combination to OR.</p>
+<p>When a Checker returns false, unprocessed messages remain in the Session and are considered by the next job. The Checker chooses when extraction starts; the Extractor and update policy still decide what to save and how to handle existing records.</p>
+<p>A batch of Operations can also finish partially. If searching related old memories fails, Auto Memory first falls back to <code>ReadMemories</code> and reads a recent set of Entries. Processing stops before writing only if that fallback read also fails or the Extractor call fails.</p>
+<p>If an individual write Operation fails, the worker records the error and continues with the remaining Operations. After the batch is processed, the extraction watermark still advances. A failed Operation is not retried automatically, and successful writes are not rolled back. Auto Memory is therefore best for information that can be extracted again or corrected later. Rules that must take effect atomically belong in a configuration or transactional database.</p>
+<h3 id="16-how-memory-returns-to-the-next-request">1.6 How memory returns to the next request</h3>
+<p>After an Entry has been written, the framework finds candidates within the current user's memory scope. <code>ReadMemories</code> needs no query and reads Entries from newest to oldest by update time. <code>SearchMemories</code> scores relevance for the current question and orders the results. The <code>memory_load</code> and <code>memory_search</code> tools use these two paths: the former is useful for seeing recent memories, while the latter searches around a specific question.</p>
+<p>The scoring method depends on the storage backend. A keyword backend tokenizes Entry text and Topics, then combines coverage, rarity, and contiguous phrase scores. A vector backend embeds the query and obtains candidates by vector similarity. Hybrid search can fuse vector and keyword results, so a different phrasing can still find a memory while exact strings such as code names and version numbers remain easier to match.</p>
+<p>Search first scopes results with <code>memory.UserKey{AppName, UserID}</code>, then can filter by Fact, Episode, or event time. When searching one memory kind returns too few results, Kind Fallback can search the other kinds as well.</p>
+<p>Deduplication and a maximum result count can control a large set of similar results. Whether a similarity threshold is applied depends on the search mode: vector backends skip cosine-similarity threshold filtering when hybrid search is enabled because the fused score has a different scale. Time ordering can be enabled when the question depends on event order. It changes the order of similarly relevant results; it does not promote an irrelevant memory.</p>
+<p>The model can call these read interfaces on demand, or the framework can load memories before the model call. Giving <code>memory_search</code> or <code>memory_load</code> to the Agent lets the model decide when to query. This saves context in ordinary turns, but the model may fail to notice that a search is needed. For a question with several independent parts, shorter queries can be searched separately and their results combined.</p>
+<p>If the model should see long-term background before answering, enable preload. Preload is disabled by default, and <code>WithPreloadMemory(0)</code> also keeps it disabled. A positive N sets the memory budget for the turn. <code>-1</code> loads all Entries and is suitable only when the number of memories is bounded. For a long-running application, start with a small positive value.</p>
+<p>For a positive budget N, the framework first reads N+1 Entries. The extra Entry tells it whether the total exceeds the budget. If it does not, the Entries are injected directly. If it does, the current user message is used as a query and the most relevant N Entries are searched, with hybrid search and deduplication requested when supported by the backend. If search fails, the query is empty, or no usable result is returned, the framework falls back to reading the newest N Entries.</p>
+<p><img alt="Preload budget and fallback" src="../../assets/img/blog/memory/memory-preload-budget-en.svg" /></p>
+<p><em>Figure 4: With a positive preload budget N, the framework reads N+1 Entries first. If the count exceeds the budget, it searches for N relevant Entries. A read failure does not block the model call.</em></p>
+<p>Preloaded memories are injected into the system context by default. <code>WithPreloadMemoryInjectionMode(llmagent.PreloadMemoryInjectionUser)</code> can place them near the user/history messages instead. That mode is friendlier to prompt caching, but the injected content participates in token trimming. <code>WithPreloadMemoryPlaybook</code> replaces the default reading instructions with an application-supplied playbook. When a non-empty value is provided, the built-in playbook is not retained, so the caller must include any default constraints it still needs. An empty string keeps the built-in playbook.</p>
+<p>Session Summary, Session Recall, long-term Memory, and the current Session history may all enter one model request. The framework does not automatically merge them into one deduplicated context. If the same fact exists in an old Event and a Memory Entry, it may consume input space twice. Set budgets for each source and inspect model-request logs to see what the model actually receives.</p>
+<h2 id="2-built-in-memory-algorithm-improvements-and-results">2. Built-in Memory: Algorithm Improvements and Results</h2>
+<h3 id="21-from-memory-storage-to-answer-quality">2.1 From memory storage to answer quality</h3>
+<p>The flow above can turn a conversation into a long-term memory for a new Session. A formed memory does not guarantee a correct answer, however. Later updates can remove details, and information that exists only in an Assistant reply may be missed by ordinary extraction. The framework addresses these two cases with a more conservative update policy and an additional Assistant extraction stage.</p>
+<p>In a historical fixed 50-question LongMemEval-S run, the default Merge Similar policy with Assistant Episode disabled reached 28% answer accuracy. Switching to Preserve History raised it to 82%. Enabling Assistant Episode on top of that reached <strong>90%</strong>, with 45 correct answers instead of the original 14. The configurations and the Mem0 OSS comparison are shown below.</p>
+<table>
+<thead>
+<tr>
+<th>Configuration</th>
+<th>Assistant Episode</th>
+<th style="text-align: right;">Accuracy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Built-in Memory, Merge Similar</td>
+<td>Off</td>
+<td style="text-align: right;">28%</td>
+</tr>
+<tr>
+<td>Built-in Memory, Merge Similar</td>
+<td>On</td>
+<td style="text-align: right;">58%</td>
+</tr>
+<tr>
+<td>Built-in Memory, Preserve History</td>
+<td>Off</td>
+<td style="text-align: right;">82%</td>
+</tr>
+<tr>
+<td>Built-in Memory, Preserve History</td>
+<td>On</td>
+<td style="text-align: right;"><strong>90%</strong></td>
+</tr>
+<tr>
+<td>Built-in Memory, Append Only</td>
+<td>Off</td>
+<td style="text-align: right;">82%</td>
+</tr>
+<tr>
+<td>Built-in Memory, Append Only</td>
+<td>On</td>
+<td style="text-align: right;">88%</td>
+</tr>
+<tr>
+<td>Mem0 OSS 2.0.11, native</td>
+<td>N/A</td>
+<td style="text-align: right;">84%</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Evaluation note:</strong> The LongMemEval-S main result uses a fixed set of 50 questions. Historical sessions are replayed through the Runner; after memory is written, the question is answered in a new Session, and failures count in the denominator. The 28% baseline already uses built-in Memory. The built-in configurations use the same main dataset and settings, including <code>glm52</code>, <code>text-embedding-ada-002</code>, and pgvector top-k 20, while the code versions differ. Mem0 OSS uses the same evaluation program with its native configuration. See the <a href="https://github.com/trpc-group/trpc-agent-go-benchmark/blob/main/memory/results/README.md">evaluation results</a> for details.</p>
+</blockquote>
+<h3 id="22-how-policy-handles-later-changes">2.2 How Policy handles later changes</h3>
+<p>When Auto Memory processes conversations continuously, the same subject may appear at different times. A project may first require Go 1.21 and later raise the minimum to Go 1.23. The Extractor must identify the relationship between the two statements before deciding what to do with the old record. That decision is constrained by the Update Policy.</p>
+<p>The policy is applied in two places. The Extractor uses the policy-specific prompt to understand old and new information and produce Add, Update, Delete, or Clear Operations. Before writing, the worker applies the same policy to remove duplicates and prevent an update from silently losing old information. The model handles language-level interpretation; the worker enforces local write boundaries without another model call.</p>
+<p>The default Merge Similar policy preserves the framework's original merging behavior. Auto Memory searches Entries similar to the new content and combines relevance with text overlap to decide whether they are duplicates. When the similarity is high, the presence of a new <code>Topic</code> also affects whether an update is allowed. This keeps memory compact when only the current conclusion matters, but the result still depends on backend search and model-generated Operations.</p>
+<p>Later discussion of the same subject does not necessarily invalidate an earlier fact. In one case, a user said on May 30 that they had completed seven short stories. On June 16, they added that they were writing a new story and aimed to write 500 words per week. The second conversation added a writing update but did not change the completed count. Under the default policy, the resulting memory no longer contained the number seven, so the Agent could not answer the count in a new Session.</p>
+<p>The loss happened while writing the memory. Once the original number is absent from the final Entry, changing the query, adding a tag, or searching an index cannot recover it. The first requirement for a correct answer in the new Session is to prevent later conversation from overwriting a still-valid detail.</p>
+<p><img alt="Memory retrieval checkpoints" src="../../assets/img/blog/memory/memory-recall-checkpoints-en.svg" /></p>
+<p><em>Figure 5: One piece of information must become an Entry, be retrieved, and enter the model request before it can affect an answer. Content lost during writing cannot be restored by later retrieval.</em></p>
+<p>Two passages can be broadly similar while describing different facts. A changed number, date, or status may represent a new fact. An update policy therefore needs to distinguish an addition to an old fact from a change to it.</p>
+<p>Append Only takes the conservative route: it keeps new facts alongside old ones and lets retrieval combine them later. It follows an add-only idea similar to Mem0's add-only mode, converts Update to Add, filters exact duplicates, and skips Delete and Clear produced by automatic extraction. In the Go-version example, the Go 1.21 record remains and the Go 1.23 requirement becomes another memory.</p>
+<p>Append Only avoids losing information during writes, but similar records and historical changes accumulate. The worker removes duplicates among the Entries found for the current batch and query; it does not scan every memory on each write. Long-running applications should therefore watch Entry growth and duplicate results at retrieval time.</p>
+<p>Sometimes a fact is gradually enriched rather than changed. For example, an earlier Entry might say <code>Alice visited Bob on December 1st, 2025.</code>, and a later conversation might add <code>Alice visited Bob at 4pm on December 1st, 2025.</code> The later sentence adds a time to the same visit. Saving every such addition separately would create many near-duplicates. Preserve History keeps the possibility of updating the original Entry, provided the new content is a non-conflicting addition. If a number, date, or status changes, the framework tries to preserve both versions.</p>
+<p>To decide whether new content can enrich an old Entry, Preserve History first rules out an exact duplicate. It compares normalized text, memory kind, event time, participants, and location. If these are all the same, it skips the write. <code>Topics</code> do not participate in duplicate detection, so changing only a label does not create another Entry. Content that is not a duplicate is then checked for compatible event context. If the date, participants, or location no longer match, the old Entry is kept and a new one is added.</p>
+<p>For the same event, the framework also checks whether the new text preserves the old content and whether it adds too much unrelated content. The current implementation computes old-content coverage and the share of common content in the new text, using thresholds of 0.95 and 0.70. It then checks important tokens, numbers, negation, and token order. These checks distinguish an addition from a changed fact. For example, <code>Alice manages Bob.</code> becoming <code>Bob manages Alice.</code>, or "published every Wednesday" becoming "no longer published every Wednesday," must not be written back as an ordinary enrichment. If any check fails, the old Entry remains and the new content is handled as Add. The worker performs this decision locally without another model call.</p>
+<pre class="mermaid"><code>flowchart LR
+    N[New Add or Update] --&gt; D{Text and event information identical?}
+    D --&gt;|Yes| S[Skip duplicate]
+    D --&gt;|No| I{Event context compatible?}
+    I --&gt;|No| A[Keep old Entry&lt;br/&gt;Add a new Entry]
+    I --&gt;|Yes| C{Old content preserved&lt;br/&gt;and change checks pass?}
+    C --&gt;|No| A
+    C --&gt;|Yes| U[Update old Entry&lt;br/&gt;Add new details]</code></pre>
+<p><em>Figure 6: Preserve History checks text and event information for both Add and Update. A passing enrichment updates the old record; other content becomes a new Entry. The diagram assumes both operations are enabled.</em></p>
+<p>The same checks apply when the Extractor directly returns Update. If the target record does not exist, or the new content fails the enrichment checks, Update is converted to Add and the old text is not replaced.</p>
+<p>Returning to the lost story count, replaying the two conversations with Preserve History keeps the original seven-story Entry and adds the writing update and weekly goal. In a new Session, the Agent can find the number and answer seven. The two strategies produce the following results.</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Merge Similar</th>
+<th>Preserve History</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Memory after the first interaction</td>
+<td>Keeps the completed count of seven</td>
+<td>Keeps the completed count of seven</td>
+</tr>
+<tr>
+<td>Final memory after the second interaction</td>
+<td>Keeps the update and goal; the original count is missing</td>
+<td>Keeps the original count and adds the update and goal</td>
+</tr>
+<tr>
+<td>Search in the new Session</td>
+<td>No basis for seven</td>
+<td>Finds the completed-count Entry</td>
+</tr>
+<tr>
+<td>Answer in the new Session</td>
+<td>Cannot determine the count</td>
+<td>Answers seven</td>
+</tr>
+</tbody>
+</table>
+<p>The three policies make different trade-offs. Merge Similar keeps memory compact when only the current conclusion matters. Append Only is useful when losing an old value is unacceptable and changes should coexist. Preserve History is useful when history should remain available while non-conflicting additions can still be merged.</p>
+<p>The default remains Merge Similar so a framework upgrade does not silently change existing applications' memory shape and update behavior. The Update Policy is selected when the Extractor is created and applies from the next automatic extraction onward. Existing Entries are not migrated or rewritten when the policy changes.</p>
+<p>Preserve History and Append Only also treat deletion differently. Preserve History asks the model to select Delete only when the user clearly asks to forget something, and the worker then executes that Operation normally. Append Only filters Delete and Clear produced by automatic extraction.</p>
+<p>These policies constrain the built-in Extractor and Auto Memory worker only. Direct Service calls and explicit write tools still follow their corresponding interfaces.</p>
+<h3 id="23-assistant-replies-can-become-episodic-memories">2.3 Assistant replies can become episodic memories</h3>
+<p>By default, long-term memory is mainly extracted from user-provided information. In some tasks, an Agent's own result is worth preserving. An Agent may complete a troubleshooting task and provide steps that are later confirmed. When a similar issue appears, a new Session may need that experience.</p>
+<p>Ordinary extraction can use an Assistant reply as context, but it may miss information supplied only by the Assistant. If a procedure exists only in the reply and the user never repeats it, Preserve History cannot preserve an Entry that was never created. This is why the framework adds a separate Assistant extraction stage.</p>
+<p>LongMemEval contains examples of this gap. In one conversation, the Assistant mentions that a study had 38 participants. In another, the Assistant introduces the cartoon <code>Nu, pogodi!</code>. The user does not repeat the number or title, and the resulting memory contains only their interest in the topic. In a new Session, that interest does not answer how many people took part or what the cartoon was called. When the answer depends on an earlier Assistant response, ordinary user-information extraction may leave a gap.</p>
+<p>An Assistant reply must also be kept in its original context. It may contain an unconfirmed recommendation or a hallucination. Writing it directly as a Fact could turn "the Assistant suggested this plan" into "the user adopted this plan," causing later answers to rely on an unverified claim.</p>
+<p><code>WithAssistantEpisodeExtraction()</code> therefore writes only episodic memories. The Extractor organizes the user's question and the Assistant's result together, marks that the content came from the Assistant, and records the relationship between the participants. Later tasks can find the number, title, or troubleshooting procedure with the context needed to interpret it. An Episode records what was said at that time; whether the answer was correct or the recommendation was executed still needs confirmation from tool results, tests, or user feedback.</p>
+<p>The Extractor first handles user information through ordinary extraction and then processes Assistant results in a separate stage. The second stage selects reusable user/assistant interactions from new messages, excludes tool messages and intermediate replies with tool calls, excludes interactions the user asked to forget, and sends the candidates to the model in batches.</p>
+<p>Each extracted result carries a source identifier. The framework uses it to find the original interaction and check duplication, length, and whether numbers appear in the source. Failed checks are skipped. Valid Episodes are combined with ordinary Operations and passed through the selected policy and Service.</p>
+<pre class="mermaid"><code>flowchart LR
+    C[New Session messages] --&gt; O[Ordinary extraction&lt;br/&gt;User information and maintenance]
+    O --&gt; F[Select reusable&lt;br/&gt;User / Assistant interactions]
+    F --&gt; X[Separate batched extraction&lt;br/&gt;Earlier Assistant results]
+    X --&gt; V[Source matching and content checks]
+    O --&gt; J[Combine ordinary Operations&lt;br/&gt;and valid Episode Adds]
+    V --&gt; J
+    J --&gt; P[Selected Update Policy]
+    P --&gt; M[(Built-in Memory)]
+    X -.-&gt;|Optional stage request fails| J</code></pre>
+<p><em>Figure 7: After ordinary extraction, the framework extracts reusable results from Assistant replies, validates them, and sends valid Operations through the Policy and Service.</em></p>
+<p>Assistant Episode is disabled by default because it stores Agent-generated content, may add model calls, and can increase later context. Enable it with <code>WithAssistantEpisodeExtraction()</code> when later tasks must recover a result previously given by the Agent.</p>
+<p>When enabled, the second model call runs only when the current batch contains suitable candidates. With no candidates, the stage is skipped. A failure in this optional stage preserves ordinary extraction results. Cancellation by the caller or failure of ordinary extraction still returns an extraction error.</p>
+<h3 id="24-results-across-task-types">2.4 Results across task types</h3>
+<p>The following table breaks down the LongMemEval results by question type and shows how the two improvements contribute.</p>
+<table>
+<thead>
+<tr>
+<th>Question type</th>
+<th style="text-align: right;">Questions</th>
+<th style="text-align: right;">Merge Similar, Assistant Off</th>
+<th style="text-align: right;">Preserve History, Assistant Off</th>
+<th style="text-align: right;">Preserve History, Assistant On</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Knowledge update</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">8</td>
+</tr>
+<tr>
+<td>Multi-Session reasoning</td>
+<td style="text-align: right;">13</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">11</td>
+<td style="text-align: right;">10</td>
+</tr>
+<tr>
+<td>Assistant information</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">5</td>
+</tr>
+<tr>
+<td>User preference</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr>
+<td>User fact</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">7</td>
+</tr>
+<tr>
+<td>Temporal reasoning</td>
+<td style="text-align: right;">13</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">13</td>
+<td style="text-align: right;">13</td>
+</tr>
+<tr>
+<td>Total</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">14</td>
+<td style="text-align: right;">41</td>
+<td style="text-align: right;">45</td>
+</tr>
+</tbody>
+</table>
+<p>Preserve History adds eight correct answers in both multi-Session reasoning and temporal reasoning. Assistant Episode then adds five answers to questions that were previously missing Assistant information, raising overall accuracy from 82% to 90%.</p>
+<p>We also compared update policies on ten long conversations from LoCoMo. F1 measures token overlap between an answer and its reference, while LLM Score records the judging model's confidence. For LLM Score, a correct judgment contributes the model's confidence and an incorrect judgment contributes zero; the values are averaged over all questions.</p>
+<blockquote>
+<p>LoCoMo uses all 1,986 QA pairs with <code>gpt-4o-mini</code>, <code>text-embedding-3-small</code>, and top-k 30. Its second participant is mapped to Assistant during replay, so these results compare update policies with Assistant Episode disabled.</p>
+</blockquote>
+<p>The next table also reports a weighted F1 for answerable questions. After adversarial questions are excluded, 1,540 questions remain for that column.</p>
+<table>
+<thead>
+<tr>
+<th>Configuration</th>
+<th style="text-align: right;">F1 on all QA</th>
+<th style="text-align: right;">LLM Score on all QA</th>
+<th style="text-align: right;">Weighted F1 on answerable questions</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Historical reference configuration (report)</td>
+<td style="text-align: right;">0.4690</td>
+<td style="text-align: right;">0.5320</td>
+<td style="text-align: right;">0.4230</td>
+</tr>
+<tr>
+<td>Preserve History</td>
+<td style="text-align: right;"><strong>0.4865</strong></td>
+<td style="text-align: right;"><strong>0.5609</strong></td>
+<td style="text-align: right;"><strong>0.4579</strong></td>
+</tr>
+<tr>
+<td>Append Only</td>
+<td style="text-align: right;">0.4773</td>
+<td style="text-align: right;">0.5441</td>
+<td style="text-align: right;">0.4402</td>
+</tr>
+</tbody>
+</table>
+<p>Preserve History is highest on all three metrics in this long-conversation set. Append Only is also above the historical reference, but by a smaller margin. Applications that need to keep historical changes without allowing too many near-duplicates can start by trying Preserve History.</p>
+<h2 id="3-quickly-integrate-agent-memory">3. Quickly Integrate Agent Memory</h2>
+<p>Adding Memory to an existing Agent does not require a separate, dedicated Agent. The existing model, Instruction, application tools, and <code>Runner.Run</code> entry point can all remain unchanged. The additional configuration only determines how conversations are processed and how long-term information is brought back into later requests. Both the built-in Memory implementation and external platforms can be integrated directly into an Agent that initially has only a Session Service.</p>
+<h3 id="31-start-with-a-standard-agent">3.1 Start with a standard Agent</h3>
+<p>The following example starts with a standard Agent configured only with a Session Service. It reuses the application's existing <code>chatModel</code>, <code>businessInstruction</code>, <code>businessTools</code>, request parameters, and the <code>handleEvent</code> event handler. The Session Service stores the current conversation, while external requests continue to enter through <code>Runner.Run</code>. In actual code, place the imports at the top of the source file and put the remaining statements inside an application function that returns <code>error</code>. The example below shows a standard Agent <strong>without long-term Memory enabled</strong>.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-0-10">10</a></span>
+<span class="normal"><a href="#__codelineno-0-11">11</a></span>
+<span class="normal"><a href="#__codelineno-0-12">12</a></span>
+<span class="normal"><a href="#__codelineno-0-13">13</a></span>
+<span class="normal"><a href="#__codelineno-0-14">14</a></span>
+<span class="normal"><a href="#__codelineno-0-15">15</a></span>
+<span class="normal"><a href="#__codelineno-0-16">16</a></span>
+<span class="normal"><a href="#__codelineno-0-17">17</a></span>
+<span class="normal"><a href="#__codelineno-0-18">18</a></span>
+<span class="normal"><a href="#__codelineno-0-19">19</a></span>
+<span class="normal"><a href="#__codelineno-0-20">20</a></span>
+<span class="normal"><a href="#__codelineno-0-21">21</a></span>
+<span class="normal"><a href="#__codelineno-0-22">22</a></span>
+<span class="normal"><a href="#__codelineno-0-23">23</a></span>
+<span class="normal"><a href="#__codelineno-0-24">24</a></span>
+<span class="normal"><a href="#__codelineno-0-25">25</a></span>
+<span class="normal"><a href="#__codelineno-0-26">26</a></span>
+<span class="normal"><a href="#__codelineno-0-27">27</a></span>
+<span class="normal"><a href="#__codelineno-0-28">28</a></span>
+<span class="normal"><a href="#__codelineno-0-29">29</a></span>
+<span class="normal"><a href="#__codelineno-0-30">30</a></span>
+<span class="normal"><a href="#__codelineno-0-31">31</a></span>
+<span class="normal"><a href="#__codelineno-0-32">32</a></span>
+<span class="normal"><a href="#__codelineno-0-33">33</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/model"</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/runner"</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nx">sessioninmemory</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/session/inmemory"</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessioninmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="k">defer</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="nx">businessAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="s">"business-agent"</span><span class="p">,</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">chatModel</span><span class="p">),</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="nx">businessInstruction</span><span class="p">),</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">businessTools</span><span class="p">),</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="p">)</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="nx">appRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="w">    </span><span class="s">"business-app"</span><span class="p">,</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="w">    </span><span class="nx">businessAgent</span><span class="p">,</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="p">)</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="k">defer</span><span class="w"> </span><span class="nx">appRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">appRunner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="nx">userInput</span><span class="p">),</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="p">)</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="p">}</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="nx">handleEvent</span><span class="p">(</span><span class="nx">event</span><span class="p">)</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The Session Service is created by application code and passed to the Runner, but ownership remains with the caller, so the caller is still responsible for closing it. The two <code>defer</code> calls execute in last-in-first-out order: when the application exits, the Runner is closed first and the Session Service is closed afterward, stopping its cleanup tasks and asynchronous summarizer.</p>
+<p>Within one Session, later requests continue because the Runner restores saved events. A new Session does not automatically see the earlier confirmed information. This same code can later be configured with built-in Memory or an external platform; an external platform does not require built-in Memory to be enabled first.</p>
+<h3 id="32-connect-the-built-in-memory-service">3.2 Connect the built-in Memory service</h3>
+<p>If the application does not need capabilities specific to an external platform, the built-in <code>memory.Service</code> is the recommended starting point. Create a Service, add its tools to the Agent, and register the same Service with the Runner. The existing Agent then gains cross-Session long-term Memory. Replace the Agent and Runner setup above with the following code to <strong>enable the Memory Service</strong>.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-1-10">10</a></span>
+<span class="normal"><a href="#__codelineno-1-11">11</a></span>
+<span class="normal"><a href="#__codelineno-1-12">12</a></span>
+<span class="normal"><a href="#__codelineno-1-13">13</a></span>
+<span class="normal"><a href="#__codelineno-1-14">14</a></span>
+<span class="normal"><a href="#__codelineno-1-15">15</a></span>
+<span class="normal"><a href="#__codelineno-1-16">16</a></span>
+<span class="normal"><a href="#__codelineno-1-17">17</a></span>
+<span class="normal"><a href="#__codelineno-1-18">18</a></span>
+<span class="normal"><a href="#__codelineno-1-19">19</a></span>
+<span class="normal"><a href="#__codelineno-1-20">20</a></span>
+<span class="normal"><a href="#__codelineno-1-21">21</a></span>
+<span class="normal"><a href="#__codelineno-1-22">22</a></span>
+<span class="normal"><a href="#__codelineno-1-23">23</a></span>
+<span class="normal"><a href="#__codelineno-1-24">24</a></span>
+<span class="normal"><a href="#__codelineno-1-25">25</a></span>
+<span class="normal"><a href="#__codelineno-1-26">26</a></span>
+<span class="normal"><a href="#__codelineno-1-27">27</a></span>
+<span class="normal"><a href="#__codelineno-1-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/runner"</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/tool"</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="p">)</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="nx">memoryService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">NewMemoryService</span><span class="p">()</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="k">defer</span><span class="w"> </span><span class="nx">memoryService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="nx">agentTools</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">append</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{},</span><span class="w"> </span><span class="nx">businessTools</span><span class="p">...)</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="nx">agentTools</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">agentTools</span><span class="p">,</span><span class="w"> </span><span class="nx">memoryService</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()...)</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a><span class="nx">businessAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15"></a><span class="w">    </span><span class="s">"business-agent"</span><span class="p">,</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">chatModel</span><span class="p">),</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="nx">businessInstruction</span><span class="p">),</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">agentTools</span><span class="p">),</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadMemory</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20"></a><span class="p">)</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21"></a>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22"></a><span class="nx">appRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23"></a><span class="w">    </span><span class="s">"business-app"</span><span class="p">,</span>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24"></a><span class="w">    </span><span class="nx">businessAgent</span><span class="p">,</span>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span>
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithMemoryService</span><span class="p">(</span><span class="nx">memoryService</span><span class="p">),</span>
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27"></a><span class="p">)</span>
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28"></a><span class="k">defer</span><span class="w"> </span><span class="nx">appRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>memoryService.Tools()</code> lets the Agent save and search long-term information. <code>runner.WithMemoryService</code> tells the Runner which Memory Service to use. <code>llmagent.WithPreloadMemory(10)</code> reads up to ten memories before a model call, so the model can see some long-term background even when it does not call a search tool.</p>
+<p>The next choice is where Entries are stored. Start with InMemory during development. Switch to a persistent backend or a shared backend when the application requires it.</p>
+<table>
+<thead>
+<tr>
+<th>Backend</th>
+<th>Typical use</th>
+<th>Retrieval characteristic</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>InMemory</td>
+<td>Local development and tests</td>
+<td>No external service; data disappears when the process exits</td>
+</tr>
+<tr>
+<td>SQLite</td>
+<td>Single-instance applications and local persistence</td>
+<td>Local file with keyword retrieval</td>
+</tr>
+<tr>
+<td>Redis, MySQL, PostgreSQL</td>
+<td>Shared memory across instances</td>
+<td>Database-backed Entries with keyword scoring</td>
+</tr>
+<tr>
+<td>SQLiteVec</td>
+<td>Single-instance semantic retrieval</td>
+<td>Local vector store that can combine keyword results</td>
+</tr>
+<tr>
+<td>MySQLVec, pgvector</td>
+<td>Semantic retrieval on an existing database</td>
+<td>Embeddings from an Embedder, optionally fused with keyword results</td>
+</tr>
+<tr>
+<td>ChromaDB</td>
+<td>A separate vector service</td>
+<td>Retrieves relevant Entries through vector search</td>
+</tr>
+</tbody>
+</table>
+<p>Vector backends require an Embedder when the Service is created. Its output dimension must match the index dimension. After changing the backend, the Agent, Runner, and <code>Runner.Run</code> wiring can stay the same. Connection parameters and a complete configuration are shown in the <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto">Auto Memory example</a>.</p>
+<p>After choosing the storage backend, decide who writes the Entries. Without an Extractor, the model can respond to an explicit memory instruction by calling <code>memory_add</code>. When the application has already confirmed a rule, it can instead call <code>AddMemory</code> directly and verify the write result within the current call.</p>
+<p>To extract long-term information from ordinary conversation, add an Extractor when creating the Service. The following configuration enables the Preserve History and Assistant Episode features described in Chapter 2; <code>extractionModel</code> is the model reserved for memory extraction.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-2-10">10</a></span>
+<span class="normal"><a href="#__codelineno-2-11">11</a></span>
+<span class="normal"><a href="#__codelineno-2-12">12</a></span>
+<span class="normal"><a href="#__codelineno-2-13">13</a></span>
+<span class="normal"><a href="#__codelineno-2-14">14</a></span>
+<span class="normal"><a href="#__codelineno-2-15">15</a></span>
+<span class="normal"><a href="#__codelineno-2-16">16</a></span>
+<span class="normal"><a href="#__codelineno-2-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/memory/extractor"</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="nx">memExtractor</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">extractor</span><span class="p">.</span><span class="nx">NewExtractor</span><span class="p">(</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">    </span><span class="nx">extractionModel</span><span class="p">,</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">    </span><span class="nx">extractor</span><span class="p">.</span><span class="nx">WithUpdatePolicy</span><span class="p">(</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">        </span><span class="nx">extractor</span><span class="p">.</span><span class="nx">UpdatePolicyPreserveHistory</span><span class="p">,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">    </span><span class="nx">extractor</span><span class="p">.</span><span class="nx">WithAssistantEpisodeExtraction</span><span class="p">(),</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="p">)</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="nx">memoryService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">NewMemoryService</span><span class="p">(</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithExtractor</span><span class="p">(</span><span class="nx">memExtractor</span><span class="p">),</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="p">)</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17"></a><span class="k">defer</span><span class="w"> </span><span class="nx">memoryService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+<p>If a different update policy is required, specify it explicitly here; otherwise, the framework uses Merge Similar by default. Preserve History and Append Only can significantly improve memory retention, but they may also accelerate Entry growth. If the application only needs to retain user-provided information, remove <code>WithAssistantEpisodeExtraction()</code>. A Checker can also be added when extraction timing needs to follow the conditions described in Chapter 1. For most applications, Merge Similar or Preserve History is a reasonable starting point, with Assistant memory extraction disabled. Enable Assistant extraction when the application also needs Agent-generated results to become retrievable memories.</p>
+<p>When multiple Sessions need to be processed concurrently, <code>WithAsyncMemoryNum</code> controls the number of background workers, <code>WithMemoryQueueSize</code> controls the queue capacity, and <code>WithMemoryJobTimeout</code> controls the timeout for an individual job. If the queue is full while the call context is still valid, the framework may process the job synchronously, so queue capacity can affect request latency. The Memory Service owns these background resources and must be closed separately; the Runner does not close it on the caller's behalf.</p>
+<p>After an Extractor is configured, Auto mode gives the Agent search tools by default and leaves writes to background extraction. To let the Agent respond directly to a request such as "remember this rule," expose write tools with <code>WithAutoMemoryExposedTools</code>.</p>
+<p>An operation being available on the Service does not mean it must be exposed as an Agent tool. <code>WithToolEnabled</code> controls what the framework and extraction stage can execute, while <code>WithToolExposed</code> controls whether the corresponding tool appears in the Agent's tool list. Direct Service calls still use the corresponding interfaces. These switches do not authenticate users; user isolation and access control must be enforced by the backend and application configuration.</p>
+<p>Some Sessions include external knowledge in their context even though that material should not become a user memory. Set <code>WithDisableAutoMemoryOnExternalContext(true)</code> for that case. The framework recognizes context produced by its knowledge-retrieval tools or by a tool that advertises <code>PollutesAutoMemory() bool</code>. A custom RAG tool without this marker may still have its returned content extracted by Auto Memory.</p>
+<p><img alt="Built-in Memory configuration choices" src="../../assets/img/blog/memory/native-memory-options-en.svg" /></p>
+<p><em>Figure 8: The application can choose how Entries are written, which backend stores them, and whether retrieval happens through a Tool or preload. Automatic extraction is configured through the Extractor and Service.</em></p>
+<p>After wiring is complete, use two Sessions to check that long-term memory works. In Session A, tell the Agent that a database migration review must check the rollback script and compatibility tests. Consume the full Runner event stream, then read or search for the target Entry to confirm that it was formed.</p>
+<p>Keep the same AppName and UserID, create a new SessionID, and ask what the migration review should check first. Compare the recalled memory with the final answer to see whether the Agent used the rule in the new Session. The Auto Memory example's <code>/memory</code> command displays Entries, and <code>/new</code> keeps the user identity while creating a new Session.</p>
+<h3 id="33-register-an-adapter-for-an-external-memory-platform">3.3 Register an adapter for an external Memory platform</h3>
+<p>If an application already uses an independent Memory platform, or wants capabilities such as layered memory and relation retrieval, register that platform's adapter with the Runner. The Session Service continues to save and restore conversations, while the external platform organizes long-term memory from completed Sessions.</p>
+<p>External platforms have their own data structures and update semantics. The framework therefore delivers a completed Session through <code>session.Ingestor</code>. If an adapter had to reuse the built-in <code>memory.Service</code>, it would need to invent meanings for update, delete, and clear operations that the platform might not provide. With Ingestor, the platform remains responsible for how memories are formed, stored, indexed, and maintained.</p>
+<p>At the end of a turn, the Runner gives the Session to the adapter and the platform processes it in its own way. If the adapter implements <code>Reader</code>, it can participate in preload for later requests. The application can also add the platform's tools so the model searches on demand, or register its Plugin with the Runner for automatic recall before a model call.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant U as User
+    participant R as Runner
+    participant A as Agent
+    participant E as External Memory adapter
+    participant S as Session Service
+
+    Note over R,E: Plugin is registered when the Runner is created
+    U-&gt;&gt;R: Runner.Run
+    R-&gt;&gt;A: Run the Agent
+    opt Preload enabled and adapter implements Reader
+        A-&gt;&gt;E: Framework reads or searches before the model call
+        E--&gt;&gt;A: Add memories to the model request
+    end
+    opt Plugin performs automatic recall
+        A-&gt;&gt;E: Trigger Plugin BeforeModel
+        E--&gt;&gt;A: Add recalled context to the model request
+    end
+    opt Model calls a memory tool
+        A-&gt;&gt;E: Execute the model's Tool call
+        E--&gt;&gt;A: Return relevant memories
+    end
+    A--&gt;&gt;R: Events and answer
+    R-&gt;&gt;S: Save the completed Session
+    R-&gt;&gt;E: IngestSession(Session)</code></pre>
+<p><em>Figure 9: An external platform receives the completed Session through Ingestor and returns relevant memories through the Reader, Tool, or Plugin capabilities it supports.</em></p>
+<p>The framework currently supports integrations with TencentDB Agent Memory, Mem0, and other external platforms. When choosing among them, first consider what the application needs to retain over the long term, then follow the corresponding integration guide.</p>
+<table>
+<thead>
+<tr>
+<th>Memory platform</th>
+<th>Best suited for</th>
+<th>Common scenarios</th>
+<th>Integration guide</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TencentDB Agent Memory</td>
+<td>Team development and collaboration involving multiple members or Agents</td>
+<td>Reusing background, constraints, and handling experience from earlier tasks together with team assets</td>
+<td><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/memory/tencentdb.md">Integration guide</a></td>
+</tr>
+<tr>
+<td>Mem0</td>
+<td>Personalized assistants, content creation, code review, and other applications that need cross-Session memory</td>
+<td>Storing user facts, preferences, and project conventions; choosing Platform or OSS according to the application's data boundary</td>
+<td><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/memory/mem0.md">Integration guide</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="summary">Summary</h2>
+<p>Long-term memory has become an important general-purpose capability for Agents. With tRPC-Agent-Go's Memory service, applications can easily integrate the built-in Memory implementation or switch to an external memory platform as needed.</p>
+<p>When an Agent begins handling tasks across Sessions, first distinguish which information is worth retaining as long-term memory. Session continues to preserve the current conversation, State stores values that require exact reads and writes, and Memory should hold information that will be reused repeatedly in future tasks. Most applications can begin by configuring the built-in <code>memory.Service</code> on the Runner and then tune extraction, storage backends, update policies, and related options as needed, without changing the Agent's existing invocation flow.</p>
+<p>If the application also needs an external platform's own memory-processing model or team-asset capabilities, the same Agent code can switch to an external adapter. When changing platforms, most modifications are confined to Service construction and the retrieval entry points, while the Agent's application logic can remain unchanged.</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/memory/index.md">tRPC-Agent-Go Memory documentation</a></li>
+<li><a href="https://github.com/TencentCloud/TencentDB-Agent-Memory">TencentDB Agent Memory repository</a></li>
+<li><a href="https://docs.mem0.ai/platform/platform-vs-oss">Mem0 Platform and Open Source comparison</a></li>
+<li><a href="https://docs.mem0.ai/migration/oss-v2-to-v3">Mem0 OSS V3 migration guide</a></li>
+<li><a href="https://docs.mem0.ai/migration/platform-v2-to-v3">Mem0 Platform V3 migration guide</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go repository</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go-benchmark/tree/main/memory">tRPC-Agent-Go Memory Benchmark</a></li>
+<li><a href="https://arxiv.org/abs/2410.10813">LongMemEval Benchmark</a></li>
+<li><a href="https://github.com/xiaowu0162/LongMemEval">LongMemEval dataset and evaluation</a></li>
+<li><a href="https://arxiv.org/abs/2402.17753">LoCoMo Benchmark</a></li>
+<li><a href="https://github.com/snap-research/locomo">LoCoMo dataset and evaluation</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/docs/mkdocs">tRPC-Agent-Go official documentation</a></li>
+</ul>
+<h2 id="usage-and-discussion">Usage and Discussion</h2>
+<p>Welcome to tRPC-Agent-Go. For detailed usage documentation and examples, see the <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/docs/mkdocs">official documentation</a> and the <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory">Memory examples</a>.</p>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Last update">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 9, 2026 13:41:26 UTC">2026-09-09 13:41:26</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Created">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 9, 2026 13:41:26 UTC">2026-09-09 13:41:26</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+  
+
+
+
+  <form class="md-feedback" name="feedback" hidden>
+    <fieldset>
+      <legend class="md-feedback__title">
+        Was this page helpful?
+      </legend>
+      <div class="md-feedback__inner">
+        <div class="md-feedback__list">
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page was helpful" data-md-value="1">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m7 0c0 .8-.7 1.5-1.5 1.5S14 10.3 14 9.5 14.7 8 15.5 8s1.5.7 1.5 1.5m-5 7.73c-1.75 0-3.29-.73-4.19-1.81L9.23 14c.45.72 1.52 1.23 2.77 1.23s2.32-.51 2.77-1.23l1.42 1.42c-.9 1.08-2.44 1.81-4.19 1.81"/></svg>
+            </button>
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page could be improved" data-md-value="0">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10m-6.5-4c.8 0 1.5.7 1.5 1.5s-.7 1.5-1.5 1.5-1.5-.7-1.5-1.5.7-1.5 1.5-1.5M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m2 4.5c1.75 0 3.29.72 4.19 1.81l-1.42 1.42C14.32 16.5 13.25 16 12 16s-2.32.5-2.77 1.23l-1.42-1.42C8.71 14.72 10.25 14 12 14"/></svg>
+            </button>
+          
+        </div>
+        <div class="md-feedback__note">
+          
+            <div data-md-value="1" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!
+            </div>
+          
+            <div data-md-value="0" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!<br>Please help us improve by opening an <a href="https://github.com/trpc-group/trpc-agent-go/issues/new" target="_blank" rel="noopener">issue</a>.
+            </div>
+          
+        </div>
+      </div>
+    </fieldset>
+  </form>
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../trpcagentgo/" class="md-footer__link md-footer__link--prev" aria-label="Previous: A Go Agent Framework for Building Intelligent AI Applications">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                A Go Agent Framework for Building Intelligent AI Applications
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../summary/" class="md-footer__link md-footer__link--next" aria-label="Next: Context Management Design and Evaluation for Long-Running Agents">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Context Management Design and Evaluation for Long-Running Agents
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+        <script src="../../assets/javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
