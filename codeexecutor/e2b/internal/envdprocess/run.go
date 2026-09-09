@@ -21,6 +21,7 @@ import (
 var (
 	errProcessTimeout      = errors.New("envd process: process timeout")
 	errProcessDisconnected = errors.New("envd process: process disconnected")
+	errInitialStdinStopped = errors.New("envd process: initial stdin stopped by stream termination")
 )
 
 // defaultProcessTimeout matches the E2B SDK command timeout. It is applied

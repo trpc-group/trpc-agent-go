@@ -668,6 +668,146 @@ func TestRunCompletesInitialStdinBeforeConsumingImmediateEnd(t *testing.T) {
 	assert.Equal(t, 0, result.ExitCode)
 }
 
+func TestInitialStdinUnblockedByStreamTermination(t *testing.T) {
+	tests := []struct {
+		name      string
+		end       *process.ProcessEvent
+		streamErr error
+		wantExit  int
+		wantError string
+	}{
+		{name: "ExitZero", end: endEvent(0)},
+		{name: "ExitNonzero", end: endEvent(7), wantExit: 7},
+		{
+			name: "FailedEnd",
+			end: &process.ProcessEvent{Event: &process.ProcessEvent_End{
+				End: &process.ProcessEvent_EndEvent{Status: "execution failed"},
+			}},
+			wantError: "execution failed",
+		},
+		{
+			name: "StreamError",
+			streamErr: connect.NewError(
+				connect.CodeUnavailable, errors.New("event stream unavailable"),
+			),
+			wantError: "event stream unavailable",
+		},
+	}
+	for _, entry := range []string{"Run", "Start"} {
+		for _, operation := range []string{"SendInput", "CloseStdin"} {
+			for _, tt := range tests {
+				t.Run(entry+"/"+operation+"/"+tt.name, func(t *testing.T) {
+					inputStarted := make(chan struct{})
+					killRequests := make(chan uint32, 1)
+					handler := &testProcessHandler{}
+					handler.start = func(
+						ctx context.Context,
+						_ *connect.Request[process.StartRequest],
+						stream *connect.ServerStream[process.StartResponse],
+					) error {
+						if err := stream.Send(startEvent(89)); err != nil {
+							return err
+						}
+						select {
+						case <-inputStarted:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+						if tt.streamErr != nil {
+							return tt.streamErr
+						}
+						return stream.Send(&process.StartResponse{Event: tt.end})
+					}
+					// Only cancellation can release this RPC. An automatic success
+					// after a delay would conceal the startup barrier wait cycle.
+					if operation == "SendInput" {
+						handler.sendInput = func(
+							ctx context.Context,
+							_ *connect.Request[process.SendInputRequest],
+						) (*connect.Response[process.SendInputResponse], error) {
+							close(inputStarted)
+							<-ctx.Done()
+							return nil, ctx.Err()
+						}
+					} else {
+						handler.sendInput = func(
+							context.Context,
+							*connect.Request[process.SendInputRequest],
+						) (*connect.Response[process.SendInputResponse], error) {
+							return connect.NewResponse(&process.SendInputResponse{}), nil
+						}
+						handler.closeStdin = func(
+							ctx context.Context,
+							_ *connect.Request[process.CloseStdinRequest],
+						) (*connect.Response[process.CloseStdinResponse], error) {
+							close(inputStarted)
+							<-ctx.Done()
+							return nil, ctx.Err()
+						}
+					}
+					handler.sendSignal = unexpectedSendSignal(t)
+					if entry == "Run" && tt.streamErr != nil {
+						handler.sendSignal = func(
+							ctx context.Context,
+							req *connect.Request[process.SendSignalRequest],
+						) (*connect.Response[process.SendSignalResponse], error) {
+							assert.NoError(t, ctx.Err())
+							assert.Equal(t, process.Signal_SIGNAL_SIGKILL, req.Msg.Signal)
+							killRequests <- req.Msg.Process.GetPid()
+							return connect.NewResponse(&process.SendSignalResponse{}), nil
+						}
+					}
+
+					client := newTestClient(t, handler, nil)
+					const processTimeout = 2 * time.Second
+					req := Request{
+						Cmd:           "true",
+						Stdin:         "unused",
+						KeepStdinOpen: operation == "SendInput",
+						Timeout:       processTimeout,
+					}
+					started := time.Now()
+					var result Result
+					var err error
+					if entry == "Run" {
+						result, err = client.Run(context.Background(), req)
+					} else {
+						var proc *Process
+						proc, err = client.Start(context.Background(), req)
+						require.NotNil(t, proc)
+						defer proc.Disconnect()
+						waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+						defer cancel()
+						var waitErr error
+						result, waitErr = proc.Wait(waitCtx)
+						assert.Equal(t, err, waitErr)
+					}
+					elapsed := time.Since(started)
+					if tt.wantError == "" {
+						require.NoError(t, err)
+					} else {
+						require.ErrorContains(t, err, tt.wantError)
+						assert.NotErrorIs(t, err, context.Canceled)
+					}
+					assert.Equal(t, uint32(89), result.PID)
+					assert.Equal(t, tt.wantExit, result.ExitCode)
+					assert.False(t, result.TimedOut)
+					assert.Less(t, elapsed, processTimeout/2,
+						"stream termination must unblock initial stdin before the process deadline")
+					if entry == "Run" && tt.streamErr != nil {
+						select {
+						case pid := <-killRequests:
+							assert.Equal(t, uint32(89), pid)
+						default:
+							t.Error("Run must kill the process after stream failure")
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestRunNormalEndTakesPrecedenceOverConcurrentSendInputError(t *testing.T) {
 	handler := &testProcessHandler{}
 	handler.start = func(
@@ -943,77 +1083,53 @@ func TestRunCancellationDuringInitialStdinErrorGraceCleansUp(t *testing.T) {
 	assert.Equal(t, uint32(87), (<-killRequests).Msg.Process.GetPid())
 }
 
-func TestRunProcessTimeoutAfterInitialStdinRPCError(t *testing.T) {
-	tests := []struct {
-		name          string
-		keepStdinOpen bool
-		configure     func(*testProcessHandler)
-	}{
-		{
-			name:          "SendInput",
-			keepStdinOpen: true,
-			configure: func(handler *testProcessHandler) {
-				handler.sendInput = func(
-					context.Context,
-					*connect.Request[process.SendInputRequest],
-				) (*connect.Response[process.SendInputResponse], error) {
-					return nil, connect.NewError(
-						connect.CodeDeadlineExceeded,
-						errors.New("input request deadline exceeded"),
-					)
-				}
-			},
-		},
-		{
-			name: "CloseStdin",
-			configure: func(handler *testProcessHandler) {
-				handler.closeStdin = func(
-					context.Context,
-					*connect.Request[process.CloseStdinRequest],
-				) (*connect.Response[process.CloseStdinResponse], error) {
-					return nil, connect.NewError(
-						connect.CodeDeadlineExceeded,
-						errors.New("close request deadline exceeded"),
-					)
-				}
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			handler := blockingProcessHandler(t, nil)
-			handler.start = func(
-				ctx context.Context,
-				_ *connect.Request[process.StartRequest],
-				stream *connect.ServerStream[process.StartResponse],
-			) error {
-				for _, response := range []*process.StartResponse{
-					startEvent(88),
-					{Event: stdoutEvent([]byte("stdout before timeout\n"))},
-					{Event: stderrEvent([]byte("stderr before timeout\n"))},
-				} {
-					if err := stream.Send(response); err != nil {
-						return err
+func TestRunPreservesInitialStdinErrorBeforeProcessTimeout(t *testing.T) {
+	for _, operation := range []string{"SendInput", "CloseStdin"} {
+		t.Run(operation, func(t *testing.T) {
+			for _, code := range []connect.Code{
+				connect.CodeUnavailable,
+				connect.CodeInternal,
+				connect.CodeDeadlineExceeded,
+			} {
+				t.Run(code.String(), func(t *testing.T) {
+					handler := blockingProcessHandler(t, nil)
+					// This RPC fails independently while its context is still live.
+					// A later process timeout must not erase the original failure,
+					// even when the RPC itself reports DeadlineExceeded.
+					const message = "independent stdin transport failure"
+					if operation == "SendInput" {
+						handler.sendInput = func(
+							ctx context.Context,
+							_ *connect.Request[process.SendInputRequest],
+						) (*connect.Response[process.SendInputResponse], error) {
+							assert.NoError(t, ctx.Err())
+							return nil, connect.NewError(code, errors.New(message))
+						}
+					} else {
+						handler.closeStdin = func(
+							ctx context.Context,
+							_ *connect.Request[process.CloseStdinRequest],
+						) (*connect.Response[process.CloseStdinResponse], error) {
+							assert.NoError(t, ctx.Err())
+							return nil, connect.NewError(code, errors.New(message))
+						}
 					}
-				}
-				<-ctx.Done()
-				return ctx.Err()
-			}
-			tt.configure(handler)
-			handler.sendSignal = unexpectedSendSignal(t)
+					// Returning the stdin error promptly may require cleanup before
+					// the remote deadline; do not require waiting for that deadline.
+					handler.sendSignal = successfulSendSignal(t)
 
-			client := newTestClient(t, handler, nil)
-			result, err := client.Run(context.Background(), Request{
-				Cmd:           "sleep",
-				Stdin:         "unused",
-				KeepStdinOpen: tt.keepStdinOpen,
-				Timeout:       100 * time.Millisecond,
-			})
-			require.NoError(t, err)
-			assert.Equal(t, uint32(88), result.PID)
-			assert.Equal(t, "stdout before timeout\n", result.Stdout)
-			assert.Equal(t, "stderr before timeout\n", result.Stderr)
-			assert.True(t, result.TimedOut)
+					client := newTestClient(t, handler, nil)
+					result, err := client.Run(context.Background(), Request{
+						Cmd:           "sleep",
+						Stdin:         "unused",
+						KeepStdinOpen: operation == "SendInput",
+						Timeout:       250 * time.Millisecond,
+					})
+					require.ErrorContains(t, err, message)
+					assert.Equal(t, code, connect.CodeOf(err))
+					assert.Equal(t, uint32(77), result.PID)
+				})
+			}
 		})
 	}
 }
@@ -1022,29 +1138,31 @@ func TestRunProcessTimeoutWhileInitialStdinRPCIsPending(t *testing.T) {
 	tests := []struct {
 		name          string
 		keepStdinOpen bool
-		configure     func(*testProcessHandler)
+		configure     func(*testProcessHandler, <-chan struct{})
 	}{
 		{
 			name:          "SendInput",
 			keepStdinOpen: true,
-			configure: func(handler *testProcessHandler) {
+			configure: func(handler *testProcessHandler, release <-chan struct{}) {
 				handler.sendInput = func(
 					ctx context.Context,
 					_ *connect.Request[process.SendInputRequest],
 				) (*connect.Response[process.SendInputResponse], error) {
 					<-ctx.Done()
+					<-release
 					return nil, ctx.Err()
 				}
 			},
 		},
 		{
 			name: "CloseStdin",
-			configure: func(handler *testProcessHandler) {
+			configure: func(handler *testProcessHandler, release <-chan struct{}) {
 				handler.closeStdin = func(
 					ctx context.Context,
 					_ *connect.Request[process.CloseStdinRequest],
 				) (*connect.Response[process.CloseStdinResponse], error) {
 					<-ctx.Done()
+					<-release
 					return nil, ctx.Err()
 				}
 			},
@@ -1053,7 +1171,12 @@ func TestRunProcessTimeoutWhileInitialStdinRPCIsPending(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := blockingProcessHandler(t, nil)
-			tt.configure(handler)
+			// Keep the server from returning a remote DeadlineExceeded before
+			// the client's timer fires. This case specifically tests cancellation
+			// by the local process deadline, not an independent RPC status.
+			release := make(chan struct{})
+			defer close(release)
+			tt.configure(handler, release)
 			handler.sendSignal = unexpectedSendSignal(t)
 
 			client := newTestClient(t, handler, nil)

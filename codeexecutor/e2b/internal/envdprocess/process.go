@@ -183,21 +183,25 @@ func (p *Process) completeStartup() {
 func (p *Process) startConsumer(
 	processStreamCtx context.Context,
 	stream processEventStream,
+	cancelInitialStdin context.CancelFunc,
 ) {
-	go p.consume(processStreamCtx, stream)
+	go p.consume(processStreamCtx, stream, cancelInitialStdin)
 }
 
 func (p *Process) consume(
 	processStreamCtx context.Context,
 	stream processEventStream,
+	cancelInitialStdin context.CancelFunc,
 ) {
-	// Defers run in reverse order: disconnect the attachment and cancel its RPC
-	// context before closing the response side of the stream. This keeps all
-	// transport cleanup with the sole stream owner.
+	// Keep response-stream cleanup with its sole consumer. Initial stdin has a
+	// separate cancellation path so it cannot hold the startup barrier forever.
 	defer func() {
-		// A terminal response may arrive while Start is still writing initial
-		// stdin. Delay stream cancellation until startup finishes so consumer
-		// teardown cannot turn a successful stdin RPC into context.Canceled.
+		// The result and done are published before this defer. Unblock initial
+		// stdin without canceling the stream context, then let startup reconcile
+		// that result before this sole owner tears down the response stream.
+		if cancelInitialStdin != nil {
+			cancelInitialStdin()
+		}
 		<-p.startupDone
 		p.disconnect()
 		_ = stream.Close()
@@ -259,34 +263,48 @@ func (p *Process) remoteExecutionFinished() bool {
 	return p.state.remoteEnded || p.state.timedOut
 }
 
-// waitForConfirmedTermination gives an EndEvent or configured process timeout
-// already in flight a bounded opportunity to reach the process stream. A
-// closed stream without either is not evidence that the remote process
-// terminated. callerCtx is observed separately from the process stream context
-// so caller cancellation remains prompt without racing ahead of timeout state
-// publication by the stream consumer.
-func (p *Process) waitForConfirmedTermination(
+// reconcileStdinError gives a trailing EndEvent a bounded opportunity to
+// supersede a stdin RPC failure. stdinCause is captured when the RPC returns,
+// not after this wait; cleanup eligibility is distinct from error precedence.
+func (p *Process) reconcileStdinError(
 	callerCtx context.Context,
-	timeout time.Duration,
-) bool {
-	if p.remoteExecutionFinished() {
-		return true
-	}
-	if timeout <= 0 {
-		return false
-	}
-	timer := time.NewTimer(timeout)
+	stdinErr error,
+	stdinCause error,
+) error {
+	timer := time.NewTimer(initialStdinEndEventGracePeriod)
 	defer timer.Stop()
 	select {
 	case <-p.done:
-		return p.remoteExecutionFinished()
 	case <-callerCtx.Done():
-		// Prefer a terminal event that raced with caller cancellation.
-		return p.remoteExecutionFinished()
 	case <-timer.C:
-		// Prefer a terminal event that raced with the timer.
-		return p.remoteExecutionFinished()
 	}
+
+	p.mu.RLock()
+	remoteEnded := p.state.remoteEnded
+	timedOut := p.state.timedOut
+	streamErr := p.state.err
+	p.mu.RUnlock()
+	if remoteEnded {
+		return streamErr
+	}
+	// An RPC status code alone is not evidence of local context cancellation.
+	contextFailure := errors.Is(stdinErr, context.Canceled) ||
+		errors.Is(stdinErr, context.DeadlineExceeded)
+	if contextFailure && timedOut && errors.Is(stdinCause, errProcessTimeout) {
+		return streamErr
+	}
+	if callerErr := callerCtx.Err(); callerErr != nil {
+		if errors.Is(stdinErr, callerErr) {
+			return stdinErr
+		}
+		return callerErr
+	}
+	if contextFailure && errors.Is(stdinCause, errInitialStdinStopped) && streamErr != nil {
+		// Stream failure canceled the child RPC. Report the transport/protocol
+		// failure rather than the cancellation introduced only to unblock stdin.
+		return streamErr
+	}
+	return errors.Join(stdinErr, streamErr)
 }
 
 func (p *Process) snapshot() (Result, error) {
