@@ -1285,6 +1285,26 @@ agent := llmagent.New(
 )
 ```
 
+通过 `WithServers` 配置的 named HTTP server 可以使用带自定义 scheme 的、
+结构合法的绝对 URL，前提是宿主运行时提供兼容的 `HTTPReqHandler`。broker 不会
+在配置阶段检查该 handler 是否存在。运行时直接传入的 URL 仍然只允许 HTTP/HTTPS。
+
+对于自定义 scheme 的命名 server，未被 interceptor 处理的操作错误会替换成不含
+endpoint 的固定错误。`context.Canceled` 和 `context.DeadlineExceeded` 仍可通过
+`errors.Is` 识别；宿主代码也可以通过 `errors.Is`、`errors.As` 或 `errors.Unwrap`
+分类或检查 cause，但顶层错误文本仍不包含 endpoint。工具不存在、缺少必填参数等
+模型请求错误仍会照常返回，便于模型自纠。`WithErrorInterceptor` 会先收到原始错误
+和 endpoint，宿主仍可记录、分类或替换错误。
+
+#### 一次性客户端与服务端主动消息
+
+每次 broker 操作都会使用一个一次性 MCP client，且不会消费服务端主动消息。
+对于代码配置的、使用自定义 scheme 的命名 server，streamable HTTP client
+会关闭后台 `GET` 流。宿主 option 会在 broker 默认值之后应用；内部宿主
+确实需要该流时，可以通过 `tmcp.WithClientGetSSEEnabled(true)` 重新开启。
+既有的 HTTP/HTTPS 命名 server 和 ad-hoc HTTP/HTTPS 目标继续沿用
+trpc-mcp-go 的默认行为。
+
 #### Server Description（服务描述）
 
 `ConnectionConfig` 上的 `Description` 字段为 MCP server 提供一段能力摘要，
