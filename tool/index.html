@@ -2027,6 +2027,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#one-shot-clients-and-server-initiated-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      One-Shot Clients and Server-Initiated Messages
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#server-description" class="md-nav__link">
     <span class="md-ellipsis">
       Server Description
@@ -5081,6 +5090,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#one-shot-clients-and-server-initiated-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      One-Shot Clients and Server-Initiated Messages
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#server-description" class="md-nav__link">
     <span class="md-ellipsis">
       Server Description
@@ -7319,6 +7337,26 @@ request usually needs only a small subset of that surface.</p>
 </span><span id="__span-33-25"><a id="__codelineno-33-25" name="__codelineno-33-25"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">broker</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
 </span><span id="__span-33-26"><a id="__codelineno-33-26" name="__codelineno-33-26"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<p>Named HTTP servers configured through <code>WithServers</code> may use a structurally
+valid absolute URL with a custom scheme when the host runtime provides a
+compatible <code>HTTPReqHandler</code>. The broker does not check for that handler at
+configuration time. Ad-hoc URL selectors remain HTTP/HTTPS only.</p>
+<p>For custom-scheme named servers, unhandled operation errors are replaced with
+an endpoint-neutral message. <code>context.Canceled</code> and <code>context.DeadlineExceeded</code>
+remain detectable with <code>errors.Is</code>, and host code can classify or inspect the
+cause with <code>errors.Is</code>, <code>errors.As</code>, or <code>errors.Unwrap</code>. The top-level error
+text remains endpoint-neutral. Errors about the model's request, such as an
+unknown tool or missing arguments, remain actionable. <code>WithErrorInterceptor</code>
+receives the underlying error and endpoint first, so hosts can still log,
+classify, or replace the error.</p>
+<h4 id="one-shot-clients-and-server-initiated-messages">One-Shot Clients and Server-Initiated Messages</h4>
+<p>Every broker operation uses a single-use MCP client and does not consume
+server-initiated messages. For code-configured named servers that use a
+custom URL scheme, streamable HTTP clients disable the background <code>GET</code>
+stream. Host options are applied afterward, so an internal host that needs
+the stream can opt back in with <code>tmcp.WithClientGetSSEEnabled(true)</code>.
+Named HTTP/HTTPS servers and ad-hoc HTTP/HTTPS targets keep the
+trpc-mcp-go default.</p>
 <h4 id="server-description">Server Description</h4>
 <p>The <code>Description</code> field on <code>ConnectionConfig</code> provides a capability
 summary for the MCP server, helping the model decide which server to
@@ -9765,7 +9803,7 @@ explicitly at the right time.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 3, 2026 02:08:56 UTC">2026-09-03 02:08:56</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 10, 2026 12:55:34 UTC">2026-09-10 12:55:34</span>
   </span>
 
     
