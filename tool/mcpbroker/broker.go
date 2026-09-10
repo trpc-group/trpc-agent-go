@@ -33,8 +33,10 @@
 //
 // Errors from custom-scheme named servers are endpoint-neutral by default.
 // WithErrorInterceptor still receives the underlying error first and can
-// classify or replace it. Errors about the model's own request, such as an
-// unknown tool or missing arguments, remain available for self-correction.
+// classify or replace it. The top-level error text omits endpoint details,
+// while host code can still classify the cause with errors.Is/errors.As or
+// inspect it with errors.Unwrap. Errors about the model's own request, such as
+// an unknown tool or missing arguments, remain available for self-correction.
 package mcpbroker
 
 import (
@@ -170,8 +172,10 @@ type ClientOptionsRequest struct {
 // Broker defaults are applied first; options here follow and may override or extend behavior
 // intentionally (see trpc-mcp-go ClientOption / StdioClientOption). For example, a host can use
 // tmcp.WithHTTPBeforeRequest to rewrite an Authorization header set earlier by
-// WithHTTPHeaderInjector. Streamable clients disable the background GET stream by default;
-// tmcp.WithClientGetSSEEnabled(true) opts back in. nil entries are filtered out.
+// WithHTTPHeaderInjector. For code-configured named custom-scheme servers, streamable
+// clients disable the background GET stream; tmcp.WithClientGetSSEEnabled(true) opts
+// back in. Existing HTTP/HTTPS named and ad-hoc targets keep the trpc-mcp-go default.
+// nil entries are filtered out.
 type ClientOptions struct {
 	HTTP  []tmcp.ClientOption
 	Stdio []tmcp.StdioClientOption
@@ -263,7 +267,9 @@ func New(opts ...Option) *Broker {
 //
 // Errors from custom-scheme named servers are endpoint-neutral by default;
 // errors about the model's own request remain unchanged. WithErrorInterceptor
-// observes the underlying error first.
+// observes the underlying error first. The top-level error text omits endpoint
+// details, while host code can still classify the cause with errors.Is/errors.As
+// or inspect it with errors.Unwrap.
 //
 // Model-controlled ad-hoc URL selectors remain restricted to http and https;
 // see WithAllowAdHocHTTP.

@@ -1343,7 +1343,10 @@ compatible `HTTPReqHandler`. The broker does not check for that handler at
 configuration time. Ad-hoc URL selectors remain HTTP/HTTPS only.
 
 For custom-scheme named servers, unhandled operation errors are replaced with
-an endpoint-neutral message. Errors about the model's request, such as an
+an endpoint-neutral message. `context.Canceled` and `context.DeadlineExceeded`
+remain detectable with `errors.Is`, and host code can classify or inspect the
+cause with `errors.Is`, `errors.As`, or `errors.Unwrap`. The top-level error
+text remains endpoint-neutral. Errors about the model's request, such as an
 unknown tool or missing arguments, remain actionable. `WithErrorInterceptor`
 receives the underlying error and endpoint first, so hosts can still log,
 classify, or replace the error.
@@ -1351,10 +1354,12 @@ classify, or replace the error.
 #### One-Shot Clients and Server-Initiated Messages
 
 Every broker operation uses a single-use MCP client and does not consume
-server-initiated messages. Streamable HTTP clients therefore disable the
-background `GET` stream by default. Host options are applied afterward, so a
-host that needs the stream can opt back in with
-`tmcp.WithClientGetSSEEnabled(true)`.
+server-initiated messages. For code-configured named servers that use a
+custom URL scheme, streamable HTTP clients disable the background `GET`
+stream. Host options are applied afterward, so an internal host that needs
+the stream can opt back in with `tmcp.WithClientGetSSEEnabled(true)`.
+Named HTTP/HTTPS servers and ad-hoc HTTP/HTTPS targets keep the
+trpc-mcp-go default.
 
 #### Server Description
 

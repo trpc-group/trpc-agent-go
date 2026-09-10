@@ -1410,7 +1410,7 @@ func requireEndpointNeutralError(t *testing.T, err error, serverName string) {
 		require.NotContains(t, message, secret, "model-visible error leaked endpoint detail")
 	}
 	require.Contains(t, message, serverName)
-	require.Nil(t, errors.Unwrap(err))
+	require.Error(t, errors.Unwrap(err))
 }
 
 func TestNamedCustomSchemeError_IsEndpointNeutral(t *testing.T) {
@@ -1437,6 +1437,22 @@ func TestNamedCustomSchemeError_IsEndpointNeutral(t *testing.T) {
 		Arguments: map[string]any{"text": "hello"},
 	})
 	requireEndpointNeutralError(t, err, "internal_named")
+}
+
+func TestNamedCustomSchemeError_PreservesTypedCause(t *testing.T) {
+	cause := &url.Error{
+		Op:  http.MethodPost,
+		URL: internalEndpointURL,
+		Err: context.DeadlineExceeded,
+	}
+	err := newNamedServerOperationError("internal_named", cause)
+
+	requireEndpointNeutralError(t, err, "internal_named")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	var urlErr *url.Error
+	require.ErrorAs(t, err, &urlErr)
+	require.Same(t, cause, urlErr)
 }
 
 func TestNamedCustomSchemeError_InterceptorSeesRawError(t *testing.T) {
@@ -1530,6 +1546,129 @@ func TestNamedCustomSchemeError_KeepsModelRequestErrors(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), `MCP tool "absent_tool" not found`)
+}
+
+func TestNamedCustomSchemeError_PreservesOperationContextIdentity(t *testing.T) {
+	t.Run("caller_cancel", func(t *testing.T) {
+		handler := &waitForContextHandler{started: make(chan struct{})}
+		var rawErr error
+		var baseURL string
+		broker := newNamedCustomSchemeWaitBroker(t, 0, handler, &rawErr, &baseURL)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := broker.listTools(ctx, listToolsInput{Selector: "internal_named"})
+			errCh <- err
+		}()
+
+		select {
+		case <-handler.started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("HTTPReqHandler did not start")
+		}
+		cancel()
+
+		select {
+		case err := <-errCh:
+			requireNamedCustomSchemeContextError(t, err, rawErr, context.Canceled, context.DeadlineExceeded)
+			require.Equal(t, internalEndpointURL, baseURL)
+		case <-time.After(2 * time.Second):
+			t.Fatal("listTools did not return after cancellation")
+		}
+	})
+
+	t.Run("broker_deadline", func(t *testing.T) {
+		handler := &waitForContextHandler{}
+		var rawErr error
+		var baseURL string
+		broker := newNamedCustomSchemeWaitBroker(t, 25*time.Millisecond, handler, &rawErr, &baseURL)
+
+		_, err := broker.listTools(context.Background(), listToolsInput{Selector: "internal_named"})
+		requireNamedCustomSchemeContextError(t, err, rawErr, context.DeadlineExceeded, context.Canceled)
+		require.Equal(t, internalEndpointURL, baseURL)
+	})
+}
+
+func newNamedCustomSchemeWaitBroker(
+	t *testing.T,
+	timeout time.Duration,
+	handler tmcp.HTTPReqHandler,
+	rawErr *error,
+	baseURL *string,
+) *Broker {
+	t.Helper()
+	return New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"internal_named": {
+				ServerURL: internalEndpointURL,
+				Transport: "streamable_http",
+				Timeout:   timeout,
+			},
+		}),
+		WithErrorInterceptor(func(ctx context.Context, req *BrokerErrorRequest) (*BrokerErrorDecision, error) {
+			*rawErr = req.Err
+			*baseURL = req.BaseURL
+			return &BrokerErrorDecision{Handled: false}, nil
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			return &ClientOptions{
+				HTTP: []tmcp.ClientOption{tmcp.WithHTTPReqHandler(handler)},
+			}, nil
+		}),
+	)
+}
+
+func requireNamedCustomSchemeContextError(t *testing.T, err, rawErr, sentinel, other error) {
+	t.Helper()
+	requireEndpointNeutralError(t, err, "internal_named")
+	require.True(t, errors.Is(err, sentinel))
+	require.False(t, errors.Is(err, other))
+	require.True(t, errors.Is(err, tmcp.ErrHTTPRequestFailed))
+
+	var operationErr *operationContextError
+	require.True(t, errors.As(err, &operationErr))
+	require.NotNil(t, operationErr)
+
+	require.Error(t, rawErr)
+	require.NotEqual(t, err.Error(), rawErr.Error())
+	require.Equal(t, rawErr, errors.Unwrap(err))
+	require.Contains(t, rawErr.Error(), "HTTP request failed")
+	require.True(t, errors.Is(rawErr, tmcp.ErrHTTPRequestFailed))
+	require.True(t, errors.Is(rawErr, sentinel))
+}
+
+func TestStreamableClientOptions_DisablesGetSSEOnlyForNamedCustomScheme(t *testing.T) {
+	require.Empty(t, streamableClientOptions(legacymcp.ConnectionConfig{
+		ServerURL: "https://example.com/mcp",
+	}, false, nil))
+
+	require.Empty(t, streamableClientOptions(legacymcp.ConnectionConfig{
+		ServerURL: "http://example.com/mcp",
+	}, true, nil))
+
+	namedCustom := streamableClientOptions(legacymcp.ConnectionConfig{
+		ServerURL: "custom://service/mcp",
+	}, false, nil)
+	require.Len(t, namedCustom, 1)
+
+	var hostCalls int
+	hostOpt := func(*tmcp.Client) { hostCalls++ }
+	opts := streamableClientOptions(legacymcp.ConnectionConfig{
+		ServerURL: "custom://service/mcp",
+	}, false, []tmcp.ClientOption{hostOpt})
+	require.Len(t, opts, 2)
+
+	client := &tmcp.Client{}
+	hostWasLast := false
+	for _, opt := range opts {
+		before := hostCalls
+		opt(client)
+		hostWasLast = hostCalls > before
+	}
+	require.Equal(t, 1, hostCalls)
+	require.True(t, hostWasLast)
 }
 
 func TestNamedHTTPError_KeepsUnderlyingDetail(t *testing.T) {
@@ -1742,6 +1881,24 @@ func TestCreateClientRevalidatesOriginScheme(t *testing.T) {
 	require.Contains(t, err.Error(), "requires http or https")
 }
 
+// waitForContextHandler blocks until the request context is done and then
+// returns ctx.Err. It is used to exercise cancellation and deadline identity
+// through the real trpc-mcp-go HTTPReqHandler path.
+type waitForContextHandler struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (h *waitForContextHandler) Handle(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
+	h.once.Do(func() {
+		if h.started != nil {
+			close(h.started)
+		}
+	})
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 // rewriteHTTPReqHandler resolves a custom endpoint scheme by redirecting the
 // request to a real HTTP test server. trpc-mcp-go can invoke Handle from
 // background goroutines (for example the GET SSE stream), so the recorded
@@ -1808,6 +1965,8 @@ func TestNamedServerCustomScheme_ReachesHTTPReqHandler(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, output.Tools, 2)
 	require.Contains(t, handler.Schemes(), "custom")
+	// Named custom-scheme streamable clients disable GET-SSE unless the host
+	// opts back in after the broker default.
 	methods := handler.Methods()
 	require.NotEmpty(t, methods)
 	require.NotContains(t, methods, http.MethodGet)
