@@ -367,7 +367,11 @@ func InvalidateBinding(inv *agent.Invocation) {
 	if !ok || state == nil || state.view == nil {
 		return
 	}
-	storeInvalidated(inv, cloneView(state.view), BindingReasonInvalidated)
+	// The holder owns an immutable view, so invalidation only needs a new view
+	// header for the binding metadata. Keep sharing the read-only items instead
+	// of copying the complete model-visible history.
+	next := *state.view
+	storeInvalidated(inv, &next, BindingReasonInvalidated)
 }
 
 func storeInvalidated(inv *agent.Invocation, view *View, reason string) {

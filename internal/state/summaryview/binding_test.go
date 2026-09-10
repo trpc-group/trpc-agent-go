@@ -141,6 +141,52 @@ func TestBindingReasonRecordsStageThatDecidedBinding(t *testing.T) {
 	})
 }
 
+func TestInvalidateBindingCopiesMetadataAndSharesImmutableItems(t *testing.T) {
+	history := []model.Message{
+		model.NewUserMessage("first"),
+		model.NewAssistantMessage("second"),
+	}
+	invocation := agent.NewInvocation()
+	AttachProjection(invocation, projectionFor(history, len(history)))
+	Finalize(invocation, &model.Request{Messages: history}, 128)
+	invocationView := invocation.View()
+
+	originalState, ok := agent.GetStateValue[*invocationState](
+		invocation,
+		stateKey,
+	)
+	require.True(t, ok)
+	viewState, ok := agent.GetStateValue[*invocationState](
+		invocationView,
+		stateKey,
+	)
+	require.True(t, ok)
+	require.Same(t, originalState, viewState)
+
+	InvalidateBinding(invocationView)
+
+	invalidatedState, ok := agent.GetStateValue[*invocationState](
+		invocationView,
+		stateKey,
+	)
+	require.True(t, ok)
+	require.NotSame(t, originalState, invalidatedState)
+	require.NotSame(t, originalState.view, invalidatedState.view)
+	require.Same(
+		t,
+		&originalState.view.Items[0],
+		&invalidatedState.view.Items[0],
+	)
+	require.True(t, originalState.view.Bound)
+	require.Equal(t, BindingReasonBound, originalState.view.BindingReason)
+	require.False(t, invalidatedState.view.Bound)
+	require.Equal(
+		t,
+		BindingReasonInvalidated,
+		invalidatedState.view.BindingReason,
+	)
+}
+
 func TestBindingFromContextReportsViewState(t *testing.T) {
 	history := []model.Message{
 		model.NewUserMessage("first"),
