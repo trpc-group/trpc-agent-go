@@ -361,6 +361,15 @@ type initializingSearchWindowRecordingSessionService struct {
 	*recordingStateInitializer
 }
 
+type unavailableStateInitializer struct {
+	session.Service
+	*recordingStateInitializer
+}
+
+func (*unavailableStateInitializer) StateInitializationAvailable() bool {
+	return false
+}
+
 func TestResolveStorageUserID(t *testing.T) {
 	t.Parallel()
 
@@ -772,6 +781,17 @@ func TestWrapSessionService_PreservesStateInitializationService(t *testing.T) {
 	legacy, present := persisted.GetState("legacy-state")
 	require.True(t, present)
 	require.Equal(t, "legacy", string(legacy))
+}
+
+func TestWrapSessionServiceOmitsUnavailableStateInitialization(t *testing.T) {
+	t.Parallel()
+
+	wrapped := WrapSessionService(&unavailableStateInitializer{
+		Service:                   &recordingSessionService{},
+		recordingStateInitializer: &recordingStateInitializer{},
+	})
+	_, ok := wrapped.(session.StateInitializationService)
+	require.False(t, ok)
 }
 
 func TestWrapSessionService_PreservesStateInitializationCombinations(
