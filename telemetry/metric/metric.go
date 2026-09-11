@@ -328,9 +328,10 @@ func initWorkflowMetrics(mp metric.MeterProvider) error {
 // NewMeterProvider creates a new meter provider with optional configuration.
 // The environment variables described below can be used for Endpoint configuration.
 //
-// Service resource attributes are omitted unless explicitly configured.
-// Framework meters use the trpc-agent-go version or revision found in Go build
-// information as their instrumentation scope version.
+// The service.name resource attribute uses the OpenTelemetry SDK default unless
+// explicitly configured. Other service resource attributes are omitted by
+// default. Framework meters use the trpc-agent-go version or revision found in
+// Go build information as their instrumentation scope version.
 // OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT (default: "https://localhost:4317")
 // https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
 func NewMeterProvider(ctx context.Context, opts ...Option) (*sdkmetric.MeterProvider, error) {
@@ -453,21 +454,24 @@ func WithProtocol(protocol string) Option {
 	}
 }
 
-// WithServiceName overrides the service.name resource attribute.
+// WithServiceName sets the service.name resource attribute. OTEL_SERVICE_NAME
+// and service.name in OTEL_RESOURCE_ATTRIBUTES take precedence.
 func WithServiceName(serviceName string) Option {
 	return func(opts *options) {
 		opts.serviceName = serviceName
 	}
 }
 
-// WithServiceNamespace overrides the service.namespace resource attribute.
+// WithServiceNamespace sets the service.namespace resource attribute.
+// service.namespace in OTEL_RESOURCE_ATTRIBUTES takes precedence.
 func WithServiceNamespace(serviceNamespace string) Option {
 	return func(opts *options) {
 		opts.serviceNamespace = serviceNamespace
 	}
 }
 
-// WithServiceVersion overrides the service.version resource attribute.
+// WithServiceVersion sets the service.version resource attribute.
+// service.version in OTEL_RESOURCE_ATTRIBUTES takes precedence.
 func WithServiceVersion(serviceVersion string) Option {
 	return func(opts *options) {
 		opts.serviceVersion = serviceVersion
@@ -515,5 +519,9 @@ func buildResource(ctx context.Context, options *options) (*resource.Resource, e
 		resourceOpts = append(resourceOpts, resource.WithAttributes(*options.resourceAttributes...))
 	}
 
-	return resource.New(ctx, resourceOpts...)
+	configured, err := resource.New(ctx, resourceOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return resource.Merge(resource.Default(), configured)
 }

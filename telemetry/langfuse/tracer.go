@@ -78,11 +78,7 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 	}
 	processor := newSpanProcessor(exp)
 	if provider == nil {
-		res, err := resource.New(ctx,
-			resource.WithFromEnv(),
-			resource.WithHost(),
-			resource.WithTelemetrySDK(),
-		)
+		res, err := newResource(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create resource: %w", err)
 		}
@@ -101,6 +97,18 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 		trace.WithInstrumentationVersion(identity.InstrumentationVersion()),
 	)
 	return provider.Shutdown, nil
+}
+
+func newResource(ctx context.Context) (*resource.Resource, error) {
+	detected, err := resource.New(ctx,
+		resource.WithFromEnv(),
+		resource.WithHost(),
+		resource.WithTelemetrySDK(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return resource.Merge(resource.Default(), detected)
 }
 
 // encodeAuth encodes the public and secret keys for basic authentication.

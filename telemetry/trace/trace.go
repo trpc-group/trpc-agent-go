@@ -42,9 +42,10 @@ var Tracer trace.Tracer = instrumentationTracer(TracerProvider)
 // Start collects telemetry with optional configuration.
 // The environment variables described below can be used for endpoint configuration.
 //
-// Service resource attributes are omitted unless explicitly configured. The
-// instrumentation scope identifies trpc-agent-go and uses its Go build version
-// or revision when available.
+// The service.name resource attribute uses the OpenTelemetry SDK default unless
+// explicitly configured. Other service resource attributes are omitted by
+// default. The instrumentation scope identifies trpc-agent-go and uses its Go
+// build version or revision when available.
 //
 // OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT (default: "https://localhost:4317")
 // https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
@@ -164,21 +165,24 @@ func WithProtocol(protocol string) Option {
 	}
 }
 
-// WithServiceName overrides the service.name resource attribute.
+// WithServiceName sets the service.name resource attribute. OTEL_SERVICE_NAME
+// and service.name in OTEL_RESOURCE_ATTRIBUTES take precedence.
 func WithServiceName(serviceName string) Option {
 	return func(opts *options) {
 		opts.serviceName = serviceName
 	}
 }
 
-// WithServiceNamespace overrides the service.namespace resource attribute.
+// WithServiceNamespace sets the service.namespace resource attribute.
+// service.namespace in OTEL_RESOURCE_ATTRIBUTES takes precedence.
 func WithServiceNamespace(serviceNamespace string) Option {
 	return func(opts *options) {
 		opts.serviceNamespace = serviceNamespace
 	}
 }
 
-// WithServiceVersion overrides the service.version resource attribute.
+// WithServiceVersion sets the service.version resource attribute.
+// service.version in OTEL_RESOURCE_ATTRIBUTES takes precedence.
 func WithServiceVersion(serviceVersion string) Option {
 	return func(opts *options) {
 		opts.serviceVersion = serviceVersion
@@ -233,7 +237,11 @@ func buildResource(ctx context.Context, options *options) (*resource.Resource, e
 		resourceOpts = append(resourceOpts, resource.WithAttributes(*options.resourceAttributes...))
 	}
 
-	return resource.New(ctx, resourceOpts...)
+	configured, err := resource.New(ctx, resourceOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return resource.Merge(resource.Default(), configured)
 }
 
 func tracesEndpoint(protocol string) string {

@@ -15,9 +15,9 @@ import (
 	"strings"
 )
 
-const modulePath = "trpc.group/trpc-go/trpc-agent-go"
+const rootModulePath = "trpc.group/trpc-go/trpc-agent-go"
 
-var instrumentVersion = detectInstrumentationVersion()
+var instrumentVersion = ModuleVersion(rootModulePath)
 
 // InstrumentationVersion returns the version that identifies the
 // trpc-agent-go instrumentation scope. It is empty when the build does not
@@ -26,16 +26,21 @@ func InstrumentationVersion() string {
 	return instrumentVersion
 }
 
-func detectInstrumentationVersion() string {
+// ModuleVersion returns the version that identifies modulePath as an
+// instrumentation scope. It uses the module version for dependencies and the
+// VCS revision for an unversioned main module. It returns an empty string when
+// the build does not contain enough information to identify the module
+// revision reliably.
+func ModuleVersion(modulePath string) string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return ""
 	}
-	return instrumentationVersionFromBuildInfo(info)
+	return moduleVersionFromBuildInfo(info, modulePath)
 }
 
-func instrumentationVersionFromBuildInfo(info *debug.BuildInfo) string {
-	if info == nil {
+func moduleVersionFromBuildInfo(info *debug.BuildInfo, modulePath string) string {
+	if info == nil || modulePath == "" {
 		return ""
 	}
 	if info.Main.Path == modulePath {

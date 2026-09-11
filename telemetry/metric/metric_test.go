@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
+	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -26,7 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
-func TestBuildResourceOmitsServiceIdentityByDefault(t *testing.T) {
+func TestBuildResourceUsesDefaultServiceName(t *testing.T) {
 	t.Setenv("OTEL_SERVICE_NAME", "")
 	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
 
@@ -34,8 +35,19 @@ func TestBuildResourceOmitsServiceIdentityByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildResource() error = %v", err)
 	}
-	if _, ok := res.Set().Value(semconv.ServiceNameKey); ok {
-		t.Fatal("service.name should be unset by default")
+	serviceName, ok := res.Set().Value(semconv.ServiceNameKey)
+	if !ok {
+		t.Fatal("service.name should be set by default")
+	}
+	defaultServiceName, ok := resource.Default().Set().Value(semconv.ServiceNameKey)
+	if !ok {
+		t.Fatal("OpenTelemetry default resource does not contain service.name")
+	}
+	if serviceName.AsString() != defaultServiceName.AsString() {
+		t.Fatalf("service.name = %q, want %q", serviceName.AsString(), defaultServiceName.AsString())
+	}
+	if !strings.HasPrefix(serviceName.AsString(), "unknown_service:") {
+		t.Fatalf("service.name = %q, want unknown_service fallback", serviceName.AsString())
 	}
 	if _, ok := res.Set().Value(semconv.ServiceNamespaceKey); ok {
 		t.Fatal("service.namespace should be unset by default")

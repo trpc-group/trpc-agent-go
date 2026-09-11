@@ -15,11 +15,13 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"trpc.group/trpc-go/trpc-agent-go/internal/telemetry/identity"
 	ametric "trpc.group/trpc-go/trpc-agent-go/telemetry/metric"
 )
 
 const (
-	meterName = "trpc_agent_go.session.redis"
+	modulePath = "trpc.group/trpc-go/trpc-agent-go/session/redis"
+	meterName  = "trpc_agent_go.session.redis"
 
 	metricPrefix = "trpc_agent_go.session.redis."
 )
@@ -70,7 +72,10 @@ func initOperationCounters() map[string]metric.Int64Counter {
 		if mp == nil {
 			return
 		}
-		meter := mp.Meter(meterName)
+		meter := mp.Meter(
+			meterName,
+			metric.WithInstrumentationVersion(identity.ModuleVersion(modulePath)),
+		)
 		operationCounters = make(map[string]metric.Int64Counter, len(operationMetrics))
 		for _, om := range operationMetrics {
 			c, err := meter.Int64Counter(
