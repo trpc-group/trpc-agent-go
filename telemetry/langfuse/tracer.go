@@ -16,7 +16,6 @@ import (
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
@@ -80,9 +79,6 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 	processor := newSpanProcessor(exp)
 	if provider == nil {
 		res, err := resource.New(ctx,
-			resource.WithAttributes(
-				semconv.ServiceName(identity.DefaultServiceName()),
-			),
 			resource.WithFromEnv(),
 			resource.WithHost(),
 			resource.WithTelemetrySDK(),

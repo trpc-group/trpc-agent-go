@@ -328,10 +328,9 @@ func initWorkflowMetrics(mp metric.MeterProvider) error {
 // NewMeterProvider creates a new meter provider with optional configuration.
 // The environment variables described below can be used for Endpoint configuration.
 //
-// The Resource describes the host application. If no service name is configured,
-// NewMeterProvider uses OpenTelemetry's unknown_service fallback based on the
-// executable name. Framework meters use the trpc-agent-go version or revision
-// found in Go build information as their instrumentation scope version.
+// Service resource attributes are omitted unless explicitly configured.
+// Framework meters use the trpc-agent-go version or revision found in Go build
+// information as their instrumentation scope version.
 // OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT (default: "https://localhost:4317")
 // https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
 func NewMeterProvider(ctx context.Context, opts ...Option) (*sdkmetric.MeterProvider, error) {
@@ -454,21 +453,21 @@ func WithProtocol(protocol string) Option {
 	}
 }
 
-// WithServiceName sets the host application's service.name resource attribute.
+// WithServiceName overrides the service.name resource attribute.
 func WithServiceName(serviceName string) Option {
 	return func(opts *options) {
 		opts.serviceName = serviceName
 	}
 }
 
-// WithServiceNamespace sets the host application's service.namespace resource attribute.
+// WithServiceNamespace overrides the service.namespace resource attribute.
 func WithServiceNamespace(serviceNamespace string) Option {
 	return func(opts *options) {
 		opts.serviceNamespace = serviceNamespace
 	}
 }
 
-// WithServiceVersion sets the host application's service.version resource attribute.
+// WithServiceVersion overrides the service.version resource attribute.
 func WithServiceVersion(serviceVersion string) Option {
 	return func(opts *options) {
 		opts.serviceVersion = serviceVersion
@@ -490,9 +489,7 @@ func WithResourceAttributes(attrs ...attribute.KeyValue) Option {
 
 func buildResource(ctx context.Context, options *options) (*resource.Resource, error) {
 	// Build resource with options values
-	resourceAttrs := []attribute.KeyValue{
-		semconv.ServiceName(identity.DefaultServiceName()),
-	}
+	var resourceAttrs []attribute.KeyValue
 	if options.serviceNamespace != "" {
 		resourceAttrs = append(resourceAttrs, semconv.ServiceNamespace(options.serviceNamespace))
 	}
@@ -503,12 +500,15 @@ func buildResource(ctx context.Context, options *options) (*resource.Resource, e
 		resourceAttrs = append(resourceAttrs, semconv.ServiceVersion(options.serviceVersion))
 	}
 
-	resourceOpts := []resource.Option{
-		resource.WithAttributes(resourceAttrs...),
+	var resourceOpts []resource.Option
+	if len(resourceAttrs) > 0 {
+		resourceOpts = append(resourceOpts, resource.WithAttributes(resourceAttrs...))
+	}
+	resourceOpts = append(resourceOpts,
 		resource.WithFromEnv(),
 		resource.WithHost(),         // Adds host.name
 		resource.WithTelemetrySDK(), // Adds telemetry.sdk.{name,language,version}
-	}
+	)
 
 	// Append custom resource attributes
 	if options.resourceAttributes != nil && len(*options.resourceAttributes) > 0 {

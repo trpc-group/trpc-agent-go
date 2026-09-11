@@ -11,8 +11,6 @@
 package identity
 
 import (
-	"os"
-	"path/filepath"
 	"runtime/debug"
 	"strings"
 )
@@ -26,16 +24,6 @@ var instrumentVersion = detectInstrumentationVersion()
 // contain enough information to identify the framework revision reliably.
 func InstrumentationVersion() string {
 	return instrumentVersion
-}
-
-// DefaultServiceName returns the OpenTelemetry fallback service name for the
-// current executable.
-func DefaultServiceName() string {
-	executable, err := os.Executable()
-	if err != nil {
-		return "unknown_service:go"
-	}
-	return "unknown_service:" + filepath.Base(executable)
 }
 
 func detectInstrumentationVersion() string {

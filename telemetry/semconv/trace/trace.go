@@ -13,20 +13,11 @@ package trace
 // Telemetry attributes constants for tracing spans.
 // Reference: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/gen-ai-agent-spans.md#spans
 const (
-	// ResourceServiceNamespace defines the legacy service namespace for trpc-go-agent.
-	// Deprecated: service.namespace identifies the host application, not the
-	// instrumentation library. Configure it with telemetry/trace or
-	// telemetry/metric options instead.
+	// ResourceServiceNamespace defines the service namespace for trpc-go-agent.
 	ResourceServiceNamespace = "trpc-go-agent"
-	// ResourceServiceName defines the legacy service name for telemetry.
-	// Deprecated: service.name identifies the host application, not the
-	// instrumentation library. Configure it with telemetry/trace or
-	// telemetry/metric options instead.
+	// ResourceServiceName defines the service name for telemetry.
 	ResourceServiceName = "telemetry"
-	// ResourceServiceVersion defines the legacy version of the telemetry service.
-	// Deprecated: service.version identifies the host application, not the
-	// instrumentation library. Configure it with telemetry/trace or
-	// telemetry/metric options instead.
+	// ResourceServiceVersion defines the version of the telemetry service.
 	ResourceServiceVersion = "v0.1.0"
 
 	// KeyEventID is the attribute key for event ID.

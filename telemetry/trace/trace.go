@@ -42,9 +42,8 @@ var Tracer trace.Tracer = instrumentationTracer(TracerProvider)
 // Start collects telemetry with optional configuration.
 // The environment variables described below can be used for endpoint configuration.
 //
-// The Resource describes the host application. If no service name is configured,
-// Start uses OpenTelemetry's unknown_service fallback based on the executable name.
-// The instrumentation scope identifies trpc-agent-go and uses its Go build version
+// Service resource attributes are omitted unless explicitly configured. The
+// instrumentation scope identifies trpc-agent-go and uses its Go build version
 // or revision when available.
 //
 // OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT (default: "https://localhost:4317")
@@ -165,21 +164,21 @@ func WithProtocol(protocol string) Option {
 	}
 }
 
-// WithServiceName sets the host application's service.name resource attribute.
+// WithServiceName overrides the service.name resource attribute.
 func WithServiceName(serviceName string) Option {
 	return func(opts *options) {
 		opts.serviceName = serviceName
 	}
 }
 
-// WithServiceNamespace sets the host application's service.namespace resource attribute.
+// WithServiceNamespace overrides the service.namespace resource attribute.
 func WithServiceNamespace(serviceNamespace string) Option {
 	return func(opts *options) {
 		opts.serviceNamespace = serviceNamespace
 	}
 }
 
-// WithServiceVersion sets the host application's service.version resource attribute.
+// WithServiceVersion overrides the service.version resource attribute.
 func WithServiceVersion(serviceVersion string) Option {
 	return func(opts *options) {
 		opts.serviceVersion = serviceVersion
@@ -208,9 +207,7 @@ func WithHeaders(headers map[string]string) Option {
 
 func buildResource(ctx context.Context, options *options) (*resource.Resource, error) {
 	// Build resource with options values
-	resourceAttrs := []attribute.KeyValue{
-		semconv.ServiceName(identity.DefaultServiceName()),
-	}
+	var resourceAttrs []attribute.KeyValue
 	if options.serviceNamespace != "" {
 		resourceAttrs = append(resourceAttrs, semconv.ServiceNamespace(options.serviceNamespace))
 	}
@@ -221,12 +218,15 @@ func buildResource(ctx context.Context, options *options) (*resource.Resource, e
 		resourceAttrs = append(resourceAttrs, semconv.ServiceVersion(options.serviceVersion))
 	}
 
-	resourceOpts := []resource.Option{
-		resource.WithAttributes(resourceAttrs...),
+	var resourceOpts []resource.Option
+	if len(resourceAttrs) > 0 {
+		resourceOpts = append(resourceOpts, resource.WithAttributes(resourceAttrs...))
+	}
+	resourceOpts = append(resourceOpts,
 		resource.WithFromEnv(),
 		resource.WithHost(),         // Adds host.name
 		resource.WithTelemetrySDK(), // Adds telemetry.sdk.{name,language,version}
-	}
+	)
 
 	// Append custom resource attributes
 	if options.resourceAttributes != nil && len(*options.resourceAttributes) > 0 {

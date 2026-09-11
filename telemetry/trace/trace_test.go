@@ -12,7 +12,6 @@ package trace
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -44,7 +43,7 @@ func TestInstrumentationTracerIdentity(t *testing.T) {
 	}
 }
 
-func TestBuildResourceUsesHostServiceIdentityByDefault(t *testing.T) {
+func TestBuildResourceOmitsServiceIdentityByDefault(t *testing.T) {
 	t.Setenv("OTEL_SERVICE_NAME", "")
 	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
 
@@ -52,9 +51,8 @@ func TestBuildResourceUsesHostServiceIdentityByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildResource() error = %v", err)
 	}
-	serviceName, ok := res.Set().Value(semconv.ServiceNameKey)
-	if !ok || !strings.HasPrefix(serviceName.AsString(), "unknown_service:") {
-		t.Fatalf("service.name = %q, want executable-based fallback", serviceName.AsString())
+	if _, ok := res.Set().Value(semconv.ServiceNameKey); ok {
+		t.Fatal("service.name should be unset by default")
 	}
 	if _, ok := res.Set().Value(semconv.ServiceNamespaceKey); ok {
 		t.Fatal("service.namespace should be unset by default")

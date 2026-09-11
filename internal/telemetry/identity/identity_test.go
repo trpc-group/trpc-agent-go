@@ -11,7 +11,6 @@ package identity
 
 import (
 	"runtime/debug"
-	"strings"
 	"testing"
 )
 
@@ -99,11 +98,5 @@ func TestInstrumentationVersionFromBuildInfo(t *testing.T) {
 				t.Fatalf("instrumentationVersionFromBuildInfo() = %q, want %q", got, test.want)
 			}
 		})
-	}
-}
-
-func TestDefaultServiceName(t *testing.T) {
-	if got := DefaultServiceName(); !strings.HasPrefix(got, "unknown_service:") {
-		t.Fatalf("DefaultServiceName() = %q, want unknown_service prefix", got)
 	}
 }

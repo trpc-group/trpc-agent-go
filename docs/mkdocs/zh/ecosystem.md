@@ -885,9 +885,8 @@ plugins:
 - OTLP 导出：使用 `otlpmetricgrpc`，支持环境变量覆盖：
   - `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`。
   - `OTEL_EXPORTER_OTLP_ENDPOINT`（兜底）。
-- 资源标识：`service.name` 默认使用 OpenTelemetry 基于可执行文件名生成的
-  兜底值。宿主应用应通过选项或标准 OpenTelemetry 环境变量配置
-  `service.namespace/name/version`。
+- 资源标识：默认不写入 `service.namespace/name/version`，仅在通过选项或标准
+  OpenTelemetry 环境变量显式配置时写入。
 - Instrumentation Scope：通过 meter 名称和从 Go 构建信息中读取的框架版本
   标识由 tRPC-Agent-Go 产生的指标。
 
@@ -939,8 +938,8 @@ func main() {
 - OTLP 导出：使用 `otlptracegrpc`，支持环境变量覆盖：
   - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`。
   - `OTEL_EXPORTER_OTLP_ENDPOINT`（兜底）。
-- 资源标识：用于描述宿主应用；通过选项或标准 OpenTelemetry 环境变量配置
-  `service.namespace/name/version`。
+- 资源标识：默认不写入 `service.namespace/name/version`，仅在通过选项或标准
+  OpenTelemetry 环境变量显式配置时写入。
 - Instrumentation Scope：使用 `trpc.agent.go` 和从 Go 构建信息中读取的框架
   版本，标识由 tRPC-Agent-Go 产生的 span。
 - Propagator：默认启用 `TraceContext`。
