@@ -331,6 +331,159 @@ func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
 	}
 }
 
+func TestNewClientTimesOutOnSilentWebsocket(t *testing.T) {
+	clientClosed := make(chan struct{})
+	kernelDeleted := make(chan struct{})
+	wsConnected := make(chan *websocket.Conn, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/kernelspecs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"kernelspecs":{"python3":{"name":"python3"}}}`))
+		case "/api/kernels":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"123"}`))
+		case "/api/kernels/123":
+			if r.Method != http.MethodDelete {
+				t.Errorf("kernel cleanup method = %s, want %s", r.Method, http.MethodDelete)
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			close(kernelDeleted)
+		case "/api/kernels/123/channels":
+			ws, err := cstUpgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			wsConnected <- ws
+			defer ws.Close()
+			if _, _, err = ws.ReadMessage(); err != nil {
+				close(clientClosed)
+				return
+			}
+			if _, _, err = ws.ReadMessage(); err != nil {
+				close(clientClosed)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+	port, err := strconv.Atoi(parsed.Port())
+	assert.NoError(t, err)
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := NewClient(ConnectionInfo{
+			Host:             parsed.Hostname(),
+			Port:             port,
+			KernelName:       "python3",
+			WaitReadyTimeout: 50 * time.Millisecond,
+		})
+		result <- err
+	}()
+
+	var newClientErr error
+	select {
+	case newClientErr = <-result:
+	case <-time.After(500 * time.Millisecond):
+		select {
+		case ws := <-wsConnected:
+			_ = ws.Close()
+		case <-time.After(time.Second):
+			t.Fatal("websocket was not established")
+		}
+		select {
+		case <-result:
+		case <-time.After(time.Second):
+			t.Fatal("NewClient did not return after the websocket was closed")
+		}
+		t.Fatal("NewClient did not respect WaitReadyTimeout for a silent websocket")
+	}
+	assert.Error(t, newClientErr)
+	assert.ErrorContains(t, newClientErr, "wait for kernel ready timeout")
+
+	select {
+	case <-kernelDeleted:
+	case <-time.After(time.Second):
+		t.Fatal("kernel was not deleted after readiness timeout")
+	}
+	select {
+	case <-clientClosed:
+	case <-time.After(time.Second):
+		t.Fatal("websocket was not closed after readiness timeout")
+	}
+}
+
+func TestNewClientClearsReadDeadlineAfterReady(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/kernelspecs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"kernelspecs":{"python3":{"name":"python3"}}}`))
+		case "/api/kernels":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"123"}`))
+		case "/api/kernels/123/channels":
+			ws, err := cstUpgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer ws.Close()
+
+			var message executionMessage
+			if err := ws.ReadJSON(&message); err != nil {
+				return
+			}
+			_ = ws.WriteJSON(map[string]any{
+				"header":        map[string]any{"msg_type": "kernel_info_reply"},
+				"parent_header": map[string]any{"msg_id": message.Header.MsgID},
+			})
+
+			for {
+				if err := ws.ReadJSON(&message); err != nil {
+					return
+				}
+				if message.Header.MsgType == "execute_request" {
+					_ = ws.WriteJSON(map[string]any{
+						"header":        map[string]any{"msg_type": "status"},
+						"parent_header": map[string]any{"msg_id": message.Header.MsgID},
+						"content":       map[string]any{"execution_state": "idle"},
+					})
+					return
+				}
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+	port, err := strconv.Atoi(parsed.Port())
+	assert.NoError(t, err)
+
+	client, err := NewClient(ConnectionInfo{
+		Host:             parsed.Hostname(),
+		Port:             port,
+		KernelName:       "python3",
+		WaitReadyTimeout: 100 * time.Millisecond,
+	})
+	if !assert.NoError(t, err) || !assert.NotNil(t, client) {
+		return
+	}
+	defer client.Close()
+
+	time.Sleep(200 * time.Millisecond)
+	_, err = client.runCode("pass")
+	assert.NoError(t, err)
+}
+
 func TestNewClientPreservesKernelCleanupError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

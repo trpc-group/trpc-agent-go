@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -279,19 +280,23 @@ func (c *Client) waitForReady() (bool, error) {
 		return false, err
 	}
 
-	timeout := time.After(c.waitReadyTimeout)
+	if err := c.ws.SetReadDeadline(time.Now().Add(c.waitReadyTimeout)); err != nil {
+		return false, err
+	}
 	for {
-		select {
-		case <-timeout:
-			return false, fmt.Errorf("wait for kernel ready timeout")
-		default:
-		}
 		var message executionMessage
 		if err := c.ws.ReadJSON(&message); err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				return false, fmt.Errorf("wait for kernel ready timeout: %w", err)
+			}
 			return false, err
 		}
 
 		if message.Header.MsgType == "kernel_info_reply" && message.ParentHeader.MsgID == msgID {
+			if err := c.ws.SetReadDeadline(time.Time{}); err != nil {
+				return false, err
+			}
 			return true, nil
 		}
 	}
