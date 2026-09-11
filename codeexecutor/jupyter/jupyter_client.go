@@ -274,6 +274,7 @@ func (c *Client) cleanupAfterStartupFailure(err error) error {
 	return err
 }
 
+// waitForReady waits for the kernel_info_reply message within the readiness timeout.
 func (c *Client) waitForReady() (bool, error) {
 	msgID, err := c.sendMessage(map[string]any{}, "shell", "kernel_info_request")
 	if err != nil {

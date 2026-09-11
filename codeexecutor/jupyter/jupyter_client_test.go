@@ -332,6 +332,7 @@ func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
 	}
 }
 
+// TestNewClientTimesOutOnSilentWebsocket verifies that a silent readiness websocket is bounded by the timeout.
 func TestNewClientTimesOutOnSilentWebsocket(t *testing.T) {
 	clientClosed := make(chan struct{})
 	kernelDeleted := make(chan struct{})
@@ -420,6 +421,7 @@ func TestNewClientTimesOutOnSilentWebsocket(t *testing.T) {
 	}
 }
 
+// TestNewClientClearsReadDeadlineAfterReady verifies that later execution is not limited by the readiness deadline.
 func TestNewClientClearsReadDeadlineAfterReady(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -491,6 +493,7 @@ type readDeadlineErrorConn struct {
 	calls  int
 }
 
+// SetReadDeadline returns a controlled error on the configured call for testing.
 func (c *readDeadlineErrorConn) SetReadDeadline(deadline time.Time) error {
 	c.calls++
 	if c.calls == c.failOn {
@@ -499,6 +502,7 @@ func (c *readDeadlineErrorConn) SetReadDeadline(deadline time.Time) error {
 	return c.Conn.SetReadDeadline(deadline)
 }
 
+// TestNewClientHandlesReadDeadlineErrors verifies cleanup when setting or clearing the deadline fails.
 func TestNewClientHandlesReadDeadlineErrors(t *testing.T) {
 	for _, test := range []struct {
 		name   string
