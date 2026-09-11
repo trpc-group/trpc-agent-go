@@ -46,7 +46,11 @@ func (s *Service) CreateSessionSummary(
 		return nil
 	}
 
+	ctx, att := isummary.BeginAttempt(ctx, sess, filterKey)
+	defer att.Report()
+
 	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	att.Summarized(updated, err)
 	if err != nil || !updated {
 		return err
 	}
@@ -57,12 +61,13 @@ func (s *Service) CreateSessionSummary(
 	sess.SummariesMu.RUnlock()
 
 	if sum == nil {
+		att.Persisted(isummary.PersistNoSummary)
 		return nil
 	}
 
 	summaryBytes, err := json.Marshal(sum)
 	if err != nil {
-		return fmt.Errorf("marshal summary failed: %w", err)
+		return att.RecordWrite(fmt.Errorf("marshal summary failed: %w", err))
 	}
 
 	// Note: expires_at is set to NULL - summaries are bound to session
@@ -81,9 +86,10 @@ func (s *Service) CreateSessionSummary(
 		sess.AppName, sess.UserID, sess.ID, filterKey, summaryBytes, sum.UpdatedAt, nil)
 
 	if err != nil {
-		return fmt.Errorf("upsert summary failed: %w", err)
+		return att.RecordWrite(fmt.Errorf("upsert summary failed: %w", err))
 	}
 
+	att.Persisted(isummary.PersistStored)
 	return nil
 }
 

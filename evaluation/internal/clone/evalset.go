@@ -110,6 +110,10 @@ func cloneInvocation(src *evalset.Invocation) (*evalset.Invocation, error) {
 		return nil, nil
 	}
 	copied := *src
+	if src.MetricNames != nil {
+		copied.MetricNames = make([]string, len(src.MetricNames))
+		copy(copied.MetricNames, src.MetricNames)
+	}
 	copied.CreationTimestamp = cloneEpochTime(src.CreationTimestamp)
 	contextMessages, err := cloneMessages(src.ContextMessages)
 	if err != nil {

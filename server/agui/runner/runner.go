@@ -212,11 +212,30 @@ func inputMessagesFromRunAgentInput(input *adapter.RunAgentInput) (*runAgentMess
 		return nil, errors.New("no messages provided")
 	}
 	lastMessage := input.Messages[len(input.Messages)-1]
-	if lastMessage.Role != types.RoleUser && lastMessage.Role != types.RoleTool {
-		return nil, errors.New("last message role must be user or tool")
+	if lastMessage.Role != types.RoleUser &&
+		lastMessage.Role != types.RoleTool &&
+		lastMessage.Role != types.RoleAssistant {
+		return nil, errors.New("last message role must be user, assistant or tool")
 	}
 	if lastMessage.Role == types.RoleTool {
 		return toolMessagesFromRunAgentInput(input.Messages)
+	}
+	if lastMessage.Role == types.RoleAssistant {
+		content, ok := lastMessage.ContentString()
+		if !ok {
+			return nil, errors.New("assistant message content is not a string")
+		}
+		if content == "" {
+			return nil, errors.New("assistant message content is empty")
+		}
+		inputMessage := model.Message{
+			Role:    model.RoleAssistant,
+			Content: content,
+		}
+		return &runAgentMessages{
+			inputMessage: &inputMessage,
+			inputID:      lastMessage.ID,
+		}, nil
 	}
 	if content, ok := lastMessage.ContentString(); ok {
 		inputMessage := model.Message{
@@ -517,6 +536,10 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 	if !r.emitStartupEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
 		return
 	}
+	if input.messages.inputMessage.Role == model.RoleAssistant {
+		r.runExternalAssistantMessage(ctx, events, input)
+		return
+	}
 	if input.messages.inputMessage.Role == model.RoleTool {
 		if !r.emitToolResultEvents(ctx, events, input) {
 			return
@@ -544,6 +567,103 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 	cancel(nil)
 	waitForRunHooks(hookDone, hookRemaining)
 	<-agentRunDone
+}
+
+// runExternalAssistantMessage records an assistant message supplied by the
+// caller without invoking the underlying model runner. This is intended for
+// framework/backend notifications that need to become part of an existing
+// conversation transcript.
+func (r *runner) runExternalAssistantMessage(
+	ctx context.Context,
+	events chan<- aguievents.Event,
+	input *runInput,
+) {
+	if err := r.persistExternalAssistantMessage(ctx, input); err != nil {
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(
+			fmt.Sprintf("persist assistant message: %v", err),
+			aguievents.WithRunID(input.runID),
+		), input)
+		return
+	}
+	// Persist the assistant message before notifying the caller that the run
+	// finished. closeTrack in the run defer flushes the terminal lifecycle event.
+	if err := r.flushTrack(ctx, input.key); err != nil {
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(
+			fmt.Sprintf("flush assistant track events: %v", err),
+			aguievents.WithRunID(input.runID),
+		), input)
+		return
+	}
+	if !r.emitEvent(ctx, events, aguievents.NewRunFinishedEvent(input.threadID, input.runID), input) {
+		return
+	}
+}
+
+// persistExternalAssistantMessage appends the supplied assistant message to
+// the core session transcript and AG-UI track. Assistant-only runs must target
+// an existing user-anchored session; creating a new assistant-only session
+// would be discarded by session history filtering and would violate the
+// history contract.
+func (r *runner) persistExternalAssistantMessage(ctx context.Context, input *runInput) error {
+	if r.sessionService == nil {
+		return errors.New("session service is nil")
+	}
+	if r.tracker == nil {
+		return errors.New("track service is not configured")
+	}
+	message := *input.messages.inputMessage
+	persistCtx, cancel := r.newTrackPersistenceContext(ctx)
+	defer cancel()
+	sess, err := r.sessionService.GetSession(persistCtx, input.key)
+	if err != nil {
+		return fmt.Errorf("get session: %w", err)
+	}
+	if sess == nil {
+		return errors.New("assistant message requires an existing user session")
+	}
+	hasUserMessage := false
+	for _, evt := range sess.Events {
+		if evt.IsUserMessage() {
+			hasUserMessage = true
+			break
+		}
+	}
+	if !hasUserMessage {
+		return errors.New("assistant message requires an existing user message")
+	}
+	messageID := input.messages.inputID
+	if messageID == "" {
+		messageID = uuid.NewString()
+		input.messages.inputID = messageID
+	}
+	evt := event.NewResponseEvent(
+		input.runID,
+		input.key.AppName,
+		&model.Response{
+			ID:     messageID,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: message,
+			}},
+		},
+	)
+	evt.RequestID = input.runID
+	if err := r.sessionService.AppendEvent(persistCtx, sess, evt); err != nil {
+		return fmt.Errorf("append session event: %w", err)
+	}
+	trackEvents := []aguievents.Event{
+		aguievents.NewTextMessageStartEvent(messageID, aguievents.WithRole(model.RoleAssistant.String())),
+		aguievents.NewTextMessageContentEvent(messageID, message.Content),
+		aguievents.NewTextMessageEndEvent(messageID),
+	}
+	for _, trackEvent := range trackEvents {
+		if err := r.recordTrackEvent(ctx, input.key, trackEvent); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *runner) runEventLoop(

@@ -1,0 +1,68 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package summarycontext
+
+import "context"
+
+// ModelCall is the built-in summarizer's published call mode for one summary
+// attempt. It carries the stable mode string only, never prompt, usage, or
+// content. An empty Mode means this attempt did not publish a call.
+type ModelCall struct {
+	Mode string
+}
+
+type modelCallKey struct{}
+
+// WithModelCallRecorder attaches a recorder that the built-in summarizer
+// fills when it records a summary model call or custom response. A nil
+// recorder makes RecordModelCall a no-op.
+func WithModelCallRecorder(ctx context.Context, call *ModelCall) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if call == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, modelCallKey{}, call)
+}
+
+// RecordModelCall publishes the built-in summary call mode for the current
+// attempt. A provider-called mode (standalone or cache_safe_fork) is kept
+// once observed, so a later custom_response cannot hide that the provider
+// was reached. It is a no-op when no recorder is attached to ctx.
+func RecordModelCall(ctx context.Context, mode string) {
+	if ctx == nil {
+		return
+	}
+	recorder := ModelCallFromContext(ctx)
+	if recorder == nil {
+		return
+	}
+	if isProviderCalledMode(recorder.Mode) && !isProviderCalledMode(mode) {
+		return
+	}
+	recorder.Mode = mode
+}
+
+func isProviderCalledMode(mode string) bool {
+	return mode == "standalone" || mode == "cache_safe_fork"
+}
+
+// ModelCallFromContext returns the attempt-local model-call recorder, or nil
+// when none is attached.
+func ModelCallFromContext(ctx context.Context) *ModelCall {
+	if ctx == nil {
+		return nil
+	}
+	recorder, ok := ctx.Value(modelCallKey{}).(*ModelCall)
+	if !ok || recorder == nil {
+		return nil
+	}
+	return recorder
+}

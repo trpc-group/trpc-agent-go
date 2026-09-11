@@ -674,6 +674,61 @@ events, err := runnerInstance.Run(
 `plugin.NewGlobalInstruction(text)` 会在每一次模型请求前，统一追加一条 system
 message。适合用来实现全局策略或统一行为（例如安全约束、风格要求）。
 
+### ToolLoopWarning（工具循环提醒）
+
+`toolloopwarning.New()` 会在每次模型调用前，检查请求末尾两个相邻的完整工具轮次。当工具
+名称、规范化后的 JSON 参数以及模型可见结果都相同时，插件会在当前请求末尾临时追加一条
+`user` 角色提醒。同一个 request 被重复处理时不会追加多份提醒；但只要循环继续，每个新的
+匹配 request 都会收到提醒。轮次内容变化或中间出现非工具消息时不会匹配。每个 invocation
+的第一次模型请求会被明确跳过，避免仅因恢复了上一次 Run 的重复历史尾部就触发新的提醒。
+
+工具调用 ID 用于将结果与调用配对，但不参与轮次指纹比较。一个完整轮次要求每个工具
+调用恰好对应一条末尾工具结果消息；不完整或格式异常的轮次不会匹配。该插件默认关闭，
+不会额外发起模型调用或工具调用，也不会停止 invocation 或触发重试。插件必须注册到
+`Runner`；直接调用 `Agent.Run` 不会安装 Runner plugin。
+
+提醒的 `user` 角色只是模型协议形态，不表示文本由人类输入。提醒只存在于当前模型请求：
+它不会作为 session event 追加，也不会在后续 Run 中作为 history 恢复。普通 standalone
+summary 只读取已持久化 event，因此不会把提醒作为 source content；但显式启用 cache-safe
+summary forking 时，summarizer 会复用最终模型请求，提醒会进入 summarizer 输入，并可能间接
+影响最终持久化的派生 summary。Execution Trace 同样会在 completion artifact 上记录最终请求，
+但不会把它写成 session history。模型基于提醒生成的响应继续遵循正常的 session 行为。
+
+检测基于 `BeforeModel` 时可见的请求，因此 history projection、工具结果转换、summary
+cutoff 和 context compaction 已经反映在待比较内容中。如果后续 callback 移除了提醒，且同
+一个 request 再次进入 callback 链，只有在末尾工具轮次仍然匹配时插件才会重新追加；同一
+request 末尾已有提醒时不会重复追加。
+
+可使用 `WithExcludedToolNames(...)` 排除轮询等预期会重复的工具；可使用
+`WithWarningMessage(...)` 自定义或本地化提醒内容。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolloopwarning"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+agentInstance := llmagent.New(
+	"my-agent",
+	llmagent.WithModel(openai.New("gpt-4o-mini")),
+)
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(toolloopwarning.New(
+		toolloopwarning.WithExcludedToolNames("poll_status"),
+	)),
+)
+defer runnerInstance.Close()
+```
+
+无需 API Key 且可稳定复现的完整示例见
+[examples/plugin/toolloopwarning](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/toolloopwarning)。
+该示例使用确定性的脚本模型（scripted model）生成两个相同工具轮次，同时仍然经过正常的
+Runner、LLMAgent、工具、插件和 session 路径。
+
 ### ToolCallID
 
 `plugin/toolcallid` 下的 `toolcallid.New()` 用于在模型返回最终 `ToolCall.ID` 后统一改写为框架使用的 tool call ID。当 provider / model 不能稳定保证 `ToolCall.ID` 足够唯一时，可以启用这个插件。
@@ -1136,7 +1191,7 @@ FinishReason：
 
 完整示例见 [examples/plugin/errormessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/errormessage)。
 
-说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、ToolError、MessageMerger、ErrorMessage、Guardrail 八类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
+说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、ToolError、ToolLoopWarning、MessageMerger、ErrorMessage、Guardrail 九类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
 
 ## 如何扩展：写一个自己的插件
 

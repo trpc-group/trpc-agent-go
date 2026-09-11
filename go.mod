@@ -3,6 +3,7 @@ module trpc.group/trpc-go/trpc-agent-go
 go 1.21
 
 require (
+	connectrpc.com/connect v1.18.1
 	github.com/bmatcuk/doublestar/v4 v4.9.1
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/creack/pty v1.1.24

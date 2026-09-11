@@ -18,8 +18,9 @@ import (
 
 func TestEvalMetricJSONMarshalling(t *testing.T) {
 	metric := &EvalMetric{
-		MetricName: "accuracy",
-		Threshold:  0.8,
+		MetricName:               "accuracy",
+		Threshold:                0.8,
+		RequireExplicitSelection: true,
 		Extension: map[string]any{
 			"caseThreshold": 0.7,
 			"weight":        0.3,
@@ -28,13 +29,14 @@ func TestEvalMetricJSONMarshalling(t *testing.T) {
 
 	data, err := json.Marshal(metric)
 	assert.NoError(t, err)
-	assert.JSONEq(t, `{"metricName":"accuracy","threshold":0.8,"extension":{"caseThreshold":0.7,"weight":0.3}}`, string(data))
+	assert.JSONEq(t, `{"metricName":"accuracy","threshold":0.8,"extension":{"caseThreshold":0.7,"weight":0.3},"requireExplicitSelection":true}`, string(data))
 
 	var decoded EvalMetric
 	err = json.Unmarshal(data, &decoded)
 	assert.NoError(t, err)
 	assert.Equal(t, metric.MetricName, decoded.MetricName)
 	assert.Equal(t, metric.Threshold, decoded.Threshold)
+	assert.Equal(t, metric.RequireExplicitSelection, decoded.RequireExplicitSelection)
 	assert.Equal(t, map[string]any{"caseThreshold": 0.7, "weight": 0.3}, decoded.Extension)
 }
 

@@ -268,3 +268,150 @@ func TestNewClient(t *testing.T) {
 	})
 	assert.NoError(t, err)
 }
+
+func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
+	clientClosed := make(chan struct{})
+	kernelDeleted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/kernelspecs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"kernelspecs":{"python3":{"name":"python3"}}}`))
+		case "/api/kernels":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"123"}`))
+		case "/api/kernels/123":
+			if r.Method != http.MethodDelete {
+				t.Errorf("kernel cleanup method = %s, want %s", r.Method, http.MethodDelete)
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			close(kernelDeleted)
+		case "/api/kernels/123/channels":
+			ws, err := cstUpgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			if _, _, err = ws.ReadMessage(); err != nil {
+				return
+			}
+			if err = ws.WriteMessage(websocket.TextMessage, []byte("{")); err != nil {
+				return
+			}
+			if _, _, err = ws.ReadMessage(); err != nil {
+				close(clientClosed)
+			}
+		}
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+	port, err := strconv.Atoi(parsed.Port())
+	assert.NoError(t, err)
+
+	_, err = NewClient(ConnectionInfo{
+		Host:             parsed.Hostname(),
+		Port:             port,
+		KernelName:       "python3",
+		WaitReadyTimeout: time.Second,
+	})
+	assert.Error(t, err)
+
+	select {
+	case <-clientClosed:
+	case <-time.After(time.Second):
+		t.Fatal("websocket was not closed after readiness failure")
+	}
+	select {
+	case <-kernelDeleted:
+	case <-time.After(time.Second):
+		t.Fatal("kernel was not deleted after readiness failure")
+	}
+}
+
+func TestNewClientPreservesKernelCleanupError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/kernelspecs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"kernelspecs":{"python3":{"name":"python3"}}}`))
+		case "/api/kernels":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"123"}`))
+		case "/api/kernels/123":
+			http.Error(w, "cleanup failed", http.StatusInternalServerError)
+		case "/api/kernels/123/channels":
+			ws, err := cstUpgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer ws.Close()
+			if _, _, err = ws.ReadMessage(); err != nil {
+				return
+			}
+			_ = ws.WriteMessage(websocket.TextMessage, []byte("{"))
+		}
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+	port, err := strconv.Atoi(parsed.Port())
+	assert.NoError(t, err)
+
+	_, err = NewClient(ConnectionInfo{
+		Host:             parsed.Hostname(),
+		Port:             port,
+		KernelName:       "python3",
+		WaitReadyTimeout: time.Second,
+	})
+	assert.Error(t, err)
+	assert.ErrorContains(t, err, "failed to delete kernel")
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestDeleteKernelCoversRequestAndResponseBranches(t *testing.T) {
+	t.Run("invalid request URL", func(t *testing.T) {
+		client := &Client{
+			baseURL:    "http://[::1",
+			kernelID:   "123",
+			httpClient: &http.Client{},
+		}
+		assert.Error(t, client.deleteKernel())
+	})
+
+	t.Run("transport error", func(t *testing.T) {
+		client := &Client{
+			baseURL:  "http://jupyter.test",
+			kernelID: "123",
+			httpClient: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return nil, fmt.Errorf("transport failed")
+			})},
+		}
+		assert.ErrorContains(t, client.deleteKernel(), "transport failed")
+	})
+
+	t.Run("ok with token", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "token secret", r.Header.Get("Authorization"))
+			assert.Equal(t, "/api/kernels/123", r.URL.Path)
+			assert.Equal(t, http.MethodDelete, r.Method)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+		client := &Client{
+			baseURL:        server.URL,
+			kernelID:       "123",
+			httpClient:     server.Client(),
+			connectionInfo: ConnectionInfo{Token: "secret"},
+		}
+		assert.NoError(t, client.deleteKernel())
+	})
+}

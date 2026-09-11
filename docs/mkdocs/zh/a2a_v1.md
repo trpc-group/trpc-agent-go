@@ -572,7 +572,7 @@ W3C trace context 会自动通过 HTTP header 传播。生产环境仍应通过�
 
 旧版包还保留 `WithProcessorBuilder`、`WithTaskManagerBuilder`、`WithStreamingEventType`、`WithStreamingRespHandler` 和 `WithStructuredTaskErrors` 等兼容扩展点。它们用于维持既有 v0 应用行为，不代表 v1 的推荐设计；新代码应优先使用 v1 的统一 MessageProcessor、TaskManager 和 converter 扩展边界。
 
-工具调用、代码执行、reasoning 和 `state_delta` 使用的共享 metadata extension 见 [A2A 协议交互规范](a2a-interaction.md)。其中的 metadata key 与交互规范版本同时适用于旧版和 v1 包；`TextPart`、`DataPart`、小写 method 和流式 envelope 示例描述的是 v0.2.x wire model，v1 则通过统一 Part、Message、Artifact 和 Task update event 承载这些共享 metadata。
+工具调用、代码执行、reasoning 和 `state_delta` 使用的共享 metadata extension 见 [A2A 协议交互规范](https://trpc-group.github.io/trpc-agent-go/zh/a2a-interaction/)。其中的 metadata key 与交互规范版本同时适用于旧版和 v1 包；`TextPart`、`DataPart`、小写 method 和流式 envelope 示例描述的是 v0.2.x wire model，v1 则通过统一 Part、Message、Artifact 和 Task update event 承载这些共享 metadata。
 
 ### v0 Task 管理边界
 
