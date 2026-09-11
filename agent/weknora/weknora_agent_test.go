@@ -258,7 +258,7 @@ func TestWeKnoraAgent_SendFinalStreamingEvent(t *testing.T) {
 	}
 
 	eventChan := make(chan *event.Event, 1)
-	weknoraAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "aggregated content", "aggregated reasoning")
+	weknoraAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "test-response", "aggregated content", "aggregated reasoning")
 	close(eventChan)
 
 	evt := <-eventChan
@@ -699,4 +699,80 @@ func TestWeKnoraAgent_Run(t *testing.T) {
 			t.Error("expected nil event channel on error")
 		}
 	})
+}
+
+func TestWeKnoraAgent_RunResponseIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sessions/default-session":
+			fmt.Fprint(w, `{"success":true,"data":{"id":"default-session"}}`)
+		case "/api/v1/agent-chat/default-session":
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"response_type\":\"thinking\",\"content\":\"thinking\"}\n\n")
+			fmt.Fprint(w, "data: {\"response_type\":\"answer\",\"content\":\"hello\"}\n\n")
+			fmt.Fprint(w, "data: {\"response_type\":\"answer\",\"content\":\" world\"}\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	weknoraAgent, err := New(WithName("test-agent"), WithBaseUrl(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	invocation := &agent.Invocation{
+		InvocationID: "test-inv",
+		Message:      model.Message{Content: "test query"},
+	}
+	var previousID string
+	// Repeated calls can share an invocation, but must not share a response ID.
+	for run := 0; run < 2; run++ {
+		events, err := weknoraAgent.Run(ctx, invocation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var responseID, content, reasoning string
+		var partials, finals int
+		for evt := range events {
+			rsp := evt.Response
+			if rsp == nil || rsp.Error != nil || len(rsp.Choices) != 1 {
+				t.Fatalf("unexpected response: %+v", rsp)
+			}
+			if rsp.ID == "" {
+				t.Error("response ID must not be empty")
+			}
+			if responseID == "" {
+				responseID = rsp.ID
+			}
+			if rsp.ID != responseID {
+				t.Errorf("response ID changed within a run: %q != %q", rsp.ID, responseID)
+			}
+			if rsp.IsPartial {
+				partials++
+				if finals != 0 || rsp.Done || rsp.Object != model.ObjectTypeChatCompletionChunk {
+					t.Errorf("invalid partial response: %+v", rsp)
+				}
+				content += rsp.Choices[0].Delta.Content
+				reasoning += rsp.Choices[0].Delta.ReasoningContent
+			} else {
+				finals++
+				if !rsp.Done || rsp.Object != model.ObjectTypeChatCompletion {
+					t.Errorf("invalid completion response: %+v", rsp)
+				}
+				msg := rsp.Choices[0].Message
+				if msg.Role != model.RoleAssistant || msg.Content != content || msg.ReasoningContent != reasoning {
+					t.Errorf("completion does not match streamed message: %+v", msg)
+				}
+			}
+		}
+		if partials != 3 || finals != 1 || content != "hello world" || reasoning != "thinking" {
+			t.Fatalf("unexpected stream: partials=%d finals=%d content=%q reasoning=%q", partials, finals, content, reasoning)
+		}
+		if run > 0 && responseID == previousID {
+			t.Error("separate runs must have distinct response IDs")
+		}
+		previousID = responseID
+	}
 }

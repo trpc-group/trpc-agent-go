@@ -1719,7 +1719,7 @@ func TestRunUserIDResolverError(t *testing.T) {
 	assert.Equal(t, 0, underlying.calls)
 }
 
-func TestRunLastMessageNotUser(t *testing.T) {
+func TestRunLastMessageUnsupportedRole(t *testing.T) {
 	underlying := &fakeRunner{}
 	fakeTrans := &fakeTranslator{}
 	r := &runner{
@@ -1734,12 +1734,328 @@ func TestRunLastMessageNotUser(t *testing.T) {
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
-		Messages: []types.Message{{Role: types.RoleAssistant, Content: "bot"}},
+		Messages: []types.Message{{Role: types.RoleSystem, Content: "system"}},
 	}
 	eventsCh, err := r.Run(context.Background(), input)
 	assert.Nil(t, eventsCh)
 	assert.ErrorContains(t, err, "build input message")
-	assert.ErrorContains(t, err, "last message role must be user or tool")
+	assert.ErrorContains(t, err, "last message role must be user, assistant or tool")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunAssistantMessagePersistsWithoutInvokingRunner(t *testing.T) {
+	ctx := context.Background()
+	service := inmemory.NewSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	userEvent := agentevent.NewResponseEvent("seed", "user", &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser, Content: "hello"},
+		}},
+	})
+	require.NoError(t, service.AppendEvent(ctx, sess, userEvent))
+
+	underlying := &fakeRunner{}
+	r := New(underlying,
+		WithAppName("app"),
+		WithSessionService(service),
+		WithFlushInterval(0),
+	)
+	eventsCh, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{
+			ID:      "assistant-1",
+			Role:    types.RoleAssistant,
+			Content: "后台通知",
+		}},
+	})
+	require.NoError(t, err)
+	events := collectEvents(t, eventsCh)
+	require.Len(t, events, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), events[0])
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), events[1])
+	assert.Equal(t, 0, underlying.calls)
+
+	stored, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	var assistantFound bool
+	for _, event := range stored.Events {
+		if len(event.Choices) == 0 {
+			continue
+		}
+		message := event.Choices[0].Message
+		if message.Role == model.RoleAssistant && message.Content == "后台通知" {
+			assistantFound = true
+			break
+		}
+	}
+	assert.True(t, assistantFound)
+
+	trackEvents, err := service.GetTrackEvents(ctx, key, aguitrack.TrackAGUI)
+	require.NoError(t, err)
+	var trackAssistantFound bool
+	for _, trackEvent := range trackEvents.Events {
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(trackEvent.Payload, &payload))
+		if payload["type"] == string(aguievents.EventTypeTextMessageStart) &&
+			payload["messageId"] == "assistant-1" && payload["role"] == "assistant" {
+			trackAssistantFound = true
+		}
+	}
+	assert.True(t, trackAssistantFound)
+}
+
+func TestInputMessagesFromRunAgentInputAcceptsAssistantText(t *testing.T) {
+	got, err := inputMessagesFromRunAgentInput(&adapter.RunAgentInput{
+		Messages: []types.Message{{
+			ID:      "assistant-1",
+			Role:    types.RoleAssistant,
+			Content: "通知",
+		}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.inputMessage)
+	assert.Equal(t, model.RoleAssistant, got.inputMessage.Role)
+	assert.Equal(t, "通知", got.inputMessage.Content)
+	assert.Equal(t, "assistant-1", got.inputID)
+	assert.Nil(t, got.userMessage)
+}
+
+func TestInputMessagesFromRunAgentInputRejectsInvalidAssistantContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		content any
+		errText string
+	}{
+		{name: "empty string", content: "", errText: "assistant message content is empty"},
+		{name: "non-string", content: []any{"通知"}, errText: "assistant message content is not a string"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := inputMessagesFromRunAgentInput(&adapter.RunAgentInput{
+				Messages: []types.Message{{
+					Role:    types.RoleAssistant,
+					Content: tt.content,
+				}},
+			})
+			assert.ErrorContains(t, err, tt.errText)
+		})
+	}
+}
+
+func TestRunAssistantMessageWithoutExistingUserSessionReturnsRunError(t *testing.T) {
+	service := inmemory.NewSessionService()
+	underlying := &fakeRunner{}
+	r := New(underlying,
+		WithAppName("app"),
+		WithSessionService(service),
+		WithFlushInterval(0),
+	)
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleAssistant, Content: "通知"}},
+	})
+	require.NoError(t, err)
+	events := collectEvents(t, eventsCh)
+	require.Len(t, events, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), events[0])
+	assert.IsType(t, (*aguievents.RunErrorEvent)(nil), events[1])
+	assert.Contains(t, events[1].(*aguievents.RunErrorEvent).Message, "existing user session")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunAssistantMessageWithoutSessionServiceReturnsRunError(t *testing.T) {
+	underlying := &fakeRunner{}
+	r := New(underlying, WithAppName("app"), WithFlushInterval(0))
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleAssistant, Content: "通知"}},
+	})
+	require.NoError(t, err)
+	events := collectEvents(t, eventsCh)
+	require.Len(t, events, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), events[0])
+	assert.Contains(t, events[1].(*aguievents.RunErrorEvent).Message, "session service is nil")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunAssistantMessageWithoutTrackServiceReturnsRunError(t *testing.T) {
+	service := inmemory.NewSessionService()
+	underlying := &fakeRunner{}
+	r := New(underlying,
+		WithAppName("app"),
+		WithSessionService(nonTrackSessionService{Service: service}),
+		WithFlushInterval(0),
+	)
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleAssistant, Content: "通知"}},
+	})
+	require.NoError(t, err)
+	events := collectEvents(t, eventsCh)
+	require.Len(t, events, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), events[0])
+	assert.Contains(t, events[1].(*aguievents.RunErrorEvent).Message, "track service is not configured")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunAssistantMessageWithoutExistingUserMessageReturnsRunError(t *testing.T) {
+	ctx := context.Background()
+	service := inmemory.NewSessionService()
+	_, err := service.CreateSession(ctx, session.Key{
+		AppName: "app", UserID: "user", SessionID: "thread",
+	}, nil)
+	require.NoError(t, err)
+	underlying := &fakeRunner{}
+	r := New(underlying,
+		WithAppName("app"),
+		WithSessionService(service),
+		WithFlushInterval(0),
+	)
+	eventsCh, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleAssistant, Content: "通知"}},
+	})
+	require.NoError(t, err)
+	events := collectEvents(t, eventsCh)
+	require.Len(t, events, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), events[0])
+	assert.Contains(t, events[1].(*aguievents.RunErrorEvent).Message, "existing user message")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunAssistantMessageGetSessionErrorReturnsRunError(t *testing.T) {
+	getErr := errors.New("get session failed")
+	service := inmemory.NewSessionService(inmemory.WithGetSessionHook(
+		func(_ *session.GetSessionContext, _ func() (*session.Session, error)) (*session.Session, error) {
+			return nil, getErr
+		},
+	))
+	underlying := &fakeRunner{}
+	r := New(underlying,
+		WithAppName("app"),
+		WithSessionService(service),
+		WithFlushInterval(0),
+	)
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleAssistant, Content: "通知"}},
+	})
+	require.NoError(t, err)
+	events := collectEvents(t, eventsCh)
+	require.Len(t, events, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), events[0])
+	assert.Contains(t, events[1].(*aguievents.RunErrorEvent).Message, "get session failed")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunAssistantMessageAppendErrorReturnsRunError(t *testing.T) {
+	ctx := context.Background()
+	appendErr := errors.New("append session failed")
+	service := inmemory.NewSessionService(inmemory.WithAppendEventHook(
+		func(eventCtx *session.AppendEventContext, next func() error) error {
+			if eventCtx.Event != nil && eventCtx.Event.RequestID == "run" {
+				return appendErr
+			}
+			return next()
+		},
+	))
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	userEvent := agentevent.NewResponseEvent("seed", "user", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}},
+	})
+	userEvent.RequestID = "seed"
+	require.NoError(t, service.AppendEvent(ctx, sess, userEvent))
+
+	underlying := &fakeRunner{}
+	r := New(underlying,
+		WithAppName("app"),
+		WithSessionService(service),
+		WithFlushInterval(0),
+	)
+	eventsCh, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleAssistant, Content: "通知"}},
+	})
+	require.NoError(t, err)
+	events := collectEvents(t, eventsCh)
+	require.Len(t, events, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), events[0])
+	assert.Contains(t, events[1].(*aguievents.RunErrorEvent).Message, "append session event")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunAssistantMessageTrackErrorReturnsRunError(t *testing.T) {
+	ctx := context.Background()
+	service := inmemory.NewSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	userEvent := agentevent.NewResponseEvent("seed", "user", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}},
+	})
+	require.NoError(t, service.AppendEvent(ctx, sess, userEvent))
+
+	underlying := &fakeRunner{}
+	r := New(underlying,
+		WithAppName("app"),
+		WithSessionService(service),
+		WithFlushInterval(0),
+	).(*runner)
+	r.tracker = &errorTracker{appendErr: errors.New("append track failed")}
+	eventsCh, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleAssistant, Content: "通知"}},
+	})
+	require.NoError(t, err)
+	events := collectEvents(t, eventsCh)
+	require.Len(t, events, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), events[0])
+	assert.Contains(t, events[1].(*aguievents.RunErrorEvent).Message, "append track failed")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestRunAssistantMessageFlushErrorReturnsRunError(t *testing.T) {
+	ctx := context.Background()
+	service := inmemory.NewSessionService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	userEvent := agentevent.NewResponseEvent("seed", "user", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}},
+	})
+	require.NoError(t, service.AppendEvent(ctx, sess, userEvent))
+
+	underlying := &fakeRunner{}
+	r := New(underlying,
+		WithAppName("app"),
+		WithSessionService(service),
+		WithFlushInterval(0),
+	).(*runner)
+	r.tracker = &errorTracker{flushErr: errors.New("flush assistant track failed")}
+	eventsCh, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleAssistant, Content: "通知"}},
+	})
+	require.NoError(t, err)
+	events := collectEvents(t, eventsCh)
+	require.Len(t, events, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), events[0])
+	assert.Contains(t, events[1].(*aguievents.RunErrorEvent).Message, "flush assistant track events")
 	assert.Equal(t, 0, underlying.calls)
 }
 

@@ -39,7 +39,11 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		return nil
 	}
 
+	ctx, att := isummary.BeginAttempt(ctx, sess, filterKey)
+	defer att.Report()
+
 	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	att.Summarized(updated, err)
 	if err != nil || !updated {
 		return err
 	}
@@ -50,16 +54,17 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	sess.SummariesMu.RUnlock()
 
 	if sum == nil {
+		att.Persisted(isummary.PersistNoSummary)
 		return nil
 	}
 
 	// Get app to write summary. Session must exist in storage.
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
-		return fmt.Errorf("session not found: %s", key.SessionID)
+		return att.RecordWrite(fmt.Errorf("session not found: %s", key.SessionID))
 	}
 
-	return s.writeSummaryUnderLock(app, key, filterKey, sum)
+	return att.RecordWrite(s.writeSummaryUnderLock(app, key, filterKey, sum))
 }
 
 // writeSummaryUnderLock writes a summary for a filterKey under app lock and refreshes TTL.

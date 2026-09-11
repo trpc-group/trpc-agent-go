@@ -711,7 +711,8 @@ func TestClient_GetSession_WithTracksAndSummary(t *testing.T) {
 
 	// Create summary
 	sum := &session.Summary{Summary: "test-sum", UpdatedAt: time.Now().UTC()}
-	require.NoError(t, c.CreateSummary(ctx, key, "", sum, time.Hour))
+	_, summaryErr := c.CreateSummary(ctx, key, "", sum, time.Hour)
+	require.NoError(t, summaryErr)
 
 	// Full GetSession should return events, tracks, summary
 	sess, err := c.GetSession(ctx, key, 0, time.Time{})

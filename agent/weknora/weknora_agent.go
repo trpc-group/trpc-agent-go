@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/client"
+	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -155,6 +156,8 @@ func (r *WeKnoraAgent) runStreaming(ctx context.Context, invocation *agent.Invoc
 	go func() {
 		defer close(eventChan)
 
+		// All chunks and the final completion belong to one response.
+		responseID := uuid.NewString()
 		var aggregatedContentBuilder strings.Builder
 		var aggregatedReasoningBuilder strings.Builder
 
@@ -181,6 +184,7 @@ func (r *WeKnoraAgent) runStreaming(ctx context.Context, invocation *agent.Invoc
 						invocation.InvocationID,
 						r.name,
 						event.WithResponse(&model.Response{
+							ID:        responseID,
 							Object:    model.ObjectTypeChatCompletionChunk,
 							Choices:   []model.Choice{{Delta: message}},
 							Timestamp: time.Now(),
@@ -205,7 +209,7 @@ func (r *WeKnoraAgent) runStreaming(ctx context.Context, invocation *agent.Invoc
 		}
 
 		// Send final aggregated event
-		r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String(), aggregatedReasoningBuilder.String())
+		r.sendFinalStreamingEvent(ctx, eventChan, invocation, responseID, aggregatedContentBuilder.String(), aggregatedReasoningBuilder.String())
 	}()
 
 	return eventChan, nil
@@ -216,6 +220,7 @@ func (r *WeKnoraAgent) sendFinalStreamingEvent(
 	ctx context.Context,
 	eventChan chan<- *event.Event,
 	invocation *agent.Invocation,
+	responseID string,
 	aggregatedContent string,
 	aggregatedReasoning string,
 ) {
@@ -223,6 +228,8 @@ func (r *WeKnoraAgent) sendFinalStreamingEvent(
 		invocation.InvocationID,
 		r.name,
 		event.WithResponse(&model.Response{
+			ID:        responseID,
+			Object:    model.ObjectTypeChatCompletion,
 			Done:      true,
 			IsPartial: false,
 			Timestamp: time.Now(),

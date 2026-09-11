@@ -1832,14 +1832,16 @@ type EvaluationResult struct {
 	EvalSetID     string                  // EvalSetID is the evaluation set identifier.
 	OverallStatus status.EvalStatus       // OverallStatus is the overall status.
 	ExecutionTime time.Duration           // ExecutionTime is the execution duration.
+	InferenceStats *evalresult.InferenceStats // InferenceStats contains actual agent inference resource usage.
 	EvalCases     []*EvaluationCaseResult // EvalCases is the list of case results.
 }
 
 type EvaluationCaseResult struct {
-	EvalCaseID      string                         // EvalCaseID is the case identifier.
-	OverallStatus   status.EvalStatus              // OverallStatus is the aggregated status of this case.
-	EvalCaseResults []*evalresult.EvalCaseResult   // EvalCaseResults is the case result for each run.
-	MetricResults   []*evalresult.EvalMetricResult // MetricResults is the aggregated metric results.
+	EvalCaseID         string                         // EvalCaseID is the case identifier.
+	OverallStatus      status.EvalStatus              // OverallStatus is the aggregated status of this case.
+	InferenceStats *evalresult.InferenceStats         // InferenceStats contains actual agent inference resource usage across runs for this case.
+	EvalCaseResults    []*evalresult.EvalCaseResult   // EvalCaseResults is the case result for each run.
+	MetricResults      []*evalresult.EvalMetricResult // MetricResults is the aggregated metric results.
 }
 ```
 

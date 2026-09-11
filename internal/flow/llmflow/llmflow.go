@@ -39,7 +39,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarydiag"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
@@ -78,6 +80,16 @@ const (
 	contextCompactionOutcomeRebuildUnavailable = "rebuild_unavailable"
 	contextCompactionOutcomePersistenceError   = "persistence_error"
 	contextCompactionOutcomePostCountError     = "post_count_error"
+
+	// Session summary injection outcomes report whether a stored summary
+	// selected for this request is still observable in the same framework
+	// model.Request after the response sequence has been observed. They do
+	// not describe a provider's final payload.
+	summaryInjectionOutcomeBlockTextPresent = "block_text_present"
+	summaryInjectionOutcomeBlockTextMissing = "block_text_missing"
+	summaryInjectionOutcomeNotSelected      = "not_selected"
+	summaryInjectionOutcomeLookupMiss       = "lookup_miss"
+	summaryInjectionOutcomeScopeMismatch    = "scope_mismatch"
 )
 
 // InvocationHasFilteredUserTools reports whether the cached filtered tool
@@ -1723,35 +1735,47 @@ func (f *Flow) runContextCompaction(
 	if viewPresent {
 		summaryCtx = summaryview.ContextWithView(summaryCtx, view)
 	}
+	var usedRebuild bool
 	logResult := func(
 		outcome string,
 		result *model.Request,
 		postRequestTokens int,
 	) {
-		var viewBound bool
-		var viewItems int
-		if viewPresent && view != nil {
-			viewBound = view.Bound
-			viewItems = len(view.Items)
+		// After a rebuild, even when the post-rebuild token count fails,
+		// the invocation holds the latest view. Paths that never rebuild
+		// keep the snapshot frozen before summarization.
+		binding := summaryview.BindingFromContext(summaryCtx)
+		if usedRebuild {
+			binding = summaryview.BindingFromInvocation(invocation)
 		}
-		format := "Pre-LLM context compaction result: outcome=%s, agent=%s, " +
-			"filter_key=%q, request_tokens=%d, threshold=%d, " +
+		filterKeyDisplay, filterKeyTruncated :=
+			summarydiag.FormatFilterKey(filterKey)
+		format := "Pre-LLM context compaction result: schema_version=%d, " +
+			"outcome=%s, agent=%q, agent_truncated=%t, filter_key=%q, " +
+			"filter_key_truncated=%t, " +
+			"request_tokens=%d, threshold=%d, " +
 			"context_window=%d, messages=%d->%d, post_request_tokens=%d, " +
 			"summary_view_present=%t, summary_view_bound=%t, " +
-			"summary_view_items=%d, duration_ms=%d"
+			"summary_view_items=%d, binding_reason=%s, duration_ms=%d"
+		agentName, agentTruncated :=
+			summarydiag.FormatAgentName(invocation.AgentName)
 		args := []any{
+			summarydiag.SchemaVersion,
 			outcome,
-			invocation.AgentName,
-			filterKey,
+			agentName,
+			agentTruncated,
+			filterKeyDisplay,
+			filterKeyTruncated,
 			decision.tokenCount,
 			decision.threshold,
 			decision.contextWindow,
 			len(decisionRequest.Messages),
 			len(result.Messages),
 			postRequestTokens,
-			viewPresent,
-			viewBound,
-			viewItems,
+			binding.Present,
+			binding.Bound,
+			binding.Items,
+			binding.Reason,
 			time.Since(startedAt).Milliseconds(),
 		}
 		if outcome == contextCompactionOutcomeSuccess {
@@ -1824,6 +1848,7 @@ func (f *Flow) runContextCompaction(
 		)
 		return req
 	}
+	usedRebuild = true
 	postDecisionRequest := requestWithCallLimitFinalizationMessage(
 		rebuilt,
 		rebuildPlan.callLimitFinalizationMessage,
@@ -2490,6 +2515,7 @@ func (f *Flow) callLLM(
 	}()
 	if callModel == nil {
 		err = errors.New("no model available for LLM call")
+		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, false, err
 	}
 	log.DebugfContext(
@@ -2501,6 +2527,7 @@ func (f *Flow) callLLM(
 	// configured (<= 0), this is a no-op and preserves existing behavior.
 	if err = invocation.IncLLMCallCount(); err != nil {
 		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
+		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, false, err
 	}
 	llmLimitReached := calllimit.RecordLLMCall(
@@ -2521,15 +2548,25 @@ func (f *Flow) callLLM(
 	// Run before model callbacks if they exist.
 	ctx, customResp, err := f.runBeforeModelCallbacks(ctx, invocation, llmRequest)
 	if err != nil {
+		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, false, err
 	}
 	if customResp != nil {
-		return ctx, func(yield func(*model.Response) bool) {
-			yield(customResp)
-		}, false, nil
+		// Keep the original callLLM return and span-on-return contract.
+		// The seq finalizer reports once on drain or early stop. An
+		// unused seq is never consumed, so it reports nothing.
+		return ctx, withResponseSeqFinalizer(
+			func(yield func(*model.Response) bool) {
+				yield(customResp)
+			},
+			func() {
+				reportSummaryInjection(ctx, invocation, llmRequest)
+			},
+		), false, nil
 	}
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		err = errors.New(errMsgNoLLMMessages)
+		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, false, err
 	}
 	if invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
@@ -2587,16 +2624,31 @@ func (f *Flow) callLLM(
 	)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
+		// generateContentSeq failed before returning a seq. Report once
+		// against the request as observed at that failure; do not also
+		// attach a seq finalizer.
+		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, true, err
+	}
+	// Eager GenerateContent has already mutated llmRequest. A lazy
+	// IterModel may tailor or drop the selected summary only while the
+	// seq runs. Report once after the seq ends or is stopped early, and
+	// always attach that finalizer so a disabled call span cannot skip
+	// the record.
+	reportInjection := func() {
+		reportSummaryInjection(ctx, invocation, llmRequest)
 	}
 	if started {
 		finishSpanOnReturn = false
 		seq = withResponseSeqFinalizer(seq, func() {
+			reportInjection()
 			span.SetAttributes(
 				tokenTailoringAttrs(tailoringObserver.Snapshot())...,
 			)
 			finishCallSpan(nil)
 		})
+	} else {
+		seq = withResponseSeqFinalizer(seq, reportInjection)
 	}
 	return ctx, seq, true, nil
 }
@@ -2754,6 +2806,100 @@ func finalizeSummaryView(
 		return
 	}
 	summaryview.Finalize(invocation, req, tokens)
+}
+
+// reportSummaryInjection reports whether the session summary selected while
+// building this request is still present in the same model.Request after the
+// response sequence has been observed. Eager GenerateContent mutates that
+// request before returning a seq; a lazy IterModel may mutate it only while
+// the seq runs. Built-in providers, including the OpenAI adapter, mutate the
+// request in place during token tailoring, so the record then reflects the
+// tailored framework request. A custom Model may copy the request, in which
+// case the record does not claim to describe the payload that Model sent.
+// Requests that do not use session summaries report nothing.
+func reportSummaryInjection(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) {
+	if invocation == nil || req == nil {
+		return
+	}
+	selection, ok := summaryinject.FromInvocation(invocation)
+	if !ok {
+		return
+	}
+	blockPresent := selection.BlockPresent(req.Messages)
+	outcome := summaryInjectionOutcome(selection, blockPresent)
+	filterKey, filterKeyTruncated :=
+		summarydiag.FormatFilterKey(invocation.GetEventFilterKey())
+	agentName, agentTruncated :=
+		summarydiag.FormatAgentName(invocation.AgentName)
+	format := "Session summary injection result: schema_version=%d, " +
+		"outcome=%s, agent=%q, agent_truncated=%t, filter_key=%q, " +
+		"filter_key_truncated=%t, lookup_strategy=%s, lookup_result=%s, " +
+		"selected=%t, block_text_present=%t, boundary_present=%t, " +
+		"stored_summaries=%d, matching_candidates=%d, " +
+		"full_session_summary=%t, session_events=%d, history_messages=%d, " +
+		"request_messages=%d"
+	args := []any{
+		summarydiag.SchemaVersion,
+		outcome,
+		agentName,
+		agentTruncated,
+		filterKey,
+		filterKeyTruncated,
+		selection.LookupStrategy,
+		selection.LookupResult,
+		selection.Selected,
+		blockPresent,
+		selection.BoundaryPresent,
+		selection.StoredSummaries,
+		selection.MatchingCandidates,
+		selection.FullSessionPresent,
+		selection.SessionEvents,
+		selection.HistoryMessages,
+		len(req.Messages),
+	}
+	switch outcome {
+	case summaryInjectionOutcomeBlockTextMissing:
+		// A selected summary whose recorded block text is missing from every
+		// framework request message is the only injection defect that Warns.
+		// This is a substring observation of the same model.Request after
+		// the response sequence has been observed; it does not claim what
+		// a provider sent, or that the original injection slot is intact.
+		log.WarnfContext(ctx, format, args...)
+	default:
+		// Requests that found no in-scope summary, including a branch miss
+		// next to an unused full-session summary, are routine.
+		log.DebugfContext(ctx, format, args...)
+	}
+}
+
+// summaryInjectionOutcome classifies one request's summary injection. A
+// selected summary whose recorded block text is missing from every message
+// Content in the same framework model.Request is reported as
+// block_text_missing. That observation does not describe a provider's
+// final payload or prove the original injection slot. A scope mismatch
+// names the unused full-session summary; it does not mean the scoped
+// history was dropped from this request.
+func summaryInjectionOutcome(
+	selection summaryinject.Selection,
+	blockPresent bool,
+) string {
+	if selection.Selected {
+		if blockPresent {
+			return summaryInjectionOutcomeBlockTextPresent
+		}
+		return summaryInjectionOutcomeBlockTextMissing
+	}
+	if selection.ScopeMismatch() {
+		return summaryInjectionOutcomeScopeMismatch
+	}
+	if selection.StoredSummaries > 0 {
+		return summaryInjectionOutcomeLookupMiss
+	}
+	return summaryInjectionOutcomeNotSelected
 }
 
 func (f *Flow) summaryViewTokenCounter() model.TokenCounter {
