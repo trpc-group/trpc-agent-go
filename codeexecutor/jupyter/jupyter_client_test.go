@@ -331,6 +331,7 @@ func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
 	}
 }
 
+// TestNewClientDeletesKernelWhenWebsocketDialFails verifies cleanup after a websocket dial failure.
 func TestNewClientDeletesKernelWhenWebsocketDialFails(t *testing.T) {
 	const token = "secret"
 	kernelDeleted := make(chan struct{})
@@ -376,6 +377,7 @@ func TestNewClientDeletesKernelWhenWebsocketDialFails(t *testing.T) {
 	}
 }
 
+// TestNewClientPreservesWebsocketDialAndKernelCleanupErrors verifies that both startup and cleanup errors are retained.
 func TestNewClientPreservesWebsocketDialAndKernelCleanupErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

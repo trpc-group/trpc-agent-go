@@ -265,6 +265,7 @@ func (c *Client) deleteKernel() error {
 	return nil
 }
 
+// cleanupAfterStartupFailure deletes the started kernel and closes the websocket after startup fails.
 func (c *Client) cleanupAfterStartupFailure(err error) error {
 	if cleanupErr := c.deleteKernel(); cleanupErr != nil {
 		err = errors.Join(err, cleanupErr)
