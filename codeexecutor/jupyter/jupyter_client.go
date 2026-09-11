@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -77,10 +76,7 @@ type executionMessage struct {
 	} `json:"parent_header"`
 }
 
-// NewClient creates a new Jupyter client from connectionInfo.
-// If readiness fails after startup, NewClient attempts to delete the started
-// kernel and closes the websocket. The returned error may include both the
-// readiness error and any cleanup error.
+// NewClient creates a new Jupyter client
 func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 	baseURL := fmt.Sprintf("http://%s:%d", connectionInfo.Host, connectionInfo.Port)
 	c := &Client{
@@ -123,9 +119,12 @@ func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 
 	c.ws = ws
 	c.sessionID = uuid.New().String()
-	_, err = c.waitForReady()
+	ready, err := c.waitForReady()
 	if err != nil {
-		return nil, c.cleanupAfterStartupFailure(err)
+		return nil, err
+	}
+	if !ready {
+		return nil, fmt.Errorf("kernel not ready")
 	}
 
 	return c, nil
@@ -241,36 +240,6 @@ func (c *Client) startKernel(kernelName string) (string, error) {
 	}
 
 	return kernelResp.ID, nil
-}
-
-func (c *Client) deleteKernel() error {
-	url := fmt.Sprintf("%s/api/kernels/%s", c.baseURL, c.kernelID)
-	req, err := http.NewRequest(http.MethodDelete, url, nil)
-	if err != nil {
-		return err
-	}
-
-	if c.connectionInfo.Token != "" {
-		req.Header.Set("Authorization", "token "+c.connectionInfo.Token)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to delete kernel: %s", resp.Status)
-	}
-	return nil
-}
-
-func (c *Client) cleanupAfterStartupFailure(err error) error {
-	if cleanupErr := c.deleteKernel(); cleanupErr != nil {
-		err = errors.Join(err, cleanupErr)
-	}
-	_ = c.ws.Close()
-	return err
 }
 
 func (c *Client) waitForReady() (bool, error) {

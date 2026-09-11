@@ -16,11 +16,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// NamedToolSet wraps a ToolSet to qualify tool names with the ToolSet name by
-// default. Callers can opt into exposing the original tool names.
+// NamedToolSet wraps a ToolSet to automatically prefix tool names with the toolset name.
+// This prevents tool name conflicts when multiple toolsets provide tools with the same name.
 type NamedToolSet struct {
-	toolSet  tool.ToolSet
-	nameMode tool.ToolSetToolNameMode
+	toolSet tool.ToolSet
 }
 
 // NewNamedToolSet creates a new named toolset wrapper.
@@ -29,40 +28,12 @@ func NewNamedToolSet(toolSet tool.ToolSet) *NamedToolSet {
 	if t, ok := toolSet.(*NamedToolSet); ok {
 		return t
 	}
-	return NewNamedToolSetWithMode(toolSet, tool.ToolSetToolNameModeQualified)
-}
-
-// NewNamedToolSetWithMode creates a named ToolSet wrapper with the requested
-// model-facing name mode.
-func NewNamedToolSetWithMode(
-	toolSet tool.ToolSet,
-	nameMode tool.ToolSetToolNameMode,
-) *NamedToolSet {
-	mode := normalizeToolSetToolNameMode(nameMode)
-	if t, ok := toolSet.(*NamedToolSet); ok {
-		if t.nameMode == mode {
-			return t
-		}
-		return &NamedToolSet{
-			toolSet:  t.toolSet,
-			nameMode: mode,
-		}
-	}
 	return &NamedToolSet{
-		toolSet:  toolSet,
-		nameMode: mode,
+		toolSet: toolSet,
 	}
 }
 
-func normalizeToolSetToolNameMode(mode tool.ToolSetToolNameMode) tool.ToolSetToolNameMode {
-	if mode == tool.ToolSetToolNameModeOriginal {
-		return tool.ToolSetToolNameModeOriginal
-	}
-	return tool.ToolSetToolNameModeQualified
-}
-
-// Tools returns tools with model-facing names according to the ToolSet's name
-// mode. The ToolSet name is retained separately for runtime policy checks.
+// Tools returns tools with names prefixed by the toolset name to avoid conflicts.
 func (s *NamedToolSet) Tools(ctx context.Context) []tool.Tool {
 	tools := s.toolSet.Tools(ctx)
 
@@ -70,21 +41,18 @@ func (s *NamedToolSet) Tools(ctx context.Context) []tool.Tool {
 	if toolSetName == "" {
 		return tools
 	}
-	// Create tools with model-facing names while retaining the source ToolSet
-	// name for runtime policy and tracing checks.
-	namedTools := make([]tool.Tool, 0, len(tools))
+
+	// Create tools with prefixed names to avoid conflicts
+	prefixedTools := make([]tool.Tool, 0, len(tools))
 	for _, t := range tools {
-		namedTool := &NamedTool{
-			original:    t,
-			toolSetName: toolSetName,
+		prefixedTool := &NamedTool{
+			original: t,
+			name:     toolSetName,
 		}
-		if s.nameMode == tool.ToolSetToolNameModeQualified {
-			namedTool.name = toolSetName
-		}
-		namedTools = append(namedTools, namedTool)
+		prefixedTools = append(prefixedTools, prefixedTool)
 	}
 
-	return namedTools
+	return prefixedTools
 }
 
 // Close implements the ToolSet interface.
@@ -97,12 +65,10 @@ func (s *NamedToolSet) Name() string {
 	return s.toolSet.Name()
 }
 
-// NamedTool wraps an original tool with a model-facing name and retains the
-// source ToolSet identity for runtime policy checks.
+// NamedTool wraps an original tool with a prefixed name to avoid conflicts.
 type NamedTool struct {
-	original    tool.Tool
-	name        string
-	toolSetName string
+	original tool.Tool
+	name     string
 }
 
 // NewUnprefixedNamedTool wraps a tool as a NamedTool without adding any name
@@ -277,8 +243,7 @@ func toolName(tl tool.Tool) string {
 	return decl.Name
 }
 
-// Declaration returns the tool declaration with the configured model-facing
-// name.
+// Declaration returns the tool declaration with a prefixed name.
 func (t *NamedTool) Declaration() *tool.Declaration {
 	decl := t.original.Declaration()
 	name := decl.Name
@@ -330,7 +295,7 @@ func (t *NamedTool) CheckPermission(
 
 // ToolSetName returns the source ToolSet name for runtime policy checks.
 func (t *NamedTool) ToolSetName() string {
-	return t.toolSetName
+	return t.name
 }
 
 // Call delegates to the original tool's Call method.

@@ -120,23 +120,6 @@ module_path_from_go_mod() {
 	return 1
 }
 
-minimum_go_version_from_go_mod() {
-	local mod_file="$1"
-	local directive go_version _
-	while read -r directive go_version _; do
-		if [[ "${directive}" == "go" ]]; then
-			if [[ -z "${go_version}" ]]; then
-				echo "empty Go version in ${mod_file}" >&2
-				return 1
-			fi
-			printf '%s\n' "${go_version}"
-			return 0
-		fi
-	done <"${mod_file}"
-	echo "unable to read Go version from ${mod_file}" >&2
-	return 1
-}
-
 is_external_importable_path() {
 	local import_path="$1"
 	[[ "${import_path}" != */internal ]] && [[ "${import_path}" != */internal/* ]]
@@ -194,16 +177,14 @@ add_repository_replaces() {
 
 check_module_as_external_consumer() {
 	local mod_file="$1"
-	local mod_dir module_path go_version readable package_file consumer_dir status
+	local mod_dir module_path readable package_file consumer_dir status
 	mod_dir="$(cd "$(dirname "${mod_file}")" && pwd)"
 	readable="$(module_readable_name "${mod_file}")"
 	module_path="$(module_path_from_go_mod "${mod_file}")"
-	go_version="$(minimum_go_version_from_go_mod "${mod_file}")"
 
 	echo "::group::External consumer: ${readable}"
 	echo "module path: ${module_path}"
 	echo "module dir: ${mod_dir}"
-	echo "minimum Go version: ${go_version}"
 
 	package_file="$(mktemp "${tmp_root}/importable-packages.XXXXXX")"
 	if ! list_importable_packages "${mod_dir}" "${package_file}"; then
@@ -225,9 +206,6 @@ check_module_as_external_consumer() {
 	(
 		cd "${consumer_dir}"
 		go mod init example.com/trpc-agent-go-external-consumer
-		# Select the target module's minimum toolchain before resolving its
-		# replacement instead of letting an older runner select the latest Go.
-		go mod edit -go="${go_version}"
 		add_repository_replaces
 		write_consumer_test "${package_file}" "${consumer_dir}/consumer_test.go"
 		go mod tidy

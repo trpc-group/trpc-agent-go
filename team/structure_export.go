@@ -15,7 +15,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
-	"trpc.group/trpc-go/trpc-agent-go/internal/teamtrace"
 )
 
 // Export exports the static structure of the team.
@@ -77,14 +76,15 @@ func exportCoordinatorTeam(
 	if coordinator == nil {
 		return snapshot, nil
 	}
-	layout := teamtrace.NewCoordinatorLayout(rootNodeID, members)
+	memberAllocator := istructure.NewPathAllocator(rootNodeID)
 	coordinatorSnapshot, err := exportChild(ctx, coordinator)
 	if err != nil {
 		return nil, err
 	}
+	coordinatorPath := memberAllocator.Next("coordinator")
 	rebasedCoordinator, err := istructure.RebaseSnapshot(
 		coordinatorSnapshot,
-		layout.CoordinatorNodeID,
+		coordinatorPath,
 	)
 	if err != nil {
 		return nil, err
@@ -96,12 +96,12 @@ func exportCoordinatorTeam(
 		FromNodeID: rootNodeID,
 		ToNodeID:   rebasedCoordinator.EntryNodeID,
 	})
-	for i, member := range members {
+	for _, member := range members {
 		memberSnapshot, exportErr := exportChild(ctx, member)
 		if exportErr != nil {
 			return nil, exportErr
 		}
-		memberPath := layout.MemberNodeIDs[i]
+		memberPath := memberAllocator.Next(member.Info().Name)
 		rebasedMember, rebaseErr := istructure.RebaseSnapshot(memberSnapshot, memberPath)
 		if rebaseErr != nil {
 			return nil, rebaseErr

@@ -49,32 +49,22 @@ Timer Example + OpenTelemetry Integration
 ## Timing Output Example
 
 ```
-⏱️  BeforeAgentCallback: tool-timer-assistant started at 19:52:29.649
+⏱️  BeforeAgentCallback: tool-timer-assistant started at 11:05:53.759
    InvocationID: invocation-...
    UserMsg: "calculate 10 + 20"
 
-⏱️  BeforeModelCallback: model started at 19:52:29.650
+⏱️  BeforeModelCallback: model started at 11:05:53.760
+   ModelKey: model_1754276753760058036
    Messages: 2
 
-⏱️  AfterModelCallback: model completed in 20.719832265s
+⏱️  AfterModelCallback: model completed in 5.965324643s
 
-⏱️  BeforeToolCallback: calculator (call call_...) started at 19:52:50.370
-   Args: {"a": 10, "b": 20, "operation": "add"}
+⏱️  BeforeToolCallback: calculator started at 11:05:59.725
+   Args: {"a":10,"b":20,"operation":"add"}
 
-⏱️  AfterToolCallback: calculator (call call_...) completed in 44.939µs
-   Result: &{add 10 20 30}
-
-⏱️  BeforeModelCallback: model started at 19:52:50.371
-   Messages: 4
-
-⏱️  AfterModelCallback: model completed in 1.144983592s
-
-⏱️  AfterAgentCallback: tool-timer-assistant completed in 21.866556495s
+⏱️  AfterToolCallback: calculator completed in 28.224µs
+   Result: {add 10 20 30}
 ```
-
-`AfterAgentCallback` prints after the full agent run finishes, including the
-follow-up model call that turns the tool result into the final answer. It
-reports the total agent duration.
 
 ## Telemetry Data
 

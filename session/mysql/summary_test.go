@@ -123,12 +123,10 @@ func TestUpsertSessionSummarySkipsOlderCutoff(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"updated_at"}).AddRow(persistedUpdatedAt))
 	mock.ExpectCommit()
 
-	result, err := s.upsertSessionSummary(
+	err = s.upsertSessionSummary(
 		context.Background(), key, "", []byte(`{"summary":"older"}`), incomingUpdatedAt,
 	)
 	require.NoError(t, err)
-	require.Equal(t, isummary.PersistStale, result,
-		"a skipped stale write must be reported as such")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -157,9 +155,8 @@ func TestUpsertSessionSummaryEqualCutoffLastWriteWins(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	result, err := s.upsertSessionSummary(context.Background(), key, "", summaryBytes, updatedAt)
+	err = s.upsertSessionSummary(context.Background(), key, "", summaryBytes, updatedAt)
 	require.NoError(t, err)
-	require.Equal(t, isummary.PersistStored, result)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

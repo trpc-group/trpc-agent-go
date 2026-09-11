@@ -565,6 +565,19 @@ func parentInvocationWithLiveSession(
 	return view
 }
 
+func (at *Tool) surfaceRootNodeIDForParentInvocation(
+	parentInv *agent.Invocation,
+) string {
+	if parentInv == nil || at.agent == nil {
+		return ""
+	}
+	rootNodeID := teamtrace.MemberTraceRootForInvocation(parentInv)
+	if rootNodeID == "" {
+		return ""
+	}
+	return teamtrace.MemberNodeID(rootNodeID, at.agent.Info().Name)
+}
+
 func (at *Tool) childInvocationOptions(
 	ctx context.Context,
 	parentInv *agent.Invocation,
@@ -625,12 +638,11 @@ func (at *Tool) childInvocationOptions(
 			inv.RunOptions = runOptions
 		})
 	}
-	if mount, ok := teamtrace.MemberMountFromContext(ctx); ok {
+	if surfaceRootNodeID := at.surfaceRootNodeIDForParentInvocation(parentInv); surfaceRootNodeID != "" {
 		invocationOpts = append(
 			invocationOpts,
-			agent.WithInvocationTraceNodeID(mount.TraceNodeID),
 			func(inv *agent.Invocation) {
-				agent.SetInvocationSurfaceRootNodeID(inv, mount.SurfaceRootNodeID)
+				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
 			},
 		)
 	}

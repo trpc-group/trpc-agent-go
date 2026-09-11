@@ -11,7 +11,6 @@ package clone
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
-	tokenusage "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/usage"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 )
 
@@ -51,12 +50,6 @@ func cloneEvalCaseResult(src *evalresult.EvalCaseResult) (*evalresult.EvalCaseRe
 		return nil, nil
 	}
 	copied := *src
-	if src.InferenceStats != nil {
-		copied.InferenceStats = &evalresult.InferenceStats{
-			Duration:   src.InferenceStats.Duration,
-			TokenUsage: tokenusage.Clone(src.InferenceStats.TokenUsage),
-		}
-	}
 	overallMetrics, err := cloneEvalMetricResults(src.OverallEvalMetricResults)
 	if err != nil {
 		return nil, err

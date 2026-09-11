@@ -348,15 +348,6 @@ func (s *sessionSummarizer) ShouldSummarizeWithContext(
 	if report, ok := reportFromContext(ctx); ok {
 		report.Trigger = trigger
 	}
-	isummarycontext.RecordTrigger(ctx, isummarycontext.TriggerObservation{
-		Name:           trigger.Name,
-		Metric:         trigger.Metric,
-		Value:          trigger.Value,
-		Threshold:      trigger.Threshold,
-		ContextWindow:  trigger.ContextWindow,
-		CheckCount:     len(trigger.Checks),
-		ThresholdRatio: trigger.ThresholdRatio,
-	})
 	return trigger.Fired
 }
 
@@ -470,14 +461,9 @@ func (s *sessionSummarizer) selectSummaryEvents(
 ) summaryEventSelection {
 	view, ok := modelVisibleViewForSession(ctx, sess)
 	if !ok {
-		retained, decision := s.filterEventsForSummaryObserved(sess.Events)
-		events := filterSummaryInputEventsForSession(retained, sess)
-		recordSelection(
-			ctx,
-			isummarycontext.SourceSessionEvents,
-			decision,
-			len(retained),
-			len(events),
+		events := filterSummaryInputEventsForSession(
+			s.filterEventsForSummary(sess.Events),
+			sess,
 		)
 		return summaryEventSelection{events: events, sourceEvents: events}
 	}
@@ -486,11 +472,6 @@ func (s *sessionSummarizer) selectSummaryEvents(
 		// projected items may differ from messages changed by later processors
 		// or before-model callbacks. Do not summarize or advance persistence
 		// from content that is not proven to have been visible to the model.
-		isummarycontext.RecordEventSelection(ctx, isummarycontext.EventSelection{
-			Source:   isummarycontext.SourceUnboundView,
-			Reason:   isummarycontext.ReasonUnboundView,
-			Eligible: len(view.Items),
-		})
 		return summaryEventSelection{effective: true}
 	}
 
@@ -518,7 +499,7 @@ func (s *sessionSummarizer) selectSummaryEvents(
 		)
 		boundaries = append([]summaryview.Boundary{{}}, boundaries...)
 	}
-	events, decision := s.filterEventsForSummaryObserved(events)
+	events = s.filterEventsForSummary(events)
 	if len(boundaries) > len(events) {
 		boundaries = boundaries[:len(events)]
 	}
@@ -536,7 +517,6 @@ func (s *sessionSummarizer) selectSummaryEvents(
 		boundaries:   boundaries,
 		effective:    true,
 	}
-	unmapped := false
 	if boundary, found := view.BoundaryForItems(itemIndexes); found {
 		selection.boundary = boundary
 		if source := sourceEventsThroughBoundary(sess.Events, boundary); len(source) > 0 {
@@ -550,78 +530,8 @@ func (s *sessionSummarizer) selectSummaryEvents(
 		selection.sourceEvents = nil
 		selection.itemIndexes = nil
 		selection.boundaries = nil
-		unmapped = true
-	}
-	if unmapped {
-		recordUnmappedSelection(ctx, decision)
-	} else {
-		recordSelection(
-			ctx,
-			isummarycontext.SourceModelVisible,
-			decision,
-			len(events),
-			len(selection.events),
-		)
 	}
 	return selection
-}
-
-// recordSelection publishes the observed summary input selection. retained is
-// the number of events that survived skip-recent, and selected is the
-// pre-hook count that survived every later built-in stage. A later hook or
-// callback may rewrite the prompt without changing this observation.
-func recordSelection(
-	ctx context.Context,
-	source string,
-	decision skipRecentDecision,
-	retained int,
-	selected int,
-) {
-	isummarycontext.RecordEventSelection(ctx, isummarycontext.EventSelection{
-		Source:              source,
-		Reason:              selectionReason(decision, retained, selected),
-		Eligible:            decision.eligible,
-		SkipRecentRequested: decision.requested,
-		SkipRecentApplied:   decision.applied,
-		// Selected is the pre-hook event count. A later hook or callback
-		// may rewrite the prompt without changing this observation.
-		Selected: selected,
-	})
-}
-
-// selectionReason names the stage that produced the final selected count.
-func selectionReason(
-	decision skipRecentDecision,
-	retained int,
-	selected int,
-) string {
-	if selected > 0 {
-		return isummarycontext.ReasonSelected
-	}
-	if decision.eligible == 0 {
-		return isummarycontext.ReasonNoCandidates
-	}
-	if decision.reason != "" {
-		return decision.reason
-	}
-	if retained > 0 {
-		// Events survived skip-recent and were then removed by the session's
-		// branch scoping.
-		return isummarycontext.ReasonSessionFilterEmpty
-	}
-	return isummarycontext.ReasonNoCandidates
-}
-
-// recordUnmappedSelection publishes a selection that was dropped because its
-// items had no structural mapping to a stored event.
-func recordUnmappedSelection(ctx context.Context, decision skipRecentDecision) {
-	isummarycontext.RecordEventSelection(ctx, isummarycontext.EventSelection{
-		Source:              isummarycontext.SourceModelVisible,
-		Reason:              isummarycontext.ReasonBoundaryUnmapped,
-		Eligible:            decision.eligible,
-		SkipRecentRequested: decision.requested,
-		SkipRecentApplied:   decision.applied,
-	})
 }
 
 func previousSummaryEvent(text string) event.Event {
@@ -1013,79 +923,35 @@ func (s *sessionSummarizer) buildCheckSessionWithSelection(
 	return checkSess
 }
 
-// skipRecentDecision records what one filterEventsForSummary call did. It holds
-// counts and a stable reason only, never event content.
-type skipRecentDecision struct {
-	// eligible is the number of events handed to the skip-recent callback.
-	eligible int
-	// requested is the raw callback return, or zero when none is configured.
-	requested int
-	// applied is how many events skip-recent itself removed:
-	// clamp(requested, 0, eligible). Later stages are not counted here.
-	applied int
-	// reason is empty when events survived, and otherwise names the closed-set
-	// cause that emptied the slice.
-	reason string
-}
-
 // filterEventsForSummary filters events for summarization, excluding recent events
 // and ensuring that retained events still have enough context to summarize.
 func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event.Event {
-	filtered, _ := s.filterEventsForSummaryObserved(events)
-	return filtered
-}
-
-// filterEventsForSummaryObserved applies the same filtering as
-// filterEventsForSummary and additionally reports the decision it made, so
-// diagnostics can distinguish a skip-recent callback that consumed everything
-// from a retained prefix rejected as unsafe.
-func (s *sessionSummarizer) filterEventsForSummaryObserved(
-	events []event.Event,
-) ([]event.Event, skipRecentDecision) {
-	decision := skipRecentDecision{eligible: len(events)}
 	if s.skipRecentFunc == nil {
-		return events, decision
+		return events
 	}
 
 	skipCount := s.skipRecentFunc(events)
-	decision.requested = skipCount
-	decision.applied = skipRecentApplied(skipCount, len(events))
 	if skipCount <= 0 {
-		return events, decision
+		return events
 	}
 	if len(events) <= skipCount {
-		decision.reason = isummarycontext.ReasonSkipRecentAll
-		return []event.Event{}, decision
+		return []event.Event{}
 	}
 
 	filteredEvents := events[:len(events)-skipCount]
 
 	if hasUserMessageForSummary(filteredEvents) {
-		return filteredEvents, decision
+		return filteredEvents
 	}
 
 	// Delta summarization can prepend the previous summary as a synthetic
 	// system event. Preserve assistant/tool follow-ups when that summary is
 	// still present and at least one real event remains after it.
 	if s.hasPrependedSummaryContext(filteredEvents) {
-		return filteredEvents, decision
+		return filteredEvents
 	}
 
-	decision.reason = isummarycontext.ReasonUnsafePrefix
-	return []event.Event{}, decision
-}
-
-// skipRecentApplied is the number of events the skip-recent callback itself
-// removed: clamp(requested, 0, eligible). It does not include later drops
-// from an unsafe prefix, session scoping, or an unmapped boundary.
-func skipRecentApplied(requested, eligible int) int {
-	if requested <= 0 {
-		return 0
-	}
-	if requested > eligible {
-		return eligible
-	}
-	return requested
+	return []event.Event{}
 }
 
 func hasUserMessageForSummary(events []event.Event) bool {
@@ -2201,11 +2067,12 @@ func (s *sessionSummarizer) recordReportCall(
 	request *model.Request,
 	mode string,
 ) {
-	if report, ok := reportFromContext(ctx); ok {
-		report.Call.Mode = mode
-		report.Call.EstimatedPromptTokens = estimateRequestPromptTokens(ctx, request)
+	report, ok := reportFromContext(ctx)
+	if !ok {
+		return
 	}
-	isummarycontext.RecordModelCall(ctx, mode)
+	report.Call.Mode = mode
+	report.Call.EstimatedPromptTokens = estimateRequestPromptTokens(ctx, request)
 }
 
 func (s *sessionSummarizer) recordReportUsage(
@@ -2346,9 +2213,6 @@ func inheritReportContext(next context.Context, current context.Context) context
 	if next == nil {
 		return current
 	}
-	next = isummarycontext.InheritModelCallRecorder(next, current)
-	next = isummarycontext.InheritTriggerRecorder(next, current)
-	next = isummarycontext.InheritEventSelectionRecorder(next, current)
 	report, ok := reportFromContext(current)
 	if !ok {
 		return next

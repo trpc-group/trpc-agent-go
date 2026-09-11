@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	coreagent "trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -96,25 +95,24 @@ func (c *MultiToolChatAgent) Close() error {
 	return c.runner.Close()
 }
 
-// ProcessMessage processes a single message exchange.
-func (c *MultiToolChatAgent) ProcessMessage(
-	ctx context.Context,
-	userMessage string,
-	runOpts ...coreagent.RunOption,
-) (string, error) {
+// ProcessMessage processes a single message exchange
+func (c *MultiToolChatAgent) ProcessMessage(ctx context.Context, userMessage string) (string, error) {
 	var output strings.Builder
 	fmt.Printf("👤 User message: %s\n", userMessage)
 	message := model.NewUserMessage(userMessage)
-	// Run agent through runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, runOpts...)
+
+	// Run agent through runner
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return output.String(), fmt.Errorf("failed to run agent: %w", err)
 	}
-	// Process streaming response.
+
+	// Process streaming response
 	streamOutput, err := c.processStreamingResponse(eventChan)
 	if err != nil {
 		return output.String(), err
 	}
+
 	output.WriteString(streamOutput)
 	return output.String(), nil
 }

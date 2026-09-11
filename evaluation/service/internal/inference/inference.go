@@ -16,14 +16,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	itoolmock "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/toolmock"
-	tokenusage "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/usage"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -36,8 +33,6 @@ import (
 type Result struct {
 	Invocations     []*evalset.Invocation
 	ExecutionTraces []*trace.Trace
-	// InferenceStats contains resource measurements for the target agent.
-	InferenceStats *evalresult.InferenceStats
 }
 
 // Inference executes the agent against the provided invocations.
@@ -60,17 +55,12 @@ func Inference(
 	// Accumulate each invocation response.
 	responseInvocations := make([]*evalset.Invocation, 0, len(invocations))
 	executionTraces := make([]*trace.Trace, 0, len(invocations))
-	inferenceStats := &evalresult.InferenceStats{}
 	for _, invocation := range invocations {
-		startTime := time.Now()
-		responseInvocation, executionTrace, invocationTokenUsage, err := inferenceInvocationWithUsage(ctx, runner, sessionID, initialSession, invocation, runOptions, opts)
-		inferenceStats.Duration += time.Since(startTime)
-		inferenceStats.TokenUsage = tokenusage.Add(inferenceStats.TokenUsage, invocationTokenUsage)
+		responseInvocation, executionTrace, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation, runOptions, opts)
 		if err != nil && responseInvocation == nil && executionTrace == nil {
 			return &Result{
 				Invocations:     responseInvocations,
 				ExecutionTraces: executionTraces,
-				InferenceStats:  inferenceStats,
 			}, err
 		}
 		responseInvocations = append(responseInvocations, responseInvocation)
@@ -79,14 +69,12 @@ func Inference(
 			return &Result{
 				Invocations:     responseInvocations,
 				ExecutionTraces: executionTraces,
-				InferenceStats:  inferenceStats,
 			}, err
 		}
 	}
 	return &Result{
 		Invocations:     responseInvocations,
 		ExecutionTraces: executionTraces,
-		InferenceStats:  inferenceStats,
 	}, nil
 }
 
@@ -125,11 +113,7 @@ func InferenceWithConversationScenario(
 	if conversation == nil {
 		return nil, errors.New("user simulator conversation is nil")
 	}
-	inferenceStats := &evalresult.InferenceStats{}
 	defer func() {
-		if result != nil {
-			result.InferenceStats = inferenceStats
-		}
 		closeErr := conversation.Close()
 		if closeErr != nil {
 			err = errors.Join(err, fmt.Errorf("close user simulator conversation: %w", closeErr))
@@ -138,41 +122,37 @@ func InferenceWithConversationScenario(
 	result = &Result{
 		Invocations:     make([]*evalset.Invocation, 0),
 		ExecutionTraces: make([]*trace.Trace, 0),
-		InferenceStats:  inferenceStats,
 	}
 	var lastTargetResponse *model.Message
 	for {
 		decision, nextErr := conversation.Next(ctx, &usersimulation.TurnRequest{LastTargetResponse: lastTargetResponse})
 		if nextErr != nil {
-			return result, fmt.Errorf("simulate next turn: %w", nextErr)
+			return nil, fmt.Errorf("simulate next turn: %w", nextErr)
 		}
 		if decision == nil {
-			return result, errors.New("simulate next turn: decision is nil")
+			return nil, errors.New("simulate next turn: decision is nil")
 		}
 		if decision.Stop {
 			return result, nil
 		}
 		if decision.Message == nil {
-			return result, errors.New("simulate next turn: message is nil")
+			return nil, errors.New("simulate next turn: message is nil")
 		}
 		userMessage := *decision.Message
 		if userMessage.Role == "" {
 			userMessage.Role = model.RoleUser
 		}
 		if userMessage.Role != model.RoleUser {
-			return result, fmt.Errorf("simulate next turn: invalid message role %q", userMessage.Role)
+			return nil, fmt.Errorf("simulate next turn: invalid message role %q", userMessage.Role)
 		}
-		startTime := time.Now()
-		responseInvocation, executionTrace, invocationTokenUsage, nextErr := inferenceInvocationWithUsage(ctx, r, sessionID, initialSession, &evalset.Invocation{
+		responseInvocation, executionTrace, nextErr := inferenceInvocation(ctx, r, sessionID, initialSession, &evalset.Invocation{
 			UserContent: &userMessage,
 		}, runOptions, nil)
-		inferenceStats.Duration += time.Since(startTime)
-		inferenceStats.TokenUsage = tokenusage.Add(inferenceStats.TokenUsage, invocationTokenUsage)
 		if nextErr != nil {
-			return result, nextErr
+			return nil, nextErr
 		}
 		if responseInvocation.FinalResponse == nil {
-			return result, errors.New("target final response is nil")
+			return nil, errors.New("target final response is nil")
 		}
 		result.Invocations = append(result.Invocations, responseInvocation)
 		result.ExecutionTraces = append(result.ExecutionTraces, executionTrace)
@@ -190,34 +170,19 @@ func inferenceInvocation(
 	runOptions []agent.RunOption,
 	opts *options,
 ) (*evalset.Invocation, *trace.Trace, error) {
-	responseInvocation, executionTrace, _, err := inferenceInvocationWithUsage(
-		ctx, r, sessionID, initialSession, invocation, runOptions, opts,
-	)
-	return responseInvocation, executionTrace, err
-}
-
-func inferenceInvocationWithUsage(
-	ctx context.Context,
-	r runner.Runner,
-	sessionID string,
-	initialSession *evalset.SessionInput,
-	invocation *evalset.Invocation,
-	runOptions []agent.RunOption,
-	opts *options,
-) (*evalset.Invocation, *trace.Trace, *model.Usage, error) {
 	if invocation.UserContent == nil {
-		return nil, nil, nil, fmt.Errorf("invocation user content is nil for eval case invocation %q", invocation.InvocationID)
+		return nil, nil, fmt.Errorf("invocation user content is nil for eval case invocation %q", invocation.InvocationID)
 	}
 	mergedOpts := make([]agent.RunOption, 0, 1+len(runOptions))
 	mergedOpts = append(mergedOpts, runOptions...)
 	toolMockEntries, err := selectToolMockEntries(invocation, opts)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	if len(toolMockEntries) > 0 {
 		toolMockPlugin, err := buildToolMockPlugin(toolMockEntries, opts.toolMockRunner)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 		mergedOpts = append(mergedOpts, plugin.WithPlugins(toolMockPlugin))
 	}
@@ -232,26 +197,22 @@ func inferenceInvocationWithUsage(
 		mergedOpts...,
 	)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("runner run: %w", err)
+		return nil, nil, fmt.Errorf("runner run: %w", err)
 	}
 	// Capture the invocation ID, final response, tool uses, and tool responses.
 	var (
-		invocationID        string
-		finalResponse       *model.Message
-		finalByInvID        = make(map[string]*model.Message)
-		fallbackFinal       *model.Message
-		executionTrace      *trace.Trace
-		inferenceTokenUsage *model.Usage
-		eventErr            error
-		tools               = make([]*evalset.Tool, 0)
-		toolIDIdx           = make(map[string]int)
+		invocationID   string
+		finalResponse  *model.Message
+		finalByInvID   = make(map[string]*model.Message)
+		fallbackFinal  *model.Message
+		executionTrace *trace.Trace
+		eventErr       error
+		tools          = make([]*evalset.Tool, 0)
+		toolIDIdx      = make(map[string]int)
 	)
 	for event := range events {
 		if event == nil {
 			continue
-		}
-		if event.Response != nil && !event.Response.IsPartial {
-			inferenceTokenUsage = tokenusage.Add(inferenceTokenUsage, event.Response.Usage)
 		}
 		if event.IsRunnerCompletion() {
 			if event.InvocationID != "" {
@@ -309,20 +270,16 @@ func inferenceInvocationWithUsage(
 	if finalResponse == nil {
 		finalResponse = fallbackFinal
 	}
-	if inferenceTokenUsage == nil && executionTrace != nil {
-		inferenceTokenUsage = tokenusage.Add(nil, executionTrace.Usage)
-	}
 	result := &evalset.Invocation{
 		InvocationID:  invocationID,
-		MetricNames:   append([]string(nil), invocation.MetricNames...),
 		UserContent:   invocation.UserContent,
 		FinalResponse: finalResponse,
 		Tools:         tools,
 	}
 	if eventErr != nil {
-		return result, executionTrace, inferenceTokenUsage, eventErr
+		return result, executionTrace, eventErr
 	}
-	return result, executionTrace, inferenceTokenUsage, nil
+	return result, executionTrace, nil
 }
 
 func buildToolMockPlugin(entries []*toolmock.Tool, toolMockRunner runner.Runner) (plugin.Plugin, error) {

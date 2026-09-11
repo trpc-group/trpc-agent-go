@@ -12,15 +12,12 @@ package service
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestInferenceRequestJSONRoundTrip(t *testing.T) {
@@ -53,24 +50,10 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 		UserID:             "user-123",
 		Status:             status.EvalStatusPassed,
 		ErrorMessage:       "",
-		InferenceStats: &evalresult.InferenceStats{
-			Duration: 42 * time.Millisecond,
-			TokenUsage: &model.Usage{
-				PromptTokens:     10,
-				CompletionTokens: 5,
-				TotalTokens:      15,
-			},
-		},
 	}
 
 	data, err := json.Marshal(result)
 	assert.NoError(t, err)
-	var payload map[string]json.RawMessage
-	assert.NoError(t, json.Unmarshal(data, &payload))
-	assert.Contains(t, payload, "inferenceStats")
-	assert.NotContains(t, payload, "inferenceDuration")
-	assert.NotContains(t, payload, "inferenceTokenUsage")
-	assert.NotContains(t, payload, "agentExecutionTime")
 
 	var decoded InferenceResult
 	err = json.Unmarshal(data, &decoded)
@@ -82,7 +65,6 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, result.SessionID, decoded.SessionID)
 	assert.Equal(t, result.UserID, decoded.UserID)
 	assert.Equal(t, result.Status, decoded.Status)
-	assert.Equal(t, result.InferenceStats, decoded.InferenceStats)
 	assert.Len(t, decoded.Inferences, 1)
 	if len(decoded.Inferences) == 1 {
 		assert.Equal(t, "inv-1", decoded.Inferences[0].InvocationID)

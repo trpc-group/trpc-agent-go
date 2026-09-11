@@ -52,14 +52,10 @@ func (s *Service) CreateSessionSummary(
 		return nil
 	}
 
-	ctx, att := isummary.BeginAttempt(ctx, sess, filterKey)
-	defer att.Report()
-
 	updated, err := isummary.SummarizeSession(
 		ctx, s.opts.summarizer,
 		sess, filterKey, force,
 	)
-	att.Summarized(updated, err)
 	if err != nil || !updated {
 		return err
 	}
@@ -69,15 +65,14 @@ func (s *Service) CreateSessionSummary(
 	sess.SummariesMu.RUnlock()
 
 	if sum == nil {
-		att.Persisted(isummary.PersistNoSummary)
 		return nil
 	}
 
 	summaryBytes, err := json.Marshal(sum)
 	if err != nil {
-		return att.RecordWrite(fmt.Errorf(
+		return fmt.Errorf(
 			"marshal summary failed: %w", err,
-		))
+		)
 	}
 
 	_, err = s.pgClient.ExecContext(ctx,
@@ -101,11 +96,10 @@ func (s *Service) CreateSessionSummary(
 		sum.UpdatedAt, nil,
 	)
 	if err != nil {
-		return att.RecordWrite(fmt.Errorf(
+		return fmt.Errorf(
 			"upsert summary failed: %w", err,
-		))
+		)
 	}
-	att.Persisted(isummary.PersistStored)
 	return nil
 }
 

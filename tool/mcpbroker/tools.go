@@ -142,7 +142,7 @@ func (b *Broker) listTools(ctx context.Context, input listToolsInput) (listTools
 		return listToolsOutput{}, err
 	}
 
-	mcpTools, err := withOneShotClient(ctx, cfg, target.Origin == OriginAdhoc, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
+	mcpTools, err := withOneShotClient(ctx, cfg, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
 		result, listErr := client.ListTools(opCtx, &tmcp.ListToolsRequest{})
 		if listErr != nil {
 			return nil, fmt.Errorf("list MCP tools: %w", listErr)
@@ -150,11 +150,14 @@ func (b *Broker) listTools(ctx context.Context, input listToolsInput) (listTools
 		return result.Tools, nil
 	})
 	if err != nil {
-		return listToolsOutput{}, b.resolveOperationError(ctx, target, operationMetadata{
+		if handled, interceptErr := interceptHTTPOperationError(ctx, b, target, operationMetadata{
 			Selector: input.Selector,
 			BaseURL:  target.Config.ServerURL,
 			Phase:    PhaseListTools,
-		}, err)
+		}, err); handled {
+			return listToolsOutput{}, interceptErr
+		}
+		return listToolsOutput{}, err
 	}
 
 	sort.Slice(mcpTools, func(i, j int) bool {
@@ -204,7 +207,7 @@ func (b *Broker) inspectTools(ctx context.Context, input inspectToolsInput) (ins
 		return inspectToolsOutput{}, err
 	}
 
-	mcpTools, err := withOneShotClient(ctx, cfg, target.Origin == OriginAdhoc, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
+	mcpTools, err := withOneShotClient(ctx, cfg, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) ([]tmcp.Tool, error) {
 		result, listErr := client.ListTools(opCtx, &tmcp.ListToolsRequest{})
 		if listErr != nil {
 			return nil, fmt.Errorf("list MCP tools: %w", listErr)
@@ -212,11 +215,14 @@ func (b *Broker) inspectTools(ctx context.Context, input inspectToolsInput) (ins
 		return result.Tools, nil
 	})
 	if err != nil {
-		return inspectToolsOutput{}, b.resolveOperationError(ctx, target, operationMetadata{
+		if handled, interceptErr := interceptHTTPOperationError(ctx, b, target, operationMetadata{
 			Selector: input.Selector,
 			BaseURL:  target.Config.ServerURL,
 			Phase:    PhaseInspectTools,
-		}, err)
+		}, err); handled {
+			return inspectToolsOutput{}, interceptErr
+		}
+		return inspectToolsOutput{}, err
 	}
 
 	selectedTools, err := selectToolsForInspection(mcpTools, input.Tools)
@@ -273,7 +279,7 @@ func (b *Broker) callTool(ctx context.Context, input callToolInput) (callToolOut
 		return callToolOutput{}, err
 	}
 
-	result, err := withOneShotClient(ctx, cfg, target.Origin == OriginAdhoc, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) (*tmcp.CallToolResult, error) {
+	result, err := withOneShotClient(ctx, cfg, httpExtra, stdioExtra, func(opCtx context.Context, client tmcp.Connector) (*tmcp.CallToolResult, error) {
 		if validateErr := validateCallToolArguments(opCtx, client, toolName, input.Arguments); validateErr != nil {
 			return nil, validateErr
 		}
@@ -289,12 +295,15 @@ func (b *Broker) callTool(ctx context.Context, input callToolInput) (callToolOut
 		return callResult, nil
 	})
 	if err != nil {
-		return callToolOutput{}, b.resolveOperationError(ctx, target, operationMetadata{
+		if handled, interceptErr := interceptHTTPOperationError(ctx, b, target, operationMetadata{
 			Selector: input.Selector,
 			BaseURL:  target.Config.ServerURL,
 			ToolName: toolName,
 			Phase:    PhaseCallTool,
-		}, err)
+		}, err); handled {
+			return callToolOutput{}, interceptErr
+		}
+		return callToolOutput{}, err
 	}
 
 	output := callToolOutput{
@@ -329,7 +338,7 @@ func validateCallToolArguments(
 		}
 	}
 	if target == nil {
-		return newModelRequestError(fmt.Errorf("MCP tool %q not found", toolName))
+		return fmt.Errorf("MCP tool %q not found", toolName)
 	}
 
 	if target.InputSchema == nil || len(target.InputSchema.Required) == 0 {
@@ -348,9 +357,7 @@ func validateCallToolArguments(
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return newModelRequestError(
-			fmt.Errorf("missing required arguments for MCP tool %q: %s", toolName, strings.Join(missing, ", ")),
-		)
+		return fmt.Errorf("missing required arguments for MCP tool %q: %s", toolName, strings.Join(missing, ", "))
 	}
 	return nil
 }

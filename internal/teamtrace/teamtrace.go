@@ -10,72 +10,11 @@
 package teamtrace
 
 import (
-	"context"
-
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 )
 
 const memberTraceRootConfigsKey = "__trpc_agent_internal_team_member_trace_root__"
-
-const memberSurfaceRootStateKey = "__trpc_agent_internal_team_member_surface_root_state__"
-
-type memberMountContextKey struct{}
-
-// CoordinatorLayout describes static coordinator-team node ids under one root.
-type CoordinatorLayout struct {
-	CoordinatorNodeID string
-	MemberNodeIDs     []string
-}
-
-// MemberMount carries the concrete node ids for one mounted Team member call.
-type MemberMount struct {
-	TraceNodeID       string
-	SurfaceRootNodeID string
-}
-
-// NewCoordinatorLayout allocates coordinator and member node ids like static export.
-func NewCoordinatorLayout(rootNodeID string, members []agent.Agent) CoordinatorLayout {
-	allocator := istructure.NewPathAllocator(rootNodeID)
-	layout := CoordinatorLayout{
-		CoordinatorNodeID: allocator.Next("coordinator"),
-	}
-	if len(members) == 0 {
-		return layout
-	}
-	layout.MemberNodeIDs = make([]string, 0, len(members))
-	for _, member := range members {
-		memberName := ""
-		if member != nil {
-			memberName = member.Info().Name
-		}
-		layout.MemberNodeIDs = append(layout.MemberNodeIDs, allocator.Next(memberName))
-	}
-	return layout
-}
-
-// ContextWithMemberMount stores one mounted Team member path in ctx.
-func ContextWithMemberMount(ctx context.Context, mount MemberMount) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if mount.TraceNodeID == "" || mount.SurfaceRootNodeID == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, memberMountContextKey{}, mount)
-}
-
-// MemberMountFromContext returns one mounted Team member path from ctx.
-func MemberMountFromContext(ctx context.Context) (MemberMount, bool) {
-	if ctx == nil {
-		return MemberMount{}, false
-	}
-	mount, ok := ctx.Value(memberMountContextKey{}).(MemberMount)
-	if !ok || mount.TraceNodeID == "" || mount.SurfaceRootNodeID == "" {
-		return MemberMount{}, false
-	}
-	return mount, true
-}
 
 // RootNodeID returns the mounted surface lookup root node id for one team invocation.
 func RootNodeID(inv *agent.Invocation, teamName string) string {
@@ -107,7 +46,7 @@ func MemberNodeID(rootNodeID string, memberName string) string {
 	return istructure.JoinNodeID(rootNodeID, memberName)
 }
 
-// WithMemberTraceRoot stores the mounted execution-trace root in custom configs.
+// WithMemberTraceRoot stores the mounted team root in custom configs.
 func WithMemberTraceRoot(cfgs map[string]any, rootNodeID string) map[string]any {
 	if rootNodeID == "" {
 		return cfgs
@@ -117,7 +56,7 @@ func WithMemberTraceRoot(cfgs map[string]any, rootNodeID string) map[string]any 
 	return out
 }
 
-// MemberTraceRoot returns the mounted execution-trace root from custom configs.
+// MemberTraceRoot returns the mounted team root from custom configs.
 func MemberTraceRoot(cfgs map[string]any) string {
 	if cfgs == nil {
 		return ""
@@ -130,7 +69,7 @@ func MemberTraceRoot(cfgs map[string]any) string {
 	return rootNodeID
 }
 
-// SetMemberTraceRootForInvocation stores the mounted execution-trace root.
+// SetMemberTraceRootForInvocation stores the mounted team root on one invocation.
 func SetMemberTraceRootForInvocation(
 	inv *agent.Invocation,
 	rootNodeID string,
@@ -138,40 +77,12 @@ func SetMemberTraceRootForInvocation(
 	agent.SetInvocationTeamMemberTraceRoot(inv, rootNodeID)
 }
 
-// ClearMemberTraceRootForInvocation removes the mounted execution-trace root.
+// ClearMemberTraceRootForInvocation removes the mounted team root from one invocation.
 func ClearMemberTraceRootForInvocation(inv *agent.Invocation) {
 	agent.ClearInvocationTeamMemberTraceRoot(inv)
 }
 
-// SetMemberSurfaceRootForInvocation stores the mounted Team member surface root.
-func SetMemberSurfaceRootForInvocation(
-	inv *agent.Invocation,
-	rootNodeID string,
-) {
-	if inv == nil || rootNodeID == "" {
-		return
-	}
-	inv.SetState(memberSurfaceRootStateKey, rootNodeID)
-}
-
-// ClearMemberSurfaceRootForInvocation removes the mounted Team member surface root.
-func ClearMemberSurfaceRootForInvocation(inv *agent.Invocation) {
-	if inv == nil {
-		return
-	}
-	inv.DeleteState(memberSurfaceRootStateKey)
-}
-
-// MemberSurfaceRootForInvocation returns the mounted Team member surface root.
-func MemberSurfaceRootForInvocation(inv *agent.Invocation) string {
-	if inv == nil {
-		return ""
-	}
-	rootNodeID, _ := agent.GetStateValue[string](inv, memberSurfaceRootStateKey)
-	return rootNodeID
-}
-
-// MemberTraceRootForInvocation returns the mounted execution-trace root.
+// MemberTraceRootForInvocation returns the mounted team root for one invocation.
 func MemberTraceRootForInvocation(inv *agent.Invocation) string {
 	if inv == nil {
 		return ""

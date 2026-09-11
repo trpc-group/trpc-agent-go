@@ -1118,8 +1118,7 @@ func TestService_WithDisableScriptCache_ZSetSummary(t *testing.T) {
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
 	sum := &session.Summary{Summary: "summary", UpdatedAt: time.Now().UTC()}
-	_, err = service.zsetClient.CreateSummary(ctx, key, "all", sum, 0)
-	require.NoError(t, err)
+	require.NoError(t, service.zsetClient.CreateSummary(ctx, key, "all", sum, 0))
 	assert.Equal(t, []string{"eval"}, recorder.snapshot())
 }
 
