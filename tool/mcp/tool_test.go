@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
@@ -255,6 +257,135 @@ func TestMCPTool_WithSchemas(t *testing.T) {
 	if decl.Name != "schema_tool" {
 		t.Errorf("expected name 'schema_tool', got %q", decl.Name)
 	}
+}
+
+func TestNewMCPTool_PrefersRawSchemaNumericBounds(t *testing.T) {
+	// Simulate the real MCP ListTools path: RawInputSchema retains exact JSON
+	// Schema 2020-12 number tokens, while InputSchema already went through
+	// kin-openapi (float64 rounding + exclusive bounds rewritten to bools).
+	rawInput := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"page_size": {
+				"type": "integer",
+				"minimum": 1,
+				"maximum": 9007199254740993,
+				"exclusiveMinimum": 0,
+				"exclusiveMaximum": 9007199254740994
+			}
+		}
+	}`)
+	rawOutput := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"total": {
+				"type": "integer",
+				"minimum": 0,
+				"maximum": 9007199254740993,
+				"exclusiveMinimum": -1,
+				"exclusiveMaximum": 9007199254740994
+			}
+		}
+	}`)
+
+	roundedMax := float64(9007199254740993)
+	minOne := float64(1)
+	minZero := float64(0)
+	lossyInput := &openapi3.Schema{
+		Type: &openapi3.Types{openapi3.TypeObject},
+		Properties: openapi3.Schemas{
+			"page_size": {
+				Value: &openapi3.Schema{
+					Type:         &openapi3.Types{openapi3.TypeInteger},
+					Min:          &minOne,
+					Max:          &roundedMax,
+					ExclusiveMin: true,
+					ExclusiveMax: true,
+				},
+			},
+		},
+	}
+	lossyOutput := &openapi3.Schema{
+		Type: &openapi3.Types{openapi3.TypeObject},
+		Properties: openapi3.Schemas{
+			"total": {
+				Value: &openapi3.Schema{
+					Type:         &openapi3.Types{openapi3.TypeInteger},
+					Min:          &minZero,
+					Max:          &roundedMax,
+					ExclusiveMin: true,
+					ExclusiveMax: true,
+				},
+			},
+		},
+	}
+
+	mcpTool := newMCPTool(mcp.Tool{
+		Name:            "bounded_search",
+		Description:     "Search with bounded page size",
+		RawInputSchema:  rawInput,
+		RawOutputSchema: rawOutput,
+		InputSchema:     lossyInput,
+		OutputSchema:    lossyOutput,
+	}, &mcpSessionManager{})
+
+	decl := mcpTool.Declaration()
+	require.NotNil(t, decl.InputSchema)
+	require.NotNil(t, decl.OutputSchema)
+
+	pageSize := decl.InputSchema.Properties["page_size"]
+	require.Equal(t, json.Number("1"), pageSize.Minimum)
+	require.Equal(t, json.Number("9007199254740993"), pageSize.Maximum)
+	require.Equal(t, json.Number("0"), pageSize.ExclusiveMinimum)
+	require.Equal(t, json.Number("9007199254740994"), pageSize.ExclusiveMaximum)
+
+	total := decl.OutputSchema.Properties["total"]
+	require.Equal(t, json.Number("0"), total.Minimum)
+	require.Equal(t, json.Number("9007199254740993"), total.Maximum)
+	require.Equal(t, json.Number("-1"), total.ExclusiveMinimum)
+	require.Equal(t, json.Number("9007199254740994"), total.ExclusiveMaximum)
+}
+
+func TestNewMCPTool_FallsBackToTypedSchema(t *testing.T) {
+	minOne := float64(1)
+	maxTen := float64(10)
+	mcpTool := newMCPTool(mcp.Tool{
+		Name: "local_tool",
+		InputSchema: &openapi3.Schema{
+			Type: &openapi3.Types{openapi3.TypeObject},
+			Properties: openapi3.Schemas{
+				"page_size": {
+					Value: &openapi3.Schema{
+						Type: &openapi3.Types{openapi3.TypeInteger},
+						Min:  &minOne,
+						Max:  &maxTen,
+					},
+				},
+			},
+		},
+	}, &mcpSessionManager{})
+
+	pageSize := mcpTool.Declaration().InputSchema.Properties["page_size"]
+	require.Equal(t, json.Number("1"), pageSize.Minimum)
+	require.Equal(t, json.Number("10"), pageSize.Maximum)
+	require.Empty(t, pageSize.ExclusiveMinimum)
+	require.Empty(t, pageSize.ExclusiveMaximum)
+}
+
+func TestResolveToolSchema_NilCases(t *testing.T) {
+	require.Nil(t, resolveToolSchema(nil, nil))
+	require.Nil(t, resolveToolSchema(json.RawMessage{}, nil))
+
+	raw := json.RawMessage(`{"type":"integer","maximum":9007199254740993,"exclusiveMinimum":0}`)
+	roundedMax := float64(9007199254740993)
+	lossy := &openapi3.Schema{
+		Type:         &openapi3.Types{openapi3.TypeInteger},
+		Max:          &roundedMax,
+		ExclusiveMin: true,
+	}
+	schema := resolveToolSchema(raw, lossy)
+	require.Equal(t, json.Number("9007199254740993"), schema.Maximum)
+	require.Equal(t, json.Number("0"), schema.ExclusiveMinimum)
 }
 
 func TestMCPToolResult_GetMeta(t *testing.T) {

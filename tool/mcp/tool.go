@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
@@ -69,17 +70,27 @@ func newMCPTool(mcpToolData mcp.Tool, sessionManager *mcpSessionManager) *mcpToo
 		sessionManager: sessionManager,
 	}
 
-	// Convert MCP input schema to inner Schema.
-	if mcpToolData.InputSchema != nil {
-		mcpTool.inputSchema = convertMCPSchemaToSchema(mcpToolData.InputSchema)
-	}
-
-	// Convert MCP output schema to inner Schema.
-	if mcpToolData.OutputSchema != nil {
-		mcpTool.outputSchema = convertMCPSchemaToSchema(mcpToolData.OutputSchema)
-	}
+	// Prefer Raw*Schema when present: the MCP SDK already converted typed
+	// InputSchema/OutputSchema through kin-openapi, which stores minimum/maximum
+	// as float64 and rewrites numeric exclusive bounds to booleans. Decoding the
+	// original JSON with UseNumber preserves exact integer and exclusive bounds.
+	mcpTool.inputSchema = resolveToolSchema(mcpToolData.RawInputSchema, mcpToolData.InputSchema)
+	mcpTool.outputSchema = resolveToolSchema(mcpToolData.RawOutputSchema, mcpToolData.OutputSchema)
 
 	return mcpTool
+}
+
+// resolveToolSchema converts an MCP tool schema, preferring the raw JSON bytes
+// retained by the MCP client before kin-openapi normalization. When raw bytes
+// are absent (locally constructed tools), it falls back to the typed schema.
+func resolveToolSchema(raw json.RawMessage, typed *openapi3.Schema) *tool.Schema {
+	if len(raw) > 0 {
+		return convertMCPSchemaToSchema(raw)
+	}
+	if typed == nil {
+		return nil
+	}
+	return convertMCPSchemaToSchema(typed)
 }
 
 // ToolMetadata converts explicit MCP tool annotations into framework metadata.
