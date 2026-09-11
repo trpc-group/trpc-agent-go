@@ -228,6 +228,9 @@ func NewToolSet(opts ...Option) (*ToolSet, error) {
 	if base.Scheme != "https" {
 		return nil, fmt.Errorf("youcom: base URL must be HTTPS, got %q", cfg.baseURL)
 	}
+	if base.Host == "" {
+		return nil, fmt.Errorf("youcom: base URL must include a host, got %q", cfg.baseURL)
+	}
 
 	httpClient := resolveHTTPClient(cfg)
 	// Guard against the API key leaking through redirects: drop X-API-Key
@@ -273,11 +276,14 @@ type youcomSearcher struct {
 }
 
 // searchRequest represents the input for the You.com search tool.
+// Note: the framework splits jsonschema tags on every comma, so the
+// descriptions below deliberately avoid commas; enum values are declared
+// with separate enum= entries.
 type searchRequest struct {
 	Query      string `json:"query" jsonschema:"description=The search query to execute on You.com"`
-	NumResults int    `json:"num_results,omitempty" jsonschema:"description=Maximum number of results to return (default: 10, max: 10)"`
-	Country    string `json:"country,omitempty" jsonschema:"description=Country code used to bias results (e.g. US, DE)"`
-	SafeSearch string `json:"safe_search,omitempty" jsonschema:"description=Safe search strictness: strict, moderate, or off"`
+	NumResults int    `json:"num_results,omitempty" jsonschema:"description=Maximum number of results to return (default 10 max 10)"`
+	Country    string `json:"country,omitempty" jsonschema:"description=Country code used to bias results (e.g. US or DE)"`
+	SafeSearch string `json:"safe_search,omitempty" jsonschema:"description=Safe search strictness,enum=strict,enum=moderate,enum=off"`
 }
 
 // searchResponse represents the output from the You.com search tool.
@@ -434,28 +440,34 @@ func (s *youcomSearcher) query(
 	}
 
 	// Flatten the web and news sections, preserving API order within each
-	// section (web results first, matching the API response layout).
-	flat := make([]youcomAPIResult, 0, len(apiResp.Results.Web)+len(apiResp.Results.News))
-	flat = append(flat, apiResp.Results.Web...)
-	flat = append(flat, apiResp.Results.News...)
-
-	results := make([]resultItem, 0, len(flat))
-	for _, r := range flat {
-		item := resultItem{
-			URL:          r.URL,
-			Title:        r.Title,
-			Snippets:     trimSnippets(r.Snippets),
-			ThumbnailURL: r.ThumbnailURL,
+	// section (web results first, matching the API response layout). The
+	// API treats `count` as a per-section limit, so the sections are
+	// truncated once the combined list reaches numResults to honor the
+	// tool's result-count contract.
+	results := make([]resultItem, 0, numResults)
+	appendSection := func(section []youcomAPIResult) {
+		for _, r := range section {
+			if len(results) == numResults {
+				return
+			}
+			item := resultItem{
+				URL:          r.URL,
+				Title:        r.Title,
+				Snippets:     trimSnippets(r.Snippets),
+				ThumbnailURL: r.ThumbnailURL,
+			}
+			// News results often carry a description instead of snippets.
+			if len(item.Snippets) == 0 && r.Description != "" {
+				item.Snippets = trimSnippets([]string{r.Description})
+			}
+			if item.URL == "" && item.Title == "" {
+				continue
+			}
+			results = append(results, item)
 		}
-		// News results often carry a description instead of snippets.
-		if len(item.Snippets) == 0 && r.Description != "" {
-			item.Snippets = trimSnippets([]string{r.Description})
-		}
-		if item.URL == "" && item.Title == "" {
-			continue
-		}
-		results = append(results, item)
 	}
+	appendSection(apiResp.Results.Web)
+	appendSection(apiResp.Results.News)
 	return results, nil
 }
 

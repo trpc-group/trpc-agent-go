@@ -774,3 +774,177 @@ func TestSearchToolInvalidJSONResponse(t *testing.T) {
 		t.Errorf("expected decode response error, got %v", err)
 	}
 }
+
+func TestSearchToolCapsCombinedSections(t *testing.T) {
+	// The API treats `count` as a per-section limit, so both sections can
+	// each return up to `count` entries. The tool must cap the combined
+	// list at numResults so the result-count contract holds.
+	web := make([]youcomAPIResult, 0, 4)
+	for i := 0; i < 4; i++ {
+		web = append(web, youcomAPIResult{
+			URL:   fmt.Sprintf("https://example.com/web/%d", i),
+			Title: fmt.Sprintf("Web %d", i),
+		})
+	}
+	news := make([]youcomAPIResult, 0, 4)
+	for i := 0; i < 4; i++ {
+		news = append(news, youcomAPIResult{
+			URL:         fmt.Sprintf("https://example.com/news/%d", i),
+			Title:       fmt.Sprintf("News %d", i),
+			Description: fmt.Sprintf("News description %d", i),
+		})
+	}
+	srv, _ := newFakeYoucomAPI(t, web, news)
+
+	toolSet, err := NewToolSet(
+		WithAPIKey("key-123"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(fakeTLSClient()),
+		WithNumResults(5),
+	)
+	if err != nil {
+		t.Fatalf("failed to create tool set: %v", err)
+	}
+
+	searchTool, ok := toolSet.tools[0].(interface {
+		Call(context.Context, []byte) (any, error)
+	})
+	if !ok {
+		t.Fatalf("tool does not implement Call")
+	}
+
+	reqJSON, err := json.Marshal(searchRequest{Query: "sections"})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	result, err := searchTool.Call(context.Background(), reqJSON)
+	if err != nil {
+		t.Fatalf("search call failed: %v", err)
+	}
+	resp, ok := result.(searchResponse)
+	if !ok {
+		t.Fatalf("expected searchResponse type, got %T", result)
+	}
+	if len(resp.Results) != 5 {
+		t.Fatalf("expected 5 results, got %d", len(resp.Results))
+	}
+	// Web results come first, then news up to the cap.
+	for i, item := range resp.Results[:4] {
+		if want := fmt.Sprintf("Web %d", i); item.Title != want {
+			t.Errorf("result %d: expected title %q, got %q", i, want, item.Title)
+		}
+	}
+	if resp.Results[4].Title != "News 0" {
+		t.Errorf("result 4: expected title %q, got %q", "News 0", resp.Results[4].Title)
+	}
+}
+
+func TestSearchToolCapsCombinedSectionsWithInvalidEntries(t *testing.T) {
+	// Entries without a URL or title are dropped and do not consume the
+	// result budget, so the cap applies to valid entries only.
+	web := []youcomAPIResult{
+		{URL: "https://example.com/web/0", Title: "Web 0"},
+		{}, // invalid: no URL and no title
+		{URL: "https://example.com/web/1", Title: "Web 1"},
+	}
+	news := []youcomAPIResult{
+		{URL: "https://example.com/news/0", Title: "News 0", Description: "d0"},
+		{}, // invalid: no URL and no title
+		{URL: "https://example.com/news/1", Title: "News 1", Description: "d1"},
+	}
+	srv, _ := newFakeYoucomAPI(t, web, news)
+
+	toolSet, err := NewToolSet(
+		WithAPIKey("key-123"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(fakeTLSClient()),
+		WithNumResults(2),
+	)
+	if err != nil {
+		t.Fatalf("failed to create tool set: %v", err)
+	}
+
+	searchTool, ok := toolSet.tools[0].(interface {
+		Call(context.Context, []byte) (any, error)
+	})
+	if !ok {
+		t.Fatalf("tool does not implement Call")
+	}
+
+	reqJSON, err := json.Marshal(searchRequest{Query: "invalid entries"})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	result, err := searchTool.Call(context.Background(), reqJSON)
+	if err != nil {
+		t.Fatalf("search call failed: %v", err)
+	}
+	resp, ok := result.(searchResponse)
+	if !ok {
+		t.Fatalf("expected searchResponse type, got %T", result)
+	}
+	if len(resp.Results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(resp.Results))
+	}
+	if resp.Results[0].Title != "Web 0" || resp.Results[1].Title != "Web 1" {
+		t.Errorf("unexpected results: %q, %q", resp.Results[0].Title, resp.Results[1].Title)
+	}
+}
+
+func TestNewToolSetRejectsHostlessBaseURL(t *testing.T) {
+	for _, raw := range []string{
+		"https://",
+		"https:foo",
+		"https:///v1/search",
+	} {
+		_, err := NewToolSet(
+			WithAPIKey("key-123"),
+			WithBaseURL(raw),
+		)
+		if err == nil {
+			t.Errorf("expected error for hostless base URL %q, got nil", raw)
+			continue
+		}
+		if !strings.Contains(err.Error(), "host") {
+			t.Errorf("expected host error for %q, got %v", raw, err)
+		}
+	}
+}
+
+func TestToolDeclarationSchema(t *testing.T) {
+	toolSet, err := NewToolSet(WithAPIKey("key-123"))
+	if err != nil {
+		t.Fatalf("failed to create tool set: %v", err)
+	}
+
+	decl := toolSet.tools[0].Declaration()
+	if decl == nil {
+		t.Fatalf("expected non-nil declaration")
+	}
+	if decl.Name != "search" {
+		t.Errorf("expected tool name %q, got %q", "search", decl.Name)
+	}
+	props := decl.InputSchema.Properties
+	if len(props) != 4 {
+		t.Fatalf("expected 4 properties, got %d", len(props))
+	}
+	if props["query"] == nil {
+		t.Fatalf("missing query property")
+	}
+	if got, want := props["num_results"].Description, "Maximum number of results to return (default 10 max 10)"; got != want {
+		t.Errorf("num_results description: got %q, want %q", got, want)
+	}
+	if got, want := props["country"].Description, "Country code used to bias results (e.g. US or DE)"; got != want {
+		t.Errorf("country description: got %q, want %q", got, want)
+	}
+	safe := props["safe_search"]
+	if safe == nil {
+		t.Fatalf("missing safe_search property")
+	}
+	if got, want := safe.Description, "Safe search strictness"; got != want {
+		t.Errorf("safe_search description: got %q, want %q", got, want)
+	}
+	if len(safe.Enum) != 3 || safe.Enum[0] != "strict" || safe.Enum[1] != "moderate" || safe.Enum[2] != "off" {
+		t.Errorf("safe_search enum: got %v, want [strict moderate off]", safe.Enum)
+	}
+}
