@@ -19,11 +19,18 @@ import (
 	"github.com/creack/pty"
 )
 
-func startPTY(cmd *exec.Cmd) (*os.File, func() error, error) {
+func startPTY(
+	cmd *exec.Cmd,
+	hook func(*exec.Cmd) error,
+) (*os.File, func() error, error) {
 	if cmd == nil {
 		return nil, nil, errors.New("nil command")
 	}
 
+	preparePTYCommand(cmd)
+	if err := applySpawnHook(cmd, hook); err != nil {
+		return nil, nil, err
+	}
 	preparePTYCommand(cmd)
 	master, err := pty.Start(cmd)
 	if err != nil {
