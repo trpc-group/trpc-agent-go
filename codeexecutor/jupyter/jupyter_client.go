@@ -120,10 +120,11 @@ func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 	c.ws = ws
 	c.sessionID = uuid.New().String()
 	ready, err := c.waitForReady()
-	if err != nil {
-		return nil, err
-	}
-	if !ready {
+	if err != nil || !ready {
+		c.ws.Close()
+		if err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("kernel not ready")
 	}
 

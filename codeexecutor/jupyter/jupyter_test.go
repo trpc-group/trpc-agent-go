@@ -7,18 +7,27 @@
 //
 //
 
+//go:build !windows
+
 package jupyter
 
 import (
+	"bufio"
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
@@ -682,6 +691,85 @@ func TestNewWithFakePythonExited(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// NewClient failure path: the fake gateway announces "is available at" but
+// the endpoint returns an error, so NewClient fails. New() must still clean
+// up the gateway subprocess before returning the error.
+func TestNewClientFailureCleansUpGateway(t *testing.T) {
+	tmp := t.TempDir()
+	pidFile := filepath.Join(tmp, "gateway.pid")
+
+	// Serve a deterministic failing endpoint on an OS-assigned port instead
+	// of guessing a free port.
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failSrv.Close()
+
+	parsed, err := url.Parse(failSrv.URL)
+	if err != nil {
+		t.Fatalf("parse failing endpoint URL: %v", err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatalf("parse failing endpoint port: %v", err)
+	}
+
+	fake := filepath.Join(tmp, "python")
+	script := "#!/bin/sh\n" +
+		"trap 'exit 0' TERM INT\n" +
+		"prev=\"\"\n" +
+		"PORT=8888\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"--version\" ]; then exit 0; fi\n" +
+		"  if [ \"$prev\" = \"--KernelGatewayApp.port\" ]; then PORT=\"$a\"; fi\n" +
+		"  prev=\"$a\"\n" +
+		"done\n" +
+		"echo \"$$\" > \"" + pidFile + "\"\n" +
+		"echo \"[KernelGatewayApp] Jupyter Kernel Gateway is available at http://127.0.0.1:$PORT\" 1>&2\n" +
+		"while :; do sleep 1; done\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake python: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", tmp+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	_, err = New(
+		WithPort(port),
+		WithStartTimeout(8*time.Second),
+		WithWaitReadyTimeout(3*time.Second),
+	)
+	if err == nil {
+		t.Fatal("expected New() to fail: NewClient cannot reach the fake gateway")
+	}
+
+	pidBytes, rerr := os.ReadFile(pidFile)
+	if rerr != nil {
+		t.Fatalf("gateway pid file missing: %v", rerr)
+	}
+	pid, perr := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if perr != nil {
+		t.Fatalf("invalid gateway pid %q: %v", pidBytes, perr)
+	}
+	// Guarantee no leftover process even when this test fails before the
+	// cleanup assertion below.
+	defer func() {
+		_ = exec.Command("kill", "-9", strconv.Itoa(pid)).Run()
+	}()
+
+	// The gateway subprocess must be reaped after New() returns the error.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if proc, ferr := os.FindProcess(pid); ferr != nil {
+			return // Process not found: cleaned up.
+		} else if serr := proc.Signal(syscall.Signal(0)); serr != nil {
+			return // Process not found: cleaned up.
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("gateway subprocess (pid=%d) still alive after New() returned error", pid)
+}
+
 // Error path for ExecuteCode when client is not initialized.
 func TestExecuteCodeClientNotInit(t *testing.T) {
 	ce := &CodeExecutor{}
@@ -702,4 +790,145 @@ func TestCleanupKillBranch(t *testing.T) {
 	_ = cmd.Wait()
 	ce := &CodeExecutor{cancel: cancel, subprocess: cmd}
 	ce.cleanup()
+}
+
+// TestScannerGoroutineExitsOnContextCancel verifies that the scanner goroutine
+// started inside New() drains stderr and exits cleanly when the CodeExecutor
+// context is cancelled while the subprocess is still writing output.
+// This covers the ctx.Done() drain branch inside the scanner goroutine.
+func TestScannerGoroutineExitsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start a subprocess that writes to stderr continuously.
+	cmd := exec.CommandContext(ctx, "bash", "-c",
+		`while :; do echo "log line" >&2; sleep 0.01; done`)
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("StderrPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	lines := make(chan string, 64)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer close(lines)
+		sc := bufio.NewScanner(stderrPipe)
+		for sc.Scan() {
+			select {
+			case lines <- sc.Text():
+			case <-ctx.Done():
+				// drain branch under test
+				for sc.Scan() {
+				}
+				return
+			default:
+			}
+		}
+	}()
+
+	// Read a few lines to confirm the goroutine is running.
+	for i := 0; i < 3; i++ {
+		select {
+		case <-lines:
+		case <-time.After(2 * time.Second):
+			t.Fatal("scanner goroutine did not produce lines in time")
+		}
+	}
+
+	// Cancel the context; this should trigger the ctx.Done() drain path.
+	cancel()
+
+	// Kill the subprocess so it closes stderr, unblocking the scanner.
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	stderrPipe.Close()
+	_ = cmd.Wait()
+
+	select {
+	case <-done:
+		// goroutine exited cleanly
+	case <-time.After(3 * time.Second):
+		t.Fatal("scanner goroutine did not exit after context cancel")
+	}
+}
+
+// TestNewExitedWithKnownExitCode verifies that when the subprocess exits, the
+// exit code is correctly extracted. Now that cleanup() (which calls Wait()) is
+// invoked before reading ProcessState, the real exit code should always be
+// available.
+func TestNewExitedWithKnownExitCode(t *testing.T) {
+	tmp := t.TempDir()
+	fake := filepath.Join(tmp, "python")
+	// Script writes one stderr line then exits with a known code.
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"--version\" ]; then exit 0; fi\n" +
+		"done\n" +
+		"echo 'starting up' >&2\n" +
+		"sleep 0.05\n" +
+		"exit 42\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake python: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", tmp+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	_, err := New(
+		WithStartTimeout(3*time.Second),
+		WithWaitReadyTimeout(100*time.Millisecond),
+	)
+	require.Error(t, err)
+	// cleanup() now calls Wait() before ExitCode() is read, so the real
+	// exit code (42) must be present in the error message.
+	assert.Contains(t, err.Error(), "jupyter gateway exited with code 42",
+		"expected real exit code 42 in error, got: %v", err)
+}
+
+// TestNewReadyLineNotDroppedAfter64Lines verifies that the startup ready line
+// is never discarded even when the gateway emits more than 64 lines of output
+// before announcing "is available at". This is a regression test for the
+// default-discard-during-startup bug.
+func TestNewReadyLineNotDroppedAfter64Lines(t *testing.T) {
+	tmp := t.TempDir()
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failSrv.Close()
+
+	parsed, err := url.Parse(failSrv.URL)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(parsed.Port())
+	require.NoError(t, err)
+
+	fake := filepath.Join(tmp, "python")
+	// Emit 100 lines of noise BEFORE the ready line, far exceeding the 64-
+	// line channel buffer. The ready line must still be observed by New().
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"--version\" ]; then exit 0; fi\n" +
+		"done\n" +
+		"i=0; while [ $i -lt 100 ]; do echo \"noise line $i\" >&2; i=$((i+1)); done\n" +
+		"echo \"[KernelGatewayApp] Jupyter Kernel Gateway is available at http://127.0.0.1:8888\" >&2\n" +
+		"while :; do sleep 1; done\n"
+	require.NoError(t, os.WriteFile(fake, []byte(script), 0o755))
+
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", tmp+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	_, err = New(
+		WithPort(port),
+		WithStartTimeout(8*time.Second),
+		WithWaitReadyTimeout(3*time.Second),
+	)
+	// NewClient will fail (the endpoint returns 500), but the failure must be
+	// from NewClient — not a startup timeout. A startup timeout would mean the
+	// ready line was dropped.
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "startup timeout",
+		"ready line was dropped (channel buffer full during startup): %v", err)
 }

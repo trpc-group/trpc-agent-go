@@ -12,10 +12,10 @@ package jupyter
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"os/exec"
 	"regexp"
@@ -103,6 +103,7 @@ type CodeExecutor struct {
 	startTimeout     time.Duration
 	waitReadyTimeout time.Duration
 	subprocess       *exec.Cmd
+	stderrPipe       io.ReadCloser // read end of the subprocess stderr pipe; closed by cleanup
 	cli              *Client
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -182,36 +183,94 @@ func New(opts ...Option) (*CodeExecutor, error) {
 
 	c.subprocess = exec.CommandContext(c.ctx, "python", args...)
 
-	buff := bytes.NewBuffer(make([]byte, 1024))
-	c.subprocess.Stderr = buff
+	// StderrPipe connects subprocess stderr to an OS pipe whose read end we
+	// own. Unlike assigning a *bytes.Buffer to cmd.Stderr, this never shares
+	// a non-goroutine-safe data structure between the os/exec background
+	// goroutine (writing) and the startup scanner below (reading).
+	// See issue #2573 for the data race this replaces.
+	stderrPipe, err := c.subprocess.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stderr pipe: %v", err)
+	}
+	c.stderrPipe = stderrPipe
 
 	if err := c.subprocess.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start jupyter gateway: %v", err)
 	}
 
+	lines, startupDone := c.startStderrScanner(stderrPipe)
+	return c.waitForGatewayReady(lines, startupDone)
+}
+
+// startStderrScanner spawns a goroutine that forwards subprocess stderr lines
+// to the returned channel. The goroutine blocks on each send until startupDone
+// is closed (guaranteeing no line is dropped during startup), then switches to
+// a non-blocking discard loop so the subprocess pipe never fills up at runtime.
+// The channel is closed when the scanner reaches EOF or the context is cancelled.
+func (c *CodeExecutor) startStderrScanner(pipe io.ReadCloser) (<-chan string, chan struct{}) {
+	lines := make(chan string, 64)
+	startupDone := make(chan struct{})
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(pipe)
+		for sc.Scan() {
+			select {
+			case lines <- sc.Text():
+			case <-c.ctx.Done():
+				for sc.Scan() {
+				}
+				return
+			case <-startupDone:
+				// Startup complete: switch to non-blocking discard so the
+				// subprocess can keep writing without filling the pipe.
+				for sc.Scan() {
+					select {
+					case lines <- sc.Text():
+					default:
+					case <-c.ctx.Done():
+						for sc.Scan() {
+						}
+						return
+					}
+				}
+				return
+			}
+		}
+	}()
+	return lines, startupDone
+}
+
+// waitForGatewayReady reads lines from the scanner channel and returns once
+// the gateway announces "is available at", or returns an error on timeout,
+// process exit, or a logged ERROR.
+func (c *CodeExecutor) waitForGatewayReady(lines <-chan string, startupDone chan struct{}) (*CodeExecutor, error) {
+	var err error
 	timeout := time.After(c.startTimeout)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	scan := bufio.NewReader(buff)
 	for {
 		select {
 		case <-timeout:
+			close(startupDone)
 			c.cleanup()
 			return nil, fmt.Errorf("jupyter gateway startup timeout")
-		case <-ticker.C:
-			if c.subprocess.ProcessState != nil && c.subprocess.ProcessState.Exited() {
-				exitCode := c.subprocess.ProcessState.ExitCode()
+		case line, ok := <-lines:
+			if !ok {
+				// EOF: subprocess closed stderr (exited). Call cleanup() so
+				// Wait() populates ProcessState before reading ExitCode.
+				close(startupDone)
 				c.cleanup()
+				exitCode := -1
+				if c.subprocess.ProcessState != nil {
+					exitCode = c.subprocess.ProcessState.ExitCode()
+				}
 				return nil, fmt.Errorf("jupyter gateway exited with code %d", exitCode)
 			}
-
-			line, _, _ := scan.ReadLine()
-			if strings.Contains(string(line), "ERROR:") {
-				errorInfo := strings.Split(string(line), "ERROR:")[1]
+			if strings.Contains(line, "ERROR:") {
+				errorInfo := strings.Split(line, "ERROR:")[1]
+				close(startupDone)
 				c.cleanup()
 				return nil, fmt.Errorf("jupyter gateway error: %s", errorInfo)
 			}
-			if strings.Contains(string(line), "is available at") {
+			if strings.Contains(line, "is available at") {
 				c.cli, err = NewClient(ConnectionInfo{
 					Host:             c.ip,
 					Port:             c.port,
@@ -220,8 +279,11 @@ func New(opts ...Option) (*CodeExecutor, error) {
 					WaitReadyTimeout: c.waitReadyTimeout,
 				})
 				if err != nil {
+					close(startupDone)
+					c.cleanup()
 					return nil, err
 				}
+				close(startupDone)
 				c.ws = localexec.NewRuntime("")
 				return c, nil
 			}
@@ -366,6 +428,12 @@ func (c *CodeExecutor) cleanup() {
 	if c.subprocess != nil {
 		if err := c.subprocess.Process.Signal(syscall.SIGINT); err != nil {
 			c.subprocess.Process.Kill()
+		}
+		// Close the stderr pipe read end so the scanner goroutine unblocks
+		// and exits before we call Wait(). This avoids the "wait before all
+		// reads complete" violation documented in os/exec.Cmd.StderrPipe.
+		if c.stderrPipe != nil {
+			c.stderrPipe.Close()
 		}
 		c.subprocess.Wait()
 	}
