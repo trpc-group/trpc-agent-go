@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/runoutcome"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
@@ -3124,6 +3125,16 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 		loop.invocation,
 		runnerCompletionEvent,
 	)
+	switch {
+	case runoutcome.IsExplicitCancel(ctx):
+		runnerCompletionEvent.RunOutcome = &event.RunOutcome{
+			Status: event.RunOutcomeStatusCancelled,
+		}
+	case runoutcome.IsTimedOut(ctx):
+		runnerCompletionEvent.RunOutcome = &event.RunOutcome{
+			Status: event.RunOutcomeStatusTimedOut,
+		}
+	}
 
 	propagateFallbackState := shouldPropagateFallbackState(
 		loop.finalError,
