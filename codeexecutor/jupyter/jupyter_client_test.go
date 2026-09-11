@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -482,6 +483,94 @@ func TestNewClientClearsReadDeadlineAfterReady(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	_, err = client.runCode("pass")
 	assert.NoError(t, err)
+}
+
+type readDeadlineErrorConn struct {
+	net.Conn
+	failOn int
+	calls  int
+}
+
+func (c *readDeadlineErrorConn) SetReadDeadline(deadline time.Time) error {
+	c.calls++
+	if c.calls == c.failOn {
+		return fmt.Errorf("read deadline failed")
+	}
+	return c.Conn.SetReadDeadline(deadline)
+}
+
+func TestNewClientHandlesReadDeadlineErrors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		failOn int
+	}{
+		{name: "setting readiness deadline", failOn: 1},
+		{name: "clearing readiness deadline", failOn: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			kernelDeleted := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/kernelspecs":
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"kernelspecs":{"python3":{"name":"python3"}}}`))
+				case "/api/kernels":
+					w.WriteHeader(http.StatusCreated)
+					_, _ = w.Write([]byte(`{"id":"123"}`))
+				case "/api/kernels/123":
+					w.WriteHeader(http.StatusNoContent)
+					close(kernelDeleted)
+				case "/api/kernels/123/channels":
+					ws, err := cstUpgrader.Upgrade(w, r, nil)
+					if err != nil {
+						return
+					}
+					defer ws.Close()
+					var message executionMessage
+					if err := ws.ReadJSON(&message); err != nil {
+						return
+					}
+					_ = ws.WriteJSON(map[string]any{
+						"header":        map[string]any{"msg_type": "kernel_info_reply"},
+						"parent_header": map[string]any{"msg_id": message.Header.MsgID},
+					})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			originalNetDialContext := websocket.DefaultDialer.NetDialContext
+			defer func() {
+				websocket.DefaultDialer.NetDialContext = originalNetDialContext
+			}()
+			websocket.DefaultDialer.NetDialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+				if err != nil {
+					return nil, err
+				}
+				return &readDeadlineErrorConn{Conn: conn, failOn: test.failOn}, nil
+			}
+
+			parsed, err := url.Parse(server.URL)
+			assert.NoError(t, err)
+			port, err := strconv.Atoi(parsed.Port())
+			assert.NoError(t, err)
+			_, err = NewClient(ConnectionInfo{
+				Host:             parsed.Hostname(),
+				Port:             port,
+				KernelName:       "python3",
+				WaitReadyTimeout: time.Second,
+			})
+			assert.ErrorContains(t, err, "read deadline failed")
+
+			select {
+			case <-kernelDeleted:
+			case <-time.After(time.Second):
+				t.Fatal("kernel was not deleted after a read deadline error")
+			}
+		})
+	}
 }
 
 func TestNewClientPreservesKernelCleanupError(t *testing.T) {
