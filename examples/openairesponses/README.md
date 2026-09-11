@@ -17,9 +17,15 @@ export OPENAI_MODEL="gpt-5"
 cd examples/openairesponses
 go run ./chat -streaming=true
 go run ./tools -streaming=true   # try: calculate 123 * 456
+
+# Regression check for store=false + plaintext ReasoningContent
+# (no fabricated rs_replay_* ids). Offline needs no API key.
+go run ./validate-store-false
+go run ./validate-store-false -live   # needs OPENAI_API_KEY; multi-turn tools
 ```
 
 Flags: `-model`, `-api-key`, `-base-url`, `-streaming`.
+`validate-store-false` also accepts `-live` and `-effort`.
 
 Construct the model with `openairesponses.New`:
 

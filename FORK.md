@@ -42,6 +42,12 @@ m := openairesponses.New(modelName,
 )
 ```
 
+With `store=false`, the adapter requests `include=["reasoning.encrypted_content"]`,
+stores the blob on `Message.ReasoningSignature`, and replays it on later turns
+**without** inventing `rs_replay_*` ids. Plaintext `ReasoningContent` alone is
+never sent as a reasoning input item (that is what caused dogfood 404s).
+Function-call / tool-output items still convert so multi-step tool loops work.
+
 Try locally:
 
 ```bash

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -57,6 +58,8 @@ func TestGenerateContent_NonStreamTextAndUsage(t *testing.T) {
 	require.Equal(t, 11, resps[0].Usage.PromptTokens)
 	require.Equal(t, 2, resps[0].Usage.CompletionTokens)
 	require.Equal(t, false, gotBody["store"])
+	include, _ := gotBody["include"].([]any)
+	require.Contains(t, include, "reasoning.encrypted_content")
 }
 
 func TestGenerateContent_StreamTextOrderAndSingleTerminal(t *testing.T) {
@@ -263,6 +266,9 @@ func TestGenerateContent_IncompleteMapsToLength(t *testing.T) {
 }
 
 func TestConvertMessages_ToolCallAndReasoningReplay(t *testing.T) {
+	// Plaintext ReasoningContent must not become a reasoning input item
+	// (fabricated rs_replay_* ids fail with store=false). Tool call + output
+	// items still convert so multi-step loops work.
 	items, err := convertMessages([]model.Message{
 		model.NewUserMessage("calc"),
 		{
@@ -285,13 +291,118 @@ func TestConvertMessages_ToolCallAndReasoningReplay(t *testing.T) {
 	var decoded []map[string]any
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 	require.Equal(t, "user", decoded[0]["role"])
+	require.Equal(t, "function_call", decoded[1]["type"])
+	require.Equal(t, "function_call_output", decoded[2]["type"])
+	require.Equal(t, "call_1", decoded[1]["call_id"])
+	require.Equal(t, "call_1", decoded[2]["call_id"])
+	require.Equal(t, "2", decoded[2]["output"])
+	for _, item := range decoded {
+		require.NotEqual(t, "reasoning", item["type"])
+		id, _ := item["id"].(string)
+		require.False(t, strings.HasPrefix(id, "rs_replay_"), "unexpected fabricated id %q", id)
+	}
+}
+
+func TestConvertMessages_ReplaysEncryptedReasoning(t *testing.T) {
+	items, err := convertMessages([]model.Message{
+		model.NewUserMessage("calc"),
+		{
+			Role:               model.RoleAssistant,
+			ReasoningContent:   "need a tool",
+			ReasoningSignature: "enc_blob_abc",
+			ToolCalls: []model.ToolCall{{
+				ID:   "call_1",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "calculator",
+					Arguments: []byte(`{"a":1}`),
+				},
+			}},
+		},
+		model.NewToolMessage("call_1", "calculator", "2"),
+	})
+	require.NoError(t, err)
+	raw, err := json.Marshal(items)
+	require.NoError(t, err)
+	var decoded []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	require.Equal(t, "user", decoded[0]["role"])
 	require.Equal(t, "reasoning", decoded[1]["type"])
+	require.Equal(t, "enc_blob_abc", decoded[1]["encrypted_content"])
+	require.Equal(t, "need a tool", decoded[1]["summary"].([]any)[0].(map[string]any)["text"])
+	if id, ok := decoded[1]["id"].(string); ok {
+		require.Empty(t, id, "store=false replay must not send a server reasoning id")
+		require.False(t, strings.HasPrefix(id, "rs_"))
+	}
 	require.Equal(t, "function_call", decoded[2]["type"])
 	require.Equal(t, "function_call_output", decoded[3]["type"])
-	require.Equal(t, "need a tool", decoded[1]["summary"].([]any)[0].(map[string]any)["text"])
-	require.Equal(t, "call_1", decoded[2]["call_id"])
-	require.Equal(t, "call_1", decoded[3]["call_id"])
-	require.Equal(t, "2", decoded[3]["output"])
+}
+
+func TestConvertMessages_OmitsPlaintextReasoningOnly(t *testing.T) {
+	items, err := convertMessages([]model.Message{
+		model.NewUserMessage("hi"),
+		{
+			Role:             model.RoleAssistant,
+			ReasoningContent: "thinking only",
+			Content:          "hello",
+		},
+	})
+	require.NoError(t, err)
+	raw, err := json.Marshal(items)
+	require.NoError(t, err)
+	var decoded []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	require.Equal(t, "user", decoded[0]["role"])
+	require.Equal(t, "assistant", decoded[1]["role"])
+	for _, item := range decoded {
+		require.NotEqual(t, "reasoning", item["type"])
+	}
+}
+
+func TestBuildParams_IncludesEncryptedContentWhenStoreFalse(t *testing.T) {
+	m := New("gpt-5", WithAPIKey("test"), WithStore(false))
+	params, err := m.buildParams(&model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+	})
+	require.NoError(t, err)
+	require.Contains(t, params.Include, responses.ResponseIncludableReasoningEncryptedContent)
+
+	mStore := New("gpt-5", WithAPIKey("test"), WithStore(true))
+	paramsStore, err := mStore.buildParams(&model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+	})
+	require.NoError(t, err)
+	require.Empty(t, paramsStore.Include)
+}
+
+func TestProjectResponse_CapturesEncryptedReasoning(t *testing.T) {
+	resp := &responses.Response{
+		ID:     "resp_1",
+		Status: "completed",
+		Output: []responses.ResponseOutputItemUnion{},
+	}
+	// Build via JSON so AsReasoning / EncryptedContent populate like the API.
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id":"resp_1",
+		"status":"completed",
+		"output":[{
+			"type":"reasoning",
+			"id":"rs_real",
+			"encrypted_content":"enc_from_api",
+			"summary":[{"type":"summary_text","text":"plan"}]
+		},{
+			"type":"function_call",
+			"call_id":"call_1",
+			"name":"calculator",
+			"arguments":"{\"a\":1}"
+		}]
+	}`), resp))
+
+	out := projectResponse(resp.ID, "gpt-5", 1, resp, false, true, "", "")
+	require.Equal(t, "plan", out.Choices[0].Message.ReasoningContent)
+	require.Equal(t, "enc_from_api", out.Choices[0].Message.ReasoningSignature)
+	require.Len(t, out.Choices[0].Message.ToolCalls, 1)
+	require.Equal(t, "call_1", out.Choices[0].Message.ToolCalls[0].ID)
 }
 
 func TestGenerateContent_ExtraFieldsAndOfficialEffort(t *testing.T) {
