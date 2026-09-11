@@ -1759,6 +1759,78 @@ child := agenttool.NewTool(
 - `HistoryScopeParentBranch` 是共享上下文链路，不是快照隔离。如果不希望子 Agent 的详细事件在父 Agent 后续上下文中出现，保持默认 `HistoryScopeIsolated`，并把必要上下文放进工具参数。
 - `WithSkipSummarization(true)` 只会跳过额外的外层总结型 LLM 调用，不会把 `tool.response` 变成 assistant final response；如果你需要真正的终止信号，仍应持续消费到 `runner.completion`
 
+### 线程化 AgentTool（`NewThreadTool`）
+
+`agenttool.NewThreadTool(agent)` 是面向**固定**被包装 Agent 的可选构造器，不会改变
+`NewTool` 或 `NewDynamicTool`。当父模型需要在同一个父 Session 内，与同一个专家 Agent
+维持**多条可独立寻址的对话分支**时使用。
+
+它仍然是同步 call-return。每条分支就是父 Session 中带有稳定事件过滤键
+（`agenttool:<namespace>:thread:<id>`）的那批事件。它不引入 Controller、消息队列、
+lease、后台任务、executor checkpoint、独立子 Session，也不实现 Graph 恢复/检查点。
+
+```go
+childTool := agenttool.NewThreadTool(specialist)
+
+// 可选：固定分支命名空间，使 thread ID 在 Agent 改名后仍可解析，
+// 或避免两个同名 Agent 共用命名空间。
+childTool = agenttool.NewThreadTool(
+    specialist,
+    agenttool.WithThreadNamespace("billing-specialist"),
+)
+```
+
+模型侧输入为 `{thread_id?: string, input: <被包装 Agent 的 schema>}`。传给子 Agent
+的只有 `input` 的 JSON 序列化。结果为
+`{thread_id?, status, output?, error?, retryable?}`，没有 `resume` 布尔字段。
+
+**轮次语义**
+
+- 省略 `thread_id` 会以密码学强度的不透明 ID 新建一条分支。
+- 传入 `thread_id` 表示向该分支**追加一条新消息**，不会替换或重试此前的轮次。
+- 外部传入的 ID 必须匹配 `^[A-Za-z0-9_-]{8,128}$`。未知或非法 ID 会失败，不会静默建分支。
+- 只有当父 Session 中已存在该过滤键下的事件时，分支才算存在。若调用在子 Agent
+  持久化任何事件之前就失败，则**不返回** `thread_id`，重试即新建一条分支。因此输出
+  中只有 `status` 是必填字段。
+- 若此前的轮次被中断，其残留尾部会保留在分支中。框架的孤儿 tool_call 清洗会保证下一次
+  请求合法，但不提供中断轮次替换，也不提供 checkpoint 恢复。
+
+**持久化与生命周期**
+
+- 跨轮次、跨节点的连续性受限于父 Session 持久化是否成功，以及父 Session 的事件保留
+  窗口。**该窗口由父对话与所有分支共享**，因此很长的父 Session 会把较早的分支事件挤出
+  可检索范围。请相应设置 session service 的 `WithSessionEventLimit`。
+- FilterKey 只隔离事件历史，不隔离 Session State；所有分支仍共享父 Session 的 State map。
+  若被包装 Agent 会写入会话私有状态，需要结合 `agenttool.ThreadIDFromContext` 自行给状态
+  key 加 thread 命名空间。
+- 分支没有独立生命周期：没有 TTL、列举或删除，随父 Session 一起存续与销毁。
+- 必须有父 invocation Session；不会回退到隔离的内存 runner。
+
+**并发与集成**
+
+- 不同 thread ID 可并发；同一 ID 仅由每个 `Tool` 的进程内互斥保证串行，不提供跨节点互斥。
+- 被包装 Agent 内部嵌套调用的普通 `NewTool` 会保留各自独立的过滤键，不会继承分支键。
+- `StreamableCall` 委托给 `Call`，只发出一个 `tool.FinalResultChunk` 信封（不转发内部事件）。
+- `output` 始终是 string。子调用路径收集 assistant 文本，不会保留自定义
+  `OutputSchema` 类型。
+- Graph 的 `CallWithAgentToolGraphRuntime` 走该信封路径，不参与 graph checkpoint 状态
+  与 interrupt 恢复；无论被包装 Agent 是以错误形式返回 graph interrupt，还是只通过
+  graph executor 事件发出信号，都会返回 `retryable: false` 的失败信封。后者只能通过
+  executor 事件观察，因此线程调用总会为子运行启用这些事件；即使调用方传入
+  `agent.WithDisableGraphExecutorEvents(true)`，仍会得到失败信封，且这些内部
+  `graph.*` 事件不会写入共享 Session。
+- 无法判断可重试性时会省略 `retryable`。永久性校验失败（非法输入或 thread ID、未知
+  线程、缺少父 Session、不支持的 graph interrupt）为 `false`；context 取消、超时与
+  session flush 失败为 `true`；普通子 Agent 运行失败则省略该字段。
+- 被包装 Agent 仍实现现有 `agent.Agent`。需要分支 ID 时读取
+  `agenttool.ThreadIDFromContext`，它返回最近一层 `NewThreadTool` 调用的 ID。完整恢复
+  要求子 Agent 消费 Session 历史，或把该 ID 映射到提供商会话 ID。实现必须并发安全，
+  且不得跨调用保留会话本地状态。
+- `WithThreadNamespace` 仅对 `NewThreadTool` 生效，`NewTool` 与 `NewDynamicTool` 会忽略
+  它；它不改变模型侧工具名。命名空间默认取被包装 Agent 名，且必须匹配
+  `^[A-Za-z0-9_-]+$`。命名空间非法时 `NewThreadTool` 直接 panic，而不做有损改写，因为
+  有损改写可能把两个命名空间静默合并。
+
 ### 动态 AgentTool
 
 `agenttool.NewTool(agent)` 适合工具背后已经有一个明确的专家 Agent：开发者先把
@@ -1903,6 +1975,7 @@ Dynamic AgentTool 与另外两种多 Agent 机制的边界不同：
 | 机制 | 模型选择什么 | 生命周期 | 控制权 |
 | --- | --- | --- | --- |
 | `agenttool.NewTool(agent)` | 一个固定的工具入口 | 每次工具调用 | 返回工具结果给父 Agent |
+| `agenttool.NewThreadTool(agent)` | 固定工具入口加上可选 `thread_id` | 每次工具调用，向父 Session 的某条对话分支追加消息 | 返回 `{thread_id?, status, output?, error?, retryable?}` 信封，其中只有 `status` 一定存在 |
 | `transfer_to_agent` | 一个已注册 sub-agent | 当前轮继续由目标 Agent 处理 | 控制权移交 |
 | `agenttool.NewDynamicTool()` | 本次调用的 `request`、`instruction`、tools/skills 子集，以及可选的已注册模型 profile | 每次工具调用 | 返回工具结果给父 Agent |
 

@@ -5248,7 +5248,7 @@ func TestTool_callWithParentInvocation_NoSessionFallback(t *testing.T) {
 	at := NewTool(&mockAgent{name: "test", description: "test"})
 	parent := agent.NewInvocation()
 
-	res, err := at.callWithParentInvocation(context.Background(), parent, model.NewUserMessage("hi"), nil)
+	res, err := at.callWithParentInvocation(context.Background(), parent, model.NewUserMessage("hi"), nil, "")
 	require.NoError(t, err)
 	require.Equal(t, "Hello from mock agent!", res)
 }
@@ -5321,6 +5321,7 @@ func TestTool_callWithParentInvocation_PreservesRunStructuredOutput(t *testing.T
 		parent,
 		model.NewUserMessage("hi"),
 		nil,
+		"",
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, res)
@@ -5359,6 +5360,7 @@ func TestTool_callWithParentInvocation_PinStructuredOutputUsesChildContract(t *t
 		parent,
 		model.NewUserMessage("hi"),
 		nil,
+		"",
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, res)
@@ -5389,6 +5391,7 @@ func TestTool_callWithParentInvocation_RestoresLiveSessionFromParallelClone(
 		parent,
 		model.NewUserMessage("hi"),
 		nil,
+		"",
 	)
 	require.NoError(t, err)
 	require.Equal(t, "saw-live-session", res)

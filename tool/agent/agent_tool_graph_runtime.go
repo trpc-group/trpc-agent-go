@@ -42,12 +42,23 @@ func (at *Tool) CallWithAgentToolGraphRuntime(
 	if at.dynamic {
 		return at.callDynamic(ctx, jsonArgs)
 	}
+	if at.thread {
+		// Thread tools stay on the envelope call-return path: they own their
+		// branch filter key and do not participate in graph checkpoint state
+		// or interrupt resume.
+		if runtime.ParentInvocation != nil {
+			ctx = coreagent.NewInvocationContext(ctx, runtime.ParentInvocation)
+		}
+		return at.callThread(ctx, jsonArgs)
+	}
 	graphRuntime, err := parentInvocationGraphRuntimeFromContext(runtime)
 	if err != nil {
 		return nil, err
 	}
 	message := model.NewUserMessage(string(jsonArgs))
-	return at.callWithParentInvocation(ctx, runtime.ParentInvocation, message, graphRuntime)
+	return at.callWithParentInvocation(
+		ctx, runtime.ParentInvocation, message, graphRuntime, "",
+	)
 }
 
 func parentInvocationGraphRuntimeFromContext(
@@ -114,24 +125,6 @@ func (at *Tool) newGraphToolInterruptCapture(
 	}
 }
 
-func (at *Tool) wrapGraphToolInterruptCapture(
-	src <-chan *event.Event,
-	capture *graphToolInterruptCapture,
-) <-chan *event.Event {
-	if capture == nil {
-		return src
-	}
-	out := make(chan *event.Event)
-	go func() {
-		defer close(out)
-		for evt := range src {
-			capture.observe(evt)
-			out <- evt
-		}
-	}()
-	return out
-}
-
 func shouldSuppressGraphRuntimeSessionEvent(
 	inv *coreagent.Invocation,
 	evt *event.Event,
@@ -146,26 +139,28 @@ func shouldSuppressGraphRuntimeSessionEvent(
 	return suppressed && strings.HasPrefix(evt.Object, "graph.")
 }
 
-func (c *graphToolInterruptCapture) observe(evt *event.Event) {
-	if c == nil || evt == nil || evt.Object != graph.ObjectTypeGraphPregelStep {
-		return
+// pregelStepInterrupt reconstructs the interrupt reported by a graph pregel
+// step event, together with the checkpoint metadata carried by that event.
+//
+// A graph executor signals an interrupt by emitting this event and then
+// closing its event channel without an error, so an AgentTool that runs a
+// graph agent must observe this event to notice such an interrupt at all.
+func pregelStepInterrupt(
+	evt *event.Event,
+) (*graph.InterruptError, graph.PregelStepMetadata, bool) {
+	if evt == nil || evt.Object != graph.ObjectTypeGraphPregelStep {
+		return nil, graph.PregelStepMetadata{}, false
 	}
 	raw, ok := evt.StateDelta[graph.MetadataKeyPregel]
 	if !ok || len(raw) == 0 {
-		return
+		return nil, graph.PregelStepMetadata{}, false
 	}
 	var meta graph.PregelStepMetadata
 	if err := json.Unmarshal(raw, &meta); err != nil {
-		return
+		return nil, graph.PregelStepMetadata{}, false
 	}
 	if meta.NodeID == "" || meta.InterruptValue == nil {
-		return
-	}
-	if c.expectedLineageID != "" && meta.LineageID != c.expectedLineageID {
-		return
-	}
-	if c.expectedCheckpointNS != "" && meta.CheckpointNS != c.expectedCheckpointNS {
-		return
+		return nil, graph.PregelStepMetadata{}, false
 	}
 	interrupt := graph.NewInterruptError(meta.InterruptValue)
 	interrupt.NodeID = meta.NodeID
@@ -175,6 +170,23 @@ func (c *graphToolInterruptCapture) observe(evt *event.Event) {
 	}
 	interrupt.Key = interruptKey
 	interrupt.TaskID = interruptKey
+	return interrupt, meta, true
+}
+
+func (c *graphToolInterruptCapture) observe(evt *event.Event) {
+	if c == nil {
+		return
+	}
+	interrupt, meta, ok := pregelStepInterrupt(evt)
+	if !ok {
+		return
+	}
+	if c.expectedLineageID != "" && meta.LineageID != c.expectedLineageID {
+		return
+	}
+	if c.expectedCheckpointNS != "" && meta.CheckpointNS != c.expectedCheckpointNS {
+		return
+	}
 	if c.interrupt != nil && !c.sameInterrupt(interrupt, meta) {
 		c.conflictErr = fmt.Errorf("agent tool graph captured multiple interrupt checkpoints")
 		return
