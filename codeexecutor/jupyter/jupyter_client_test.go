@@ -331,6 +331,88 @@ func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
 	}
 }
 
+// TestNewClientDeletesKernelWhenWebsocketDialFails verifies cleanup after a websocket dial failure.
+func TestNewClientDeletesKernelWhenWebsocketDialFails(t *testing.T) {
+	const token = "secret"
+	kernelDeleted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/kernelspecs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"kernelspecs":{"python3":{"name":"python3"}}}`))
+		case "/api/kernels":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"123"}`))
+		case "/api/kernels/123":
+			assert.Equal(t, token, strings.TrimPrefix(r.Header.Get("Authorization"), "token "))
+			assert.Equal(t, http.MethodDelete, r.Method)
+			w.WriteHeader(http.StatusNoContent)
+			close(kernelDeleted)
+		case "/api/kernels/123/channels":
+			http.Error(w, "websocket unavailable", http.StatusServiceUnavailable)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+	port, err := strconv.Atoi(parsed.Port())
+	assert.NoError(t, err)
+
+	_, err = NewClient(ConnectionInfo{
+		Host:             parsed.Hostname(),
+		Port:             port,
+		Token:            token,
+		KernelName:       "python3",
+		WaitReadyTimeout: time.Second,
+	})
+	assert.Error(t, err)
+	assert.ErrorContains(t, err, "websocket: bad handshake")
+	select {
+	case <-kernelDeleted:
+	case <-time.After(time.Second):
+		t.Fatal("kernel was not deleted after websocket dial failure")
+	}
+}
+
+// TestNewClientPreservesWebsocketDialAndKernelCleanupErrors verifies that both startup and cleanup errors are retained.
+func TestNewClientPreservesWebsocketDialAndKernelCleanupErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/kernelspecs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"kernelspecs":{"python3":{"name":"python3"}}}`))
+		case "/api/kernels":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"123"}`))
+		case "/api/kernels/123":
+			http.Error(w, "cleanup failed", http.StatusInternalServerError)
+		case "/api/kernels/123/channels":
+			http.Error(w, "websocket unavailable", http.StatusServiceUnavailable)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+	port, err := strconv.Atoi(parsed.Port())
+	assert.NoError(t, err)
+
+	_, err = NewClient(ConnectionInfo{
+		Host:             parsed.Hostname(),
+		Port:             port,
+		KernelName:       "python3",
+		WaitReadyTimeout: time.Second,
+	})
+	assert.Error(t, err)
+	assert.ErrorContains(t, err, "websocket: bad handshake")
+	assert.ErrorContains(t, err, "failed to delete kernel")
+}
+
 func TestNewClientPreservesKernelCleanupError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
