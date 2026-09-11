@@ -722,7 +722,7 @@ func TestFSRepository_URLRoot_ZipDownloadAndCache(t *testing.T) {
 	))
 	defer srv.Close()
 
-	urlRoot := srv.URL + "/skills.zip"
+	urlRoot := localhostServerURL(t, srv.URL) + "/skills.zip"
 	repo, err := NewFSRepository(urlRoot)
 	require.NoError(t, err)
 
@@ -752,7 +752,7 @@ func TestFSRepository_URLRoot_TarGZDownload(t *testing.T) {
 	))
 	defer srv.Close()
 
-	urlRoot := srv.URL + "/skills.tgz"
+	urlRoot := localhostServerURL(t, srv.URL) + "/skills.tgz"
 	repo, err := NewFSRepository(urlRoot)
 	require.NoError(t, err)
 	_, err = repo.Path("beta")
@@ -773,7 +773,7 @@ func TestFSRepository_URLRoot_SingleSkillFile(t *testing.T) {
 	))
 	defer srv.Close()
 
-	urlRoot := srv.URL + "/" + skillFile
+	urlRoot := localhostServerURL(t, srv.URL) + "/" + skillFile
 	repo, err := NewFSRepository(urlRoot)
 	require.NoError(t, err)
 	_, err = repo.Path("gamma")
@@ -796,7 +796,9 @@ func TestFSRepository_URLRoot_BadArchivePathRejected(t *testing.T) {
 	))
 	defer srv.Close()
 
-	_, err := NewFSRepository(srv.URL + "/skills.zip")
+	_, err := NewFSRepository(
+		localhostServerURL(t, srv.URL) + "/skills.zip",
+	)
 	require.Error(t, err)
 }
 
@@ -874,7 +876,9 @@ func TestFSRepository_URLRoot_TarDownload(t *testing.T) {
 	))
 	defer srv.Close()
 
-	repo, err := NewFSRepository(srv.URL + "/skills.tar")
+	repo, err := NewFSRepository(
+		localhostServerURL(t, srv.URL) + "/skills.tar",
+	)
 	require.NoError(t, err)
 	_, err = repo.Path("delta")
 	require.NoError(t, err)
@@ -896,7 +900,9 @@ func TestFSRepository_URLRoot_DetectArchiveKind_Zip(t *testing.T) {
 	))
 	defer srv.Close()
 
-	repo, err := NewFSRepository(srv.URL + "/skills")
+	repo, err := NewFSRepository(
+		localhostServerURL(t, srv.URL) + "/skills",
+	)
 	require.NoError(t, err)
 	_, err = repo.Path("epsilon")
 	require.NoError(t, err)
@@ -918,7 +924,9 @@ func TestFSRepository_URLRoot_DetectArchiveKind_TarGZ(t *testing.T) {
 	))
 	defer srv.Close()
 
-	repo, err := NewFSRepository(srv.URL + "/skills")
+	repo, err := NewFSRepository(
+		localhostServerURL(t, srv.URL) + "/skills",
+	)
 	require.NoError(t, err)
 	_, err = repo.Path("zeta")
 	require.NoError(t, err)
@@ -935,7 +943,9 @@ func TestFSRepository_URLRoot_DownloadNon2xxFails(t *testing.T) {
 	))
 	defer srv.Close()
 
-	_, err := NewFSRepository(srv.URL + "/skills.zip")
+	_, err := NewFSRepository(
+		localhostServerURL(t, srv.URL) + "/skills.zip",
+	)
 	require.Error(t, err)
 }
 
@@ -951,7 +961,9 @@ func TestFSRepository_URLRoot_UnsupportedPayloadFails(t *testing.T) {
 	))
 	defer srv.Close()
 
-	_, err := NewFSRepository(srv.URL + "/skills.bin")
+	_, err := NewFSRepository(
+		localhostServerURL(t, srv.URL) + "/skills.bin",
+	)
 	require.Error(t, err)
 }
 
@@ -1022,7 +1034,7 @@ func TestURLRootHelpers(t *testing.T) {
 	))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL)
+	u, err := url.Parse(localhostServerURL(t, srv.URL))
 	require.NoError(t, err)
 	err = downloadURLToFile(
 		u,
@@ -1103,7 +1115,9 @@ func TestFSRepository_URLRoot_RejectsZipSymlinkEntry(t *testing.T) {
 	))
 	defer srv.Close()
 
-	_, err = NewFSRepository(srv.URL + "/skills.zip")
+	_, err = NewFSRepository(
+		localhostServerURL(t, srv.URL) + "/skills.zip",
+	)
 	require.Error(t, err)
 }
 
@@ -1137,7 +1151,9 @@ func TestFSRepository_URLRoot_RejectsTarSymlinkEntry(t *testing.T) {
 	))
 	defer srv.Close()
 
-	_, err = NewFSRepository(srv.URL + "/skills.tar")
+	_, err = NewFSRepository(
+		localhostServerURL(t, srv.URL) + "/skills.tar",
+	)
 	require.Error(t, err)
 }
 
