@@ -203,21 +203,22 @@ func convertMessages(messages []model.Message) (responses.ResponseInputParam, er
 
 // reasoningInputItem builds a Responses reasoning input item from a stored
 // ReasoningSignature (encrypted_content). Plaintext ReasoningContent alone is
-// not enough for store=false replay.
+// not enough for store=false replay. gpt-5 still requires summary on the
+// reasoning item even when encrypted_content is present, so always emit it
+// (empty string when no plaintext summary was captured).
 func reasoningInputItem(msg model.Message) (responses.ResponseInputItemUnionParam, bool) {
 	enc := strings.TrimSpace(msg.ReasoningSignature)
 	if enc == "" {
 		return responses.ResponseInputItemUnionParam{}, false
 	}
-	reasoning := &responses.ResponseReasoningItemParam{
-		EncryptedContent: param.NewOpt(enc),
-	}
-	if summary := strings.TrimSpace(msg.ReasoningContent); summary != "" {
-		reasoning.Summary = []responses.ResponseReasoningItemSummaryParam{{
-			Text: summary,
-		}}
-	}
-	return responses.ResponseInputItemUnionParam{OfReasoning: reasoning}, true
+	return responses.ResponseInputItemUnionParam{
+		OfReasoning: &responses.ResponseReasoningItemParam{
+			EncryptedContent: param.NewOpt(enc),
+			Summary: []responses.ResponseReasoningItemSummaryParam{{
+				Text: strings.TrimSpace(msg.ReasoningContent),
+			}},
+		},
+	}, true
 }
 
 func roleToEasyInput(role model.Role) responses.EasyInputMessageRole {

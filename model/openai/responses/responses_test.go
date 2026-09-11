@@ -338,6 +338,37 @@ func TestConvertMessages_ReplaysEncryptedReasoning(t *testing.T) {
 	require.Equal(t, "function_call_output", decoded[3]["type"])
 }
 
+func TestConvertMessages_ReplaysEncryptedReasoningWithEmptySummary(t *testing.T) {
+	// gpt-5 rejects missing summary even when encrypted_content is set.
+	items, err := convertMessages([]model.Message{
+		model.NewUserMessage("calc"),
+		{
+			Role:               model.RoleAssistant,
+			ReasoningSignature: "enc_blob_only",
+			ToolCalls: []model.ToolCall{{
+				ID:   "call_1",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "calculator",
+					Arguments: []byte(`{"a":1}`),
+				},
+			}},
+		},
+		model.NewToolMessage("call_1", "calculator", "2"),
+	})
+	require.NoError(t, err)
+	raw, err := json.Marshal(items)
+	require.NoError(t, err)
+	var decoded []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	require.Equal(t, "reasoning", decoded[1]["type"])
+	require.Equal(t, "enc_blob_only", decoded[1]["encrypted_content"])
+	summary, ok := decoded[1]["summary"].([]any)
+	require.True(t, ok, "summary must be present for gpt-5")
+	require.NotEmpty(t, summary)
+	require.Equal(t, "", summary[0].(map[string]any)["text"])
+}
+
 func TestConvertMessages_OmitsPlaintextReasoningOnly(t *testing.T) {
 	items, err := convertMessages([]model.Message{
 		model.NewUserMessage("hi"),
