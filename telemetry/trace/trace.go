@@ -30,26 +30,29 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/telemetry/identity"
 )
 
 // TracerProvider is the global tracer TracerProvider for telemetry.
 var TracerProvider trace.TracerProvider = noop.NewTracerProvider()
 
 // Tracer is the global tracer instance for telemetry.
-var Tracer trace.Tracer = TracerProvider.Tracer("")
+var Tracer trace.Tracer = instrumentationTracer(TracerProvider)
 
 // Start collects telemetry with optional configuration.
 // The environment variables described below can be used for endpoint configuration.
+//
+// The Resource describes the host application. If no service name is configured,
+// Start uses OpenTelemetry's unknown_service fallback based on the executable name.
+// The instrumentation scope identifies trpc-agent-go and uses its Go build version
+// or revision when available.
 //
 // OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT (default: "https://localhost:4317")
 // https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
 func Start(ctx context.Context, opts ...Option) (clean func() error, err error) {
 	// Set default options
 	options := &options{
-		serviceName:      itelemetry.ServiceName,
-		serviceVersion:   itelemetry.ServiceVersion,
-		serviceNamespace: itelemetry.ServiceNamespace,
-		protocol:         itelemetry.ProtocolGRPC, // Default to gRPC
+		protocol: itelemetry.ProtocolGRPC, // Default to gRPC
 	}
 	for _, opt := range opts {
 		opt(options)
@@ -83,7 +86,7 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 	}
 
 	// Update global tracer
-	Tracer = otel.Tracer(itelemetry.InstrumentName)
+	Tracer = instrumentationTracer(otel.GetTracerProvider())
 	return func() error {
 		if restoreSpanAttributePolicy != nil {
 			restoreSpanAttributePolicy()
@@ -93,6 +96,13 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 		}
 		return nil
 	}, nil
+}
+
+func instrumentationTracer(provider trace.TracerProvider) trace.Tracer {
+	return provider.Tracer(
+		itelemetry.InstrumentName,
+		trace.WithInstrumentationVersion(identity.InstrumentationVersion()),
+	)
 }
 
 // Option is a function that configures tracer options.
@@ -155,21 +165,21 @@ func WithProtocol(protocol string) Option {
 	}
 }
 
-// WithServiceName overrides the service.name resource attribute.
+// WithServiceName sets the host application's service.name resource attribute.
 func WithServiceName(serviceName string) Option {
 	return func(opts *options) {
 		opts.serviceName = serviceName
 	}
 }
 
-// WithServiceNamespace overrides the service.namespace resource attribute.
+// WithServiceNamespace sets the host application's service.namespace resource attribute.
 func WithServiceNamespace(serviceNamespace string) Option {
 	return func(opts *options) {
 		opts.serviceNamespace = serviceNamespace
 	}
 }
 
-// WithServiceVersion overrides the service.version resource attribute.
+// WithServiceVersion sets the host application's service.version resource attribute.
 func WithServiceVersion(serviceVersion string) Option {
 	return func(opts *options) {
 		opts.serviceVersion = serviceVersion
@@ -198,12 +208,21 @@ func WithHeaders(headers map[string]string) Option {
 
 func buildResource(ctx context.Context, options *options) (*resource.Resource, error) {
 	// Build resource with options values
+	resourceAttrs := []attribute.KeyValue{
+		semconv.ServiceName(identity.DefaultServiceName()),
+	}
+	if options.serviceNamespace != "" {
+		resourceAttrs = append(resourceAttrs, semconv.ServiceNamespace(options.serviceNamespace))
+	}
+	if options.serviceName != "" {
+		resourceAttrs = append(resourceAttrs, semconv.ServiceName(options.serviceName))
+	}
+	if options.serviceVersion != "" {
+		resourceAttrs = append(resourceAttrs, semconv.ServiceVersion(options.serviceVersion))
+	}
+
 	resourceOpts := []resource.Option{
-		resource.WithAttributes(
-			semconv.ServiceNamespace(options.serviceNamespace),
-			semconv.ServiceName(options.serviceName),
-			semconv.ServiceVersion(options.serviceVersion),
-		),
+		resource.WithAttributes(resourceAttrs...),
 		resource.WithFromEnv(),
 		resource.WithHost(),         // Adds host.name
 		resource.WithTelemetrySDK(), // Adds telemetry.sdk.{name,language,version}

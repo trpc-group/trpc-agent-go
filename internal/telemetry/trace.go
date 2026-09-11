@@ -35,12 +35,9 @@ import (
 // In production, this points to grpc.Dial.
 var grpcDial = grpc.Dial
 
-// telemetry service constants.
+// Telemetry instrumentation constants.
 const (
-	ServiceName      = "telemetry"
-	ServiceVersion   = "v0.1.0"
-	ServiceNamespace = "trpc-go-agent"
-	InstrumentName   = "trpc.agent.go"
+	InstrumentName = "trpc.agent.go"
 
 	SpanNamePrefixExecuteTool = "execute_tool"
 
