@@ -118,7 +118,7 @@ func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 	}
 	ws, _, err := websocket.DefaultDialer.Dial(wsUrl, reqHeader)
 	if err != nil {
-		return nil, err
+		return nil, c.cleanupAfterStartupFailure(err)
 	}
 
 	c.ws = ws
@@ -269,7 +269,9 @@ func (c *Client) cleanupAfterStartupFailure(err error) error {
 	if cleanupErr := c.deleteKernel(); cleanupErr != nil {
 		err = errors.Join(err, cleanupErr)
 	}
-	_ = c.ws.Close()
+	if c.ws != nil {
+		_ = c.ws.Close()
+	}
 	return err
 }
 
