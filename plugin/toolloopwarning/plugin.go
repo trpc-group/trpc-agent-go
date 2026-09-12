@@ -10,6 +10,7 @@ package toolloopwarning
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -26,6 +27,7 @@ const (
 type toolLoopWarningPlugin struct {
 	warning           string
 	excludedToolNames map[string]struct{}
+	stopAfterWarning  bool
 }
 
 type detectorState struct {
@@ -36,18 +38,21 @@ type detectorState struct {
 	// re-enter callbacks with the same request pointer. Retaining the first
 	// pointer keeps retries of the initial request inside the initial-request
 	// skip boundary.
-	firstRequest *model.Request
+	firstRequest     *model.Request
+	armedFingerprint string
 }
 
 // New returns an opt-in plugin that adds a temporary user-role instruction to
 // each eligible model request when its two trailing complete tool rounds are
-// identical. The instruction is request-local: it is not appended to session
-// history, and the plugin never stops or retries the invocation.
+// identical. WithStopAfterWarning additionally stops the invocation before a
+// third identical ordered tool bundle is executed. The instruction is
+// request-local: it is not appended to session history.
 func New(opts ...Option) plugin.Plugin {
 	o := newOptions(opts...)
 	return &toolLoopWarningPlugin{
 		warning:           o.warning,
 		excludedToolNames: o.excludedToolNames,
+		stopAfterWarning:  o.stopAfterWarning,
 	}
 }
 
@@ -66,6 +71,9 @@ func (p *toolLoopWarningPlugin) Register(r *plugin.Registry) {
 	}
 	r.BeforeAgent(p.beforeAgent)
 	r.BeforeModel(p.beforeModel)
+	if p.stopAfterWarning {
+		r.BeforeToolExecution(p.beforeToolExecution)
+	}
 	r.AfterAgent(p.afterAgent)
 }
 
@@ -123,7 +131,51 @@ func (p *toolLoopWarningPlugin) beforeModel(
 		args.Request.Messages,
 		model.NewUserMessage(p.warning),
 	)
+	if p.stopAfterWarning {
+		state.armedFingerprint, _ = matchingTrailingActionFingerprint(
+			args.Request.Messages[:len(args.Request.Messages)-1],
+			p.excludedToolNames,
+		)
+	}
 	return nil, nil
+}
+
+func (p *toolLoopWarningPlugin) beforeToolExecution(
+	ctx context.Context,
+	args *agent.BeforeToolExecutionArgs,
+) error {
+	if p == nil || args == nil || args.Response == nil || args.Response.IsPartial {
+		return nil
+	}
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || invocation == nil {
+		return nil
+	}
+	state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
+	if !ok || state == nil {
+		return nil
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	armedFingerprint := state.armedFingerprint
+	state.armedFingerprint = ""
+	if armedFingerprint == "" || len(args.Response.Choices) == 0 {
+		return nil
+	}
+
+	toolCalls := args.Response.Choices[0].Message.ToolCalls
+	if len(toolCalls) == 0 {
+		toolCalls = args.Response.Choices[0].Delta.ToolCalls
+	}
+	actualFingerprint, ok := fingerprintToolCalls(toolCalls)
+	if !ok || actualFingerprint != armedFingerprint {
+		return nil
+	}
+	return agent.NewStopError(fmt.Sprintf(
+		"tool loop guard stopped a repeated tool-call bundle before execution (fingerprint: %s)",
+		actualFingerprint,
+	))
 }
 
 func (p *toolLoopWarningPlugin) afterAgent(

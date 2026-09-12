@@ -138,6 +138,120 @@ func TestPluginOptionsAffectObservableBehavior(t *testing.T) {
 	require.True(t, hasWarning(included.Messages, customWarning))
 }
 
+func TestPluginStopsBeforeRepeatedToolBundle(t *testing.T) {
+	manager, _, ctx := newCallbackHarness(t, New(WithStopAfterWarning()))
+	first := &model.Request{Messages: []model.Message{model.NewUserMessage("run")}}
+	runBeforeModel(t, manager, ctx, first)
+
+	request := repeatedRoundsRequest("search", 2)
+	runBeforeModel(t, manager, ctx, request)
+	require.True(t, hasWarning(request.Messages, defaultWarning))
+
+	response := &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: assistantToolMessage(
+				newToolCall("new-id", "search", ` { "limit": 1, "query": "x" } `),
+			),
+		}},
+	}
+	err := manager.RunBeforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: response},
+	)
+	require.Error(t, err)
+	stopErr, ok := agent.AsStopError(err)
+	require.True(t, ok)
+	require.Contains(t, stopErr.Error(), "fingerprint")
+
+	err = manager.RunBeforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: response},
+	)
+	require.NoError(t, err)
+}
+
+func TestPluginBeforeToolExecutionFailOpenAndUsesDelta(t *testing.T) {
+	plugin := &toolLoopWarningPlugin{stopAfterWarning: true}
+	var nilPlugin *toolLoopWarningPlugin
+	err := nilPlugin.beforeToolExecution(context.Background(), nil)
+	require.NoError(t, err)
+	err = plugin.beforeToolExecution(context.Background(), nil)
+	require.NoError(t, err)
+	err = plugin.beforeToolExecution(
+		context.Background(),
+		&agent.BeforeToolExecutionArgs{Response: &model.Response{IsPartial: true}},
+	)
+	require.NoError(t, err)
+
+	invocation := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
+	response := &model.Response{Done: true}
+	err = plugin.beforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: response},
+	)
+	require.NoError(t, err)
+
+	state := &detectorState{}
+	invocation.SetState(stateKey, state)
+	err = plugin.beforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: response},
+	)
+	require.NoError(t, err)
+
+	state.armedFingerprint = "armed"
+	err = plugin.beforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: response},
+	)
+	require.NoError(t, err)
+
+	state.armedFingerprint = "armed"
+	err = plugin.beforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: response},
+	)
+	require.NoError(t, err)
+
+	state.armedFingerprint = "armed"
+	invalid := &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: assistantToolMessage(newToolCall("id", "", `{}`))}},
+	}
+	err = plugin.beforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: invalid},
+	)
+	require.NoError(t, err)
+
+	state.armedFingerprint = "armed"
+	different := &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: assistantToolMessage(newToolCall("id", "other", `{}`))}},
+	}
+	err = plugin.beforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: different},
+	)
+	require.NoError(t, err)
+
+	call := newToolCall("id", "search", ` { "query": "x" } `)
+	state.armedFingerprint, _ = fingerprintToolCalls([]model.ToolCall{call})
+	delta := &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Delta: assistantToolMessage(call)}},
+	}
+	err = plugin.beforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: delta},
+	)
+	stopErr, ok := agent.AsStopError(err)
+	require.True(t, ok)
+	require.Contains(t, stopErr.Error(), "fingerprint")
+}
+
 func TestPluginHandlesNilInputsAndMissingInvocation(t *testing.T) {
 	var nilPlugin *toolLoopWarningPlugin
 	require.Empty(t, nilPlugin.Name())
@@ -253,6 +367,34 @@ func TestPluginRunnerIntegrationDisabledOrExcluded(t *testing.T) {
 	}
 }
 
+func TestPluginRunnerIntegrationStopsBeforeThirdToolBundle(t *testing.T) {
+	run := runRepeatedRound(t, repeatedRunConfig{
+		warningEnabled:   true,
+		stopAfterWarning: true,
+	})
+	requests := run.model.Requests()
+	require.Len(t, requests, 3)
+	require.True(t, hasWarning(requests[2], defaultWarning))
+	require.Equal(t, int32(2), run.slowCalls.Load())
+	require.Equal(t, int32(2), run.fastCalls.Load())
+	assertSessionHasNoWarning(t, run.sessionService, defaultWarning)
+}
+
+func TestPluginRunnerIntegrationStopsAfterJSONRepair(t *testing.T) {
+	run := runRepeatedRound(t, repeatedRunConfig{
+		warningEnabled:      true,
+		stopAfterWarning:    true,
+		jsonRepairEnabled:   true,
+		malformedThirdRound: true,
+	})
+	requests := run.model.Requests()
+	require.Len(t, requests, 3)
+	require.True(t, hasWarning(requests[2], defaultWarning))
+	require.Equal(t, int32(2), run.slowCalls.Load())
+	require.Equal(t, int32(2), run.fastCalls.Load())
+	assertSessionHasNoWarning(t, run.sessionService, defaultWarning)
+}
+
 func newCallbackHarness(
 	t *testing.T,
 	p pluginbase.Plugin,
@@ -341,8 +483,10 @@ func countWarningMessages(messages []model.Message, warning string) int {
 }
 
 type repeatedRoundModel struct {
-	mu       sync.Mutex
-	requests [][]model.Message
+	mu                  sync.Mutex
+	requests            [][]model.Message
+	repeatThirdRound    bool
+	malformedThirdRound bool
 }
 
 func (m *repeatedRoundModel) Info() model.Info {
@@ -365,11 +509,14 @@ func (m *repeatedRoundModel) GenerateContent(
 			Message: model.NewAssistantMessage("done"),
 		}},
 	}
-	if callIndex < 2 {
+	if callIndex < 2 || (m.repeatThirdRound && callIndex == 2) {
 		suffix := callIndex + 1
 		arguments := `{"value":"same"}`
 		if callIndex == 1 {
 			arguments = ` { "value": "same" } `
+		}
+		if callIndex == 2 && m.malformedThirdRound {
+			arguments = `{"value":"same",}`
 		}
 		response = &model.Response{
 			ID:   fmt.Sprintf("tool-response-%d", suffix),
@@ -404,6 +551,9 @@ type parallelInput struct {
 
 type repeatedRunConfig struct {
 	warningEnabled        bool
+	stopAfterWarning      bool
+	jsonRepairEnabled     bool
+	malformedThirdRound   bool
 	executionTraceEnabled bool
 	perCallResults        bool
 	varyRawResults        bool
@@ -459,7 +609,10 @@ func runRepeatedRound(t *testing.T, config repeatedRunConfig) repeatedRun {
 		function.WithName("fast"),
 		function.WithDescription("Returns immediately."),
 	)
-	modelStub := &repeatedRoundModel{}
+	modelStub := &repeatedRoundModel{
+		repeatThirdRound:    config.stopAfterWarning,
+		malformedThirdRound: config.malformedThirdRound,
+	}
 	agentInstance := llmagent.New(
 		"assistant",
 		llmagent.WithModel(modelStub),
@@ -470,6 +623,9 @@ func runRepeatedRound(t *testing.T, config repeatedRunConfig) repeatedRun {
 	runnerOptions := []runner.Option{runner.WithSessionService(sessionService)}
 	if config.warningEnabled {
 		pluginOptions := []Option{}
+		if config.stopAfterWarning {
+			pluginOptions = append(pluginOptions, WithStopAfterWarning())
+		}
 		if len(config.excludedTools) > 0 {
 			pluginOptions = append(
 				pluginOptions,
@@ -501,6 +657,12 @@ func runRepeatedRound(t *testing.T, config repeatedRunConfig) repeatedRun {
 		runOptions = append(
 			runOptions,
 			agent.WithExecutionTraceEnabled(true),
+		)
+	}
+	if config.jsonRepairEnabled {
+		runOptions = append(
+			runOptions,
+			agent.WithToolCallArgumentsJSONRepairEnabled(true),
 		)
 	}
 	if config.transformResults {
