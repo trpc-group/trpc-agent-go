@@ -241,7 +241,15 @@ func isStringFieldType(fieldType reflect.Type) bool {
 }
 
 // appendEnumValue parses and appends a typed enum value to the schema.
+// For arrays and slices, enum tags constrain the innermost item schema.
 func appendEnumValue(fieldType reflect.Type, value string, schema *tool.Schema) error {
+	switch fieldType.Kind() {
+	case reflect.Ptr:
+		return appendEnumValue(fieldType.Elem(), value, schema)
+	case reflect.Array, reflect.Slice:
+		return appendEnumValue(fieldType.Elem(), value, schema.Items)
+	}
+
 	if schema.Enum == nil {
 		schema.Enum = make([]any, 0)
 	}

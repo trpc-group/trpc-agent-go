@@ -226,6 +226,7 @@ For Function Tools, the input `req` is automatically converted into a JSON Schem
 
 - **Field name**: use `json:"..."` as the schema property name.
 - **Field description (recommended)**: use `jsonschema:"description=..."` to populate `properties.<field>.description`.
+- **Enum constraints**: use `jsonschema:"enum=foo,enum=bar,enum=baz"` on a scalar field or a slice/array such as `Values []string`. For slices and arrays, the enum applies to `items` (the innermost items for nested arrays), not to the entire array. Pointer fields/elements are dereferenced, and numeric and boolean values retain their JSON types.
 - **String pattern constraint**: use `jsonschema:"pattern=^[a-z0-9_-]+$"` to populate `properties.<field>.pattern`.
 - **Manual schemas**: when constructing `tool.Schema` directly, set `Pattern: "^[a-z0-9_-]+$"` to emit the JSON Schema `pattern` keyword.
 - **Note**: the `jsonschema` tag uses comma `,` as the separator, so **the description value must not contain `,`**; otherwise it will be parsed as multiple tag items.

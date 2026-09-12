@@ -1047,3 +1047,36 @@ func TestStreamableFunctionTool_WithBothCustomSchemas(t *testing.T) {
 		t.Errorf("expected output schema type 'object', got %q", decl.OutputSchema.Type)
 	}
 }
+
+func TestFunctionTool_ArrayItemEnumSchema(t *testing.T) {
+	type args struct {
+		Values []string `json:"values" jsonschema:"enum=foo,enum=bar,enum=baz"`
+	}
+	fn := func(_ context.Context, input args) (args, error) { return input, nil }
+	fTool := function.NewFunctionTool(fn, function.WithName("array_enum"))
+	declaration := fTool.Declaration()
+	for _, schema := range []*tool.Schema{declaration.InputSchema, declaration.OutputSchema} {
+		encoded, err := json.Marshal(schema.Properties["values"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var actual map[string]any
+		if err := json.Unmarshal(encoded, &actual); err != nil {
+			t.Fatal(err)
+		}
+		if actual["type"] != "array" {
+			t.Fatalf("expected array schema, got %s", encoded)
+		}
+		if _, ok := actual["enum"]; ok {
+			t.Fatalf("enum must not constrain the whole array: %s", encoded)
+		}
+		items, ok := actual["items"].(map[string]any)
+		if !ok || items["type"] != "string" {
+			t.Fatalf("expected string items, got %s", encoded)
+		}
+		enums, ok := items["enum"].([]any)
+		if !ok || len(enums) != 3 || enums[0] != "foo" || enums[1] != "bar" || enums[2] != "baz" {
+			t.Fatalf("expected foo/bar/baz item enum, got %s", encoded)
+		}
+	}
+}
