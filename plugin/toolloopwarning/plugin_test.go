@@ -11,6 +11,7 @@ package toolloopwarning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -169,6 +170,78 @@ func TestPluginStopsBeforeRepeatedToolBundle(t *testing.T) {
 		&model.AfterModelArgs{Response: response},
 	)
 	require.NoError(t, err)
+}
+
+func TestPluginAfterModelFailOpenAndUsesDelta(t *testing.T) {
+	plugin := &toolLoopWarningPlugin{stopAfterWarning: true}
+	var nilPlugin *toolLoopWarningPlugin
+	_, err := nilPlugin.afterModel(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = plugin.afterModel(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = plugin.afterModel(
+		context.Background(),
+		&model.AfterModelArgs{Response: &model.Response{IsPartial: true}},
+	)
+	require.NoError(t, err)
+
+	invocation := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
+	response := &model.Response{Done: true}
+	_, err = plugin.afterModel(
+		ctx,
+		&model.AfterModelArgs{Response: response},
+	)
+	require.NoError(t, err)
+
+	state := &detectorState{}
+	invocation.SetState(stateKey, state)
+	_, err = plugin.afterModel(
+		ctx,
+		&model.AfterModelArgs{Response: response},
+	)
+	require.NoError(t, err)
+
+	state.armedFingerprint = "armed"
+	_, err = plugin.afterModel(
+		ctx,
+		&model.AfterModelArgs{Response: response, Error: errors.New("model failed")},
+	)
+	require.NoError(t, err)
+
+	state.armedFingerprint = "armed"
+	_, err = plugin.afterModel(
+		ctx,
+		&model.AfterModelArgs{Response: response},
+	)
+	require.NoError(t, err)
+
+	state.armedFingerprint = "armed"
+	invalid := &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: assistantToolMessage(newToolCall("id", "", `{}`))}},
+	}
+	_, err = plugin.afterModel(ctx, &model.AfterModelArgs{Response: invalid})
+	require.NoError(t, err)
+
+	state.armedFingerprint = "armed"
+	different := &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: assistantToolMessage(newToolCall("id", "other", `{}`))}},
+	}
+	_, err = plugin.afterModel(ctx, &model.AfterModelArgs{Response: different})
+	require.NoError(t, err)
+
+	call := newToolCall("id", "search", ` { "query": "x" } `)
+	state.armedFingerprint, _ = fingerprintToolCalls([]model.ToolCall{call})
+	delta := &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Delta: assistantToolMessage(call)}},
+	}
+	_, err = plugin.afterModel(ctx, &model.AfterModelArgs{Response: delta})
+	stopErr, ok := agent.AsStopError(err)
+	require.True(t, ok)
+	require.Contains(t, stopErr.Error(), "fingerprint")
 }
 
 func TestPluginHandlesNilInputsAndMissingInvocation(t *testing.T) {
