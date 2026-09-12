@@ -73,7 +73,7 @@ func main() {
 	}
 
 	modelName := flag.String("model", defaultModel, "OpenAI-compatible model name")
-	caseName := flag.String("case", "all", "case to run: all, baseline, date-only, full-datetime, precise-tool")
+	caseName := flag.String("case", "all", "case to run: all, baseline, date-only, full-datetime, full-datetime-user, precise-tool")
 	turnDelay := flag.Duration("turn-delay", 1200*time.Millisecond, "delay between turns so full-datetime changes")
 	flag.Parse()
 
@@ -155,11 +155,22 @@ func buildCases() []cacheCase {
 		},
 		{
 			Name:        "full-datetime",
-			Description: "Legacy-style full timestamp in the system prompt. This changes each turn and is less cache-friendly.",
+			Description: "Legacy-style full timestamp in the system prompt. This changes each turn and is less cache-friendly. System placement remains the default.",
 			QueryPrefix: "Answer briefly.",
 			Options: []llmagent.Option{
 				llmagent.WithAddCurrentTime(true),
 				llmagent.WithTimeFormat("2006-01-02 15:04:05 MST"),
+			},
+			Queries: regularQueries(),
+		},
+		{
+			Name:        "full-datetime-user",
+			Description: "Full timestamp on the latest user turn via WithTimePromptPlacement(TimePromptPlacementUser), keeping the system prefix stable.",
+			QueryPrefix: "Answer briefly.",
+			Options: []llmagent.Option{
+				llmagent.WithAddCurrentTime(true),
+				llmagent.WithTimeFormat("2006-01-02 15:04:05 MST"),
+				llmagent.WithTimePromptPlacement(llmagent.TimePromptPlacementUser),
 			},
 			Queries: regularQueries(),
 		},
