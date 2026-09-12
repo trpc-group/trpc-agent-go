@@ -69,6 +69,12 @@ func WithObservationLeafValueMaxBytes(maxBytes int) Option {
 	}
 }
 
+func WithEnvironment(environment string) Option {
+	return func(cfg *config) {
+		cfg.environment = environment
+	}
+}
+
 // config holds Langfuse configuration options.
 type config struct {
 	secretKey                    string
@@ -76,6 +82,7 @@ type config struct {
 	host                         string
 	insecure                     bool
 	maxObservationLeafValueBytes *int
+	environment                  string
 }
 
 // newConfigFromEnv creates a Langfuse config from environment variables.
@@ -94,6 +101,7 @@ func newConfigFromEnv() *config {
 		host:                         getEnv("LANGFUSE_HOST", ""),
 		insecure:                     getEnv("LANGFUSE_INSECURE", "") == "true",
 		maxObservationLeafValueBytes: leafBytes,
+		environment:                  getEnv("LANGFUSE_ENVIRONMENT", "default"),
 	}
 }
 
