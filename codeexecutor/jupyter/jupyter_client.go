@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -273,25 +274,30 @@ func (c *Client) cleanupAfterStartupFailure(err error) error {
 	return err
 }
 
+// waitForReady waits for the kernel_info_reply message within the readiness timeout.
 func (c *Client) waitForReady() (bool, error) {
 	msgID, err := c.sendMessage(map[string]any{}, "shell", "kernel_info_request")
 	if err != nil {
 		return false, err
 	}
 
-	timeout := time.After(c.waitReadyTimeout)
+	if err := c.ws.SetReadDeadline(time.Now().Add(c.waitReadyTimeout)); err != nil {
+		return false, err
+	}
 	for {
-		select {
-		case <-timeout:
-			return false, fmt.Errorf("wait for kernel ready timeout")
-		default:
-		}
 		var message executionMessage
 		if err := c.ws.ReadJSON(&message); err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				return false, fmt.Errorf("wait for kernel ready timeout: %w", err)
+			}
 			return false, err
 		}
 
 		if message.Header.MsgType == "kernel_info_reply" && message.ParentHeader.MsgID == msgID {
+			if err := c.ws.SetReadDeadline(time.Time{}); err != nil {
+				return false, err
+			}
 			return true, nil
 		}
 	}
