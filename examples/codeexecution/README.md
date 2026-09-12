@@ -1,18 +1,18 @@
 # Code Execution Example
 
-This example demonstrates how to use code execution with the three available executor backends: `LocalCodeExecutor`, `ContainerCodeExecutor`, and `JupyterCodeExecutor`.
+This example demonstrates code execution with the available executor backends: local, container, Jupyter, and OpenSandbox (plus e2b elsewhere in the tree).
 
 ## What is Code Execution?
 
-The code execution system allows you to execute code snippets in various programming languages (Python, Bash) locally, in isolated Docker containers, or against a Jupyter kernel.
+The code execution system allows you to execute code snippets in various programming languages (Python, Bash) locally, in isolated Docker containers, against a Jupyter kernel, or in a remote OpenSandbox.
 
 ### Key Features
 
-- **Multiple Executors**: Support for local execution, containerized execution, and Jupyter-kernel execution
+- **Multiple Executors**: Local, containerized, Jupyter-kernel, and OpenSandbox remote execution
 - **Multi-language Support**: Execute Python and Bash code
 - **Configurable**: Custom working directories, timeouts, and cleanup options
 - **Code Block Extraction**: Automatically extract code blocks from markdown-formatted text
-- **Safe Execution**: Isolated environments with resource limits (containers) or controlled local execution
+- **Safe Execution**: Isolated environments with resource limits (containers / OpenSandbox) or controlled local execution
 
 ## Prerequisites
 
@@ -21,6 +21,7 @@ The code execution system allows you to execute code snippets in various program
 - Docker installed and running (for ContainerCodeExecutor, see `./container`)
 - Python 3.x with `jupyter_kernel_gateway` installed (for JupyterCodeExecutor, see `./jupyter`)
 - Python 3.x, Go, and Bash interpreters (for LocalCodeExecutor)
+- Running OpenSandbox server + API key (for OpenSandbox, see `./opensandbox`)
 
 ## Code Executors
 
@@ -35,6 +36,10 @@ Executes code in isolated Docker containers. Provides better security and isolat
 ### JupyterCodeExecutor
 
 Executes code against a Jupyter kernel, preserving variable state across snippets. See the [`./jupyter`](./jupyter) sub-example.
+
+### OpenSandbox
+
+Remote self-hosted sandbox via the OpenSandbox Go SDK. See the [`./opensandbox`](./opensandbox) sub-example. Note: OpenSandbox advertises `SupportsCleanEnv=false` and declarative I/O is a v1 stub — policy mode and rich `StageInputs`/`CollectOutputs` fail closed rather than silently degrading.
 
 ## Environment Variables
 

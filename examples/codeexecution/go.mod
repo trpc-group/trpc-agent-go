@@ -6,17 +6,20 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container => ../../codeexecutor/container
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter => ../../codeexecutor/jupyter
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/opensandbox => ../../codeexecutor/opensandbox
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.5.0
+	trpc.group/trpc-go/trpc-agent-go v1.11.1
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v0.0.0-20260325093248-5d0ece08e197
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/opensandbox v1.11.1
 )
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.4.14 // indirect
+	github.com/alibaba/OpenSandbox/sdks/sandbox/go v1.0.3 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect

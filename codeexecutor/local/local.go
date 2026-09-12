@@ -156,7 +156,8 @@ func (e *CodeExecutor) ExecuteCode(
 			scriptDir = cmdDir
 		}
 	} else {
-		tempDir, err := os.MkdirTemp("", "codeexec_"+input.ExecutionID)
+		safeExecID := sanitizeIDForPath(input.ExecutionID, "exec")
+		tempDir, err := os.MkdirTemp("", "codeexec_"+safeExecID)
 		if err != nil {
 			return codeexecutor.CodeExecutionResult{}, fmt.Errorf(
 				"failed to create temp directory: %w", err,
@@ -398,6 +399,9 @@ func (e *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := e.ensureWS()
 	return codeexecutor.NewEngineWithCapabilities(
 		rt, rt, rt,
-		codeexecutor.Capabilities{SupportsCleanEnv: true},
+		codeexecutor.Capabilities{
+			SupportsCleanEnv:      true,
+			SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOTrue(),
+		},
 	)
 }

@@ -12,6 +12,8 @@ package processor_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,6 +22,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	iprocessor "trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
@@ -258,7 +261,8 @@ func TestCodeExecutionResponseProcessor_UsesSharedWorkspaceSessionKey(
 		{
 			name: "session id only",
 			sess: &session.Session{ID: "test-session"},
-			want: "test-session",
+			// KeyFromInvocation is the session workspace hash: app="" / user="" / id="test-session"
+			want: codeexecutor.SessionWorkspaceKey("", "", "test-session"),
 		},
 		{
 			name: "full session key",
@@ -267,7 +271,8 @@ func TestCodeExecutionResponseProcessor_UsesSharedWorkspaceSessionKey(
 				UserID:  "test-user",
 				ID:      "test-session",
 			},
-			want: "test-app/test-user/test-session",
+			// Session workspace hash over the full identity triple.
+			want: codeexecutor.SessionWorkspaceKey("test-app", "test-user", "test-session"),
 		},
 	}
 
@@ -317,6 +322,93 @@ func (s *stubExec) ExecuteCode(
 }
 func (s *stubExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+// TestCodeExecutionResponseProcessor_MigratesLegacyWorkspaceEndToEnd runs
+// the full framework path — the same one runner.go drives (it embeds the
+// invocation into ctx via agent.NewInvocationContext before agent.Run) —
+// with a real sandbox executor: ProcessResponse must derive
+// KeyFromInvocation as ExecutionID, and the sandbox runtime must recognize
+// that shape and migrate the pre-encoding-change legacy directory to the
+// new key layout. This closes the seam between the processor-level tests
+// (stub exec, asserts only the ID) and the runtime-level tests (direct
+// CreateWorkspace/ExecuteCode calls): neither alone proves the framework's
+// real caller triggers migration.
+func TestCodeExecutionResponseProcessor_MigratesLegacyWorkspaceEndToEnd(
+	t *testing.T,
+) {
+	const (
+		app    = "proc-app"
+		user   = "proc-user"
+		sessID = "proc-session"
+	)
+
+	root := t.TempDir()
+	// Seed a legacy-layout workspace exactly where a pre-encoding-change
+	// binary would have created it: workspacePathForID maps the legacy
+	// key "app/user/id" onto <root>/sandbox/app/user/id.
+	legacyKey := codeexecutor.LegacySessionWorkspaceKey(app, user, sessID)
+	require.Equal(t, "proc-app/proc-user/proc-session", legacyKey)
+	legacyPath := filepath.Join(root, "sandbox", app, user, sessID)
+	if err := os.MkdirAll(filepath.Join(legacyPath, "work"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(legacyPath, "out"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(legacyPath, "work", "source.txt"),
+		[]byte("legacy-work"), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := sandbox.New(
+		sandbox.WithWorkspaceRoot(root),
+		sandbox.WithPermissionProfile(sandbox.DangerFullAccessProfile()),
+	)
+	t.Cleanup(func() { _ = exec.Close() })
+
+	inv := &agent.Invocation{
+		Agent:     &testAgent{exec: exec},
+		Session:   &session.Session{AppName: app, UserID: user, ID: sessID},
+		AgentName: "test-agent",
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "```bash\necho migrated\n```",
+			}},
+		},
+	}
+
+	ch := make(chan *event.Event, 8)
+	// runner.go embeds the invocation into ctx before agent.Run; the
+	// processor forwards this ctx to ExecuteCode, and the sandbox runtime
+	// reads the session from it for migration. A bare context.Background()
+	// would be a weaker shape than the framework actually produces.
+	proc := iprocessor.NewCodeExecutionResponseProcessor()
+	proc.ProcessResponse(agent.NewInvocationContext(context.Background(), inv),
+		inv, &model.Request{}, rsp, ch)
+
+	newKey := codeexecutor.SessionWorkspaceKey(app, user, sessID)
+	newPath := filepath.Join(root, "sandbox", newKey)
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("new-style workspace %s missing after ProcessResponse: %v",
+			newPath, err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy workspace %s still present (stat err=%v); "+
+			"end-to-end migration did not run", legacyPath, err)
+	}
+	data, err := os.ReadFile(filepath.Join(newPath, "work", "source.txt"))
+	if err != nil {
+		t.Fatalf("reading migrated source.txt: %v", err)
+	}
+	require.Equal(t, "legacy-work", string(data),
+		"legacy work file must survive migration")
 }
 
 // testAgent implements agent.Agent and agent.CodeExecutor

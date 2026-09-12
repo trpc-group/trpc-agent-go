@@ -11,6 +11,10 @@ package workspacesession
 
 import (
 	"context"
+	"errors"
+	"strings"
+
+	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -55,8 +59,7 @@ func (r *Resolver) EnsureEngine() codeexecutor.Engine {
 		"workspacesession: falling back to local engine; " +
 			"executor does not expose EngineProvider",
 	)
-	rt := localexec.NewRuntime("")
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return localexec.New().Engine()
 }
 
 // CreateWorkspace acquires the invocation-scoped workspace for a tool run.
@@ -71,6 +74,17 @@ func (r *Resolver) CreateWorkspace(
 
 // CreateWorkspaceHandle acquires the invocation-scoped workspace together with
 // the registry token required for ABA-safe conditional invalidation.
+//
+// If the invocation carries a Session without a stable ID, an ephemeral
+// workspace key derived from InvocationID is used so placeholder sessions
+// cannot share a durable tool/skill name key, while still allowing multiple
+// tool calls within the same invocation to reuse one workspace. The returned
+// WorkspaceHandle exposes the entryToken required for cleanup via
+// InvalidateWorkspaceHandle or ReleaseWorkspaceHandle.
+//
+// Callers that acquire an ephemeral handle are responsible for calling
+// ReleaseWorkspaceHandle when the workspace is no longer needed, since
+// ephemeral workspaces are not tracked by any session-level lifecycle.
 func (r *Resolver) CreateWorkspaceHandle(
 	ctx context.Context,
 	eng codeexecutor.Engine,
@@ -78,14 +92,85 @@ func (r *Resolver) CreateWorkspaceHandle(
 ) (codeexecutor.WorkspaceHandle, error) {
 	reg := r.reg
 	if reg == nil {
-		reg = codeexecutor.NewWorkspaceRegistry()
-		r.reg = reg
+		// Resolver must be constructed via NewResolver, which
+		// guarantees r.reg != nil. A nil reg here means a zero-value
+		// Resolver was used. Fail closed rather than lazily allocating
+		// — lazy init is a data race when multiple goroutines call
+		// CreateWorkspaceHandle concurrently (each would create its
+		// own registry, and the loser's handles would be unreleaseable
+		// via the winner's registry).
+		return codeexecutor.WorkspaceHandle{}, errors.New(
+			"workspacesession: Resolver not initialized via NewResolver")
 	}
-	sid := workspaceKey(ctx, name)
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 		ctx = withWorkspaceArtifactContext(ctx, inv)
 	}
+	sid := workspaceKey(ctx, name)
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.Session != nil {
+		if strings.TrimSpace(inv.Session.ID) == "" {
+			// Invalid (empty-ID) sessions must not share a workspace
+			// via the tool/skill name key. Derive the key from
+			// InvocationID so all tool calls within the same
+			// invocation reuse one workspace (bounded leak of 1 per
+			// invocation, not 1 per call). Fall back to a random UUID
+			// only when InvocationID is also empty.
+			suffix := strings.TrimSpace(inv.InvocationID)
+			if suffix == "" {
+				suffix = uuid.NewString()
+			}
+			sid = ephemeralKeyPrefix + suffix
+		}
+	}
 	return reg.AcquireHandle(ctx, eng.Manager(), sid)
+}
+
+// ReleaseWorkspaceHandle releases the registry entry identified by
+// handle, cleaning up the underlying workspace via the manager that
+// created it. This is the public cleanup path for workspaces acquired
+// via CreateWorkspaceHandle, including ephemeral workspaces created for
+// invalid sessions.
+//
+// Callers that acquire an ephemeral handle (empty session ID) SHOULD call
+// this when done to avoid leaking the backend workspace. For non-ephemeral
+// (session-scoped) workspaces, the handle is cached for reuse and should
+// NOT be released until the session ends.
+func (r *Resolver) ReleaseWorkspaceHandle(
+	ctx context.Context,
+	handle codeexecutor.WorkspaceHandle,
+) error {
+	if r == nil || r.reg == nil {
+		return nil
+	}
+	return r.reg.ReleaseHandle(ctx, handle)
+}
+
+// ephemeralKeyPrefix marks registry keys derived from an invocation but not
+// owned by any session lifecycle. Handles under these keys must be released
+// after the invocation finishes.
+const ephemeralKeyPrefix = "ephemeral-invocation-"
+
+// IsEphemeralHandle reports whether handle was acquired for an invalid
+// (empty-ID) session and therefore has no session-level lifecycle owning it.
+// Such handles must be released with ReleaseWorkspaceHandle after the
+// invocation finishes, or the backend workspace will leak for the life of the
+// process.
+func (r *Resolver) IsEphemeralHandle(handle codeexecutor.WorkspaceHandle) bool {
+	return strings.HasPrefix(handle.RegistryID(), ephemeralKeyPrefix)
+}
+
+// ReleaseEphemeralHandle releases handle only when it is an ephemeral
+// (invalid-session) workspace. Session-scoped handles are left cached and
+// untouched. This is the recommended teardown hook for production callers that
+// want to reclaim ephemeral workspaces after a single invocation without
+// discarding valid session workspaces.
+func (r *Resolver) ReleaseEphemeralHandle(
+	ctx context.Context,
+	handle codeexecutor.WorkspaceHandle,
+) error {
+	if !r.IsEphemeralHandle(handle) {
+		return nil
+	}
+	return r.ReleaseWorkspaceHandle(ctx, handle)
 }
 
 // InvalidateWorkspaceHandle conditionally removes the exact registry entry
@@ -109,20 +194,47 @@ func workspaceKey(ctx context.Context, fallback string) string {
 }
 
 // KeyFromInvocation derives the shared workspace key for an invocation.
+//
+// The key is codeexecutor.SessionWorkspaceKey over (AppName, UserID, ID):
+// "sess-" followed by 32 lowercase hex characters. It is a single
+// filesystem-safe path segment (no separators, no ':' illegal on Windows,
+// fixed length) and injective over the identity triple, so distinct
+// sessions never share a workspace. Session.ID is required; empty or
+// whitespace-only ID returns "".
+//
+// The encoding changed from "app/user/id" (or just "id" when fields were
+// missing) to the hash format above. codeexecutor/sandbox migrates its
+// PerSession workspaces at runtime: when CreateWorkspace receives an
+// execID equal to this key for the invocation's session, it renames the
+// legacy directory automatically. Callers using the sandbox runtime must
+// NOT additionally migrate via LegacyKeyFromInvocation — doing so races
+// the runtime on the same directory. Other WorkspaceManager
+// implementations that persist by this key still need their own upgrade
+// strategy if they predate the encoding change.
 func KeyFromInvocation(inv *agent.Invocation) string {
 	if inv == nil || inv.Session == nil {
 		return ""
 	}
-	if inv.Session.AppName != "" && inv.Session.UserID != "" && inv.Session.ID != "" {
-		return inv.Session.AppName + "/" + inv.Session.UserID + "/" + inv.Session.ID
-	}
-	return inv.Session.ID
+	app := inv.Session.AppName
+	user := inv.Session.UserID
+	id := inv.Session.ID
+	return codeexecutor.SessionWorkspaceKey(app, user, id)
 }
 
-// withWorkspaceArtifactContext mirrors internal/workspaceinput.withArtifactContext:
-// inject artifact service when present, then session info when Session is set.
-// Workspace init hooks and StageInputs during CreateWorkspace then resolve
-// artifact:// references consistently with other artifact-backed staging paths.
+// LegacyKeyFromInvocation reproduces the pre-encoding-change workspace key
+// format ("app/user/id" or just "id"). It is intended for diagnostics and
+// one-time upgrade tooling around WorkspaceManager implementations that do
+// not migrate on their own. The codeexecutor/sandbox runtime already
+// migrates its PerSession directories automatically; callers on that
+// runtime must not run a concurrent migration with this key.
+func LegacyKeyFromInvocation(inv *agent.Invocation) string {
+	if inv == nil || inv.Session == nil {
+		return ""
+	}
+	return codeexecutor.LegacySessionWorkspaceKey(
+		inv.Session.AppName, inv.Session.UserID, inv.Session.ID)
+}
+
 func withWorkspaceArtifactContext(
 	ctx context.Context,
 	inv *agent.Invocation,

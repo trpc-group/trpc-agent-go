@@ -52,3 +52,60 @@ func TestNewEngine_And_Wrappers(t *testing.T) {
 		require.Equal(t, "work/a.txt", files[0].Name)
 	}
 }
+
+type nopWM struct{}
+
+func (nopWM) CreateWorkspace(context.Context, string, codeexecutor.WorkspacePolicy) (codeexecutor.Workspace, error) {
+	return codeexecutor.Workspace{ID: "x", Path: "/tmp/x"}, nil
+}
+func (nopWM) Cleanup(context.Context, codeexecutor.Workspace) error { return nil }
+
+type nopFS struct{}
+
+func (nopFS) PutFiles(context.Context, codeexecutor.Workspace, []codeexecutor.PutFile) error {
+	return nil
+}
+func (nopFS) PutDirectory(context.Context, codeexecutor.Workspace, string, string) error {
+	return nil
+}
+func (nopFS) StageDirectory(context.Context, codeexecutor.Workspace, string, string, codeexecutor.StageOptions) error {
+	return nil
+}
+func (nopFS) Collect(context.Context, codeexecutor.Workspace, []string) ([]codeexecutor.File, error) {
+	return nil, nil
+}
+func (nopFS) StageInputs(context.Context, codeexecutor.Workspace, []codeexecutor.InputSpec) error {
+	return codeexecutor.ErrDeclarativeIONotSupported
+}
+func (nopFS) CollectOutputs(context.Context, codeexecutor.Workspace, codeexecutor.OutputSpec) (codeexecutor.OutputManifest, error) {
+	return codeexecutor.OutputManifest{}, codeexecutor.ErrDeclarativeIONotSupported
+}
+
+type nopRunner struct{}
+
+func (nopRunner) RunProgram(context.Context, codeexecutor.Workspace, codeexecutor.RunProgramSpec) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{}, nil
+}
+
+func TestInvariant_Capability_ImmutableSentinels(t *testing.T) {
+	p1 := codeexecutor.SupportsDeclarativeIOFalse()
+	p2 := codeexecutor.SupportsDeclarativeIOFalse()
+	require.False(t, *p1)
+	require.False(t, *p2)
+	require.NotSame(t, p1, p2, "each call must allocate a fresh *bool")
+
+	eng := codeexecutor.NewEngineWithCapabilities(nopWM{}, nopFS{}, nopRunner{}, codeexecutor.Capabilities{
+		SupportsDeclarativeIO: p1,
+	})
+	*p1 = true
+	d := eng.Describe()
+	require.NotNil(t, d.SupportsDeclarativeIO)
+	require.False(t, *d.SupportsDeclarativeIO, "engine must keep construction-time value")
+
+	*d.SupportsDeclarativeIO = true
+	d2 := eng.Describe()
+	require.False(t, *d2.SupportsDeclarativeIO)
+
+	_, err := eng.FS().CollectOutputs(context.Background(), codeexecutor.Workspace{}, codeexecutor.OutputSpec{})
+	require.ErrorIs(t, err, codeexecutor.ErrDeclarativeIONotSupported)
+}

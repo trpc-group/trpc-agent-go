@@ -139,15 +139,8 @@ func executionIDFromContext(ctx context.Context) string {
 	if !ok || inv == nil || inv.Session == nil {
 		return ""
 	}
-	var parts []string
-	if inv.Session.AppName != "" {
-		parts = append(parts, inv.Session.AppName)
-	}
-	if inv.Session.UserID != "" {
-		parts = append(parts, inv.Session.UserID)
-	}
-	if inv.Session.ID != "" {
-		parts = append(parts, inv.Session.ID)
-	}
-	return strings.Join(parts, "/")
+	// SessionWorkspaceKey returns "" for placeholder sessions (empty or
+	// whitespace-only ID), so those never collapse onto one durable key.
+	return codeexecutor.SessionWorkspaceKey(
+		inv.Session.AppName, inv.Session.UserID, inv.Session.ID)
 }

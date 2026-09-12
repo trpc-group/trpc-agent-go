@@ -11,6 +11,7 @@ package workspacesession
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -41,6 +42,7 @@ func (s *resolverStubExec) Engine() codeexecutor.Engine { return s.eng }
 
 type resolverStubMgr struct {
 	created []string
+	cleans  []string
 }
 
 func (m *resolverStubMgr) CreateWorkspace(
@@ -52,7 +54,8 @@ func (m *resolverStubMgr) CreateWorkspace(
 	return codeexecutor.Workspace{ID: id, Path: "/tmp/" + id}, nil
 }
 
-func (*resolverStubMgr) Cleanup(context.Context, codeexecutor.Workspace) error {
+func (m *resolverStubMgr) Cleanup(_ context.Context, ws codeexecutor.Workspace) error {
+	m.cleans = append(m.cleans, ws.ID)
 	return nil
 }
 
@@ -127,6 +130,7 @@ func TestResolver_EnsureEngine(t *testing.T) {
 	require.NotNil(t, fallback.Manager())
 	require.NotNil(t, fallback.FS())
 	require.NotNil(t, fallback.Runner())
+	require.True(t, fallback.Describe().SupportsCleanEnv)
 }
 
 func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
@@ -151,13 +155,13 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	ctx = agent.NewInvocationContext(context.Background(), inv)
 	ws3, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
-	require.Equal(t, "sess-123", ws3.ID)
-	require.Equal(t, []string{"workspace", "sess-123"}, mgr.created)
+	require.Equal(t, KeyFromInvocation(inv), ws3.ID)
+	require.Equal(t, []string{"workspace", KeyFromInvocation(inv)}, mgr.created)
 
 	ws4, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
 	require.Equal(t, ws3, ws4)
-	require.Equal(t, []string{"workspace", "sess-123"}, mgr.created)
+	require.Equal(t, []string{"workspace", KeyFromInvocation(inv)}, mgr.created)
 
 	inv.Session = &session.Session{
 		AppName: "app",
@@ -167,8 +171,12 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	ctx = agent.NewInvocationContext(context.Background(), inv)
 	ws5, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
-	require.Equal(t, "app/user/sess-456", ws5.ID)
-	require.Equal(t, []string{"workspace", "sess-123", "app/user/sess-456"}, mgr.created)
+	require.Equal(t, KeyFromInvocation(inv), ws5.ID)
+	require.Equal(t, []string{
+		"workspace",
+		codeexecutor.SessionWorkspaceKey("", "", "sess-123"),
+		KeyFromInvocation(inv),
+	}, mgr.created)
 }
 
 // artifactProbeManager asserts CreateWorkspace's context can resolve an artifact
@@ -232,7 +240,7 @@ func TestResolver_CreateWorkspace_InjectsArtifactContext(t *testing.T) {
 	r := NewResolver(nil, nil)
 	ws, err := r.CreateWorkspace(ctx, eng, "ignored")
 	require.NoError(t, err)
-	require.Equal(t, "myapp/u1/sess-art", ws.ID)
+	require.Equal(t, KeyFromInvocation(inv), ws.ID)
 	require.True(t, probe.sawOK)
 }
 
@@ -288,4 +296,185 @@ func TestResolver_InvalidateWorkspaceHandle_UsesInvocationKey(t *testing.T) {
 	_, err = r.CreateWorkspace(ctx, eng, "fallback")
 	require.NoError(t, err)
 	require.Equal(t, 2, mgr.creates)
+}
+
+func TestKeyFromInvocation_Injective(t *testing.T) {
+	// Empty-field positions must not collide.
+	a := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a", ID: "b"}})
+	b := KeyFromInvocation(&agent.Invocation{Session: &session.Session{UserID: "a", ID: "b"}})
+	require.NotEqual(t, a, b)
+	// Embedded separators must not collide either.
+	c := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a/b", UserID: "c", ID: "d"}})
+	d := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a", UserID: "b/c", ID: "d"}})
+	require.NotEqual(t, c, d)
+	// Deterministic for the same identity.
+	require.Equal(t, c, KeyFromInvocation(&agent.Invocation{
+		Session: &session.Session{AppName: "a/b", UserID: "c", ID: "d"},
+	}))
+}
+
+func TestKeyFromInvocation_MatchesSessionWorkspaceKey(t *testing.T) {
+	inv := &agent.Invocation{Session: &session.Session{
+		AppName: "app", UserID: "user", ID: "sess",
+	}}
+	got := KeyFromInvocation(inv)
+	require.Equal(t, codeexecutor.SessionWorkspaceKey("app", "user", "sess"), got)
+	require.Regexp(t, `^sess-[0-9a-f]{32}$`, got)
+	require.Len(t, got, 37)
+}
+
+func TestKeyFromInvocation_RejectsEmptyID(t *testing.T) {
+	require.Equal(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{}}))
+	require.Equal(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a", UserID: "u", ID: ""}}))
+	require.NotEqual(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{ID: "x"}}))
+}
+
+func TestLegacyKeyFromInvocation_MatchesOldFormat(t *testing.T) {
+	// Full identity: old format was "app/user/id".
+	require.Equal(t, "app/user/sid",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{
+			AppName: "app", UserID: "user", ID: "sid",
+		}}))
+
+	// Missing app or user: old format fell back to just "id".
+	require.Equal(t, "sid",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{
+			ID: "sid",
+		}}))
+	require.Equal(t, "sid",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{
+			AppName: "app", ID: "sid",
+		}}))
+
+	// Empty ID: returns "" (same as new format).
+	require.Equal(t, "",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{}}))
+
+	// Nil safety.
+	require.Equal(t, "", LegacyKeyFromInvocation(nil))
+}
+
+func TestKeyFromInvocation_DiffersFromLegacy(t *testing.T) {
+	inv := &agent.Invocation{Session: &session.Session{
+		AppName: "app", UserID: "user", ID: "sid",
+	}}
+	require.NotEqual(t, KeyFromInvocation(inv), LegacyKeyFromInvocation(inv),
+		"new and legacy keys must differ to justify the migration")
+}
+
+func TestResolver_CreateWorkspace_EmptySessionIDUsesEphemeralKey(t *testing.T) {
+	mgr := &resolverStubMgr{}
+	eng := newResolverStubEngine(mgr)
+	r := NewResolver(nil, nil)
+	inv := agent.NewInvocation()
+	inv.Session = &session.Session{AppName: "app", UserID: "u", ID: ""}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	ws1, err := r.CreateWorkspace(ctx, eng, "skill-name")
+	require.NoError(t, err)
+	require.NotEqual(t, "skill-name", ws1.ID)
+	require.True(t, strings.HasPrefix(ws1.ID, "ephemeral-invocation-"),
+		"ephemeral key must be derived from InvocationID")
+	require.Contains(t, ws1.ID, inv.InvocationID,
+		"ephemeral key must embed the InvocationID for per-invocation stability")
+
+	// Same invocation reuses the same workspace (cached by stable key).
+	ws1b, err := r.CreateWorkspace(ctx, eng, "skill-name")
+	require.NoError(t, err)
+	require.Equal(t, ws1, ws1b, "same invocation must reuse the ephemeral workspace")
+	require.Len(t, mgr.created, 1, "second call must hit cache, not create a new workspace")
+
+	// Different invocation gets a different workspace.
+	inv2 := agent.NewInvocation()
+	inv2.Session = &session.Session{}
+	ctx2 := agent.NewInvocationContext(context.Background(), inv2)
+	ws2, err := r.CreateWorkspace(ctx2, eng, "skill-name")
+	require.NoError(t, err)
+	require.NotEqual(t, ws1.ID, ws2.ID, "different invocations must get different ephemeral keys")
+	require.NotContains(t, mgr.created, "skill-name")
+}
+
+// TestResolver_ReleaseWorkspaceHandle_CleansEphemeralWorkspace verifies
+// that the public ReleaseWorkspaceHandle method actually invokes Cleanup
+// on the manager — not just returning nil. This guards against regressions
+// where the release path silently becomes a no-op.
+func TestResolver_ReleaseWorkspaceHandle_CleansEphemeralWorkspace(t *testing.T) {
+	mgr := &resolverStubMgr{}
+	eng := newResolverStubEngine(mgr)
+	r := NewResolver(nil, nil)
+	inv := agent.NewInvocation()
+	inv.Session = &session.Session{AppName: "app", UserID: "u", ID: ""}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	handle, err := r.CreateWorkspaceHandle(ctx, eng, "skill-name")
+	require.NoError(t, err)
+	require.NotEqual(t, "", handle.Workspace.ID, "handle must reference a workspace")
+	require.Len(t, mgr.cleans, 0, "no cleanup before Release")
+
+	// ReleaseWorkspaceHandle must actually call Cleanup on the manager.
+	require.NoError(t, r.ReleaseWorkspaceHandle(ctx, handle))
+	require.Len(t, mgr.cleans, 1, "Release must invoke Cleanup exactly once")
+	require.Equal(t, handle.Workspace.ID, mgr.cleans[0],
+		"Cleanup must be called for the released workspace")
+
+	// After release, the workspace must no longer be in the registry cache.
+	_, ok := r.reg.Get(handle.Workspace.ID)
+	require.False(t, ok, "released workspace must not remain in registry cache")
+}
+
+// TestResolver_IsEphemeralHandle_RoundTrip verifies that the resolver can
+// identify ephemeral (invalid empty-ID session) handles and that
+// ReleaseEphemeralHandle cleans them up, while leaving session-scoped
+// workspaces cached and reusable. This is the lifecycle contract the
+// production skill_run path relies on to avoid leaking one backend workspace
+// per invalid-session invocation.
+func TestResolver_IsEphemeralHandle_RoundTrip(t *testing.T) {
+	mgr := &resolverStubMgr{}
+	eng := newResolverStubEngine(mgr)
+	r := NewResolver(nil, nil)
+
+	// Valid session -> session-scoped key, NOT ephemeral.
+	vInv := agent.NewInvocation()
+	vInv.Session = &session.Session{ID: "sess-1"}
+	vCtx := agent.NewInvocationContext(context.Background(), vInv)
+	vHandle, err := r.CreateWorkspaceHandle(vCtx, eng, "skill-name")
+	require.NoError(t, err)
+	require.False(t, r.IsEphemeralHandle(vHandle),
+		"valid session handles must not be ephemeral")
+
+	// Empty session -> ephemeral-invocation key.
+	eInv := agent.NewInvocation()
+	eInv.Session = &session.Session{}
+	eCtx := agent.NewInvocationContext(context.Background(), eInv)
+	eHandle, err := r.CreateWorkspaceHandle(eCtx, eng, "skill-name")
+	require.NoError(t, err)
+	require.True(t, r.IsEphemeralHandle(eHandle),
+		"empty-session handles must be ephemeral")
+	require.True(t, strings.HasPrefix(eHandle.RegistryID(), "ephemeral-invocation-"))
+	require.Len(t, mgr.cleans, 0, "no cleanup before release")
+
+	// ReleaseEphemeralHandle must clean the ephemeral workspace and remove
+	// its registry entry.
+	require.NoError(t, r.ReleaseEphemeralHandle(eCtx, eHandle))
+	require.Len(t, mgr.cleans, 1, "ephemeral release must call Cleanup exactly once")
+	require.Equal(t, eHandle.Workspace.ID, mgr.cleans[0])
+	_, ok := r.reg.Get(eHandle.Workspace.ID)
+	require.False(t, ok, "released ephemeral workspace must not remain in registry cache")
+
+	// The session-scoped handle must NOT be released by ReleaseEphemeralHandle:
+	// it stays cached and reusable.
+	require.NoError(t, r.ReleaseEphemeralHandle(vCtx, vHandle))
+	require.Len(t, mgr.cleans, 1, "session-scoped handle must not be released as ephemeral")
+	vHandle2, err := r.CreateWorkspaceHandle(vCtx, eng, "skill-name")
+	require.NoError(t, err)
+	require.Equal(t, vHandle.Workspace.ID, vHandle2.Workspace.ID,
+		"session-scoped workspace must still be cached and reused")
+	// created has exactly two entries: the valid-session key and the
+	// ephemeral key. The valid-session key must not be created twice.
+	validCreated := 0
+	for _, id := range mgr.created {
+		if id == vHandle.Workspace.ID {
+			validCreated++
+		}
+	}
+	require.Equal(t, 1, validCreated, "valid session must not recreate its workspace")
 }

@@ -122,3 +122,30 @@ func TestPinnedArtifactVersion_ResolvedMatch(t *testing.T) {
 	require.NotNil(t, got)
 	require.Equal(t, 9, *got)
 }
+
+func TestSanitizeIDForPath(t *testing.T) {
+	// Hazardous characters are replaced, safe ones preserved.
+	got := sanitizeIDForPath(`a/b:c|d\e`, "exec")
+	require.Equal(t, "a_b_c_d_e", got)
+	for _, r := range got {
+		isAllowed := (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_'
+		require.True(t, isAllowed, "unexpected rune %q in %q", r, got)
+	}
+
+	// Already-safe IDs pass through unchanged.
+	require.Equal(
+		t, "sess-0123_abzXYZ",
+		sanitizeIDForPath("sess-0123_abzXYZ", "exec"),
+	)
+
+	// Empty input returns the caller's fallback.
+	require.Equal(t, "exec", sanitizeIDForPath("", "exec"))
+	require.Equal(t, "ws", sanitizeIDForPath("", "ws"))
+
+	// Fully illegal input maps to underscores; the result is non-empty
+	// and still path-safe, so the fallback is not needed.
+	require.Equal(t, "___", sanitizeIDForPath("///", "exec"))
+}
