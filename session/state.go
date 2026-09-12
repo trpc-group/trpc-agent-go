@@ -17,6 +17,20 @@ const (
 	StateTempPrefix = "temp:"
 )
 
+// IsInternalStateKey reports whether key is reserved for session bookkeeping
+// (the track index and summary progress markers). Internal keys are filtered
+// from replay-observable snapshots and must not be written as user state.
+func IsInternalStateKey(key string) bool {
+	switch key {
+	case tracksStateKey,
+		SummaryLastIncludedTimestampStateKey,
+		SummaryLastIncludedEventIDStateKey:
+		return true
+	default:
+		return false
+	}
+}
+
 // State maintains the current value and the pending-commit delta.
 type State struct {
 	// Value stores the current committed state
