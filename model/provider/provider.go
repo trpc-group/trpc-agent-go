@@ -29,6 +29,7 @@ func init() {
 	Register("gemini", geminiProvider)
 	Register("ollama", ollamaProvider)
 	Register("hunyuan", hunyuanProvider)
+	Register("orcarouter", orcaRouterProvider)
 }
 
 // Provider builds a model.Model instance.
@@ -135,6 +136,17 @@ func openaiProvider(opts *Options) (model.Model, error) {
 	}
 	res = append(res, opts.OpenAIOption...)
 	return openai.New(opts.ModelName, res...), nil
+}
+
+// orcaRouterProvider builds an OrcaRouter model instance using the resolved options.
+// OrcaRouter is an OpenAI-compatible gateway (https://www.orcarouter.ai) that
+// serves many models through the same endpoint; it behaves like the OpenAI
+// provider with a fixed default base URL and API key name.
+func orcaRouterProvider(opts *Options) (model.Model, error) {
+	if opts.Variant == "" {
+		opts.Variant = string(openai.VariantOrcaRouter)
+	}
+	return openaiProvider(opts)
 }
 
 // anthropicProvider builds an Anthropic-compatible model instance using the resolved options.
