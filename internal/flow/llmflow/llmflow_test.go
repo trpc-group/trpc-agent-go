@@ -655,6 +655,124 @@ func TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled(t *testin
 	require.Equal(t, "{\"a\":2}", string(response.Choices[0].Message.ToolCalls[0].Function.Arguments))
 }
 
+func TestProcessStreamingResponses_BeforeToolExecutionSeesFinalResponse(t *testing.T) {
+	var seenArguments []byte
+	customResponse := &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "tool",
+						Arguments: []byte("{a:2}"),
+					},
+				}},
+			},
+		}},
+	}
+	p := &hookPlugin{
+		name: "final-response-hook",
+		reg: func(r *plugin.Registry) {
+			r.AfterModel(func(
+				_ context.Context,
+				_ *model.AfterModelArgs,
+			) (*model.AfterModelResult, error) {
+				return &model.AfterModelResult{CustomResponse: customResponse}, nil
+			})
+			r.BeforeToolExecution(func(
+				_ context.Context,
+				args *agent.BeforeToolExecutionArgs,
+			) error {
+				seenArguments = append(
+					[]byte(nil),
+					args.Response.Choices[0].Message.ToolCalls[0].Function.Arguments...,
+				)
+				return nil
+			})
+		},
+	}
+	pm := plugin.MustNewManager(p)
+	repairEnabled := true
+	inv := agent.NewInvocation(
+		agent.WithInvocationPlugins(pm),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ToolCallArgumentsJSONRepairEnabled: &repairEnabled,
+		}),
+	)
+	f := New(nil, nil, Options{})
+	responseSeq := func(yield func(*model.Response) bool) {
+		yield(&model.Response{Done: true})
+	}
+	eventChan := make(chan *event.Event, 10)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(context.Background(), "s")
+	defer span.End()
+
+	lastEvent, err := f.processStreamingResponses(
+		ctx,
+		inv,
+		nil,
+		&model.Request{},
+		responseSeq,
+		eventChan,
+		span,
+		true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Equal(t, `{"a":2}`, string(seenArguments))
+}
+
+func TestProcessStreamingResponses_BeforeToolExecutionErrorStopsProcessing(t *testing.T) {
+	wantErr := errors.New("before tool execution failed")
+	p := &hookPlugin{
+		name: "final-response-hook",
+		reg: func(r *plugin.Registry) {
+			r.BeforeToolExecution(func(
+				_ context.Context,
+				_ *agent.BeforeToolExecutionArgs,
+			) error {
+				return wantErr
+			})
+		},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationPlugins(plugin.MustNewManager(p)))
+	f := New(nil, nil, Options{})
+	responseSeq := func(yield func(*model.Response) bool) {
+		yield(&model.Response{Done: true})
+	}
+	eventChan := make(chan *event.Event, 1)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(context.Background(), "s")
+	defer span.End()
+
+	lastEvent, err := f.processStreamingResponses(
+		ctx,
+		inv,
+		nil,
+		&model.Request{},
+		responseSeq,
+		eventChan,
+		span,
+		true,
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, lastEvent)
+}
+
+func TestStreamingResponseProcessor_BeforeToolExecutionFailOpen(t *testing.T) {
+	var nilProcessor *streamingResponseProcessor
+	require.NoError(t, nilProcessor.runBeforeToolExecutionCallbacks(nil))
+
+	processor := &streamingResponseProcessor{}
+	require.NoError(t, processor.runBeforeToolExecutionCallbacks(nil))
+	processor.currentInvocation = &agent.Invocation{Plugins: stubPluginManager{}}
+	require.NoError(t, processor.runBeforeToolExecutionCallbacks(nil))
+}
+
 func TestProcessStreamingResponses_RejectsEmptyCompletedToolCallNameBeforeEmit(t *testing.T) {
 	f := New(nil, nil, Options{})
 	inv := agent.NewInvocation(agent.WithInvocationID("inv-empty-tool-name"))

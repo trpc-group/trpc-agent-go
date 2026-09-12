@@ -308,6 +308,36 @@ func TestManager_BeforeToolExecutionRunsInPluginOrder(t *testing.T) {
 	require.Equal(t, []string{"p1", "p2"}, calls)
 }
 
+func TestManager_BeforeToolExecutionHandlesNilAndErrors(t *testing.T) {
+	args := &agent.BeforeToolExecutionArgs{}
+	var nilManager *plugin.Manager
+	require.NoError(t, nilManager.RunBeforeToolExecution(context.Background(), args))
+
+	m := plugin.MustNewManager()
+	require.NoError(t, m.RunBeforeToolExecution(context.Background(), nil))
+
+	var nilRegistry *plugin.Registry
+	nilRegistry.BeforeToolExecution(nil)
+	(&plugin.Registry{}).BeforeToolExecution(nil)
+
+	wantErr := errors.New("execution policy rejected response")
+	m = plugin.MustNewManager(&testPlugin{
+		name: "policy",
+		reg: func(r *plugin.Registry) {
+			r.BeforeToolExecution(nil)
+			r.BeforeToolExecution(func(
+				context.Context,
+				*agent.BeforeToolExecutionArgs,
+			) error {
+				return wantErr
+			})
+		},
+	})
+	err := m.RunBeforeToolExecution(context.Background(), args)
+	require.ErrorIs(t, err, wantErr)
+	require.Contains(t, err.Error(), `plugin "policy"`)
+}
+
 func TestManager_AfterToolMessagesCanonicalizesReplacements(t *testing.T) {
 	original := []model.Message{
 		model.NewToolMessage("call-1", "search", "raw 1"),
