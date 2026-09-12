@@ -1129,6 +1129,7 @@ func TestGenerateJSONSchema_DefSchemaIsolation(t *testing.T) {
 	require.Contains(t, defNode.Required, "value")
 }
 
+// TestGenerateJSONSchema_ArrayItemEnum verifies enum placement and typed values across containers.
 func TestGenerateJSONSchema_ArrayItemEnum(t *testing.T) {
 	type status string
 	tests := []struct {
@@ -1141,6 +1142,12 @@ func TestGenerateJSONSchema_ArrayItemEnum(t *testing.T) {
 	}{
 		{"strings", reflect.TypeOf([]string{}), "enum=foo,enum=bar,enum=baz", "string", []any{"foo", "bar", "baz"}, 1},
 		{"fixed array", reflect.TypeOf([2]int{}), "enum=1,enum=2", "integer", []any{int64(1), int64(2)}, 1},
+		{"uint64 maximum", reflect.TypeOf([]uint64{}), "enum=18446744073709551615", "integer", []any{uint64(18446744073709551615)}, 1},
+		{"uint8 maximum", reflect.TypeOf([]uint8{}), "enum=255", "integer", []any{uint64(255)}, 1},
+		{"unsigned negative", reflect.TypeOf([]uint64{}), "enum=-1", "integer", []any{}, 1},
+		{"unsigned overflow", reflect.TypeOf([]uint8{}), "enum=256", "integer", []any{}, 1},
+		{"uint64 overflow", reflect.TypeOf([]uint64{}), "enum=18446744073709551616", "integer", []any{}, 1},
+		{"unsigned scalar", reflect.TypeOf(uint64(0)), "enum=18446744073709551615", "integer", []any{uint64(18446744073709551615)}, 0},
 		{"numbers", reflect.TypeOf([]float64{}), "enum=1.5,enum=2.5", "number", []any{1.5, 2.5}, 1},
 		{"booleans", reflect.TypeOf([]bool{}), "enum=true,enum=false", "boolean", []any{true, false}, 1},
 		{"named strings", reflect.TypeOf([]status{}), "enum=foo,enum=bar", "string", []any{"foo", "bar"}, 1},

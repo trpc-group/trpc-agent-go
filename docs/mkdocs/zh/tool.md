@@ -213,7 +213,7 @@ Function Tool 的入参 `req` 会自动生成对应的 JSON Schema（用于模�
 
 - **字段名**：使用 `json:"..."` 作为 schema 的字段名。
 - **字段描述（推荐）**：使用 `jsonschema:"description=..."` 写入 schema 的 `properties.<field>.description`。
-- **枚举约束**：在标量字段或 `Values []string` 这样的切片/数组字段上使用 `jsonschema:"enum=foo,enum=bar,enum=baz"`。切片和数组的枚举约束会写入 `items`（嵌套数组为最内层元素），而不是约束整个数组。支持指针字段和指针元素，数值和布尔值会保留对应的 JSON 类型。
+- **枚举约束**：在标量字段或 `Values []string` 这样的切片/数组字段上使用 `jsonschema:"enum=foo,enum=bar,enum=baz"`。切片和数组的枚举约束会写入 `items`（嵌套数组为最内层元素），而不是约束整个数组。支持指针字段和指针元素，数值和布尔值会保留对应的 JSON 类型。 无符号整数枚举支持对应 Go 类型的完整取值范围；负数和越界值会在标签解析时被拒绝。
 - **字符串正则约束**：使用 `jsonschema:"pattern=^[a-z0-9_-]+$"` 写入 schema 的 `properties.<field>.pattern`。
 - **手写 schema**：如果直接构造 `tool.Schema`，可设置 `Pattern: "^[a-z0-9_-]+$"` 输出 JSON Schema 的 `pattern` 关键字。
 - **注意**：`jsonschema` tag 内部使用英文逗号 `,` 作为分隔符，因此 **description 内容中不能包含 `,`**，否则会被误解析成多个 tag。

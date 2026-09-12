@@ -256,11 +256,16 @@ func appendEnumValue(fieldType reflect.Type, value string, schema *tool.Schema) 
 	switch fieldType.Kind() {
 	case reflect.String:
 		schema.Enum = append(schema.Enum, value)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		v, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			return fmt.Errorf("parse enum value %v to int64 failed: %w", value, err)
+		}
+		schema.Enum = append(schema.Enum, v)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		v, err := strconv.ParseUint(value, 10, fieldType.Bits())
+		if err != nil {
+			return fmt.Errorf("parse enum value %v to %v failed: %w", value, fieldType, err)
 		}
 		schema.Enum = append(schema.Enum, v)
 	case reflect.Float32, reflect.Float64:
