@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/telemetry/identity"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
 
@@ -46,7 +47,11 @@ func NewDynamicFloat64Histogram(
 		return nil, fmt.Errorf("meter provider is nil")
 	}
 
-	meter := mp.Meter(meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, metricName)))
+	meter := mp.Meter(
+		meterName,
+		metric.WithInstrumentationVersion(identity.InstrumentationVersion()),
+		metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, metricName)),
+	)
 
 	h, err := meter.Float64Histogram(metricName, options...)
 	if err != nil {
@@ -81,7 +86,11 @@ func (d *DynamicFloat64Histogram) SetBuckets(boundaries []float64) error {
 		return fmt.Errorf("meter provider is nil")
 	}
 	// Create a new Meter each time buckets change (required for some SDK/provider implementations).
-	meter := d.mp.Meter(d.meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, d.metricName)))
+	meter := d.mp.Meter(
+		d.meterName,
+		metric.WithInstrumentationVersion(identity.InstrumentationVersion()),
+		metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, d.metricName)),
+	)
 
 	opts := make([]metric.Float64HistogramOption, 0, len(d.options)+1)
 	opts = append(opts, d.options...)
@@ -122,7 +131,11 @@ func NewDynamicInt64Histogram(
 		return nil, fmt.Errorf("meter provider is nil")
 	}
 
-	meter := mp.Meter(meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, metricName)))
+	meter := mp.Meter(
+		meterName,
+		metric.WithInstrumentationVersion(identity.InstrumentationVersion()),
+		metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, metricName)),
+	)
 
 	h, err := meter.Int64Histogram(metricName, options...)
 	if err != nil {
@@ -157,7 +170,11 @@ func (d *DynamicInt64Histogram) SetBuckets(boundaries []float64) error {
 		return fmt.Errorf("meter provider is nil")
 	}
 	// Create a new Meter each time buckets change (required for some SDK/provider implementations).
-	meter := d.mp.Meter(d.meterName, metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, d.metricName)))
+	meter := d.mp.Meter(
+		d.meterName,
+		metric.WithInstrumentationVersion(identity.InstrumentationVersion()),
+		metric.WithInstrumentationAttributes(attribute.String(metrics.KeyMetricName, d.metricName)),
+	)
 
 	opts := make([]metric.Int64HistogramOption, 0, len(d.options)+1)
 	opts = append(opts, d.options...)

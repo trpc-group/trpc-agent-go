@@ -25,6 +25,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/telemetry/identity"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
@@ -33,7 +34,10 @@ import (
 func InitMeterProvider(mp metric.MeterProvider) error {
 	itelemetry.MeterProvider = mp
 
-	itelemetry.ChatMeter = mp.Meter(metrics.MeterNameChat)
+	itelemetry.ChatMeter = mp.Meter(
+		metrics.MeterNameChat,
+		metric.WithInstrumentationVersion(identity.InstrumentationVersion()),
+	)
 	var err error
 	if itelemetry.ChatMetricTRPCAgentGoClientRequestCnt, err = itelemetry.ChatMeter.Int64Counter(
 		metrics.MetricTRPCAgentGoClientRequestCnt,
@@ -97,7 +101,10 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 		return fmt.Errorf("failed to create chat metric TRPCAgentGoClientOutputTokenPerTime: %w", err)
 	}
 
-	itelemetry.ExecuteToolMeter = mp.Meter(metrics.MeterNameExecuteTool)
+	itelemetry.ExecuteToolMeter = mp.Meter(
+		metrics.MeterNameExecuteTool,
+		metric.WithInstrumentationVersion(identity.InstrumentationVersion()),
+	)
 	if itelemetry.ExecuteToolMetricTRPCAgentGoClientRequestCnt, err = itelemetry.ExecuteToolMeter.Int64Counter(
 		metrics.MetricTRPCAgentGoClientRequestCnt,
 		metric.WithDescription("Total number of client requests"),
@@ -241,7 +248,10 @@ func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 		return fmt.Errorf("invoke agent meter provider is nil")
 	}
 
-	itelemetry.InvokeAgentMeter = mp.Meter(metrics.MeterNameInvokeAgent)
+	itelemetry.InvokeAgentMeter = mp.Meter(
+		metrics.MeterNameInvokeAgent,
+		metric.WithInstrumentationVersion(identity.InstrumentationVersion()),
+	)
 	meterName := metrics.MeterNameInvokeAgent
 	var err error
 	if itelemetry.InvokeAgentMetricGenAIRequestCnt, err = itelemetry.InvokeAgentMeter.Int64Counter(
@@ -287,7 +297,10 @@ func initWorkflowMetrics(mp metric.MeterProvider) error {
 		return fmt.Errorf("workflow meter provider is nil")
 	}
 
-	itelemetry.WorkflowMeter = mp.Meter(metrics.MeterNameWorkflow)
+	itelemetry.WorkflowMeter = mp.Meter(
+		metrics.MeterNameWorkflow,
+		metric.WithInstrumentationVersion(identity.InstrumentationVersion()),
+	)
 	meterName := metrics.MeterNameWorkflow
 	var err error
 	if itelemetry.WorkflowMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
@@ -314,15 +327,17 @@ func initWorkflowMetrics(mp metric.MeterProvider) error {
 
 // NewMeterProvider creates a new meter provider with optional configuration.
 // The environment variables described below can be used for Endpoint configuration.
+//
+// The service.name resource attribute uses the OpenTelemetry SDK default unless
+// explicitly configured. Other service resource attributes are omitted by
+// default. Framework meters use the trpc-agent-go version or revision found in
+// Go build information as their instrumentation scope version.
 // OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT (default: "https://localhost:4317")
 // https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
 func NewMeterProvider(ctx context.Context, opts ...Option) (*sdkmetric.MeterProvider, error) {
 	// Set default options
 	options := &options{
-		serviceName:      itelemetry.ServiceName,
-		serviceVersion:   itelemetry.ServiceVersion,
-		serviceNamespace: itelemetry.ServiceNamespace,
-		protocol:         itelemetry.ProtocolGRPC, // Default to gRPC
+		protocol: itelemetry.ProtocolGRPC, // Default to gRPC
 	}
 	for _, opt := range opts {
 		opt(options)
@@ -439,21 +454,24 @@ func WithProtocol(protocol string) Option {
 	}
 }
 
-// WithServiceName overrides the service.name resource attribute.
+// WithServiceName sets the service.name resource attribute. OTEL_SERVICE_NAME
+// and service.name in OTEL_RESOURCE_ATTRIBUTES take precedence.
 func WithServiceName(serviceName string) Option {
 	return func(opts *options) {
 		opts.serviceName = serviceName
 	}
 }
 
-// WithServiceNamespace overrides the service.namespace resource attribute.
+// WithServiceNamespace sets the service.namespace resource attribute.
+// service.namespace in OTEL_RESOURCE_ATTRIBUTES takes precedence.
 func WithServiceNamespace(serviceNamespace string) Option {
 	return func(opts *options) {
 		opts.serviceNamespace = serviceNamespace
 	}
 }
 
-// WithServiceVersion overrides the service.version resource attribute.
+// WithServiceVersion sets the service.version resource attribute.
+// service.version in OTEL_RESOURCE_ATTRIBUTES takes precedence.
 func WithServiceVersion(serviceVersion string) Option {
 	return func(opts *options) {
 		opts.serviceVersion = serviceVersion
@@ -475,21 +493,35 @@ func WithResourceAttributes(attrs ...attribute.KeyValue) Option {
 
 func buildResource(ctx context.Context, options *options) (*resource.Resource, error) {
 	// Build resource with options values
-	resourceOpts := []resource.Option{
-		resource.WithAttributes(
-			semconv.ServiceNamespace(options.serviceNamespace),
-			semconv.ServiceName(options.serviceName),
-			semconv.ServiceVersion(options.serviceVersion),
-		),
+	var resourceAttrs []attribute.KeyValue
+	if options.serviceNamespace != "" {
+		resourceAttrs = append(resourceAttrs, semconv.ServiceNamespace(options.serviceNamespace))
+	}
+	if options.serviceName != "" {
+		resourceAttrs = append(resourceAttrs, semconv.ServiceName(options.serviceName))
+	}
+	if options.serviceVersion != "" {
+		resourceAttrs = append(resourceAttrs, semconv.ServiceVersion(options.serviceVersion))
+	}
+
+	var resourceOpts []resource.Option
+	if len(resourceAttrs) > 0 {
+		resourceOpts = append(resourceOpts, resource.WithAttributes(resourceAttrs...))
+	}
+	resourceOpts = append(resourceOpts,
 		resource.WithFromEnv(),
 		resource.WithHost(),         // Adds host.name
 		resource.WithTelemetrySDK(), // Adds telemetry.sdk.{name,language,version}
-	}
+	)
 
 	// Append custom resource attributes
 	if options.resourceAttributes != nil && len(*options.resourceAttributes) > 0 {
 		resourceOpts = append(resourceOpts, resource.WithAttributes(*options.resourceAttributes...))
 	}
 
-	return resource.New(ctx, resourceOpts...)
+	configured, err := resource.New(ctx, resourceOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return resource.Merge(resource.Default(), configured)
 }
