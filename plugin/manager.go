@@ -67,6 +67,19 @@ type Registry struct {
 	mgr  *Manager
 }
 
+// BeforeToolExecution registers a callback at the final response execution
+// boundary. It runs after custom response replacement and enabled tool-call
+// normalizers, but before the response is emitted or any tool is executed.
+func (r *Registry) BeforeToolExecution(cb agent.BeforeToolExecutionCallback) {
+	if r == nil || r.mgr == nil || cb == nil {
+		return
+	}
+	r.mgr.beforeToolExecutionHooks = append(
+		r.mgr.beforeToolExecutionHooks,
+		namedBeforeToolExecutionHook{name: r.name, hook: cb},
+	)
+}
+
 // BeforeAgent registers a before-agent callback.
 func (r *Registry) BeforeAgent(cb agent.BeforeAgentCallbackStructured) {
 	if r == nil || r.mgr == nil || cb == nil {
@@ -213,13 +226,19 @@ func (r *Registry) AfterRun(hook AfterRunHook) {
 //
 // Manager implements agent.PluginManager.
 type Manager struct {
-	plugins                []Plugin
-	agentCallbacks         *agent.Callbacks
-	modelCallbacks         *model.Callbacks
-	toolCallbacks          *tool.Callbacks
-	eventHooks             []namedEventHook
-	afterRunHooks          []namedAfterRunHook
-	afterToolMessagesHooks []namedAfterToolMessagesHook
+	plugins                  []Plugin
+	agentCallbacks           *agent.Callbacks
+	modelCallbacks           *model.Callbacks
+	toolCallbacks            *tool.Callbacks
+	beforeToolExecutionHooks []namedBeforeToolExecutionHook
+	eventHooks               []namedEventHook
+	afterRunHooks            []namedAfterRunHook
+	afterToolMessagesHooks   []namedAfterToolMessagesHook
+}
+
+type namedBeforeToolExecutionHook struct {
+	name string
+	hook agent.BeforeToolExecutionCallback
 }
 
 type namedEventHook struct {
@@ -316,6 +335,23 @@ func (m *Manager) ToolCallbacks() *tool.Callbacks {
 		return nil
 	}
 	return m.toolCallbacks
+}
+
+// RunBeforeToolExecution runs callbacks at the final response execution
+// boundary in plugin order.
+func (m *Manager) RunBeforeToolExecution(
+	ctx context.Context,
+	args *agent.BeforeToolExecutionArgs,
+) error {
+	if m == nil || args == nil {
+		return nil
+	}
+	for _, h := range m.beforeToolExecutionHooks {
+		if err := h.hook(ctx, args); err != nil {
+			return fmt.Errorf("plugin %q: %w", h.name, err)
+		}
+	}
+	return nil
 }
 
 // OnEvent implements agent.PluginManager.

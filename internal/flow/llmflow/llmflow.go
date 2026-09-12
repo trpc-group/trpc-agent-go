@@ -1001,6 +1001,11 @@ func (p *streamingResponseProcessor) process(
 		}
 		return true
 	}
+	if err := p.runBeforeToolExecutionCallbacks(response); err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
 	llmResponseEvent := p.emitLLMResponse(
 		eventInvocation,
 		response,
@@ -1033,6 +1038,28 @@ func (p *streamingResponseProcessor) process(
 		responseSpan.SetAttributes(latencyResponseAttrs(response)...)
 	}
 	return true
+}
+
+func (p *streamingResponseProcessor) runBeforeToolExecutionCallbacks(
+	response *model.Response,
+) error {
+	if p == nil || p.currentInvocation == nil ||
+		p.currentInvocation.Plugins == nil {
+		return nil
+	}
+	runner, ok := p.currentInvocation.Plugins.(interface {
+		RunBeforeToolExecution(
+			context.Context,
+			*agent.BeforeToolExecutionArgs,
+		) error
+	})
+	if !ok {
+		return nil
+	}
+	return runner.RunBeforeToolExecution(p.ctx, &agent.BeforeToolExecutionArgs{
+		Request:  p.llmRequest,
+		Response: response,
+	})
 }
 
 func validateCompletedToolCallNames(response *model.Response) error {

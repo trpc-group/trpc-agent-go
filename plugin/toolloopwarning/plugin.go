@@ -72,7 +72,7 @@ func (p *toolLoopWarningPlugin) Register(r *plugin.Registry) {
 	r.BeforeAgent(p.beforeAgent)
 	r.BeforeModel(p.beforeModel)
 	if p.stopAfterWarning {
-		r.AfterModel(p.afterModel)
+		r.BeforeToolExecution(p.beforeToolExecution)
 	}
 	r.AfterAgent(p.afterAgent)
 }
@@ -140,29 +140,28 @@ func (p *toolLoopWarningPlugin) beforeModel(
 	return nil, nil
 }
 
-func (p *toolLoopWarningPlugin) afterModel(
+func (p *toolLoopWarningPlugin) beforeToolExecution(
 	ctx context.Context,
-	args *model.AfterModelArgs,
-) (*model.AfterModelResult, error) {
+	args *agent.BeforeToolExecutionArgs,
+) error {
 	if p == nil || args == nil || args.Response == nil || args.Response.IsPartial {
-		return nil, nil
+		return nil
 	}
 	invocation, ok := agent.InvocationFromContext(ctx)
 	if !ok || invocation == nil {
-		return nil, nil
+		return nil
 	}
 	state, ok := agent.GetStateValue[*detectorState](invocation, stateKey)
 	if !ok || state == nil {
-		return nil, nil
+		return nil
 	}
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	armedFingerprint := state.armedFingerprint
 	state.armedFingerprint = ""
-	if armedFingerprint == "" || args.Error != nil ||
-		len(args.Response.Choices) == 0 {
-		return nil, nil
+	if armedFingerprint == "" || len(args.Response.Choices) == 0 {
+		return nil
 	}
 
 	toolCalls := args.Response.Choices[0].Message.ToolCalls
@@ -171,9 +170,9 @@ func (p *toolLoopWarningPlugin) afterModel(
 	}
 	actualFingerprint, ok := fingerprintToolCalls(toolCalls)
 	if !ok || actualFingerprint != armedFingerprint {
-		return nil, nil
+		return nil
 	}
-	return nil, agent.NewStopError(fmt.Sprintf(
+	return agent.NewStopError(fmt.Sprintf(
 		"tool loop guard stopped a repeated tool-call bundle before execution (fingerprint: %s)",
 		actualFingerprint,
 	))

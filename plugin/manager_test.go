@@ -271,6 +271,43 @@ func TestManager_ModelCallbacks_EarlyExit(t *testing.T) {
 	require.Equal(t, []string{"p1"}, calls)
 }
 
+func TestManager_BeforeToolExecutionRunsInPluginOrder(t *testing.T) {
+	var calls []string
+	m := plugin.MustNewManager(
+		&testPlugin{
+			name: "p1",
+			reg: func(r *plugin.Registry) {
+				r.BeforeToolExecution(func(
+					_ context.Context,
+					args *agent.BeforeToolExecutionArgs,
+				) error {
+					calls = append(calls, "p1")
+					return nil
+				})
+			},
+		},
+		&testPlugin{
+			name: "p2",
+			reg: func(r *plugin.Registry) {
+				r.BeforeToolExecution(func(
+					_ context.Context,
+					args *agent.BeforeToolExecutionArgs,
+				) error {
+					calls = append(calls, "p2")
+					return nil
+				})
+			},
+		},
+	)
+
+	err := m.RunBeforeToolExecution(
+		context.Background(),
+		&agent.BeforeToolExecutionArgs{Response: &model.Response{Done: true}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"p1", "p2"}, calls)
+}
+
 func TestManager_AfterToolMessagesCanonicalizesReplacements(t *testing.T) {
 	original := []model.Message{
 		model.NewToolMessage("call-1", "search", "raw 1"),

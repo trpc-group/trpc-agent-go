@@ -35,7 +35,9 @@
 // By default the plugin is warning-only: it makes no additional model or tool
 // calls and does not stop or retry the invocation. WithStopAfterWarning arms
 // the current invocation after the warning is appended. If the next complete
-// model response selects the same ordered tool bundle, the plugin returns an
-// agent.StopError before any of those tools execute. The stop diagnostic
-// contains only the bounded action fingerprint, not tool arguments or results.
+// model response selects the same ordered tool bundle, the plugin compares the
+// final response after custom-response replacement and enabled JSON/text tool
+// call repair, then returns an agent.StopError before any of those tools
+// execute. The stop diagnostic contains only the bounded action fingerprint,
+// not tool arguments or results.
 package toolloopwarning

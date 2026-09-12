@@ -11,7 +11,6 @@ package toolloopwarning
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -156,63 +155,63 @@ func TestPluginStopsBeforeRepeatedToolBundle(t *testing.T) {
 			),
 		}},
 	}
-	_, err := manager.ModelCallbacks().RunAfterModel(
+	err := manager.RunBeforeToolExecution(
 		ctx,
-		&model.AfterModelArgs{Response: response},
+		&agent.BeforeToolExecutionArgs{Response: response},
 	)
 	require.Error(t, err)
 	stopErr, ok := agent.AsStopError(err)
 	require.True(t, ok)
 	require.Contains(t, stopErr.Error(), "fingerprint")
 
-	_, err = manager.ModelCallbacks().RunAfterModel(
+	err = manager.RunBeforeToolExecution(
 		ctx,
-		&model.AfterModelArgs{Response: response},
+		&agent.BeforeToolExecutionArgs{Response: response},
 	)
 	require.NoError(t, err)
 }
 
-func TestPluginAfterModelFailOpenAndUsesDelta(t *testing.T) {
+func TestPluginBeforeToolExecutionFailOpenAndUsesDelta(t *testing.T) {
 	plugin := &toolLoopWarningPlugin{stopAfterWarning: true}
 	var nilPlugin *toolLoopWarningPlugin
-	_, err := nilPlugin.afterModel(context.Background(), nil)
+	err := nilPlugin.beforeToolExecution(context.Background(), nil)
 	require.NoError(t, err)
-	_, err = plugin.afterModel(context.Background(), nil)
+	err = plugin.beforeToolExecution(context.Background(), nil)
 	require.NoError(t, err)
-	_, err = plugin.afterModel(
+	err = plugin.beforeToolExecution(
 		context.Background(),
-		&model.AfterModelArgs{Response: &model.Response{IsPartial: true}},
+		&agent.BeforeToolExecutionArgs{Response: &model.Response{IsPartial: true}},
 	)
 	require.NoError(t, err)
 
 	invocation := agent.NewInvocation()
 	ctx := agent.NewInvocationContext(context.Background(), invocation)
 	response := &model.Response{Done: true}
-	_, err = plugin.afterModel(
+	err = plugin.beforeToolExecution(
 		ctx,
-		&model.AfterModelArgs{Response: response},
+		&agent.BeforeToolExecutionArgs{Response: response},
 	)
 	require.NoError(t, err)
 
 	state := &detectorState{}
 	invocation.SetState(stateKey, state)
-	_, err = plugin.afterModel(
+	err = plugin.beforeToolExecution(
 		ctx,
-		&model.AfterModelArgs{Response: response},
+		&agent.BeforeToolExecutionArgs{Response: response},
 	)
 	require.NoError(t, err)
 
 	state.armedFingerprint = "armed"
-	_, err = plugin.afterModel(
+	err = plugin.beforeToolExecution(
 		ctx,
-		&model.AfterModelArgs{Response: response, Error: errors.New("model failed")},
+		&agent.BeforeToolExecutionArgs{Response: response},
 	)
 	require.NoError(t, err)
 
 	state.armedFingerprint = "armed"
-	_, err = plugin.afterModel(
+	err = plugin.beforeToolExecution(
 		ctx,
-		&model.AfterModelArgs{Response: response},
+		&agent.BeforeToolExecutionArgs{Response: response},
 	)
 	require.NoError(t, err)
 
@@ -221,7 +220,10 @@ func TestPluginAfterModelFailOpenAndUsesDelta(t *testing.T) {
 		Done:    true,
 		Choices: []model.Choice{{Message: assistantToolMessage(newToolCall("id", "", `{}`))}},
 	}
-	_, err = plugin.afterModel(ctx, &model.AfterModelArgs{Response: invalid})
+	err = plugin.beforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: invalid},
+	)
 	require.NoError(t, err)
 
 	state.armedFingerprint = "armed"
@@ -229,7 +231,10 @@ func TestPluginAfterModelFailOpenAndUsesDelta(t *testing.T) {
 		Done:    true,
 		Choices: []model.Choice{{Message: assistantToolMessage(newToolCall("id", "other", `{}`))}},
 	}
-	_, err = plugin.afterModel(ctx, &model.AfterModelArgs{Response: different})
+	err = plugin.beforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: different},
+	)
 	require.NoError(t, err)
 
 	call := newToolCall("id", "search", ` { "query": "x" } `)
@@ -238,7 +243,10 @@ func TestPluginAfterModelFailOpenAndUsesDelta(t *testing.T) {
 		Done:    true,
 		Choices: []model.Choice{{Delta: assistantToolMessage(call)}},
 	}
-	_, err = plugin.afterModel(ctx, &model.AfterModelArgs{Response: delta})
+	err = plugin.beforeToolExecution(
+		ctx,
+		&agent.BeforeToolExecutionArgs{Response: delta},
+	)
 	stopErr, ok := agent.AsStopError(err)
 	require.True(t, ok)
 	require.Contains(t, stopErr.Error(), "fingerprint")
@@ -372,6 +380,21 @@ func TestPluginRunnerIntegrationStopsBeforeThirdToolBundle(t *testing.T) {
 	assertSessionHasNoWarning(t, run.sessionService, defaultWarning)
 }
 
+func TestPluginRunnerIntegrationStopsAfterJSONRepair(t *testing.T) {
+	run := runRepeatedRound(t, repeatedRunConfig{
+		warningEnabled:      true,
+		stopAfterWarning:    true,
+		jsonRepairEnabled:   true,
+		malformedThirdRound: true,
+	})
+	requests := run.model.Requests()
+	require.Len(t, requests, 3)
+	require.True(t, hasWarning(requests[2], defaultWarning))
+	require.Equal(t, int32(2), run.slowCalls.Load())
+	require.Equal(t, int32(2), run.fastCalls.Load())
+	assertSessionHasNoWarning(t, run.sessionService, defaultWarning)
+}
+
 func newCallbackHarness(
 	t *testing.T,
 	p pluginbase.Plugin,
@@ -460,9 +483,10 @@ func countWarningMessages(messages []model.Message, warning string) int {
 }
 
 type repeatedRoundModel struct {
-	mu               sync.Mutex
-	requests         [][]model.Message
-	repeatThirdRound bool
+	mu                  sync.Mutex
+	requests            [][]model.Message
+	repeatThirdRound    bool
+	malformedThirdRound bool
 }
 
 func (m *repeatedRoundModel) Info() model.Info {
@@ -490,6 +514,9 @@ func (m *repeatedRoundModel) GenerateContent(
 		arguments := `{"value":"same"}`
 		if callIndex == 1 {
 			arguments = ` { "value": "same" } `
+		}
+		if callIndex == 2 && m.malformedThirdRound {
+			arguments = `{"value":"same",}`
 		}
 		response = &model.Response{
 			ID:   fmt.Sprintf("tool-response-%d", suffix),
@@ -525,6 +552,8 @@ type parallelInput struct {
 type repeatedRunConfig struct {
 	warningEnabled        bool
 	stopAfterWarning      bool
+	jsonRepairEnabled     bool
+	malformedThirdRound   bool
 	executionTraceEnabled bool
 	perCallResults        bool
 	varyRawResults        bool
@@ -580,7 +609,10 @@ func runRepeatedRound(t *testing.T, config repeatedRunConfig) repeatedRun {
 		function.WithName("fast"),
 		function.WithDescription("Returns immediately."),
 	)
-	modelStub := &repeatedRoundModel{repeatThirdRound: config.stopAfterWarning}
+	modelStub := &repeatedRoundModel{
+		repeatThirdRound:    config.stopAfterWarning,
+		malformedThirdRound: config.malformedThirdRound,
+	}
 	agentInstance := llmagent.New(
 		"assistant",
 		llmagent.WithModel(modelStub),
@@ -625,6 +657,12 @@ func runRepeatedRound(t *testing.T, config repeatedRunConfig) repeatedRun {
 		runOptions = append(
 			runOptions,
 			agent.WithExecutionTraceEnabled(true),
+		)
+	}
+	if config.jsonRepairEnabled {
+		runOptions = append(
+			runOptions,
+			agent.WithToolCallArgumentsJSONRepairEnabled(true),
 		)
 	}
 	if config.transformResults {
