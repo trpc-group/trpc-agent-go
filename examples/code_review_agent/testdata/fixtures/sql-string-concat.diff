@@ -1,0 +1,10 @@
+diff --git a/repository.go b/repository.go
+--- a/repository.go
++++ b/repository.go
+@@ -1,2 +1,6 @@
+ package sample
+ 
++func FindUser(name string) string {
++	query := "SELECT * FROM users WHERE name = '" + name + "'"
++	return query
++}

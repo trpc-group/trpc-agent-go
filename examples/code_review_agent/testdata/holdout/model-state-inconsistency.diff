@@ -1,0 +1,10 @@
+diff --git a/subscription.go b/subscription.go
+--- a/subscription.go
++++ b/subscription.go
+@@ -8,6 +8,9 @@ func activate(sub *Subscription) {
+ 	sub.State = StateActive
+ 	sub.ActivatedAt = clock.Now()
+ 	sub.Audit("activated")
++	// CR_AGENT_FAKE_MODEL_HIGH CR_AGENT_FAKE_MODEL_STATE_INCONSISTENCY: saved state diverges from in-memory state.
++	sub.StoreDraft(sub.ActivatedAt)
+ }
