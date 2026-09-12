@@ -235,14 +235,27 @@ func NewToolSet(opts ...Option) (*ToolSet, error) {
 	httpClient := resolveHTTPClient(cfg)
 	// Guard against the API key leaking through redirects: drop X-API-Key
 	// whenever a redirect would carry the request to a different origin.
+	// A caller-supplied CheckRedirect is preserved: the wrapper invokes the
+	// caller hook (if any) so custom allowlists/denial rules and limits stay
+	// in effect, and only applies the default 10-redirect limit itself when
+	// no caller hook was provided.
 	baseOrigin := base
+	callerRedirect := httpClient.CheckRedirect
 	clonedClient := *httpClient
 	clonedClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return fmt.Errorf("stopped after 10 redirects")
-		}
+		// Credential protection is owned by the ToolSet and always applies,
+		// regardless of the caller's redirect policy.
 		if !sameOrigin(baseOrigin, req.URL) {
 			req.Header.Del("X-API-Key")
+		}
+		if callerRedirect != nil {
+			// The caller hook decides whether (and how many times) the
+			// redirect is followed. http.ErrUseLastResponse stops here and
+			// returns the redirect response to the caller.
+			return callerRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
 		}
 		return nil
 	}

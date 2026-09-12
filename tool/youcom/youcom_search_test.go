@@ -578,6 +578,120 @@ func TestSearchToolStripsAPIKeyOnCrossOriginRedirect(t *testing.T) {
 	}
 }
 
+func TestSearchToolPreservesCallerRedirectPolicy(t *testing.T) {
+	var mu sync.Mutex
+	hookCalled := false
+	var gotKeys []string
+	final := httptest.NewTLSServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			gotKeys = append(gotKeys, r.Header.Get("X-API-Key"))
+			mu.Unlock()
+		},
+	))
+	defer final.Close()
+
+	origin := httptest.NewTLSServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, final.URL+"/v1/search", http.StatusFound)
+		},
+	))
+	defer origin.Close()
+
+	base := fakeTLSClient()
+	base.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		mu.Lock()
+		hookCalled = true
+		mu.Unlock()
+		// Caller policy: never follow redirects.
+		return http.ErrUseLastResponse
+	}
+
+	toolSet, err := NewToolSet(
+		WithAPIKey("secret-key"),
+		WithBaseURL(origin.URL),
+		WithHTTPClient(base),
+	)
+	if err != nil {
+		t.Fatalf("failed to create tool set: %v", err)
+	}
+
+	searchTool, ok := toolSet.tools[0].(interface {
+		Call(context.Context, []byte) (any, error)
+	})
+	if !ok {
+		t.Fatalf("tool does not implement Call")
+	}
+	reqJSON, err := json.Marshal(searchRequest{Query: "redirect test"})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	// The redirect response (302) is returned as an error by the tool since
+	// it is a non-2xx status; the caller hook must have prevented the
+	// redirect from being followed.
+	_, callErr := searchTool.Call(context.Background(), reqJSON)
+	if callErr == nil {
+		t.Fatal("expected an error from the 302 response returned by ErrUseLastResponse")
+	}
+	if !strings.Contains(callErr.Error(), "302") {
+		t.Errorf("expected 302 status error from unfollowed redirect, got %v", callErr)
+	}
+	mu.Lock()
+	called, keys := hookCalled, append([]string(nil), gotKeys...)
+	mu.Unlock()
+	if !called {
+		t.Error("caller CheckRedirect hook was not invoked")
+	}
+	if len(keys) != 0 {
+		t.Errorf("expected 0 requests at final origin (redirect must not be followed), got %d", len(keys))
+	}
+}
+
+func TestSearchToolDefaultRedirectLimit(t *testing.T) {
+	redirects := 0
+	final := httptest.NewTLSServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		},
+	))
+	defer final.Close()
+
+	// origin responds with an endless same-origin redirect loop.
+	origin := httptest.NewTLSServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			redirects++
+			http.Redirect(w, r, r.URL.String(), http.StatusFound)
+		},
+	))
+	defer origin.Close()
+
+	toolSet, err := NewToolSet(
+		WithAPIKey("secret-key"),
+		WithBaseURL(origin.URL),
+		WithHTTPClient(fakeTLSClient()),
+	)
+	if err != nil {
+		t.Fatalf("failed to create tool set: %v", err)
+	}
+
+	searchTool, ok := toolSet.tools[0].(interface {
+		Call(context.Context, []byte) (any, error)
+	})
+	if !ok {
+		t.Fatalf("tool does not implement Call")
+	}
+	reqJSON, err := json.Marshal(searchRequest{Query: "redirect loop"})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if _, callErr := searchTool.Call(context.Background(), reqJSON); callErr == nil {
+		t.Fatal("expected an error from the redirect loop")
+	}
+	if redirects > 10 {
+		t.Errorf("expected the default 10-redirect limit to remain effective, followed %d redirects", redirects)
+	}
+}
+
 func TestTrimSnippetsRuneBoundary(t *testing.T) {
 	// 501 bytes whose 500th byte falls inside a multi-byte rune.
 	cjk := strings.Repeat("界", 200) // 600 bytes of 3-byte runes
