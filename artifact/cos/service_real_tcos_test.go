@@ -11,9 +11,11 @@ package cos_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -162,4 +164,94 @@ func TestArtifact_UserScope(t *testing.T) {
 	a, err = s.LoadArtifact(context.Background(), sessionInfo, userScopeKey, nil)
 	require.NoError(t, err)
 	require.Nil(t, a)
+}
+
+func TestArtifact_Head_WithIncludeURL(t *testing.T) {
+	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_SECRETID, COS_SECRETKEY and COS_BUCKET_URL")
+
+	s, err := cos.NewService("cos-head", os.Getenv("COS_BUCKET_URL"))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user-head",
+		SessionID: "session-head",
+	}
+	key := "head_url_test.txt"
+
+	t.Cleanup(func() {
+		if err := s.DeleteArtifact(ctx, sessionInfo, key); err != nil {
+			t.Logf("Cleanup: DeleteArtifact: %v", err)
+		}
+	})
+
+	ver, err := s.SaveArtifact(ctx, sessionInfo, key, &artifact.Artifact{
+		Data:     []byte("hello"),
+		MimeType: "text/plain",
+	})
+	require.NoError(t, err)
+
+	// Default: URL is not included.
+	h, err := s.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    key,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, h)
+	require.Empty(t, h.URL)
+
+	// WithIncludeURL(true): URL should be populated (best effort).
+	h, err = s.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    key,
+	}, artifact.WithIncludeURL(true))
+	require.NoError(t, err)
+	require.NotNil(t, h)
+	require.NotEmpty(t, h.URL)
+	require.Contains(t, h.URL, "/artifact/")
+	require.Contains(t, h.URL, "/"+key+"/")
+	require.Contains(t, h.URL, "/"+strconv.Itoa(ver))
+}
+
+func TestArtifact_Head_WithPresignedURL(t *testing.T) {
+	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_SECRETID, COS_SECRETKEY and COS_BUCKET_URL")
+
+	s, err := cos.NewService("cos-head-presign", os.Getenv("COS_BUCKET_URL"))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user-presign",
+		SessionID: "session-presign",
+	}
+	key := "head_presign_test.txt"
+
+	t.Cleanup(func() {
+		if err := s.DeleteArtifact(ctx, sessionInfo, key); err != nil {
+			t.Logf("Cleanup: DeleteArtifact: %v", err)
+		}
+	})
+
+	ver, err := s.SaveArtifact(ctx, sessionInfo, key, &artifact.Artifact{
+		Data:     []byte("hello"),
+		MimeType: "text/plain",
+	})
+	require.NoError(t, err)
+
+	h, err := s.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    key,
+		Version:     &ver,
+	}, artifact.WithPresignedURL(5*time.Minute))
+	require.NoError(t, err)
+	require.NotNil(t, h)
+	require.NotEmpty(t, h.URL)
+	fmt.Printf("URL: %s\n", h.URL)
+	t.Logf("URL: %s", h.URL)
+	require.Contains(t, h.URL, "q-sign-algorithm=")
+	require.Contains(t, h.URL, "/artifact/")
+	require.Contains(t, h.URL, "/"+key+"/")
+	require.Contains(t, h.URL, "/"+strconv.Itoa(ver))
 }

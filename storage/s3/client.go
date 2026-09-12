@@ -29,6 +29,7 @@ import (
 type Client interface {
 	PutObject(ctx context.Context, key string, data []byte, contentType string) error
 	GetObject(ctx context.Context, key string) ([]byte, string, error)
+	HeadObject(ctx context.Context, req *HeadObjectRequest, opts ...HeadObjectOption) (*HeadObjectResponse, error)
 	ListObjects(ctx context.Context, prefix string) ([]string, error)
 	DeleteObjects(ctx context.Context, keys []string) error
 	Close() error
@@ -39,6 +40,7 @@ type Client interface {
 type s3API interface {
 	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 	DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
 	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
@@ -142,6 +144,39 @@ func (c *client) GetObject(ctx context.Context, key string) ([]byte, string, err
 	return data, aws.ToString(resp.ContentType), nil
 }
 
+// HeadObject retrieves object metadata from S3 without downloading its content.
+func (c *client) HeadObject(
+	ctx context.Context,
+	req *HeadObjectRequest,
+	opts ...HeadObjectOption,
+) (*HeadObjectResponse, error) {
+	if req == nil {
+		return nil, errors.New("s3: head object request is nil")
+	}
+
+	o := HeadObjectOptions{}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(&o)
+	}
+	_ = o
+
+	resp, err := c.s3.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(req.Key),
+	})
+	if err != nil {
+		return nil, wrapError(err)
+	}
+
+	return &HeadObjectResponse{
+		Size:        aws.ToInt64(resp.ContentLength),
+		ContentType: aws.ToString(resp.ContentType),
+	}, nil
+}
+
 // ListObjects lists object keys with the given prefix.
 func (c *client) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	var keys []string
@@ -236,6 +271,8 @@ func wrapError(err error) error {
 		switch apiErr.ErrorCode() {
 		case "AccessDenied", "AccessDeniedException":
 			return errors.Join(ErrAccessDenied, err)
+		case "NotFound":
+			return errors.Join(ErrNotFound, err)
 		case "NoSuchKey":
 			return errors.Join(ErrNotFound, err)
 		case "NoSuchBucket":
