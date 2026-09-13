@@ -2192,6 +2192,58 @@ func TestCompareAllowedDiff(t *testing.T) {
 	}
 }
 
+func TestCompareRejectsInvalidSnapshotMetadataStrings(t *testing.T) {
+	invalidUTF8 := string([]byte{0xff})
+	tests := []struct {
+		name     string
+		caseName string
+		mutate   func(*Snapshot, *Snapshot)
+		want     string
+	}{
+		{
+			name:     "comparison case invalid UTF-8",
+			caseName: invalidUTF8,
+			mutate: func(baseline, actual *Snapshot) {
+				baseline.Case = invalidUTF8
+				actual.Case = invalidUTF8
+			},
+			want: "invalid UTF-8",
+		},
+		{
+			name:     "backend invalid UTF-8",
+			caseName: "allowed",
+			mutate:   func(baseline, _ *Snapshot) { baseline.Backend = invalidUTF8 },
+			want:     "invalid UTF-8",
+		},
+		{
+			name:     "snapshot case invalid UTF-8",
+			caseName: "allowed",
+			mutate: func(baseline, actual *Snapshot) {
+				baseline.Case = invalidUTF8
+				actual.Case = invalidUTF8
+			},
+			want: "invalid UTF-8",
+		},
+		{
+			name:     "reserved wildcard backend",
+			caseName: "allowed",
+			mutate:   func(baseline, _ *Snapshot) { baseline.Backend = "*" },
+			want:     "reserved",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := minimalSnapshot("baseline", `{}`)
+			actual := minimalSnapshot("actual", `{}`)
+			test.mutate(&baseline, &actual)
+			if _, err := Compare(test.caseName, baseline, actual, nil); err == nil ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Compare() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestCompareAllowedDiffBackendPairIsUnordered(t *testing.T) {
 	baseline := minimalSnapshot("baseline", `{"score":1}`)
 	actual := minimalSnapshot("actual", `{"score":2}`)

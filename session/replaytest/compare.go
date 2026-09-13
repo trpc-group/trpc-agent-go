@@ -51,8 +51,25 @@ func Compare(caseName string, baseline, actual Snapshot, allowed []AllowedDiff) 
 }
 
 func validateSnapshotMetadata(caseName string, baseline, actual Snapshot) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "comparison case name", value: caseName},
+		{name: "baseline backend name", value: baseline.Backend},
+		{name: "actual backend name", value: actual.Backend},
+		{name: "baseline case name", value: baseline.Case},
+		{name: "actual case name", value: actual.Case},
+	} {
+		if err := validateUTF8String(field.name, field.value); err != nil {
+			return fmt.Errorf("replaytest: %w", err)
+		}
+	}
 	if baseline.Backend == "" || actual.Backend == "" {
 		return errors.New("replaytest: comparison backend names are required")
+	}
+	if baseline.Backend == "*" || actual.Backend == "*" {
+		return errors.New("replaytest: comparison backend name \"*\" is reserved")
 	}
 	if baseline.Backend == actual.Backend {
 		return fmt.Errorf("replaytest: comparison backend %q is repeated", baseline.Backend)
