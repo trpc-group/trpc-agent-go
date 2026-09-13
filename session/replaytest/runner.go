@@ -37,6 +37,7 @@ const (
 	maxReplayEvents         = 100_000
 	maxReplayMemories       = 100_000
 	maxReplayJSONBytes      = 8 << 20
+	maxReplayJSONDepth      = 256
 	maxReplayStateValueSize = 1 << 20
 	maxReplayMemorySize     = 8 << 20
 	maxReplaySummarySize    = 8 << 20
@@ -2634,6 +2635,7 @@ func validateJSONStrings(owner string, value reflect.Value) error {
 		owner,
 		value,
 		make(map[jsonReference]struct{}),
+		0,
 	)
 }
 
@@ -2646,9 +2648,13 @@ func validateJSONStringsRecursively(
 	owner string,
 	value reflect.Value,
 	visiting map[jsonReference]struct{},
+	depth int,
 ) error {
 	if !value.IsValid() {
 		return nil
+	}
+	if depth > maxReplayJSONDepth {
+		return fmt.Errorf("%s exceeds JSON nesting depth limit %d", owner, maxReplayJSONDepth)
 	}
 	if reference, ok := jsonValueReference(value); ok {
 		if _, exists := visiting[reference]; exists {
@@ -2662,17 +2668,17 @@ func validateJSONStringsRecursively(
 		if value.IsNil() {
 			return nil
 		}
-		return validateJSONStringsRecursively(owner, value.Elem(), visiting)
+		return validateJSONStringsRecursively(owner, value.Elem(), visiting, depth+1)
 	case reflect.String:
 		return validateUTF8String(owner, value.String())
 	case reflect.Map:
-		return validateJSONMapStrings(owner, value, visiting)
+		return validateJSONMapStrings(owner, value, visiting, depth)
 	case reflect.Slice:
-		return validateJSONSliceStrings(owner, value, visiting)
+		return validateJSONSliceStrings(owner, value, visiting, depth)
 	case reflect.Array:
-		return validateJSONSequenceStrings(owner, value, visiting)
+		return validateJSONSequenceStrings(owner, value, visiting, depth)
 	case reflect.Struct:
-		return validateJSONStructStrings(owner, value, visiting)
+		return validateJSONStructStrings(owner, value, visiting, depth)
 	}
 	return nil
 }
@@ -2681,13 +2687,14 @@ func validateJSONMapStrings(
 	owner string,
 	value reflect.Value,
 	visiting map[jsonReference]struct{},
+	depth int,
 ) error {
 	iterator := value.MapRange()
 	for iterator.Next() {
-		if err := validateJSONStringsRecursively(owner+" key", iterator.Key(), visiting); err != nil {
+		if err := validateJSONStringsRecursively(owner+" key", iterator.Key(), visiting, depth+1); err != nil {
 			return err
 		}
-		if err := validateJSONStringsRecursively(owner+" value", iterator.Value(), visiting); err != nil {
+		if err := validateJSONStringsRecursively(owner+" value", iterator.Value(), visiting, depth+1); err != nil {
 			return err
 		}
 	}
@@ -2698,6 +2705,7 @@ func validateJSONSliceStrings(
 	owner string,
 	value reflect.Value,
 	visiting map[jsonReference]struct{},
+	depth int,
 ) error {
 	if value.Type() == reflect.TypeOf(json.RawMessage(nil)) {
 		return validateUTF8String(owner, string(value.Bytes()))
@@ -2705,19 +2713,21 @@ func validateJSONSliceStrings(
 	if value.Type().Elem().Kind() == reflect.Uint8 {
 		return nil
 	}
-	return validateJSONSequenceStrings(owner, value, visiting)
+	return validateJSONSequenceStrings(owner, value, visiting, depth)
 }
 
 func validateJSONSequenceStrings(
 	owner string,
 	value reflect.Value,
 	visiting map[jsonReference]struct{},
+	depth int,
 ) error {
 	for index := 0; index < value.Len(); index++ {
 		if err := validateJSONStringsRecursively(
 			fmt.Sprintf("%s item %d", owner, index),
 			value.Index(index),
 			visiting,
+			depth+1,
 		); err != nil {
 			return err
 		}
@@ -2729,6 +2739,7 @@ func validateJSONStructStrings(
 	owner string,
 	value reflect.Value,
 	visiting map[jsonReference]struct{},
+	depth int,
 ) error {
 	// A custom marshaler can read unexported fields directly. Walk the complete
 	// object graph for cycle detection in that case, while retaining the normal
@@ -2736,7 +2747,7 @@ func validateJSONStructStrings(
 	customMarshaler := implementsMarshaler(value, jsonMarshalerType) ||
 		implementsMarshaler(value, textMarshalerType)
 	if customMarshaler {
-		if err := detectJSONCycles(owner, value, visiting); err != nil {
+		if err := detectJSONCycles(owner, value, visiting, depth); err != nil {
 			return err
 		}
 	}
@@ -2749,6 +2760,7 @@ func validateJSONStructStrings(
 			owner+" field "+field.Name,
 			value.Field(index),
 			visiting,
+			depth+1,
 		); err != nil {
 			return err
 		}
@@ -2756,9 +2768,12 @@ func validateJSONStructStrings(
 	return nil
 }
 
-func detectJSONCycles(owner string, value reflect.Value, visiting map[jsonReference]struct{}) error {
+func detectJSONCycles(owner string, value reflect.Value, visiting map[jsonReference]struct{}, depth int) error {
 	if !value.IsValid() || value.Type() == timeValueType {
 		return nil
+	}
+	if depth > maxReplayJSONDepth {
+		return fmt.Errorf("%s exceeds JSON nesting depth limit %d", owner, maxReplayJSONDepth)
 	}
 	if reference, ok := jsonValueReference(value); ok {
 		if _, exists := visiting[reference]; exists {
@@ -2772,17 +2787,17 @@ func detectJSONCycles(owner string, value reflect.Value, visiting map[jsonRefere
 		if value.IsNil() {
 			return nil
 		}
-		return detectJSONCycles(owner, value.Elem(), visiting)
+		return detectJSONCycles(owner, value.Elem(), visiting, depth+1)
 	case reflect.Map:
 		if value.IsNil() {
 			return nil
 		}
 		iterator := value.MapRange()
 		for iterator.Next() {
-			if err := detectJSONCycles(owner, iterator.Key(), visiting); err != nil {
+			if err := detectJSONCycles(owner, iterator.Key(), visiting, depth+1); err != nil {
 				return err
 			}
-			if err := detectJSONCycles(owner, iterator.Value(), visiting); err != nil {
+			if err := detectJSONCycles(owner, iterator.Value(), visiting, depth+1); err != nil {
 				return err
 			}
 		}
@@ -2791,13 +2806,13 @@ func detectJSONCycles(owner string, value reflect.Value, visiting map[jsonRefere
 			return nil
 		}
 		for index := 0; index < value.Len(); index++ {
-			if err := detectJSONCycles(owner, value.Index(index), visiting); err != nil {
+			if err := detectJSONCycles(owner, value.Index(index), visiting, depth+1); err != nil {
 				return err
 			}
 		}
 	case reflect.Struct:
 		for index := 0; index < value.NumField(); index++ {
-			if err := detectJSONCycles(owner, value.Field(index), visiting); err != nil {
+			if err := detectJSONCycles(owner, value.Field(index), visiting, depth+1); err != nil {
 				return err
 			}
 		}

@@ -776,6 +776,31 @@ func TestValidateJSONValueRejectsHiddenCustomMarshalCycle(t *testing.T) {
 	}
 }
 
+func TestValidateJSONValueRejectsExcessiveNesting(t *testing.T) {
+	var value any = "leaf"
+	for index := 0; index <= maxReplayJSONDepth; index++ {
+		value = []any{value}
+	}
+	err := validateJSONValue("nested value", value)
+	if err == nil || !strings.Contains(err.Error(), "nesting depth") {
+		t.Fatalf("validateJSONValue() error = %v, want nesting depth limit", err)
+	}
+}
+
+func TestCompareRejectsExcessiveSnapshotNesting(t *testing.T) {
+	var value any = "leaf"
+	for index := 0; index <= maxReplayJSONDepth; index++ {
+		value = map[string]any{"nested": value}
+	}
+	baseline := minimalSnapshot("baseline", "1")
+	actual := minimalSnapshot("actual", "1")
+	baseline.Session["nested"] = value
+	if _, err := Compare("allowed", baseline, actual, nil); err == nil ||
+		!strings.Contains(err.Error(), "nesting depth") {
+		t.Fatalf("Compare() error = %v, want nesting depth limit", err)
+	}
+}
+
 func TestReplayRejectsNilMemorySearchResult(t *testing.T) {
 	backend := InMemoryBackend()
 	open := backend.Open
