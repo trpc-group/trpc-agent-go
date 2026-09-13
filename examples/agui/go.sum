@@ -90,7 +90,6 @@ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+
 github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
 github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
-github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
@@ -175,5 +174,7 @@ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb h1:hW6SMv4qfVqQTD5WMCVp3avQTD9PpkMbmwXugzGKsL8=
 trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb/go.mod h1:7nbGA66/9AZ2j8+juvl7IsH0FC9jEdrxgsmBLrdKnLw=
+trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.3.0.20260813112030-aed2c1f02f9c h1:q2yryDla8piHPhiZRZal3xLcOlJHxiy/35MNI2ZTjHk=
+trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.3.0.20260813112030-aed2c1f02f9c/go.mod h1:99CiMuw358i5qqoQ5pRGe8JBRRsf45oUBfTRgHnWn2Q=
 trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 h1:Vd2bewRzVD19TxGC0mCB4/oqo8Eti1tRAEaV3XGfS+M=
 trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3/go.mod h1:dmIEHlm3TG74PKiGeOKiuRI73+F3cOMO+KtYNgnc70I=
