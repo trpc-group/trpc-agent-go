@@ -666,19 +666,8 @@ func validateDiff(caseName string, index int, diff Diff, backendNames map[string
 	if diff.Case != caseName || diff.BackendA == "" || diff.BackendB == "" || diff.SessionID == "" || !strings.HasPrefix(diff.Path, "/") {
 		return false, fmt.Errorf("replaytest: case %q diff %d has an invalid locator", caseName, index)
 	}
-	for _, field := range []struct{ name, value string }{
-		{name: "diff case", value: diff.Case}, {name: "diff session id", value: diff.SessionID},
-		{name: "diff path", value: diff.Path}, {name: "diff track name", value: diff.TrackName},
-		{name: "diff memory id", value: diff.MemoryID}, {name: "diff explanation", value: diff.Explanation},
-	} {
-		if err := validateUTF8String(field.name, field.value); err != nil {
-			return false, fmt.Errorf("replaytest: case %q diff %d: %w", caseName, index, err)
-		}
-	}
-	if diff.SummaryFilterKey != nil {
-		if err := validateUTF8String("diff summary filter key", *diff.SummaryFilterKey); err != nil {
-			return false, fmt.Errorf("replaytest: case %q diff %d: %w", caseName, index, err)
-		}
+	if err := validateDiffStrings(diff); err != nil {
+		return false, fmt.Errorf("replaytest: case %q diff %d: %w", caseName, index, err)
 	}
 	for _, value := range []struct {
 		name  string
@@ -704,6 +693,21 @@ func validateDiff(caseName string, index int, diff Diff, backendNames map[string
 		return false, fmt.Errorf("replaytest: case %q diff %d has no allowed_diff explanation", caseName, index)
 	}
 	return capabilityEvidence, nil
+}
+
+func validateDiffStrings(diff Diff) error {
+	for _, field := range []struct{ name, value string }{
+		{"diff case", diff.Case}, {"diff session id", diff.SessionID}, {"diff path", diff.Path},
+		{"diff track name", diff.TrackName}, {"diff memory id", diff.MemoryID}, {"diff explanation", diff.Explanation},
+	} {
+		if err := validateUTF8String(field.name, field.value); err != nil {
+			return err
+		}
+	}
+	if diff.SummaryFilterKey != nil {
+		return validateUTF8String("diff summary filter key", *diff.SummaryFilterKey)
+	}
+	return nil
 }
 
 func validateCapabilityEvidence(caseName string, diff Diff) (bool, error) {
