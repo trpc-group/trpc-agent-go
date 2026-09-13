@@ -42,6 +42,30 @@ func TestWithContextWindow(t *testing.T) {
 	require.Zero(t, m.Info().ContextWindow)
 }
 
+func TestNewPropagatesTokenTailoringOptions(t *testing.T) {
+	counter := model.NewSimpleTokenCounter()
+	strategy := model.NewMiddleOutStrategy(counter)
+	m, err := New(
+		context.Background(),
+		"gemini-test",
+		WithGeminiClientConfig(&genai.ClientConfig{
+			APIKey:  "test-key",
+			Backend: 2,
+		}),
+		WithChannelBufferSize(17),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(123),
+		WithTokenCounter(counter),
+		WithTailoringStrategy(strategy),
+	)
+	require.NoError(t, err)
+	require.Equal(t, 17, m.channelBufferSize)
+	require.True(t, m.enableTokenTailoring)
+	require.Equal(t, 123, m.maxInputTokens)
+	require.Same(t, counter, m.tokenCounter)
+	require.Same(t, strategy, m.tailoringStrategy)
+}
+
 func TestOptions(t *testing.T) {
 	var (
 		defaultGeminiClientConfig = &genai.ClientConfig{}

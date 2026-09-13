@@ -9955,6 +9955,81 @@ func TestOptimizeForCache_DefaultDisabled_NonOpenAI(t *testing.T) {
 	)
 }
 
+func TestPrepareChatRequestObservesCacheReordering(t *testing.T) {
+	m := New(
+		"gpt-4o",
+		WithAPIKey("test-key"),
+		WithEnableTokenTailoring(false),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("hello"),
+		model.NewSystemMessage("system"),
+	}}
+	var changes []imodelrequest.TokenTailoringChange
+	ctx, observer := imodelrequest.ObserveTokenTailoring(
+		context.Background(),
+		func(change imodelrequest.TokenTailoringChange) {
+			changes = append(changes, change)
+		},
+	)
+
+	_, _, err := m.prepareChatRequest(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, observer.Snapshot(), 1)
+	require.Len(t, changes, 1)
+	require.Equal(
+		t,
+		imodelrequest.TokenTailoringProvenanceUnknown,
+		changes[0].Record.Provenance,
+	)
+	require.Equal(t, model.RoleUser, changes[0].Before[0].Role)
+	require.Equal(t, model.RoleSystem, changes[0].After[0].Role)
+}
+
+func TestPrepareChatRequestClassifiesBuiltInNormalizationAsPreserved(t *testing.T) {
+	m := New(
+		"gpt-4o",
+		WithAPIKey("test-key"),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(10_000),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("system"),
+		model.NewUserMessage("old question"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "search",
+					Arguments: []byte(`{"q":"x"}`),
+				},
+			}},
+		},
+		model.NewToolMessage("call_1", "search", "result"),
+		model.NewUserMessage("current question"),
+	}}
+	var changes []imodelrequest.TokenTailoringChange
+	ctx, _ := imodelrequest.ObserveTokenTailoring(
+		context.Background(),
+		func(change imodelrequest.TokenTailoringChange) {
+			changes = append(changes, change)
+		},
+	)
+
+	_, _, err := m.prepareChatRequest(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	require.Equal(
+		t,
+		imodelrequest.TokenTailoringProvenancePreserved,
+		changes[0].Record.Provenance,
+	)
+	require.Empty(t, changes[0].Before[2].Content)
+	require.Equal(t, " ", changes[0].After[2].Content)
+}
+
 // TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.
 func TestOptimizeMessagesForCache(t *testing.T) {
 	tests := []struct {
