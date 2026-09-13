@@ -776,6 +776,27 @@ func TestValidateJSONValueRejectsHiddenCustomMarshalCycle(t *testing.T) {
 	}
 }
 
+func TestReplayRejectsNilMemorySearchResult(t *testing.T) {
+	backend := InMemoryBackend()
+	open := backend.Open
+	backend.Open = func(ctx context.Context, name string) (*Services, error) {
+		services, err := open(ctx, name)
+		if err != nil {
+			return services, err
+		}
+		services.Memory = &nilMemorySearchService{Service: services.Memory}
+		return services, nil
+	}
+	_, err := Replay(context.Background(), Case{
+		Name:     "nil-memory-search-result",
+		Requires: []Capability{CapabilitySession, CapabilityMemory, CapabilityMemorySearch},
+		Steps:    []Step{{Name: "search", Kind: StepSearchMemory, MemorySearch: &MemorySearchInput{Query: "query"}}},
+	}, backend)
+	if err == nil || !strings.Contains(err.Error(), "memory search") {
+		t.Fatalf("Replay() error = %v, want nil memory search result error", err)
+	}
+}
+
 func TestReplayPreservesEmptyStateValue(t *testing.T) {
 	replayCase := PublicCases()[0]
 	replayCase.Name = "empty-state-replay"
@@ -1883,6 +1904,12 @@ type recursiveHiddenCycleJSONValue struct {
 
 func (value *recursiveHiddenCycleJSONValue) MarshalJSON() ([]byte, error) {
 	return json.Marshal(value.Next)
+}
+
+type nilMemorySearchService struct{ memory.Service }
+
+func (s *nilMemorySearchService) SearchMemories(context.Context, memory.UserKey, string, ...memory.SearchOption) ([]*memory.Entry, error) {
+	return []*memory.Entry{nil}, nil
 }
 
 type cancelAfterAppUpdateService struct {

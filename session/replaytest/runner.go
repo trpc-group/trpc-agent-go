@@ -1250,7 +1250,10 @@ func (e *execution) searchMemory(
 		references[entry.ID] = fingerprint
 	}
 	seen := make(map[string]struct{}, len(results))
-	for _, entry := range results {
+	for index, entry := range results {
+		if entry == nil {
+			return fmt.Errorf("memory search %q result %d is nil", name, index)
+		}
 		if _, exists := seen[entry.ID]; exists {
 			return fmt.Errorf("memory search %q repeats id %q", name, entry.ID)
 		}
