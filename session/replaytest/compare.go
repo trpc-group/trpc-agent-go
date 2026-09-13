@@ -541,6 +541,18 @@ func validateReportMetadata(r Report) (map[string]struct{}, error) {
 		if backend == "" {
 			return nil, errors.New("replaytest: report backend name is required")
 		}
+		if backend == "*" {
+			return nil, errors.New("replaytest: report backend name \"*\" is reserved")
+		}
+		if err := validateUTF8String("report backend name", backend); err != nil {
+			return nil, fmt.Errorf("replaytest: %w", err)
+		}
+		if backend == "*" {
+			return nil, errors.New("replaytest: report backend name \"*\" is reserved")
+		}
+		if err := validateUTF8String("report backend name", backend); err != nil {
+			return nil, fmt.Errorf("replaytest: %w", err)
+		}
 		if _, exists := backendNames[backend]; exists {
 			return nil, fmt.Errorf("replaytest: duplicate report backend %q", backend)
 		}

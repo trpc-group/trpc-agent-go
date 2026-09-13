@@ -872,6 +872,8 @@ func TestReportValidationRejectsMalformedReports(t *testing.T) {
 		{name: "too few backends", mutate: func(report *Report) { report.Backends = report.Backends[:1] }},
 		{name: "unknown comparison mode", mutate: func(report *Report) { report.ComparisonMode = "unknown" }},
 		{name: "empty backend", mutate: func(report *Report) { report.Backends[1] = "" }},
+		{name: "reserved wildcard backend", mutate: func(report *Report) { report.Backends[1] = "*" }},
+		{name: "invalid backend UTF-8", mutate: func(report *Report) { report.Backends[1] = string([]byte{0xff}) }},
 		{name: "duplicate backend", mutate: func(report *Report) { report.Backends[1] = report.Backends[0] }},
 		{name: "missing reference", mutate: func(report *Report) { report.Reference = "missing" }},
 		{name: "consensus reference", mutate: func(report *Report) {
