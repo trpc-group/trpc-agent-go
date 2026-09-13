@@ -2782,6 +2782,10 @@ func detectJSONCycles(owner string, value reflect.Value, visiting map[jsonRefere
 		visiting[reference] = struct{}{}
 		defer delete(visiting, reference)
 	}
+	return detectJSONCycleChildren(owner, value, visiting, depth)
+}
+
+func detectJSONCycleChildren(owner string, value reflect.Value, visiting map[jsonReference]struct{}, depth int) error {
 	switch value.Kind() {
 	case reflect.Interface, reflect.Pointer:
 		if value.IsNil() {
@@ -2789,32 +2793,48 @@ func detectJSONCycles(owner string, value reflect.Value, visiting map[jsonRefere
 		}
 		return detectJSONCycles(owner, value.Elem(), visiting, depth+1)
 	case reflect.Map:
-		if value.IsNil() {
-			return nil
-		}
-		iterator := value.MapRange()
-		for iterator.Next() {
-			if err := detectJSONCycles(owner, iterator.Key(), visiting, depth+1); err != nil {
-				return err
-			}
-			if err := detectJSONCycles(owner, iterator.Value(), visiting, depth+1); err != nil {
-				return err
-			}
-		}
+		return detectJSONMapCycles(owner, value, visiting, depth)
 	case reflect.Slice, reflect.Array:
-		if value.Kind() == reflect.Slice && value.IsNil() {
-			return nil
-		}
-		for index := 0; index < value.Len(); index++ {
-			if err := detectJSONCycles(owner, value.Index(index), visiting, depth+1); err != nil {
-				return err
-			}
-		}
+		return detectJSONSequenceCycles(owner, value, visiting, depth)
 	case reflect.Struct:
-		for index := 0; index < value.NumField(); index++ {
-			if err := detectJSONCycles(owner, value.Field(index), visiting, depth+1); err != nil {
-				return err
-			}
+		return detectJSONStructCycles(owner, value, visiting, depth)
+	default:
+		return nil
+	}
+}
+
+func detectJSONMapCycles(owner string, value reflect.Value, visiting map[jsonReference]struct{}, depth int) error {
+	if value.IsNil() {
+		return nil
+	}
+	iterator := value.MapRange()
+	for iterator.Next() {
+		if err := detectJSONCycles(owner, iterator.Key(), visiting, depth+1); err != nil {
+			return err
+		}
+		if err := detectJSONCycles(owner, iterator.Value(), visiting, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func detectJSONSequenceCycles(owner string, value reflect.Value, visiting map[jsonReference]struct{}, depth int) error {
+	if value.Kind() == reflect.Slice && value.IsNil() {
+		return nil
+	}
+	for index := 0; index < value.Len(); index++ {
+		if err := detectJSONCycles(owner, value.Index(index), visiting, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func detectJSONStructCycles(owner string, value reflect.Value, visiting map[jsonReference]struct{}, depth int) error {
+	for index := 0; index < value.NumField(); index++ {
+		if err := detectJSONCycles(owner, value.Field(index), visiting, depth+1); err != nil {
+			return err
 		}
 	}
 	return nil

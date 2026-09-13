@@ -646,61 +646,64 @@ func validateCaseResult(
 func validateCaseDiffs(result CaseResult, backendNames map[string]struct{}) (bool, error) {
 	hasCapabilityEvidence := false
 	for index, diff := range result.Diffs {
-		if diff.Path == "/execution" && diff.Allowed {
-			return false, fmt.Errorf("replaytest: case %q allows an execution failure", result.Name)
-		}
-		capabilityEvidence, err := validateCapabilityEvidence(result.Name, diff)
+		capabilityEvidence, err := validateDiff(result.Name, index, diff, backendNames)
 		if err != nil {
 			return false, err
 		}
 		hasCapabilityEvidence = hasCapabilityEvidence || capabilityEvidence
-		if diff.Case != result.Name || diff.BackendA == "" || diff.BackendB == "" ||
-			diff.SessionID == "" || !strings.HasPrefix(diff.Path, "/") {
-			return false, fmt.Errorf("replaytest: case %q diff %d has an invalid locator", result.Name, index)
-		}
-		for _, field := range []struct {
-			name  string
-			value string
-		}{
-			{name: "diff case", value: diff.Case},
-			{name: "diff session id", value: diff.SessionID},
-			{name: "diff path", value: diff.Path},
-			{name: "diff track name", value: diff.TrackName},
-			{name: "diff memory id", value: diff.MemoryID},
-			{name: "diff explanation", value: diff.Explanation},
-		} {
-			if err := validateUTF8String(field.name, field.value); err != nil {
-				return false, fmt.Errorf("replaytest: case %q diff %d: %w", result.Name, index, err)
-			}
-		}
-		if diff.SummaryFilterKey != nil {
-			if err := validateUTF8String("diff summary filter key", *diff.SummaryFilterKey); err != nil {
-				return false, fmt.Errorf("replaytest: case %q diff %d: %w", result.Name, index, err)
-			}
-		}
-		if err := validateJSONValue("diff baseline", diff.Baseline); err != nil {
-			return false, fmt.Errorf("replaytest: case %q diff %d baseline: %w", result.Name, index, err)
-		}
-		if err := validateJSONValue("diff actual", diff.Actual); err != nil {
-			return false, fmt.Errorf("replaytest: case %q diff %d actual: %w", result.Name, index, err)
-		}
-		if err := validateJSONPointerEscapes(diff.Path); err != nil {
-			return false, fmt.Errorf("replaytest: case %q diff %d has invalid JSON pointer escape: %w", result.Name, index, err)
-		}
-		if err := validateSummaryLocator(diff); err != nil {
-			return false, fmt.Errorf("replaytest: case %q diff %d: %w", result.Name, index, err)
-		}
-		if _, ok := backendNames[diff.BackendA]; !ok {
-			return false, fmt.Errorf("replaytest: case %q diff %d names unknown backend %q", result.Name, index, diff.BackendA)
-		}
-		if _, ok := backendNames[diff.BackendB]; !ok {
-			return false, fmt.Errorf("replaytest: case %q diff %d names unknown backend %q", result.Name, index, diff.BackendB)
-		}
-		if diff.Allowed && diff.Explanation == "" {
-			return false, fmt.Errorf("replaytest: case %q diff %d has no allowed_diff explanation", result.Name, index)
-		}
 	}
 	return hasCapabilityEvidence, nil
+}
+
+func validateDiff(caseName string, index int, diff Diff, backendNames map[string]struct{}) (bool, error) {
+	if diff.Path == "/execution" && diff.Allowed {
+		return false, fmt.Errorf("replaytest: case %q allows an execution failure", caseName)
+	}
+	capabilityEvidence, err := validateCapabilityEvidence(caseName, diff)
+	if err != nil {
+		return false, err
+	}
+	if diff.Case != caseName || diff.BackendA == "" || diff.BackendB == "" || diff.SessionID == "" || !strings.HasPrefix(diff.Path, "/") {
+		return false, fmt.Errorf("replaytest: case %q diff %d has an invalid locator", caseName, index)
+	}
+	for _, field := range []struct{ name, value string }{
+		{name: "diff case", value: diff.Case}, {name: "diff session id", value: diff.SessionID},
+		{name: "diff path", value: diff.Path}, {name: "diff track name", value: diff.TrackName},
+		{name: "diff memory id", value: diff.MemoryID}, {name: "diff explanation", value: diff.Explanation},
+	} {
+		if err := validateUTF8String(field.name, field.value); err != nil {
+			return false, fmt.Errorf("replaytest: case %q diff %d: %w", caseName, index, err)
+		}
+	}
+	if diff.SummaryFilterKey != nil {
+		if err := validateUTF8String("diff summary filter key", *diff.SummaryFilterKey); err != nil {
+			return false, fmt.Errorf("replaytest: case %q diff %d: %w", caseName, index, err)
+		}
+	}
+	for _, value := range []struct {
+		name  string
+		value any
+	}{{"diff baseline", diff.Baseline}, {"diff actual", diff.Actual}} {
+		if err := validateJSONValue(value.name, value.value); err != nil {
+			return false, fmt.Errorf("replaytest: case %q diff %d %s: %w", caseName, index, value.name, err)
+		}
+	}
+	if err := validateJSONPointerEscapes(diff.Path); err != nil {
+		return false, fmt.Errorf("replaytest: case %q diff %d has invalid JSON pointer escape: %w", caseName, index, err)
+	}
+	if err := validateSummaryLocator(diff); err != nil {
+		return false, fmt.Errorf("replaytest: case %q diff %d: %w", caseName, index, err)
+	}
+	if _, ok := backendNames[diff.BackendA]; !ok {
+		return false, fmt.Errorf("replaytest: case %q diff %d names unknown backend %q", caseName, index, diff.BackendA)
+	}
+	if _, ok := backendNames[diff.BackendB]; !ok {
+		return false, fmt.Errorf("replaytest: case %q diff %d names unknown backend %q", caseName, index, diff.BackendB)
+	}
+	if diff.Allowed && diff.Explanation == "" {
+		return false, fmt.Errorf("replaytest: case %q diff %d has no allowed_diff explanation", caseName, index)
+	}
+	return capabilityEvidence, nil
 }
 
 func validateCapabilityEvidence(caseName string, diff Diff) (bool, error) {
