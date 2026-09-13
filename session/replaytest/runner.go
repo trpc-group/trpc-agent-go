@@ -1781,15 +1781,18 @@ func validateCase(replayCase Case) error {
 }
 
 func replayStepCounts(steps []Step) (count, branches int) {
-	for _, step := range steps {
-		count++
-		if step.Kind == StepConcurrent {
-			branches += len(step.Concurrent)
-			for _, branch := range step.Concurrent {
-				nested, nestedBranches := replayStepCounts(branch)
-				count += nested
-				branches += nestedBranches
+	work := make([][]Step, 0, 1)
+	work = append(work, steps)
+	for len(work) > 0 {
+		current := work[len(work)-1]
+		work = work[:len(work)-1]
+		for _, step := range current {
+			count++
+			if step.Kind != StepConcurrent {
+				continue
 			}
+			branches += len(step.Concurrent)
+			work = append(work, step.Concurrent...)
 		}
 	}
 	return count, branches
