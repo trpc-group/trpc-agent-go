@@ -28,6 +28,7 @@ var _ session.WindowService = (*Service)(nil)
 const eventWindowBatchSize = 64
 
 type persistedWindowEntry struct {
+	rowID int64
 	entry session.EventWindowEntry
 }
 
@@ -149,23 +150,20 @@ func (s *Service) loadWindowAnchor(
 	err := s.mysqlClient.Query(
 		ctx,
 		func(rows *sql.Rows) error {
-			row, err := scanWindowRow(rows)
+			row, err := scanWindowMetadata(rows)
 			if err != nil {
 				return err
-			}
-			if !sessionwindow.EventAllowed(&row.entry.Event, roleFilter) {
-				return nil
 			}
 			anchor = row
 			return nil
 		},
 		fmt.Sprintf(
-			`SELECT event, created_at FROM %s
+			`SELECT id, created_at FROM %s
 WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND created_at >= ?
 AND JSON_UNQUOTE(JSON_EXTRACT(event, '$.id')) = ?
 AND deleted_at IS NULL
-ORDER BY created_at ASC
+ORDER BY created_at ASC, id ASC
 LIMIT 1`,
 			s.tableSessionEvents,
 		),
@@ -177,6 +175,15 @@ LIMIT 1`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load event window anchor: %w", err)
+	}
+	if anchor == nil {
+		return nil, nil
+	}
+	if err := s.materializeWindowEntries(ctx, key, []*persistedWindowEntry{anchor}); err != nil {
+		return nil, fmt.Errorf("load event window anchor payload: %w", err)
+	}
+	if !sessionwindow.EventAllowed(&anchor.entry.Event, roleFilter) {
+		return nil, nil
 	}
 	return anchor, nil
 }
@@ -194,6 +201,7 @@ func (s *Service) loadWindowNeighbors(
 		return nil, nil
 	}
 	cursorCreatedAt := anchor.entry.CreatedAt
+	cursorID := anchor.rowID
 	out := make([]session.EventWindowEntry, 0, limit)
 	for len(out) < limit {
 		rows, err := s.queryWindowNeighborBatch(
@@ -201,6 +209,7 @@ func (s *Service) loadWindowNeighbors(
 			key,
 			sessionCreatedAt,
 			cursorCreatedAt,
+			cursorID,
 			before,
 		)
 		if err != nil {
@@ -211,6 +220,10 @@ func (s *Service) loadWindowNeighbors(
 		}
 		for _, row := range rows {
 			cursorCreatedAt = row.entry.CreatedAt
+			cursorID = row.rowID
+			// A payload can be soft-deleted after the metadata scan. Keep its
+			// metadata slot so this cursor still advances across the whole batch;
+			// EventAllowed rejects the zero event without making it visible.
 			if !sessionwindow.EventAllowed(&row.entry.Event, roleFilter) {
 				continue
 			}
@@ -234,23 +247,24 @@ func (s *Service) queryWindowNeighborBatch(
 	key session.Key,
 	sessionCreatedAt time.Time,
 	cursorCreatedAt time.Time,
+	cursorID int64,
 	before bool,
 ) ([]*persistedWindowEntry, error) {
-	// Keyset cursor: rows sharing the exact same microsecond created_at as the
-	// batch boundary may be skipped. TIMESTAMP(6) makes this rare in practice
-	// and we accept the tradeoff to avoid filesort on the lookup index.
-	comparator := `(created_at > ?)`
-	orderBy := `ORDER BY created_at ASC`
+	// Compare the complete ordering key. This is an expanded OR rather than a
+	// tuple comparison because the TDSQL proxy cannot extract shard routing from
+	// tuple predicates.
+	comparator := `(created_at > ? OR (created_at = ? AND id > ?))`
+	orderBy := `ORDER BY created_at ASC, id ASC`
 	if before {
-		comparator = `(created_at < ?)`
-		orderBy = `ORDER BY created_at DESC`
+		comparator = `(created_at < ? OR (created_at = ? AND id < ?))`
+		orderBy = `ORDER BY created_at DESC, id DESC`
 	}
 
 	rows := make([]*persistedWindowEntry, 0, eventWindowBatchSize)
 	err := s.mysqlClient.Query(
 		ctx,
 		func(sqlRows *sql.Rows) error {
-			row, err := scanWindowRow(sqlRows)
+			row, err := scanWindowMetadata(sqlRows)
 			if err != nil {
 				return err
 			}
@@ -258,7 +272,7 @@ func (s *Service) queryWindowNeighborBatch(
 			return nil
 		},
 		fmt.Sprintf(
-			`SELECT event, created_at FROM %s
+			`SELECT id, created_at FROM %s
 WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND created_at >= ?
 AND deleted_at IS NULL
@@ -274,32 +288,76 @@ LIMIT ?`,
 		key.SessionID,
 		sessionCreatedAt,
 		cursorCreatedAt,
+		cursorCreatedAt,
+		cursorID,
 		eventWindowBatchSize,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load event window neighbors: %w", err)
 	}
+	if err := s.materializeWindowEntries(ctx, key, rows); err != nil {
+		return nil, fmt.Errorf("load event window neighbor payloads: %w", err)
+	}
 	return rows, nil
 }
 
-func scanWindowRow(rows *sql.Rows) (*persistedWindowEntry, error) {
-	var (
-		eventBytes []byte
-		createdAt  time.Time
-	)
-	if err := rows.Scan(&eventBytes, &createdAt); err != nil {
+func scanWindowMetadata(rows *sql.Rows) (*persistedWindowEntry, error) {
+	var rowID int64
+	var createdAt time.Time
+	if err := rows.Scan(&rowID, &createdAt); err != nil {
 		return nil, fmt.Errorf("scan event window entry: %w", err)
 	}
-	var evt event.Event
-	if err := json.Unmarshal(eventBytes, &evt); err != nil {
-		return nil, fmt.Errorf("unmarshal event window entry: %w", err)
-	}
 	return &persistedWindowEntry{
+		rowID: rowID,
 		entry: session.EventWindowEntry{
-			Event:     evt,
 			CreatedAt: createdAt,
 		},
 	}, nil
+}
+
+// materializeWindowEntries loads JSON only after an ordered lightweight metadata
+// batch has been selected, so the sorting stage does not carry JSON. MySQL may
+// return the IN query in any order, so fill each metadata slot by database row ID
+// and leave absent payloads empty.
+func (s *Service) materializeWindowEntries(
+	ctx context.Context,
+	key session.Key,
+	entries []*persistedWindowEntry,
+) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(entries))
+	args := make([]any, 0, len(entries)+1)
+	byID := make(map[int64]*persistedWindowEntry, len(entries))
+	for i, entry := range entries {
+		placeholders[i] = "?"
+		args = append(args, entry.rowID)
+		byID[entry.rowID] = entry
+	}
+	// TDSQL routes this lookup by (id, user_id), so retain user_id even though
+	// the metadata query already scoped the session.
+	args = append(args, key.UserID)
+	query := fmt.Sprintf(`SELECT id, event FROM %s WHERE id IN (%s)
+AND user_id = ?
+AND deleted_at IS NULL`, s.tableSessionEvents, strings.Join(placeholders, ","))
+	if err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var rowID int64
+		var eventBytes []byte
+		if err := rows.Scan(&rowID, &eventBytes); err != nil {
+			return fmt.Errorf("scan event window payload: %w", err)
+		}
+		entry := byID[rowID]
+		var evt event.Event
+		if err := json.Unmarshal(eventBytes, &evt); err != nil {
+			return fmt.Errorf("unmarshal event window entry: %w", err)
+		}
+		entry.entry.Event = evt
+		return nil
+	}, query, args...); err != nil {
+		return fmt.Errorf("materialize event window entries: %w", err)
+	}
+	return nil
 }
 
 func reverseWindowEntries(entries []session.EventWindowEntry) {
