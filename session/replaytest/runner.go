@@ -28,6 +28,21 @@ import (
 
 const summaryIsolationSessionSuffix = "-summary-isolation"
 
+// Defensive limits keep malformed or hostile adapters from exhausting the
+// replay process. They are intentionally conservative for a consistency test
+// harness; larger workloads should be split into multiple cases.
+const (
+	maxReplaySteps          = 10_000
+	maxReplayBranches       = 2_000
+	maxReplayEvents         = 100_000
+	maxReplayMemories       = 100_000
+	maxReplayJSONBytes      = 8 << 20
+	maxReplayStateValueSize = 1 << 20
+	maxReplayMemorySize     = 8 << 20
+	maxReplaySummarySize    = 8 << 20
+	maxReplayTrackPayload   = 8 << 20
+)
+
 // Runner executes cases using either a named reference or oracle-free
 // pairwise consensus.
 type Runner struct {
@@ -1723,6 +1738,13 @@ func validateCase(replayCase Case) error {
 	if len(replayCase.Steps) == 0 {
 		return fmt.Errorf("replaytest: case %q has no steps", replayCase.Name)
 	}
+	steps, branches := replayStepCounts(replayCase.Steps)
+	if steps > maxReplaySteps {
+		return fmt.Errorf("replaytest: case %q has %d steps, limit is %d", replayCase.Name, steps, maxReplaySteps)
+	}
+	if branches > maxReplayBranches {
+		return fmt.Errorf("replaytest: case %q has %d branches, limit is %d", replayCase.Name, branches, maxReplayBranches)
+	}
 	switch replayCase.EventOrder {
 	case "", EventOrderGlobal, EventOrderCausal:
 	default:
@@ -1756,6 +1778,21 @@ func validateCase(replayCase Case) error {
 		}
 	}
 	return validateCaseCapabilities(replayCase)
+}
+
+func replayStepCounts(steps []Step) (count, branches int) {
+	for _, step := range steps {
+		count++
+		if step.Kind == StepConcurrent {
+			branches += len(step.Concurrent)
+			for _, branch := range step.Concurrent {
+				nested, nestedBranches := replayStepCounts(branch)
+				count += nested
+				branches += nestedBranches
+			}
+		}
+	}
+	return count, branches
 }
 
 func containsConcurrentStep(steps []Step) bool {
@@ -2107,6 +2144,9 @@ func validateStepKind(step Step) error {
 }
 
 func validateMemoryInputStrings(input *MemoryInput) error {
+	if len(input.Memory) > maxReplayMemorySize {
+		return fmt.Errorf("memory content exceeds %d bytes", maxReplayMemorySize)
+	}
 	if err := validateUTF8String("memory content", input.Memory); err != nil {
 		return err
 	}
@@ -2143,6 +2183,9 @@ func validateTrackStep(step Step) error {
 		return fmt.Errorf("step %q: %w", step.Name, err)
 	}
 	if payload := step.Track.Event.Payload; payload != nil {
+		if len(payload) > maxReplayTrackPayload {
+			return fmt.Errorf("step %q track payload exceeds %d bytes", step.Name, maxReplayTrackPayload)
+		}
 		if err := validateUTF8String("track JSON payload", string(payload)); err != nil {
 			return fmt.Errorf("step %q: %w", step.Name, err)
 		}
@@ -2564,6 +2607,9 @@ func validateJSONValue(owner string, value any) error {
 	if err != nil {
 		return fmt.Errorf("%s contains invalid JSON data: %w", owner, err)
 	}
+	if len(raw) > maxReplayJSONBytes {
+		return fmt.Errorf("%s exceeds %d JSON bytes", owner, maxReplayJSONBytes)
+	}
 	var decoded any
 	if err := decodeJSON(raw, &decoded); err != nil {
 		return fmt.Errorf("%s contains invalid JSON data: %w", owner, err)
@@ -2779,6 +2825,9 @@ func validateEventStateDelta(stepName string, stateDelta session.StateMap) error
 				key,
 			)
 		}
+		if len(stateDelta[key]) > maxReplayStateValueSize {
+			return fmt.Errorf("step %q event state delta key %q exceeds %d bytes", stepName, key, maxReplayStateValueSize)
+		}
 		for _, prefix := range []string{
 			session.StateAppPrefix,
 			session.StateUserPrefix,
@@ -2840,6 +2889,9 @@ func validateStateKeys(
 	for _, key := range valueKeys {
 		if err := validateStateKey(scope, key); err != nil {
 			return fmt.Errorf("%s: %w", owner, err)
+		}
+		if len(values[key]) > maxReplayStateValueSize {
+			return fmt.Errorf("%s state key %q exceeds %d bytes", owner, key, maxReplayStateValueSize)
 		}
 	}
 	for _, key := range deleteKeys {

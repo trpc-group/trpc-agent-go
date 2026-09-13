@@ -797,6 +797,21 @@ func TestReplayRejectsNilMemorySearchResult(t *testing.T) {
 	}
 }
 
+func TestValidateCaseRejectsOversizedStateValue(t *testing.T) {
+	tooLarge := make([]byte, maxReplayStateValueSize+1)
+	err := validateCase(Case{
+		Name:     "oversized-state",
+		Requires: []Capability{CapabilitySession, CapabilitySessionState},
+		Steps: []Step{{Name: "write", Kind: StepUpdateState, State: &StateInput{
+			Scope:  StateScopeSession,
+			Values: session.StateMap{"large": tooLarge},
+		}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("validateCase() error = %v, want size limit error", err)
+	}
+}
+
 func TestReplayPreservesEmptyStateValue(t *testing.T) {
 	replayCase := PublicCases()[0]
 	replayCase.Name = "empty-state-replay"

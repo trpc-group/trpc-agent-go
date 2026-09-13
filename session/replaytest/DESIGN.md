@@ -38,3 +38,10 @@ remain explicit evidence.
 InMemory and file-backed SQLite form the lightweight matrix. Optional external
 adapters live in their owning integration modules and declare only capabilities
 they actually wire.
+
+Evidence boundaries are explicit: `IMPLEMENTED` refers to code and tests in this
+package, `LOCAL_VERIFIED` refers to commands run against InMemory or SQLite,
+`EXTERNAL_REQUIRED` refers to Redis/SQL/vector/IM or fault-injection environments
+not bundled here, and `DESIGNED` refers to an adapter or migration contract that
+has not yet been exercised against a live service. A passing lightweight matrix
+must not be reported as proof of the external categories.

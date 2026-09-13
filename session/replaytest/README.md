@@ -14,6 +14,12 @@ tracks, concurrent event branches, and conflict-free concurrent State, Memory,
 Summary, and Track writes. Each case names an injected fault; the unit test
 proves that every fault produces a blocking diff.
 
+Replay applies defensive per-case limits for steps, branches, events, memories,
+state values, JSON payloads, summaries, and track payloads. These limits are
+part of the harness safety contract and prevent malformed adapters from
+exhausting the process; very large datasets should be partitioned into multiple
+cases.
+
 Memory persistence snapshots are content-sorted because `ReadMemories` does not
 define cross-backend result order. `StepSearchMemory` is separate: it requires
 `CapabilityMemorySearch` and records result order, stable logical memory IDs,
@@ -143,6 +149,13 @@ database drivers or integration-only dependency upgrades. Future Redis,
 PostgreSQL, MySQL, and ClickHouse adapters can register their existing Session
 and Memory services through `Backend.Open` and follow the owning module's
 existing environment configuration and skip behavior.
+
+Before an external adapter is admitted to a production matrix, its conformance
+evidence must cover a unique case namespace; cleanup after success, failure, and
+cancellation; two workers writing the same session; read-after-write visibility
+for Memory; duplicate delivery of the same logical event; and restart during an
+uncertain commit. The lightweight matrix does not claim these properties for an
+adapter that has not supplied those tests.
 
 An adapter must isolate test data, clean up sessions, scoped state, summaries,
 tracks, and memories, and declare only capabilities that it actually wires.

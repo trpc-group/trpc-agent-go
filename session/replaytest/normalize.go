@@ -154,6 +154,9 @@ func normalizeEvents(
 	plan *causalOrderPlan,
 	baseTime time.Time,
 ) ([]CanonicalMap, map[string][]string, map[string]string, error) {
+	if len(events) > maxReplayEvents {
+		return nil, nil, nil, fmt.Errorf("session contains %d events, limit is %d", len(events), maxReplayEvents)
+	}
 	records := make([]normalizedEvent, 0, len(events))
 	order := make(map[string][]string)
 	physicalToLogical := make(map[string]string, len(events))
@@ -479,6 +482,9 @@ type normalizedMemoryIdentity struct {
 func normalizeMemoryCatalog(
 	entries []*memory.Entry,
 ) ([]CanonicalMap, map[string]normalizedMemoryIdentity, error) {
+	if len(entries) > maxReplayMemories {
+		return nil, nil, fmt.Errorf("memory catalog contains %d entries, limit is %d", len(entries), maxReplayMemories)
+	}
 	records := make([]normalizedMemoryRecord, 0, len(entries))
 	ids := make(map[string]struct{}, len(entries))
 	for index, entry := range entries {
@@ -700,6 +706,9 @@ func normalizeSummaries(
 		if err := validateSummaryStrings(summary, filterKey); err != nil {
 			return nil, err
 		}
+		if len(summary.Summary) > maxReplaySummarySize {
+			return nil, fmt.Errorf("summary %q exceeds %d bytes", filterKey, maxReplaySummarySize)
+		}
 		value := CanonicalMap{
 			"text":               summary.Summary,
 			"topics":             append([]string(nil), summary.Topics...),
@@ -830,6 +839,9 @@ func normalizeTracks(sess *session.Session, baseTime time.Time) (map[string][]Ca
 		}
 		events := make([]CanonicalMap, 0, len(history.Events))
 		for index, trackEvent := range history.Events {
+			if len(trackEvent.Payload) > maxReplayTrackPayload {
+				return nil, fmt.Errorf("track %q event %d payload exceeds %d bytes", trackName, index, maxReplayTrackPayload)
+			}
 			if err := validateUTF8String(
 				fmt.Sprintf("track %q event %d name", trackName, index),
 				string(trackEvent.Track),
@@ -890,6 +902,9 @@ func normalizeTimestamps(value map[string]any, keys ...string) {
 }
 
 func decodeJSON(raw []byte, output any) error {
+	if len(raw) > maxReplayJSONBytes {
+		return fmt.Errorf("json exceeds %d bytes", maxReplayJSONBytes)
+	}
 	if !utf8.Valid(raw) {
 		return errors.New("json contains invalid UTF-8")
 	}
