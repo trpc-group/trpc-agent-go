@@ -742,6 +742,31 @@ func TestEventExtraFieldsRejectCyclicJSONValues(t *testing.T) {
 	}
 }
 
+func TestEventExtraFieldsRejectCycleBeforeCustomMarshal(t *testing.T) {
+	cyclic := &recursiveCycleJSONValue{}
+	cyclic.Next = cyclic
+	step := responseEvent("recursive-cycle-extra-fields", 1, "assistant", model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type:        "function",
+					ExtraFields: map[string]any{"cyclic": cyclic},
+				}},
+			},
+		}},
+	})
+	replayCase := Case{
+		Name:     "recursive-cycle-extra-fields",
+		Requires: []Capability{CapabilitySession},
+		Steps:    []Step{step},
+	}
+	if err := validateCase(replayCase); err == nil || !strings.Contains(err.Error(), "cyclic JSON data") {
+		t.Fatalf("validateCase() error = %v, want cycle rejection before custom marshal", err)
+	}
+}
+
 func TestReplayPreservesEmptyStateValue(t *testing.T) {
 	replayCase := PublicCases()[0]
 	replayCase.Name = "empty-state-replay"
@@ -1833,6 +1858,14 @@ type cyclicJSONValue struct {
 
 func (*cyclicJSONValue) MarshalJSON() ([]byte, error) {
 	return []byte(`{"valid":true}`), nil
+}
+
+type recursiveCycleJSONValue struct {
+	Next *recursiveCycleJSONValue `json:"next"`
+}
+
+func (value *recursiveCycleJSONValue) MarshalJSON() ([]byte, error) {
+	return json.Marshal(value.Next)
 }
 
 type cancelAfterAppUpdateService struct {

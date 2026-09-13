@@ -2550,6 +2550,13 @@ func validateEventToolCallArguments(evt *event.Event) error {
 }
 
 func validateJSONValue(owner string, value any) error {
+	// Walk the original object graph before invoking custom MarshalJSON methods.
+	// A custom marshaler is user-controlled and may recurse through a cycle
+	// itself; validating after json.Marshal would give it a chance to overflow
+	// the stack before our cycle guard runs.
+	if err := validateJSONStrings(owner, reflect.ValueOf(value)); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("%s contains invalid JSON data: %w", owner, err)
@@ -2558,7 +2565,7 @@ func validateJSONValue(owner string, value any) error {
 	if err := decodeJSON(raw, &decoded); err != nil {
 		return fmt.Errorf("%s contains invalid JSON data: %w", owner, err)
 	}
-	return validateJSONStrings(owner, reflect.ValueOf(value))
+	return nil
 }
 
 func validateJSONStrings(owner string, value reflect.Value) error {
