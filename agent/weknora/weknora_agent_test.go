@@ -11,6 +11,7 @@ package weknora
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -224,7 +225,7 @@ func TestWeKnoraAgent_SendErrorEvent(t *testing.T) {
 	}
 
 	eventChan := make(chan *event.Event, 1)
-	weknoraAgent.sendErrorEvent(context.Background(), eventChan, invocation, "test error message")
+	weknoraAgent.sendErrorEvent(context.Background(), eventChan, invocation, "test error message", "")
 	close(eventChan)
 
 	evt := <-eventChan
@@ -258,7 +259,7 @@ func TestWeKnoraAgent_SendFinalStreamingEvent(t *testing.T) {
 	}
 
 	eventChan := make(chan *event.Event, 1)
-	weknoraAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "test-response", "aggregated content", "aggregated reasoning")
+	weknoraAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "test-response", "aggregated content", "aggregated reasoning", "")
 	close(eventChan)
 
 	evt := <-eventChan
@@ -774,5 +775,123 @@ func TestWeKnoraAgent_RunResponseIdentity(t *testing.T) {
 			t.Error("separate runs must have distinct response IDs")
 		}
 		previousID = responseID
+	}
+}
+
+func TestWeKnoraAgent_RunUpstreamResponseMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		chunks    []string
+		wantIDs   []string
+		wantError bool
+	}{
+		{name: "missing IDs", chunks: []string{`{"response_type":"answer","content":"a"}`}, wantIDs: []string{"", ""}},
+		{name: "stable ID", chunks: []string{`{"id":"upstream","response_type":"thinking","content":"hmm"}`, `{"id":"upstream","response_type":"answer","content":"a"}`}, wantIDs: []string{"upstream", "upstream", "upstream"}},
+		{name: "late and changing IDs", chunks: []string{`{"response_type":"answer","content":"a"}`, `{"id":"first","response_type":"answer","content":"b"}`, `{"response_type":"answer","content":"c"}`, `{"id":"last","response_type":"answer","content":"d"}`}, wantIDs: []string{"", "first", "first", "last", "last"}},
+		{name: "ID only on empty chunk", chunks: []string{`{"id":"upstream","response_type":"answer","content":""}`, `{"response_type":"answer","content":"a"}`}, wantIDs: []string{"upstream", "upstream"}},
+		{name: "ID on terminal chunk", chunks: []string{`{"response_type":"answer","content":"a"}`, `{"id":"terminal","response_type":"answer","done":true}`}, wantIDs: []string{"", "terminal"}},
+		{name: "upstream error", chunks: []string{`{"id":"answer","response_type":"answer","content":"a"}`, `{"id":"failure","response_type":"error","content":"failed"}`}, wantIDs: []string{"answer", "failure"}, wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/sessions/default-session":
+					fmt.Fprint(w, `{"success":true,"data":{"id":"default-session"}}`)
+				case "/api/v1/agent-chat/default-session":
+					w.Header().Set("Content-Type", "text/event-stream")
+					requests++
+					for _, chunk := range tt.chunks {
+						if requests > 1 {
+							var payload map[string]any
+							if err := json.Unmarshal([]byte(chunk), &payload); err != nil {
+								t.Error(err)
+								return
+							}
+							delete(payload, "id")
+							data, err := json.Marshal(payload)
+							if err != nil {
+								t.Error(err)
+								return
+							}
+							chunk = string(data)
+						}
+						fmt.Fprintf(w, "data: %s\n\n", chunk)
+					}
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			a, err := New(WithName("test-agent"), WithBaseUrl(server.URL))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var previousID string
+			for run := 0; run < 2; run++ {
+				stream, err := a.Run(ctx, &agent.Invocation{InvocationID: "inv", Message: model.Message{Content: "query"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var events []*event.Event
+				for evt := range stream {
+					events = append(events, evt)
+				}
+				if len(events) != len(tt.wantIDs) {
+					t.Fatalf("got %d events, want %d", len(events), len(tt.wantIDs))
+				}
+				responseID := events[0].Response.ID
+				if responseID == "" || responseID == previousID {
+					t.Fatalf("invalid run identity %q", responseID)
+				}
+				previousID = responseID
+				// Inspect after draining to detect accidental mutation of earlier metadata.
+				for i, evt := range events {
+					data, err := json.Marshal(evt)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var decoded event.Event
+					if err := json.Unmarshal(data, &decoded); err != nil {
+						t.Fatal(err)
+					}
+					var metadata struct {
+						Version    int    `json:"version"`
+						ResponseID string `json:"response_id"`
+					}
+					raw, exists := decoded.Extensions["weknora"]
+					wantID := tt.wantIDs[i]
+					if run > 0 {
+						wantID = ""
+					} // A new run must not inherit upstream metadata.
+					if wantID == "" {
+						if exists {
+							t.Fatalf("unexpected metadata: %s", raw)
+						}
+					} else {
+						if err := json.Unmarshal(raw, &metadata); err != nil {
+							t.Fatal(err)
+						}
+						if metadata.Version != 1 || metadata.ResponseID != wantID {
+							t.Fatalf("event %d metadata: %+v", i, metadata)
+						}
+					}
+					if i == len(events)-1 && tt.wantError {
+						if evt.Response.Error == nil {
+							t.Fatal("expected error event")
+						}
+						continue
+					}
+					if evt.Response.Error != nil || evt.Response.ID != responseID {
+						t.Fatalf("unexpected response: %+v", evt.Response)
+					}
+					if i == len(events)-1 && (!evt.Response.Done || evt.Response.IsPartial || evt.Response.Object != model.ObjectTypeChatCompletion) {
+						t.Fatal("invalid completion")
+					}
+				}
+			}
+		})
 	}
 }
