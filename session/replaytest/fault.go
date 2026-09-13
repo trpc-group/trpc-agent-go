@@ -89,7 +89,7 @@ func injectMemoryContent(output *Snapshot) error {
 		return errors.New("memory fault requires a memory")
 	}
 	memoryValue, ok := output.Memories[0]["memory"].(map[string]any)
-	if !ok {
+	if !ok || memoryValue == nil {
 		return errors.New("memory payload is missing")
 	}
 	memoryValue["memory"] = "injected-memory-drift"
@@ -154,7 +154,7 @@ func injectSummaryStale(output *Snapshot) error {
 		return err
 	}
 	boundary, ok := summary["boundary"].(map[string]any)
-	if !ok {
+	if !ok || boundary == nil {
 		return errors.New("stale summary fault requires a boundary")
 	}
 	lastEventID, _ := boundary["last_event_id"].(string)
@@ -198,7 +198,7 @@ func injectTrackPayload(output *Snapshot) error {
 		return err
 	}
 	payload, ok := trackEvent["payload"].(map[string]any)
-	if !ok {
+	if !ok || payload == nil {
 		return errors.New("track payload is missing")
 	}
 	payload["status"] = "injected-track-drift"

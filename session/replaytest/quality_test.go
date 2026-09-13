@@ -1079,10 +1079,22 @@ func TestInjectFaultRejectsMissingPrerequisites(t *testing.T) {
 			t.Fatal("InjectFault() unexpectedly accepted an invalid memory payload")
 		}
 	})
+	t.Run("nil memory payload", func(t *testing.T) {
+		input := Snapshot{Memories: []CanonicalMap{{"memory": map[string]any(nil)}}}
+		if _, err := InjectFault(input, FaultMemoryContent); err == nil {
+			t.Fatal("InjectFault() unexpectedly accepted a nil memory payload")
+		}
+	})
 	t.Run("invalid track payload", func(t *testing.T) {
 		input := Snapshot{Tracks: map[string][]CanonicalMap{"track": {{"payload": "invalid"}}}}
 		if _, err := InjectFault(input, FaultTrackPayload); err == nil {
 			t.Fatal("InjectFault() unexpectedly accepted an invalid track payload")
+		}
+	})
+	t.Run("nil track payload", func(t *testing.T) {
+		input := Snapshot{Tracks: map[string][]CanonicalMap{"track": {{"payload": map[string]any(nil)}}}}
+		if _, err := InjectFault(input, FaultTrackPayload); err == nil {
+			t.Fatal("InjectFault() unexpectedly accepted a nil track payload")
 		}
 	})
 	t.Run("nil summary payload", func(t *testing.T) {
@@ -1096,6 +1108,14 @@ func TestInjectFaultRejectsMissingPrerequisites(t *testing.T) {
 			if _, err := InjectFault(input, kind); err == nil {
 				t.Fatalf("InjectFault(%q) unexpectedly accepted a nil summary", kind)
 			}
+		}
+	})
+	t.Run("nil stale boundary", func(t *testing.T) {
+		input := Snapshot{Summaries: map[string]CanonicalMap{
+			"summary": {"boundary": map[string]any(nil)},
+		}}
+		if _, err := InjectFault(input, FaultSummaryStale); err == nil {
+			t.Fatal("InjectFault() unexpectedly accepted a nil summary boundary")
 		}
 	})
 	t.Run("unencodable snapshot", func(t *testing.T) {
