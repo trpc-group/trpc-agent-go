@@ -1788,10 +1788,19 @@ func replayStepCounts(steps []Step) (count, branches int) {
 		work = work[:len(work)-1]
 		for _, step := range current {
 			count++
+			// Once either limit is exceeded, the caller only needs a value
+			// greater than the limit. Stop traversing immediately so a hostile
+			// case cannot force an unbounded walk before validation rejects it.
+			if count > maxReplaySteps {
+				return count, branches
+			}
 			if step.Kind != StepConcurrent {
 				continue
 			}
 			branches += len(step.Concurrent)
+			if branches > maxReplayBranches {
+				return count, branches
+			}
 			work = append(work, step.Concurrent...)
 		}
 	}
