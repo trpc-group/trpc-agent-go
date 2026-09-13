@@ -2789,6 +2789,22 @@ func TestAnchoredSummaryCutoffRemainsSemantic(t *testing.T) {
 	}
 }
 
+func TestNormalizeSummariesRejectsMismatchedBoundaryFilterKey(t *testing.T) {
+	sess := &session.Session{
+		CreatedAt: caseEpoch,
+		Summaries: map[string]*session.Summary{
+			"branch/a": {
+				Summary:  "summary",
+				Boundary: session.NewSummaryBoundary("branch/b", caseEpoch.Add(time.Second)),
+			},
+		},
+	}
+	if _, err := normalizeSummaries(sess, nil, nil); err == nil ||
+		!strings.Contains(err.Error(), "belongs to filter key") {
+		t.Fatalf("normalizeSummaries() error = %v, want filter-key mismatch", err)
+	}
+}
+
 func TestTimestampOnlySummaryCutoffRemainsSemantic(t *testing.T) {
 	normalize := func(backend string, cutoff time.Time) Snapshot {
 		sess := &session.Session{
@@ -2955,6 +2971,29 @@ func TestNormalizeMemorySearchesPreservesRankAndScore(t *testing.T) {
 				t.Fatalf("normalizeMemorySearches() error = %v, want search-time mismatch", err)
 			}
 		})
+	}
+}
+
+func TestNormalizeMemorySearchesRejectsInvalidScores(t *testing.T) {
+	entries := []*memory.Entry{{
+		ID:     "physical-a",
+		Memory: &memory.Memory{Memory: "first"},
+	}}
+	_, ids, err := normalizeMemoryCatalog(entries)
+	if err != nil {
+		t.Fatalf("normalizeMemoryCatalog() error = %v", err)
+	}
+	for _, score := range []float64{-0.01, 1.01, math.NaN(), math.Inf(1)} {
+		_, err := normalizeMemorySearches(map[string][]*memory.Entry{
+			"query": {{
+				ID:     "physical-a",
+				Memory: &memory.Memory{Memory: "first"},
+				Score:  score,
+			}},
+		}, ids)
+		if err == nil || !strings.Contains(err.Error(), "outside [0,1]") {
+			t.Fatalf("normalizeMemorySearches(score=%v) error = %v, want range error", score, err)
+		}
 	}
 }
 

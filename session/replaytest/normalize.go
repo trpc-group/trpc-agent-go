@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -549,6 +550,15 @@ func normalizeMemorySearches(
 		seen := make(map[string]struct{}, len(entries))
 		results := make([]CanonicalMap, 0, len(entries))
 		for index, entry := range entries {
+			if entry != nil && (math.IsNaN(entry.Score) || math.IsInf(entry.Score, 0) ||
+				entry.Score < 0 || entry.Score > 1) {
+				return nil, fmt.Errorf(
+					"memory search %q result %d has score %v outside [0,1]",
+					name,
+					index,
+					entry.Score,
+				)
+			}
 			value, err := normalizeMemoryEntry(
 				entry,
 				fmt.Sprintf("memory search %q result %d", name, index),
@@ -716,6 +726,13 @@ func normalizeSummaries(
 			"retained_event_ids": retainedEventIDs(events, summary, filterKey, physicalToLogical),
 		}
 		if boundary := summary.CutoffBoundary(); boundary != nil {
+			if summary.Boundary != nil && boundary.FilterKey != filterKey {
+				return nil, fmt.Errorf(
+					"summary %q boundary belongs to filter key %q",
+					filterKey,
+					boundary.FilterKey,
+				)
+			}
 			lastEventID := boundary.LastEventID
 			cutoffAt := normalizeTimeOffset(boundary.CutoffAt, sess.CreatedAt)
 			if lastEventID != "" {
