@@ -949,10 +949,13 @@ func decodeJSON(raw []byte, output any) error {
 func rejectDuplicateJSONKeys(raw []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	return consumeUniqueJSONValue(decoder)
+	return consumeUniqueJSONValue(decoder, 0)
 }
 
-func consumeUniqueJSONValue(decoder *json.Decoder) error {
+func consumeUniqueJSONValue(decoder *json.Decoder, depth int) error {
+	if depth > maxReplayJSONDepth {
+		return fmt.Errorf("json exceeds nesting depth limit %d", maxReplayJSONDepth)
+	}
 	token, err := decoder.Token()
 	if err != nil {
 		return err
@@ -977,14 +980,14 @@ func consumeUniqueJSONValue(decoder *json.Decoder) error {
 				return fmt.Errorf("duplicate json object key %q", key)
 			}
 			keys[key] = struct{}{}
-			if err := consumeUniqueJSONValue(decoder); err != nil {
+			if err := consumeUniqueJSONValue(decoder, depth+1); err != nil {
 				return err
 			}
 		}
 		return consumeJSONDelimiter(decoder, '}')
 	case '[':
 		for decoder.More() {
-			if err := consumeUniqueJSONValue(decoder); err != nil {
+			if err := consumeUniqueJSONValue(decoder, depth+1); err != nil {
 				return err
 			}
 		}

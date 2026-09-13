@@ -787,6 +787,22 @@ func TestValidateJSONValueRejectsExcessiveNesting(t *testing.T) {
 	}
 }
 
+func TestDecodeJSONRejectsExcessiveNesting(t *testing.T) {
+	raw := make([]byte, 0, maxReplayJSONDepth*2+1)
+	for index := 0; index <= maxReplayJSONDepth; index++ {
+		raw = append(raw, '[')
+	}
+	raw = append(raw, '0')
+	for index := 0; index <= maxReplayJSONDepth; index++ {
+		raw = append(raw, ']')
+	}
+	var value any
+	err := decodeJSON(raw, &value)
+	if err == nil || !strings.Contains(err.Error(), "nesting depth") {
+		t.Fatalf("decodeJSON() error = %v, want nesting depth limit", err)
+	}
+}
+
 func TestCompareRejectsExcessiveSnapshotNesting(t *testing.T) {
 	var value any = "leaf"
 	for index := 0; index <= maxReplayJSONDepth; index++ {
@@ -895,6 +911,11 @@ func TestReportValidationRejectsMalformedReports(t *testing.T) {
 		{name: "negative duration", mutate: func(report *Report) { report.Cases[0].Duration = -1 }},
 		{name: "invalid diff locator", mutate: func(report *Report) {
 			setBlockingReportDiff(report, Diff{BackendA: "baseline", BackendB: "actual", SessionID: "clean", Path: "/state"})
+		}},
+		{name: "invalid diff JSON pointer escape", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/state/~2"
+			setBlockingReportDiff(report, diff)
 		}},
 		{name: "unknown left backend", mutate: func(report *Report) {
 			setBlockingReportDiff(report, validReportDiff())

@@ -575,6 +575,9 @@ func validateReportCases(r Report, backendNames map[string]struct{}) (reportTota
 		if result.Name == "" {
 			return reportTotals{}, errors.New("replaytest: report case name is required")
 		}
+		if err := validateUTF8String("report case name", result.Name); err != nil {
+			return reportTotals{}, fmt.Errorf("replaytest: %w", err)
+		}
 		if _, exists := caseNames[result.Name]; exists {
 			return reportTotals{}, fmt.Errorf("replaytest: duplicate report case %q", result.Name)
 		}
@@ -654,6 +657,35 @@ func validateCaseDiffs(result CaseResult, backendNames map[string]struct{}) (boo
 		if diff.Case != result.Name || diff.BackendA == "" || diff.BackendB == "" ||
 			diff.SessionID == "" || !strings.HasPrefix(diff.Path, "/") {
 			return false, fmt.Errorf("replaytest: case %q diff %d has an invalid locator", result.Name, index)
+		}
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "diff case", value: diff.Case},
+			{name: "diff session id", value: diff.SessionID},
+			{name: "diff path", value: diff.Path},
+			{name: "diff track name", value: diff.TrackName},
+			{name: "diff memory id", value: diff.MemoryID},
+			{name: "diff explanation", value: diff.Explanation},
+		} {
+			if err := validateUTF8String(field.name, field.value); err != nil {
+				return false, fmt.Errorf("replaytest: case %q diff %d: %w", result.Name, index, err)
+			}
+		}
+		if diff.SummaryFilterKey != nil {
+			if err := validateUTF8String("diff summary filter key", *diff.SummaryFilterKey); err != nil {
+				return false, fmt.Errorf("replaytest: case %q diff %d: %w", result.Name, index, err)
+			}
+		}
+		if err := validateJSONValue("diff baseline", diff.Baseline); err != nil {
+			return false, fmt.Errorf("replaytest: case %q diff %d baseline: %w", result.Name, index, err)
+		}
+		if err := validateJSONValue("diff actual", diff.Actual); err != nil {
+			return false, fmt.Errorf("replaytest: case %q diff %d actual: %w", result.Name, index, err)
+		}
+		if err := validateJSONPointerEscapes(diff.Path); err != nil {
+			return false, fmt.Errorf("replaytest: case %q diff %d has invalid JSON pointer escape: %w", result.Name, index, err)
 		}
 		if err := validateSummaryLocator(diff); err != nil {
 			return false, fmt.Errorf("replaytest: case %q diff %d: %w", result.Name, index, err)
