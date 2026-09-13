@@ -144,6 +144,14 @@ func (*listVersionsErrService) LoadArtifact(
 	return &artifact.Artifact{Data: []byte("x")}, nil
 }
 
+func (*listVersionsErrService) Head(
+	_ context.Context,
+	_ *artifact.HeadRequest,
+	_ ...artifact.HeadOption,
+) (*artifact.HeadResponse, error) {
+	return nil, nil
+}
+
 func (*listVersionsErrService) ListArtifactKeys(
 	_ context.Context,
 	_ artifact.SessionInfo,
