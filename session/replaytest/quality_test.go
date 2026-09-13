@@ -812,6 +812,17 @@ func TestValidateCaseRejectsOversizedStateValue(t *testing.T) {
 	}
 }
 
+func TestValidateCaseShortCircuitsOversizedStepTree(t *testing.T) {
+	steps := make([]Step, maxReplaySteps+1)
+	err := validateCase(Case{
+		Name:  "oversized-step-tree",
+		Steps: steps,
+	})
+	if err == nil || !strings.Contains(err.Error(), "steps") {
+		t.Fatalf("validateCase() error = %v, want step limit error", err)
+	}
+}
+
 func TestReplayPreservesEmptyStateValue(t *testing.T) {
 	replayCase := PublicCases()[0]
 	replayCase.Name = "empty-state-replay"
