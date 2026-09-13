@@ -767,6 +767,15 @@ func TestEventExtraFieldsRejectCycleBeforeCustomMarshal(t *testing.T) {
 	}
 }
 
+func TestValidateJSONValueRejectsHiddenCustomMarshalCycle(t *testing.T) {
+	cyclic := &recursiveHiddenCycleJSONValue{}
+	cyclic.Next = cyclic
+	err := validateJSONValue("hidden cycle", map[string]any{"value": cyclic})
+	if err == nil || !strings.Contains(err.Error(), "cyclic JSON data") {
+		t.Fatalf("validateJSONValue() error = %v, want cyclic JSON data", err)
+	}
+}
+
 func TestReplayPreservesEmptyStateValue(t *testing.T) {
 	replayCase := PublicCases()[0]
 	replayCase.Name = "empty-state-replay"
@@ -1865,6 +1874,14 @@ type recursiveCycleJSONValue struct {
 }
 
 func (value *recursiveCycleJSONValue) MarshalJSON() ([]byte, error) {
+	return json.Marshal(value.Next)
+}
+
+type recursiveHiddenCycleJSONValue struct {
+	Next *recursiveHiddenCycleJSONValue
+}
+
+func (value *recursiveHiddenCycleJSONValue) MarshalJSON() ([]byte, error) {
 	return json.Marshal(value.Next)
 }
 

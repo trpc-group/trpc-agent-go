@@ -2669,6 +2669,16 @@ func validateJSONStructStrings(
 	value reflect.Value,
 	visiting map[jsonReference]struct{},
 ) error {
+	// A custom marshaler can read unexported fields directly. Walk the complete
+	// object graph for cycle detection in that case, while retaining the normal
+	// UTF-8 checks only for fields encoding/json would otherwise expose.
+	customMarshaler := implementsMarshaler(value, jsonMarshalerType) ||
+		implementsMarshaler(value, textMarshalerType)
+	if customMarshaler {
+		if err := detectJSONCycles(owner, value, visiting); err != nil {
+			return err
+		}
+	}
 	for index := 0; index < value.NumField(); index++ {
 		field := value.Type().Field(index)
 		if field.PkgPath != "" || strings.Split(field.Tag.Get("json"), ",")[0] == "-" {
@@ -2680,6 +2690,55 @@ func validateJSONStructStrings(
 			visiting,
 		); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func detectJSONCycles(owner string, value reflect.Value, visiting map[jsonReference]struct{}) error {
+	if !value.IsValid() || value.Type() == timeValueType {
+		return nil
+	}
+	if reference, ok := jsonValueReference(value); ok {
+		if _, exists := visiting[reference]; exists {
+			return fmt.Errorf("%s contains cyclic JSON data", owner)
+		}
+		visiting[reference] = struct{}{}
+		defer delete(visiting, reference)
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if value.IsNil() {
+			return nil
+		}
+		return detectJSONCycles(owner, value.Elem(), visiting)
+	case reflect.Map:
+		if value.IsNil() {
+			return nil
+		}
+		iterator := value.MapRange()
+		for iterator.Next() {
+			if err := detectJSONCycles(owner, iterator.Key(), visiting); err != nil {
+				return err
+			}
+			if err := detectJSONCycles(owner, iterator.Value(), visiting); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		if value.Kind() == reflect.Slice && value.IsNil() {
+			return nil
+		}
+		for index := 0; index < value.Len(); index++ {
+			if err := detectJSONCycles(owner, value.Index(index), visiting); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		for index := 0; index < value.NumField(); index++ {
+			if err := detectJSONCycles(owner, value.Field(index), visiting); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
