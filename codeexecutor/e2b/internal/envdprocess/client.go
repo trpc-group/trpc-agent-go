@@ -549,7 +549,7 @@ func (c *Client) cleanupRunProcess(
 		killed, err := c.kill(cleanupCtx, killTarget{tag: tag})
 		if err != nil {
 			if cleanupCtx.Err() != nil {
-				return nil
+				return fmt.Errorf("envd process: tag cleanup was not confirmed: %w", cleanupCtx.Err())
 			}
 			return err
 		}
@@ -558,7 +558,7 @@ func (c *Client) cleanupRunProcess(
 		}
 		select {
 		case <-cleanupCtx.Done():
-			return nil
+			return fmt.Errorf("envd process: tag cleanup was not confirmed: %w", cleanupCtx.Err())
 		case <-retry.C:
 		}
 	}

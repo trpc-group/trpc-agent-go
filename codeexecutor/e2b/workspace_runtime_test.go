@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +28,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	ci "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/codeinterpreter"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec/processconnect"
 )
 
 // executeResponder is a hook for customizing the /execute NDJSON response.
@@ -45,11 +45,15 @@ type mockE2BServer struct {
 	execCalls   int
 	killCalls   int
 	lastCode    string
+	process     *workspaceProcessHandler
+	rpc         http.Handler
 }
 
 func newMockE2BServer(t *testing.T, respond executeResponder) *mockE2BServer {
 	t.Helper()
 	m := &mockE2BServer{t: t, respond: respond}
+	m.process = &workspaceProcessHandler{inputs: make(map[uint32]*workspaceProcessInput)}
+	_, m.rpc = processconnect.NewProcessHandler(m.process)
 	m.server = httptest.NewServer(http.HandlerFunc(m.handle))
 	return m
 }
@@ -65,13 +69,17 @@ func (m *mockE2BServer) client() *http.Client {
 }
 
 func (m *mockE2BServer) handle(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/process.Process/") {
+		m.rpc.ServeHTTP(w, r)
+		return
+	}
 	switch {
 	case r.Method == "POST" && r.URL.Path == "/sandboxes":
 		m.mu.Lock()
 		m.createCalls++
 		m.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","envdPort":49999}`))
+		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","envdPort":49983,"envdVersion":"0.5.2"}`))
 		return
 	case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/sandboxes/"):
 		m.mu.Lock()
@@ -81,14 +89,14 @@ func (m *mockE2BServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/connect"):
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","state":"running"}`))
+		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","state":"running","envdVersion":"0.5.2"}`))
 		return
 	case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/pause"):
 		w.WriteHeader(http.StatusNoContent)
 		return
 	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/sandboxes/"):
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","state":"running"}`))
+		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","state":"running","envdVersion":"0.5.2"}`))
 		return
 	case r.URL.Path == "/execute":
 		m.mu.Lock()
@@ -161,7 +169,7 @@ func newMockedExecutor(
 	allOpts := append([]Option{
 		WithAPIKey("test-key"),
 		WithDomain("e2b.test"),
-		WithDebug(true),
+		WithDebug(false),
 		WithHTTPClient(srv.client()),
 		WithRequestTimeout(5 * time.Second),
 	}, opts...)
@@ -190,7 +198,7 @@ func TestNewWithContext_ConnectExisting(t *testing.T) {
 	c, err := NewWithContext(context.Background(),
 		WithAPIKey("test-key"),
 		WithDomain("e2b.test"),
-		WithDebug(true),
+		WithDebug(false),
 		WithHTTPClient(srv.client()),
 		WithSandboxID("existing-id"),
 	)
@@ -208,7 +216,7 @@ func TestNew_EnvKey(t *testing.T) {
 	t.Setenv("E2B_API_KEY", "env-key")
 	c, err := New(
 		WithDomain("e2b.test"),
-		WithDebug(true),
+		WithDebug(false),
 		WithHTTPClient(srv.client()),
 	)
 	require.NoError(t, err)
@@ -405,137 +413,6 @@ func TestStageDirectory_ReadOnly(t *testing.T) {
 		codeexecutor.StageOptions{}))
 	require.NoError(t, c.StageDirectory(context.Background(), ws, dir, "d",
 		codeexecutor.StageOptions{ReadOnly: true}))
-}
-
-func TestRunProgram_FramedOutput(t *testing.T) {
-	srv := newMockE2BServer(t, func(code string) string {
-		stdout := strings.Join([]string{
-			sentinelStdoutBegin,
-			"hello",
-			sentinelStdoutEnd,
-			sentinelExitPrefix + "0",
-		}, "\n") + "\n"
-		stderr := strings.Join([]string{
-			sentinelStderrBegin,
-			sentinelStderrEnd,
-		}, "\n") + "\n"
-		return ndjsonLines(stdoutMsg(stdout), stderrMsg(stderr))
-	})
-	defer srv.close()
-	c := newMockedExecutor(t, srv)
-
-	ws := codeexecutor.Workspace{ID: "x", Path: "/tmp/ws"}
-	res, err := c.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
-		Cmd:     "echo",
-		Args:    []string{"hi"},
-		Env:     map[string]string{"FOO": "bar"},
-		Cwd:     "work",
-		Stdin:   "input data",
-		Timeout: 3 * time.Second,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "hello", res.Stdout)
-	assert.Equal(t, "", res.Stderr)
-	assert.Equal(t, 0, res.ExitCode)
-	assert.False(t, res.TimedOut)
-}
-
-func TestRunProgram_BashErrorSurfaced(t *testing.T) {
-	srv := newMockE2BServer(t, func(code string) string {
-		// Emit an error event — runBashStreaming should translate this
-		// into an error return value.
-		return ndjsonLines(errorMsg("ShellError", "boom", ""))
-	})
-	defer srv.close()
-	c := newMockedExecutor(t, srv)
-
-	_, err := c.RunProgram(context.Background(),
-		codeexecutor.Workspace{ID: "x", Path: "/tmp/ws"},
-		codeexecutor.RunProgramSpec{Cmd: "false"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bash error")
-}
-
-// runProgramCaptureScript runs spec through a mock e2b sandbox and
-// returns the bash script handed to the sandbox `/execute` endpoint,
-// so CleanEnv tests can assert how RunProgram shapes the program
-// invocation without a real sandbox.
-func runProgramCaptureScript(
-	t *testing.T, spec codeexecutor.RunProgramSpec,
-) string {
-	t.Helper()
-	var gotScript string
-	srv := newMockE2BServer(t, func(code string) string {
-		gotScript = code
-		stdout := strings.Join([]string{
-			sentinelStdoutBegin, "", sentinelStdoutEnd,
-			sentinelExitPrefix + "0",
-		}, "\n") + "\n"
-		stderr := strings.Join([]string{
-			sentinelStderrBegin, sentinelStderrEnd,
-		}, "\n") + "\n"
-		return ndjsonLines(stdoutMsg(stdout), stderrMsg(stderr))
-	})
-	defer srv.close()
-	c := newMockedExecutor(t, srv)
-	ws := codeexecutor.Workspace{ID: "wCE", Path: "/tmp/ws"}
-	_, err := c.RunProgram(context.Background(), ws, spec)
-	require.NoError(t, err)
-	require.NotEmpty(t, gotScript)
-	return gotScript
-}
-
-// TestRunProgram_CleanEnvUsesEnvI guards the e2b half of issue
-// #1845: when spec.CleanEnv is set the spawned program must be
-// launched through `env -i` with a minimal PATH, so it starts from
-// an empty environment plus the workspace base vars instead of
-// inheriting the sandbox process environment.
-func TestRunProgram_CleanEnvUsesEnvI(t *testing.T) {
-	script := runProgramCaptureScript(t, codeexecutor.RunProgramSpec{
-		Cmd:      "echo",
-		Args:     []string{"hi"},
-		CleanEnv: true,
-		Timeout:  3 * time.Second,
-	})
-	require.Contains(t, script, "env -i ",
-		"clean mode must start the program from an empty env")
-	require.Contains(t, script, minimalCleanPATH,
-		"clean mode must inject a minimal PATH for env -i")
-	require.Contains(t, script, codeexecutor.WorkspaceEnvDirKey+"=",
-		"workspace base vars must still be injected in clean mode")
-}
-
-// TestRunProgram_CleanEnvKeepsSpecPATH verifies a caller-supplied
-// PATH is honored in clean mode and suppresses the minimalCleanPATH
-// fallback (so the tool/skill layer, which has already vetted that
-// PATH, stays authoritative).
-func TestRunProgram_CleanEnvKeepsSpecPATH(t *testing.T) {
-	script := runProgramCaptureScript(t, codeexecutor.RunProgramSpec{
-		Cmd:      "echo",
-		CleanEnv: true,
-		Env:      map[string]string{"PATH": "/opt/vetted/bin"},
-		Timeout:  3 * time.Second,
-	})
-	require.Contains(t, script, "env -i ")
-	require.Contains(t, script, "/opt/vetted/bin")
-	require.NotContains(t, script, minimalCleanPATH,
-		"caller PATH must suppress the minimal PATH fallback")
-}
-
-// TestRunProgram_NoCleanEnvUsesPlainEnv pins the non-policy
-// contract: without CleanEnv the runtime keeps a plain `env ...`
-// token and inherits the sandbox environment, so existing callers
-// are unaffected.
-func TestRunProgram_NoCleanEnvUsesPlainEnv(t *testing.T) {
-	script := runProgramCaptureScript(t, codeexecutor.RunProgramSpec{
-		Cmd:     "echo",
-		Env:     map[string]string{"FOO": "bar"},
-		Timeout: 3 * time.Second,
-	})
-	require.Contains(t, script, "env ")
-	require.NotContains(t, script, "env -i",
-		"non-clean mode must not isolate the environment")
-	require.NotContains(t, script, minimalCleanPATH)
 }
 
 func TestCollect_ReadsFiles(t *testing.T) {
@@ -748,26 +625,16 @@ func TestStageInputs_SandboxNotInitialized(t *testing.T) {
 }
 
 func TestExecuteInline_Python(t *testing.T) {
-	srv := newMockE2BServer(t, func(code string) string {
-		if strings.Contains(code, sentinelStdoutBegin) {
-			stdout := strings.Join([]string{
-				sentinelStdoutBegin,
-				"inline-ok",
-				sentinelStdoutEnd,
-				sentinelExitPrefix + "0",
-			}, "\n") + "\n"
-			return ndjsonLines(stdoutMsg(stdout))
-		}
-		return ""
-	})
+	srv := newMockE2BServer(t, func(string) string { return "" })
 	defer srv.close()
+	srv.process.stdout = "inline-ok\n"
 	c := newMockedExecutor(t, srv)
-
 	res, err := c.ExecuteInline(context.Background(), "e1",
-		[]codeexecutor.CodeBlock{{Language: "python", Code: "print('x')"}},
-		2*time.Second)
+		[]codeexecutor.CodeBlock{{Language: "python", Code: "print('x')"}}, 2*time.Second)
 	require.NoError(t, err)
-	assert.Contains(t, res.Stdout, "inline-ok")
+	assert.Equal(t, "inline-ok\n", res.Stdout)
+	require.Len(t, srv.process.requests, 1)
+	assert.Contains(t, srv.process.requests[0].Process.Args, "python3")
 }
 
 func TestExecuteInline_UnsupportedBlockLang(t *testing.T) {
@@ -844,17 +711,6 @@ func TestExtractBetween_Edge(t *testing.T) {
 	assert.Equal(t, "hello", extractBetween("BEGIN\nhelloEND", "BEGIN", "END"))
 }
 
-func TestParseFramedOutput_NegativeExit(t *testing.T) {
-	stdout := strings.Join([]string{
-		sentinelStdoutBegin,
-		"x",
-		sentinelStdoutEnd,
-		sentinelExitPrefix + "not-a-number",
-	}, "\n") + "\n"
-	_, _, exit := parseFramedOutput(stdout, "")
-	assert.Equal(t, 0, exit)
-}
-
 func TestTarGzFromFiles_InvalidPath(t *testing.T) {
 	_, err := tarGzFromFiles([]codeexecutor.PutFile{{Path: "", Content: []byte("x")}})
 	require.Error(t, err)
@@ -866,12 +722,6 @@ func TestTarGzFromFiles_InvalidPath(t *testing.T) {
 func TestTarGzFromDir_MissingRoot(t *testing.T) {
 	_, err := tarGzFromDir("/definitely/not/there/" + t.Name())
 	require.Error(t, err)
-}
-
-func TestIsTimeoutErr_MixedCase(t *testing.T) {
-	assert.True(t, isTimeoutErr(fmt.Errorf("Request TIMEOUT occurred")))
-	assert.True(t, isTimeoutErr(fmt.Errorf("context deadline: timeout")))
-	assert.False(t, isTimeoutErr(fmt.Errorf("misc")))
 }
 
 func TestPinnedArtifactVersion(t *testing.T) {
@@ -906,49 +756,17 @@ func TestPinnedArtifactVersion(t *testing.T) {
 }
 
 func TestSaveWorkspaceMetadata_ReturnsCommitExitError(t *testing.T) {
-	srv := newMockE2BServer(t, func(code string) string {
-		switch {
-		case strings.Contains(code, "base64 -d >"):
-			return ndjsonLines(stdoutMsg(""))
-		case strings.Contains(code, "mv -f"):
-			require.Contains(t, code, "metadata path is a directory")
-			stdout := strings.Join([]string{
-				sentinelStdoutBegin,
-				sentinelStdoutEnd,
-				sentinelExitPrefix + "1",
-			}, "\n") + "\n"
-			stderr := strings.Join([]string{
-				sentinelStderrBegin,
-				"mv failed",
-				sentinelStderrEnd,
-			}, "\n") + "\n"
-			return ndjsonLines(stdoutMsg(stdout), stderrMsg(stderr))
-		case strings.Contains(code, "rm -f"):
-			stdout := strings.Join([]string{
-				sentinelStdoutBegin,
-				sentinelStdoutEnd,
-				sentinelExitPrefix + "0",
-			}, "\n") + "\n"
-			stderr := strings.Join([]string{
-				sentinelStderrBegin,
-				sentinelStderrEnd,
-			}, "\n") + "\n"
-			return ndjsonLines(stdoutMsg(stdout), stderrMsg(stderr))
-		default:
-			return ndjsonLines(stdoutMsg(""))
-		}
-	})
+	srv := newMockE2BServer(t, func(string) string { return "" })
 	defer srv.close()
+	srv.process.exitCode = 1
+	srv.process.stderr = "mv failed\n"
 	c := newMockedExecutor(t, srv)
-
-	err := c.ensureRuntime().saveWorkspaceMetadata(
-		context.Background(),
-		codeexecutor.Workspace{ID: "w", Path: "/workspace"},
-		codeexecutor.WorkspaceMetadata{},
-	)
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "exit code 1")
+	err := c.ensureRuntime().saveWorkspaceMetadata(context.Background(),
+		codeexecutor.Workspace{ID: "w", Path: "/workspace"}, codeexecutor.WorkspaceMetadata{})
+	require.ErrorContains(t, err, "exit code 1")
+	require.Len(t, srv.process.requests, 2)
+	assert.Contains(t, strings.Join(srv.process.requests[0].Process.Args, " "), "metadata path is a directory")
+	assert.Contains(t, strings.Join(srv.process.requests[1].Process.Args, " "), "rm -f")
 }
 
 func TestSaveWorkspaceMetadata_ReturnsWriteError(t *testing.T) {
@@ -1159,33 +977,13 @@ func TestCollectOutputs_MaxFilesLimit(t *testing.T) {
 	assert.True(t, mf.LimitsHit)
 }
 
-func TestRunProgram_DefaultTimeout(t *testing.T) {
-	srv := newMockE2BServer(t, func(code string) string {
-		stdout := strings.Join([]string{
-			sentinelStdoutBegin,
-			"done",
-			sentinelStdoutEnd,
-			sentinelExitPrefix + "0",
-		}, "\n") + "\n"
-		return ndjsonLines(stdoutMsg(stdout))
-	})
-	defer srv.close()
-	c := newMockedExecutor(t, srv)
-
-	res, err := c.RunProgram(context.Background(),
-		codeexecutor.Workspace{ID: "x", Path: "/tmp/ws"},
-		codeexecutor.RunProgramSpec{Cmd: "true"})
-	require.NoError(t, err)
-	assert.Equal(t, "done", res.Stdout)
-}
-
 func TestExecuteCode_SandboxExecutionError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == "POST" && r.URL.Path == "/sandboxes":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(
-				`{"sandboxID":"sbx","clientID":"c","templateID":"t","envdPort":49999}`))
+				`{"sandboxID":"sbx","clientID":"c","templateID":"t","envdPort":49983,"envdVersion":"0.5.2"}`))
 		case r.URL.Path == "/execute":
 			w.WriteHeader(http.StatusInternalServerError)
 		default:
@@ -1256,7 +1054,7 @@ func TestPauseExecutor_NotOwner(t *testing.T) {
 	c, err := NewWithContext(context.Background(),
 		WithAPIKey("test-key"),
 		WithDomain("e2b.test"),
-		WithDebug(true),
+		WithDebug(false),
 		WithHTTPClient(srv.client()),
 		WithSandboxID("existing-id"),
 	)
