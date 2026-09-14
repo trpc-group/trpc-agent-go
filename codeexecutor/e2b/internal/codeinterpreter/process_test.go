@@ -81,13 +81,14 @@ func TestRunProcessSandboxConnection(t *testing.T) {
 			name, version, refreshedVersion, stdin, authorization, wantAuthorization, wantError string
 			port                                                                                int
 		}{
-			{name: "modern", version: "0.5.2", stdin: "data", port: 49984},
-			{name: "legacy", version: "0.2.10", wantAuthorization: "Basic dXNlcjo="},
-			{name: "custom user", version: "0.2.10", authorization: "Basic cm9vdDo=", wantAuthorization: "Basic cm9vdDo="},
+			{name: "modern", version: "0.5.2", stdin: "data", port: 49984, wantAuthorization: "Basic cm9vdDo="},
+			{name: "legacy", version: "0.2.10", wantAuthorization: "Basic cm9vdDo="},
+			{name: "custom legacy user", version: "0.2.10", authorization: "Basic dXNlcjo=", wantAuthorization: "Basic dXNlcjo="},
+			{name: "custom modern user", version: "0.5.2", authorization: "Basic dXNlcjo=", wantAuthorization: "Basic dXNlcjo="},
 			{name: "unsupported stdin", version: "0.2.10", stdin: "data", wantError: "finite stdin requires envd >= 0.5.2"},
-			{name: "refresh version", refreshedVersion: "0.5.2", stdin: "data"},
+			{name: "refresh version", refreshedVersion: "0.5.2", stdin: "data", wantAuthorization: "Basic cm9vdDo="},
 			{name: "unknown version", stdin: "data", wantError: "known envd version"},
-			{name: "unknown without stdin"},
+			{name: "unknown without stdin", wantAuthorization: "Basic cm9vdDo="},
 			{name: "invalid version", version: "bad", wantError: "invalid envd version"},
 		} {
 			t.Run(fmt.Sprintf("connect=%t/%s", connectExisting, tc.name), func(t *testing.T) {
@@ -205,13 +206,4 @@ func TestRunProcessLoopbackDebug(t *testing.T) {
 	_, err = RunProcess(context.Background(), s, envdprocess.Request{Cmd: "true"})
 	require.ErrorContains(t, err, "headers require HTTPS")
 	assert.EqualValues(t, 1, h.started.Load())
-}
-
-func TestLegacyEnvdUser(t *testing.T) {
-	for version, want := range map[string]bool{
-		"0.2.10": true, "v0.3.9+build": true, "0.4.0-rc.1": true,
-		"0.4.0": false, "0.5.2": false, "1.0.0": false, "": false,
-	} {
-		assert.Equal(t, want, legacyEnvdUser(version), version)
-	}
 }

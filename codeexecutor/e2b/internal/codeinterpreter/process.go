@@ -28,6 +28,9 @@ const defaultEnvdPort = 49983
 // requires a known envd version; missing metadata is refreshed before launch.
 // Remote endpoints require HTTPS. No request is routed to Code Interpreter.
 // A nil sandbox or context returns an error. Process lifetime is owned by Run.
+// Remote processes default to root, matching the standard Code Interpreter
+// kernel's workspace ownership. Configured Authorization or req.User overrides
+// that account. Credentialless loopback debug uses the server's default user.
 func RunProcess(ctx context.Context, s *Sandbox, req envdprocess.Request) (envdprocess.Result, error) {
 	if ctx == nil {
 		return envdprocess.Result{}, errors.New("e2b: nil context")
@@ -90,11 +93,11 @@ func (s *Sandbox) newProcessClient(needsStdin bool) (*envdprocess.Client, error)
 	if s.connection.Debug && (domain == "localhost" || net.ParseIP(domain).IsLoopback()) {
 		baseURL = "http://" + net.JoinHostPort(domain, strconv.Itoa(port))
 	}
-	return envdprocess.NewClient(baseURL, s.connection.HTTPClient, s.processHeaders(version),
+	return envdprocess.NewClient(baseURL, s.connection.HTTPClient, s.processHeaders(),
 		envdprocess.WithEnvdVersion(version))
 }
 
-func (s *Sandbox) processHeaders(version string) http.Header {
+func (s *Sandbox) processHeaders() http.Header {
 	headers := make(http.Header)
 	if s.connection.AccessToken != "" {
 		headers.Set("X-Access-Token", s.connection.AccessToken)
@@ -110,27 +113,13 @@ func (s *Sandbox) processHeaders(version string) http.Header {
 		}
 		headers.Set(key, value)
 	}
-	// E2B SDKs explicitly select user on envd versions predating template
-	// default-user support (0.4.0). An operator-supplied Authorization header
-	// can select another account on compatible deployments.
-	if headers.Get("Authorization") == "" && legacyEnvdUser(version) {
-		headers.Set("Authorization", "Basic dXNlcjo=") // user:
+	// Workspace files are still created by Code Interpreter, whose standard
+	// kernel runs as root. Preserve that execution identity across the native
+	// migration, including existing workspaces and 0600 staged files. Custom
+	// templates can explicitly select their kernel account through Headers.
+	// Debug HTTP must remain credentialless; its server selects the account.
+	if headers.Get("Authorization") == "" && !s.connection.Debug {
+		headers.Set("Authorization", "Basic cm9vdDo=") // root:
 	}
 	return headers
-}
-
-// legacyEnvdUser only selects a default header; NewClient validates the full
-// version before sending any request.
-func legacyEnvdUser(version string) bool {
-	version = strings.TrimPrefix(version, "v")
-	core, _, _ := strings.Cut(version, "+")
-	core, prerelease, _ := strings.Cut(core, "-")
-	parts := strings.Split(core, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	major, _ := strconv.Atoi(parts[0])
-	minor, _ := strconv.Atoi(parts[1])
-	patch, _ := strconv.Atoi(parts[2])
-	return major == 0 && (minor < 4 || minor == 4 && patch == 0 && prerelease != "")
 }

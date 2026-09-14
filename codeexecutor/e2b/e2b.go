@@ -483,6 +483,9 @@ func (c *CodeExecutor) StageDirectory(
 // in RunResult with a nil error; cancellation and transport failures are errors.
 // Finite stdin requires a known envd version of at least 0.5.2. Output is
 // captured without trimming or truncation. There is no Code Interpreter fallback.
+// Remote programs default to root to match standard Code Interpreter workspace
+// ownership. Custom templates should set Authorization through WithHeaders to
+// select their kernel account; an explicit Authorization header takes precedence.
 func (c *CodeExecutor) RunProgram(
 	ctx context.Context, ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,

@@ -162,14 +162,19 @@ as a total timeout on the Process stream. Remote Process endpoints require
 HTTPS. Local debug can use `WithDebug(true)` with `WithDomain("localhost")` or
 a loopback IP, but HTTP cannot carry access tokens or configured headers.
 
-Like the [E2B SDK](https://github.com/e2b-dev/E2B/blob/main/packages/js-sdk/src/envd/rpc.ts),
-versions before 0.4.0 explicitly select `user`; newer versions use the template's
-default account. A configured `Authorization` header takes precedence over this
-legacy default. Compatible deployments requiring another user can provide
-Basic authentication through `WithHeaders`, for example `Basic cm9vdDo=` for
-`root:` over HTTPS. Check user, HOME/PATH and workspace file ownership when
-migrating a custom template; kernel-local environment changes are not inherited
-by native processes.
+Remote workspace programs default to `root`, matching the standard Code
+Interpreter kernel that creates workspace directories, stages files, and reads
+outputs. This preserves access to existing workspaces and private staged files
+without changing their ownership or permissions. The native template default
+can be a different account, so the Code Interpreter adapter selects its account
+explicitly, independent of the envd version.
+
+For a custom template whose kernel runs as another account, configure the same
+account through `WithHeaders` using Basic authentication, for example
+`Authorization: Basic dXNlcjo=` for `user:` over HTTPS. An explicit
+`Authorization` header takes precedence. Credentialless loopback debug follows
+the local server's account. Kernel-local environment changes are not inherited
+by native processes; check HOME/PATH when migrating custom templates.
 
 ## Workspace Layout
 
