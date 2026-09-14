@@ -7,6 +7,9 @@
 //
 
 // Package ocr provides OCR (Optical Character Recognition) interfaces and implementations.
+//
+// Deprecated: use knowledge/source WithExtractor with an OCR-capable content
+// extractor, such as knowledge/extractor/docling, instead.
 package ocr
 
 import (
@@ -15,6 +18,9 @@ import (
 )
 
 // Extractor defines the core interface for text extraction from images.
+//
+// Deprecated: use knowledge/extractor.Extractor with an OCR-capable content
+// extractor, such as knowledge/extractor/docling, instead.
 type Extractor interface {
 	// ExtractText extracts text from image data.
 	// Returns the recognized text and any error encountered.
@@ -28,9 +34,13 @@ type Extractor interface {
 }
 
 // Option defines a function type for configuring OCR operations.
+//
+// Deprecated: use OCR options on the selected content extractor instead.
 type Option func(*Options)
 
 // Options holds runtime options for OCR operations.
+//
+// Deprecated: use OCR options on the selected content extractor instead.
 type Options struct {
 	// Custom options can be added here in the future
 	// For example:

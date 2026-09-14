@@ -10,6 +10,9 @@
 // +build tesseract
 
 // Package tesseract provides Tesseract OCR engine implementation.
+//
+// Deprecated: use knowledge/source WithExtractor with an OCR-capable content
+// extractor, such as knowledge/extractor/docling, instead.
 package tesseract
 
 import (
@@ -28,12 +31,16 @@ import (
 // 2. Add dependency: go get github.com/otiai10/gosseract/v2
 //
 // Note: This engine uses a sync.Pool to support true concurrent OCR processing.
+//
+// Deprecated: use knowledge/extractor/docling with source WithExtractor instead.
 type Extractor struct {
 	pool   *sync.Pool
 	config *options
 }
 
 // New creates a new Tesseract OCR Extractor with a client pool for concurrent processing.
+//
+// Deprecated: use knowledge/extractor/docling.New with source WithExtractor instead.
 func New(opts ...Option) (*Extractor, error) {
 	cfg := &options{
 		language:            "eng",
