@@ -256,6 +256,17 @@ func TestRunProgramCancellationAndTimeout(t *testing.T) {
 		t.Run(fmt.Sprintf("caller=%t", caller), func(t *testing.T) {
 			srv := newMockE2BServer(t, nil)
 			defer srv.close()
+			rpc := srv.rpc
+			srv.rpc = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/Start") {
+					// Exercise the client's owned timer, not a second timer in
+					// Connect's mock server rounded to whole milliseconds. RPC
+					// deadline errors are covered separately as stream failures.
+					assert.NotEmpty(t, r.Header.Get("Connect-Timeout-Ms"))
+					r.Header.Del("Connect-Timeout-Ms")
+				}
+				rpc.ServeHTTP(w, r)
+			})
 			srv.process.start = func(ctx context.Context, _ *connect.Request[process.StartRequest], stream *connect.ServerStream[process.StartResponse]) error {
 				if err := sendWorkspaceStart(stream, 1); err != nil {
 					return err

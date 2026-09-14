@@ -1347,9 +1347,58 @@ func TestRunReportsUnconfirmedTagCleanup(t *testing.T) {
 	go func() { <-registered; cancel() }()
 	result, err := client.Run(ctx, Request{Cmd: "sleep"})
 	require.ErrorIs(t, err, context.Canceled)
+	require.NotErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, errRunCleanup)
 	require.ErrorContains(t, err, "tag cleanup was not confirmed")
 	assert.False(t, result.TimedOut)
 	assert.Zero(t, result.PID)
+}
+
+func TestRunCleanupPreservesExecutionErrorClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		started bool
+		pending bool
+	}{
+		{name: "tag retry deadline"},
+		{name: "tag RPC deadline", pending: true},
+		{name: "PID RPC deadline", started: true, pending: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := &testProcessHandler{}
+			handler.start = func(_ context.Context, _ *connect.Request[process.StartRequest], stream *connect.ServerStream[process.StartResponse]) error {
+				if tc.started {
+					if err := stream.Send(startEvent(42)); err != nil {
+						return err
+					}
+				}
+				return connect.NewError(connect.CodeUnavailable, errors.New("execution unavailable"))
+			}
+			handler.sendSignal = func(ctx context.Context, req *connect.Request[process.SendSignalRequest]) (*connect.Response[process.SendSignalResponse], error) {
+				if tc.started {
+					assert.EqualValues(t, 42, req.Msg.Process.GetPid())
+				} else {
+					assert.NotEmpty(t, req.Msg.Process.GetTag())
+				}
+				if tc.pending {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				return nil, connect.NewError(connect.CodeNotFound, errors.New("not registered"))
+			}
+			client := newTestClient(t, handler, nil)
+			ctx := context.Background()
+			result, err := client.Run(ctx, Request{Cmd: "echo"})
+			require.NoError(t, ctx.Err())
+			require.ErrorContains(t, err, "execution unavailable")
+			require.ErrorContains(t, err, "deadline")
+			require.ErrorIs(t, err, errRunCleanup)
+			assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+			assert.NotErrorIs(t, err, context.DeadlineExceeded)
+			assert.NotErrorIs(t, err, context.Canceled)
+			assert.False(t, result.TimedOut)
+		})
+	}
 }
 
 func TestRunStreamErrorIsProtocolError(t *testing.T) {
