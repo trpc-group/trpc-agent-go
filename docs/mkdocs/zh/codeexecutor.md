@@ -151,12 +151,16 @@ client，并保留显式设置的 `http.Client.Timeout`；该值不应短于需�
 要求 HTTPS；本地调试可组合 `WithDebug(true)` 与 `WithDomain("localhost")`
 或回环 IP，但 HTTP 不允许携带 access token 或自定义 header。
 
-默认用户遵循 [E2B SDK](https://github.com/e2b-dev/E2B/blob/main/packages/js-sdk/src/envd/rpc.ts)：
-envd 0.4.0 以前显式选择 `user`，新版使用模板默认账号。显式配置的
-`Authorization` header 优先于旧版默认值。需要其他用户的兼容部署可通过
-`WithHeaders` 配置 Basic 认证，例如在 HTTPS 上用 `Basic cm9vdDo=` 表示
-`root:`。自定义模板迁移时应核对运行用户、HOME/PATH 和文件所有权；kernel
-进程内临时修改的环境不会被原生进程继承。
+远端 workspace 程序默认使用 `root`，与标准 Code Interpreter kernel 创建目录、
+写入文件和读取输出时的账号一致。这样能继续访问已有 workspace 和私有文件，
+无需修改其所有权或权限。原生模板的默认账号可能不同，因此 Code Interpreter
+适配层会显式选择账号，该选择不依赖 envd 版本。
+
+若自定义模板的 kernel 使用其他账号，应通过 `WithHeaders` 配置相同账号的
+Basic 认证，例如在 HTTPS 上使用 `Authorization: Basic dXNlcjo=` 表示 `user:`。
+显式配置的 `Authorization` header 优先。无凭据的回环地址调试使用本地服务端
+账号。kernel 进程内临时修改的环境不会被原生进程继承；自定义模板迁移时仍需
+核对 HOME/PATH。
 
 ## Workspace 中有哪些目录
 

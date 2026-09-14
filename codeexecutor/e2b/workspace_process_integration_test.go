@@ -24,12 +24,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
-// TestIntegrationWorkspaceProcess tests the public route on a fresh sandbox
-// and a second executor connected to it. It creates a billable sandbox only
-// when the integration tag and E2B_API_KEY are provided. E2B_API_URL and
+// TestIntegrationWorkspaceProcess tests the filesystem/process lifecycle on a
+// fresh sandbox and a second executor connected to it. It creates a billable
+// sandbox only when the integration tag and E2B_API_KEY are provided. E2B_API_URL and
 // E2B_DOMAIN follow normal executor configuration; E2B_TEMPLATE and E2B_ENVD_USER
-// can select a compatible template and process account. No /execute call is
-// needed to create the temporary directories used here.
+// can select a compatible template and process account. E2B_ENVD_USER must
+// match the template's Code Interpreter kernel account. Filesystem operations
+// use /execute, so this catches identity mismatches with native processes.
 func TestIntegrationWorkspaceProcess(t *testing.T) {
 	if os.Getenv("E2B_API_KEY") == "" {
 		t.Skip("set E2B_API_KEY to run the workspace process integration test")
@@ -52,9 +53,15 @@ func TestIntegrationWorkspaceProcess(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connected.Close()) })
 
-	ws := codeexecutor.Workspace{Path: fmt.Sprintf("/tmp/trpc-runprogram-%d", time.Now().UnixNano())}
-	for name, executor := range map[string]*CodeExecutor{"created": owner, "connected": connected} {
-		t.Run(name, func(t *testing.T) {
+	ws, err := owner.CreateWorkspace(ctx, fmt.Sprintf("integration-%d", time.Now().UnixNano()), codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name     string
+		executor *CodeExecutor
+	}{{"created", owner}, {"connected", connected}} {
+		t.Run(tc.name, func(t *testing.T) {
+			executor := tc.executor
+			checkWorkspaceProcessFiles(t, ctx, executor, ws)
 			result, err := executor.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
 				Cmd: "/bin/sh", Args: []string{"-c", `printf 'before\n__E2B_STDOUT_END__\nafter\n\n'; printf 'error\n' >&2; exit 7`},
 				Cwd: "out", CleanEnv: true,
