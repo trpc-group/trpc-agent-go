@@ -612,7 +612,12 @@ func TestLoadOrInitializeSessionStateCommitCancellationPriority(t *testing.T) {
 			}
 			release()
 
-			got := <-resultCh
+			var got result
+			select {
+			case got = <-resultCh:
+			case <-time.After(time.Second):
+				t.Fatal("initialization did not return after validation was released")
+			}
 			require.ErrorIs(t, got.err, test.wantErr)
 			require.False(t, got.didInitialize)
 			require.Nil(t, got.value)
