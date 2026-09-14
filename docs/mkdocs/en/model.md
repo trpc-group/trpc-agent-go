@@ -1958,7 +1958,7 @@ The framework currently supports the following Variants:
 
 - GLM OpenAI-compatible API adaptation
 - Serializes the thinking toggle using GLM's `thinking` object format
-- Falls back to exposing `reasoning_content` as visible content when some GLM gateways return an empty `content` field without tool calls
+- Falls back to exposing `reasoning_content` as visible content when some GLM gateways return an empty `content` field without tool calls and finish normally (`finish_reason=stop`)
 
 **6. VariantKimi**
 
