@@ -176,7 +176,8 @@ func originFromURL(u *url.URL) string {
 // non-positive. An initial stdin failure may add up to one second while Run
 // reconciles a terminal result already in flight. A later process timeout does
 // not erase an independent stdin failure. LaunchOption values configure this
-// invocation.
+// invocation. Cleanup failures retain diagnostic text without adding their
+// context or RPC error identities to the original execution error chain.
 func (c *Client) Run(
 	ctx context.Context,
 	req Request,
@@ -526,15 +527,23 @@ const (
 	tagCleanupRetryInterval         = 25 * time.Millisecond
 )
 
+var errRunCleanup = errors.New("envd process: cleanup failed")
+
 // cleanupRunProcess uses a detached, bounded context because the caller
 // context normally already failed. A known PID is definitive. Before a PID is
 // observed, Run retries its unique tag because an initial NotFound can race
-// envd process registration.
+// envd process registration. Cleanup has its own lifetime, so its error must
+// not change errors.Is/errors.As classification of the execution failure.
 func (c *Client) cleanupRunProcess(
 	callerCtx context.Context,
 	proc *Process,
 	tag string,
-) error {
+) (cleanupErr error) {
+	defer func() {
+		if cleanupErr != nil {
+			cleanupErr = fmt.Errorf("%w: %v", errRunCleanup, cleanupErr)
+		}
+	}()
 	cleanupCtx, cancel := context.WithTimeout(
 		context.WithoutCancel(callerCtx), runCleanupTimeout,
 	)
@@ -549,7 +558,7 @@ func (c *Client) cleanupRunProcess(
 		killed, err := c.kill(cleanupCtx, killTarget{tag: tag})
 		if err != nil {
 			if cleanupCtx.Err() != nil {
-				return fmt.Errorf("envd process: tag cleanup was not confirmed: %w", cleanupCtx.Err())
+				return fmt.Errorf("envd process: tag cleanup was not confirmed: %v", cleanupCtx.Err())
 			}
 			return err
 		}
@@ -558,7 +567,7 @@ func (c *Client) cleanupRunProcess(
 		}
 		select {
 		case <-cleanupCtx.Done():
-			return fmt.Errorf("envd process: tag cleanup was not confirmed: %w", cleanupCtx.Err())
+			return fmt.Errorf("envd process: tag cleanup was not confirmed: %v", cleanupCtx.Err())
 		case <-retry.C:
 		}
 	}
