@@ -537,6 +537,98 @@ func TestLoadOrInitializeSessionStateCloseCancelsOwner(t *testing.T) {
 	require.ErrorIs(t, <-ownerDone, context.Canceled)
 }
 
+func TestLoadOrInitializeSessionStateCommitCancellationPriority(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+
+	tests := []struct {
+		name         string
+		closeService bool
+		wantErr      error
+	}{
+		{
+			name:         "service close wins after callback cancellation check",
+			closeService: true,
+			wantErr:      errStateInitializationClosed,
+		},
+		{
+			name:    "caller cancellation remains canceled after callback cancellation check",
+			wantErr: context.Canceled,
+		},
+	}
+	type result struct {
+		value         []byte
+		didInitialize bool
+		err           error
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := NewSessionService()
+			t.Cleanup(func() { require.NoError(t, service.Close()) })
+			_, err := service.CreateSession(context.Background(), key, nil)
+			require.NoError(t, err)
+
+			callCtx := context.Background()
+			var cancel context.CancelFunc
+			if !test.closeService {
+				callCtx, cancel = context.WithCancel(callCtx)
+				t.Cleanup(cancel)
+			}
+			initializeCtxs := make(chan context.Context, 1)
+			validationStarted := make(chan struct{})
+			releaseValidation := make(chan struct{})
+			var releaseValidationOnce sync.Once
+			release := func() { releaseValidationOnce.Do(func() { close(releaseValidation) }) }
+			t.Cleanup(release)
+			resultCh := make(chan result, 1)
+			go func() {
+				value, didInitialize, err := service.LoadOrInitializeSessionState(
+					callCtx,
+					key,
+					"state",
+					func([]byte) bool {
+						close(validationStarted)
+						<-releaseValidation
+						return true
+					},
+					func(initializeCtx context.Context) ([]byte, error) {
+						initializeCtxs <- initializeCtx
+						return []byte("value"), nil
+					},
+				)
+				resultCh <- result{value: value, didInitialize: didInitialize, err: err}
+			}()
+
+			initializeCtx := <-initializeCtxs
+			<-validationStarted
+			if test.closeService {
+				require.NoError(t, service.Close())
+			} else {
+				cancel()
+			}
+			select {
+			case <-initializeCtx.Done():
+			case <-time.After(time.Second):
+				t.Fatal("cancellation did not cancel the initializer context")
+			}
+			release()
+
+			var got result
+			select {
+			case got = <-resultCh:
+			case <-time.After(time.Second):
+				t.Fatal("initialization did not return after validation was released")
+			}
+			require.ErrorIs(t, got.err, test.wantErr)
+			require.False(t, got.didInitialize)
+			require.Nil(t, got.value)
+			stored, err := service.GetSession(context.Background(), key)
+			require.NoError(t, err)
+			_, present := stored.GetState("state")
+			require.False(t, present)
+		})
+	}
+}
+
 func TestStateInitializationPreservesZeroValueClose(t *testing.T) {
 	service := &SessionService{}
 	require.NoError(t, service.Close())

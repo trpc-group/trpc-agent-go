@@ -352,15 +352,15 @@ func (s *SessionService) commitInitializedSessionState(
 	generation *sessionWithTTL,
 	state session.StateMap,
 ) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	s.stateInitializationMu.Lock()
 	defer s.stateInitializationMu.Unlock()
 	select {
 	case <-s.stateInitializationClosed:
 		return errStateInitializationClosed
 	default:
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	app, ok := s.getAppSessions(key.AppName)
