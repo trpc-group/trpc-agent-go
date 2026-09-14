@@ -1330,6 +1330,28 @@ func TestRunStreamWithoutEndEventIsProtocolError(t *testing.T) {
 	assert.Equal(t, "partial", result.Stdout)
 }
 
+func TestRunReportsUnconfirmedTagCleanup(t *testing.T) {
+	registered := make(chan struct{})
+	handler := &testProcessHandler{}
+	handler.start = func(ctx context.Context, _ *connect.Request[process.StartRequest], _ *connect.ServerStream[process.StartResponse]) error {
+		close(registered)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	handler.sendSignal = func(context.Context, *connect.Request[process.SendSignalRequest]) (*connect.Response[process.SendSignalResponse], error) {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("not registered"))
+	}
+	client := newTestClient(t, handler, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { <-registered; cancel() }()
+	result, err := client.Run(ctx, Request{Cmd: "sleep"})
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorContains(t, err, "tag cleanup was not confirmed")
+	assert.False(t, result.TimedOut)
+	assert.Zero(t, result.PID)
+}
+
 func TestRunStreamErrorIsProtocolError(t *testing.T) {
 	handler := &testProcessHandler{}
 	handler.start = func(

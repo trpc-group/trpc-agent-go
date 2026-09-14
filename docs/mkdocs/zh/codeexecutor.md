@@ -124,6 +124,40 @@ agent := llmagent.New(
 - 生产环境或更强调隔离：优先 `container`
 - 明确需要 Jupyter kernel：使用 `jupyter`
 
+### E2B workspace 程序执行
+
+`e2b.CodeExecutor.RunProgram` 和 `Engine().Runner().RunProgram` 使用原生
+envd Process RPC，不再依赖 Code Interpreter `/execute`。`ExecuteCode`
+（包括显式提交的 Bash 代码块）继续使用 Code Interpreter kernel。
+Workspace 文件系统操作仍使用 `/execute`，本次迁移仅覆盖程序执行。
+
+- `RunProgramSpec.Timeout` 非正时默认 **30 秒**，覆盖目录准备和命令执行。
+  `WithExecutionTimeout` 作用于代码单元，不控制 workspace 程序。
+- stdout/stderr 保留原始字节、末尾换行及与旧哨兵字符串相同的内容，不做截断。
+- 正常的非零退出通过 `RunResult.ExitCode` 返回，Go error 为 nil。
+  调用方取消、HTTP/RPC 故障返回错误；只有进程自身的 deadline 设置 `TimedOut`，
+  调用方 deadline 不会设置该标志。取消或流异常会触发有界、尽力而为的进程清理，
+  清理可能增加返回耗时，也可能失败。
+- `CleanEnv` 使用 `env -i`，保留 workspace 变量及调用者的 `Env`，同名变量由
+  调用者覆盖。未提供 `PATH` 时，干净环境补入最小系统路径。Linux 模板须提供
+  `/bin/bash`、`/bin/mkdir` 和 `/usr/bin/env` 以完成目录准备。
+- 非空 `Stdin` 需要 **envd 0.5.2 或更新版本**才能发送 EOF。版本来自新建或连接
+  sandbox 的元数据；缺失时通过 sandbox info 刷新。版本未知或不支持时，在启动
+  命令前明确报错。空 stdin 在旧版 envd 上也会收到 EOF，不回退 `/execute`。
+
+原生路径复用新建或连接 sandbox 得到的 domain、数据面 token 和配置的 HTTP
+client，并保留显式设置的 `http.Client.Timeout`；该值不应短于需要运行的长命令。
+默认 `WithRequestTimeout` 不作为整个 Process 流的总超时。远端 Process endpoint
+要求 HTTPS；本地调试可组合 `WithDebug(true)` 与 `WithDomain("localhost")`
+或回环 IP，但 HTTP 不允许携带 access token 或自定义 header。
+
+默认用户遵循 [E2B SDK](https://github.com/e2b-dev/E2B/blob/main/packages/js-sdk/src/envd/rpc.ts)：
+envd 0.4.0 以前显式选择 `user`，新版使用模板默认账号。显式配置的
+`Authorization` header 优先于旧版默认值。需要其他用户的兼容部署可通过
+`WithHeaders` 配置 Basic 认证，例如在 HTTPS 上用 `Basic cm9vdDo=` 表示
+`root:`。自定义模板迁移时应核对运行用户、HOME/PATH 和文件所有权；kernel
+进程内临时修改的环境不会被原生进程继承。
+
 ## Workspace 中有哪些目录
 
 执行器会在一个 workspace 中运行程序。常见目录约定如下：

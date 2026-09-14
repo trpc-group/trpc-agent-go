@@ -126,6 +126,51 @@ Typical recommendations:
 - isolated or production-like execution: `container`
 - notebook workflows: `jupyter`
 
+### E2B workspace programs
+
+`e2b.CodeExecutor.RunProgram` and `Engine().Runner().RunProgram` use native
+envd Process RPCs. They do not require the Code Interpreter `/execute`
+endpoint. `ExecuteCode`, including explicitly submitted Bash code blocks,
+continues to use Code Interpreter kernels. Workspace filesystem operations
+still use `/execute`; this migration covers program execution only.
+
+- A non-positive `RunProgramSpec.Timeout` uses 30 seconds. The timeout covers
+  directory preparation and the command. `WithExecutionTimeout` applies to
+  code cells, not workspace programs.
+- Stdout and stderr preserve their exact bytes, including trailing newlines
+  and text matching the former output sentinels. Capture is not truncated.
+- A normal non-zero exit is returned in `RunResult.ExitCode` with a nil error.
+  Caller cancellation and HTTP/RPC failures return errors. Only the process
+  deadline sets `TimedOut`; caller deadlines do not. Cancellation or a failed
+  stream triggers bounded, best-effort process cleanup, which can add latency
+  and may itself fail.
+- `CleanEnv` uses `env -i`, with workspace variables and caller `Env` values.
+  Caller values override workspace defaults. When no `PATH` is supplied, clean
+  mode adds the minimal system path. The Linux template must provide
+  `/bin/bash`, `/bin/mkdir`, and `/usr/bin/env` for directory preparation.
+- Non-empty `Stdin` requires envd **0.5.2 or newer** to signal EOF. The version
+  is read from sandbox create/connect metadata; missing versions are refreshed
+  from sandbox info. Unknown or unsupported stdin capability fails before the
+  command starts. Empty stdin reaches EOF even on older envd versions.
+  There is no fallback to `/execute`.
+
+The native route reuses the sandbox domain, data-plane tokens and configured
+HTTP client for both new and connected sandboxes. It preserves an explicitly
+configured `http.Client.Timeout`; do not set that timeout shorter than the
+long-running commands you need. The default `WithRequestTimeout` is not imposed
+as a total timeout on the Process stream. Remote Process endpoints require
+HTTPS. Local debug can use `WithDebug(true)` with `WithDomain("localhost")` or
+a loopback IP, but HTTP cannot carry access tokens or configured headers.
+
+Like the [E2B SDK](https://github.com/e2b-dev/E2B/blob/main/packages/js-sdk/src/envd/rpc.ts),
+versions before 0.4.0 explicitly select `user`; newer versions use the template's
+default account. A configured `Authorization` header takes precedence over this
+legacy default. Compatible deployments requiring another user can provide
+Basic authentication through `WithHeaders`, for example `Basic cm9vdDo=` for
+`root:` over HTTPS. Check user, HOME/PATH and workspace file ownership when
+migrating a custom template; kernel-local environment changes are not inherited
+by native processes.
+
 ## Workspace Layout
 
 Programs run inside a workspace. Common directories are:
