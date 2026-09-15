@@ -534,7 +534,148 @@ func TestLoadOrInitializeSessionStateCloseCancelsOwner(t *testing.T) {
 	<-ownerStarted
 
 	require.NoError(t, service.Close())
-	require.ErrorIs(t, <-ownerDone, context.Canceled)
+	err = <-ownerDone
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, errStateInitializationClosed)
+}
+
+func TestLoadOrInitializeSessionStateLifecycleBeforeCommit(t *testing.T) {
+	for _, phase := range []string{"initializer", "projection"} {
+		t.Run(phase, func(t *testing.T) {
+			for _, test := range []struct {
+				name       string
+				callerErr  error
+				closeFirst bool
+				closeLast  bool
+			}{
+				{name: "service close", closeFirst: true},
+				{name: "caller cancellation", callerErr: context.Canceled},
+				{name: "caller deadline", callerErr: context.DeadlineExceeded},
+				{name: "caller cancellation then close", callerErr: context.Canceled, closeLast: true},
+				{name: "caller deadline then close", callerErr: context.DeadlineExceeded, closeLast: true},
+				{name: "close then caller cancellation", callerErr: context.Canceled, closeFirst: true},
+				{name: "close then caller deadline", callerErr: context.DeadlineExceeded, closeFirst: true},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					ctx := context.Background()
+					key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+					service := NewSessionService()
+					t.Cleanup(func() { require.NoError(t, service.Close()) })
+					_, err := service.CreateSession(ctx, key, nil)
+					require.NoError(t, err)
+
+					var callCtx context.Context
+					var cancel context.CancelFunc
+					if test.callerErr == context.DeadlineExceeded {
+						callCtx, cancel = context.WithTimeout(ctx, time.Second)
+					} else {
+						callCtx, cancel = context.WithCancel(ctx)
+					}
+					t.Cleanup(cancel)
+
+					wait := func(done <-chan struct{}) {
+						t.Helper()
+						select {
+						case <-done:
+						case <-time.After(5 * time.Second):
+							t.Fatal("state initialization lifecycle did not complete")
+						}
+					}
+					reached := make(chan context.Context, 1)
+					release := make(chan struct{})
+					var releaseOnce sync.Once
+					unblock := func() { releaseOnce.Do(func() { close(release) }) }
+					type result struct {
+						value       []byte
+						initialized bool
+						err         error
+					}
+					results := make(chan result, 1)
+					ownerDone := make(chan struct{})
+					t.Cleanup(func() {
+						cancel()
+						unblock()
+						wait(ownerDone)
+					})
+					go func() {
+						defer close(ownerDone)
+						var initializeCtx context.Context
+						value, initialized, err := service.LoadOrInitializeSessionState(
+							callCtx, key, "canonical",
+							func(value []byte) bool { return string(value) == "value" },
+							func(ctx context.Context) ([]byte, error) {
+								initializeCtx = ctx
+								if phase == "initializer" {
+									reached <- ctx
+									<-release
+								}
+								return []byte("value"), nil
+							},
+							session.StateInitializationProjection{
+								StateKey: "projected",
+								Project: func([]byte) ([]byte, error) {
+									// Hold the public call between its context check and commit.
+									if phase == "projection" {
+										reached <- initializeCtx
+										<-release
+									}
+									return []byte("projection"), nil
+								},
+							},
+						)
+						results <- result{value: value, initialized: initialized, err: err}
+					}()
+
+					var initializeCtx context.Context
+					select {
+					case initializeCtx = <-reached:
+					case <-time.After(5 * time.Second):
+						t.Fatal("state initialization did not reach the barrier")
+					}
+					if test.closeFirst {
+						require.NoError(t, service.Close())
+						wait(initializeCtx.Done())
+					}
+					if test.callerErr != nil {
+						if test.callerErr == context.Canceled {
+							cancel()
+						}
+						wait(callCtx.Done())
+						require.ErrorIs(t, callCtx.Err(), test.callerErr)
+						wait(initializeCtx.Done())
+					}
+					if test.closeLast {
+						require.NoError(t, service.Close())
+					}
+					unblock()
+					wait(ownerDone)
+					got := <-results
+					wantErr := test.callerErr
+					if wantErr == nil {
+						wantErr = errStateInitializationClosed
+					}
+					require.ErrorIs(t, got.err, wantErr)
+					if test.callerErr != nil {
+						require.NotErrorIs(t, got.err, errStateInitializationClosed)
+					} else {
+						require.NotErrorIs(t, got.err, context.Canceled)
+					}
+					require.False(t, got.initialized)
+					require.Nil(t, got.value)
+					stored, err := service.GetSession(ctx, key)
+					require.NoError(t, err)
+					for _, stateKey := range []string{"canonical", "projected"} {
+						_, present := stored.GetState(stateKey)
+						require.False(t, present, "unexpected commit to %s", stateKey)
+					}
+					service.stateInitializationMu.Lock()
+					gates := len(service.stateInitializationGates)
+					service.stateInitializationMu.Unlock()
+					require.Zero(t, gates)
+				})
+			}
+		})
+	}
 }
 
 func TestStateInitializationPreservesZeroValueClose(t *testing.T) {

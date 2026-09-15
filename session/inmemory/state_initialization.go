@@ -45,6 +45,9 @@ func (g *stateInitializationGate) release() {
 }
 
 // LoadOrInitializeSessionState implements session.StateInitializationService.
+// Close cancels in-flight initializers and prevents further initialization
+// commits. After a successful initializer, lifecycle checks give an already
+// canceled caller context precedence over service closure.
 func (s *SessionService) LoadOrInitializeSessionState(
 	ctx context.Context,
 	key session.Key,
@@ -234,13 +237,13 @@ func (s *SessionService) initializeSessionState(
 		}
 		return nil, false, callbackErr
 	}
-	if err := initializeCtx.Err(); err != nil {
-		select {
-		case <-s.stateInitializationClosed:
-			return nil, false, errStateInitializationClosed
-		default:
-		}
+	if err := ctx.Err(); err != nil {
 		return nil, false, err
+	}
+	select {
+	case <-s.stateInitializationClosed:
+		return nil, false, errStateInitializationClosed
+	default:
 	}
 	value = cloneStateInitializationValue(value)
 	if !validate(cloneStateInitializationValue(value)) {
@@ -251,7 +254,7 @@ func (s *SessionService) initializeSessionState(
 		return nil, false, err
 	}
 	if err := s.commitInitializedSessionState(
-		initializeCtx,
+		ctx,
 		key,
 		generation,
 		state,
@@ -352,6 +355,8 @@ func (s *SessionService) commitInitializedSessionState(
 	generation *sessionWithTTL,
 	state session.StateMap,
 ) error {
+	// Use the caller context here; service closure is checked separately under
+	// the commit lock so its cancellation of the initializer cannot mask it.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
