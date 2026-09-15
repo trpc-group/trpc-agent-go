@@ -37,8 +37,8 @@ func TestRunnerDeduplicatesEventPersistence(t *testing.T) {
 
 	require.NoError(t, r.processSingleAgentEvent(context.Background(), loop, evt))
 	require.NoError(t, r.processSingleAgentEvent(context.Background(), loop, evt))
-	require.Len(t, service.appendEventCalls, 1)
-	require.Len(t, service.enqueueSummaryJobCalls, 1)
+	require.Len(t, service.appendEventCallsSnapshot(), 1)
+	require.Len(t, service.enqueueSummaryJobCallsSnapshot(), 1)
 }
 
 func TestRunnerDoesNotDeduplicateAcrossEventLoops(t *testing.T) {
@@ -62,8 +62,8 @@ func TestRunnerDoesNotDeduplicateAcrossEventLoops(t *testing.T) {
 		evt,
 		&eventPersistenceDeduper{},
 	))
-	require.Len(t, service.appendEventCalls, 2)
-	require.Len(t, service.enqueueSummaryJobCalls, 2)
+	require.Len(t, service.appendEventCallsSnapshot(), 2)
+	require.Len(t, service.enqueueSummaryJobCallsSnapshot(), 2)
 }
 
 func TestRunnerReleasesCompletedEventPersistenceRecord(t *testing.T) {
@@ -206,8 +206,8 @@ func TestRunnerDoesNotDeduplicateEmptyEventID(t *testing.T) {
 	require.True(t, r.handleEventPersistenceOnce(
 		context.Background(), invocation, sess, sess, evt, deduper,
 	))
-	require.Len(t, service.appendEventCalls, 2)
-	require.Len(t, service.enqueueSummaryJobCalls, 2)
+	require.Len(t, service.appendEventCallsSnapshot(), 2)
+	require.Len(t, service.enqueueSummaryJobCallsSnapshot(), 2)
 }
 
 func newPersistenceDedupTestInput() (

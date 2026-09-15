@@ -246,7 +246,36 @@ func BuildExecutionTrace(
 	return capture.Build(status, time.Now())
 }
 
+// BuildExecutionTraceWithAgentName is like BuildExecutionTrace but never reads
+// inv.AgentName, using agentName instead. Callers that captured the agent name
+// before the invocation could be mutated concurrently (for example the runner
+// completion path after cancellation before the first agent event) must use
+// this variant to avoid racing the agent goroutine's asynchronous invocation
+// setup.
+func BuildExecutionTraceWithAgentName(
+	inv *Invocation,
+	status trace.TraceStatus,
+	agentName string,
+) *trace.Trace {
+	if inv == nil {
+		return nil
+	}
+	inv.initializeExecutionTraceWithAgentName(agentName)
+	capture := inv.executionTraceCapture()
+	if capture == nil {
+		return nil
+	}
+	inv.ensureTraceCaptureMetadataWithAgentName(agentName)
+	return capture.Build(status, time.Now())
+}
+
 func (inv *Invocation) initializeExecutionTrace() {
+	inv.initializeExecutionTraceWithAgentName(invocationAgentName(inv))
+}
+
+// initializeExecutionTraceWithAgentName lazily initializes the execution trace
+// capture using the caller-provided agentName without reading inv.AgentName.
+func (inv *Invocation) initializeExecutionTraceWithAgentName(agentName string) {
 	if inv == nil || !inv.RunOptions.ExecutionTraceEnabled {
 		return
 	}
@@ -255,13 +284,13 @@ func (inv *Invocation) initializeExecutionTrace() {
 	if inv.traceCapture != nil {
 		return
 	}
-	inv.ensureTraceNodeIDLocked()
+	inv.ensureTraceNodeIDLockedWithAgentName(agentName)
 	sessionID := ""
 	if inv.Session != nil {
 		sessionID = inv.Session.ID
 	}
 	inv.traceCapture = tracecapture.New(
-		inv.AgentName,
+		agentName,
 		inv.InvocationID,
 		sessionID,
 		time.Now(),
@@ -269,6 +298,12 @@ func (inv *Invocation) initializeExecutionTrace() {
 }
 
 func (inv *Invocation) ensureTraceCaptureMetadata() {
+	inv.ensureTraceCaptureMetadataWithAgentName(invocationAgentName(inv))
+}
+
+// ensureTraceCaptureMetadataWithAgentName refreshes the capture metadata using
+// the caller-provided agentName without reading inv.AgentName.
+func (inv *Invocation) ensureTraceCaptureMetadataWithAgentName(agentName string) {
 	if inv == nil {
 		return
 	}
@@ -278,8 +313,7 @@ func (inv *Invocation) ensureTraceCaptureMetadata() {
 		inv.traceMu.Unlock()
 		return
 	}
-	inv.ensureTraceNodeIDLocked()
-	agentName := inv.AgentName
+	inv.ensureTraceNodeIDLockedWithAgentName(agentName)
 	sessionID := ""
 	if inv.Session != nil {
 		sessionID = inv.Session.ID
@@ -301,10 +335,17 @@ func (inv *Invocation) ensureTraceNodeID() {
 }
 
 func (inv *Invocation) ensureTraceNodeIDLocked() {
-	if inv == nil || inv.traceNodeID != "" || inv.AgentName == "" {
+	inv.ensureTraceNodeIDLockedWithAgentName(invocationAgentName(inv))
+}
+
+// ensureTraceNodeIDLockedWithAgentName derives the trace node id using the
+// caller-provided agentName without reading inv.AgentName. The caller must hold
+// inv.traceMu.
+func (inv *Invocation) ensureTraceNodeIDLockedWithAgentName(agentName string) {
+	if inv == nil || inv.traceNodeID != "" || agentName == "" {
 		return
 	}
-	inv.traceNodeID = escapeTraceLocalName(inv.AgentName)
+	inv.traceNodeID = escapeTraceLocalName(agentName)
 }
 
 func (inv *Invocation) executionTraceCapture() *tracecapture.Capture {

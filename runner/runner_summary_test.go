@@ -11,6 +11,7 @@ package runner
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -59,8 +60,8 @@ func TestRunnerEnqueuesModelVisibleSummaryView(t *testing.T) {
 		sess,
 		evt,
 	))
-	require.Len(t, service.enqueueSummaryJobCalls, 1)
-	view, ok := summaryview.FromContext(service.enqueueSummaryJobCalls[0].ctx)
+	require.Len(t, service.enqueueSummaryJobCallsSnapshot(), 1)
+	view, ok := summaryview.FromContext(service.enqueueSummaryJobCallsSnapshot()[0].ctx)
 	require.True(t, ok)
 	require.Equal(t, 13_310, view.RequestTokens)
 }
@@ -88,8 +89,8 @@ func TestRunnerPersistsErrorEventWithoutEnqueuingSummary(t *testing.T) {
 		sess,
 		errorEvent,
 	))
-	require.Len(t, service.appendEventCalls, 1)
-	require.Empty(t, service.enqueueSummaryJobCalls)
+	require.Len(t, service.appendEventCallsSnapshot(), 1)
+	require.Empty(t, service.enqueueSummaryJobCallsSnapshot())
 }
 
 func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
@@ -117,10 +118,10 @@ func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// Verify EnqueueSummaryJob was called once; worker cascades full-session internally.
-		require.Len(t, mockSessionService.enqueueSummaryJobCalls, 1, "Should call EnqueueSummaryJob once")
+		require.Len(t, mockSessionService.enqueueSummaryJobCallsSnapshot(), 1, "Should call EnqueueSummaryJob once")
 
 		// Check the only call
-		onlyCall := mockSessionService.enqueueSummaryJobCalls[0]
+		onlyCall := mockSessionService.enqueueSummaryJobCallsSnapshot()[0]
 		assert.Equal(t, "", onlyCall.filterKey, "Call should use default empty FilterKey from mock agent")
 		assert.False(t, onlyCall.force, "Call should not force")
 		assert.NotNil(t, onlyCall.sess, "Call should have session")
@@ -150,7 +151,7 @@ func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// Verify EnqueueSummaryJob was not called
-		assert.Len(t, mockSessionService.enqueueSummaryJobCalls, 0, "Should not call EnqueueSummaryJob for non-qualifying events")
+		assert.Len(t, mockSessionService.enqueueSummaryJobCallsSnapshot(), 0, "Should not call EnqueueSummaryJob for non-qualifying events")
 	})
 
 	t.Run("does not call EnqueueSummaryJob for events with state delta only", func(t *testing.T) {
@@ -178,7 +179,7 @@ func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 
 		// Verify EnqueueSummaryJob was NOT called for state delta only events
 		// because the new logic only triggers summary for assistant responses
-		require.Len(t, mockSessionService.enqueueSummaryJobCalls, 0, "Should not call EnqueueSummaryJob for state delta only events")
+		require.Len(t, mockSessionService.enqueueSummaryJobCallsSnapshot(), 0, "Should not call EnqueueSummaryJob for state delta only events")
 	})
 
 	t.Run("handles EnqueueSummaryJob errors gracefully", func(t *testing.T) {
@@ -207,7 +208,7 @@ func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// Verify EnqueueSummaryJob was still called once despite error
-		assert.Len(t, errorSessionService.enqueueSummaryJobCalls, 1, "Should still call EnqueueSummaryJob once even when it returns error")
+		assert.Len(t, errorSessionService.enqueueSummaryJobCallsSnapshot(), 1, "Should still call EnqueueSummaryJob once even when it returns error")
 	})
 }
 
@@ -384,7 +385,7 @@ func TestRunner_PerToolCallResultEventsFailedIntermediatePersistenceUsesStandalo
 	for range events {
 	}
 
-	require.Len(t, capture.enqueueSummaryJobCalls, 1)
+	require.Len(t, capture.enqueueSummaryJobCallsSnapshot(), 1)
 	require.False(t, capture.capturedOK)
 	require.Nil(t, capture.capturedParent)
 }
@@ -796,11 +797,28 @@ func (m *cacheSafeForkToolResultMockAgent) Run(
 }
 
 // mockSessionService implements the session.Service interface for testing EnqueueSummaryJob calls.
+// The runner persists events on background goroutines, so all recorded-call
+// fields are guarded by mu and must be read through the snapshot accessors.
 type mockSessionService struct {
+	mu                     sync.Mutex
 	enqueueSummaryJobCalls []enqueueSummaryJobCall
 	appendEventCalls       []appendEventCall
 	createSessionCalls     []createSessionCall
 	getSessionCalls        []getSessionCall
+}
+
+// enqueueSummaryJobCallsSnapshot returns a copy of the recorded EnqueueSummaryJob calls.
+func (m *mockSessionService) enqueueSummaryJobCallsSnapshot() []enqueueSummaryJobCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]enqueueSummaryJobCall(nil), m.enqueueSummaryJobCalls...)
+}
+
+// appendEventCallsSnapshot returns a copy of the recorded AppendEvent calls.
+func (m *mockSessionService) appendEventCallsSnapshot() []appendEventCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]appendEventCall(nil), m.appendEventCalls...)
 }
 
 type enqueueSummaryJobCall struct {
@@ -894,6 +912,8 @@ func (m *mockSessionService) UpdateSessionState(ctx context.Context, key session
 }
 
 func (m *mockSessionService) AppendEvent(ctx context.Context, session *session.Session, event *event.Event, options ...session.Option) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.appendEventCalls = append(m.appendEventCalls, appendEventCall{session, event, options})
 	return nil
 }
@@ -903,6 +923,8 @@ func (m *mockSessionService) CreateSessionSummary(ctx context.Context, sess *ses
 }
 
 func (m *mockSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.enqueueSummaryJobCalls = append(m.enqueueSummaryJobCalls, enqueueSummaryJobCall{
 		ctx:       ctx,
 		sess:      sess,
@@ -1209,7 +1231,7 @@ func TestRunner_SyncSummaryIntraRun_SkipsIntermediateButAllowsFinal(
 	// turn end.
 	require.Len(
 		t,
-		svc.enqueueSummaryJobCalls,
+		svc.enqueueSummaryJobCallsSnapshot(),
 		1,
 		"final response should trigger EnqueueSummaryJob "+
 			"even with sync intra-run summary active",
@@ -1242,7 +1264,7 @@ func TestRunner_EnqueueSummaryJob_ToolResultTrigger(t *testing.T) {
 			// skipped.
 			require.Len(
 				t,
-				svc.enqueueSummaryJobCalls,
+				svc.enqueueSummaryJobCallsSnapshot(),
 				2,
 				"tool result + final text should each "+
 					"trigger EnqueueSummaryJob",
@@ -1274,7 +1296,7 @@ func TestRunner_EnqueueSummaryJob_ToolResultTrigger(t *testing.T) {
 
 			assert.Len(
 				t,
-				svc.enqueueSummaryJobCalls,
+				svc.enqueueSummaryJobCallsSnapshot(),
 				0,
 				"SkipSummarization should prevent "+
 					"EnqueueSummaryJob",

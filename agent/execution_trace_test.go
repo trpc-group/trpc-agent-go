@@ -413,3 +413,30 @@ func TestInvocationTeamMemberTraceRoot_LifecycleAndNilGuards(t *testing.T) {
 	ClearInvocationTeamMemberTraceRoot(inv)
 	require.Empty(t, InvocationTeamMemberTraceRoot(inv))
 }
+
+func TestBuildExecutionTraceWithAgentName_NilAndDisabled(t *testing.T) {
+	// Nil invocation returns nil without touching anything.
+	require.Nil(t, BuildExecutionTraceWithAgentName(nil, atrace.TraceStatusCompleted, "agent"))
+
+	// Execution trace disabled returns nil without creating a capture.
+	inv := NewInvocation(
+		WithInvocationAgent(&mockAgent{name: "agent"}),
+		WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	require.Nil(t, BuildExecutionTraceWithAgentName(inv, atrace.TraceStatusCompleted, "agent"))
+}
+
+func TestBuildExecutionTraceWithAgentName_UsesProvidedName(t *testing.T) {
+	// No agent name is set on the invocation, so the capture is created with an
+	// empty root agent name and the caller-provided name must fill it in.
+	inv := NewInvocation(
+		WithInvocationSession(&session.Session{ID: "session-1"}),
+		WithInvocationRunOptions(RunOptions{ExecutionTraceEnabled: true}),
+		WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	built := BuildExecutionTraceWithAgentName(inv, atrace.TraceStatusCompleted, "provided-name")
+	require.NotNil(t, built)
+	// The trace root agent name must come from the caller-provided name, not
+	// from the live invocation.
+	require.Equal(t, "provided-name", built.RootAgentName)
+}

@@ -1703,6 +1703,30 @@ func (inv *Invocation) SyncView(view *Invocation) {
 	inv.stateMu.Unlock()
 }
 
+// RefreshViewState copies the view-visible state from src into inv, replacing
+// inv's current state snapshot. Only the state map is updated; identity and
+// structural fields (AgentName, Agent, Session, …) are left unchanged.
+//
+// This is used by the runner to refresh the pre-run completion-plugin snapshot
+// after RunWithPlugins returns: BeforeAgent hooks run synchronously inside
+// RunWithPlugins and may write invocation state (billing markers, audit flags,
+// timing data, etc.). RefreshViewState captures those writes without touching
+// the bare fields that the agent goroutine may already be mutating
+// concurrently.
+//
+// Both src.stateMu (read) and inv.stateMu (write) are held during the copy,
+// so the operation is race-free even when src is the live invocation and a
+// concurrent SetState call is in flight.
+func (inv *Invocation) RefreshViewState(src *Invocation) {
+	if inv == nil || src == nil || inv == src {
+		return
+	}
+	snapshot := src.cloneViewState() // holds src.stateMu.RLock internally
+	inv.stateMu.Lock()
+	inv.state = snapshot
+	inv.stateMu.Unlock()
+}
+
 func (inv *Invocation) cloneState() map[string]any {
 	return inv.cloneStateByFilter(isCloneStateKey, keepStateValue)
 }
@@ -2071,14 +2095,31 @@ func InjectIntoEvent(inv *Invocation, e *event.Event) {
 // EmitEvent inject invocation information into event and emit it to channel.
 func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 	e *event.Event) error {
+	return emitEvent(ctx, inv, ch, e, invocationAgentName(inv))
+}
+
+// EmitEventWithAgentName is like EmitEvent but takes the agent name explicitly
+// instead of reading inv.AgentName. Callers that captured the agent name before
+// the invocation could be mutated concurrently (for example the runner
+// completion path after cancellation before the first agent event) must use
+// this variant to avoid racing the agent goroutine's asynchronous invocation
+// setup.
+func EmitEventWithAgentName(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
+	e *event.Event, agentName string) error {
+	return emitEvent(ctx, inv, ch, e, agentName)
+}
+
+// emitEvent injects invocation information into the event and emits it to the
+// channel using the caller-provided agentName instead of reading inv.AgentName.
+func emitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
+	e *event.Event, agentName string) error {
 	if ch == nil || e == nil {
 		return nil
 	}
-	attachAwaitUserReplyRoute(inv, e)
+	attachAwaitUserReplyRoute(inv, e, agentName)
 	InjectIntoEvent(inv, e)
-	var agentName, requestID string
+	var requestID string
 	if inv != nil {
-		agentName = inv.AgentName
 		requestID = inv.RunOptions.RequestID
 	}
 	log.Tracef(
@@ -2091,6 +2132,15 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 		agentName,
 	)
 	return event.EmitEvent(ctx, ch, e)
+}
+
+// invocationAgentName returns the invocation's agent name, or an empty string
+// for a nil invocation.
+func invocationAgentName(inv *Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	return inv.AgentName
 }
 
 // GetAppendEventNoticeKey get append event notice key.
