@@ -44,7 +44,11 @@ func (g *stateInitializationGate) release() {
 	g.once.Do(func() { close(g.done) })
 }
 
-// LoadOrInitializeSessionState implements session.StateInitializationService.
+// LoadOrInitializeSessionState returns a valid persisted value for stateKey.
+// If the current value is absent or invalid, it coordinates initialization and
+// commits the replacement with its projections to the same session generation.
+// See session.StateInitializationService for the complete callback contract.
+//
 // Close cancels in-flight initializers and prevents further initialization
 // commits. After a successful initializer, lifecycle checks give an already
 // canceled caller context precedence over service closure.
@@ -362,6 +366,9 @@ func (s *SessionService) commitInitializedSessionState(
 	}
 	s.stateInitializationMu.Lock()
 	defer s.stateInitializationMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case <-s.stateInitializationClosed:
 		return errStateInitializationClosed
@@ -386,6 +393,9 @@ func (s *SessionService) commitInitializedSessionState(
 		return errors.New(
 			"memory session service initialize session state failed: session generation changed",
 		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	for stateKey, value := range state {
 		stored.session.SetState(stateKey, value)

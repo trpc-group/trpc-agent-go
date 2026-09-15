@@ -11,6 +11,7 @@ package inmemory
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -674,6 +675,144 @@ func TestLoadOrInitializeSessionStateLifecycleBeforeCommit(t *testing.T) {
 					require.Zero(t, gates)
 				})
 			}
+		})
+	}
+}
+
+type commitCheckContext struct {
+	context.Context
+	armed   atomic.Bool
+	once    sync.Once
+	checked chan struct{}
+	release <-chan struct{}
+}
+
+func (c *commitCheckContext) Err() error {
+	err := c.Context.Err()
+	if c.armed.Load() {
+		// Capture the pre-lock check before allowing the caller to cancel.
+		c.once.Do(func() {
+			close(c.checked)
+			if c.release != nil {
+				<-c.release
+			}
+		})
+	}
+	return err
+}
+
+func TestLoadOrInitializeSessionStateCancellationWhileWaitingForCommitLock(t *testing.T) {
+	for _, lockName := range []string{"initialization lock", "app lock", "initialization lock and service close"} {
+		t.Run(lockName, func(t *testing.T) {
+			service := NewSessionService()
+			t.Cleanup(func() { require.NoError(t, service.Close()) })
+			key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+			_, err := service.CreateSession(context.Background(), key, nil)
+			require.NoError(t, err)
+			app, ok := service.getAppSessions(key.AppName)
+			require.True(t, ok)
+
+			callCtx, cancel := context.WithCancel(context.Background())
+			ctx := &commitCheckContext{Context: callCtx, checked: make(chan struct{})}
+			closeService := lockName == "initialization lock and service close"
+			unblockCheck := func() {}
+			if closeService {
+				release := make(chan struct{})
+				ctx.release = release
+				var once sync.Once
+				unblockCheck = func() { once.Do(func() { close(release) }) }
+			}
+			projectionStarted := make(chan struct{})
+			releaseProjection := make(chan struct{})
+			var projectionOnce, unlockOnce sync.Once
+			unblockProjection := func() { projectionOnce.Do(func() { close(releaseProjection) }) }
+			unlock := func() {}
+			wait := func(done <-chan struct{}) {
+				t.Helper()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("state initialization did not reach the expected stage")
+				}
+			}
+			type result struct {
+				value       []byte
+				initialized bool
+				err         error
+			}
+			results := make(chan result, 1)
+			ownerDone := make(chan struct{})
+			t.Cleanup(func() {
+				cancel()
+				unblockCheck()
+				unblockProjection()
+				unlockOnce.Do(unlock)
+				wait(ownerDone)
+			})
+			go func() {
+				defer close(ownerDone)
+				value, initialized, err := service.LoadOrInitializeSessionState(
+					ctx, key, "canonical",
+					func(value []byte) bool { return string(value) == "value" },
+					func(context.Context) ([]byte, error) { return []byte("value"), nil },
+					session.StateInitializationProjection{
+						StateKey: "projected",
+						Project: func([]byte) ([]byte, error) {
+							close(projectionStarted)
+							<-releaseProjection
+							return []byte("projection"), nil
+						},
+					},
+				)
+				results <- result{value: value, initialized: initialized, err: err}
+			}()
+			wait(projectionStarted)
+			if lockName != "app lock" {
+				service.stateInitializationMu.Lock()
+				unlock = service.stateInitializationMu.Unlock
+			} else {
+				app.mu.RLock()
+				unlock = app.mu.RUnlock
+			}
+			ctx.armed.Store(true)
+			unblockProjection()
+			wait(ctx.checked)
+			if lockName == "app lock" {
+				// Holding a read lock prevents the commit's writer from acquiring
+				// the lock. New readers are refused once that writer is waiting.
+				deadline := time.After(5 * time.Second)
+				for app.mu.TryRLock() {
+					app.mu.RUnlock()
+					select {
+					case <-deadline:
+						t.Fatal("state initialization did not wait for the app lock")
+					default:
+					}
+					runtime.Gosched()
+				}
+			}
+			cancel()
+			unlockOnce.Do(unlock)
+			if closeService {
+				// Finish Close while the pre-lock context result is held at nil.
+				require.NoError(t, service.Close())
+			}
+			unblockCheck()
+			wait(ownerDone)
+			got := <-results
+			require.ErrorIs(t, got.err, context.Canceled)
+			require.False(t, got.initialized)
+			require.Nil(t, got.value)
+			stored, err := service.GetSession(context.Background(), key)
+			require.NoError(t, err)
+			for _, stateKey := range []string{"canonical", "projected"} {
+				_, present := stored.GetState(stateKey)
+				require.False(t, present, "unexpected commit to %s", stateKey)
+			}
+			service.stateInitializationMu.Lock()
+			gates := len(service.stateInitializationGates)
+			service.stateInitializationMu.Unlock()
+			require.Zero(t, gates)
 		})
 	}
 }
