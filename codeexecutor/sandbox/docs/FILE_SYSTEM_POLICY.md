@@ -23,14 +23,20 @@ The managed file-system boundary is designed around three rules:
    workspace grant. The default protected set is `.git`, `.agents`, and
    `.trpc-agent-sandbox`.
 
-This boundary is backend-specific at the OS layer. On Linux, managed execution
-starts with a read-only bind mount of `/`, then adds writable bind mounts for the
-workspace and any explicit external write grants. On macOS, managed execution
-starts from a Seatbelt deny-default profile, adds selected platform read
-defaults required by common tools, and then grants the workspace and explicit
-external paths. Sensitive files that must not be readable should be covered by
-no-access denials, for example through `WithNoAccessPaths` or
-`WithNoAccessGlobs`, or kept outside the host paths visible to the sandbox.
+This boundary is backend-specific at the OS layer. On Linux, host-root profiles
+(`ReadOnlyProfile` and `WorkspaceWriteProfile`) start with a read-only bind
+mount of `/`, then hide sibling session directories, mask common credential
+paths, and add writable bind mounts for the workspace and explicit external
+write grants. That host-root view keeps installed tools working; it is not a
+confidentiality boundary for arbitrary host files. `IsolatedWorkspaceProfile`
+does not bind `/`; it mounts only runtime directories, the session workspace,
+and explicit grants. On macOS, managed execution starts from a Seatbelt
+deny-default profile, adds selected platform read defaults required by common
+tools, and then grants the workspace and explicit external paths. Sensitive
+files that must not be readable should be covered by no-access denials, for
+example through `WithNoAccessPaths` or `WithNoAccessGlobs`, kept outside the
+host paths visible to the sandbox, or avoided by using
+`IsolatedWorkspaceProfile`.
 
 ## Rule Targets
 
@@ -69,11 +75,24 @@ that subtree read-only.
 
 The Linux backend uses `bubblewrap` mount namespaces to materialize the policy:
 
-- `--ro-bind / /` gives the command a read-only view of the host root.
-  Read-only mounts do **not** block `connect(2)` on visible Unix domain socket
-  files. On `NetworkRestricted` Linux profiles, the AF_UNIX seccomp filter
-  described in [`NETWORK_POLICY.md`](NETWORK_POLICY.md) is what prevents the
-  guest from creating sockets to use those paths.
+- Host-root profiles use `--ro-bind / /` so the command has a read-only view of
+  the host root. That does **not** provide confidentiality for arbitrary host
+  files. Read-only mounts also do **not** block `connect(2)` on visible Unix
+  domain socket files. On `NetworkRestricted` Linux profiles, the AF_UNIX
+  seccomp filter described in [`NETWORK_POLICY.md`](NETWORK_POLICY.md) is what
+  prevents the guest from creating sockets to use those paths.
+- After the host-root bind, the backend tmpfs-masks the sessions parent
+  (`<workspaceRoot>/sandbox`) and re-binds only the current session workspace,
+  so sibling sessions are not readable.
+- Common credential paths such as `~/.ssh`, `~/.aws`, `~/.kube`, and
+  `/etc/shadow` are masked unless the caller grants that exact path with
+  `WithReadPaths` / `WithWritePaths`. A parent grant such as `$HOME`, or a
+  child grant such as `~/.ssh/config`, does not re-open sibling credential
+  files. A child grant is bind-mounted after the parent tmpfs and before
+  `--remount-ro`; binding after the remount would fail.
+- `IsolatedWorkspaceProfile` uses `--ro-bind-try` for runtime directories
+  (`/usr`, `/bin`, `/lib`, `/etc`, ...) instead of binding `/`. It also masks
+  `/etc/shadow` and `/etc/gshadow` when those files exist.
 - `--bind <workspace> <workspace>` makes the sandbox workspace writable.
 - Explicit absolute read grants are added with `--ro-bind`.
 - Explicit absolute write grants are added with `--bind`.
@@ -141,9 +160,13 @@ The runtime defaults to `WorkspaceWriteProfile()`. When callers pass
 `WithPermissionProfile`, that explicit profile replaces the default.
 
 `WorkspaceWriteProfile()` grants writes to the session-owned workspace
-directories. The host view depends on the backend:
+directories. The host view depends on the backend and profile:
 
-- Linux gives the sandbox a read-only host root view.
+- Linux `ReadOnlyProfile` / `WorkspaceWriteProfile` give the sandbox a
+  read-only host root view, then hide sibling sessions and mask common
+  credential paths. Arbitrary host files outside that denylist remain readable.
+- Linux `IsolatedWorkspaceProfile` does not bind the host root. Only runtime
+  directories, the current session workspace, and explicit grants are visible.
 - macOS gives the sandbox selected platform read defaults plus explicit grants.
 - The workspace root, `work`, `home`, `tmp`, `runs`, `out`, and `skills`
   directories are writable.
@@ -183,8 +206,11 @@ The default workspace root is `${TMPDIR}/trpc-agent-go-sandbox`, and callers can
 override it with `WithWorkspaceRoot`.
 
 Different session ids map to different workspace directories, so files written in
-one session are not visible through another session's workspace. This is the
-session-level file-system boundary. The runtime sanitizes path components in the
+one session are not visible through another session's workspace APIs. Host
+processes can still read those directories. Guest isolation is separate: Linux
+host-root profiles tmpfs-mask the sessions parent so a guest cannot `ls` sibling
+session directories through the read-only host root, and macOS Seatbelt only
+grants the current workspace. The runtime sanitizes path components in the
 session id before constructing the workspace path, so an id cannot escape the
 configured workspace root.
 

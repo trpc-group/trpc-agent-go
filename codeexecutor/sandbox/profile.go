@@ -67,10 +67,13 @@ func (p PermissionProfile) enforcement() enforcement {
 }
 
 // ReadOnlyProfile returns a managed profile with read-only host visibility and
-// restricted networking. On Linux, restricted networking denies pathname and
-// abstract AF_UNIX sockets and AF_VSOCK, while leaving anonymous stream and
-// seqpacket socketpairs available; use NetworkEnabled when the command needs
-// pathname or abstract Unix IPC, or AF_VSOCK.
+// restricted networking. On Linux this bind-mounts the host root read-only, so
+// ordinary host files remain readable, but common credential paths and sibling
+// session directories are masked. Use IsolatedWorkspaceProfile when the
+// command must not see the host root at all. On Linux, restricted networking
+// denies pathname and abstract AF_UNIX sockets and AF_VSOCK, while leaving
+// anonymous stream and seqpacket socketpairs available; use NetworkEnabled
+// when the command needs pathname or abstract Unix IPC, or AF_VSOCK.
 func ReadOnlyProfile() PermissionProfile {
 	return PermissionProfile{
 		typ: profileManaged,
@@ -88,10 +91,15 @@ func ReadOnlyProfile() PermissionProfile {
 
 // WorkspaceWriteProfile returns the default managed profile: read-only host
 // root, writable session workspace, protected metadata, restricted networking.
-// On Linux, that restricted default denies pathname and abstract AF_UNIX
-// sockets and AF_VSOCK, while leaving anonymous stream and seqpacket
-// socketpairs available; use NetworkEnabled when the command needs pathname or
-// abstract Unix IPC, or AF_VSOCK.
+// On Linux this bind-mounts the host root read-only so installed tools keep
+// working, then masks common credential paths and hides sibling session
+// workspaces. Arbitrary host files outside that denylist remain readable. Use
+// IsolatedWorkspaceProfile when the sandbox must not see the host root, or
+// WithReadPaths on a credential path to re-open that exact path. On Linux,
+// the restricted network default denies pathname and abstract AF_UNIX sockets
+// and AF_VSOCK, while leaving anonymous stream and seqpacket socketpairs
+// available; use NetworkEnabled when the command needs pathname or abstract
+// Unix IPC, or AF_VSOCK.
 func WorkspaceWriteProfile() PermissionProfile {
 	p := ReadOnlyProfile()
 	p.fileSystem.Rules = append(p.fileSystem.Rules,
@@ -104,6 +112,37 @@ func WorkspaceWriteProfile() PermissionProfile {
 		fileSystemRule{Kind: ruleSpecial, Access: accessWrite, Special: specialSkills},
 	)
 	return p
+}
+
+// IsolatedWorkspaceProfile returns a managed profile with a writable session
+// workspace and restricted networking, without exposing the host root. On
+// Linux the backend bind-mounts only runtime directories such as /usr and
+// /etc, the session workspace, and any explicit path grants. Sibling session
+// directories and host home directories are not visible unless granted.
+// IsolatedWorkspaceProfile still mounts a read-only /etc for resolver and
+// libc data; use WithNoAccessPaths for additional denials. On macOS the
+// Seatbelt projection is already deny-default, so this profile matches
+// WorkspaceWriteProfile plus the absence of a host-root read special.
+func IsolatedWorkspaceProfile() PermissionProfile {
+	p := WorkspaceWriteProfile()
+	filtered := make([]fileSystemRule, 0, len(p.fileSystem.Rules))
+	for _, rule := range p.fileSystem.Rules {
+		if rule.Kind == ruleSpecial && rule.Special == specialRoot {
+			continue
+		}
+		filtered = append(filtered, rule)
+	}
+	p.fileSystem.Rules = filtered
+	return p
+}
+
+func (p PermissionProfile) exposesHostRoot() bool {
+	for _, rule := range p.fileSystem.Rules {
+		if rule.Kind == ruleSpecial && rule.Special == specialRoot && rule.Access == accessRead {
+			return true
+		}
+	}
+	return false
 }
 
 // DangerFullAccessProfile intentionally disables sandboxing.

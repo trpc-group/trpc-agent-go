@@ -139,7 +139,10 @@ When `-scenario all` is used, scenarios that do not apply to the current
 -require-os-sandbox=true
 ```
 
-On Linux, the managed sandbox requires `bwrap` and user namespace support. On
+On Linux, the managed sandbox requires `bwrap` and user namespace support.
+`WorkspaceWriteProfile` bind-mounts the host root read-only, then masks
+common credential paths and sibling session directories. Use
+`IsolatedWorkspaceProfile` when commands must not see the host root at all. On
 macOS, the managed sandbox requires `/usr/bin/sandbox-exec` and host permission
 to apply Seatbelt profiles. If the OS sandbox cannot be set up, the example
 reports the typed setup/backend error and does not fall back to local execution.

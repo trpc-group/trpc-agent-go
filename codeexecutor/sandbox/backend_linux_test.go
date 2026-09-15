@@ -210,6 +210,742 @@ func TestLinuxSandboxArgsWorkspaceMountPolicy(t *testing.T) {
 	if !hasArgTriple(args, "--ro-bind", denyReadMaskSource(ws), secret) {
 		t.Fatalf("workspace-write args = %#v, missing no-access file mask", args)
 	}
+	sessionsRoot, err := filepath.Abs(filepath.Join(rt.root, "sandbox"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgPair(args, "--tmpfs", sessionsRoot) {
+		t.Fatalf("workspace-write args = %#v, missing sibling session hide", args)
+	}
+}
+
+func TestLinuxSandboxArgsIsolatedOmitsHostRoot(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "isolated-root", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.prepareProtectedMasks(IsolatedWorkspaceProfile(), ws); err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(
+		IsolatedWorkspaceProfile(),
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasArgTriple(args, "--ro-bind", "/", "/") {
+		t.Fatalf("isolated args = %#v, unexpected host root bind", args)
+	}
+	if !hasArgTriple(args, "--ro-bind-try", "/usr", "/usr") {
+		t.Fatalf("isolated args = %#v, missing runtime /usr bind", args)
+	}
+	if !hasArgPair(args, "--tmpfs", "/tmp") {
+		t.Fatalf("isolated args = %#v, missing isolated /tmp", args)
+	}
+	if !hasArgTriple(args, "--bind", ws.Path, ws.Path) {
+		t.Fatalf("isolated args = %#v, missing workspace write bind", args)
+	}
+}
+
+func TestLinuxSandboxArgsMaskDefaultCredentialsAndHonorExactGrant(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ssh := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(ssh, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "cred-mask", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile()
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(
+		profile,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInaccessibleDirMask(args, ssh) {
+		t.Fatalf("args = %#v, missing default ~/.ssh mask", args)
+	}
+
+	granted := profile.WithReadPaths(ssh)
+	grantedArgs, err := rt.linuxSandboxArgs(
+		granted,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasInaccessibleDirMask(grantedArgs, ssh) {
+		t.Fatalf("granted args = %#v, exact ~/.ssh grant still masked", grantedArgs)
+	}
+	if !hasArgTriple(grantedArgs, "--ro-bind", ssh, ssh) {
+		t.Fatalf("granted args = %#v, missing ~/.ssh read bind", grantedArgs)
+	}
+
+	config := filepath.Join(ssh, "config")
+	if err := os.WriteFile(config, []byte("Host example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	childArgs, err := rt.linuxSandboxArgs(
+		profile.WithReadPaths(config),
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInaccessibleDirMask(childArgs, ssh) {
+		t.Fatalf("child grant args = %#v, missing ~/.ssh mask", childArgs)
+	}
+	if !hasArgTriple(childArgs, "--ro-bind", config, config) {
+		t.Fatalf("child grant args = %#v, missing ~/.ssh/config re-bind", childArgs)
+	}
+	tmpfsAt := argPairIndex(childArgs, "--tmpfs", ssh)
+	remountAt := argPairIndex(childArgs, "--remount-ro", ssh)
+	bindAt := argTripleIndexAfter(childArgs, tmpfsAt, "--ro-bind", config, config)
+	if tmpfsAt < 0 || remountAt < 0 || bindAt < 0 || bindAt > remountAt {
+		t.Fatalf("child grant must bind after tmpfs and before remount-ro: %#v", childArgs)
+	}
+}
+
+func TestLinuxSessionHideArgsOnlyUnderSessionsRoot(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "hide-under-root", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wsAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hide, err := rt.linuxSessionHideArgs(wsAbs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsRoot, err := filepath.Abs(filepath.Join(rt.root, "sandbox"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgPair(hide, "--tmpfs", sessionsRoot) {
+		t.Fatalf("hide args = %#v, want tmpfs over sessions root", hide)
+	}
+
+	outside, err := filepath.Abs(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hide, err = rt.linuxSessionHideArgs(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hide != nil {
+		t.Fatalf("hide args = %#v, workspace outside sessions root should not mask siblings", hide)
+	}
+}
+
+func TestLinuxIsolatedSkipsHostHomeMaskAndMountsGrantAncestors(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ssh := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(ssh, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	grantRoot := t.TempDir()
+	grant := filepath.Join(grantRoot, "nested", "data")
+	if err := os.MkdirAll(grant, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "isolated-grant", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := IsolatedWorkspaceProfile().WithReadPaths(grant)
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(
+		profile,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasInaccessibleDirMask(args, ssh) {
+		t.Fatalf("isolated args = %#v, must not mask host ~/.ssh", args)
+	}
+	grantAbs, err := filepath.Abs(grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested, err := filepath.Abs(filepath.Join(grantRoot, "nested"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgPair(args, "--dir", nested) {
+		t.Fatalf("isolated args = %#v, missing grant ancestor --dir %s", args, nested)
+	}
+	if !hasArgTriple(args, "--ro-bind", grantAbs, grantAbs) {
+		t.Fatalf("isolated args = %#v, missing external grant bind", args)
+	}
+
+	dests, err := rt.linuxAbsoluteGrantDests(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(dests, grantAbs) {
+		t.Fatalf("linuxAbsoluteGrantDests = %#v, missing %s", dests, grantAbs)
+	}
+
+	grantArgs, err := rt.defaultCredentialGrantArgs(profile.WithReadPaths(filepath.Join(ssh, "config")), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grantArgs != nil {
+		t.Fatalf("isolated credential grant args = %#v, want nil", grantArgs)
+	}
+}
+
+func TestLinuxCredentialFileMaskWriteGrantAndWorkspaceSkip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	netrc := filepath.Join(home, ".netrc")
+	if err := os.WriteFile(netrc, []byte("machine example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ssh := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(ssh, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".aws"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(ssh, "config")
+	if err := os.WriteFile(config, []byte("Host example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "cred-file-mask", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.prepareProtectedMasks(WorkspaceWriteProfile(), ws); err != nil {
+		t.Fatal(err)
+	}
+
+	args, err := rt.defaultCredentialDenyMaskArgs(WorkspaceWriteProfile(), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	netrcAbs, err := filepath.Abs(netrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgTriple(args, "--ro-bind", denyReadMaskSource(ws), netrcAbs) {
+		t.Fatalf("mask args = %#v, missing ~/.netrc file mask", args)
+	}
+	awsAbs, err := filepath.Abs(filepath.Join(home, ".aws"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasInaccessibleDirMask(args, awsAbs) {
+		t.Fatalf("mask args = %#v, missing ~/.aws mask", args)
+	}
+
+	insideSSH := filepath.Join(ws.Path, ".ssh")
+	if err := os.MkdirAll(insideSSH, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", ws.Path)
+	insideArgs, err := rt.defaultCredentialDenyMaskArgs(WorkspaceWriteProfile(), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insideAbs, err := filepath.Abs(insideSSH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasInaccessibleDirMask(insideArgs, insideAbs) {
+		t.Fatalf("mask args = %#v, workspace-local .ssh must not be masked as a host credential", insideArgs)
+	}
+	t.Setenv("HOME", home)
+
+	writeProfile := WorkspaceWriteProfile().WithWritePaths(config, config)
+	writeArgs, err := rt.defaultCredentialGrantArgs(writeProfile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configAbs, err := filepath.Abs(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgTriple(writeArgs, "--bind", configAbs, configAbs) {
+		t.Fatalf("grant args = %#v, missing writable ~/.ssh/config bind", writeArgs)
+	}
+	grantedMask, err := rt.defaultCredentialDenyMaskArgs(writeProfile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshAbs, err := filepath.Abs(ssh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshTmpfs := argPairIndex(grantedMask, "--tmpfs", sshAbs)
+	sshRemount := argPairIndex(grantedMask, "--remount-ro", sshAbs)
+	awsTmpfs := argPairIndex(grantedMask, "--tmpfs", awsAbs)
+	awsRemount := argPairIndex(grantedMask, "--remount-ro", awsAbs)
+	bindAt := argTripleIndex(grantedMask, "--bind", configAbs, configAbs)
+	if sshTmpfs < 0 || sshRemount < 0 || bindAt < 0 || !(sshTmpfs < bindAt && bindAt < sshRemount) {
+		t.Fatalf("mask args = %#v, ~/.ssh/config grant must bind inside the ~/.ssh mask", grantedMask)
+	}
+	if awsTmpfs >= 0 && awsRemount >= 0 && awsTmpfs < bindAt && bindAt < awsRemount {
+		t.Fatalf("mask args = %#v, ~/.ssh/config grant must not bind inside the ~/.aws mask", grantedMask)
+	}
+	bindCount := 0
+	for i := 0; i+2 < len(writeArgs); i++ {
+		if writeArgs[i] == "--bind" && writeArgs[i+1] == configAbs && writeArgs[i+2] == configAbs {
+			bindCount++
+		}
+	}
+	if bindCount != 1 {
+		t.Fatalf("grant args = %#v, duplicate write grant should bind once", writeArgs)
+	}
+
+	denied := writeProfile.WithNoAccessPaths(config)
+	noneArgs, err := rt.defaultCredentialGrantArgs(denied, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasArgTriple(noneArgs, "--bind", configAbs, configAbs) ||
+		hasArgTriple(noneArgs, "--ro-bind", configAbs, configAbs) {
+		t.Fatalf("grant args = %#v, no-access child must not reopen the credential", noneArgs)
+	}
+
+	other := t.TempDir()
+	otherArgs, err := rt.defaultCredentialGrantArgs(WorkspaceWriteProfile().WithReadPaths(other), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherAbs, err := filepath.Abs(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasArgTriple(otherArgs, "--ro-bind", otherAbs, otherAbs) {
+		t.Fatalf("grant args = %#v, non-credential path is not a credential reopen", otherArgs)
+	}
+
+	missing := filepath.Join(ssh, "missing-config")
+	_, err = rt.defaultCredentialGrantArgs(WorkspaceWriteProfile().WithReadPaths(missing), ws)
+	if !isKind(err, ErrPathDenied) {
+		t.Fatalf("missing credential child error = %v, want ErrPathDenied", err)
+	}
+
+	_, err = rt.defaultCredentialGrantArgs(
+		WorkspaceWriteProfile().WithReadPaths(config).WithNoAccessGlobs("["),
+		ws,
+	)
+	if err == nil {
+		t.Fatal("invalid no-access glob should fail credential child resolveAccess")
+	}
+	_, err = rt.defaultCredentialDenyMaskArgs(
+		WorkspaceWriteProfile().WithReadPaths(config).WithNoAccessGlobs("["),
+		ws,
+	)
+	if err == nil {
+		t.Fatal("invalid no-access glob should fail credential deny mask grants")
+	}
+}
+
+func TestLinuxCredentialHelpersWhenWorkingDirIsGone(t *testing.T) {
+	absWS := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(absWS, "work"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ws := codeexecutor.Workspace{ID: "gone-cwd", Path: absWS}
+	rt := NewRuntime(WithWorkspaceRoot("relative-root"))
+	profile := IsolatedWorkspaceProfile().WithReadPaths("/usr")
+	withDeletedWorkingDir(t)
+
+	if _, err := rt.linuxSandboxArgs(
+		WorkspaceWriteProfile(),
+		codeexecutor.Workspace{ID: "rel-ws", Path: "relative-ws"},
+		"relative-ws/work",
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	); err == nil {
+		t.Fatal("linuxSandboxArgs with a relative workspace should fail after cwd is gone")
+	}
+	if _, err := rt.linuxSandboxArgs(
+		WorkspaceWriteProfile(),
+		ws,
+		filepath.Join(absWS, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	); err == nil {
+		t.Fatal("linuxSandboxArgs with a relative runtime root should fail after cwd is gone")
+	}
+	if _, err := rt.linuxSessionHideArgs(absWS); err == nil {
+		t.Fatal("linuxSessionHideArgs with a relative root should fail after cwd is gone")
+	}
+	if _, err := rt.linuxAbsoluteGrantDests(profile, codeexecutor.Workspace{Path: "relative-ws"}); err == nil {
+		t.Fatal("linuxAbsoluteGrantDests with a relative workspace should fail after cwd is gone")
+	}
+	if _, err := rt.defaultCredentialDenyMaskArgs(WorkspaceWriteProfile(), codeexecutor.Workspace{Path: "relative-ws"}); err == nil {
+		t.Fatal("defaultCredentialDenyMaskArgs with a relative workspace should fail after cwd is gone")
+	}
+	if _, err := rt.defaultCredentialGrantArgs(
+		WorkspaceWriteProfile().WithReadPaths("/etc/passwd"),
+		codeexecutor.Workspace{Path: "relative-ws"},
+	); err == nil {
+		t.Fatal("defaultCredentialGrantArgs with a relative workspace should fail after cwd is gone")
+	}
+
+	t.Setenv("HOME", "relative-home")
+	args, err := rt.defaultCredentialDenyMaskArgs(WorkspaceWriteProfile(), ws)
+	if err != nil {
+		t.Fatalf("host-root mask with relative HOME: %v", err)
+	}
+	if hasInaccessibleDirMask(args, "relative-home/.ssh") {
+		t.Fatalf("mask args = %#v, relative HOME credential Abs failure should skip the path", args)
+	}
+	if parent, ok := credentialDenyParent("/tmp/not-a-credential"); ok {
+		t.Fatalf("credentialDenyParent = %q, relative HOME Abs failure should not invent a parent", parent)
+	}
+}
+
+func withDeletedWorkingDir(t *testing.T) {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := filepath.Abs("relative-path"); err == nil {
+		t.Skip("filepath.Abs does not fail after deleting the working directory")
+	}
+}
+
+func TestLinuxSandboxArgsHostRootOmitsHideOutsideSessionsRoot(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	outside := t.TempDir()
+	if _, err := codeexecutor.EnsureLayout(outside); err != nil {
+		t.Fatal(err)
+	}
+	ws := codeexecutor.Workspace{ID: "outside-sessions", Path: outside}
+	profile := ReadOnlyProfile()
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(
+		profile,
+		ws,
+		filepath.Join(outside, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsRoot, err := filepath.Abs(filepath.Join(rt.root, "sandbox"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasArgPair(args, "--tmpfs", sessionsRoot) {
+		t.Fatalf("args = %#v, workspace outside sessions root should not hide siblings", args)
+	}
+	outsideAbs, err := filepath.Abs(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasArgTriple(args, "--ro-bind", outsideAbs, outsideAbs) {
+		t.Fatalf("args = %#v, hide remount of workspace should be omitted outside sessions root", args)
+	}
+}
+
+func TestLinuxIsolatedCredentialMaskWithEmptyHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "isolated-empty-home", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := IsolatedWorkspaceProfile()
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(
+		profile,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--tmpfs" && filepath.Base(args[i+1]) == ".ssh" {
+			t.Fatalf("args = %#v, empty HOME must not invent a ~/.ssh mask", args)
+		}
+	}
+	mask, err := rt.defaultCredentialDenyMaskArgs(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat("/etc/shadow"); err == nil {
+		if !hasArgTriple(mask, "--ro-bind", denyReadMaskSource(ws), "/etc/shadow") &&
+			!hasInaccessibleDirMask(mask, "/etc/shadow") {
+			t.Fatalf("mask args = %#v, isolated empty-home should still mask /etc/shadow", mask)
+		}
+	}
+}
+
+func TestLinuxCredentialGrantArgsSkipsEmptyRelativeAndWorkspaceChild(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "cred-grant-skips", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", ws.Path)
+	inside := filepath.Join(ws.Path, ".ssh", "config")
+	if err := os.MkdirAll(filepath.Dir(inside), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inside, []byte("Host inside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	profile := WorkspaceWriteProfile()
+	profile.fileSystem.Rules = append(profile.fileSystem.Rules,
+		fileSystemRule{Kind: rulePath, Access: accessRead, Path: ""},
+		fileSystemRule{Kind: rulePath, Access: accessRead, Path: "relative-cred"},
+		fileSystemRule{Kind: ruleGlob, Access: accessNone, Glob: "secrets/*"},
+		fileSystemRule{Kind: rulePath, Access: accessRead, Path: inside},
+	)
+	args, err := rt.defaultCredentialGrantArgs(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insideAbs, err := filepath.Abs(inside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasArgTriple(args, "--ro-bind", insideAbs, insideAbs) {
+		t.Fatalf("grant args = %#v, workspace-local credential child must not reopen", args)
+	}
+	if parent, ok := credentialDenyParent(filepath.Join(ws.Path, ".ssh")); ok {
+		t.Fatalf("credentialDenyParent(%q) = %q, exact credential dir is not a child", filepath.Join(ws.Path, ".ssh"), parent)
+	}
+}
+
+func TestLinuxAbsoluteGrantDestsSkipsWorkspaceAndNoAccess(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "grant-dests", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	external := t.TempDir()
+	blocked := t.TempDir()
+	profile := IsolatedWorkspaceProfile().
+		WithReadPaths(external, filepath.Join(ws.Path, "work"), "relative-grant").
+		WithNoAccessPaths(blocked)
+	profile.fileSystem.Rules = append(profile.fileSystem.Rules, fileSystemRule{
+		Kind: rulePath, Access: accessRead, Path: "",
+	})
+	dests, err := rt.linuxAbsoluteGrantDests(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalAbs, err := filepath.Abs(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedAbs, err := filepath.Abs(blocked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(dests, externalAbs) {
+		t.Fatalf("dests = %#v, missing external grant", dests)
+	}
+	if containsString(dests, blockedAbs) {
+		t.Fatalf("dests = %#v, no-access path must not be a grant dest", dests)
+	}
+	for _, dest := range dests {
+		if dest == filepath.Join(ws.Path, "work") || strings.Contains(dest, "relative-grant") {
+			t.Fatalf("dests = %#v, workspace or relative grant should be skipped", dests)
+		}
+	}
+}
+
+func TestLinuxDirAncestorsRootAndSeenParents(t *testing.T) {
+	if got := appendLinuxDirAncestors(nil, "/", map[string]bool{}); len(got) != 0 {
+		t.Fatalf("root dest args = %#v, want none", got)
+	}
+	if got := appendLinuxDirAncestors(nil, "", map[string]bool{}); len(got) != 0 {
+		t.Fatalf("empty dest args = %#v, want none", got)
+	}
+	seen := map[string]bool{"/": true, "/tmp": true}
+	got := appendLinuxDirAncestors(nil, "/tmp/a/b", seen)
+	if hasArgPair(got, "--dir", "/tmp") {
+		t.Fatalf("args = %#v, already-seen /tmp should not be added", got)
+	}
+	if !hasArgPair(got, "--dir", "/tmp/a") {
+		t.Fatalf("args = %#v, missing unseen ancestor /tmp/a", got)
+	}
+}
+
+func TestLinuxBwrapHostSecretAndCrossSessionDenied(t *testing.T) {
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skip("bubblewrap not available")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sshKey := filepath.Join(home, ".ssh", "id_rsa")
+	if err := os.MkdirAll(filepath.Dir(sshKey), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const sshSecret = "ISSUE2605_SSH_SECRET"
+	const peerSecret = "ISSUE2605_PEER_SESSION_SECRET"
+	if err := os.WriteFile(sshKey, []byte(sshSecret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	rt := NewRuntime(
+		WithWorkspaceRoot(root),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	if _, _, err := rt.linuxPreflight(context.Background()); err != nil {
+		t.Skipf("bubblewrap preflight unavailable: %v", err)
+	}
+	peer, err := rt.CreateWorkspace(context.Background(), "peer-session", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerFile := filepath.Join(peer.Path, "work", "notes.txt")
+	if err := os.WriteFile(peerFile, []byte(peerSecret+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "attacker-session", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := "cat " + sshKey + " 2>/dev/null || echo SSH_DENIED; " +
+		"ls " + filepath.Join(root, "sandbox") + "; " +
+		"cat " + peerFile + " 2>/dev/null || echo PEER_DENIED"
+	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:  "bash",
+		Args: []string{"-c", script},
+	})
+	if err != nil {
+		t.Fatalf("run error: %v result=%#v", err, res)
+	}
+	if strings.Contains(res.Stdout, sshSecret) {
+		t.Fatalf("host ssh secret leaked:\n%s", res.Stdout)
+	}
+	if !strings.Contains(res.Stdout, "SSH_DENIED") {
+		t.Fatalf("expected ssh read to fail:\n%s", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, peerSecret) {
+		t.Fatalf("peer session file leaked:\n%s", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, "peer-session") {
+		t.Fatalf("sibling session directory visible:\n%s", res.Stdout)
+	}
+
+	sshConfig := filepath.Join(home, ".ssh", "config")
+	const sshConfigContent = "Host allowed"
+	if err := os.WriteFile(sshConfig, []byte(sshConfigContent+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err = rt.RunProgram(
+		WithAdditionalPermissions(
+			context.Background(),
+			AdditionalPermissions{ReadPaths: []string{sshConfig}},
+		),
+		ws,
+		codeexecutor.RunProgramSpec{
+			Cmd:  "bash",
+			Args: []string{"-c", "cat " + sshConfig + "; cat " + sshKey + " 2>/dev/null || echo KEY_DENIED"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("run with credential child grant error: %v result=%#v", err, res)
+	}
+	if !strings.Contains(res.Stdout, sshConfigContent) {
+		t.Fatalf("credential child grant did not expose config:\n%s", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, sshSecret) || !strings.Contains(res.Stdout, "KEY_DENIED") {
+		t.Fatalf("credential child grant leaked sibling key:\n%s", res.Stdout)
+	}
+
+	isolated := NewRuntime(
+		WithWorkspaceRoot(root),
+		WithPermissionProfile(IsolatedWorkspaceProfile()),
+	)
+	if _, _, err := isolated.linuxPreflight(context.Background()); err != nil {
+		t.Skipf("bubblewrap preflight unavailable: %v", err)
+	}
+	res, err = isolated.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd: "bash",
+		Args: []string{"-c", "cat /etc/passwd >/dev/null && echo PASSWD_OK; " +
+			"cat " + sshKey + " 2>/dev/null || echo ISO_SSH_DENIED; " +
+			"cat " + peerFile + " 2>/dev/null || echo ISO_PEER_DENIED"},
+	})
+	if err != nil {
+		t.Fatalf("isolated run error: %v result=%#v", err, res)
+	}
+	if !strings.Contains(res.Stdout, "PASSWD_OK") {
+		t.Fatalf("isolated profile should still read /etc/passwd:\n%s stderr=%s", res.Stdout, res.Stderr)
+	}
+	if strings.Contains(res.Stdout, sshSecret) || !strings.Contains(res.Stdout, "ISO_SSH_DENIED") {
+		t.Fatalf("isolated profile leaked host ssh:\n%s", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, peerSecret) || !strings.Contains(res.Stdout, "ISO_PEER_DENIED") {
+		t.Fatalf("isolated profile leaked peer session:\n%s", res.Stdout)
+	}
 }
 
 func TestLinuxWorkspaceReadOnlyMountArgsSkipWorkspaceAndMissingTargets(t *testing.T) {
@@ -1299,15 +2035,6 @@ func newLinuxDiagnosticsTestRuntime(
 	return rt, ws
 }
 
-func hasArgPair(args []string, first, second string) bool {
-	for i := 0; i+1 < len(args); i++ {
-		if args[i] == first && args[i+1] == second {
-			return true
-		}
-	}
-	return false
-}
-
 func hasArg(args []string, want string) bool {
 	for _, arg := range args {
 		if arg == want {
@@ -1317,13 +2044,38 @@ func hasArg(args []string, want string) bool {
 	return false
 }
 
-func hasArgTriple(args []string, first, second, third string) bool {
-	for i := 0; i+2 < len(args); i++ {
-		if args[i] == first && args[i+1] == second && args[i+2] == third {
-			return true
+func hasArgPair(args []string, first, second string) bool {
+	return argPairIndex(args, first, second) >= 0
+}
+
+func argPairIndex(args []string, first, second string) int {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == first && args[i+1] == second {
+			return i
 		}
 	}
-	return false
+	return -1
+}
+
+func hasArgTriple(args []string, first, second, third string) bool {
+	return argTripleIndex(args, first, second, third) >= 0
+}
+
+func argTripleIndex(args []string, first, second, third string) int {
+	return argTripleIndexAfter(args, -1, first, second, third)
+}
+
+func argTripleIndexAfter(args []string, after int, first, second, third string) int {
+	start := after + 1
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i+2 < len(args); i++ {
+		if args[i] == first && args[i+1] == second && args[i+2] == third {
+			return i
+		}
+	}
+	return -1
 }
 
 func hasArgSequence(args []string, want ...string) bool {
@@ -1343,13 +2095,15 @@ func hasArgSequence(args []string, want ...string) bool {
 }
 
 func hasInaccessibleDirMask(args []string, target string) bool {
-	for i := 0; i+5 < len(args); i++ {
+	return hasPermsTmpfs(args, target) && argPairIndex(args, "--remount-ro", target) >= 0
+}
+
+func hasPermsTmpfs(args []string, target string) bool {
+	for i := 0; i+3 < len(args); i++ {
 		if args[i] == "--perms" &&
 			args[i+1] == "000" &&
 			args[i+2] == "--tmpfs" &&
-			args[i+3] == target &&
-			args[i+4] == "--remount-ro" &&
-			args[i+5] == target {
+			args[i+3] == target {
 			return true
 		}
 	}

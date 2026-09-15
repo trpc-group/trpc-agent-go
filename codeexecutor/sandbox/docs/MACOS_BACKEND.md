@@ -147,7 +147,7 @@ caller lifecycle responsibilities, data flow, filtering model, and limitations.
 | Capability | Linux `linux-bubblewrap` | macOS `macos-sandbox-exec` |
 | --- | --- | --- |
 | OS sandbox mechanism | `bubblewrap` namespaces and mounts | Apple Seatbelt through `/usr/bin/sandbox-exec` |
-| Host root visibility | Read-only bind of `/` | Selected platform defaults plus explicit grants |
+| Host root visibility | Host-root profiles bind `/` read-only; `IsolatedWorkspaceProfile` uses runtime paths plus explicit grants | Selected platform defaults plus explicit grants |
 | Mount namespace | Supported | Not supported |
 | PID namespace | Supported with `--unshare-pid` | Not supported |
 | Parent death handling | `--die-with-parent` plus process-group cleanup | Process-group cleanup only |
@@ -174,5 +174,6 @@ sanitized environment with `ShellEnvironmentPolicy` and passes it directly to th
 - macOS uses Seatbelt rules instead of namespace and mount operations.
 - macOS does not provide PID or network namespaces; process and network
   isolation are expressed through Seatbelt and process-group cleanup.
-- Linux behavior and tests remain unchanged; platform differences are documented
-  rather than hidden behind new public APIs.
+- Linux host-root profiles retain a read-only host view after masking
+  credential paths and sibling sessions; use `IsolatedWorkspaceProfile`
+  when the command must not see the host root.
