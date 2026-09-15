@@ -10,6 +10,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,66 @@ func TestConvertMCPSchema_Basic(t *testing.T) {
 	require.Equal(t, "bbb", s.Properties["b"].Description)
 }
 
+func TestConvertMCPSchema_NumericBounds(t *testing.T) {
+	mcpSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"page_size": map[string]any{
+				"type":             "integer",
+				"minimum":          1,
+				"maximum":          json.Number("9007199254740993"),
+				"exclusiveMinimum": 0,
+				"exclusiveMaximum": json.Number("9007199254740994"),
+			},
+		},
+	}
+
+	schema := convertMCPSchemaToSchema(mcpSchema)
+	pageSize := schema.Properties["page_size"]
+	require.Equal(t, json.Number("1"), pageSize.Minimum)
+	require.Equal(t, json.Number("9007199254740993"), pageSize.Maximum)
+	require.Equal(t, json.Number("0"), pageSize.ExclusiveMinimum)
+	require.Equal(t, json.Number("9007199254740994"), pageSize.ExclusiveMaximum)
+}
+
+func TestConvertMCPSchema_DefaultAndEnumKeepFloat64(t *testing.T) {
+	raw := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"page_size": {
+				"type": "integer",
+				"minimum": 1,
+				"maximum": 9007199254740993,
+				"default": 10,
+				"enum": [10, 20, 50]
+			}
+		}
+	}`)
+	schema := convertMCPSchemaToSchema(raw)
+	pageSize := schema.Properties["page_size"]
+	require.Equal(t, json.Number("1"), pageSize.Minimum)
+	require.Equal(t, json.Number("9007199254740993"), pageSize.Maximum)
+	require.Equal(t, float64(10), pageSize.Default)
+	require.Equal(t, []any{float64(10), float64(20), float64(50)}, pageSize.Enum)
+}
+
+func TestConvertMCPSchema_RawMessagePreservesLargeIntegers(t *testing.T) {
+	raw := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"page_size": {
+				"type": "integer",
+				"maximum": 9007199254740993,
+				"exclusiveMinimum": 0
+			}
+		}
+	}`)
+	schema := convertMCPSchemaToSchema(raw)
+	pageSize := schema.Properties["page_size"]
+	require.Equal(t, json.Number("9007199254740993"), pageSize.Maximum)
+	require.Equal(t, json.Number("0"), pageSize.ExclusiveMinimum)
+}
+
 func TestConvertProperties_Nil(t *testing.T) {
 	require.Nil(t, convertProperties(nil))
 }
@@ -45,6 +106,36 @@ func TestConvertMCPSchema_InvalidJSON(t *testing.T) {
 	// Channel cannot marshal, expect fallback schema.
 	schema := convertMCPSchemaToSchema(make(chan int))
 	require.Equal(t, &tool.Schema{Type: "object"}, schema)
+}
+
+func TestConvertMCPSchema_NonObjectJSON(t *testing.T) {
+	schema := convertMCPSchemaToSchema("not-an-object")
+	require.Equal(t, &tool.Schema{Type: "object"}, schema)
+}
+
+func TestConvertMCPSchema_NonNumericBoundsAreDropped(t *testing.T) {
+	schema := convertMCPSchemaToSchema(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"page_size": map[string]any{
+				"type":             "integer",
+				"minimum":          true,
+				"maximum":          "unbounded",
+				"exclusiveMinimum": []any{1},
+				"exclusiveMaximum": map[string]any{"value": 2},
+			},
+		},
+	})
+	pageSize := schema.Properties["page_size"]
+	require.Empty(t, pageSize.Minimum)
+	require.Empty(t, pageSize.Maximum)
+	require.Empty(t, pageSize.ExclusiveMinimum)
+	require.Empty(t, pageSize.ExclusiveMaximum)
+}
+
+func TestSchemaNumber_MissingAndUnmarshalable(t *testing.T) {
+	require.Empty(t, schemaNumber(map[string]any{}, "minimum"))
+	require.Empty(t, schemaNumber(map[string]any{"minimum": make(chan int)}, "minimum"))
 }
 
 func TestConvertMCPSchema_RootPattern(t *testing.T) {

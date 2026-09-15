@@ -1099,19 +1099,35 @@ func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 		if effectiveSchemaType == "object" && properties == nil {
 			properties = map[string]*tool.Schema{}
 		}
+		wireProperties := normalizeToolProperties(properties)
 		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        declaration.Name,
 				Description: anthropic.String(buildToolDescription(declaration)),
 				InputSchema: anthropic.ToolInputSchemaParam{
 					Type:       constant.Object(declaration.InputSchema.Type),
-					Properties: properties,
+					Properties: wireProperties,
 					Required:   declaration.InputSchema.Required,
 				},
 			},
 		})
 	}
 	return result
+}
+
+// normalizeToolProperties converts schema properties into stdlib JSON tokens
+// before the Anthropic SDK serializes them. The SDK's encoder treats
+// encoding/json.Number as a string alias, which turns numeric JSON Schema
+// bounds into quoted strings and causes Anthropic to reject the whole tool
+// declaration. Returning json.RawMessage keeps integer literals that do not
+// fit in float64 (for example 9007199254740993) instead of rounding them.
+func normalizeToolProperties(properties map[string]*tool.Schema) any {
+	schemaJSON, err := json.Marshal(properties)
+	if err != nil {
+		log.Debugf("marshal Anthropic tool properties: %v", err)
+		return properties
+	}
+	return json.RawMessage(schemaJSON)
 }
 
 // buildToolDescription builds the description for a tool.
