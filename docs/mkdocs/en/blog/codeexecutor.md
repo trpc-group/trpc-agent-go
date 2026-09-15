@@ -247,19 +247,19 @@ Code Executor is the execution system. Sandbox is one backend that emphasizes se
 
 tRPC-Agent-Go sandbox permissions revolve around `PermissionProfile`. A profile combines file-system policy and network policy so callers do not create contradictory configurations.
 
-`ReadOnlyProfile` makes the host root file system read-only and restricts network access. `WorkspaceWriteProfile` is the default managed profile: root is read-only, workspace and working directories are writable, and network access is restricted. `DangerFullAccessProfile` explicitly disables sandboxing and enables network access, and should only be used for fully trusted cases that require host permissions. `ExternalSandboxProfile` indicates that isolation is provided externally, such as by a container, remote platform, or upper-layer system.
+`ReadOnlyProfile` makes the host root file system read-only and restricts network access. `WorkspaceWriteProfile` is the default managed profile: root is read-only, workspace and working directories are writable, and network access is restricted. On Linux this keeps installed tools working, then masks common credential paths and sibling session directories. Arbitrary host files outside that denylist remain readable. `IsolatedWorkspaceProfile` keeps a writable workspace but does not bind the host root on Linux, so host home directories and other session workspaces are not visible unless explicitly granted. `DangerFullAccessProfile` explicitly disables sandboxing and enables network access, and should only be used for fully trusted cases that require host permissions. `ExternalSandboxProfile` indicates that isolation is provided externally, such as by a container, remote platform, or upper-layer system.
 
 `WorkspaceWriteProfile` maps naturally to Agent execution: the outside world is read-only by default, while session workspace directories such as `work`, `out`, `runs`, `skills`, `home`, and `tmp` are writable.
 
 Callers can add explicit path grants through `WithReadPaths` and `WithWritePaths`, or block sensitive paths through `WithNoAccessPaths` and `WithNoAccessGlobs`. These are runtime mount and path rules, not prompt instructions.
 
-On Linux, the backend starts from a read-only root:
+On Linux, host-root profiles start from a read-only root:
 
 ```text
 --ro-bind / /
 ```
 
-It then remounts allowed workspace paths as writable and hides protected paths. The model is important: it is not "everything writable, then deny some paths." It is "read-only by default, then explicitly open writable paths."
+They then hide sibling session directories, mask common credential paths, remount allowed workspace paths as writable, and hide protected paths. The model is important: it is not "everything writable, then deny some paths." It is "read-only by default, then explicitly open writable paths." `IsolatedWorkspaceProfile` skips the host-root bind and only mounts runtime directories plus the session workspace.
 
 ### Network: Restricted by Default, Enabled Explicitly
 

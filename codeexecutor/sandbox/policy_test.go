@@ -34,6 +34,18 @@ func TestPermissionProfileEnforcement(t *testing.T) {
 	if got := ExternalSandboxProfile(NetworkPolicy{}).enforcement(); got != enforcementExternal {
 		t.Fatalf("external_sandbox enforcement = %s", got)
 	}
+	if got := IsolatedWorkspaceProfile().enforcement(); got != enforcementManaged {
+		t.Fatalf("isolated_workspace enforcement = %s", got)
+	}
+	if IsolatedWorkspaceProfile().exposesHostRoot() {
+		t.Fatalf("IsolatedWorkspaceProfile should not expose host root")
+	}
+	if !WorkspaceWriteProfile().exposesHostRoot() || !ReadOnlyProfile().exposesHostRoot() {
+		t.Fatalf("host-root profiles should expose host root")
+	}
+	if !containsSpecialRule(IsolatedWorkspaceProfile(), accessWrite, specialWork) {
+		t.Fatalf("isolated profile missing work write grant")
+	}
 }
 
 func TestRuntimeDefaultProfileIsWorkspaceWrite(t *testing.T) {

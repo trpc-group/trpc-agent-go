@@ -54,7 +54,7 @@ i386 programs using modern direct socket syscalls retain anonymous stream and
 seqpacket socketpairs, while programs using legacy `socketcall` cannot use
 socket operations under `NetworkRestricted`.
 
-Because the managed Linux profile still uses `--ro-bind / /`, host socket paths
+Because host-root Linux profiles still use `--ro-bind / /`, host socket paths
 such as `docker.sock` remain visible in the mount namespace. The seccomp filter
 is what makes them unusable: the guest cannot create a new AF_UNIX file
 descriptor to `connect(2)` them. The same rule also blocks guest-local pathname
