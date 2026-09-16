@@ -909,6 +909,11 @@ func TestValidateValueAgainstSchema_ScalarTypes(t *testing.T) {
 	assert.True(t, ok)
 	assert.Empty(t, reason)
 
+	overLong := json.Number("1e" + strings.Repeat("9", maxJSONNumberTokenLen))
+	ok, reason = validateValueAgainstSchema(overLong, &tool.Schema{Type: "number"}, nil, "$")
+	assert.False(t, ok)
+	assert.Contains(t, reason, "expected number")
+
 	ok, reason = validateValueAgainstSchema(json.Number("not-a-number"), &tool.Schema{Type: "number"}, nil, "$")
 	assert.False(t, ok)
 	assert.Contains(t, reason, "expected number")
@@ -1030,8 +1035,8 @@ func TestSanitizeMessagesWithTools_DowngradesNumericBounds(t *testing.T) {
 				}},
 			},
 			{
-				Role:   model.RoleTool,
-				ToolID: "call_1",
+				Role:    model.RoleTool,
+				ToolID:  "call_1",
 				Content: "ok",
 			},
 		}

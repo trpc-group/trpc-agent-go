@@ -31,6 +31,11 @@ const (
 	invalidToolResultTag = "[invalid_tool_result]"
 	orphanToolCallTag    = "[orphan_tool_call]"
 	orphanToolResultTag  = "[orphan_tool_result]"
+
+	// maxJSONNumberTokenLen caps json.Number / schema bound tokens before
+	// big.Rat.SetString so hostile exponent strings cannot exhaust memory
+	// (CVE-2022-23772). Ordinary tool JSON numbers stay far below this.
+	maxJSONNumberTokenLen = 1024
 )
 
 var (
@@ -524,11 +529,17 @@ func validateNumberValueAgainstSchema(value any, schema *tool.Schema, path strin
 // parseJSONNumber converts a json.Number into a big.Rat without a float64 round trip.
 // This exists so inclusive and exclusive schema bounds stay exact above 2^53.
 // Without this, encoding/json float64 parsing would round large integer tokens.
+//
+// Token length is capped before Rat.SetString so hostile exponent strings cannot
+// trigger unbounded allocation (CVE-2022-23772 / gosec G113).
 func parseJSONNumber(num json.Number) (*big.Rat, bool) {
 	if num == "" {
 		return nil, false
 	}
-	rat, ok := new(big.Rat).SetString(string(num))
+	if len(num) > maxJSONNumberTokenLen {
+		return nil, false
+	}
+	rat, ok := new(big.Rat).SetString(string(num)) //nolint:gosec // G113: length capped by maxJSONNumberTokenLen above
 	if !ok {
 		return nil, false
 	}
