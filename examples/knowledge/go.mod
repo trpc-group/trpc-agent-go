@@ -10,11 +10,13 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini => ../../knowledge/embedder/gemini
 	trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age => ../../knowledge/graphstore/age
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract => ../../knowledge/ocr/tesseract
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/chroma => ../../knowledge/vectorstore/chroma
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch => ../../knowledge/vectorstore/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus => ../../knowledge/vectorstore/milvus
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/sqlitevec => ../../knowledge/vectorstore/sqlitevec
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../../knowledge/vectorstore/tcvector
+	trpc.group/trpc-go/trpc-agent-go/storage/chroma => ../../storage/chroma
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch => ../../storage/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/storage/milvus => ../../storage/milvus
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
@@ -30,11 +32,13 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python v1.11.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age v0.0.0-20260602121024-664ebd0ab56d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-20251203120347-0b4d62cb115d
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/chroma v0.0.0-20260904110919-05fc562ab374
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus v0.8.1-0.20251222024650-ea147adf3d21
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/sqlitevec v1.9.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/storage/chroma v0.0.0-20260904110919-05fc562ab374 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.9.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
