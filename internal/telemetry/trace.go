@@ -699,7 +699,7 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 		// Host-supplied cost rides on the same generation span as usage so Langfuse
 		// stores dollars without needing its ingest catalog. Empty CostDetails skips
 		// the attribute; Langfuse may still price from usage alone when configured.
-		if len(rsp.Usage.CostDetails) > 0 {
+		if rsp.Usage.CostDetails != (model.CostDetails{}) {
 			if costJSON, err := json.Marshal(rsp.Usage.CostDetails); err == nil {
 				attrs = append(attrs, attribute.String(
 					"langfuse.observation.cost_details", string(costJSON),

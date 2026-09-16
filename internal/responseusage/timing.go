@@ -101,13 +101,9 @@ func usageOnlyHasTimingInfo(usage *model.Usage) bool {
 	if usage == nil {
 		return true
 	}
-	// CostDetails is a map, so Usage cannot be compared with ==.
-	return usage.PromptTokens == 0 &&
-		usage.CompletionTokens == 0 &&
-		usage.TotalTokens == 0 &&
-		usage.PromptTokensDetails == (model.PromptTokensDetails{}) &&
-		usage.CompletionTokensDetails == (model.CompletionTokensDetails{}) &&
-		len(usage.CostDetails) == 0
+	withoutTiming := *usage
+	withoutTiming.TimingInfo = nil
+	return withoutTiming == model.Usage{}
 }
 
 // AttachTiming attaches TimingInfo to response usage.

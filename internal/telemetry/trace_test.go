@@ -1338,10 +1338,10 @@ func TestBuildResponseAttributes_EmitsCostDetails(t *testing.T) {
 			PromptTokens:     100,
 			CompletionTokens: 20,
 			TotalTokens:      120,
-			CostDetails: map[string]float64{
-				"input":  0.0002,
-				"output": 0.00024,
-				"total":  0.00044,
+			CostDetails: model.CostDetails{
+				Input:  0.0002,
+				Output: 0.00024,
+				Total:  0.00044,
 			},
 		},
 	}

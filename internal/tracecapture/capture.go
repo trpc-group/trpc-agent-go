@@ -319,7 +319,7 @@ func traceStepUsage(usage *model.Usage) *model.Usage {
 	if out.PromptTokens == 0 && out.CompletionTokens == 0 && out.TotalTokens == 0 &&
 		out.PromptTokensDetails == (model.PromptTokensDetails{}) &&
 		out.CompletionTokensDetails == (model.CompletionTokensDetails{}) &&
-		len(out.CostDetails) == 0 {
+		out.CostDetails == (model.CostDetails{}) {
 		return nil
 	}
 	return &out
@@ -525,5 +525,10 @@ func addUsage(total *model.Usage, next *model.Usage) *model.Usage {
 	total.PromptTokensDetails.CacheCreationTokens += next.PromptTokensDetails.CacheCreationTokens
 	total.PromptTokensDetails.CacheReadTokens += next.PromptTokensDetails.CacheReadTokens
 	total.CompletionTokensDetails.ReasoningTokens += next.CompletionTokensDetails.ReasoningTokens
+	total.CostDetails.Input += next.CostDetails.Input
+	total.CostDetails.InputCachedTokens += next.CostDetails.InputCachedTokens
+	total.CostDetails.Output += next.CostDetails.Output
+	total.CostDetails.OutputReasoningTokens += next.CostDetails.OutputReasoningTokens
+	total.CostDetails.Total += next.CostDetails.Total
 	return total
 }
