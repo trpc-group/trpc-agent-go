@@ -1330,6 +1330,36 @@ func TestBuildResponseAttributes_JSONMarshalPaths(t *testing.T) {
 	require.True(t, foundOTelMessages)
 }
 
+func TestBuildResponseAttributes_EmitsCostDetails(t *testing.T) {
+	rsp := &model.Response{
+		ID:    "resp-cost",
+		Model: "gpt-5.6-terra",
+		Usage: &model.Usage{
+			PromptTokens:     100,
+			CompletionTokens: 20,
+			TotalTokens:      120,
+			CostDetails: map[string]float64{
+				"input":  0.0002,
+				"output": 0.00024,
+				"total":  0.00044,
+			},
+		},
+	}
+	attrs := buildResponseAttributes(rsp, semconvtrace.ValueDefaultErrorType)
+
+	var costJSON string
+	for _, attr := range attrs {
+		if string(attr.Key) == "langfuse.observation.cost_details" {
+			costJSON = attr.Value.AsString()
+			break
+		}
+	}
+	require.NotEmpty(t, costJSON)
+	var got map[string]float64
+	require.NoError(t, json.Unmarshal([]byte(costJSON), &got))
+	require.InDelta(t, 0.00044, got["total"], 1e-12)
+}
+
 func TestTrace_AdditionalBranches(t *testing.T) {
 	// TraceToolCall with nil rspEvent and rspEvent without Response
 	s := newRecordingSpan()

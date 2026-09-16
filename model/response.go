@@ -130,6 +130,13 @@ type Usage struct {
 	// CompletionTokensDetails is the details of the completion tokens.
 	CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
 
+	// CostDetails is optional host-supplied USD cost keyed like Langfuse
+	// usage_details (input, input_cached_tokens, output, output_reasoning_tokens, total).
+	// Providers do not return dollars; hosts that know model rates fill this so the
+	// Langfuse exporter can write langfuse.observation.cost_details without relying
+	// on Langfuse ingest-time pricing. Empty means cost is unknown at call time.
+	CostDetails map[string]float64 `json:"cost_details,omitempty"`
+
 	// TimingInfo contains detailed timing information for token generation.
 	TimingInfo *TimingInfo `json:"timing_info,omitempty"`
 }

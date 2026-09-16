@@ -316,7 +316,10 @@ func traceStepUsage(usage *model.Usage) *model.Usage {
 	}
 	out := *usage
 	out.TimingInfo = nil
-	if out == (model.Usage{}) {
+	if out.PromptTokens == 0 && out.CompletionTokens == 0 && out.TotalTokens == 0 &&
+		out.PromptTokensDetails == (model.PromptTokensDetails{}) &&
+		out.CompletionTokensDetails == (model.CompletionTokensDetails{}) &&
+		len(out.CostDetails) == 0 {
 		return nil
 	}
 	return &out

@@ -174,6 +174,7 @@ type llmSpanCollected struct {
 	outputMessagesOTel *string
 	toolDefinitions    *string
 	usage              usageDetails
+	costDetailsJSON    *string               // host-supplied langfuse.observation.cost_details
 	attrs              []*commonpb.KeyValue // non-LLM attributes to keep
 }
 
@@ -204,6 +205,13 @@ func transformCallLLM(span *tracepb.Span) {
 		if usageJSON, err := json.Marshal(usage); err == nil {
 			newAttributes = append(newAttributes, stringKV(observationUsageDetails, string(usageJSON)))
 		}
+	}
+
+	// observation.cost_details — host-priced USD (from model.Usage.CostDetails or a
+	// direct span attribute). Without this write, Langfuse must price at ingest
+	// and partial catalog matches under-report cost.
+	if collected.costDetailsJSON != nil && *collected.costDetailsJSON != "" {
+		newAttributes = append(newAttributes, stringKV(observationCostDetails, *collected.costDetailsJSON))
 	}
 
 	if collected.sessionID != nil {
@@ -247,6 +255,10 @@ func collectLLMSpanAttributes(attrs []*commonpb.KeyValue) llmSpanCollected {
 			c.usage.InputCacheRead = attr.Value.GetIntValue()
 		case semconvtrace.KeyGenAIUsageInputTokensCacheCreation:
 			c.usage.InputCacheCreation = attr.Value.GetIntValue()
+		case observationCostDetails:
+			// Lift host cost out of the passthrough bag so we write it once after
+			// usage_details and never duplicate the attribute.
+			c.costDetailsJSON = getStringPtr(attr.Value)
 		default:
 			c.attrs = append(c.attrs, attr)
 		}
