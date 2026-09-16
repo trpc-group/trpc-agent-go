@@ -17,10 +17,10 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/session/noop"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -635,7 +635,6 @@ func TestToolsReturnsAllContextTools(t *testing.T) {
 		}
 	}
 }
-
 
 func TestPensieveMutatingToolsRequireSerialExecution(t *testing.T) {
 	for _, tl := range []tool.Tool{NewNoteTool(), NewDeleteContextTool()} {
