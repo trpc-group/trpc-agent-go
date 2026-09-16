@@ -31,6 +31,7 @@ core namespace and mount flags used by real sandbox runs:
 bwrap \
   --die-with-parent \
   --unshare-user \
+  --cap-drop ALL \
   --unshare-pid \
   --new-session \
   --ro-bind / / \
@@ -101,6 +102,7 @@ docker run --rm \
   your-image \
   --die-with-parent \
   --unshare-user \
+  --cap-drop ALL \
   --unshare-pid \
   --new-session \
   --ro-bind / / \
@@ -131,6 +133,7 @@ docker run --rm \
   your-image \
   --die-with-parent \
   --unshare-user \
+  --cap-drop ALL \
   --unshare-pid \
   --new-session \
   --ro-bind / / \
