@@ -307,7 +307,14 @@ func TestTrimConversations_Failures(t *testing.T) {
 			deleted, err := svc.TrimConversations(context.Background(), key)
 			require.Error(t, err)
 			require.Nil(t, deleted)
-			if stage != "scan" && stage != "decode" {
+			switch stage {
+			case "scan":
+				require.ErrorContains(t, err, "scan trim event")
+			case "decode":
+				require.ErrorContains(t, err, "unmarshal trim event")
+				var syntaxErr *json.SyntaxError
+				require.ErrorAs(t, err, &syntaxErr)
+			default:
 				require.ErrorIs(t, err, cause)
 			}
 			require.NoError(t, mock.ExpectationsWereMet())

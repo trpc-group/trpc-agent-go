@@ -189,7 +189,7 @@ deleted, err := sessionService.TrimConversations(ctx, key, mysql.WithCount(2))
 if err != nil {
     return err
 }
-// deleted contains all persisted events belonging to the two selected requests.
+// deleted 包含所选两轮请求的全部已持久化事件。
 ```
 
 从 Redis 切换时，将 `redis.WithCount(n)` 替换为 `mysql.WithCount(n)`。

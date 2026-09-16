@@ -95,6 +95,8 @@ func (s *Service) TrimConversations(
 		if err != nil {
 			return fmt.Errorf("lock session: %w", err)
 		}
+		// Match GetSession's expires_at > now filter and cleanup's
+		// expires_at <= now boundary; trimming does not revive expired sessions.
 		if expiresAt.Valid && !expiresAt.Time.After(time.Now()) {
 			return nil
 		}
@@ -107,8 +109,11 @@ func (s *Service) TrimConversations(
 		if err := s.deleteTrimEvents(ctx, tx, key, selected); err != nil {
 			return err
 		}
-		for _, row := range selected {
-			deleted = append(deleted, row.event)
+		if len(selected) > 0 {
+			deleted = make([]event.Event, len(selected))
+			for i, row := range selected {
+				deleted[i] = row.event
+			}
 		}
 		return ctx.Err()
 	})
@@ -156,6 +161,8 @@ func (s *Service) loadTrimEvents(
 	return events, nil
 }
 
+// selectTrimEvents uses a total order so selection and returned events are
+// deterministic regardless of database row order.
 func selectTrimEvents(events []trimEvent, count int) []trimEvent {
 	slices.SortFunc(events, func(a, b trimEvent) int {
 		if c := a.event.Timestamp.Compare(b.event.Timestamp); c != 0 {
@@ -166,6 +173,7 @@ func selectTrimEvents(events []trimEvent, count int) []trimEvent {
 		}
 		return cmp.Compare(a.id, b.id)
 	})
+	// Do not size this map from count, which may far exceed the actual history.
 	targets := make(map[string]struct{})
 	for i := len(events) - 1; i >= 0 && len(targets) < count; i-- {
 		if requestID := events[i].event.RequestID; requestID != "" {
@@ -176,6 +184,9 @@ func selectTrimEvents(events []trimEvent, count int) []trimEvent {
 	// contiguous, and a selected request can span any number of SQL batches.
 	var selected []trimEvent
 	for _, row := range events {
+		if row.event.RequestID == "" {
+			continue
+		}
 		if _, ok := targets[row.event.RequestID]; ok {
 			selected = append(selected, row)
 		}
@@ -189,20 +200,23 @@ func (s *Service) deleteTrimEvents(
 	key session.Key,
 	events []trimEvent,
 ) error {
+	// #nosec G201 -- NewService builds the table name from a validated prefix; values are bound below.
+	queryPrefix := fmt.Sprintf("DELETE FROM %s", s.tableSessionEvents)
+	if s.opts.softDelete {
+		queryPrefix = fmt.Sprintf("UPDATE %s SET deleted_at = ?", s.tableSessionEvents)
+	}
+	// Keep user_id explicit for TDSQL shard routing; row IDs alone are
+	// insufficient because the distributed table's PK is (id, user_id).
+	queryPrefix += " WHERE app_name = ? AND user_id = ? AND session_id = ?" +
+		" AND deleted_at IS NULL AND id IN ("
 	now := time.Now()
 	for start := 0; start < len(events); start += trimDeleteBatchSize {
 		batch := events[start:min(start+trimDeleteBatchSize, len(events))]
-		var args []any
-		// #nosec G201 -- NewService builds the table name from a validated prefix; values are bound below.
-		query := fmt.Sprintf("DELETE FROM %s", s.tableSessionEvents)
+		query := queryPrefix + strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",") + ")"
+		args := make([]any, 0, len(batch)+4)
 		if s.opts.softDelete {
-			query = fmt.Sprintf("UPDATE %s SET deleted_at = ?", s.tableSessionEvents)
 			args = append(args, now)
 		}
-		// Keep user_id explicit for TDSQL shard routing; row IDs alone are
-		// insufficient because the distributed table's PK is (id, user_id).
-		query += " WHERE app_name = ? AND user_id = ? AND session_id = ?" +
-			" AND deleted_at IS NULL AND id IN (" + strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",") + ")"
 		args = append(args, key.AppName, key.UserID, key.SessionID)
 		for _, row := range batch {
 			args = append(args, row.id)
