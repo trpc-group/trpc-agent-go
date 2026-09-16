@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,19 +29,25 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarydiag"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolsurface"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -55,6 +63,7 @@ const (
 	queuedUserAuthor          = "user"
 
 	errMsgNoModelResponse = "no response received from model"
+	errMsgNoLLMMessages   = "no messages available for LLM call"
 
 	flowRunPanicLogFmt = log.PanicPrefix + " Flow execution panic (invocation: %s, " +
 		"agent: %s): %v\n%s"
@@ -64,6 +73,23 @@ const (
 	defaultContextCompactionThresholdRatio = 0.7
 	contextCompactionFallbackWindow        = 8192
 	contextCompactionMinTokens             = 2000
+
+	contextCompactionOutcomeSuccess            = "success"
+	contextCompactionOutcomeNoUpdate           = "no_update"
+	contextCompactionOutcomeSummaryError       = "summary_error"
+	contextCompactionOutcomeRebuildUnavailable = "rebuild_unavailable"
+	contextCompactionOutcomePersistenceError   = "persistence_error"
+	contextCompactionOutcomePostCountError     = "post_count_error"
+
+	// Session summary injection outcomes report whether a stored summary
+	// selected for this request is still observable in the same framework
+	// model.Request after the response sequence has been observed. They do
+	// not describe a provider's final payload.
+	summaryInjectionOutcomeBlockTextPresent = "block_text_present"
+	summaryInjectionOutcomeBlockTextMissing = "block_text_missing"
+	summaryInjectionOutcomeNotSelected      = "not_selected"
+	summaryInjectionOutcomeLookupMiss       = "lookup_miss"
+	summaryInjectionOutcomeScopeMismatch    = "scope_mismatch"
 )
 
 // InvocationHasFilteredUserTools reports whether the cached filtered tool
@@ -133,9 +159,10 @@ type contextCompactionTailProcessor interface {
 }
 
 type contextCompactionRebuildPlan struct {
-	beforeContent    *model.Request
-	contentProcessor *processor.ContentRequestProcessor
-	tailProcessors   []contextCompactionTailProcessor
+	beforeContent                *model.Request
+	contentProcessor             *processor.ContentRequestProcessor
+	tailProcessors               []contextCompactionTailProcessor
+	callLimitFinalizationMessage *model.Message
 }
 
 type summarySnapshot struct {
@@ -342,15 +369,17 @@ func traceSnapshotFromMessages(messages []model.Message) *atrace.Snapshot {
 	return &atrace.Snapshot{Text: string(bytes)}
 }
 
-func traceSnapshotFromEvent(evt *event.Event) *atrace.Snapshot {
-	if evt == nil || evt.Response == nil {
+func executionTraceAppliedSurfaceIDs(invocation *agent.Invocation) []string {
+	if invocation == nil || invocation.Agent == nil {
 		return nil
 	}
-	bytes, err := json.Marshal(evt.Response)
-	if err != nil {
+	reporter, ok := invocation.Agent.(interface {
+		ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []string
+	})
+	if !ok {
 		return nil
 	}
-	return &atrace.Snapshot{Text: string(bytes)}
+	return reporter.ExecutionTraceAppliedSurfaceIDs(invocation)
 }
 
 func (f *Flow) maybeConsumeQueuedUserMessages(
@@ -524,6 +553,9 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 			parentRequest,
 		)
 	}
+	if view, ok := summaryview.Snapshot(invocation); ok {
+		summaryCtx = summaryview.ContextWithView(summaryCtx, view)
+	}
 
 	err = invocation.SessionService.CreateSessionSummary(
 		summaryCtx,
@@ -638,7 +670,9 @@ func runModelSelector(
 	return selector(ctx, invocation)
 }
 
-// runOneStep executes one step of the flow (one LLM call cycle).
+// runOneStep executes one LLM call cycle. Despite the legacy name, this is
+// not a structural execution-trace Step; every cycle updates the Step owned by
+// the surrounding agent run.
 // Returns the last event generated, or nil if no events.
 func (f *Flow) runOneStep(
 	ctx context.Context,
@@ -660,6 +694,12 @@ func (f *Flow) runOneStep(
 		}
 		finishLatencySpan(stepSpan, stepStarted, err)
 	}()
+	defer func() {
+		if calllimit.Active(invocation) {
+			invocation.EndInvocation = true
+			calllimit.Finish(invocation)
+		}
+	}()
 	// Initialize empty LLM request.
 	llmRequest := &model.Request{
 		Tools: make(map[string]tool.Tool), // Initialize tools map
@@ -680,6 +720,13 @@ func (f *Flow) runOneStep(
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
+	if instruction, ok := calllimit.PreviewForLLM(
+		invocation,
+		invocation.MaxLLMCalls,
+	); ok && rebuildPlan != nil {
+		message := model.NewUserMessage(instruction)
+		rebuildPlan.callLimitFinalizationMessage = &message
+	}
 	llmRequest = f.maybeCompactContextBeforeLLM(
 		ctx,
 		invocation,
@@ -690,14 +737,7 @@ func (f *Flow) runOneStep(
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
-	observabilityInvocation := invocationViewForModel(invocation, callModel)
-	stepID := agent.StartExecutionTraceStep(
-		invocation,
-		agent.InvocationTraceNodeID(invocation),
-		traceSnapshotFromMessages(llmRequest.Messages),
-		nil,
-	)
-	agent.SetExecutionTraceStepAppliedSurfaceIDs(invocation, stepID)
+	observabilityInvocation := observabilityInvocationForModel(invocation, callModel)
 	var span oteltrace.Span
 	var modelName string
 	if callModel != nil {
@@ -708,10 +748,22 @@ func (f *Flow) runOneStep(
 		defer span.End()
 	}
 	// 2. Call LLM (get response sequence).
-	ctx, responseSeq, err := f.callLLM(ctx, invocation, llmRequest, callModel)
+	ctx, responseSeq, modelCalled, err := f.callLLM(ctx, invocation, llmRequest, callModel)
 	if err != nil {
-		agent.FinishExecutionTraceStep(invocation, stepID, nil, err)
 		return nil, err
+	}
+	var lastCompleteUsage *model.Usage
+	if modelCalled && invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
+		modelResponseSeq := responseSeq
+		responseSeq = func(yield func(*model.Response) bool) {
+			modelResponseSeq(func(response *model.Response) bool {
+				if response != nil && !response.IsPartial && response.Usage != nil {
+					usage := *response.Usage
+					lastCompleteUsage = &usage
+				}
+				return yield(response)
+			})
+		}
 	}
 	// 3. Process streaming responses.
 	lastEvent, err = f.processStreamingResponses(
@@ -724,9 +776,11 @@ func (f *Flow) runOneStep(
 		span,
 		startedSpan,
 	)
-	agent.FinishExecutionTraceStep(invocation, stepID, traceSnapshotFromEvent(lastEvent), err)
-	if lastEvent != nil && lastEvent.Response != nil {
-		agent.SetExecutionTraceStepUsage(invocation, stepID, lastEvent.Response.Usage)
+	if lastCompleteUsage != nil {
+		tracecapture.AddInvocationStepUsage(
+			agent.NewInvocationContext(ctx, invocation),
+			lastCompleteUsage,
+		)
 	}
 	return lastEvent, err
 }
@@ -812,6 +866,7 @@ type streamingResponseProcessor struct {
 	eventChan               chan<- *event.Event
 	span                    oteltrace.Span
 	startedSpan             bool
+	chatTraceState          itelemetry.ChatTraceState
 	tracker                 *itelemetry.ChatMetricsTracker
 	timingInfo              *model.TimingInfo
 	partialUsageState       responseusage.PartialState
@@ -927,6 +982,25 @@ func (p *streamingResponseProcessor) process(
 	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
+	p.repairToolCallTextAndStats(response)
+	if err := validateCompletedToolCallNames(response); err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
+	if p.shouldBufferToolCallTextPartial(response) {
+		if err := agent.CheckContextCancelled(p.ctx); err != nil {
+			*p.err = err
+			responseErr = err
+			return false
+		}
+		if responseStarted && response != nil {
+			responseSpan.SetAttributes(
+				latencyResponseAttrs(response)...,
+			)
+		}
+		return true
+	}
 	llmResponseEvent := p.emitLLMResponse(
 		eventInvocation,
 		response,
@@ -961,6 +1035,37 @@ func (p *streamingResponseProcessor) process(
 	return true
 }
 
+func validateCompletedToolCallNames(response *model.Response) error {
+	if response == nil || response.IsPartial {
+		return nil
+	}
+	for choiceIndex, choice := range response.Choices {
+		messages := []struct {
+			location  string
+			toolCalls []model.ToolCall
+		}{
+			{location: "message", toolCalls: choice.Message.ToolCalls},
+			{location: "delta", toolCalls: choice.Delta.ToolCalls},
+		}
+		for _, message := range messages {
+			for toolCallIndex, toolCall := range message.toolCalls {
+				if strings.TrimSpace(toolCall.Function.Name) != "" {
+					continue
+				}
+				return fmt.Errorf(
+					"invalid model response: tool call function name is empty: response_id=%q choice=%d location=%s tool_call=%d id=%q",
+					response.ID,
+					choiceIndex,
+					message.location,
+					toolCallIndex,
+					toolCall.ID,
+				)
+			}
+		}
+	}
+	return nil
+}
+
 func (p *streamingResponseProcessor) recordResponseStats(response *model.Response) {
 	p.responseCount++
 	if response == nil {
@@ -986,10 +1091,7 @@ func (p *streamingResponseProcessor) updateMetricsState() {
 		return
 	}
 	p.tracker.SetInvocationState(
-		metricsInvocationForCurrent(
-			p.currentInvocation,
-			p.observabilityInvocation,
-		),
+		p.currentInvocation,
 		p.timingInfo,
 	)
 }
@@ -1024,6 +1126,64 @@ func (p *streamingResponseProcessor) repairToolCallArguments(
 		return
 	}
 	jsonrepair.RepairResponseToolCallArgumentsInPlace(p.ctx, response)
+}
+
+func (p *streamingResponseProcessor) repairToolCallTextAndStats(
+	response *model.Response,
+) {
+	wasToolResponse := response != nil &&
+		(response.IsToolCallResponse() || response.IsToolResultResponse())
+	if p.repairToolCallText(response) && !wasToolResponse &&
+		response.IsToolCallResponse() {
+		p.toolResponseCount++
+	}
+}
+
+func (p *streamingResponseProcessor) repairToolCallText(
+	response *model.Response,
+) bool {
+	if p.currentInvocation == nil {
+		return false
+	}
+	if !isToolCallTextRepairEnabled(p.currentInvocation) {
+		return false
+	}
+	return repairResponseToolCallTextInPlace(p.ctx, p.llmRequest, response)
+}
+
+func (p *streamingResponseProcessor) shouldBufferToolCallTextPartial(
+	response *model.Response,
+) bool {
+	return response != nil && response.IsPartial &&
+		p.currentInvocation != nil &&
+		isToolCallTextRepairEnabled(p.currentInvocation) &&
+		p.llmRequest != nil && len(p.llmRequest.Tools) > 0 &&
+		responseMayContainTextToolCall(response)
+}
+
+func responseMayContainTextToolCall(response *model.Response) bool {
+	if response == nil {
+		return false
+	}
+	for i := range response.Choices {
+		msg := &response.Choices[i].Message
+		if msg.Role != model.RoleAssistant {
+			continue
+		}
+		text, ok := repairableMessageText(msg)
+		if !ok {
+			continue
+		}
+		if strings.Contains(text, textToolCallOpenTag) {
+			return true
+		}
+		for prefixLen := 1; prefixLen < len(textToolCallOpenTag); prefixLen++ {
+			if strings.HasSuffix(text, textToolCallOpenTag[:prefixLen]) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (p *streamingResponseProcessor) emitLLMResponse(
@@ -1065,7 +1225,7 @@ func (p *streamingResponseProcessor) traceChat(
 	if p.tracker != nil {
 		ttfb = p.tracker.FirstTokenTimeDuration()
 	}
-	itelemetry.TraceChat(p.span, &itelemetry.TraceChatAttributes{
+	p.chatTraceState.TraceChat(p.span, &itelemetry.TraceChatAttributes{
 		Invocation: observabilityInvocationForCurrent(
 			eventInvocation,
 			p.observabilityInvocation,
@@ -1200,24 +1360,18 @@ func invocationFromContextOrDefault(
 	return invocation
 }
 
-func invocationViewForModel(
+func observabilityInvocationForModel(
 	invocation *agent.Invocation,
 	callModel model.Model,
 ) *agent.Invocation {
 	if invocation == nil {
 		return nil
 	}
-	return invocation.View(agent.WithInvocationModel(callModel))
-}
-
-func metricsInvocationForCurrent(
-	current *agent.Invocation,
-	base *agent.Invocation,
-) *agent.Invocation {
-	if base == nil {
-		return current
-	}
-	return observabilityInvocationForCurrent(current, base)
+	return newObservabilityInvocation(
+		invocation,
+		invocation.Session,
+		callModel,
+	)
 }
 
 func observabilityInvocationForCurrent(
@@ -1227,13 +1381,27 @@ func observabilityInvocationForCurrent(
 	if base == nil {
 		return current
 	}
-	if current == nil || current.Session == nil {
+	if current == nil || current.Session == nil ||
+		current.Session == base.Session {
 		return base
 	}
-	return base.View(
-		agent.WithInvocationSession(current.Session),
-		agent.WithInvocationModel(base.Model),
-	)
+	return newObservabilityInvocation(base, current.Session, base.Model)
+}
+
+// newObservabilityInvocation intentionally excludes invocation state: metrics
+// and tracing consume only identity, session, and model metadata, while state
+// can contain large model-visible history snapshots.
+func newObservabilityInvocation(
+	base *agent.Invocation,
+	sess *session.Session,
+	callModel model.Model,
+) *agent.Invocation {
+	return &agent.Invocation{
+		AgentName:    base.AgentName,
+		InvocationID: base.InvocationID,
+		Session:      sess,
+		Model:        callModel,
+	}
 }
 
 func trackModelResponseTelemetry(
@@ -1425,8 +1593,31 @@ func (f *Flow) preprocess(
 		finishLatencySpan(stageSpan, stageStarted, nil)
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
-	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(ctx, llmRequest.Messages, llmRequest.Tools)
+	sanitizeRequestMessages(ctx, invocation, llmRequest)
 	return rebuildPlan
+}
+
+func sanitizeRequestMessages(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) {
+	if req == nil {
+		return
+	}
+	before := req.Messages
+	result := toolcall.SanitizeMessagesWithToolsResult(
+		ctx,
+		before,
+		req.Tools,
+	)
+	req.Messages = result.Messages
+	summaryview.RebaseAfterTransform(
+		invocation,
+		before,
+		result.Messages,
+		result.SourceIndexes,
+	)
 }
 
 func normalizeContextCompactionThresholdRatio(ratio float64) float64 {
@@ -1466,15 +1657,22 @@ func (f *Flow) maybeCompactContextBeforeLLM(
 		}
 		return req
 	}
+	decisionRequest := requestWithCallLimitFinalizationMessage(
+		req,
+		rebuildPlan.callLimitFinalizationMessage,
+	)
 	decision := syncCompactContextDecision(
 		ctx,
 		invocation,
-		req,
+		decisionRequest,
 		f.contextCompactionThresholdRatio,
 		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
 	)
+	if decision.err == nil {
+		summaryview.Finalize(invocation, decisionRequest, decision.tokenCount)
+	}
 	if started {
-		span.SetAttributes(contextCompactionAttrs(decision, req)...)
+		span.SetAttributes(contextCompactionAttrs(decision, decisionRequest)...)
 	}
 	if decision.err != nil {
 		if started {
@@ -1503,6 +1701,11 @@ func (f *Flow) runContextCompaction(
 	rebuildPlan *contextCompactionRebuildPlan,
 	decision contextCompactionDecision,
 ) *model.Request {
+	startedAt := time.Now()
+	decisionRequest := requestWithCallLimitFinalizationMessage(
+		req,
+		rebuildPlan.callLimitFinalizationMessage,
+	)
 	filterKey := invocation.GetEventFilterKey()
 	before := snapshotSummary(invocation.Session, filterKey)
 	emitLatencyDiagnosticEvent(
@@ -1516,8 +1719,8 @@ func (f *Flow) runContextCompaction(
 			TokenCount:    decision.tokenCount,
 			Threshold:     decision.threshold,
 			ContextWindow: decision.contextWindow,
-			MessageCount:  len(req.Messages),
-			ToolCount:     len(req.Tools),
+			MessageCount:  len(decisionRequest.Messages),
+			ToolCount:     len(decisionRequest.Tools),
 			FilterKey:     filterKey,
 		},
 	)
@@ -1525,9 +1728,62 @@ func (f *Flow) runContextCompaction(
 		ctx,
 		invocation,
 		latencySpanContextSummary,
-		contextCompactionAttrs(decision, req)...,
+		contextCompactionAttrs(decision, decisionRequest)...,
 	)
 	summaryCtx = summary.ContextWithCacheSafeForkRequest(summaryCtx, req)
+	view, viewPresent := summaryview.Snapshot(invocation)
+	if viewPresent {
+		summaryCtx = summaryview.ContextWithView(summaryCtx, view)
+	}
+	var usedRebuild bool
+	logResult := func(
+		outcome string,
+		result *model.Request,
+		postRequestTokens int,
+	) {
+		// After a rebuild, even when the post-rebuild token count fails,
+		// the invocation holds the latest view. Paths that never rebuild
+		// keep the snapshot frozen before summarization.
+		binding := summaryview.BindingFromContext(summaryCtx)
+		if usedRebuild {
+			binding = summaryview.BindingFromInvocation(invocation)
+		}
+		filterKeyDisplay, filterKeyTruncated :=
+			summarydiag.FormatFilterKey(filterKey)
+		format := "Pre-LLM context compaction result: schema_version=%d, " +
+			"outcome=%s, agent=%q, agent_truncated=%t, filter_key=%q, " +
+			"filter_key_truncated=%t, " +
+			"request_tokens=%d, threshold=%d, " +
+			"context_window=%d, messages=%d->%d, post_request_tokens=%d, " +
+			"summary_view_present=%t, summary_view_bound=%t, " +
+			"summary_view_items=%d, binding_reason=%s, duration_ms=%d"
+		agentName, agentTruncated :=
+			summarydiag.FormatAgentName(invocation.AgentName)
+		args := []any{
+			summarydiag.SchemaVersion,
+			outcome,
+			agentName,
+			agentTruncated,
+			filterKeyDisplay,
+			filterKeyTruncated,
+			decision.tokenCount,
+			decision.threshold,
+			decision.contextWindow,
+			len(decisionRequest.Messages),
+			len(result.Messages),
+			postRequestTokens,
+			binding.Present,
+			binding.Bound,
+			binding.Items,
+			binding.Reason,
+			time.Since(startedAt).Milliseconds(),
+		}
+		if outcome == contextCompactionOutcomeSuccess {
+			log.InfofContext(ctx, format, args...)
+			return
+		}
+		log.WarnfContext(ctx, format, args...)
+	}
 	err := invocation.SessionService.CreateSessionSummary(
 		summaryCtx,
 		invocation.Session,
@@ -1555,21 +1811,18 @@ func (f *Flow) runContextCompaction(
 			TokenCount:    decision.tokenCount,
 			Threshold:     decision.threshold,
 			ContextWindow: decision.contextWindow,
-			MessageCount:  len(req.Messages),
-			ToolCount:     len(req.Tools),
+			MessageCount:  len(decisionRequest.Messages),
+			ToolCount:     len(decisionRequest.Tools),
 			FilterKey:     filterKey,
 			Updated:       &updated,
 		},
 	)
 	if !updated {
+		outcome := contextCompactionOutcomeNoUpdate
 		if err != nil {
-			log.DebugfContext(
-				ctx,
-				"Pre-LLM context compaction skipped for agent %s: %v",
-				invocation.AgentName,
-				err,
-			)
+			outcome = contextCompactionOutcomeSummaryError
 		}
+		logResult(outcome, decisionRequest, decision.tokenCount)
 		return req
 	}
 
@@ -1588,29 +1841,56 @@ func (f *Flow) runContextCompaction(
 	}
 	finishLatencySpan(rebuildSpan, rebuildStarted, nil)
 	if rebuilt == nil {
-		log.DebugfContext(
-			ctx,
-			"Pre-LLM context compaction skipped for agent %s: safe rebuild unavailable",
-			invocation.AgentName,
+		logResult(
+			contextCompactionOutcomeRebuildUnavailable,
+			decisionRequest,
+			decision.tokenCount,
 		)
 		return req
 	}
+	usedRebuild = true
+	postDecisionRequest := requestWithCallLimitFinalizationMessage(
+		rebuilt,
+		rebuildPlan.callLimitFinalizationMessage,
+	)
+	postDecision := syncCompactContextDecision(
+		rebuildCtx,
+		invocation,
+		postDecisionRequest,
+		f.contextCompactionThresholdRatio,
+		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
+	)
+	postRequestTokens := postDecision.tokenCount
+	if postDecision.err == nil {
+		summaryview.Finalize(
+			invocation,
+			postDecisionRequest,
+			postDecision.tokenCount,
+		)
+	} else {
+		log.DebugfContext(
+			ctx,
+			"Post-compaction request token count failed for agent %s: %v",
+			invocation.AgentName,
+			postDecision.err,
+		)
+		postRequestTokens = -1
+	}
 
 	if err != nil {
-		log.WarnfContext(
-			ctx,
-			"Pre-LLM context compaction rebuilt request for agent %s after in-memory summary update; persistence failed: %v",
-			invocation.AgentName,
-			err,
+		logResult(
+			contextCompactionOutcomePersistenceError,
+			postDecisionRequest,
+			postRequestTokens,
 		)
 		return rebuilt
 	}
 
-	log.DebugfContext(
-		ctx,
-		"Pre-LLM context compaction rebuilt request for agent %s",
-		invocation.AgentName,
-	)
+	outcome := contextCompactionOutcomeSuccess
+	if postDecision.err != nil {
+		outcome = contextCompactionOutcomePostCountError
+	}
+	logResult(outcome, postDecisionRequest, postRequestTokens)
 	return rebuilt
 }
 
@@ -1639,11 +1919,7 @@ func (f *Flow) rebuildRequestForContextCompaction(
 			rebuilt,
 		)
 	}
-	rebuilt.Messages = toolcall.SanitizeMessagesWithTools(
-		ctx,
-		rebuilt.Messages,
-		rebuilt.Tools,
-	)
+	sanitizeRequestMessages(ctx, invocation, rebuilt)
 	return rebuilt
 }
 
@@ -1681,6 +1957,21 @@ func cloneRequestForContextCompaction(req *model.Request) *model.Request {
 			cloned.Tools[name] = t
 		}
 	}
+	return &cloned
+}
+
+func requestWithCallLimitFinalizationMessage(
+	req *model.Request,
+	message *model.Message,
+) *model.Request {
+	if req == nil || message == nil {
+		return req
+	}
+	cloned := *req
+	cloned.Messages = append(
+		append([]model.Message(nil), req.Messages...),
+		*message,
+	)
 	return &cloned
 }
 
@@ -1740,6 +2031,13 @@ func cloneContentPartForContextCompaction(
 			audio.Data = append([]byte(nil), part.Audio.Data...)
 		}
 		cloned.Audio = &audio
+	}
+	if part.Video != nil {
+		video := *part.Video
+		if part.Video.Data != nil {
+			video.Data = append([]byte(nil), part.Video.Data...)
+		}
+		cloned.Video = &video
 	}
 	if part.File != nil {
 		file := *part.File
@@ -1886,8 +2184,11 @@ func syncCompactContextDecision(
 		return decision
 	}
 
-	decision.threshold = contextCompactionThreshold(inv, ratio)
 	decision.contextWindow = contextCompactionWindow(inv)
+	decision.threshold, decision.thresholdBasis = contextCompactionThresholdForWindow(
+		decision.contextWindow,
+		ratio,
+	)
 	if counter == nil {
 		counter = model.NewSimpleTokenCounter()
 	}
@@ -1924,14 +2225,25 @@ func contextCompactionWindow(inv *agent.Invocation) int {
 
 func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
 	contextWindow := contextCompactionWindow(inv)
+	threshold, _ := contextCompactionThresholdForWindow(contextWindow, ratio)
+	return threshold
+}
+
+func contextCompactionThresholdForWindow(
+	contextWindow int,
+	ratio float64,
+) (int, string) {
 	threshold := int(float64(contextWindow) * normalizeContextCompactionThresholdRatio(ratio))
+	basis := contextCompactionThresholdBasisContextWindow
 	if threshold < contextCompactionMinTokens {
 		threshold = contextCompactionMinTokens
+		basis = contextCompactionThresholdBasisMinimumTokens
 	}
 	if threshold > contextWindow {
 		threshold = contextWindow
+		basis = contextCompactionThresholdBasisContextWindow
 	}
-	return threshold
+	return threshold, basis
 }
 
 // getFilteredTools returns the list of tools for this invocation after applying the filter.
@@ -2179,7 +2491,7 @@ func (f *Flow) callLLM(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 	callModel model.Model,
-) (context.Context, model.Seq[*model.Response], error) {
+) (context.Context, model.Seq[*model.Response], bool, error) {
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,
@@ -2187,17 +2499,24 @@ func (f *Flow) callLLM(
 		latencyRequestAttrs(llmRequest)...,
 	)
 	var err error
-	defer func() {
+	finishSpanOnReturn := true
+	finishCallSpan := func(finishErr error) {
 		if started && callModel != nil {
 			span.SetAttributes(
 				attribute.String("llmflow.model", callModel.Info().Name),
 			)
 		}
-		finishLatencySpan(span, started, err)
+		finishLatencySpan(span, started, finishErr)
+	}
+	defer func() {
+		if finishSpanOnReturn {
+			finishCallSpan(err)
+		}
 	}()
 	if callModel == nil {
 		err = errors.New("no model available for LLM call")
-		return ctx, nil, err
+		reportSummaryInjection(ctx, invocation, llmRequest)
+		return ctx, nil, false, err
 	}
 	log.DebugfContext(
 		ctx,
@@ -2208,24 +2527,389 @@ func (f *Flow) callLLM(
 	// configured (<= 0), this is a no-op and preserves existing behavior.
 	if err = invocation.IncLLMCallCount(); err != nil {
 		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
-		return ctx, nil, err
+		reportSummaryInjection(ctx, invocation, llmRequest)
+		return ctx, nil, false, err
+	}
+	llmLimitReached := calllimit.RecordLLMCall(
+		invocation,
+		invocation.MaxLLMCalls,
+	)
+	finalizationInstruction, finalizing := calllimit.ActivateForLLM(
+		invocation,
+		llmLimitReached,
+	)
+	var finalizationMessage *callLimitFinalizationMessage
+	if finalizing {
+		finalizationMessage = appendCallLimitFinalizationMessage(
+			llmRequest,
+			finalizationInstruction,
+		)
 	}
 	// Run before model callbacks if they exist.
 	ctx, customResp, err := f.runBeforeModelCallbacks(ctx, invocation, llmRequest)
 	if err != nil {
-		return ctx, nil, err
+		reportSummaryInjection(ctx, invocation, llmRequest)
+		return ctx, nil, false, err
 	}
 	if customResp != nil {
-		return ctx, func(yield func(*model.Response) bool) {
-			yield(customResp)
-		}, nil
+		// Keep the original callLLM return and span-on-return contract.
+		// The seq finalizer reports once on drain or early stop. An
+		// unused seq is never consumed, so it reports nothing.
+		return ctx, withResponseSeqFinalizer(
+			func(yield func(*model.Response) bool) {
+				yield(customResp)
+			},
+			func() {
+				reportSummaryInjection(ctx, invocation, llmRequest)
+			},
+		), false, nil
 	}
-	summaryfork.Attach(invocation, llmRequest)
+	if llmRequest == nil || len(llmRequest.Messages) == 0 {
+		err = errors.New(errMsgNoLLMMessages)
+		reportSummaryInjection(ctx, invocation, llmRequest)
+		return ctx, nil, false, err
+	}
+	if invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
+		traceCtx := agent.NewInvocationContext(ctx, invocation)
+		tracecapture.SetInvocationStepInput(
+			traceCtx,
+			traceSnapshotFromMessages(llmRequest.Messages),
+		)
+		tracecapture.MergeInvocationStepAppliedSurfaceIDs(
+			traceCtx,
+			executionTraceAppliedSurfaceIDs(invocation),
+		)
+	}
+	ctx = contextWithModelRetryCallbacks(ctx, f, invocation, callModel)
+	finalizeSummaryView(
+		ctx,
+		invocation,
+		llmRequest,
+		f.summaryViewTokenCounter(),
+	)
+	summaryfork.Attach(
+		invocation,
+		requestWithoutCallLimitFinalizationMessage(
+			llmRequest,
+			finalizationMessage,
+		),
+	)
+	ctx, tailoringObserver := imodelrequest.ObserveTokenTailoring(
+		ctx,
+		func(record imodelrequest.TokenTailoringRecord) {
+			summaryview.InvalidateBinding(invocation)
+			summaryfork.Invalidate(invocation)
+			if tokenTailoringCollapsedHistory(record) {
+				log.WarnfContext(
+					ctx,
+					"Model request token tailoring collapsed history: "+
+						"provider=%s, max_input_tokens=%d, messages=%d->%d",
+					record.Provider,
+					record.MaxInputTokens,
+					record.BeforeMessages,
+					record.AfterMessages,
+				)
+				return
+			}
+			log.DebugfContext(
+				ctx,
+				"Model request token tailoring applied: provider=%s, "+
+					"max_input_tokens=%d, messages=%d->%d",
+				record.Provider,
+				record.MaxInputTokens,
+				record.BeforeMessages,
+				record.AfterMessages,
+			)
+		},
+	)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
-		return ctx, nil, err
+		// generateContentSeq failed before returning a seq. Report once
+		// against the request as observed at that failure; do not also
+		// attach a seq finalizer.
+		reportSummaryInjection(ctx, invocation, llmRequest)
+		return ctx, nil, true, err
 	}
-	return ctx, seq, nil
+	// Eager GenerateContent has already mutated llmRequest. A lazy
+	// IterModel may tailor or drop the selected summary only while the
+	// seq runs. Report once after the seq ends or is stopped early, and
+	// always attach that finalizer so a disabled call span cannot skip
+	// the record.
+	reportInjection := func() {
+		reportSummaryInjection(ctx, invocation, llmRequest)
+	}
+	if started {
+		finishSpanOnReturn = false
+		seq = withResponseSeqFinalizer(seq, func() {
+			reportInjection()
+			span.SetAttributes(
+				tokenTailoringAttrs(tailoringObserver.Snapshot())...,
+			)
+			finishCallSpan(nil)
+		})
+	} else {
+		seq = withResponseSeqFinalizer(seq, reportInjection)
+	}
+	return ctx, seq, true, nil
+}
+
+func tokenTailoringCollapsedHistory(
+	record imodelrequest.TokenTailoringRecord,
+) bool {
+	return record.BeforeMessages > 2 && record.AfterMessages <= 2
+}
+
+func withResponseSeqFinalizer(
+	seq model.Seq[*model.Response],
+	finalize func(),
+) model.Seq[*model.Response] {
+	var once sync.Once
+	return func(yield func(*model.Response) bool) {
+		defer once.Do(finalize)
+		seq(yield)
+	}
+}
+
+type callLimitFinalizationMessage struct {
+	instruction  string
+	index        int
+	messageCount int
+	priorMatches int
+}
+
+// appendCallLimitFinalizationMessage adds the request-scoped instruction as
+// the final user message and returns its cache-safe exclusion marker. The
+// request is not the session event history, so this does not create or persist
+// a user event.
+func appendCallLimitFinalizationMessage(
+	req *model.Request,
+	instruction string,
+) *callLimitFinalizationMessage {
+	if req == nil {
+		return nil
+	}
+	marker := &callLimitFinalizationMessage{
+		instruction:  instruction,
+		index:        len(req.Messages),
+		messageCount: len(req.Messages) + 1,
+	}
+	for _, message := range req.Messages {
+		if isCallLimitFinalizationMessage(message, instruction) {
+			marker.priorMatches++
+		}
+	}
+	req.Messages = append(
+		req.Messages,
+		model.NewUserMessage(instruction),
+	)
+	return marker
+}
+
+// requestWithoutCallLimitFinalizationMessage returns a request view for
+// cache-safe summarization without the transient finalization instruction.
+// The provider request remains unchanged.
+func requestWithoutCallLimitFinalizationMessage(
+	req *model.Request,
+	marker *callLimitFinalizationMessage,
+) *model.Request {
+	if req == nil || marker == nil {
+		return req
+	}
+	index := -1
+	if marker.index < len(req.Messages) && isCallLimitFinalizationMessage(
+		req.Messages[marker.index],
+		marker.instruction,
+	) {
+		index = marker.index
+	} else {
+		remainingPriorMatches := marker.priorMatches
+		for i, message := range req.Messages {
+			if !isCallLimitFinalizationMessage(message, marker.instruction) {
+				continue
+			}
+			if remainingPriorMatches == 0 {
+				index = i
+				break
+			}
+			remainingPriorMatches--
+		}
+	}
+	// A callback may rewrite fields on the synthetic message while leaving the
+	// message slice structurally unchanged. In that case its original slot is
+	// the provenance marker even though its payload no longer matches.
+	if index < 0 && len(req.Messages) == marker.messageCount &&
+		marker.index < len(req.Messages) {
+		index = marker.index
+	}
+	if index < 0 {
+		return req
+	}
+	cloned := *req
+	cloned.Messages = make([]model.Message, 0, len(req.Messages)-1)
+	cloned.Messages = append(cloned.Messages, req.Messages[:index]...)
+	cloned.Messages = append(cloned.Messages, req.Messages[index+1:]...)
+	return &cloned
+}
+
+func isCallLimitFinalizationMessage(
+	message model.Message,
+	instruction string,
+) bool {
+	return message.Role == model.RoleUser &&
+		message.Content == instruction &&
+		len(message.ContentParts) == 0 &&
+		message.ToolID == "" &&
+		message.ToolName == "" &&
+		len(message.ToolCalls) == 0 &&
+		message.ReasoningContent == "" &&
+		message.ReasoningSignature == ""
+}
+
+// enforceCallLimitFinalizationToolFree keeps finalization requests tool-free
+// across callback groups and retry callbacks. It is intentionally idempotent.
+func enforceCallLimitFinalizationToolFree(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) context.Context {
+	if !calllimit.Active(invocation) {
+		return ctx
+	}
+	if req == nil {
+		return imodelrequest.WithToolsDisabled(ctx)
+	}
+	req.Tools = nil
+	imodelrequest.DeleteToolControlFields(req.ExtraFields)
+	return imodelrequest.WithToolsDisabled(ctx)
+}
+
+func finalizeSummaryView(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	counter model.TokenCounter,
+) {
+	if invocation == nil || req == nil || len(req.Messages) == 0 {
+		return
+	}
+	if counter == nil {
+		counter = model.NewSimpleTokenCounter()
+	}
+	tokens, err := counter.CountTokensRange(
+		ctx,
+		req.Messages,
+		0,
+		len(req.Messages),
+	)
+	if err != nil {
+		log.DebugfContext(ctx, "final model-visible request token count failed: %v", err)
+		return
+	}
+	summaryview.Finalize(invocation, req, tokens)
+}
+
+// reportSummaryInjection reports whether the session summary selected while
+// building this request is still present in the same model.Request after the
+// response sequence has been observed. Eager GenerateContent mutates that
+// request before returning a seq; a lazy IterModel may mutate it only while
+// the seq runs. Built-in providers, including the OpenAI adapter, mutate the
+// request in place during token tailoring, so the record then reflects the
+// tailored framework request. A custom Model may copy the request, in which
+// case the record does not claim to describe the payload that Model sent.
+// Requests that do not use session summaries report nothing.
+func reportSummaryInjection(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) {
+	if invocation == nil || req == nil {
+		return
+	}
+	selection, ok := summaryinject.FromInvocation(invocation)
+	if !ok {
+		return
+	}
+	blockPresent := selection.BlockPresent(req.Messages)
+	outcome := summaryInjectionOutcome(selection, blockPresent)
+	filterKey, filterKeyTruncated :=
+		summarydiag.FormatFilterKey(invocation.GetEventFilterKey())
+	agentName, agentTruncated :=
+		summarydiag.FormatAgentName(invocation.AgentName)
+	format := "Session summary injection result: schema_version=%d, " +
+		"outcome=%s, agent=%q, agent_truncated=%t, filter_key=%q, " +
+		"filter_key_truncated=%t, lookup_strategy=%s, lookup_result=%s, " +
+		"selected=%t, block_text_present=%t, boundary_present=%t, " +
+		"stored_summaries=%d, matching_candidates=%d, " +
+		"full_session_summary=%t, session_events=%d, history_messages=%d, " +
+		"request_messages=%d"
+	args := []any{
+		summarydiag.SchemaVersion,
+		outcome,
+		agentName,
+		agentTruncated,
+		filterKey,
+		filterKeyTruncated,
+		selection.LookupStrategy,
+		selection.LookupResult,
+		selection.Selected,
+		blockPresent,
+		selection.BoundaryPresent,
+		selection.StoredSummaries,
+		selection.MatchingCandidates,
+		selection.FullSessionPresent,
+		selection.SessionEvents,
+		selection.HistoryMessages,
+		len(req.Messages),
+	}
+	switch outcome {
+	case summaryInjectionOutcomeBlockTextMissing:
+		// A selected summary whose recorded block text is missing from every
+		// framework request message is the only injection defect that Warns.
+		// This is a substring observation of the same model.Request after
+		// the response sequence has been observed; it does not claim what
+		// a provider sent, or that the original injection slot is intact.
+		log.WarnfContext(ctx, format, args...)
+	default:
+		// Requests that found no in-scope summary, including a branch miss
+		// next to an unused full-session summary, are routine.
+		log.DebugfContext(ctx, format, args...)
+	}
+}
+
+// summaryInjectionOutcome classifies one request's summary injection. A
+// selected summary whose recorded block text is missing from every message
+// Content in the same framework model.Request is reported as
+// block_text_missing. That observation does not describe a provider's
+// final payload or prove the original injection slot. A scope mismatch
+// names the unused full-session summary; it does not mean the scoped
+// history was dropped from this request.
+func summaryInjectionOutcome(
+	selection summaryinject.Selection,
+	blockPresent bool,
+) string {
+	if selection.Selected {
+		if blockPresent {
+			return summaryInjectionOutcomeBlockTextPresent
+		}
+		return summaryInjectionOutcomeBlockTextMissing
+	}
+	if selection.ScopeMismatch() {
+		return summaryInjectionOutcomeScopeMismatch
+	}
+	if selection.StoredSummaries > 0 {
+		return summaryInjectionOutcomeLookupMiss
+	}
+	return summaryInjectionOutcomeNotSelected
+}
+
+func (f *Flow) summaryViewTokenCounter() model.TokenCounter {
+	for i := len(f.requestProcessors) - 1; i >= 0; i-- {
+		contentProcessor, ok := f.requestProcessors[i].(*processor.ContentRequestProcessor)
+		if ok {
+			return contentProcessor.ContextCompactionConfig.TokenCounter
+		}
+	}
+	return nil
 }
 
 func (f *Flow) runBeforeModelCallbacks(
@@ -2233,6 +2917,11 @@ func (f *Flow) runBeforeModelCallbacks(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 ) (context.Context, *model.Response, error) {
+	ctx = enforceCallLimitFinalizationToolFree(
+		ctx,
+		invocation,
+		llmRequest,
+	)
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,
@@ -2332,15 +3021,30 @@ func wrapBeforeModelCallbacksWithInvocation(
 			args *model.BeforeModelArgs,
 		) (*model.BeforeModelResult, error) {
 			ctx = withInvocationContextIfMissing(ctx, invocation)
+			ctx = enforceCallLimitFinalizationToolFree(
+				ctx,
+				invocation,
+				args.Request,
+			)
 			result, err := callback(ctx, args)
 			if result != nil && result.Context != nil {
 				clonedResult := *result
-				clonedResult.Context = withInvocationContextIfMissing(
+				resultCtx := withInvocationContextIfMissing(
 					result.Context,
 					invocationFromContextOrFallback(ctx, invocation),
 				)
+				clonedResult.Context = enforceCallLimitFinalizationToolFree(
+					resultCtx,
+					invocation,
+					args.Request,
+				)
 				return &clonedResult, err
 			}
+			enforceCallLimitFinalizationToolFree(
+				ctx,
+				invocation,
+				args.Request,
+			)
 			return result, err
 		}
 	}
@@ -2353,6 +3057,9 @@ func (f *Flow) generateContentSeq(
 	llmRequest *model.Request,
 	callModel model.Model,
 ) (model.Seq[*model.Response], error) {
+	if llmRequest == nil || len(llmRequest.Messages) == 0 {
+		return nil, errors.New(errMsgNoLLMMessages)
+	}
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,

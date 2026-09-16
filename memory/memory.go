@@ -34,6 +34,11 @@ const (
 	// SessionStateKeyAutoMemoryLastExtractAt stores the last included event
 	// timestamp for auto memory extraction.
 	SessionStateKeyAutoMemoryLastExtractAt = "memory:last_extract_at"
+	// SessionStateKeyMemoryMode stores session-scoped memory generation mode.
+	SessionStateKeyMemoryMode = "memory:mode"
+	// MemoryModePolluted means the session consumed external context and should
+	// no longer be used for automatic memory extraction.
+	MemoryModePolluted = "polluted"
 )
 
 var (
@@ -93,9 +98,10 @@ func WithUpdateMetadata(m *Metadata) UpdateOption {
 	return func(o *updateOptions) { o.metadata = m }
 }
 
-// UpdateResult captures the effective memory ID after an update.
-// When memory identity changes due to updated content or metadata,
-// MemoryID contains the rotated canonical key.
+// UpdateResult captures the effective memory ID after a successful update.
+// When memory identity changes due to updated content or metadata, MemoryID
+// contains the rotated canonical key. UpdateMemory leaves the result unchanged
+// when it returns an error.
 type UpdateResult struct {
 	MemoryID string
 }
@@ -152,25 +158,8 @@ func ResolveSearchOptions(
 	return o
 }
 
-// Service defines the interface for memory service operations.
-type Service interface {
-	// AddMemory adds or updates a memory for a user (idempotent).
-	// Options may include WithMetadata for episodic metadata.
-	AddMemory(ctx context.Context, userKey UserKey, memory string,
-		topics []string, opts ...AddOption) error
-
-	// UpdateMemory updates an existing memory for a user.
-	// Options may include WithUpdateMetadata for episodic
-	// metadata.
-	UpdateMemory(ctx context.Context, memoryKey Key, memory string,
-		topics []string, opts ...UpdateOption) error
-
-	// DeleteMemory deletes a memory for a user.
-	DeleteMemory(ctx context.Context, memoryKey Key) error
-
-	// ClearMemories clears all memories for a user.
-	ClearMemories(ctx context.Context, userKey UserKey) error
-
+// Reader defines read-only memory operations.
+type Reader interface {
 	// ReadMemories reads memories for a user.
 	ReadMemories(ctx context.Context, userKey UserKey,
 		limit int) ([]*Entry, error)
@@ -180,6 +169,33 @@ type Service interface {
 	// filtering (kind, time range, hybrid search, etc.).
 	SearchMemories(ctx context.Context, userKey UserKey,
 		query string, opts ...SearchOption) ([]*Entry, error)
+}
+
+// Service defines the interface for memory service operations.
+type Service interface {
+	// Reader provides read-only memory access used by preload and memory tools.
+	Reader
+
+	// AddMemory adds or updates a memory for a user (idempotent).
+	// Backends that support soft deletion reactivate a matching tombstone.
+	// Options may include WithMetadata for episodic metadata.
+	AddMemory(ctx context.Context, userKey UserKey, memory string,
+		topics []string, opts ...AddOption) error
+
+	// UpdateMemory updates an existing active memory for a user.
+	// A soft-deleted source is treated as not found. Options may include
+	// WithUpdateMetadata for episodic metadata. When the canonical ID changes,
+	// a missing or soft-deleted target becomes active. If the target is already
+	// active, UpdateMemory returns an error without modifying either memory.
+	// In soft-delete mode, a successful rotation retains the source tombstone.
+	UpdateMemory(ctx context.Context, memoryKey Key, memory string,
+		topics []string, opts ...UpdateOption) error
+
+	// DeleteMemory deletes a memory for a user.
+	DeleteMemory(ctx context.Context, memoryKey Key) error
+
+	// ClearMemories clears all memories for a user.
+	ClearMemories(ctx context.Context, userKey UserKey) error
 
 	// Tools returns the list of available memory tools.
 	Tools() []tool.Tool

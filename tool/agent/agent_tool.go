@@ -53,9 +53,9 @@ type Tool struct {
 
 	// dynamic enables the dynamic AgentTool mode created by NewDynamicTool.
 	// In this mode the tool runs a short-lived sub-agent whose
-	// capability surface (tools / skills / instruction) is selected per call
-	// within a code-defined safety boundary, rather than wrapping one
-	// pre-defined agent.
+	// capability surface (tools / skills / instruction and, when configured,
+	// a model profile) is selected per call within a code-defined safety
+	// boundary, rather than wrapping one pre-defined agent.
 	dynamic bool
 	// dynamicCfg holds the dynamic-mode configuration. It is only consulted
 	// when dynamic is true.
@@ -92,6 +92,7 @@ type dynamicOptions struct {
 	capabilitySkillProvider   CapabilitySkillsProvider
 	capabilityTools           []tool.Tool
 	capabilitySkills          skillRepository
+	modelProfiles             []agentModelProfile
 	capabilityToolsSet        bool
 	exposeToolSelection       bool
 	exposeSkillSelection      bool
@@ -564,19 +565,6 @@ func parentInvocationWithLiveSession(
 	return view
 }
 
-func (at *Tool) surfaceRootNodeIDForParentInvocation(
-	parentInv *agent.Invocation,
-) string {
-	if parentInv == nil || at.agent == nil {
-		return ""
-	}
-	rootNodeID := teamtrace.MemberTraceRootForInvocation(parentInv)
-	if rootNodeID == "" {
-		return ""
-	}
-	return teamtrace.MemberNodeID(rootNodeID, at.agent.Info().Name)
-}
-
 func (at *Tool) childInvocationOptions(
 	ctx context.Context,
 	parentInv *agent.Invocation,
@@ -625,6 +613,11 @@ func (at *Tool) childInvocationOptions(
 	if parentInv == nil {
 		return invocationOpts
 	}
+	invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
+		runOptions := inv.RunOptions
+		clearInheritedToolRunOptions(&runOptions)
+		inv.RunOptions = runOptions
+	})
 	if at.hasPinnedRunOptions() {
 		invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
 			runOptions := inv.RunOptions
@@ -632,15 +625,26 @@ func (at *Tool) childInvocationOptions(
 			inv.RunOptions = runOptions
 		})
 	}
-	if surfaceRootNodeID := at.surfaceRootNodeIDForParentInvocation(parentInv); surfaceRootNodeID != "" {
+	if mount, ok := teamtrace.MemberMountFromContext(ctx); ok {
 		invocationOpts = append(
 			invocationOpts,
+			agent.WithInvocationTraceNodeID(mount.TraceNodeID),
 			func(inv *agent.Invocation) {
-				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
+				agent.SetInvocationSurfaceRootNodeID(inv, mount.SurfaceRootNodeID)
 			},
 		)
 	}
 	return invocationOpts
+}
+
+func clearInheritedToolRunOptions(runOptions *agent.RunOptions) {
+	if runOptions == nil {
+		return
+	}
+	runOptions.ToolFilter = nil
+	runOptions.AdditionalTools = nil
+	runOptions.ExternalTools = nil
+	runOptions.ExternalToolNames = nil
 }
 
 func (at *Tool) hasPinnedRunOptions() bool {
@@ -847,6 +851,9 @@ func (at *Tool) wrapWithStreamSemantics(
 	src <-chan *event.Event,
 ) <-chan *event.Event {
 	if shouldDeferStreamCompletion(ctx, inv) {
+		if at.persistentHistory != nil && at.persistentHistory.enabled {
+			at.ensureUserMessageForCall(ctx, inv)
+		}
 		return src
 	}
 	return at.wrapWithCallSemantics(ctx, inv, src)

@@ -20,11 +20,13 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -68,7 +70,9 @@ const (
 	methodPost = "POST"
 	methodGet  = "GET"
 
-	defaultMaxBodyBytes int64 = 1 << 20
+	// Enough for one default max-size binary content part after base64 JSON
+	// encoding plus normal request metadata.
+	defaultMaxBodyBytes int64 = 12 << 20
 
 	queryRequestID = "request_id"
 
@@ -83,6 +87,7 @@ var errEmptyReplyValue = errors.New(errEmptyReply)
 
 const (
 	errTypeInvalidRequest = "invalid_request"
+	errTypeInvalidModel   = "invalid_model"
 	errTypeUnauthorized   = "unauthorized"
 	errTypeInternal       = "internal_error"
 	errTypeUnsupported    = "unsupported"
@@ -144,6 +149,7 @@ type Server struct {
 	requireMention    bool
 	mentionPatterns   []string
 	runOptionResolver RunOptionResolver
+	selectableModels  map[string]struct{}
 
 	lanes *laneLocker
 
@@ -234,6 +240,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		requireMention:    options.requireMention,
 		mentionPatterns:   options.mentionPatterns,
 		runOptionResolver: options.runOptionResolver,
+		selectableModels:  options.selectableModels,
 		lanes:             newLaneLocker(),
 		canceled:          newCancelTracker(),
 		recorder:          options.recorder,
@@ -431,8 +438,32 @@ func (s *Server) decodeJSON(r *http.Request, target any) error {
 	if r == nil {
 		return errors.New("nil request")
 	}
-	reader := io.LimitReader(r.Body, s.maxBodyBytes)
-	decoder := json.NewDecoder(reader)
+	maxBytes := s.maxBodyBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxBodyBytes
+	}
+	if r.ContentLength > maxBytes {
+		return fmt.Errorf(
+			"request body exceeds max_body_bytes (%d bytes)",
+			maxBytes,
+		)
+	}
+	limit := maxBytes
+	if maxBytes < math.MaxInt64 {
+		limit = maxBytes + 1
+	}
+	reader := &io.LimitedReader{R: r.Body, N: limit}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("read request body: %w", err)
+	}
+	if int64(len(data)) > maxBytes {
+		return fmt.Errorf(
+			"request body exceeds max_body_bytes (%d bytes)",
+			maxBytes,
+		)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("decode json: %w", err)
 	}
@@ -551,6 +582,7 @@ func (s *Server) resolveRunOptions(
 				UserID:    run.userID,
 				SessionID: run.sessionID,
 				RequestID: run.requestID,
+				ModelName: run.modelName,
 				Message:   run.userMsg,
 				Trace:     debugrecorder.TraceFromContext(ctx),
 				Extensions: cloneExtensions(

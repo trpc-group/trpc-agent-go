@@ -1,0 +1,877 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package a2a
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	a2aclient "trpc.group/trpc-go/trpc-a2a-go/v2/client"
+	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
+	a2aserver "trpc.group/trpc-go/trpc-a2a-go/v2/server"
+	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
+	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/memory"
+	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/stateless"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+type modeTestRunner struct {
+	events []*event.Event
+}
+
+func (r *modeTestRunner) Run(
+	context.Context,
+	string,
+	string,
+	model.Message,
+	...agent.RunOption,
+) (<-chan *event.Event, error) {
+	out := make(chan *event.Event, len(r.events))
+	for _, evt := range r.events {
+		out <- evt
+	}
+	close(out)
+	return out, nil
+}
+
+func (*modeTestRunner) Close() error { return nil }
+
+type inputRequiredEventConverter struct{}
+
+func (*inputRequiredEventConverter) ConvertStreamingToA2AMessage(
+	_ context.Context,
+	_ *event.Event,
+	options EventToA2AStreamingOptions,
+) (protocol.StreamEvent, error) {
+	message := protocol.NewMessage(
+		protocol.MessageRoleAgent,
+		[]*protocol.Part{protocol.NewTextPart("more input is required")},
+	)
+	status := protocol.NewTaskStatusUpdateEvent(
+		options.TaskID,
+		options.CtxID,
+		protocol.TaskStatus{
+			State:   protocol.TaskStateInputRequired,
+			Message: &message,
+		},
+		true,
+	)
+	return &status, nil
+}
+
+func TestNewRequiresRunnerAndAgentCard(t *testing.T) {
+	card := a2aserver.AgentCard{
+		Name: "agent",
+		URL:  "http://localhost:8080",
+	}
+	tests := []struct {
+		name    string
+		opts    []Option
+		wantErr string
+	}{
+		{
+			name:    "runner",
+			wantErr: "runner (WithRunner) is required",
+		},
+		{
+			name:    "agent card",
+			opts:    []Option{WithRunner(&modeTestRunner{})},
+			wantErr: "agent card (WithAgentCard) is required",
+		},
+		{
+			name:    "runner before agent card",
+			opts:    []Option{WithAgentCard(card)},
+			wantErr: "runner (WithRunner) is required",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := New(test.opts...)
+			if err == nil || err.Error() != test.wantErr {
+				t.Fatalf("New error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestMessageProcessorManagerModes(t *testing.T) {
+	newRunner := func() *modeTestRunner {
+		return &modeTestRunner{events: []*event.Event{
+			{
+				Response: &model.Response{
+					ID:        "response-id",
+					IsPartial: true,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: "hello"},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					ID:        "response-id",
+					IsPartial: true,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: " world"},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					ID:   "response-id",
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("hello world"),
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Done:   true,
+				},
+				StateDelta: map[string][]byte{"state-key": []byte(`"value"`)},
+			},
+		}}
+	}
+	request := protocol.SendMessageParams{
+		Message: protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]*protocol.Part{protocol.NewTextPart("hi")},
+		),
+	}
+	ctx := NewContextWithUserID(context.Background(), "user")
+
+	t.Run("stateless returns request-local Task", func(t *testing.T) {
+		processor, err := buildProcessor("agent", &options{
+			runner:       newRunner(),
+			errorHandler: defaultErrorHandler,
+		})
+		if err != nil {
+			t.Fatalf("buildProcessor failed: %v", err)
+		}
+		manager, err := stateless.NewTaskManager(processor)
+		if err != nil {
+			t.Fatalf("stateless.NewTaskManager failed: %v", err)
+		}
+		response, err := manager.OnSendMessage(ctx, request)
+		if err != nil {
+			t.Fatalf("OnSendMessage failed: %v", err)
+		}
+		task := response.GetTask()
+		if task == nil {
+			t.Fatalf("response = %#v, want Task", response.Result)
+		}
+		if task.Status.State != protocol.TaskStateCompleted {
+			t.Errorf("task state = %s, want completed", task.Status.State)
+		}
+		var text string
+		for _, artifact := range task.Artifacts {
+			for _, part := range artifact.Parts {
+				text += part.TextContent()
+			}
+		}
+		if text != "hello world" {
+			t.Errorf("task artifact text = %q, want hello world", text)
+		}
+		if len(task.Artifacts) != 1 {
+			t.Fatalf("task artifact count = %d, want 1", len(task.Artifacts))
+		}
+		stateDelta := DecodeStateDeltaMetadata(task.Artifacts[0].Metadata[ia2a.MessageMetadataStateDeltaKey])
+		if got := string(stateDelta["state-key"]); got != `"value"` {
+			t.Errorf("state delta = %q, want %q", got, `"value"`)
+		}
+		if _, err := manager.OnGetTask(ctx, protocol.TaskQueryParams{ID: task.ID}); err == nil {
+			t.Fatal("OnGetTask succeeded, want task-not-found")
+		}
+	})
+
+	t.Run("explicit manager returns Task", func(t *testing.T) {
+		processor, err := buildProcessor("agent", &options{
+			runner:       newRunner(),
+			errorHandler: defaultErrorHandler,
+			taskManagerBuilder: func(taskmanager.MessageProcessor) (taskmanager.TaskManager, error) {
+				return nil, nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("buildProcessor failed: %v", err)
+		}
+		manager, err := memory.NewTaskManager(processor)
+		if err != nil {
+			t.Fatalf("memory.NewTaskManager failed: %v", err)
+		}
+		response, err := manager.OnSendMessage(ctx, request)
+		if err != nil {
+			t.Fatalf("OnSendMessage failed: %v", err)
+		}
+		task := response.GetTask()
+		if task == nil {
+			t.Fatalf("response = %#v, want Task", response.Result)
+		}
+		if task.Status.State != protocol.TaskStateCompleted {
+			t.Errorf("task state = %s, want completed", task.Status.State)
+		}
+		stored, err := manager.OnGetTask(ctx, protocol.TaskQueryParams{ID: task.ID})
+		if err != nil {
+			t.Fatalf("OnGetTask failed: %v", err)
+		}
+		if stored.Status.State != protocol.TaskStateCompleted {
+			t.Errorf("stored task state = %s, want completed", stored.Status.State)
+		}
+	})
+
+	t.Run("stateless preserves final-only response", func(t *testing.T) {
+		processor, err := buildProcessor("agent", &options{
+			runner: &modeTestRunner{events: []*event.Event{
+				{
+					Response: &model.Response{
+						ID:   "response-id",
+						Done: true,
+						Choices: []model.Choice{{
+							Message: model.NewAssistantMessage("final answer"),
+						}},
+					},
+				},
+				{
+					Response: &model.Response{
+						Object: model.ObjectTypeRunnerCompletion,
+						Done:   true,
+					},
+				},
+			}},
+			errorHandler: defaultErrorHandler,
+		})
+		if err != nil {
+			t.Fatalf("buildProcessor failed: %v", err)
+		}
+		manager, err := stateless.NewTaskManager(processor)
+		if err != nil {
+			t.Fatalf("stateless.NewTaskManager failed: %v", err)
+		}
+		response, err := manager.OnSendMessage(ctx, request)
+		if err != nil {
+			t.Fatalf("OnSendMessage failed: %v", err)
+		}
+		task := response.GetTask()
+		if task == nil || len(task.Artifacts) != 1 ||
+			len(task.Artifacts[0].Parts) != 1 {
+			t.Fatalf("task = %#v, want one artifact part", task)
+		}
+		if got := task.Artifacts[0].Parts[0].TextContent(); got != "final answer" {
+			t.Fatalf("artifact content = %q, want final answer", got)
+		}
+	})
+
+	t.Run("stateless deduplicates no-ID multimodal snapshot", func(t *testing.T) {
+		snapshot := model.Message{
+			Content: "answer",
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "result.txt",
+					URL:      "https://example.com/result.txt",
+					MimeType: "text/plain",
+				},
+			}},
+		}
+		processor, err := buildProcessor("agent", &options{
+			runner: &modeTestRunner{events: []*event.Event{
+				{
+					Response: &model.Response{
+						IsPartial: true,
+						Choices: []model.Choice{{
+							Delta: snapshot,
+						}},
+					},
+				},
+				{
+					Response: &model.Response{
+						Done: true,
+						Choices: []model.Choice{{
+							Message: snapshot,
+						}},
+					},
+				},
+				{
+					Response: &model.Response{
+						Object: model.ObjectTypeRunnerCompletion,
+						Done:   true,
+					},
+				},
+			}},
+			errorHandler: defaultErrorHandler,
+		})
+		if err != nil {
+			t.Fatalf("buildProcessor failed: %v", err)
+		}
+		manager, err := stateless.NewTaskManager(processor)
+		if err != nil {
+			t.Fatalf("stateless.NewTaskManager failed: %v", err)
+		}
+		response, err := manager.OnSendMessage(ctx, request)
+		if err != nil {
+			t.Fatalf("OnSendMessage failed: %v", err)
+		}
+		task := response.GetTask()
+		if task == nil || len(task.Artifacts) != 1 {
+			t.Fatalf("task = %#v, want one artifact", task)
+		}
+		parts := task.Artifacts[0].Parts
+		if len(parts) != 2 {
+			t.Fatalf("artifact parts = %#v, want one text and one file", parts)
+		}
+		if parts[0].TextContent() != "answer" ||
+			parts[1].URLContent() != "https://example.com/result.txt" {
+			t.Fatalf("artifact parts = %#v", parts)
+		}
+	})
+}
+
+func TestConverterTaskEndStateIsRetained(t *testing.T) {
+	processor, err := buildProcessor("agent", &options{
+		runner: &modeTestRunner{events: []*event.Event{
+			{
+				Response: &model.Response{
+					ID:        "response",
+					IsPartial: true,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: "ignored"},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Done:   true,
+				},
+			},
+		}},
+		eventToA2AConverter: &inputRequiredEventConverter{},
+		errorHandler:        defaultErrorHandler,
+	})
+	if err != nil {
+		t.Fatalf("buildProcessor failed: %v", err)
+	}
+	manager, err := memory.NewTaskManager(processor)
+	if err != nil {
+		t.Fatalf("memory.NewTaskManager failed: %v", err)
+	}
+	response, err := manager.OnSendMessage(
+		NewContextWithUserID(context.Background(), "user"),
+		protocol.SendMessageParams{Message: protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]*protocol.Part{protocol.NewTextPart("hi")},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("OnSendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil || task.Status.State != protocol.TaskStateInputRequired {
+		t.Fatalf("response task = %#v, want input-required", task)
+	}
+	stored, err := manager.OnGetTask(
+		context.Background(),
+		protocol.TaskQueryParams{ID: task.ID},
+	)
+	if err != nil {
+		t.Fatalf("OnGetTask failed: %v", err)
+	}
+	if stored.Status.State != protocol.TaskStateInputRequired {
+		t.Fatalf("stored task state = %s, want input-required", stored.Status.State)
+	}
+}
+
+func TestResponseRewriterRunsBeforeTaskAggregation(t *testing.T) {
+	runner := &modeTestRunner{events: []*event.Event{
+		{
+			Response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "secret"},
+				}},
+			},
+		},
+		{
+			Response: &model.Response{
+				Object: model.ObjectTypeRunnerCompletion,
+				Done:   true,
+			},
+		},
+	}}
+	processor, err := buildProcessor("agent", &options{
+		runner:       runner,
+		errorHandler: defaultErrorHandler,
+		responseRewriter: func(
+			_ context.Context,
+			result protocol.StreamEvent,
+		) protocol.StreamEvent {
+			if _, ok := result.(*protocol.TaskArtifactUpdateEvent); ok {
+				return nil
+			}
+			return result
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildProcessor failed: %v", err)
+	}
+	manager, err := stateless.NewTaskManager(processor)
+	if err != nil {
+		t.Fatalf("stateless.NewTaskManager failed: %v", err)
+	}
+	request := protocol.SendMessageParams{Message: protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]*protocol.Part{protocol.NewTextPart("hi")},
+	)}
+	response, err := manager.OnSendMessage(
+		NewContextWithUserID(context.Background(), "user"),
+		request,
+	)
+	if err != nil {
+		t.Fatalf("OnSendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil {
+		t.Fatal("response did not contain a Task")
+	}
+	if len(task.Artifacts) != 0 {
+		t.Fatalf("dropped artifact reappeared in completed Task: %#v", task.Artifacts)
+	}
+}
+
+func TestResponseRewriterCanEmptyArtifactParts(t *testing.T) {
+	runner := &modeTestRunner{events: []*event.Event{
+		{
+			Response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "secret"},
+				}},
+			},
+		},
+		{
+			Response: &model.Response{
+				Object: model.ObjectTypeRunnerCompletion,
+				Done:   true,
+			},
+		},
+	}}
+	rewriterCalled := false
+	processor, err := buildProcessor("agent", &options{
+		runner:       runner,
+		errorHandler: defaultErrorHandler,
+		responseRewriter: func(
+			_ context.Context,
+			result protocol.StreamEvent,
+		) protocol.StreamEvent {
+			if update, ok := result.(*protocol.TaskArtifactUpdateEvent); ok {
+				rewriterCalled = true
+				update.Artifact.Parts = nil
+			}
+			return result
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildProcessor failed: %v", err)
+	}
+	manager, err := stateless.NewTaskManager(processor)
+	if err != nil {
+		t.Fatalf("stateless.NewTaskManager failed: %v", err)
+	}
+	response, err := manager.OnSendMessage(
+		NewContextWithUserID(context.Background(), "user"),
+		protocol.SendMessageParams{Message: protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]*protocol.Part{protocol.NewTextPart("hi")},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("OnSendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil {
+		t.Fatal("response did not contain a Task")
+	}
+	if task.Status.State != protocol.TaskStateCompleted {
+		t.Fatalf("task state = %s, want completed", task.Status.State)
+	}
+	if !rewriterCalled {
+		t.Fatal("response rewriter did not receive an artifact update")
+	}
+}
+
+func TestTaskManagerBuilderPropagatesError(t *testing.T) {
+	wantErr := errors.New("task manager unavailable")
+	_, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(a2aserver.AgentCard{
+			Name: "agent",
+			URL:  "http://localhost:8080",
+		}),
+		WithTaskManagerBuilder(func(
+			taskmanager.MessageProcessor,
+		) (taskmanager.TaskManager, error) {
+			return nil, wantErr
+		}),
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("New error = %v, want wrapped %v", err, wantErr)
+	}
+}
+
+func TestServerRoutesPrimarySupportedInterface(t *testing.T) {
+	server, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(a2aserver.AgentCard{
+			Name: "agent",
+			URL:  "http://example.com/legacy",
+			SupportedInterfaces: []a2aserver.AgentInterface{
+				{
+					URL:             "http://example.com/primary",
+					ProtocolBinding: "JSONRPC",
+					ProtocolVersion: "1.0",
+				},
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://example.com/primary/.well-known/agent-card.json",
+		nil,
+	)
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("primary interface status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	var servedCard a2aserver.AgentCard
+	if err := json.Unmarshal(recorder.Body.Bytes(), &servedCard); err != nil {
+		t.Fatalf("agent card unmarshal failed: %v", err)
+	}
+	if got, want := servedCard.PrimaryURL(), "http://example.com/primary"; got != want {
+		t.Fatalf("served primary URL = %q, want %q", got, want)
+	}
+}
+
+func TestServerDoesNotMutateInputAgentCardInterfaces(t *testing.T) {
+	card := a2aserver.AgentCard{
+		Name: "agent",
+		SupportedInterfaces: []a2aserver.AgentInterface{{
+			URL:             "http://example.com/agent",
+			ProtocolBinding: "JSONRPC",
+			ProtocolVersion: protocol.ProtocolVersionV1,
+		}},
+	}
+	if _, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(card),
+	); err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if got, want := card.SupportedInterfaces[0].URL, "http://example.com/agent"; got != want {
+		t.Fatalf("input card URL = %q, want unchanged %q", got, want)
+	}
+}
+
+func TestServerRejectsSignedAgentCardRequiringNormalization(t *testing.T) {
+	card := a2aserver.AgentCard{
+		Name: "agent",
+		URL:  "http://example.com/agent/",
+		Signatures: []a2aserver.AgentCardSignature{{
+			Protected: "header",
+			Signature: "signature",
+		}},
+	}
+	_, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(card),
+	)
+	const want = "signed agent card requires normalization; provide a card signed with the final served URL"
+	if err == nil || err.Error() != want {
+		t.Fatalf("New error = %v, want %q", err, want)
+	}
+}
+
+func TestServerAcceptsExactSignedAgentCard(t *testing.T) {
+	card := a2aserver.AgentCard{
+		Name: "agent",
+		URL:  "http://example.com/agent",
+		SupportedInterfaces: []a2aserver.AgentInterface{{
+			URL:             "http://example.com/agent",
+			ProtocolBinding: "JSONRPC",
+			ProtocolVersion: protocol.ProtocolVersionV1,
+		}},
+		Signatures: []a2aserver.AgentCardSignature{{
+			Protected: "header",
+			Signature: "signature",
+		}},
+	}
+	if _, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(card),
+	); err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+}
+
+func TestServerKeepsAdvertisedAndMountedJSONRPCEndpointAligned(t *testing.T) {
+	tests := []struct {
+		name             string
+		path             string
+		explicitEndpoint bool
+	}{
+		{name: "explicit endpoint", path: "/rpc", explicitEndpoint: true},
+		{name: "escaped slash", path: "/a%2Fb"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			httpServer := httptest.NewUnstartedServer(nil)
+			endpoint := "http://" + httpServer.Listener.Addr().String() + test.path
+			card := a2aserver.AgentCard{
+				Name: "agent",
+				URL:  endpoint,
+				SupportedInterfaces: []a2aserver.AgentInterface{{
+					URL:             endpoint,
+					ProtocolBinding: protocol.ProtocolBindingJSONRPC,
+					ProtocolVersion: protocol.ProtocolVersionV1,
+				}},
+			}
+			options := []Option{
+				WithRunner(&modeTestRunner{events: legacyResponseEvents("answer")}),
+				WithAgentCard(card),
+			}
+			if test.explicitEndpoint {
+				options = append(options, WithExtraA2AOptions(
+					a2aserver.WithJSONRPCEndpoint(test.path),
+				))
+			}
+			server, err := New(options...)
+			if err != nil {
+				t.Fatalf("New failed: %v", err)
+			}
+			httpServer.Config.Handler = server.Handler()
+			httpServer.Start()
+			t.Cleanup(httpServer.Close)
+
+			cardResponse, err := httpServer.Client().Get(endpoint + protocol.AgentCardPath)
+			if err != nil {
+				t.Fatalf("Get Agent Card failed: %v", err)
+			}
+			defer cardResponse.Body.Close()
+			if cardResponse.StatusCode != http.StatusOK {
+				t.Fatalf("Agent Card status = %d, want %d", cardResponse.StatusCode, http.StatusOK)
+			}
+			var servedCard a2aserver.AgentCard
+			if err := json.NewDecoder(cardResponse.Body).Decode(&servedCard); err != nil {
+				t.Fatalf("decode Agent Card failed: %v", err)
+			}
+			if got := servedCard.PrimaryURL(); got != endpoint {
+				t.Fatalf("served endpoint = %q, want %q", got, endpoint)
+			}
+
+			client, err := a2aclient.NewA2AClient(servedCard.PrimaryURL())
+			if err != nil {
+				t.Fatalf("NewA2AClient failed: %v", err)
+			}
+			message := protocol.NewMessage(
+				protocol.MessageRoleUser,
+				[]*protocol.Part{protocol.NewTextPart("hello")},
+			)
+			response, err := client.SendMessage(context.Background(), protocol.SendMessageParams{
+				Message: message,
+			})
+			if err != nil {
+				t.Fatalf("SendMessage failed: %v", err)
+			}
+			if task := response.GetTask(); task == nil || task.Status.State != protocol.TaskStateCompleted {
+				t.Fatalf("response task = %#v, want completed", task)
+			}
+		})
+	}
+}
+
+func TestNewAgentCardAdvertisesExactSubpathEndpoint(t *testing.T) {
+	httpServer := httptest.NewUnstartedServer(nil)
+	endpoint := "http://" + httpServer.Listener.Addr().String() + "/api/v1/agent"
+	card, err := NewAgentCard(
+		"agent",
+		"description",
+		"1.0.0",
+		endpoint,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("NewAgentCard failed: %v", err)
+	}
+	if got, want := card.PrimaryURL(), endpoint+"/"; got != want {
+		t.Fatalf("primary URL = %q, want %q", got, want)
+	}
+
+	server, err := New(
+		WithRunner(&modeTestRunner{events: legacyResponseEvents("answer")}),
+		WithAgentCard(card),
+	)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	httpServer.Config.Handler = server.Handler()
+	httpServer.Start()
+	t.Cleanup(httpServer.Close)
+
+	client, err := a2aclient.NewA2AClient(card.PrimaryURL())
+	if err != nil {
+		t.Fatalf("NewA2AClient failed: %v", err)
+	}
+	message := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]*protocol.Part{protocol.NewTextPart("hello")},
+	)
+	response, err := client.SendMessage(context.Background(), protocol.SendMessageParams{
+		Message: message,
+	})
+	if err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil || task.Status.State != protocol.TaskStateCompleted {
+		t.Fatalf("response task = %#v, want completed", task)
+	}
+}
+
+func TestDataPartUsesJSONRepresentation(t *testing.T) {
+	converter := &defaultA2AMessageToAgentMessage{}
+	message := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]*protocol.Part{protocol.NewDataPart(map[string]any{
+			"enabled": true,
+			"count":   2,
+		})},
+	)
+	converted, err := converter.ConvertToAgentMessage(context.Background(), message)
+	if err != nil {
+		t.Fatalf("ConvertToAgentMessage failed: %v", err)
+	}
+	if len(converted.ContentParts) != 1 || converted.ContentParts[0].Text == nil {
+		t.Fatalf("content parts = %#v, want one text part", converted.ContentParts)
+	}
+	if got := *converted.ContentParts[0].Text; got != `{"count":2,"enabled":true}` {
+		t.Fatalf("data part text = %q, want JSON object", got)
+	}
+}
+
+func TestRunnerClosureBeforeCompletionFailsTask(t *testing.T) {
+	processor, err := buildProcessor("agent", &options{
+		runner:       &modeTestRunner{},
+		errorHandler: defaultErrorHandler,
+	})
+	if err != nil {
+		t.Fatalf("buildProcessor failed: %v", err)
+	}
+	manager, err := stateless.NewTaskManager(processor)
+	if err != nil {
+		t.Fatalf("stateless.NewTaskManager failed: %v", err)
+	}
+	response, err := manager.OnSendMessage(
+		NewContextWithUserID(context.Background(), "user"),
+		protocol.SendMessageParams{Message: protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]*protocol.Part{protocol.NewTextPart("hi")},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("OnSendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil {
+		t.Fatalf("response = %#v, want Task", response.Result)
+	}
+	if task.Status.State != protocol.TaskStateFailed {
+		t.Fatalf("task state = %s, want failed", task.Status.State)
+	}
+}
+
+func TestTerminalAgentErrorFailsTaskByDefault(t *testing.T) {
+	processor, err := buildProcessor("agent", &options{
+		runner: &modeTestRunner{events: []*event.Event{{
+			Response: &model.Response{
+				Object: model.ObjectTypeError,
+				Done:   true,
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "agent failed",
+				},
+			},
+		}}},
+		errorHandler: defaultErrorHandler,
+	})
+	if err != nil {
+		t.Fatalf("buildProcessor failed: %v", err)
+	}
+	manager, err := stateless.NewTaskManager(processor)
+	if err != nil {
+		t.Fatalf("stateless.NewTaskManager failed: %v", err)
+	}
+	response, err := manager.OnSendMessage(
+		NewContextWithUserID(context.Background(), "user"),
+		protocol.SendMessageParams{Message: protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]*protocol.Part{protocol.NewTextPart("hi")},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("OnSendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil || task.Status.State != protocol.TaskStateFailed {
+		t.Fatalf("task = %#v, want failed Task", task)
+	}
+	if task.Status.Message == nil || len(task.Status.Message.Parts) != 1 ||
+		task.Status.Message.Parts[0].TextContent() != "agent failed" {
+		t.Fatalf("failure status message = %#v", task.Status.Message)
+	}
+	if got := task.Status.Message.Metadata[ia2a.MessageMetadataTaskStateKey]; got != string(protocol.TaskStateFailed) {
+		t.Fatalf("task state metadata = %v, want failed", got)
+	}
+}
+
+func TestNewAgentCardAdvertisesV1JSONRPCInterface(t *testing.T) {
+	card, err := NewAgentCard(
+		"agent",
+		"description",
+		"1.0.0",
+		"127.0.0.1:8888",
+		true,
+	)
+	if err != nil {
+		t.Fatalf("NewAgentCard failed: %v", err)
+	}
+	if len(card.SupportedInterfaces) != 1 {
+		t.Fatalf("supported interface count = %d, want 1", len(card.SupportedInterfaces))
+	}
+	iface := card.SupportedInterfaces[0]
+	if iface.URL != "http://127.0.0.1:8888/" ||
+		iface.ProtocolBinding != "JSONRPC" ||
+		iface.ProtocolVersion != protocol.ProtocolVersionV1 {
+		t.Fatalf("supported interface = %#v", iface)
+	}
+}

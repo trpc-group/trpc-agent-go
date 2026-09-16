@@ -1619,6 +1619,49 @@ func TestAppendTrackEvent_TTLSetsExpiresAt(t *testing.T) {
 	assert.True(t, sawTrackExpiresAt)
 }
 
+func TestAppendTrackEvent_TrackTTLOverridesSessionTTL(t *testing.T) {
+	now := time.Now()
+	mc := &mockClient{
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
+		findOneFn: func(_ any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{State: bson.M{}}, nil, nil)
+		},
+	}
+	trackTTL := time.Duration(0)
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
+		o.sessionTTL = time.Hour
+		o.trackEventTTL = &trackTTL
+	})
+	sess := newSessionForTest("app", "u", "s")
+
+	require.NoError(t, s.AppendTrackEvent(context.Background(), sess,
+		trackEventForTest("alpha", `"payload"`, now)))
+
+	var sawStateExpiresAt, sawTrackDoc bool
+	for _, op := range mc.recorded() {
+		switch op.coll {
+		case "session_states":
+			if op.name != "UpdateOne" {
+				continue
+			}
+			upd := op.update.(bson.M)
+			set := upd["$set"].(bson.M)
+			_, sawStateExpiresAt = set["expires_at"]
+		case "session_tracks":
+			if op.name != "InsertOne" {
+				continue
+			}
+			doc := op.doc.(sessionTrackDoc)
+			sawTrackDoc = true
+			assert.Nil(t, doc.ExpiresAt)
+		}
+	}
+	assert.True(t, sawStateExpiresAt)
+	assert.True(t, sawTrackDoc)
+}
+
 func TestAppendTrackEvent_AsyncPathDispatchesToChan(t *testing.T) {
 	mc := &mockClient{}
 	s := newServiceForTest(t, mc, func(o *serviceOpts) {
@@ -1734,6 +1777,85 @@ func TestGetSession_LoadsTrackEvents(t *testing.T) {
 	assert.Equal(t, json.RawMessage(`"payload"`), sess.Tracks["alpha"].Events[0].Payload)
 }
 
+func TestServiceGetTrackEventsReadsTrackStorage(t *testing.T) {
+	now := time.Now()
+	oldEvent := trackEventForTest("alpha", `"old"`, now.Add(-2*time.Minute))
+	newEvent := trackEventForTest("alpha", `"new"`, now.Add(-time.Minute))
+	oldBytes, err := json.Marshal(oldEvent)
+	require.NoError(t, err)
+	newBytes, err := json.Marshal(newEvent)
+	require.NoError(t, err)
+	mc := &mockClient{
+		findFn: func(filter any) (*mongo.Cursor, error) {
+			f := filter.(bson.M)
+			assert.Equal(t, "app", f["app_name"])
+			assert.Equal(t, "u", f["user_id"])
+			assert.Equal(t, bson.M{"$in": []string{"s"}}, f["session_id"])
+			assert.Equal(t, bson.M{"$in": []session.Track{"alpha"}}, f["track"])
+			assert.Contains(t, f, "created_at")
+			return docsCursor([]any{
+				sessionTrackDoc{SessionID: "s", Track: "alpha", Event: newBytes, CreatedAt: newEvent.Timestamp},
+				sessionTrackDoc{SessionID: "s", Track: "alpha", Event: oldBytes, CreatedAt: oldEvent.Timestamp},
+			})
+		},
+	}
+	s := newServiceForTest(t, mc)
+	got, err := s.GetTrackEvents(context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+		"alpha")
+	require.NoError(t, err)
+	require.Equal(t, session.Track("alpha"), got.Track)
+	require.Len(t, got.Events, 2)
+	assert.Equal(t, json.RawMessage(`"old"`), got.Events[0].Payload)
+	assert.Equal(t, json.RawMessage(`"new"`), got.Events[1].Payload)
+	ops := mc.recorded()
+	require.Len(t, ops, 1)
+	assert.Equal(t, "Find", ops[0].name)
+	assert.Equal(t, "session_tracks", ops[0].coll)
+}
+
+func TestServiceGetTrackEventsErrorsAndEmpty(t *testing.T) {
+	t.Run("invalid key", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{})
+		_, err := s.GetTrackEvents(
+			context.Background(),
+			session.Key{UserID: "u", SessionID: "s"},
+			"alpha",
+		)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, session.ErrAppNameRequired)
+	})
+	t.Run("query error", func(t *testing.T) {
+		want := errors.New("find failed")
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return nil, want
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.GetTrackEvents(
+			context.Background(),
+			session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+			"alpha",
+		)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+		assert.Contains(t, err.Error(), "mongodb session service get track events failed")
+	})
+	t.Run("empty events", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{})
+		got, err := s.GetTrackEvents(
+			context.Background(),
+			session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+			"alpha",
+		)
+		require.NoError(t, err)
+		require.Equal(t, session.Track("alpha"), got.Track)
+		require.Empty(t, got.Events)
+		require.NotNil(t, got.Events)
+	})
+}
+
 func TestGetTrackEvents_BatchesSessionsAndTracks(t *testing.T) {
 	now := time.Now()
 	alphaOld := trackEventForTest("alpha", `"old"`, now.Add(-2*time.Minute))
@@ -1780,6 +1902,73 @@ func TestGetTrackEvents_BatchesSessionsAndTracks(t *testing.T) {
 	assert.Equal(t, json.RawMessage(`"new"`), got[0]["alpha"][0].Payload)
 	require.Len(t, got[1]["beta"], 1)
 	assert.Equal(t, json.RawMessage(`"beta"`), got[1]["beta"][0].Payload)
+}
+
+func TestGetTrackEventsByTrackListsBoundaries(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
+	t.Run("empty keys", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{})
+		got, err := s.getTrackEventsByTrackLists(context.Background(), nil, nil, 0, time.Time{})
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+	t.Run("track list count mismatch", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{})
+		_, err := s.getTrackEventsByTrackLists(context.Background(), []session.Key{key}, nil, 0, time.Time{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "track lists count mismatch")
+	})
+	t.Run("track ttl lower bound and limit", func(t *testing.T) {
+		ttl := time.Hour
+		mc := &mockClient{
+			findFn: func(filter any) (*mongo.Cursor, error) {
+				f := filter.(bson.M)
+				createdAt := f["created_at"].(bson.M)
+				afterTime, ok := createdAt["$gt"].(time.Time)
+				require.True(t, ok)
+				assert.WithinDuration(t, time.Now().Add(-ttl), afterTime, 5*time.Second)
+				return emptyCursor()
+			},
+		}
+		s := newServiceForTest(t, mc, func(o *serviceOpts) { o.trackEventTTL = &ttl })
+		got, err := s.getTrackEventsByTrackLists(
+			context.Background(),
+			[]session.Key{key},
+			[][]session.Track{{"alpha"}},
+			1,
+			time.Time{},
+		)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Empty(t, got[0])
+	})
+}
+
+func TestGetTrackEvents_TrackTTLZeroDoesNotApplySessionTTL(t *testing.T) {
+	trackTTL := time.Duration(0)
+	mc := &mockClient{
+		findFn: func(filter any) (*mongo.Cursor, error) {
+			f := filter.(bson.M)
+			createdAt := f["created_at"].(bson.M)
+			afterTime, ok := createdAt["$gt"].(time.Time)
+			require.True(t, ok)
+			assert.True(t, afterTime.IsZero())
+			return emptyCursor()
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
+		o.sessionTTL = time.Hour
+		o.trackEventTTL = &trackTTL
+	})
+	got, err := s.getTrackEvents(context.Background(),
+		[]session.Key{{AppName: "app", UserID: "u", SessionID: "s"}},
+		[]sessionStateDoc{{State: bson.M{"tracks": mustTrackIndex(t, []session.Track{"alpha"})}}},
+		0,
+		time.Time{},
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0])
 }
 
 func TestGetTrackEvents_ErrorsAndNoTrackFastPath(t *testing.T) {

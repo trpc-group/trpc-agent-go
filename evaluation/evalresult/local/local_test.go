@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -124,6 +125,45 @@ func TestLocalManagerSaveUsesProvidedID(t *testing.T) {
 	loaded, err := mgr.Get(ctx, "app", "custom-id")
 	require.NoError(t, err)
 	assert.Equal(t, "provided-name", loaded.EvalSetResultName)
+}
+
+func TestLocalManagerSavePersistsActualInvocationExecutionTrace(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	mgr := New(evalresult.WithBaseDir(dir)).(*manager)
+	result := &evalresult.EvalSetResult{
+		EvalSetID:       "set",
+		EvalSetResultID: "trace-result",
+		EvalCaseResults: []*evalresult.EvalCaseResult{{
+			EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{{
+				ActualInvocation: &evalset.Invocation{
+					InvocationID: "inv-1",
+					ExecutionTrace: &agenttrace.Trace{
+						RootInvocationID: "root-1",
+						Steps: []agenttrace.Step{{
+							NodeID: "fetch_match",
+							Output: &agenttrace.Snapshot{
+								Text: "match data",
+							},
+						}},
+					},
+				},
+			}},
+		}},
+	}
+	id, err := mgr.Save(ctx, "app", result)
+	require.NoError(t, err)
+	loaded, err := mgr.Get(ctx, "app", id)
+	require.NoError(t, err)
+	perInvocation := loaded.EvalCaseResults[0].EvalMetricResultPerInvocation[0]
+	require.NotNil(t, perInvocation.ActualInvocation.ExecutionTrace)
+	assert.Equal(t, "root-1", perInvocation.ActualInvocation.ExecutionTrace.RootInvocationID)
+	if assert.Len(t, perInvocation.ActualInvocation.ExecutionTrace.Steps, 1) {
+		assert.Equal(t, "match data", perInvocation.ActualInvocation.ExecutionTrace.Steps[0].Output.Text)
+	}
+	payload, err := os.ReadFile(mgr.evalSetResultPath("app", id))
+	require.NoError(t, err)
+	assert.Contains(t, string(payload), "executionTrace")
 }
 
 func TestLocalManagerGetInvalidContent(t *testing.T) {

@@ -10,6 +10,8 @@
 package clone
 
 import (
+	"encoding/json"
+
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	criterionlength "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/length"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -29,6 +31,7 @@ func CloneEvalMetric(src *metric.EvalMetric) (*metric.EvalMetric, error) {
 		return nil, errNilInput("eval metric")
 	}
 	copied := *src
+	// Extension is intentionally assigned as-is because callers own its clone semantics.
 	clonedCriterion, err := cloneCriterion(src.Criterion)
 	if err != nil {
 		return nil, err
@@ -147,6 +150,7 @@ func cloneJSONCriterion(src *criterionjson.JSONCriterion) (*criterionjson.JSONCr
 		copied.OnlyTree = onlyTree.(map[string]any)
 	}
 	copied.NumberTolerance = cloneFloat64Ptr(src.NumberTolerance)
+	copied.Schema = append(json.RawMessage(nil), src.Schema...)
 	return &copied, nil
 }
 
@@ -197,8 +201,33 @@ func cloneJudgeTemplateOptions(src *criterionllm.JudgeTemplateOptions) *criterio
 		return nil
 	}
 	copied := *src
+	copied.ResponseScorerOptions = cloneResponseScorerOptions(src.ResponseScorerOptions)
 	copied.VariableBindings = cloneTemplateVariableBindings(src.VariableBindings)
 	return &copied
+}
+
+func cloneResponseScorerOptions(src *criterionllm.ResponseScorerOptions) *criterionllm.ResponseScorerOptions {
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	copied.Categories = cloneCategoryScores(src.Categories)
+	return &copied
+}
+
+func cloneCategoryScores(src []*criterionllm.CategoryScore) []*criterionllm.CategoryScore {
+	if src == nil {
+		return nil
+	}
+	copied := make([]*criterionllm.CategoryScore, len(src))
+	for i := range src {
+		if src[i] == nil {
+			continue
+		}
+		category := *src[i]
+		copied[i] = &category
+	}
+	return copied
 }
 
 func cloneTemplateVariableBindings(src []*criterionllm.TemplateVariableBinding) []*criterionllm.TemplateVariableBinding {
@@ -219,6 +248,10 @@ func cloneTemplateVariableBinding(src *criterionllm.TemplateVariableBinding) *cr
 	copied := *src
 	if src.Source != nil {
 		source := *src.Source
+		if src.Source.Selector != nil {
+			selector := *src.Source.Selector
+			source.Selector = &selector
+		}
 		copied.Source = &source
 	}
 	return &copied

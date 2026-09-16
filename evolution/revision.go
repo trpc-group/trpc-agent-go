@@ -98,6 +98,7 @@ const (
 	AuditActionDelete  AuditAction = "delete"
 	AuditActionPromote AuditAction = "promote"
 	AuditActionReject  AuditAction = "reject"
+	AuditActionSubmit  AuditAction = "submit"
 )
 
 // Revision is an immutable snapshot of a SkillSpec plus the metadata
@@ -127,6 +128,23 @@ type Revision struct {
 	SafetyReport        *SafetyReport        `json:"safety_report,omitempty"`
 	EffectivenessReport *EffectivenessReport `json:"effectiveness_report,omitempty"`
 	HumanReport         *HumanReport         `json:"human_report,omitempty"`
+	Evidence            *RevisionEvidence    `json:"evidence,omitempty"`
+}
+
+// RevisionEvidence records reproducible evaluation evidence attached to an
+// externally submitted revision. Large traces stay in the experiment store;
+// the revision only carries the identifiers and aggregate scores required for
+// approval and audit. Delta must equal CandidateScore minus BaselineScore
+// within floating-point tolerance.
+type RevisionEvidence struct {
+	ExperimentID   string             `json:"experiment_id,omitempty"`
+	DatasetID      string             `json:"dataset_id,omitempty"`
+	DatasetVersion string             `json:"dataset_version,omitempty"`
+	BaselineScore  float64            `json:"baseline_score"`
+	CandidateScore float64            `json:"candidate_score"`
+	Delta          float64            `json:"delta"`
+	CaseCount      int                `json:"case_count,omitempty"`
+	Objectives     map[string]float64 `json:"objectives,omitempty"`
 }
 
 // SpecReport is the deterministic SpecGate verdict.
@@ -221,11 +239,13 @@ type ActivePointer interface {
 // Filesystem backed implementation.
 // -----------------------------------------------------------------------------
 
+const fileSkillLockRetryInterval = 10 * time.Millisecond
+
 // fileCandidateStore stores revisions under <root>/<skill-id>/revisions/<revision-id>/
 // and an append-only audit log under <root>/<skill-id>/audit.log. It
-// is deliberately boring: plain files, no database, no locking file
-// layout, so it works inside the existing filesystem-only
-// `managed_skills/` world.
+// is deliberately boring: plain files plus a small lock directory for
+// cross-process state-changing decisions, no database, so it works
+// inside the existing filesystem-only `managed_skills/` world.
 type fileCandidateStore struct {
 	root string
 	mu   sync.Mutex // serializes audit-log appends per process.
@@ -247,6 +267,38 @@ func newFileCandidateStore(root string) *fileCandidateStore {
 // reviewer-returned name verbatim.
 func (s *fileCandidateStore) skillDir(skillID string) string {
 	return filepath.Join(s.root, sanitizeSkillName(skillID))
+}
+
+func (s *fileCandidateStore) lockSkill(ctx context.Context, skillID string) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(skillID) == "" {
+		return nil, errors.New("evolution: skill lock: empty skill id")
+	}
+	dir := s.skillDir(skillID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("evolution: skill lock: mkdir %q: %w", dir, err)
+	}
+	lockDir := filepath.Join(dir, ".state.lock")
+	ticker := time.NewTicker(fileSkillLockRetryInterval)
+	defer ticker.Stop()
+	for {
+		err := os.Mkdir(lockDir, 0o700)
+		if err == nil {
+			return func() {
+				_ = os.Remove(lockDir)
+			}, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("evolution: skill lock: acquire %q: %w", lockDir, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // WriteRevision implements CandidateStore.

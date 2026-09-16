@@ -67,6 +67,9 @@ const (
 	// TriggerTypeTransfer indicates the child invocation was created because
 	// the parent agent invoked the transfer_to_agent tool (handoff pattern).
 	TriggerTypeTransfer = "transfer"
+	// TriggerTypeDynamicWorkflow indicates the child invocation was created by
+	// one dynamic workflow script calling a registered child agent.
+	TriggerTypeDynamicWorkflow = "dynamic_workflow"
 )
 
 // ParentInvocationMetadata describes how a child invocation was triggered by
@@ -248,6 +251,8 @@ func cloneExecutionTrace(executionTrace *trace.Trace) *trace.Trace {
 		StartedAt:        executionTrace.StartedAt,
 		EndedAt:          executionTrace.EndedAt,
 		Status:           executionTrace.Status,
+		Input:            cloneExecutionTraceSnapshot(executionTrace.Input),
+		Output:           cloneExecutionTraceSnapshot(executionTrace.Output),
 		Usage:            cloneUsage(executionTrace.Usage),
 		Steps:            make([]trace.Step, 0, len(executionTrace.Steps)),
 	}
@@ -268,6 +273,7 @@ func cloneExecutionTraceStep(step trace.Step) trace.Step {
 		AgentName:          step.AgentName,
 		Branch:             step.Branch,
 		NodeID:             step.NodeID,
+		NodeType:           step.NodeType,
 		StartedAt:          step.StartedAt,
 		EndedAt:            step.EndedAt,
 		PredecessorStepIDs: append(
@@ -278,7 +284,43 @@ func cloneExecutionTraceStep(step trace.Step) trace.Step {
 		Input:             cloneExecutionTraceSnapshot(step.Input),
 		Output:            cloneExecutionTraceSnapshot(step.Output),
 		Usage:             cloneUsage(step.Usage),
+		Tools:             cloneExecutionTraceTools(step.Tools),
+		Skills:            append([]trace.Skill(nil), step.Skills...),
 		Error:             step.Error,
+	}
+}
+
+func cloneExecutionTraceTools(tools []trace.Tool) []trace.Tool {
+	if tools == nil {
+		return nil
+	}
+	cloned := make([]trace.Tool, len(tools))
+	for i, tool := range tools {
+		cloned[i] = tool
+		cloned[i].Arguments = cloneExecutionTraceValue(tool.Arguments)
+		cloned[i].Result = cloneExecutionTraceValue(tool.Result)
+	}
+	return cloned
+}
+
+func cloneExecutionTraceValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		cloned := make(map[string]any, len(v))
+		for key, item := range v {
+			cloned[key] = cloneExecutionTraceValue(item)
+		}
+		return cloned
+	case []any:
+		cloned := make([]any, len(v))
+		for i, item := range v {
+			cloned[i] = cloneExecutionTraceValue(item)
+		}
+		return cloned
+	case []byte:
+		return append([]byte(nil), v...)
+	default:
+		return value
 	}
 }
 
@@ -443,7 +485,7 @@ func redactedEventForLogging(e *Event) Event {
 
 func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (bool, error) {
 	// Snapshot before send: once ch <- e returns, the receiver owns *e and
-	// may mutate it concurrently (runner.copyEventInvocationFields). Reading
+	// may mutate it concurrently (runner.backfillEventMetadata). Reading
 	// *e after the send for logging is a data race.
 	eventStr := snapshotEvent(e)
 	select {

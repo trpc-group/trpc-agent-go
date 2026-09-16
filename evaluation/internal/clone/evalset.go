@@ -10,8 +10,10 @@
 package clone
 
 import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // CloneEvalSet clones an eval set and all nested eval cases.
@@ -108,6 +110,10 @@ func cloneInvocation(src *evalset.Invocation) (*evalset.Invocation, error) {
 		return nil, nil
 	}
 	copied := *src
+	if src.MetricNames != nil {
+		copied.MetricNames = make([]string, len(src.MetricNames))
+		copy(copied.MetricNames, src.MetricNames)
+	}
 	copied.CreationTimestamp = cloneEpochTime(src.CreationTimestamp)
 	contextMessages, err := cloneMessages(src.ContextMessages)
 	if err != nil {
@@ -139,7 +145,80 @@ func cloneInvocation(src *evalset.Invocation) (*evalset.Invocation, error) {
 		return nil, err
 	}
 	copied.ToolMock = toolMock
+	executionTrace, err := cloneExecutionTrace(src.ExecutionTrace)
+	if err != nil {
+		return nil, err
+	}
+	copied.ExecutionTrace = executionTrace
 	return &copied, nil
+}
+
+func cloneExecutionTrace(src *trace.Trace) (*trace.Trace, error) {
+	if src == nil {
+		return nil, nil
+	}
+	cloneSnapshot := func(src *trace.Snapshot) *trace.Snapshot {
+		if src == nil {
+			return nil
+		}
+		copied := *src
+		return &copied
+	}
+	cloneUsage := func(src *model.Usage) *model.Usage {
+		if src == nil {
+			return nil
+		}
+		copied := *src
+		if src.TimingInfo != nil {
+			timingInfo := *src.TimingInfo
+			copied.TimingInfo = &timingInfo
+		}
+		return &copied
+	}
+	copied := *src
+	copied.Input = cloneSnapshot(src.Input)
+	copied.Output = cloneSnapshot(src.Output)
+	copied.Usage = cloneUsage(src.Usage)
+	if src.Steps != nil {
+		copied.Steps = make([]trace.Step, len(src.Steps))
+		for i := range src.Steps {
+			step := src.Steps[i]
+			step.PredecessorStepIDs = cloneStringSlice(src.Steps[i].PredecessorStepIDs)
+			step.AppliedSurfaceIDs = cloneStringSlice(src.Steps[i].AppliedSurfaceIDs)
+			step.Input = cloneSnapshot(src.Steps[i].Input)
+			step.Output = cloneSnapshot(src.Steps[i].Output)
+			step.Usage = cloneUsage(src.Steps[i].Usage)
+			tools, err := cloneTraceTools(src.Steps[i].Tools)
+			if err != nil {
+				return nil, err
+			}
+			step.Tools = tools
+			step.Skills = append([]trace.Skill(nil), src.Steps[i].Skills...)
+			copied.Steps[i] = step
+		}
+	}
+	return &copied, nil
+}
+
+func cloneTraceTools(src []trace.Tool) ([]trace.Tool, error) {
+	if src == nil {
+		return nil, nil
+	}
+	copied := make([]trace.Tool, len(src))
+	for i := range src {
+		copied[i] = src[i]
+		arguments, err := cloneAny(src[i].Arguments)
+		if err != nil {
+			return nil, err
+		}
+		copied[i].Arguments = arguments
+		result, err := cloneAny(src[i].Result)
+		if err != nil {
+			return nil, err
+		}
+		copied[i].Result = result
+	}
+	return copied, nil
 }
 
 func cloneToolMock(src *toolmock.ToolMock) (*toolmock.ToolMock, error) {

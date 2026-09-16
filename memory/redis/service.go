@@ -30,9 +30,57 @@ import (
 const (
 	// defaultConnectionTimeout is the default timeout for Redis connection test.
 	defaultConnectionTimeout = 5 * time.Second
+
+	addMemoryResultSuccess = 0
+
+	updateMemoryResultNotFound = 0
+	updateMemoryResultSuccess  = 1
+	updateMemoryResultConflict = 2
 )
 
 var _ memory.Service = (*Service)(nil)
+
+// luaAddMemory atomically enforces the per-user limit for new memory IDs while
+// allowing an existing ID to be overwritten idempotently. A positive result is
+// the current memory count when the limit has been reached.
+var luaAddMemory = redis.NewScript(`
+local key = KEYS[1]
+local memoryID = ARGV[1]
+local entryJSON = ARGV[2]
+local memoryLimit = tonumber(ARGV[3])
+
+if redis.call('HEXISTS', key, memoryID) == 0 then
+    local count = redis.call('HLEN', key)
+    if count >= memoryLimit then
+        return count
+    end
+end
+
+redis.call('HSET', key, memoryID, entryJSON)
+return 0
+`)
+
+// luaUpdateMemory atomically updates a memory hash field and, when its
+// canonical ID changes, rejects an existing target before rotating the field.
+var luaUpdateMemory = redis.NewScript(`
+local key = KEYS[1]
+local sourceID = ARGV[1]
+local targetID = ARGV[2]
+local entryJSON = ARGV[3]
+
+if redis.call('HEXISTS', key, sourceID) == 0 then
+    return 0
+end
+if sourceID ~= targetID and redis.call('HEXISTS', key, targetID) == 1 then
+    return 2
+end
+
+redis.call('HSET', key, targetID, entryJSON)
+if sourceID ~= targetID then
+    redis.call('HDEL', key, sourceID)
+end
+return 1
+`)
 
 // Service is the redis memory service.
 // Storage structure:
@@ -108,11 +156,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 			opts.extractor, opts.enabledTools,
 		)
 		config := imemory.AutoMemoryConfig{
-			Extractor:        opts.extractor,
-			AsyncMemoryNum:   opts.asyncMemoryNum,
-			MemoryQueueSize:  opts.memoryQueueSize,
-			MemoryJobTimeout: opts.memoryJobTimeout,
-			EnabledTools:     opts.enabledTools,
+			Extractor:                opts.extractor,
+			AsyncMemoryNum:           opts.asyncMemoryNum,
+			MemoryQueueSize:          opts.memoryQueueSize,
+			MemoryJobTimeout:         opts.memoryJobTimeout,
+			DisableOnExternalContext: opts.disableAutoMemoryOnExternalContext,
+			EnabledTools:             opts.enabledTools,
 		}
 		svc.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, svc)
 		svc.autoMemoryWorker.Start()
@@ -128,17 +177,6 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		return err
 	}
 	key := s.getUserMemKey(userKey)
-
-	if s.opts.memoryLimit > 0 {
-		count, err := s.redisClient.HLen(ctx, key).Result()
-		if err != nil && err != redis.Nil {
-			return fmt.Errorf("redis memory service check memory count failed: %w", err)
-		}
-		if int(count) >= s.opts.memoryLimit {
-			return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
-				userKey.UserID, s.opts.memoryLimit, count)
-		}
-	}
 
 	now := time.Now()
 	mem := &memory.Memory{
@@ -159,6 +197,28 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 	bytes, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal memory entry failed: %w", err)
+	}
+	if s.opts.memoryLimit > 0 {
+		scriptResult, err := luaAddMemory.Run(
+			ctx,
+			s.redisClient,
+			[]string{key},
+			entry.ID,
+			string(bytes),
+			s.opts.memoryLimit,
+		).Int()
+		if err != nil {
+			return fmt.Errorf("store memory entry failed: %w", err)
+		}
+		switch {
+		case scriptResult == addMemoryResultSuccess:
+			return nil
+		case scriptResult > addMemoryResultSuccess:
+			return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
+				userKey.UserID, s.opts.memoryLimit, scriptResult)
+		default:
+			return fmt.Errorf("add memory entry returned unexpected result %d", scriptResult)
+		}
 	}
 	if err := s.redisClient.HSet(ctx, key, entry.ID, bytes).Err(); err != nil {
 		return fmt.Errorf("store memory entry failed: %w", err)
@@ -198,31 +258,31 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		ep,
 		now,
 	)
-	if newID != memoryKey.MemoryID {
-		exists, err := s.redisClient.HExists(ctx, key, newID).Result()
-		if err != nil {
-			return fmt.Errorf("check rotated memory id failed: %w", err)
-		}
-		if exists {
-			return fmt.Errorf("memory with id %s already exists", newID)
-		}
-	}
 
 	updated, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal updated memory entry failed: %w", err)
 	}
-	if newID == memoryKey.MemoryID {
-		if err := s.redisClient.HSet(ctx, key, newID, updated).Err(); err != nil {
-			return fmt.Errorf("update memory entry failed: %w", err)
-		}
-	} else {
-		pipe := s.redisClient.TxPipeline()
-		pipe.HSet(ctx, key, newID, updated)
-		pipe.HDel(ctx, key, memoryKey.MemoryID)
-		if _, err := pipe.Exec(ctx); err != nil {
-			return fmt.Errorf("update memory entry failed: %w", err)
-		}
+	scriptResult, err := luaUpdateMemory.Run(
+		ctx,
+		s.redisClient,
+		[]string{key},
+		memoryKey.MemoryID,
+		newID,
+		string(updated),
+	).Int()
+	if err != nil {
+		return fmt.Errorf("update memory entry failed: %w", err)
+	}
+	switch scriptResult {
+	case updateMemoryResultNotFound:
+		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+	case updateMemoryResultSuccess:
+		// Continue and publish the effective ID below.
+	case updateMemoryResultConflict:
+		return fmt.Errorf("memory with id %s already exists", newID)
+	default:
+		return fmt.Errorf("update memory entry returned unexpected result %d", scriptResult)
 	}
 	if result := memory.ResolveUpdateResult(opts); result != nil {
 		result.MemoryID = newID

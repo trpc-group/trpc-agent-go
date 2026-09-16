@@ -75,12 +75,18 @@ runner := runner.NewRunner(
 
 ### Auto Memory Configuration Options
 
-| Option                     | Description                            | Default        |
-| -------------------------- | -------------------------------------- | -------------- |
-| `WithExtractor(extractor)` | Enable auto mode with LLM extractor    | nil (disabled) |
-| `WithAsyncMemoryNum(n)`    | Number of background worker goroutines | 3              |
-| `WithMemoryQueueSize(n)`   | Size of memory job queue               | 100            |
-| `WithMemoryJobTimeout(d)`  | Timeout for each extraction job        | 30s            |
+| Option                                             | Description                                        | Default        |
+| -------------------------------------------------- | -------------------------------------------------- | -------------- |
+| `WithExtractor(extractor)`                         | Enable auto mode with LLM extractor                | nil (disabled) |
+| `WithAsyncMemoryNum(n)`                            | Number of background worker goroutines             | 3              |
+| `WithMemoryQueueSize(n)`                           | Size of memory job queue                           | 100            |
+| `WithMemoryJobTimeout(d)`                          | Timeout for each extraction job                    | 30s            |
+| `WithDisableAutoMemoryOnExternalContext(disable)`  | Skip future auto extraction after knowledge search | false          |
+
+When `WithDisableAutoMemoryOnExternalContext(true)` is enabled, framework-owned
+knowledge search tools mark the session state `memory:mode = polluted`. The
+guard only stops future automatic extraction for that session. It does not block
+memory preload, `memory_search`, `memory_load`, or explicit memory write tools.
 
 ### Extraction Checkers (>= 1.3.0)
 
@@ -217,6 +223,13 @@ memoryService := memoryinmemory.NewMemoryService(
 | `PGVECTOR_PASSWORD`       | pgvector PostgreSQL password             | ``                          |
 | `PGVECTOR_DATABASE`       | pgvector PostgreSQL database             | `trpc-agent-go-pgmemory`    |
 | `PGVECTOR_EMBEDDER_MODEL` | pgvector embedder model                  | `text-embedding-3-small`    |
+| `CHROMA_BASE_URL`         | ChromaDB REST base URL                   | `http://localhost:8000`     |
+| `CHROMA_API_KEY`          | ChromaDB API key                         | ``                          |
+| `CHROMA_BEARER_TOKEN`     | ChromaDB bearer token                    | ``                          |
+| `CHROMA_TENANT`           | ChromaDB tenant                          | `default_tenant`            |
+| `CHROMA_DATABASE`         | ChromaDB database                        | `default_database`          |
+| `CHROMA_COLLECTION`       | ChromaDB collection                      | `memories`                  |
+| `CHROMA_EMBEDDER_MODEL`   | ChromaDB embedder model                  | `text-embedding-3-small`    |
 | `MYSQL_HOST`              | MySQL host                               | `localhost`                 |
 | `MYSQL_PORT`              | MySQL port                               | `3306`                      |
 | `MYSQL_USER`              | MySQL user                               | `root`                      |
@@ -229,9 +242,13 @@ memoryService := memoryinmemory.NewMemoryService(
 | ------------ | ------------------------------------------------------------------------- | ---------------- |
 | `-model`     | Name of the model for chat responses                                      | `deepseek-v4-flash`  |
 | `-ext-model` | Name of the model for memory extraction                                   | Same as `-model` |
-| `-memory`    | Memory service type: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `postgres`, `pgvector`, `mysql` | `inmemory` |
+| `-memory`    | Memory service type: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `postgres`, `pgvector`, `mysql`, `mysqlvec`, `chromadb` | `inmemory` |
 | `-streaming` | Enable streaming mode for responses                                       | `true`           |
 | `-debug`     | Enable debug mode to print messages sent to model                         | `false`          |
+| `-knowledge` | Enable a small local knowledge base with `knowledge_search`                | `false`          |
+| `-disable-auto-memory-on-external-context` | Stop future auto-memory extraction after `knowledge_search` is used | `false` |
+| `-update-policy` | Update policy: `merge_similar`, `preserve_history`, or `append_only` | `merge_similar` |
+| `-assistant-episode` | Extract reusable assistant results as episode memories | `false` |
 
 ## Usage
 
@@ -249,6 +266,35 @@ go run .
 # Use different models for chat and extraction.
 go run . -model gpt-4o -ext-model gpt-4o-mini
 ```
+
+Model names beginning with `glm` automatically use the OpenAI client's GLM
+compatibility variant.
+
+### Update Policies
+
+The default `merge_similar` policy preserves the existing auto-memory
+behavior. The other policies are opt-in:
+
+```bash
+# Preserve older facts and update only for safe, non-conflicting enrichment.
+go run . -update-policy preserve_history
+
+# Keep non-duplicate extracted memories as independent entries.
+go run . -update-policy append_only
+```
+
+Assistant episode extraction is also opt-in and can be combined with any
+update policy:
+
+```bash
+go run . \
+  -update-policy preserve_history \
+  -assistant-episode
+```
+
+When enabled, reusable assistant-produced results such as recommendations,
+plans, and structured comparisons can be stored as ordinary episode memories.
+The memory schema and storage tables do not change.
 
 ### Memory Backend Configuration
 
@@ -285,7 +331,17 @@ go run . -memory postgres
 export PGVECTOR_HOST=localhost
 export PGVECTOR_PASSWORD=password
 go run . -memory pgvector
+
+# ChromaDB memory service
+export CHROMA_BASE_URL=http://localhost:8000
+export CHROMA_COLLECTION=memories
+export CHROMA_EMBEDDER_MODEL=text-embedding-3-small
+go run . -memory chromadb
 ```
+
+ChromaDB runs as a separate server. `CHROMA_BASE_URL` may target localhost,
+a remote deployment, or Chroma Cloud; remote credentials require HTTPS.
+Changing the embedding model requires a new collection or a full re-embedding.
 
 ### Debug Mode
 
@@ -301,6 +357,21 @@ go run . -debug
 go run . -streaming=false
 ```
 
+### External Context Guard Smoke
+
+```bash
+go run . \
+  -memory inmemory \
+  -streaming=false \
+  -knowledge \
+  -disable-auto-memory-on-external-context
+```
+
+Use `/state` to inspect the current session state. After `knowledge_search`
+returns successfully with the guard enabled, `/state` prints
+`memory:mode = polluted`, and future automatic extraction for that session is
+skipped.
+
 ### Help
 
 ```bash
@@ -311,16 +382,24 @@ Output:
 
 ```
 Usage of ./auto:
+  -assistant-episode
+        Extract reusable assistant results as episode memories
   -debug
         Enable debug mode to print messages sent to model
+  -disable-auto-memory-on-external-context
+        Stop future auto-memory extraction after knowledge_search is used
   -ext-model string
         Model for memory extraction (defaults to chat model)
+  -knowledge
+        Enable a small local knowledge base with knowledge_search
   -memory string
-        Memory service type: inmemory, sqlite, sqlitevec, redis, postgres, pgvector, mysql (default "inmemory")
+        Memory service type: inmemory, sqlite, sqlitevec, redis, postgres, pgvector, mysql, mysqlvec, chromadb (default "inmemory")
   -model string
         Model for chat responses (default "deepseek-v4-flash")
   -streaming
         Enable streaming mode for responses (default true)
+  -update-policy string
+        Memory update policy: merge_similar, preserve_history, or append_only (default "merge_similar")
 ```
 
 ## Chat Interface
@@ -331,7 +410,12 @@ The interface is simple and intuitive:
 🧠 Auto Memory Demo
 Chat Model: deepseek-v4-flash
 Extractor Model: deepseek-v4-flash
+Memory Service: inmemory
 Streaming: true
+Knowledge: false
+Disable Auto Memory On External Context: false
+Update Policy: merge_similar
+Assistant Episode Extraction: false
 ==================================================
 
 💡 Auto memory mode extracts user information automatically.
@@ -342,6 +426,7 @@ Streaming: true
 
 💡 Special commands:
    /memory   - Show what the system remembers about you
+   /state    - Show current memory guard session state
    /new      - Start a new session
    /exit     - End the conversation
 
@@ -362,7 +447,7 @@ backend engineer from TechCorp. How can I help you today?
    (Memories persist across sessions)
 
 👤 You: What do you know about me?
-🔧 Memory tool calls:
+🔧 Tool calls:
    • memory_search (ID: call_xyz789)
      Args: {"query":"user information"}
 
@@ -379,6 +464,7 @@ work at TechCorp as a backend engineer.
 ### Session Commands
 
 - `/memory` - Show stored memories for the current user
+- `/state` - Show current memory guard session state
 - `/new` - Start a new session (memories persist across sessions)
 - `/exit` - End the conversation
 
@@ -521,4 +607,4 @@ defer memoryService.Close()
 ## See Also
 
 - [Manual Memory Example](../) - Traditional memory tools approach
-- [Memory Module Documentation](../../../docs/mkdocs/en/memory.md) - Complete memory guide
+- [Memory Module Documentation](../../../docs/mkdocs/en/memory/index.md) - Complete memory guide

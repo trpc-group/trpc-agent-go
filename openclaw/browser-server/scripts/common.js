@@ -39,11 +39,17 @@ export function resolveHeadlessMode(
   if (argv.includes("--headless")) {
     return true;
   }
-  const raw = `${envValue || ""}`.trim();
+  const raw = `${envValue || ""}`.trim().toLowerCase();
   if (raw === "") {
     return true;
   }
-  return raw === "true";
+  if (["1", "true", "yes", "on"].includes(raw)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(raw)) {
+    return false;
+  }
+  return true;
 }
 
 export function buildRelayLaunchOptions({

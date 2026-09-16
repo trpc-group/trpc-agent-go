@@ -38,11 +38,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -126,12 +128,6 @@ func WithNodeType(nodeType NodeType) Option {
 	}
 }
 
-func withTraceTransparent() Option {
-	return func(node *Node) {
-		node.traceTransparent = true
-	}
-}
-
 // WithUserInputKey sets the state key used as one-shot user input for LLM and
 // Agent nodes. When empty, StateKeyUserInput is used.
 func WithUserInputKey(key string) Option {
@@ -183,6 +179,39 @@ func WithEnableParallelTools(enable bool) Option {
 	return func(node *Node) {
 		node.enableParallelTools = enable
 	}
+}
+
+// WithToolConcurrencyConfig configures overall and per-group limits for
+// parallel tool execution. Each invocation of the Tools node has independent
+// limits. The configuration only takes effect with
+// WithEnableParallelTools(true).
+// It panics if a tool name appears in more than one positive-limit group.
+func WithToolConcurrencyConfig(config tool.ConcurrencyConfig) Option {
+	if err := toolcall.ValidateConcurrencyConfig(config); err != nil {
+		panic(err)
+	}
+	snapshot := cloneToolConcurrencyConfig(config)
+	return func(node *Node) {
+		node.toolConcurrencyConfig = cloneToolConcurrencyConfig(snapshot)
+	}
+}
+
+func cloneToolConcurrencyConfig(
+	config tool.ConcurrencyConfig,
+) tool.ConcurrencyConfig {
+	cloned := config
+	if config.Groups == nil {
+		return cloned
+	}
+	cloned.Groups = make([]tool.ConcurrencyGroup, len(config.Groups))
+	for i, group := range config.Groups {
+		cloned.Groups[i] = group
+		cloned.Groups[i].ToolNames = append(
+			[]string(nil),
+			group.ToolNames...,
+		)
+	}
+	return cloned
 }
 
 // WithCacheKeyFields sets a cache key selector that derives the cache key
@@ -743,15 +772,15 @@ func (sg *StateGraph) AddToolsNode(
 	return sg
 }
 
-// AddAgentNode adds a node that uses a sub-agent by name.
+// AddAgentNode adds a node that uses a sub-agent by name. Execution trace
+// records one step for each actual node visit.
 // The agent name should correspond to a sub-agent in the GraphAgent's sub-agent list.
 func (sg *StateGraph) AddAgentNode(
 	id string,
 	opts ...Option,
 ) *StateGraph {
 	agentNodeFunc := NewAgentNodeFunc(id, opts...)
-	// Add agent node type option.
-	agentOpts := append([]Option{WithNodeType(NodeTypeAgent), withTraceTransparent()}, opts...)
+	agentOpts := append([]Option{WithNodeType(NodeTypeAgent)}, opts...)
 	sg.AddNode(id, agentNodeFunc, agentOpts...)
 	return sg
 }
@@ -1340,8 +1369,21 @@ func (r *llmRunner) executeUserInputStage(
 	var ops []MessageOp
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		if used[len(used)-1].Content != userInput {
-			used[len(used)-1] = model.NewUserMessage(userInput)
-			ops = append(ops, ReplaceLastUser{Content: userInput})
+			if resolved, ok := resolveProjectedCurrentUser(
+				state,
+				used[len(used)-1],
+				userInput,
+			); ok {
+				if !model.MessagesEqual(resolved, used[len(used)-1]) {
+					used[len(used)-1] = resolved
+					ops = append(ops, ReplaceLastUser{
+						Content: resolved.Content,
+					})
+				}
+			} else {
+				used[len(used)-1] = model.NewUserMessage(userInput)
+				ops = append(ops, ReplaceLastUser{Content: userInput})
+			}
 		}
 	} else {
 		used = append(used, model.NewUserMessage(userInput))
@@ -1367,6 +1409,22 @@ func (r *llmRunner) executeUserInputStage(
 			r.nodeID: asst.Content,
 		},
 	}, nil
+}
+
+func resolveProjectedCurrentUser(
+	state State,
+	msg model.Message,
+	userInput string,
+) (model.Message, bool) {
+	execCtx := executionContextFromState(state)
+	if execCtx == nil {
+		return model.Message{}, false
+	}
+	return messageprojection.ResolveCurrentUser(
+		execCtx.Invocation,
+		msg,
+		userInput,
+	)
 }
 
 func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span oteltrace.Span) (any, error) {
@@ -2368,6 +2426,12 @@ func newToolsNodeRuntime(
 	configuredRetryPolicy := node.toolCallRetryPolicy
 
 	return func(ctx context.Context, state State) (any, error) {
+		var concurrencyLimiter *toolcall.Limiter
+		if parallel {
+			concurrencyLimiter = toolcall.NewLimiter(
+				node.toolConcurrencyConfig,
+			)
+		}
 		ctx, span, startedSpan := startNodeSpan(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
 		var workflow *itelemetry.Workflow
 		if startedSpan {
@@ -2413,6 +2477,7 @@ func newToolsNodeRuntime(
 			State:          state,
 			NodeID:         nodeID,
 			EnableParallel: parallel,
+			Concurrency:    concurrencyLimiter,
 			ToolCallbacks:  toolCallbacks,
 			RetryPolicy:    configuredRetryPolicy,
 		})
@@ -3078,14 +3143,13 @@ func newAgentNodeRuntime(agentName string, cfg agentNodeConfig) *agentNodeRuntim
 
 func (r *agentNodeRuntime) NodeFunc() NodeFunc {
 	return func(ctx context.Context, state State) (any, error) {
-		return r.Run(ctx, state, claimAgentNodeTraceTask(state))
+		return r.Run(ctx, state)
 	}
 }
 
 func (r *agentNodeRuntime) Run(
 	ctx context.Context,
 	state State,
-	traceTask *traceTaskMetadata,
 ) (any, error) {
 	// Extract execution context for event emission.
 	invocationID, _, _, _, eventChan := extractExecutionContext(state)
@@ -3093,15 +3157,7 @@ func (r *agentNodeRuntime) Run(
 	nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 	targetAgent, err := targetAgentFromState(state, r.agentName)
 	if err != nil {
-		if traceTask != nil {
-			traceTask.markFallbackToWrapper()
-		}
 		return nil, err
-	}
-	if traceTask != nil && traceTask.shouldFallbackToWrapper() {
-		if parentInvocation, ok := agent.InvocationFromContext(ctx); ok {
-			traceTask.materializeWrapper(parentInvocation)
-		}
 	}
 	childState := buildChildStateForAgentNode(state, nodeID, targetAgent, r.config)
 	// Optionally map parent's last_response to user_input for this agent node.
@@ -3121,7 +3177,6 @@ func (r *agentNodeRuntime) Run(
 		r.config.userInputKey,
 		r.config.inputMessageMapper,
 		r.config.runOptions,
-		traceTask,
 	)
 	// Emit agent execution start event.
 	startTime := time.Now()
@@ -3141,7 +3196,6 @@ func (r *agentNodeRuntime) Run(
 		// Emit agent execution error event.
 		endTime := time.Now()
 		emitAgentErrorEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime, err)
-		recordAgentNodeTraceTerminals(traceTask, invocation)
 		return nil, fmt.Errorf("failed to run agent %s: %w", r.agentName, err)
 	}
 	// Process agent event stream and capture completion state.
@@ -3158,7 +3212,6 @@ func (r *agentNodeRuntime) Run(
 		r.config.streamOutputName,
 	)
 	if err != nil {
-		recordAgentNodeTraceTerminals(traceTask, invocation)
 		return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 	}
 	if streamRes.interrupt != nil {
@@ -3175,7 +3228,6 @@ func (r *agentNodeRuntime) Run(
 		)
 		intr := NewInterruptError(streamRes.interrupt.Value)
 		intr.TaskID = streamRes.interrupt.TaskID
-		recordAgentNodeTraceTerminals(traceTask, invocation)
 		return nil, intr
 	}
 	// Emit agent execution complete event.
@@ -3188,7 +3240,6 @@ func (r *agentNodeRuntime) Run(
 		startTime,
 		endTime,
 	)
-	recordAgentNodeTraceTerminals(traceTask, invocation)
 	return finalizeAgentNodeOutput(
 		state,
 		nodeID,
@@ -3196,46 +3247,6 @@ func (r *agentNodeRuntime) Run(
 		r.config.outputMapper,
 		r.config.userInputKey,
 	), nil
-}
-
-func recordAgentNodeTraceTerminals(
-	metadata *traceTaskMetadata,
-	invocation *agent.Invocation,
-) {
-	if metadata == nil {
-		return
-	}
-	stepIDs := agentNodeChildTerminalStepIDs(
-		invocation,
-		metadata.childEntryPredecessorStepIDs(),
-	)
-	if len(stepIDs) > 0 {
-		metadata.setChildTerminalStepIDs(stepIDs)
-		return
-	}
-	metadata.markFallbackToWrapper()
-}
-
-func agentNodeChildTerminalStepIDs(
-	invocation *agent.Invocation,
-	entryPredecessors []string,
-) []string {
-	stepIDs := normalizeTraceStepIDs(agent.NextExecutionTracePredecessors(invocation))
-	if len(stepIDs) == 0 {
-		return nil
-	}
-	entrySet := make(map[string]struct{}, len(entryPredecessors))
-	for _, stepID := range normalizeTraceStepIDs(entryPredecessors) {
-		entrySet[stepID] = struct{}{}
-	}
-	realStepIDs := make([]string, 0, len(stepIDs))
-	for _, stepID := range stepIDs {
-		if _, ok := entrySet[stepID]; ok {
-			continue
-		}
-		realStepIDs = append(realStepIDs, stepID)
-	}
-	return realStepIDs
 }
 
 func stateStringOr(state State, key string, fallback string) string {
@@ -3901,7 +3912,6 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 	userInputKey string,
 	inputMessageMapper AgentNodeInputMapper,
 	nodeRunOptions []agent.RunOption,
-	traceTask *traceTaskMetadata,
 ) *agent.Invocation {
 	inputMessage := agentNodeInputMessage(
 		parentState,
@@ -3947,7 +3957,8 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 			agent.WithInvocationRunOptions(runOptions),
 			agent.WithInvocationEventFilterKey(filterKey),
 		}
-		if traceNodeID := buildAgentNodeTraceNodeID(parentInvocation, nodeID); traceNodeID != "" {
+		traceNodeID := buildAgentNodeTraceNodeID(parentInvocation, nodeID)
+		if traceNodeID != "" {
 			invocationOpts = append(invocationOpts, agent.WithInvocationTraceNodeID(traceNodeID))
 		}
 		if surfaceRootNodeID := buildAgentNodeSurfaceRoot(parentInvocation, nodeID); surfaceRootNodeID != "" {
@@ -3955,19 +3966,20 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
 			})
 		}
-		var entryPredecessors []string
-		if traceTask != nil {
-			entryPredecessors = currentTraceTaskPredecessors(traceTask)
-		} else {
-			entryPredecessors = currentTraceStepPredecessors(parentState)
-			if len(entryPredecessors) == 0 {
-				entryPredecessors = agent.NextExecutionTracePredecessors(parentInvocation)
-			}
+		entryPredecessors := currentTraceStepPredecessors(parentState)
+		if len(entryPredecessors) == 0 {
+			entryPredecessors = agent.NextExecutionTracePredecessors(parentInvocation)
 		}
 		if len(entryPredecessors) > 0 {
 			invocationOpts = append(invocationOpts, agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors))
 		}
 		inv := parentInvocation.Clone(invocationOpts...)
+		if stepID, ok := GetStateValue[string](parentState, currentTraceStepIDStateKey); ok {
+			tracecapture.BindInvocationStep(
+				agent.NewInvocationContext(ctx, inv),
+				stepID,
+			)
+		}
 		return inv
 	}
 	// Create standalone invocation.
@@ -4000,6 +4012,9 @@ func applyAgentNodeRunOptions(runOptions *agent.RunOptions, opts []agent.RunOpti
 
 func detachAgentNodeMutableRunOptions(in agent.RunOptions) agent.RunOptions {
 	out := in
+	// Caller-declared skill loads target the entry invocation. A graph node
+	// may opt in explicitly through its own node run options.
+	out.SkillLoads = nil
 	// Detach only parent-owned mutable containers.
 	// Standard run options can append to or merge into these containers.
 	out.InjectedContextMessages = slices.Clip(out.InjectedContextMessages)
@@ -4051,13 +4066,6 @@ func injectAgentNodeToolContinuationMessages(
 	runOptions.InjectedContextMessages = append(runOptions.InjectedContextMessages, history...)
 }
 
-func currentTraceTaskPredecessors(traceTask *traceTaskMetadata) []string {
-	if traceTask == nil {
-		return nil
-	}
-	return traceTask.childEntryPredecessorStepIDs()
-}
-
 func currentTraceStepPredecessors(state State) []string {
 	if state == nil {
 		return nil
@@ -4084,7 +4092,6 @@ func buildAgentInvocationWithStateAndScope(
 		nodeID,
 		scope,
 		StateKeyUserInput,
-		nil,
 		nil,
 		nil,
 	)
@@ -4236,7 +4243,7 @@ func runAfterToolPluginCallbacks(
 	}
 
 	callbacks := invocation.Plugins.ToolCallbacks()
-	if callbacks == nil {
+	if callbacks == nil || len(callbacks.AfterTool) == 0 {
 		return ctx, nil, nil
 	}
 
@@ -4253,6 +4260,16 @@ func runAfterToolPluginCallbacks(
 	if afterResult != nil && afterResult.Context != nil {
 		ctx = afterResult.Context
 	}
+	// A graph interrupt is resumable control flow, not an execution failure
+	// that an after-tool callback may replace with an ordinary result.
+	var interruptErr *InterruptError
+	if errors.As(runErr, &interruptErr) {
+		return ctx, nil, runErr
+	}
+	// A non-nil CustomResult from a registered AfterTool hook is an explicit
+	// plugin replacement and skips node AfterTool callbacks. An empty
+	// AfterTool list is skipped above so the released no-callback echo of
+	// args.Result is not treated as an override.
 	if afterResult != nil && afterResult.CustomResult != nil {
 		if err != nil {
 			return ctx, afterResult.CustomResult,
@@ -5020,6 +5037,7 @@ func emitFastModelResponseEvent(
 
 func traceProcessedModelResponse(
 	span oteltrace.Span,
+	traceState *itelemetry.ChatTraceState,
 	tracker *itelemetry.ChatMetricsTracker,
 	invocation *agent.Invocation,
 	request *model.Request,
@@ -5039,7 +5057,7 @@ func traceProcessedModelResponse(
 	if tracker != nil {
 		ttfb = tracker.FirstTokenTimeDuration()
 	}
-	itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+	traceState.TraceChat(span, &itelemetry.TraceChatAttributes{
 		Invocation:       invocation,
 		Request:          request,
 		Response:         response,
@@ -5054,6 +5072,7 @@ type modelResponseProcessor struct {
 	stableInvocation               *agent.Invocation
 	observabilityInvocation        *agent.Invocation
 	invocation                     *agent.Invocation
+	chatTraceState                 itelemetry.ChatTraceState
 	tracker                        *itelemetry.ChatMetricsTracker
 	timingInfo                     *model.TimingInfo
 	partialUsageState              responseusage.PartialState
@@ -5373,6 +5392,7 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 	)
 	traceProcessedModelResponse(
 		p.config.Span,
+		&p.chatTraceState,
 		p.tracker,
 		p.observabilityInvocation,
 		p.config.Request,
@@ -5513,6 +5533,21 @@ type toolCallsConfig struct {
 	ToolCallbacks *tool.Callbacks
 	// RetryPolicy specifies callable tool-call retry policy for this tools node.
 	RetryPolicy *tool.RetryPolicy
+	// Concurrency limits active calls across invocations of the owning node.
+	Concurrency *toolcall.Limiter
+}
+
+type parallelToolCallCancelCause struct {
+	owner *int
+	err   error
+}
+
+func (c *parallelToolCallCancelCause) Error() string {
+	return c.err.Error()
+}
+
+func (c *parallelToolCallCancelCause) Unwrap() error {
+	return c.err
 }
 
 // processToolCalls executes all tool calls and returns the resulting messages.
@@ -5543,6 +5578,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				ToolCallbacks: toolCallbacks,
 				State:         config.State,
 				RetryPolicy:   config.RetryPolicy,
+				Concurrency:   config.Concurrency,
 			})
 			if err != nil {
 				if IsInterruptError(err) {
@@ -5572,8 +5608,9 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		err error
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	cancelOwner := new(int)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 
 	out := make([]model.Message, len(config.ToolCalls))
 	pendingCalls := make([]pendingCall, 0, len(config.ToolCalls))
@@ -5590,6 +5627,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		return out, nil
 	}
 	results := make(chan result, len(pendingCalls))
+	traceRecorder := &graphToolTraceRecorder{}
 	var wg sync.WaitGroup
 	wg.Add(len(pendingCalls))
 
@@ -5608,10 +5646,15 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				ToolCallbacks: toolCallbacks,
 				State:         config.State,
 				RetryPolicy:   config.RetryPolicy,
+				Concurrency:   config.Concurrency,
+				TraceRecorder: traceRecorder,
 			})
 			// On error, cancel siblings but still report result so collector can exit cleanly.
 			if err != nil {
-				cancel()
+				cancel(&parallelToolCallCancelCause{
+					owner: cancelOwner,
+					err:   err,
+				})
 				results <- result{idx: i, err: err}
 				return
 			}
@@ -5638,7 +5681,16 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			completedThisRun[completedKey] = r.msg
 		}
 	}
-	if err := selectToolCallError(errsByIndex); err != nil {
+	traceRecorder.flush(ctx)
+	cancelCause, _ := context.Cause(ctx).(*parallelToolCallCancelCause)
+	var causalError error
+	if cancelCause != nil && cancelCause.owner == cancelOwner {
+		causalError = cancelCause.err
+	}
+	if err := selectToolCallError(
+		errsByIndex,
+		causalError,
+	); err != nil {
 		if IsInterruptError(err) {
 			recordCompletedToolMessages(config.State, config.NodeID, completedThisRun)
 			setAgentToolInterruptStateFromError(config.State, err)
@@ -5651,7 +5703,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	return out, nil
 }
 
-func selectToolCallError(errs []error) error {
+func selectToolCallError(errs []error, causalError error) error {
 	var agentToolInterrupt error
 	var interrupt error
 	var first error
@@ -5678,6 +5730,11 @@ func selectToolCallError(errs []error) error {
 	}
 	if interrupt != nil {
 		return interrupt
+	}
+	// Context-only errors from sibling cancellation must not replace the tool
+	// failure that caused that cancellation.
+	if causalError != nil {
+		return causalError
 	}
 	return first
 }
@@ -5782,15 +5839,57 @@ type singleToolCallConfig struct {
 	ToolCallbacks *tool.Callbacks
 	State         State
 	RetryPolicy   *tool.RetryPolicy
+	Concurrency   *toolcall.Limiter
+	TraceRecorder *graphToolTraceRecorder
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
 func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (model.Message, error) {
 	id, name := config.ToolCall.ID, config.ToolCall.Function.Name
+	originalInvocation, traceStepID := graphToolTraceContext(ctx, config.State)
 	t := config.Tools[name]
 	if t == nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s not found", name)))
-		return model.Message{}, fmt.Errorf("tool %s not found", name)
+		err := fmt.Errorf("tool %s not found", name)
+		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		recordGraphToolExecutionTrace(
+			ctx,
+			originalInvocation,
+			traceStepID,
+			config.TraceRecorder,
+			config.ToolCallIndex,
+			name,
+			id,
+			config.ToolCall.Function.Arguments,
+			nil,
+			nil,
+			err,
+		)
+		return model.Message{}, err
+	}
+	if config.Concurrency != nil {
+		release, err := config.Concurrency.Acquire(ctx, name)
+		if err != nil {
+			traceErr := fmt.Errorf(
+				"wait for tool %s concurrency: %w",
+				name,
+				err,
+			)
+			recordGraphToolExecutionTrace(
+				ctx,
+				originalInvocation,
+				traceStepID,
+				config.TraceRecorder,
+				config.ToolCallIndex,
+				name,
+				id,
+				config.ToolCall.Function.Arguments,
+				nil,
+				nil,
+				traceErr,
+			)
+			return model.Message{}, traceErr
+		}
+		defer release()
 	}
 
 	startTime := time.Now()
@@ -5818,7 +5917,6 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	}
 
 	// Keep the original invocation as a fallback when callbacks return a bare context.
-	originalInvocation, _ := agent.InvocationFromContext(ctx)
 	ctx, span, startedSpan := startNodeSpan(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
 	_, startEventInvocation, finalCtx, completeEventInvocation, result, modifiedArgs, err := runToolWithEventContexts(
 		ctx,
@@ -5894,12 +5992,39 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		span.End()
 	}
 
+	traceInvocation := invocationOrFallback(originalInvocation, eventInvocation)
 	if err != nil {
 		if interruptErr != nil {
+			recordGraphToolExecutionTrace(
+				finalCtx,
+				traceInvocation,
+				traceStepID,
+				config.TraceRecorder,
+				config.ToolCallIndex,
+				name,
+				id,
+				modifiedArgs,
+				result,
+				nil,
+				nil,
+			)
 			return model.Message{}, err
 		}
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
+		recordGraphToolExecutionTrace(
+			finalCtx,
+			traceInvocation,
+			traceStepID,
+			config.TraceRecorder,
+			config.ToolCallIndex,
+			name,
+			id,
+			modifiedArgs,
+			nil,
+			nil,
+			err,
+		)
 		return model.Message{}, fmt.Errorf("tool %s call failed: %w", name, err)
 	}
 
@@ -5908,10 +6033,48 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	if err != nil {
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
-		return model.Message{}, fmt.Errorf("failed to marshal tool result: %w", err)
+		traceErr := fmt.Errorf("failed to marshal tool result: %w", err)
+		recordGraphToolExecutionTrace(
+			finalCtx,
+			traceInvocation,
+			traceStepID,
+			config.TraceRecorder,
+			config.ToolCallIndex,
+			name,
+			id,
+			modifiedArgs,
+			nil,
+			nil,
+			traceErr,
+		)
+		return model.Message{}, traceErr
 	}
-
+	recordGraphToolExecutionTrace(
+		finalCtx,
+		traceInvocation,
+		traceStepID,
+		config.TraceRecorder,
+		config.ToolCallIndex,
+		name,
+		id,
+		modifiedArgs,
+		nil,
+		content,
+		nil,
+	)
 	return model.NewToolMessage(id, name, string(content)), nil
+}
+
+func graphToolTraceContext(ctx context.Context, state State) (*agent.Invocation, string) {
+	var invocation *agent.Invocation
+	if ctx != nil {
+		invocation, _ = agent.InvocationFromContext(ctx)
+	}
+	if state == nil {
+		return invocation, ""
+	}
+	stepID, _ := state[currentTraceStepIDStateKey].(string)
+	return invocation, stepID
 }
 
 func setAgentToolInterruptStateFromError(state State, err error) {

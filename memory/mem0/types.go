@@ -33,6 +33,18 @@ type createMemoryRequest struct {
 	ProjectID string         `json:"project_id,omitempty"`
 }
 
+type ossCreateMemoryRequest struct {
+	Messages       []apiMessage   `json:"messages"`
+	UserID         string         `json:"user_id,omitempty"`
+	AgentID        string         `json:"agent_id,omitempty"`
+	RunID          string         `json:"run_id,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	ExpirationDate string         `json:"expiration_date,omitempty"`
+	Infer          bool           `json:"infer"`
+	MemoryType     string         `json:"memory_type,omitempty"`
+	Prompt         string         `json:"prompt,omitempty"`
+}
+
 type createMemoryEvent struct {
 	ID      string `json:"id"`
 	EventID string `json:"event_id"`
@@ -99,9 +111,10 @@ func (r *listMemoriesResponse) UnmarshalJSON(data []byte) error {
 }
 
 type searchV2Request struct {
-	Query   string         `json:"query"`
-	Filters map[string]any `json:"filters,omitempty"`
-	TopK    int            `json:"top_k,omitempty"`
+	Query     string         `json:"query"`
+	Filters   map[string]any `json:"filters,omitempty"`
+	TopK      int            `json:"top_k,omitempty"`
+	Threshold *float64       `json:"threshold,omitempty"`
 }
 
 type searchV2Response struct {
@@ -126,12 +139,18 @@ func (r *searchV2Response) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	type rawSearchV2Response searchV2Response
-	var wrapped rawSearchV2Response
+	var wrapped struct {
+		Memories []searchMemoryRecord `json:"memories"`
+		Results  []searchMemoryRecord `json:"results"`
+	}
 	if err := json.Unmarshal(data, &wrapped); err != nil {
 		return err
 	}
-	*r = searchV2Response(wrapped)
+	if wrapped.Memories != nil {
+		r.Memories = wrapped.Memories
+		return nil
+	}
+	r.Memories = wrapped.Results
 	return nil
 }
 

@@ -321,7 +321,7 @@ func TestTransformInvokeAgent(t *testing.T) {
 	}
 }
 
-func TestTransformInvokeAgent_UsesOnlyOTelMessages(t *testing.T) {
+func TestTransformInvokeAgent_PrefersOTelMessagesWithLegacyFallback(t *testing.T) {
 	legacyInput := `[{"role":"user","content":"legacy input"}]`
 	legacyOutput := `[{"index":0,"message":{"role":"assistant","content":"legacy output"},"finish_reason":"stop"}]`
 	otelInput := `[{"role":"user","parts":[{"type":"text","content":"otel input"}]}]`
@@ -363,8 +363,8 @@ func TestTransformInvokeAgent_UsesOnlyOTelMessages(t *testing.T) {
 		require.NotEqual(t, semconvtrace.KeyGenAIInputMessages, attr.Key)
 		require.NotEqual(t, semconvtrace.KeyGenAIOutputMessages, attr.Key)
 	}
-	require.NotContains(t, attrMap, observationInput)
-	require.NotContains(t, attrMap, observationOutput)
+	require.JSONEq(t, legacyInput, attrMap[observationInput])
+	require.JSONEq(t, legacyOutput, attrMap[observationOutput])
 }
 
 func TestTransformCallLLM(t *testing.T) {
@@ -479,7 +479,7 @@ func TestTransformCallLLM(t *testing.T) {
 	}
 }
 
-func TestTransformCallLLM_UsesOnlyOTelMessages(t *testing.T) {
+func TestTransformCallLLM_PrefersOTelMessagesWithLegacyFallback(t *testing.T) {
 	legacyInput := `[{"role":"user","content":"legacy input"}]`
 	legacyOutput := `[{"index":0,"message":{"role":"assistant","content":"legacy output"},"finish_reason":"stop"}]`
 	otelInput := `[{"role":"user","parts":[{"type":"text","content":"otel input"}]}]`
@@ -524,8 +524,8 @@ func TestTransformCallLLM_UsesOnlyOTelMessages(t *testing.T) {
 		require.NotEqual(t, semconvtrace.KeyGenAIInputMessages, attr.Key)
 		require.NotEqual(t, semconvtrace.KeyGenAIOutputMessages, attr.Key)
 	}
-	require.NotEqual(t, legacyInput, attrMap[observationInput])
-	require.JSONEq(t, `{"text":"raw response"}`, attrMap[observationOutput])
+	require.JSONEq(t, legacyInput, attrMap[observationInput])
+	require.JSONEq(t, legacyOutput, attrMap[observationOutput])
 }
 
 func TestTransformCallLLM_PromptWithTools(t *testing.T) {
@@ -627,7 +627,7 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			inputTokens:   100,
 			outputTokens:  50,
 			cachedTokens:  30,
-			expectedUsage: map[string]int64{"input": 100, "output": 50, "input_cached": 30},
+			expectedUsage: map[string]int64{"input": 70, "output": 50, "input_cached": 30},
 		},
 		{
 			name:            "with Anthropic cache_read tokens",
@@ -650,7 +650,21 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			cachedTokens:        50,
 			cacheReadTokens:     70,
 			cacheCreationTokens: 20,
-			expectedUsage:       map[string]int64{"input": 300, "output": 100, "input_cached": 50, "input_cache_read": 70, "input_cache_creation": 20},
+			expectedUsage:       map[string]int64{"input": 300, "output": 100, "input_cache_read": 70, "input_cache_creation": 20},
+		},
+		{
+			name:          "cached tokens equal input",
+			inputTokens:   30,
+			outputTokens:  10,
+			cachedTokens:  30,
+			expectedUsage: map[string]int64{"output": 10, "input_cached": 30},
+		},
+		{
+			name:          "cached tokens exceed input",
+			inputTokens:   20,
+			outputTokens:  10,
+			cachedTokens:  30,
+			expectedUsage: map[string]int64{"output": 10, "input_cached": 30},
 		},
 		{
 			name:          "zero tokens omitted",
@@ -1664,6 +1678,46 @@ func TestBuildLLMObservationInput_And_WrapWithToolsBranches(t *testing.T) {
 
 	out = buildLLMObservationInput(llmSpanCollected{})
 	require.Equal(t, "N/A", out)
+
+	legacyMsgs := `[{"role":"user","content":"legacy hello"}]`
+	withLegacy := llmSpanCollected{inputMessages: strPtr(legacyMsgs), toolDefinitions: strPtr(toolDefs)}
+	out = buildLLMObservationInput(withLegacy)
+	require.Contains(t, out, `"tools"`)
+	require.Contains(t, out, "legacy hello")
+
+	otelWins := llmSpanCollected{
+		inputMessagesOTel: strPtr(messages),
+		inputMessages:     strPtr(legacyMsgs),
+	}
+	out = buildLLMObservationInput(otelWins)
+	require.JSONEq(t, messages, out)
+}
+
+func TestBuildLLMObservationOutput_PrefersLegacyOverLLMResponse(t *testing.T) {
+	otelOutput := `[{"role":"assistant","parts":[{"type":"text","content":"otel output"}],"finish_reason":"stop"}]`
+	legacyOutput := `[{"index":0,"message":{"role":"assistant","content":"legacy output"},"finish_reason":"stop"}]`
+	llmResponse := `{"choices":[{"index":0,"message":{"role":"assistant","content":"from response"}}]}`
+
+	require.JSONEq(t, otelOutput, buildLLMObservationOutput(llmSpanCollected{
+		outputMessagesOTel: strPtr(otelOutput),
+		outputMessages:     strPtr(legacyOutput),
+		llmResponse:        strPtr(llmResponse),
+	}))
+
+	require.JSONEq(t, legacyOutput, buildLLMObservationOutput(llmSpanCollected{
+		outputMessages: strPtr(legacyOutput),
+		llmResponse:    strPtr(llmResponse),
+	}))
+
+	require.JSONEq(t, llmResponse, buildLLMObservationOutput(llmSpanCollected{
+		llmResponse: strPtr(llmResponse),
+	}))
+
+	require.Equal(t, `{"text":"raw"}`, buildLLMObservationOutput(llmSpanCollected{
+		llmResponse: strPtr(`{"text":"raw"}`),
+	}))
+
+	require.Equal(t, "N/A", buildLLMObservationOutput(llmSpanCollected{}))
 }
 
 func TestSanitizeSingleMessageForObservation_AndTruncateBytesHeadTail(t *testing.T) {

@@ -102,3 +102,69 @@ func TestLLMCriterionSampleParallelismJSON(t *testing.T) {
 	assert.True(t, decoded.SampleParallelismEnabled)
 	assert.Equal(t, 3, decoded.SampleParallelism)
 }
+
+func TestTemplateVariableSourceJSONSupportsExpandedFields(t *testing.T) {
+	const payload = `{
+  "scope": "actual",
+  "field": "traceStepOutput",
+  "selector": {
+    "nodeID": "fetch_match"
+  },
+  "path": "$.payload.answer"
+}`
+	var source TemplateVariableSource
+	err := json.Unmarshal([]byte(payload), &source)
+	require.NoError(t, err)
+	assert.Equal(t, TemplateVariableScopeActual, source.Scope)
+	assert.Equal(t, TemplateVariableFieldTraceStepOutput, source.Field)
+	require.NotNil(t, source.Selector)
+	assert.Equal(t, "fetch_match", source.Selector.NodeID)
+	assert.Equal(t, "$.payload.answer", source.Path)
+	data, err := json.Marshal(source)
+	require.NoError(t, err)
+	assert.JSONEq(t, payload, string(data))
+}
+
+func TestTemplateVariableSourceConstantsCoverTemplateEvaluatorSources(t *testing.T) {
+	assert.Equal(t, TemplateVariableField("traceStepInput"), TemplateVariableFieldTraceStepInput)
+	assert.Equal(t, TemplateVariableField("traceStepOutput"), TemplateVariableFieldTraceStepOutput)
+	assert.Equal(t, TemplateVariableField("traceStepTools"), TemplateVariableFieldTraceStepTools)
+	assert.Equal(t, TemplateVariableField("traceStepSkills"), TemplateVariableFieldTraceStepSkills)
+	assert.Equal(t, TemplateVariableScope("metric"), TemplateVariableScopeMetric)
+	assert.Equal(t, TemplateVariableField("rubrics"), TemplateVariableFieldRubrics)
+}
+
+func TestJudgeTemplateOptionsJSONSupportsResponseScorerOptions(t *testing.T) {
+	const payload = `{
+  "responseScorerName": "categorical",
+  "structuredOutputName": "categorical_schema",
+  "responseScorerOptions": {
+    "categories": [
+      { "label": "correct", "score": 1 },
+      { "label": "incorrect", "score": 0 }
+    ]
+  }
+}`
+	var options JudgeTemplateOptions
+	err := json.Unmarshal([]byte(payload), &options)
+	require.NoError(t, err)
+	assert.Equal(t, "categorical_schema", options.StructuredOutputName)
+	require.NotNil(t, options.ResponseScorerOptions)
+	require.Len(t, options.ResponseScorerOptions.Categories, 2)
+	assert.Equal(t, "correct", options.ResponseScorerOptions.Categories[0].Label)
+	assert.Equal(t, 1.0, options.ResponseScorerOptions.Categories[0].Score)
+	data, err := json.Marshal(options)
+	require.NoError(t, err)
+	assert.JSONEq(t, payload, string(data))
+}
+
+func TestTemplateVariableSourceOldJSONShapeRemainsStable(t *testing.T) {
+	source := TemplateVariableSource{
+		Scope: TemplateVariableScopeActual,
+		Field: TemplateVariableFieldUserContent,
+	}
+	data, err := json.Marshal(source)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"scope":"actual","field":"userContent"}`, string(data))
+	assert.NotContains(t, string(data), "selector")
+}

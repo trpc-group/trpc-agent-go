@@ -188,6 +188,21 @@ func SetExecutionTraceStepAppliedSurfaceIDs(inv *Invocation, stepID string) {
 	capture.SetStepAppliedSurfaceIDs(stepID, reporter.ExecutionTraceAppliedSurfaceIDs(inv))
 }
 
+// SetExecutionTraceStepNodeType records the semantic node type for one execution trace step.
+// It has no error return and silently does nothing when inv is nil, tracing is disabled or
+// unavailable, inputs are empty, or stepID is unknown.
+func SetExecutionTraceStepNodeType(inv *Invocation, stepID string, nodeType string) {
+	if inv == nil || stepID == "" || nodeType == "" {
+		return
+	}
+	inv.initializeExecutionTrace()
+	capture := inv.executionTraceCapture()
+	if capture == nil {
+		return
+	}
+	capture.SetStepNodeType(stepID, nodeType)
+}
+
 // SetExecutionTraceStepUsage records token usage for one execution trace step.
 func SetExecutionTraceStepUsage(inv *Invocation, stepID string, usage *model.Usage) {
 	if inv == nil || stepID == "" || usage == nil {
@@ -308,6 +323,21 @@ func (inv *Invocation) executionTraceFields() (*tracecapture.Capture, string) {
 	inv.traceMu.Lock()
 	defer inv.traceMu.Unlock()
 	return inv.traceCapture, inv.traceNodeID
+}
+
+func (inv *Invocation) executionTraceRuntimeFields() (
+	*tracecapture.StepBinding,
+	*tracecapture.Capture,
+) {
+	if inv == nil || !inv.RunOptions.ExecutionTraceEnabled {
+		return nil, nil
+	}
+	inv.traceMu.Lock()
+	defer inv.traceMu.Unlock()
+	if inv.executionTraceStepBinding == nil {
+		inv.executionTraceStepBinding = tracecapture.NewStepBinding()
+	}
+	return inv.executionTraceStepBinding, inv.traceCapture
 }
 
 func cloneStringSlice(values []string) []string {

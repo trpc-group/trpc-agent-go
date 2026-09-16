@@ -11,12 +11,15 @@ package outbound
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/channel/telegram"
 )
+
+var ErrTargetUnavailable = errors.New("outbound: unable to resolve target")
 
 const (
 	runtimeStateDeliveryChannel = "openclaw.delivery.channel"
@@ -47,9 +50,7 @@ func ResolveTarget(
 
 	if strings.TrimSpace(target.Channel) == "" ||
 		strings.TrimSpace(target.Target) == "" {
-		return DeliveryTarget{}, fmt.Errorf(
-			"outbound: unable to resolve target",
-		)
+		return DeliveryTarget{}, ErrTargetUnavailable
 	}
 	if err := validateTarget(target); err != nil {
 		return DeliveryTarget{}, err

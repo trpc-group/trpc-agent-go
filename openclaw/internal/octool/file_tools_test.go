@@ -175,6 +175,112 @@ func TestReadSpreadsheetTool_DefaultsToLatestUpload(t *testing.T) {
 	require.Equal(t, []string{"r2c1", "r2c2"}, res.Rows[0].Values)
 }
 
+func TestReadSpreadsheetTool_LegacyXLS(t *testing.T) {
+	t.Parallel()
+
+	xlsPath := legacyWorkbookPath(t)
+	tool := newReadSpreadsheetTool()
+
+	out, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"path": xlsPath,
+		"row":  3,
+	}))
+	require.NoError(t, err)
+
+	res := out.(readSpreadsheetResult)
+	require.Equal(t, xlsPath, res.Path)
+	require.Equal(t, sheetKindXLS, res.Kind)
+	require.Equal(t, "Table", res.Sheet)
+	require.Equal(t, 12, res.RowCount)
+	require.Equal(t, 3, res.StartRow)
+	require.Equal(t, 3, res.EndRow)
+	require.Len(t, res.Rows, 1)
+	require.Equal(t, []string{
+		"code2",
+		"name2",
+		"description2",
+	}, res.Rows[0].Values)
+	require.Contains(t, res.Text, "row 3:")
+}
+
+func TestReadSpreadsheetRows_LegacyXLSBySheet(t *testing.T) {
+	t.Parallel()
+
+	rows, sheet, kind, err := readSpreadsheetRows(
+		legacyWorkbookPath(t),
+		sheetKindXLS,
+		"Table",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "Table", sheet)
+	require.Equal(t, sheetKindXLS, kind)
+	require.Len(t, rows, 12)
+	require.Equal(t, []string{
+		"code2",
+		"name2",
+		"description2",
+	}, rows[2])
+}
+
+func TestReadSpreadsheetRows_LegacyXLSMissingSheet(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, err := readSpreadsheetRows(
+		legacyWorkbookPath(t),
+		sheetKindXLS,
+		"Missing",
+	)
+	require.ErrorContains(t, err, `sheet "Missing" not found`)
+	require.ErrorContains(t, err, "xlsx fallback")
+}
+
+func TestReadSpreadsheetRows_LegacyXLSInvalidFileReportsBothFailures(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "broken.xls")
+	require.NoError(t, os.WriteFile(path, []byte("not a workbook"), 0o600))
+
+	rows, sheet, kind, err := readSpreadsheetRows(path, sheetKindXLS, "")
+	require.ErrorContains(t, err, "read legacy spreadsheet")
+	require.ErrorContains(t, err, "xlsx fallback")
+	require.Nil(t, rows)
+	require.Empty(t, sheet)
+	require.Empty(t, kind)
+}
+
+func TestReadLegacyWorkbookRows_OpenError(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := readLegacyWorkbookRows(
+		filepath.Join(t.TempDir(), "missing.xls"),
+		"",
+	)
+	require.ErrorContains(t, err, "open legacy spreadsheet")
+}
+
+func TestReadSpreadsheetTool_XLSFallsBackToOOXML(t *testing.T) {
+	t.Parallel()
+
+	xlsxPath := createSampleWorkbook(t)
+	data, err := os.ReadFile(xlsxPath)
+	require.NoError(t, err)
+	xlsPath := filepath.Join(t.TempDir(), "mislabelled.xls")
+	require.NoError(t, os.WriteFile(xlsPath, data, 0o600))
+
+	tool := newReadSpreadsheetTool()
+	out, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"path": xlsPath,
+		"row":  2,
+	}))
+	require.NoError(t, err)
+
+	res := out.(readSpreadsheetResult)
+	require.Equal(t, sheetKindXLSX, res.Kind)
+	require.Equal(t, []string{"r2c1", "r2c2"}, res.Rows[0].Values)
+}
+
 func TestReadDocumentTool_Declaration(t *testing.T) {
 	t.Parallel()
 
@@ -207,6 +313,18 @@ func TestReadDocumentTool_TextDocxAndErrors(t *testing.T) {
 		[]byte("alpha\nbeta\ngamma"),
 		0o600,
 	))
+	jsonldPath := filepath.Join(t.TempDir(), "metadata.jsonld")
+	require.NoError(t, os.WriteFile(
+		jsonldPath,
+		[]byte(`{"@context":"https://schema.org","name":"example"}`),
+		0o600,
+	))
+	pythonPath := filepath.Join(t.TempDir(), "script.py")
+	require.NoError(t, os.WriteFile(
+		pythonPath,
+		[]byte("print('hello')\n"),
+		0o600,
+	))
 
 	docxPath := createSampleDOCX(t, "hello docx")
 	tool := newReadDocumentTool()
@@ -221,6 +339,25 @@ func TestReadDocumentTool_TextDocxAndErrors(t *testing.T) {
 	require.Equal(t, docKindText, textRes.Kind)
 	require.True(t, textRes.Truncated)
 	require.Equal(t, "alpha", textRes.Text)
+
+	jsonldOut, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"path": jsonldPath,
+	}))
+	require.NoError(t, err)
+
+	jsonldRes := jsonldOut.(readDocumentResult)
+	require.Equal(t, docKindText, jsonldRes.Kind)
+	require.Contains(t, jsonldRes.Text, `"@context"`)
+	require.Contains(t, jsonldRes.Text, `"name":"example"`)
+
+	pythonOut, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"path": pythonPath,
+	}))
+	require.NoError(t, err)
+
+	pythonRes := pythonOut.(readDocumentResult)
+	require.Equal(t, docKindText, pythonRes.Kind)
+	require.Contains(t, pythonRes.Text, "print('hello')")
 
 	docxOut, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
 		"path": docxPath,
@@ -300,6 +437,10 @@ func TestReadDocumentHelpers(t *testing.T) {
 
 	require.Equal(t, docKindDOCX, documentKindFromPath(docxPath))
 	require.Equal(t, docKindText, documentKindFromPath(logPath))
+	require.Equal(t, docKindText, documentKindFromPath("metadata.jsonld"))
+	require.Equal(t, docKindText, documentKindFromPath("script.py"))
+	require.Equal(t, docKindText, documentKindFromPath("query.sql"))
+	require.Equal(t, docKindText, documentKindFromPath("config.toml"))
 	require.Equal(t, docKindImage, documentKindFromPath("chart.png"))
 	require.Equal(t, docKindImage, documentKindFromPath("photo.jpeg"))
 	require.Equal(t, "", documentKindFromPath("bad.bin"))
@@ -420,20 +561,27 @@ func TestSpreadsheetHelpers(t *testing.T) {
 	))
 
 	require.Equal(t, sheetKindXLSX, spreadsheetKindFromPath(xlsxPath))
+	require.Equal(t, sheetKindXLS, spreadsheetKindFromPath("legacy.xls"))
 	require.Equal(t, sheetKindCSV, spreadsheetKindFromPath(csvPath))
 	require.Equal(t, "", spreadsheetKindFromPath("bad.txt"))
 
-	rows, sheet, err := readSpreadsheetRows(xlsxPath, sheetKindXLSX, "")
+	rows, sheet, kind, err := readSpreadsheetRows(
+		xlsxPath,
+		sheetKindXLSX,
+		"",
+	)
 	require.NoError(t, err)
 	require.Equal(t, "Sheet1", sheet)
+	require.Equal(t, sheetKindXLSX, kind)
 	require.Len(t, rows, 5)
 
-	rows, sheet, err = readSpreadsheetRows(csvPath, sheetKindCSV, "")
+	rows, sheet, kind, err = readSpreadsheetRows(csvPath, sheetKindCSV, "")
 	require.NoError(t, err)
 	require.Empty(t, sheet)
+	require.Equal(t, sheetKindCSV, kind)
 	require.Len(t, rows, 3)
 
-	_, _, err = readSpreadsheetRows(csvPath, "bad", "")
+	_, _, _, err = readSpreadsheetRows(csvPath, "bad", "")
 	require.ErrorContains(t, err, errSpreadsheetUnsupported)
 
 	selected, startRow, endRow, err := selectSpreadsheetRows(
@@ -483,6 +631,12 @@ func TestSpreadsheetHelpers(t *testing.T) {
 	require.Equal(t, "row 2: a\tb", formatted)
 	require.Equal(t, "", formatSpreadsheetRows(nil))
 	require.Nil(t, sanitizeSpreadsheetCells(nil))
+	require.Nil(t, trimTrailingEmptyCells([]string{"", " "}))
+	require.Equal(
+		t,
+		[]string{"a", "", "b"},
+		trimTrailingEmptyCells([]string{"a", "", "b", "", " "}),
+	)
 
 	truncated, ok := truncateText("abcdef", 3)
 	require.True(t, ok)
@@ -536,6 +690,16 @@ func createSampleWorkbook(t *testing.T) string {
 	path := filepath.Join(t.TempDir(), "sample.xlsx")
 	require.NoError(t, book.SaveAs(path))
 	require.NoError(t, book.Close())
+	return path
+}
+
+func legacyWorkbookPath(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join("testdata", "legacy.xls")
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.False(t, info.IsDir())
 	return path
 }
 

@@ -59,7 +59,7 @@ func main() {
         summary.WithChecksAny( // 任一条件满足即触发摘要
             summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
             summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
-            summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；比较被检查 session 的最后一个事件（在增量摘要路径里通常就是最近一个待摘要事件）
+            summary.CheckTimeThreshold(5*time.Minute), // Runner 路径：下一请求到来前的空闲时间超过 5 分钟时触发
         ),
         summary.WithMaxSummaryWords(200), // 限制摘要在 200 字以内
     )
@@ -205,7 +205,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(                         // 任一条件满足即触发
         summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
         summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
-        summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；比较被检查 session 的最后一个事件（在增量摘要路径里通常就是最近一个待摘要事件）
+        summary.CheckTimeThreshold(5*time.Minute), // Runner 路径：下一请求到来前的空闲时间超过 5 分钟时触发
     ),
     summary.WithMaxSummaryWords(200),              // 限制摘要在 200 字以内
 )
@@ -1710,7 +1710,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(                     // 任一条件满足即触发
         summary.CheckEventThreshold(20),       // 自上次摘要后新增 20 个事件后触发
         summary.CheckTokenThreshold(4000),     // 自上次摘要后新增 4000 个 token 后触发
-        summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；比较被检查 session 的最后一个事件（在增量摘要路径里通常就是最近一个待摘要事件）
+        summary.CheckTimeThreshold(5*time.Minute), // Runner 路径：下一请求到来前的空闲时间超过 5 分钟时触发
     ),
     summary.WithMaxSummaryWords(200),          // 限制摘要在 200 字以内
 )
@@ -1809,10 +1809,10 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 - 事件数量超过阈值（`WithEventThreshold`）
 - Token 数量超过阈值（`WithTokenThreshold`）
-- 在一次摘要检查中，被检查 session 的最后一个事件已超过指定时间；在默认增量摘要路径里，这通常就是最近一个待摘要事件（`WithTimeThreshold`）
+- 当前顶层 request 到来前的空闲间隔超过阈值（Runner 路径中的 `WithTimeThreshold`）
 - 满足自定义组合条件（`WithChecksAny` / `WithChecksAll`）
 
-`WithTimeThreshold` 不是后台定时器。系统不会在“静默满 5 分钟”的瞬间主动生成摘要；只有在执行摘要检查时才会评估，通常发生在一轮对话结束后，或你手动调用摘要 API 时。它判断的是被检查 session 的最后一个事件；在默认增量摘要路径里，这个 session 只包含待摘要增量，所以 `5*time.Minute` 通常等价于：“到下一次摘要检查时，如果最近一个待摘要事件已经超过 5 分钟，就立即生成摘要。”
+`WithTimeThreshold` 不是后台定时器。Runner 自动路径会在顶层 request 到达时固定记录时间，并将它与同一摘要 scope 中的上一条相关事件比较。例如，`5*time.Minute` 表示：“下一次顶层 request 在该 scope 静默超过 5 分钟后到达时，由这次 request 引发的摘要检查可以触发。”模型响应耗时和异步 worker 排队时间不会计入 gap。没有 Runner request observation 的直接 checker 或摘要 API 调用保留原有的 last-event-age 行为。
 
 #### 手动触发
 
@@ -2030,7 +2030,7 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - **`WithContextThreshold(opts ...ContextThresholdOption)`**：零配置触发器，在每次评估时动态感知当前模型的 context window。根据 context window 的比例（默认 50%）自动计算 token 阈值，当用户切换模型时自动适配，无需重建 Summarizer。这是大多数场景下的推荐选项，类似 Codex CLI 和 Claude Code 的 auto-compact 行为。示例：`WithContextThreshold()` 零配置使用，或 `WithContextThreshold(summary.WithContextThresholdRatio(0.6))` 自定义比例。
 - **`WithEventThreshold(eventCount int)`**：当自上次摘要后的事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在自上次摘要后新增 20 个事件后触发。
 - **`WithTokenThreshold(tokenCount int)`**：当自上次摘要后的 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在自上次摘要后新增 4000 个 token 后触发。
-- **`WithTimeThreshold(interval time.Duration)`**：在执行摘要检查时进行判断；它包装的是 `CheckTimeThreshold`，语义上比较“被检查 session 的最后一个事件”是否已超过该间隔。在默认增量摘要路径里，这通常等价于最近一个待摘要事件。它不是后台定时器。示例：`WithTimeThreshold(5*time.Minute)` 的含义是：“到下一次摘要检查时，如果被检查 session 的最后一个事件已经超过 5 分钟，就立即生成摘要。”
+- **`WithTimeThreshold(interval time.Duration)`**：Runner 路径按当前顶层 request 到来前的空闲间隔判断。request 到达时间只记录一次，因此模型响应耗时和异步排队时间不会计入 gap。它不是后台定时器：`WithTimeThreshold(5*time.Minute)` 会在下一次 request 引发摘要检查时评估。没有 Runner request observation 的直接调用保留原有 last-event-age 行为。
 
 > **Context Window 注册**
 >
@@ -2077,8 +2077,8 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 **摘要生成：**
 
 - **`WithMaxSummaryWords(maxWords int)`**：限制摘要的最大字数。该限制会包含在提示词中以指导模型生成。示例：`WithMaxSummaryWords(150)` 请求在 150 字以内的摘要。
-- **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含占位符 `{conversation_text}`，它会被对话内容替换。当设置 `WithMaxSummaryWords(...)` 时，`{max_summary_words}` 必须出现在 `WithPrompt(...)` 或 `WithSystemPrompt(...)` 其中之一。
-- **`WithSystemPrompt(prompt string)`**：为摘要指令添加独立的 system message。它不能包含 `{conversation_text}`；对话内容必须放在 `WithPrompt(...)` 中，让 system message 保持纯指令。
+- **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含 `{conversation_text}`，并可选包含 `{previous_summary}`，用于把上一版滚动摘要与本次新增事件分别放置。当设置 `WithMaxSummaryWords(...)` 时，`{max_summary_words}` 必须出现在 `WithPrompt(...)` 或 `WithSystemPrompt(...)` 其中之一。
+- **`WithSystemPrompt(prompt string)`**：为摘要指令添加独立的 system message。它不能包含 `{conversation_text}` 或 `{previous_summary}`；对话内容必须放在 `WithPrompt(...)` 中，让 system message 保持纯指令。
 - **`WithSkipRecent(skipFunc SkipRecentFunc)`**：通过自定义函数在摘要时跳过**最近**事件。函数接收所有事件并返回应跳过的尾部事件数量，返回 0 表示不跳过。适合避免总结最近、可能不完整的对话，或实现基于时间/内容的跳过策略。
 
 #### Token 计数器配置（Token Counter Configuration）
@@ -2214,6 +2214,22 @@ summarizer := summary.NewSummarizer(
     summary.WithPrompt(customPrompt), // 自定义 Prompt
     summary.WithMaxSummaryWords(100), // 注入 Prompt 里面的 {max_summary_words}
     summary.WithEventThreshold(15),
+)
+
+// 也可以单独放置上一版滚动摘要
+incrementalPrompt := `<previous_summary>
+{previous_summary}
+</previous_summary>
+
+<new_conversation>
+{conversation_text}
+</new_conversation>
+
+更新后的摘要：`
+
+summarizer = summary.NewSummarizer(
+    summaryModel,
+    summary.WithPrompt(incrementalPrompt),
 )
 
 // 将摘要指令拆分到独立的 system message
@@ -2352,7 +2368,7 @@ if found {
 
 2. **增量摘要**：新事件与先前的摘要（作为系统事件前置）组合，生成一个既包含旧上下文又包含新信息的更新摘要。
 
-3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（基于自上次摘要后的增量事件计数、增量 token 计数，以及时间检查中“被检查 session 的最后一个事件距离当前是否已超过阈值”；在默认增量摘要路径里，这对应最近一个待摘要事件）。如果条件未满足且 `force=false`，则跳过摘要。
+3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件。事件数和 token 条件使用增量输入；Runner 路径的时间条件使用“当前顶层 request 到达时间减去该 scope 上一条相关事件时间”，没有 Runner observation 的直接调用保留 last-event-age fallback。如果条件未满足且 `force=false`，则跳过摘要。
 
 4. **异步 Worker**：摘要任务使用基于哈希的分发策略分配到多个 worker goroutine。这确保同一会话的任务按顺序处理，而不同会话可以并行处理。
 

@@ -140,6 +140,30 @@ func (s *Service) AppendTrackEvent(
 	return nil
 }
 
+// GetTrackEvents returns persisted track events for the given session track.
+func (s *Service) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	opt := applyOptions(opts...)
+	trackEvents, err := s.getTrackEventsByTrackLists(
+		ctx,
+		[]session.Key{key},
+		[][]session.Track{{track}},
+		opt.EventNum,
+		opt.EventTime,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite session service get track events failed: %w", err)
+	}
+	return &session.TrackEvents{Track: track, Events: trackEvents[0][track]}, nil
+}
+
 func (s *Service) enqueueTrackPersist(
 	ctx context.Context,
 	sess *session.Session,

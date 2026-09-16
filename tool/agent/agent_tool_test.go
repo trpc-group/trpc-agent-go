@@ -569,6 +569,16 @@ func (m *toolSurfaceRecordingModel) sawTool(name string) bool {
 	return false
 }
 
+func newAgentToolTestTool(name string) tool.Tool {
+	return function.NewFunctionTool(
+		func(_ context.Context, _ map[string]string) (string, error) {
+			return name, nil
+		},
+		function.WithName(name),
+		function.WithDescription("Returns a test response."),
+	)
+}
+
 type handoffArgs struct {
 	AgentID string `json:"agent_id"`
 	Task    string `json:"task"`
@@ -2502,12 +2512,14 @@ type streamingMockAgent struct {
 	name string
 	// capture the event filter key seen by Run for assertion.
 	seenFilterKey         string
+	seenTraceNodeID       string
 	seenSurfaceRootNodeID string
 }
 
 func (m *streamingMockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
 	// record the filter key used so tests can assert it equals agent name.
 	m.seenFilterKey = inv.GetEventFilterKey()
+	m.seenTraceNodeID = agent.InvocationTraceNodeID(inv)
 	m.seenSurfaceRootNodeID = agent.InvocationSurfaceRootNodeID(inv)
 	ch := make(chan *event.Event, 3)
 	go func() {
@@ -3671,20 +3683,18 @@ func TestTool_StreamableCall_FlushesParentSession(t *testing.T) {
 	}
 }
 
-func TestTool_StreamableCall_PropagatesSurfaceRootNodeID(t *testing.T) {
+func TestTool_StreamableCall_AppliesMemberMountFromContext(t *testing.T) {
 	sa := &streamingMockAgent{name: "stream-agent"}
 	at := NewTool(sa, WithStreamInner(true))
 	parent := agent.NewInvocation(
 		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
 		agent.WithInvocationEventFilterKey("parent-agent"),
-		agent.WithInvocationRunOptions(agent.RunOptions{
-			CustomAgentConfigs: teamtrace.WithMemberTraceRoot(
-				nil,
-				"workflow/team",
-			),
-		}),
 	)
-	ctx := agent.NewInvocationContext(context.Background(), parent)
+	var ctx context.Context = agent.NewInvocationContext(context.Background(), parent)
+	ctx = teamtrace.ContextWithMemberMount(ctx, teamtrace.MemberMount{
+		TraceNodeID:       "workflow/team/stream-agent",
+		SurfaceRootNodeID: "workflow/surface/team/stream-agent",
+	})
 	reader, err := at.StreamableCall(ctx, []byte(`{"request":"hi"}`))
 	require.NoError(t, err)
 	defer reader.Close()
@@ -3695,7 +3705,8 @@ func TestTool_StreamableCall_PropagatesSurfaceRootNodeID(t *testing.T) {
 		}
 		require.NoError(t, recvErr)
 	}
-	require.Equal(t, "workflow/team/stream-agent", sa.seenSurfaceRootNodeID)
+	require.Equal(t, "workflow/team/stream-agent", sa.seenTraceNodeID)
+	require.Equal(t, "workflow/surface/team/stream-agent", sa.seenSurfaceRootNodeID)
 }
 
 func TestTool_StreamableCall_NotifiesCompletion(t *testing.T) {
@@ -5242,6 +5253,47 @@ func TestTool_callWithParentInvocation_NoSessionFallback(t *testing.T) {
 	require.Equal(t, "Hello from mock agent!", res)
 }
 
+func TestTool_callWithParentInvocation_DoesNotInheritParentToolSurface(t *testing.T) {
+	const (
+		childToolName      = "child_tool"
+		additionalToolName = "parent_additional"
+		externalToolName   = "parent_external"
+	)
+	childTool := newAgentToolTestTool(childToolName)
+	additionalTool := newAgentToolTestTool(additionalToolName)
+	externalTool := newAgentToolTestTool(externalToolName)
+	childModel := &toolSurfaceRecordingModel{
+		name:    "child-model",
+		message: model.NewAssistantMessage("child done"),
+	}
+	child := llmagent.New(
+		"child-agent",
+		llmagent.WithModel(childModel),
+		llmagent.WithTools([]tool.Tool{childTool}),
+	)
+	at := NewTool(child)
+	parentRunOptions := agent.NewRunOptions(
+		agent.WithAdditionalTools([]tool.Tool{additionalTool}),
+		agent.WithExternalTools([]tool.Tool{externalTool}),
+		agent.WithToolFilter(func(_ context.Context, tl tool.Tool) bool {
+			decl := tl.Declaration()
+			return decl == nil || decl.Name != childToolName
+		}),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(parentRunOptions),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	require.Equal(t, "child done", result)
+	require.True(t, childModel.sawTool(childToolName))
+	require.False(t, childModel.sawTool(additionalToolName))
+	require.False(t, childModel.sawTool(externalToolName))
+}
+
 func TestTool_callWithParentInvocation_PreservesRunStructuredOutput(t *testing.T) {
 	modelImpl := &structuredOutputCaptureModel{name: "capture-model"}
 	child := llmagent.New("structured-output-child", llmagent.WithModel(modelImpl))
@@ -5697,6 +5749,65 @@ func TestTool_WithPinRunOptions_PreservesRuntimeState(t *testing.T) {
 	childInv := parentInv.Clone(opts...)
 	require.Empty(t, childInv.RunOptions.ModelName)
 	require.Equal(t, runtimeState, childInv.RunOptions.RuntimeState)
+}
+
+func TestTool_ChildInvocationOptions_ClearsInheritedToolRunOptions(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent)
+	additionalTool := newAgentToolTestTool("parent_additional")
+	externalTool := newAgentToolTestTool("parent_external")
+	toolFilter := func(context.Context, tool.Tool) bool {
+		return false
+	}
+	executionFilter := func(context.Context, tool.Tool) bool {
+		return true
+	}
+	permissionPolicy := tool.PermissionPolicyFunc(
+		func(context.Context, *tool.PermissionRequest) (tool.PermissionDecision, error) {
+			return tool.AllowPermission(), nil
+		},
+	)
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ModelName:            "parent-model",
+			RuntimeState:         map[string]any{"room_id": "r1"},
+			ToolFilter:           toolFilter,
+			AdditionalTools:      []tool.Tool{additionalTool},
+			ExternalTools:        []tool.Tool{externalTool},
+			ExternalToolNames:    map[string]bool{"parent_external": true},
+			ToolExecutionFilter:  executionFilter,
+			ToolPermissionPolicy: permissionPolicy,
+		}),
+	)
+	opts := agentTool.childInvocationOptions(
+		context.Background(),
+		parentInv,
+		model.NewUserMessage("test"),
+		"child-key",
+		nil,
+	)
+	childInv := parentInv.Clone(opts...)
+	require.Nil(t, childInv.RunOptions.ToolFilter)
+	require.Nil(t, childInv.RunOptions.AdditionalTools)
+	require.Nil(t, childInv.RunOptions.ExternalTools)
+	require.Nil(t, childInv.RunOptions.ExternalToolNames)
+	require.Equal(t, "parent-model", childInv.RunOptions.ModelName)
+	require.Equal(t, map[string]any{"room_id": "r1"}, childInv.RunOptions.RuntimeState)
+	require.NotNil(t, childInv.RunOptions.ToolExecutionFilter)
+	require.NotNil(t, childInv.RunOptions.ToolPermissionPolicy)
+	require.Equal(t, additionalTool, parentInv.RunOptions.AdditionalTools[0])
+	require.Equal(t, externalTool, parentInv.RunOptions.ExternalTools[0])
+	require.Equal(t, map[string]bool{"parent_external": true}, parentInv.RunOptions.ExternalToolNames)
+	require.NotNil(t, parentInv.RunOptions.ToolFilter)
+}
+
+func TestClearInheritedToolRunOptions_Nil(t *testing.T) {
+	require.NotPanics(t, func() {
+		clearInheritedToolRunOptions(nil)
+	})
 }
 
 func TestTool_WithPinModel_Disabled_PreservesModelName(t *testing.T) {

@@ -101,6 +101,37 @@ func TestNormalizeStructureSnapshotExpandsLLMToolSurfaceWithoutGlobalInstruction
 	assert.Equal(t, "node_1#tool.lookup", normalized.Surfaces[0].SurfaceID)
 }
 
+func TestNormalizeStructureSnapshotExpandsAgentToolSurfaces(t *testing.T) {
+	snapshot := &astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "node_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindAgent},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "node_1#tool",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{
+						{ID: "lookup", Description: "Lookup."},
+						{ID: "delay", Description: "Delay."},
+					},
+				},
+			},
+		},
+	}
+	normalized, err := NormalizeStructureSnapshot(snapshot)
+	assert.NoError(t, err)
+	require.NotNil(t, normalized)
+	require.Len(t, normalized.Surfaces, 2)
+	assert.Equal(t, "node_1#tool.lookup", normalized.Surfaces[0].SurfaceID)
+	assert.Equal(t, "node_1#tool.delay", normalized.Surfaces[1].SurfaceID)
+	assert.Equal(t, []astructure.ToolRef{{ID: "lookup", Description: "Lookup."}}, normalized.Surfaces[0].Value.Tools)
+	assert.Equal(t, []astructure.ToolRef{{ID: "delay", Description: "Delay."}}, normalized.Surfaces[1].Value.Tools)
+}
+
 func TestNormalizeStructureSnapshotDropsEmptyAndRejectsInvalidToolSurfaces(t *testing.T) {
 	text := "global"
 	snapshot := &astructure.Snapshot{
@@ -175,6 +206,38 @@ func TestNewStructureStoresNormalizedSnapshot(t *testing.T) {
 	assert.Contains(t, structure.SurfaceIndex, "node_1#tool.delay")
 	assert.Contains(t, structure.KnownSurfaceIDs, "node_1#tool")
 	assert.Equal(t, "node_1#tool", snapshot.Surfaces[1].SurfaceID)
+}
+
+func TestNewStructureStoresNormalizedAgentToolSurfaces(t *testing.T) {
+	snapshot := &astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "node_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindAgent},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "node_1#tool",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{
+						{ID: "lookup", Description: "Lookup."},
+						{ID: "delay", Description: "Delay."},
+					},
+				},
+			},
+		},
+	}
+	structure, err := NewStructure(snapshot)
+	require.NoError(t, err)
+	require.NotNil(t, structure)
+	require.Len(t, structure.Snapshot.Surfaces, 2)
+	assert.Equal(t, "node_1#tool.lookup", structure.Snapshot.Surfaces[0].SurfaceID)
+	assert.Equal(t, "node_1#tool.delay", structure.Snapshot.Surfaces[1].SurfaceID)
+	assert.Contains(t, structure.SurfaceIndex, "node_1#tool.lookup")
+	assert.Contains(t, structure.SurfaceIndex, "node_1#tool.delay")
+	assert.Contains(t, structure.KnownSurfaceIDs, "node_1#tool")
 }
 
 func TestNewStructureAcceptsAggregateToolTraceIDAfterNormalization(t *testing.T) {

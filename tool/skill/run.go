@@ -483,28 +483,50 @@ func (t *RunTool) Call(
 		ctx,
 		in,
 	)
-	eng, ws, skillRoot, ctxIO, staged, stageWarn, err := t.
-		prepareWorkspaceForRun(
-			ctx,
-			in,
-		)
+	prepared, err := t.prepareWorkspaceForRun(ctx, in)
 	if err != nil {
 		return nil, err
 	}
-	cwd := resolveCWD(in.Cwd, skillRoot)
-	rr, err := t.runProgram(ctxIO, eng, ws, skillRoot, cwd, in)
+	rr, err := t.runPrepared(prepared, in)
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		t.invalidateWorkspaceHandle(prepared.handle)
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			prepared, err = t.prepareWorkspaceForRun(ctx, in)
+			if err == nil {
+				rr, err = t.runPrepared(prepared, in)
+			}
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+				t.invalidateWorkspaceHandle(prepared.handle)
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	autoFiles := t.autoExportWorkspaceOut(ctxIO, eng, ws, in)
-	files, manifest, outputWarn, err := t.prepareOutputs(
-		ctxIO,
-		eng,
+	ws := prepared.handle.Workspace
+	autoFiles, err := t.autoExportWorkspaceOut(
+		prepared.ctxIO, prepared.eng, ws, in,
+	)
+	if err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			t.invalidateWorkspaceHandle(prepared.handle)
+		}
+		return nil, err
+	}
+	files, manifest, outputWarn, partialStale, err := t.prepareOutputs(
+		prepared.ctxIO,
+		prepared.eng,
 		ws,
 		in,
 	)
+	if partialStale {
+		t.invalidateWorkspaceHandle(prepared.handle)
+	}
 	if err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			t.invalidateWorkspaceHandle(prepared.handle)
+		}
 		return nil, err
 	}
 	filteredOutputs := filterFailedEmptyOutputs(rr, files, manifest)
@@ -529,9 +551,9 @@ func (t *RunTool) Call(
 	if len(outputWarn) > 0 {
 		out.Warnings = append(out.Warnings, outputWarn...)
 	}
-	out.StagedInputs = staged
-	if len(stageWarn) > 0 {
-		out.Warnings = append(out.Warnings, stageWarn...)
+	out.StagedInputs = prepared.staged
+	if len(prepared.warnings) > 0 {
+		out.Warnings = append(out.Warnings, prepared.warnings...)
 	}
 	if len(filteredOutputs.omittedNames) > 0 {
 		toolcache.DeleteSkillRunOutputFilesFromContext(
@@ -636,34 +658,89 @@ func (t *RunTool) applyArtifactSaveOverrides(
 func (t *RunTool) prepareWorkspaceForRun(
 	ctx context.Context,
 	in runInput,
-) (
-	codeexecutor.Engine,
-	codeexecutor.Workspace,
-	string,
-	context.Context,
-	[]stagedInput,
-	[]string,
-	error,
-) {
+) (workspaceRunPreparation, error) {
 	eng := t.ensureEngine()
-	ws, err := t.createWorkspace(ctx, eng, in.Skill)
-	if err != nil {
-		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
-	}
-	stageRes, err := t.stageSkillForRun(ctx, eng, ws, in.Skill)
-	if err != nil {
-		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
-	}
-	staged, stageWarn := t.stageUserFileInputs(ctx, eng, ws)
-	ctxIO := withArtifactContext(ctx)
-	if len(in.Inputs) > 0 {
-		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
-			return nil, codeexecutor.Workspace{}, "", nil, nil,
-				nil, err
+	prepared, acquired, err := t.prepareWorkspaceAttempt(ctx, eng, in)
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		if acquired {
+			t.wsr.InvalidateWorkspaceHandle(prepared.handle)
+		}
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			prepared, acquired, err = t.prepareWorkspaceAttempt(ctx, eng, in)
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) && acquired {
+				t.wsr.InvalidateWorkspaceHandle(prepared.handle)
+			}
 		}
 	}
-	return eng, ws, stageRes.WorkspaceSkillDir, ctxIO, staged, stageWarn,
-		nil
+	if err != nil {
+		return workspaceRunPreparation{}, err
+	}
+	return prepared, nil
+}
+
+type workspaceRunPreparation struct {
+	eng       codeexecutor.Engine
+	handle    codeexecutor.WorkspaceHandle
+	skillRoot string
+	ctxIO     context.Context
+	staged    []stagedInput
+	warnings  []string
+}
+
+func (t *RunTool) prepareWorkspaceAttempt(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	in runInput,
+) (workspaceRunPreparation, bool, error) {
+	handle, err := t.createWorkspaceHandle(ctx, eng, in.Skill)
+	if err != nil {
+		return workspaceRunPreparation{}, false, err
+	}
+	prepared := workspaceRunPreparation{eng: eng, handle: handle}
+	ws := handle.Workspace
+	stageRes, err := t.stageSkillForRun(ctx, eng, ws, in.Skill)
+	if err != nil {
+		return prepared, true, err
+	}
+	prepared.skillRoot = stageRes.WorkspaceSkillDir
+	prepared.staged, prepared.warnings, err = t.stageUserFileInputs(
+		ctx, eng, ws,
+	)
+	if err != nil {
+		return prepared, true, err
+	}
+	prepared.ctxIO = withArtifactContext(ctx)
+	if len(in.Inputs) > 0 {
+		if err := eng.FS().StageInputs(
+			prepared.ctxIO, ws, in.Inputs,
+		); err != nil {
+			return prepared, true, err
+		}
+	}
+	return prepared, true, nil
+}
+
+func (t *RunTool) runPrepared(
+	prepared workspaceRunPreparation,
+	in runInput,
+) (codeexecutor.RunResult, error) {
+	cwd := resolveCWD(in.Cwd, prepared.skillRoot)
+	return t.runProgram(
+		prepared.ctxIO,
+		prepared.eng,
+		prepared.handle.Workspace,
+		prepared.skillRoot,
+		cwd,
+		in,
+	)
+}
+
+func (t *RunTool) invalidateWorkspaceHandle(
+	handle codeexecutor.WorkspaceHandle,
+) {
+	if t != nil && t.wsr != nil {
+		t.wsr.InvalidateWorkspaceHandle(handle)
+	}
 }
 
 func (t *RunTool) stageSkillForRun(
@@ -750,7 +827,7 @@ func (t *RunTool) stageUserFileInputs(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
-) ([]stagedInput, []string) {
+) ([]stagedInput, []string, error) {
 	return workspaceinput.StageConversationFiles(ctx, eng, ws)
 }
 
@@ -820,21 +897,27 @@ func (t *RunTool) autoExportWorkspaceOut(
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 	in runInput,
-) []codeexecutor.File {
+) ([]codeexecutor.File, error) {
 	if eng == nil || in.Outputs != nil || len(in.OutputFiles) > 0 {
-		return nil
+		return nil, nil
 	}
 	files, err := eng.FS().Collect(ctx, ws,
 		[]string{defaultAutoExportPattern})
-	if err != nil || len(files) == 0 {
-		return nil
+	if err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if len(files) == 0 {
+		return nil, nil
 	}
 	if len(files) > defaultAutoExportMax {
 		files = files[:defaultAutoExportMax]
 	}
 	trimTruncatedUTF8TextFiles(files)
 	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
-	return files
+	return files, nil
 }
 
 // parseRunArgs validates and decodes input args.
@@ -904,13 +987,20 @@ func (t *RunTool) ensureEngine() codeexecutor.Engine {
 func (t *RunTool) createWorkspace(
 	ctx context.Context, eng codeexecutor.Engine, name string,
 ) (codeexecutor.Workspace, error) {
+	handle, err := t.createWorkspaceHandle(ctx, eng, name)
+	return handle.Workspace, err
+}
+
+func (t *RunTool) createWorkspaceHandle(
+	ctx context.Context, eng codeexecutor.Engine, name string,
+) (codeexecutor.WorkspaceHandle, error) {
 	if t.reg == nil || t.wsr == nil {
 		if t.reg == nil {
 			t.reg = codeexecutor.NewWorkspaceRegistry()
 		}
 		t.wsr = workspacesession.NewResolver(t.exec, t.reg)
 	}
-	return t.wsr.CreateWorkspace(ctx, eng, name)
+	return t.wsr.CreateWorkspaceHandle(ctx, eng, name)
 }
 
 // stageSkill materializes the skill source under skills/<name>.
@@ -1786,21 +1876,29 @@ func withArtifactContext(ctx context.Context) context.Context {
 }
 
 // prepareOutputs collects files either through OutputSpec or legacy
-// output_files patterns. It returns collected files and optional
-// manifest.
+// output_files patterns. The bool result reports a non-fatal partial commit
+// that also carried ErrWorkspaceStale, allowing callers to invalidate the
+// exact handle while preserving the partial output result.
 func (t *RunTool) prepareOutputs(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 	in runInput,
-) ([]codeexecutor.File, *codeexecutor.OutputManifest, []string, error) {
+) (
+	[]codeexecutor.File,
+	*codeexecutor.OutputManifest,
+	[]string,
+	bool,
+	error,
+) {
 	var files []codeexecutor.File
 	var manifest *codeexecutor.OutputManifest
 	if in.Outputs != nil && len(in.OutputFiles) == 0 {
 		m, err := eng.FS().CollectOutputs(ctx, ws, *in.Outputs)
+		stale := errors.Is(err, codeexecutor.ErrWorkspaceStale)
 		if err != nil &&
 			!errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
-			return nil, nil, nil, err
+			return nil, nil, nil, false, err
 		}
 		manifest = &m
 		if in.Outputs.Inline {
@@ -1809,15 +1907,15 @@ func (t *RunTool) prepareOutputs(
 		if err != nil {
 			return files, manifest, []string{
 				warnPartialOutputCommit,
-			}, nil
+			}, stale, nil
 		}
-		return files, manifest, nil, nil
+		return files, manifest, nil, false, nil
 	}
 	fs, err := t.collectFiles(ctx, eng, ws, in.OutputFiles)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, false, err
 	}
-	return fs, nil, nil, nil
+	return fs, nil, nil, false, nil
 }
 
 func outputFilesFromManifest(

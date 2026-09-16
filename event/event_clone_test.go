@@ -90,6 +90,8 @@ func TestEvent_Clone_DeepCopiesExecutionTrace(t *testing.T) {
 		ExecutionTrace: &trace.Trace{
 			RootAgentName:    "assistant",
 			RootInvocationID: "inv-1",
+			Input:            &trace.Snapshot{Text: "run input"},
+			Output:           &trace.Snapshot{Text: "run output"},
 			Usage: &model.Usage{
 				PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3,
 				TimingInfo: &model.TimingInfo{FirstTokenDuration: time.Second},
@@ -98,6 +100,7 @@ func TestEvent_Clone_DeepCopiesExecutionTrace(t *testing.T) {
 				{
 					StepID:             "s1",
 					NodeID:             "assistant",
+					NodeType:           "llm",
 					PredecessorStepIDs: []string{"s0"},
 					Input:              &trace.Snapshot{Text: "input"},
 					Output:             &trace.Snapshot{Text: "output"},
@@ -105,6 +108,18 @@ func TestEvent_Clone_DeepCopiesExecutionTrace(t *testing.T) {
 						PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3,
 						TimingInfo: &model.TimingInfo{ReasoningDuration: time.Second},
 					},
+					Tools: []trace.Tool{{
+						ID:        "call-1",
+						Name:      "lookup",
+						Arguments: map[string]any{"city": "Paris"},
+						Result:    []any{"ok"},
+					}, {
+						ID:        "call-2",
+						Name:      "raw",
+						Arguments: []byte("raw-args"),
+						Result:    []byte("raw-result"),
+					}},
+					Skills: []trace.Skill{{Name: "research"}},
 				},
 			},
 		},
@@ -113,16 +128,33 @@ func TestEvent_Clone_DeepCopiesExecutionTrace(t *testing.T) {
 	require.NotNil(t, clone)
 	require.NotNil(t, clone.ExecutionTrace)
 	require.NotSame(t, e.ExecutionTrace, clone.ExecutionTrace)
+	require.NotSame(t, e.ExecutionTrace.Input, clone.ExecutionTrace.Input)
+	require.NotSame(t, e.ExecutionTrace.Output, clone.ExecutionTrace.Output)
+	require.Equal(t, "llm", clone.ExecutionTrace.Steps[0].NodeType)
+	clone.ExecutionTrace.Input.Text = "updated run input"
+	clone.ExecutionTrace.Output.Text = "updated run output"
 	clone.ExecutionTrace.Steps[0].PredecessorStepIDs[0] = "changed"
 	clone.ExecutionTrace.Steps[0].Input.Text = "updated"
 	clone.ExecutionTrace.Steps[0].Usage.TotalTokens = 99
 	clone.ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration = 2 * time.Second
+	clone.ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"] = "changed"
+	clone.ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0] = "changed"
+	clone.ExecutionTrace.Steps[0].Tools[1].Arguments.([]byte)[0] = 'x'
+	clone.ExecutionTrace.Steps[0].Tools[1].Result.([]byte)[0] = 'x'
+	clone.ExecutionTrace.Steps[0].Skills[0].Name = "changed"
 	clone.ExecutionTrace.Usage.TotalTokens = 88
 	clone.ExecutionTrace.Usage.TimingInfo.FirstTokenDuration = 3 * time.Second
+	require.Equal(t, "run input", e.ExecutionTrace.Input.Text)
+	require.Equal(t, "run output", e.ExecutionTrace.Output.Text)
 	require.Equal(t, []string{"s0"}, e.ExecutionTrace.Steps[0].PredecessorStepIDs)
 	require.Equal(t, "input", e.ExecutionTrace.Steps[0].Input.Text)
 	require.Equal(t, 3, e.ExecutionTrace.Steps[0].Usage.TotalTokens)
 	require.Equal(t, time.Second, e.ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration)
+	require.Equal(t, "Paris", e.ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"])
+	require.Equal(t, "ok", e.ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0])
+	require.Equal(t, []byte("raw-args"), e.ExecutionTrace.Steps[0].Tools[1].Arguments)
+	require.Equal(t, []byte("raw-result"), e.ExecutionTrace.Steps[0].Tools[1].Result)
+	require.Equal(t, "research", e.ExecutionTrace.Steps[0].Skills[0].Name)
 	require.Equal(t, 3, e.ExecutionTrace.Usage.TotalTokens)
 	require.Equal(t, time.Second, e.ExecutionTrace.Usage.TimingInfo.FirstTokenDuration)
 }
@@ -140,6 +172,8 @@ func TestEvent_Clone_ExecutionTraceKeepsNilUsage(t *testing.T) {
 	clone := e.Clone()
 	require.NotNil(t, clone)
 	require.NotNil(t, clone.ExecutionTrace)
+	require.Nil(t, clone.ExecutionTrace.Input)
+	require.Nil(t, clone.ExecutionTrace.Output)
 	require.Nil(t, clone.ExecutionTrace.Usage)
 	require.Len(t, clone.ExecutionTrace.Steps, 1)
 	require.Nil(t, clone.ExecutionTrace.Steps[0].Usage)

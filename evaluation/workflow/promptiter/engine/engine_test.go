@@ -520,6 +520,107 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 	assert.Equal(t, "accepted prompt", *backward.requests[1].Surfaces[0].Value.Text)
 }
 
+func TestRunStopsBeforeBackwardWhenTrainLossesAreEmpty(t *testing.T) {
+	evalService := newScriptedEvalService(func(evalSetID string, profileValue string) scriptedEvalOutcome {
+		_ = evalSetID
+		_ = profileValue
+		return scriptedEvalOutcome{
+			score:             0.8,
+			metricStatus:      status.EvalStatusPassed,
+			appliedSurfaceIDs: []string{testSurfaceID},
+		}
+	})
+	engineInstance, err := New(
+		context.Background(),
+		WithAgentEvaluator(newTestAgentEvaluator(t, evalService)),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
+	)
+	require.NoError(t, err)
+	observedKinds := make([]EventKind, 0)
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		Train:          testEvalSetInputs("train"),
+		Validation:     testEvalSetInputs("validation"),
+		InitialProfile: runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+		StopPolicy: StopPolicy{
+			StopOnNoTrainLosses: true,
+		},
+		MaxRounds:        5,
+		TargetSurfaceIDs: []string{testSurfaceID},
+	}, WithObserver(func(ctx context.Context, event *Event) error {
+		_ = ctx
+		observedKinds = append(observedKinds, event.Kind)
+		return nil
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, []string{"base prompt", "base prompt"}, evalService.profiles)
+	require.Len(t, result.Rounds, 1)
+	round := result.Rounds[0]
+	assert.Empty(t, round.Losses)
+	assert.Nil(t, round.Backward)
+	assert.Nil(t, round.Aggregation)
+	assert.Nil(t, round.Patches)
+	assert.Nil(t, round.OutputProfile)
+	assert.Nil(t, round.Validation)
+	assert.Nil(t, round.Acceptance)
+	require.NotNil(t, round.Stop)
+	assert.True(t, round.Stop.ShouldStop)
+	assert.Equal(t, "no train losses extracted", round.Stop.Reason)
+	assert.Equal(t, []EventKind{
+		EventKindBaselineValidation,
+		EventKindRoundStarted,
+		EventKindRoundTrainEvaluation,
+		EventKindRoundLosses,
+		EventKindRoundCompleted,
+	}, observedKinds)
+}
+
+func TestRunContinuesOnEmptyTrainLossesWhenPolicyDisabled(t *testing.T) {
+	evalService := newScriptedEvalService(func(evalSetID string, profileValue string) scriptedEvalOutcome {
+		_ = evalSetID
+		_ = profileValue
+		return scriptedEvalOutcome{
+			score:             0.8,
+			metricStatus:      status.EvalStatusPassed,
+			appliedSurfaceIDs: []string{testSurfaceID},
+		}
+	})
+	engineInstance, err := New(
+		context.Background(),
+		WithAgentEvaluator(newTestAgentEvaluator(t, evalService)),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
+	)
+	require.NoError(t, err)
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{testSurfaceID},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, []string{"base prompt", "base prompt", "base prompt"}, evalService.profiles)
+	require.Len(t, result.Rounds, 1)
+	round := result.Rounds[0]
+	assert.Empty(t, round.Losses)
+	assert.NotNil(t, round.Backward)
+	assert.NotNil(t, round.Aggregation)
+	assert.NotNil(t, round.Patches)
+	assert.NotNil(t, round.OutputProfile)
+	assert.NotNil(t, round.Validation)
+	require.NotNil(t, round.Acceptance)
+	assert.True(t, round.Acceptance.Accepted)
+	require.NotNil(t, round.Stop)
+	assert.Equal(t, "max rounds reached", round.Stop.Reason)
+}
+
 func TestRunAllowsToolSurfaceInTraceWhenTargetingInstruction(t *testing.T) {
 	backward := &fakeBackwarder{
 		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
@@ -2080,6 +2181,17 @@ func TestValidateEvalSetInputsRejectsInvalidInputs(t *testing.T) {
 			},
 		},
 	}))
+	assert.NoError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "node_1",
+				},
+			},
+		},
+	}))
 	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
 		{
 			EvalSetID: "train",
@@ -2142,6 +2254,74 @@ func TestValidateEvalSetInputsRejectsInvalidInputs(t *testing.T) {
 			},
 		},
 	}), `train loss hint eval case "case_2" is not selected for eval set "train"`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: " ",
+					NodeID:     "node_1",
+				},
+			},
+		},
+	}), `train loss target metric name for eval set "train" is empty`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     " ",
+				},
+			},
+		},
+	}), `train loss target node id for eval set "train" metric "quality" is empty`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "node_1",
+				},
+				{
+					MetricName: " quality ",
+					NodeID:     "node_2",
+				},
+			},
+		},
+	}), `train loss target metric " quality " for eval set "train" is duplicated`)
+	assert.EqualError(t, validateEvalSetInputs("train", []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "node_1",
+				},
+			},
+		},
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "node_2",
+				},
+			},
+		},
+	}), `train loss target metric "quality" for eval set "train" is duplicated`)
+	assert.EqualError(t, validateEvalSetInputs("validation", []EvalSetInput{
+		{
+			EvalSetID: "validation",
+			LossTargets: []LossTarget{
+				{
+					MetricName: " ",
+					NodeID:     " ",
+				},
+			},
+		},
+	}), `validation loss targets for eval set "validation" are not supported`)
 }
 
 func TestRunRejectsNonPositiveMaxRounds(t *testing.T) {
@@ -3008,6 +3188,100 @@ func TestBackwardCoversAdditionalBranches(t *testing.T) {
 	assert.Equal(t, "case_b", result.Cases[1].EvalCaseID)
 }
 
+func TestBackwardCaseProcessesLossStartingFromIntermediateStep(t *testing.T) {
+	structure, err := profilecompiler.NewStructure(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "node_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM, Name: "planner"},
+			{NodeID: "node_2", Kind: astructure.NodeKindLLM, Name: "writer"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "node_1#instruction",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value:     astructure.SurfaceValue{Text: stringPtr("plan")},
+			},
+			{
+				SurfaceID: "node_2#instruction",
+				NodeID:    "node_2",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value:     astructure.SurfaceValue{Text: stringPtr("write")},
+			},
+		},
+	})
+	require.NoError(t, err)
+	fake := &fakeBackwarder{
+		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
+			_ = ctx
+			if request.StepID == "step_2" {
+				return &backwarder.Result{
+					Gradients: []promptiter.SurfaceGradient{
+						{SurfaceID: "node_2#instruction", Gradient: "target gradient"},
+					},
+					Upstream: []backwarder.Propagation{
+						{
+							PredecessorStepID: "step_1",
+							Gradients: []backwarder.GradientPacket{
+								{FromStepID: "step_2", Severity: promptiter.LossSeverityP1, Gradient: "upstream gradient"},
+							},
+						},
+					},
+				}, nil
+			}
+			return &backwarder.Result{}, nil
+		},
+	}
+	engineInstance := &engine{backwarder: fake}
+	caseResult, backwardErr := engineInstance.backwardCase(context.Background(), structure, nil, CaseResult{
+		EvalSetID:  "train",
+		EvalCaseID: "case_1",
+		Trace: &atrace.Trace{
+			Steps: []atrace.Step{
+				{
+					StepID:            "step_1",
+					NodeID:            "node_1",
+					AppliedSurfaceIDs: []string{"node_1#instruction"},
+				},
+				{
+					StepID:             "step_2",
+					NodeID:             "node_2",
+					PredecessorStepIDs: []string{"step_1"},
+					AppliedSurfaceIDs:  []string{"node_2#instruction"},
+				},
+			},
+		},
+	}, promptiter.CaseLoss{
+		EvalSetID:  "train",
+		EvalCaseID: "case_1",
+		TerminalLosses: []promptiter.TerminalLoss{
+			{
+				StepID:   "step_2",
+				Severity: promptiter.LossSeverityP1,
+				Loss:     "metric reason",
+			},
+		},
+	}, targetSurfaceSet{"node_2#instruction": {}})
+	require.NoError(t, backwardErr)
+	require.NotNil(t, caseResult)
+	require.Len(t, fake.requests, 2)
+	assert.Equal(t, "step_2", fake.requests[0].StepID)
+	assert.Equal(t, []backwarder.GradientPacket{
+		{FromStepID: "step_2", Severity: promptiter.LossSeverityP1, Gradient: "metric reason"},
+	}, fake.requests[0].Incoming)
+	assert.Equal(t, "step_1", fake.requests[1].StepID)
+	assert.Equal(t, []backwarder.GradientPacket{
+		{FromStepID: "step_2", Severity: promptiter.LossSeverityP1, Gradient: "upstream gradient"},
+	}, fake.requests[1].Incoming)
+	require.Len(t, caseResult.StepGradients, 1)
+	assert.Equal(t, "step_2", caseResult.StepGradients[0].StepID)
+	assert.Equal(t, "node_2", caseResult.StepGradients[0].NodeID)
+	assert.Equal(t, []promptiter.SurfaceGradient{
+		{SurfaceID: "node_2#instruction", Gradient: "target gradient"},
+	}, caseResult.StepGradients[0].Gradients)
+}
+
 func TestBackwardRunsEvalCasesInParallel(t *testing.T) {
 	profile := testRuntimeProfile(t)
 	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
@@ -3345,7 +3619,7 @@ func TestLossStopAndEventHelpers(t *testing.T) {
 				},
 			},
 		}},
-	})
+	}, nil)
 	assert.NoError(t, err)
 	assert.Empty(t, losses)
 	losses, err = (&engine{}).loss(&EvaluationResult{
@@ -3369,7 +3643,7 @@ func TestLossStopAndEventHelpers(t *testing.T) {
 				}},
 			}},
 		}},
-	})
+	}, nil)
 	assert.Nil(t, losses)
 	assert.EqualError(t, err, `resolve terminal step for eval case "case_1": execution trace has no terminal step`)
 	decision := (&engine{}).stop(1, 4, StopPolicy{
@@ -3420,7 +3694,7 @@ func TestOptimizeHelpersAndLossValidation(t *testing.T) {
 	}, targetSurfaceSet{testSurfaceID: {}}, OptimizerOptions{})
 	assert.Nil(t, patchSet)
 	assert.EqualError(t, err, `optimize surface "node_1#instruction": boom`)
-	losses, err := (&engine{}).loss(nil)
+	losses, err := (&engine{}).loss(nil, nil)
 	assert.Nil(t, losses)
 	assert.EqualError(t, err, "evaluation result is nil")
 	losses, err = (&engine{}).loss(&EvaluationResult{
@@ -3441,7 +3715,7 @@ func TestOptimizeHelpersAndLossValidation(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, nil)
 	assert.Nil(t, losses)
 	assert.EqualError(t, err, `metric "quality" for eval case "case_1" is missing loss reason`)
 	terminalStepIDs, err := traceTerminalStepIDs(nil)
@@ -3841,6 +4115,37 @@ func TestRunPropagatesStructureExportError(t *testing.T) {
 	assert.EqualError(t, err, "export structure: boom")
 }
 
+func TestRunRejectsUnknownTrainLossTargetNode(t *testing.T) {
+	engineInstance, err := New(
+		context.Background(),
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
+	)
+	require.NoError(t, err)
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		Train: []EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossTargets: []LossTarget{
+					{
+						MetricName: "quality",
+						NodeID:     "missing",
+					},
+				},
+			},
+		},
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testRuntimeProfile(t),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{testSurfaceID},
+	})
+	assert.Nil(t, result)
+	assert.EqualError(t, err, `validate train loss targets: loss target node id "missing" for eval set "train" metric "quality" is unknown`)
+}
+
 func TestLossUsesTraceTerminalStep(t *testing.T) {
 	losses, err := (&engine{}).loss(&EvaluationResult{
 		EvalSets: []EvalSetResult{
@@ -3880,12 +4185,316 @@ func TestLossUsesTraceTerminalStep(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, nil)
 	assert.NoError(t, err)
 	if assert.Len(t, losses, 1) && assert.Len(t, losses[0].TerminalLosses, 1) {
 		assert.Equal(t, "step_3", losses[0].TerminalLosses[0].StepID)
 		assert.Empty(t, losses[0].TerminalLosses[0].Severity)
 	}
+}
+
+func TestLossTargetsRouteMetricReasonToLastMatchingNodeStep(t *testing.T) {
+	losses, err := (&engine{}).loss(&EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Trace: &atrace.Trace{
+							Status: atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{
+									StepID: "step_1",
+									NodeID: "root",
+								},
+								{
+									StepID:             "step_2",
+									NodeID:             "draft",
+									PredecessorStepIDs: []string{"step_1"},
+								},
+								{
+									StepID:             "step_3",
+									NodeID:             "draft",
+									PredecessorStepIDs: []string{"step_2"},
+								},
+								{
+									StepID:             "step_4",
+									NodeID:             "final",
+									PredecessorStepIDs: []string{"step_3"},
+								},
+							},
+						},
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     " needs a better intermediate draft ",
+							},
+						},
+					},
+				},
+			},
+		},
+	}, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "draft",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, losses, 1)
+	require.Len(t, losses[0].TerminalLosses, 1)
+	assert.Equal(t, "step_3", losses[0].TerminalLosses[0].StepID)
+	assert.Equal(t, "needs a better intermediate draft", losses[0].TerminalLosses[0].Loss)
+}
+
+func TestLossTargetsSkipCaseWhenTargetNodeDidNotRun(t *testing.T) {
+	losses, err := (&engine{}).loss(&EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Trace: &atrace.Trace{
+							Status: atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{
+									StepID: "step_1",
+									NodeID: "root",
+								},
+							},
+						},
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     "needs improvement",
+							},
+						},
+					},
+				},
+			},
+		},
+	}, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "draft",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, losses)
+}
+
+func TestLossTargetsRejectNilTrace(t *testing.T) {
+	losses, err := (&engine{}).loss(&EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     "needs improvement",
+							},
+						},
+					},
+				},
+			},
+		},
+	}, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "draft",
+				},
+			},
+		},
+	})
+	assert.Nil(t, losses)
+	assert.EqualError(t, err, `resolve loss target for eval case "case_1" metric "quality": execution trace is nil`)
+}
+
+func TestLossTargetsSkipPassedMetric(t *testing.T) {
+	losses, err := (&engine{}).loss(&EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Trace: &atrace.Trace{
+							Status: atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{
+									StepID: "step_1",
+									NodeID: "draft",
+								},
+							},
+						},
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusPassed,
+							},
+						},
+					},
+				},
+			},
+		},
+	}, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "draft",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, losses)
+}
+
+func TestLossTargetsApplyAtEvalSetScopeAcrossInputEntries(t *testing.T) {
+	losses, err := (&engine{}).loss(&EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Trace: &atrace.Trace{
+							Status: atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{
+									StepID: "case_1_terminal",
+									NodeID: "final",
+								},
+								{
+									StepID: "case_1_target",
+									NodeID: "draft",
+								},
+							},
+						},
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     "case one reason",
+							},
+						},
+					},
+				},
+			},
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_2",
+						Trace: &atrace.Trace{
+							Status: atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{
+									StepID: "case_2_terminal",
+									NodeID: "final",
+								},
+								{
+									StepID: "case_2_target",
+									NodeID: "draft",
+								},
+							},
+						},
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     "case two reason",
+							},
+						},
+					},
+				},
+			},
+		},
+	}, []EvalSetInput{
+		{
+			EvalSetID:   "train",
+			EvalCaseIDs: []string{"case_1"},
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "draft",
+				},
+			},
+		},
+		{
+			EvalSetID:   "train",
+			EvalCaseIDs: []string{"case_2"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, losses, 2)
+	require.Len(t, losses[0].TerminalLosses, 1)
+	require.Len(t, losses[1].TerminalLosses, 1)
+	assert.Equal(t, "case_1_target", losses[0].TerminalLosses[0].StepID)
+	assert.Equal(t, "case_2_target", losses[1].TerminalLosses[0].StepID)
+}
+
+func TestLossTargetsRequireMetricInTrainingResult(t *testing.T) {
+	losses, err := (&engine{}).loss(&EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Metrics: []MetricResult{
+							{
+								MetricName: "helpfulness",
+								Status:     status.EvalStatusPassed,
+							},
+						},
+					},
+				},
+			},
+		},
+	}, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "draft",
+				},
+			},
+		},
+	})
+	assert.Nil(t, losses)
+	assert.EqualError(t, err, `loss target metric "quality" for eval set "train" is missing from training result`)
 }
 
 func TestTraceTerminalStepIDsReturnsTraceTerminalSet(t *testing.T) {
@@ -3964,7 +4573,7 @@ func TestLossExpandsMetricAcrossTraceTerminalSteps(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, nil)
 	assert.NoError(t, err)
 	if assert.Len(t, losses, 1) && assert.Len(t, losses[0].TerminalLosses, 2) {
 		assert.Equal(t, "step_2", losses[0].TerminalLosses[0].StepID)
@@ -4002,7 +4611,7 @@ func TestMergeLossHintsAppendsToExistingFailedMetricLoss(t *testing.T) {
 			},
 		},
 	}
-	losses, err := (&engine{}).loss(result)
+	losses, err := (&engine{}).loss(result, nil)
 	require.NoError(t, err)
 	mergedLosses, err := mergeLossHints(losses, result, []EvalSetInput{
 		{

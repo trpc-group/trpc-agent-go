@@ -65,12 +65,17 @@ type Option func(*config)
 
 // config holds the configuration for the DuckDuckGo tool.
 type config struct {
-	baseURL    string
-	backend    string
-	userAgent  string
-	httpClient *http.Client
-	timeout    time.Duration
-	timeoutSet bool
+	baseURL                  string
+	backend                  string
+	userAgent                string
+	httpClient               *http.Client
+	timeout                  time.Duration
+	timeoutSet               bool
+	blockedResultURLPatterns *resultURLPatterns
+}
+
+type resultURLPatterns struct {
+	values []string
 }
 
 // WithBaseURL sets the base URL for the DuckDuckGo API.
@@ -113,6 +118,26 @@ func WithHTTPClient(httpClient *http.Client) Option {
 	}
 }
 
+// WithBlockedResultURLPatterns filters search results whose URL contains one
+// of the provided case-insensitive patterns. Use it to exclude known
+// undesired mirrors or routes from search tool output without changing the
+// search backend.
+func WithBlockedResultURLPatterns(patterns ...string) Option {
+	return func(c *config) {
+		normalized := normalizeResultURLPatterns(patterns)
+		if len(normalized) == 0 {
+			return
+		}
+		if c.blockedResultURLPatterns == nil {
+			c.blockedResultURLPatterns = &resultURLPatterns{}
+		}
+		c.blockedResultURLPatterns.values = append(
+			c.blockedResultURLPatterns.values,
+			normalized...,
+		)
+	}
+}
+
 // searchRequest represents the input for the DuckDuckGo search tool.
 type searchRequest struct {
 	Query string `json:"query" jsonschema:"description=The search query to execute on DuckDuckGo"`
@@ -134,11 +159,12 @@ type resultItem struct {
 
 // ddgTool represents the DuckDuckGo search tool.
 type ddgTool struct {
-	client     *client.Client
-	httpClient *http.Client
-	baseURL    string
-	backend    string
-	userAgent  string
+	client                   *client.Client
+	httpClient               *http.Client
+	baseURL                  string
+	backend                  string
+	userAgent                string
+	blockedResultURLPatterns *resultURLPatterns
 }
 
 // NewTool creates a new DuckDuckGo search tool with the provided options.
@@ -167,11 +193,12 @@ func NewTool(opts ...Option) tool.CallableTool {
 	ddgClient := client.New(cfg.baseURL, cfg.userAgent, cfg.httpClient)
 
 	searchTool := &ddgTool{
-		client:     ddgClient,
-		httpClient: cfg.httpClient,
-		baseURL:    cfg.baseURL,
-		backend:    cfg.backend,
-		userAgent:  cfg.userAgent,
+		client:                   ddgClient,
+		httpClient:               cfg.httpClient,
+		baseURL:                  cfg.baseURL,
+		backend:                  cfg.backend,
+		userAgent:                cfg.userAgent,
+		blockedResultURLPatterns: cfg.blockedResultURLPatterns,
 	}
 
 	return function.NewFunctionTool(
@@ -285,9 +312,11 @@ func (t *ddgTool) search(ctx context.Context, req searchRequest) (searchResponse
 
 	switch t.backend {
 	case "", backendAPI:
-		return t.searchAPIWithSERPFallback(ctx, req)
+		resp, err := t.searchAPIWithSERPFallback(ctx, req)
+		return t.filterSearchResponse(resp), err
 	case backendHTML, backendLite:
-		return t.searchSERPWithFallback(ctx, req)
+		resp, err := t.searchSERPWithFallback(ctx, req)
+		return t.filterSearchResponse(resp), err
 	default:
 		return searchResponse{
 			Query:   req.Query,
@@ -297,11 +326,80 @@ func (t *ddgTool) search(ctx context.Context, req searchRequest) (searchResponse
 	}
 }
 
+func (t *ddgTool) filterSearchResponse(resp searchResponse) searchResponse {
+	patterns := resultURLPatternValues(t.blockedResultURLPatterns)
+	if len(patterns) == 0 || len(resp.Results) == 0 {
+		return resp
+	}
+
+	results := make([]resultItem, 0, len(resp.Results))
+	filtered := 0
+	for _, result := range resp.Results {
+		if resultURLMatchesPattern(result.URL, patterns) {
+			filtered++
+			continue
+		}
+		results = append(results, result)
+	}
+	if filtered == 0 {
+		return resp
+	}
+
+	resp.Results = results
+	note := fmt.Sprintf(
+		"filtered %d result(s) matching configured blocked URL patterns; "+
+			"returned %d unblocked result(s)",
+		filtered,
+		len(results),
+	)
+	if strings.TrimSpace(resp.Summary) == "" {
+		resp.Summary = note
+	} else {
+		resp.Summary += "; " + note
+	}
+	return resp
+}
+
+func resultURLMatchesPattern(raw string, patterns []string) bool {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return false
+	}
+	for _, pattern := range patterns {
+		if pattern == "" {
+			continue
+		}
+		if strings.Contains(raw, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func resultURLPatternValues(patterns *resultURLPatterns) []string {
+	if patterns == nil {
+		return nil
+	}
+	return patterns.values
+}
+
+func normalizeResultURLPatterns(patterns []string) []string {
+	normalized := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		pattern = strings.ToLower(strings.TrimSpace(pattern))
+		if pattern == "" {
+			continue
+		}
+		normalized = append(normalized, pattern)
+	}
+	return normalized
+}
+
 func (t *ddgTool) searchAPIWithSERPFallback(
 	ctx context.Context,
 	req searchRequest,
 ) (searchResponse, error) {
-	result, err := t.searchAPI(req)
+	result, err := t.searchAPI(ctx, req)
 	if err == nil || ctx.Err() != nil || !shouldFallbackFromAPIError(err) {
 		return result, err
 	}
@@ -334,15 +432,30 @@ func (t *ddgTool) searchAPIWithSERPFallback(
 	)
 }
 
-func (t *ddgTool) searchAPI(req searchRequest) (searchResponse, error) {
+func (t *ddgTool) searchAPIWithDefaultBaseURL(
+	ctx context.Context,
+	req searchRequest,
+) (searchResponse, error) {
+	apiTool := *t
+	apiTool.baseURL = defaultBaseURL
+	apiTool.backend = backendAPI
+	apiTool.userAgent = defaultUserAgent
+	apiTool.client = client.New(defaultBaseURL, apiTool.userAgent, apiTool.httpClient)
+	return apiTool.searchAPI(ctx, req)
+}
+
+func (t *ddgTool) searchAPI(
+	ctx context.Context,
+	req searchRequest,
+) (searchResponse, error) {
 	// Perform the search.
-	response, err := t.client.Search(req.Query)
+	response, err := t.client.SearchContext(ctx, req.Query)
 	if err != nil {
 		return searchResponse{
 			Query:   req.Query,
 			Results: []resultItem{},
 			Summary: fmt.Sprintf("Error performing search: %v", err),
-		}, fmt.Errorf("error performing search: %v", err)
+		}, fmt.Errorf("error performing search: %w", err)
 	}
 
 	// Convert the response to our format.

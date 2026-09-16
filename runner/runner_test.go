@@ -58,6 +58,149 @@ type mockAgent struct {
 	name string
 }
 
+type executionTraceCapturingAgent struct {
+	*mockAgent
+	executionTraceEnabled bool
+}
+
+func (a *executionTraceCapturingAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	a.executionTraceEnabled = invocation.RunOptions.ExecutionTraceEnabled
+	return a.mockAgent.Run(ctx, invocation)
+}
+
+type repositoryOnlyAgent struct {
+	*mockAgent
+}
+
+func (a *repositoryOnlyAgent) InvocationSkillRepository(
+	context.Context,
+	*agent.Invocation,
+) skill.Repository {
+	return nil
+}
+
+func TestRunnerRejectsSkillLoadsForUnsupportedAgent(t *testing.T) {
+	r := NewRunner("app", &mockAgent{name: "plain"})
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("hello"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+
+	require.Nil(t, events)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, agent.ErrSkillLoadingUnsupported))
+}
+
+func TestRunnerExecutionTraceDefaultAndPerRunOverride(t *testing.T) {
+	tests := []struct {
+		name          string
+		runnerOptions []Option
+		runOptions    []agent.RunOption
+		wantEnabled   bool
+	}{
+		{
+			name:        "default disabled",
+			wantEnabled: false,
+		},
+		{
+			name:          "runner default enabled",
+			runnerOptions: []Option{WithExecutionTraceEnabled(true)},
+			wantEnabled:   true,
+		},
+		{
+			name:          "single run disables runner default",
+			runnerOptions: []Option{WithExecutionTraceEnabled(true)},
+			runOptions:    []agent.RunOption{agent.WithExecutionTraceEnabled(false)},
+			wantEnabled:   false,
+		},
+		{
+			name:          "single run enables disabled runner",
+			runnerOptions: []Option{WithExecutionTraceEnabled(false)},
+			runOptions:    []agent.RunOption{agent.WithExecutionTraceEnabled(true)},
+			wantEnabled:   true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ag := &executionTraceCapturingAgent{
+				mockAgent: &mockAgent{name: "trace-capture"},
+			}
+			r := NewRunner("app", ag, test.runnerOptions...)
+			t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+			events, err := r.Run(
+				context.Background(),
+				"user",
+				"session",
+				model.NewUserMessage("hello"),
+				test.runOptions...,
+			)
+			require.NoError(t, err)
+			var completion *event.Event
+			for evt := range events {
+				if evt != nil && evt.IsRunnerCompletion() {
+					completion = evt
+				}
+			}
+			assert.Equal(t, test.wantEnabled, ag.executionTraceEnabled)
+			require.NotNil(t, completion)
+			if test.wantEnabled {
+				assert.NotNil(t, completion.ExecutionTrace)
+			} else {
+				assert.Nil(t, completion.ExecutionTrace)
+			}
+		})
+	}
+}
+
+func TestRunnerExecutionTraceDefaultAppliesToAgentFactory(t *testing.T) {
+	var got agent.RunOptions
+	r := NewRunnerWithAgentFactory(
+		"app",
+		"factory-agent",
+		func(_ context.Context, runOptions agent.RunOptions) (agent.Agent, error) {
+			got = runOptions
+			return &mockAgent{name: "factory-agent"}, nil
+		},
+		WithExecutionTraceEnabled(true),
+	)
+	t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("hello"),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	assert.True(t, got.ExecutionTraceEnabled)
+}
+
+func TestRunnerRejectsRepositoryProviderWithoutSkillLoadSupport(t *testing.T) {
+	ag := &repositoryOnlyAgent{mockAgent: &mockAgent{name: "repository-only"}}
+	r := NewRunner("app", ag)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("hello"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+
+	require.Nil(t, events)
+	require.ErrorIs(t, err, agent.ErrSkillLoadingUnsupported)
+}
+
 type staticSessionRouter struct {
 	sess *session.Session
 }
@@ -280,6 +423,7 @@ type realStructuredOutputMapPayload struct {
 type capturedModelRequest struct {
 	messages         []model.Message
 	structuredOutput *model.StructuredOutput
+	toolNames        []string
 }
 
 type sequentialModel struct {
@@ -381,6 +525,10 @@ func cloneCapturedModelRequest(req *model.Request) *capturedModelRequest {
 	cloned := &capturedModelRequest{
 		messages: append([]model.Message(nil), req.Messages...),
 	}
+	for name := range req.Tools {
+		cloned.toolNames = append(cloned.toolNames, name)
+	}
+	sort.Strings(cloned.toolNames)
 	if req.StructuredOutput != nil {
 		structuredOutput := *req.StructuredOutput
 		if req.StructuredOutput.JSONSchema != nil {
@@ -390,6 +538,398 @@ func cloneCapturedModelRequest(req *model.Request) *capturedModelRequest {
 		cloned.structuredOutput = &structuredOutput
 	}
 	return cloned
+}
+
+func TestRunnerRunWithSkillLoadsMaterializesFirstRequest(t *testing.T) {
+	repo := createRunnerDeclaredSkillRepository(t)
+	modelStub := &sequentialModel{
+		name: "declared-skill",
+		responses: []*model.Response{{
+			ID:   "declared-skill-response",
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("done"),
+			}},
+		}},
+	}
+	activatedTool := &callCountingTool{
+		name:   "review_inspect",
+		result: "ok",
+	}
+	activatedSet := &candidateToolSet{
+		name:  "review-tools",
+		tools: []tool.Tool{activatedTool},
+	}
+	agt := llmagent.New(
+		"reviewer",
+		llmagent.WithModel(modelStub),
+		llmagent.WithSkills(repo),
+		llmagent.WithActivatableToolSets([]tool.ToolSet{activatedSet}),
+		llmagent.WithToolActivationOnSkillLoad(
+			"review",
+			[]string{"review-tools"},
+		),
+	)
+	r := NewRunner("app", agt)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review this"),
+		agent.WithSkillLoads(skill.LoadRequest{
+			Name: "review",
+			Docs: []string{"guide.md"},
+		}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 1)
+	system := firstSystemMessageContent(requests[0].messages)
+	require.Contains(t, system, "REVIEW BODY")
+	require.Contains(t, system, "GUIDE BODY")
+	require.Contains(t, requests[0].toolNames, "review-tools_review_inspect")
+}
+
+func TestRunnerWrappersPreserveSkillLoads(t *testing.T) {
+	tests := []struct {
+		name      string
+		runnerOpt Option
+		response  string
+		requests  int
+	}{
+		{
+			name: "ralph loop",
+			runnerOpt: WithRalphLoop(RalphLoopConfig{
+				CompletionPromise: "DONE",
+			}),
+			response: "<promise>DONE</promise>",
+			requests: 1,
+		},
+		{
+			name: "candidate selector",
+			runnerOpt: WithCandidateSelector(
+				&fixedCandidateSelector{winner: 0},
+				WithCandidateAttempts(2),
+			),
+			response: "done",
+			requests: 2,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			responses := make([]*model.Response, test.requests)
+			for i := range responses {
+				responses[i] = &model.Response{
+					ID:   fmt.Sprintf("%s-%d", test.name, i),
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage(test.response),
+					}},
+				}
+			}
+			modelStub := &sequentialModel{
+				name:      test.name,
+				responses: responses,
+			}
+			agt := llmagent.New(
+				"reviewer",
+				llmagent.WithModel(modelStub),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			)
+			r := NewRunner("app", agt, test.runnerOpt)
+
+			events, err := r.Run(
+				context.Background(),
+				"user",
+				"session",
+				model.NewUserMessage("review"),
+				agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+			)
+			require.NoError(t, err)
+			for range events {
+			}
+
+			requests := modelStub.Requests()
+			require.Len(t, requests, test.requests)
+			for _, request := range requests {
+				require.Contains(
+					t,
+					firstSystemMessageContent(request.messages),
+					"REVIEW BODY",
+				)
+			}
+		})
+	}
+}
+
+func TestRunnerRalphLoopPreservesSkillLoadsAcrossIterations(t *testing.T) {
+	modelStub := &sequentialModel{
+		name: "ralph-multi-iteration",
+		responses: []*model.Response{
+			{
+				ID:   "ralph-working",
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("still working"),
+				}},
+			},
+			{
+				ID:   "ralph-done",
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(
+						"<promise>DONE</promise>",
+					),
+				}},
+			},
+		},
+	}
+	agt := llmagent.New(
+		"reviewer",
+		llmagent.WithModel(modelStub),
+		llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+	)
+	r := NewRunner(
+		"app",
+		agt,
+		WithRalphLoop(RalphLoopConfig{
+			MaxIterations:     2,
+			CompletionPromise: "DONE",
+		}),
+	)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 2)
+	for _, request := range requests {
+		require.Contains(
+			t,
+			firstSystemMessageContent(request.messages),
+			"REVIEW BODY",
+		)
+	}
+}
+
+func TestRunnerNestedCandidateAndRalphPreserveSkillLoads(t *testing.T) {
+	const attempts = 2
+	responses := make([]*model.Response, 0, attempts*2)
+	for i := 0; i < attempts; i++ {
+		responses = append(
+			responses,
+			&model.Response{
+				ID:   fmt.Sprintf("candidate-%d-working", i),
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("still working"),
+				}},
+			},
+			&model.Response{
+				ID:   fmt.Sprintf("candidate-%d-done", i),
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(
+						"<promise>DONE</promise>",
+					),
+				}},
+			},
+		)
+	}
+	modelStub := &sequentialModel{
+		name:      "candidate-ralph",
+		responses: responses,
+	}
+	agt := llmagent.New(
+		"reviewer",
+		llmagent.WithModel(modelStub),
+		llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+	)
+	r := NewRunner(
+		"app",
+		agt,
+		WithRalphLoop(RalphLoopConfig{
+			MaxIterations:     2,
+			CompletionPromise: "DONE",
+		}),
+		WithCandidateSelector(
+			&fixedCandidateSelector{winner: 0},
+			WithCandidateAttempts(attempts),
+		),
+	)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, attempts*2)
+	for _, request := range requests {
+		require.Contains(
+			t,
+			firstSystemMessageContent(request.messages),
+			"REVIEW BODY",
+		)
+	}
+}
+
+func TestRunnerWrappersRejectInvalidSkillBeforeModelRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		runnerOpt Option
+		errorType string
+	}{
+		{
+			name: "ralph loop",
+			runnerOpt: WithRalphLoop(RalphLoopConfig{
+				CompletionPromise: "DONE",
+			}),
+			errorType: agent.ErrorTypeStopAgentError,
+		},
+		{
+			name: "candidate selector",
+			runnerOpt: WithCandidateSelector(
+				&fixedCandidateSelector{winner: 0},
+				WithCandidateAttempts(2),
+			),
+			errorType: model.ErrorTypeRunError,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			modelStub := &sequentialModel{name: test.name}
+			agt := llmagent.New(
+				"reviewer",
+				llmagent.WithModel(modelStub),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			)
+			r := NewRunner("app", agt, test.runnerOpt)
+
+			events, err := r.Run(
+				context.Background(),
+				"user",
+				"session",
+				model.NewUserMessage("review"),
+				agent.WithSkillLoads(skill.LoadRequest{Name: "missing"}),
+			)
+			require.NoError(t, err)
+			var skillLoadError *model.ResponseError
+			for evt := range events {
+				if evt != nil && evt.Response != nil &&
+					evt.Response.Error != nil &&
+					strings.Contains(
+						evt.Response.Error.Message,
+						skill.ErrSkillUnavailable.Error(),
+					) {
+					skillLoadError = evt.Response.Error
+				}
+			}
+
+			require.NotNil(
+				t,
+				skillLoadError,
+				"wrapper must deliver the skill-load failure",
+			)
+			require.Equal(t, test.errorType, skillLoadError.Type)
+			require.Empty(t, modelStub.Requests())
+		})
+	}
+}
+
+func TestRunnerRejectsSkillLoadsForLazyRootBeforeFactoryRun(t *testing.T) {
+	factoryCalled := false
+	lazy := agent.NewLazyAgent(
+		agent.Info{Name: "lazy-root"},
+		func(
+			context.Context,
+			agent.RunOptions,
+		) (agent.Agent, error) {
+			factoryCalled = true
+			return llmagent.New(
+				"lazy-root",
+				llmagent.WithModel(&sequentialModel{name: "lazy-root"}),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			), nil
+		},
+	)
+	r := NewRunner("app", lazy)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+
+	require.Nil(t, events)
+	require.ErrorIs(t, err, agent.ErrSkillLoadingUnsupported)
+	require.False(t, factoryCalled)
+}
+
+func TestRunnerAgentFactorySupportsSkillLoads(t *testing.T) {
+	modelStub := &sequentialModel{
+		name: "factory-root",
+		responses: []*model.Response{{
+			ID:   "factory-root-response",
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("done"),
+			}},
+		}},
+	}
+	r := NewRunnerWithAgentFactory(
+		"app",
+		"factory-root",
+		func(
+			context.Context,
+			agent.RunOptions,
+		) (agent.Agent, error) {
+			return llmagent.New(
+				"factory-root",
+				llmagent.WithModel(modelStub),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			), nil
+		},
+	)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 1)
+	require.Contains(
+		t,
+		firstSystemMessageContent(requests[0].messages),
+		"REVIEW BODY",
+	)
 }
 
 func firstSystemMessageContent(messages []model.Message) string {
@@ -464,6 +1004,19 @@ func TestEnqueueUserMessage_Errors(t *testing.T) {
 	)
 	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
 
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: " "},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
+
 	textPart := "hello from part"
 	err = EnqueueUserMessage(
 		r,
@@ -473,6 +1026,45 @@ func TestEnqueueUserMessage_Errors(t *testing.T) {
 			ContentParts: []model.ContentPart{{
 				Type: model.ContentTypeText,
 				Text: &textPart,
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: "https://example.com/video.mp4"},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{Data: []byte("video")},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeAudio,
+				Audio: &model.Audio{URL: "https://example.com/audio.mp3"},
 			}},
 		},
 	)
@@ -963,7 +1555,7 @@ func TestRunner_Run_WithRunStructuredOutputJSON_SupportsPointerSliceAndArrayFiel
 	require.NoError(t, err)
 	var structured any
 	for evt := range eventCh {
-		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		require.Nil(t, evt.Error, "unexpected runner completion event error: %+v", evt.Error)
 		if evt.StructuredOutput != nil {
 			structured = evt.StructuredOutput
 		}
@@ -1029,7 +1621,7 @@ func TestRunner_Run_WithRunStructuredOutputJSON_SupportsPointerSliceAndArrayFiel
 	require.NoError(t, err)
 	var structured any
 	for evt := range eventCh {
-		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		require.Nil(t, evt.Error, "unexpected runner completion event error: %+v", evt.Error)
 		if evt.StructuredOutput != nil {
 			structured = evt.StructuredOutput
 		}
@@ -1124,7 +1716,7 @@ func TestRunner_Run_WithRunStructuredOutputJSONSchema_LegacyNonStrictPointerSlic
 	require.NoError(t, err)
 	var structured any
 	for evt := range eventCh {
-		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		require.Nil(t, evt.Error, "unexpected runner completion event error: %+v", evt.Error)
 		if evt.StructuredOutput != nil {
 			structured = evt.StructuredOutput
 		}
@@ -1190,7 +1782,7 @@ func TestRunner_Run_WithRunStructuredOutputJSON_SupportsStringMap_RealOpenAI(
 	require.NoError(t, err)
 	var structured any
 	for evt := range eventCh {
-		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		require.Nil(t, evt.Error, "unexpected runner completion event error: %+v", evt.Error)
 		if evt.StructuredOutput != nil {
 			structured = evt.StructuredOutput
 		}
@@ -1451,6 +2043,71 @@ func TestRunner_WithPlugins_AppliesHooks(t *testing.T) {
 	}
 }
 
+func TestRunner_WithPlugins_AfterRunReceivesFinalizedCompletionClone(t *testing.T) {
+	const mutatedTag = "after-run-mutated"
+	const mutatedInput = "after-run-mutated-input"
+	const mutatedOutput = "after-run-mutated-output"
+	var afterRunEvent *event.Event
+	p := &testPlugin{
+		name: "after-run",
+		reg: func(r *plugin.Registry) {
+			r.AfterRun(func(ctx context.Context, args *plugin.AfterRunArgs) error {
+				if args == nil {
+					return nil
+				}
+				afterRunEvent = args.CompletionEvent
+				if args.CompletionEvent != nil {
+					args.CompletionEvent.Tag = mutatedTag
+				}
+				if args.CompletionEvent != nil && args.CompletionEvent.ExecutionTrace != nil {
+					trace := args.CompletionEvent.ExecutionTrace
+					if trace.Input != nil {
+						trace.Input.Text = mutatedInput
+					}
+					if trace.Output != nil {
+						trace.Output.Text = mutatedOutput
+					}
+				}
+				return nil
+			})
+		},
+	}
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &mockAgent{name: "test-agent"}
+	r := NewRunner(
+		"test-app",
+		ag,
+		WithSessionService(sessionService),
+		WithPlugins(p),
+	)
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+		agent.WithExecutionTraceEnabled(true),
+	)
+	require.NoError(t, err)
+	var completion *event.Event
+	for evt := range ch {
+		if evt != nil && evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+	require.NotNil(t, afterRunEvent)
+	require.True(t, afterRunEvent.IsRunnerCompletion())
+	require.NotNil(t, afterRunEvent.ExecutionTrace)
+	require.NotNil(t, afterRunEvent.ExecutionTrace.Input)
+	require.NotNil(t, afterRunEvent.ExecutionTrace.Output)
+	require.NotNil(t, completion)
+	require.NotEqual(t, mutatedTag, completion.Tag)
+	require.NotNil(t, completion.ExecutionTrace)
+	require.NotNil(t, completion.ExecutionTrace.Input)
+	require.NotNil(t, completion.ExecutionTrace.Output)
+	require.NotEqual(t, mutatedInput, completion.ExecutionTrace.Input.Text)
+	require.NotEqual(t, mutatedOutput, completion.ExecutionTrace.Output.Text)
+}
+
 type closeableTestPlugin struct {
 	testPlugin
 	closed bool
@@ -1466,6 +2123,7 @@ type chainTestPluginManager struct {
 	modelCallbacks *model.Callbacks
 	toolCallbacks  *tool.Callbacks
 	eventHook      func(context.Context, *agent.Invocation, *event.Event) (*event.Event, error)
+	afterRunHook   func(context.Context, *plugin.AfterRunArgs) error
 	closeHook      func(context.Context) error
 }
 
@@ -1490,6 +2148,16 @@ func (m *chainTestPluginManager) OnEvent(
 		return e, nil
 	}
 	return m.eventHook(ctx, invocation, e)
+}
+
+func (m *chainTestPluginManager) AfterRun(
+	ctx context.Context,
+	args *plugin.AfterRunArgs,
+) error {
+	if m.afterRunHook == nil {
+		return nil
+	}
+	return m.afterRunHook(ctx, args)
 }
 
 func (m *chainTestPluginManager) Close(ctx context.Context) error {
@@ -1574,6 +2242,10 @@ func TestPluginManagerChain_RunsCallbacksInManagerOrder(t *testing.T) {
 	eventOut, err := chain.OnEvent(context.Background(), nil, &event.Event{Tag: "start"})
 	require.NoError(t, err)
 	require.Equal(t, "start-first-second", eventOut.Tag)
+	afterRun, ok := chain.(afterRunManager)
+	require.True(t, ok)
+	err = afterRun.AfterRun(context.Background(), &plugin.AfterRunArgs{})
+	require.NoError(t, err)
 	require.Equal(t, []string{
 		"first:before-agent",
 		"second:before-agent",
@@ -1589,6 +2261,8 @@ func TestPluginManagerChain_RunsCallbacksInManagerOrder(t *testing.T) {
 		"second:after-tool",
 		"first:event",
 		"second:event",
+		"first:after-run",
+		"second:after-run",
 	}, order)
 }
 
@@ -1645,6 +2319,23 @@ func TestPluginManagerChain_OnEventStopsOnError(t *testing.T) {
 	require.Nil(t, got)
 }
 
+func TestPluginManagerChain_AfterRunContinuesAndJoinsErrors(t *testing.T) {
+	expected := errors.New("after run failed")
+	called := false
+	chain := pluginManagerChain{
+		&chainTestPluginManager{afterRunHook: func(context.Context, *plugin.AfterRunArgs) error {
+			return expected
+		}},
+		&chainTestPluginManager{afterRunHook: func(context.Context, *plugin.AfterRunArgs) error {
+			called = true
+			return nil
+		}},
+	}
+	err := chain.AfterRun(context.Background(), &plugin.AfterRunArgs{})
+	require.ErrorIs(t, err, expected)
+	require.True(t, called)
+}
+
 func newChainTestPluginManager(name string, order *[]string) *chainTestPluginManager {
 	agentCallbacks := agent.NewCallbacks()
 	agentCallbacks.RegisterBeforeAgent(func(context.Context, *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
@@ -1681,6 +2372,10 @@ func newChainTestPluginManager(name string, order *[]string) *chainTestPluginMan
 			*order = append(*order, name+":event")
 			e.Tag += "-" + name
 			return e, nil
+		},
+		afterRunHook: func(context.Context, *plugin.AfterRunArgs) error {
+			*order = append(*order, name+":after-run")
+			return nil
 		},
 	}
 }
@@ -2656,26 +3351,26 @@ func TestRunner_GraphCompletionPropagation(t *testing.T) {
 	require.NotEmpty(t, events, "Should receive events")
 
 	// Find the runner completion event (should be the last one).
-	var runnerCompletionEvent *event.Event
+	var runnerEvent *event.Event
 	for i := len(events) - 1; i >= 0; i-- {
 		if events[i].Object == model.ObjectTypeRunnerCompletion {
-			runnerCompletionEvent = events[i]
+			runnerEvent = events[i]
 			break
 		}
 	}
 
-	require.NotNil(t, runnerCompletionEvent, "Should have runner completion event")
+	require.NotNil(t, runnerEvent, "Should have runner completion event")
 
 	// Verify that the state delta was propagated.
-	assert.NotNil(t, runnerCompletionEvent.StateDelta, "State delta should be propagated")
-	assert.Equal(t, "final_value", string(runnerCompletionEvent.StateDelta["final_key"]),
+	assert.NotNil(t, runnerEvent.StateDelta, "State delta should be propagated")
+	assert.Equal(t, "final_value", string(runnerEvent.StateDelta["final_key"]),
 		"State delta should contain the final key-value pair")
 
 	// Verify that the final choices were propagated.
-	assert.NotEmpty(t, runnerCompletionEvent.Response.Choices,
+	assert.NotEmpty(t, runnerEvent.Response.Choices,
 		"Final choices should be propagated")
 	assert.Equal(t, "Graph execution completed",
-		runnerCompletionEvent.Response.Choices[0].Message.Content,
+		runnerEvent.Response.Choices[0].Message.Content,
 		"Final message content should match")
 }
 
@@ -2715,15 +3410,15 @@ func TestRunner_GraphCompletionSessionStateFiltersSnapshotKeys(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			var runnerCompletionEvent *event.Event
+			var runnerEvent *event.Event
 			for ev := range eventCh {
 				if ev != nil && ev.Object == model.ObjectTypeRunnerCompletion {
-					runnerCompletionEvent = ev
+					runnerEvent = ev
 				}
 			}
-			require.NotNil(t, runnerCompletionEvent)
-			require.Equal(t, lastResponse, runnerCompletionEvent.StateDelta[graph.StateKeyLastResponse])
-			require.Contains(t, runnerCompletionEvent.StateDelta, graph.StateKeyMessages)
+			require.NotNil(t, runnerEvent)
+			require.Equal(t, lastResponse, runnerEvent.StateDelta[graph.StateKeyLastResponse])
+			require.Contains(t, runnerEvent.StateDelta, graph.StateKeyMessages)
 
 			sess, err := sessionService.GetSession(context.Background(), session.Key{
 				AppName:   "test-app",
@@ -3889,7 +4584,7 @@ func (m *graphCompletionMockAgent) Run(
 			"final_key": []byte("final_value"),
 		}
 	}
-	graphCompletionEvent := &event.Event{
+	graphEvent := &event.Event{
 		Response: &model.Response{
 			ID:     "graph-completion",
 			Object: "graph.execution",
@@ -3912,15 +4607,15 @@ func (m *graphCompletionMockAgent) Run(
 	}
 	if m.visibleCompletion {
 		visible, ok := graph.VisibleGraphCompletionEventForAuthor(
-			graphCompletionEvent,
+			graphEvent,
 			m.name,
 		)
 		if ok {
-			graphCompletionEvent = visible
+			graphEvent = visible
 		}
 	}
 
-	eventCh <- graphCompletionEvent
+	eventCh <- graphEvent
 	close(eventCh)
 
 	return eventCh, nil
@@ -3994,7 +4689,7 @@ func (m *dedupGraphCompletionAgent) Run(
 		Timestamp:    time.Now(),
 	}
 
-	graphCompletionEvent := &event.Event{
+	graphEvent := &event.Event{
 		Response: &model.Response{
 			ID:     graphEventID,
 			Object: graph.ObjectTypeGraphExecution,
@@ -4017,7 +4712,7 @@ func (m *dedupGraphCompletionAgent) Run(
 	}
 
 	eventCh <- assistantEvent
-	eventCh <- graphCompletionEvent
+	eventCh <- graphEvent
 	close(eventCh)
 	return eventCh, nil
 }
@@ -4072,7 +4767,7 @@ func (m *mismatchedIDGraphCompletionAgent) Run(
 		ID:           "assistant-event-id",
 		Timestamp:    time.Now(),
 	}
-	graphCompletionEvent := &event.Event{
+	graphEvent := &event.Event{
 		Response: &model.Response{
 			ID:     "graph-event-id",
 			Object: graph.ObjectTypeGraphExecution,
@@ -4091,7 +4786,7 @@ func (m *mismatchedIDGraphCompletionAgent) Run(
 		Timestamp:    time.Now(),
 	}
 	eventCh <- assistantEvent
-	eventCh <- graphCompletionEvent
+	eventCh <- graphEvent
 	close(eventCh)
 	return eventCh, nil
 }
@@ -4138,6 +4833,21 @@ func (m *failingAgent) FindSubAgent(name string) agent.Agent { return nil }
 func (m *failingAgent) Tools() []tool.Tool                   { return nil }
 func (m *failingAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
 	return nil, errors.New("run failed")
+}
+
+type contextCauseFailingAgent struct{ name string }
+
+func (m *contextCauseFailingAgent) Info() agent.Info         { return agent.Info{Name: m.name} }
+func (m *contextCauseFailingAgent) SubAgents() []agent.Agent { return nil }
+func (m *contextCauseFailingAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+func (m *contextCauseFailingAgent) Tools() []tool.Tool { return nil }
+func (m *contextCauseFailingAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return nil, cause
+	}
+	return nil, errors.New("context is not canceled")
 }
 
 // completionNoticeAgent emits an event that requires completion; it pre-adds
@@ -4431,6 +5141,105 @@ func TestRunner_Run_AgentRunError(t *testing.T) {
 	require.Equal(t, filterKey, errorEvent.FilterKey)
 }
 
+func TestRunner_Run_AgentRunCancellationErrorPersistsCancelledType(t *testing.T) {
+	const requestID = "req-run-cancelled"
+	cancelCauseErr := errors.New("client stopped")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(cancelCauseErr)
+	var hookErrorTypes []string
+	var hookErrorMessages []string
+	sessionService := sessioninmemory.NewSessionService(
+		sessioninmemory.WithAppendEventHook(
+			func(ctx *session.AppendEventContext, next func() error) error {
+				if ctx.Event != nil && ctx.Event.Error != nil {
+					hookErrorTypes = append(hookErrorTypes, ctx.Event.Error.Type)
+					hookErrorMessages = append(hookErrorMessages, ctx.Event.Error.Message)
+				}
+				return next()
+			},
+		),
+	)
+	r := NewRunner(
+		"app",
+		&contextCauseFailingAgent{name: "f"},
+		WithSessionService(sessionService),
+	)
+	ch, err := r.Run(
+		ctx,
+		"u",
+		"s",
+		model.NewUserMessage("m"),
+		agent.WithRequestID(requestID),
+	)
+	require.ErrorIs(t, err, cancelCauseErr)
+	require.Nil(t, ch)
+	require.Equal(t, []string{model.ErrorTypeCancelled}, hookErrorTypes)
+	require.Equal(t, []string{cancelCauseErr.Error()}, hookErrorMessages)
+}
+
+func TestAgentRunErrorType(t *testing.T) {
+	causeErr := errors.New("client stopped")
+	causeCtx, cancelCause := context.WithCancelCause(context.Background())
+	cancelCause(causeErr)
+	wrappedCauseCtx, cancelWrappedCause := context.WithCancelCause(context.Background())
+	wrappedCauseErr := errors.New("wrapped client stopped")
+	cancelWrappedCause(fmt.Errorf("outer: %w", wrappedCauseErr))
+	tests := []struct {
+		name   string
+		ctx    context.Context
+		runErr error
+		want   string
+	}{
+		{
+			name:   "context canceled error",
+			ctx:    context.Background(),
+			runErr: context.Canceled,
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "context deadline exceeded error",
+			ctx:    context.Background(),
+			runErr: fmt.Errorf("model request: %w", context.DeadlineExceeded),
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "matching context cause",
+			ctx:    causeCtx,
+			runErr: fmt.Errorf("run agent: %w", causeErr),
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "wrapped context cause",
+			ctx:    wrappedCauseCtx,
+			runErr: wrappedCauseErr,
+			want:   model.ErrorTypeCancelled,
+		},
+		{
+			name:   "unrelated error in canceled context",
+			ctx:    causeCtx,
+			runErr: errors.New("run failed"),
+			want:   model.ErrorTypeRunError,
+		},
+		{
+			name:   "plain error",
+			ctx:    context.Background(),
+			runErr: errors.New("run failed"),
+			want:   model.ErrorTypeRunError,
+		},
+		{
+			name:   "nil context",
+			ctx:    nil,
+			runErr: errors.New("run failed"),
+			want:   model.ErrorTypeRunError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, agentRunErrorType(tt.ctx, tt.runErr))
+		})
+	}
+}
+
 func TestRunnerLatencyDiagnosticHelpers(t *testing.T) {
 	ctx := context.Background()
 	_, disabledSpan, disabledStarted := startRunnerLatencySpan(
@@ -4539,6 +5348,16 @@ func TestRunnerLatencyDiagnosticHelpers(t *testing.T) {
 		t,
 		runnerHasAttr(eventAttrs, "runner.event.state_delta_keys", 1),
 	)
+	stateOnlyAttrs := runnerEventAttrs(&event.Event{
+		ID:         "state-only",
+		StateDelta: map[string][]byte{"state": []byte(`"updated"`)},
+	})
+	require.True(t, runnerHasAttr(stateOnlyAttrs, "runner.event.id", "state-only"))
+	require.True(t, runnerHasAttr(stateOnlyAttrs, "runner.event.state_delta_keys", 1))
+	require.True(t, runnerHasAttr(stateOnlyAttrs, "runner.event.object", ""))
+	require.True(t, runnerHasAttr(stateOnlyAttrs, "runner.event.partial", false))
+	require.True(t, runnerHasAttr(stateOnlyAttrs, "runner.event.done", false))
+	require.False(t, runnerHasAttrKey(stateOnlyAttrs, "runner.event.choices"))
 	require.Nil(t, runnerEventAttrs(nil))
 
 	require.True(t, runnerTraceEventDetails(nil))
@@ -4560,6 +5379,15 @@ func runnerHasAttr(attrs []attribute.KeyValue, key string, want any) bool {
 	for _, kv := range attrs {
 		if string(kv.Key) == key &&
 			fmt.Sprint(kv.Value.AsInterface()) == fmt.Sprint(want) {
+			return true
+		}
+	}
+	return false
+}
+
+func runnerHasAttrKey(attrs []attribute.KeyValue, key string) bool {
+	for _, kv := range attrs {
+		if string(kv.Key) == key {
 			return true
 		}
 	}
@@ -4875,6 +5703,25 @@ func TestCloneResponseError(t *testing.T) {
 		require.Equal(t, "p", *got.Param)
 		require.Equal(t, "c", *got.Code)
 	})
+}
+
+func TestCloneContentPartsDeepCopiesVideo(t *testing.T) {
+	parts := []model.ContentPart{{
+		Type: model.ContentTypeVideo,
+		Video: &model.Video{
+			URL:    "https://example.com/video.mp4",
+			Data:   []byte("video"),
+			Format: "mp4",
+		},
+	}}
+
+	cloned := cloneContentParts(parts)
+
+	require.Len(t, cloned, 1)
+	require.NotSame(t, parts[0].Video, cloned[0].Video)
+	require.Equal(t, parts[0].Video, cloned[0].Video)
+	cloned[0].Video.Data[0] = 'V'
+	require.Equal(t, []byte("video"), parts[0].Video.Data)
 }
 
 func TestGraphCompletionNotPersistedAsMessage(t *testing.T) {
@@ -5490,7 +6337,7 @@ func TestShouldClearRunnerCompletionChoicesInSession_FallsBackToChoiceSignatureW
 	))
 }
 
-func TestShouldClearRunnerCompletionChoicesInSession_DedupsByPersistedResponseIDEvenWhenGraphCompletionEventIsVisible(
+func TestShouldClearRunnerCompletionChoicesInSession_DedupsByPersistedResponseIDEvenWhenGraphEventIsVisible(
 	t *testing.T,
 ) {
 	loop := &eventLoopContext{
@@ -7138,6 +7985,93 @@ func TestRunner_InterruptedAssistantPluginRunsOnce(t *testing.T) {
 	require.NotNil(t, sess)
 	require.Len(t, sess.Events, 2)
 	require.Equal(t, "hello!", sess.Events[1].Choices[0].Message.Content)
+}
+
+func TestRunner_DynamicWorkflowChildDoesNotOverrideRootCompletion(t *testing.T) {
+	stripParentMetadata := &testPlugin{
+		name: "strip-parent-metadata",
+		reg: func(registry *plugin.Registry) {
+			registry.OnEvent(func(
+				_ context.Context,
+				_ *agent.Invocation,
+				evt *event.Event,
+			) (*event.Event, error) {
+				if evt.ParentMetadata == nil {
+					return evt, nil
+				}
+				replacement := evt.Clone()
+				replacement.ParentMetadata = nil
+				return replacement, nil
+			})
+		},
+	}
+	service := sessioninmemory.NewSessionService()
+	sess, err := service.CreateSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "user", SessionID: "session"},
+		session.StateMap{},
+	)
+	require.NoError(t, err)
+	rr := NewRunner(
+		"app",
+		&noOpAgent{name: "root"},
+		WithSessionService(service),
+	).(*runner)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&noOpAgent{name: "root"}),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(service),
+	)
+	inv.Plugins = plugin.MustNewManager(stripParentMetadata)
+	loop := &eventLoopContext{
+		sess:             sess,
+		invocation:       inv,
+		processedEventCh: make(chan *event.Event, 2),
+		streamFilter:     graph.NewStreamModeFilter(false, nil),
+	}
+
+	childEvent := event.NewResponseEvent(
+		"child-invocation",
+		"child",
+		&model.Response{
+			ID:   "child-response",
+			Done: true,
+			Choices: []model.Choice{{Index: 0, Message: model.Message{
+				Role: model.RoleAssistant, Content: "child result",
+			}}},
+		},
+	)
+	childEvent.ParentInvocationID = inv.InvocationID
+	childEvent.ParentMetadata = &event.ParentInvocationMetadata{
+		TriggerType: event.TriggerTypeDynamicWorkflow,
+		TriggerID:   "workflow/call-1",
+		TriggerName: "run_workflow",
+	}
+	require.NoError(t, rr.processSingleAgentEvent(
+		context.Background(), loop, childEvent,
+	))
+	require.Empty(t, loop.fallbackChoices)
+	require.Empty(t, loop.fallbackResponseID)
+	emittedChild := <-loop.processedEventCh
+	require.Nil(t, emittedChild.ParentMetadata)
+
+	rootEvent := event.NewResponseEvent(
+		inv.InvocationID,
+		"root",
+		&model.Response{
+			ID:   "root-response",
+			Done: true,
+			Choices: []model.Choice{{Index: 0, Message: model.Message{
+				Role: model.RoleAssistant, Content: "root result",
+			}}},
+		},
+	)
+	require.NoError(t, rr.processSingleAgentEvent(
+		context.Background(), loop, rootEvent,
+	))
+	require.Equal(t, "root-response", loop.fallbackResponseID)
+	require.Equal(t, "root result", assistantChoicePrimaryContent(loop.fallbackChoices))
+	require.Len(t, loop.processedEventCh, 1)
 }
 
 func TestRunner_RoutedSessionPersistsInterruptedPartialAssistant(t *testing.T) {
@@ -8854,8 +9788,16 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 
 	agentCh := make(chan *event.Event)
 	flushCh := make(chan *flush.FlushRequest)
-	// No Attach needed because processAgentEvents will attach using this channel.
-	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil)
+	processed := rr.processAgentEvents(
+		ctx,
+		sess,
+		inv,
+		agentCh,
+		flushCh,
+		nil,
+		nil,
+		nil,
+	)
 	// Send one event, then close agentCh
 	go func() {
 		agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("x")}}}}
@@ -8899,11 +9841,23 @@ func TestMergeCurrentTurnMessagesIntoSeed_ReplacesLastUserMessageWhenItMatchesOr
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("first"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
-		model.NewAssistantMessage("after"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
 	}, merged)
 }
 
@@ -8922,12 +9876,27 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOnlyOlderMessageMatchesOrig
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("current"),
-		model.NewAssistantMessage("after"),
-		model.NewUserMessage("latest"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("current"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewUserMessage("latest"),
+			seededHistory: true,
+		},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
 	}, merged)
 }
 
@@ -8945,11 +9914,23 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOriginalMissing(t *testing.
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("first"),
-		model.NewAssistantMessage("after"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
 	}, merged)
 }
 
@@ -8963,7 +9944,16 @@ func TestMergeCurrentTurnMessagesIntoSeed_PreservesSeedWhenCurrentTurnIsEmpty(t 
 		model.NewUserMessage("current"),
 		nil,
 	)
-	require.Equal(t, seed, merged)
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewUserMessage("current"),
+			seededHistory: true,
+		},
+	}, merged)
 }
 
 func TestFinalResponseIDFromStateDelta_Cases(t *testing.T) {
@@ -9493,19 +10483,19 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDeepNestedWorkflowPatches(
 		t,
 		snapshot,
 		"start",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	plannerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	workerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"worker",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var startPatch agent.SurfacePatch
 	startPatch.SetInstruction("start patched instruction")
@@ -9620,13 +10610,13 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectChainChildPatch(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	writerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"writer",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var plannerPatch agent.SurfacePatch
 	plannerPatch.SetInstruction("planner patched instruction")
@@ -9775,13 +10765,13 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectParallelBranchPatches(
 		t,
 		snapshot,
 		"researcher",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	reviewerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"reviewer",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var researcherPatch agent.SurfacePatch
 	researcherPatch.SetInstruction("researcher patched instruction")
@@ -9938,7 +10928,7 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectCycleChildPatch(
 		t,
 		snapshot,
 		"worker",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var workerPatch agent.SurfacePatch
 	workerPatch.SetInstruction("worker patched instruction")
@@ -10541,7 +11531,7 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesGraphCompositeChildPatch(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	require.Equal(t, "assistant/pipeline/planner", plannerNodeID)
 	var patch agent.SurfacePatch
@@ -10789,6 +11779,29 @@ func createNamedRunnerTestSkillRepository(
 	return repo
 }
 
+func createRunnerDeclaredSkillRepository(t *testing.T) skill.Repository {
+	t.Helper()
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "review")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, skill.SkillFile),
+		[]byte(
+			"---\nname: review\ndescription: review changes\n---\n"+
+				"REVIEW BODY\n",
+		),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, "guide.md"),
+		[]byte("GUIDE BODY\n"),
+		0o644,
+	))
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	return repo
+}
+
 // TestRunner_WithAppName_OverridesSessionKey verifies that agent.WithAppName
 // overrides the runner's default app name for session isolation.
 func TestRunner_WithAppName_OverridesSessionKey(t *testing.T) {
@@ -10927,10 +11940,10 @@ func TestRunner_WithAppName_IsolatesDifferentProjects(t *testing.T) {
 	assert.Nil(t, sessDefault, "default app name should have no session")
 }
 
-// TestRunner_WithAppName_CompletionEventAuthor verifies that the runner
+// TestRunner_WithAppName_EventAuthor verifies that the runner
 // completion event uses the overridden app name as its Author, not the
 // runner's default app name.
-func TestRunner_WithAppName_CompletionEventAuthor(t *testing.T) {
+func TestRunner_WithAppName_EventAuthor(t *testing.T) {
 	const (
 		defaultAppName  = "default-app"
 		overrideAppName = "tenant-x"

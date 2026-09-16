@@ -3,22 +3,35 @@ import { createNavigationPolicy } from "./ssrf.js";
 import { BrowserRuntime } from "./runtime.js";
 
 function readBool(value, fallback) {
-  const raw = `${value || ""}`.trim();
+  const raw = `${value || ""}`.trim().toLowerCase();
   if (raw === "") {
     return fallback;
   }
-  return raw === "true";
+  if (["1", "true", "yes", "on"].includes(raw)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(raw)) {
+    return false;
+  }
+  return fallback;
 }
 
-function readConfig(env = process.env) {
+export function readConfig(env = process.env) {
   const addr = env.OPENCLAW_BROWSER_SERVER_ADDR || "127.0.0.1:19790";
   const [host, portText] = addr.split(":");
+  const browserMode = `${env.TRPC_CLAW_BROWSER_MODE || ""}`.trim();
+  const headlessFallback =
+    browserMode === "interactive" || browserMode === "headed" ? false : true;
   return {
     host,
     port: Number(portText) || 19790,
     token: `${env.OPENCLAW_BROWSER_SERVER_TOKEN || ""}`.trim(),
-    headless: readBool(env.OPENCLAW_BROWSER_HEADLESS, true),
-    executablePath: `${env.OPENCLAW_BROWSER_EXECUTABLE_PATH || ""}`.trim(),
+    headless: readBool(env.OPENCLAW_BROWSER_HEADLESS, headlessFallback),
+    executablePath: `${
+      env.OPENCLAW_BROWSER_EXECUTABLE_PATH ||
+      env.TRPC_CLAW_BROWSER_PATH ||
+      ""
+    }`.trim(),
     policy: createNavigationPolicy(env)
   };
 }

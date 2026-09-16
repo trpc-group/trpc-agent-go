@@ -113,7 +113,7 @@ type Node struct {
 	Name        string
 	Description string
 	Function    NodeFunc
-	Type        NodeType // Type of the node (function, llm, tool, etc.)
+	Type        NodeType // Type of the node (function, LLM operation, tool, etc.)
 
 	// userInputKey is the state key used as one-shot input for LLM and
 	// Agent nodes. When empty, StateKeyUserInput is used.
@@ -171,6 +171,8 @@ type Node struct {
 	// When true, multiple tool calls in a single assistant response are executed concurrently.
 	// Default is false (serial execution) for compatibility and safety.
 	enableParallelTools bool
+	// toolConcurrencyConfig limits active calls for parallel Tools nodes.
+	toolConcurrencyConfig tool.ConcurrencyConfig
 
 	// llmGenerationConfig stores per-node generation configuration for LLM nodes.
 	// If set, AddLLMNode forwards it to the underlying LLM runner.
@@ -199,10 +201,6 @@ type Node struct {
 	// sub-agent. This provides a concise way to implement "pass only the
 	// result" pipelines between agent nodes without extra glue nodes.
 	agentInputFromLastResponse bool
-
-	// traceTransparent marks framework-owned agent nodes that may elide the
-	// parent wrapper step from execution trace when all runtime guards pass.
-	traceTransparent bool
 }
 
 // Edge represents an edge in the graph.
@@ -530,8 +528,6 @@ type ExecutionContext struct {
 	traceBarrierChannelSources map[string]map[string][]string
 	// traceSourceStepIDsByTaskID tracks the trace source steps produced by each task.
 	traceSourceStepIDsByTaskID map[string][]string
-	// traceAgentNodeTasksByNodeID tracks transparent agent-node candidates.
-	traceAgentNodeTasksByNodeID map[string]*traceTaskRegistryEntry
 }
 
 func (e *ExecutionContext) setCompletionIdentity(text, identity string) {

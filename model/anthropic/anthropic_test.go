@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -167,6 +169,114 @@ func Test_Model_GenerateContent_NilRequest(t *testing.T) {
 	assert.Nil(t, ch)
 }
 
+func TestModel_GenerateContent_ToolsDisabledAfterCallback(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(
+				w http.ResponseWriter,
+				r *http.Request,
+			) {
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+				if stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = w.Write([]byte(strings.Join([]string{
+						"event: message_start",
+						`data: {"type":"message_start","message":{"id":"msg-test","type":"message","role":"assistant","model":"claude-test","content":[]}}`,
+						"",
+						"event: content_block_start",
+						`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+						"",
+						"event: content_block_delta",
+						`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+						"",
+						"event: content_block_stop",
+						`data: {"type":"content_block_stop","index":0}`,
+						"",
+						"event: message_delta",
+						`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`,
+						"",
+						"event: message_stop",
+						`data: {"type":"message_stop"}`,
+						"",
+					}, "\n") + "\n"))
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{
+					"id":"msg-test",
+					"type":"message",
+					"role":"assistant",
+					"model":"claude-test",
+					"content":[{"type":"text","text":"ok"}],
+					"stop_reason":"end_turn",
+					"stop_sequence":null,
+					"usage":{"input_tokens":1,"output_tokens":1}
+				}`))
+			}))
+			defer server.Close()
+
+			m := New(
+				"claude-test",
+				WithAPIKey("test-key"),
+				WithBaseURL(server.URL),
+				WithAnthropicClientOptions(
+					anthropicopt.WithJSONSet("tools", []any{}),
+					anthropicopt.WithJSONSet(
+						"client_option_field",
+						"preserved",
+					),
+				),
+				WithAnthropicRequestOptions(
+					anthropicopt.WithJSONSet(
+						"tool_choice",
+						map[string]any{"type": "any"},
+					),
+					anthropicopt.WithJSONSet(
+						"request_option_field",
+						"preserved",
+					),
+				),
+				WithChatRequestCallback(func(
+					_ context.Context,
+					request *anthropic.MessageNewParams,
+				) {
+					request.Tools = []anthropic.ToolUnionParam{{
+						OfTool: &anthropic.ToolParam{
+							Name: "callback_tool",
+						},
+					}}
+					request.ToolChoice =
+						anthropic.ToolChoiceParamOfTool("callback_tool")
+					request.SetExtraFields(map[string]any{
+						"tools":          []any{},
+						"tool_choice":    map[string]any{"type": "any"},
+						"callback_field": "preserved",
+					})
+				}),
+			)
+			ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+			responseChan, err := m.GenerateContent(ctx, &model.Request{
+				Messages: []model.Message{model.NewUserMessage("test")},
+				GenerationConfig: model.GenerationConfig{
+					Stream: stream,
+				},
+			})
+			require.NoError(t, err)
+			for range responseChan {
+			}
+
+			require.NotNil(t, captured)
+			require.NotContains(t, captured, "tools")
+			require.NotContains(t, captured, "tool_choice")
+			require.Equal(t, "preserved", captured["callback_field"])
+			require.Equal(t, "preserved", captured["client_option_field"])
+			require.Equal(t, "preserved", captured["request_option_field"])
+		})
+	}
+}
+
 func Test_convertUserMessage(t *testing.T) {
 	p1 := "part-1"
 	p2 := "part-2"
@@ -249,6 +359,57 @@ func Test_convertTools(t *testing.T) {
 	assert.Equal(t, 1, len(params))
 	assert.NotNil(t, params[0].OfTool)
 	assert.Equal(t, "t1", params[0].OfTool.Name)
+}
+
+func Test_convertTools_NoArgObjectSchemaUsesEmptyProperties(t *testing.T) {
+	tests := []struct {
+		name                string
+		inputSchema         *tool.Schema
+		wantEmptyProperties bool
+		wantSerializedType  string
+	}{
+		{
+			name:                "explicit object type",
+			inputSchema:         &tool.Schema{Type: "object"},
+			wantEmptyProperties: true,
+			wantSerializedType:  "object",
+		},
+		{
+			name:                "implicit SDK object type",
+			inputSchema:         &tool.Schema{},
+			wantEmptyProperties: true,
+			wantSerializedType:  "object",
+		},
+		{
+			name:               "non-object type",
+			inputSchema:        &tool.Schema{Type: "array"},
+			wantSerializedType: "array",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			params := convertTools(map[string]tool.Tool{
+				"no_arg_tool": stubTool{decl: &tool.Declaration{
+					Name:        "no_arg_tool",
+					InputSchema: tt.inputSchema,
+				}},
+			})
+
+			body, err := json.Marshal(params)
+			require.NoError(t, err)
+			if tt.wantEmptyProperties {
+				require.Contains(t, string(body), `"properties":{}`)
+				require.NotContains(t, string(body), `"properties":null`)
+			} else {
+				require.Contains(t, string(body), `"properties":null`)
+				require.NotContains(t, string(body), `"properties":{}`)
+			}
+			require.Contains(t, string(body), `"type":"`+tt.wantSerializedType+`"`)
+			require.Equal(t, tt.inputSchema.Type, string(params[0].OfTool.InputSchema.Type))
+			require.Nil(t, tt.inputSchema.Properties)
+		})
+	}
 }
 
 func Test_buildToolDescription_AppendsOutputSchema(t *testing.T) {
@@ -1581,7 +1742,7 @@ func Test_HandleStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 		"event: message_stop",
 		`data: {"type":"message_stop"}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 
 	orig := model.DefaultNewHTTPClient
 	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
@@ -1637,6 +1798,7 @@ func Test_HandleStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 	assert.True(t, partials >= 1)
 	assert.NotNil(t, final)
 	assert.True(t, final.Done)
+	assert.Nil(t, final.Error)
 	assert.True(t, chunkCalled)
 	select {
 	case <-streamCompleteCalled:
@@ -1731,7 +1893,7 @@ func Test_HandleStreamingResponse_ToolInputDeltaOverridesStartInput(t *testing.T
 		"event: message_stop",
 		`data: {"type":"message_stop"}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 	orig := model.DefaultNewHTTPClient
 	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
 	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
@@ -1813,7 +1975,7 @@ func Test_HandleStreamingResponse_ToolInputDeltaHiddenByDefault(t *testing.T) {
 		"event: message_stop",
 		`data: {"type":"message_stop"}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 	orig := model.DefaultNewHTTPClient
 	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
 	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
@@ -1864,7 +2026,7 @@ func Test_HandleStreamingResponse_ToolInputPreservesStartInputWithoutDelta(t *te
 		"event: message_stop",
 		`data: {"type":"message_stop"}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 	orig := model.DefaultNewHTTPClient
 	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
 	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
@@ -1933,7 +2095,7 @@ func Test_HandleStreamingResponse_ServerToolInputDeltaOverridesStartInput(t *tes
 		"event: message_stop",
 		`data: {"type":"message_stop"}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 	orig := model.DefaultNewHTTPClient
 	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
 	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
@@ -2465,9 +2627,11 @@ func Test_isStreamRetryableError_AnthropicAPIErrorUsesStatusCode(t *testing.T) {
 	require.True(t, isStreamRetryableError(apiErr))
 }
 
-// Test_HandleStreamingResponse_StreamRetryBoundsHTTPAttempts verifies that
-// outer stream retry does not multiply the Anthropic SDK's default retry budget.
-func Test_HandleStreamingResponse_StreamRetryBoundsHTTPAttempts(t *testing.T) {
+// Test_HandleStreamingResponse_PreservesSDKRetryPolicy documents that outer
+// stream retry no longer forces WithMaxRetries(0). Tests that need a fixed
+// HTTP attempt count still disable the SDK budget explicitly via
+// WithAnthropicClientOptions(WithMaxRetries(0)).
+func Test_HandleStreamingResponse_PreservesSDKRetryPolicy(t *testing.T) {
 	var attempts int32
 	orig := model.DefaultNewHTTPClient
 	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
@@ -2481,6 +2645,9 @@ func Test_HandleStreamingResponse_StreamRetryBoundsHTTPAttempts(t *testing.T) {
 	m := New(
 		"claude-test",
 		WithHTTPClientOptions(),
+		// Explicit SDK MaxRetries(0) keeps this assertion about the outer
+		// WithStreamRetry budget alone. Production leaves the SDK policy intact.
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
 		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
 	)
 
@@ -2492,7 +2659,196 @@ func Test_HandleStreamingResponse_StreamRetryBoundsHTTPAttempts(t *testing.T) {
 	for range responseChan {
 	}
 	require.Equal(t, int32(3), atomic.LoadInt32(&attempts),
-		"WithStreamRetry(2) must make exactly 3 HTTP calls (initial + 2 retries), not SDK retries per attempt")
+		"with SDK MaxRetries(0), WithStreamRetry(2) makes initial + 2 outer retries")
+}
+
+// Test_HandleStreamingResponse_EOFWithoutMessageStopRetries verifies quiet
+// scanner EOF before message_stop is treated as premature termination and
+// retried when no caller-visible output was delivered.
+func Test_HandleStreamingResponse_EOFWithoutMessageStopRetries(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			n := atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			if n == 1 {
+				// message_start only — clean EOF without message_stop.
+				return &http.Response{
+					StatusCode: 200,
+					Header:     h,
+					Body:       io.NopCloser(strings.NewReader(ssePrelude)),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(sseFullSuccess)),
+			}, nil
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 16)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	var sawText, sawErr bool
+	for r := range responseChan {
+		if r.Error != nil {
+			sawErr = true
+		}
+		for _, c := range r.Choices {
+			if c.Message.Content == "hello" || c.Delta.Content == "hello" {
+				sawText = true
+			}
+		}
+	}
+	require.False(t, sawErr)
+	require.True(t, sawText)
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
+}
+
+// Test_HandleStreamingResponse_EOFAfterVisibleDeltaDoesNotRetry ensures that
+// once a text delta reached the caller, missing message_stop is terminal.
+func Test_HandleStreamingResponse_EOFAfterVisibleDeltaDoesNotRetry(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	partialWithText := ssePrelude +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}` + "\n\n"
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(partialWithText)),
+			}, nil
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 16)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	var sawErr bool
+	var errMsg string
+	for r := range responseChan {
+		if r.Error != nil {
+			sawErr = true
+			errMsg = r.Error.Message
+		}
+	}
+	require.True(t, sawErr)
+	require.Contains(t, errMsg, "message_stop")
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts),
+		"must not retry after caller-visible text delta")
+}
+
+// Test_HandleStreamingResponse_AttemptDeadlineRetriesWhileParentLive verifies
+// that DeadlineExceeded from an attempt-local timeout stays retryable when the
+// parent context has not been canceled.
+func Test_HandleStreamingResponse_AttemptDeadlineRetriesWhileParentLive(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			n := atomic.AddInt32(&attempts, 1)
+			if n == 1 {
+				return nil, fmt.Errorf("request timeout: %w", context.DeadlineExceeded)
+			}
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(sseFullSuccess)),
+			}, nil
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 16)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	var sawText, sawErr bool
+	for r := range responseChan {
+		if r.Error != nil {
+			sawErr = true
+		}
+		for _, c := range r.Choices {
+			if c.Message.Content == "hello" || c.Delta.Content == "hello" {
+				sawText = true
+			}
+		}
+	}
+	require.False(t, sawErr)
+	require.True(t, sawText)
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
+}
+
+// Test_HandleStreamingResponse_ExpiredParentNeverRetries ensures a canceled
+// parent context stops the outer retry loop immediately.
+func Test_HandleStreamingResponse_ExpiredParentNeverRetries(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&attempts, 1)
+			return nil, fmt.Errorf("connection reset by peer")
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	responseChan := make(chan *model.Response, 4)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	for range responseChan {
+	}
+	require.LessOrEqual(t, atomic.LoadInt32(&attempts), int32(1),
+		"expired parent must not drive outer stream retries")
 }
 
 // Test_HandleStreamingResponse_RetryInvokesStreamCompleteCallbackOnce verifies
@@ -3713,7 +4069,7 @@ func TestChatRequestCallbackSynchronous(t *testing.T) {
 					"event: message_stop",
 					`data: {"type":"message_stop"}`,
 					"",
-				}, "\n")
+				}, "\n") + "\n"
 				model.DefaultNewHTTPClient = func(
 					_ ...HTTPClientOption,
 				) model.HTTPClient {

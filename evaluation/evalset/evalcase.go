@@ -10,6 +10,7 @@
 package evalset
 
 import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -97,6 +98,9 @@ const (
 type Invocation struct {
 	// InvocationID uniquely identifies this invocation.
 	InvocationID string `json:"invocationId,omitempty"`
+	// MetricNames selects the evaluation metrics for this invocation. When empty,
+	// metrics that do not require explicit selection apply.
+	MetricNames []string `json:"metricNames,omitempty"`
 	// ContextMessages contains per-case context messages for this invocation.
 	ContextMessages []*model.Message `json:"contextMessages,omitempty"`
 	// UserContent represents the user's input.
@@ -111,6 +115,8 @@ type Invocation struct {
 	IntermediateResponses []*model.Message `json:"intermediateResponses,omitempty"`
 	// CreationTimestamp when this invocation was created.
 	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp,omitempty"`
+	// ExecutionTrace contains the execution trace aligned with this invocation.
+	ExecutionTrace *trace.Trace `json:"executionTrace,omitempty"`
 }
 
 // Tool represents a single tool invocation and its execution result.

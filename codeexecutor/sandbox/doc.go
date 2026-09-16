@@ -7,5 +7,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package sandbox provides an OS-level sandbox code executor.
+// Package sandbox provides an OS-level sandbox code executor. Runtime supports
+// both buffered RunProgram calls and full-duplex StartProcess calls; both use
+// the same workspace, permission, environment, and native-backend enforcement.
 package sandbox

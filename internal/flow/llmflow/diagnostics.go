@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -191,12 +192,18 @@ func emitLatencyDiagnosticEvent(
 }
 
 type contextCompactionDecision struct {
-	shouldCompact bool
-	tokenCount    int
-	threshold     int
-	contextWindow int
-	err           error
+	shouldCompact  bool
+	tokenCount     int
+	threshold      int
+	contextWindow  int
+	thresholdBasis string
+	err            error
 }
+
+const (
+	contextCompactionThresholdBasisContextWindow = "context_window"
+	contextCompactionThresholdBasisMinimumTokens = "minimum_tokens"
+)
 
 func contextCompactionAttrs(
 	decision contextCompactionDecision,
@@ -221,6 +228,39 @@ func contextCompactionAttrs(
 			"llmflow.context_compaction.context_window",
 			decision.contextWindow,
 		),
+		attribute.String(
+			"llmflow.context_compaction.threshold_basis",
+			decision.thresholdBasis,
+		),
 	)
 	return attrs
+}
+
+func tokenTailoringAttrs(
+	records []modelrequest.TokenTailoringRecord,
+) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		attribute.Bool("llmflow.token_tailoring.applied", len(records) > 0),
+		attribute.Int("llmflow.token_tailoring.apply_count", len(records)),
+	}
+	if len(records) == 0 {
+		return attrs
+	}
+	last := records[len(records)-1]
+	return append(
+		attrs,
+		attribute.String("llmflow.token_tailoring.provider", last.Provider),
+		attribute.Int(
+			"llmflow.token_tailoring.max_input_tokens",
+			last.MaxInputTokens,
+		),
+		attribute.Int(
+			"llmflow.token_tailoring.before_messages",
+			last.BeforeMessages,
+		),
+		attribute.Int(
+			"llmflow.token_tailoring.after_messages",
+			last.AfterMessages,
+		),
+	)
 }

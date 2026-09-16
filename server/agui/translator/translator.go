@@ -186,6 +186,7 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		events = append(events, textMessageEvents...)
 	}
 	if rsp.IsToolCallResponse() {
+		events = append(events, t.closeTextStreamsBeforeToolEvent()...)
 		toolCallEvents, err := t.toolCallEvent(rsp)
 		if err != nil {
 			return nil, err
@@ -200,6 +201,7 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 			}
 			events = append(events, toolResultActivityEvents...)
 		} else {
+			events = append(events, t.closeTextStreamsBeforeToolEvent()...)
 			toolResultEvents, err := t.toolResultEvent(rsp, event.ID)
 			if err != nil {
 				return nil, err
@@ -500,7 +502,7 @@ func (t *translator) reasoningEvents(rsp *model.Response) ([]aguievents.Event, e
 	if rsp.ID == "" {
 		return nil, nil
 	}
-	reasoningID := rsp.ID
+	reasoningID := reasoningMessageID(rsp.ID)
 	var events []aguievents.Event
 	// Different message ID means a new reasoning message.
 	if t.lastReasoningMessageID != reasoningID {
@@ -661,6 +663,10 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 		return nil, errors.New("invalid response object")
 	}
 	return events, nil
+}
+
+func reasoningMessageID(responseID string) string {
+	return "reasoning-" + responseID
 }
 
 // toolCallEvent translates a tool call trpc-agent-go event to AG-UI events.

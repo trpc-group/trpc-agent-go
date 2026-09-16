@@ -95,6 +95,7 @@ func TestReporterTrackResponseTracesWithTracker(t *testing.T) {
 		Usage: &model.Usage{
 			PromptTokens:     3,
 			CompletionTokens: 5,
+			TotalTokens:      8,
 		},
 	})
 	reporter.End()
@@ -107,6 +108,29 @@ func TestReporterTrackResponseTracesWithTracker(t *testing.T) {
 	require.Equal(t, "response-id", attrs[semconvtrace.KeyGenAIResponseID].AsString())
 	require.Equal(t, int64(3), attrs[semconvtrace.KeyGenAIUsageInputTokens].AsInt64())
 	require.Equal(t, int64(5), attrs[semconvtrace.KeyGenAIUsageOutputTokens].AsInt64())
+	require.Equal(t, int64(8), attrs[semconvtrace.KeyGenAIUsageTotalTokens].AsInt64())
+}
+
+func TestReporterWithoutResponseDoesNotTraceRequestPayload(t *testing.T) {
+	recorder := useChatTelemetrySpanRecorder(t)
+	reporter := StartChat(
+		context.Background(),
+		&testModel{name: "request-model"},
+		&model.Request{Messages: []model.Message{model.NewUserMessage("secret")}},
+		true,
+	)
+
+	reporter.End()
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	attrs := attributesMap(spans[0].Attributes())
+	_, ok := attrs[semconvtrace.KeyLLMRequest]
+	require.False(t, ok)
+	_, ok = attrs[semconvtrace.KeyGenAIInputMessages]
+	require.False(t, ok)
+	_, ok = attrs[semconvtrace.KeyGenAIInputMessagesOTel]
+	require.False(t, ok)
 }
 
 func TestReporterTrackResponseHandlesNilInputsAndNilTracker(t *testing.T) {

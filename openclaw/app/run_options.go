@@ -92,7 +92,12 @@ const (
 	flagContextCompactionOversizedToolResultMaxTokens = "context-compaction-oversized-tool-result-max-tokens"
 	flagMaxHistoryRuns                                = "max-history-runs"
 	flagMaxLLMCalls                                   = "max-llm-calls"
+	flagFinalizeBeforeMaxLLMCalls                     = "finalize-before-max-llm-calls"
+	flagDeadlineFinalizationWindow                    = "deadline-finalization-window"
+	flagDeadlineFinalizationMaxInputTokens            = "deadline-finalization-max-input-tokens"
 	flagMaxToolIterations                             = "max-tool-iterations"
+	flagOpenAIMaxRetries                              = "openai-max-retries"
+	flagOpenAITimeout                                 = "openai-timeout"
 	flagPreloadMemory                                 = "preload-memory"
 	flagToolCallArgumentsJSONRepair                   = "tool-call-arguments-json-repair"
 
@@ -128,9 +133,10 @@ const (
 	flagSkillsToolResults     = "skills-loaded-content-in-tool-results"
 	flagSkillsSkipFallback    = "skills-skip-fallback-on-session-summary"
 
-	flagDebugRecorder     = "debug-recorder"
-	flagDebugRecorderDir  = "debug-recorder-dir"
-	flagDebugRecorderMode = "debug-recorder-mode"
+	flagDebugRecorder                = "debug-recorder"
+	flagDebugRecorderDir             = "debug-recorder-dir"
+	flagDebugRecorderMode            = "debug-recorder-mode"
+	flagOpenAITextOnlyMessageContent = "openai-text-only-message-content"
 
 	flagLatencyDiagnostics                 = "latency-diagnostics"
 	flagLatencyDiagnosticsEvents           = "latency-diagnostics-events"
@@ -143,6 +149,7 @@ const (
 	flagHostExecDefaultTimeout             = "host-exec-default-timeout"
 	flagHostExecMaxTimeout                 = "host-exec-max-timeout"
 	flagHostExecMaxYield                   = "host-exec-max-yield"
+	flagHostExecMaxIdleWait                = "host-exec-max-idle-wait"
 
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
@@ -188,6 +195,9 @@ type runOptions struct {
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
 	MaxLLMCalls                                   int
+	FinalizeBeforeMaxLLMCalls                     bool
+	DeadlineFinalizationWindow                    time.Duration
+	DeadlineFinalizationMaxInputTokens            int
 	MaxToolIterations                             int
 	PreloadMemory                                 int
 	ToolCallArgumentsJSONRepair                   bool
@@ -218,45 +228,55 @@ type runOptions struct {
 	ClaudeEnv          string
 	ClaudeWorkDir      string
 
-	ModelMode             string
-	OpenAIModel           string
-	OpenAIVariant         string
-	OpenAIBaseURL         string
-	OpenAIHeaders         map[string]string
-	GenerationConfig      *model.GenerationConfig
-	ModelConfig           *yaml.Node
-	KnowledgesConfig      []knowledgeEntry
-	SkillsRoot            string
-	SkillsExtraDir        string
-	SkillsDebug           bool
-	SkillsAllowBundled    string
-	SkillConfigs          map[string]ocskills.SkillConfig
-	SkillsWatch           bool
-	SkillsWatchBundled    bool
-	SkillsWatchDebounce   time.Duration
-	SkillsSummaryCacheTTL time.Duration
-	SkillsOverviewLimit   int
-	SkillsOverviewPinned  string
-	SkillsToolProfile     string
-	SkillsLoadMode        string
-	SkillsMaxLoaded       int
-	SkillsToolResults     bool
-	SkillsSkipFallback    bool
-	SkillsToolingGuide    *string
-	StateDir              string
+	ModelMode                    string
+	OpenAIModel                  string
+	OpenAIVariant                string
+	OpenAIBaseURL                string
+	OpenAITextOnlyMessageContent bool
+	OpenAITimeout                time.Duration
+	OpenAIMaxRetries             int
+	OpenAIMaxRetriesSet          bool
+	OpenAIUseVariantAPIKey       bool
+	OpenAIHeaders                map[string]string
+	GenerationConfig             *model.GenerationConfig
+	ModelConfig                  *yaml.Node
+	ModelDefault                 string
+	ModelEntries                 map[string]modelEntryConfig
+	KnowledgesConfig             []knowledgeEntry
+	SkillsRoot                   string
+	SkillsExtraDir               string
+	SkillsDebug                  bool
+	SkillsAllowBundled           string
+	SkillConfigs                 map[string]ocskills.SkillConfig
+	SkillsWatch                  bool
+	SkillsWatchBundled           bool
+	SkillsWatchDebounce          time.Duration
+	SkillsSummaryCacheTTL        time.Duration
+	SkillsOverviewLimit          int
+	SkillsOverviewPinned         string
+	SkillsToolProfile            string
+	SkillsLoadMode               string
+	SkillsMaxLoaded              int
+	SkillsToolResults            bool
+	SkillsSkipFallback           bool
+	SkillsToolingGuide           *string
+	StateDir                     string
 
-	EvolutionEnabled        bool
-	EvolutionHumanGate      string
-	EvolutionSkillScopeMode skill.SkillScopeMode
+	EvolutionEnabled               bool
+	EvolutionHumanGate             string
+	EvolutionSkillScopeMode        skill.SkillScopeMode
+	EvolutionApprovalTimeout       time.Duration
+	EvolutionApprovalSweepInterval time.Duration
 
 	DebugRecorderEnabled bool
 	DebugRecorderDir     string
 	DebugRecorderMode    string
 
-	AllowUsers      string
-	RequireMention  bool
-	Mention         string
-	RuntimeProfiles *runtimeprofile.Config
+	AllowUsers          string
+	RequireMention      bool
+	Mention             string
+	GatewayMaxBodyBytes int64
+	RuntimeProfiles     *runtimeprofile.Config
 
 	Channels []pluginSpec
 
@@ -301,6 +321,7 @@ type runOptions struct {
 	HostExecDefaultTimeout             time.Duration
 	HostExecMaxTimeout                 time.Duration
 	HostExecMaxYield                   time.Duration
+	HostExecMaxIdleWait                time.Duration
 
 	enableOpenClawToolsExplicit  bool
 	deferToolSurfaceModeExplicit bool
@@ -325,9 +346,10 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		AgentType: agentTypeLLM,
 
-		ModelMode:     modeOpenAI,
-		OpenAIModel:   defaultOpenAIModelName(),
-		OpenAIVariant: defaultOpenAIVariant,
+		ModelMode:        modeOpenAI,
+		OpenAIModel:      defaultOpenAIModelName(),
+		OpenAIVariant:    defaultOpenAIVariant,
+		OpenAIMaxRetries: -1,
 
 		SkillsWatch:         true,
 		SkillsWatchDebounce: defaultSkillsWatchDebounce,
@@ -347,7 +369,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		ToolCallArgumentsJSONRepair: true,
 
-		DeferToolSurfaceMode:               deferToolSurfaceModeAuto,
+		DeferToolSurfaceMode:               deferToolSurfaceModeOff,
 		DeferToolSurfaceDefaultDirectTools: true,
 	}
 
@@ -466,6 +488,26 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagMaxLLMCalls,
 		0,
 		"Max LLM calls per invocation (0=unlimited)",
+	)
+	fs.BoolVar(
+		&opts.FinalizeBeforeMaxLLMCalls,
+		flagFinalizeBeforeMaxLLMCalls,
+		false,
+		"On the last allowed LLM call, disable tools and ask the model to finalize",
+	)
+	fs.DurationVar(
+		&opts.DeadlineFinalizationWindow,
+		flagDeadlineFinalizationWindow,
+		0,
+		"Disable tools and ask the model to finalize when request deadline "+
+			"is within this window (0 disables)",
+	)
+	fs.IntVar(
+		&opts.DeadlineFinalizationMaxInputTokens,
+		flagDeadlineFinalizationMaxInputTokens,
+		0,
+		"Approximate input-token budget for deadline finalization requests "+
+			"(0 keeps the full context)",
 	)
 	fs.IntVar(
 		&opts.MaxToolIterations,
@@ -622,13 +664,31 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"openai-variant",
 		defaultOpenAIVariant,
 		"OpenAI variant: auto, openai, deepseek, qwen, hunyuan, "+
-			"glm (auto uses configured base URL host)",
+			"glm, kimi, minimax (auto uses configured base URL host)",
 	)
 	fs.StringVar(
 		&opts.OpenAIBaseURL,
 		"openai-base-url",
 		"",
 		"OpenAI base URL override (mode=openai, optional)",
+	)
+	fs.BoolVar(
+		&opts.OpenAITextOnlyMessageContent,
+		flagOpenAITextOnlyMessageContent,
+		false,
+		"Reduce OpenAI-compatible user message content parts to text-only",
+	)
+	fs.DurationVar(
+		&opts.OpenAITimeout,
+		flagOpenAITimeout,
+		0,
+		"OpenAI HTTP request timeout (0 disables)",
+	)
+	fs.IntVar(
+		&opts.OpenAIMaxRetries,
+		flagOpenAIMaxRetries,
+		-1,
+		"OpenAI max retries (-1 uses SDK default)",
 	)
 	fs.StringVar(
 		&opts.AllowUsers,
@@ -647,6 +707,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"mention",
 		"",
 		"Comma-separated mention patterns",
+	)
+	fs.Int64Var(
+		&opts.GatewayMaxBodyBytes,
+		"gateway-max-body-bytes",
+		0,
+		"Maximum JSON request body bytes for gateway endpoints (0 uses default)",
 	)
 	fs.StringVar(
 		&opts.SkillsRoot,
@@ -942,8 +1008,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 	fs.StringVar(
 		&opts.DeferToolSurfaceMode,
 		flagDeferToolSurfaceMode,
-		deferToolSurfaceModeAuto,
-		"Deferred tool surface mode: off, on, auto",
+		deferToolSurfaceModeOff,
+		"Deferred tool surface mode: off, on, auto (default off)",
 	)
 	fs.IntVar(
 		&opts.DeferToolSurfaceChars,
@@ -993,6 +1059,13 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Maximum wait before exec_command or write_stdin returns "+
 			"interim output (0 disables the cap)",
 	)
+	fs.DurationVar(
+		&opts.HostExecMaxIdleWait,
+		flagHostExecMaxIdleWait,
+		0,
+		"Maximum sleep-style idle wait allowed inside host exec "+
+			"commands (0 allows long idle waits)",
+	)
 
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, &exitError{Code: 2, Err: err}
@@ -1016,6 +1089,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		setFlags,
 		flagDeferToolSurfaceMode,
 	)
+	opts.OpenAIMaxRetriesSet = flagWasSet(setFlags, flagOpenAIMaxRetries)
 	if flagWasSet(setFlags, flagDeferToolSurface) &&
 		!opts.DeferToolSurface &&
 		!flagWasSet(setFlags, flagDeferToolSurfaceMode) {
@@ -1187,12 +1261,17 @@ type agentRunConfig struct {
 	EnableContextCompaction                       *bool `yaml:"enable_context_compaction,omitempty"`
 	ContextCompactionOversizedToolResultMaxTokens *int  `yaml:"context_compaction_oversized_tool_result_max_tokens,omitempty"`
 	MaxHistoryRuns                                *int  `yaml:"max_history_runs,omitempty"`
-	MaxLLMCalls                                   *int  `yaml:"max_llm_calls,omitempty"`
-	MaxToolIterations                             *int  `yaml:"max_tool_iterations,omitempty"`
-	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
-	ToolCallArgumentsJSONRepair                   *bool `yaml:"tool_call_arguments_json_repair,omitempty"`
-	DisablePostToolPrompt                         *bool `yaml:"disable_post_tool_prompt,omitempty"`
-	DisablePostToolPromptCamel                    *bool `yaml:"disablePostToolPrompt,omitempty"`
+	// MaxLLMCalls limits agent-facing model calls per invocation. Auxiliary
+	// session summary and auto-memory extraction calls are excluded.
+	MaxLLMCalls                        *int    `yaml:"max_llm_calls,omitempty"`
+	FinalizeBeforeMaxLLMCalls          *bool   `yaml:"finalize_before_max_llm_calls,omitempty"`
+	DeadlineFinalizationWindow         *string `yaml:"deadline_finalization_window,omitempty"`
+	DeadlineFinalizationMaxInputTokens *int    `yaml:"deadline_finalization_max_input_tokens,omitempty"`
+	MaxToolIterations                  *int    `yaml:"max_tool_iterations,omitempty"`
+	PreloadMemory                      *int    `yaml:"preload_memory,omitempty"`
+	ToolCallArgumentsJSONRepair        *bool   `yaml:"tool_call_arguments_json_repair,omitempty"`
+	DisablePostToolPrompt              *bool   `yaml:"disable_post_tool_prompt,omitempty"`
+	DisablePostToolPromptCamel         *bool   `yaml:"disablePostToolPrompt,omitempty"`
 
 	Instruction      *string  `yaml:"instruction,omitempty"`
 	InstructionFiles []string `yaml:"instruction_files,omitempty"`
@@ -1229,13 +1308,78 @@ type ralphLoopVerifyConfig struct {
 }
 
 type modelConfig struct {
-	Mode             *string               `yaml:"mode,omitempty"`
-	Name             *string               `yaml:"name,omitempty"`
-	BaseURL          *string               `yaml:"base_url,omitempty"`
-	OpenAIVariant    *string               `yaml:"openai_variant,omitempty"`
-	Headers          map[string]string     `yaml:"headers,omitempty"`
-	GenerationConfig *generationConfigYAML `yaml:"generation_config,omitempty"`
-	Config           *rawYAMLNode          `yaml:"config,omitempty"`
+	Mode             *string                     `yaml:"mode,omitempty"`
+	Name             *string                     `yaml:"name,omitempty"`
+	BaseURL          *string                     `yaml:"base_url,omitempty"`
+	OpenAIVariant    *string                     `yaml:"openai_variant,omitempty"`
+	TextOnlyContent  *bool                       `yaml:"text_only_content,omitempty"`
+	Timeout          *string                     `yaml:"timeout,omitempty"`
+	MaxRetries       *int                        `yaml:"max_retries,omitempty"`
+	Headers          map[string]string           `yaml:"headers,omitempty"`
+	GenerationConfig *generationConfigYAML       `yaml:"generation_config,omitempty"`
+	Config           *rawYAMLNode                `yaml:"config,omitempty"`
+	Default          *string                     `yaml:"default,omitempty"`
+	Models           map[string]modelEntryConfig `yaml:"models,omitempty"`
+}
+
+type modelEntryConfig struct {
+	Mode            *string           `yaml:"mode,omitempty"`
+	Name            *string           `yaml:"name,omitempty"`
+	BaseURL         *string           `yaml:"base_url,omitempty"`
+	OpenAIVariant   *string           `yaml:"openai_variant,omitempty"`
+	TextOnlyContent *bool             `yaml:"text_only_content,omitempty"`
+	Timeout         *string           `yaml:"timeout,omitempty"`
+	MaxRetries      *int              `yaml:"max_retries,omitempty"`
+	Headers         map[string]string `yaml:"headers,omitempty"`
+	Config          *rawYAMLNode      `yaml:"config,omitempty"`
+}
+
+// modelConfigHasLegacyFields intentionally excludes GenerationConfig because
+// one generation_config is shared by all catalog entries.
+func modelConfigHasLegacyFields(cfg *modelConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	return cfg.Mode != nil ||
+		cfg.Name != nil ||
+		cfg.BaseURL != nil ||
+		cfg.OpenAIVariant != nil ||
+		cfg.TextOnlyContent != nil ||
+		cfg.Timeout != nil ||
+		cfg.MaxRetries != nil ||
+		len(cfg.Headers) > 0 ||
+		cfg.Config != nil
+}
+
+func modelFlagsWereSet(set map[string]struct{}) bool {
+	for _, name := range []string{
+		"mode",
+		"model",
+		"openai-base-url",
+		"openai-variant",
+		flagOpenAITextOnlyMessageContent,
+		flagOpenAITimeout,
+		flagOpenAIMaxRetries,
+	} {
+		if flagWasSet(set, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneModelEntryConfigs(
+	src map[string]modelEntryConfig,
+) map[string]modelEntryConfig {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]modelEntryConfig, len(src))
+	for name, entry := range src {
+		entry.Headers = cleanHeaderMap(entry.Headers)
+		out[name] = entry
+	}
+	return out
 }
 
 type generationConfigYAML struct {
@@ -1255,6 +1399,7 @@ type gatewayConfig struct {
 	AllowUsers      []string `yaml:"allow_users,omitempty"`
 	RequireMention  *bool    `yaml:"require_mention,omitempty"`
 	MentionPatterns []string `yaml:"mention_patterns,omitempty"`
+	MaxBodyBytes    *int64   `yaml:"max_body_bytes,omitempty"`
 }
 
 type skillsConfig struct {
@@ -1325,6 +1470,8 @@ type toolsConfig struct {
 	HostExecMaxTimeoutCamel       *string             `yaml:"hostExecMaxTimeout,omitempty"`
 	HostExecMaxYield              *string             `yaml:"host_exec_max_yield,omitempty"`
 	HostExecMaxYieldCamel         *string             `yaml:"hostExecMaxYield,omitempty"`
+	HostExecMaxIdleWait           *string             `yaml:"host_exec_max_idle_wait,omitempty"`
+	HostExecMaxIdleWaitCamel      *string             `yaml:"hostExecMaxIdleWait,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -1399,8 +1546,14 @@ type evolutionConfig struct {
 
 	// HumanGate controls the human approval gate for skill revisions.
 	// Values: "always" (hold all), "create" (hold new skills only), "" (disabled).
-	HumanGate  *string                    `yaml:"human_gate,omitempty"`
-	SkillScope *evolutionSkillScopeConfig `yaml:"skill_scope,omitempty"`
+	HumanGate *string `yaml:"human_gate,omitempty"`
+	// ApprovalTimeout auto-promotes pending_approval revisions older than
+	// the duration. Empty or "0" disables auto-expiration.
+	ApprovalTimeout *string `yaml:"approval_timeout,omitempty"`
+	// ApprovalSweepInterval overrides the auto-expiration scan interval.
+	// Empty or "0" keeps the service default.
+	ApprovalSweepInterval *string                    `yaml:"approval_sweep_interval,omitempty"`
+	SkillScope            *evolutionSkillScopeConfig `yaml:"skill_scope,omitempty"`
 }
 
 type evolutionSkillScopeConfig struct {
@@ -1701,6 +1854,39 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, flagMaxLLMCalls) {
 			opts.MaxLLMCalls = *cfg.Agent.MaxLLMCalls
 		}
+		if cfg.Agent.FinalizeBeforeMaxLLMCalls != nil &&
+			!flagWasSet(set, flagFinalizeBeforeMaxLLMCalls) {
+			opts.FinalizeBeforeMaxLLMCalls = *cfg.Agent.FinalizeBeforeMaxLLMCalls
+		}
+		if cfg.Agent.DeadlineFinalizationWindow != nil &&
+			!flagWasSet(set, flagDeadlineFinalizationWindow) {
+			dur, err := parseDuration(
+				*cfg.Agent.DeadlineFinalizationWindow,
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"agent.deadline_finalization_window: %w",
+					err,
+				)
+			}
+			if dur < 0 {
+				return fmt.Errorf(
+					"agent.deadline_finalization_window must be >= 0",
+				)
+			}
+			opts.DeadlineFinalizationWindow = dur
+		}
+		if cfg.Agent.DeadlineFinalizationMaxInputTokens != nil &&
+			!flagWasSet(set, flagDeadlineFinalizationMaxInputTokens) {
+			v := *cfg.Agent.DeadlineFinalizationMaxInputTokens
+			if v < 0 {
+				return fmt.Errorf(
+					"agent.deadline_finalization_max_input_tokens " +
+						"must be >= 0",
+				)
+			}
+			opts.DeadlineFinalizationMaxInputTokens = v
+		}
 		if cfg.Agent.MaxToolIterations != nil &&
 			!flagWasSet(set, flagMaxToolIterations) {
 			opts.MaxToolIterations = *cfg.Agent.MaxToolIterations
@@ -1801,6 +1987,31 @@ func (cfg *fileConfig) apply(
 	}
 
 	if cfg.Model != nil {
+		if cfg.Model.Default != nil && len(cfg.Model.Models) == 0 {
+			return fmt.Errorf(
+				"model.default requires model.models",
+			)
+		}
+		if len(cfg.Model.Models) > 0 {
+			if modelConfigHasLegacyFields(cfg.Model) ||
+				modelFlagsWereSet(set) {
+				return fmt.Errorf(
+					"model.models cannot be combined with legacy model " +
+						"fields or model CLI flags",
+				)
+			}
+			defaultName := ""
+			if cfg.Model.Default != nil {
+				defaultName = strings.TrimSpace(*cfg.Model.Default)
+			}
+			if defaultName == "" {
+				return fmt.Errorf(
+					"model.default is required when model.models is configured",
+				)
+			}
+			opts.ModelDefault = defaultName
+			opts.ModelEntries = cloneModelEntryConfigs(cfg.Model.Models)
+		}
 		if cfg.Model.Mode != nil && !flagWasSet(set, "mode") {
 			opts.ModelMode = strings.TrimSpace(*cfg.Model.Mode)
 		}
@@ -1816,6 +2027,29 @@ func (cfg *fileConfig) apply(
 			opts.OpenAIVariant = strings.TrimSpace(
 				*cfg.Model.OpenAIVariant,
 			)
+		}
+		textOnly := cfg.Model.TextOnlyContent
+		if textOnly != nil &&
+			!flagWasSet(set, flagOpenAITextOnlyMessageContent) {
+			opts.OpenAITextOnlyMessageContent = *textOnly
+		}
+		if cfg.Model.Timeout != nil && !flagWasSet(set, flagOpenAITimeout) {
+			dur, err := parseDuration(*cfg.Model.Timeout)
+			if err != nil {
+				return fmt.Errorf("model.timeout: %w", err)
+			}
+			if dur < 0 {
+				return fmt.Errorf("model.timeout must be >= 0")
+			}
+			opts.OpenAITimeout = dur
+		}
+		if cfg.Model.MaxRetries != nil &&
+			!flagWasSet(set, flagOpenAIMaxRetries) {
+			if *cfg.Model.MaxRetries < 0 {
+				return fmt.Errorf("model.max_retries must be >= 0")
+			}
+			opts.OpenAIMaxRetries = *cfg.Model.MaxRetries
+			opts.OpenAIMaxRetriesSet = true
 		}
 		if len(cfg.Model.Headers) > 0 {
 			opts.OpenAIHeaders = cleanHeaderMap(cfg.Model.Headers)
@@ -1863,6 +2097,10 @@ func (cfg *fileConfig) apply(
 				cfg.Gateway.MentionPatterns,
 				csvDelimiter,
 			)
+		}
+		if cfg.Gateway.MaxBodyBytes != nil &&
+			!flagWasSet(set, "gateway-max-body-bytes") {
+			opts.GatewayMaxBodyBytes = *cfg.Gateway.MaxBodyBytes
 		}
 	}
 	if cfg.RuntimeProfiles != nil {
@@ -2101,6 +2339,9 @@ func (cfg *fileConfig) apply(
 			if err != nil {
 				return fmt.Errorf("tools.dynamic_agent_timeout: %w", err)
 			}
+			if dur < 0 {
+				return fmt.Errorf("tools.dynamic_agent_timeout must be >= 0")
+			}
 			opts.DynamicAgentTimeout = dur
 		}
 		hostExecTimeout := firstStringPtr(
@@ -2147,6 +2388,21 @@ func (cfg *fileConfig) apply(
 				)
 			}
 			opts.HostExecMaxYield = dur
+		}
+		hostExecMaxIdleWait := firstStringPtr(
+			cfg.Tools.HostExecMaxIdleWait,
+			cfg.Tools.HostExecMaxIdleWaitCamel,
+		)
+		if hostExecMaxIdleWait != nil &&
+			!flagWasSet(set, flagHostExecMaxIdleWait) {
+			dur, err := parseDuration(*hostExecMaxIdleWait)
+			if err != nil {
+				return fmt.Errorf(
+					"tools.host_exec_max_idle_wait: %w",
+					err,
+				)
+			}
+			opts.HostExecMaxIdleWait = dur
 		}
 		if len(cfg.Tools.Providers) > 0 {
 			opts.ToolProviders = convertPluginSpecs(cfg.Tools.Providers)
@@ -2245,6 +2501,26 @@ func (cfg *fileConfig) apply(
 		}
 		if cfg.Evolution.HumanGate != nil {
 			opts.EvolutionHumanGate = strings.TrimSpace(*cfg.Evolution.HumanGate)
+		}
+		if cfg.Evolution.ApprovalTimeout != nil {
+			dur, err := parseDuration(*cfg.Evolution.ApprovalTimeout)
+			if err != nil {
+				return fmt.Errorf("evolution.approval_timeout: %w", err)
+			}
+			if dur < 0 {
+				return fmt.Errorf("evolution.approval_timeout must be >= 0")
+			}
+			opts.EvolutionApprovalTimeout = dur
+		}
+		if cfg.Evolution.ApprovalSweepInterval != nil {
+			dur, err := parseDuration(*cfg.Evolution.ApprovalSweepInterval)
+			if err != nil {
+				return fmt.Errorf("evolution.approval_sweep_interval: %w", err)
+			}
+			if dur < 0 {
+				return fmt.Errorf("evolution.approval_sweep_interval must be >= 0")
+			}
+			opts.EvolutionApprovalSweepInterval = dur
 		}
 		if cfg.Evolution.SkillScope != nil &&
 			cfg.Evolution.SkillScope.Mode != nil {
@@ -2817,6 +3093,18 @@ func finalizeRunOptions(opts *runOptions) error {
 			opts.MaxLLMCalls,
 		)
 	}
+	if opts.DeadlineFinalizationWindow < 0 {
+		return fmt.Errorf(
+			"invalid deadline finalization window: %s",
+			opts.DeadlineFinalizationWindow,
+		)
+	}
+	if opts.DeadlineFinalizationMaxInputTokens < 0 {
+		return fmt.Errorf(
+			"invalid deadline finalization max input tokens: %d",
+			opts.DeadlineFinalizationMaxInputTokens,
+		)
+	}
 	opts.EvolutionSkillScopeMode = skill.NormalizeSkillScopeMode(
 		opts.EvolutionSkillScopeMode,
 	)
@@ -2861,6 +3149,15 @@ func finalizeRunOptions(opts *runOptions) error {
 			opts.DynamicAgentTimeout,
 		)
 	}
+	if opts.OpenAITimeout < 0 {
+		return fmt.Errorf("invalid OpenAI timeout: %s", opts.OpenAITimeout)
+	}
+	if opts.OpenAIMaxRetries < -1 {
+		return fmt.Errorf(
+			"invalid OpenAI max retries: %d",
+			opts.OpenAIMaxRetries,
+		)
+	}
 	if opts.HostExecDefaultTimeout < 0 {
 		return fmt.Errorf(
 			"invalid host exec default timeout: %s",
@@ -2877,6 +3174,12 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid host exec max yield: %s",
 			opts.HostExecMaxYield,
+		)
+	}
+	if opts.HostExecMaxIdleWait < 0 {
+		return fmt.Errorf(
+			"invalid host exec max idle wait: %s",
+			opts.HostExecMaxIdleWait,
 		)
 	}
 	opts.DeferToolSurfaceDirect = strings.Join(

@@ -114,6 +114,14 @@ type Option func(*options)
 // the Message field. Implementations must be safe for concurrent use.
 type ResultPostProcessor func(ctx context.Context, resp *KnowledgeSearchResponse) *KnowledgeSearchResponse
 
+type autoMemoryPollutingTool struct {
+	tool.CallableTool
+}
+
+func (t *autoMemoryPollutingTool) PollutesAutoMemory() bool {
+	return true
+}
+
 type options struct {
 	toolName            string
 	toolDescription     string
@@ -286,11 +294,13 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 		description = "Search for relevant information in the knowledge base. " +
 			"Use this tool to find context and facts to help answer user questions."
 	}
-	return function.NewFunctionTool(
-		searchFunc,
-		function.WithName(toolName),
-		function.WithDescription(description),
-	)
+	return &autoMemoryPollutingTool{
+		CallableTool: function.NewFunctionTool(
+			searchFunc,
+			function.WithName(toolName),
+			function.WithDescription(description),
+		),
+	}
 }
 
 // KnowledgeSearchRequestWithFilter represents the input with filter for the knowledge search tool.
@@ -381,11 +391,13 @@ func NewAgenticFilterSearchTool(
 	}
 	filterInfo := generateAgenticFilterPrompt(agenticFilterInfo)
 	description := composeAgenticToolDescription(opt.toolDescription, filterInfo)
-	return function.NewFunctionTool(
-		searchFunc,
-		function.WithName(toolName),
-		function.WithDescription(description),
-	)
+	return &autoMemoryPollutingTool{
+		CallableTool: function.NewFunctionTool(
+			searchFunc,
+			function.WithName(toolName),
+			function.WithDescription(description),
+		),
+	}
 }
 
 func searchContextFromInvocation(invocation *agent.Invocation) ([]knowledge.ConversationMessage, string, string) {

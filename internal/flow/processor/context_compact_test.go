@@ -628,59 +628,6 @@ func TestCompactIncrementEvents_KeepToolNameWinsOverForceClean(t *testing.T) {
 	require.Zero(t, stats.ToolResultsCompacted)
 }
 
-func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
-	content := strings.Repeat("current-result ", 32)
-	msg := model.NewToolMessage("tool-call-current", "session_load", content)
-
-	baseline, baselineOK := compactedCurrentInvocationMessage(
-		msg,
-		event.Event{},
-		ContextCompactionConfig{
-			ToolResultMaxTokens: 10,
-		},
-	)
-	require.True(t, baselineOK)
-	require.Contains(t, baseline.Content, compactedToolResultPlaceholder)
-	require.Contains(t, baseline.Content, "read-only, idempotent")
-	require.Contains(t, baseline.Content, "do not repeat side-effecting")
-	require.NotContains(t, baseline.Content, "session summary above")
-
-	compacted, ok := compactedCurrentInvocationMessage(
-		msg,
-		event.Event{},
-		ContextCompactionConfig{
-			ToolResultMaxTokens: 10,
-			toolResultCompactionRules: toolResultCompactionRules{
-				keepToolNames: toolNameSet([]string{"session_load"}),
-			},
-		},
-	)
-
-	require.True(t, ok)
-	require.Equal(t, content, compacted.Content)
-	require.Equal(t, msg.ToolID, compacted.ToolID)
-	require.Equal(t, msg.ToolName, compacted.ToolName)
-}
-
-func TestShouldCompactCurrentInvocationToolResult_DisabledAndErrors(t *testing.T) {
-	msg := model.NewToolMessage("call_worker", "worker", "large result")
-
-	require.False(t, shouldCompactCurrentInvocationToolResult(
-		msg,
-		ContextCompactionConfig{ToolResultMaxTokens: 0},
-	))
-
-	require.False(t, shouldCompactCurrentInvocationToolResult(
-		msg,
-		ContextCompactionConfig{
-			ToolResultMaxTokens: 1,
-			TokenCounter: &sequenceTokenCounter{
-				errs: []error{errors.New("count tokens")},
-			},
-		},
-	))
-}
-
 func TestSessionEventsSnapshot(t *testing.T) {
 	require.Nil(t, sessionEventsSnapshot(nil))
 

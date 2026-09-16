@@ -35,6 +35,7 @@ import (
 	"time"
 	"unicode"
 
+	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -204,8 +205,12 @@ const (
 		"pattern, or to remember an executable workflow or " +
 		"integration, prefer creating or updating a local " +
 		"skill over treating it as a one-off answer. For " +
-		"lightweight facts, preferences, or simple standing " +
-		"rules, use memory instead. " +
+		"lightweight facts, stable persona or tone preferences, " +
+		"and simple non-procedural standing facts, use memory " +
+		"instead. Do not use memory for reusable task workflows, " +
+		"output formats, tool procedures, or post-task feedback " +
+		"unless the user explicitly asks to save that content as " +
+		"memory. " +
 		"Use platform code and tools for stable safety " +
 		"boundaries, secrets, permissions, file paths, " +
 		"validation, and execution guarantees; use skill " +
@@ -258,6 +263,28 @@ const (
 		"prior knowledge, or partial memory when a matching " +
 		"skill exists. Load `SKILL.md` first, then load " +
 		"only the extra docs you still need."
+	openClawShellSharedGuidance = "Do not use exec_command for public web search " +
+		"or static page fetches when duckduckgo_search or web_fetch is " +
+		"present; reserve shell network commands for installed media " +
+		"tools, deterministic data processing, or sites not covered by " +
+		"a dedicated web tool. Do not use host system package managers " +
+		"such as apt, yum, dnf, apk, pacman, zypper, or brew from chat; " +
+		"use preconfigured dependencies or ask for an explicit setup " +
+		"flow. "
+	openClawHostShellGuidance = "For other general local shell work, " +
+		"use exec_command. " +
+		openClawShellSharedGuidance +
+		"For interactive follow-up input, use write_stdin and " +
+		"kill_session when needed. Use message to send to the current " +
+		"chat or an explicit target. "
+	openClawSandboxShellGuidance = "For other general local shell work, " +
+		"use exec_command. In sandbox mode, exec_command only supports " +
+		"foreground non-interactive commands; write_stdin, kill_session, " +
+		"background execution, TTY allocation, and session continuation " +
+		"are unavailable. " +
+		openClawShellSharedGuidance +
+		"Use message to send to the current chat or an explicit " +
+		"target. "
 	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
 		"and spreadsheet uploads already in the chat, prefer " +
 		"read_document or read_spreadsheet before falling back " +
@@ -269,14 +296,8 @@ const (
 		"available in the current session. " +
 		"Do not call exec_command just to print OPENCLAW_* upload " +
 		"vars or inspect recent upload metadata when a matching " +
-		"chat file is already available. For other general local " +
-		"shell work, use exec_command. Do not use host system package " +
-		"managers such as apt, yum, dnf, apk, pacman, zypper, or brew " +
-		"from chat; use preconfigured dependencies or ask for an " +
-		"explicit setup flow. For interactive follow-up " +
-		"input, use " +
-		"write_stdin and kill_session when needed. Use message " +
-		"to send to the current chat or an explicit target. " +
+		"chat file is already available. " +
+		openClawHostShellGuidance +
 		"When a web search tool such as duckduckgo_search is " +
 		"present, use it for general web search before using " +
 		"browser automation or web_fetch against search engine " +
@@ -292,10 +313,13 @@ const (
 		"browser only when a page requires JavaScript rendering, " +
 		"interaction, download handling, screenshots, or visual " +
 		"verification; do not drive Google, Bing, or DuckDuckGo " +
-		"result pages through browser when a search tool is " +
-		"available. If a public site repeatedly blocks access " +
+		"result pages, Google Scholar, Brave Search, or other " +
+		"search-engine result pages through browser when a search " +
+		"tool is available. If a public site repeatedly blocks access " +
 		"with sign-in, bot-check, CAPTCHA, or anti-automation " +
-		"errors and the user has not provided credentials, stop " +
+		"errors, Cloudflare or `Just a moment` challenges, or " +
+		"unusual traffic warnings and the user has not provided " +
+		"credentials, stop " +
 		"retrying that blocked path; use search, fetch, metadata, " +
 		"or the evidence already available to complete the task or " +
 		"state the exact blocker. When searches return no useful " +
@@ -428,7 +452,14 @@ const (
 		"tool or skill names, then call `dynamic_agent`; pass exact " +
 		"tool names such as web_fetch or browser in its `tools` " +
 		"field, and pass only real skill names in its `skills` " +
-		"field. Use `dynamic_agent` for broader " +
+		"field. Skill-backed work is tool-backed work. If a direct " +
+		"`skill_load` tool is available and the user names a skill or " +
+		"the task clearly matches a listed skill description, call " +
+		"`skill_load` first. If direct `skill_load` is unavailable, " +
+		"use `tool_search` to find the matching skill, then call " +
+		"`dynamic_agent` with that skill name. Do not answer a " +
+		"matching skill task directly from prior knowledge before the " +
+		"skill has been loaded or delegated. Use `dynamic_agent` for broader " +
 		"files, uploads, browser automation, shell work, messaging, " +
 		"cron, memory, skills, knowledge, external tools, or " +
 		"verification. For public web research, include search and " +
@@ -463,7 +494,14 @@ const (
 		"Do not use browser as a substitute for web search or " +
 		"fetching known static URLs; if a worker needs those " +
 		"capabilities but they are unavailable, return the exact " +
-		"missing search/fetch blocker. " +
+		"missing search/fetch blocker. Do not use browser to drive " +
+		"DuckDuckGo, Google, Google Scholar, Brave Search, Bing, " +
+		"or other search-engine result pages when search or fetch " +
+		"tools are available. If browser content shows a CAPTCHA, " +
+		"Cloudflare or `Just a moment` challenge, unusual traffic " +
+		"warning, bot check, or anti-automation page, treat that " +
+		"route as blocked and switch tools or sources instead of " +
+		"waiting, screenshotting, or retrying it. " +
 		"Browser snapshots are for current page structure and " +
 		"interactive state, not bulk extraction of long static " +
 		"documents; when static page text is needed, prefer " +
@@ -485,15 +523,23 @@ const (
 
 	defaultExecResultOutputChars = 20_000
 
-	deepSeekAPIHost = "api.deepseek.com"
-	qwenAPIHost     = "dashscope.aliyuncs.com"
-	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
-	glmAPIHost      = "open.bigmodel.cn"
+	deepSeekAPIHost  = "api.deepseek.com"
+	qwenAPIHost      = "dashscope.aliyuncs.com"
+	hunyuanAPIHost   = "api.hunyuan.cloud.tencent.com"
+	glmAPIHost       = "open.bigmodel.cn"
+	miniMaxAPIHost   = "api.minimax.io"
+	miniMaxCNAPIHost = "api.minimaxi.com"
+	kimiAPIHost      = "api.moonshot.ai"
+	kimiCNAPIHost    = "api.moonshot.cn"
 
-	openAIAPIKeyEnvName  = "OPENAI_API_KEY"
-	openAIBaseURLEnvName = "OPENAI_BASE_URL"
-	openAIHeadersEnvName = "OPENAI_HEADERS"
-	openAIModelEnvName   = "OPENAI_MODEL"
+	openAIAPIKeyEnvName   = "OPENAI_API_KEY"
+	deepSeekAPIKeyEnvName = "DEEPSEEK_API_KEY"
+	qwenAPIKeyEnvName     = "DASHSCOPE_API_KEY"
+	miniMaxAPIKeyEnvName  = "MINIMAX_API_KEY"
+	kimiAPIKeyEnvName     = "MOONSHOT_API_KEY"
+	openAIBaseURLEnvName  = "OPENAI_BASE_URL"
+	openAIHeadersEnvName  = "OPENAI_HEADERS"
+	openAIModelEnvName    = "OPENAI_MODEL"
 
 	errClaudeCodeAgentNoPrompts = "claude-code agent does not support " +
 		"agent prompts"
@@ -618,6 +664,7 @@ func runtimeStartupLines(
 	stateDir string,
 	channels []channel.Channel,
 	needsModel bool,
+	catalogs ...resolvedModelCatalog,
 ) []startupLogLine {
 	return []startupLogLine{
 		{text: fmt.Sprintf("App name: %s", strings.TrimSpace(opts.AppName))},
@@ -632,7 +679,7 @@ func runtimeStartupLines(
 		)},
 		{text: fmt.Sprintf(
 			"Model: %s",
-			modelStartupSummary(opts, needsModel),
+			modelStartupSummary(opts, needsModel, catalogs...),
 		)},
 		{text: fmt.Sprintf(
 			"Storage: session=%s memory=%s",
@@ -673,9 +720,17 @@ func channelStartupSummary(channels []channel.Channel) string {
 func modelStartupSummary(
 	opts runOptions,
 	needsModel bool,
+	catalogs ...resolvedModelCatalog,
 ) string {
 	if !needsModel {
 		return "disabled"
+	}
+	if len(catalogs) > 0 && catalogs[0].explicit {
+		return fmt.Sprintf(
+			"%s (%d configured)",
+			catalogs[0].defaultAlias(),
+			len(catalogs[0].models),
+		)
 	}
 	mode := strings.ToLower(strings.TrimSpace(opts.ModelMode))
 	if mode == "" {
@@ -773,6 +828,13 @@ type Runtime struct {
 	evolutionService  evolution.Service
 	toolSets          []tool.ToolSet
 	telemetryShutdown func(context.Context) error
+
+	modelCallBudgetLimit          int
+	modelCallBudgetFinalizeOnLast bool
+	modelCallBudgetDeadlineWindow time.Duration
+	modelCallBudgetFinalRequest   modelCallBudgetFinalRequestConfig
+	modelCatalog                  resolvedModelCatalog
+	modelRunOptions               runOptions
 }
 
 // Gateway provides the HTTP handler and routes served by OpenClaw.
@@ -1017,6 +1079,16 @@ func NewRuntimeWithOptions(
 			Err:  fmt.Errorf("agent config failed: %w", err),
 		}
 	}
+	if err := validateModelCatalogAgentType(
+		agentType,
+		opts,
+		runtimeOpts,
+	); err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent config failed: %w", err),
+		}
+	}
 
 	mentionPatterns := splitCSV(opts.Mention)
 
@@ -1053,13 +1125,27 @@ func NewRuntimeWithOptions(
 		opts.SessionSummaryEnabled ||
 		opts.MemoryAutoEnabled
 
-	var mdl model.Model
+	var (
+		mdl          model.Model
+		modelCatalog resolvedModelCatalog
+	)
 	if needsModel {
-		mdl, err = modelFromOptions(opts)
+		modelCatalog, err = resolveModelCatalog(opts, runtimeOpts)
 		if err != nil {
 			return nil, &exitError{
 				Code: 1,
 				Err:  fmt.Errorf("create model failed: %w", err),
+			}
+		}
+		mdl = modelCatalog.defaultModel()
+		if err := validateRuntimeProfileModels(
+			agentType,
+			opts.RuntimeProfiles,
+			modelCatalog,
+		); err != nil {
+			return nil, &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("model catalog validation failed: %w", err),
 			}
 		}
 	}
@@ -1069,6 +1155,7 @@ func NewRuntimeWithOptions(
 		opts,
 		needsModel,
 		resolvedStateDir,
+		modelCatalog,
 	)
 	log.Infof("Instance: %s", instanceID)
 	rt.appName = opts.AppName
@@ -1143,6 +1230,7 @@ func NewRuntimeWithOptions(
 		opts.HostExecDefaultTimeout,
 		opts.HostExecMaxTimeout,
 		opts.HostExecMaxYield,
+		opts.HostExecMaxIdleWait,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1176,12 +1264,15 @@ func NewRuntimeWithOptions(
 		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
+			Models:                  modelCatalog.models,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:        opts.MaxHistoryRuns,
-			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxHistoryRuns: opts.MaxHistoryRuns,
+			MaxLLMCalls:    opts.MaxLLMCalls,
+			DeadlineFinalizationWindow: opts.
+				DeadlineFinalizationWindow,
 			MaxToolIterations:     opts.MaxToolIterations,
 			PreloadMemory:         opts.PreloadMemory,
 			GenerationConfig:      opts.GenerationConfig,
@@ -1270,6 +1361,14 @@ func NewRuntimeWithOptions(
 		prompts.Instruction,
 		prompts.SystemPrompt,
 	)
+	rt.modelCallBudgetLimit = opts.MaxLLMCalls
+	rt.modelCallBudgetFinalizeOnLast = opts.FinalizeBeforeMaxLLMCalls
+	rt.modelCallBudgetDeadlineWindow = opts.DeadlineFinalizationWindow
+	rt.modelCatalog = modelCatalog
+	rt.modelRunOptions = opts
+	rt.modelCallBudgetFinalRequest = modelCallBudgetFinalRequestFromOptions(
+		modelCatalog.runOptionsForModel(opts, modelCatalog.defaultName),
+	)
 	rt.toolSets = toolSets
 	rt.tools = runtimeTools
 	rt.skillsWatch = skillsWatch
@@ -1320,6 +1419,7 @@ func NewRuntimeWithOptions(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
+		opts.GatewayMaxBodyBytes,
 	)
 	gwOpts = append(gwOpts, gateway.WithAppName(opts.AppName))
 	gwOpts = append(gwOpts, gateway.WithUploadStore(stores.uploads))
@@ -1337,6 +1437,17 @@ func NewRuntimeWithOptions(
 		gwOpts,
 		runtimeProfileResolver,
 		runtimeProfileRequired,
+	)
+	if agentType == agentTypeLLM {
+		gwOpts = appendModelCatalogGatewayOptions(gwOpts, modelCatalog)
+	}
+	gwOpts = appendModelCatalogCallBudgetGatewayOption(
+		gwOpts,
+		opts,
+		modelCatalog,
+		opts.MaxLLMCalls,
+		opts.FinalizeBeforeMaxLLMCalls,
+		opts.DeadlineFinalizationWindow,
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -1376,6 +1487,11 @@ func NewRuntimeWithOptions(
 				},
 			),
 		),
+	)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(
+		gwOpts,
+		opts,
+		modelCatalog,
 	)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
@@ -1498,7 +1614,7 @@ func NewRuntimeWithOptions(
 	if opts.AdminEnabled {
 		adminURL := listenURL(opts.AdminAddr)
 		adminCfg := buildAdminConfig(
-			opts,
+			modelCatalog.adminRunOptions(opts),
 			agentType,
 			instanceID,
 			langfuseStatus,
@@ -1523,7 +1639,7 @@ func NewRuntimeWithOptions(
 			fileMemoryStore,
 			rt.SessionService(),
 		)
-		setRuntimeAdminOptions(rt, buildAdminOptions(opts))
+		setRuntimeAdminOptions(rt, buildAdminOptions(opts, modelCatalog))
 		rt.applyAdminConfig(adminCfg)
 	}
 
@@ -1541,7 +1657,103 @@ func (r *Runtime) Run(
 	if r == nil || r.runner == nil {
 		return nil, errors.New("openclaw runtime runner is not configured")
 	}
+	if r.modelCatalog.explicit {
+		runOpts = append(runOpts, r.modelCatalogRunOption())
+		return r.runner.Run(ctx, userID, sessionID, message, runOpts...)
+	}
+	defaultRunOpts := modelCallBudgetRunOptions(
+		r.modelCallBudgetLimit,
+		r.modelCallBudgetFinalizeOnLast,
+		r.modelCallBudgetDeadlineWindow,
+		r.modelCallBudgetFinalRequest,
+	)
+	if len(defaultRunOpts) > 0 {
+		merged := make([]agent.RunOption, 0, len(defaultRunOpts)+len(runOpts))
+		merged = append(merged, defaultRunOpts...)
+		merged = append(merged, runOpts...)
+		runOpts = merged
+	}
 	return r.runner.Run(ctx, userID, sessionID, message, runOpts...)
+}
+
+func (r *Runtime) modelCatalogRunOption() agent.RunOption {
+	return func(opts *agent.RunOptions) {
+		if opts == nil {
+			return
+		}
+		name := r.modelCatalog.defaultName
+		if opts.Model != nil {
+			selected := r.modelCatalog.runOptionsForModel(
+				r.modelRunOptions,
+				name,
+			)
+			r.applyModelCallBudgetDefaults(opts, selected)
+			return
+		}
+		requested := strings.TrimSpace(opts.ModelName)
+		opts.ModelName = requested
+		if requested != "" {
+			name = requested
+		}
+		if _, ok := r.modelCatalog.models[name]; !ok {
+			opts.ModelName = ""
+			message := fmt.Sprintf("model %q is not configured", name)
+			if opts.ModelSelector != nil {
+				message += " and cannot be combined with a custom model selector"
+			}
+			opts.ModelSelector = func(
+				context.Context,
+				*agent.Invocation,
+			) (model.Model, error) {
+				return nil, errors.New(message)
+			}
+			return
+		}
+		selected := r.modelCatalog.runOptionsForModel(
+			r.modelRunOptions,
+			name,
+		)
+		r.applyModelCallBudgetDefaults(opts, selected)
+		if opts.ModelSelector == nil {
+			applyModelCompatibilityDefaults(opts, selected)
+		}
+	}
+}
+
+func (r *Runtime) applyModelCallBudgetDefaults(
+	opts *agent.RunOptions,
+	selected runOptions,
+) {
+	factory := newModelCallBudgetFactory(
+		r.modelCallBudgetLimit,
+		r.modelCallBudgetFinalizeOnLast,
+		r.modelCallBudgetDeadlineWindow,
+		modelCallBudgetFinalRequestFromOptions(selected),
+	)
+	if factory == nil {
+		return
+	}
+	if opts.RuntimeState == nil {
+		opts.RuntimeState = make(map[string]any, 1)
+	}
+	if _, exists := opts.RuntimeState[modelCallBudgetRuntimeStateKey]; !exists {
+		opts.RuntimeState[modelCallBudgetRuntimeStateKey] = factory
+	}
+}
+
+func applyModelCompatibilityDefaults(
+	opts *agent.RunOptions,
+	selected runOptions,
+) {
+	if len(modelCompatibilityRunOptions(selected)) == 0 {
+		return
+	}
+	if opts.ToolCallArgumentsJSONRepairEnabled == nil {
+		agent.WithToolCallArgumentsJSONRepairEnabled(true)(opts)
+	}
+	if opts.ToolCallTextRepairEnabled == nil {
+		agent.WithToolCallTextRepairEnabled(true)(opts)
+	}
 }
 
 // Close releases owned resources (session/memory services, toolsets, runner).
@@ -1613,6 +1825,16 @@ func run(
 			Err:  fmt.Errorf("agent config failed: %w", err),
 		}
 	}
+	if err := validateModelCatalogAgentType(
+		agentType,
+		opts,
+		runtimeOpts,
+	); err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent config failed: %w", err),
+		}
+	}
 
 	mentionPatterns := splitCSV(opts.Mention)
 
@@ -1671,13 +1893,27 @@ func run(
 		opts.SessionSummaryEnabled ||
 		opts.MemoryAutoEnabled
 
-	var mdl model.Model
+	var (
+		mdl          model.Model
+		modelCatalog resolvedModelCatalog
+	)
 	if needsModel {
-		mdl, err = modelFromOptions(opts)
+		modelCatalog, err = resolveModelCatalog(opts, runtimeOpts)
 		if err != nil {
 			return &exitError{
 				Code: 1,
 				Err:  fmt.Errorf("create model failed: %w", err),
+			}
+		}
+		mdl = modelCatalog.defaultModel()
+		if err := validateRuntimeProfileModels(
+			agentType,
+			opts.RuntimeProfiles,
+			modelCatalog,
+		); err != nil {
+			return &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("model catalog validation failed: %w", err),
 			}
 		}
 	}
@@ -1687,6 +1923,7 @@ func run(
 		opts,
 		needsModel,
 		resolvedStateDir,
+		modelCatalog,
 	)
 	log.Infof("Instance: %s", instanceID)
 
@@ -1760,6 +1997,7 @@ func run(
 		opts.HostExecDefaultTimeout,
 		opts.HostExecMaxTimeout,
 		opts.HostExecMaxYield,
+		opts.HostExecMaxIdleWait,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1805,12 +2043,15 @@ func run(
 		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
+			Models:                  modelCatalog.models,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:        opts.MaxHistoryRuns,
-			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxHistoryRuns: opts.MaxHistoryRuns,
+			MaxLLMCalls:    opts.MaxLLMCalls,
+			DeadlineFinalizationWindow: opts.
+				DeadlineFinalizationWindow,
 			MaxToolIterations:     opts.MaxToolIterations,
 			PreloadMemory:         opts.PreloadMemory,
 			GenerationConfig:      opts.GenerationConfig,
@@ -1943,6 +2184,7 @@ func run(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
+		opts.GatewayMaxBodyBytes,
 	)
 	gwOpts = append(gwOpts, gateway.WithAppName(opts.AppName))
 	gwOpts = append(gwOpts, gateway.WithUploadStore(stores.uploads))
@@ -1960,6 +2202,17 @@ func run(
 		gwOpts,
 		runtimeProfileResolver,
 		runtimeProfileRequired,
+	)
+	if agentType == agentTypeLLM {
+		gwOpts = appendModelCatalogGatewayOptions(gwOpts, modelCatalog)
+	}
+	gwOpts = appendModelCatalogCallBudgetGatewayOption(
+		gwOpts,
+		opts,
+		modelCatalog,
+		opts.MaxLLMCalls,
+		opts.FinalizeBeforeMaxLLMCalls,
+		opts.DeadlineFinalizationWindow,
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -1999,6 +2252,11 @@ func run(
 				},
 			),
 		),
+	)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(
+		gwOpts,
+		opts,
+		modelCatalog,
 	)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
@@ -2161,7 +2419,7 @@ func run(
 		}
 		adminSvc := admin.New(
 			buildAdminConfig(
-				opts,
+				modelCatalog.adminRunOptions(opts),
 				agentType,
 				instanceID,
 				langfuseStatus,
@@ -2186,7 +2444,7 @@ func run(
 				fileMemoryStore,
 				bridgedSessionSvc,
 			),
-			buildAdminOptions(opts)...,
+			buildAdminOptions(opts, modelCatalog)...,
 		)
 		adminSrv = &http.Server{
 			Handler:           adminSvc.Handler(),
@@ -2205,6 +2463,7 @@ func run(
 		resolvedStateDir,
 		channels,
 		needsModel,
+		modelCatalog,
 	))
 	logStartupLines(browserServerSup.startupLines())
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
@@ -2421,8 +2680,14 @@ func runtimeInstanceID(
 	opts runOptions,
 	needsModel bool,
 	stateDir string,
+	catalogs ...resolvedModelCatalog,
 ) string {
 	if agentType == agentTypeLLM {
+		if len(catalogs) > 0 && catalogs[0].explicit {
+			parts := []string{agentType, stateDir}
+			parts = append(parts, catalogs[0].identityParts()...)
+			return configFingerprint(parts...)
+		}
 		return configFingerprint(
 			opts.ModelMode,
 			opts.OpenAIModel,
@@ -2437,7 +2702,11 @@ func runtimeInstanceID(
 		stateDir,
 	}
 	if needsModel {
-		parts = append(parts, opts.ModelMode, opts.OpenAIModel)
+		if len(catalogs) > 0 && catalogs[0].explicit {
+			parts = append(parts, catalogs[0].identityParts()...)
+		} else {
+			parts = append(parts, opts.ModelMode, opts.OpenAIModel)
+		}
 	}
 	return configFingerprint(parts...)
 }
@@ -2485,8 +2754,12 @@ func makeGatewayOptions(
 	users []string,
 	requireMention bool,
 	mentionPatterns []string,
+	maxBodyBytes int64,
 ) []gateway.Option {
 	opts := make([]gateway.Option, 0, 4)
+	if maxBodyBytes > 0 {
+		opts = append(opts, gateway.WithMaxBodyBytes(maxBodyBytes))
+	}
 	if len(users) > 0 {
 		opts = append(opts, gateway.WithAllowUsers(users...))
 	}
@@ -2551,6 +2824,11 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 	if opts.MaxLLMCalls != 0 {
 		return errors.New(
 			"claude-code agent does not support max-llm-calls",
+		)
+	}
+	if opts.DeadlineFinalizationWindow != 0 {
+		return errors.New(
+			"claude-code agent does not support deadline-finalization-window",
 		)
 	}
 	if opts.PreloadMemory != 0 {
@@ -2874,6 +3152,11 @@ func newAgent(
 		cfg.StateDir,
 	)
 	registerDynamicAgentBlockerCallback(callbacks)
+	registerToolArgumentGuardCallback(
+		callbacks,
+		os.Getenv(envBlockedToolArgumentSubstrings),
+	)
+	registerBlockedRouteToolCallback(callbacks)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 
 	exec := cfg.codeExecutor
@@ -2906,6 +3189,12 @@ func newAgent(
 		)
 	}
 	if deferToolSurface {
+		opts = appendDeferredSkillOverviewOptions(
+			opts,
+			cfg,
+			repo,
+			repoProvider,
+		)
 		searchTool := newDeferredCapabilitySearchTool(
 			deferredToolSurfaceConfig{
 				Model:         mdl,
@@ -3098,20 +3387,8 @@ func buildOpenClawToolingGuidance(cfg agentConfig) string {
 	}
 	guidance = strings.Replace(
 		guidance,
-		"For other general local shell work, use exec_command. "+
-			"Do not use host system package managers such as apt, yum, dnf, "+
-			"apk, pacman, zypper, or brew from chat; use preconfigured "+
-			"dependencies or ask for an explicit setup flow. For interactive "+
-			"follow-up input, use write_stdin and kill_session when needed. Use message "+
-			"to send to the current chat or an explicit target. ",
-		"For other general local shell work, use exec_command. In sandbox mode, "+
-			"exec_command only supports foreground non-interactive commands; "+
-			"write_stdin, kill_session, background execution, TTY allocation, "+
-			"and session continuation are unavailable. Do not use host system "+
-			"package managers such as apt, yum, dnf, apk, pacman, zypper, "+
-			"or brew from chat; use preconfigured dependencies or ask for an "+
-			"explicit setup flow. Use message to send to "+
-			"the current chat or an explicit target. ",
+		openClawHostShellGuidance,
+		openClawSandboxShellGuidance,
 		1,
 	)
 	guidance = strings.Replace(
@@ -3326,12 +3603,14 @@ func channelsFromRegistry(
 
 type agentConfig struct {
 	AppName string
+	Models  map[string]model.Model
 
 	AddSessionSummary                             bool
 	EnableContextCompaction                       bool
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
 	MaxLLMCalls                                   int
+	DeadlineFinalizationWindow                    time.Duration
 	MaxToolIterations                             int
 	PreloadMemory                                 int
 	GenerationConfig                              *model.GenerationConfig
@@ -3462,6 +3741,7 @@ func buildOpenClawTools(
 	hostExecDefaultTimeout time.Duration,
 	hostExecMaxTimeout time.Duration,
 	hostExecMaxYield time.Duration,
+	hostExecMaxIdleWait time.Duration,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
@@ -3481,7 +3761,11 @@ func buildOpenClawTools(
 
 	var mgr *octool.Manager
 	var execTool tool.Tool
-	commandPolicy := octool.NewChatCommandSafetyPolicy()
+	commandPolicy := octool.NewChatCommandSafetyPolicyWithOptions(
+		octool.ChatCommandSafetyPolicyOptions{
+			MaxIdleWait: hostExecMaxIdleWait,
+		},
+	)
 	outputRedactor := octool.NewChatCommandOutputRedactor()
 	if sandboxExecEngine != nil {
 		execTool = octool.NewSandboxExecCommandToolWithPolicy(
@@ -3496,6 +3780,7 @@ func buildOpenClawTools(
 			octool.WithBaseEnv(deps.ToolEnv(stateDir)),
 			octool.WithCommandPolicy(commandPolicy),
 			octool.WithOutputRedactor(outputRedactor),
+			octool.WithCleanShellStartup(true),
 			octool.WithMaxResultOutputChars(
 				defaultExecResultOutputChars,
 			),
@@ -3747,6 +4032,9 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
 	}
+	if spec.OpenAITextOnlyMessageContent {
+		opts = append(opts, openai.WithTextOnlyMessageContent(true))
+	}
 	if spec.DebugRecorderEnabled {
 		opts = append(
 			opts,
@@ -3760,6 +4048,25 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	}
 	if apiKey := strings.TrimSpace(spec.APIKey); apiKey != "" {
 		opts = append(opts, openai.WithAPIKey(apiKey))
+	}
+	if spec.Timeout > 0 {
+		opts = append(
+			opts,
+			openai.WithHTTPClientOptions(
+				openai.WithHTTPClientTimeout(spec.Timeout),
+			),
+			openai.WithOpenAIOptions(
+				openaiopt.WithRequestTimeout(spec.Timeout),
+			),
+		)
+	}
+	if spec.MaxRetries != nil {
+		opts = append(
+			opts,
+			openai.WithOpenAIOptions(
+				openaiopt.WithMaxRetries(*spec.MaxRetries),
+			),
+		)
 	}
 	if len(spec.Headers) > 0 {
 		opts = append(opts, openai.WithHeaders(spec.Headers))
@@ -3778,10 +4085,7 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 		return nil, fmt.Errorf("unsupported mode: %s", mode)
 	}
 
-	baseURL := strings.TrimSpace(opts.OpenAIBaseURL)
-	if baseURL == "" {
-		baseURL = strings.TrimSpace(os.Getenv(openAIBaseURLEnvName))
-	}
+	baseURL := resolvedOpenAIBaseURL(opts)
 	var headers map[string]string
 	if mode == modeOpenAI {
 		resolved, err := resolveOpenAIHeaders(opts.OpenAIHeaders)
@@ -3791,17 +4095,76 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 		headers = resolved
 	}
 
+	apiKey, err := openAIAPIKeyFromOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	spec := registry.ModelSpec{
-		Type:                 mode,
-		Name:                 opts.OpenAIModel,
-		BaseURL:              baseURL,
-		APIKey:               strings.TrimSpace(os.Getenv(openAIAPIKeyEnvName)),
-		OpenAIVariant:        opts.OpenAIVariant,
+		Type:                         mode,
+		Name:                         opts.OpenAIModel,
+		BaseURL:                      baseURL,
+		APIKey:                       apiKey,
+		OpenAIVariant:                opts.OpenAIVariant,
+		OpenAITextOnlyMessageContent: opts.OpenAITextOnlyMessageContent,
+		Timeout:                      opts.OpenAITimeout,
+		MaxRetries: openAIMaxRetriesPtr(
+			opts.OpenAIMaxRetries,
+			opts.OpenAIMaxRetriesSet,
+		),
 		Headers:              headers,
 		DebugRecorderEnabled: opts.DebugRecorderEnabled,
 		Config:               opts.ModelConfig,
 	}
-	return f(spec)
+	mdl, err := f(spec)
+	if err != nil {
+		return nil, err
+	}
+	return newModelTimeoutModel(mdl, opts.OpenAITimeout), nil
+}
+
+func openAIAPIKeyFromOptions(opts runOptions) (string, error) {
+	envName := openAIAPIKeyEnvName
+	if opts.OpenAIUseVariantAPIKey &&
+		strings.EqualFold(strings.TrimSpace(opts.ModelMode), modeOpenAI) {
+		variant, err := parseOpenAIVariant(
+			opts.OpenAIVariant,
+			resolvedOpenAIBaseURL(opts),
+		)
+		if err != nil {
+			return "", err
+		}
+		switch variant {
+		case openai.VariantDeepSeek:
+			envName = deepSeekAPIKeyEnvName
+		case openai.VariantQwen:
+			envName = qwenAPIKeyEnvName
+		case openai.VariantMiniMax:
+			envName = miniMaxAPIKeyEnvName
+		case openai.VariantKimi:
+			envName = kimiAPIKeyEnvName
+		}
+	}
+	if envName != openAIAPIKeyEnvName {
+		if apiKey := strings.TrimSpace(os.Getenv(envName)); apiKey != "" {
+			return apiKey, nil
+		}
+	}
+	return strings.TrimSpace(os.Getenv(openAIAPIKeyEnvName)), nil
+}
+
+func resolvedOpenAIBaseURL(opts runOptions) string {
+	baseURL := strings.TrimSpace(opts.OpenAIBaseURL)
+	if baseURL != "" {
+		return baseURL
+	}
+	return strings.TrimSpace(os.Getenv(openAIBaseURLEnvName))
+}
+
+func openAIMaxRetriesPtr(maxRetries int, set bool) *int {
+	if !set || maxRetries < 0 {
+		return nil
+	}
+	return &maxRetries
 }
 
 func resolveOpenAIHeaders(
@@ -3944,10 +4307,96 @@ func parseOpenAIVariant(
 		openai.VariantDeepSeek,
 		openai.VariantHunyuan,
 		openai.VariantQwen,
-		openai.VariantGLM:
+		openai.VariantGLM,
+		openai.VariantMiniMax,
+		openai.VariantKimi:
 		return variant, nil
 	default:
 		return "", fmt.Errorf("unsupported openai variant: %s", raw)
+	}
+}
+
+func appendModelCompatibilityGatewayRunOptions(
+	opts []gateway.Option,
+	runOpts runOptions,
+	catalog resolvedModelCatalog,
+) []gateway.Option {
+	if catalog.explicit && len(catalog.models) > 0 {
+		return append(
+			opts,
+			gateway.WithRunOptionResolver(func(
+				ctx context.Context,
+				input gateway.RunOptionInput,
+			) (context.Context, []agent.RunOption, error) {
+				name := catalog.selectedModelName(ctx, input.ModelName)
+				selected := catalog.runOptionsForModel(runOpts, name)
+				return ctx, modelCompatibilityRunOptions(selected), nil
+			}),
+		)
+	}
+	staticRunOpts := modelCompatibilityRunOptions(runOpts)
+	if len(staticRunOpts) == 0 {
+		return opts
+	}
+	return append(
+		opts,
+		gateway.WithRunOptionResolver(func(
+			ctx context.Context,
+			_ gateway.RunOptionInput,
+		) (context.Context, []agent.RunOption, error) {
+			return ctx, append([]agent.RunOption(nil), staticRunOpts...), nil
+		}),
+	)
+}
+
+func modelCompatibilityRunOptions(
+	opts runOptions,
+) []agent.RunOption {
+	if strings.TrimSpace(opts.ModelMode) != modeOpenAI {
+		return nil
+	}
+	variant, err := parseOpenAIVariant(opts.OpenAIVariant, opts.OpenAIBaseURL)
+	if err != nil || variant != openai.VariantGLM {
+		return nil
+	}
+	return []agent.RunOption{
+		agent.WithToolCallArgumentsJSONRepairEnabled(true),
+		agent.WithToolCallTextRepairEnabled(true),
+	}
+}
+
+const defaultReasoningFinalizationApproxRunesPerToken = 1.0
+
+func modelCallBudgetFinalRequestFromOptions(
+	opts runOptions,
+) modelCallBudgetFinalRequestConfig {
+	cfg := modelCallBudgetFinalRequestConfig{
+		MaxInputTokens: opts.DeadlineFinalizationMaxInputTokens,
+	}
+	if strings.TrimSpace(opts.ModelMode) != modeOpenAI {
+		return cfg
+	}
+	if opts.DeadlineFinalizationWindow <= 0 {
+		return cfg
+	}
+	variant, err := parseOpenAIVariant(opts.OpenAIVariant, opts.OpenAIBaseURL)
+	if err != nil {
+		return cfg
+	}
+	switch variant {
+	case openai.VariantDeepSeek,
+		openai.VariantHunyuan,
+		openai.VariantQwen,
+		openai.VariantGLM:
+		cfg.DisableThinking = true
+		cfg.DropReasoningContent = true
+		if cfg.ApproxRunesPerToken <= 0 {
+			cfg.ApproxRunesPerToken =
+				defaultReasoningFinalizationApproxRunesPerToken
+		}
+		return cfg
+	default:
+		return cfg
 	}
 }
 
@@ -3965,6 +4414,12 @@ func inferOpenAIVariant(baseURL string) openai.Variant {
 		return openai.VariantHunyuan
 	case strings.EqualFold(host, glmAPIHost):
 		return openai.VariantGLM
+	case strings.EqualFold(host, miniMaxAPIHost),
+		strings.EqualFold(host, miniMaxCNAPIHost):
+		return openai.VariantMiniMax
+	case strings.EqualFold(host, kimiAPIHost),
+		strings.EqualFold(host, kimiCNAPIHost):
+		return openai.VariantKimi
 	default:
 		return openai.VariantOpenAI
 	}

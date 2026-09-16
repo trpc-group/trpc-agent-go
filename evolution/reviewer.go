@@ -61,6 +61,7 @@ var reviewSystemPrompt = strings.Join([]string{
 	"- Keep skill names and descriptions scope-accurate. If the transcript only covers part of a broader workflow, name the skill narrowly and mention its limits instead of implying full task-family coverage.",
 	"- If you save a skill, include every essential API/tool category, ordering constraint, and output-field requirement that was necessary for successful completion in the transcript.",
 	"- Do not omit required steps from the learned skill just because they appeared obvious in context. If a step (e.g. saving the final artifact, calling a finalize tool, validating output) was required, mention it explicitly.",
+	"- If the user gives future/default workflow feedback for a recurring task category (for example: \"以后遇到 X 默认按这套工作流\", \"going forward use this schema\"), and the feedback contains concrete steps, fields, source-ordering rules, or categories, treat it as reusable procedural knowledge and prefer creating/updating a skill. Do not emit it as durable memory.",
 	"- If nothing is worth saving, set skip_reason and leave skills/updates/deletions empty.",
 	"",
 	"Failure-aware learning (only when `## Session outcome` is present):",
@@ -141,36 +142,69 @@ func (r *LLMReviewer) Review(ctx context.Context, input *ReviewInput) (*ReviewDe
 		},
 	}
 
-	respCh, err := r.model.GenerateContent(ctx, req)
+	respCh, err := generateReviewerContent(ctx, r.model, req)
 	if err != nil {
 		return nil, fmt.Errorf("evolution: reviewer generate: %w", err)
 	}
 
 	var full strings.Builder
 	sawDelta := false
-	for resp := range respCh {
-		if resp.Error != nil {
-			return nil, fmt.Errorf("evolution: reviewer response error: %s", resp.Error.Message)
-		}
-		for _, c := range resp.Choices {
-			if c.Delta.Content != "" {
-				sawDelta = true
-				full.WriteString(c.Delta.Content)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("evolution: reviewer response: %w", ctx.Err())
+		case resp, ok := <-respCh:
+			if !ok {
+				decision, err := parseReviewDecision(strings.TrimSpace(full.String()))
+				if err != nil {
+					return nil, err
+				}
+				return normalizeReviewDecision(decision)
 			}
-			// Only use Message.Content as a fallback for non-streaming
-			// providers. Streaming providers emit both Delta and Message,
-			// so appending both would duplicate the text.
-			if !sawDelta && c.Message.Content != "" {
-				full.WriteString(c.Message.Content)
+			if resp == nil {
+				continue
+			}
+			if resp.Error != nil {
+				return nil, fmt.Errorf("evolution: reviewer response error: %s", resp.Error.Message)
+			}
+			for _, c := range resp.Choices {
+				if c.Delta.Content != "" {
+					sawDelta = true
+					full.WriteString(c.Delta.Content)
+				}
+				// Only use Message.Content as a fallback for non-streaming
+				// providers. Streaming providers emit both Delta and Message,
+				// so appending both would duplicate the text.
+				if !sawDelta && c.Message.Content != "" {
+					full.WriteString(c.Message.Content)
+				}
 			}
 		}
 	}
+}
 
-	decision, err := parseReviewDecision(strings.TrimSpace(full.String()))
-	if err != nil {
-		return nil, err
+type reviewerGenerateResult struct {
+	respCh <-chan *model.Response
+	err    error
+}
+
+func generateReviewerContent(
+	ctx context.Context,
+	m model.Model,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	resultCh := make(chan reviewerGenerateResult, 1)
+	go func() {
+		respCh, err := m.GenerateContent(ctx, req)
+		resultCh <- reviewerGenerateResult{respCh: respCh, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultCh:
+		return result.respCh, result.err
 	}
-	return normalizeReviewDecision(decision)
 }
 
 func buildUserPrompt(input *ReviewInput, messageMaxChars int) string {

@@ -765,7 +765,8 @@ func (p *PostgreSQLMemoryService) unmarshalTopics(data []byte) []string {
 建议：
 
 - 将包放回 `memory/mem0/`，在 memory 领域下更直观、更易发现。
-- 让 Runner 在每轮对话结束后，通过 `runner.WithSessionIngestor(...)` 把完整 session transcript 交给外部长时记忆平台。
+- 让 Runner 在每轮对话结束后，通过 `runner.WithSessionIngestor(...)` 把当前
+  Session 交给 ingestor；mem0 适配层只转发新增且非空的 user/assistant 增量。
 - 只暴露真正符合平台能力边界的工具。对 mem0 来说，通常是只读的 `memory_search`，以及可选的 `memory_load`。
 - 平台特有的 ingest、轮询、鉴权、重试逻辑，都收敛在 `memory/mem0` 内部，不污染 core memory 抽象。
 
@@ -884,7 +885,10 @@ plugins:
 - OTLP 导出：使用 `otlpmetricgrpc`，支持环境变量覆盖：
   - `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`。
   - `OTEL_EXPORTER_OTLP_ENDPOINT`（兜底）。
-- 资源标识：自动填充 `service.namespace/name/version`。
+- 资源标识：`service.name` 使用 OpenTelemetry SDK 的默认回退值；
+  `service.namespace/version` 仅在显式配置时写入。
+- Instrumentation Scope：通过 meter 名称和从 Go 构建信息中读取的实际发出
+  指标的模块版本，标识由 tRPC-Agent-Go 产生的指标。
 
 示例（启动指标与上报 Counter）：
 
@@ -934,6 +938,10 @@ func main() {
 - OTLP 导出：使用 `otlptracegrpc`，支持环境变量覆盖：
   - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`。
   - `OTEL_EXPORTER_OTLP_ENDPOINT`（兜底）。
+- 资源标识：`service.name` 使用 OpenTelemetry SDK 的默认回退值；
+  `service.namespace/version` 仅在显式配置时写入。
+- Instrumentation Scope：使用 `trpc.agent.go` 和从 Go 构建信息中读取的框架
+  版本，标识由 tRPC-Agent-Go 产生的 span。
 - Propagator：默认启用 `TraceContext`。
 
 示例（启动追踪与创建 Span）：

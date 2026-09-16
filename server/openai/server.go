@@ -228,8 +228,12 @@ func (s *Server) handleNonStreaming(w http.ResponseWriter, r *http.Request, req 
 		s.writeError(w, errors.New("messages cannot be empty"), errorTypeInvalidRequest, http.StatusBadRequest)
 		return
 	}
-	// Get the last message (user message).
-	userMessage := messages[len(messages)-1]
+	runInput, err := runInputFromMessages(messages)
+	if err != nil {
+		log.WarnfContext(ctx, "openai: failed to build run input: %v", err)
+		s.writeError(w, err, errorTypeInvalidRequest, http.StatusBadRequest)
+		return
+	}
 	// Get session ID from header or generate one.
 	sessionID := r.Header.Get(headerSessionID)
 	if sessionID == "" {
@@ -240,17 +244,18 @@ func (s *Server) handleNonStreaming(w http.ResponseWriter, r *http.Request, req 
 	if userID == "" {
 		userID = defaultUserID
 	}
-	// Build run options with history.
-	runOpts := []agent.RunOption{}
-	if len(messages) > 1 {
-		runOpts = append(runOpts, agent.WithMessages(messages[:len(messages)-1]))
+	// Build run options with history and caller-declared external tools.
+	// Generation config (temperature, max_tokens, etc.) should be set when
+	// creating the agent, not at runtime. OpenAI API parameters are ignored
+	// here for now.
+	runOpts, err := buildRunOptions(req, runInput)
+	if err != nil {
+		log.WarnfContext(ctx, "openai: failed to build run options: %v", err)
+		s.writeError(w, err, errorTypeInvalidRequest, http.StatusBadRequest)
+		return
 	}
-	// Note: Generation config (temperature, max_tokens, etc.) should be set
-	// when creating the agent, not at runtime. OpenAI API parameters are
-	// ignored here for now. Users should configure the agent with desired
-	// generation config when creating it.
 	// Run the agent.
-	eventCh, err := s.runner.Run(ctx, userID, sessionID, userMessage, runOpts...)
+	eventCh, err := s.runner.Run(ctx, userID, sessionID, runInput.inputMessage, runOpts...)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -323,8 +328,12 @@ func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, req *op
 		s.writeError(w, errors.New("messages cannot be empty"), errorTypeInvalidRequest, http.StatusBadRequest)
 		return
 	}
-	// Get the last message (user message).
-	userMessage := messages[len(messages)-1]
+	runInput, err := runInputFromMessages(messages)
+	if err != nil {
+		log.WarnfContext(ctx, "openai: failed to build run input: %v", err)
+		s.writeError(w, err, errorTypeInvalidRequest, http.StatusBadRequest)
+		return
+	}
 	// Get session ID from header or generate one.
 	sessionID := r.Header.Get(headerSessionID)
 	if sessionID == "" {
@@ -335,17 +344,18 @@ func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, req *op
 	if userID == "" {
 		userID = defaultUserID
 	}
-	// Build run options with history.
-	runOpts := []agent.RunOption{}
-	if len(messages) > 1 {
-		runOpts = append(runOpts, agent.WithMessages(messages[:len(messages)-1]))
+	// Build run options with history and caller-declared external tools.
+	// Generation config (temperature, max_tokens, etc.) should be set when
+	// creating the agent, not at runtime. OpenAI API parameters are ignored
+	// here for now.
+	runOpts, err := buildRunOptions(req, runInput)
+	if err != nil {
+		log.WarnfContext(ctx, "openai: failed to build run options: %v", err)
+		s.writeError(w, err, errorTypeInvalidRequest, http.StatusBadRequest)
+		return
 	}
-	// Note: Generation config (temperature, max_tokens, etc.) should be set
-	// when creating the agent, not at runtime. OpenAI API parameters are
-	// ignored here for now. Users should configure the agent with desired
-	// generation config when creating it.
 	// Run the agent.
-	eventCh, err := s.runner.Run(ctx, userID, sessionID, userMessage, runOpts...)
+	eventCh, err := s.runner.Run(ctx, userID, sessionID, runInput.inputMessage, runOpts...)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,

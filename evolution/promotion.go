@@ -15,7 +15,73 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 )
+
+var revisionMutationLocks mutationLockRegistry
+
+type mutationLockRegistry struct {
+	mu    sync.Mutex
+	locks map[string]*mutationLock
+}
+
+type mutationLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+type candidateStoreSkillLocker interface {
+	lockSkill(ctx context.Context, skillID string) (func(), error)
+}
+
+func (r *mutationLockRegistry) lock(skillID string) func() {
+	r.mu.Lock()
+	if r.locks == nil {
+		r.locks = make(map[string]*mutationLock)
+	}
+	lock := r.locks[skillID]
+	if lock == nil {
+		lock = &mutationLock{}
+		r.locks[skillID] = lock
+	}
+	lock.refs++
+	r.mu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		r.mu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(r.locks, skillID)
+		}
+		r.mu.Unlock()
+	}
+}
+
+// lockRevisionMutation serializes all publisher and active-pointer mutations
+// for one skill. File stores add a cross-process lock; other stores still get
+// process-local serialization.
+func lockRevisionMutation(
+	ctx context.Context,
+	store CandidateStore,
+	skillID string,
+) (func(), error) {
+	localUnlock := revisionMutationLocks.lock(skillID)
+	locker, ok := store.(candidateStoreSkillLocker)
+	if !ok || locker == nil {
+		return localUnlock, nil
+	}
+	storeUnlock, err := locker.lockSkill(ctx, skillID)
+	if err != nil {
+		localUnlock()
+		return nil, err
+	}
+	return func() {
+		storeUnlock()
+		localUnlock()
+	}, nil
+}
 
 func archiveCurrentActiveRevision(
 	ctx context.Context,

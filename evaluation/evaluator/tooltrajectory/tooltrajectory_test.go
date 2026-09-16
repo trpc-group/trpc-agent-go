@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	ctooltrajectory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -43,6 +44,10 @@ func TestToolTrajectoryEvaluator_EvaluateSuccessAndFailure(t *testing.T) {
 	require.Len(t, result.PerInvocationResults, 1)
 	assert.Equal(t, 1.0, result.OverallScore)
 	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
+	require.NotNil(t, result.PerInvocationResults[0].Details.Value)
+	assert.Equal(t, score.KindNumeric, result.PerInvocationResults[0].Details.Value.Kind)
+	require.NotNil(t, result.PerInvocationResults[0].Details.Value.Numeric)
+	assert.Equal(t, 1.0, *result.PerInvocationResults[0].Details.Value.Numeric)
 
 	expecteds[0].InvocationID = "b"
 	result, err = ev.Evaluate(context.Background(), actuals, expecteds, evalMetric)
@@ -51,6 +56,10 @@ func TestToolTrajectoryEvaluator_EvaluateSuccessAndFailure(t *testing.T) {
 	assert.Equal(t, 0.0, result.PerInvocationResults[0].Score)
 	assert.Equal(t, status.EvalStatusFailed, result.PerInvocationResults[0].Status)
 	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
+	require.NotNil(t, result.PerInvocationResults[0].Details.Value)
+	assert.Equal(t, score.KindNumeric, result.PerInvocationResults[0].Details.Value.Kind)
+	require.NotNil(t, result.PerInvocationResults[0].Details.Value.Numeric)
+	assert.Equal(t, 0.0, *result.PerInvocationResults[0].Details.Value.Numeric)
 }
 
 func TestToolTrajectoryEvaluator_Errors(t *testing.T) {

@@ -46,6 +46,9 @@ func newSQLiteVecMemoryService(
 
 	if cfg.Extractor != nil {
 		opts = append(opts, memorysqlitevec.WithExtractor(cfg.Extractor))
+		opts = append(opts, memorysqlitevec.WithDisableAutoMemoryOnExternalContext(
+			cfg.DisableAutoMemoryOnExternalContext,
+		))
 		if cfg.AsyncMemoryNum > 0 {
 			opts = append(
 				opts,

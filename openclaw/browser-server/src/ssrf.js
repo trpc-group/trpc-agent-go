@@ -12,6 +12,20 @@ function parseDomains(value) {
     .filter(Boolean);
 }
 
+function readBool(value, fallback = false) {
+  const raw = `${value || ""}`.trim().toLowerCase();
+  if (raw === "") {
+    return fallback;
+  }
+  if (["1", "true", "yes", "on"].includes(raw)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(raw)) {
+    return false;
+  }
+  return fallback;
+}
+
 function isLoopbackHost(host) {
   return host === "localhost" || host.endsWith(".localhost");
 }
@@ -55,12 +69,11 @@ export function createNavigationPolicy(env = process.env) {
   return {
     allowedDomains: parseDomains(env.OPENCLAW_BROWSER_ALLOWED_DOMAINS),
     blockedDomains: parseDomains(env.OPENCLAW_BROWSER_BLOCKED_DOMAINS),
-    allowLoopback:
-      `${env.OPENCLAW_BROWSER_ALLOW_LOOPBACK || ""}` === "true",
-    allowPrivateNetworks:
-      `${env.OPENCLAW_BROWSER_ALLOW_PRIVATE_NETWORKS || ""}` === "true",
-    allowFileURLs:
-      `${env.OPENCLAW_BROWSER_ALLOW_FILE_URLS || ""}` === "true"
+    allowLoopback: readBool(env.OPENCLAW_BROWSER_ALLOW_LOOPBACK),
+    allowPrivateNetworks: readBool(
+      env.OPENCLAW_BROWSER_ALLOW_PRIVATE_NETWORKS
+    ),
+    allowFileURLs: readBool(env.OPENCLAW_BROWSER_ALLOW_FILE_URLS)
   };
 }
 

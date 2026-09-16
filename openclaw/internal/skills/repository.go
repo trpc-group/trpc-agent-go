@@ -89,6 +89,11 @@ type Repository struct {
 	skillConfigs map[string]SkillConfig
 }
 
+type orderedSummary struct {
+	summary skill.Summary
+	baseDir string
+}
+
 type Option func(*Repository)
 
 func WithDebug(debug bool) Option {
@@ -429,7 +434,7 @@ func (r *Repository) indexLocked() {
 
 	eligibleSet := map[string]struct{}{}
 	reasons := map[string]string{}
-	eligibleSummaries := []skill.Summary{}
+	eligibleSummaries := []orderedSummary{}
 	baseDirs := map[string]string{}
 	metas := map[string]*openClawMetadata{}
 	skillKeys := map[string]string{}
@@ -506,13 +511,16 @@ func (r *Repository) indexLocked() {
 		eligibleSet[name] = struct{}{}
 		baseDirs[name] = baseDir
 		if summary, ok := summaryByName[name]; ok {
-			eligibleSummaries = append(eligibleSummaries, summary)
+			eligibleSummaries = append(eligibleSummaries, orderedSummary{
+				summary: summary,
+				baseDir: baseDir,
+			})
 		}
 	}
 
 	r.eligible = eligibleSet
 	r.reasons = reasons
-	r.summaries = eligibleSummaries
+	r.summaries = orderedSkillSummaries(eligibleSummaries)
 	r.summaryFingerprints = scanSummaryFingerprints(
 		r.summaryScanRootsLocked(),
 	)
@@ -520,6 +528,45 @@ func (r *Repository) indexLocked() {
 	r.baseDirs = baseDirs
 	r.metas = metas
 	r.skillKey = skillKeys
+}
+
+func orderedSkillSummaries(entries []orderedSummary) []skill.Summary {
+	if len(entries) == 0 {
+		return nil
+	}
+	ordered := append([]orderedSummary(nil), entries...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return skillSummaryPriority(ordered[i].baseDir) <
+			skillSummaryPriority(ordered[j].baseDir)
+	})
+	out := make([]skill.Summary, 0, len(ordered))
+	for _, entry := range ordered {
+		out = append(out, entry.summary)
+	}
+	return out
+}
+
+func skillSummaryPriority(baseDir string) int {
+	if isEvolutionManagedSkillDir(baseDir) {
+		return 0
+	}
+	return 1
+}
+
+func isEvolutionManagedSkillDir(baseDir string) bool {
+	cleaned := filepath.Clean(strings.TrimSpace(baseDir))
+	if cleaned == "" || cleaned == "." {
+		return false
+	}
+	parts := strings.FieldsFunc(cleaned, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "skills" && parts[i+1] == "evolution" {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Repository) summaryCacheExpiredLocked(now time.Time) bool {

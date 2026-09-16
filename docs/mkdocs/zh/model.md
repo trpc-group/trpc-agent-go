@@ -588,6 +588,125 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+##### 自定义流式 Usage 聚合
+
+OpenAI-compatible adapter 默认会请求流式 usage，并聚合服务方返回的
+usage chunk。大多数应用应保留这一行为。只有兼容服务方对 usage chunk
+采用了非标准语义时，才需要配置 `WithAccumulateChunkTokenUsage`。该 option
+只影响流式 chunk 的聚合；非流式 usage 直接来自完整响应。
+
+###### `WithAccumulateChunkTokenUsage` 的执行方式
+
+配置后，回调会按顺序处理每个流式 chunk。回调签名是：
+
+```go
+func(current model.Usage, delta model.Usage) model.Usage
+```
+
+| 参数 | 含义 |
+| --- | --- |
+| `current` | 处理当前 chunk 之前的累计状态 |
+| `delta` | 当前 chunk 携带的 `Usage` |
+| 返回值 | 处理当前 chunk 之后要保存的完整状态 |
+
+对于每个 chunk，OpenAI-compatible adapter 会先让上游 SDK 聚合这个 chunk。
+如果配置了自定义回调，adapter 随后会还原出处理该 chunk 之前的 usage 状态，
+把当前 chunk 的 usage 映射成 `delta`，调用回调，再用回调返回值整体替换 SDK
+accumulator 中的 usage。因此，下一个 chunk 看到的 `current` 就是上一次的
+返回值，最终模型响应拿到的是最后一次返回值。
+
+`delta` 只是 API 中的参数名，不代表服务方一定发送了数学意义上的增量。
+它可能是真正的增量、截至当前的累计总量、最后一次完整总量，也可能是空值，
+具体取决于服务方。
+
+回调返回值会整体替换累计后的 `model.Usage`。返回值中没有填写的字段，
+不会自动从 `current` 或 `delta` 补回。
+
+标准 OpenAI-compatible stream 的原始内容 chunk 中，`usage` 为 `null`。
+adapter 在调用回调前，会把这个空值映射为零值 `model.Usage`。最后的
+usage-only chunk 才包含完整总量：
+
+```text
+原始内容 chunk:     usage = null
+回调收到的内容 chunk: delta = model.Usage{}
+原始最后一个 chunk:  usage = {prompt: 100, completion: 20, total: 120, cached: 80}
+回调收到的最后 chunk: delta = {prompt: 100, completion: 20, total: 120, cached: 80}
+```
+
+默认聚合器可以直接处理这种形态，不需要自定义 accumulator。
+
+###### `model.Usage` 字段说明
+
+Accumulator 保存的是一个完整的 `model.Usage`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `PromptTokens` | 服务方上报的本次请求输入 token 总量。缓存命中的输入 token 通常已经包含在该值中，不应再次相加 |
+| `CompletionTokens` | 服务方上报的模型输出 token 总量 |
+| `TotalTokens` | 服务方上报的总 token，通常等于 prompt 加 completion |
+| `PromptTokensDetails.CachedTokens` | OpenAI-compatible Prompt Cache 命中的输入 token，通常是 `PromptTokens` 的子集 |
+| `PromptTokensDetails.CacheCreationTokens` | 用于创建显式缓存的 token，主要对应 Anthropic 风格缓存 |
+| `PromptTokensDetails.CacheReadTokens` | 从显式缓存中读取的 token，主要对应 Anthropic 风格缓存 |
+| `CompletionTokensDetails.ReasoningTokens` | Completion usage 中服务方上报的推理 token |
+| `TimingInfo` | 可选的框架耗时信息，不属于计费 token |
+| `TimingInfo.FirstTokenDuration` | 每次模型调用从请求开始到第一个有效 reasoning、content 或 tool-call chunk 的耗时，多个模型调用会累加 |
+| `TimingInfo.ReasoningDuration` | 流式 reasoning 阶段的累计耗时；非流式请求无法精确计算区间，因此保持为零 |
+
+这些字段组成 provider-agnostic 结构。
+`WithAccumulateChunkTokenUsage` 属于 OpenAI-compatible adapter，因此回调
+只会收到上游 OpenAI-compatible 响应和 adapter 映射支持的字段；其他服务方
+专用字段保持为零。
+
+`TimingInfo` 包含 `FirstTokenDuration` 和 `ReasoningDuration`。框架会在
+OpenAI chunk usage 聚合之外附加这些耗时，因此自定义 token accumulator
+通常不需要创建或合并 `TimingInfo`。
+
+Token 计数细节仍以具体服务方定义为准。例如，不应把 `CachedTokens` 再加到
+`PromptTokens` 上，也不应在服务方没有要求时自行重算 `TotalTokens`。
+
+###### 根据服务方选择聚合策略
+
+先根据服务方的响应格式选择配置：
+
+| 服务方响应格式 | 直接累加会重复计数吗 | 推荐配置 |
+| --- | --- | --- |
+| 最后的 usage-only chunk 包含完整总量 | 不会，之前的 chunk 不携带 usage | 使用默认聚合器 |
+| 每个 usage chunk 都是独立增量 | 不会 | 使用默认聚合器 |
+| usage chunk 是累计快照，或重复上报已经出现的字段 | 会 | 自定义“最新非零值”聚合器 |
+
+对于累计快照或重复字段，保留最新的非零 usage。空 chunk 必须保留
+`current`，否则最后一次有效 usage 后的空 chunk 可能把结果清零。
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+func latestNonZeroUsage(current, delta model.Usage) model.Usage {
+    if delta.PromptTokens == 0 &&
+        delta.CompletionTokens == 0 &&
+        delta.TotalTokens == 0 &&
+        delta.PromptTokensDetails.CachedTokens == 0 &&
+        delta.PromptTokensDetails.CacheCreationTokens == 0 &&
+        delta.PromptTokensDetails.CacheReadTokens == 0 &&
+        delta.CompletionTokensDetails.ReasoningTokens == 0 {
+        return current
+    }
+    return delta
+}
+
+llm := openai.New("your-model",
+    openai.WithAccumulateChunkTokenUsage(latestNonZeroUsage),
+)
+```
+
+返回完整 `delta` 可以保留 `CachedTokens`、`ReasoningTokens` 等嵌套明细；
+“空”的判断应覆盖服务方可能上报的每个字段。
+
+选择自定义策略前，应检查服务方一次完整请求的原始 chunk，确认 usage
+究竟是增量还是累计值，以及是否存在最后的 usage-only chunk。
+
 ##### 通过回调动态修改请求体
 
 `WithChatRequestCallback` 接收 `*openai.ChatCompletionNewParams` 指针，
@@ -1174,7 +1293,10 @@ OpenAI SDK 自动重试以下错误：
 - **500+ Server Errors**：服务器内部错误（5xx）
 - **网络连接错误**：无响应或连接失败
 
-**注意**：SDK 默认最大重试次数为 2 次。
+**注意**：SDK 默认最大重试次数为 2 次。这表示初始请求失败后最多再重试
+2 次，因此一次调用默认最多会发起 3 次 HTTP 请求。`openaiopt.WithMaxRetries(n)`
+中的 `n` 指重试次数，不是总请求次数；设置为 `0` 可关闭 SDK 自动重试，
+只发送初始请求。
 
 ##### 重试策略
 
@@ -1214,6 +1336,18 @@ llm := openai.New("gpt-4o-mini",
 )
 ```
 
+**关闭重试**：
+
+```go
+// 需要完全关闭 SDK 自动重试的场景
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(0),  // 不重试，只发起一次请求
+        openaiopt.WithRequestTimeout(10*time.Second),
+    ),
+)
+```
+
 ##### 工作原理
 
 重试机制的执行流程：
@@ -1246,6 +1380,7 @@ llm := openai.New("gpt-4o-mini",
 - **无框架重试**：框架本身不实现重试逻辑
 - **客户端级重试**：所有重试由 OpenAI 客户端处理
 - **配置透传**：使用 `WithOpenAIOptions` 配置重试行为
+- **关闭重试**：设置 `openaiopt.WithMaxRetries(0)` 可关闭 SDK 自动重试
 - **自动处理**：速率限制（429）自动处理，无需额外代码
 
 ##### 使用示例
@@ -1756,7 +1891,7 @@ model := anthropic.New("claude-sonnet-4-0",
 
 #### 7. Variant 优化：平台特有行为适配
 
-Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容平台的特有行为差异。通过指定不同的 Variant，框架能够自动适配各平台的 API 差异，特别是文件上传、删除和处理逻辑。
+Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容平台的特有行为差异。通过指定不同的 Variant，框架能够自动适配各平台的 API 差异，包括文件处理和思考开关字段的序列化格式。
 
 ##### 7.1. 支持的 Variant 类型
 
@@ -1782,6 +1917,7 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - 默认 BaseURL：`https://api.deepseek.com`
 - API Key 环境变量名：`DEEPSEEK_API_KEY`
 - 显式设置 `WithVariant(openai.VariantDeepSeek)`，或使用官方 DeepSeek API BaseURL 时，才会启用 DeepSeek 特有行为
+- 按 [DeepSeek Chat Completions API](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion) 文档定义，将 `GenerationConfig.MaxTokens` 序列化为 `max_tokens`；其他 variant 继续使用 `max_completion_tokens`
 - 其他行为与标准 OpenAI 一致
 
 **4. VariantQwen（千问）**
@@ -1790,6 +1926,31 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - 默认 BaseURL：`https://dashscope.aliyuncs.com/compatible-mode/v1`
 - API Key 环境变量名：`DASHSCOPE_API_KEY`
 - 其他行为与标准 OpenAI 一致
+
+**5. VariantGLM（智谱 GLM）**
+
+- GLM OpenAI-compatible 接口适配
+- 使用 GLM 的 `thinking` 对象格式序列化思考开关
+- 当部分 GLM 网关把最终答案放在 `reasoning_content` 且 `content` 为空时，框架会将其回退为可见内容
+
+**6. VariantKimi**
+
+- Kimi 开放平台适配
+- 默认 BaseURL：`https://api.moonshot.ai/v1`
+- API Key 环境变量名：`MOONSHOT_API_KEY`
+- 对官方 `api.moonshot.ai` 和 `api.moonshot.cn` host 自动推断
+- 将思考开关序列化为 `{"thinking": {"type": "enabled"}}`
+- 文件上传默认使用 `file-extract` purpose
+
+**7. VariantMiniMax**
+
+- MiniMax OpenAI 兼容接口适配
+- 默认 BaseURL：`https://api.minimax.io/v1`
+- API Key 环境变量名：`MINIMAX_API_KEY`
+- 对官方 `api.minimax.io` 和 `api.minimaxi.com` host 自动推断
+- 开启思考时序列化为 `{"thinking": {"type": "adaptive"}}`，关闭时序列化为 `{"thinking": {"type": "disabled"}}`
+- 保持 MiniMax 原生 `<think>...</think>` 内容不变，以便工具调用间完整回传交错思考
+- 文件上传和删除使用 MiniMax 的 `/v1/files/upload` 与 `/v1/files/delete` 接口，默认 purpose 为 `video_understanding`
 
 ##### 7.2. 使用方式
 
@@ -1810,6 +1971,16 @@ model := openai.New("deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
     openai.WithAPIKey("your-api-key"),
     openai.WithVariant(openai.VariantDeepSeek), // 指定 DeepSeek
+)
+
+// 使用 Kimi 开放平台
+model = openai.New("kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi), // 自动读取 MOONSHOT_API_KEY
+)
+
+// 使用 MiniMax OpenAI 兼容接口
+model = openai.New("MiniMax-M3",
+    openai.WithVariant(openai.VariantMiniMax), // 自动读取 MINIMAX_API_KEY
 )
 ```
 
@@ -1842,6 +2013,12 @@ message := model.Message{
 # DeepSeek 自动配置
 export DEEPSEEK_API_KEY="your-api-key"
 # 无需显式调用 WithAPIKey，框架会自动读取
+
+# Kimi 自动配置
+export MOONSHOT_API_KEY="your-api-key"
+
+# MiniMax 自动配置
+export MINIMAX_API_KEY="your-api-key"
 ```
 
 ```go
@@ -1852,6 +2029,74 @@ model := openai.New("deepseek-v4-flash",
     openai.WithVariant(openai.VariantDeepSeek), // 自动读取 DEEPSEEK_API_KEY
 )
 ```
+
+##### 7.4. 思考开关与 Variant
+
+`Variant` 和 `GenerationConfig.ThinkingEnabled` 负责不同的事情：
+
+- `WithVariant(...)` 选择服务方协议，决定思考开关应使用哪个字段和 JSON 格式；
+- `ThinkingEnabled` 决定是否显式开启或关闭思考。
+
+仅设置 `Variant` **不会自动发送思考开关**。当 `ThinkingEnabled == nil` 时，框架不发送任何开关字段，由服务方使用默认值。即使某个服务方当前默认开启思考，如果调用方需要确定性行为，也应显式设置 `ThinkingEnabled`。
+
+各 OpenAI-compatible Variant 的序列化结果如下：
+
+| Variant | `ThinkingEnabled=true` 的请求字段 |
+| --- | --- |
+| `VariantOpenAI` | `"thinking_enabled": true` |
+| `VariantDeepSeek` | `"thinking": {"type": "enabled"}` |
+| `VariantHunyuan` | `"thinking": {"type": "enabled"}` |
+| `VariantGLM` | `"thinking": {"type": "enabled"}` |
+| `VariantQwen` | `"enable_thinking": true` |
+| `VariantKimi` | `"thinking": {"type": "enabled"}` |
+| `VariantMiniMax` | `"thinking": {"type": "adaptive"}` |
+
+例如，通过官方 DeepSeek API 确定性地开启思考：
+
+```go
+thinking := true
+
+llm := openai.New("deepseek-v4-flash",
+    openai.WithBaseURL("https://api.deepseek.com"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithVariant(openai.VariantDeepSeek),
+)
+
+request := &model.Request{
+    Messages: []model.Message{
+        model.NewUserMessage("分析这个问题。"),
+    },
+    GenerationConfig: model.GenerationConfig{
+        Stream:          true,
+        ThinkingEnabled: &thinking,
+    },
+}
+```
+
+`ThinkingEnabled` 只适用于提供显式思考开关的模型；如果模型只支持推理预算，请改用 `ReasoningEffort`。对实现上述思考开关格式的外部服务，通常显式设置对应 `Variant` 和 `ThinkingEnabled` 即可。如果代理网关使用了不同字段或需要额外参数，可以通过 `openai.WithExtraFields(...)` 添加或覆盖服务方特有字段。
+
+对于要求始终开启思考的 Kimi 模型，应省略 `ThinkingEnabled`。如需让
+Kimi K2.6 在多轮对话间保留推理内容，可显式传入完整的服务方扩展：
+
+```go
+llm := openai.New(
+    "kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi),
+    openai.WithExtraFields(map[string]any{
+        "thinking": map[string]string{
+            "type": "enabled",
+            "keep": "all",
+        },
+    }),
+)
+```
+
+对 MiniMax-M3，`ThinkingEnabled=false` 会发送
+`thinking.type=disabled`；MiniMax M2.x 虽然接受该值，但仍会继续思考。
+适配器有意不设置 `reasoning_split`：MiniMax 原生 OpenAI 格式会把推理保留在
+assistant `content` 的 `<think>...</think>` 中，框架会在工具调用历史中原样保存。
+返回工具结果前，不应删除 assistant 历史中的这些标签。服务方的多轮要求参见
+[MiniMax OpenAI SDK 文档](https://platform.minimax.io/docs/api-reference/text-openai-api)。
 
 #### 8. 流式工具调用增量：ShowToolCallDelta
 

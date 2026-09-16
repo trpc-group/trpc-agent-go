@@ -72,6 +72,9 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 	if s.opts.sessionTTL > 0 {
 		s.cleanupExpiredSessions(ctx, now)
 	}
+	if s.opts.trackEventTTL != nil && s.opts.effectiveTrackEventTTL() > 0 {
+		s.cleanupExpiredTrackEvents(ctx, now)
+	}
 	if s.opts.appStateTTL > 0 {
 		s.cleanupExpiredAppStates(ctx, now)
 	}
@@ -143,14 +146,16 @@ WHERE %s AND deleted_at IS NULL`,
 		nowNs, whereExpired); err != nil {
 		return err
 	}
-	if err := s.softDeleteExpiredBySession(
-		ctx,
-		tx,
-		s.tableSessionTracks,
-		nowNs,
-		whereExpired,
-	); err != nil {
-		return err
+	if s.opts.trackEventTTL == nil {
+		if err := s.softDeleteExpiredBySession(
+			ctx,
+			tx,
+			s.tableSessionTracks,
+			nowNs,
+			whereExpired,
+		); err != nil {
+			return err
+		}
 	}
 	if err := s.softDeleteExpiredBySession(
 		ctx,
@@ -238,14 +243,16 @@ func (s *Service) hardDeleteExpiredSessionsTx(
 	); err != nil {
 		return err
 	}
-	if err := s.hardDeleteExpiredBySession(
-		ctx,
-		tx,
-		s.tableSessionTracks,
-		nowNs,
-		whereExpired,
-	); err != nil {
-		return err
+	if s.opts.trackEventTTL == nil {
+		if err := s.hardDeleteExpiredBySession(
+			ctx,
+			tx,
+			s.tableSessionTracks,
+			nowNs,
+			whereExpired,
+		); err != nil {
+			return err
+		}
 	}
 	if err := s.hardDeleteExpiredBySession(
 		ctx,
@@ -297,6 +304,42 @@ WHERE EXISTS (
 		nowNs,
 	)
 	return err
+}
+
+func (s *Service) cleanupExpiredTrackEvents(
+	ctx context.Context,
+	now time.Time,
+) {
+	nowNs := now.UTC().UnixNano()
+	if s.opts.softDelete {
+		_, err := s.db.ExecContext(
+			ctx,
+			fmt.Sprintf(
+				`UPDATE %s SET deleted_at = ?
+WHERE expires_at IS NOT NULL AND expires_at <= ?
+AND deleted_at IS NULL`,
+				s.tableSessionTracks,
+			),
+			nowNs,
+			nowNs,
+		)
+		if err != nil {
+			log.ErrorfContext(ctx, "cleanup track events: %v", err)
+		}
+		return
+	}
+	_, err := s.db.ExecContext(
+		ctx,
+		fmt.Sprintf(
+			`DELETE FROM %s
+WHERE expires_at IS NOT NULL AND expires_at <= ?`,
+			s.tableSessionTracks,
+		),
+		nowNs,
+	)
+	if err != nil {
+		log.ErrorfContext(ctx, "cleanup track events: %v", err)
+	}
 }
 
 func (s *Service) cleanupExpiredAppStates(

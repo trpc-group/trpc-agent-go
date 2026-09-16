@@ -13,34 +13,51 @@ package summaryfork
 import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/statecopy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const stateKey = "trpc_agent.summary.cache_safe_fork_request"
 
+// invocationState keeps an immutable snapshot opaque to Invocation.View's
+// generic state cloner. Mutations must replace the holder instead of changing
+// the stored request in place.
+type invocationState struct {
+	request *model.Request
+}
+
 // Attach stores a snapshot of the parent model request on the invocation.
 func Attach(inv *agent.Invocation, req *model.Request) {
 	if inv == nil || req == nil {
 		return
 	}
-	inv.SetState(stateKey, cloneRequest(req))
+	inv.SetState(stateKey, &invocationState{request: cloneRequest(req)})
 }
 
 // Request returns a snapshot of the parent model request, if one exists.
 func Request(inv *agent.Invocation) (*model.Request, bool) {
-	req, ok := agent.GetStateValue[*model.Request](inv, stateKey)
-	if !ok || req == nil {
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.request == nil {
 		return nil, false
 	}
-	return cloneRequest(req), true
+	return cloneRequest(state.request), true
+}
+
+// Invalidate removes the current cache-safe request snapshot. Summarization
+// falls back to its standalone session input until a later Attach.
+func Invalidate(inv *agent.Invocation) {
+	if inv == nil {
+		return
+	}
+	inv.DeleteState(stateKey)
 }
 
 // AppendResponse appends persisted response messages to the stored request
 // snapshot. It is a no-op when no snapshot is present.
 func AppendResponse(inv *agent.Invocation, rsp *model.Response) {
-	req, ok := agent.GetStateValue[*model.Request](inv, stateKey)
-	if !ok || req == nil || rsp == nil {
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.request == nil || rsp == nil {
 		return
 	}
 	messages := responseMessages(rsp)
@@ -48,9 +65,9 @@ func AppendResponse(inv *agent.Invocation, rsp *model.Response) {
 		return
 	}
 
-	next := cloneRequest(req)
-	next.Messages = append(next.Messages, cloneMessages(messages)...)
-	inv.SetState(stateKey, next)
+	next := cloneRequest(state.request)
+	next.Messages = append(next.Messages, statecopy.Messages(messages)...)
+	inv.SetState(stateKey, &invocationState{request: next})
 }
 
 func responseMessages(rsp *model.Response) []model.Message {
@@ -95,86 +112,13 @@ func cloneRequest(req *model.Request) *model.Request {
 	}
 
 	cloned := *req
-	cloned.Messages = cloneMessages(req.Messages)
+	cloned.Messages = statecopy.Messages(req.Messages)
 	cloned.GenerationConfig = cloneGenerationConfig(req.GenerationConfig)
 	cloned.StructuredOutput = cloneStructuredOutput(req.StructuredOutput)
 	cloned.ExtraFields = jsonmap.Clone(req.ExtraFields)
 	cloned.Headers = cloneHeaders(req.Headers)
 	cloned.Tools = cloneTools(req.Tools)
 	return &cloned
-}
-
-func cloneMessages(messages []model.Message) []model.Message {
-	if messages == nil {
-		return nil
-	}
-	cloned := make([]model.Message, len(messages))
-	for i := range messages {
-		cloned[i] = cloneMessage(messages[i])
-	}
-	return cloned
-}
-
-func cloneMessage(msg model.Message) model.Message {
-	cloned := msg
-	cloned.ContentParts = cloneContentParts(msg.ContentParts)
-	cloned.ToolCalls = cloneToolCalls(msg.ToolCalls)
-	return cloned
-}
-
-func cloneContentParts(parts []model.ContentPart) []model.ContentPart {
-	if parts == nil {
-		return nil
-	}
-	cloned := make([]model.ContentPart, len(parts))
-	for i := range parts {
-		cloned[i] = cloneContentPart(parts[i])
-	}
-	return cloned
-}
-
-func cloneContentPart(part model.ContentPart) model.ContentPart {
-	cloned := part
-	if part.Text != nil {
-		text := *part.Text
-		cloned.Text = &text
-	}
-	if part.Image != nil {
-		image := *part.Image
-		image.Data = append([]byte(nil), part.Image.Data...)
-		cloned.Image = &image
-	}
-	if part.Audio != nil {
-		audio := *part.Audio
-		audio.Data = append([]byte(nil), part.Audio.Data...)
-		cloned.Audio = &audio
-	}
-	if part.File != nil {
-		file := *part.File
-		file.Data = append([]byte(nil), part.File.Data...)
-		cloned.File = &file
-	}
-	return cloned
-}
-
-func cloneToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
-	if toolCalls == nil {
-		return nil
-	}
-	cloned := make([]model.ToolCall, len(toolCalls))
-	for i := range toolCalls {
-		cloned[i] = toolCalls[i]
-		cloned[i].Function.Arguments = append(
-			[]byte(nil),
-			toolCalls[i].Function.Arguments...,
-		)
-		if toolCalls[i].Index != nil {
-			index := *toolCalls[i].Index
-			cloned[i].Index = &index
-		}
-		cloned[i].ExtraFields = jsonmap.Clone(toolCalls[i].ExtraFields)
-	}
-	return cloned
 }
 
 func cloneGenerationConfig(cfg model.GenerationConfig) model.GenerationConfig {

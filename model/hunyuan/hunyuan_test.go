@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/hunyuan/internal/hunyuan"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -217,6 +218,60 @@ func TestGenerateContentNilRequest(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for nil request, got nil")
 	}
+}
+
+func TestGenerateContentToolsDisabledAfterCallback(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			"Response": hunyuan.ChatCompletionResponse{
+				Id: "test-id",
+				Choices: []*hunyuan.ChatCompletionResponseChoice{{
+					Index:        0,
+					FinishReason: "stop",
+					Message: &hunyuan.ChatCompletionMessageParam{
+						Role:    "assistant",
+						Content: "ok",
+					},
+				}},
+			},
+		}))
+	}))
+	defer server.Close()
+
+	m := New(
+		"hunyuan-lite",
+		WithSecretId("test-secret-id"),
+		WithSecretKey("test-secret-key"),
+		WithBaseUrl(server.URL),
+		WithHost("test-host"),
+		WithChatRequestCallback(func(
+			_ context.Context,
+			request *hunyuan.ChatCompletionNewParams,
+		) {
+			request.Tools = []*hunyuan.ChatCompletionMessageTool{{}}
+			request.ToolChoice = "required"
+			request.CustomTool = &hunyuan.ChatCompletionMessageTool{}
+		}),
+	)
+	ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+	responseChan, err := m.GenerateContent(ctx, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+	})
+	require.NoError(t, err)
+	for range responseChan {
+	}
+
+	require.NotNil(t, captured)
+	require.NotContains(t, captured, "Tools")
+	require.NotContains(t, captured, "ToolChoice")
+	require.NotContains(t, captured, "CustomTool")
 }
 
 func TestGenerateContentWithMockServer(t *testing.T) {
@@ -757,7 +812,14 @@ func TestConvertMessage(t *testing.T) {
 		{
 			Type: model.ContentTypeAudio,
 			Audio: &model.Audio{
-				Data: []byte("audio data"),
+				URL: "https://example.com/audio.mp3",
+			},
+		},
+		{
+			Type: model.ContentTypeVideo,
+			Video: &model.Video{
+				URL:  "https://example.com/video.mp4",
+				Data: []byte("ignored video data"),
 			},
 		},
 	}
@@ -766,9 +828,13 @@ func TestConvertMessage(t *testing.T) {
 		t.Fatalf("convertMessage failed: %v", err)
 	}
 
-	if len(hMsg.Contents) != 3 {
-		t.Fatalf("Expected 3 content parts, got %d", len(hMsg.Contents))
+	if len(hMsg.Contents) != 4 {
+		t.Fatalf("Expected 4 content parts, got %d", len(hMsg.Contents))
 	}
+	assert.Equal(t, "audio_url", hMsg.Contents[2].Type)
+	assert.Equal(t, "https://example.com/audio.mp3", hMsg.Contents[2].VideoUrl.Url)
+	assert.Equal(t, "video_url", hMsg.Contents[3].Type)
+	assert.Equal(t, "https://example.com/video.mp4", hMsg.Contents[3].VideoUrl.Url)
 }
 
 func TestTokenTailoringOptions(t *testing.T) {
@@ -1462,6 +1528,14 @@ func TestImageToURLOrBase64(t *testing.T) {
 			},
 			want: "data:image/png;base64,dGVzdA==",
 		},
+		{
+			name: "with full MIME format",
+			image: &model.Image{
+				Format: "image/png",
+				Data:   []byte("test"),
+			},
+			want: "data:image/png;base64,dGVzdA==",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1474,18 +1548,26 @@ func TestImageToURLOrBase64(t *testing.T) {
 	}
 }
 
-func TestAudioToBase64(t *testing.T) {
-	audio := &model.Audio{
-		Format: "audio/mp3",
+func TestAudioToURLOrBase64(t *testing.T) {
+	assert.Equal(t, "https://example.com/audio.mp3", audioToURLOrBase64(&model.Audio{
+		URL:  "https://example.com/audio.mp3",
+		Data: []byte("ignored audio data"),
+	}))
+	assert.Equal(t, "data:audio/mp3;base64,dGVzdCBhdWRpbyBkYXRh", audioToURLOrBase64(&model.Audio{
+		Format: "mp3",
 		Data:   []byte("test audio data"),
-	}
+	}))
+}
 
-	result := audioToBase64(audio)
-	expected := "data:audio/mp3;base64,dGVzdCBhdWRpbyBkYXRh"
-
-	if result != expected {
-		t.Errorf("Expected %s, got %s", expected, result)
-	}
+func TestVideoToURLOrBase64(t *testing.T) {
+	assert.Equal(t, "https://example.com/video.mp4", videoToURLOrBase64(&model.Video{
+		URL:  "https://example.com/video.mp4",
+		Data: []byte("ignored video data"),
+	}))
+	assert.Equal(t, "data:video/mp4;base64,dGVzdCB2aWRlbyBkYXRh", videoToURLOrBase64(&model.Video{
+		Format: "mp4",
+		Data:   []byte("test video data"),
+	}))
 }
 
 // Test_buildToolDescription tests tool description building.

@@ -302,11 +302,15 @@ func appendFilePart(parts []protocol.Part, cp model.ContentPart) []protocol.Part
 		fp.Metadata = metadata
 		return append(parts, &fp)
 	}
-	if cp.File.FileID != "" {
+	fileURL := cp.File.URL
+	if fileURL == "" {
+		fileURL = cp.File.FileID
+	}
+	if fileURL != "" {
 		fp := protocol.NewFilePartWithURI(
 			fileName,
 			cp.File.MimeType,
-			cp.File.FileID,
+			fileURL,
 		)
 		fp.Metadata = metadata
 		return append(parts, &fp)
@@ -335,6 +339,8 @@ type parseResult struct {
 
 	// reasoningContent holds thought/reasoning content from TextParts with thought metadata
 	reasoningContent string
+
+	contentParts []model.ContentPart
 
 	// toolCalls holds function call requests (assistant -> tool)
 	toolCalls []model.ToolCall
@@ -455,6 +461,11 @@ func parseA2AMessagePartsWithMappers(
 		case protocol.KindData:
 			flushParseResultText(result, &textBuilder, &reasoningBuilder)
 			processDataPartWithMappers(part, result, mappers)
+		case protocol.KindFile:
+			flushParseResultText(result, &textBuilder, &reasoningBuilder)
+			if contentPart := convertResponseFilePart(part); contentPart != nil {
+				result.contentParts = append(result.contentParts, *contentPart)
+			}
 		}
 	}
 	flushParseResultText(result, &textBuilder, &reasoningBuilder)
@@ -481,6 +492,118 @@ func parseA2AMessagePartsWithMappers(
 		model.ErrorTypeFlowError,
 	)
 	return result
+}
+
+func convertResponseFilePart(part protocol.Part) *model.ContentPart {
+	var filePart *protocol.FilePart
+	switch value := part.(type) {
+	case *protocol.FilePart:
+		filePart = value
+	case protocol.FilePart:
+		filePart = &value
+	default:
+		return nil
+	}
+	if filePart == nil {
+		return nil
+	}
+
+	switch file := filePart.File.(type) {
+	case *protocol.FileWithBytes:
+		if file == nil {
+			return nil
+		}
+		data, err := base64.StdEncoding.DecodeString(file.Bytes)
+		if err != nil {
+			log.Warnf("decode A2A file part: %v; using raw bytes", err)
+			data = []byte(file.Bytes)
+		}
+		name, mimeType, contentType := legacyA2AFileIdentity(
+			filePart,
+			file.Name,
+			file.MimeType,
+		)
+		switch contentType {
+		case ia2a.FilePartMetadataContentTypeImage:
+			return &model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{
+				Data: data, Format: mimeType,
+			}}
+		case ia2a.FilePartMetadataContentTypeAudio:
+			return &model.ContentPart{Type: model.ContentTypeAudio, Audio: &model.Audio{
+				Data: data, Format: mimeType,
+			}}
+		default:
+			return &model.ContentPart{Type: model.ContentTypeFile, File: &model.File{
+				Name: name, Data: data, MimeType: mimeType,
+			}}
+		}
+	case *protocol.FileWithURI:
+		if file == nil {
+			return nil
+		}
+		name, mimeType, contentType := legacyA2AFileIdentity(
+			filePart,
+			file.Name,
+			file.MimeType,
+		)
+		if contentType == ia2a.FilePartMetadataContentTypeImage {
+			return &model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{
+				URL: file.URI, Format: mimeType,
+			}}
+		}
+		return &model.ContentPart{Type: model.ContentTypeFile, File: &model.File{
+			Name: name, URL: file.URI, MimeType: mimeType,
+		}}
+	default:
+		return nil
+	}
+}
+
+func legacyA2AFileIdentity(
+	filePart *protocol.FilePart,
+	name *string,
+	mimeType *string,
+) (string, string, string) {
+	var resolvedName, resolvedMimeType string
+	if name != nil {
+		resolvedName = *name
+	}
+	if mimeType != nil {
+		resolvedMimeType = *mimeType
+	}
+	if contentType, ok := filePart.Metadata[ia2a.FilePartMetadataContentTypeKey].(string); ok && contentType != "" {
+		return resolvedName, resolvedMimeType, contentType
+	}
+	normalizedMimeType := strings.TrimSpace(strings.ToLower(resolvedMimeType))
+	switch {
+	case strings.HasPrefix(normalizedMimeType, "image/"):
+		return resolvedName, resolvedMimeType, ia2a.FilePartMetadataContentTypeImage
+	case strings.HasPrefix(normalizedMimeType, "audio/"):
+		return resolvedName, resolvedMimeType, ia2a.FilePartMetadataContentTypeAudio
+	case normalizedMimeType == "png",
+		normalizedMimeType == "jpg",
+		normalizedMimeType == "jpeg",
+		normalizedMimeType == "gif",
+		normalizedMimeType == "webp",
+		normalizedMimeType == "bmp",
+		normalizedMimeType == "tiff":
+		return resolvedName, resolvedMimeType, ia2a.FilePartMetadataContentTypeImage
+	case normalizedMimeType == "mp3",
+		normalizedMimeType == "wav",
+		normalizedMimeType == "mpeg",
+		normalizedMimeType == "mpga",
+		normalizedMimeType == "ogg",
+		normalizedMimeType == "flac",
+		normalizedMimeType == "m4a",
+		normalizedMimeType == "aac":
+		return resolvedName, resolvedMimeType, ia2a.FilePartMetadataContentTypeAudio
+	case resolvedName == ia2a.FilePartMetadataContentTypeImage:
+		return resolvedName, resolvedMimeType, ia2a.FilePartMetadataContentTypeImage
+	case resolvedName == ia2a.FilePartMetadataContentTypeAudio:
+		return resolvedName, resolvedMimeType, ia2a.FilePartMetadataContentTypeAudio
+	default:
+		return resolvedName, resolvedMimeType, ia2a.FilePartMetadataContentTypeFile
+	}
 }
 
 func flushParseResultText(
@@ -805,6 +928,7 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 					Content:          result.textContent,
 					ReasoningContent: result.reasoningContent,
 					ToolCalls:        result.toolCalls,
+					ContentParts:     result.contentParts,
 				},
 			}},
 			Object:    model.ObjectTypeChatCompletion,
@@ -855,6 +979,7 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 				Role:             internalRole,
 				Content:          content,
 				ReasoningContent: result.reasoningContent,
+				ContentParts:     result.contentParts,
 			},
 		}},
 		Object:    objectType,
@@ -951,6 +1076,7 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 				Content:          result.textContent,
 				ReasoningContent: result.reasoningContent,
 				ToolCalls:        result.toolCalls,
+				ContentParts:     result.contentParts,
 			},
 		})
 	}
@@ -972,13 +1098,15 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 	// Text content: final assistant response
 	// Only add if no tool calls (tool calls already include text content)
 	content := nonStreamingResponseContent(result)
-	if len(result.toolCalls) == 0 && (content != "" || result.reasoningContent != "") {
+	if len(result.toolCalls) == 0 &&
+		(content != "" || result.reasoningContent != "" || len(result.contentParts) > 0) {
 		internalRole := convertA2ARoleToModelRole(role)
 		choices = append(choices, model.Choice{
 			Message: model.Message{
 				Role:             internalRole,
 				Content:          content,
 				ReasoningContent: result.reasoningContent,
+				ContentParts:     result.contentParts,
 			},
 		})
 	}
@@ -1060,6 +1188,7 @@ func buildRecoverableErrorResponse(messageID string, result *parseResult, role p
 				Role:             convertA2ARoleToModelRole(role),
 				Content:          content,
 				ReasoningContent: result.reasoningContent,
+				ContentParts:     result.contentParts,
 			},
 		}},
 		Object:    objectType,

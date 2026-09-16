@@ -78,12 +78,57 @@ ag, err := claudecode.New(
 
 Claude Code CLI 的 `--session-id` 要求是 UUID。该 Agent 会基于 `invocation.Session.AppName`、`invocation.Session.UserID`、`invocation.Session.ID` 生成确定性的 UUID 作为 CLI session id。
 
-每次运行按如下顺序尝试：
+### 默认方式：使用 Claude Code session
+
+默认情况下，该 Agent 使用 Claude Code CLI 原生 session 历史。每次运行按如下顺序尝试：
 
 1. `--resume <cli-session-id>`
 2. `--session-id <cli-session-id>`
 
-如需保持上下文，请在 `runner` 中持续使用相同的 app name、user ID、session ID。
+如果 `--resume` 找不到已有会话，该 Agent 会使用同一个 deterministic UUID 通过 `--session-id` 创建会话。后续轮次继续使用相同的 app name、user ID、session ID 时，会得到相同的 CLI session id。
+
+这种方式适合单实例服务，或请求总是固定路由到同一台机器、同一个用户目录和同一套 Claude Code 配置环境的场景。此时如需保持上下文，请在 `runner` 中持续使用相同的 app name、user ID、session ID。
+
+使用 `WithResumeEnabled(false)` 可以关闭 Claude Code CLI 原生 session resume。关闭后，该 Agent 不传 `--resume` 或 `--session-id`，而是传 `--no-session-persistence`，避免本地 CLI session 成为隐式上下文来源。
+
+### 使用框架 session events 构造上下文
+
+如果服务部署了多个实例、容器会重建，或者请求不会固定路由到同一台机器，Claude Code CLI 本地 session 就不能作为可靠的多轮上下文来源。此时应把上下文放在框架 session service 中，例如 Redis 或数据库。所有服务实例通过相同的 app name、user ID、session ID 读取同一份 session events，再由 `WithMessageBuilder` 把这些 events 拼成传给 Claude Code CLI 的完整 prompt。
+
+推荐配置方式：
+
+1. 给 `runner` 配置共享 session service。
+2. 使用 `WithMessageBuilder` 从 `args.Events` 构造完整 prompt。
+3. 使用 `WithResumeEnabled(false)` 关闭 Claude Code CLI 本地 session resume，避免同一段历史同时来自 prompt 和本地 session。
+
+`MessageBuilderArgs.Events` 是只读浅快照，不应修改其中的 event、response、state delta 或 extensions。通过 `runner.Run` 调用时，runner 会先持久化当前 turn 的 user message，再调用 Agent；因此 builder 看到的 events 已经包含当前 turn user message，不要默认再追加一遍。
+
+下面示例省略 `context`、`strings` 等标准库 import，只展示 Agent 相关配置。示例只拼接非 partial 的 message 文本；生产环境可以按业务需要选择是否加入工具调用和工具结果。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
+
+ag, err := claudecode.New(
+  claudecode.WithMessageBuilder(func(ctx context.Context, args *claudecode.MessageBuilderArgs) (string, error) {
+    var prompt strings.Builder
+    for _, evt := range args.Events {
+      if evt.Response == nil || len(evt.Choices) == 0 || evt.IsPartial {
+        continue
+      }
+      msg := evt.Choices[0].Message
+      if msg.Content == "" {
+        continue
+      }
+      prompt.WriteString(string(msg.Role))
+      prompt.WriteString(": ")
+      prompt.WriteString(msg.Content)
+      prompt.WriteString("\n")
+    }
+    return prompt.String(), nil
+  }),
+  claudecode.WithResumeEnabled(false),
+)
+```
 
 ## 原始日志落盘
 
@@ -111,3 +156,5 @@ ag, err := claudecode.New(
 | `WithEnv(env...)` | 追加 CLI 环境变量。格式为 `KEY=VALUE`。 |
 | `WithWorkDir(dir)` | 设置 CLI 工作目录。 |
 | `WithRawOutputHook(hook)` | 观测 raw stdout/stderr。回调会在 CLI 结束后、解析前调用。 |
+| `WithMessageBuilder(builder)` | 自定义传给 Claude Code CLI 的完整 prompt。 |
+| `WithResumeEnabled(enabled)` | 控制是否使用 Claude Code CLI session resume；默认 `true`。 |

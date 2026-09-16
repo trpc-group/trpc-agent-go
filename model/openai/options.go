@@ -136,6 +136,9 @@ type options struct {
 	// This can be useful when a provider rejects file inputs in chat messages,
 	// while still keeping the file parts in-memory for downstream tools.
 	OmitFileContentParts bool
+
+	// textOnlyMessageContent overrides the variant default when set.
+	textOnlyMessageContent *bool
 }
 
 var (
@@ -313,6 +316,11 @@ func WithExtraFields(extraFields map[string]any) Option {
 // The default variant is VariantOpenAI.
 // Optional variants are:
 // - VariantHunyuan: Hunyuan variant with specific file handling.
+// - VariantDeepSeek: DeepSeek-compatible request behavior.
+// - VariantQwen: Qwen-compatible request behavior.
+// - VariantGLM: GLM-compatible request and response behavior.
+// - VariantMiniMax: MiniMax-compatible request behavior.
+// - VariantKimi: Kimi-compatible request and file behavior.
 func WithVariant(variant Variant) Option {
 	return func(opts *options) {
 		opts.Variant = variant
@@ -325,6 +333,14 @@ func WithVariant(variant Variant) Option {
 func WithOmitFileContentParts(omit bool) Option {
 	return func(opts *options) {
 		opts.OmitFileContentParts = omit
+	}
+}
+
+// WithTextOnlyMessageContent controls whether user message content parts are
+// reduced to text-only payloads before sending them to the provider.
+func WithTextOnlyMessageContent(enabled bool) Option {
+	return func(opts *options) {
+		opts.textOnlyMessageContent = &enabled
 	}
 }
 

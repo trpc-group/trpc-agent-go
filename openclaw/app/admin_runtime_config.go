@@ -48,8 +48,9 @@ var runtimeAdminOptionsStore sync.Map
 const AdminSourceConfigPathEnvName = "TRPC_CLAW_ADMIN_SOURCE_CONFIG_PATH"
 
 type adminRuntimeConfigProvider struct {
-	configPath string
-	opts       runOptions
+	configPath         string
+	opts               runOptions
+	modelCatalogActive bool
 }
 
 type adminRuntimeConfigKeyRef struct {
@@ -85,14 +86,16 @@ type adminRuntimeConfiguredValue struct {
 
 func buildAdminRuntimeConfigProvider(
 	opts runOptions,
+	catalogs ...resolvedModelCatalog,
 ) admin.RuntimeConfigProvider {
 	path := adminWritableConfigPath(opts.ConfigPath)
 	if path == "" {
 		return nil
 	}
 	return &adminRuntimeConfigProvider{
-		configPath: path,
-		opts:       opts,
+		configPath:         path,
+		opts:               opts,
+		modelCatalogActive: explicitModelCatalogConfigured(catalogs),
 	}
 }
 
@@ -106,8 +109,11 @@ func adminWritableConfigPath(configPath string) string {
 	return strings.TrimSpace(configPath)
 }
 
-func buildAdminOptions(opts runOptions) []admin.Option {
-	provider := buildAdminRuntimeConfigProvider(opts)
+func buildAdminOptions(
+	opts runOptions,
+	catalogs ...resolvedModelCatalog,
+) []admin.Option {
+	provider := buildAdminRuntimeConfigProvider(opts, catalogs...)
 	if provider == nil {
 		return nil
 	}
@@ -171,8 +177,13 @@ func (p *adminRuntimeConfigProvider) RuntimeConfigStatus() (
 			len(adminRuntimeConfigSectionSpecs()),
 		),
 	}
+	modelCatalogActive := p.modelCatalogActive ||
+		adminRuntimeConfigHasModelCatalog(root)
 	visibleValues := map[string]string{}
 	for _, section := range adminRuntimeConfigSectionSpecs() {
+		if modelCatalogActive && section.Key == "model" {
+			continue
+		}
 		view := admin.RuntimeConfigSection{
 			Key:     section.Key,
 			Title:   section.Title,
@@ -247,6 +258,13 @@ func (p *adminRuntimeConfigProvider) SaveRuntimeConfigValue(
 	if err != nil {
 		return err
 	}
+	if (p.modelCatalogActive || adminRuntimeConfigHasModelCatalog(root)) &&
+		strings.HasPrefix(spec.Key, "model.") {
+		return fmt.Errorf(
+			"model runtime config fields are unavailable " +
+				"when a model catalog is configured",
+		)
+	}
 	if spec.Key == "tools.code_executor.type" && strings.TrimSpace(value) == "" {
 		adminRuntimeDeleteField(root, spec.Path)
 	} else {
@@ -284,6 +302,23 @@ func (p *adminRuntimeConfigProvider) ResetRuntimeConfigValue(
 		return err
 	}
 	return writeConfigDocument(p.configPath, &doc)
+}
+
+func explicitModelCatalogConfigured(
+	catalogs []resolvedModelCatalog,
+) bool {
+	return len(catalogs) > 0 && catalogs[0].explicit
+}
+
+func adminRuntimeConfigHasModelCatalog(root *yaml.Node) bool {
+	modelNode := adminRuntimeLookupMappingValue(
+		root,
+		adminRuntimeKey("model"),
+	)
+	return adminRuntimeLookupMappingValue(
+		modelNode,
+		adminRuntimeKey("models"),
+	) != nil
 }
 
 func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
@@ -382,6 +417,20 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					"hunyuan",
 					"glm",
 				),
+				adminRuntimeBoolField(
+					"model.text_only_content",
+					"Text-Only Message Content",
+					"Drop non-text user content parts for text-only providers.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("model"),
+						adminRuntimeKey("text_only_content"),
+					},
+					func(opts runOptions) string {
+						return strconv.FormatBool(
+							opts.OpenAITextOnlyMessageContent,
+						)
+					},
+				),
 			},
 		},
 		{
@@ -392,7 +441,9 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 				adminRuntimeNumberField(
 					"agent.max_llm_calls",
 					"Max LLM Calls",
-					"Limit LLM calls per invocation; 0 is unlimited.",
+					"Limit agent-facing LLM calls per invocation; "+
+						"auxiliary summary and memory calls are excluded; "+
+						"0 is unlimited.",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("agent"),
 						adminRuntimeKey("max_llm_calls"),
@@ -616,9 +667,10 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 				adminRuntimeSelectField(
 					"tools.defer_to_dynamic_agent_mode",
 					"Deferred Tool Surface Mode",
-					"Control whether broad tool surfaces are loaded "+
-						"directly or through tool_search and "+
-						"dynamic_agent.",
+					"Control whether broad tool surfaces stay "+
+						"direct on the parent agent or move behind "+
+						"tool_search and dynamic_agent. Default "+
+						"is off.",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("tools"),
 						adminRuntimeKey(
@@ -740,6 +792,27 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 							return ""
 						}
 						return opts.HostExecMaxYield.String()
+					},
+				),
+				adminRuntimeTextField(
+					"tools.host_exec_max_idle_wait",
+					"Host Exec Max Idle Wait",
+					"Maximum sleep-style idle wait allowed inside "+
+						"host exec_command calls, for example 20s. "+
+						"Empty or 0 allows long idle waits.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"host_exec_max_idle_wait",
+							"hostExecMaxIdleWait",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.HostExecMaxIdleWait <= 0 {
+							return ""
+						}
+						return opts.HostExecMaxIdleWait.String()
 					},
 				),
 				adminRuntimeTextField(

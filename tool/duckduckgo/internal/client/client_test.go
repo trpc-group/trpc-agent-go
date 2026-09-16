@@ -10,7 +10,9 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -343,6 +345,21 @@ func TestClient_Search_NetworkError(t *testing.T) {
 	_, err := client.Search("test query")
 	if err == nil {
 		t.Error("Expected error for network failure")
+	}
+}
+
+func TestClient_SearchContext_Canceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := New(
+		"http://localhost:1",
+		"test-agent/1.0",
+		&http.Client{Timeout: 30 * time.Second},
+	)
+
+	_, err := client.SearchContext(ctx, "test query")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Expected context.Canceled, got %v", err)
 	}
 }
 

@@ -30,7 +30,7 @@ This example demonstrates a clean chat interface that surfaces the model's inter
 | Argument            | Description                                  | Default Value        |
 | ------------------- | -------------------------------------------- | -------------------- |
 | `-model`            | Name of the model to use                     | `deepseek-v4-pro`  |
-| `-variant`          | Model variant: `openai`, `deepseek`, `qwen`, `hunyuan` | `openai`     |
+| `-variant`          | Model variant: `openai`, `deepseek`, `qwen`, `hunyuan`, `glm` | `openai`     |
 | `-streaming`        | Enable streaming mode for responses          | `true`               |
 | `-thinking`         | Enable reasoning/thinking (if provider supports) | `true`            |
 | `-thinking-tokens`  | Max reasoning tokens (if provider supports)  | `2048`               |
@@ -44,6 +44,25 @@ This example demonstrates a clean chat interface that surfaces the model's inter
 | `discard_previous` | Discard `reasoning_content` from previous turns, keep current (default, recommended). |
 | `keep_all`         | Keep all `reasoning_content` in history.                     |
 | `discard_all`      | Discard all `reasoning_content` from history.                |
+
+### Thinking Toggle and Variant
+
+The two flags have separate roles:
+
+- `-variant` selects the provider protocol and controls how the request field is serialized.
+- `-thinking` explicitly enables or disables thinking.
+
+For deterministic behavior in application code, configure both `Variant` and
+`ThinkingEnabled`. A variant by itself does not enable thinking; if
+`ThinkingEnabled` is left unset, the provider applies its own default. This
+demo defaults `-thinking` to `true`, so omitting that CLI flag still sends the
+enabled toggle. The built-in variants serialize the switch as follows:
+
+| Variant | Enabled request field |
+| ------- | --------------------- |
+| `openai` | `"thinking_enabled": true` |
+| `deepseek`, `hunyuan`, `glm` | `"thinking": {"type": "enabled"}` |
+| `qwen` | `"enable_thinking": true` |
 
 ## Usage
 
@@ -121,7 +140,7 @@ Usage of ./thinking:
   -thinking-tokens int
         Max reasoning tokens if provider supports it (default 2048)
   -variant string
-        Name of Variant to use when use openai provider, openai / hunyuan / deepseek / qwen (default "openai")
+        Name of Variant to use with the OpenAI provider: openai / hunyuan / deepseek / qwen / glm (default "openai")
 ```
 
 ## Chat Interface
@@ -184,6 +203,7 @@ Debug: true
 
 - This demo uses the in-memory session service for simplicity.
 - Reasoning visibility depends on the provider/model. Enabling flags signals intent but does not guarantee reasoning will be returned.
+- Passing `-thinking=false` emits the variant-specific disabled value instead of falling back to the provider default.
 - Debug mode is enabled by default to help verify `reasoning_content` handling in multi-turn conversations.
 - The default `-reasoning-mode=discard_previous` follows DeepSeek API best practices: discard `reasoning_content` from previous turns while keeping the current turn's reasoning for tool call scenarios.
 - The `calculator` and `current_time` tools are always available to test thinking + tool call scenarios.

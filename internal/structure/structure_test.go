@@ -16,6 +16,28 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/structure"
 )
 
+func TestNormalizeNodeKind(t *testing.T) {
+	tests := []struct {
+		name string
+		kind string
+		want structure.NodeKind
+	}{
+		{name: "function", kind: "function", want: structure.NodeKindFunction},
+		{name: "llm", kind: "llm", want: structure.NodeKindLLM},
+		{name: "tool", kind: "tool", want: structure.NodeKindTool},
+		{name: "agent", kind: "agent", want: structure.NodeKindAgent},
+		{name: "join", kind: "join", want: structure.NodeKindFunction},
+		{name: "router", kind: "router", want: structure.NodeKindFunction},
+		{name: "custom", kind: "custom", want: structure.NodeKindFunction},
+		{name: "empty", kind: "", want: structure.NodeKindFunction},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, NormalizeNodeKind(tt.kind))
+		})
+	}
+}
+
 func TestPathAllocator_AllocatesEscapedStablePaths(t *testing.T) {
 	allocator := NewPathAllocator("root")
 	assert.Equal(t, "root/_", allocator.Next(""))

@@ -26,6 +26,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -512,6 +514,90 @@ func TestBuildRequestProcessors_EventMessageProjectorWiring(
 		model.NewUserMessage("hello"),
 	)
 	require.Equal(t, "projected", got.Content)
+}
+
+func TestBuildRequestProcessors_IncludeSyntheticErrorMessagesWiring(
+	t *testing.T,
+) {
+	newMessageEvent := func(author string, msg model.Message) event.Event {
+		return event.Event{
+			Author: author,
+			Response: &model.Response{
+				Done:    true,
+				Choices: []model.Choice{{Message: msg}},
+			},
+		}
+	}
+	newInvocation := func() *agent.Invocation {
+		errorEvent := event.NewErrorEvent(
+			"inv",
+			"tester",
+			"flow_error",
+			"boom",
+		)
+		errorEvent.Response.Choices = []model.Choice{{
+			Message: model.NewAssistantMessage(errorcontent.FallbackMessage),
+		}}
+		errorcontent.MarkSynthetic(errorEvent)
+		return &agent.Invocation{
+			AgentName: "tester",
+			Session: &session.Session{Events: []event.Event{
+				newMessageEvent("user", model.NewUserMessage("first")),
+				*errorEvent,
+				newMessageEvent("user", model.NewUserMessage("second")),
+			}},
+		}
+	}
+	tests := []struct {
+		name        string
+		configure   func(*Options)
+		wantContent []string
+	}{
+		{
+			name:        "default omits",
+			configure:   func(*Options) {},
+			wantContent: []string{"first\n\nsecond"},
+		},
+		{
+			name: "compatibility mode includes",
+			configure: func(opts *Options) {
+				WithIncludeSyntheticErrorMessages(true)(opts)
+			},
+			wantContent: []string{
+				"first",
+				errorcontent.FallbackMessage,
+				"second",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &Options{}
+			tt.configure(opts)
+			procs := buildRequestProcessors("tester", opts)
+			var contentProcessor *processor.ContentRequestProcessor
+			for _, requestProcessor := range procs {
+				if candidate, ok := requestProcessor.(*processor.ContentRequestProcessor); ok {
+					contentProcessor = candidate
+				}
+			}
+			require.NotNil(t, contentProcessor)
+			req := &model.Request{}
+
+			contentProcessor.ProcessRequest(
+				context.Background(),
+				newInvocation(),
+				req,
+				nil,
+			)
+
+			require.Len(t, req.Messages, len(tt.wantContent))
+			for i, content := range tt.wantContent {
+				require.Equal(t, content, req.Messages[i].Content)
+			}
+		})
+	}
 }
 
 func TestBuildRequestProcessors_PostToolPromptInjection(t *testing.T) {
@@ -1958,7 +2044,7 @@ func TestLLMAgent_SetModelInstructions(t *testing.T) {
 
 // TestHaveCustomResponseError tests the Error method of haveCustomResponseError.
 func TestHaveCustomResponseError(t *testing.T) {
-	err := &haveCustomResponseError{EventChan: make(<-chan *event.Event)}
+	err := &haveCustomResponseError{eventChan: make(<-chan *event.Event)}
 	require.Equal(t, "custom response provided, returning early", err.Error())
 }
 
@@ -2572,6 +2658,40 @@ func TestLLMAgent_SetupInvocation_PropagatesMaxLimits(t *testing.T) {
 	llmNoLimits.setupInvocation(invNoLimits)
 	require.Equal(t, 0, invNoLimits.MaxLLMCalls)
 	require.Equal(t, 0, invNoLimits.MaxToolIterations)
+}
+
+func TestLLMAgent_SetupInvocation_ConfiguresCallLimitFinalization(t *testing.T) {
+	const toolInstruction = "finish with the available tool results"
+	llmAgent := New(
+		"limits-agent",
+		WithModel(newDummyModel()),
+		WithMaxLLMCalls(2),
+		WithMaxToolIterations(1),
+		WithLLMCallLimitFinalization(""),
+		WithToolIterationLimitFinalization(toolInstruction),
+	)
+
+	llmInvocation := agent.NewInvocation()
+	llmAgent.setupInvocation(llmInvocation)
+	require.False(t, calllimit.RecordLLMCall(llmInvocation, 2))
+	require.True(t, calllimit.RecordLLMCall(llmInvocation, 2))
+	instruction, ok := calllimit.ActivateForLLM(llmInvocation, true)
+	require.True(t, ok)
+	require.Equal(t, calllimit.DefaultInstruction, instruction)
+
+	toolInvocation := agent.NewInvocation()
+	llmAgent.setupInvocation(toolInvocation)
+	require.True(t, calllimit.RecordToolIteration(toolInvocation, 1))
+	calllimit.ScheduleToolFinalization(toolInvocation)
+	instruction, ok = calllimit.ActivateForLLM(toolInvocation, false)
+	require.True(t, ok)
+	require.Equal(t, toolInstruction, instruction)
+
+	defaultAgent := New("default-agent", WithModel(newDummyModel()))
+	defaultInvocation := agent.NewInvocation()
+	defaultAgent.setupInvocation(defaultInvocation)
+	require.False(t, calllimit.RecordLLMCall(defaultInvocation, 1))
+	require.False(t, calllimit.RecordToolIteration(defaultInvocation, 1))
 }
 
 func TestLLMAgent_MessageFilterMode(t *testing.T) {

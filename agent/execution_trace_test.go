@@ -161,6 +161,13 @@ func TestExecutionTrace_LazilyInitializesForDirectInvocationLiteral(t *testing.T
 	require.Len(t, executionTrace.Steps, 1)
 	assert.Equal(t, "assistant", executionTrace.RootAgentName)
 	assert.Equal(t, "assistant", executionTrace.Steps[0].NodeID)
+	assert.Empty(t, executionTrace.Steps[0].NodeType)
+	assert.Empty(t, StartExecutionTraceStep(
+		inv,
+		"",
+		nil,
+		nil,
+	))
 }
 
 func TestNextExecutionTracePredecessors_UsesNestedChildInvocationTerminals(t *testing.T) {
@@ -210,6 +217,7 @@ func TestExecutionTraceHelpers_HandleNilAndDisabledInvocation(t *testing.T) {
 	assert.Empty(t, StartExecutionTraceStep(nilInv, "assistant", nil, nil))
 	FinishExecutionTraceStep(nilInv, "step-1", nil, nil)
 	SetExecutionTraceStepAppliedSurfaceIDs(nilInv, "step-1")
+	SetExecutionTraceStepNodeType(nilInv, "step-1", "agent")
 	SetExecutionTraceStepUsage(nilInv, "step-1", &model.Usage{TotalTokens: 1})
 	assert.Nil(t, NextExecutionTracePredecessors(nilInv))
 	assert.Nil(t, BuildExecutionTrace(nilInv, atrace.TraceStatusCompleted))
@@ -224,6 +232,9 @@ func TestExecutionTraceHelpers_HandleNilAndDisabledInvocation(t *testing.T) {
 	FinishExecutionTraceStep(disabled, "step-1", nil, nil)
 	FinishExecutionTraceStep(disabled, "", nil, nil)
 	SetExecutionTraceStepAppliedSurfaceIDs(disabled, "step-1")
+	SetExecutionTraceStepNodeType(disabled, "step-1", "agent")
+	SetExecutionTraceStepNodeType(disabled, "", "agent")
+	SetExecutionTraceStepNodeType(disabled, "step-1", "")
 	SetExecutionTraceStepUsage(disabled, "step-1", &model.Usage{TotalTokens: 1})
 	SetExecutionTraceStepUsage(disabled, "", &model.Usage{TotalTokens: 1})
 	SetExecutionTraceStepUsage(disabled, "step-1", nil)
@@ -272,6 +283,28 @@ func TestExecutionTraceHelpers_RecordAppliedSurfaceIDs(t *testing.T) {
 	require.NotNil(t, executionTrace)
 	require.Len(t, executionTrace.Steps, 1)
 	assert.Equal(t, []string{"assistant#instruction", "assistant#model"}, executionTrace.Steps[0].AppliedSurfaceIDs)
+}
+
+func TestExecutionTraceHelpers_RecordStepNodeType(t *testing.T) {
+	inv := NewInvocation(
+		WithInvocationAgent(&mockAgent{name: "assistant"}),
+		WithInvocationRunOptions(RunOptions{ExecutionTraceEnabled: true}),
+		WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	stepID := StartExecutionTraceStep(
+		inv,
+		InvocationTraceNodeID(inv),
+		&atrace.Snapshot{Text: "input"},
+		nil,
+	)
+	require.NotEmpty(t, stepID)
+	SetExecutionTraceStepNodeType(inv, stepID, "agent")
+	SetExecutionTraceStepNodeType(inv, "missing-step", "tool")
+	FinishExecutionTraceStep(inv, stepID, &atrace.Snapshot{Text: "output"}, nil)
+	executionTrace := BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	assert.Equal(t, "agent", executionTrace.Steps[0].NodeType)
 }
 
 func TestExecutionTraceHelpers_RecordStepUsage(t *testing.T) {

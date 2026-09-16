@@ -489,7 +489,8 @@ AND deleted_at IS NULL`,
 		return fmt.Errorf("marshal track event: %w", err)
 	}
 
-	newExpires := calculateExpiresAt(now, s.opts.sessionTTL)
+	sessionExpires := calculateExpiresAt(now, s.opts.sessionTTL)
+	trackExpires := calculateExpiresAt(now, s.opts.effectiveTrackEventTTL())
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -508,7 +509,7 @@ AND deleted_at IS NULL`,
 		),
 		updatedState,
 		sessState.UpdatedAt.UTC().UnixNano(),
-		newExpires,
+		sessionExpires,
 		key.AppName,
 		key.UserID,
 		key.SessionID,
@@ -534,7 +535,7 @@ AND deleted_at IS NULL`,
 		eventBytes,
 		tsNs,
 		tsNs,
-		newExpires,
+		trackExpires,
 	)
 	if err != nil {
 		return fmt.Errorf("insert track event: %w", err)

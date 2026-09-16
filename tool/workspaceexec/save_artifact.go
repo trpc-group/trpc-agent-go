@@ -121,10 +121,15 @@ func (t *SaveArtifactTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	ws, err := t.exec.resolver.CreateWorkspace(ctxIO, eng, "workspace")
+	handle, err := t.exec.resolver.CreateWorkspaceHandle(
+		ctxIO,
+		eng,
+		"workspace",
+	)
 	if err != nil {
 		return nil, err
 	}
+	ws := handle.Workspace
 	manifest, err := eng.FS().CollectOutputs(ctxIO, ws, codeexecutor.OutputSpec{
 		Globs:         []string{rel},
 		MaxFiles:      1,
@@ -133,6 +138,9 @@ func (t *SaveArtifactTool) Call(
 		Save:          true,
 		Inline:        false,
 	})
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		t.exec.resolver.InvalidateWorkspaceHandle(handle)
+	}
 	if err != nil && !errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
 		return nil, err
 	}

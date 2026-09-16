@@ -49,12 +49,13 @@ func (r *Runtime) osSandboxCommand(
 	cwd string,
 	env []string,
 	spec codeexecutor.RunProgramSpec,
+	diagnostics sandboxDenialRun,
 ) (*exec.Cmd, string, commandCleanup, error) {
-	seatbelt, err := r.macosPreflight()
+	seatbelt, err := r.macosPreflightContext(ctx)
 	if err != nil {
 		return nil, string(BackendMacOSSandboxExec), nil, err
 	}
-	policy, err := r.macosSeatbeltProfile(profile, ws)
+	policy, err := r.macosSeatbeltProfile(profile, ws, diagnostics)
 	if err != nil {
 		return nil, string(BackendMacOSSandboxExec), nil, err
 	}
@@ -78,39 +79,67 @@ func (r *Runtime) osSandboxCommand(
 }
 
 func (r *Runtime) macosPreflight() (string, error) {
-	r.preflightOnce.Do(func() {
-		if r.backend != BackendAuto && r.backend != BackendMacOSSandboxExec {
-			r.preflightErr = backendError(
-				ErrUnsupportedBackend,
-				string(r.backend),
-				errors.New("unsupported backend on macOS"),
-			)
-			return
-		}
-		if _, err := os.Stat(macosSandboxExecPath); err != nil {
-			r.preflightErr = backendError(
-				ErrSetupFailed,
-				string(BackendMacOSSandboxExec),
-				errors.New("sandbox-exec executable not found at /usr/bin/sandbox-exec"),
-			)
-			return
-		}
-		stderr, err := runMacOSSeatbeltPreflightProbe(macosSandboxExecPath)
-		if err != nil {
-			r.preflightErr = backendError(
-				ErrSetupFailed,
-				string(BackendMacOSSandboxExec),
-				seatbeltProbeError{err: err, stderr: stderr},
-			)
-			return
-		}
-		r.seatbeltPath = macosSandboxExecPath
-	})
-	return r.seatbeltPath, r.preflightErr
+	return r.macosPreflightContext(context.Background())
 }
 
-func runMacOSSeatbeltPreflightProbe(seatbelt string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (r *Runtime) macosPreflightContext(ctx context.Context) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-r.preflightGate:
+	}
+	defer func() {
+		r.preflightGate <- struct{}{}
+	}()
+	if r.preflightDone {
+		return r.seatbeltPath, r.preflightErr
+	}
+	if r.backend != BackendAuto && r.backend != BackendMacOSSandboxExec {
+		r.preflightErr = backendError(
+			ErrUnsupportedBackend,
+			string(r.backend),
+			errors.New("unsupported backend on macOS"),
+		)
+		r.preflightDone = true
+		return "", r.preflightErr
+	}
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		r.preflightErr = backendError(
+			ErrSetupFailed,
+			string(BackendMacOSSandboxExec),
+			errors.New("sandbox-exec executable not found at /usr/bin/sandbox-exec"),
+		)
+		r.preflightDone = true
+		return "", r.preflightErr
+	}
+	stderr, err := runMacOSSeatbeltPreflightProbe(ctx, macosSandboxExecPath)
+	return r.completeMacOSPreflight(ctx, stderr, err)
+}
+
+func (r *Runtime) completeMacOSPreflight(
+	ctx context.Context,
+	stderr string,
+	err error,
+) (string, error) {
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		r.preflightErr = backendError(
+			ErrSetupFailed,
+			string(BackendMacOSSandboxExec),
+			seatbeltProbeError{err: err, stderr: stderr},
+		)
+		r.preflightDone = true
+		return "", r.preflightErr
+	}
+	r.seatbeltPath = macosSandboxExecPath
+	r.preflightDone = true
+	return r.seatbeltPath, nil
+}
+
+func runMacOSSeatbeltPreflightProbe(parent context.Context, seatbelt string) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	profilePath, err := writeMacOSSeatbeltProfile(macosPreflightPolicy())
 	if err != nil {

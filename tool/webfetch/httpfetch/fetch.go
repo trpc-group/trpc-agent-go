@@ -13,9 +13,13 @@ package httpfetch
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +27,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	pdfpkg "github.com/dslipak/pdf"
 	"golang.org/x/net/html"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -32,7 +37,11 @@ import (
 const (
 	defaultTimeout = 30 * time.Second
 	maxURLs        = 20
+
+	maxHTTPErrorBodyLength = 512
 )
+
+var errNoVisibleHTMLText = errors.New("HTML response contained no visible text")
 
 // Option configures the WebFetch tool.
 type Option func(*config)
@@ -46,6 +55,8 @@ type config struct {
 	allowedDomains        []string
 	blockedDomains        []string
 	mainContentOnly       bool
+	blockSearchPages      bool
+	detectBlockedPages    bool
 }
 
 // WithHTTPClient sets the HTTP client.
@@ -93,6 +104,25 @@ func WithBlockedDomains(domains []string) Option {
 func WithMainContentExtraction(enabled bool) Option {
 	return func(cfg *config) {
 		cfg.mainContentOnly = enabled
+	}
+}
+
+// WithSearchResultPageBlocking makes web_fetch reject common search-engine
+// result pages. It is off by default for SDK compatibility; applications that
+// provide dedicated search tools can enable it to keep web_fetch focused on
+// known result URLs.
+func WithSearchResultPageBlocking(enabled bool) Option {
+	return func(cfg *config) {
+		cfg.blockSearchPages = enabled
+	}
+}
+
+// WithBlockedPageDetection makes web_fetch return a structured error when an
+// otherwise successful response looks like a CAPTCHA, Cloudflare, or anti-bot
+// challenge page. It is off by default for SDK compatibility.
+func WithBlockedPageDetection(enabled bool) Option {
+	return func(cfg *config) {
+		cfg.detectBlockedPages = enabled
 	}
 }
 
@@ -162,6 +192,8 @@ func NewTool(opts ...Option) tool.CallableTool {
 		maxContentLength:      cfg.maxContentLength,
 		maxTotalContentLength: cfg.maxTotalContentLength,
 		mainContentOnly:       cfg.mainContentOnly,
+		blockSearchPages:      cfg.blockSearchPages,
+		detectBlockedPages:    cfg.detectBlockedPages,
 	}
 
 	// Register urlValidators
@@ -184,9 +216,7 @@ func NewTool(opts ...Option) tool.CallableTool {
 	return function.NewFunctionTool(
 		t.fetch,
 		function.WithName("web_fetch"),
-		function.WithDescription("Fetches and extracts text content from a list of URLs. "+
-			"Supports up to 20 URLs. Useful for summarizing, comparing, or extracting information from web pages. "+
-			"For PDFs or binary documents, download the file and use a document-reading tool instead."),
+		function.WithDescription(t.description()),
 	)
 }
 
@@ -195,7 +225,26 @@ type webFetchTool struct {
 	maxContentLength      int
 	maxTotalContentLength int
 	mainContentOnly       bool
+	blockSearchPages      bool
+	detectBlockedPages    bool
 	urlValidators         []urlfilter.URLValidator
+}
+
+func (t *webFetchTool) description() string {
+	desc := "Fetches and extracts text content from a list of URLs. " +
+		"Supports up to 20 URLs. Useful for summarizing, comparing, " +
+		"or extracting information from web pages. Supports HTML, " +
+		"text-like responses, JSON, and PDFs."
+	if t.blockSearchPages {
+		desc += " Search-result pages are blocked; use dedicated " +
+			"search tools first, then fetch known result URLs."
+	}
+	if t.detectBlockedPages {
+		desc += " CAPTCHA, Cloudflare, unusual-traffic, and anti-bot " +
+			"challenge pages are reported as blocked instead of " +
+			"returned as usable content."
+	}
+	return desc
 }
 
 func (t *webFetchTool) fetch(ctx context.Context, req fetchRequest) (fetchResponse, error) {
@@ -270,6 +319,12 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 		item.Error = err.Error()
 		return item
 	}
+	if t.blockSearchPages {
+		if name, ok := blockedSearchResultPage(urlStr); ok {
+			item.Error = blockedSearchResultPageError(name)
+			return item
+		}
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
@@ -283,6 +338,15 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 		return item
 	}
 	defer resp.Body.Close()
+	if t.blockSearchPages && resp.Request != nil &&
+		resp.Request.URL != nil {
+		if name, ok := blockedSearchResultPage(
+			resp.Request.URL.String(),
+		); ok {
+			item.Error = blockedSearchResultPageError(name)
+			return item
+		}
+	}
 
 	contentType := resp.Header.Get("Content-Type")
 	// Parse media type (ignore parameters like charset)
@@ -291,7 +355,7 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 	item.StatusCode = resp.StatusCode
 
 	if item.StatusCode < 200 || item.StatusCode >= 300 {
-		item.Error = fmt.Sprintf("HTTP status %d", item.StatusCode)
+		item.Error = httpStatusError(resp, t.detectBlockedPages)
 		return item
 	}
 
@@ -302,6 +366,11 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 		content, processErr = convertHTMLToMarkdownWithOptions(
 			resp.Body,
 			t.mainContentOnly,
+		)
+	} else if item.ContentType == "application/pdf" {
+		content, processErr = readPDFAsText(
+			resp.Body,
+			t.maxContentLength,
 		)
 	} else if isSupportedTextType(item.ContentType) {
 		content, processErr = readBodyAsString(resp.Body)
@@ -314,6 +383,13 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 		item.Error = processErr.Error()
 		return item
 	}
+	if t.detectBlockedPages {
+		if reason, ok := blockedFetchPageReason(content); ok {
+			item.Content = ""
+			item.Error = blockedFetchPageError(reason)
+			return item
+		}
+	}
 
 	// Apply per-URL limit
 	if t.maxContentLength > 0 && len(content) > t.maxContentLength {
@@ -324,21 +400,318 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 	return item
 }
 
+func httpStatusError(resp *http.Response, detectBlockedPages bool) string {
+	msg := fmt.Sprintf("HTTP status %s", resp.Status)
+	if snippet := httpErrorBodySnippet(resp); snippet != "" {
+		msg += "; body: " + snippet
+		if detectBlockedPages {
+			if reason, ok := blockedFetchPageReason(snippet); ok {
+				msg += "; " + blockedFetchPageError(reason)
+			}
+		}
+	}
+	return msg
+}
+
+func httpErrorBodySnippet(resp *http.Response) string {
+	data, err := io.ReadAll(io.LimitReader(
+		resp.Body,
+		maxHTTPErrorBodyLength+1,
+	))
+	if err != nil {
+		return ""
+	}
+	truncated := len(data) > maxHTTPErrorBodyLength
+	if truncated {
+		data = data[:maxHTTPErrorBodyLength]
+	}
+	text := string(data)
+	contentType := strings.Split(resp.Header.Get("Content-Type"), ";")[0]
+	if strings.TrimSpace(contentType) == "text/html" {
+		if converted, err := convertHTMLToMarkdownWithOptions(
+			bytes.NewReader(data),
+			true,
+		); err == nil {
+			text = converted
+		}
+	}
+	text = strings.ToValidUTF8(text, "")
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return ""
+	}
+	if truncated {
+		text += "..."
+	}
+	return text
+}
+
 func unsupportedContentTypeError(contentType string) string {
 	contentType = strings.TrimSpace(contentType)
 	if contentType == "" {
 		contentType = "unknown"
 	}
 	msg := fmt.Sprintf("unsupported content type: %s", contentType)
-	switch contentType {
-	case "application/pdf":
-		return msg + "; web_fetch extracts text and HTML pages only. " +
-			"Download the PDF and use a document-reading tool instead."
-	default:
-		return msg + "; web_fetch extracts text and HTML pages only. " +
-			"For binary documents, download the file and use an " +
-			"appropriate document-reading tool instead."
+	return msg + "; web_fetch extracts HTML, text-like responses, JSON, " +
+		"and PDFs. For other binary documents, download the file and " +
+		"use an appropriate document-reading tool instead."
+}
+
+type searchResultPageRule struct {
+	Name      string
+	Host      string
+	Paths     []string
+	QueryKeys []string
+}
+
+var searchResultPageRules = []searchResultPageRule{
+	{
+		Name:      "DuckDuckGo search",
+		Host:      "duckduckgo.com",
+		Paths:     []string{"/"},
+		QueryKeys: []string{"q"},
+	},
+	{
+		Name:      "DuckDuckGo HTML search",
+		Host:      "html.duckduckgo.com",
+		Paths:     []string{"/html", "/html/"},
+		QueryKeys: []string{"q"},
+	},
+	{
+		Name:      "DuckDuckGo Lite search",
+		Host:      "lite.duckduckgo.com",
+		Paths:     []string{"/lite", "/lite/"},
+		QueryKeys: []string{"q"},
+	},
+	{
+		Name:      "Google search",
+		Host:      "google.com",
+		Paths:     []string{"/search"},
+		QueryKeys: []string{"q"},
+	},
+	{
+		Name:      "Google Scholar search",
+		Host:      "scholar.google.com",
+		Paths:     []string{"/scholar"},
+		QueryKeys: []string{"q"},
+	},
+	{
+		Name:      "Google cached search",
+		Host:      "webcache.googleusercontent.com",
+		Paths:     []string{"/search"},
+		QueryKeys: []string{"q"},
+	},
+	{
+		Name:      "Bing search",
+		Host:      "bing.com",
+		Paths:     []string{"/search"},
+		QueryKeys: []string{"q"},
+	},
+	{
+		Name:      "Brave Search",
+		Host:      "search.brave.com",
+		Paths:     []string{"/search"},
+		QueryKeys: []string{"q"},
+	},
+	{
+		Name:      "Yahoo search",
+		Host:      "search.yahoo.com",
+		Paths:     []string{"/search"},
+		QueryKeys: []string{"p", "q"},
+	},
+}
+
+func blockedSearchResultPage(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", false
 	}
+	host := normalizeSearchHost(u.Hostname())
+	if host == "" {
+		return "", false
+	}
+	path := strings.ToLower(strings.TrimSpace(u.Path))
+	if path == "" {
+		path = "/"
+	}
+	for i := range searchResultPageRules {
+		rule := searchResultPageRules[i]
+		if !hostMatchesSearchDomain(host, rule.Host) {
+			continue
+		}
+		if !searchResultPathMatches(path, rule.Paths) {
+			continue
+		}
+		if !searchResultQueryMatches(u, rule.QueryKeys) {
+			continue
+		}
+		return rule.Name, true
+	}
+	return "", false
+}
+
+func normalizeSearchHost(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimSuffix(host, ".")
+	return strings.TrimPrefix(host, "www.")
+}
+
+func hostMatchesSearchDomain(host string, domain string) bool {
+	domain = normalizeSearchHost(domain)
+	return host == domain || strings.HasSuffix(host, "."+domain)
+}
+
+func searchResultPathMatches(path string, allowed []string) bool {
+	for _, raw := range allowed {
+		allowedPath := strings.ToLower(strings.TrimSpace(raw))
+		if allowedPath == "" {
+			continue
+		}
+		if path == allowedPath {
+			return true
+		}
+		if strings.HasSuffix(allowedPath, "/") {
+			continue
+		}
+		if strings.HasPrefix(path, allowedPath+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func searchResultQueryMatches(u *url.URL, keys []string) bool {
+	if len(keys) == 0 {
+		return true
+	}
+	query := u.Query()
+	for _, key := range keys {
+		if strings.TrimSpace(query.Get(key)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func blockedSearchResultPageError(name string) string {
+	return "web_fetch search-result page is blocked: " + name +
+		". Use dedicated search tools first, then use web_fetch for " +
+		"known result URLs, APIs, archives, or direct source pages."
+}
+
+func blockedFetchPageReason(text string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return "", false
+	}
+	if looksLikeCloudflareChallenge(lower) {
+		return "Cloudflare or browser challenge", true
+	}
+	if containsAll(lower, "unusual traffic", "computer network") ||
+		containsAll(lower, "systems have detected", "unusual traffic") {
+		return "unusual-traffic warning", true
+	}
+	if strings.Contains(lower, "captcha") &&
+		containsAny(lower, "verify", "human", "robot", "challenge") {
+		return "CAPTCHA challenge", true
+	}
+	if containsAny(
+		lower,
+		"verify you are human",
+		"checking if the site connection is secure",
+		"review the security of your connection",
+		"enable javascript and cookies to continue",
+	) {
+		return "human-verification challenge", true
+	}
+	if looksLikeShortBotChallenge(lower) {
+		return "bot-check challenge", true
+	}
+	return "", false
+}
+
+func looksLikeShortBotChallenge(text string) bool {
+	if len(text) > 1200 || !containsAny(
+		text,
+		"bot check",
+		"anti-bot",
+		"anti automation",
+		"anti-automation",
+	) {
+		return false
+	}
+	return containsAny(
+		text,
+		"access denied",
+		"blocked",
+		"challenge",
+		"enable javascript",
+		"security check",
+		"verify",
+	)
+}
+
+func looksLikeCloudflareChallenge(text string) bool {
+	if isShortJustAMomentPage(text) {
+		return true
+	}
+	if containsAny(
+		text,
+		"# just a moment",
+		"<title>just a moment",
+		"\njust a moment",
+	) {
+		return true
+	}
+	if strings.Contains(text, "just a moment") &&
+		containsAny(
+			text,
+			"cloudflare",
+			"security of your connection",
+			"checking your browser",
+		) {
+		return true
+	}
+	return containsAny(
+		text,
+		"cloudflare ray id",
+		"checking your browser before accessing",
+	)
+}
+
+func isShortJustAMomentPage(text string) bool {
+	compact := strings.Join(strings.Fields(text), " ")
+	compact = strings.Trim(compact, ".!。 \t\r\n")
+	if len(compact) > 80 {
+		return false
+	}
+	return compact == "just a moment"
+}
+
+func blockedFetchPageError(reason string) string {
+	return "web_fetch page appears blocked by CAPTCHA, Cloudflare, " +
+		"unusual-traffic, bot-check, or anti-automation protection. " +
+		"Treat this route as blocked and switch to dedicated search " +
+		"tools, direct source URLs, APIs, archives, or existing " +
+		"evidence instead of retrying it. Detected: " + reason + "."
+}
+
+func containsAny(text string, values ...string) bool {
+	for _, value := range values {
+		if strings.Contains(text, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAll(text string, values ...string) bool {
+	for _, value := range values {
+		if !strings.Contains(text, value) {
+			return false
+		}
+	}
+	return true
 }
 
 // truncateString truncates a string to n bytes, ensuring valid UTF-8.
@@ -393,6 +766,124 @@ func readBodyAsString(r io.Reader) (string, error) {
 	return buf.String(), nil
 }
 
+const pdfLineYTolerance = 2.0
+
+func readPDFAsText(r io.Reader, maxBodyBytes int) (string, error) {
+	data, err := readPDFBody(r, maxBodyBytes)
+	if err != nil {
+		return "", err
+	}
+	reader, err := pdfpkg.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("read pdf: %w", err)
+	}
+
+	var text strings.Builder
+	pageCount := reader.NumPage()
+	for pageIndex := 1; pageIndex <= pageCount; pageIndex++ {
+		pageText, err := readPDFPageText(reader.Page(pageIndex))
+		if err != nil {
+			return "", fmt.Errorf("read pdf page %d: %w", pageIndex, err)
+		}
+		pageText = strings.TrimSpace(pageText)
+		if pageText == "" {
+			continue
+		}
+		if text.Len() > 0 {
+			text.WriteString("\n\n")
+		}
+		text.WriteString(pageText)
+	}
+	return strings.ToValidUTF8(text.String(), ""), nil
+}
+
+func readPDFBody(r io.Reader, maxBodyBytes int) ([]byte, error) {
+	if maxBodyBytes <= 0 {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+		return data, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(r, int64(maxBodyBytes)+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if len(data) > maxBodyBytes {
+		return nil, fmt.Errorf(
+			"pdf response body exceeds per-url content limit of %d bytes",
+			maxBodyBytes,
+		)
+	}
+	return data, nil
+}
+
+func readPDFPageText(page pdfpkg.Page) (text string, err error) {
+	if page.V.IsNull() {
+		return "", nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("read pdf page content: %v", recovered)
+		}
+	}()
+	return pdfPageText(page.Content().Text), nil
+}
+
+func pdfPageText(text []pdfpkg.Text) string {
+	if len(text) == 0 {
+		return ""
+	}
+	fragments := append([]pdfpkg.Text(nil), text...)
+	sort.Sort(pdfpkg.TextVertical(fragments))
+
+	var b strings.Builder
+	var last pdfpkg.Text
+	haveLast := false
+	for _, fragment := range fragments {
+		if fragment.S == "" {
+			continue
+		}
+		if haveLast {
+			if math.Abs(fragment.Y-last.Y) > pdfLineYTolerance {
+				trimTrailingSpaces(&b)
+				b.WriteByte('\n')
+			} else if shouldSeparatePDFText(last, fragment) {
+				b.WriteByte(' ')
+			}
+		}
+		b.WriteString(fragment.S)
+		last = fragment
+		haveLast = true
+	}
+	return b.String()
+}
+
+func shouldSeparatePDFText(prev, next pdfpkg.Text) bool {
+	if strings.HasSuffix(prev.S, " ") || strings.HasPrefix(next.S, " ") {
+		return false
+	}
+	gap := next.X - (prev.X + prev.W)
+	if gap <= 0 {
+		return false
+	}
+	size := math.Max(prev.FontSize, next.FontSize)
+	if size <= 0 {
+		size = 12
+	}
+	return gap > size*0.25
+}
+
+func trimTrailingSpaces(b *strings.Builder) {
+	s := b.String()
+	trimmed := strings.TrimRight(s, " \t")
+	if len(trimmed) == len(s) {
+		return
+	}
+	b.Reset()
+	b.WriteString(trimmed)
+}
+
 func convertHTMLToMarkdown(r io.Reader) (string, error) {
 	return convertHTMLToMarkdownWithOptions(r, false)
 }
@@ -412,14 +903,52 @@ func convertHTMLToMarkdownWithOptions(
 			commonmark.NewCommonmarkPlugin(),
 		),
 	)
-	markdown, err := conv.ConvertString(
-		markdownSourceHTML(bodyBytes, mainContentOnly),
-	)
+	source := markdownSourceHTML(bodyBytes, mainContentOnly)
+	markdown, err := conv.ConvertString(source)
 	if err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(markdown) == "" {
+		text, fallbackErr := htmlVisibleTextFallback([]byte(source))
+		if errors.Is(fallbackErr, errNoVisibleHTMLText) {
+			return markdown, nil
+		}
+		if fallbackErr != nil {
+			return "", fallbackErr
+		}
+		return text, nil
+	}
 
 	return markdown, nil
+}
+
+func htmlVisibleTextFallback(raw []byte) (string, error) {
+	return htmlVisibleTextFallbackFromReader(bytes.NewReader(raw), raw)
+}
+
+func htmlVisibleTextFallbackFromReader(
+	r io.Reader,
+	_ []byte,
+) (string, error) {
+	doc, err := html.Parse(r)
+	if err != nil {
+		return "", fmt.Errorf("parse HTML for visible-text fallback: %w", err)
+	}
+
+	var chunks []string
+	walkHTML(doc, func(n *html.Node) {
+		if n.Type != html.TextNode || hasInvisibleHTMLAncestor(n.Parent) {
+			return
+		}
+		text := strings.Join(strings.Fields(n.Data), " ")
+		if text != "" {
+			chunks = append(chunks, text)
+		}
+	})
+	if len(chunks) == 0 {
+		return "", errNoVisibleHTMLText
+	}
+	return strings.Join(chunks, "\n"), nil
 }
 
 func markdownSourceHTML(raw []byte, mainContentOnly bool) string {
@@ -549,9 +1078,32 @@ func isNoisyHTMLNode(n *html.Node) bool {
 	if n.Type != html.ElementNode {
 		return false
 	}
+	if isInvisibleHTMLNode(n) {
+		return true
+	}
 	switch strings.ToLower(n.Data) {
-	case "script", "style", "noscript", "template", "svg",
-		"nav", "header", "footer", "form":
+	case "nav", "header", "footer", "form":
+		return true
+	}
+	return false
+}
+
+func hasInvisibleHTMLAncestor(n *html.Node) bool {
+	for n != nil {
+		if isInvisibleHTMLNode(n) {
+			return true
+		}
+		n = n.Parent
+	}
+	return false
+}
+
+func isInvisibleHTMLNode(n *html.Node) bool {
+	if n == nil || n.Type != html.ElementNode {
+		return false
+	}
+	switch strings.ToLower(n.Data) {
+	case "script", "style", "noscript", "template", "svg":
 		return true
 	}
 	if hasHTMLAttr(n, "hidden") {

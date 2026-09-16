@@ -138,6 +138,10 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				"PRELOADED_USER_MEMORIES BEGINS",
 				"## User Memories",
 			},
+			excludes: []string{
+				"session_search",
+				"session_load",
+			},
 		},
 		{
 			name: "single memory",
@@ -472,6 +476,26 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 		assert.Nil(t, msg)
 	})
 
+	t.Run("uses memory reader without memory service", func(t *testing.T) {
+		p := NewContentRequestProcessor(WithPreloadMemory(-1))
+		mockReader := &mockMemoryService{
+			memories: []*memory.Entry{
+				newTestMemoryEntry("mem-reader", "User prefers tea"),
+			},
+		}
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{
+				AppName: "app",
+				UserID:  "user",
+			}),
+		)
+		inv.MemoryReader = mockReader
+		msg := p.getPreloadMemoryMessage(context.Background(), inv)
+		require.NotNil(t, msg)
+		assert.Contains(t, msg.Content, "User prefers tea")
+		assert.True(t, mockReader.readCalled)
+	})
+
 	t.Run("nil session", func(t *testing.T) {
 		p := NewContentRequestProcessor(WithPreloadMemory(-1))
 		inv := agent.NewInvocation()
@@ -550,6 +574,8 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 		assert.Contains(t, msg.Content, "Quick memory pass")
 		assert.Contains(t, msg.Content, "User likes coffee")
 		assert.Contains(t, msg.Content, "mem-1")
+		assert.NotContains(t, msg.Content, "session_search")
+		assert.NotContains(t, msg.Content, "session_load")
 	})
 
 	t.Run("uses preload memory playbook override", func(t *testing.T) {
@@ -914,6 +940,8 @@ func TestProcessRequest_WithPreloadMemory(t *testing.T) {
 		assert.Contains(t, req.Messages[0].Content, "Decision boundary")
 		assert.Contains(t, req.Messages[0].Content, "User Memories")
 		assert.Contains(t, req.Messages[0].Content, "User prefers dark mode")
+		assert.NotContains(t, req.Messages[0].Content, "session_search")
+		assert.NotContains(t, req.Messages[0].Content, "session_load")
 	})
 
 	t.Run("adaptive preload uses search result in system message", func(t *testing.T) {
@@ -1153,6 +1181,8 @@ func TestProcessRequest_PreloadMemory_UserInjectionMode(t *testing.T) {
 	require.Contains(t, req.Messages[1].Content, "Decision boundary")
 	require.Contains(t, req.Messages[1].Content, "User Memories")
 	require.Contains(t, req.Messages[1].Content, "User prefers dark mode")
+	require.NotContains(t, req.Messages[1].Content, "session_search")
+	require.NotContains(t, req.Messages[1].Content, "session_load")
 	require.Contains(t, req.Messages[1].Content, "hello")
 }
 

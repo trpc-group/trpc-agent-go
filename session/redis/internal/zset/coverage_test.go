@@ -213,7 +213,7 @@ func TestCov_CreateSummary_LuaError(t *testing.T) {
 		Summary:   "test",
 		UpdatedAt: time.Now(),
 	}
-	err := c.CreateSummary(ctx, key, "", sum, time.Hour)
+	_, err := c.CreateSummary(ctx, key, "", sum, time.Hour)
 	require.Error(t, err)
 }
 
@@ -999,6 +999,6 @@ func TestCov_CreateSummary_ExpireTTLWithConnection(t *testing.T) {
 	require.NoError(t, err)
 
 	// CreateSummary with TTL > 0 exercises the Expire branch
-	err = c.CreateSummary(ctx, key, "fk1", &session.Summary{Summary: "hello", UpdatedAt: time.Now()}, time.Hour)
+	_, err = c.CreateSummary(ctx, key, "fk1", &session.Summary{Summary: "hello", UpdatedAt: time.Now()}, time.Hour)
 	require.NoError(t, err)
 }

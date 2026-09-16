@@ -43,7 +43,7 @@ var (
 
 func main() {
 	flag.Parse()
-	if os.Getenv("MEM0_API_KEY") == "" {
+	if os.Getenv("MEM0_API_KEY") == "" && !mem0SelfHostedOSS() {
 		log.Fatal("MEM0_API_KEY is required")
 	}
 	if os.Getenv("OPENAI_API_KEY") == "" {
@@ -158,12 +158,17 @@ func summariseExtras(entry *memory.Entry) string {
 
 func newMem0Service(timeout time.Duration) (*memorymem0.Service, error) {
 	opts := []memorymem0.ServiceOpt{
-		memorymem0.WithAPIKey(os.Getenv("MEM0_API_KEY")),
 		memorymem0.WithTimeout(timeout),
 		memorymem0.WithMemoryJobTimeout(timeout),
 		memorymem0.WithAsyncMemoryNum(1),
 		memorymem0.WithMemoryQueueSize(8),
 		memorymem0.WithLoadToolEnabled(true),
+	}
+	if apiKey := os.Getenv("MEM0_API_KEY"); apiKey != "" {
+		opts = append(opts, memorymem0.WithAPIKey(apiKey))
+	}
+	if mem0SelfHostedOSS() {
+		opts = append(opts, memorymem0.WithSelfHostedOSS())
 	}
 	if host := mem0Host(); host != "" {
 		opts = append(opts, memorymem0.WithHost(host))
@@ -172,6 +177,15 @@ func newMem0Service(timeout time.Duration) (*memorymem0.Service, error) {
 		opts = append(opts, memorymem0.WithOrgProject(orgID, os.Getenv("MEM0_PROJECT_ID")))
 	}
 	return memorymem0.NewService(opts...)
+}
+
+func mem0SelfHostedOSS() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MEM0_SELF_HOSTED_OSS"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func mem0Host() string {

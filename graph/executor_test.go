@@ -26,7 +26,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
@@ -469,67 +468,6 @@ func TestExecutor_ProcessChannelWrites_RecordsMultipleTraceSources(t *testing.T)
 	}, 1)
 	require.Equal(t, []string{"s1", "s2"}, exec.tracePredecessorsForChannels(execCtx, []string{"out"}))
 	require.Equal(t, []string{"s1", "s2"}, exec.tracePredecessorsForChannels(execCtx, []string{"barrier"}))
-}
-
-func TestExecutor_RegisterAgentNodeTraceTask_ClaimedConflictBlocksNewTask(t *testing.T) {
-	exec := &Executor{}
-	execCtx := &ExecutionContext{}
-	first := newTraceTaskMetadata(execCtx, "task-1", "agent", []string{"s0"}, nil)
-	require.True(t, exec.registerAgentNodeTraceTask(execCtx, first))
-	require.Same(t, first, execCtx.claimAgentNodeTraceTask("agent"))
-	second := newTraceTaskMetadata(execCtx, "task-2", "agent", nil, nil)
-	require.False(t, exec.registerAgentNodeTraceTask(execCtx, second))
-	firstSnapshot := first.snapshot()
-	secondSnapshot := second.snapshot()
-	require.True(t, firstSnapshot.claimed)
-	require.False(t, firstSnapshot.fallbackToWrapper)
-	require.True(t, secondSnapshot.fallbackToWrapper)
-	require.Nil(t, claimAgentNodeTraceTask(State{
-		StateKeyExecContext:        execCtx,
-		StateKeyCurrentNodeID:      "agent",
-		currentTraceStepIDStateKey: "wrapper",
-	}))
-	require.Nil(t, execCtx.claimAgentNodeTraceTask("agent"))
-	exec.unregisterAgentNodeTraceTask(execCtx, "agent", first)
-	third := newTraceTaskMetadata(execCtx, "task-3", "agent", nil, nil)
-	require.True(t, exec.registerAgentNodeTraceTask(execCtx, third))
-}
-
-func TestExecutor_RegisterAgentNodeTraceTask_UnclaimedConflictFallsBackBothTasks(t *testing.T) {
-	exec := &Executor{}
-	execCtx := &ExecutionContext{}
-	first := newTraceTaskMetadata(execCtx, "task-1", "agent", nil, nil)
-	second := newTraceTaskMetadata(execCtx, "task-2", "agent", nil, nil)
-	require.True(t, exec.registerAgentNodeTraceTask(execCtx, first))
-	require.False(t, exec.registerAgentNodeTraceTask(execCtx, second))
-	require.True(t, first.snapshot().fallbackToWrapper)
-	require.True(t, second.snapshot().fallbackToWrapper)
-	claimed := execCtx.claimAgentNodeTraceTask("agent")
-	require.Same(t, first, claimed)
-	inv := agent.NewInvocation(
-		agent.WithInvocationAgent(&stubAgent{name: "root"}),
-		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
-	)
-	wrapperStepID := claimed.materializeWrapper(inv)
-	require.NotEmpty(t, wrapperStepID)
-	require.Equal(t, []string{wrapperStepID}, claimed.childEntryPredecessorStepIDs())
-}
-
-func TestExecutor_EnsureTraceSourceForTask_FallbackWrapperIsIdempotent(t *testing.T) {
-	exec := &Executor{}
-	execCtx := &ExecutionContext{traceSourceStepIDsByTaskID: make(map[string][]string)}
-	traceTask := newTraceTaskMetadata(execCtx, "task-1", "agent", nil, nil)
-	task := &Task{NodeID: "agent", TaskID: "task-1"}
-	inv := agent.NewInvocation(
-		agent.WithInvocationAgent(&stubAgent{name: "root"}),
-		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
-	)
-	exec.ensureTraceSourceForTask(inv, execCtx, task, State{"ok": true}, nil, traceTask)
-	exec.ensureTraceSourceForTask(inv, execCtx, task, State{"ok": true}, errors.New("route boom"), traceTask)
-	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
-	require.Len(t, trace.Steps, 1)
-	require.Contains(t, trace.Steps[0].Error, "route boom")
-	require.Equal(t, []string{trace.Steps[0].StepID}, exec.traceSourceStepIDsForTask(execCtx, "task-1"))
 }
 
 func TestExecutor_DisableGraphExecutorEvents_SuppressesEventHelpers(t *testing.T) {
@@ -4440,7 +4378,6 @@ func TestExecutor_executeStepTask_RecoversFromPanic(t *testing.T) {
 		task,
 		step,
 		nil,
-		false,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "task panic")

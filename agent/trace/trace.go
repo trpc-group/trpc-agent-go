@@ -35,8 +35,13 @@ type Trace struct {
 	StartedAt        time.Time
 	EndedAt          time.Time
 	Status           TraceStatus
-	Usage            *model.Usage
-	Steps            []Step
+	// Input stores the JSON-encoded, role-normalized model.Message received by
+	// runner.Run.
+	Input *Snapshot
+	// Output stores the JSON-encoded final model.Message produced by this run.
+	Output *Snapshot
+	Usage  *model.Usage
+	Steps  []Step
 }
 
 // Step is a single recorded execution step.
@@ -47,6 +52,9 @@ type Step struct {
 	AgentName          string
 	Branch             string
 	NodeID             string
+	// NodeType is the semantic type of the executed node and matches the node
+	// kind in the static structure: function, llm, tool, or agent.
+	NodeType           string
 	StartedAt          time.Time
 	EndedAt            time.Time
 	PredecessorStepIDs []string
@@ -54,10 +62,34 @@ type Step struct {
 	Input              *Snapshot
 	Output             *Snapshot
 	Usage              *model.Usage
-	Error              string
+	// Tools stores tool executions completed within this step in call order.
+	Tools []Tool
+	// Skills stores skills successfully loaded within this step in load order.
+	Skills []Skill
+	Error  string
 }
 
-// Snapshot stores a stable text snapshot for a step input or output.
+// Tool is a structured record of one tool execution within a trace step.
+type Tool struct {
+	// ID is the tool call ID assigned by the model response.
+	ID string
+	// Name is the resolved tool name executed by the framework.
+	Name string
+	// Arguments stores the effective tool arguments used for execution.
+	Arguments any
+	// Result stores the tool result returned to the model when available.
+	Result any
+	// Error stores the tool execution error when a tool response was produced.
+	Error string
+}
+
+// Skill is a structured record of one skill successfully loaded within a trace step.
+type Skill struct {
+	// Name is the loaded skill name.
+	Name string
+}
+
+// Snapshot stores a stable text snapshot for a trace or step input or output.
 type Snapshot struct {
 	Text string
 }

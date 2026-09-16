@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -29,7 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/callback"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
-	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
+	tokenusage "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/usage"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -53,6 +54,7 @@ type local struct {
 	evalResultManager                 evalresult.Manager
 	registry                          registry.Registry
 	metricRegistry                    metricregistry.Registry
+	evalCaseResultAggregator          service.EvalCaseResultAggregator
 	sessionIDSupplier                 func(ctx context.Context) string
 	userSimulator                     usersimulation.Simulator
 	callbacks                         *service.Callbacks
@@ -88,6 +90,9 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 	if opts.MetricRegistry == nil {
 		return nil, errors.New("metric registry is nil")
 	}
+	if opts.EvalCaseResultAggregator == nil {
+		return nil, errors.New("eval case result aggregator is nil")
+	}
 	if opts.SessionIDSupplier == nil {
 		return nil, errors.New("session id supplier is nil")
 	}
@@ -99,6 +104,7 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 		evalResultManager:                 opts.EvalResultManager,
 		registry:                          opts.Registry,
 		metricRegistry:                    opts.MetricRegistry,
+		evalCaseResultAggregator:          opts.EvalCaseResultAggregator,
 		sessionIDSupplier:                 opts.SessionIDSupplier,
 		userSimulator:                     opts.UserSimulator,
 		callbacks:                         opts.Callbacks,
@@ -252,9 +258,66 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt 
 	runResult = &service.EvalSetRunResult{
 		AppName:         req.AppName,
 		EvalSetID:       req.EvalSetID,
+		InferenceStats:  inferenceStatsForInferenceResults(req.InferenceResults),
 		EvalCaseResults: evalCaseResults,
 	}
 	return runResult, nil
+}
+
+func inferenceStatsForInferenceResults(results []*service.InferenceResult) *evalresult.InferenceStats {
+	var total *evalresult.InferenceStats
+	for _, result := range results {
+		total = addInferenceStats(total, inferenceStatsForInferenceResult(result))
+	}
+	return total
+}
+
+func inferenceStatsForInferenceResult(result *service.InferenceResult) *evalresult.InferenceStats {
+	if result == nil {
+		return nil
+	}
+	// Trace-mode cases replay recorded invocations without executing the agent.
+	if result.EvalMode == evalset.EvalModeTrace {
+		return nil
+	}
+	stats := &evalresult.InferenceStats{}
+	if result.InferenceStats != nil {
+		stats.Duration = result.InferenceStats.Duration
+		stats.TokenUsage = tokenusage.Clone(result.InferenceStats.TokenUsage)
+	}
+	if stats.Duration <= 0 {
+		for _, executionTrace := range result.ExecutionTraces {
+			if executionTrace == nil || executionTrace.StartedAt.IsZero() || executionTrace.EndedAt.IsZero() {
+				continue
+			}
+			if duration := executionTrace.EndedAt.Sub(executionTrace.StartedAt); duration > 0 {
+				stats.Duration += duration
+			}
+		}
+	}
+	if stats.TokenUsage == nil {
+		for _, executionTrace := range result.ExecutionTraces {
+			if executionTrace != nil {
+				stats.TokenUsage = tokenusage.Add(stats.TokenUsage, executionTrace.Usage)
+			}
+		}
+	}
+	if stats.Duration <= 0 && stats.TokenUsage == nil {
+		return nil
+	}
+	return stats
+}
+
+func addInferenceStats(total, stats *evalresult.InferenceStats) *evalresult.InferenceStats {
+	if stats == nil {
+		return total
+	}
+	if total == nil {
+		total = &evalresult.InferenceStats{}
+	}
+	total.Duration += stats.Duration
+	total.TokenUsage = tokenusage.Add(total.TokenUsage, stats.TokenUsage)
+	return total
 }
 
 func (s *local) resolveMetricExtensions(
@@ -375,6 +438,7 @@ func (s *local) failedEvalCaseResult(evalSetID string, inferenceResult *service.
 		ErrorMessage:    errorMessage,
 		SessionID:       inferenceResult.SessionID,
 		UserID:          inferenceResult.UserID,
+		InferenceStats:  inferenceStatsForInferenceResult(inferenceResult),
 	}
 }
 
@@ -392,6 +456,9 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	}
 	if opts.Registry == nil {
 		return nil, errors.New("registry is nil")
+	}
+	if opts.EvalCaseResultAggregator == nil {
+		return nil, errors.New("eval case result aggregator is nil")
 	}
 	evalCase, err := opts.EvalSetManager.GetCase(ctx,
 		inferenceResult.AppName,
@@ -415,8 +482,18 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	if err != nil {
 		return nil, err
 	}
+	metricInvocationIndexes, err := buildMetricInvocationIndexes(
+		inferenceResult.EvalCaseID,
+		inputs.actuals,
+		inputs.expecteds,
+		evaluateConfig.EvalMetrics,
+	)
+	if err != nil {
+		return nil, err
+	}
 	// overallMetricResults collects the metric results for the entire eval case.
 	overallMetricResults := make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics))
+	effectiveMetrics := make([]*metric.EvalMetric, 0, len(evaluateConfig.EvalMetrics))
 	perInvocation := make([]*evalresult.EvalMetricResultPerInvocation, len(inputs.actuals))
 	for i, actual := range inputs.actuals {
 		perInvocation[i] = &evalresult.EvalMetricResultPerInvocation{
@@ -427,6 +504,14 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	}
 	// Iterate through every configured metric and run the evaluation.
 	for _, configuredMetric := range evaluateConfig.EvalMetrics {
+		if configuredMetric == nil {
+			return nil, errors.New("eval metric is nil")
+		}
+		invocationIndexes := metricInvocationIndexes[configuredMetric.MetricName]
+		if len(invocationIndexes) == 0 {
+			continue
+		}
+		// Evaluators receive only the invocations that selected this metric.
 		metricEvaluator, err := lookupMetricEvaluator(opts.Registry, configuredMetric)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -443,19 +528,23 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		if err != nil {
 			return nil, err
 		}
-		result, err := metricEvaluator.Evaluate(ctx, inputs.actuals, inputs.expecteds, evalMetric)
+		selectedActuals := selectInvocations(inputs.actuals, invocationIndexes)
+		selectedExpecteds := selectInvocations(inputs.expecteds, invocationIndexes)
+		result, err := metricEvaluator.Evaluate(ctx, selectedActuals, selectedExpecteds, evalMetric)
 		if err != nil {
 			return nil, fmt.Errorf("run evaluation for metric %s: %w", evalMetric.MetricName, err)
 		}
-		if len(result.PerInvocationResults) != len(perInvocation) {
+		effectiveMetrics = append(effectiveMetrics, evalMetric)
+		if len(result.PerInvocationResults) != len(invocationIndexes) {
 			return nil, fmt.Errorf("metric %s returned %d per-invocation results, expected %d", evalMetric.MetricName,
-				len(result.PerInvocationResults), len(perInvocation))
+				len(result.PerInvocationResults), len(invocationIndexes))
 		}
 		reasons := make([]string, 0, len(result.PerInvocationResults))
 		rubricScores := make([]*evalresult.RubricScore, 0, len(result.PerInvocationResults))
 		for i, invocationResult := range result.PerInvocationResults {
+			invocationIndex := invocationIndexes[i]
 			resultCriterion, err := materializeResultCriterion(
-				ctx, evalMetric, inputs.actuals[:i+1], inputs.expecteds[:i+1],
+				ctx, evalMetric, inputs.actuals[:invocationIndex+1], inputs.expecteds[:invocationIndex+1],
 			)
 			if err != nil {
 				return nil, fmt.Errorf("materialize criterion for metric %s invocation %d: %w",
@@ -473,14 +562,15 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 				evalMetricResult.Details = &evalresult.EvalMetricResultDetails{
 					Reason:       invocationResult.Details.Reason,
 					Score:        invocationResult.Details.Score,
+					Value:        invocationResult.Details.Value,
 					RubricScores: invocationResult.Details.RubricScores,
 				}
 				reasons = append(reasons, invocationResult.Details.Reason)
 				rubricScores = append(rubricScores, invocationResult.Details.RubricScores...)
 			}
-			perInvocation[i].EvalMetricResults = append(perInvocation[i].EvalMetricResults, evalMetricResult)
+			perInvocation[invocationIndex].EvalMetricResults = append(perInvocation[invocationIndex].EvalMetricResults, evalMetricResult)
 		}
-		overallCriterion, err := materializeOverallCriterion(ctx, evalMetric, inputs.actuals, inputs.expecteds)
+		overallCriterion, err := materializeOverallCriterion(ctx, evalMetric, selectedActuals, selectedExpecteds)
 		if err != nil {
 			return nil, fmt.Errorf("materialize overall criterion for metric %s: %w",
 				evalMetric.MetricName, err)
@@ -498,19 +588,38 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 			},
 		})
 	}
-	// Summarize the overall metric results and return the final eval status.
-	finalStatus, err := istatus.SummarizeMetricsStatus(overallMetricResults)
+	aggregation, err := opts.EvalCaseResultAggregator.Aggregate(ctx, &service.EvalCaseResultAggregationInput{
+		AppName:         inferenceResult.AppName,
+		EvalSetID:       inferenceResult.EvalSetID,
+		EvalCase:        evalCase,
+		InferenceResult: inferenceResult,
+		EvalMetrics:     effectiveMetrics,
+		MetricResults:   overallMetricResults,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("summarize overall metric results: %w", err)
+		return nil, fmt.Errorf("aggregate eval case result: %w", err)
+	}
+	if aggregation == nil {
+		return nil, errors.New("eval case result aggregation result is nil")
+	}
+	switch aggregation.Status {
+	case evalstatus.EvalStatusPassed, evalstatus.EvalStatusFailed, evalstatus.EvalStatusNotEvaluated:
+	default:
+		return nil, fmt.Errorf("unexpected eval case result aggregation status %v", aggregation.Status)
+	}
+	if math.IsNaN(aggregation.Score) || math.IsInf(aggregation.Score, 0) {
+		return nil, fmt.Errorf("eval case result aggregation score must be finite: %v", aggregation.Score)
 	}
 	return &evalresult.EvalCaseResult{
 		EvalSetID:                     inferenceResult.EvalSetID,
 		EvalID:                        inferenceResult.EvalCaseID,
-		FinalEvalStatus:               finalStatus,
+		Score:                         aggregation.Score,
+		FinalEvalStatus:               aggregation.Status,
 		OverallEvalMetricResults:      overallMetricResults,
 		EvalMetricResultPerInvocation: perInvocation,
 		SessionID:                     inferenceResult.SessionID,
 		UserID:                        inputs.userID,
+		InferenceStats:                inferenceStatsForInferenceResult(inferenceResult),
 	}, nil
 }
 
@@ -626,6 +735,66 @@ type caseEvaluationInputs struct {
 	userID    string
 }
 
+// buildMetricInvocationIndexes resolves the metrics that apply to each invocation.
+// An invocation without an explicit metric list inherits metrics that do not require explicit selection.
+func buildMetricInvocationIndexes(
+	evalCaseID string,
+	actuals, expecteds []*evalset.Invocation,
+	evalMetrics []*metric.EvalMetric,
+) (map[string][]int, error) {
+	configuredMetricNames := make(map[string]struct{}, len(evalMetrics))
+	defaultMetricNames := make(map[string]struct{}, len(evalMetrics))
+	for _, evalMetric := range evalMetrics {
+		if evalMetric == nil {
+			continue
+		}
+		configuredMetricNames[evalMetric.MetricName] = struct{}{}
+		if !evalMetric.RequireExplicitSelection {
+			defaultMetricNames[evalMetric.MetricName] = struct{}{}
+		}
+	}
+	indexesByMetric := make(map[string][]int, len(defaultMetricNames))
+	for invocationIndex := range actuals {
+		var metricNames []string
+		if invocationIndex < len(expecteds) && expecteds[invocationIndex] != nil {
+			metricNames = expecteds[invocationIndex].MetricNames
+		}
+		if len(metricNames) == 0 && actuals[invocationIndex] != nil {
+			metricNames = actuals[invocationIndex].MetricNames
+		}
+		if len(metricNames) == 0 {
+			for metricName := range defaultMetricNames {
+				indexesByMetric[metricName] = append(indexesByMetric[metricName], invocationIndex)
+			}
+			continue
+		}
+		seenMetricNames := make(map[string]struct{}, len(metricNames))
+		for metricIndex, metricName := range metricNames {
+			metricName = strings.TrimSpace(metricName)
+			if metricName == "" {
+				return nil, fmt.Errorf("eval case %s invocation %d metric name %d is empty", evalCaseID, invocationIndex, metricIndex)
+			}
+			if _, ok := configuredMetricNames[metricName]; !ok {
+				return nil, fmt.Errorf("eval case %s invocation %d metric %s is not configured", evalCaseID, invocationIndex, metricName)
+			}
+			if _, ok := seenMetricNames[metricName]; ok {
+				return nil, fmt.Errorf("eval case %s invocation %d metric %s is duplicated", evalCaseID, invocationIndex, metricName)
+			}
+			seenMetricNames[metricName] = struct{}{}
+			indexesByMetric[metricName] = append(indexesByMetric[metricName], invocationIndex)
+		}
+	}
+	return indexesByMetric, nil
+}
+
+func selectInvocations(invocations []*evalset.Invocation, indexes []int) []*evalset.Invocation {
+	selected := make([]*evalset.Invocation, 0, len(indexes))
+	for _, index := range indexes {
+		selected = append(selected, invocations[index])
+	}
+	return selected
+}
+
 func (s *local) prepareCaseEvaluationInputs(
 	ctx context.Context,
 	inferenceResult *service.InferenceResult,
@@ -659,6 +828,18 @@ func (s *local) prepareCaseEvaluationInputs(
 	if len(actuals) != len(expecteds) {
 		return nil, fmt.Errorf("inference count %d does not match expected conversation length %d",
 			len(actuals), len(expecteds))
+	}
+	if len(inferenceResult.ExecutionTraces) > 0 {
+		if len(actuals) != len(inferenceResult.ExecutionTraces) {
+			return nil, fmt.Errorf("execution trace count %d does not match inference count %d",
+				len(inferenceResult.ExecutionTraces), len(actuals))
+		}
+		for i, actual := range actuals {
+			if actual == nil {
+				continue
+			}
+			actual.ExecutionTrace = inferenceResult.ExecutionTraces[i]
+		}
 	}
 	attachContextMessages(actuals, evalCase.ContextMessages)
 	attachContextMessages(expecteds, evalCase.ContextMessages)
@@ -810,8 +991,8 @@ func resolveEvaluatorName(evalMetric *metric.EvalMetric) string {
 	return evalMetric.MetricName
 }
 
-// userInputOnlyInvocationsForEval builds placeholder invocations that only preserve user inputs.
-// This whitelist prevents trace outputs from being treated as reference answers and stays correct when Invocation gains new fields.
+// userInputOnlyInvocationsForEval builds placeholder invocations that preserve user inputs and metric bindings.
+// This whitelist prevents trace outputs from being treated as reference answers.
 func userInputOnlyInvocationsForEval(conversation []*evalset.Invocation) []*evalset.Invocation {
 	expecteds := make([]*evalset.Invocation, len(conversation))
 	for i, invocation := range conversation {
@@ -821,6 +1002,7 @@ func userInputOnlyInvocationsForEval(conversation []*evalset.Invocation) []*eval
 		}
 		expecteds[i] = &evalset.Invocation{
 			InvocationID: invocation.InvocationID,
+			MetricNames:  append([]string(nil), invocation.MetricNames...),
 			UserContent:  invocation.UserContent,
 		}
 	}

@@ -5,26 +5,14 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 
-// Package envscrub holds the shared blocklist of "policy-mode"
-// environment variables that must be removed before handing a map
-// to a child process when a workspace_exec command-name policy is
-// active.
+// Package envscrub holds the shared blocklist of environment variables that
+// can alter shell startup, executable resolution, or dynamic loader behavior.
+// Callers use it when constructing restricted child-process environments,
+// including workspace command policies and local generated-code runtimes.
 //
-// Two call sites use it today:
-//
-//   - tool/workspaceexec scrubs caller-supplied env before setting
-//     spec.CleanEnv = true (so a model-supplied PATH / BASH_ENV /
-//     LD_PRELOAD cannot rearm a command admitted by the policy).
-//
-//   - codeexecutor.mergeProviderEnv scrubs the provider-supplied
-//     env when spec.CleanEnv is true, so a RunEnvProvider returning
-//     a "PATH" / "LD_PRELOAD" / "BASH_ENV" cannot reintroduce them
-//     after the workspace_exec scrub already ran.
-//
-// Keeping the blocklist in one place ensures the two scrubs stay
-// in sync. The package is intentionally minimal: no policy state,
-// no allocation when the input is empty, no dependencies outside
-// the standard library.
+// Keeping the blocklist in one place ensures those process boundaries stay in
+// sync. The package is intentionally minimal: it has no policy state and no
+// dependencies outside the standard library.
 package envscrub
 
 import "strings"

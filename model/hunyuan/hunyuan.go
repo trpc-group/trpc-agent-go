@@ -17,9 +17,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
+	"strings"
 	"time"
 
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -47,9 +48,7 @@ type Model struct {
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
-	tokenCounterOnce           sync.Once               // sync.Once for lazy initialization of tokenCounter.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
-	tailoringStrategyOnce      sync.Once               // sync.Once for lazy initialization of tailoringStrategy.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
 	protocolOverheadTokens int
@@ -203,6 +202,15 @@ func (m *Model) runChatRequestCallback(
 	m.chatRequestCallback(ctx, chatRequest)
 }
 
+func disableChatRequestTools(request *hunyuan.ChatCompletionNewParams) {
+	if request == nil {
+		return
+	}
+	request.Tools = nil
+	request.ToolChoice = ""
+	request.CustomTool = nil
+}
+
 func (m *Model) runChatResponseCallback(
 	ctx context.Context,
 	chatRequest *hunyuan.ChatCompletionNewParams,
@@ -260,6 +268,9 @@ func (m *Model) GenerateContent(
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
+	if imodelrequest.ToolsDisabled(ctx) {
+		disableChatRequestTools(chatRequest)
+	}
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
@@ -280,45 +291,55 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	// Determine max input tokens using priority: user config > auto calculation > default.
-	maxInputTokens := m.maxInputTokens
-	if maxInputTokens <= 0 {
-		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := m.contextWindow
-		if contextWindow <= 0 {
-			contextWindow = imodel.ResolveContextWindow(m.name)
-		}
-		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
-			// Use custom parameters if any are set.
-			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
-				contextWindow,
-				m.protocolOverheadTokens,
-				m.reserveOutputTokens,
-				m.inputTokensFloor,
-				m.safetyMarginRatio,
-				m.maxInputTokensRatio,
-			)
-		} else {
-			// Use default parameters.
-			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
-		}
-		log.DebugfContext(ctx, "auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d",
-			m.name, contextWindow, maxInputTokens)
+	maxInputTokens := m.InputTokenBudget(ctx, request)
+	if m.maxInputTokens <= 0 {
+		log.DebugfContext(ctx, "auto-calculated max input tokens: model=%s, maxInputTokens=%d",
+			m.name, maxInputTokens)
 	}
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "hunyuan.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
 		if len(tailored) > 0 {
 			log.WarnContext(ctx, "token tailoring returned best-effort messages in hunyuan.Model", err)
-			modeltailoring.ApplyResult(ctx, "hunyuan.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "hunyuan.Model", request, tailored,
+			)
 			return
 		}
 		log.WarnContext(ctx, "token tailoring failed in hunyuan.Model", "error", err)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "hunyuan.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "hunyuan.Model", request, tailored,
+	)
+}
+
+// InputTokenBudget returns the same input budget used by token tailoring.
+func (m *Model) InputTokenBudget(_ context.Context, _ *model.Request) int {
+	if m.maxInputTokens > 0 {
+		return m.maxInputTokens
+	}
+	contextWindow := m.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = imodel.ResolveContextWindow(m.name)
+	}
+	if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
+		return imodel.CalculateMaxInputTokensWithParams(
+			contextWindow,
+			m.protocolOverheadTokens,
+			m.reserveOutputTokens,
+			m.inputTokensFloor,
+			m.safetyMarginRatio,
+			m.maxInputTokensRatio,
+		)
+	}
+	return imodel.CalculateMaxInputTokens(contextWindow)
 }
 
 // buildChatRequest builds the chat request for the Hunyuan API.
@@ -613,7 +634,16 @@ func convertMessage(msg model.Message) (*hunyuan.ChatCompletionMessageParam, err
 					contents = append(contents, &hunyuan.ChatCompletionMessageContentParam{
 						Type: "audio_url",
 						VideoUrl: &hunyuan.ChatCompletionContentVideoUrlParam{
-							Url: audioToBase64(part.Audio),
+							Url: audioToURLOrBase64(part.Audio),
+						},
+					})
+				}
+			case model.ContentTypeVideo:
+				if part.Video != nil {
+					contents = append(contents, &hunyuan.ChatCompletionMessageContentParam{
+						Type: "video_url",
+						VideoUrl: &hunyuan.ChatCompletionContentVideoUrlParam{
+							Url: videoToURLOrBase64(part.Video),
 						},
 					})
 				}
@@ -674,9 +704,31 @@ func imageToURLOrBase64(image *model.Image) string {
 	if image.URL != "" {
 		return image.URL
 	}
-	return "data:image/" + image.Format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
+	format := image.Format
+	if strings.HasPrefix(format, "image/") {
+		return "data:" + format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
+	}
+	return "data:image/" + format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
-func audioToBase64(audio *model.Audio) string {
-	return "data:" + audio.Format + ";base64," + base64.StdEncoding.EncodeToString(audio.Data)
+func audioToURLOrBase64(audio *model.Audio) string {
+	if audio.URL != "" {
+		return audio.URL
+	}
+	return mediaToBase64("audio", audio.Format, audio.Data)
+}
+
+func videoToURLOrBase64(video *model.Video) string {
+	if video.URL != "" {
+		return video.URL
+	}
+	return mediaToBase64("video", video.Format, video.Data)
+}
+
+func mediaToBase64(mediaType, format string, data []byte) string {
+	mimeType := format
+	if !strings.HasPrefix(mimeType, mediaType+"/") {
+		mimeType = mediaType + "/" + mimeType
+	}
+	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
 }

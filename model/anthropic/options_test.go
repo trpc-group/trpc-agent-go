@@ -12,6 +12,7 @@ package anthropic
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -176,8 +177,16 @@ func TestWithStreamRetry_ZeroPreservesDefault(t *testing.T) {
 }
 
 func TestWithStreamRetry_ZeroRestoresDefaultAfterCustom(t *testing.T) {
-	m := New("claude-test", WithStreamRetry(5, 0, 0), WithStreamRetry(0, 0, 0))
+	m := New(
+		"claude-test",
+		WithStreamRetry(5, 2*time.Second, 20*time.Second),
+		WithStreamRetry(0, 0, 0),
+	)
 	assert.Equal(t, defaultStreamMaxRetries, m.effectiveStreamMaxRetries())
+	assert.Zero(t, m.streamRetryBaseBackoff)
+	assert.Zero(t, m.streamRetryMaxBackoff)
+	assert.Equal(t, defaultStreamRetryBaseBackoff, m.streamRetryBackoff(1))
+	assert.Equal(t, defaultStreamRetryMaxBackoff, m.streamRetryBackoff(10))
 }
 
 func TestNew_ZeroOptionsDisablesStreamRetry(t *testing.T) {

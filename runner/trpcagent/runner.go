@@ -135,6 +135,7 @@ func (r *runner) newRunRequest(
 		RunOptions: runOptions{
 			RequestID:             options.RequestID,
 			ExecutionTraceEnabled: options.ExecutionTraceEnabled,
+			RuntimeState:          options.RuntimeState,
 		},
 	}
 	if profile := profilecompiler.ProfileFromRunOptions(options); profile != nil {

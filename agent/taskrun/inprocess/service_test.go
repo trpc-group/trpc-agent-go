@@ -1031,6 +1031,12 @@ func TestServiceScopesAndErrors(t *testing.T) {
 	_, _, err = svc.Cancel(context.Background(), "missing")
 	require.ErrorIs(t, err, ErrRunNotFound)
 
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), time.Second)
+	defer cancelWait()
+	completed, err := svc.Wait(waitCtx, first.ID)
+	require.NoError(t, err)
+	require.Equal(t, StatusCompleted, completed.Status)
+
 	canceled, changed, err := svc.Cancel(context.Background(), first.ID)
 	require.NoError(t, err)
 	require.False(t, changed)

@@ -317,7 +317,10 @@ func lastRunnerCompletion(events <-chan *event.Event) *event.Event {
 }
 
 func completionText(completion *event.Event) string {
-	if completion != nil && completion.Response != nil && len(completion.Response.Choices) > 0 {
+	if completion == nil {
+		return "(no assistant text)"
+	}
+	if completion.Response != nil && len(completion.Response.Choices) > 0 {
 		if content := completion.Response.Choices[0].Message.Content; content != "" {
 			return content
 		}

@@ -28,6 +28,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -39,7 +40,14 @@ import (
 const (
 	functionToolType       = "function"
 	claudeMythosPreview    = "claude-mythos-preview"
+	claudeFable5           = "claude-fable-5"
+	claudeMythos5          = "claude-mythos-5"
+	claudeOpus5            = "claude-opus-5"
+	claudeSonnet5          = "claude-sonnet-5"
+	claudeOpus48           = "claude-opus-4-8"
+	claudeOpus48Alias      = "claude-4.8-opus"
 	claudeOpus47           = "claude-opus-4-7"
+	claudeOpus47Alias      = "claude-4.7-opus"
 	claudeOpus46           = "claude-opus-4-6"
 	claudeOpus46Alias      = "claude-4.6-opus"
 	claudeSonnet46         = "claude-sonnet-4-6"
@@ -158,6 +166,37 @@ func (m *Model) runChatRequestCallback(
 	m.chatRequestCallback(ctx, chatRequest)
 }
 
+func disableChatRequestTools(request *anthropic.MessageNewParams) {
+	if request == nil {
+		return
+	}
+	request.Tools = nil
+	request.ToolChoice = anthropic.ToolChoiceUnionParam{}
+	if override, ok := request.Overrides(); ok {
+		if filtered, ok := imodelrequest.FilterToolControlObject(override); ok {
+			request.SetExtraFields(filtered)
+		}
+		return
+	}
+	if fields := request.ExtraFields(); len(fields) > 0 {
+		request.SetExtraFields(
+			imodelrequest.FilterToolControlFields(fields, true),
+		)
+	}
+}
+
+func (m *Model) requestOptions(ctx context.Context) []option.RequestOption {
+	if !imodelrequest.ToolsDisabled(ctx) {
+		return m.anthropicRequestOptions
+	}
+	opts := append([]option.RequestOption(nil), m.anthropicRequestOptions...)
+	return append(
+		opts,
+		option.WithJSONDel("tools"),
+		option.WithJSONDel("tool_choice"),
+	)
+}
+
 func (m *Model) runChatResponseCallback(
 	ctx context.Context,
 	chatRequest *anthropic.MessageNewParams,
@@ -215,6 +254,9 @@ func (m *Model) GenerateContent(
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
+	if imodelrequest.ToolsDisabled(ctx) {
+		disableChatRequestTools(chatRequest)
+	}
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
@@ -236,37 +278,20 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	// Determine max input tokens using priority: user config > auto calculation > default.
-	maxInputTokens := m.maxInputTokens
-	if maxInputTokens <= 0 {
-		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := m.contextWindow
-		if contextWindow <= 0 {
-			contextWindow = imodel.ResolveContextWindow(m.name)
-		}
-		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
-			// Use custom parameters if any are set.
-			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
-				contextWindow,
-				m.protocolOverheadTokens,
-				m.reserveOutputTokens,
-				m.inputTokensFloor,
-				m.safetyMarginRatio,
-				m.maxInputTokensRatio,
-			)
-		} else {
-			// Use default parameters.
-			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
-		}
+	maxInputTokens := m.InputTokenBudget(ctx, request)
+	if m.maxInputTokens <= 0 {
 		log.DebugfContext(
 			ctx,
 			"auto-calculated max input tokens: model=%s, "+
-				"contextWindow=%d, maxInputTokens=%d",
+				"maxInputTokens=%d",
 			m.name,
-			contextWindow,
 			maxInputTokens,
 		)
 	}
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "anthropic.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
@@ -277,7 +302,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in anthropic.Model",
 				err,
 			)
-			modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "anthropic.Model", request, tailored,
+			)
 			return
 		}
 		log.WarnContext(
@@ -288,7 +315,31 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "anthropic.Model", request, tailored,
+	)
+}
+
+// InputTokenBudget returns the same input budget used by token tailoring.
+func (m *Model) InputTokenBudget(_ context.Context, _ *model.Request) int {
+	if m.maxInputTokens > 0 {
+		return m.maxInputTokens
+	}
+	contextWindow := m.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = imodel.ResolveContextWindow(m.name)
+	}
+	if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
+		return imodel.CalculateMaxInputTokensWithParams(
+			contextWindow,
+			m.protocolOverheadTokens,
+			m.reserveOutputTokens,
+			m.inputTokensFloor,
+			m.safetyMarginRatio,
+			m.maxInputTokensRatio,
+		)
+	}
+	return imodel.CalculateMaxInputTokens(contextWindow)
 }
 
 // buildChatRequest builds the chat request for the Anthropic API.
@@ -323,10 +374,10 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	if len(systemPrompts) > 0 {
 		chatRequest.System = systemPrompts
 	}
-	if mt := model.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
+	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
 		chatRequest.MaxTokens = int64(*mt)
 	}
-	if chatRequest.MaxTokens < int64(model.MinValidCompletionTokens) {
+	if chatRequest.MaxTokens < int64(imodel.MinValidCompletionTokens) {
 		chatRequest.MaxTokens = 4096
 	}
 	if request.Temperature != nil {
@@ -352,7 +403,7 @@ func (m *Model) applyThinkingConfig(
 		return nil
 	}
 	if !*request.ThinkingEnabled {
-		if isClaudeMythosPreview(m.name) {
+		if isAlwaysThinking(m.name) {
 			return fmt.Errorf("anthropic: thinking cannot be disabled for model %s", m.name)
 		}
 		if !supportsAdaptiveThinking(m.name) {
@@ -388,7 +439,14 @@ func supportsAdaptiveThinking(modelName string) bool {
 	return modelNameMatches(
 		modelName,
 		claudeMythosPreview,
+		claudeFable5,
+		claudeMythos5,
+		claudeOpus5,
+		claudeSonnet5,
+		claudeOpus48,
+		claudeOpus48Alias,
 		claudeOpus47,
+		claudeOpus47Alias,
 		claudeOpus46,
 		claudeOpus46Alias,
 		claudeSonnet46,
@@ -396,8 +454,12 @@ func supportsAdaptiveThinking(modelName string) bool {
 	)
 }
 
-func isClaudeMythosPreview(modelName string) bool {
-	return modelNameMatches(modelName, claudeMythosPreview)
+// isAlwaysThinking reports whether a model thinks unconditionally, so that
+// `thinking.type=disabled` is not merely ignored but rejected by the API.
+// Sending it for one of these turns a caller's explicit ThinkingEnabled=false
+// into a 400, so the request is refused here with a message naming the model.
+func isAlwaysThinking(modelName string) bool {
+	return modelNameMatches(modelName, claudeMythosPreview, claudeFable5, claudeMythos5)
 }
 
 func modelNameMatches(modelName string, targets ...string) bool {
@@ -541,7 +603,7 @@ func (m *Model) handleNonStreamingResponse(
 	responseChan chan<- *model.Response,
 ) {
 	// Issue non-streaming request.
-	message, err := m.client.Messages.New(ctx, chatRequest, m.anthropicRequestOptions...)
+	message, err := m.client.Messages.New(ctx, chatRequest, m.requestOptions(ctx)...)
 	if err != nil {
 		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
 		return
@@ -590,18 +652,15 @@ func (m *Model) handleNonStreamingResponse(
 }
 
 // handleStreamingResponse sends a streaming request to the Anthropic API and
-// emits partial deltas followed by a final response.
+// emits partial deltas followed by a final response. Transport-level failures
+// that occur before any caller-visible chunk is delivered to responseChan are
+// retried when WithStreamRetry opted in, using exponential backoff.
 //
-// Transport-level interruptions that occur BEFORE the first chunk is emitted
-// to responseChan are retried up to m.streamMaxRetries times using
-// exponential backoff. This is load-bearing for long-running workflows
-// because go-retryablehttp at the transport layer cannot retry mid-stream
-// connection resets (the HTTP response has already returned 200 OK by the
-// time the stream dies).
-//
-// Once any partial content has been delivered downstream we intentionally do
-// NOT retry; the caller is responsible for restarting the request from a
-// known state to avoid duplicate or interleaved chunks.
+// Each attempt keeps the Anthropic SDK's request retry policy (429/5xx/
+// Retry-After). The outer loop retries whole streams after that attempt
+// finishes with a truncated SSE body or other mid-stream transport failure.
+// Once any partial content or WithChatChunkCallback has been delivered, the
+// error is surfaced immediately — retrying would leak duplicate tokens.
 func (m *Model) handleStreamingResponse(
 	ctx context.Context,
 	chatRequest anthropic.MessageNewParams,
@@ -622,24 +681,21 @@ func (m *Model) handleStreamingResponse(
 			}
 			return
 		}
-		// Don't retry context cancellation — the run is being torn down.
-		if errors.Is(streamErr, context.Canceled) ||
-			errors.Is(streamErr, context.DeadlineExceeded) {
+		// Only treat parent-context cancellation as a hard stop. Attempt-local
+		// deadlines from option.WithRequestTimeout wrap DeadlineExceeded while
+		// the caller's ctx can still be live and should remain retryable.
+		if parentErr := ctx.Err(); parentErr != nil {
 			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
 		}
 		// Don't retry after any caller-visible output: partial responses on
 		// responseChan or raw chunk callbacks via WithChatChunkCallback.
-		// Retrying would leak chunks from the failed attempt or restart the
-		// stream from scratch after the caller already observed events.
 		if sawCallerOutput {
 			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
 		}
-		// Only retry transport-level errors that look transient when stream
-		// retry is enabled. Zero-option models surface the original error.
 		if !isStreamRetryableError(streamErr) || maxRetries == 0 {
 			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
@@ -683,19 +739,6 @@ func (m *Model) effectiveStreamMaxRetries() int {
 	return m.streamMaxRetries
 }
 
-// streamingRequestOptions returns per-request options for streaming calls.
-// When outer stream retry is enabled, SDK-level retries are disabled so the
-// documented WithStreamRetry budget is not multiplied by the client default.
-func (m *Model) streamingRequestOptions() []option.RequestOption {
-	if !m.streamRetryEnabled {
-		return m.anthropicRequestOptions
-	}
-	opts := make([]option.RequestOption, 0, len(m.anthropicRequestOptions)+1)
-	opts = append(opts, m.anthropicRequestOptions...)
-	opts = append(opts, option.WithMaxRetries(0))
-	return opts
-}
-
 // runStreamingAttempt performs a single streaming attempt and returns:
 //   - finalResponse: the terminal response when streaming completed cleanly
 //     (caller is responsible for delivering it to responseChan).
@@ -709,8 +752,7 @@ func (m *Model) runStreamingAttempt(
 	chatRequest anthropic.MessageNewParams,
 	responseChan chan<- *model.Response,
 ) (finalResponse *model.Response, callbackAcc *anthropic.Message, streamErr error, sawCallerOutput bool) {
-	streamOpts := m.streamingRequestOptions()
-	stream := m.client.Messages.NewStreaming(ctx, chatRequest, streamOpts...)
+	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.requestOptions(ctx)...)
 	defer stream.Close()
 	acc := newStreamingMessageAccumulator()
 
@@ -745,7 +787,10 @@ loop:
 		streamErr = stream.Err()
 	}
 	if streamErr == nil {
-		if err := acc.Finalize(); err != nil {
+		if !acc.sawMessageStop {
+			// Quiet scanner EOF without message_stop is premature termination.
+			streamErr = errors.New("anthropic stream ended without message_stop")
+		} else if err := acc.Finalize(); err != nil {
 			streamErr = err
 		} else {
 			finalResponse = buildStreamingFinalResponse(acc.Message())
@@ -800,6 +845,7 @@ var streamRetryableErrorPatterns = []string{
 	"server misbehaving",
 	"no such host",
 	"overloaded",
+	"stream ended without message_stop",
 }
 
 // streamRetryableHTTPStatusCodes are HTTP status codes worth retrying when they
@@ -842,6 +888,10 @@ func isStreamRetryableError(err error) bool {
 			return true
 		}
 	}
+	// Attempt-local deadlines remain retryable when the parent context is live.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
 	return false
 }
 
@@ -869,6 +919,7 @@ type streamingMessageAccumulator struct {
 	message             anthropic.Message
 	inputDeltaStartedAt []bool
 	finalized           bool
+	sawMessageStop      bool
 }
 
 func newStreamingMessageAccumulator() *streamingMessageAccumulator {
@@ -896,6 +947,7 @@ func (a *streamingMessageAccumulator) Accumulate(event anthropic.MessageStreamEv
 		a.message.StopSequence = event.Delta.StopSequence
 		a.message.Usage.OutputTokens = event.Usage.OutputTokens
 	case anthropic.MessageStopEvent:
+		a.sawMessageStop = true
 		return a.finalize()
 	case anthropic.ContentBlockStartEvent:
 		var block anthropic.ContentBlockUnion
@@ -1241,13 +1293,25 @@ func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 	var result []anthropic.ToolUnionParam
 	for _, t := range toolorder.SortedTools(tools) {
 		declaration := t.Declaration()
+		effectiveSchemaType := declaration.InputSchema.Type
+		// The Anthropic SDK marshals an empty type as "object". Use that
+		// effective type when normalizing properties so a typed nil map does
+		// not become JSON null for an implicit object schema.
+		if effectiveSchemaType == "" {
+			effectiveSchemaType = "object"
+		}
+		properties := declaration.InputSchema.Properties
+		// Some Anthropic-compatible endpoints reject null properties for object schemas.
+		if effectiveSchemaType == "object" && properties == nil {
+			properties = map[string]*tool.Schema{}
+		}
 		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        declaration.Name,
 				Description: anthropic.String(buildToolDescription(declaration)),
 				InputSchema: anthropic.ToolInputSchemaParam{
 					Type:       constant.Object(declaration.InputSchema.Type),
-					Properties: declaration.InputSchema.Properties,
+					Properties: properties,
 					Required:   declaration.InputSchema.Required,
 				},
 			},

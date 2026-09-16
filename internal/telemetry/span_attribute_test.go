@@ -91,6 +91,51 @@ func TestAppendStringAttribute_OmitSkipsMarshal(t *testing.T) {
 	}
 }
 
+func TestAppendStringAttributeWithRule_UsesProvidedRule(t *testing.T) {
+	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
+
+	key := semconvtrace.KeyGenAIInputMessages
+	marshal := func() ([]byte, error) {
+		return []byte(`[{"role":"user","content":"hello"}]`), nil
+	}
+	dropRule := AttributeRule{
+		Operation: OperationChat,
+		Key:       key,
+		Action:    AttributeDrop,
+	}
+
+	var marshalCalls int
+	SetSpanAttributePolicy(AppendAttributeRule(SpanAttributePolicy{}, AttributeRule{
+		Operation: OperationChat,
+		Key:       key,
+		Action:    AttributeCapture,
+	}))
+	attrs := appendStringAttributeWithRule(nil, OperationChat, key, "", func() ([]byte, error) {
+		marshalCalls++
+		return marshal()
+	}, dropRule)
+	if len(attrs) != 0 {
+		t.Fatal("expected provided drop rule to skip attribute")
+	}
+	if marshalCalls != 0 {
+		t.Fatal("expected provided drop rule to skip marshal")
+	}
+
+	marshalCalls = 0
+	SetSpanAttributePolicy(AppendAttributeRule(SpanAttributePolicy{}, dropRule))
+	captureRule := AttributeRule{Action: AttributeCapture}
+	attrs = appendStringAttributeWithRule(nil, OperationChat, key, "", func() ([]byte, error) {
+		marshalCalls++
+		return marshal()
+	}, captureRule)
+	if len(attrs) != 1 {
+		t.Fatalf("expected provided capture rule to write attribute, got %d", len(attrs))
+	}
+	if marshalCalls != 1 {
+		t.Fatal("expected provided capture rule to marshal")
+	}
+}
+
 func TestSetBytesAttribute_MaxBytesOmitOverLimitSkipsMarshal(t *testing.T) {
 	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
 

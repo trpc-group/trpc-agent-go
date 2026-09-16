@@ -454,7 +454,12 @@ func TestService_GetEventWindowMalformedHashIdxBeforeNeighbor(t *testing.T) {
 	require.NoError(t, svc.AppendEvent(ctx, sess, &anchor))
 
 	eventDataKey := hashidx.GetEventDataKey(svc.opts.keyPrefix, key)
+	eventTimeIndexKey := hashidx.GetEventTimeIndexKey(svc.opts.keyPrefix, key)
 	require.NoError(t, svc.redisClient.HSet(ctx, eventDataKey, "bad", "{bad-json").Err())
+	require.NoError(t, svc.redisClient.ZAdd(ctx, eventTimeIndexKey, goredis.Z{
+		Score:  float64(anchor.Timestamp.Add(-time.Hour).UnixNano()),
+		Member: "bad",
+	}).Err())
 
 	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
 		Key:           key,

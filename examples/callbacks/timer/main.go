@@ -192,9 +192,6 @@ func (e *toolTimerExample) runExample(ctx context.Context) error {
 			fmt.Printf("❌ Error: %v\n", err)
 			fmt.Println() // Add spacing after error.
 		}
-		// Wait briefly for AfterAgentCallback to complete its output.
-		// This ensures timing information appears before the next prompt.
-		time.Sleep(50 * time.Millisecond)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -233,11 +230,21 @@ func (e *toolTimerExample) startNewSession() {
 func (e *toolTimerExample) processResponse(eventChan <-chan *event.Event) error {
 	fmt.Print("🤖 Assistant: ")
 
+	// Drain the full event channel so AfterAgentCallback can finish
+	// printing before the next prompt. AfterAgent runs after remaining
+	// events are forwarded; returning on the first final response used
+	// to require a short sleep to wait for that log.
+	finalSeen := false
 	for event := range eventChan {
+		if finalSeen {
+			continue
+		}
+
 		// Handle errors.
 		if event.Error != nil {
 			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
-			return nil
+			finalSeen = true
+			continue
 		}
 
 		// Handle tool calls.
@@ -271,7 +278,7 @@ func (e *toolTimerExample) processResponse(eventChan <-chan *event.Event) error 
 		// Check if this is the final event.
 		if event.IsFinalResponse() {
 			fmt.Printf("\n")
-			break
+			finalSeen = true
 		}
 	}
 

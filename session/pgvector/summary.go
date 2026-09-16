@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
@@ -51,10 +52,14 @@ func (s *Service) CreateSessionSummary(
 		return nil
 	}
 
+	ctx, att := isummary.BeginAttempt(ctx, sess, filterKey)
+	defer att.Report()
+
 	updated, err := isummary.SummarizeSession(
 		ctx, s.opts.summarizer,
 		sess, filterKey, force,
 	)
+	att.Summarized(updated, err)
 	if err != nil || !updated {
 		return err
 	}
@@ -64,14 +69,15 @@ func (s *Service) CreateSessionSummary(
 	sess.SummariesMu.RUnlock()
 
 	if sum == nil {
+		att.Persisted(isummary.PersistNoSummary)
 		return nil
 	}
 
 	summaryBytes, err := json.Marshal(sum)
 	if err != nil {
-		return fmt.Errorf(
+		return att.RecordWrite(fmt.Errorf(
 			"marshal summary failed: %w", err,
-		)
+		))
 	}
 
 	_, err = s.pgClient.ExecContext(ctx,
@@ -95,10 +101,11 @@ func (s *Service) CreateSessionSummary(
 		sum.UpdatedAt, nil,
 	)
 	if err != nil {
-		return fmt.Errorf(
+		return att.RecordWrite(fmt.Errorf(
 			"upsert summary failed: %w", err,
-		)
+		))
 	}
+	att.Persisted(isummary.PersistStored)
 	return nil
 }
 
@@ -206,13 +213,13 @@ func (s *Service) GetSessionSummaryText(
 			WHERE app_name = $1 AND user_id = $2
 			AND session_id = $3 AND filter_key = $4
 			AND (expires_at IS NULL
-				OR expires_at > NOW() AT TIME ZONE 'localtime')
-			AND updated_at >= $5
+				OR expires_at > $5)
+			AND updated_at >= $6
 			AND deleted_at IS NULL`,
 			s.tableSessionSummaries,
 		),
 		key.AppName, key.UserID, key.SessionID,
-		filterKey, sess.CreatedAt,
+		filterKey, time.Now(), sess.CreatedAt,
 	)
 	if err == nil && summaryText != "" {
 		return summaryText, true
@@ -251,14 +258,14 @@ func (s *Service) GetSessionSummaryText(
 				AND session_id = $3
 				AND filter_key = $4
 				AND (expires_at IS NULL
-					OR expires_at > NOW() AT TIME ZONE 'localtime')
-				AND updated_at >= $5
+					OR expires_at > $5)
+				AND updated_at >= $6
 				AND deleted_at IS NULL`,
 				s.tableSessionSummaries,
 			),
 			key.AppName, key.UserID, key.SessionID,
 			session.SummaryFilterKeyAllContents,
-			sess.CreatedAt,
+			time.Now(), sess.CreatedAt,
 		)
 		if err == nil && summaryText != "" {
 			return summaryText, true

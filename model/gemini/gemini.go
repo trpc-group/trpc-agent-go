@@ -16,11 +16,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"google.golang.org/genai"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -177,7 +179,13 @@ func (m *Model) GenerateContent(
 	// Apply token tailoring if configured.
 	m.applyTokenTailoring(ctx, request)
 	chatRequest := m.convertMessages(request.Messages)
-	generateConfig := m.buildChatConfig(request)
+	if len(chatRequest) == 0 {
+		return nil, errors.New("gemini: no content after message conversion")
+	}
+	generateConfig := m.buildChatConfigWithToolControl(
+		request,
+		imodelrequest.ToolsDisabled(ctx),
+	)
 	// Execute callback synchronously before starting the goroutine
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
@@ -602,37 +610,20 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	// Determine max input tokens using priority: user config > auto calculation > default.
-	maxInputTokens := m.maxInputTokens
-	if maxInputTokens <= 0 {
-		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := m.contextWindow
-		if contextWindow <= 0 {
-			contextWindow = imodel.ResolveContextWindow(m.name)
-		}
-		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
-			// Use custom parameters if any are set.
-			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
-				contextWindow,
-				m.protocolOverheadTokens,
-				m.reserveOutputTokens,
-				m.inputTokensFloor,
-				m.safetyMarginRatio,
-				m.maxInputTokensRatio,
-			)
-		} else {
-			// Use default parameters.
-			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
-		}
+	maxInputTokens := m.InputTokenBudget(ctx, request)
+	if m.maxInputTokens <= 0 {
 		log.DebugfContext(
 			ctx,
 			"auto-calculated max input tokens: model=%s, "+
-				"contextWindow=%d, maxInputTokens=%d",
+				"maxInputTokens=%d",
 			m.name,
-			contextWindow,
 			maxInputTokens,
 		)
 	}
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "gemini.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
@@ -643,7 +634,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in gemini.Model",
 				err,
 			)
-			modeltailoring.ApplyResult(ctx, "gemini.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "gemini.Model", request, tailored,
+			)
 			return
 		}
 		log.WarnContext(
@@ -654,11 +647,42 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "gemini.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "gemini.Model", request, tailored,
+	)
+}
+
+// InputTokenBudget returns the same input budget used by token tailoring.
+func (m *Model) InputTokenBudget(_ context.Context, _ *model.Request) int {
+	if m.maxInputTokens > 0 {
+		return m.maxInputTokens
+	}
+	contextWindow := m.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = imodel.ResolveContextWindow(m.name)
+	}
+	if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
+		return imodel.CalculateMaxInputTokensWithParams(
+			contextWindow,
+			m.protocolOverheadTokens,
+			m.reserveOutputTokens,
+			m.inputTokensFloor,
+			m.safetyMarginRatio,
+			m.maxInputTokensRatio,
+		)
+	}
+	return imodel.CalculateMaxInputTokens(contextWindow)
 }
 
 // buildChatConfig converts our Request to Gemini request config.
 func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentConfig {
+	return m.buildChatConfigWithToolControl(request, false)
+}
+
+func (m *Model) buildChatConfigWithToolControl(
+	request *model.Request,
+	disableToolFields bool,
+) *genai.GenerateContentConfig {
 	chatRequest := &genai.GenerateContentConfig{
 		Tools: m.convertTools(request.Tools),
 	}
@@ -680,8 +704,12 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 		chatRequest.ResponseJsonSchema = request.StructuredOutput.JSONSchema
 	}
 
-	if mt := model.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
-		chatRequest.MaxOutputTokens = model.MaxTokensToInt32(*mt)
+	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
+		if *mt > math.MaxInt32 {
+			chatRequest.MaxOutputTokens = math.MaxInt32
+		} else {
+			chatRequest.MaxOutputTokens = int32(*mt)
+		}
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = genai.Ptr(float32(*request.Temperature))
@@ -712,7 +740,22 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 		requestExtras,
 		rewriteBypassThoughtSignatures,
 	)
+	if disableToolFields {
+		chatRequest.Tools = nil
+		chatRequest.ToolConfig = nil
+		chatRequest.HTTPOptions.ExtrasRequestProvider =
+			chainExtrasRequestProvider(
+				chatRequest.HTTPOptions.ExtrasRequestProvider,
+				deleteGeminiToolControls,
+			)
+	}
 	return chatRequest
+}
+
+func deleteGeminiToolControls(body map[string]any) map[string]any {
+	delete(body, "tools")
+	delete(body, "toolConfig")
+	return body
 }
 
 // buildThinkingConfig converts our Request to Gemini request ThinkingConfig
@@ -733,7 +776,7 @@ func normalizeThinkingLevel(level string) genai.ThinkingLevel {
 	return genai.ThinkingLevel(strings.TrimSpace(level))
 }
 
-// convertMessages converts our Message format to OpenAI's format.
+// convertMessages converts model messages to Gemini contents.
 func (m *Model) convertMessages(messages []model.Message) []*genai.Content {
 	result := make([]*genai.Content, 0, len(messages))
 
@@ -743,7 +786,7 @@ func (m *Model) convertMessages(messages []model.Message) []*genai.Content {
 	return result
 }
 
-// convertMessageContent converts message content to user message content union.
+// convertMessageContent converts one model message to at most one Gemini content.
 func (m *Model) convertMessageContent(
 	msg model.Message,
 ) []*genai.Content {
@@ -766,42 +809,35 @@ func (m *Model) convertMessageContent(
 		}
 		return []*genai.Content{genai.NewContentFromParts([]*genai.Part{part}, genai.RoleUser)}
 	}
-	var (
-		contentParts []*genai.Content
-	)
+	parts := make([]*genai.Part, 0, 1+len(msg.ContentParts)+len(msg.ToolCalls))
 	role := genai.RoleUser
 	if msg.Role == model.RoleAssistant {
 		role = genai.RoleModel
 	}
+	messageSignature := thoughtSignatureFromString(msg.ReasoningSignature)
 	// Add Content as a text part if present.
 	if msg.Content != "" {
-		if signature := thoughtSignatureFromString(msg.ReasoningSignature); len(signature) > 0 {
-			contentParts = append(
-				contentParts,
-				genai.NewContentFromParts([]*genai.Part{{
-					Text:             msg.Content,
-					ThoughtSignature: signature,
-				}}, genai.Role(role)),
-			)
-		} else {
-			contentParts = append(
-				contentParts,
-				genai.NewContentFromText(msg.Content, genai.Role(role)),
-			)
-		}
+		parts = append(parts, &genai.Part{
+			Text:             msg.Content,
+			ThoughtSignature: messageSignature,
+		})
 	}
 	for _, part := range msg.ContentParts {
 		contentPart := m.convertContentPart(part)
 		if contentPart == nil {
 			continue
 		}
-		// For non-file or non-skipped file types, add to contentParts.
-		contentParts = append(contentParts, genai.NewContentFromParts([]*genai.Part{contentPart}, genai.Role(role)))
+		parts = append(parts, contentPart)
 	}
 	if toolCallParts := m.convertAssistantToolCallParts(msg.ToolCalls); len(toolCallParts) > 0 {
-		contentParts = append(contentParts, genai.NewContentFromParts(toolCallParts, genai.Role(role)))
+		parts = append(parts, toolCallParts...)
 	}
-	return contentParts
+	if len(parts) == 0 {
+		return nil
+	}
+	return []*genai.Content{
+		genai.NewContentFromParts(parts, genai.Role(role)),
+	}
 }
 
 // convertAssistantToolCallParts builds function-call parts for one assistant step.
@@ -824,17 +860,13 @@ func (m *Model) convertAssistantToolCallParts(toolCalls []model.ToolCall) []*gen
 }
 
 func assistantStepNeedsBypassSignature(toolCalls []model.ToolCall) bool {
-	hasEmitted := false
 	for _, toolCall := range toolCalls {
 		if toolCall.Function.Name == "" {
 			continue
 		}
-		hasEmitted = true
-		if len(thoughtSignatureFromExtraFields(toolCall.ExtraFields)) > 0 {
-			return false
-		}
+		return len(thoughtSignatureFromExtraFields(toolCall.ExtraFields)) == 0
 	}
-	return hasEmitted
+	return false
 }
 
 func (m *Model) convertToolCallPart(toolCall model.ToolCall, injectBypass bool) *genai.Part {
@@ -995,7 +1027,26 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 		if part.Audio == nil {
 			return nil
 		}
-		return genai.NewPartFromBytes(part.Audio.Data, part.Audio.Format)
+		mimeType := mediaMIMEType(part.Audio.Format, "audio")
+		if part.Audio.URL != "" {
+			return genai.NewPartFromURI(part.Audio.URL, mimeType)
+		}
+		if len(part.Audio.Data) == 0 {
+			return nil
+		}
+		return genai.NewPartFromBytes(part.Audio.Data, mimeType)
+	case model.ContentTypeVideo:
+		if part.Video == nil {
+			return nil
+		}
+		mimeType := mediaMIMEType(part.Video.Format, "video")
+		if part.Video.URL != "" {
+			return genai.NewPartFromURI(part.Video.URL, mimeType)
+		}
+		if len(part.Video.Data) == 0 {
+			return nil
+		}
+		return genai.NewPartFromBytes(part.Video.Data, mimeType)
 	case model.ContentTypeFile:
 		if part.File == nil {
 			return nil
@@ -1011,4 +1062,12 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 		return genai.NewPartFromBytes(part.File.Data, part.File.MimeType)
 	}
 	return nil
+}
+
+func mediaMIMEType(format, mediaType string) string {
+	format = strings.TrimSpace(format)
+	if format == "" || strings.Contains(format, "/") {
+		return format
+	}
+	return mediaType + "/" + format
 }
