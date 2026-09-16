@@ -10,6 +10,7 @@ package codeinterpreter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -75,11 +76,17 @@ func (t *processTestTransport) RoundTrip(req *http.Request) (*http.Response, err
 	return t.base.RoundTrip(req)
 }
 
+type processRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f processRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestRunProcessSandboxConnection(t *testing.T) {
 	for _, connectExisting := range []bool{false, true} {
 		for _, tc := range []struct {
 			name, version, refreshedVersion, stdin, authorization, wantAuthorization, wantError string
-			port                                                                                int
+			port, refreshedPort                                                                 int
 		}{
 			{name: "modern", version: "0.5.2", stdin: "data", port: 49984, wantAuthorization: "Basic cm9vdDo="},
 			{name: "legacy", version: "0.2.10", wantAuthorization: "Basic cm9vdDo="},
@@ -87,6 +94,7 @@ func TestRunProcessSandboxConnection(t *testing.T) {
 			{name: "custom modern user", version: "0.5.2", authorization: "Basic dXNlcjo=", wantAuthorization: "Basic dXNlcjo="},
 			{name: "unsupported stdin", version: "0.2.10", stdin: "data", wantError: "finite stdin requires envd >= 0.5.2"},
 			{name: "refresh version", refreshedVersion: "0.5.2", stdin: "data", wantAuthorization: "Basic cm9vdDo="},
+			{name: "refresh version and port", refreshedVersion: "0.5.2", stdin: "data", port: 49984, refreshedPort: 49985, wantAuthorization: "Basic cm9vdDo="},
 			{name: "unknown version", stdin: "data", wantError: "known envd version"},
 			{name: "unknown without stdin", wantAuthorization: "Basic cm9vdDo="},
 			{name: "invalid version", version: "bad", wantError: "invalid envd version"},
@@ -100,6 +108,9 @@ func TestRunProcessSandboxConnection(t *testing.T) {
 				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if strings.HasPrefix(r.URL.Path, "/process.Process/") {
 						port := tc.port
+						if tc.refreshedPort != 0 {
+							port = tc.refreshedPort
+						}
 						if port == 0 {
 							port = 49983
 						}
@@ -117,12 +128,14 @@ func TestRunProcessSandboxConnection(t *testing.T) {
 					}
 					assert.Equal(t, "api-key", r.Header.Get("X-API-Key"))
 					version := tc.version
+					port := tc.port
 					if r.Method == http.MethodGet {
 						metadataReads.Add(1)
 						version = tc.refreshedVersion
+						port = tc.refreshedPort
 					}
 					w.Header().Set("Content-Type", "application/json")
-					_, _ = fmt.Fprintf(w, `{"sandboxID":"sandbox","clientID":"worker","domain":"actual.test","envdVersion":%q,"envdPort":%d,"envdAccessToken":"envd-token","trafficAccessToken":"traffic-token"}`, version, tc.port)
+					_, _ = fmt.Fprintf(w, `{"sandboxID":"sandbox","clientID":"worker","domain":"actual.test","envdVersion":%q,"envdPort":%d,"envdAccessToken":"envd-token","trafficAccessToken":"traffic-token"}`, version, port)
 				}))
 				defer server.Close()
 				target, err := url.Parse(server.URL)
@@ -186,6 +199,39 @@ func TestRunProcessMetadataRefreshHonorsCancellation(t *testing.T) {
 	_, err := RunProcess(ctx, s, envdprocess.Request{Cmd: "cat", Stdin: "data"})
 	require.ErrorContains(t, err, "discover envd stdin capability")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestRunProcessMetadataRefreshTimeout(t *testing.T) {
+	for _, timeout := range []time.Duration{0, -time.Second, 5 * time.Second} {
+		t.Run(timeout.String(), func(t *testing.T) {
+			wantTimeout := timeout
+			if wantTimeout <= 0 {
+				wantTimeout = DefaultRequestTimeout * time.Second
+			}
+			metadataErr := errors.New("metadata unavailable")
+			before := time.Now()
+			requests := 0
+			client := &http.Client{Transport: processRoundTripper(func(req *http.Request) (*http.Response, error) {
+				requests++
+				assert.Equal(t, http.MethodGet, req.Method)
+				assert.Equal(t, "/sandboxes/sandbox", req.URL.Path)
+				deadline, ok := req.Context().Deadline()
+				require.True(t, ok, "metadata discovery must have a bounded lifetime")
+				assert.False(t, deadline.Before(before.Add(wantTimeout)))
+				assert.False(t, deadline.After(time.Now().Add(wantTimeout)))
+				return nil, metadataErr
+			})}
+			s := &Sandbox{id: "sandbox", connection: &ConnectionConfig{
+				APIURL: "https://api.test", HTTPClient: client, RequestTimeout: timeout,
+			}}
+			result, err := RunProcess(context.Background(), s, envdprocess.Request{Cmd: "cat", Stdin: "data"})
+			require.ErrorIs(t, err, metadataErr)
+			require.ErrorContains(t, err, "discover envd stdin capability")
+			assert.Equal(t, envdprocess.Result{}, result)
+			assert.Equal(t, 1, requests, "failed discovery must not launch a process")
+			assert.Zero(t, client.Timeout, "metadata discovery must not modify the shared client")
+		})
+	}
 }
 
 func TestRunProcessLoopbackDebug(t *testing.T) {

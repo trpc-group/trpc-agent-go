@@ -353,6 +353,27 @@ func TestRunProgramConcurrentRequests(t *testing.T) {
 	}
 }
 
+func TestRunProgramUninitializedSandbox(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ce   *CodeExecutor
+	}{
+		{name: "missing executor"},
+		{name: "missing sandbox", ce: &CodeExecutor{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := &workspaceRuntime{ce: tc.ce}
+			result, err := runtime.RunProgram(context.Background(),
+				codeexecutor.Workspace{Path: "/tmp/ws"}, codeexecutor.RunProgramSpec{Cmd: "true"})
+			require.ErrorContains(t, err, "sandbox not initialized")
+			assert.Empty(t, result.Stdout)
+			assert.Empty(t, result.Stderr)
+			assert.Zero(t, result.ExitCode)
+			assert.False(t, result.TimedOut)
+		})
+	}
+}
+
 func TestRunProgramBootstrapFailuresAndEOF(t *testing.T) {
 	if _, err := exec.LookPath("/bin/bash"); err != nil {
 		t.Skip("requires /bin/bash")

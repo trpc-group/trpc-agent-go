@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	process "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec/processconnect"
 )
 
 func TestRunRejectsInvalidInput(t *testing.T) {
@@ -1398,6 +1399,48 @@ func TestRunCleanupPreservesExecutionErrorClassification(t *testing.T) {
 			assert.NotErrorIs(t, err, context.Canceled)
 			assert.False(t, result.TimedOut)
 		})
+	}
+}
+
+// unregisteredProcessClient models a NotFound reply arriving at the cleanup
+// deadline. Returning it at the RPC boundary avoids the HTTP client's own
+// deadline error hiding the retry loop's exhausted cleanup budget.
+type unregisteredProcessClient struct {
+	processconnect.ProcessClient
+	signals []*process.SendSignalRequest
+}
+
+func (c *unregisteredProcessClient) SendSignal(ctx context.Context, req *connect.Request[process.SendSignalRequest]) (*connect.Response[process.SendSignalResponse], error) {
+	c.signals = append(c.signals, req.Msg)
+	<-ctx.Done()
+	return nil, connect.NewError(connect.CodeNotFound, errors.New("not registered"))
+}
+
+func TestRunUnregisteredProcessAtCleanupDeadline(t *testing.T) {
+	handler := &testProcessHandler{}
+	handler.start = func(context.Context, *connect.Request[process.StartRequest], *connect.ServerStream[process.StartResponse]) error {
+		return connect.NewError(connect.CodeUnavailable, errors.New("execution unavailable"))
+	}
+	client := newTestClient(t, handler, nil)
+	rpc := &unregisteredProcessClient{ProcessClient: client.processClient}
+	client.processClient = rpc
+	ctx := context.Background()
+	result, err := client.Run(ctx, Request{Cmd: "echo"})
+	require.NoError(t, ctx.Err())
+	require.ErrorContains(t, err, "execution unavailable")
+	require.ErrorContains(t, err, "tag cleanup was not confirmed")
+	require.ErrorIs(t, err, errRunCleanup)
+	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+	assert.NotErrorIs(t, err, context.DeadlineExceeded)
+	assert.NotErrorIs(t, err, context.Canceled)
+	assert.False(t, result.TimedOut)
+	assert.Zero(t, result.PID)
+	require.NotEmpty(t, rpc.signals)
+	tag := rpc.signals[0].Process.GetTag()
+	assert.NotEmpty(t, tag)
+	for _, signal := range rpc.signals {
+		assert.Equal(t, tag, signal.Process.GetTag())
+		assert.Equal(t, process.Signal_SIGNAL_SIGKILL, signal.Signal)
 	}
 }
 
