@@ -251,6 +251,21 @@ func TestSummaryCutoffTimeAndClone(t *testing.T) {
 	})
 }
 
+func TestSummaryPositionalLiteralCompatibility(t *testing.T) {
+	updatedAt := time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)
+	sum := Summary{
+		"summary",
+		[]string{"topic"},
+		updatedAt,
+		NewSummaryBoundary("branch", updatedAt),
+	}
+
+	require.Equal(t, "summary", sum.Summary)
+	require.Equal(t, []string{"topic"}, sum.Topics)
+	require.Equal(t, updatedAt, sum.UpdatedAt)
+	require.Equal(t, "branch", sum.Boundary.FilterKey)
+}
+
 func TestSummaryPrefixCutoff(t *testing.T) {
 	base := time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)
 
@@ -2141,6 +2156,34 @@ func TestSession_Clone_Concurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestSession_Clone_ConcurrentUpdateUserSession(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	updatedAt := sess.UpdatedAt
+	ev := &event.Event{}
+	start := make(chan struct{})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			sess.Clone()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			sess.UpdateUserSession(ev)
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+	assert.True(t, sess.UpdatedAt.After(updatedAt))
 }
 
 func TestNewSession(t *testing.T) {

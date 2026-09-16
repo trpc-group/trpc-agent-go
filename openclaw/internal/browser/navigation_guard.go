@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/searchresult"
 )
 
 type navigationPolicy struct {
@@ -23,6 +25,7 @@ type navigationPolicy struct {
 	AllowLoopback    bool
 	AllowPrivateNet  bool
 	AllowFileURLs    bool
+	AllowSearchPages bool
 	AllowedFileRoots []string
 }
 
@@ -102,6 +105,13 @@ func (p navigationPolicy) Validate(raw string) error {
 		}
 	}
 	return fmt.Errorf("browser domain is not allowed: %s", host)
+}
+
+func (p navigationPolicy) BlockedSearchResultPage(raw string) (string, bool) {
+	if p.AllowSearchPages {
+		return "", false
+	}
+	return searchresult.Match(raw)
 }
 
 func (p navigationPolicy) fileURLAllowed(u *url.URL) bool {

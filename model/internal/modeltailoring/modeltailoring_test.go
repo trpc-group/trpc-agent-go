@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -45,7 +46,9 @@ func TestApplyResult_PreservesOriginalOnEmptyResult(t *testing.T) {
 			}
 			req := &model.Request{Messages: append([]model.Message(nil), original...)}
 
-			updated := ApplyResult(context.Background(), "test.Model", req, tt.tailored)
+			updated := ApplyResult(
+				context.Background(), "test.Model", req, tt.tailored,
+			)
 
 			require.False(t, updated)
 			require.Equal(t, original, req.Messages)
@@ -60,7 +63,9 @@ func TestApplyResult_AppliesTailoredMessages(t *testing.T) {
 		model.NewUserMessage("q"),
 	}}
 
-	updated := ApplyResult(context.Background(), "test.Model", req, tailored)
+	updated := ApplyResult(
+		context.Background(), "test.Model", req, tailored,
+	)
 
 	require.True(t, updated)
 	require.Equal(t, tailored, req.Messages)
@@ -70,8 +75,43 @@ func TestApplyResult_AllowsEmptyResultForEmptyOriginal(t *testing.T) {
 	req := &model.Request{}
 	tailored := []model.Message{}
 
-	updated := ApplyResult(context.Background(), "test.Model", req, tailored)
+	updated := ApplyResult(
+		context.Background(), "test.Model", req, tailored,
+	)
 
 	require.True(t, updated)
 	require.Equal(t, tailored, req.Messages)
+}
+
+func TestObserveChangesReportsMutatingStrategy(t *testing.T) {
+	ctx, observer := modelrequest.ObserveTokenTailoring(
+		context.Background(),
+		nil,
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("question"),
+	}}
+	finishObservation := ObserveChanges(ctx, "test.Model", req, 100)
+	req.Messages[0].Content = "mutated in place"
+	finishObservation()
+
+	require.Equal(t, []modelrequest.TokenTailoringRecord{{
+		Provider:       "test.Model",
+		MaxInputTokens: 100,
+		BeforeMessages: 1,
+		AfterMessages:  1,
+	}}, observer.Snapshot())
+}
+
+func TestObserveChangesDoesNotReportUnchangedRequest(t *testing.T) {
+	ctx, observer := modelrequest.ObserveTokenTailoring(
+		context.Background(),
+		nil,
+	)
+	messages := []model.Message{model.NewUserMessage("question")}
+	req := &model.Request{Messages: messages}
+
+	finishObservation := ObserveChanges(ctx, "test.Model", req, 100)
+	finishObservation()
+	require.Empty(t, observer.Snapshot())
 }

@@ -19,6 +19,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantmemory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 )
@@ -44,6 +46,9 @@ type memoryExtractor struct {
 	model    model.Model
 	prompt   string
 	checkers []Checker
+
+	updatePolicy               UpdatePolicy
+	assistantEpisodeExtraction bool
 
 	enabledTools map[string]struct{}
 
@@ -119,64 +124,92 @@ func (e *memoryExtractor) Extract(
 	if len(messages) == 0 {
 		return nil, nil
 	}
-
-	// Build request with tool declarations.
-	tools := backgroundTools
-	if len(e.enabledTools) > 0 {
-		tools = filterTools(backgroundTools, e.enabledTools)
+	effective := e
+	if policy, managed := updatepolicy.WorkerConfiguration(ctx); managed {
+		configured := normalizeUpdatePolicy(UpdatePolicy(policy))
+		if configured != e.configuredUpdatePolicy() {
+			copy := *e
+			copy.updatePolicy = configured
+			effective = &copy
+		}
 	}
+	if effective.assistantEpisodeExtraction {
+		if enabled, managed := assistantmemory.WorkerConfiguration(ctx); managed && !enabled {
+			return effective.extractOperations(ctx, messages, existing)
+		}
+		return effective.extractWithAssistantEpisodes(ctx, messages, existing)
+	}
+	return effective.extractOperations(ctx, messages, existing)
+}
+
+func (e *memoryExtractor) extractOperations(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*Operation, error) {
 	req := &model.Request{
 		Messages: e.buildMessages(ctx, messages, existing),
-		Tools:    tools,
+		Tools:    e.extractionTools(),
 	}
-
-	// Call model.
-	ctx, rspChan, err := e.runBeforeModelCallbacks(ctx, req)
+	var ops []*Operation
+	_, err := e.runExtractionRequest(ctx, req, func(
+		callCtx context.Context,
+		call model.ToolCall,
+	) {
+		if op := e.parseToolCall(callCtx, call); op != nil {
+			ops = append(ops, op)
+		}
+	})
 	if err != nil {
 		return nil, err
+	}
+	return ops, nil
+}
+
+func (e *memoryExtractor) runExtractionRequest(
+	ctx context.Context,
+	req *model.Request,
+	handleCall func(context.Context, model.ToolCall),
+) (context.Context, error) {
+	ctx, rspChan, err := e.runBeforeModelCallbacks(ctx, req)
+	if err != nil {
+		return ctx, err
 	}
 	if rspChan == nil {
 		rspChan, err = e.model.GenerateContent(ctx, req)
 		if err != nil {
 			log.WarnfContext(ctx, "extractor: model call failed: %v", err)
-			return nil, fmt.Errorf("model call failed: %w", err)
+			return ctx, fmt.Errorf("model call failed: %w", err)
 		}
 	}
 	if rspChan == nil {
-		return nil, errors.New("model returned nil response channel")
+		return ctx, errors.New("model returned nil response channel")
 	}
 
-	// Parse tool calls into operations.
-	var ops []*Operation
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("memory extraction canceled: %w", ctx.Err())
+			return ctx, fmt.Errorf("memory extraction canceled: %w", ctx.Err())
 		case rsp, ok := <-rspChan:
 			if !ok {
-				return ops, nil
+				return ctx, nil
 			}
 			ctx, rsp, err = e.runAfterModelCallbacks(ctx, req, rsp)
 			if err != nil {
-				return nil, err
+				return ctx, err
 			}
 			if rsp == nil {
 				continue
 			}
 			if rsp.Error != nil {
-				return nil, fmt.Errorf("model error: %s", rsp.Error.Message)
+				return ctx, fmt.Errorf("model error: %s", rsp.Error.Message)
 			}
 			if len(rsp.Choices) == 0 {
 				continue
 			}
-			// Choices are alternative candidates rather than cumulative
-			// tool-call batches, so only the selected primary choice
-			// should be converted into operations.
+			// Choices are alternatives, so only the primary choice is used.
 			for _, call := range rsp.Choices[0].Message.ToolCalls {
-				op := e.parseToolCall(ctx, call)
-				if op != nil {
-					ops = append(ops, op)
-				}
+				handleCall(ctx, call)
 			}
 		}
 	}
@@ -277,10 +310,6 @@ func (e *memoryExtractor) buildMessages(
 	return result
 }
 
-// currentDatePlaceholder is replaced in the prompt template with
-// the actual reference date.
-const currentDatePlaceholder = "{current_date}"
-
 // buildSystemPrompt builds the system prompt with existing memories
 // and available actions based on enabled tools.
 // refDate is substituted into the prompt's {current_date} placeholder
@@ -291,17 +320,10 @@ func (e *memoryExtractor) buildSystemPrompt(
 ) string {
 	var sb strings.Builder
 
-	dateStr := refDate.UTC().Format(time.DateOnly)
-	renderedPrompt, err := prompt.Text{Template: e.prompt}.Render(prompt.RenderEnv{
-		Vars: prompt.Vars{
-			"current_date": dateStr,
-		},
-	})
-	if err != nil {
-		renderedPrompt = e.prompt
+	sb.WriteString(e.renderPrompt(refDate))
+	if policyBlock := e.updatePolicyPromptBlock(); policyBlock != "" {
+		sb.WriteString(policyBlock)
 	}
-	sb.WriteString(renderedPrompt)
-
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
 	sb.WriteString(e.availableActionsBlock())
@@ -320,6 +342,18 @@ func (e *memoryExtractor) buildSystemPrompt(
 	}
 
 	return sb.String()
+}
+
+func (e *memoryExtractor) renderPrompt(refDate time.Time) string {
+	rendered, err := prompt.Text{Template: e.prompt}.Render(prompt.RenderEnv{
+		Vars: prompt.Vars{
+			"current_date": refDate.UTC().Format(time.DateOnly),
+		},
+	})
+	if err != nil {
+		return e.prompt
+	}
+	return rendered
 }
 
 // toolActionDescriptions maps background tool names to their
@@ -350,6 +384,7 @@ var toolActionOrder = []string{
 // memory tools the model is allowed to call.
 func (e *memoryExtractor) availableActionsBlock() string {
 	var sb strings.Builder
+	policyTools := e.updatePolicyEnabledTools()
 	for _, name := range toolActionOrder {
 		// Skip tools that are disabled.
 		if e.enabledTools != nil {
@@ -357,10 +392,16 @@ func (e *memoryExtractor) availableActionsBlock() string {
 				continue
 			}
 		}
+		if policyTools != nil {
+			if _, ok := policyTools[name]; !ok {
+				continue
+			}
+		}
 		desc, ok := toolActionDescriptions[name]
 		if !ok {
 			continue
 		}
+		desc = e.updatePolicyToolDescription(name, desc)
 		fmt.Fprintf(&sb, "- %s: %s\n", name, desc)
 	}
 	if sb.Len() == 0 {
@@ -376,7 +417,11 @@ func (e *memoryExtractor) parseToolCall(ctx context.Context, call model.ToolCall
 		log.WarnfContext(ctx, "extractor: failed to parse tool args: %v", err)
 		return nil
 	}
-	return parseToolCallArgs(call.Function.Name, args)
+	op := parseToolCallArgs(call.Function.Name, args)
+	if op == nil {
+		log.WarnfContext(ctx, "extractor: invalid %s arguments", call.Function.Name)
+	}
+	return op
 }
 
 func (e *memoryExtractor) runBeforeModelCallbacks(

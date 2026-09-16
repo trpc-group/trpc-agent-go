@@ -42,7 +42,7 @@ func (c *Client) addSessionToUserIndex(ctx context.Context, key session.Key, met
 		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
 	}
 
-	result, err := luaCreateSession.Run(ctx, c.client,
+	result, err := c.runScript(ctx, luaCreateSession,
 		[]string{metaKey, indexKey},
 		string(metaJSON), key.SessionID, ttlSeconds, string(indexEntry),
 	).Int()
@@ -63,7 +63,7 @@ func (c *Client) removeSessionFromUserIndex(ctx context.Context, dataKeys []stri
 	keys := make([]string, 0, len(dataKeys)+1)
 	keys = append(keys, dataKeys...)
 	keys = append(keys, indexKey)
-	if _, err := luaDeleteSession.Run(ctx, c.client, keys, key.SessionID).Result(); err != nil {
+	if _, err := c.runScript(ctx, luaDeleteSession, keys, key.SessionID).Result(); err != nil {
 		return fmt.Errorf("delete session: %w", err)
 	}
 	return nil

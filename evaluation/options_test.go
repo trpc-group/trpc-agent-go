@@ -12,9 +12,11 @@ package evaluation
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
@@ -22,6 +24,7 @@ import (
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 type stubService struct{}
@@ -54,9 +57,14 @@ func (stubConversation) Close() error {
 	return nil
 }
 
+type stubEvalCaseResultAggregator struct{}
+
+func (stubEvalCaseResultAggregator) Aggregate(context.Context, *service.EvalCaseResultAggregationInput) (*service.EvalCaseResultAggregationResult, error) {
+	return &service.EvalCaseResultAggregationResult{}, nil
+}
+
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := newOptions()
-
 	assert.Equal(t, defaultNumRuns, opts.numRuns)
 	assert.NotNil(t, opts.evalSetManager)
 	assert.NotNil(t, opts.evalResultManager)
@@ -69,6 +77,25 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.Nil(t, opts.evalCaseParallelInferenceEnabled)
 	assert.Nil(t, opts.evalCaseParallelEvaluationEnabled)
 	assert.False(t, opts.runDetailsEnabled)
+}
+
+func TestOptionsInferenceStats(t *testing.T) {
+	opts := newOptions()
+	opts.addInferenceStats(&evalresult.InferenceStats{Duration: 2 * time.Second})
+	opts.addInferenceStats(&evalresult.InferenceStats{Duration: 3 * time.Second})
+	opts.addInferenceStats(&evalresult.InferenceStats{})
+	got := opts.inferenceStatsValue()
+	assert.Equal(t, 5*time.Second, got.Duration)
+
+	var nilOpts *options
+	nilOpts.addInferenceStats(&evalresult.InferenceStats{Duration: time.Second})
+	assert.Nil(t, nilOpts.inferenceStatsValue())
+
+	opts = newOptions()
+	opts.addInferenceStats(&evalresult.InferenceStats{TokenUsage: &model.Usage{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5}})
+	opts.addInferenceStats(&evalresult.InferenceStats{TokenUsage: &model.Usage{PromptTokens: 7, CompletionTokens: 11, TotalTokens: 18}})
+	got = opts.inferenceStatsValue()
+	assert.Equal(t, &model.Usage{PromptTokens: 9, CompletionTokens: 14, TotalTokens: 23}, got.TokenUsage)
 }
 
 func TestWithEvalSetManager(t *testing.T) {
@@ -95,15 +122,25 @@ func TestWithMetricManager(t *testing.T) {
 func TestWithRegistry(t *testing.T) {
 	custom := registry.New()
 	opts := newOptions(WithRegistry(custom))
-
 	assert.Equal(t, custom, opts.registry)
+}
+
+func TestWithRegistryNil(t *testing.T) {
+	opts := newOptions(WithRegistry(nil))
+	err := opts.validate(false)
+	assert.ErrorContains(t, err, "registry is nil")
 }
 
 func TestWithMetricRegistry(t *testing.T) {
 	custom := metricregistry.New()
 	opts := newOptions(WithMetricRegistry(custom))
-
 	assert.Equal(t, custom, opts.metricRegistry)
+}
+
+func TestWithEvalCaseResultAggregator(t *testing.T) {
+	custom := stubEvalCaseResultAggregator{}
+	opts := newOptions(WithEvalCaseResultAggregator(custom))
+	assert.Equal(t, custom, opts.evalCaseResultAggregator)
 }
 
 func TestWithEvaluationService(t *testing.T) {

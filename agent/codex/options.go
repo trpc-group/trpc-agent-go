@@ -13,22 +13,50 @@ import (
 	"context"
 	"errors"
 	"slices"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // StateKeyThreadID is the session state key used to persist the Codex thread id.
 const StateKeyThreadID = "agent.codex.thread_id"
 
+// MessageBuilderArgs provides read-only context for building a Codex CLI prompt.
+type MessageBuilderArgs struct {
+	// InvocationID is the invocation identifier associated with this CLI execution.
+	InvocationID string
+	// AppName is the framework application name from the invocation session.
+	AppName string
+	// UserID is the framework user identifier from the invocation session.
+	UserID string
+	// SessionID is the framework session identifier from the invocation session.
+	SessionID string
+	// Message is the current invocation message.
+	Message model.Message
+	// Events is a shallow snapshot of session events and must not be mutated.
+	Events []event.Event
+}
+
+// MessageBuilder builds the complete user prompt string passed to the Codex CLI.
+//
+// When the agent is run through runner.Run, Events already includes the
+// current turn user message because the runner persists it before invoking the
+// agent. The builder must return the full prompt to pass to the CLI.
+type MessageBuilder func(ctx context.Context, args *MessageBuilderArgs) (string, error)
+
 // options stores CodexAgent configuration.
 type options struct {
-	name          string
-	description   string
-	bin           string
-	globalArgs    []string
-	args          []string
-	env           []string
-	workDir       string
-	commandRunner commandRunner
-	rawOutputHook RawOutputHook
+	name           string
+	description    string
+	bin            string
+	globalArgs     []string
+	args           []string
+	env            []string
+	workDir        string
+	commandRunner  commandRunner
+	rawOutputHook  RawOutputHook
+	messageBuilder MessageBuilder
+	resumeEnabled  bool
 }
 
 // Option configures a CodexAgent.
@@ -54,9 +82,9 @@ type RawOutputHookArgs struct {
 	Error error
 }
 
-// RawOutputHook is invoked after the CLI command completes and before transcript parsing.
+// RawOutputHook is invoked after the CLI command completes and after streamed transcript events are emitted.
 //
-// If the hook returns an error, the agent emits a final error event and stops processing the invocation.
+// If the hook returns an error, the agent emits a trailing error event and skips the final assistant response.
 type RawOutputHook func(ctx context.Context, args *RawOutputHookArgs) error
 
 // WithName sets the agent name.
@@ -109,10 +137,20 @@ func WithRawOutputHook(hook RawOutputHook) Option {
 	}
 }
 
-// withCommandRunner overrides how the agent executes external commands, only for test.
-func withCommandRunner(runner commandRunner) Option {
+// WithMessageBuilder sets a callback that builds the complete Codex CLI prompt.
+// If builder is nil, the agent uses invocation.Message.Content directly.
+func WithMessageBuilder(builder MessageBuilder) Option {
 	return func(o *options) {
-		o.commandRunner = runner
+		o.messageBuilder = builder
+	}
+}
+
+// WithResumeEnabled controls whether the agent uses Codex CLI thread resume.
+// Resume is enabled by default. When disabled, the agent runs only codex exec
+// and does not persist newly observed thread ids into session state.
+func WithResumeEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.resumeEnabled = enabled
 	}
 }
 
@@ -120,9 +158,10 @@ func withCommandRunner(runner commandRunner) Option {
 func newOptions(opt ...Option) (*options, error) {
 	opts := &options{
 		name:          "codex-cli",
-		description:   "Invokes a locally installed Codex CLI and emits tool events from its JSONL output.",
+		description:   "Invokes a locally installed Codex CLI and emits assistant and tool events from its JSONL output.",
 		bin:           "codex",
 		commandRunner: execCommandRunner{},
+		resumeEnabled: true,
 	}
 	for _, o := range opt {
 		o(opts)

@@ -1,18 +1,37 @@
+<!-- markdownlint-disable MD041 -->
+
+<!--
+Write the pull request title and description in English.
+
+The title must identify the primary affected package or repository area.
+
+Preferred form:
+  package: lowercase summary
+
+For multiple equally affected packages:
+  {package/a, package/b}: lowercase summary
+
+For a coherent cross-cutting change spanning many packages with no primary
+package:
+  lsc: lowercase summary
+-->
+
 ## What changed
 
-Describe the user-visible behavior, API, documentation, or example changes in
-this pull request.
+Summarize the outcome and its user or developer impact. Do not restate the
+implementation or enumerate changed files.
 
 ## Why
 
-Explain the problem this solves and any compatibility considerations.
+Explain the problem and any non-obvious design rationale.
 
 ## Testing
 
-List the commands or manual checks you ran. If a check is not applicable, say
-why.
+List the automated and manual validation that was actually performed. If a
+check is not applicable, explain why.
 
 ## Notes for reviewers
 
-Call out areas that deserve extra attention, such as concurrency, persistence,
-protocol compatibility, or public API changes.
+Optionally call out risks or design decisions that are not obvious from the
+diff, such as public API, compatibility, concurrency, persistence, protocol, or
+security concerns.

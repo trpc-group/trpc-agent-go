@@ -67,7 +67,8 @@ type Manager struct {
 
 	clock func() time.Time
 
-	shellEnvSnapshot func(context.Context, string) map[string]string
+	shellEnvSnapshot     func(context.Context, string) map[string]string
+	beforeSessionHandoff func()
 }
 
 type Option func(*Manager)
@@ -250,20 +251,26 @@ func (m *Manager) Exec(
 	}
 
 	if params.Background {
-		return execResult{
+		result := execResult{
 			Status:    "running",
 			SessionID: sess.id,
 			Output:    m.limitTailResultOutput(sess.tail(defaultLogTail)),
-		}, nil
+		}
+		if err := m.commitRunningSession(ctx, sess); err != nil {
+			return execResult{}, err
+		}
+		return result, nil
 	}
 
 	if yieldMs == 0 {
 		select {
 		case <-ctx.Done():
+			_ = sess.detachParentCancellation()
 			_ = m.kill(sess.id)
 			return execResult{}, ctx.Err()
 		case <-sess.doneCh:
 		}
+		_ = sess.detachParentCancellation()
 		out, code := sess.allOutput()
 		_ = m.clearFinished(sess.id)
 		out = m.limitResultOutput(out)
@@ -280,9 +287,11 @@ func (m *Manager) Exec(
 
 	select {
 	case <-ctx.Done():
+		_ = sess.detachParentCancellation()
 		_ = m.kill(sess.id)
 		return execResult{}, ctx.Err()
 	case <-sess.doneCh:
+		_ = sess.detachParentCancellation()
 		out, code := sess.allOutput()
 		_ = m.clearFinished(sess.id)
 		out = m.limitResultOutput(out)
@@ -292,12 +301,35 @@ func (m *Manager) Exec(
 			ExitCode: code,
 		}, nil
 	case <-timer.C:
-		return execResult{
+		result := execResult{
 			Status:    "running",
 			SessionID: sess.id,
 			Output:    m.limitTailResultOutput(sess.tail(defaultLogTail)),
-		}, nil
+		}
+		if err := m.commitRunningSession(ctx, sess); err != nil {
+			return execResult{}, err
+		}
+		return result, nil
 	}
+}
+
+func (m *Manager) commitRunningSession(
+	parent context.Context,
+	sess *session,
+) error {
+	if m.beforeSessionHandoff != nil {
+		m.beforeSessionHandoff()
+	}
+	if sess.detachParentCancellation() &&
+		(parent == nil || parent.Err() == nil) {
+		return nil
+	}
+	_ = m.kill(sess.id)
+	_ = m.clearFinished(sess.id)
+	if parent != nil && parent.Err() != nil {
+		return parent.Err()
+	}
+	return context.Canceled
 }
 
 func runForeground(
@@ -441,15 +473,24 @@ func exitCode(err error) int {
 }
 
 func (m *Manager) startBackground(
-	parentCtx context.Context,
+	parent context.Context,
 	params execParams,
 	timeout time.Duration,
 	redact func(string) string,
 ) (*session, error) {
-	if parentCtx == nil {
-		parentCtx = context.Background()
+	if parent != nil {
+		select {
+		case <-parent.Done():
+			return nil, parent.Err()
+		default:
+		}
 	}
-	ctx, cancel := context.WithTimeout(parentCtx, timeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	stopParentCancellation := func() bool { return true }
+	if parent != nil {
+		stopParentCancellation = context.AfterFunc(parent, cancel)
+	}
 	cmd := shellCmdWithStartup(
 		ctx,
 		params.Command,
@@ -465,10 +506,12 @@ func (m *Manager) startBackground(
 	sess := newSession(newSessionID(), params.Command, m.maxLines)
 	sess.cancel = cancel
 	sess.redact = redact
+	sess.parentCancelStop = stopParentCancellation
 
 	if params.Pty {
 		master, closeIO, err := startPTY(cmd)
 		if err != nil {
+			_ = stopParentCancellation()
 			cancel()
 			return nil, err
 		}
@@ -483,6 +526,7 @@ func (m *Manager) startBackground(
 		prepareCommandProcess(cmd)
 		stdin, stdout, stderr, err := startPipes(cmd)
 		if err != nil {
+			_ = stopParentCancellation()
 			cancel()
 			return nil, err
 		}
@@ -503,6 +547,7 @@ func (m *Manager) startBackground(
 			sess.readFrom(stderr)
 		}()
 		if err := cmd.Start(); err != nil {
+			_ = stopParentCancellation()
 			cancel()
 			_ = sess.closeIO()
 			return nil, err

@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacesession"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -53,6 +54,9 @@ func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {
 func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event) {
 	if invocation == nil || rsp == nil || rsp.IsPartial {
+		return
+	}
+	if calllimit.Active(invocation) {
 		return
 	}
 	e := codeExecutorForInvocation(invocation)

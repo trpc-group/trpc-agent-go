@@ -424,6 +424,12 @@ func TestBuildReaderOptions(t *testing.T) {
 		opts := buildReaderOptions(config)
 		require.Len(t, opts, 1)
 	})
+
+	t.Run("negative chunk config forwarded", func(t *testing.T) {
+		config := &ReaderConfig{chunkSize: -1, chunkOverlap: -1}
+		opts := buildReaderOptions(config)
+		require.Len(t, opts, 2)
+	})
 }
 
 func TestResolveFileType(t *testing.T) {

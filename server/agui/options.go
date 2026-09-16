@@ -12,6 +12,7 @@ package agui
 import (
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service/sse"
@@ -33,6 +34,7 @@ type options struct {
 	basePath                 string
 	path                     string
 	serviceFactory           ServiceFactory
+	runnerFactory            RunnerFactory
 	aguiRunnerOptions        []aguirunner.Option
 	messagesSnapshotPath     string
 	messagesSnapshotEnabled  bool
@@ -50,6 +52,7 @@ func newOptions(opt ...Option) *options {
 		basePath:                defaultBasePath,
 		path:                    defaultPath,
 		serviceFactory:          defaultServiceFactory,
+		runnerFactory:           defaultRunnerFactory,
 		messagesSnapshotPath:    defaultMessagesSnapshotPath,
 		messagesSnapshotEnabled: defaultMessagesSnapshotState,
 		cancelPath:              defaultCancelPath,
@@ -124,10 +127,34 @@ func WithServiceFactory(f ServiceFactory) Option {
 	}
 }
 
+// RunnerFactory creates the AG-UI runner used by the service.
+// The options are aggregated from the AG-UI server options in user-provided order.
+type RunnerFactory func(baseRunner runner.Runner, opt ...aguirunner.Option) (aguirunner.Runner, error)
+
+// WithRunnerFactory sets the AG-UI runner factory.
+// Passing nil makes New return an error.
+func WithRunnerFactory(factory RunnerFactory) Option {
+	return func(o *options) {
+		o.runnerFactory = factory
+	}
+}
+
+// defaultRunnerFactory creates the default AG-UI runner.
+func defaultRunnerFactory(r runner.Runner, opt ...aguirunner.Option) (aguirunner.Runner, error) {
+	return aguirunner.New(r, opt...), nil
+}
+
 // WithAGUIRunnerOptions sets the AG-UI runner options.
 func WithAGUIRunnerOptions(aguiRunnerOpts ...aguirunner.Option) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguiRunnerOpts...)
+	}
+}
+
+// WithRunHook appends a hook that runs after the AG-UI run has started.
+func WithRunHook(hook aguirunner.RunHook) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithRunHook(hook))
 	}
 }
 
@@ -138,7 +165,8 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
-// WithFlushInterval sets how often buffered AG-UI events are flushed for a session.
+// WithFlushInterval configures startup and periodic history flushes. A positive duration enables both;
+// zero disables both and leaves buffered history for finalization.
 func WithFlushInterval(d time.Duration) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithFlushInterval(d))
@@ -194,8 +222,10 @@ func WithReasoningContentEnabled(enabled bool) Option {
 	}
 }
 
-// WithEventSourceMetadataEnabled controls whether translated AG-UI events
-// include source metadata from the original trpc-agent-go event in rawEvent.
+// WithEventSourceMetadataEnabled controls whether AG-UI events include source
+// metadata in rawEvent. Translated events include metadata from the original
+// trpc-agent-go event, and message snapshots include request forwardedProps
+// under rawEvent.runs when the request provides it.
 func WithEventSourceMetadataEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(
@@ -229,8 +259,9 @@ func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	}
 }
 
-// WithConcurrentMessageStreamsEnabled controls whether multiple text and reasoning
-// message streams with different message IDs may stay open concurrently.
+// WithConcurrentMessageStreamsEnabled controls whether text and reasoning
+// message streams are scoped by message ID. It is enabled by default; pass false
+// to preserve the previous legacy serial message-stream boundaries.
 func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithConcurrentMessageStreamsEnabled(enabled))
@@ -270,6 +301,14 @@ func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
 func WithMessagesSnapshotRunLifecycleEventsEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotRunLifecycleEventsEnabled(enabled))
+	}
+}
+
+// WithMessagesSnapshotBestEffortEnabled controls whether malformed history
+// track events are skipped while building MESSAGES_SNAPSHOT.
+func WithMessagesSnapshotBestEffortEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotBestEffortEnabled(enabled))
 	}
 }
 

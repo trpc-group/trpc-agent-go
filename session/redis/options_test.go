@@ -323,6 +323,17 @@ func TestWithSessionTTL(t *testing.T) {
 	}
 }
 
+func TestWithTrackEventTTL(t *testing.T) {
+	opts := ServiceOpts{sessionTTL: time.Hour}
+	assert.Equal(t, time.Hour, opts.effectiveTrackEventTTL())
+	WithTrackEventTTL(0)(&opts)
+	require.NotNil(t, opts.trackEventTTL)
+	assert.Equal(t, time.Duration(0), opts.effectiveTrackEventTTL())
+	WithTrackEventTTL(30 * time.Minute)(&opts)
+	require.NotNil(t, opts.trackEventTTL)
+	assert.Equal(t, 30*time.Minute, opts.effectiveTrackEventTTL())
+}
+
 func TestWithAppStateTTL(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -267,16 +267,18 @@ func (r *conversationFilesRequirement) SentinelExists(
 	return true, nil
 }
 
-// Apply delegates to StageConversationFiles. Because this requirement
-// is Optional, the reconciler converts a non-nil error into a
-// warning rather than aborting; that matches the legacy auto-staging
-// behavior which never blocked execution on a partial stage.
+// Apply delegates to StageConversationFiles. Ordinary staging warnings retain
+// the legacy best-effort behavior. Stale errors remain typed so the reconciler
+// can abort before executing against a replaced workspace.
 func (r *conversationFilesRequirement) Apply(
 	ctx context.Context, rctx ApplyContext,
 ) error {
-	_, warnings := workspaceinput.StageConversationFiles(
+	_, warnings, err := workspaceinput.StageConversationFiles(
 		ctx, rctx.Engine, rctx.Workspace,
 	)
+	if err != nil {
+		return err
+	}
 	if len(warnings) > 0 {
 		return fmt.Errorf(
 			"conversation files warnings: %s",

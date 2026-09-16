@@ -65,19 +65,47 @@ func (r *Resolver) CreateWorkspace(
 	eng codeexecutor.Engine,
 	name string,
 ) (codeexecutor.Workspace, error) {
+	handle, err := r.CreateWorkspaceHandle(ctx, eng, name)
+	return handle.Workspace, err
+}
+
+// CreateWorkspaceHandle acquires the invocation-scoped workspace together with
+// the registry token required for ABA-safe conditional invalidation.
+func (r *Resolver) CreateWorkspaceHandle(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	name string,
+) (codeexecutor.WorkspaceHandle, error) {
 	reg := r.reg
 	if reg == nil {
 		reg = codeexecutor.NewWorkspaceRegistry()
 		r.reg = reg
 	}
-	sid := name
+	sid := workspaceKey(ctx, name)
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-		if key := KeyFromInvocation(inv); key != "" {
-			sid = key
-		}
 		ctx = withWorkspaceArtifactContext(ctx, inv)
 	}
-	return reg.Acquire(ctx, eng.Manager(), sid)
+	return reg.AcquireHandle(ctx, eng.Manager(), sid)
+}
+
+// InvalidateWorkspaceHandle conditionally removes the exact registry entry
+// represented by handle.
+func (r *Resolver) InvalidateWorkspaceHandle(
+	handle codeexecutor.WorkspaceHandle,
+) bool {
+	if r == nil || r.reg == nil {
+		return false
+	}
+	return r.reg.Invalidate(handle)
+}
+
+func workspaceKey(ctx context.Context, fallback string) string {
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		if key := KeyFromInvocation(inv); key != "" {
+			return key
+		}
+	}
+	return fallback
 }
 
 // KeyFromInvocation derives the shared workspace key for an invocation.

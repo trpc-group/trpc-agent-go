@@ -12,6 +12,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,7 +57,7 @@ func (f *fileToolSet) readMultipleFiles(
 	rsp := &readMultipleFilesResponse{BaseDirectory: f.baseDir}
 	if len(req.Patterns) == 0 {
 		rsp.Message = "Error: patterns cannot be empty"
-		return rsp, fmt.Errorf("patterns cannot be empty")
+		return rsp, errors.New("patterns cannot be empty")
 	}
 	var (
 		files []string

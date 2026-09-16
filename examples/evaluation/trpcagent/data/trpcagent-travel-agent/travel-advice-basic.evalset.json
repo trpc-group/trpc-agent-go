@@ -1,0 +1,26 @@
+{
+  "evalSetId": "travel-advice-basic",
+  "name": "travel-advice-basic",
+  "evalCases": [
+    {
+      "evalId": "shanghai_travel_advice",
+      "conversation": [
+        {
+          "invocationId": "shanghai_travel_advice-1",
+          "userContent": {
+            "role": "user",
+            "content": "I am traveling to Shanghai today. What should I watch out for, and can I still get a museum ticket?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Shanghai is sunny at 26C. There are festival events downtown, so expect traffic disruptions. Museum tickets are still available with 25 seats left. Leave early, avoid the city center if possible, and reserve now."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "trpcagent-travel-agent",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}

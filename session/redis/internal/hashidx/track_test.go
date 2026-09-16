@@ -12,6 +12,7 @@ package hashidx
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -104,6 +105,66 @@ func TestClient_AppendTrackEvent_PreservesExistingTTLWithoutRefresh(t *testing.T
 	assert.Contains(t, tracks, session.Track("alpha"))
 }
 
+func TestClient_AppendTrackEvent_TrackTTLZeroPersistsTrackKeys(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	createCfg := defaultConfig()
+	createCfg.SessionTTL = 10 * time.Second
+	createClient := NewClient(rdb, createCfg)
+	trackTTL := time.Duration(0)
+	appendCfg := createCfg
+	appendCfg.TrackEventTTL = &trackTTL
+	appendClient := NewClient(rdb, appendCfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trk-ttl-zero"}
+	_, err := createClient.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	tracksJSON, err := json.Marshal([]string{"alpha"})
+	require.NoError(t, err)
+	err = appendClient.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}, tracksJSON)
+	require.NoError(t, err)
+	trackDataKey := createClient.keys.TrackDataKey(key, "alpha")
+	trackTimeIndexKey := createClient.keys.TrackTimeIndexKey(key, "alpha")
+	trackNamesKey := createClient.keys.TrackIndexKey(key)
+	assert.True(t, mr.Exists(trackDataKey))
+	assert.True(t, mr.Exists(trackTimeIndexKey))
+	assert.True(t, mr.Exists(trackNamesKey))
+	assert.Equal(t, time.Duration(0), mr.TTL(trackDataKey))
+	assert.Equal(t, time.Duration(0), mr.TTL(trackTimeIndexKey))
+	assert.Equal(t, time.Duration(0), mr.TTL(trackNamesKey))
+}
+
+func TestClient_AppendTrackEvent_SubSecondTrackTTLExpiresTrackKeys(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	createCfg := defaultConfig()
+	createClient := NewClient(rdb, createCfg)
+	trackTTL := 500 * time.Millisecond
+	appendCfg := createCfg
+	appendCfg.TrackEventTTL = &trackTTL
+	appendClient := NewClient(rdb, appendCfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trk-ttl-sub-second"}
+	_, err := createClient.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	tracksJSON, err := json.Marshal([]string{"alpha"})
+	require.NoError(t, err)
+	err = appendClient.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}, tracksJSON)
+	require.NoError(t, err)
+	trackDataKey := createClient.keys.TrackDataKey(key, "alpha")
+	trackTimeIndexKey := createClient.keys.TrackTimeIndexKey(key, "alpha")
+	trackNamesKey := createClient.keys.TrackIndexKey(key)
+	assert.Equal(t, time.Second, mr.TTL(trackDataKey))
+	assert.Equal(t, time.Second, mr.TTL(trackTimeIndexKey))
+	assert.Equal(t, time.Second, mr.TTL(trackNamesKey))
+}
+
 func TestClient_GetTrackEvents(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())
@@ -156,6 +217,50 @@ func TestClient_GetTrackEvents(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, result["nonexistent"])
 	})
+}
+
+func TestClient_GetTrackEvents_BeyondLuaStackLimit(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "large-track"}
+	track := session.Track("beta")
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	const eventCount = 8200
+	baseTime := time.Unix(1_700_000_000, 0)
+	pipe := rdb.Pipeline()
+	for i := 0; i < eventCount; i++ {
+		id := fmt.Sprintf("e%05d", i)
+		trackEvent := session.TrackEvent{
+			Track:     track,
+			Payload:   json.RawMessage(fmt.Sprintf(`%d`, i)),
+			Timestamp: baseTime.Add(time.Duration(i) * time.Second),
+		}
+		eventJSON, err := json.Marshal(trackEvent)
+		require.NoError(t, err)
+		pipe.HSet(ctx, c.keys.TrackDataKey(key, track), id, eventJSON)
+		pipe.ZAdd(ctx, c.keys.TrackTimeIndexKey(key, track), redis.Z{
+			Score:  float64(trackEvent.Timestamp.UnixNano()),
+			Member: id,
+		})
+	}
+	_, err = pipe.Exec(ctx)
+	require.NoError(t, err)
+
+	result, err := c.GetTrackEvents(ctx, key, []session.Track{track}, 200, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, result[track], 200)
+	assert.JSONEq(t, `8000`, string(result[track][0].Payload))
+	assert.JSONEq(t, `8199`, string(result[track][199].Payload))
+
+	result, err = c.GetTrackEvents(ctx, key, []session.Track{track}, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, result[track], eventCount)
+	assert.JSONEq(t, `0`, string(result[track][0].Payload))
+	assert.JSONEq(t, `8199`, string(result[track][eventCount-1].Payload))
 }
 
 func TestClient_ListTracksForSession(t *testing.T) {

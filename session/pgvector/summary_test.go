@@ -202,7 +202,11 @@ func TestGetSessionSummaryText_FromDB(t *testing.T) {
 	s, mock, db := newTestService(t, nil)
 	defer db.Close()
 
-	sess := session.NewSession("app", "user", "sess")
+	createdAt := time.Date(2025, 4, 7, 9, 0, 0, 0, time.UTC)
+	sess := session.NewSession(
+		"app", "user", "sess",
+		session.WithSessionCreatedAt(createdAt),
+	)
 
 	sum := session.Summary{Summary: "db summary"}
 	sumBytes, _ := json.Marshal(sum)
@@ -210,6 +214,11 @@ func TestGetSessionSummaryText_FromDB(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"summary"}).
 		AddRow(sumBytes)
 	mock.ExpectQuery("SELECT summary FROM").
+		WithArgs(
+			"app", "user", "sess",
+			session.SummaryFilterKeyAllContents,
+			timeArg{}, createdAt,
+		).
 		WillReturnRows(rows)
 
 	text, ok := s.GetSessionSummaryText(
@@ -223,15 +232,28 @@ func TestGetSessionSummaryText_NotFound(t *testing.T) {
 	s, mock, db := newTestService(t, nil)
 	defer db.Close()
 
-	sess := session.NewSession("app", "user", "sess")
+	createdAt := time.Date(2025, 4, 7, 9, 0, 0, 0, time.UTC)
+	sess := session.NewSession(
+		"app", "user", "sess",
+		session.WithSessionCreatedAt(createdAt),
+	)
 
 	// Primary query returns no rows.
 	mock.ExpectQuery("SELECT summary FROM").
+		WithArgs(
+			"app", "user", "sess", "custom",
+			timeArg{}, createdAt,
+		).
 		WillReturnRows(
 			sqlmock.NewRows([]string{"summary"}),
 		)
 	// Fallback query returns no rows.
 	mock.ExpectQuery("SELECT summary FROM").
+		WithArgs(
+			"app", "user", "sess",
+			session.SummaryFilterKeyAllContents,
+			timeArg{}, createdAt,
+		).
 		WillReturnRows(
 			sqlmock.NewRows([]string{"summary"}),
 		)

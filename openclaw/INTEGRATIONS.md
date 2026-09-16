@@ -936,6 +936,9 @@ Optional config fields:
 - `base_url` (default depends on `backend`)
 - `user_agent`
 - `timeout`
+- `blocked_result_url_patterns`: optional case-insensitive URL substrings
+  to filter from search results, intended for benchmark hygiene such as
+  excluding public trace or answer mirrors
 
 `api` uses the DuckDuckGo Instant Answer API and works best for
 encyclopedic answers. `html` and `lite` parse DuckDuckGo search result pages
@@ -974,8 +977,18 @@ tools:
 Optional config fields:
 
 - `blocked_domains`
+- `allow_search_result_pages` (default: `false`)
+- `detect_blocked_pages` (default: `true`)
 - `max_content_length`
 - `max_total_content_length`
+
+By default, OpenClaw configures `web_fetch` to reject common
+search-engine result pages and to report CAPTCHA, Cloudflare,
+unusual-traffic, and anti-bot challenge pages as blocked. Use dedicated
+search tools for discovery, then fetch known result URLs. Set
+`allow_search_result_pages: true` only for workflows that intentionally
+need raw search-result HTML, and set `detect_blocked_pages: false` only
+when the challenge page itself is the target content.
 
 ## Built-in ToolSets
 
@@ -1006,12 +1019,14 @@ Highlights:
   - loopback hosts are blocked
   - private-network IPs are blocked
   - `file://` URLs are blocked
+  - search-engine result pages are blocked
 - You can refine navigation policy with:
   - `allowed_domains`
   - `blocked_domains`
   - `allow_loopback`
   - `allow_private_networks`
   - `allow_file_urls`
+  - `allow_search_result_pages`
 
 Runnable example: `openclaw/examples/browser_use/`.
 Browser-server example: `openclaw/examples/browser_server_use/`.
@@ -1312,6 +1327,44 @@ tools:
         delay_seconds: "1s"
         num_retries: 3
 ```
+
+### ToolSet: youcom
+
+You.com Web Search toolset. Live web search with URLs, titles, and
+snippets; good general-purpose companion to the `duckduckgo` provider and
+the credentialed `google` toolset.
+
+Requires a You.com API key. Set `api_key` in the config or export
+`YDC_API_KEY` (config wins when both are present). Keys are available at
+[you.com/platform/api-keys](https://you.com/platform/api-keys). The toolset
+calls the documented Web Search API endpoint
+(`https://ydc-index.io/v1/search`); `base_url` exists for testing and must
+be HTTPS.
+
+```yaml
+tools:
+  refresh_toolsets_on_run: true
+  toolsets:
+    - type: "youcom"
+      name: "youcom"
+      config:
+        # api_key: "..."  # or use the YDC_API_KEY env var
+        num_results: 5
+        country: "US"
+        safe_search: "moderate"
+        timeout: "30s"
+```
+
+Config fields:
+
+- `api_key` (or environment `YDC_API_KEY`)
+- optional: `num_results` (default 10, max 10), `country`, `safe_search`
+  (`strict` / `moderate` / `off`), `base_url`, `user_agent`, `timeout`
+
+The search tool is named `search` and is automatically namespaced under
+the toolset `name` (for example `youcom_search` when the toolset is named
+`youcom`). Per-call request fields `num_results`, `country`, and
+`safe_search` override the configured defaults.
 
 ### ToolSet: email
 

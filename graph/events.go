@@ -97,14 +97,19 @@ const (
 // NodeType represents the type of a graph node.
 type NodeType string
 
-// Node type constants.
 const (
+	// NodeTypeFunction represents a function node.
 	NodeTypeFunction NodeType = "function"
-	NodeTypeLLM      NodeType = "llm"
-	NodeTypeTool     NodeType = "tool"
-	NodeTypeAgent    NodeType = "agent"
-	NodeTypeJoin     NodeType = "join"
-	NodeTypeRouter   NodeType = "router"
+	// NodeTypeLLM represents an LLM operation node.
+	NodeTypeLLM NodeType = "llm"
+	// NodeTypeTool represents a tool node.
+	NodeTypeTool NodeType = "tool"
+	// NodeTypeAgent represents an agent node.
+	NodeTypeAgent NodeType = "agent"
+	// NodeTypeJoin represents a join node.
+	NodeTypeJoin NodeType = "join"
+	// NodeTypeRouter represents a router node.
+	NodeTypeRouter NodeType = "router"
 )
 
 // String returns the string representation of the node type.

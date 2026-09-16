@@ -170,6 +170,37 @@ func TestInstructionProc_Request(t *testing.T) {
 	}
 }
 
+func TestInstructionProcessor_RuntimeStatePlaceholders(t *testing.T) {
+	invocation := &agent.Invocation{
+		AgentName:    testAgentName,
+		InvocationID: testInvocationID,
+		RunOptions: agent.RunOptions{RuntimeState: map[string]any{
+			"document": "Current draft",
+			"version":  2,
+		}},
+	}
+	req := &model.Request{}
+	processor := NewInstructionRequestProcessor(
+		"Draft: {runtime:document}",
+		"Version: {runtime:version}",
+	)
+
+	processor.ProcessRequest(
+		context.Background(),
+		invocation,
+		req,
+		make(chan *event.Event, 1),
+	)
+
+	require.Len(t, req.Messages, 1)
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.Equal(
+		t,
+		"Version: 2\n\nDraft: Current draft",
+		req.Messages[0].Content,
+	)
+}
+
 func TestFindSystemMessageIndex(t *testing.T) {
 	tests := []struct {
 		name     string

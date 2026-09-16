@@ -12,6 +12,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -258,6 +259,126 @@ func TestExecTool_PartialMetadataCommitReturnsFiles(t *testing.T) {
 	require.Contains(t, out.Result.Warnings, warnPartialOutputCommit)
 }
 
+func TestExecTool_PartialStaleInvalidatesWithoutReplay(t *testing.T) {
+	manager := &legacySkillRetryManager{}
+	fs := &partialStaleSkillFS{
+		stubFS: &stubFS{},
+		manifest: codeexecutor.OutputManifest{
+			Files: []codeexecutor.FileRef{{
+				Name:    outATxt,
+				Content: contentHi,
+			}},
+		},
+	}
+	exitCode := 0
+	session := &stubProgramSession{
+		id: "partial-stale",
+		polls: []codeexecutor.ProgramPoll{{
+			Status:   codeexecutor.ProgramStatusExited,
+			ExitCode: &exitCode,
+		}},
+		runResult: codeexecutor.RunResult{ExitCode: 0},
+	}
+	runner := &staleWriteSkillRunner{session: session}
+	runTool := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: &managedEngine{
+			m: manager,
+			f: fs,
+			r: runner,
+		}},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{WorkspaceSkillDir: "."}, nil
+		})),
+	)
+	execTool := NewExecTool(runTool)
+	args, err := jsonMarshal(execInput{
+		runInput: runInput{
+			Skill:   testSkillName,
+			Command: echoOK,
+			Outputs: &codeexecutor.OutputSpec{
+				Globs:  []string{outGlobTxt},
+				Inline: true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	reader, err := execTool.StreamableCall(context.Background(), args)
+	require.NoError(t, err)
+	_, out := drainExecStream(t, reader)
+	require.NotNil(t, out.Result)
+	require.Contains(t, out.Result.Warnings, warnPartialOutputCommit)
+	require.Len(t, out.Result.OutputFiles, 1)
+	require.Equal(t, 1, runner.starts,
+		"partial output must not replay the completed session")
+	require.Equal(t, 1, manager.creates)
+
+	reader, err = execTool.StreamableCall(context.Background(), args)
+	require.NoError(t, err)
+	_, out = drainExecStream(t, reader)
+	require.NotNil(t, out.Result)
+	require.Equal(t, 2, runner.starts)
+	require.Equal(t, 2, manager.creates,
+		"the next call must rebuild the invalidated workspace once")
+}
+
+func TestExecTool_UnsafeStartStaleInvalidatesWithoutReplay(t *testing.T) {
+	manager := &legacySkillRetryManager{}
+	exitCode := 0
+	runner := &staleWriteSkillRunner{
+		session: &stubProgramSession{
+			id: "started-after-unsafe",
+			polls: []codeexecutor.ProgramPoll{{
+				Status:   codeexecutor.ProgramStatusExited,
+				ExitCode: &exitCode,
+			}},
+			runResult: codeexecutor.RunResult{ExitCode: 0},
+		},
+		startErrors: []error{errors.Join(
+			codeexecutor.ErrWorkspaceStale,
+			codeexecutor.ErrWorkspaceRetryUnsafe,
+		)},
+	}
+	runTool := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: &managedEngine{
+			m: manager,
+			f: &stubFS{},
+			r: runner,
+		}},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{WorkspaceSkillDir: "."}, nil
+		})),
+	)
+	execTool := NewExecTool(runTool)
+	args, err := jsonMarshal(execInput{runInput: runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+	}})
+	require.NoError(t, err)
+
+	_, err = execTool.StreamableCall(context.Background(), args)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceRetryUnsafe)
+	require.Equal(t, 1, runner.starts, "unsafe stale must not replay")
+	require.Equal(t, 1, manager.creates)
+
+	reader, err := execTool.StreamableCall(context.Background(), args)
+	require.NoError(t, err)
+	_, out := drainExecStream(t, reader)
+	require.Equal(t, codeexecutor.ProgramStatusExited, out.Status)
+	require.Equal(t, 2, runner.starts)
+	require.Equal(t, 2, manager.creates,
+		"the next call must rebuild the invalidated workspace once")
+}
+
 func TestKillSessionTool_RemovesSession(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -328,6 +449,72 @@ func TestExecArtifactsStateDelta(t *testing.T) {
 	require.Equal(t, "artifact://a.txt@3", got.Artifacts[0].Ref)
 }
 
+func TestExecTool_StaleWriteInvalidatesLegacyWorkspace(t *testing.T) {
+	manager := &legacySkillRetryManager{}
+	session := &stubProgramSession{
+		id: "stale-write",
+		polls: []codeexecutor.ProgramPoll{{
+			Status: codeexecutor.ProgramStatusRunning,
+			Output: "ready",
+		}},
+		writeErr: codeexecutor.ErrWorkspaceStale,
+	}
+	runner := &staleWriteSkillRunner{session: session}
+	eng := &managedEngine{
+		m: manager,
+		f: &stubFS{},
+		r: runner,
+	}
+	runTool := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: eng},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{WorkspaceSkillDir: "."}, nil
+		})),
+	)
+	execTool := NewExecTool(runTool)
+	startArgs, err := jsonMarshal(execInput{
+		runInput: runInput{
+			Skill:   testSkillName,
+			Command: echoOK,
+		},
+	})
+	require.NoError(t, err)
+	reader, err := execTool.StreamableCall(
+		context.Background(),
+		startArgs,
+	)
+	require.NoError(t, err)
+	_, started := drainExecStream(t, reader)
+	require.Equal(t, "stale-write", started.SessionID)
+	require.Equal(t, 1, manager.creates)
+
+	writeArgs, err := jsonMarshal(sessionWriteInput{
+		SessionID: "stale-write",
+		Chars:     "must-not-replay",
+	})
+	require.NoError(t, err)
+	_, err = NewWriteStdinTool(execTool).StreamableCall(
+		context.Background(),
+		writeArgs,
+	)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+
+	runArgs, err := jsonMarshal(runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+	})
+	require.NoError(t, err)
+	_, err = runTool.Call(context.Background(), runArgs)
+	require.NoError(t, err)
+	require.Equal(t, 2, manager.creates)
+	require.Equal(t, []string{"must-not-replay"}, session.writes,
+		"stdin must not be replayed after an uncertain session write")
+}
+
 type stubProgramSession struct {
 	mu         sync.Mutex
 	id         string
@@ -335,6 +522,7 @@ type stubProgramSession struct {
 	logOutput  string
 	runResult  codeexecutor.RunResult
 	writes     []string
+	writeErr   error
 	killErr    error
 	killCalled bool
 	closeCount int
@@ -412,7 +600,7 @@ func (s *stubProgramSession) Write(
 		data += "\n"
 	}
 	s.writes = append(s.writes, data)
-	return nil
+	return s.writeErr
 }
 
 func (s *stubProgramSession) Kill(grace time.Duration) error {
@@ -432,6 +620,34 @@ func (s *stubProgramSession) Close() error {
 
 func (s *stubProgramSession) RunResult() codeexecutor.RunResult {
 	return s.runResult
+}
+
+type staleWriteSkillRunner struct {
+	session     *stubProgramSession
+	startErrors []error
+	starts      int
+}
+
+func (*staleWriteSkillRunner) RunProgram(
+	context.Context,
+	codeexecutor.Workspace,
+	codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{ExitCode: 0}, nil
+}
+
+func (r *staleWriteSkillRunner) StartProgram(
+	context.Context,
+	codeexecutor.Workspace,
+	codeexecutor.InteractiveProgramSpec,
+) (codeexecutor.ProgramSession, error) {
+	r.starts++
+	if len(r.startErrors) > 0 {
+		err := r.startErrors[0]
+		r.startErrors = r.startErrors[1:]
+		return nil, err
+	}
+	return r.session, nil
 }
 
 type logOnlyProgramSession struct {

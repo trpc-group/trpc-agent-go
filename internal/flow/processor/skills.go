@@ -79,6 +79,7 @@ type skillsRequestProcessorOptions struct {
 	hasToolFlags       bool
 	execToolsDisabled  bool
 	repoResolver       func(context.Context, *agent.Invocation) skill.Repository
+	loadStateDeltaHook func(context.Context, *agent.Invocation, *event.Event)
 	directoryHints     bool
 	filePathHints      bool
 }
@@ -211,6 +212,16 @@ func WithSkillsRepositoryResolver(
 	}
 }
 
+// WithSkillLoadStateDeltaHook installs an internal hook that observes and may
+// extend the state update produced for invocation-declared skill loads.
+func WithSkillLoadStateDeltaHook(
+	hook func(context.Context, *agent.Invocation, *event.Event),
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.loadStateDeltaHook = hook
+	}
+}
+
 // WithMaxLoadedSkills caps how many skills remain "loaded" in session
 // state.
 //
@@ -280,6 +291,7 @@ func WithSkillsFilePathHints(
 type SkillsRequestProcessor struct {
 	repo               skill.Repository
 	repoResolver       func(context.Context, *agent.Invocation) skill.Repository
+	loadStateDeltaHook func(context.Context, *agent.Invocation, *event.Event)
 	capabilityGuidance *string
 	protocolGuidance   *string
 	toolingGuidance    *string
@@ -294,7 +306,8 @@ type SkillsRequestProcessor struct {
 }
 
 const (
-	skillsTurnInitStateKey = "processor:skills:turn_init"
+	skillsTurnInitStateKey         = "processor:skills:turn_init"
+	skillsRequestedLoadsAppliedKey = "processor:skills:requested_loads_applied"
 )
 
 // NewSkillsRequestProcessor creates a processor instance.
@@ -324,6 +337,7 @@ func NewSkillsRequestProcessor(
 	return &SkillsRequestProcessor{
 		repo:               repo,
 		repoResolver:       options.repoResolver,
+		loadStateDeltaHook: options.loadStateDeltaHook,
 		capabilityGuidance: options.capabilityGuidance,
 		protocolGuidance:   options.protocolGuidance,
 		toolingGuidance:    options.toolingGuidance,
@@ -365,6 +379,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	maybeMigrateLegacySkillState(ctx, inv, ch)
 
 	p.maybeClearSkillStateForTurn(ctx, inv, ch)
+	p.applyRequestedSkillLoads(ctx, inv, ch)
 
 	promptCtx, promptSpan, promptStarted := startProcessorLatencySpan(
 		ctx,
@@ -483,6 +498,66 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 		inv.InvocationID, inv.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingInstruction),
 	))
+}
+
+func (p *SkillsRequestProcessor) applyRequestedSkillLoads(
+	ctx context.Context,
+	inv *agent.Invocation,
+	ch chan<- *event.Event,
+) {
+	if inv == nil || inv.Session == nil || len(inv.RunOptions.SkillLoads) == 0 {
+		return
+	}
+	if _, ok := inv.GetState(skillsRequestedLoadsAppliedKey); ok {
+		return
+	}
+	inv.SetState(skillsRequestedLoadsAppliedKey, true)
+
+	// In turn mode, combine the turn reset and the declared loads into one
+	// state update. Emitting a reset event followed by a load event allows an
+	// outer asynchronous event consumer (for example, Ralph Loop under Runner)
+	// to apply the stale reset after the next continuation has already loaded
+	// the skill into the shared session.
+	delta := make(map[string][]byte, len(inv.RunOptions.SkillLoads)*2+1)
+	if p.loadMode == SkillLoadModeTurn {
+		for key, value := range clearSkillState(inv) {
+			delta[key] = value
+		}
+	}
+	orderKey := skill.LoadedOrderKey(inv.AgentName)
+	var order []string
+	if raw, ok := inv.Session.GetState(orderKey); ok {
+		order = skill.ParseLoadedOrder(raw)
+	}
+	for _, load := range inv.RunOptions.SkillLoads {
+		delta[skill.LoadedKey(inv.AgentName, load.Name)] = []byte("1")
+		switch {
+		case load.IncludeAllDocs:
+			delta[skill.DocsKey(inv.AgentName, load.Name)] = []byte("*")
+		case len(load.Docs) > 0:
+			// json.Marshal cannot fail for a string slice.
+			docs, _ := json.Marshal(load.Docs)
+			delta[skill.DocsKey(inv.AgentName, load.Name)] = docs
+		}
+		order = skill.TouchLoadedOrder(order, load.Name)
+	}
+	if encoded := skill.MarshalLoadedOrder(order); len(encoded) > 0 {
+		delta[orderKey] = encoded
+	}
+
+	ev := event.New(
+		inv.InvocationID,
+		inv.AgentName,
+		event.WithObject(model.ObjectTypeStateUpdate),
+		event.WithStateDelta(delta),
+	)
+	if p.loadStateDeltaHook != nil {
+		p.loadStateDeltaHook(ctx, inv, ev)
+	}
+	for key, value := range ev.StateDelta {
+		inv.Session.SetState(key, value)
+	}
+	agent.EmitEvent(ctx, inv, ch, ev)
 }
 
 func (p *SkillsRequestProcessor) repositoryForInvocation(
@@ -746,6 +821,13 @@ func (p *SkillsRequestProcessor) maybeClearSkillStateForTurn(
 		return
 	}
 	inv.SetState(skillsTurnInitStateKey, true)
+
+	// A declared load is committed together with the turn reset by
+	// applyRequestedSkillLoads so asynchronous consumers observe only the
+	// final atomic state.
+	if len(inv.RunOptions.SkillLoads) > 0 {
+		return
+	}
 
 	delta := clearSkillState(inv)
 	if len(delta) == 0 {

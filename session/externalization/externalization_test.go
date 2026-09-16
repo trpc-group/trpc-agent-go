@@ -57,3 +57,53 @@ func TestWrapEnabledExternalizesEvents(t *testing.T) {
 	require.NotNil(t, part.ContentRef)
 	assert.NotEmpty(t, part.ContentRef.ArtifactName)
 }
+
+func TestWrapPreservesCoordinatedStateInitializationCapability(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	inner := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, inner.Close()) })
+	_, err := inner.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	wrapped := Wrap(
+		inner,
+		artifactinmemory.NewService(),
+		Config{Enabled: true},
+	)
+	initializer, ok := wrapped.(session.StateInitializationService)
+	require.True(t, ok)
+	value, didInitialize, err := initializer.LoadOrInitializeSessionState(
+		ctx,
+		key,
+		"private-state",
+		func(value []byte) bool { return string(value) == "value" },
+		func(context.Context) ([]byte, error) { return []byte("value"), nil },
+		session.StateInitializationProjection{
+			StateKey: "legacy-state",
+			Project: func([]byte) ([]byte, error) {
+				return []byte("legacy"), nil
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, didInitialize)
+	require.Equal(t, "value", string(value))
+	persisted, err := inner.GetSession(ctx, key)
+	require.NoError(t, err)
+	legacy, present := persisted.GetState("legacy-state")
+	require.True(t, present)
+	require.Equal(t, "legacy", string(legacy))
+
+	withoutCapability := Wrap(
+		&requiredSessionServiceOnly{Service: inner},
+		artifactinmemory.NewService(),
+		Config{Enabled: true},
+	)
+	_, ok = withoutCapability.(session.StateInitializationService)
+	require.False(t, ok)
+}
+
+type requiredSessionServiceOnly struct {
+	session.Service
+}

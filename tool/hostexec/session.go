@@ -93,6 +93,7 @@ func (s *session) markDone(exitCode int) {
 	if s.partial != "" {
 		s.lines = append(s.lines, s.partial)
 		s.partial = ""
+		s.trimLocked()
 	}
 	s.exitCode = exitCode
 	s.finished = time.Now()

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -39,6 +40,7 @@ import (
 const (
 	defaultWorkspaceExecTimeout = 5 * time.Minute
 	defaultWorkspaceWriteYield  = 200
+	outputTruncatedMarker       = "\n...[output truncated]...\n"
 )
 
 // Environment variables that mirror the option names; useful for
@@ -76,6 +78,7 @@ type ExecTool struct {
 	// "eval curl ..." or "sh -c '...'".
 	allowedCmds []string
 	deniedCmds  []string
+	outputLimit int
 
 	mu       sync.Mutex
 	sessions map[string]*execSession
@@ -97,6 +100,7 @@ type execSession struct {
 	mu sync.Mutex
 
 	proc        codeexecutor.ProgramSession
+	handle      codeexecutor.WorkspaceHandle
 	exitedAt    time.Time
 	finalized   bool
 	finalizedAt time.Time
@@ -139,15 +143,28 @@ type execOutput struct {
 	SessionID  string `json:"session_id,omitempty"`
 	Offset     int    `json:"offset"`
 	NextOffset int    `json:"next_offset"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	TotalBytes int    `json:"total_bytes,omitempty"`
+}
+
+// OutputLimits controls how much terminal text workspace_exec and
+// workspace_write_stdin return inline. The limit is applied before the tool
+// result event is created, so oversized terminal output is not persisted in
+// full in the session. A non-positive MaxOutputBytes disables this limit.
+type OutputLimits struct {
+	// MaxOutputBytes is the maximum inline output size per tool call.
+	// Non-positive values disable output windowing.
+	MaxOutputBytes int
 }
 
 type execRequest struct {
-	background bool
-	tty        bool
-	yield      *int
-	eng        codeexecutor.Engine
-	ws         codeexecutor.Workspace
-	spec       codeexecutor.RunProgramSpec
+	background      bool
+	tty             bool
+	yield           *int
+	eng             codeexecutor.Engine
+	ws              codeexecutor.Workspace
+	workspaceHandle codeexecutor.WorkspaceHandle
+	spec            codeexecutor.RunProgramSpec
 }
 
 type killOutput struct {
@@ -196,6 +213,19 @@ func WithWorkspaceRegistry(
 ) func(*ExecTool) {
 	return func(t *ExecTool) {
 		t.reg = reg
+	}
+}
+
+// WithOutputLimits sets the inline terminal-output limit for workspace_exec
+// and workspace_write_stdin. Oversized output is normally windowed with its
+// head and tail preserved. If the limit cannot fit the truncation marker, the
+// output falls back to a UTF-8-safe prefix. Invalid UTF-8 sequences are
+// discarded before the byte budget is applied. The returned result includes
+// truncated=true and the original total_bytes value when output is changed.
+// The limit is disabled by default.
+func WithOutputLimits(limits OutputLimits) func(*ExecTool) {
+	return func(t *ExecTool) {
+		t.outputLimit = limits.MaxOutputBytes
 	}
 }
 
@@ -580,10 +610,7 @@ func (t *ExecTool) Call(ctx context.Context, args []byte) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if t.sessional {
-		return t.callSessional(ctx, req)
-	}
-	return t.callNonSessional(ctx, req)
+	return t.callWithWorkspaceRetry(ctx, req)
 }
 
 func parseExecInput(args []byte) (execInput, error) {
@@ -616,13 +643,6 @@ func (t *ExecTool) prepareExec(
 	if err := checkRunnerSupportsPolicy(eng, policyActive); err != nil {
 		return execRequest{}, err
 	}
-	ws, err := t.resolver.CreateWorkspace(ctx, eng, "workspace")
-	if err != nil {
-		return execRequest{}, err
-	}
-	if err := t.reconcileWorkspace(ctx, eng, ws); err != nil {
-		return execRequest{}, err
-	}
 	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
 	if timeout <= 0 {
 		timeout = in.Timeout
@@ -632,7 +652,6 @@ func (t *ExecTool) prepareExec(
 		tty:        firstBoolValue(in.TTY, in.PTY),
 		yield:      firstIntPtr(in.YieldTimeMS, in.YieldMs),
 		eng:        eng,
-		ws:         ws,
 		spec: codeexecutor.RunProgramSpec{
 			Cmd:      "sh",
 			Args:     shellArgsForPolicy(policyActive, in.Command),
@@ -643,6 +662,119 @@ func (t *ExecTool) prepareExec(
 			Timeout:  execTimeout(timeout),
 		},
 	}, nil
+}
+
+func (t *ExecTool) callWithWorkspaceRetry(
+	ctx context.Context,
+	base execRequest,
+) (execOutput, error) {
+	req := base
+	out, acquired, err := t.executeWorkspaceAttempt(ctx, &req)
+	if err == nil || !errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		return out, err
+	}
+	if acquired {
+		t.resolver.InvalidateWorkspaceHandle(req.workspaceHandle)
+	}
+	if !codeexecutor.IsWorkspaceRetrySafe(err) {
+		return out, err
+	}
+	retry := base
+	out, acquired, err = t.executeWorkspaceAttempt(ctx, &retry)
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) && acquired {
+		t.resolver.InvalidateWorkspaceHandle(retry.workspaceHandle)
+	}
+	return out, err
+}
+
+// executeWorkspaceAttempt keeps Acquire, reconciliation, and process start in
+// one retry unit. Stale always invalidates the exact acquired handle, while the
+// caller separately checks reconciliation's retry-safety marker before replay.
+func (t *ExecTool) executeWorkspaceAttempt(
+	ctx context.Context,
+	req *execRequest,
+) (execOutput, bool, error) {
+	handle, err := t.resolver.CreateWorkspaceHandle(
+		ctx,
+		req.eng,
+		"workspace",
+	)
+	if err != nil {
+		return execOutput{}, false, err
+	}
+	req.workspaceHandle = handle
+	req.ws = handle.Workspace
+	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
+		return execOutput{}, true, err
+	}
+	commandMayHaveStarted, err := t.reconcileWorkspace(
+		ctx,
+		req.eng,
+		req.ws,
+		req.workspaceHandle.InstanceID,
+	)
+	if err != nil {
+		return execOutput{}, true, err
+	}
+	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) &&
+			commandMayHaveStarted {
+			// Reconcile may have started an arbitrary bootstrap command,
+			// so a post-reconcile generation change is invalidation-only
+			// and must not replay automatically.
+			err = errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
+		}
+		return execOutput{}, true, err
+	}
+	if t.sessional {
+		out, err := t.callSessional(ctx, *req)
+		return out, true, err
+	}
+	out, err := t.callNonSessional(ctx, *req)
+	return out, true, err
+}
+
+func validateWorkspaceHandle(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	handle codeexecutor.WorkspaceHandle,
+) error {
+	if handle.InstanceID == "" {
+		return nil
+	}
+	if eng == nil {
+		return errors.New("workspaceexec: workspace manager is unavailable")
+	}
+	manager := eng.Manager()
+	if manager == nil {
+		return errors.New("workspaceexec: workspace manager is unavailable")
+	}
+	provider, ok := manager.(codeexecutor.WorkspaceInstanceProvider)
+	if !ok {
+		return errors.New(
+			"workspaceexec: workspace manager lost instance identity capability",
+		)
+	}
+	current, err := provider.InstanceID(ctx)
+	if err != nil {
+		return fmt.Errorf("workspaceexec: validate workspace instance: %w", err)
+	}
+	if current == "" {
+		return errors.New(
+			"workspaceexec: workspace instance provider returned an empty instance ID",
+		)
+	}
+	if current == handle.InstanceID {
+		return nil
+	}
+	return errors.Join(
+		codeexecutor.ErrWorkspaceStale,
+		fmt.Errorf(
+			"workspaceexec: workspace instance changed from %q to %q",
+			handle.InstanceID,
+			current,
+		),
+	)
 }
 
 // checkCommandPolicy enforces the optional allow/deny lists. When no
@@ -764,7 +896,7 @@ func (t *ExecTool) callNonSessional(
 	if err != nil {
 		return execOutput{}, err
 	}
-	return out, nil
+	return t.limitOutput(out), nil
 }
 
 func (t *ExecTool) callSessional(
@@ -776,7 +908,7 @@ func (t *ExecTool) callSessional(
 		if err != nil {
 			return execOutput{}, err
 		}
-		return out, nil
+		return t.limitOutput(out), nil
 	}
 	return t.startInteractive(ctx, req)
 }
@@ -821,9 +953,13 @@ func (t *ExecTool) startInteractive(
 	if err != nil {
 		return execOutput{}, err
 	}
-	t.putSession(proc.ID(), &execSession{proc: proc})
+	t.putSession(proc.ID(), &execSession{
+		proc:   proc,
+		handle: req.workspaceHandle,
+	})
 	poll := initialPoll(proc, req.background, req.yield)
 	out := pollOutput(proc.ID(), poll)
+	out = t.limitOutput(out)
 	if poll.Status == codeexecutor.ProgramStatusExited {
 		if err := t.finalizeAndRemoveSession(proc.ID()); err != nil {
 			out.SessionID = proc.ID()
@@ -868,6 +1004,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 	appendNewline := firstBoolValue(in.AppendNewline, in.Submit)
 	if in.Chars != "" || appendNewline {
 		if err := sess.proc.Write(in.Chars, appendNewline); err != nil {
+			t.exec.invalidateSessionWorkspaceIfStale(sess, err)
 			return nil, err
 		}
 	}
@@ -879,6 +1016,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 		programsession.PollLineLimit(0),
 	)
 	out := pollOutput(sessionID, poll)
+	out = t.exec.limitOutput(out)
 	if poll.Status == codeexecutor.ProgramStatusExited {
 		if err := t.exec.finalizeAndRemoveSession(sessionID); err != nil {
 			out.SessionID = sessionID
@@ -908,6 +1046,7 @@ func (t *KillSessionTool) Call(_ context.Context, args []byte) (any, error) {
 	poll := sess.proc.Poll(nil)
 	if poll.Status == codeexecutor.ProgramStatusRunning {
 		if err := sess.proc.Kill(programsession.DefaultSessionKill); err != nil {
+			t.exec.invalidateSessionWorkspaceIfStale(sess, err)
 			return nil, err
 		}
 		status = "killed"
@@ -927,14 +1066,16 @@ func (t *KillSessionTool) Call(_ context.Context, args []byte) (any, error) {
 // the function preserves the legacy behavior of staging conversation
 // files inline; otherwise it delegates to the reconciler which
 // collects Requirements from every provider and applies them in
-// phase order (file -> skill -> command).
+// phase order (file -> skill -> command). The returned boolean reports
+// whether a bootstrap command may have started.
 func (t *ExecTool) reconcileWorkspace(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
-) error {
+	instanceID codeexecutor.WorkspaceInstanceID,
+) (bool, error) {
 	if t == nil || len(t.providers) == 0 {
-		_, warnings := workspaceinput.StageConversationFiles(ctx, eng, ws)
+		_, warnings, err := workspaceinput.StageConversationFiles(ctx, eng, ws)
 		for _, warning := range warnings {
 			log.WarnfContext(
 				ctx,
@@ -942,20 +1083,22 @@ func (t *ExecTool) reconcileWorkspace(
 				warning,
 			)
 		}
-		return nil
+		return false, err
 	}
 	inv, _ := agent.InvocationFromContext(ctx)
 	var all []workspaceprep.Requirement
 	for _, p := range t.providers {
 		reqs, err := p.Requirements(ctx, inv)
 		if err != nil {
-			return fmt.Errorf(
+			return false, fmt.Errorf(
 				"workspace_exec provider %s: %w", p.Name(), err,
 			)
 		}
 		all = append(all, reqs...)
 	}
-	warnings, err := t.reconciler.Reconcile(ctx, eng, ws, all)
+	warnings, commandMayHaveStarted, err := t.reconciler.Reconcile(
+		ctx, eng, ws, instanceID, all,
+	)
 	for _, warning := range warnings {
 		log.WarnfContext(
 			ctx,
@@ -964,9 +1107,11 @@ func (t *ExecTool) reconcileWorkspace(
 		)
 	}
 	if err != nil {
-		return fmt.Errorf("workspace_exec reconcile: %w", err)
+		return commandMayHaveStarted, fmt.Errorf(
+			"workspace_exec reconcile: %w", err,
+		)
 	}
-	return nil
+	return commandMayHaveStarted, nil
 }
 
 func (t *ExecTool) liveEngine() (codeexecutor.Engine, error) {
@@ -1025,6 +1170,7 @@ func (t *ExecTool) finalizeAndRemoveSession(id string) error {
 	}
 	t.markSessionFinalized(sess)
 	if err := sess.proc.Close(); err != nil {
+		t.invalidateSessionWorkspaceIfStale(sess, err)
 		return err
 	}
 	_, err = t.removeSession(id)
@@ -1050,8 +1196,20 @@ func (t *ExecTool) cleanupExpiredLocked() {
 		if expired {
 			if err := sess.proc.Close(); err == nil {
 				delete(t.sessions, id)
+			} else {
+				t.invalidateSessionWorkspaceIfStale(sess, err)
 			}
 		}
+	}
+}
+
+func (t *ExecTool) invalidateSessionWorkspaceIfStale(
+	sess *execSession,
+	err error,
+) {
+	if t != nil && t.resolver != nil &&
+		errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		t.resolver.InvalidateWorkspaceHandle(sess.handle)
 	}
 }
 
@@ -1094,11 +1252,13 @@ func execOutputSchema(desc string) *tool.Schema {
 		Required:    []string{"status", "offset", "next_offset"},
 		Properties: map[string]*tool.Schema{
 			"status":      {Type: "string", Description: "running or exited"},
-			"output":      {Type: "string", Description: "Aggregated terminal text observed for this call. It may combine stdout and stderr and does not guarantee preservation of their original interleaving."},
+			"output":      {Type: "string", Description: "Aggregated terminal text observed for this call. It may combine stdout and stderr and does not guarantee preservation of their original interleaving. When truncated is true, this is only a bounded view of the output consumed through next_offset; omitted content cannot be retrieved by a later poll."},
 			"exit_code":   {Type: "integer", Description: "Exit code when the session has exited."},
 			"session_id":  {Type: "string", Description: "Interactive session id when still running."},
-			"offset":      {Type: "integer", Description: "Start offset of returned output."},
-			"next_offset": {Type: "integer", Description: "Next output offset."},
+			"offset":      {Type: "integer", Description: "Start cursor of the underlying output consumed for this call."},
+			"next_offset": {Type: "integer", Description: "Next cursor after the underlying output consumed for this call, including content omitted when truncated is true."},
+			"truncated":   {Type: "boolean", Description: "True when output was shortened to the configured inline limit or invalid UTF-8 was discarded before the tool result was persisted."},
+			"total_bytes": {Type: "integer", Description: "Original raw output size in bytes when truncated is true."},
 		},
 	}
 }
@@ -1115,6 +1275,64 @@ func pollOutput(sessionID string, poll codeexecutor.ProgramPoll) execOutput {
 		out.SessionID = sessionID
 	}
 	return out
+}
+
+func (t *ExecTool) limitOutput(out execOutput) execOutput {
+	if t == nil || t.outputLimit <= 0 {
+		return out
+	}
+	validOutput := strings.ToValidUTF8(out.Output, "")
+	if validOutput == out.Output && len(validOutput) <= t.outputLimit {
+		return out
+	}
+	out.TotalBytes = len(out.Output)
+	out.Output = windowOutput(validOutput, t.outputLimit)
+	out.Truncated = true
+	return out
+}
+
+func windowOutput(output string, maxBytes int) string {
+	if maxBytes <= 0 || len(output) <= maxBytes {
+		return output
+	}
+	if maxBytes <= len(outputTruncatedMarker) {
+		return utf8Prefix(output, maxBytes)
+	}
+
+	contentBudget := maxBytes - len(outputTruncatedMarker)
+	headBudget := (contentBudget + 1) / 2
+	tailBudget := contentBudget - headBudget
+	head := utf8Prefix(output, headBudget)
+	tail := utf8Suffix(output, tailBudget)
+	return head + outputTruncatedMarker + tail
+}
+
+func utf8Prefix(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	end := maxBytes
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
+}
+
+func utf8Suffix(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	start := len(s) - maxBytes
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return s[start:]
 }
 
 func execTimeout(raw int) time.Duration {

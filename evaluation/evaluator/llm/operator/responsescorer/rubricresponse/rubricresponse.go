@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	scorepkg "trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -84,6 +85,7 @@ func (e *rubricResponseScorer) ScoreBasedOnResponse(ctx context.Context, respons
 	}
 	averageScore /= float64(len(matches))
 	result.Score = averageScore
+	result.Value = &scorepkg.Value{Kind: scorepkg.KindNumeric, Numeric: &result.Score}
 	result.Reason = strings.Join(reasons, "\n")
 	return result, nil
 }

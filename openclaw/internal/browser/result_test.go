@@ -88,6 +88,96 @@ func TestCompactBrowserErrorText_IgnoresPlainPageText(t *testing.T) {
 	require.Empty(t, got)
 }
 
+func TestBlockedBrowserPageReason_DetectsCommonChallenges(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		text string
+		want string
+	}{
+		{
+			name: "cloudflare title",
+			text: "Page Title: Just a moment...\n" +
+				"Checking if the site connection is secure",
+			want: "Cloudflare",
+		},
+		{
+			name: "short just a moment body",
+			text: "Just a moment......",
+			want: "Cloudflare",
+		},
+		{
+			name: "unusual traffic",
+			text: "Our systems have detected unusual traffic from " +
+				"your computer network.",
+			want: "unusual-traffic",
+		},
+		{
+			name: "captcha",
+			text: "Please complete the CAPTCHA to verify you are human.",
+			want: "CAPTCHA",
+		},
+		{
+			name: "human verification",
+			text: "Checking if the site connection is secure. " +
+				"Enable JavaScript and cookies to continue.",
+			want: "human-verification",
+		},
+		{
+			name: "bot check",
+			text: "This page is running an anti-bot check. " +
+				"Please wait while we verify your browser.",
+			want: "bot-check",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := blockedBrowserPageReason(tc.text)
+			require.True(t, ok)
+			require.Contains(t, got, tc.want)
+		})
+	}
+}
+
+func TestBlockedBrowserPageReason_IgnoresPlainPageText(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{
+		"This article says a captcha can be hard to read.",
+		"This security article compares anti-bot systems and bot check terminology.",
+		"The phrase just a moment appeared in the transcript.",
+		"Just a moment in the article title, then regular text.",
+		"Verify your account settings before changing the profile.",
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := blockedBrowserPageReason(tc)
+			require.False(t, ok)
+			require.Empty(t, got)
+		})
+	}
+}
+
+func TestBrowserResultURL(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "https://example.com/final", browserResultURL(map[string]any{
+		"url": "https://example.com/final",
+	}))
+	require.Equal(t, "https://example.com/mcp", browserResultURL(textPayload(
+		"Page URL: https://example.com/mcp",
+	)))
+	require.Empty(t, browserResultURL(nil))
+}
+
 func TestParseTabs_ParsesActiveTab(t *testing.T) {
 	t.Parallel()
 

@@ -79,6 +79,7 @@ type macosAccessRoot struct {
 func (r *Runtime) macosSeatbeltProfile(
 	profile PermissionProfile,
 	ws codeexecutor.Workspace,
+	diagnostics sandboxDenialRun,
 ) (string, error) {
 	if err := validateFileSystemRules(profile); err != nil {
 		return "", err
@@ -110,7 +111,7 @@ func (r *Runtime) macosSeatbeltProfile(
 		"file-write*",
 		macosAccessRoots(writeRoots, writeExclusions, protectedRoots),
 	)
-	globPolicy, err := r.macosNoAccessGlobPolicy(profile, ws)
+	globPolicy, err := r.macosNoAccessGlobPolicy(profile, ws, diagnostics)
 	if err != nil {
 		return "", err
 	}
@@ -119,7 +120,7 @@ func (r *Runtime) macosSeatbeltProfile(
 		return "", err
 	}
 	sections := []string{
-		macosBaseSeatbeltPolicy,
+		macosBaseSeatbeltPolicyForDiagnostics(diagnostics),
 		macosPlatformRootLiteralPolicy,
 		macosPlatformAliasPolicy,
 		macosPlatformTempMetadataPolicy,
@@ -146,6 +147,18 @@ func macosPreflightPolicy() string {
 		macosPlatformTempMetadataPolicy,
 		readPolicy,
 	}), "\n\n")
+}
+
+func macosBaseSeatbeltPolicyForDiagnostics(diagnostics sandboxDenialRun) string {
+	if !diagnostics.enabled || diagnostics.runTag == "" || !diagnostics.defaultDenyTaggable {
+		return macosBaseSeatbeltPolicy
+	}
+	return strings.Replace(
+		macosBaseSeatbeltPolicy,
+		"(deny default)",
+		fmt.Sprintf("(deny default (with message %s))", sbplString(diagnostics.runTag)),
+		1,
+	)
 }
 
 const macosPlatformRootLiteralPolicy = `; Allow processes to read the filesystem root itself for getcwd/path resolution.
@@ -349,6 +362,7 @@ func macosSeatbeltAccessPolicy(operations string, roots []macosAccessRoot) strin
 func (r *Runtime) macosNoAccessGlobPolicy(
 	profile PermissionProfile,
 	ws codeexecutor.Workspace,
+	diagnostics sandboxDenialRun,
 ) (string, error) {
 	// macOS glob no-access rules are hard Seatbelt denials, matching
 	// Codex's macOS behavior. More-specific read/write grants do not reopen
@@ -366,12 +380,20 @@ func (r *Runtime) macosNoAccessGlobPolicy(
 			continue
 		}
 		regex = strings.ReplaceAll(regex, `"`, `\"`)
+		message := macosDenyMessage(diagnostics)
 		rules = append(rules,
-			fmt.Sprintf(`(deny file-read* file-map-executable file-test-existence (regex #"%s"))`, regex),
-			fmt.Sprintf(`(deny file-write* (regex #"%s"))`, regex),
+			fmt.Sprintf(`(deny file-read* file-map-executable file-test-existence (regex #"%s")%s)`, regex, message),
+			fmt.Sprintf(`(deny file-write* (regex #"%s")%s)`, regex, message),
 		)
 	}
 	return strings.Join(rules, "\n"), nil
+}
+
+func macosDenyMessage(diagnostics sandboxDenialRun) string {
+	if !diagnostics.enabled || diagnostics.runTag == "" || !diagnostics.explicitDenyTaggable {
+		return ""
+	}
+	return fmt.Sprintf(" (with message %s)", sbplString(diagnostics.runTag))
 }
 
 func macosSeatbeltRegexForWorkspaceGlob(

@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,6 +54,54 @@ func TestNewToolSet_Foreground(t *testing.T) {
 	require.Contains(t, outputField(res), "hello")
 	require.EqualValues(t, 0, res["exit_code"])
 	require.Empty(t, mgr.sessions)
+}
+
+func TestNewToolSet_ForegroundHonorsMaxLines(t *testing.T) {
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	cases := []struct {
+		name    string
+		command string
+	}{
+		{
+			name:    "trailing newline",
+			command: "printf 'l1\\nl2\\nl3\\nl4\\nl5\\n'",
+		},
+		{
+			// The last line arrives as a partial that markDone
+			// appends after the readers stop; it must be trimmed
+			// like any other line.
+			name:    "no trailing newline",
+			command: "printf 'l1\\nl2\\nl3\\nl4\\nl5'",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			set, err := NewToolSet(WithMaxLines(3))
+			require.NoError(t, err)
+			defer set.Close()
+
+			execTool, _, _, _ := toolSetTools(t, set)
+			out, err := execTool.Call(
+				context.Background(),
+				mustJSON(t, map[string]any{
+					"command": tc.command,
+					"yieldMs": 0,
+				}),
+			)
+			require.NoError(t, err)
+
+			res := out.(map[string]any)
+			require.Equal(t, programStatusExited, res["status"])
+			require.Equal(
+				t, "l3\nl4\nl5", outputField(res),
+				"foreground output must be exactly the "+
+					"configured tail",
+			)
+		})
+	}
 }
 
 func TestNewToolSet_BaseDirAndRelativeWorkdir(t *testing.T) {
@@ -171,6 +220,51 @@ func TestNewToolSet_WriteStdin(t *testing.T) {
 	all := outputField(writeOut.(map[string]any))
 	all += pollUntilExited(t, mgr, sessionID)
 	require.Contains(t, all, "got:hi")
+}
+
+func TestNewToolSet_WriteStdin_ReturnsWhenProcessExits(t *testing.T) {
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet(WithJobTTL(10 * time.Second))
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, writeTool, _, _ := toolSetTools(t, set)
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command":    "sleep 0.3; echo finished",
+			"background": true,
+		}),
+	)
+	require.NoError(t, err)
+
+	sessionID := out.(map[string]any)["session_id"].(string)
+	require.NotEmpty(t, sessionID)
+
+	// A yield far longer than the command: the wait must end when the
+	// process exits, not when the yield timer fires.
+	start := time.Now()
+	writeOut, err := writeTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"session_id":    sessionID,
+			"chars":         "",
+			"yield_time_ms": 30_000,
+		}),
+	)
+	require.NoError(t, err)
+	elapsed := time.Since(start)
+
+	res := writeOut.(map[string]any)
+	require.Equal(t, programStatusExited, res["status"])
+	require.Contains(t, outputField(res), "finished")
+	require.Less(
+		t, elapsed, 10*time.Second,
+		"write_stdin slept out its yield instead of returning on exit",
+	)
 }
 
 func TestNewToolSet_WriteStdin_NoRepeatedInitialOutput(t *testing.T) {
@@ -523,6 +617,7 @@ func TestRunForeground_ContextCancel(t *testing.T) {
 		execParams{Command: "sleep 5"},
 		5*time.Second,
 		nil,
+		defaultMaxLines,
 	)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, output)
@@ -795,10 +890,23 @@ func TestToolCalls_NotConfigured(t *testing.T) {
 	require.EqualError(t, err, errKillToolNotConfigured)
 }
 
+func TestWriteStdin_UnknownSession(t *testing.T) {
+	tool := &writeStdinTool{mgr: newManager()}
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"session_id": "missing",
+			"chars":      "hello",
+		}),
+	)
+	require.ErrorIs(t, err, errUnknownSession)
+}
+
 func TestWriteStdin_CanceledBeforePoll(t *testing.T) {
 	mgr := newManager()
 	sess := newSession("session", "cat", defaultMaxLines)
-	sess.stdin = &testWriteCloser{}
+	writer := &testWriteCloser{}
+	sess.stdin = writer
 	mgr.sessions[sess.id] = sess
 
 	tool := &writeStdinTool{mgr: mgr}
@@ -815,6 +923,33 @@ func TestWriteStdin_CanceledBeforePoll(t *testing.T) {
 		}),
 	)
 	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, writer.String())
+}
+
+func TestWriteStdin_CanceledAfterWriteBeforePoll(t *testing.T) {
+	for _, yield := range []int{0, 200} {
+		t.Run(fmt.Sprintf("yield_%d", yield), func(t *testing.T) {
+			mgr := newManager()
+			sess := newSession("session", "cat", defaultMaxLines)
+			ctx, cancel := context.WithCancel(context.Background())
+			writer := &cancelAfterWriteCloser{cancel: cancel}
+			sess.stdin = writer
+			mgr.sessions[sess.id] = sess
+
+			tool := &writeStdinTool{mgr: mgr}
+			out, err := tool.Call(
+				ctx,
+				mustJSON(t, map[string]any{
+					"session_id":    sess.id,
+					"chars":         "hello",
+					"yield_time_ms": yield,
+				}),
+			)
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			require.Equal(t, "hello", writer.String())
+		})
+	}
 }
 
 func TestHostexec_HelperFunctions(t *testing.T) {
@@ -993,8 +1128,10 @@ func TestSession_HelpersAndBranches(t *testing.T) {
 	require.False(t, doneAt.IsZero())
 	sess.markDone(9)
 
+	// markDone trims the appended partial like any other line, so the
+	// one-line cap keeps only the final line.
 	out, code := sess.allOutput()
-	require.Equal(t, "third\ntail", out)
+	require.Equal(t, "tail", out)
 	require.Equal(t, 7, code)
 
 	exited := sess.poll(nil)
@@ -1083,6 +1220,25 @@ type testWriteCloser struct {
 }
 
 func (w *testWriteCloser) Close() error {
+	return nil
+}
+
+type cancelAfterWriteCloser struct {
+	buf    bytes.Buffer
+	cancel context.CancelFunc
+}
+
+func (w *cancelAfterWriteCloser) Write(p []byte) (int, error) {
+	n, err := w.buf.Write(p)
+	w.cancel()
+	return n, err
+}
+
+func (w *cancelAfterWriteCloser) String() string {
+	return w.buf.String()
+}
+
+func (w *cancelAfterWriteCloser) Close() error {
 	return nil
 }
 

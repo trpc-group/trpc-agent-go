@@ -75,6 +75,7 @@ type ServiceOpts struct {
 	extraOptions []any
 
 	sessionTTL         time.Duration
+	trackEventTTL      *time.Duration
 	appStateTTL        time.Duration
 	userStateTTL       time.Duration
 	enableAsyncPersist bool
@@ -146,6 +147,13 @@ func (opts ServiceOpts) shouldCascadeFullSessionSummary() bool {
 	return *opts.cascadeFullSessionSummary
 }
 
+func (opts ServiceOpts) effectiveTrackEventTTL() time.Duration {
+	if opts.trackEventTTL != nil {
+		return *opts.trackEventTTL
+	}
+	return opts.sessionTTL
+}
+
 // WithPostgresClientDSN sets the PostgreSQL DSN connection
 // string directly (recommended).
 func WithPostgresClientDSN(dsn string) ServiceOpt {
@@ -208,6 +216,13 @@ func WithSessionEventLimit(limit int) ServiceOpt {
 // event list.
 func WithSessionTTL(ttl time.Duration) ServiceOpt {
 	return func(o *ServiceOpts) { o.sessionTTL = ttl }
+}
+
+// WithTrackEventTTL sets the TTL for track events.
+// If unset, track events use the session TTL. A non-positive TTL disables track
+// event expiration.
+func WithTrackEventTTL(ttl time.Duration) ServiceOpt {
+	return func(o *ServiceOpts) { o.trackEventTTL = &ttl }
 }
 
 // WithAppStateTTL sets the TTL for app state.

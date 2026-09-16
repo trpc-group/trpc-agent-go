@@ -241,6 +241,91 @@ func TestSessionSQLite_CleanupExpiredData_Hard_AppUser(t *testing.T) {
 	}
 }
 
+func TestSessionSQLite_CleanupExpiredData_TrackTTL(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+	svc, err := NewService(db, WithTrackEventTTL(time.Hour))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, svc.AppendTrackEvent(ctx, sess, newTrackEvent("expired", 1)))
+	setSQLiteTrackExpires(t, svc, ctx, key, "expired", time.Now().Add(-time.Hour).UTC().UnixNano())
+	svc.cleanupExpiredData(ctx)
+	deleted := sqliteTrackDeletedAt(t, svc, ctx, key, "expired")
+	require.True(t, deleted.Valid)
+}
+
+func TestSessionSQLite_CleanupExpiredTrackEvents(t *testing.T) {
+	tests := []struct {
+		name       string
+		softDelete bool
+	}{
+		{name: "soft delete", softDelete: true},
+		{name: "hard delete", softDelete: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, _, cleanup := openTempSQLiteDB(t)
+			defer cleanup()
+			svc, err := NewService(
+				db,
+				WithTrackEventTTL(time.Hour),
+				WithSoftDelete(tt.softDelete),
+			)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, svc.Close()) }()
+			ctx := context.Background()
+			key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+			sess, err := svc.CreateSession(ctx, key, nil)
+			require.NoError(t, err)
+			require.NoError(t, svc.AppendTrackEvent(ctx, sess, newTrackEvent("expired", 1)))
+			require.NoError(t, svc.AppendTrackEvent(ctx, sess, newTrackEvent("fresh", 2)))
+			now := time.Now().UTC()
+			setSQLiteTrackExpires(t, svc, ctx, key, "expired", now.Add(-time.Hour).UnixNano())
+			setSQLiteTrackExpires(t, svc, ctx, key, "fresh", now.Add(time.Hour).UnixNano())
+			svc.cleanupExpiredTrackEvents(ctx, now)
+			if tt.softDelete {
+				require.True(t, sqliteTrackDeletedAt(t, svc, ctx, key, "expired").Valid)
+				require.False(t, sqliteTrackDeletedAt(t, svc, ctx, key, "fresh").Valid)
+				return
+			}
+			require.Equal(t, 0, sqliteTrackCount(t, svc, ctx, key, "expired"))
+			require.Equal(t, 1, sqliteTrackCount(t, svc, ctx, key, "fresh"))
+		})
+	}
+}
+
+func TestSessionSQLite_CleanupExpiredSessionsKeepsTrackEventsWithTrackTTL(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+	svc, err := NewService(
+		db,
+		WithSessionTTL(time.Hour),
+		WithTrackEventTTL(time.Hour),
+		WithSoftDelete(false),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, svc.AppendTrackEvent(ctx, sess, newTrackEvent("fresh", 1)))
+	_, err = svc.db.ExecContext(
+		ctx,
+		"UPDATE "+svc.tableSessionStates+" SET expires_at = ?",
+		time.Now().Add(-time.Hour).UTC().UnixNano(),
+	)
+	require.NoError(t, err)
+	setSQLiteTrackExpires(t, svc, ctx, key, "fresh", time.Now().Add(time.Hour).UTC().UnixNano())
+	svc.cleanupExpiredData(ctx)
+	require.Equal(t, 0, sqliteSessionCount(t, svc, ctx, key))
+	require.Equal(t, 1, sqliteTrackCount(t, svc, ctx, key, "fresh"))
+}
+
 func TestSessionSQLite_StartCleanupRoutine_NoInterval(t *testing.T) {
 	db, _, cleanup := openTempSQLiteDB(t)
 	defer cleanup()
@@ -252,6 +337,95 @@ func TestSessionSQLite_StartCleanupRoutine_NoInterval(t *testing.T) {
 	require.Nil(t, svc.cleanupTicker)
 	svc.startCleanupRoutine()
 	require.Nil(t, svc.cleanupTicker)
+}
+
+func setSQLiteTrackExpires(
+	t *testing.T,
+	svc *Service,
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	expiresAt int64,
+) {
+	t.Helper()
+	_, err := svc.db.ExecContext(
+		ctx,
+		"UPDATE "+svc.tableSessionTracks+
+			" SET expires_at = ? WHERE app_name = ? AND user_id = ?"+
+			" AND session_id = ? AND track = ?",
+		expiresAt,
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		track,
+	)
+	require.NoError(t, err)
+}
+
+func sqliteTrackDeletedAt(
+	t *testing.T,
+	svc *Service,
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+) sql.NullInt64 {
+	t.Helper()
+	var deleted sql.NullInt64
+	err := svc.db.QueryRowContext(
+		ctx,
+		"SELECT deleted_at FROM "+svc.tableSessionTracks+
+			" WHERE app_name = ? AND user_id = ? AND session_id = ?"+
+			" AND track = ?",
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		track,
+	).Scan(&deleted)
+	require.NoError(t, err)
+	return deleted
+}
+
+func sqliteTrackCount(
+	t *testing.T,
+	svc *Service,
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+) int {
+	t.Helper()
+	var count int
+	err := svc.db.QueryRowContext(
+		ctx,
+		"SELECT COUNT(*) FROM "+svc.tableSessionTracks+
+			" WHERE app_name = ? AND user_id = ? AND session_id = ?"+
+			" AND track = ?",
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		track,
+	).Scan(&count)
+	require.NoError(t, err)
+	return count
+}
+
+func sqliteSessionCount(
+	t *testing.T,
+	svc *Service,
+	ctx context.Context,
+	key session.Key,
+) int {
+	t.Helper()
+	var count int
+	err := svc.db.QueryRowContext(
+		ctx,
+		"SELECT COUNT(*) FROM "+svc.tableSessionStates+
+			" WHERE app_name = ? AND user_id = ? AND session_id = ?",
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	).Scan(&count)
+	require.NoError(t, err)
+	return count
 }
 
 func TestSessionSQLite_CleanupRoutine_Tick(t *testing.T) {

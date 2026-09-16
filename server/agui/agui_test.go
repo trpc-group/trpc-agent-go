@@ -11,6 +11,7 @@ package agui
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -81,6 +82,128 @@ func TestEndToEndServerSendsSSEEvents(t *testing.T) {
 	assert.NotNil(t, agent.lastInvocation)
 	assert.Equal(t, "hi there", agent.lastInvocation.Message.Content)
 	assert.Equal(t, model.RoleUser, agent.lastInvocation.Message.Role)
+}
+
+func TestCustomRunnerDisconnectReleasesInnerSessionKey(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		cancelOnContextDone bool
+	}{
+		{name: "run continues"},
+		{name: "run is canceled", cancelOnContextDone: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCustomRunnerDisconnectReleasesInnerSessionKey(t, tc.cancelOnContextDone)
+		})
+	}
+}
+
+func testCustomRunnerDisconnectReleasesInnerSessionKey(t *testing.T, cancelOnContextDone bool) {
+	firstAgentRunContext := make(chan context.Context, 1)
+	releaseFirstAgentRun := make(chan struct{})
+	releaseFirst := func() {
+		select {
+		case <-releaseFirstAgentRun:
+		default:
+			close(releaseFirstAgentRun)
+		}
+	}
+
+	agt := &mockAgent{info: agent.Info{Name: "demo"}}
+	agt.run = func(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+		if agt.runCalls == 1 {
+			firstAgentRunContext <- ctx
+			<-releaseFirstAgentRun
+		}
+		events := make(chan *event.Event, 1)
+		events <- event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			&model.Response{
+				ID:     "completion",
+				Object: model.ObjectTypeRunnerCompletion,
+				Done:   true,
+			},
+		)
+		close(events)
+		return events, nil
+	}
+	baseRunner := runner.NewRunner(agt.Info().Name, agt)
+	t.Cleanup(func() {
+		releaseFirst()
+		assert.NoError(t, baseRunner.Close())
+	})
+	relayCompleted := make(chan struct{}, 2)
+	runnerFactory := func(
+		base runner.Runner,
+		opts ...aguirunner.Option,
+	) (aguirunner.Runner, error) {
+		return &requestCancelRelayRunner{
+			inner:     aguirunner.New(base, opts...),
+			completed: relayCompleted,
+		}, nil
+	}
+	serverOptions := []Option{
+		WithTimeout(0),
+		WithRunnerFactory(runnerFactory),
+	}
+	if cancelOnContextDone {
+		serverOptions = append(serverOptions, WithCancelOnContextDoneEnabled(true))
+	}
+	srv, err := New(baseRunner, serverOptions...)
+	if !assert.NoError(t, err) || !assert.NotNil(t, srv) {
+		return
+	}
+
+	firstPayload := `{"threadId":"thread","runId":"run-1","messages":[{"role":"user","content":"hi"}]}`
+	firstBaseReq := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(firstPayload))
+	firstRequestCtx, cancelFirstRequest := context.WithCancel(firstBaseReq.Context())
+	firstReq := firstBaseReq.WithContext(firstRequestCtx)
+	firstRecorder := httptest.NewRecorder()
+	firstHandlerDone := make(chan struct{})
+	go func() {
+		srv.Handler().ServeHTTP(firstRecorder, firstReq)
+		close(firstHandlerDone)
+	}()
+
+	var agentRunContext context.Context
+	select {
+	case agentRunContext = <-firstAgentRunContext:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for first agent run context")
+	}
+	cancelFirstRequest()
+	waitForAGUISignal(t, firstHandlerDone, "first HTTP handler return")
+	waitForAGUISignal(t, relayCompleted, "first relay completion")
+	if cancelOnContextDone {
+		assert.Eventually(t, func() bool {
+			return errors.Is(agentRunContext.Err(), context.Canceled)
+		}, time.Second, 10*time.Millisecond)
+	} else {
+		assert.NoError(t, agentRunContext.Err())
+	}
+	releaseFirst()
+
+	var secondRecorder *httptest.ResponseRecorder
+	ok := assert.Eventually(t, func() bool {
+		payload := `{"threadId":"thread","runId":"run-2","messages":[{"role":"user","content":"again"}]}`
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
+		ctx, cancel := context.WithTimeout(req.Context(), 500*time.Millisecond)
+		defer cancel()
+		req = req.WithContext(ctx)
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			return false
+		}
+		secondRecorder = recorder
+		return true
+	}, 2*time.Second, 10*time.Millisecond)
+	if !ok {
+		return
+	}
+	assert.NotContains(t, secondRecorder.Body.String(), "run already exists")
+	assert.Contains(t, secondRecorder.Body.String(), `"type":"RUN_FINISHED"`)
 }
 
 func TestWithToolCallDeltaStreamingEnabledPropagatesToRunner(t *testing.T) {
@@ -175,6 +298,176 @@ func TestNewDistributedCancelRequiresSessionService(t *testing.T) {
 	assert.EqualError(t, err, "new service: agui: session service is required when distributed cancel is enabled")
 }
 
+func TestNewRunnerFactoryNilRejected(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r, WithRunnerFactory(nil))
+	assert.Nil(t, srv)
+	assert.EqualError(t, err, "new service: agui: runner factory must not be nil")
+}
+
+func TestNewDefaultRunnerFactoryUsed(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	var captured aguirunner.Runner
+	serviceFactory := func(r aguirunner.Runner, _ ...service.Option) service.Service {
+		captured = r
+		return dummyAGUIService{}
+	}
+	srv, err := New(r, WithServiceFactory(serviceFactory))
+	assert.NoError(t, err)
+	assert.NotNil(t, srv)
+	assert.NotNil(t, captured)
+}
+
+func TestNewRunnerFactoryCalledWithBaseRunnerAndOptions(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	baseRunner := runner.NewRunner(agent.Info().Name, agent)
+	sessionSvc := inmemory.NewSessionService()
+	customRunner := &testAGUIRunner{}
+	var capturedBase runner.Runner
+	var capturedOpts []aguirunner.Option
+	factory := func(r runner.Runner, opts ...aguirunner.Option) (aguirunner.Runner, error) {
+		capturedBase = r
+		capturedOpts = append([]aguirunner.Option(nil), opts...)
+		return customRunner, nil
+	}
+	srv, err := New(baseRunner,
+		WithRunnerFactory(factory),
+		WithTimeout(2*time.Second),
+		WithAppName("demo"),
+		WithSessionService(sessionSvc),
+	)
+	ro := aguirunner.NewOptions(capturedOpts...)
+	assert.NoError(t, err)
+	assert.NotNil(t, srv)
+	assert.Same(t, baseRunner, capturedBase)
+	assert.Equal(t, 2*time.Second, ro.Timeout)
+	assert.Equal(t, "demo", ro.AppName)
+	assert.Same(t, sessionSvc, ro.SessionService)
+}
+
+func TestNewRunnerFactoryPreservesOptionOrder(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	baseRunner := runner.NewRunner(agent.Info().Name, agent)
+	var capturedOpts []aguirunner.Option
+	factory := func(_ runner.Runner, opts ...aguirunner.Option) (aguirunner.Runner, error) {
+		capturedOpts = append([]aguirunner.Option(nil), opts...)
+		return &testAGUIRunner{}, nil
+	}
+	srv, err := New(baseRunner,
+		WithAGUIRunnerOptions(aguirunner.WithAppName("first")),
+		WithAppName("second"),
+		WithAGUIRunnerOptions(aguirunner.WithAppName("third")),
+		WithRunnerFactory(factory),
+	)
+	ro := aguirunner.NewOptions(capturedOpts...)
+	assert.NoError(t, err)
+	assert.NotNil(t, srv)
+	assert.Equal(t, "third", ro.AppName)
+}
+
+func TestNewRunnerFactoryRunnerUsedByServiceFactory(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	baseRunner := runner.NewRunner(agent.Info().Name, agent)
+	customRunner := &testAGUIRunner{}
+	var captured aguirunner.Runner
+	factory := func(_ runner.Runner, _ ...aguirunner.Option) (aguirunner.Runner, error) {
+		return customRunner, nil
+	}
+	serviceFactory := func(r aguirunner.Runner, _ ...service.Option) service.Service {
+		captured = r
+		return dummyAGUIService{}
+	}
+	srv, err := New(baseRunner, WithRunnerFactory(factory), WithServiceFactory(serviceFactory))
+	assert.NoError(t, err)
+	assert.NotNil(t, srv)
+	assert.Same(t, customRunner, captured)
+}
+
+func TestNewRunnerFactoryError(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	baseRunner := runner.NewRunner(agent.Info().Name, agent)
+	factoryErr := errors.New("boom")
+	factory := func(_ runner.Runner, _ ...aguirunner.Option) (aguirunner.Runner, error) {
+		return nil, factoryErr
+	}
+	srv, err := New(baseRunner, WithRunnerFactory(factory))
+	assert.Nil(t, srv)
+	assert.EqualError(t, err, "new service: agui: create runner: boom")
+}
+
+func TestNewRunnerFactoryNilRunner(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	baseRunner := runner.NewRunner(agent.Info().Name, agent)
+	factory := func(_ runner.Runner, _ ...aguirunner.Option) (aguirunner.Runner, error) {
+		return nil, nil
+	}
+	srv, err := New(baseRunner, WithRunnerFactory(factory))
+	assert.Nil(t, srv)
+	assert.EqualError(t, err, "new service: agui: runner factory returned nil runner")
+}
+
+func TestNewMessagesSnapshotStillRequiresAppNameWithRunnerFactory(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	baseRunner := runner.NewRunner(agent.Info().Name, agent)
+	factory := func(_ runner.Runner, _ ...aguirunner.Option) (aguirunner.Runner, error) {
+		return &testAGUIRunner{}, nil
+	}
+	srv, err := New(baseRunner,
+		WithRunnerFactory(factory),
+		WithMessagesSnapshotEnabled(true),
+		WithSessionService(inmemory.NewSessionService()),
+	)
+	assert.Nil(t, srv)
+	assert.EqualError(t, err, "new service: agui: app name is required when messages snapshot is enabled")
+}
+
+func TestNewMessagesSnapshotStillRequiresSessionServiceWithRunnerFactory(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	baseRunner := runner.NewRunner(agent.Info().Name, agent)
+	factory := func(_ runner.Runner, _ ...aguirunner.Option) (aguirunner.Runner, error) {
+		return &testAGUIRunner{}, nil
+	}
+	srv, err := New(baseRunner,
+		WithRunnerFactory(factory),
+		WithMessagesSnapshotEnabled(true),
+		WithAppName("demo"),
+	)
+	assert.Nil(t, srv)
+	assert.EqualError(t, err, "new service: agui: session service is required when messages snapshot is enabled")
+}
+
+func TestNewMessagesSnapshotStillRequiresTrackServiceWithRunnerFactory(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	baseRunner := runner.NewRunner(agent.Info().Name, agent)
+	factory := func(_ runner.Runner, _ ...aguirunner.Option) (aguirunner.Runner, error) {
+		return &testAGUIRunner{}, nil
+	}
+	srv, err := New(baseRunner,
+		WithRunnerFactory(factory),
+		WithMessagesSnapshotEnabled(true),
+		WithAppName("demo"),
+		WithSessionService(&fakeSessionService{}),
+	)
+	assert.Nil(t, srv)
+	assert.EqualError(t, err, "new service: agui: session service must implement TrackService")
+}
+
+func TestNewDistributedCancelStillRequiresSessionServiceWithRunnerFactory(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	baseRunner := runner.NewRunner(agent.Info().Name, agent)
+	var called bool
+	factory := func(_ runner.Runner, _ ...aguirunner.Option) (aguirunner.Runner, error) {
+		called = true
+		return &testAGUIRunner{}, nil
+	}
+	srv, err := New(baseRunner, WithRunnerFactory(factory), WithDistributedCancelEnabled(true))
+	assert.Nil(t, srv)
+	assert.EqualError(t, err, "new service: agui: session service is required when distributed cancel is enabled")
+	assert.False(t, called)
+}
+
 func TestNewServiceRequiresServiceFactory(t *testing.T) {
 	opts := &options{serviceFactory: nil}
 	svc, err := newService(runner.NewRunner("demo", &mockAgent{info: agent.Info{Name: "demo"}}), opts)
@@ -196,15 +489,14 @@ func TestNewWrapsServiceFactoryError(t *testing.T) {
 func TestNewServiceRequiresTrackService(t *testing.T) {
 	agent := &mockAgent{info: agent.Info{Name: "demo"}}
 	r := runner.NewRunner(agent.Info().Name, agent)
-	opts := &options{
-		basePath:                "/",
-		path:                    "/chat",
-		serviceFactory:          func(aguirunner.Runner, ...service.Option) service.Service { return dummyAGUIService{} },
-		messagesSnapshotEnabled: true,
-		messagesSnapshotPath:    "/history",
-		appName:                 "demo",
-		sessionService:          &fakeSessionService{},
-	}
+	opts := newOptions(
+		WithPath("/chat"),
+		WithServiceFactory(func(aguirunner.Runner, ...service.Option) service.Service { return dummyAGUIService{} }),
+		WithMessagesSnapshotEnabled(true),
+		WithMessagesSnapshotPath("/history"),
+		WithAppName("demo"),
+		WithSessionService(&fakeSessionService{}),
+	)
 	svc, err := newService(r, opts)
 	assert.Nil(t, svc)
 	assert.EqualError(t, err, "agui: session service must implement TrackService")
@@ -406,6 +698,61 @@ func (a *mockAgent) FindSubAgent(string) agent.Agent {
 type dummyAGUIService struct{}
 
 func (dummyAGUIService) Handler() http.Handler { return http.NewServeMux() }
+
+type testAGUIRunner struct{}
+
+func (*testAGUIRunner) Run(context.Context, *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+	events := make(chan aguievents.Event)
+	close(events)
+	return events, nil
+}
+
+type requestCancelRelayRunner struct {
+	inner     aguirunner.Runner
+	completed chan<- struct{}
+}
+
+func (r *requestCancelRelayRunner) Run(
+	ctx context.Context,
+	input *adapter.RunAgentInput,
+) (<-chan aguievents.Event, error) {
+	innerEvents, err := r.inner.Run(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	outerEvents := make(chan aguievents.Event)
+	go func() {
+		defer func() {
+			close(outerEvents)
+			r.completed <- struct{}{}
+		}()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-innerEvents:
+				if !ok {
+					return
+				}
+				select {
+				case outerEvents <- event:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return outerEvents, nil
+}
+
+func waitForAGUISignal(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatalf("timeout waiting for %s", name)
+	}
+}
 
 type fakeSessionService struct{}
 

@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 )
 
 type echoPromptModel struct {
@@ -110,6 +111,71 @@ func TestSessionSummarizer_PreHook_ModifiesEventsAndRebuildsText(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, summary, "new-content")
 	assert.NotContains(t, summary, "origin")
+}
+
+func TestSessionSummarizer_PreHook_ModifiesSeparatedPreviousSummary(t *testing.T) {
+	mdl := &echoPromptModel{}
+	var capturedEvents []event.Event
+	s := NewSummarizer(
+		mdl,
+		WithPrompt("Previous:\n{previous_summary}\n\nConversation:\n{conversation_text}\n\nSummary:"),
+		WithPreSummaryHook(func(in *PreSummaryHookContext) error {
+			capturedEvents = append([]event.Event(nil), in.Events...)
+			require.Equal(t, "previous", in.PreviousSummary)
+			require.Equal(t, "user: new conversation", in.Text)
+			in.PreviousSummary = "redacted previous"
+			in.Text = "redacted conversation"
+			return nil
+		}),
+	)
+	sess := &session.Session{ID: "sess", Events: []event.Event{
+		{
+			Author: authorSystem,
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Content: "previous"},
+			}}},
+		},
+		newEventWithContent("new conversation"),
+	}}
+	ctx := isummarycontext.WithPreviousSummary(context.Background(), "previous")
+
+	result, err := s.Summarize(ctx, sess)
+	require.NoError(t, err)
+	require.Len(t, capturedEvents, 1)
+	require.Equal(t, authorUser, capturedEvents[0].Author)
+	require.Contains(t, result, "Previous:\nredacted previous")
+	require.Contains(t, result, "Conversation:\nredacted conversation")
+	require.NotContains(t, result, "new conversation")
+}
+
+func TestSessionSummarizer_PreHook_ClearsSeparatedConversation(t *testing.T) {
+	mdl := &echoPromptModel{}
+	s := NewSummarizer(
+		mdl,
+		WithPrompt("Previous:\n{previous_summary}\n\nConversation:\n{conversation_text}\n\nSummary:"),
+		WithPreSummaryHook(func(in *PreSummaryHookContext) error {
+			require.Equal(t, "previous", in.PreviousSummary)
+			in.Events = nil
+			in.Text = ""
+			return nil
+		}),
+	)
+	sess := &session.Session{ID: "sess", Events: []event.Event{
+		{
+			Author: authorSystem,
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Content: "previous"},
+			}}},
+		},
+		newEventWithContent("sensitive conversation"),
+	}}
+	ctx := isummarycontext.WithPreviousSummary(context.Background(), "previous")
+
+	result, err := s.Summarize(ctx, sess)
+	require.NoError(t, err)
+	require.Contains(t, result, "Previous:\nprevious")
+	require.Contains(t, result, "Conversation:\n\n\nSummary:")
+	require.NotContains(t, result, "sensitive conversation")
 }
 
 func TestSessionSummarizer_PostHook_ModifiesOutput(t *testing.T) {
@@ -335,16 +401,13 @@ func TestSessionSummarizer_ModelCallbacks_Before_CustomResponseSkipsModel(t *tes
 	)
 
 	sess := &session.Session{
-		ID: "sess",
-		Events: []event.Event{newEventWithContent(
-			strings.Repeat("oversized-origin ", 1000),
-		)},
+		ID:     "sess",
+		Events: []event.Event{newEventWithContent("origin")},
 	}
 	summary, err := s.Summarize(context.Background(), sess)
 	require.NoError(t, err)
 	assert.Equal(t, "FROM_CALLBACK", summary)
-	assert.Contains(t, callbackInput, summaryConversationOmitted)
-	assert.Less(t, strings.Count(callbackInput, "oversized-origin"), 900)
+	assert.Contains(t, callbackInput, "origin")
 }
 
 func TestSessionSummarizer_ModelCallbacks_Before_AppliesToFallbackRequest(
@@ -374,15 +437,15 @@ func TestSessionSummarizer_ModelCallbacks_Before_AppliesToFallbackRequest(
 		WithCacheSafeForking(true),
 		WithModelCallbacks(callbacks),
 	)
-	oversized := strings.Repeat("oversized-origin ", 1000)
+	oversizedParent := strings.Repeat("oversized-parent ", 1000)
 	parent := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage("stable system"),
-		model.NewUserMessage(oversized),
+		model.NewUserMessage(oversizedParent),
 	}}
 	ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
 	sess := &session.Session{
 		ID:     "fallback-callback",
-		Events: []event.Event{newEventWithContent(oversized)},
+		Events: []event.Event{newEventWithContent("event text for fallback")},
 	}
 
 	summary, err := s.Summarize(ctx, sess)
@@ -391,7 +454,7 @@ func TestSessionSummarizer_ModelCallbacks_Before_AppliesToFallbackRequest(
 	require.NotNil(t, capture.request)
 	require.Len(t, capture.request.Messages, 1)
 	require.Contains(t, capture.request.Messages[0].Content,
-		summaryConversationOmitted)
+		"event text for fallback")
 	require.NotNil(t, capture.request.GenerationConfig.MaxTokens)
 	require.Equal(t, maxTokens,
 		*capture.request.GenerationConfig.MaxTokens)

@@ -30,10 +30,11 @@ type session struct {
 	command string
 	redact  func(string) string
 
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	closeIO func() error
-	cancel  context.CancelFunc
+	cmd              *exec.Cmd
+	stdin            io.WriteCloser
+	closeIO          func() error
+	cancel           context.CancelFunc
+	parentCancelStop func() bool
 
 	doneCh chan struct{}
 	ioDone chan struct{}
@@ -75,6 +76,17 @@ func (s *session) running() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.finished.IsZero()
+}
+
+func (s *session) detachParentCancellation() bool {
+	s.mu.Lock()
+	stop := s.parentCancelStop
+	s.parentCancelStop = nil
+	s.mu.Unlock()
+	if stop == nil {
+		return true
+	}
+	return stop()
 }
 
 func (s *session) doneAt() time.Time {

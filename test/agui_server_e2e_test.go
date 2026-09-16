@@ -132,19 +132,9 @@ func TestAGUIServer_MockModel_RunAndSnapshot(t *testing.T) {
 }
 
 func TestAGUIServer_MockModel_CancelStopsRun(t *testing.T) {
-	modelInstance := &QueueModel{}
-	modelInstance.Push(Call{
-		Responses: []*model.Response{
-			{
-				ID:        "mock-stream-1",
-				Object:    model.ObjectTypeChatCompletionChunk,
-				IsPartial: true,
-				Choices: []model.Choice{{
-					Delta: model.Message{Role: model.RoleAssistant, Content: "x"},
-				}},
-			},
-		},
-	})
+	modelInstance := &waitModel{delta: model.Message{
+		Role: model.RoleAssistant, Content: "x",
+	}}
 
 	httpServer := newAGUIHTTPServer(t, modelInstance)
 
@@ -231,7 +221,9 @@ func TestAGUIServer_MockModel_CancelDuringReasoningKeepsHistoryValid(t *testing.
 		Service:      baseSessionService,
 		TrackService: baseSessionService,
 	}
-	modelInstance := &reasoningWaitModel{reasoningDelta: "thinking"}
+	modelInstance := &waitModel{delta: model.Message{
+		Role: model.RoleAssistant, ReasoningContent: "thinking",
+	}}
 	httpServer := newAGUIHTTPServerWithOptions(
 		t,
 		modelInstance,
@@ -465,11 +457,11 @@ func (s *ctxAwareTrackSessionService) AppendTrackEvent(
 	return s.TrackService.AppendTrackEvent(ctx, sess, event, opts...)
 }
 
-type reasoningWaitModel struct {
-	reasoningDelta string
+type waitModel struct {
+	delta model.Message
 }
 
-func (m *reasoningWaitModel) GenerateContent(ctx context.Context, request *model.Request) (<-chan *model.Response, error) {
+func (m *waitModel) GenerateContent(ctx context.Context, request *model.Request) (<-chan *model.Response, error) {
 	if request == nil {
 		return nil, errors.New("mock model: request is nil")
 	}
@@ -480,11 +472,11 @@ func (m *reasoningWaitModel) GenerateContent(ctx context.Context, request *model
 		case <-ctx.Done():
 			return
 		case ch <- &model.Response{
-			ID:        "reasoning-msg-1",
+			ID:        "wait-msg-1",
 			Object:    model.ObjectTypeChatCompletionChunk,
 			IsPartial: true,
 			Choices: []model.Choice{{
-				Delta: model.Message{Role: model.RoleAssistant, ReasoningContent: m.reasoningDelta},
+				Delta: m.delta,
 			}},
 		}:
 		}
@@ -493,6 +485,6 @@ func (m *reasoningWaitModel) GenerateContent(ctx context.Context, request *model
 	return ch, nil
 }
 
-func (m *reasoningWaitModel) Info() model.Info {
-	return model.Info{Name: "reasoning-wait-model"}
+func (m *waitModel) Info() model.Info {
+	return model.Info{Name: "wait-model"}
 }

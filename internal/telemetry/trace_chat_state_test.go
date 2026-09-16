@@ -216,26 +216,36 @@ func benchmarkTraceChatStreamingRequestAttributes(b *testing.B, useState bool) {
 	installChatStreamingPolicyForTest()
 	defer SetSpanAttributePolicy(SpanAttributePolicy{})
 
-	req := &model.Request{Messages: multiTurnMessagesForChatStateTest(4)}
-	responses := make([]*model.Response, 40)
-	for i := range responses {
-		responses[i] = chatResponseForChatStateTest(fmt.Sprintf("chunk-%d", i))
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		span := newRecordingSpan()
-		if useState {
-			state := &ChatTraceState{}
-			for _, rsp := range responses {
-				state.TraceChat(span, &TraceChatAttributes{Request: req, Response: rsp})
+	for _, tc := range []struct {
+		turns  int
+		chunks int
+	}{
+		{turns: 4, chunks: 16},
+		{turns: 16, chunks: 64},
+	} {
+		b.Run(fmt.Sprintf("turns=%d/chunks=%d", tc.turns, tc.chunks), func(b *testing.B) {
+			req := &model.Request{Messages: multiTurnMessagesForChatStateTest(tc.turns)}
+			responses := make([]*model.Response, tc.chunks)
+			for i := range responses {
+				responses[i] = chatResponseForChatStateTest(fmt.Sprintf("chunk-%d", i))
 			}
-			continue
-		}
-		for _, rsp := range responses {
-			TraceChat(span, &TraceChatAttributes{Request: req, Response: rsp})
-		}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				span := newRecordingSpan()
+				if useState {
+					state := &ChatTraceState{}
+					for _, rsp := range responses {
+						state.TraceChat(span, &TraceChatAttributes{Request: req, Response: rsp})
+					}
+					continue
+				}
+				for _, rsp := range responses {
+					TraceChat(span, &TraceChatAttributes{Request: req, Response: rsp})
+				}
+			}
+		})
 	}
 }
 
