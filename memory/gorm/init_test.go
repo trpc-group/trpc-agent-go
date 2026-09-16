@@ -80,4 +80,3 @@ func TestQuoteIdent(t *testing.T) {
 	assert.Contains(t, quoted, "order")
 	assert.NotEqual(t, "order", quoted)
 }
-

@@ -195,4 +195,3 @@ type stubCustomTool struct {
 func (s *stubCustomTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{Name: s.name, Description: "custom"}
 }
-
