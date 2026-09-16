@@ -94,6 +94,10 @@ type Session struct {
 	maskedEventIDs map[string]bool `json:"-"`
 	// maskedEventsHydrated tracks whether maskedEventIDs was loaded from State.
 	maskedEventsHydrated bool `json:"-"`
+	// maskedEventsStateFingerprint is the MaskedEventsStateKey payload last
+	// used to hydrate maskedEventIDs. When SetState changes that key, the
+	// fingerprint no longer matches and the next mask-aware read reconciles.
+	maskedEventsStateFingerprint string `json:"-"`
 
 	stateMu sync.RWMutex `json:"-"` // stateMu is the read-write mutex for State.
 }
@@ -122,6 +126,7 @@ func (sess *Session) Clone() *Session {
 		}
 	}
 	copiedSess.maskedEventsHydrated = sess.maskedEventsHydrated
+	copiedSess.maskedEventsStateFingerprint = sess.maskedEventsStateFingerprint
 	sess.EventMu.RUnlock()
 
 	// Copy track events.

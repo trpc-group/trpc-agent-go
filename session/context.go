@@ -221,16 +221,22 @@ func (sess *Session) MaskAndPersistEvents(
 	}
 
 	masked := sess.maskEventsLocked(ids, existingIDs)
-	if masked == 0 {
-		sess.EventMu.Unlock()
-		return 0, nil
-	}
-
 	payload, err := sess.marshalMaskedEventIDsLocked()
 	if err != nil {
 		sess.restoreMaskedEventIDsLocked(snapshot)
 		sess.EventMu.Unlock()
 		return 0, err
+	}
+
+	// Even when every requested ID was already masked in memory (for example
+	// via MaskEvents), still persist when session state is missing or stale so
+	// a reload keeps the same mask set.
+	if masked == 0 {
+		raw, ok := sess.GetState(MaskedEventsStateKey)
+		if ok && string(raw) == string(payload) {
+			sess.EventMu.Unlock()
+			return 0, nil
+		}
 	}
 
 	if svc != nil {
@@ -244,6 +250,8 @@ func (sess *Session) MaskAndPersistEvents(
 	}
 
 	sess.SetState(MaskedEventsStateKey, payload)
+	sess.maskedEventsStateFingerprint = string(payload)
+	sess.maskedEventsHydrated = true
 	sess.EventMu.Unlock()
 
 	if masked > 0 {
@@ -259,14 +267,15 @@ func (sess *Session) PersistMaskedEvents(
 	svc Service,
 	key Key,
 ) error {
+	if sess == nil {
+		return nil
+	}
 	payload, err := sess.maskedEventsPayload()
 	if err != nil {
 		return err
 	}
 	if svc == nil {
-		if sess != nil {
-			sess.SetState(MaskedEventsStateKey, payload)
-		}
+		sess.SetState(MaskedEventsStateKey, payload)
 		return nil
 	}
 	if err := svc.UpdateSessionState(ctx, key, StateMap{
@@ -307,12 +316,21 @@ func (sess *Session) ensureMaskedEventsFromState() {
 }
 
 func (sess *Session) ensureMaskedEventsFromStateLocked() {
-	if sess.maskedEventsHydrated {
+	raw, ok := sess.GetState(MaskedEventsStateKey)
+	rawFingerprint := ""
+	if ok {
+		rawFingerprint = string(raw)
+	}
+	if sess.maskedEventsHydrated &&
+		sess.maskedEventsStateFingerprint == rawFingerprint {
 		return
 	}
 	sess.maskedEventsHydrated = true
+	sess.maskedEventsStateFingerprint = rawFingerprint
 
-	raw, ok := sess.GetState(MaskedEventsStateKey)
+	// Reconcile from the current persisted payload so SetState updates to
+	// MaskedEventsStateKey are observed after the first hydration.
+	sess.maskedEventIDs = nil
 	if !ok || len(raw) == 0 {
 		return
 	}
@@ -322,9 +340,7 @@ func (sess *Session) ensureMaskedEventsFromStateLocked() {
 		return
 	}
 
-	if sess.maskedEventIDs == nil {
-		sess.maskedEventIDs = make(map[string]bool, len(ids))
-	}
+	sess.maskedEventIDs = make(map[string]bool, len(ids))
 	for _, id := range ids {
 		if id != "" {
 			sess.maskedEventIDs[id] = true

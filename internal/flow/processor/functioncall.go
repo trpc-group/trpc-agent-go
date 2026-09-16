@@ -627,7 +627,8 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 	}
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 	execute := p.executeToolCallsSequentiallyAndEmitPerCallResultEvents
-	if p.enableParallelTools {
+	if p.enableParallelTools &&
+		!toolCallsRequireSerialExecution(toolCalls, tools) {
 		execute = p.executeToolCallsInParallelAndEmitPerCallResultEvents
 	}
 	lastEvent, err := execute(
@@ -821,7 +822,11 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 
 	// If parallel tools are enabled AND multiple tool calls, execute concurrently
-	if p.enableParallelTools && len(toolCalls) > 1 {
+	// unless a tool opts out of concurrency (for example session-mutating
+	// Pensieve note / delete_context tools that must see the parent Session).
+	if p.enableParallelTools &&
+		len(toolCalls) > 1 &&
+		!toolCallsRequireSerialExecution(toolCalls, tools) {
 		mergedEvent, toolResults, err := p.executeToolCallsInParallel(
 			ctx,
 			invocation,
@@ -2372,6 +2377,52 @@ func invocationView(invocation *agent.Invocation) *agent.Invocation {
 		return nil
 	}
 	return invocation.View()
+}
+
+// toolCallsRequireSerialExecution reports whether any tool in the batch
+// explicitly opts out of parallel execution. Session-mutating Pensieve tools
+// (note / delete_context) publish ConcurrencySafe=false so they run on the
+// serial path and mutate the parent Session instead of a parallel clone.
+//
+// Wrappers such as NamedTool always implement ConcurrencyAware by mirroring
+// MetadataOf; unwrap Original() first so tools that never declared a
+// concurrency preference keep the historical parallel-safe default.
+func toolCallsRequireSerialExecution(
+	toolCalls []model.ToolCall,
+	tools map[string]tool.Tool,
+) bool {
+	for _, tc := range toolCalls {
+		tl, ok := tools[tc.Function.Name]
+		if !ok {
+			continue
+		}
+		if toolExplicitlyRequiresSerial(tl) {
+			return true
+		}
+	}
+	return false
+}
+
+type toolOriginalProvider interface {
+	Original() tool.Tool
+}
+
+func toolExplicitlyRequiresSerial(tl tool.Tool) bool {
+	if tl == nil {
+		return false
+	}
+	if unwrapper, ok := tl.(toolOriginalProvider); ok {
+		if orig := unwrapper.Original(); orig != nil {
+			tl = orig
+		}
+	}
+	if aware, ok := tl.(tool.ConcurrencyAware); ok {
+		return !aware.IsConcurrencySafe()
+	}
+	if provider, ok := tl.(tool.MetadataProvider); ok {
+		return !provider.ToolMetadata().ConcurrencySafe
+	}
+	return false
 }
 
 func cloneStateDeltaSession(invocation *agent.Invocation) *agent.Invocation {

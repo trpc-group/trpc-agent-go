@@ -18,13 +18,16 @@ Masked events stay in the session for audit but are not sent back to the model o
 ## Prerequisites
 
 - Go 1.24+
-- `OPENAI_API_KEY` (or compatible endpoint via `OPENAI_BASE_URL`)
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL` set to the OpenAI-compatible base URL for the model (for `deepseek-v4-flash`, use `https://api.deepseek.com/v1`)
 
 ## Run
 
 ```bash
 cd examples/pensieve
 export OPENAI_API_KEY="your-api-key"
+# deepseek-v4-flash is served from DeepSeek's OpenAI-compatible API.
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 go run . -model deepseek-v4-flash
 ```
 

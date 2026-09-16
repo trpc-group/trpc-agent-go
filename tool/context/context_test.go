@@ -20,7 +20,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/session/noop"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // ctxWithSession creates a context containing an Invocation with a real Session.
@@ -308,8 +310,8 @@ func TestReadNotesTool(t *testing.T) {
 		}
 
 		out := result.(ReadNotesOutput)
-		if out.Count != 2 {
-			t.Fatalf("expected 2 notes, got %d", out.Count)
+		if out.Count != 2 || out.Total != 2 {
+			t.Fatalf("expected 2 notes, got count=%d total=%d", out.Count, out.Total)
 		}
 		if out.Notes["a"] != "alpha" || out.Notes["b"] != "beta" {
 			t.Fatalf("unexpected notes: %v", out.Notes)
@@ -375,8 +377,11 @@ func TestNotesIndexTool(t *testing.T) {
 		}
 		out := result.(NotesIndexOutput)
 
-		if out.Count != 2 {
-			t.Fatalf("expected 2 entries, got %d", out.Count)
+		if out.Count != 2 || out.Total != 2 {
+			t.Fatalf("expected 2 entries, got count=%d total=%d", out.Count, out.Total)
+		}
+		if out.HasMore {
+			t.Fatal("expected has_more=false for full index page")
 		}
 		// Keys are sorted alphabetically so consumers can rely on order.
 		if out.Notes[0].Key != "findings" || out.Notes[1].Key != "plan" {
@@ -628,5 +633,99 @@ func TestToolsReturnsAllContextTools(t *testing.T) {
 		if !names[name] {
 			t.Fatalf("missing tool: %s", name)
 		}
+	}
+}
+
+
+func TestPensieveMutatingToolsRequireSerialExecution(t *testing.T) {
+	for _, tl := range []tool.Tool{NewNoteTool(), NewDeleteContextTool()} {
+		aware, ok := tl.(tool.ConcurrencyAware)
+		if !ok {
+			t.Fatalf("%s must implement ConcurrencyAware", tl.Declaration().Name)
+		}
+		if aware.IsConcurrencySafe() {
+			t.Fatalf("%s must opt out of parallel execution", tl.Declaration().Name)
+		}
+		if tool.MetadataOf(tl).ConcurrencySafe {
+			t.Fatalf("%s metadata must publish ConcurrencySafe=false", tl.Declaration().Name)
+		}
+	}
+	for _, tl := range []tool.Tool{NewListContextTool(), NewReadNotesTool(), NewNotesIndexTool()} {
+		if !tool.MetadataOf(tl).ConcurrencySafe {
+			t.Fatalf("%s should remain concurrency-safe by default", tl.Declaration().Name)
+		}
+	}
+}
+
+func TestListContextUsesProjectedHistory(t *testing.T) {
+	sess := session.NewSession("app", "user", "proj1")
+	sess.Events = []event.Event{
+		newTestEvent("sibling"),
+		newTestEvent("mine"),
+	}
+	inv := agent.NewInvocation()
+	inv.Session = sess
+	summaryview.AttachProjection(inv, &summaryview.View{
+		Items: []summaryview.Item{
+			{EffectiveEvent: newTestEvent("mine")},
+		},
+	})
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tool := NewListContextTool()
+	result, err := tool.Call(ctx, []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := result.(ListContextOutput)
+	if out.Total != 1 || out.Count != 1 || out.Events[0].ID != "mine" {
+		t.Fatalf("expected only projected event, got %+v", out)
+	}
+
+	del := NewDeleteContextTool()
+	delResult, err := del.Call(ctx, []byte(`{"event_ids":["sibling","mine"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	delOut := delResult.(DeleteContextOutput)
+	if delOut.Masked != 1 {
+		t.Fatalf("expected only projected ID masked, got %+v", delOut)
+	}
+	if !sess.IsEventMasked("mine") {
+		t.Fatal("expected mine masked")
+	}
+	if sess.IsEventMasked("sibling") {
+		t.Fatal("sibling outside projection must not be masked")
+	}
+}
+
+func TestNotesIndexAndReadNotesPaginate(t *testing.T) {
+	sess := session.NewSession("app", "user", "page-notes")
+	for i := 0; i < 5; i++ {
+		sess.SetState(fmt.Sprintf("note:k%d", i), []byte(fmt.Sprintf("body-%d", i)))
+	}
+	ctx := ctxWithSession(sess)
+
+	index := NewNotesIndexTool()
+	result, err := index.Call(ctx, []byte(`{"offset":0,"limit":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := result.(NotesIndexOutput)
+	if out.Total != 5 || out.Count != 2 || !out.HasMore || out.NextOffset != 2 {
+		t.Fatalf("unexpected first page: %+v", out)
+	}
+
+	reader := NewReadNotesTool()
+	result, err = reader.Call(ctx, []byte(`{"offset":2,"limit":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readOut := result.(ReadNotesOutput)
+	if readOut.Total != 5 || readOut.Count != 2 || !readOut.HasMore {
+		t.Fatalf("unexpected read_notes page: %+v", readOut)
+	}
+	if _, ok := readOut.Notes["k0"]; ok {
+		t.Fatal("page should not include earlier keys")
 	}
 }

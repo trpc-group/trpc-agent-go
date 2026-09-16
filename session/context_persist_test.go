@@ -124,3 +124,45 @@ func TestPersistMaskedEvents(t *testing.T) {
 		}
 	})
 }
+
+func TestMaskAndPersistEventsPersistsAlreadyMasked(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "already-masked"}
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Events = []event.Event{
+		newPersistTestEvent("e1"),
+		newPersistTestEvent("e2"),
+	}
+	sess.MaskEvents("e1")
+
+	masked, err := sess.MaskAndPersistEvents(ctx, nil, key, "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if masked != 0 {
+		t.Fatalf("expected 0 newly masked, got %d", masked)
+	}
+	stored, ok := sess.GetState(session.MaskedEventsStateKey)
+	if !ok || string(stored) != `["e1"]` {
+		t.Fatalf("expected already-masked IDs persisted, got %q ok=%v", stored, ok)
+	}
+}
+
+func TestMaskedEventsStateFingerprintInvalidatesCache(t *testing.T) {
+	sess := session.NewSession("app", "user", "fp1")
+	sess.Events = []event.Event{
+		newPersistTestEvent("e1"),
+		newPersistTestEvent("e2"),
+	}
+	sess.MaskEvents("e1")
+	if len(sess.GetVisibleEvents()) != 1 {
+		t.Fatal("expected e1 masked in memory")
+	}
+
+	// External state overwrite must replace the hydrated mask cache.
+	sess.SetState(session.MaskedEventsStateKey, []byte(`["e2"]`))
+	visible := sess.GetVisibleEvents()
+	if len(visible) != 1 || visible[0].ID != "e1" {
+		t.Fatalf("expected state overwrite to reveal e1 and hide e2, got %+v", visible)
+	}
+}
