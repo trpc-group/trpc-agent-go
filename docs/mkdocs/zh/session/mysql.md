@@ -178,6 +178,43 @@ sessionService, err := mysql.NewService(
 // - 查询始终包含 `WHERE deleted_at IS NULL`
 ```
 
+## 裁剪最近几轮对话
+
+`mysql.Service.TrimConversations` 用于删除最近几轮已落库的对话事件。同一个非空
+`RequestID` 的全部事件组成一轮，可能包含用户消息、模型回复和工具事件。
+`RequestID` 为空的事件会保留。
+
+```go
+deleted, err := sessionService.TrimConversations(ctx, key, mysql.WithCount(2))
+if err != nil {
+    return err
+}
+// deleted contains all persisted events belonging to the two selected requests.
+```
+
+从 Redis 切换时，将 `redis.WithCount(n)` 替换为 `mysql.WithCount(n)`。
+该方法由具体的 MySQL 服务提供，`session.Service` 接口保持不变。
+TDSQL 分布式实例沿用 `mysql.WithTDSQLSharding(true)` 配置；裁剪 SQL 显式包含
+`user_id` 以支持分片路由，不需要新增表或索引。
+
+- 默认删除 1 轮；传入 0 或负数也按 1 轮处理；多次传入 `WithCount` 时最后一个生效。
+  数量超过可用轮数时，删除所有非空 `RequestID` 对应的轮次。
+- 按事件 `Timestamp` 判断先后，时间相同时依次按事件 `ID`、数据库行 ID 排序。
+  选中请求的事件即使交错排列或跨越多个删除批次，也会完整删除。返回事件按相同规则
+  从旧到新排列。
+- 沿用 `WithSoftDelete`：默认软删除，关闭后物理删除。会话不存在、已删除、已过期
+  或没有可裁剪事件时，返回 `nil, nil`。
+- 只修改事件历史，不回退状态、摘要、Track 数据，不修改会话时间戳、TTL 或已经加载
+  的内存 `Session`。需要重新获取会话才能看到剩余事件；这不是完整状态回滚，也不会
+  撤销工具的外部业务操作。裁剪不刷新 TTL，与 Redis HashIdx 路径一致；旧 Redis ZSet
+  路径的续期行为有所不同。
+- 会读取当前会话生命周期内的全部有效事件，不受 `WithSessionEventLimit`、摘要恢复
+  窗口或读写 Hook 影响。内存占用和扫描成本随会话历史增长。所有删除批次处于同一个
+  事务，通过会话行锁与事件写入协调。
+- 不等待异步持久化队列，也不取消正在执行的请求。需要完整裁剪时，应确保目标请求
+  已结束且事件已落库；后续写入仍可能增加事件。重复调用会继续删除剩余历史，提交
+  结果不确定时不要盲目重试。
+
 ## 配合摘要使用
 
 ```go
