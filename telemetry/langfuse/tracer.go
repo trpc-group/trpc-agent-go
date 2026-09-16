@@ -31,6 +31,10 @@ import (
 )
 
 // Start starts telemetry with Langfuse integration using the function option pattern.
+// Concurrent or nested Start lifetimes are not supported: the returned cleanup
+// restores the process-wide gen_ai.system value captured at Start time, so
+// overlapping Start/cleanup pairs can restore a stale value. Callers must
+// serialize Start sessions (cleanup before the next Start).
 func Start(ctx context.Context, opts ...Option) (clean func(context.Context) error, err error) {
 	// Start with default config from environment
 	config := newConfigFromEnv()

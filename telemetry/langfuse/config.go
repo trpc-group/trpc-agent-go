@@ -21,14 +21,15 @@ import (
 // Option is a function that configures Start options.
 type Option func(*config)
 
-// BaggageAttributeFilter decides whether a baggage member is copied onto
-// span attributes at span start. Integrators can replace the default Langfuse
-// allowlist or compose with WithExtraBaggageAttributeKeys.
+// BaggageAttributeFilter is a predicate that decides whether a baggage member
+// is copied onto span attributes at span start. Integrators can replace the
+// default Langfuse allowlist or compose with WithExtraBaggageAttributeKeys.
 type BaggageAttributeFilter func(baggage.Member) bool
 
-// AttributeRewriter transforms span attributes immediately before export.
-// Returning a new slice leaves the in-memory span unchanged for local processors.
-// A nil rewriter preserves attributes as stamped by the library (default).
+// AttributeRewriter is a transform applied to span attributes immediately
+// before export. Returning a new slice leaves the in-memory span unchanged for
+// local processors. A nil AttributeRewriter preserves attributes as stamped by
+// the library (default).
 type AttributeRewriter func(attrs []attribute.KeyValue) []attribute.KeyValue
 
 // WithSecretKey sets the Langfuse secret key.
