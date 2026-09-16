@@ -174,7 +174,7 @@ type llmSpanCollected struct {
 	outputMessagesOTel *string
 	toolDefinitions    *string
 	usage              usageDetails
-	costDetailsJSON    *string               // host-supplied langfuse.observation.cost_details
+	costDetailsJSON    *string              // host-supplied langfuse.observation.cost_details
 	attrs              []*commonpb.KeyValue // non-LLM attributes to keep
 }
 
