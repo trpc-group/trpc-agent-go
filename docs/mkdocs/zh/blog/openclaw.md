@@ -572,7 +572,7 @@ Gateway 之后，`openclaw` 直接复用 tRPC-Agent-Go 现有的执行体系。�
 - Memory backend：`inmemory`、`redis`、`mysql`、`postgres`、`pgvector`
 - Tool providers：`duckduckgo`、`webfetch_http`
 - ToolSet providers：`mcp`、`file`、`openapi`、`google`、
-  `wikipedia`、`arxivsearch`、`email`
+  `wikipedia`、`arxivsearch`、`email`、`youcom`
 - Skills：基于 `SKILL.md` 的技能目录
 
 除此之外，`openclaw` 还补充了几类更贴近长期运行场景的工具：

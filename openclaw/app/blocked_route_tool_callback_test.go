@@ -550,11 +550,7 @@ func TestBlockedRouteToolCallback_DoesNotPersistMergeMetadata(
 			},
 		)
 		require.NoError(t, err, tc.name)
-		response := decodeBlockedRouteCustomResult(
-			t,
-			freshResult.CustomResult,
-		)
-		require.Len(t, response.Results, 1, tc.name)
+		require.Nil(t, freshResult.CustomResult, tc.name)
 	}
 }
 

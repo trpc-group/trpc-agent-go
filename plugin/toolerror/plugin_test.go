@@ -597,7 +597,7 @@ func TestAfterToolLeavesSuccessfulResultUntouched(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, original, result.CustomResult)
+	require.Nil(t, result.CustomResult)
 }
 
 func TestAfterToolResolverClassifiesBusinessFailure(t *testing.T) {

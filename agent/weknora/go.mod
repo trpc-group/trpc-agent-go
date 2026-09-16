@@ -6,6 +6,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../..
 
 require (
 	github.com/Tencent/WeKnora/client v0.0.0-20260324035655-62e6ae960f46
+	github.com/google/uuid v1.6.0
 	trpc.group/trpc-go/trpc-agent-go v1.7.0
 )
 
@@ -14,7 +15,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.40.0 // indirect
