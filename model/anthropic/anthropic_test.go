@@ -2160,7 +2160,7 @@ func Test_HandleStreamingResponse_TruncatedToolInputDeltaIsRepaired(t *testing.T
 		"event: message_stop",
 		`data: {"type":"message_stop"}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 	orig := model.DefaultNewHTTPClient
 	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
 	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
@@ -3044,8 +3044,8 @@ func Test_isStreamRetryableError_NilAndTransportPatterns(t *testing.T) {
 	require.True(t, isStreamRetryableError(fmt.Errorf("http2: server sent GOAWAY")))
 }
 
-func Test_containsIsolatedToken_EmptyToken(t *testing.T) {
-	require.False(t, containsIsolatedToken("status 503", ""))
+func Test_containsHTTPStatusContext_EmptyCode(t *testing.T) {
+	require.False(t, containsHTTPStatusContext("status 503", ""))
 }
 
 func Test_HandleStreamingResponse_DoesNotRetryAfterPartialDelivery(t *testing.T) {
