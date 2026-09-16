@@ -11,6 +11,7 @@ package evolution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 func TestApprovalService_ListPending_Empty(t *testing.T) {
@@ -147,6 +149,7 @@ func TestApprovalService_Decide_ApproveArchivesPreviousActive(t *testing.T) {
 	pendingRev := &Revision{
 		SkillID:    "my-skill",
 		RevisionID: "rev-new",
+		ParentID:   "rev-old",
 		Source:     "reviewer",
 		Action:     RevisionActionUpdate,
 		Status:     RevisionPendingApproval,
@@ -177,6 +180,93 @@ func TestApprovalService_Decide_ApproveArchivesPreviousActive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"action":"archive"`)
 	assert.Contains(t, string(raw), `"revision_id":"rev-old"`)
+}
+
+func TestApprovalService_Decide_RejectsStaleParentBeforePublish(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+	pub := &mockPublisher{}
+	ctx := context.Background()
+	skillID := "my-skill"
+	revA := &Revision{
+		SkillID: skillID, RevisionID: "rev-a", Action: RevisionActionUpdate,
+		Status: RevisionActive,
+		Spec:   &SkillSpec{Name: "My Skill", Description: "a", WhenToUse: "w", Steps: []string{"s"}},
+	}
+	require.NoError(t, store.WriteRevision(ctx, revA))
+	require.NoError(t, ptr.Set(ctx, skillID, "rev-a"))
+	require.NoError(t, store.WriteRevision(ctx, &Revision{
+		SkillID: skillID, RevisionID: "rev-candidate", ParentID: "rev-a",
+		Action: RevisionActionUpdate, Status: RevisionPendingApproval,
+		Spec: &SkillSpec{
+			Name: "My Skill", Description: "candidate", WhenToUse: "w", Steps: []string{"s"},
+		},
+	}))
+
+	// A newer revision becomes active while the candidate based on rev-a waits
+	// for approval.
+	revA.Status = RevisionArchived
+	require.NoError(t, store.WriteRevision(ctx, revA))
+	require.NoError(t, store.WriteRevision(ctx, &Revision{
+		SkillID: skillID, RevisionID: "rev-b", Action: RevisionActionUpdate,
+		Status: RevisionActive,
+		Spec:   &SkillSpec{Name: "My Skill", Description: "b", WhenToUse: "w", Steps: []string{"s"}},
+	}))
+	require.NoError(t, ptr.Set(ctx, skillID, "rev-b"))
+	svc := NewApprovalService(store, ptr, pub)
+
+	err := svc.Decide(ctx, ApprovalDecision{
+		RevisionID: "rev-candidate",
+		SkillID:    skillID,
+		Approved:   true,
+		Reviewer:   "alice@example.com",
+	})
+	require.ErrorContains(t, err, "parent revision \"rev-a\" is stale")
+	require.ErrorIs(t, err, ErrStaleRevisionParent)
+	assert.Zero(t, pub.upsertCount())
+	activeID, getErr := ptr.Get(ctx, skillID)
+	require.NoError(t, getErr)
+	assert.Equal(t, "rev-b", activeID)
+	stored, readErr := store.ReadRevision(ctx, skillID, "rev-candidate")
+	require.NoError(t, readErr)
+	assert.Equal(t, RevisionRejected, stored.Status)
+	require.NotNil(t, stored.HumanReport)
+	require.NotNil(t, stored.HumanReport.Approved)
+	assert.False(t, *stored.HumanReport.Approved)
+	assert.Contains(t, stored.HumanReport.Reasons[0], "stale")
+	rawAudit, auditErr := os.ReadFile(filepath.Join(dir, skillID, "audit.log"))
+	require.NoError(t, auditErr)
+	assert.Contains(t, string(rawAudit), `"action":"reject"`)
+}
+
+func TestApprovalService_Decide_RetainsPendingRevisionOnPointerFailure(t *testing.T) {
+	store := NewFileCandidateStore(t.TempDir())
+	ctx := context.Background()
+	rev := &Revision{
+		SkillID: "my-skill", RevisionID: "rev-candidate", ParentID: "rev-a",
+		Action: RevisionActionUpdate, Status: RevisionPendingApproval,
+		Spec: &SkillSpec{
+			Name: "My Skill", Description: "candidate", WhenToUse: "w", Steps: []string{"s"},
+		},
+	}
+	require.NoError(t, store.WriteRevision(ctx, rev))
+	svc := NewApprovalService(
+		store,
+		errActivePointer{err: errors.New("pointer unavailable")},
+		&mockPublisher{},
+	)
+
+	err := svc.Decide(ctx, ApprovalDecision{
+		RevisionID: rev.RevisionID,
+		SkillID:    rev.SkillID,
+		Approved:   true,
+	})
+	require.ErrorContains(t, err, "pointer unavailable")
+	assert.NotErrorIs(t, err, ErrStaleRevisionParent)
+	stored, readErr := store.ReadRevision(ctx, rev.SkillID, rev.RevisionID)
+	require.NoError(t, readErr)
+	assert.Equal(t, RevisionPendingApproval, stored.Status)
 }
 
 func TestApprovalService_Decide_ApproveDeleteRevision(t *testing.T) {
@@ -437,6 +527,82 @@ func TestApprovalService_Decide_SerializesConcurrentDecisionsForSkill(t *testing
 	assert.Equal(t, RevisionActive, second.Status)
 }
 
+func TestWorkerPublicationSerializesWithApprovalDecision(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	pointer := NewFileActivePointer(dir)
+	publisher := newBlockingPublisher()
+	ctx := context.Background()
+	skillID := "race-skill"
+	spec := func(description string) *SkillSpec {
+		return &SkillSpec{
+			Name:        "Race Skill",
+			Description: description,
+			WhenToUse:   "testing publication serialization",
+			Steps:       []string{"Run the workflow."},
+		}
+	}
+	active := &Revision{
+		SkillID: skillID, RevisionID: "rev-active", Action: RevisionActionUpdate,
+		Status: RevisionActive, Spec: spec("active"),
+	}
+	workerRevision := &Revision{
+		SkillID: skillID, RevisionID: "rev-worker", ParentID: active.RevisionID,
+		Action: RevisionActionUpdate, Status: RevisionPending, Spec: spec("worker"),
+	}
+	pendingApproval := &Revision{
+		SkillID: skillID, RevisionID: "rev-approval", ParentID: active.RevisionID,
+		Action: RevisionActionUpdate, Status: RevisionPendingApproval, Spec: spec("approval"),
+	}
+	for _, revision := range []*Revision{active, workerRevision, pendingApproval} {
+		require.NoError(t, store.WriteRevision(ctx, revision))
+	}
+	require.NoError(t, pointer.Set(ctx, skillID, active.RevisionID))
+
+	worker := newWorker(workerConfig{
+		CandidateStore: store,
+		ActivePointer:  pointer,
+		Publisher:      publisher,
+	})
+	workerDone := make(chan bool, 1)
+	go func() {
+		workerDone <- worker.publishRevision(
+			ctx,
+			workerRevision,
+			RevisionActionUpdate,
+			true,
+			skill.SkillScope{},
+			false,
+			store,
+		)
+	}()
+	<-publisher.entered
+
+	approval := NewApprovalService(store, pointer, publisher)
+	approvalDone := make(chan error, 1)
+	go func() {
+		approvalDone <- approval.Decide(ctx, ApprovalDecision{
+			RevisionID: pendingApproval.RevisionID,
+			SkillID:    skillID,
+			Approved:   true,
+			Reviewer:   "reviewer",
+		})
+	}()
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 1, publisher.upsertCount(), "approval must wait for worker publication")
+
+	close(publisher.release)
+	assert.True(t, <-workerDone)
+	require.ErrorIs(t, <-approvalDone, ErrStaleRevisionParent)
+	assert.Equal(t, 1, publisher.upsertCount(), "stale approval must not publish")
+	activeID, err := pointer.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Equal(t, workerRevision.RevisionID, activeID)
+	stored, err := store.ReadRevision(ctx, skillID, pendingApproval.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionRejected, stored.Status)
+}
+
 func TestApprovalService_Decide_WaitsForFileStoreSkillLock(t *testing.T) {
 	dir := t.TempDir()
 	store := newFileCandidateStore(dir)
@@ -494,8 +660,9 @@ func TestApprovalService_Decide_WaitsForFileStoreSkillLock(t *testing.T) {
 }
 
 func TestApprovalService_LockSkill_FallsBackToProcessLock(t *testing.T) {
-	svc := NewApprovalService(scanCandidateStore{}, nil, nil)
-	unlock, err := svc.lockSkill(context.Background(), "fallback-skill")
+	unlock, err := lockRevisionMutation(
+		context.Background(), scanCandidateStore{}, "fallback-skill",
+	)
 	require.NoError(t, err)
 	require.NotNil(t, unlock)
 	unlock()

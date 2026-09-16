@@ -44,6 +44,7 @@ func (r *Runtime) osSandboxCommand(
 	cwd string,
 	env []string,
 	spec codeexecutor.RunProgramSpec,
+	diagnostics sandboxDenialRun,
 ) (*exec.Cmd, string, commandCleanup, error) {
 	_ = r
 	_ = ctx
@@ -52,6 +53,7 @@ func (r *Runtime) osSandboxCommand(
 	_ = cwd
 	_ = env
 	_ = spec
+	_ = diagnostics
 	return nil, runtime.GOOS, nil, backendError(
 		ErrUnsupportedBackend,
 		runtime.GOOS,

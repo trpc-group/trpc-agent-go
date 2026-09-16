@@ -17,6 +17,9 @@ import (
 
 // ErrPartialOutputCommit marks a CollectOutputs error after output files may
 // already have been added to the returned manifest or persisted as artifacts.
+// When an error matches both ErrPartialOutputCommit and [ErrWorkspaceStale],
+// callers should invalidate the workspace handle but must not replay output
+// collection; [IsWorkspaceRetrySafe] returns false for that combination.
 var ErrPartialOutputCommit = errors.New("partial output commit")
 
 // InputSpec declares a single input mapping into the workspace.

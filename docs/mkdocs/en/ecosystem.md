@@ -771,7 +771,9 @@ For externally hosted memory platforms/services such as mem0, prefer an **ingest
 Recommendations:
 
 - Place the package under `memory/mem0/` for better discoverability within the memory domain.
-- Let Runner hand the completed session transcript to the platform after each turn via `runner.WithSessionIngestor(...)`.
+- Let Runner pass the current Session to the ingestor after each turn via
+  `runner.WithSessionIngestor(...)`; the mem0 adapter forwards only the new,
+  non-empty user/assistant delta.
 - Expose only the platform capabilities that naturally fit agent usage. For mem0, that typically means read-only tools such as `memory_search` and optional `memory_load`.
 - Keep platform-specific ingestion, polling, authentication and retry logic inside `memory/mem0` rather than spreading it across core memory abstractions.
 
@@ -883,7 +885,10 @@ Contribution directions:
 - OTLP Export: uses `otlpmetricgrpc`, supports environment variable override:
   - `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`.
   - `OTEL_EXPORTER_OTLP_ENDPOINT` (fallback).
-- Resource Identification: automatically fills `service.namespace/name/version`.
+- Resource Identification: uses the OpenTelemetry SDK fallback for `service.name`;
+  `service.namespace/version` are omitted unless explicitly configured.
+- Instrumentation Scope: identifies tRPC-Agent-Go metrics by meter name and the
+  emitting module version found in Go build information.
 
 Example (start metrics and report Counter):
 
@@ -932,6 +937,10 @@ Contribution directions:
 - OTLP Export: uses `otlptracegrpc`, supports environment variable override:
   - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`.
   - `OTEL_EXPORTER_OTLP_ENDPOINT` (fallback).
+- Resource Identification: uses the OpenTelemetry SDK fallback for `service.name`;
+  `service.namespace/version` are omitted unless explicitly configured.
+- Instrumentation Scope: uses `trpc.agent.go` and the framework version found in
+  Go build information to identify spans emitted by tRPC-Agent-Go.
 - Propagator: enables `TraceContext` by default.
 
 Example (start tracing and create Span):

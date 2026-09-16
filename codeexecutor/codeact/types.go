@@ -35,7 +35,8 @@ type ToolCall struct {
 }
 
 // ToolCallHandler handles sandbox-originated tool calls. Implementations are
-// the host capability boundary; runtimes should not bypass them.
+// the host capability boundary; runtimes should not bypass them. Handlers must
+// honor context cancellation and return promptly after the context is done.
 type ToolCallHandler interface {
 	HandleToolCall(context.Context, ToolCall) (json.RawMessage, error)
 }

@@ -184,3 +184,23 @@ server, err := agui.New(
 ```
 
 此时实时对话路由为 `/agui/chat`，消息快照路由为 `/agui/history`，取消路由为 `/agui/cancel`。
+
+## 自定义 AG-UI Runner Factory
+
+默认情况下，`agui.New` 使用内置 AG-UI Runner 适配传入的 `runner.Runner`。如果需要在 AG-UI 层改写请求、事件或能力转发，可以通过 `agui.WithRunnerFactory` 提供自定义构造逻辑：
+
+```go
+server, err := agui.New(
+    baseRunner,
+    agui.WithRunnerFactory(func(base runner.Runner, opts ...aguirunner.Option) (aguirunner.Runner, error) {
+        inner := aguirunner.New(base, opts...)
+        return &customAGUIRunner{inner: inner}, nil
+    }),
+)
+```
+
+`opts...` 包含 `agui.New` 聚合出的 AG-UI Runner 配置。包装内置 Runner 时需要原样传给 `aguirunner.New`，否则这些配置不会应用到内置 Runner。
+
+自定义 Runner 如需支持消息快照或取消，需要实现 `aguirunner.MessagesSnapshotter` 或 `aguirunner.Canceler`。`WithRunnerFactory(nil)`、factory 返回 nil Runner 或 error 都会使 `agui.New` 返回错误。
+
+完整示例参见 [examples/agui/server/runner_factory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/runner_factory)。

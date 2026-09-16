@@ -567,6 +567,134 @@ func TestRunTool_PluginAfterToolOverridesError(t *testing.T) {
 	require.False(t, localAfterCalled)
 }
 
+func TestRunTool_PluginPassThroughStillRunsLocalAfterTool(t *testing.T) {
+	const (
+		pluginName = "p"
+		callID     = "call-1"
+		toolName   = "t"
+	)
+	tests := []struct {
+		name string
+		reg  func(r *plugin.Registry)
+	}{
+		{
+			name: "before tool only",
+			reg: func(r *plugin.Registry) {
+				r.BeforeTool(func(
+					context.Context,
+					*tool.BeforeToolArgs,
+				) (*tool.BeforeToolResult, error) {
+					return nil, nil
+				})
+			},
+		},
+		{
+			name: "after tool returns nil",
+			reg: func(r *plugin.Registry) {
+				r.AfterTool(func(
+					context.Context,
+					*tool.AfterToolArgs,
+				) (*tool.AfterToolResult, error) {
+					return nil, nil
+				})
+			},
+		},
+		{
+			name: "after tool returns empty result",
+			reg: func(r *plugin.Registry) {
+				r.AfterTool(func(
+					context.Context,
+					*tool.AfterToolArgs,
+				) (*tool.AfterToolResult, error) {
+					return &tool.AfterToolResult{}, nil
+				})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			localAfterCalled := false
+			local := tool.NewCallbacks().RegisterAfterTool(func(
+				context.Context,
+				string,
+				*tool.Declaration,
+				[]byte,
+				any,
+				error,
+			) (any, error) {
+				localAfterCalled = true
+				return nil, nil
+			})
+
+			pm := plugin.MustNewManager(&hookPlugin{name: pluginName, reg: tt.reg})
+			inv := &agent.Invocation{Plugins: pm}
+			ctx := agent.NewInvocationContext(context.Background(), inv)
+			tl := &captureTool{name: toolName, result: "x"}
+			tc := model.ToolCall{
+				ID: callID,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			}
+
+			_, got, _, err := runTool(ctx, tc, local, tl, State{})
+			require.NoError(t, err)
+			require.Equal(t, "x", got)
+			require.True(t, tl.called)
+			require.True(t, localAfterCalled)
+		})
+	}
+}
+
+func TestRunTool_PluginEmptyCustomResultSkipsLocalAfterTool(t *testing.T) {
+	const (
+		pluginName = "p"
+		callID     = "call-1"
+		toolName   = "t"
+	)
+	localAfterCalled := false
+	local := tool.NewCallbacks().RegisterAfterTool(func(
+		context.Context,
+		string,
+		*tool.Declaration,
+		[]byte,
+		any,
+		error,
+	) (any, error) {
+		localAfterCalled = true
+		return nil, nil
+	})
+	empty := map[string]any{}
+	pm := plugin.MustNewManager(&hookPlugin{
+		name: pluginName,
+		reg: func(r *plugin.Registry) {
+			r.AfterTool(func(
+				context.Context,
+				*tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				return &tool.AfterToolResult{CustomResult: empty}, nil
+			})
+		},
+	})
+	inv := &agent.Invocation{Plugins: pm}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	tl := &captureTool{name: toolName, result: "x"}
+	tc := model.ToolCall{
+		ID: callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, got, _, err := runTool(ctx, tc, local, tl, State{})
+	require.NoError(t, err)
+	require.Equal(t, empty, got)
+	require.True(t, tl.called)
+	require.False(t, localAfterCalled)
+}
+
 func TestRunTool_PluginBeforeTool_CustomResultWithError(t *testing.T) {
 	const (
 		callID   = "call-1"

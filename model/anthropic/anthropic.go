@@ -28,6 +28,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -39,7 +40,14 @@ import (
 const (
 	functionToolType       = "function"
 	claudeMythosPreview    = "claude-mythos-preview"
+	claudeFable5           = "claude-fable-5"
+	claudeMythos5          = "claude-mythos-5"
+	claudeOpus5            = "claude-opus-5"
+	claudeSonnet5          = "claude-sonnet-5"
+	claudeOpus48           = "claude-opus-4-8"
+	claudeOpus48Alias      = "claude-4.8-opus"
 	claudeOpus47           = "claude-opus-4-7"
+	claudeOpus47Alias      = "claude-4.7-opus"
 	claudeOpus46           = "claude-opus-4-6"
 	claudeOpus46Alias      = "claude-4.6-opus"
 	claudeSonnet46         = "claude-sonnet-4-6"
@@ -148,6 +156,37 @@ func (m *Model) runChatRequestCallback(
 	m.chatRequestCallback(ctx, chatRequest)
 }
 
+func disableChatRequestTools(request *anthropic.MessageNewParams) {
+	if request == nil {
+		return
+	}
+	request.Tools = nil
+	request.ToolChoice = anthropic.ToolChoiceUnionParam{}
+	if override, ok := request.Overrides(); ok {
+		if filtered, ok := imodelrequest.FilterToolControlObject(override); ok {
+			request.SetExtraFields(filtered)
+		}
+		return
+	}
+	if fields := request.ExtraFields(); len(fields) > 0 {
+		request.SetExtraFields(
+			imodelrequest.FilterToolControlFields(fields, true),
+		)
+	}
+}
+
+func (m *Model) requestOptions(ctx context.Context) []option.RequestOption {
+	if !imodelrequest.ToolsDisabled(ctx) {
+		return m.anthropicRequestOptions
+	}
+	opts := append([]option.RequestOption(nil), m.anthropicRequestOptions...)
+	return append(
+		opts,
+		option.WithJSONDel("tools"),
+		option.WithJSONDel("tool_choice"),
+	)
+}
+
 func (m *Model) runChatResponseCallback(
 	ctx context.Context,
 	chatRequest *anthropic.MessageNewParams,
@@ -205,6 +244,9 @@ func (m *Model) GenerateContent(
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
+	if imodelrequest.ToolsDisabled(ctx) {
+		disableChatRequestTools(chatRequest)
+	}
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
@@ -236,6 +278,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			maxInputTokens,
 		)
 	}
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "anthropic.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
@@ -246,7 +292,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in anthropic.Model",
 				err,
 			)
-			modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
+			modeltailoring.ApplyResult(
+				ctx, "anthropic.Model", request, tailored,
+			)
 			return
 		}
 		log.WarnContext(
@@ -257,7 +305,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
+	modeltailoring.ApplyResult(
+		ctx, "anthropic.Model", request, tailored,
+	)
 }
 
 // InputTokenBudget returns the same input budget used by token tailoring.
@@ -343,7 +393,7 @@ func (m *Model) applyThinkingConfig(
 		return nil
 	}
 	if !*request.ThinkingEnabled {
-		if isClaudeMythosPreview(m.name) {
+		if isAlwaysThinking(m.name) {
 			return fmt.Errorf("anthropic: thinking cannot be disabled for model %s", m.name)
 		}
 		if !supportsAdaptiveThinking(m.name) {
@@ -379,7 +429,14 @@ func supportsAdaptiveThinking(modelName string) bool {
 	return modelNameMatches(
 		modelName,
 		claudeMythosPreview,
+		claudeFable5,
+		claudeMythos5,
+		claudeOpus5,
+		claudeSonnet5,
+		claudeOpus48,
+		claudeOpus48Alias,
 		claudeOpus47,
+		claudeOpus47Alias,
 		claudeOpus46,
 		claudeOpus46Alias,
 		claudeSonnet46,
@@ -387,8 +444,12 @@ func supportsAdaptiveThinking(modelName string) bool {
 	)
 }
 
-func isClaudeMythosPreview(modelName string) bool {
-	return modelNameMatches(modelName, claudeMythosPreview)
+// isAlwaysThinking reports whether a model thinks unconditionally, so that
+// `thinking.type=disabled` is not merely ignored but rejected by the API.
+// Sending it for one of these turns a caller's explicit ThinkingEnabled=false
+// into a 400, so the request is refused here with a message naming the model.
+func isAlwaysThinking(modelName string) bool {
+	return modelNameMatches(modelName, claudeMythosPreview, claudeFable5, claudeMythos5)
 }
 
 func modelNameMatches(modelName string, targets ...string) bool {
@@ -532,7 +593,7 @@ func (m *Model) handleNonStreamingResponse(
 	responseChan chan<- *model.Response,
 ) {
 	// Issue non-streaming request.
-	message, err := m.client.Messages.New(ctx, chatRequest, m.anthropicRequestOptions...)
+	message, err := m.client.Messages.New(ctx, chatRequest, m.requestOptions(ctx)...)
 	if err != nil {
 		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
 		return
@@ -588,7 +649,7 @@ func (m *Model) handleStreamingResponse(
 	responseChan chan<- *model.Response,
 ) {
 	// Issue streaming request.
-	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.anthropicRequestOptions...)
+	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.requestOptions(ctx)...)
 	defer stream.Close()
 	// Accumulator to build final response.
 	acc := newStreamingMessageAccumulator()
@@ -1026,13 +1087,25 @@ func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
 	var result []anthropic.ToolUnionParam
 	for _, t := range toolorder.SortedTools(tools) {
 		declaration := t.Declaration()
+		effectiveSchemaType := declaration.InputSchema.Type
+		// The Anthropic SDK marshals an empty type as "object". Use that
+		// effective type when normalizing properties so a typed nil map does
+		// not become JSON null for an implicit object schema.
+		if effectiveSchemaType == "" {
+			effectiveSchemaType = "object"
+		}
+		properties := declaration.InputSchema.Properties
+		// Some Anthropic-compatible endpoints reject null properties for object schemas.
+		if effectiveSchemaType == "object" && properties == nil {
+			properties = map[string]*tool.Schema{}
+		}
 		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        declaration.Name,
 				Description: anthropic.String(buildToolDescription(declaration)),
 				InputSchema: anthropic.ToolInputSchemaParam{
 					Type:       constant.Object(declaration.InputSchema.Type),
-					Properties: declaration.InputSchema.Properties,
+					Properties: properties,
 					Required:   declaration.InputSchema.Required,
 				},
 			},

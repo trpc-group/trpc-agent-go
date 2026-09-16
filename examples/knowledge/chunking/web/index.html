@@ -1,0 +1,1634 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Knowledge Chunking Viewer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f5f7;
+      --panel: #fff;
+      --text: #172033;
+      --muted: #64748b;
+      --line: #dce2ea;
+      --accent: #2563eb;
+      --accent-soft: #dbeafe;
+      --mapped: #eff6ff;
+      --overlap: #f59e0b;
+      --overlap-soft: #fef3c7;
+      --ok: #15803d;
+      --bad: #b91c1c;
+      --code: #0f172a;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { width: min(1680px, 100%); margin: auto; padding: 20px; }
+    h1 { margin: 0; font-size: 25px; }
+    h2 { margin: 0; font-size: 17px; }
+    .subtitle { margin: 3px 0 16px; color: var(--muted); }
+    .workspace {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(360px, 42%) 64px minmax(0, 1fr);
+      height: calc(100vh - 100px);
+      min-height: 620px;
+    }
+    .panel {
+      position: relative;
+      z-index: 1;
+      min-width: 0;
+      min-height: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      box-shadow: 0 2px 8px rgb(15 23 42 / 5%);
+    }
+    .source-panel {
+      display: flex;
+      grid-column: 1;
+      flex-direction: column;
+    }
+    .result-panel {
+      display: flex;
+      grid-column: 3;
+      flex-direction: column;
+    }
+    .connector-layer {
+      position: absolute;
+      z-index: 2;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      pointer-events: none;
+    }
+    .connector {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 1.5;
+      opacity: .32;
+      vector-effect: non-scaling-stroke;
+    }
+    .connector.active {
+      stroke-width: 2.5;
+      opacity: .95;
+    }
+    .panel-head {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .file-info, .result-subtitle { color: var(--muted); font-size: 12px; }
+    .source-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 12px 14px 0;
+    }
+    .sample-select {
+      width: min(320px, 100%);
+      height: 36px;
+      padding: 0 9px;
+      background: white;
+      color: var(--text);
+    }
+    .sample-description {
+      min-height: 30px;
+      padding: 7px 14px 0;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    button, .upload-button, input, select, textarea, .source-map {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      font: inherit;
+    }
+    button, .upload-button {
+      display: inline-flex;
+      height: 36px;
+      align-items: center;
+      justify-content: center;
+      padding: 0 14px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    button {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: white;
+    }
+    button.secondary, .upload-button {
+      border-color: var(--line);
+      background: white;
+      color: var(--text);
+    }
+    button:disabled { cursor: wait; opacity: .55; }
+    .upload-button input { display: none; }
+    .source-stage {
+      position: relative;
+      flex: 1;
+      min-height: 240px;
+      margin: 12px 14px;
+    }
+    textarea, .source-map {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 13px;
+      background: #f8fafc;
+      color: var(--text);
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    textarea { resize: none; }
+    .source-map {
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      overscroll-behavior: contain;
+    }
+    .source-map.structured {
+      padding: 0;
+      background: white;
+      white-space: normal;
+    }
+    .source-segment {
+      border-radius: 2px;
+      transition: background-color .12s, box-shadow .12s;
+    }
+    .source-segment.mapped { background: var(--mapped); }
+    .source-segment.overlap-source {
+      background: var(--overlap-soft);
+      box-shadow: inset 0 -2px var(--overlap);
+    }
+    .source-segment.active {
+      background: var(--accent-soft);
+      box-shadow: inset 0 -2px var(--accent);
+    }
+    .source-segment.overlap-source.active {
+      background: #fde68a;
+      box-shadow: inset 0 -2px var(--overlap);
+    }
+    .source-anchor {
+      position: relative;
+      display: inline-block;
+      width: 0;
+      height: 1.45em;
+      vertical-align: text-bottom;
+    }
+    .source-anchor::after {
+      position: absolute;
+      top: .52em;
+      right: -3px;
+      width: 5px;
+      height: 5px;
+      border: 1px solid white;
+      border-radius: 50%;
+      background: var(--accent);
+      content: "";
+    }
+    .source-stats {
+      min-height: 28px;
+      padding: 0 14px 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .parameters {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr 1fr;
+      gap: 10px;
+      padding: 13px 14px;
+      border-top: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+    label {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    input, select {
+      width: 100%;
+      height: 37px;
+      padding: 0 9px;
+      background: white;
+      color: var(--text);
+    }
+    input:disabled { background: #eef2f6; color: #94a3b8; }
+    .parameter-note {
+      min-height: 20px;
+      padding: 0 14px 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .run-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 0 14px 14px;
+    }
+    .run-row button { min-width: 130px; }
+    #status { color: var(--muted); font-size: 12px; }
+    #status.error { color: var(--bad); }
+    .metadata-toggle { white-space: nowrap; }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .legend-item { display: inline-flex; gap: 5px; align-items: center; }
+    .legend-line {
+      width: 18px;
+      height: 2px;
+      background: var(--accent);
+    }
+    .legend-overlap {
+      width: 18px;
+      height: 8px;
+      border-bottom: 2px solid var(--overlap);
+      background: var(--overlap-soft);
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .metric { padding: 9px 10px; border-radius: 7px; background: #f8fafc; }
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .metric strong { display: block; margin-top: 2px; font-size: 17px; }
+    .chunk-list {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 12px 14px;
+      overscroll-behavior: contain;
+    }
+    .empty {
+      display: grid;
+      height: 100%;
+      place-items: center;
+      color: var(--muted);
+      text-align: center;
+    }
+    .chunk {
+      margin-bottom: 11px;
+      border: 1px solid var(--line);
+      border-left: 3px solid #93c5fd;
+      border-radius: 9px;
+      overflow: hidden;
+      transition: border-color .12s, box-shadow .12s;
+    }
+    .chunk.locatable { cursor: pointer; }
+    .chunk.locatable:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .chunk.over { border-color: #fca5a5; }
+    .chunk.active {
+      border-left-color: var(--accent);
+      box-shadow: 0 0 0 2px rgb(37 99 235 / 12%);
+    }
+    .chunk-head {
+      padding: 10px 12px;
+      background: #f8fafc;
+      border-bottom: 1px solid var(--line);
+    }
+    .chunk-title {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      font-weight: 750;
+    }
+    .badge { padding: 1px 7px; border-radius: 999px; color: white; font-size: 10px; }
+    .badge.ok { background: var(--ok); }
+    .badge.bad { background: var(--bad); }
+    .chunk-metrics { margin-top: 3px; color: var(--muted); font-size: 11px; }
+    pre {
+      margin: 0;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .chunk-content {
+      max-height: 300px;
+      padding: 12px;
+      background: white;
+      color: var(--text);
+    }
+    .json-view {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .json-key { color: #075985; font-weight: 700; }
+    .json-string { color: #047857; }
+    .json-number { color: #b45309; }
+    .json-literal { color: #7c3aed; font-weight: 700; }
+    .source-map > .json-view {
+      min-height: 100%;
+      padding: 13px;
+      background: #f8fafc;
+    }
+    .json-line {
+      display: block;
+      min-height: 1.55em;
+      border-radius: 2px;
+    }
+    .data-table-wrap {
+      width: 100%;
+      overflow: auto;
+      background: white;
+    }
+    .data-table {
+      width: max-content;
+      min-width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .data-table th, .data-table td {
+      max-width: 440px;
+      padding: 8px 10px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: white;
+      text-align: left;
+      vertical-align: top;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .data-table th {
+      position: sticky;
+      z-index: 1;
+      top: 0;
+      background: #eaf1fb;
+      color: #1e3a5f;
+      font-weight: 800;
+    }
+    .data-table tr:nth-child(even) td { background: #f8fafc; }
+    .data-table tr.source-segment.mapped td,
+    .data-table tr.source-segment.mapped th {
+      background: var(--mapped);
+    }
+    .data-table tr.source-segment.active td,
+    .data-table tr.source-segment.active th {
+      background: var(--accent-soft);
+      box-shadow: inset 0 -2px var(--accent);
+    }
+    .data-table th:last-child, .data-table td:last-child { border-right: 0; }
+    .chunk-table-content {
+      overflow: auto;
+      padding: 0;
+    }
+    .chunk-table-content .data-table th,
+    .chunk-table-content .data-table td {
+      max-width: 320px;
+      padding: 7px 9px;
+    }
+    .overlap-highlight {
+      border-radius: 2px;
+      background: var(--overlap-soft);
+      box-shadow: inset 0 -2px var(--overlap);
+    }
+    .chunk-metadata {
+      display: none;
+      padding: 12px;
+      border-top: 1px solid #334155;
+      background: var(--code);
+      color: #e2e8f0;
+    }
+    .show-metadata .chunk-metadata { display: block; }
+    @media (max-width: 980px) {
+      .workspace {
+        grid-template-columns: 1fr;
+        gap: 14px;
+        height: auto;
+      }
+      .source-panel, .result-panel { grid-column: 1; min-height: 720px; }
+      .connector-layer { display: none; }
+    }
+    @media (max-width: 560px) {
+      main { padding: 12px; }
+      .parameters { grid-template-columns: 1fr; }
+      .summary { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Knowledge Chunking Viewer</h1>
+    <p class="subtitle">
+      Start with the document reader's default, see which strategy it selects,
+      then override it only when you need to compare behavior. Developed by
+      trpc-agent-go.
+    </p>
+
+    <div id="workspace" class="workspace">
+      <svg id="connector-layer" class="connector-layer" aria-hidden="true">
+        <g id="connector-paths"></g>
+      </svg>
+
+      <section id="source-panel" class="panel source-panel">
+        <header class="panel-head">
+          <h2>Source document</h2>
+          <span id="file-info" class="file-info"></span>
+        </header>
+
+        <div class="source-actions">
+          <select id="sample-select" class="sample-select"
+            aria-label="Built-in sample" disabled></select>
+          <button id="use-sample" class="secondary" type="button" disabled>
+            Load sample
+          </button>
+          <label class="upload-button">
+            Upload document
+            <input id="file-input" type="file"
+              accept=".txt,.md,.markdown,.json,.csv,.html,.xml,.yaml,.yml">
+          </label>
+          <button id="edit-source" class="secondary" type="button" disabled>Edit source</button>
+        </div>
+        <div id="sample-description" class="sample-description">
+          Loading built-in samples...
+        </div>
+
+        <div class="source-stage">
+          <textarea id="source-content" aria-label="Source document"></textarea>
+          <div id="source-map" class="source-map"
+            aria-label="Mapped source document" hidden></div>
+        </div>
+        <div id="source-stats" class="source-stats"></div>
+
+        <div class="parameters">
+          <label>Chunking mode
+            <select id="strategy">
+              <option value="reader" selected>Reader default (recommended)</option>
+              <optgroup label="Advanced overrides">
+                <option value="fixed">FixedSizeChunking</option>
+                <option value="recursive">RecursiveChunking</option>
+                <option value="markdown">MarkdownChunking</option>
+                <option value="json">JSONChunking</option>
+              </optgroup>
+            </select>
+          </label>
+          <label>Chunk size (0 = default)
+            <input id="chunk-size" type="number" min="0" value="0">
+          </label>
+          <label>Overlap
+            <input id="overlap" type="number" min="0" value="0">
+          </label>
+        </div>
+        <div id="parameter-note" class="parameter-note"></div>
+        <div class="run-row">
+          <button id="run" type="button">Run chunking</button>
+          <span id="status"></span>
+        </div>
+      </section>
+
+      <section id="result-panel" class="panel result-panel">
+        <header class="panel-head">
+          <div>
+            <h2 id="result-title">Chunks</h2>
+            <div id="result-subtitle" class="result-subtitle">
+              Run a strategy to see its output.
+            </div>
+            <div class="legend">
+              <span class="legend-item"><span class="legend-line"></span>source mapping</span>
+              <span class="legend-item"><span class="legend-overlap"></span>overlap</span>
+              <span class="legend-item">click a chunk to locate its source</span>
+            </div>
+          </div>
+          <button id="metadata-toggle" class="secondary metadata-toggle" type="button" disabled>
+            Show metadata
+          </button>
+        </header>
+        <div id="summary" class="summary" hidden></div>
+        <div id="chunk-list" class="chunk-list">
+          <div class="empty">Choose a document and run chunking.</div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const maxFileSize = 1024 * 1024;
+    const svgNamespace = "http://www.w3.org/2000/svg";
+    const workspace = document.querySelector("#workspace");
+    const sourcePanel = document.querySelector("#source-panel");
+    const contentInput = document.querySelector("#source-content");
+    const sourceMap = document.querySelector("#source-map");
+    const editSourceButton = document.querySelector("#edit-source");
+    const fileInput = document.querySelector("#file-input");
+    const sampleSelect = document.querySelector("#sample-select");
+    const useSampleButton = document.querySelector("#use-sample");
+    const sampleDescription = document.querySelector("#sample-description");
+    const fileInfo = document.querySelector("#file-info");
+    const sourceStats = document.querySelector("#source-stats");
+    const strategyInput = document.querySelector("#strategy");
+    const chunkSizeInput = document.querySelector("#chunk-size");
+    const overlapInput = document.querySelector("#overlap");
+    const parameterNote = document.querySelector("#parameter-note");
+    const runButton = document.querySelector("#run");
+    const status = document.querySelector("#status");
+    const resultPanel = document.querySelector("#result-panel");
+    const resultTitle = document.querySelector("#result-title");
+    const resultSubtitle = document.querySelector("#result-subtitle");
+    const summary = document.querySelector("#summary");
+    const chunkList = document.querySelector("#chunk-list");
+    const metadataToggle = document.querySelector("#metadata-toggle");
+    const connectorLayer = document.querySelector("#connector-layer");
+    const connectorPaths = document.querySelector("#connector-paths");
+
+    let currentName = "sample.md";
+    let metadataVisible = false;
+    let mappingAvailable = false;
+    let mappingSummary = "";
+    let connections = [];
+    let samples = [];
+    let scrollSyncing = false;
+    let drawRequested = false;
+
+    function element(tag, className, text) {
+      const value = document.createElement(tag);
+      if (className) value.className = className;
+      if (text !== undefined) value.textContent = text;
+      return value;
+    }
+
+    function updateSourceStats() {
+      const text = contentInput.value;
+      const runes = [...text].length;
+      const bytes = new TextEncoder().encode(text).length;
+      fileInfo.textContent = currentName;
+      sourceStats.textContent =
+        `${runes} runes · ${bytes} bytes${mappingSummary ? ` · ${mappingSummary}` : ""}`;
+    }
+
+    function syncStrategy() {
+      const selection = readerSelection(currentName);
+      const effectiveStrategy = strategyInput.value === "reader"
+        ? selection.strategy
+        : strategyInput.value;
+      const isJSON = effectiveStrategy === "json";
+      const markdownNote = effectiveStrategy === "markdown"
+        ? " Markdown headings are preferred boundaries; adjacent small sections are packed when they share the active budget."
+        : "";
+      overlapInput.disabled = isJSON;
+      if (isJSON) overlapInput.value = "0";
+      if (strategyInput.value === "reader") {
+        const defaultSize = selection.strategy === "json" ? 2000 : 1024;
+        const csvNote = selection.reader === "CSVReader"
+          ? " CSVReader keeps a normalized row intact when it fits the active new-content budget; connectors use the corresponding source rows."
+          : "";
+        parameterNote.textContent =
+          `${selection.reader} selects ${strategyDisplayName(selection.strategy)} ` +
+          `for ${selection.extension}. Chunk size 0 uses its default (${defaultSize}).` +
+          csvNote +
+          markdownNote;
+      } else {
+        const fixedCSVNote = selection.reader === "CSVReader" &&
+          effectiveStrategy === "fixed"
+          ? " CSV input keeps complete normalized rows when they fit the active new-content budget."
+          : "";
+        parameterNote.textContent = isJSON
+          ? "Advanced override: JSONChunking uses serialized bytes, JSON-path connectors, and no overlap; size 0 uses 2000."
+          : "Advanced override: size 0 uses 1024 runes; explicit sizes must be at least 32, and size minus overlap at least 16." +
+            fixedCSVNote +
+            markdownNote;
+      }
+    }
+
+    function readerSelection(name) {
+      const extension = name.includes(".")
+        ? `.${name.split(".").pop().toLowerCase()}`
+        : "(no extension)";
+      if (extension === ".md" || extension === ".markdown") {
+        return {reader: "MarkdownReader", strategy: "markdown", extension};
+      }
+      if (extension === ".json") {
+        return {reader: "JSONReader", strategy: "json", extension};
+      }
+      if (extension === ".csv") {
+        return {reader: "CSVReader", strategy: "fixed", extension};
+      }
+      return {reader: "TextReader", strategy: "fixed", extension};
+    }
+
+    function strategyDisplayName(strategy) {
+      return {
+        fixed: "FixedSizeChunking",
+        recursive: "RecursiveChunking",
+        markdown: "MarkdownChunking",
+        json: "JSONChunking"
+      }[strategy] || strategy;
+    }
+
+    function showEditor() {
+      contentInput.hidden = false;
+      sourceMap.hidden = true;
+      connectorLayer.hidden = true;
+      editSourceButton.textContent = "View mapping";
+      contentInput.focus();
+    }
+
+    function showMapping() {
+      if (!mappingAvailable) return;
+      contentInput.hidden = true;
+      sourceMap.hidden = false;
+      connectorLayer.hidden = false;
+      editSourceButton.textContent = "Edit source";
+      scheduleConnections();
+    }
+
+    function invalidateMapping() {
+      mappingAvailable = false;
+      mappingSummary = "run again to refresh mapping";
+      sampleSelect.selectedIndex = -1;
+      useSampleButton.disabled = true;
+      sampleDescription.textContent =
+        "Edited document. Run chunking again to refresh the result.";
+      editSourceButton.disabled = true;
+      connectorPaths.replaceChildren();
+      connections = [];
+      updateSourceStats();
+    }
+
+    async function loadSamples() {
+      setStatus("Loading samples...");
+      const response = await fetch("/api/samples");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Load samples failed");
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new Error("No built-in samples are available.");
+      }
+      samples = data;
+      sampleSelect.replaceChildren(...samples.map(sample => {
+        const option = element("option", "", `${sample.label} · ${sample.name}`);
+        option.value = sample.id;
+        return option;
+      }));
+      sampleSelect.disabled = false;
+      useSampleButton.disabled = false;
+      await useSample();
+    }
+
+    async function useSample() {
+      const sample = samples.find(candidate => candidate.id === sampleSelect.value);
+      if (!sample) throw new Error("Select a built-in sample.");
+      useSampleButton.disabled = false;
+      setStatus("Loading sample...");
+      currentName = sample.name;
+      contentInput.value = sample.content;
+      sampleDescription.textContent = sample.description;
+      strategyInput.value = "reader";
+      chunkSizeInput.value = "0";
+      overlapInput.value = "0";
+      syncStrategy();
+      mappingSummary = "";
+      updateSourceStats();
+      await runChunking();
+    }
+
+    async function uploadDocument(file) {
+      if (!file) return;
+      if (file.size > maxFileSize) {
+        throw new Error("Document exceeds the 1 MiB viewer limit.");
+      }
+      currentName = file.name;
+      contentInput.value = await file.text();
+      sampleSelect.selectedIndex = -1;
+      useSampleButton.disabled = true;
+      sampleDescription.textContent =
+        "Uploaded document. Reader selection follows the filename extension.";
+      strategyInput.value = "reader";
+      syncStrategy();
+      mappingSummary = "";
+      updateSourceStats();
+      await runChunking();
+    }
+
+    async function runChunking() {
+      runButton.disabled = true;
+      setStatus("Running...");
+      try {
+        const response = await fetch("/api/chunks", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            name: currentName,
+            content: contentInput.value,
+            strategy: strategyInput.value,
+            chunk_size: Number(chunkSizeInput.value),
+            overlap: Number(overlapInput.value)
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Chunking failed");
+        render(data);
+        setStatus("Ready");
+      } catch (error) {
+        showError(error.message);
+      } finally {
+        runButton.disabled = false;
+      }
+    }
+
+    function render(data) {
+      metadataVisible = false;
+      resultPanel.classList.remove("show-metadata");
+      metadataToggle.textContent = "Show metadata";
+      metadataToggle.disabled = false;
+      resultTitle.textContent = `${data.strategy.name} · ${data.strategy.total} chunks`;
+
+      const selectionText = data.config.automatic
+        ? `${data.config.reader} → ${data.strategy.name} · `
+        : `advanced override · ${data.strategy.name} · `;
+
+      summary.replaceChildren(
+        metric("Chunks", data.strategy.total),
+        metric(
+          `Size range (${data.config.size_unit})`,
+          `${data.strategy.min_size}–${data.strategy.max_size}`
+        ),
+        metric("Average", `${data.strategy.avg_size.toFixed(1)} ${data.config.size_unit}`),
+        metric("Over budget", data.strategy.over_budget)
+      );
+      summary.hidden = false;
+      chunkList.replaceChildren();
+      for (const chunk of data.strategy.chunks) {
+        chunkList.appendChild(renderChunk(chunk, data));
+      }
+      chunkList.scrollTop = 0;
+
+      renderSourceMap(data);
+      buildConnections(data.strategy.chunks);
+      resultSubtitle.textContent =
+        selectionText +
+        `${data.input.name} · ${data.input.runes} runes · ${data.input.bytes} bytes · ` +
+        `size ${data.config.chunk_size} ${data.config.size_unit} · ` +
+        `overlap ${data.config.overlap} · ${mappingSummary}`;
+      mappingAvailable = true;
+      editSourceButton.disabled = false;
+      showMapping();
+    }
+
+    function metric(label, value) {
+      const card = element("div", "metric");
+      card.appendChild(element("span", "", label));
+      card.appendChild(element("strong", "", String(value)));
+      return card;
+    }
+
+    function renderChunk(chunk, data) {
+      const card = element("article", `chunk${chunk.within_budget ? "" : " over"}`);
+      card.dataset.chunkIndex = String(chunk.index);
+      const head = element("header", "chunk-head");
+      const title = element("div", "chunk-title");
+      title.appendChild(element("span", "", `#${chunk.index} · ${chunk.id}`));
+      title.appendChild(element(
+        "span",
+        `badge ${chunk.within_budget ? "ok" : "bad"}`,
+        chunk.within_budget ? "IN BUDGET" : "OVER BUDGET"
+      ));
+      head.appendChild(title);
+      head.appendChild(element(
+        "div",
+        "chunk-metrics",
+        `${chunk.runes} runes · ${chunk.bytes} bytes · ` +
+        `overlap with previous ${chunk.actual_overlap}`
+      ));
+      card.appendChild(head);
+
+      const content = renderChunkContent(chunk, data);
+      card.appendChild(content);
+      card.appendChild(element(
+        "pre",
+        "chunk-metadata",
+        JSON.stringify(chunk.metadata, null, 2)
+      ));
+      card.addEventListener("mouseenter", () => setActiveChunks([chunk.index]));
+      card.addEventListener("mouseleave", clearActiveChunks);
+      card.addEventListener("click", () => scrollToChunkSource(chunk.index));
+      card.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        scrollToChunkSource(chunk.index);
+      });
+      return card;
+    }
+
+    function renderChunkContent(chunk, data) {
+      if (data.config.strategy === "json") {
+        const content = element("pre", "chunk-content json-view");
+        appendJSON(content, chunk.content);
+        return content;
+      }
+      if (data.config.reader === "CSVReader" && chunk.actual_overlap === 0) {
+        const rows = parseNormalizedCSV(chunk.content);
+        if (rows.length > 0) {
+          const content = element("div", "chunk-content chunk-table-content");
+          appendDataTable(content, rows, chunk.index === 1);
+          return content;
+        }
+      }
+
+      const content = element("pre", "chunk-content");
+      const chunkRunes = [...chunk.content];
+      if (chunk.actual_overlap > 0) {
+        content.appendChild(element(
+          "span",
+          "overlap-highlight",
+          chunkRunes.slice(0, chunk.actual_overlap).join("")
+        ));
+        content.appendChild(document.createTextNode(
+          chunkRunes.slice(chunk.actual_overlap).join("")
+        ));
+      } else {
+        content.textContent = chunk.content;
+      }
+      return content;
+    }
+
+    function appendJSON(container, content) {
+      try {
+        const lines = buildJSONLines(JSON.parse(content));
+        lines.forEach((line, index) => {
+          appendJSONTokens(container, line.text);
+          if (index < lines.length - 1) {
+            container.appendChild(document.createTextNode("\n"));
+          }
+        });
+      } catch {
+        // Keep the exact strategy output when a chunk is not standalone JSON.
+        appendJSONTokens(container, content);
+      }
+    }
+
+    function appendJSONTokens(container, content) {
+      const tokenPattern =
+        /"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b/g;
+      let cursor = 0;
+      for (const match of content.matchAll(tokenPattern)) {
+        const index = match.index;
+        container.appendChild(document.createTextNode(
+          content.slice(cursor, index)
+        ));
+        const token = match[0];
+        let className = "json-number";
+        if (token.startsWith("\"")) {
+          const suffix = content.slice(index + token.length);
+          className = /^\s*:/.test(suffix) ? "json-key" : "json-string";
+        } else if (token === "true" || token === "false" || token === "null") {
+          className = "json-literal";
+        }
+        container.appendChild(element("span", className, token));
+        cursor = index + token.length;
+      }
+      container.appendChild(document.createTextNode(content.slice(cursor)));
+    }
+
+    function mapJSONChunks(sourceValue, chunks) {
+      const chunksByPath = new Map();
+      const anchorsByPath = new Map();
+      let mappedChunks = 0;
+      for (const chunk of chunks) {
+        chunk.mapped = false;
+        let chunkValue;
+        try {
+          chunkValue = JSON.parse(chunk.content);
+        } catch {
+          continue;
+        }
+
+        const matchedPaths = [];
+        const seenPaths = new Set();
+        for (const leaf of collectJSONLeaves(chunkValue)) {
+          const paths = [leaf.path];
+          if (
+            leaf.path[0] === "content" &&
+            (sourceValue === null ||
+              typeof sourceValue !== "object" ||
+              Array.isArray(sourceValue))
+          ) {
+            paths.push(leaf.path.slice(1));
+          }
+          for (const path of paths) {
+            const resolved = resolveJSONPath(sourceValue, path);
+            const key = JSON.stringify(path);
+            if (
+              resolved.found &&
+              sameJSONValue(resolved.value, leaf.value) &&
+              !seenPaths.has(key)
+            ) {
+              seenPaths.add(key);
+              matchedPaths.push(path);
+              addMappedIndex(chunksByPath, key, chunk.index);
+              break;
+            }
+          }
+        }
+        if (matchedPaths.length === 0) continue;
+
+        chunk.mapped = true;
+        mappedChunks++;
+        addMappedIndex(
+          anchorsByPath,
+          JSON.stringify(matchedPaths[0]),
+          chunk.index
+        );
+      }
+      return {chunksByPath, anchorsByPath, mappedChunks};
+    }
+
+    function collectJSONLeaves(value, path = [], leaves = []) {
+      if (Array.isArray(value)) {
+        if (value.length === 0) {
+          leaves.push({path, value});
+        } else {
+          value.forEach((child, index) => {
+            collectJSONLeaves(child, [...path, String(index)], leaves);
+          });
+        }
+        return leaves;
+      }
+      if (value !== null && typeof value === "object") {
+        const entries = Object.entries(value).sort(
+          ([left], [right]) => compareJSONKeys(left, right)
+        );
+        if (entries.length === 0) {
+          leaves.push({path, value});
+        } else {
+          for (const [key, child] of entries) {
+            collectJSONLeaves(child, [...path, key], leaves);
+          }
+        }
+        return leaves;
+      }
+      leaves.push({path, value});
+      return leaves;
+    }
+
+    function compareJSONKeys(left, right) {
+      const integerPattern = /^[+-]?\d+$/;
+      const leftIsInteger = integerPattern.test(left);
+      const rightIsInteger = integerPattern.test(right);
+      if (leftIsInteger !== rightIsInteger) {
+        return leftIsInteger ? -1 : 1;
+      }
+      if (leftIsInteger) {
+        const leftValue = BigInt(left);
+        const rightValue = BigInt(right);
+        if (leftValue < rightValue) return -1;
+        if (leftValue > rightValue) return 1;
+      }
+      return left < right ? -1 : left > right ? 1 : 0;
+    }
+
+    function resolveJSONPath(root, path) {
+      let value = root;
+      for (const segment of path) {
+        if (Array.isArray(value)) {
+          const index = Number(segment);
+          if (!Number.isInteger(index) || index < 0 || index >= value.length) {
+            return {found: false};
+          }
+          value = value[index];
+        } else if (
+          value !== null &&
+          typeof value === "object" &&
+          Object.prototype.hasOwnProperty.call(value, segment)
+        ) {
+          value = value[segment];
+        } else {
+          return {found: false};
+        }
+      }
+      return {found: true, value};
+    }
+
+    function sameJSONValue(left, right) {
+      if (typeof left === "string" && typeof right === "string") {
+        return left === right || (right.length > 0 && left.includes(right));
+      }
+      if (
+        (left !== null && typeof left === "object") ||
+        (right !== null && typeof right === "object")
+      ) {
+        return JSON.stringify(left) === JSON.stringify(right);
+      }
+      return Object.is(left, right);
+    }
+
+    function addMappedIndex(mapping, key, index) {
+      const indexes = mapping.get(key) || [];
+      if (!indexes.includes(index)) indexes.push(index);
+      mapping.set(key, indexes);
+    }
+
+    function buildJSONLines(value) {
+      const lines = [];
+      appendJSONValue(value, [], 0, null, false, lines);
+      return lines;
+    }
+
+    function appendJSONValue(value, path, depth, label, comma, lines) {
+      const indent = " ".repeat(depth);
+      const prefix = label === null ? "" : `${JSON.stringify(label)}: `;
+      const suffix = comma ? "," : "";
+      if (Array.isArray(value)) {
+        if (value.length === 0) {
+          lines.push({text: `${indent}${prefix}[]${suffix}`, path});
+          return;
+        }
+        lines.push({text: `${indent}${prefix}[`, path});
+        value.forEach((child, index) => {
+          appendJSONValue(
+            child,
+            [...path, String(index)],
+            depth + 2,
+            null,
+            index < value.length - 1,
+            lines
+          );
+        });
+        lines.push({text: `${indent}]${suffix}`, path: null});
+        return;
+      }
+      if (value !== null && typeof value === "object") {
+        const entries = Object.entries(value).sort(
+          ([left], [right]) => compareJSONKeys(left, right)
+        );
+        if (entries.length === 0) {
+          lines.push({text: `${indent}${prefix}{}${suffix}`, path});
+          return;
+        }
+        lines.push({text: `${indent}${prefix}{`, path});
+        entries.forEach(([key, child], index) => {
+          appendJSONValue(
+            child,
+            [...path, key],
+            depth + 2,
+            key,
+            index < entries.length - 1,
+            lines
+          );
+        });
+        lines.push({text: `${indent}}${suffix}`, path: null});
+        return;
+      }
+      lines.push({
+        text: `${indent}${prefix}${JSON.stringify(value)}${suffix}`,
+        path,
+      });
+    }
+
+    function appendJSONSource(container, sourceValue, mapping) {
+      const view = element("pre", "json-view");
+      for (const line of buildJSONLines(sourceValue)) {
+        const pathKey = line.path === null ? "" : JSON.stringify(line.path);
+        const indexes = mapping.chunksByPath.get(pathKey) || [];
+        const anchors = mapping.anchorsByPath.get(pathKey) || [];
+        const lineElement = element(
+          "span",
+          `json-line source-segment${indexes.length ? " mapped" : ""}`
+        );
+        if (indexes.length) {
+          lineElement.dataset.chunks = indexes.join(" ");
+          lineElement.addEventListener(
+            "mouseenter",
+            () => setActiveChunks(indexes)
+          );
+          lineElement.addEventListener("mouseleave", clearActiveChunks);
+        }
+        appendAnchorElements(lineElement, pathKey, anchors);
+        appendJSONTokens(lineElement, line.text);
+        view.appendChild(lineElement);
+      }
+      container.appendChild(view);
+    }
+
+    function parseCSV(content) {
+      const rows = [];
+      let row = [];
+      let field = "";
+      let quoted = false;
+      for (let index = 0; index < content.length; index++) {
+        const character = content[index];
+        if (quoted) {
+          if (character === "\"" && content[index + 1] === "\"") {
+            field += "\"";
+            index++;
+          } else if (character === "\"") {
+            quoted = false;
+          } else {
+            field += character;
+          }
+          continue;
+        }
+        if (character === "\"" && field.length === 0) {
+          quoted = true;
+        } else if (character === ",") {
+          row.push(field);
+          field = "";
+        } else if (character === "\n" || character === "\r") {
+          if (character === "\r" && content[index + 1] === "\n") index++;
+          row.push(field);
+          rows.push(row);
+          row = [];
+          field = "";
+        } else {
+          field += character;
+        }
+      }
+      if (field.length > 0 || row.length > 0) {
+        row.push(field);
+        rows.push(row);
+      }
+      return rows.filter(values => values.some(value => value.trim() !== ""));
+    }
+
+    function parseNormalizedCSV(content) {
+      return content
+        .split(/\r?\n/)
+        .filter(line => line.trim() !== "")
+        .map(line => line.split(" | "));
+    }
+
+    function mapCSVChunks(sourceContent, chunks) {
+      const normalizedRows = parseCSV(sourceContent)
+        .map(values => values
+          .map(normalizeCSVReaderField)
+          .join(" | "));
+      const rowStarts = [];
+      let normalizedContent = "";
+      for (const row of normalizedRows) {
+        if (normalizedContent.length > 0) normalizedContent += "\n";
+        rowStarts.push(normalizedContent.length);
+        normalizedContent += row;
+      }
+
+      const chunksByRow = new Map();
+      const anchorsByRow = new Map();
+      let cursor = 0;
+      let mappedChunks = 0;
+      for (const chunk of chunks) {
+        chunk.mapped = false;
+        const chunkRunes = [...chunk.content];
+        const core = chunkRunes
+          .slice(Math.min(chunk.actual_overlap, chunkRunes.length))
+          .join("")
+          .replace(/^\s+/, "");
+        if (core.length === 0) continue;
+
+        const start = normalizedContent.indexOf(core, cursor);
+        if (start < 0) continue;
+        const end = start + core.length;
+        const firstRow = rowIndexAtOffset(rowStarts, start);
+        const lastRow = rowIndexAtOffset(
+          rowStarts,
+          Math.max(start, end - 1)
+        );
+        if (firstRow < 0 || lastRow < firstRow) continue;
+
+        for (let row = firstRow; row <= lastRow; row++) {
+          addMappedIndex(chunksByRow, row, chunk.index);
+        }
+        addMappedIndex(anchorsByRow, firstRow, chunk.index);
+        chunk.mapped = true;
+        mappedChunks++;
+        cursor = end;
+      }
+      return {chunksByRow, anchorsByRow, mappedChunks};
+    }
+
+    function normalizeCSVReaderField(field) {
+      return field
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        .replace(/\n/g, " ")
+        .trim();
+    }
+
+    function rowIndexAtOffset(rowStarts, offset) {
+      if (rowStarts.length === 0 || offset < 0) return -1;
+      for (let index = rowStarts.length - 1; index >= 0; index--) {
+        if (offset >= rowStarts[index]) return index;
+      }
+      return -1;
+    }
+
+    function appendDataTable(container, rows, hasHeader, mapping = null) {
+      const wrapper = element("div", "data-table-wrap");
+      const table = element("table", "data-table");
+      let bodyRows = rows;
+      let bodyOffset = 0;
+      if (hasHeader && rows.length > 0) {
+        const head = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        for (const value of rows[0]) {
+          headRow.appendChild(element("th", "", value));
+        }
+        decorateTableRow(headRow, 0, mapping);
+        head.appendChild(headRow);
+        table.appendChild(head);
+        bodyRows = rows.slice(1);
+        bodyOffset = 1;
+      }
+      const body = document.createElement("tbody");
+      bodyRows.forEach((values, index) => {
+        const row = document.createElement("tr");
+        for (const value of values) {
+          row.appendChild(element("td", "", value));
+        }
+        decorateTableRow(row, index + bodyOffset, mapping);
+        body.appendChild(row);
+      });
+      table.appendChild(body);
+      wrapper.appendChild(table);
+      container.appendChild(wrapper);
+    }
+
+    function decorateTableRow(row, rowIndex, mapping) {
+      if (!mapping || row.children.length === 0) return;
+      const indexes = mapping.chunksByRow.get(rowIndex) || [];
+      const anchors = mapping.anchorsByRow.get(rowIndex) || [];
+      if (indexes.length) {
+        row.classList.add("source-segment", "mapped");
+        row.dataset.chunks = indexes.join(" ");
+        row.addEventListener("mouseenter", () => setActiveChunks(indexes));
+        row.addEventListener("mouseleave", clearActiveChunks);
+      }
+      appendAnchorElements(row.children[0], rowIndex, anchors, true);
+    }
+
+    function renderSourceMap(data) {
+      sourceMap.replaceChildren();
+      sourceMap.classList.remove("structured");
+      sourceMap.scrollTop = 0;
+
+      if (data.config.strategy === "json") {
+        sourceMap.classList.add("structured");
+        try {
+          const sourceValue = JSON.parse(data.source.content);
+          const mapping = mapJSONChunks(sourceValue, data.strategy.chunks);
+          appendJSONSource(sourceMap, sourceValue, mapping);
+          mappingSummary =
+            `${mapping.mappedChunks}/${data.strategy.total} chunks mapped by JSON path`;
+        } catch {
+          const jsonView = element("pre", "json-view");
+          appendJSON(jsonView, data.source.content);
+          sourceMap.appendChild(jsonView);
+          mappingSummary = "formatted JSON view · no structural anchors";
+        }
+        updateSourceStats();
+        return;
+      }
+      if (data.config.reader === "CSVReader") {
+        sourceMap.classList.add("structured");
+        const mapping = mapCSVChunks(
+          data.source.content,
+          data.strategy.chunks
+        );
+        appendDataTable(
+          sourceMap,
+          parseCSV(data.source.content),
+          true,
+          mapping
+        );
+        mappingSummary =
+          `${mapping.mappedChunks}/${data.strategy.total} chunks mapped by CSV row`;
+        updateSourceStats();
+        return;
+      }
+
+      const sourceRunes = [...data.source.content];
+      const ranges = data.strategy.chunks
+        .filter(chunk => chunk.mapped)
+        .map(chunk => ({
+          index: chunk.index,
+          start: chunk.source_start,
+          end: chunk.source_end,
+          overlapStart: chunk.overlap_start,
+          hasOverlap: chunk.actual_overlap > 0
+        }));
+
+      if (ranges.length === 0) {
+        sourceMap.textContent = data.source.content;
+        mappingSummary = data.config.strategy === "json"
+          ? "JSON output is structure-based; text mapping is unavailable"
+          : "no exact source ranges found";
+        updateSourceStats();
+        return;
+      }
+
+      const boundaries = new Set([0, sourceRunes.length]);
+      const anchors = new Map();
+      for (const range of ranges) {
+        boundaries.add(range.overlapStart);
+        boundaries.add(range.start);
+        boundaries.add(range.end);
+        const values = anchors.get(range.overlapStart) || [];
+        values.push(range.index);
+        anchors.set(range.overlapStart, values);
+      }
+      const positions = [...boundaries].sort((left, right) => left - right);
+
+      for (let i = 0; i < positions.length - 1; i++) {
+        const start = positions[i];
+        const end = positions[i + 1];
+        appendAnchors(start, anchors.get(start) || []);
+        if (end <= start) continue;
+
+        const covering = ranges.filter(
+          range => range.overlapStart <= start && range.end >= end
+        );
+        const overlapping = ranges.some(
+          range => range.hasOverlap &&
+            range.overlapStart <= start &&
+            range.start >= end
+        );
+        const segment = element(
+          "span",
+          `source-segment${covering.length ? " mapped" : ""}` +
+            `${overlapping ? " overlap-source" : ""}`,
+          sourceRunes.slice(start, end).join("")
+        );
+        segment.dataset.chunks = covering.map(range => range.index).join(" ");
+        if (covering.length) {
+          segment.addEventListener(
+            "mouseenter",
+            () => setActiveChunks(covering.map(range => range.index))
+          );
+          segment.addEventListener("mouseleave", clearActiveChunks);
+        }
+        sourceMap.appendChild(segment);
+      }
+      appendAnchors(sourceRunes.length, anchors.get(sourceRunes.length) || []);
+
+      const normalizedLabel = data.source.normalized ? " · normalized source shown" : "";
+      mappingSummary =
+        `${data.source.mapped_chunks}/${data.strategy.total} chunks mapped${normalizedLabel}`;
+      updateSourceStats();
+    }
+
+    function appendAnchors(position, indexes) {
+      appendAnchorElements(sourceMap, position, indexes);
+    }
+
+    function appendAnchorElements(container, position, indexes, prepend = false) {
+      const fragment = document.createDocumentFragment();
+      for (const index of indexes) {
+        const anchor = element("span", "source-anchor");
+        anchor.dataset.anchorIndex = String(index);
+        anchor.dataset.sourcePosition = String(position);
+        fragment.appendChild(anchor);
+      }
+      if (prepend) {
+        container.insertBefore(fragment, container.firstChild);
+      } else {
+        container.appendChild(fragment);
+      }
+    }
+
+    function buildConnections(chunks) {
+      connectorPaths.replaceChildren();
+      connections = [];
+      for (const chunk of chunks) {
+        if (!chunk.mapped) continue;
+        const anchor = sourceMap.querySelector(
+          `[data-anchor-index="${chunk.index}"]`
+        );
+        const card = chunkList.querySelector(
+          `[data-chunk-index="${chunk.index}"]`
+        );
+        if (!anchor || !card) continue;
+        card.classList.add("locatable");
+        card.tabIndex = 0;
+        card.setAttribute("role", "button");
+        card.title = "Jump to this chunk in the source";
+        const path = document.createElementNS(svgNamespace, "path");
+        path.classList.add("connector");
+        path.dataset.chunkIndex = String(chunk.index);
+        connectorPaths.appendChild(path);
+        connections.push({index: chunk.index, anchor, card, path});
+      }
+      scheduleConnections();
+    }
+
+    function scheduleConnections() {
+      if (drawRequested || connectorLayer.hidden) return;
+      drawRequested = true;
+      requestAnimationFrame(() => {
+        drawRequested = false;
+        updateConnections();
+      });
+    }
+
+    function updateConnections() {
+      if (connectorLayer.hidden) return;
+      const workspaceRect = workspace.getBoundingClientRect();
+      const sourcePanelRect = sourcePanel.getBoundingClientRect();
+      const resultPanelRect = resultPanel.getBoundingClientRect();
+      const sourceViewport = sourceMap.getBoundingClientRect();
+      const resultViewport = chunkList.getBoundingClientRect();
+
+      for (const connection of connections) {
+        const anchorRect = connection.anchor.getBoundingClientRect();
+        const cardRect = connection.card.getBoundingClientRect();
+        const sourceVisible =
+          anchorRect.bottom >= sourceViewport.top &&
+          anchorRect.top <= sourceViewport.bottom;
+        const resultVisible =
+          cardRect.bottom >= resultViewport.top &&
+          cardRect.top <= resultViewport.bottom;
+        if (!sourceVisible && !resultVisible) {
+          connection.path.setAttribute("visibility", "hidden");
+          continue;
+        }
+
+        connection.path.removeAttribute("visibility");
+        const x1 = sourcePanelRect.right - workspaceRect.left + 2;
+        const x2 = resultPanelRect.left - workspaceRect.left - 2;
+        const sourceCenter = anchorRect.top + anchorRect.height / 2;
+        const resultCenter = cardRect.top + Math.min(cardRect.height, 42) / 2;
+        const y1 = Math.min(
+          sourceViewport.bottom - 2,
+          Math.max(sourceViewport.top + 2, sourceCenter)
+        ) - workspaceRect.top;
+        const y2 = Math.min(
+          resultViewport.bottom - 2,
+          Math.max(resultViewport.top + 2, resultCenter)
+        ) - workspaceRect.top;
+        const middle = (x1 + x2) / 2;
+        connection.path.setAttribute(
+          "d",
+          `M ${x1} ${y1} C ${middle} ${y1}, ${middle} ${y2}, ${x2} ${y2}`
+        );
+      }
+    }
+
+    function scrollToChunkSource(index) {
+      const connection = connections.find(candidate => candidate.index === index);
+      if (!connection) return;
+
+      showMapping();
+      const viewport = sourceMap.getBoundingClientRect();
+      const anchor = connection.anchor.getBoundingClientRect();
+      const targetOffset = Math.min(viewport.height * 0.25, 96);
+
+      scrollSyncing = true;
+      sourceMap.scrollTop += anchor.top - viewport.top - targetOffset;
+      setActiveChunks([index]);
+      scheduleConnections();
+      requestAnimationFrame(() => {
+        scrollSyncing = false;
+        scheduleConnections();
+      });
+    }
+
+    function setActiveChunks(indexes) {
+      const selected = new Set(indexes.map(String));
+      for (const card of chunkList.querySelectorAll("[data-chunk-index]")) {
+        card.classList.toggle("active", selected.has(card.dataset.chunkIndex));
+      }
+      for (const segment of sourceMap.querySelectorAll("[data-chunks]")) {
+        const covered = segment.dataset.chunks.split(" ").filter(Boolean);
+        segment.classList.toggle(
+          "active",
+          covered.some(index => selected.has(index))
+        );
+      }
+      for (const connection of connections) {
+        connection.path.classList.toggle(
+          "active",
+          selected.has(String(connection.index))
+        );
+      }
+    }
+
+    function clearActiveChunks() {
+      setActiveChunks([]);
+    }
+
+    function synchronizeScroll(from, to) {
+      if (scrollSyncing || sourceMap.hidden) {
+        scheduleConnections();
+        return;
+      }
+      scrollSyncing = true;
+      const connection = nearestConnection(from);
+      if (connection) {
+        const target = from === sourceMap ? connection.card : connection.anchor;
+        const targetRect = target.getBoundingClientRect();
+        const viewportRect = to.getBoundingClientRect();
+        const delta =
+          targetRect.top + targetRect.height / 2 -
+          (viewportRect.top + viewportRect.height / 2);
+        to.scrollTop += delta;
+      } else {
+        const fromRange = from.scrollHeight - from.clientHeight;
+        const toRange = to.scrollHeight - to.clientHeight;
+        const ratio = fromRange > 0 ? from.scrollTop / fromRange : 0;
+        to.scrollTop = ratio * Math.max(toRange, 0);
+      }
+      scheduleConnections();
+      requestAnimationFrame(() => {
+        scrollSyncing = false;
+      });
+    }
+
+    function nearestConnection(scroller) {
+      if (!connections.length) return null;
+      const viewport = scroller.getBoundingClientRect();
+      const center = viewport.top + viewport.height / 2;
+      let nearest = null;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      for (const connection of connections) {
+        const target = scroller === sourceMap ? connection.anchor : connection.card;
+        const rect = target.getBoundingClientRect();
+        const distance = Math.abs(rect.top + rect.height / 2 - center);
+        if (distance < nearestDistance) {
+          nearest = connection;
+          nearestDistance = distance;
+        }
+      }
+      return nearest;
+    }
+
+    function setStatus(message) {
+      status.className = "";
+      status.textContent = message;
+    }
+
+    function showError(message) {
+      status.className = "error";
+      status.textContent = message;
+      resultTitle.textContent = "Chunking failed";
+      resultSubtitle.textContent = message;
+      summary.hidden = true;
+      metadataToggle.disabled = true;
+      connectorLayer.hidden = true;
+      chunkList.replaceChildren(element("div", "empty", message));
+    }
+
+    useSampleButton.addEventListener("click", () => {
+      useSample().catch(error => showError(error.message));
+    });
+    sampleSelect.addEventListener("change", () => {
+      useSample().catch(error => showError(error.message));
+    });
+    fileInput.addEventListener("change", () => {
+      uploadDocument(fileInput.files[0]).catch(error => showError(error.message));
+      fileInput.value = "";
+    });
+    editSourceButton.addEventListener("click", () => {
+      if (sourceMap.hidden) {
+        showMapping();
+      } else {
+        showEditor();
+      }
+    });
+    contentInput.addEventListener("input", invalidateMapping);
+    strategyInput.addEventListener("change", syncStrategy);
+    runButton.addEventListener("click", runChunking);
+    metadataToggle.addEventListener("click", () => {
+      metadataVisible = !metadataVisible;
+      resultPanel.classList.toggle("show-metadata", metadataVisible);
+      metadataToggle.textContent = metadataVisible ? "Hide metadata" : "Show metadata";
+      scheduleConnections();
+    });
+    sourceMap.addEventListener("scroll", () => synchronizeScroll(sourceMap, chunkList));
+    chunkList.addEventListener("scroll", () => synchronizeScroll(chunkList, sourceMap));
+    window.addEventListener("resize", scheduleConnections);
+    if ("ResizeObserver" in window) {
+      new ResizeObserver(scheduleConnections).observe(workspace);
+    }
+
+    syncStrategy();
+    loadSamples().catch(error => showError(error.message));
+  </script>
+</body>
+</html>

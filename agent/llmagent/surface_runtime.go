@@ -10,6 +10,7 @@ package llmagent
 
 import (
 	"context"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
@@ -60,6 +61,9 @@ func (a *LLMAgent) skillRepositoryForInvocation(
 	ctx context.Context,
 	inv *agent.Invocation,
 ) skill.Repository {
+	if repo, ok := preparedSkillRepositoryForInvocation(inv); ok {
+		return repo
+	}
 	if patch, ok := a.rootSurfacePatch(inv); ok {
 		if repo, ok := patch.SkillRepository(); ok {
 			return repo
@@ -146,8 +150,18 @@ func (a *LLMAgent) InvocationSkillRepository(
 	if a == nil {
 		return nil
 	}
-	return a.skillRepositoryForInvocation(ctx, inv)
+	return repositoryWithoutPreparedSkills(
+		a.skillRepositoryForInvocation(ctx, inv),
+	)
 }
+
+// SupportsInvocationSkillLoads reports that LLMAgent consumes invocation
+// skill load declarations before its first model request.
+func (a *LLMAgent) SupportsInvocationSkillLoads() bool {
+	return a != nil
+}
+
+var _ agent.InvocationSkillLoadSupport = (*LLMAgent)(nil)
 
 // InvocationCodeExecutor returns the effective code executor for the
 // invocation, honoring a per-run override when present. It implements
@@ -208,8 +222,9 @@ func (a *LLMAgent) skillToolFlagsForInvocation(
 }
 
 // ExecutionTraceAppliedSurfaceIDs reports the effective surfaces that affected one invocation step.
+// It returns nil when a shared-trace child invocation does not map to a static child node.
 func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []string {
-	nodeID := agent.InvocationSurfaceRootNodeID(inv)
+	nodeID := executionTraceSurfaceNodeID(inv)
 	if nodeID == "" {
 		return nil
 	}
@@ -256,6 +271,61 @@ func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []stri
 		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeSkill))
 	}
 	return appliedSurfaceIDs
+}
+
+// executionTraceSurfaceNodeID returns the node id that can safely publish applied surfaces.
+func executionTraceSurfaceNodeID(inv *agent.Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	nodeID := agent.InvocationSurfaceRootNodeID(inv)
+	if nodeID == "" {
+		return ""
+	}
+	if executionTraceUsesParentCapture(inv) && !executionTraceNodeIsUnderParent(inv) {
+		return ""
+	}
+	return nodeID
+}
+
+// executionTraceStepNodeID returns the static trace node id for an LLM step.
+func executionTraceStepNodeID(inv *agent.Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	nodeID := agent.InvocationTraceNodeID(inv)
+	if nodeID == "" {
+		return ""
+	}
+	if executionTraceUsesParentCapture(inv) && !executionTraceNodeIsUnderParent(inv) {
+		return ""
+	}
+	return nodeID
+}
+
+// executionTraceUsesParentCapture reports whether an invocation participates in its parent's trace.
+func executionTraceUsesParentCapture(inv *agent.Invocation) bool {
+	parent := inv.GetParentInvocation()
+	return parent != nil &&
+		inv.RunOptions.ExecutionTraceEnabled &&
+		parent.RunOptions.ExecutionTraceEnabled
+}
+
+// executionTraceNodeIsUnderParent reports whether the invocation maps to a static child node.
+func executionTraceNodeIsUnderParent(inv *agent.Invocation) bool {
+	parent := inv.GetParentInvocation()
+	if parent == nil {
+		return false
+	}
+	parentNodeID := agent.InvocationTraceNodeID(parent)
+	nodeID := agent.InvocationTraceNodeID(inv)
+	if parentNodeID == "" || nodeID == "" || nodeID == parentNodeID {
+		return false
+	}
+	if rootNodeID := agent.InvocationTeamMemberTraceRoot(inv); rootNodeID != "" {
+		return nodeID == rootNodeID || strings.HasPrefix(nodeID, rootNodeID+"/")
+	}
+	return strings.HasPrefix(nodeID, parentNodeID+"/")
 }
 
 // InvocationToolSurface returns the invocation-scoped tool surface and user tool names.
@@ -413,6 +483,7 @@ func (a *LLMAgent) userToolsForInvocation(
 	}
 	baseTools := append([]tool.Tool(nil), a.option.Tools...)
 	toolSets := append([]tool.ToolSet(nil), a.option.ToolSets...)
+	toolSetToolNameModes := a.option.toolSetToolNameModes
 	a.mu.RUnlock()
 
 	if patchedTools, ok := patch.Tools(); ok {
@@ -430,7 +501,10 @@ func (a *LLMAgent) userToolsForInvocation(
 	userTools := append([]tool.Tool(nil), baseTools...)
 	userToolNames = collectUserToolNames(baseTools)
 	for _, toolSet := range toolSets {
-		namedToolSet := itool.NewNamedToolSet(toolSet)
+		namedToolSet := itool.NewNamedToolSetWithMode(
+			toolSet,
+			toolSetToolNameMode(toolSetToolNameModes, toolSet),
+		)
 		for _, t := range namedToolSet.Tools(ctx) {
 			userTools = append(userTools, t)
 			userToolNames[t.Declaration().Name] = true

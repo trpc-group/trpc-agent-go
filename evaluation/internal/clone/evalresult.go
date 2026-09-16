@@ -11,6 +11,8 @@ package clone
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	tokenusage "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/usage"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 )
 
 // CloneEvalSetResult clones an evaluation result set.
@@ -49,6 +51,12 @@ func cloneEvalCaseResult(src *evalresult.EvalCaseResult) (*evalresult.EvalCaseRe
 		return nil, nil
 	}
 	copied := *src
+	if src.InferenceStats != nil {
+		copied.InferenceStats = &evalresult.InferenceStats{
+			Duration:   src.InferenceStats.Duration,
+			TokenUsage: tokenusage.Clone(src.InferenceStats.TokenUsage),
+		}
+	}
 	overallMetrics, err := cloneEvalMetricResults(src.OverallEvalMetricResults)
 	if err != nil {
 		return nil, err
@@ -96,7 +104,18 @@ func cloneEvalMetricResultDetails(src *evalresult.EvalMetricResultDetails) *eval
 		return nil
 	}
 	copied := *src
+	copied.Value = cloneScoreValue(src.Value)
 	copied.RubricScores = cloneRubricScores(src.RubricScores)
+	return &copied
+}
+
+func cloneScoreValue(src *score.Value) *score.Value {
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	copied.Numeric = cloneFloat64Ptr(src.Numeric)
+	copied.Boolean = cloneBoolPtr(src.Boolean)
 	return &copied
 }
 

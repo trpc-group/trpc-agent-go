@@ -470,6 +470,9 @@ func deepCopyModelContentPartsWithVisited(
 			if in[i].Audio != nil {
 				out[i].Audio = deepCopyModelAudioWithVisited(in[i].Audio, visited)
 			}
+			if in[i].Video != nil {
+				out[i].Video = deepCopyModelVideoWithVisited(in[i].Video, visited)
+			}
 			if in[i].File != nil {
 				out[i].File = deepCopyModelFileWithVisited(in[i].File, visited)
 			}
@@ -487,6 +490,9 @@ func deepCopyModelContentPartsWithVisited(
 		}
 		if in[i].Audio != nil {
 			out[i].Audio = deepCopyModelAudioWithVisited(in[i].Audio, visited)
+		}
+		if in[i].Video != nil {
+			out[i].Video = deepCopyModelVideoWithVisited(in[i].Video, visited)
 		}
 		if in[i].File != nil {
 			out[i].File = deepCopyModelFileWithVisited(in[i].File, visited)
@@ -534,6 +540,25 @@ func deepCopyModelAudioWithVisited(
 	key := pointerVisitKey(reflect.ValueOf(in).Pointer(), reflect.TypeOf(in))
 	if cached, ok := visited[key]; ok {
 		return cached.(*model.Audio)
+	}
+	out := *in
+	visited[key] = &out
+	if in.Data != nil {
+		out.Data = deepCopyBytesWithVisited(in.Data, visited)
+	}
+	return &out
+}
+
+func deepCopyModelVideoWithVisited(
+	in *model.Video,
+	visited visitedMap,
+) *model.Video {
+	if in == nil {
+		return nil
+	}
+	key := pointerVisitKey(reflect.ValueOf(in).Pointer(), reflect.TypeOf(in))
+	if cached, ok := visited[key]; ok {
+		return cached.(*model.Video)
 	}
 	out := *in
 	visited[key] = &out

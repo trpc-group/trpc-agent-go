@@ -70,10 +70,10 @@ func New(opts ...reader.Option) reader.Reader {
 // Markdown uses MarkdownChunking with configurable chunk size and overlap.
 func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
 	var opts []chunking.MarkdownOption
-	if chunkSize > 0 {
+	if chunkSize != 0 {
 		opts = append(opts, chunking.WithMarkdownChunkSize(chunkSize))
 	}
-	if overlap > 0 {
+	if overlap != 0 {
 		opts = append(opts, chunking.WithMarkdownOverlap(overlap))
 	}
 	return chunking.NewMarkdownChunking(opts...)

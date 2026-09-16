@@ -1,0 +1,44 @@
+[
+  {
+    "metricName": "llm_final_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {}
+    }
+  },
+  {
+    "metricName": "trace_io_template",
+    "evaluatorName": "llm_judge_template",
+    "threshold": 1.0,
+    "criterion": {
+      "llmJudge": {
+        "template": {
+          "prompt": "You are grading whether the selected execution trace step output answers the selected execution trace step input. The trace snapshots may be plain text or JSON.\\n\\nTrace step input snapshot:\\n{{trace_input}}\\n\\nTrace step output snapshot:\\n{{trace_output}}\\n\\nReturn JSON with:\\n- score: 1 if the output answers the input.\\n- score: 0 otherwise.\\n- reason: one concise sentence.",
+          "responseScorerName": "single_score",
+          "variableBindings": [
+            {
+              "templateVariable": "trace_input",
+              "source": {
+                "scope": "actual",
+                "field": "traceStepInput",
+                "selector": {
+                  "nodeID": "trpcagent-travel-agent"
+                }
+              }
+            },
+            {
+              "templateVariable": "trace_output",
+              "source": {
+                "scope": "actual",
+                "field": "traceStepOutput",
+                "selector": {
+                  "nodeID": "trpcagent-travel-agent"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+]

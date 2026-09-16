@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
@@ -237,6 +238,43 @@ func TestTextReader_ChunkError(t *testing.T) {
 	_, err := rdr.ReadFromReader("x", strings.NewReader("abc"))
 	if err == nil {
 		t.Fatalf("want error")
+	}
+}
+
+func TestTextReader_InvalidChunkConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		options []reader.Option
+		wantErr error
+	}{
+		{
+			name:    "negative chunk size",
+			options: []reader.Option{reader.WithChunkSize(-1)},
+			wantErr: chunking.ErrInvalidChunkSize,
+		},
+		{
+			name:    "negative overlap",
+			options: []reader.Option{reader.WithChunkOverlap(-1)},
+			wantErr: chunking.ErrInvalidOverlap,
+		},
+		{
+			name: "overlap equals chunk size",
+			options: []reader.Option{
+				reader.WithChunkSize(10),
+				reader.WithChunkOverlap(10),
+			},
+			wantErr: chunking.ErrOverlapTooLarge,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rdr := New(tt.options...)
+			_, err := rdr.ReadFromReader("test.txt", strings.NewReader("content"))
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("ReadFromReader() error = %v, want %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 

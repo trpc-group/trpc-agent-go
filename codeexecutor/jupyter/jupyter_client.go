@@ -13,7 +13,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -76,7 +78,10 @@ type executionMessage struct {
 	} `json:"parent_header"`
 }
 
-// NewClient creates a new Jupyter client
+// NewClient creates a new Jupyter client from connectionInfo.
+// If readiness fails after startup, NewClient attempts to delete the started
+// kernel and closes the websocket. The returned error may include both the
+// readiness error and any cleanup error.
 func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 	baseURL := fmt.Sprintf("http://%s:%d", connectionInfo.Host, connectionInfo.Port)
 	c := &Client{
@@ -119,12 +124,9 @@ func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 
 	c.ws = ws
 	c.sessionID = uuid.New().String()
-	ready, err := c.waitForReady()
+	_, err = c.waitForReady()
 	if err != nil {
-		return nil, err
-	}
-	if !ready {
-		return nil, fmt.Errorf("kernel not ready")
+		return nil, c.cleanupAfterStartupFailure(err)
 	}
 
 	return c, nil
@@ -242,25 +244,60 @@ func (c *Client) startKernel(kernelName string) (string, error) {
 	return kernelResp.ID, nil
 }
 
+func (c *Client) deleteKernel() error {
+	url := fmt.Sprintf("%s/api/kernels/%s", c.baseURL, c.kernelID)
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+
+	if c.connectionInfo.Token != "" {
+		req.Header.Set("Authorization", "token "+c.connectionInfo.Token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to delete kernel: %s", resp.Status)
+	}
+	return nil
+}
+
+func (c *Client) cleanupAfterStartupFailure(err error) error {
+	if cleanupErr := c.deleteKernel(); cleanupErr != nil {
+		err = errors.Join(err, cleanupErr)
+	}
+	_ = c.ws.Close()
+	return err
+}
+
+// waitForReady waits for the kernel_info_reply message within the readiness timeout.
 func (c *Client) waitForReady() (bool, error) {
 	msgID, err := c.sendMessage(map[string]any{}, "shell", "kernel_info_request")
 	if err != nil {
 		return false, err
 	}
 
-	timeout := time.After(c.waitReadyTimeout)
+	if err := c.ws.SetReadDeadline(time.Now().Add(c.waitReadyTimeout)); err != nil {
+		return false, err
+	}
 	for {
-		select {
-		case <-timeout:
-			return false, fmt.Errorf("wait for kernel ready timeout")
-		default:
-		}
 		var message executionMessage
 		if err := c.ws.ReadJSON(&message); err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				return false, fmt.Errorf("wait for kernel ready timeout: %w", err)
+			}
 			return false, err
 		}
 
 		if message.Header.MsgType == "kernel_info_reply" && message.ParentHeader.MsgID == msgID {
+			if err := c.ws.SetReadDeadline(time.Time{}); err != nil {
+				return false, err
+			}
 			return true, nil
 		}
 	}

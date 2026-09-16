@@ -1014,11 +1014,25 @@ func TestBuildResponseAttributes(t *testing.T) {
 				Usage: &model.Usage{
 					PromptTokens:     10,
 					CompletionTokens: 20,
+					// Reported total intentionally differs from prompt+completion
+					// so tests assert provider total is preferred over the sum.
+					TotalTokens: 42,
 					PromptTokensDetails: model.PromptTokensDetails{
 						CachedTokens:        7,
 						CacheReadTokens:     11,
 						CacheCreationTokens: 13,
 					},
+				},
+			},
+		},
+		{
+			name: "response with usage without total omits total attribute",
+			rsp: &model.Response{
+				ID:    "resp2",
+				Model: "gpt-4",
+				Usage: &model.Usage{
+					PromptTokens:     4,
+					CompletionTokens: 6,
 				},
 			},
 		},
@@ -1051,8 +1065,15 @@ func TestBuildResponseAttributes(t *testing.T) {
 				require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIResponseModel, tt.rsp.Model))
 				require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIResponseID, tt.rsp.ID))
 
-				// Verify cached prompt tokens attribute when provided
+				// Verify usage token attributes when provided
 				if tt.rsp.Usage != nil {
+					require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageInputTokens, int64(tt.rsp.Usage.PromptTokens)))
+					require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageOutputTokens, int64(tt.rsp.Usage.CompletionTokens)))
+					if tt.rsp.Usage.TotalTokens != 0 {
+						require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageTotalTokens, int64(tt.rsp.Usage.TotalTokens)))
+					} else {
+						require.False(t, hasAttrKey(attrs, semconvtrace.KeyGenAIUsageTotalTokens))
+					}
 					if tt.rsp.Usage.PromptTokensDetails.CachedTokens != 0 {
 						require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageInputTokensCached, int64(tt.rsp.Usage.PromptTokensDetails.CachedTokens)))
 					}

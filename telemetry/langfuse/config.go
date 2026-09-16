@@ -82,27 +82,30 @@ func WithObservationLeafValueMaxBytes(maxBytes int) Option {
 	}
 }
 
-// WithServiceName overrides the service.name resource attribute when Start
-// creates a new TracerProvider. Defaults to the library telemetry service name.
-// Ignored when an existing SDK TracerProvider is already installed.
+// WithServiceName overlays the service.name resource attribute when Start
+// creates a new TracerProvider. When unset, Start keeps the detected OpenTelemetry
+// resource (including OTEL_SERVICE_NAME). Ignored when an existing SDK
+// TracerProvider is already installed.
 func WithServiceName(serviceName string) Option {
 	return func(cfg *config) {
 		cfg.serviceName = serviceName
 	}
 }
 
-// WithServiceNamespace overrides the service.namespace resource attribute when
-// Start creates a new TracerProvider. Defaults to the library namespace.
-// Ignored when an existing SDK TracerProvider is already installed.
+// WithServiceNamespace overlays the service.namespace resource attribute when
+// Start creates a new TracerProvider. When unset, namespace stays whatever the
+// detected resource provided. Ignored when an existing SDK TracerProvider is
+// already installed.
 func WithServiceNamespace(serviceNamespace string) Option {
 	return func(cfg *config) {
 		cfg.serviceNamespace = serviceNamespace
 	}
 }
 
-// WithServiceVersion overrides the service.version resource attribute when
-// Start creates a new TracerProvider. Defaults to the library telemetry version.
-// Ignored when an existing SDK TracerProvider is already installed.
+// WithServiceVersion overlays the service.version resource attribute when
+// Start creates a new TracerProvider. When unset, version stays whatever the
+// detected resource provided. Ignored when an existing SDK TracerProvider is
+// already installed.
 func WithServiceVersion(serviceVersion string) Option {
 	return func(cfg *config) {
 		cfg.serviceVersion = serviceVersion

@@ -10,6 +10,7 @@ package template
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,8 +18,8 @@ import (
 
 	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/templateresolver"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -139,6 +140,283 @@ func TestConstructMessagesRendersTraceStepInput(t *testing.T) {
 	assert.Contains(t, messages[0].Content, "Tool input: match query")
 }
 
+func TestConstructMessagesRendersTraceStepToolsAndSkills(t *testing.T) {
+	constructor := New()
+	actual := &evalset.Invocation{
+		ExecutionTrace: &agenttrace.Trace{
+			Steps: []agenttrace.Step{
+				{
+					NodeID: "fetch_match",
+					Tools: []agenttrace.Tool{{
+						ID:        "call-1",
+						Name:      "lookup",
+						Arguments: map[string]any{"city": "Paris"},
+						Result:    map[string]any{"temperature": 18},
+					}, {
+						ID:        "call-2",
+						Name:      "unstable",
+						Arguments: map[string]any{"attempt": 2},
+						Error:     "tool failed",
+					}},
+					Skills: []agenttrace.Skill{{Name: "research"}, {Name: "weather"}},
+				},
+			},
+		},
+	}
+	messages, err := constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{actual},
+		[]*evalset.Invocation{{FinalResponse: &model.Message{Content: "reference"}}},
+		buildTemplateEvalMetric(
+			"Tools: {{tools}}\nFirst ID: {{first_tool_id}}\nFirst result: {{first_result}}\nSecond tool: {{second_tool}}\nSecond error: {{second_error}}\nSkills: {{skills}}\nSecond skill: {{second_skill}}",
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "tools",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepTools,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "first_tool_id",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepTools,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+					Path: "$[0].id",
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "first_result",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepTools,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+					Path: "$[0].result.temperature",
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "second_tool",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepTools,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+					Path: "$[1].name",
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "second_error",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepTools,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+					Path: "$[1].error",
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "skills",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepSkills,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "second_skill",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepSkills,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+					Path: "$[1].name",
+				},
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	firstToolOffset := strings.Index(messages[0].Content, `"name":"lookup"`)
+	secondToolOffset := strings.Index(messages[0].Content, `"name":"unstable"`)
+	require.NotEqual(t, -1, firstToolOffset)
+	require.NotEqual(t, -1, secondToolOffset)
+	assert.Less(t, firstToolOffset, secondToolOffset)
+	assert.Contains(t, messages[0].Content, `"name":"lookup"`)
+	assert.Contains(t, messages[0].Content, `"arguments":{"city":"Paris"}`)
+	assert.Contains(t, messages[0].Content, `"id":"call-1"`)
+	assert.Contains(t, messages[0].Content, `"result":{"temperature":18}`)
+	assert.Contains(t, messages[0].Content, `"error":"tool failed"`)
+	assert.Contains(t, messages[0].Content, "First ID: call-1")
+	assert.Contains(t, messages[0].Content, "First result: 18")
+	assert.Contains(t, messages[0].Content, "Second tool: unstable")
+	assert.Contains(t, messages[0].Content, "Second error: tool failed")
+	assert.Contains(t, messages[0].Content, `"name":"research"`)
+	assert.Contains(t, messages[0].Content, "Second skill: weather")
+}
+
+func TestConstructMessagesRendersEmptyTraceStepToolsAndSkills(t *testing.T) {
+	constructor := New()
+	actual := &evalset.Invocation{
+		ExecutionTrace: &agenttrace.Trace{
+			Steps: []agenttrace.Step{{NodeID: "fetch_match"}},
+		},
+	}
+	messages, err := constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{actual},
+		[]*evalset.Invocation{{FinalResponse: &model.Message{Content: "reference"}}},
+		buildTemplateEvalMetric(
+			"Tools: {{tools}}\nSkills: {{skills}}",
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "tools",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepTools,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "skills",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepSkills,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Content, "Tools: []")
+	assert.Contains(t, messages[0].Content, "Skills: []")
+}
+
+func TestConstructMessagesReturnsErrorForUnmarshalableTraceStepTools(t *testing.T) {
+	constructor := New()
+	actual := &evalset.Invocation{
+		ExecutionTrace: &agenttrace.Trace{
+			Steps: []agenttrace.Step{{
+				NodeID: "fetch_match",
+				Tools: []agenttrace.Tool{{
+					ID:        "call-1",
+					Name:      "bad",
+					Arguments: func() {},
+				}},
+			}},
+		},
+	}
+	messages, err := constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{actual},
+		[]*evalset.Invocation{{FinalResponse: &model.Message{Content: "reference"}}},
+		buildTemplateEvalMetric(
+			"Tools: {{tools}}",
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "tools",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepTools,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+		),
+	)
+	require.Error(t, err)
+	assert.Nil(t, messages)
+	assert.Contains(t, err.Error(), "marshal trace step tools")
+}
+
+func TestConstructMessagesRendersMetricRubrics(t *testing.T) {
+	constructor := New()
+	evalMetric := buildTemplateEvalMetric(
+		"Rubrics: {{rubrics}}",
+		&criterionllm.TemplateVariableBinding{
+			TemplateVariable: "rubrics",
+			Source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeMetric,
+				Field: criterionllm.TemplateVariableFieldRubrics,
+			},
+		},
+	)
+	evalMetric.Criterion.LLMJudge.Rubrics = []*criterionllm.Rubric{
+		{ID: "r1", Content: &criterionllm.RubricContent{Text: "Must preserve x < y > z & value."}},
+	}
+	messages, err := constructor.ConstructMessages(context.Background(), nil, nil, evalMetric)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Content, `"id":"r1"`)
+	assert.Contains(t, messages[0].Content, `"text":"Must preserve x < y > z & value."`)
+	assert.NotContains(t, messages[0].Content, `\u003c`)
+	assert.NotContains(t, messages[0].Content, `\u003e`)
+	assert.NotContains(t, messages[0].Content, `\u0026`)
+}
+
+func TestConstructMessagesAppliesJSONPath(t *testing.T) {
+	constructor := New()
+	actual := &evalset.Invocation{
+		ExecutionTrace: &agenttrace.Trace{
+			Steps: []agenttrace.Step{
+				{NodeID: "fetch", Output: &agenttrace.Snapshot{Text: `{"payload":{"answer":"Paris","evidence":{"city":"Paris","comparison":"x < y > z & a"}}}`}},
+			},
+		},
+	}
+	messages, err := constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{actual},
+		nil,
+		buildTemplateEvalMetric(
+			"Answer: {{answer}}\nEvidence: {{evidence}}",
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "answer",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch",
+					},
+					Path: "$.payload.answer",
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "evidence",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch",
+					},
+					Path: "payload.evidence",
+				},
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Content, "Answer: Paris")
+	assert.Contains(t, messages[0].Content, `Evidence: {"city":"Paris","comparison":"x < y > z & a"}`)
+	assert.NotContains(t, messages[0].Content, `\u003c`)
+	assert.NotContains(t, messages[0].Content, `\u003e`)
+	assert.NotContains(t, messages[0].Content, `\u0026`)
+}
+
 func TestConstructMessagesRejectsDuplicateBindings(t *testing.T) {
 	constructor := New()
 
@@ -190,7 +468,7 @@ func TestConstructMessagesRequiresExpectedFinalResponse(t *testing.T) {
 	assert.Contains(t, err.Error(), "expected finalResponse is empty")
 }
 
-func TestStructuredOutputResolvesResponseScorerSchema(t *testing.T) {
+func TestStructuredOutputDefaultsToResponseScorerName(t *testing.T) {
 	constructor, ok := New().(messagesconstructor.StructuredOutputMessagesConstructor)
 	require.True(t, ok)
 	output, err := constructor.StructuredOutput(context.Background(), nil, nil,
@@ -200,8 +478,32 @@ func TestStructuredOutputResolvesResponseScorerSchema(t *testing.T) {
 	require.NotNil(t, output.JSONSchema)
 	assert.Equal(t, "single_score_result", output.JSONSchema.Name)
 	evalMetric := buildTemplateEvalMetric("Answer: {{answer}}", nil)
-	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = templateresolver.ResponseScorerRubricScoresName
+	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = operatorregistry.ResponseScorerRubricScoresName
 	output, err = constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "rubric_scores_result", output.JSONSchema.Name)
+	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = operatorregistry.ResponseScorerCategoricalName
+	evalMetric.Criterion.LLMJudge.Template.ResponseScorerOptions = &criterionllm.ResponseScorerOptions{
+		Categories: []*criterionllm.CategoryScore{
+			{Label: "correct", Score: 1},
+			{Label: "incorrect", Score: 0},
+		},
+	}
+	output, err = constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "categorical_result", output.JSONSchema.Name)
+}
+
+func TestStructuredOutputUsesStructuredOutputName(t *testing.T) {
+	constructor := New().(messagesconstructor.StructuredOutputMessagesConstructor)
+	evalMetric := buildTemplateEvalMetric("Answer: {{answer}}", nil)
+	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = operatorregistry.ResponseScorerSingleScoreName
+	evalMetric.Criterion.LLMJudge.Template.StructuredOutputName = operatorregistry.StructuredOutputRubricScoresName
+	output, err := constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	require.NotNil(t, output.JSONSchema)
@@ -222,13 +524,13 @@ func TestStructuredOutputRejectsInvalidTemplateOptions(t *testing.T) {
 	assert.Contains(t, err.Error(), "template is nil")
 }
 
-func TestStructuredOutputRejectsUnsupportedScorer(t *testing.T) {
+func TestStructuredOutputRejectsUnsupportedStructuredOutput(t *testing.T) {
 	constructor := New().(messagesconstructor.StructuredOutputMessagesConstructor)
 	evalMetric := buildTemplateEvalMetric("Answer: {{answer}}", nil)
-	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = "missing"
+	evalMetric.Criterion.LLMJudge.Template.StructuredOutputName = "missing"
 	_, err := constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `unsupported response scorer "missing"`)
+	assert.Contains(t, err.Error(), `unsupported structured output "missing"`)
 }
 
 func TestConstructMessagesRejectsUnknownPlaceholder(t *testing.T) {
@@ -307,11 +609,11 @@ func TestConstructMessagesRejectsInvalidTemplateOptions(t *testing.T) {
 }
 
 func TestResolveTemplateValuesRejectsInvalidBindings(t *testing.T) {
-	values, err := resolveTemplateValues(nil, nil, []*criterionllm.TemplateVariableBinding{nil})
+	values, err := resolveTemplateValues(nil, nil, nil, []*criterionllm.TemplateVariableBinding{nil})
 	require.Error(t, err)
 	assert.Nil(t, values)
 	assert.Contains(t, err.Error(), "template binding is nil")
-	values, err = resolveTemplateValues(nil, nil, []*criterionllm.TemplateVariableBinding{{
+	values, err = resolveTemplateValues(nil, nil, nil, []*criterionllm.TemplateVariableBinding{{
 		Source: &criterionllm.TemplateVariableSource{
 			Scope: criterionllm.TemplateVariableScopeActual,
 			Field: criterionllm.TemplateVariableFieldFinalResponse,
@@ -323,17 +625,27 @@ func TestResolveTemplateValuesRejectsInvalidBindings(t *testing.T) {
 }
 
 func TestResolveBindingValueRejectsNilAndUnsupportedSource(t *testing.T) {
-	value, err := resolveBindingValue(nil, nil, nil)
+	value, err := resolveBindingValue(nil, nil, nil, nil)
 	require.Error(t, err)
 	assert.Empty(t, value)
 	assert.Contains(t, err.Error(), "source is nil")
-	value, err = resolveBindingValue(nil, nil, &criterionllm.TemplateVariableSource{
-		Scope: "metric",
+	value, err = resolveBindingValue(nil, nil, buildTemplateEvalMetric("{{x}}"), &criterionllm.TemplateVariableSource{
+		Scope: criterionllm.TemplateVariableScopeMetric,
 		Field: criterionllm.TemplateVariableFieldFinalResponse,
 	})
 	require.Error(t, err)
 	assert.Empty(t, value)
 	assert.Contains(t, err.Error(), "unsupported source metric.finalResponse")
+}
+
+func TestResolveBindingValueRejectsEmptyRubrics(t *testing.T) {
+	value, err := resolveBindingValue(nil, nil, buildTemplateEvalMetric("{{rubrics}}"), &criterionllm.TemplateVariableSource{
+		Scope: criterionllm.TemplateVariableScopeMetric,
+		Field: criterionllm.TemplateVariableFieldRubrics,
+	})
+	require.Error(t, err)
+	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "metric rubrics are empty")
 }
 
 func TestResolveActualValueRejectsInvalidActualInput(t *testing.T) {
@@ -402,8 +714,40 @@ func TestResolveTraceStepErrors(t *testing.T) {
 			wantErr: "trace selector nodeID is required",
 		},
 		{
+			name:    "missing selector for tools",
+			actuals: []*evalset.Invocation{{ExecutionTrace: &agenttrace.Trace{}}},
+			source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldTraceStepTools,
+			},
+			wantErr: "trace selector nodeID is required",
+		},
+		{
+			name:    "missing selector for skills",
+			actuals: []*evalset.Invocation{{ExecutionTrace: &agenttrace.Trace{}}},
+			source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldTraceStepSkills,
+			},
+			wantErr: "trace selector nodeID is required",
+		},
+		{
 			name:    "empty node id",
 			actuals: []*evalset.Invocation{{ExecutionTrace: &agenttrace.Trace{}}},
+			source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+				Selector: &criterionllm.TemplateVariableSelector{
+					NodeID: "",
+				},
+			},
+			wantErr: "trace selector nodeID is required",
+		},
+		{
+			name: "space node id is not trimmed",
+			actuals: []*evalset.Invocation{{
+				ExecutionTrace: &agenttrace.Trace{Steps: []agenttrace.Step{{NodeID: "fetch"}}},
+			}},
 			source: &criterionllm.TemplateVariableSource{
 				Scope: criterionllm.TemplateVariableScopeActual,
 				Field: criterionllm.TemplateVariableFieldTraceStepOutput,
@@ -411,7 +755,7 @@ func TestResolveTraceStepErrors(t *testing.T) {
 					NodeID: " ",
 				},
 			},
-			wantErr: "trace selector nodeID is required",
+			wantErr: `trace step not found for actual.traceStepOutput nodeID " " at invocation index 0`,
 		},
 		{
 			name: "no matching step",
@@ -459,7 +803,7 @@ func buildTemplateEvalMetric(promptText string,
 			LLMJudge: &criterionllm.LLMCriterion{
 				Template: &criterionllm.JudgeTemplateOptions{
 					Prompt:             promptText,
-					ResponseScorerName: templateresolver.ResponseScorerSingleScoreName,
+					ResponseScorerName: operatorregistry.ResponseScorerSingleScoreName,
 					VariableBindings:   bindings,
 				},
 			},

@@ -10,17 +10,15 @@
 package track
 
 import (
-	"testing"
-	"time"
-
 	"context"
+	"testing"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 )
 
-func TestOptionsWithAggregatorFactoryAndFlushInterval(t *testing.T) {
+func TestOptionsWithAggregatorFactory(t *testing.T) {
 	factoryCalled := false
 	customFactory := func(ctx context.Context, opt ...aggregator.Option) aggregator.Aggregator {
 		factoryCalled = true
@@ -30,14 +28,9 @@ func TestOptionsWithAggregatorFactoryAndFlushInterval(t *testing.T) {
 	opts := newOptions(
 		WithAggregatorFactory(customFactory),
 		WithAggregationOption(aggregator.WithEnabled(false)),
-		WithFlushInterval(250*time.Millisecond),
 	)
-
-	require.Equal(t, 250*time.Millisecond, opts.flushInterval)
-
 	agg := opts.aggregatorFactory(context.Background(), opts.aggregationOption...)
 	require.True(t, factoryCalled)
-
 	events, err := agg.Append(context.Background(), aguievents.NewTextMessageContentEvent("msg", "hi"))
 	require.NoError(t, err)
 	require.Len(t, events, 1) // disabled aggregation should pass through.

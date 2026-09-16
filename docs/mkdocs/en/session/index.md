@@ -358,6 +358,9 @@ Supports setting Time To Live for session data with automatic cleanup of expired
 **Supported TTL types:**
 
 - **SessionTTL**: Expiration time for session state and events
+- **TrackEventTTL**: Expiration time for track events where supported. Defaults
+  to SessionTTL unless configured; setting it to a non-positive value disables
+  track event expiry
 - **AppStateTTL**: Expiration time for app-level state
 - **UserStateTTL**: Expiration time for user-level state
 
@@ -687,7 +690,9 @@ Track events are a trajectory storage mechanism in Session that is independent o
 
 **Interface**:
 
-The Track event API is defined on the `session.TrackService` interface, which is separate from `session.Service`:
+Track event writes are exposed through the optional `session.TrackService`
+interface. Storage backends that support track history persist these events with
+the session data.
 
 ```go
 type TrackService interface {
@@ -695,7 +700,7 @@ type TrackService interface {
 }
 ```
 
-Not all storage backends implement `TrackService`. A type assertion is required:
+Not all storage backends implement track event writes. A type assertion is required:
 
 | Storage Backend | Implements TrackService |
 | --- | --- |
@@ -725,9 +730,14 @@ err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
     Timestamp: time.Now(),
 })
 
-// Retrieve track events from session
+// Read track events from this in-memory session snapshot
 trackEvents, err := sess.GetTrackEvents("ui-events")
 ```
+
+`Session.GetTrackEvents` reads only the track events already loaded into a
+session object. Reload the session before treating it as a history snapshot.
+AG-UI history uses persisted track history internally when the configured
+session service supports it, and falls back to the session snapshot otherwise.
 
 ## Semantic Recall (PGVector Only)
 

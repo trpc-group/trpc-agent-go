@@ -1,8 +1,9 @@
 # Max Limits Example
 
-This example demonstrates how to use **per‑agent limits** for LLM calls and
-tool iterations in `LLMAgent`. It intentionally configures very small limits so
-you can see how the agent stops when the budgets are exhausted.
+This example demonstrates how to use **per-agent limits** for LLM calls and
+tool iterations in `LLMAgent`, including opt-in graceful finalization. It
+intentionally configures very small limits so you can see how the agent
+produces a tool-free final response when a budget is exhausted.
 
 ## What it does
 
@@ -10,6 +11,7 @@ you can see how the agent stops when the budgets are exhausted.
   - A simple `calculator` tool (`add` / `multiply`)
   - `WithMaxLLMCalls(5)`
   - `WithMaxToolIterations(2)`
+  - Default finalization instructions for both limits
 - Sends a fixed user message asking the agent to compute an exponent
   step‑by‑step, **always using the calculator tool**, and never doing math in
   its head.
@@ -17,7 +19,7 @@ you can see how the agent stops when the budgets are exhausted.
   - Tool calls
   - Tool responses
   - Assistant deltas / messages
-  - A final error once the tool‑iteration limit is exceeded.
+  - A final assistant response once the tool-iteration limit is reached.
 
 You do **not** need to type any input during the run; the example constructs a
 single fixed user message in code.
@@ -27,7 +29,7 @@ single fixed user message in code.
 From the repo root:
 
 ```bash
-cd trpc-agent-go1/examples/max_limits
+cd examples/max_limits
 
 # Configure your model endpoint; for example:
 export OPENAI_BASE_URL="http://v2.open.venus.oa.com/llmproxy/"
@@ -56,6 +58,11 @@ By default, `main.go` sends a fixed user message that asks the agent to:
 - Call the `calculator` tool at most once per assistant turn.
 - Never do any arithmetic mentally; every multiplication must go through the tool.
 - Provide a final summary and the numeric result at the end.
+
+The tool-iteration budget is intentionally too small to complete all eight
+multiplications. After the second tool result, the framework removes the tools
+from the next model request and asks the model to give the best possible final
+response from the available context.
 
 You can experiment by editing `main.go` and changing:
 

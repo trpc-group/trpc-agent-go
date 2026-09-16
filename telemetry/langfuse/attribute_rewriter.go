@@ -37,7 +37,7 @@ func (e *attributeRewritingExporter) ExportSpans(ctx context.Context, spans []sd
 	for i, span := range spans {
 		out[i] = &attrRewrittenSpan{
 			ReadOnlySpan: span,
-			attrs:        e.rewrite(span.Attributes()),
+			attrs:        e.rewrite(cloneAttributes(span.Attributes())),
 		}
 	}
 	return e.next.ExportSpans(ctx, out)
@@ -58,4 +58,13 @@ type attrRewrittenSpan struct {
 
 func (s *attrRewrittenSpan) Attributes() []attribute.KeyValue {
 	return s.attrs
+}
+
+func cloneAttributes(attrs []attribute.KeyValue) []attribute.KeyValue {
+	if len(attrs) == 0 {
+		return nil
+	}
+	out := make([]attribute.KeyValue, len(attrs))
+	copy(out, attrs)
+	return out
 }

@@ -30,7 +30,7 @@ type NodeKind string
 const (
 	// NodeKindAgent represents an agent node.
 	NodeKindAgent NodeKind = "agent"
-	// NodeKindLLM represents an LLM node.
+	// NodeKindLLM represents an LLM operation node.
 	NodeKindLLM NodeKind = "llm"
 	// NodeKindFunction represents a function node.
 	NodeKindFunction NodeKind = "function"

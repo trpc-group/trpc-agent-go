@@ -23,7 +23,7 @@ const (
 	LossSeverityP3 LossSeverity = "P3"
 )
 
-// TerminalLoss represents one terminal grading result from evaluation.
+// TerminalLoss represents one loss packet injected into a trace step for backward propagation.
 type TerminalLoss struct {
 	// EvalSetID ties this loss to one evaluation set.
 	EvalSetID string
@@ -33,7 +33,7 @@ type TerminalLoss struct {
 	MetricName string
 	// Severity indicates how urgently this loss should influence optimization when available.
 	Severity LossSeverity
-	// StepID identifies one terminal trace step where this loss starts propagation.
+	// StepID identifies the trace step where this loss starts propagation. Default extraction uses terminal steps.
 	StepID string
 	// Loss is the serialized loss payload used by gradient computation.
 	Loss string
@@ -45,6 +45,6 @@ type CaseLoss struct {
 	EvalSetID string
 	// EvalCaseID links this case-level record to one sample.
 	EvalCaseID string
-	// TerminalLosses stores every terminal loss collected for the case.
+	// TerminalLosses stores every loss packet collected for the case.
 	TerminalLosses []TerminalLoss
 }

@@ -29,7 +29,7 @@ func TestApplyParentDeathSignal(t *testing.T) {
 
 func TestPrepareCommandsParentDeathSignal(t *testing.T) {
 	pipeCmd := &exec.Cmd{}
-	preparePipeCommand(pipeCmd)
+	preparePipeCommand(pipeCmd, keepStdin)
 	require.NotNil(t, pipeCmd.SysProcAttr)
 	require.Equal(t, syscall.SIGTERM, pipeCmd.SysProcAttr.Pdeathsig)
 

@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -35,6 +36,8 @@ import (
 var (
 	_ session.Service      = (*Service)(nil)
 	_ session.TrackService = (*Service)(nil)
+
+	_ session.StateInitializationService = (*Service)(nil)
 )
 
 // Service is the redis session service.
@@ -52,6 +55,11 @@ type Service struct {
 
 	zsetClient    *zset.Client    // legacy ZSet-based storage client
 	hashidxClient *hashidx.Client // improved Hash+Index storage client
+
+	stateInitializationLeaseTTL      time.Duration
+	stateInitializationRenewInterval time.Duration
+	stateInitializationPollMin       time.Duration
+	stateInitializationPollMax       time.Duration
 }
 
 type sessionEventPair struct {
@@ -134,28 +142,36 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	// Initialize ZSet config
 	zsetCfg := zset.Config{
-		SessionTTL:        sessionTTL,
-		AppStateTTL:       appStateTTL,
-		UserStateTTL:      userStateTTL,
-		SessionEventLimit: opts.sessionEventLimit,
-		KeyPrefix:         opts.keyPrefix,
+		SessionTTL:         sessionTTL,
+		TrackEventTTL:      opts.trackEventTTL,
+		AppStateTTL:        appStateTTL,
+		UserStateTTL:       userStateTTL,
+		SessionEventLimit:  opts.sessionEventLimit,
+		KeyPrefix:          opts.keyPrefix,
+		DisableScriptCache: opts.disableScriptCache,
 	}
 
 	// Initialize HashIdx config
 	hashidxCfg := hashidx.Config{
 		SessionTTL:             sessionTTL,
+		TrackEventTTL:          opts.trackEventTTL,
 		AppStateTTL:            appStateTTL,
 		UserStateTTL:           userStateTTL,
 		SessionEventLimit:      opts.sessionEventLimit,
 		KeyPrefix:              opts.keyPrefix,
 		EnableUserSessionIndex: opts.enableUserSessionIndex,
+		DisableScriptCache:     opts.disableScriptCache,
 	}
 
 	s := &Service{
-		opts:          opts,
-		redisClient:   redisClient,
-		zsetClient:    zset.NewClient(redisClient, zsetCfg),
-		hashidxClient: hashidx.NewClient(redisClient, hashidxCfg),
+		opts:                             opts,
+		redisClient:                      redisClient,
+		zsetClient:                       zset.NewClient(redisClient, zsetCfg),
+		hashidxClient:                    hashidx.NewClient(redisClient, hashidxCfg),
+		stateInitializationLeaseTTL:      defaultStateInitializationLeaseTTL,
+		stateInitializationRenewInterval: defaultStateInitializationRenewInterval,
+		stateInitializationPollMin:       defaultStateInitializationPollMin,
+		stateInitializationPollMax:       defaultStateInitializationPollMax,
 	}
 
 	// Initialize Async Persistence

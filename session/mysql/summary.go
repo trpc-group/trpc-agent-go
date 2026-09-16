@@ -46,45 +46,171 @@ func (s *Service) CreateSessionSummary(
 		return nil
 	}
 
+	ctx, att := isummary.BeginAttempt(ctx, sess, filterKey)
+	defer att.Report()
+
 	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	att.Summarized(updated, err)
 	if err != nil || !updated {
 		return err
 	}
 
-	// Persist to MySQL using INSERT ... ON DUPLICATE KEY UPDATE for atomic upsert.
-	// This ensures no duplicate records can be created even under concurrent writes.
 	sess.SummariesMu.RLock()
 	sum := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
-
 	if sum == nil {
+		att.Persisted(isummary.PersistNoSummary)
 		return nil
 	}
 
 	summaryBytes, err := json.Marshal(sum)
 	if err != nil {
-		return fmt.Errorf("marshal summary failed: %w", err)
+		return att.RecordWrite(fmt.Errorf("marshal summary failed: %w", err))
 	}
-
-	// Note: expires_at is set to NULL - summaries are bound to session
-	// lifecycle and will be deleted when session is deleted or expires.
-	_, err = s.mysqlClient.Exec(ctx,
-		fmt.Sprintf(
-			`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
-			ON DUPLICATE KEY UPDATE
-				summary = VALUES(summary),
-				updated_at = VALUES(updated_at),
-				expires_at = VALUES(expires_at),
-				deleted_at = NULL`,
-			s.tableSessionSummaries,
-		),
-		key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), sum.UpdatedAt, nil)
+	result, err := s.upsertSessionSummary(
+		ctx,
+		key,
+		filterKey,
+		summaryBytes,
+		sum.UpdatedAt,
+	)
 	if err != nil {
-		return fmt.Errorf("upsert summary failed: %w", err)
+		return att.RecordWrite(err)
 	}
-
+	att.Persisted(result)
 	return nil
+}
+
+// upsertSessionSummary serializes summary persistence through the parent
+// session row. This keeps writes correct for both the current four-column
+// unique index and legacy schemas whose nullable deleted_at column does not
+// prevent duplicate active summaries. It reports whether the write was
+// applied or deliberately skipped as stale.
+func (s *Service) upsertSessionSummary(
+	ctx context.Context,
+	key session.Key,
+	filterKey string,
+	summaryBytes []byte,
+	updatedAt time.Time,
+) (isummary.PersistResult, error) {
+	result := isummary.PersistStored
+	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		if err := s.lockActiveSessionForSummary(ctx, tx, key); err != nil {
+			return err
+		}
+
+		persistedUpdatedAt, exists, err := s.latestActiveSummaryUpdatedAtForUpdate(
+			ctx, tx, key, filterKey,
+		)
+		if err != nil {
+			return err
+		}
+		if exists {
+			// A summary may be generated before waiting for this transaction's
+			// parent-session lock. Do not let an older cutoff overwrite a newer
+			// committed summary. Equal cutoffs remain last-write-wins so callers
+			// can force regeneration for the same summarized history.
+			if persistedUpdatedAt.After(updatedAt) {
+				result = isummary.PersistStale
+				return nil
+			}
+
+			// Update every active copy so reads remain consistent while legacy
+			// duplicate rows are being cleaned up online.
+			_, err = tx.ExecContext(ctx,
+				fmt.Sprintf(`UPDATE %s
+					SET summary = ?, updated_at = ?, expires_at = NULL
+					WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
+					AND deleted_at IS NULL`, s.tableSessionSummaries),
+				string(summaryBytes), updatedAt,
+				key.AppName, key.UserID, key.SessionID, filterKey)
+			if err != nil {
+				return fmt.Errorf("update active summaries failed: %w", err)
+			}
+			return nil
+		}
+
+		// Keep ON DUPLICATE KEY UPDATE for the current schema: when only a
+		// soft-deleted row exists, its four-column unique key must be revived.
+		// Legacy indexes do not conflict with that row and insert a new active
+		// summary instead.
+		_, err = tx.ExecContext(ctx,
+			fmt.Sprintf(`INSERT INTO %s
+					(app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+				ON DUPLICATE KEY UPDATE
+					summary = VALUES(summary),
+					updated_at = VALUES(updated_at),
+					expires_at = VALUES(expires_at),
+					deleted_at = NULL`, s.tableSessionSummaries),
+			key.AppName, key.UserID, key.SessionID, filterKey,
+			string(summaryBytes), updatedAt, nil)
+		if err != nil {
+			return fmt.Errorf("insert or revive summary failed: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return isummary.PersistError, fmt.Errorf("upsert summary failed: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Service) lockActiveSessionForSummary(
+	ctx context.Context,
+	tx *sql.Tx,
+	key session.Key,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		fmt.Sprintf(`SELECT id FROM %s
+			WHERE app_name = ? AND user_id = ? AND session_id = ?
+			AND deleted_at IS NULL
+			FOR UPDATE`, s.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID)
+	if err != nil {
+		return fmt.Errorf("lock session for summary failed: %w", err)
+	}
+	defer rows.Close()
+
+	found := false
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("scan session lock row failed: %w", err)
+		}
+		found = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate session lock rows failed: %w", err)
+	}
+	if !found {
+		return errSessionNotFound
+	}
+	return nil
+}
+
+func (s *Service) latestActiveSummaryUpdatedAtForUpdate(
+	ctx context.Context,
+	tx *sql.Tx,
+	key session.Key,
+	filterKey string,
+) (time.Time, bool, error) {
+	var updatedAt time.Time
+	err := tx.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT updated_at FROM %s
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
+			AND deleted_at IS NULL
+			ORDER BY updated_at DESC, id DESC
+			LIMIT 1
+			FOR UPDATE`, s.tableSessionSummaries),
+		key.AppName, key.UserID, key.SessionID, filterKey).Scan(&updatedAt)
+	if err == sql.ErrNoRows {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("lock active summaries failed: %w", err)
+	}
+	return updatedAt, true, nil
 }
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
@@ -164,7 +290,9 @@ func (s *Service) GetSessionSummaryText(
 		WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND updated_at >= ?
-		AND deleted_at IS NULL`, s.tableSessionSummaries),
+		AND deleted_at IS NULL
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1`, s.tableSessionSummaries),
 		key.AppName, key.UserID, key.SessionID, filterKey, time.Now(), sess.CreatedAt)
 
 	if err != nil {
@@ -193,7 +321,9 @@ func (s *Service) GetSessionSummaryText(
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 			AND (expires_at IS NULL OR expires_at > ?)
 			AND updated_at >= ?
-			AND deleted_at IS NULL`, s.tableSessionSummaries),
+			AND deleted_at IS NULL
+			ORDER BY updated_at DESC, id DESC
+			LIMIT 1`, s.tableSessionSummaries),
 			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now(), sess.CreatedAt)
 
 		if err == nil && summaryText != "" {

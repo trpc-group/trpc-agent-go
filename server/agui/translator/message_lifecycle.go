@@ -51,6 +51,13 @@ func (t *translator) closeTextStreamsBeforeQueuedUserMessage() []aguievents.Even
 	return t.closeCurrentTextStream()
 }
 
+func (t *translator) closeTextStreamsBeforeToolEvent() []aguievents.Event {
+	if t.concurrentMessageStreamsEnabled {
+		return nil
+	}
+	return t.closeCurrentTextStream()
+}
+
 func (t *translator) translateReasoningMessageEvents(rsp *model.Response) ([]aguievents.Event, error) {
 	if t.concurrentMessageStreamsEnabled {
 		return t.concurrentReasoningEvents(rsp)
@@ -203,7 +210,7 @@ func (t *translator) concurrentReasoningEvents(rsp *model.Response) ([]aguievent
 	if rsp.ID == "" {
 		return nil, nil
 	}
-	reasoningID := rsp.ID
+	reasoningID := reasoningMessageID(rsp.ID)
 	wasStarted := t.reasoningStreams.hasStarted(reasoningID)
 	choice := rsp.Choices[0]
 	reasoningDelta := ""
@@ -236,9 +243,6 @@ func (t *translator) concurrentReasoningEvents(rsp *model.Response) ([]aguievent
 		if t.reasoningStreams.isOpen(reasoningID) {
 			shouldEnd := false
 			if contentDelta != "" {
-				shouldEnd = true
-			}
-			if rsp.IsToolCallResponse() {
 				shouldEnd = true
 			}
 			if choice.FinishReason != nil && *choice.FinishReason != "" {

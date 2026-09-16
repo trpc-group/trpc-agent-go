@@ -10,6 +10,7 @@
 package mysql
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -463,13 +464,14 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		if err != nil {
 			return fmt.Errorf("marshal session state failed: %w", err)
 		}
-		expiresAt := calculateExpiresAt(s.opts.sessionTTL)
+		sessionExpires := calculateExpiresAt(s.opts.sessionTTL)
+		trackExpires := calculateExpiresAt(s.opts.effectiveTrackEventTTL())
 
 		// Update session state.
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 			 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-			string(updatedStateBytes), updatedAt, expiresAt,
+			string(updatedStateBytes), updatedAt, sessionExpires,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -480,7 +482,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at, expires_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionTracks),
 			key.AppName, key.UserID, key.SessionID, trackEvent.Track, string(eventBytes),
-			trackEvent.Timestamp, trackEvent.Timestamp, expiresAt)
+			trackEvent.Timestamp, trackEvent.Timestamp, trackExpires)
 		if err != nil {
 			return fmt.Errorf("insert track event failed: %w", err)
 		}
@@ -538,12 +540,15 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 				return err
 			}
 
-			// Soft delete session summaries
-			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf(`UPDATE %s SET deleted_at = ?
-				 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionSummaries),
-				now, key.AppName, key.UserID, key.SessionID)
-			if err != nil {
+			// Soft delete session summaries. Legacy schemas may contain duplicate
+			// active rows that require the compatibility fallback.
+			if err = s.softDeleteSummaries(
+				ctx,
+				tx,
+				"app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL",
+				[]any{key.AppName, key.UserID, key.SessionID},
+				now,
+			); err != nil {
 				return err
 			}
 
@@ -656,7 +661,7 @@ func (s *Service) getEventsList(
 
 	// TDSQL proxy cannot extract shardkey from tuple comparison;
 	// add explicit user_id for shard routing. Harmless on MySQL.
-	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event, created_at FROM %s
+	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event, created_at, id FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
 		AND user_id = ?
 		AND deleted_at IS NULL`,
@@ -672,6 +677,7 @@ func (s *Service) getEventsList(
 	type eventWithOrder struct {
 		evt       event.Event
 		createdAt time.Time
+		id        int64
 	}
 	eventsMap := make(map[string][]eventWithOrder)
 
@@ -679,7 +685,8 @@ func (s *Service) getEventsList(
 		var appName, userID, sessionID string
 		var eventBytes []byte
 		var eventCreatedAt time.Time
-		if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes, &eventCreatedAt); err != nil {
+		var eventID int64
+		if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes, &eventCreatedAt, &eventID); err != nil {
 			return err
 		}
 		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
@@ -694,7 +701,7 @@ func (s *Service) getEventsList(
 		if err := json.Unmarshal(eventBytes, &evt); err != nil {
 			return fmt.Errorf("unmarshal event failed: %w", err)
 		}
-		eventsMap[keyStr] = append(eventsMap[keyStr], eventWithOrder{evt: evt, createdAt: eventCreatedAt})
+		eventsMap[keyStr] = append(eventsMap[keyStr], eventWithOrder{evt: evt, createdAt: eventCreatedAt, id: eventID})
 		return nil
 	}, query, args...)
 
@@ -707,7 +714,10 @@ func (s *Service) getEventsList(
 		keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
 		items := eventsMap[keyStr]
 		slices.SortFunc(items, func(a, b eventWithOrder) int {
-			return a.createdAt.Compare(b.createdAt)
+			if c := a.createdAt.Compare(b.createdAt); c != 0 {
+				return c
+			}
+			return cmp.Compare(a.id, b.id)
 		})
 		events := make([]event.Event, len(items))
 		for j, item := range items {
@@ -848,7 +858,7 @@ func (s *Service) getRecentEventRefs(
 		WHERE app_name = ? AND user_id = ? AND session_id = ?
 		AND created_at >= ?
 		AND deleted_at IS NULL
-		ORDER BY created_at DESC
+		ORDER BY created_at DESC, id DESC
 		LIMIT ?`,
 		s.tableSessionEvents)
 
@@ -945,8 +955,15 @@ func (s *Service) getEventsByRefs(
 		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}
 
+	// Tie-break on id: created_at alone is not a total order. A tool call and
+	// its result are written milliseconds apart and collide whenever the column
+	// resolution is coarser than the write interval, which would otherwise let
+	// the descending scan order survive into conversation order.
 	slices.SortFunc(refs, func(a, b eventRef) int {
-		return a.createdAt.Compare(b.createdAt)
+		if c := a.createdAt.Compare(b.createdAt); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.id, b.id)
 	})
 	events := make([]event.Event, 0, len(refs))
 	for _, ref := range refs {
@@ -1024,13 +1041,15 @@ func (s *Service) getPreviousEventRefs(
 		s.tableSessionEvents)
 	args := []any{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
 	if before != nil {
-		// Keyset cursor: rows sharing the exact same microsecond created_at as
-		// the cursor boundary may be skipped. TIMESTAMP(6) makes this rare in
-		// practice and we accept the tradeoff to avoid filesort on the index.
-		query += ` AND created_at < ?`
-		args = append(args, before.createdAt)
+		// Composite keyset cursor on (created_at, id). Comparing created_at
+		// alone drops every remaining row that shares the boundary timestamp,
+		// which is common when the column resolution is coarser than the write
+		// interval. Written as an expanded OR rather than a tuple comparison
+		// because the TDSQL proxy cannot extract the shardkey from tuples.
+		query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+		args = append(args, before.createdAt, before.createdAt, before.id)
 	}
-	query += ` ORDER BY created_at DESC LIMIT ?`
+	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
 	args = append(args, userAnchorSearchBatchSize)
 
 	refs := make([]eventRef, 0, userAnchorSearchBatchSize)
@@ -1064,13 +1083,12 @@ func (s *Service) getEventRefsWithTimestamp(
 	)
 	args := []any{key.AppName, key.UserID, key.SessionID, afterTime}
 	if before != nil {
-		// Keyset cursor: rows sharing the exact same microsecond created_at as
-		// the cursor boundary may be skipped. TIMESTAMP(6) makes this rare in
-		// practice and we accept the tradeoff to avoid filesort on the index.
-		query += ` AND created_at < ?`
-		args = append(args, before.createdAt)
+		// Composite keyset cursor on (created_at, id); see getPreviousEventRefs
+		// for why this is an expanded OR instead of a tuple comparison.
+		query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+		args = append(args, before.createdAt, before.createdAt, before.id)
 	}
-	query += ` ORDER BY created_at DESC LIMIT ?`
+	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
 	args = append(args, limit)
 
 	refs := make([]eventRef, 0, limit)
@@ -1111,11 +1129,16 @@ func filterRefsByEventTimestamp(refs []eventRef, afterTime time.Time) []eventRef
 	return filtered
 }
 
-// oldestEventRef returns the earliest ref in the current bounded event window.
+// oldestEventRef returns the earliest ref in the current bounded event window,
+// ordered by the (created_at, id) composite key. Callers use the result as an
+// exclusive keyset cursor, so ties must resolve to the smallest id: comparing
+// created_at alone would leave the lower ids of a boundary timestamp behind the
+// cursor and replay them in the next batch.
 func oldestEventRef(refs []eventRef) eventRef {
 	oldest := refs[0]
 	for _, ref := range refs[1:] {
-		if ref.createdAt.Before(oldest.createdAt) {
+		c := ref.createdAt.Compare(oldest.createdAt)
+		if c < 0 || (c == 0 && ref.id < oldest.id) {
 			oldest = ref
 		}
 	}
@@ -1179,7 +1202,7 @@ func (s *Service) getPagedEvents(
 		WHERE app_name = ? AND user_id = ? AND session_id = ?
 		AND created_at >= ?
 		AND deleted_at IS NULL
-		ORDER BY created_at DESC
+		ORDER BY created_at DESC, id DESC
 		LIMIT ? OFFSET ?`,
 		s.tableSessionEvents)
 
@@ -1218,21 +1241,34 @@ func (s *Service) getTrackEvents(
 	if len(sessionStates) != len(sessionKeys) {
 		return nil, fmt.Errorf("session states count mismatch: %d != %d", len(sessionStates), len(sessionKeys))
 	}
+	trackLists := make([][]session.Track, len(sessionKeys))
+	for i := range sessionKeys {
+		tracks, err := session.TracksFromState(sessionStates[i].State)
+		if err != nil {
+			return nil, fmt.Errorf("get track list failed: %w", err)
+		}
+		trackLists[i] = tracks
+	}
+	return s.getTrackEventsByTrackLists(ctx, sessionKeys, trackLists, limit, afterTime)
+}
 
+func (s *Service) getTrackEventsByTrackLists(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	trackLists [][]session.Track,
+	limit int,
+	afterTime time.Time,
+) ([]map[session.Track][]session.TrackEvent, error) {
 	type trackQuery struct {
 		sessionIdx int
 		track      session.Track
 		query      string
 		args       []any
 	}
-
 	queries := make([]*trackQuery, 0)
 	now := time.Now()
 	for i, key := range sessionKeys {
-		tracks, err := session.TracksFromState(sessionStates[i].State)
-		if err != nil {
-			return nil, fmt.Errorf("get track list failed: %w", err)
-		}
+		tracks := trackLists[i]
 		for _, track := range tracks {
 			query := fmt.Sprintf(`SELECT event FROM %s
 					WHERE app_name = ? AND user_id = ? AND session_id = ? AND track = ?
@@ -1248,7 +1284,7 @@ func (s *Service) getTrackEvents(
 				args = append(args, afterTime)
 			}
 			query += `
-					ORDER BY created_at DESC`
+					ORDER BY created_at DESC, id DESC`
 			if limit > 0 {
 				query += `
 					LIMIT ?`
@@ -1262,7 +1298,6 @@ func (s *Service) getTrackEvents(
 			})
 		}
 	}
-
 	results := make([]map[session.Track][]session.TrackEvent, len(sessionKeys))
 	for _, q := range queries {
 		events := make([]session.TrackEvent, 0)
@@ -1281,7 +1316,6 @@ func (s *Service) getTrackEvents(
 		if err != nil {
 			return nil, fmt.Errorf("query track events failed: %w", err)
 		}
-
 		for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
 			events[i], events[j] = events[j], events[i]
 		}
@@ -1322,11 +1356,14 @@ func (s *Service) getSummariesList(
 	// add explicit user_id for shard routing. Harmless on MySQL.
 	args = append(args, sessionKeys[0].UserID, time.Now())
 
+	// Sort oldest-first so later map assignments deterministically retain the
+	// newest active copy when a legacy schema contains duplicates.
 	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
 		AND user_id = ?
 		AND (expires_at IS NULL OR expires_at > ?)
-		AND deleted_at IS NULL`,
+		AND deleted_at IS NULL
+		ORDER BY updated_at ASC, id ASC`,
 		s.tableSessionSummaries, strings.Join(placeholders, ","))
 
 	// Build a map of session key to created_at for filtering

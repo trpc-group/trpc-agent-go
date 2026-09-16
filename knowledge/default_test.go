@@ -11,7 +11,11 @@ package knowledge
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 func TestConvertToIntIgnoresNilValues(t *testing.T) {
@@ -423,6 +428,17 @@ func TestLoadOptions(t *testing.T) {
 				return kb
 			},
 			loadOptions: []LoadOption{WithDocConcurrency(2)},
+			expectError: false,
+		},
+		{
+			name: "WithEmbeddingBatchSize",
+			setupKB: func() *BuiltinKnowledge {
+				kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: 3}}))
+				kb.vectorStore = &stubVectorStore{}
+				kb.embedder = &recordingBatchEmbedder{}
+				return kb
+			},
+			loadOptions: []LoadOption{WithEmbeddingBatchSize(2)},
 			expectError: false,
 		},
 		{
@@ -2830,5 +2846,844 @@ func TestWithLoadProgressCallback_SequentialTotalField(t *testing.T) {
 	last := events[len(events)-1]
 	if last.Total != 2*docCount {
 		t.Errorf("last event: want Total=%d, got %d", 2*docCount, last.Total)
+	}
+}
+
+// recordingBatchEmbedder implements embedder.BatchEmbedder and records how
+// ingestion groups documents into requests. batchFunc, when set, replaces the
+// well-formed response so tests can inject malformed batches.
+type recordingBatchEmbedder struct {
+	mu          sync.Mutex
+	batchSizes  []int
+	batchTexts  [][]string
+	singleCalls int
+
+	dimensions int
+	batchFunc  func(texts []string) ([][]float64, error)
+}
+
+func (e *recordingBatchEmbedder) GetEmbedding(_ context.Context, text string) ([]float64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.singleCalls++
+	return embeddingForText(text), nil
+}
+
+func (e *recordingBatchEmbedder) GetEmbeddingWithUsage(
+	ctx context.Context,
+	text string,
+) ([]float64, map[string]any, error) {
+	embedding, err := e.GetEmbedding(ctx, text)
+	return embedding, nil, err
+}
+
+func (e *recordingBatchEmbedder) GetDimensions() int {
+	if e.dimensions == 0 {
+		return 3
+	}
+	return e.dimensions
+}
+
+func (e *recordingBatchEmbedder) GetEmbeddings(
+	ctx context.Context,
+	texts []string,
+) ([][]float64, error) {
+	e.mu.Lock()
+	e.batchSizes = append(e.batchSizes, len(texts))
+	e.batchTexts = append(e.batchTexts, slices.Clone(texts))
+	batchFunc := e.batchFunc
+	e.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if batchFunc != nil {
+		return batchFunc(texts)
+	}
+	embeddings := make([][]float64, len(texts))
+	for i, text := range texts {
+		embeddings[i] = embeddingForText(text)
+	}
+	return embeddings, nil
+}
+
+// requestSizes returns the recorded batch sizes in ascending order so that
+// concurrent loads can be asserted without depending on completion order.
+func (e *recordingBatchEmbedder) requestSizes() []int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	sizes := slices.Clone(e.batchSizes)
+	sort.Ints(sizes)
+	return sizes
+}
+
+func (e *recordingBatchEmbedder) requestCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.batchSizes)
+}
+
+func (e *recordingBatchEmbedder) singleCallCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.singleCalls
+}
+
+// embeddingForText derives a deterministic vector from the embedded text so
+// that tests can prove each stored vector belongs to its own document.
+func embeddingForText(text string) []float64 {
+	return []float64{float64(len(text)), float64(strings.Count(text, "e")), 1}
+}
+
+// batchRecordingVectorStore records the embedding stored for every document
+// and can fail Add after a given number of successful writes.
+type batchRecordingVectorStore struct {
+	stubVectorStore
+	mu         sync.Mutex
+	embeddings map[string][]float64
+
+	// failAfter fails every Add beyond the first failAfter calls when > 0.
+	failAfter int
+	calls     atomic.Int64
+}
+
+func (s *batchRecordingVectorStore) Add(_ context.Context, doc *document.Document, emb []float64) error {
+	if s.failAfter > 0 && int(s.calls.Add(1)) > s.failAfter {
+		return fmt.Errorf("simulated add failure")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.embeddings == nil {
+		s.embeddings = make(map[string][]float64)
+	}
+	s.embeddings[doc.ID] = emb
+	return nil
+}
+
+func (s *batchRecordingVectorStore) storedCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.embeddings)
+}
+
+func (s *batchRecordingVectorStore) storedEmbedding(id string) ([]float64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	emb, ok := s.embeddings[id]
+	return emb, ok
+}
+
+// TestLoad_EmbeddingBatch_RequestCount verifies that N documents with an
+// effective batch size of B produce ceil(N/B) embedding requests, including
+// the short trailing batch, on both the sequential and the concurrent path.
+func TestLoad_EmbeddingBatch_RequestCount(t *testing.T) {
+	const docCount = 5
+	const batchSize = 2
+
+	tests := []struct {
+		name        string
+		concurrency []LoadOption
+	}{
+		{
+			name:        "sequential",
+			concurrency: []LoadOption{WithSourceConcurrency(1), WithDocConcurrency(1)},
+		},
+		{
+			name:        "concurrent",
+			concurrency: []LoadOption{WithSourceConcurrency(1), WithDocConcurrency(2)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			emb := &recordingBatchEmbedder{}
+			vs := &batchRecordingVectorStore{}
+			kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}))
+			kb.vectorStore = vs
+			kb.embedder = emb
+
+			opts := append(tt.concurrency,
+				WithEmbeddingBatchSize(batchSize),
+				WithShowProgress(false),
+				WithShowStats(false),
+			)
+			if err := kb.Load(context.Background(), opts...); err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			want := []int{1, 2, 2}
+			if got := emb.requestSizes(); !slices.Equal(got, want) {
+				t.Errorf("batch sizes = %v, want %v", got, want)
+			}
+			if got := emb.singleCallCount(); got != 0 {
+				t.Errorf("per-document embedding calls = %d, want 0", got)
+			}
+			if got := vs.storedCount(); got != docCount {
+				t.Errorf("stored documents = %d, want %d", got, docCount)
+			}
+		})
+	}
+}
+
+// TestLoad_EmbeddingBatch_BindsVectorsToDocuments verifies that every document
+// is stored with the vector generated from its own embedding text.
+func TestLoad_EmbeddingBatch_BindsVectorsToDocuments(t *testing.T) {
+	const docCount = 7
+
+	src := &mockSource{name: "test", docCount: docCount}
+	docs, err := src.ReadDocuments(context.Background())
+	if err != nil {
+		t.Fatalf("ReadDocuments() error = %v", err)
+	}
+
+	vs := &batchRecordingVectorStore{}
+	kb := New(WithSources([]source.Source{src}))
+	kb.vectorStore = vs
+	kb.embedder = &recordingBatchEmbedder{}
+
+	if err := kb.Load(context.Background(),
+		WithSourceConcurrency(1),
+		WithDocConcurrency(3),
+		WithEmbeddingBatchSize(3),
+		WithShowProgress(false),
+		WithShowStats(false),
+	); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	for _, doc := range docs {
+		stored, ok := vs.storedEmbedding(doc.ID)
+		if !ok {
+			t.Fatalf("document %s was not stored", doc.ID)
+		}
+		want := embeddingForText(buildEmbeddingText(doc))
+		if !slices.Equal(stored, want) {
+			t.Errorf("document %s stored %v, want %v", doc.ID, stored, want)
+		}
+	}
+}
+
+// recordingEmbedder implements only embedder.Embedder, so ingestion cannot use
+// the batch path with it.
+type recordingEmbedder struct {
+	calls atomic.Int64
+}
+
+func (e *recordingEmbedder) GetEmbedding(_ context.Context, text string) ([]float64, error) {
+	e.calls.Add(1)
+	return embeddingForText(text), nil
+}
+
+func (e *recordingEmbedder) GetEmbeddingWithUsage(
+	ctx context.Context,
+	text string,
+) ([]float64, map[string]any, error) {
+	embedding, err := e.GetEmbedding(ctx, text)
+	return embedding, nil, err
+}
+
+func (*recordingEmbedder) GetDimensions() int { return 3 }
+
+// TestLoad_EmbeddingBatch_FallsBackToSingleRequests verifies that the
+// per-document path stays in effect whenever batching cannot be applied, still
+// issuing one embedding request per document.
+func TestLoad_EmbeddingBatch_FallsBackToSingleRequests(t *testing.T) {
+	const docCount = 4
+
+	tests := []struct {
+		name       string
+		sourceSync bool
+		batchSize  int
+		// plainEmbedder selects an embedder without batch support.
+		plainEmbedder bool
+		// noEmbedder leaves the knowledge base without an embedder, as
+		// configured for a vector store that embeds remotely.
+		noEmbedder bool
+	}{
+		{name: "option not set", batchSize: 0},
+		{name: "batch size one", batchSize: 1},
+		{name: "embedder without batch support", batchSize: 4, plainEmbedder: true},
+		{name: "no embedder configured", batchSize: 4, noEmbedder: true},
+		{name: "source sync enabled", batchSize: 4, sourceSync: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			batchCapable := &recordingBatchEmbedder{}
+			plain := &recordingEmbedder{}
+			store := &batchRecordingVectorStore{}
+			kb := New(
+				WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}),
+				WithEnableSourceSync(tt.sourceSync),
+			)
+			kb.vectorStore = store
+			switch {
+			case tt.noEmbedder:
+			case tt.plainEmbedder:
+				kb.embedder = plain
+			default:
+				kb.embedder = batchCapable
+			}
+
+			if err := kb.Load(context.Background(),
+				WithSourceConcurrency(1),
+				WithDocConcurrency(2),
+				WithEmbeddingBatchSize(tt.batchSize),
+				WithShowProgress(false),
+				WithShowStats(false),
+			); err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			if got := batchCapable.requestCount(); got != 0 {
+				t.Errorf("batch requests = %d, want 0", got)
+			}
+			if tt.noEmbedder {
+				// The store receives the documents without an embedding, so
+				// there is no embedding request of either shape to count.
+				if got := store.storedCount(); got != docCount {
+					t.Errorf("stored documents = %d, want %d", got, docCount)
+				}
+				return
+			}
+			singleCalls := batchCapable.singleCallCount()
+			if tt.plainEmbedder {
+				singleCalls = int(plain.calls.Load())
+			}
+			if singleCalls != docCount {
+				t.Errorf("per-document embedding calls = %d, want %d", singleCalls, docCount)
+			}
+		})
+	}
+}
+
+// TestLoad_EmbeddingBatch_RejectsInvalidResponse verifies that a batch is
+// validated as a whole, so an invalid response stores none of its documents.
+func TestLoad_EmbeddingBatch_RejectsInvalidResponse(t *testing.T) {
+	const docCount = 3
+
+	tests := []struct {
+		name      string
+		batchFunc func(texts []string) ([][]float64, error)
+	}{
+		{
+			name: "count mismatch",
+			batchFunc: func(texts []string) ([][]float64, error) {
+				return make([][]float64, len(texts)-1), nil
+			},
+		},
+		{
+			name: "empty vector",
+			batchFunc: func(texts []string) ([][]float64, error) {
+				embeddings := validEmbeddings(len(texts))
+				embeddings[len(texts)-1] = nil
+				return embeddings, nil
+			},
+		},
+		{
+			name: "dimension mismatch within batch",
+			batchFunc: func(texts []string) ([][]float64, error) {
+				embeddings := validEmbeddings(len(texts))
+				embeddings[len(texts)-1] = []float64{1, 2}
+				return embeddings, nil
+			},
+		},
+		{
+			name: "not a number",
+			batchFunc: func(texts []string) ([][]float64, error) {
+				embeddings := validEmbeddings(len(texts))
+				embeddings[0][1] = math.NaN()
+				return embeddings, nil
+			},
+		},
+		{
+			name: "infinite value",
+			batchFunc: func(texts []string) ([][]float64, error) {
+				embeddings := validEmbeddings(len(texts))
+				embeddings[0][2] = math.Inf(-1)
+				return embeddings, nil
+			},
+		},
+		{
+			name: "request failure",
+			batchFunc: func(texts []string) ([][]float64, error) {
+				return nil, fmt.Errorf("simulated provider failure")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vs := &batchRecordingVectorStore{}
+			kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}))
+			kb.vectorStore = vs
+			kb.embedder = &recordingBatchEmbedder{batchFunc: tt.batchFunc}
+
+			err := kb.Load(context.Background(),
+				WithSourceConcurrency(1),
+				WithDocConcurrency(1),
+				WithEmbeddingBatchSize(docCount),
+				WithShowProgress(false),
+				WithShowStats(false),
+			)
+			if err == nil {
+				t.Fatal("Load() error = nil, want an error")
+			}
+			if got := vs.storedCount(); got != 0 {
+				t.Errorf("stored documents = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func validEmbeddings(n int) [][]float64 {
+	embeddings := make([][]float64, n)
+	for i := range embeddings {
+		embeddings[i] = []float64{1, 2, 3}
+	}
+	return embeddings
+}
+
+// TestLoad_EmbeddingBatch_KeepsDocumentsStoredBeforeFailure verifies the
+// non-transactional store semantics: a failure part-way through a batch keeps
+// the documents already written and still reports the error.
+func TestLoad_EmbeddingBatch_KeepsDocumentsStoredBeforeFailure(t *testing.T) {
+	const docCount = 3
+	const storedBeforeFailure = 1
+
+	vs := &batchRecordingVectorStore{failAfter: storedBeforeFailure}
+	kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}))
+	kb.vectorStore = vs
+	kb.embedder = &recordingBatchEmbedder{}
+
+	err := kb.Load(context.Background(),
+		WithSourceConcurrency(1),
+		WithDocConcurrency(1),
+		WithEmbeddingBatchSize(docCount),
+		WithShowProgress(false),
+		WithShowStats(false),
+	)
+	if err == nil {
+		t.Fatal("Load() error = nil, want an error")
+	}
+	if got := vs.storedCount(); got != storedBeforeFailure {
+		t.Errorf("stored documents = %d, want %d", got, storedBeforeFailure)
+	}
+}
+
+// TestLoad_EmbeddingBatch_StopsAfterContextCancel verifies that no further
+// batch is submitted and no further document is stored once the caller cancels.
+func TestLoad_EmbeddingBatch_StopsAfterContextCancel(t *testing.T) {
+	const docCount = 8
+	const batchSize = 2
+	const totalBatches = docCount / batchSize
+
+	tests := []struct {
+		name           string
+		docConcurrency int
+		// maxRequests bounds the batches that may already be in flight when
+		// the cancellation is observed.
+		maxRequests int
+	}{
+		{name: "sequential", docConcurrency: 1, maxRequests: 1},
+		{name: "concurrent", docConcurrency: 2, maxRequests: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			emb := &recordingBatchEmbedder{}
+			emb.batchFunc = func(texts []string) ([][]float64, error) {
+				// Cancel while the first batch is in flight.
+				cancel()
+				return validEmbeddings(len(texts)), nil
+			}
+			vs := &batchRecordingVectorStore{}
+			kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}))
+			kb.vectorStore = vs
+			kb.embedder = emb
+
+			err := kb.Load(ctx,
+				WithSourceConcurrency(1),
+				WithDocConcurrency(tt.docConcurrency),
+				WithEmbeddingBatchSize(batchSize),
+				WithShowProgress(false),
+				WithShowStats(false),
+			)
+			if err == nil {
+				t.Fatal("Load() error = nil, want a cancellation error")
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("Load() error = %v, want it to wrap context.Canceled", err)
+			}
+			if got := emb.requestCount(); got > tt.maxRequests {
+				t.Errorf("batch requests = %d, want at most %d of %d", got, tt.maxRequests, totalBatches)
+			}
+			if got := vs.storedCount(); got != 0 {
+				t.Errorf("stored documents = %d, want 0", got)
+			}
+		})
+	}
+}
+
+// TestLoad_EmbeddingBatch_ProgressCountsEveryDocument verifies that progress
+// accounting stays per document when the unit of work is a batch.
+func TestLoad_EmbeddingBatch_ProgressCountsEveryDocument(t *testing.T) {
+	const docCount = 6
+	const batchSize = 4
+
+	tests := []struct {
+		name           string
+		docConcurrency int
+	}{
+		{name: "sequential", docConcurrency: 1},
+		{name: "concurrent", docConcurrency: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var events []LoadProgressEvent
+
+			kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}))
+			kb.vectorStore = &batchRecordingVectorStore{}
+			kb.embedder = &recordingBatchEmbedder{}
+
+			if err := kb.Load(context.Background(),
+				WithSourceConcurrency(1),
+				WithDocConcurrency(tt.docConcurrency),
+				WithEmbeddingBatchSize(batchSize),
+				WithProgressStepSize(1),
+				WithShowProgress(false),
+				WithShowStats(false),
+				WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+					mu.Lock()
+					events = append(events, ev)
+					mu.Unlock()
+				}),
+			); err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			var maxProcessed int
+			for _, ev := range events {
+				if ev.Done || ev.Err != nil {
+					continue
+				}
+				if ev.SourceTotal != docCount {
+					t.Errorf("SourceTotal = %d, want %d", ev.SourceTotal, docCount)
+				}
+				maxProcessed = max(maxProcessed, ev.SourceProcessed)
+			}
+			if maxProcessed != docCount {
+				t.Errorf("max SourceProcessed = %d, want %d", maxProcessed, docCount)
+			}
+		})
+	}
+}
+
+// TestLoad_EmbeddingBatch_ProgressReportsAtMostOneUpdatePerBatch verifies that
+// a batch whose count does not land on a progress step boundary is still
+// reported, and that a batch crossing several boundaries is reported once with
+// the number of documents actually processed. Reporting only counts that are an
+// exact multiple of the step size would drop those updates, because a batch
+// advances the count by its own size rather than by one document.
+func TestLoad_EmbeddingBatch_ProgressReportsAtMostOneUpdatePerBatch(t *testing.T) {
+	const docCount = 24
+
+	tests := []struct {
+		name           string
+		docConcurrency int
+		batchSize      int
+		stepSize       int
+		want           []int
+	}{
+		// Batches end at 4, 8, 12, 16, 20 and 24 while the boundaries are at
+		// 10 and 20, so only the update at 20 is an exact multiple.
+		{name: "unaligned batch sequential", docConcurrency: 1, batchSize: 4, stepSize: 10, want: []int{12, 20, docCount}},
+		{name: "unaligned batch concurrent", docConcurrency: 2, batchSize: 4, stepSize: 10, want: []int{12, 20, docCount}},
+		// A batch of twelve crosses the boundaries at 5 and 10 at once and is
+		// reported by a single update carrying the twelve documents it really
+		// processed, not one update per boundary.
+		{name: "batch larger than step sequential", docConcurrency: 1, batchSize: 12, stepSize: 5, want: []int{12, docCount}},
+		{name: "batch larger than step concurrent", docConcurrency: 2, batchSize: 12, stepSize: 5, want: []int{12, docCount}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var processed []int
+
+			kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}))
+			kb.vectorStore = &batchRecordingVectorStore{}
+			kb.embedder = &recordingBatchEmbedder{}
+
+			if err := kb.Load(context.Background(),
+				WithSourceConcurrency(1),
+				WithDocConcurrency(tt.docConcurrency),
+				WithEmbeddingBatchSize(tt.batchSize),
+				WithProgressStepSize(tt.stepSize),
+				WithShowProgress(false),
+				WithShowStats(false),
+				WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+					if ev.Done || ev.Err != nil {
+						return
+					}
+					mu.Lock()
+					processed = append(processed, ev.SourceProcessed)
+					mu.Unlock()
+				}),
+			); err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			sort.Ints(processed)
+
+			if !slices.Equal(processed, tt.want) {
+				t.Errorf("reported document counts = %v, want %v", processed, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoad_EmbeddingBatch_ErrorProgressCountsPartialWrites pins that a store
+// failure inside a batch reports the documents that batch already wrote. A
+// batch writes one document at a time and keeps the completed writes, so an
+// event reporting the batch start would disagree with what is persisted.
+func TestLoad_EmbeddingBatch_ErrorProgressCountsPartialWrites(t *testing.T) {
+	tests := []struct {
+		name           string
+		docCount       int
+		batchSize      int
+		docConcurrency int
+		failAfter      int
+		want           int
+		// wantStats is the document count of the statistics summary. The
+		// sequential path records the size of every document it read before
+		// storing any of them, so its summary counts the whole source. The
+		// concurrent path records each unit of work as it completes, so it
+		// must still describe the documents a failed batch left persisted.
+		wantStats int
+	}{
+		// The first batch stores three documents, then the second document of
+		// the second batch fails, leaving four documents persisted.
+		{name: "sequential", docCount: 6, batchSize: 3, docConcurrency: 1, failAfter: 4, want: 4, wantStats: 6},
+		// One batch keeps the failing write deterministic under concurrency:
+		// the second write of the only batch fails after one document.
+		{name: "concurrent", docCount: 3, batchSize: 3, docConcurrency: 2, failAfter: 1, want: 1, wantStats: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := &statsCapturingLogger{Logger: log.Default}
+			originalLogger := log.Default
+			log.Default = logger
+			defer func() { log.Default = originalLogger }()
+
+			store := &batchRecordingVectorStore{failAfter: tt.failAfter}
+			kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: tt.docCount}}))
+			kb.vectorStore = store
+			kb.embedder = &recordingBatchEmbedder{}
+
+			var mu sync.Mutex
+			var reported []int
+			var reportedTotals []int
+
+			err := kb.Load(context.Background(),
+				WithSourceConcurrency(1),
+				WithDocConcurrency(tt.docConcurrency),
+				WithEmbeddingBatchSize(tt.batchSize),
+				WithShowProgress(false),
+				WithShowStats(true),
+				WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+					if ev.Err == nil {
+						return
+					}
+					mu.Lock()
+					reported = append(reported, ev.SourceProcessed)
+					reportedTotals = append(reportedTotals, ev.Total)
+					mu.Unlock()
+				}),
+			)
+			if err == nil {
+				t.Fatal("Load() error = nil, want the simulated store failure")
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			// The concurrent path reports the failing unit of work and then
+			// the failing source, so every error event must agree.
+			if len(reported) == 0 {
+				t.Fatal("no error event was reported")
+			}
+			for _, got := range reported {
+				if got != tt.want {
+					t.Errorf("SourceProcessed on failure = %v, want every error event to report %d",
+						reported, tt.want)
+					break
+				}
+			}
+			// The single source of this load holds every document, so the
+			// load total must not lag behind the source count.
+			for _, got := range reportedTotals {
+				if got != tt.want {
+					t.Errorf("Total on failure = %v, want every error event to report %d",
+						reportedTotals, tt.want)
+					break
+				}
+			}
+			if got := store.storedCount(); got != tt.want {
+				t.Errorf("documents persisted = %d, want %d, so the event disagrees with the store",
+					got, tt.want)
+			}
+			// The statistics are reported once the load closes, and only when
+			// at least one document was recorded, so dropping the partial
+			// writes of a failed first batch would remove the summary.
+			total, ok := logger.lastStatsTotal()
+			if !ok {
+				t.Fatalf("no statistics summary was logged, want one reporting %d document(s)",
+					tt.wantStats)
+			}
+			if total != tt.wantStats {
+				t.Errorf("statistics document count = %d, want %d", total, tt.wantStats)
+			}
+		})
+	}
+}
+
+// statsCapturingLogger records the document count of every statistics summary
+// the loader logs, so a test can assert what the summary describes.
+type statsCapturingLogger struct {
+	log.Logger
+
+	mu     sync.Mutex
+	totals []int
+}
+
+func (l *statsCapturingLogger) Infof(format string, args ...any) {
+	if strings.HasPrefix(format, "Document statistics - total:") && len(args) > 0 {
+		if total, ok := args[0].(int); ok {
+			l.mu.Lock()
+			l.totals = append(l.totals, total)
+			l.mu.Unlock()
+		}
+	}
+	l.Logger.Infof(format, args...)
+}
+
+// lastStatsTotal returns the document count of the most recent summary, which
+// is the one reported for the whole load.
+func (l *statsCapturingLogger) lastStatsTotal() (int, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.totals) == 0 {
+		return 0, false
+	}
+	return l.totals[len(l.totals)-1], true
+}
+
+// TestLoad_EmbeddingBatch_DoesNotBatchAcrossSources pins the documented
+// per-source request count: a batch never spans sources, so k sources issue
+// the sum of ceil(Ni/B) requests rather than ceil(N/B).
+func TestLoad_EmbeddingBatch_DoesNotBatchAcrossSources(t *testing.T) {
+	const docsPerSource = 2
+	const batchSize = 4
+
+	tests := []struct {
+		name        string
+		concurrency []LoadOption
+	}{
+		{
+			name:        "sequential",
+			concurrency: []LoadOption{WithSourceConcurrency(1), WithDocConcurrency(1)},
+		},
+		{
+			name:        "concurrent",
+			concurrency: []LoadOption{WithSourceConcurrency(2), WithDocConcurrency(2)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			emb := &recordingBatchEmbedder{}
+			kb := New(WithSources([]source.Source{
+				&mockSource{name: "src-a", docCount: docsPerSource},
+				&mockSource{name: "src-b", docCount: docsPerSource},
+				&mockSource{name: "src-c", docCount: docsPerSource},
+			}))
+			kb.vectorStore = &batchRecordingVectorStore{}
+			kb.embedder = emb
+
+			opts := append(tt.concurrency,
+				WithEmbeddingBatchSize(batchSize),
+				WithShowProgress(false),
+				WithShowStats(false),
+			)
+			if err := kb.Load(context.Background(), opts...); err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			// Six documents would fit two requests of four if batches spanned
+			// sources; each source instead contributes its own request.
+			want := []int{docsPerSource, docsPerSource, docsPerSource}
+			if got := emb.requestSizes(); !slices.Equal(got, want) {
+				t.Errorf("batch sizes = %v, want %v", got, want)
+			}
+			if got := emb.singleCallCount(); got != 0 {
+				t.Errorf("per-document embedding calls = %d, want 0", got)
+			}
+		})
+	}
+}
+
+// TestLoad_EmbeddingBatch_AllowsDeclaredDimensionMismatch documents that
+// batches whose dimension differs from the embedder's declared dimension are
+// stored rather than rejected. An embedder may report a configured default that
+// the selected model does not honour, and the per-document path stores those
+// vectors today. Every batch of the load meets the same mismatch, which is why
+// the warning is emitted once per load rather than once per batch.
+func TestLoad_EmbeddingBatch_AllowsDeclaredDimensionMismatch(t *testing.T) {
+	const docCount = 4
+	const batchSize = 2
+
+	var warnings atomic.Int64
+	originalWarnf := log.WarnfContext
+	log.WarnfContext = func(_ context.Context, format string, _ ...any) {
+		if strings.Contains(format, "declared by the embedder") {
+			warnings.Add(1)
+		}
+	}
+	defer func() { log.WarnfContext = originalWarnf }()
+
+	store := &batchRecordingVectorStore{}
+	kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}))
+	kb.vectorStore = store
+	// embeddingForText returns three components, so the declared dimension
+	// below is the one the model does not honour.
+	kb.embedder = &recordingBatchEmbedder{dimensions: 1536}
+
+	if err := kb.Load(context.Background(),
+		WithSourceConcurrency(1),
+		WithDocConcurrency(1),
+		WithEmbeddingBatchSize(batchSize),
+		WithShowProgress(false),
+		WithShowStats(false),
+	); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if got := store.storedCount(); got != docCount {
+		t.Errorf("documents persisted = %d, want %d", got, docCount)
+	}
+	// The load embeds docCount/batchSize batches, each meeting the mismatch.
+	if got := warnings.Load(); got != 1 {
+		t.Errorf("dimension warnings = %d, want 1 for the whole load", got)
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer/internal/responsejson"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -92,6 +93,7 @@ func (s *rubricScoresResponseScorer) ScoreBasedOnResponse(ctx context.Context, r
 		}
 	}
 	result.Score = total / float64(len(payload.RubricScores))
+	result.Value = &score.Value{Kind: score.KindNumeric, Numeric: &result.Score}
 	result.Reason = strings.Join(reasons, "\n")
 	return result, nil
 }

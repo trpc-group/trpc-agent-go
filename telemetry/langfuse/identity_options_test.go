@@ -136,7 +136,7 @@ func TestStart_AppliesIdentityOptions(t *testing.T) {
 		otlptracehttp.WithInsecure(),
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = clean(ctx) })
+	defer func() { _ = clean(ctx) }()
 
 	assert.Equal(t, "brand.system", itelemetry.GenAISystem())
 
@@ -151,6 +151,67 @@ func TestStart_AppliesIdentityOptions(t *testing.T) {
 	assert.Contains(t, attrs, semconv.ServiceNamespace("brand-ns"))
 	assert.Contains(t, attrs, semconv.ServiceVersion("9.9.9"))
 	span.End()
+}
+
+func TestStart_DefaultStartResetsGenAISystem(t *testing.T) {
+	ctx := context.Background()
+	oldProvider := atrace.TracerProvider
+	oldTracer := atrace.Tracer
+	defer func() {
+		atrace.TracerProvider = oldProvider
+		atrace.Tracer = oldTracer
+		itelemetry.SetGenAISystem("")
+	}()
+	itelemetry.SetGenAISystem("brand.system")
+	atrace.TracerProvider = noop.NewTracerProvider()
+
+	clean, err := start(ctx, &config{},
+		otlptracehttp.WithEndpoint("localhost:4318"),
+		otlptracehttp.WithInsecure(),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, semconvtrace.SystemTRPCGoAgent, itelemetry.GenAISystem())
+	require.NoError(t, clean(ctx))
+}
+
+func TestStart_CleanupRestoresPreviousGenAISystem(t *testing.T) {
+	ctx := context.Background()
+	oldProvider := atrace.TracerProvider
+	oldTracer := atrace.Tracer
+	defer func() {
+		atrace.TracerProvider = oldProvider
+		atrace.Tracer = oldTracer
+		itelemetry.SetGenAISystem("")
+	}()
+	itelemetry.SetGenAISystem("")
+	atrace.TracerProvider = noop.NewTracerProvider()
+
+	clean, err := start(ctx, &config{genAISystem: "brand.system"},
+		otlptracehttp.WithEndpoint("localhost:4318"),
+		otlptracehttp.WithInsecure(),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "brand.system", itelemetry.GenAISystem())
+	require.NoError(t, clean(ctx))
+	assert.Equal(t, semconvtrace.SystemTRPCGoAgent, itelemetry.GenAISystem())
+}
+
+func TestAttributeRewritingExporter_InPlaceRewriteDoesNotMutateOriginal(t *testing.T) {
+	orig := []attribute.KeyValue{attribute.String("secret", "raw")}
+	src := &attrRewrittenSpan{attrs: orig}
+	rec := &recordingExporter{}
+	exp := &attributeRewritingExporter{
+		next: rec,
+		rewrite: func(attrs []attribute.KeyValue) []attribute.KeyValue {
+			attrs[0] = attribute.String("secret", "redacted")
+			return attrs[:0]
+		},
+	}
+
+	require.NoError(t, exp.ExportSpans(context.Background(), []sdktrace.ReadOnlySpan{src}))
+	require.Equal(t, "raw", orig[0].Value.AsString())
+	require.Len(t, rec.snapshot(), 1)
+	assert.Empty(t, rec.snapshot()[0].Attributes())
 }
 
 func TestOptionHelpers_ApplyToConfig(t *testing.T) {

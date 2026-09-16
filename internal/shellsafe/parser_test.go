@@ -991,6 +991,12 @@ func TestPreviewList(t *testing.T) {
 	}
 }
 
+func withParser(p commandParser) (restore func()) {
+	prev := parseCommand
+	parseCommand = p
+	return func() { parseCommand = prev }
+}
+
 // TestParser_SeamAllowsReplacement is a contract test for the
 // commandParser seam: it temporarily installs a stub backend,
 // verifies that Parse / Policy.Check route through it, and that

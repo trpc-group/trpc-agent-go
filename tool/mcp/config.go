@@ -39,8 +39,6 @@ const (
 
 // Default configurations.
 const (
-	// defaultMaxReconnectAttempts is the default maximum number of session reconnection attempts.
-	defaultMaxReconnectAttempts = 3
 	// minReconnectAttempts is the minimum allowed reconnection attempts.
 	minReconnectAttempts = 1
 	// maxReconnectAttemptsLimit is the maximum allowed reconnection attempts.

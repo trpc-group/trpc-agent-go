@@ -12,6 +12,7 @@ package llmagent
 
 import (
 	"reflect"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/extension"
@@ -20,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -28,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
+	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 const (
@@ -293,6 +296,9 @@ type Options struct {
 	Tools []tool.Tool
 	// ToolSets is the list of tool sets available to the agent.
 	ToolSets []tool.ToolSet
+	// toolSetToolNameModes configures model-facing tool names by ToolSet name.
+	// ToolSet.Name remains the stable identity used by activation and policy.
+	toolSetToolNameModes map[string]tool.ToolSetToolNameMode
 	// activatableToolSets is the list of tool sets available for runtime activation.
 	activatableToolSets []tool.ToolSet
 	// toolActivationRules stores runtime tool activation rules.
@@ -317,6 +323,9 @@ type Options struct {
 	ToolResultAttachmentBudget int
 	// ToolCallRetryPolicy configures retry behavior for callable tool calls.
 	ToolCallRetryPolicy *tool.RetryPolicy
+	// ToolConcurrencyConfig limits active tool calls when parallel execution is enabled.
+	// Each invocation of the agent has independent limits.
+	ToolConcurrencyConfig tool.ConcurrencyConfig
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
@@ -422,6 +431,13 @@ type Options struct {
 	//   - > 0: the limit is enforced per invocation.
 	//   - <= 0: no limit is applied (default, preserves existing behavior).
 	MaxToolIterations int
+	// llmCallLimitFinalizationInstruction enables proactive finalization at
+	// MaxLLMCalls when non-nil. An empty value selects the framework default.
+	llmCallLimitFinalizationInstruction *string
+	// toolIterationLimitFinalizationInstruction enables proactive finalization
+	// at MaxToolIterations when non-nil. An empty value selects the framework
+	// default.
+	toolIterationLimitFinalizationInstruction *string
 
 	// PreserveSameBranch controls whether the content request processor
 	// should preserve original roles (assistant/tool) for events that
@@ -437,7 +453,8 @@ type Options struct {
 	PreserveForeignMessages bool
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
-	EventMessageProjector EventMessageProjector
+	EventMessageProjector         EventMessageProjector
+	includeSyntheticErrorMessages bool
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
 	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
@@ -569,6 +586,9 @@ type Options struct {
 	// explicit Deny > implicit deny > explicit Allow > implicit
 	// allow.
 	workspaceExecDeniedCommands []string
+	// workspaceExecOutputLimits caps inline terminal output before
+	// workspace_exec tool-result events are persisted.
+	workspaceExecOutputLimits toolworkspaceexec.OutputLimits
 	// workspaceBootstrap declares static files and commands that
 	// must be present/executed in the workspace before user
 	// commands run. When non-empty it is converted into a Provider
@@ -812,6 +832,45 @@ func WithMaxToolIterations(limit int) Option {
 	}
 }
 
+// WithLLMCallLimitFinalization uses the last call allowed by WithMaxLLMCalls
+// to request one tool-free final model response. The finalization call counts
+// toward the configured limit. An empty instruction uses the framework
+// default. This option has no effect when the LLM call limit is not positive.
+// The instruction is appended as a transient tail user message for the final
+// model request; it is not emitted or persisted as a user event. Before-model
+// callbacks observe the tool-free finalization request.
+//
+// When this option is not set, exceeding MaxLLMCalls preserves the default
+// terminal StopError behavior.
+func WithLLMCallLimitFinalization(instruction string) Option {
+	return func(opts *Options) {
+		opts.llmCallLimitFinalizationInstruction = &instruction
+	}
+}
+
+// WithToolIterationLimitFinalization requests one tool-free final model
+// response after the last fully framework-executed iteration allowed by
+// WithMaxToolIterations, when normal flow can continue to another LLM call.
+// The finalization call counts toward MaxLLMCalls when that limit is configured,
+// and is not attempted if that budget is exhausted.
+// If the limit-reaching response contains any caller-executed tool, including
+// an external tool or one deferred by the execution filter, the existing
+// deferred-tool lifecycle ends the current invocation without a finalization
+// call. That response still counts toward MaxToolIterations. An empty
+// instruction uses the framework default. This option has no effect when the
+// tool iteration limit is not positive.
+// The instruction is appended as a transient tail user message for the final
+// model request; it is not emitted or persisted as a user event. Before-model
+// callbacks observe the tool-free finalization request.
+//
+// When this option is not set, exceeding MaxToolIterations preserves the
+// default terminal flow_error behavior.
+func WithToolIterationLimitFinalization(instruction string) Option {
+	return func(opts *Options) {
+		opts.toolIterationLimitFinalizationInstruction = &instruction
+	}
+}
+
 // WithChannelBufferSize sets the buffer size for event channels.
 func WithChannelBufferSize(size int) Option {
 	return func(opts *Options) {
@@ -880,6 +939,23 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 	}
 }
 
+// WithToolSetToolNameMode sets how tools from the named ToolSet are exposed to
+// the model. ToolSetToolNameModeQualified is the default and exposes names as
+// {toolSetName}_{toolName}; ToolSetToolNameModeOriginal keeps the tool declarations'
+// original names. The ToolSet name itself is unchanged and this option applies
+// to both ToolSets and activatable ToolSets. Callers selecting original names
+// must ensure that those names are unique across the model request.
+// New panics during agent construction if the ToolSet name is blank, the mode
+// is unsupported, or no registered ToolSet has the given name.
+func WithToolSetToolNameMode(toolSetName string, mode tool.ToolSetToolNameMode) Option {
+	return func(opts *Options) {
+		if opts.toolSetToolNameModes == nil {
+			opts.toolSetToolNameModes = make(map[string]tool.ToolSetToolNameMode)
+		}
+		opts.toolSetToolNameModes[strings.TrimSpace(toolSetName)] = mode
+	}
+}
+
 // WithActivatableToolSets sets tool sets that may be activated at runtime.
 // These tool sets are not visible until an activation rule matches.
 func WithActivatableToolSets(toolSets []tool.ToolSet) Option {
@@ -926,6 +1002,11 @@ func WithSkills(repo skill.Repository) Option {
 
 // WithSkillRepositoryProvider enables model-agnostic Agent Skills support
 // using a repository selected from the current app/user scope.
+//
+// When an invocation declares SkillLoads, LLMAgent resolves the effective
+// repository once after BeforeAgent callbacks and retains the Skill contents
+// validated during preflight for tool construction and request processing in
+// that invocation.
 func WithSkillRepositoryProvider(provider skill.RepositoryProvider) Option {
 	return func(opts *Options) {
 		opts.skillsRepositoryProvider = provider
@@ -1361,6 +1442,19 @@ func WithWorkspaceExecDeniedCommands(cmds ...string) Option {
 	}
 }
 
+// WithWorkspaceExecOutputLimits limits terminal output returned inline by
+// workspace_exec and workspace_write_stdin. The limit is applied before the
+// tool-result event is persisted, so it also bounds the corresponding session
+// payload. A non-positive MaxOutputBytes leaves output unlimited, which is the
+// default for compatibility.
+func WithWorkspaceExecOutputLimits(
+	limits toolworkspaceexec.OutputLimits,
+) Option {
+	return func(opts *Options) {
+		opts.workspaceExecOutputLimits = limits
+	}
+}
+
 // WithWorkspaceBootstrap declares the static files and one-shot
 // commands that must be materialized in every workspace before
 // workspace_exec runs user commands. Files are applied first, then
@@ -1542,6 +1636,39 @@ func WithEnableParallelTools(enable bool) Option {
 	return func(opts *Options) {
 		opts.EnableParallelTools = enable
 	}
+}
+
+// WithToolConcurrencyConfig configures overall and per-group limits for
+// parallel tool execution. Each invocation of the agent has independent
+// limits. The configuration only takes effect with
+// WithEnableParallelTools(true).
+// It panics if a tool name appears in more than one positive-limit group.
+func WithToolConcurrencyConfig(config tool.ConcurrencyConfig) Option {
+	if err := toolcall.ValidateConcurrencyConfig(config); err != nil {
+		panic(err)
+	}
+	snapshot := cloneToolConcurrencyConfig(config)
+	return func(opts *Options) {
+		opts.ToolConcurrencyConfig = cloneToolConcurrencyConfig(snapshot)
+	}
+}
+
+func cloneToolConcurrencyConfig(
+	config tool.ConcurrencyConfig,
+) tool.ConcurrencyConfig {
+	cloned := config
+	if config.Groups == nil {
+		return cloned
+	}
+	cloned.Groups = make([]tool.ConcurrencyGroup, len(config.Groups))
+	for i, group := range config.Groups {
+		cloned.Groups[i] = group
+		cloned.Groups[i].ToolNames = append(
+			[]string(nil),
+			group.ToolNames...,
+		)
+	}
+	return cloned
 }
 
 // WithDefaultTransferMessage configures the default message used when the model
@@ -1804,6 +1931,18 @@ func WithEventMessageProjector(
 ) Option {
 	return func(opts *Options) {
 		opts.EventMessageProjector = projector
+	}
+}
+
+// WithIncludeSyntheticErrorMessages controls whether assistant content
+// synthesized by Runner or the error-message plugin is included in model
+// requests. By default, synthesized content remains emitted and persisted but
+// is omitted from subsequent model context. When omission leaves adjacent user
+// messages, the messages are merged to preserve a provider-valid sequence.
+// Set include to true to restore the previous model-context behavior.
+func WithIncludeSyntheticErrorMessages(include bool) Option {
+	return func(opts *Options) {
+		opts.includeSyntheticErrorMessages = include
 	}
 }
 

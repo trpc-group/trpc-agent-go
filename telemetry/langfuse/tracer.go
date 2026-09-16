@@ -14,14 +14,16 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
-	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
+	"trpc.group/trpc-go/trpc-agent-go/internal/telemetry/identity"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
@@ -87,27 +89,13 @@ func start(ctx context.Context, cfg *config, opts ...otlptracehttp.Option) (clea
 	}
 	processor := newSpanProcessor(spanExp, resolveBaggageFilter(cfg))
 	if provider == nil {
-		serviceNamespace := semconvtrace.ResourceServiceNamespace
-		if cfg.serviceNamespace != "" {
-			serviceNamespace = cfg.serviceNamespace
-		}
-		serviceName := semconvtrace.ResourceServiceName
-		if cfg.serviceName != "" {
-			serviceName = cfg.serviceName
-		}
-		serviceVersion := semconvtrace.ResourceServiceVersion
-		if cfg.serviceVersion != "" {
-			serviceVersion = cfg.serviceVersion
-		}
-		res, err := resource.New(ctx,
-			resource.WithAttributes(
-				semconv.ServiceNamespace(serviceNamespace),
-				semconv.ServiceName(serviceName),
-				semconv.ServiceVersion(serviceVersion),
-			),
-		)
+		res, err := newResource(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create resource: %w", err)
+		}
+		res, err = overlayIdentityResource(ctx, res, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to overlay identity resource: %w", err)
 		}
 		provider = sdktrace.NewTracerProvider(
 			sdktrace.WithSampler(sdktrace.AlwaysSample()),
@@ -123,11 +111,57 @@ func start(ctx context.Context, cfg *config, opts ...otlptracehttp.Option) (clea
 	if cfg.instrumentName != "" {
 		instrumentName = cfg.instrumentName
 	}
-	if cfg.genAISystem != "" {
-		itelemetry.SetGenAISystem(cfg.genAISystem)
+	previousGenAISystem := itelemetry.GenAISystem()
+	itelemetry.SetGenAISystem(cfg.genAISystem)
+	atrace.Tracer = provider.Tracer(
+		instrumentName,
+		trace.WithInstrumentationVersion(identity.InstrumentationVersion()),
+	)
+	return func(ctx context.Context) error {
+		defer itelemetry.SetGenAISystem(previousGenAISystem)
+		return provider.Shutdown(ctx)
+	}, nil
+}
+
+func newResource(ctx context.Context) (*resource.Resource, error) {
+	detected, err := resource.New(ctx,
+		resource.WithFromEnv(),
+		resource.WithHost(),
+		resource.WithTelemetrySDK(),
+	)
+	if err != nil {
+		return nil, err
 	}
-	atrace.Tracer = provider.Tracer(instrumentName)
-	return provider.Shutdown, nil
+	return resource.Merge(resource.Default(), detected)
+}
+
+func overlayIdentityResource(ctx context.Context, base *resource.Resource, cfg *config) (*resource.Resource, error) {
+	attrs := identityResourceAttrs(cfg)
+	if len(attrs) == 0 {
+		return base, nil
+	}
+	overlay, err := resource.New(ctx, resource.WithAttributes(attrs...))
+	if err != nil {
+		return nil, err
+	}
+	return resource.Merge(base, overlay)
+}
+
+func identityResourceAttrs(cfg *config) []attribute.KeyValue {
+	if cfg == nil {
+		return nil
+	}
+	var attrs []attribute.KeyValue
+	if cfg.serviceName != "" {
+		attrs = append(attrs, semconv.ServiceName(cfg.serviceName))
+	}
+	if cfg.serviceNamespace != "" {
+		attrs = append(attrs, semconv.ServiceNamespace(cfg.serviceNamespace))
+	}
+	if cfg.serviceVersion != "" {
+		attrs = append(attrs, semconv.ServiceVersion(cfg.serviceVersion))
+	}
+	return attrs
 }
 
 // encodeAuth encodes the public and secret keys for basic authentication.

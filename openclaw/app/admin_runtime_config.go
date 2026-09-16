@@ -48,8 +48,9 @@ var runtimeAdminOptionsStore sync.Map
 const AdminSourceConfigPathEnvName = "TRPC_CLAW_ADMIN_SOURCE_CONFIG_PATH"
 
 type adminRuntimeConfigProvider struct {
-	configPath string
-	opts       runOptions
+	configPath         string
+	opts               runOptions
+	modelCatalogActive bool
 }
 
 type adminRuntimeConfigKeyRef struct {
@@ -85,14 +86,16 @@ type adminRuntimeConfiguredValue struct {
 
 func buildAdminRuntimeConfigProvider(
 	opts runOptions,
+	catalogs ...resolvedModelCatalog,
 ) admin.RuntimeConfigProvider {
 	path := adminWritableConfigPath(opts.ConfigPath)
 	if path == "" {
 		return nil
 	}
 	return &adminRuntimeConfigProvider{
-		configPath: path,
-		opts:       opts,
+		configPath:         path,
+		opts:               opts,
+		modelCatalogActive: explicitModelCatalogConfigured(catalogs),
 	}
 }
 
@@ -106,8 +109,11 @@ func adminWritableConfigPath(configPath string) string {
 	return strings.TrimSpace(configPath)
 }
 
-func buildAdminOptions(opts runOptions) []admin.Option {
-	provider := buildAdminRuntimeConfigProvider(opts)
+func buildAdminOptions(
+	opts runOptions,
+	catalogs ...resolvedModelCatalog,
+) []admin.Option {
+	provider := buildAdminRuntimeConfigProvider(opts, catalogs...)
 	if provider == nil {
 		return nil
 	}
@@ -171,8 +177,13 @@ func (p *adminRuntimeConfigProvider) RuntimeConfigStatus() (
 			len(adminRuntimeConfigSectionSpecs()),
 		),
 	}
+	modelCatalogActive := p.modelCatalogActive ||
+		adminRuntimeConfigHasModelCatalog(root)
 	visibleValues := map[string]string{}
 	for _, section := range adminRuntimeConfigSectionSpecs() {
+		if modelCatalogActive && section.Key == "model" {
+			continue
+		}
 		view := admin.RuntimeConfigSection{
 			Key:     section.Key,
 			Title:   section.Title,
@@ -247,6 +258,13 @@ func (p *adminRuntimeConfigProvider) SaveRuntimeConfigValue(
 	if err != nil {
 		return err
 	}
+	if (p.modelCatalogActive || adminRuntimeConfigHasModelCatalog(root)) &&
+		strings.HasPrefix(spec.Key, "model.") {
+		return fmt.Errorf(
+			"model runtime config fields are unavailable " +
+				"when a model catalog is configured",
+		)
+	}
 	if spec.Key == "tools.code_executor.type" && strings.TrimSpace(value) == "" {
 		adminRuntimeDeleteField(root, spec.Path)
 	} else {
@@ -284,6 +302,23 @@ func (p *adminRuntimeConfigProvider) ResetRuntimeConfigValue(
 		return err
 	}
 	return writeConfigDocument(p.configPath, &doc)
+}
+
+func explicitModelCatalogConfigured(
+	catalogs []resolvedModelCatalog,
+) bool {
+	return len(catalogs) > 0 && catalogs[0].explicit
+}
+
+func adminRuntimeConfigHasModelCatalog(root *yaml.Node) bool {
+	modelNode := adminRuntimeLookupMappingValue(
+		root,
+		adminRuntimeKey("model"),
+	)
+	return adminRuntimeLookupMappingValue(
+		modelNode,
+		adminRuntimeKey("models"),
+	) != nil
 }
 
 func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
