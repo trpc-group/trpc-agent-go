@@ -1359,6 +1359,38 @@ func TestUsageRemainsComparableWithCostDetails(t *testing.T) {
 	_ = map[Usage]struct{}{a: {}}
 }
 
+func TestResponseClonePreservesCostDetails(t *testing.T) {
+	rsp := &Response{
+		ID: "resp-cost",
+		Usage: &Usage{
+			PromptTokens: 3,
+			CostDetails: CostDetails{
+				Input: 0.01,
+				Total: 0.01,
+			},
+		},
+	}
+	clone := rsp.Clone()
+	require.NotNil(t, clone.Usage)
+	assert.Equal(t, rsp.Usage.CostDetails, clone.Usage.CostDetails)
+	assert.NotSame(t, rsp.Usage, clone.Usage)
+}
+
+func TestUsageJSONOmitsEmptyCostDetails(t *testing.T) {
+	raw, err := json.Marshal(Usage{})
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "cost_details")
+
+	raw, err = json.Marshal(&Response{Usage: &Usage{}})
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "cost_details")
+
+	raw, err = json.Marshal(Usage{CostDetails: CostDetails{Total: 1.5}})
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"cost_details"`)
+	require.Contains(t, string(raw), `"total":1.5`)
+}
+
 func TestCostDetailsJSONKeysMatchLangfuseCatalog(t *testing.T) {
 	raw, err := json.Marshal(CostDetails{
 		Input:                 1,

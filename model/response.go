@@ -9,7 +9,10 @@
 
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Error type constants for ResponseError.Type field.
 const (
@@ -135,10 +138,29 @@ type Usage struct {
 	// Langfuse exporter can write langfuse.observation.cost_details without relying
 	// on Langfuse ingest-time pricing. The zero value means cost is unknown at call time.
 	// CostDetails is a comparable struct so Usage remains usable with ==.
+	// JSON omits the field when empty via Usage.MarshalJSON (Go omitempty does not
+	// skip zero-valued structs).
 	CostDetails CostDetails `json:"cost_details,omitempty"`
 
 	// TimingInfo contains detailed timing information for token generation.
 	TimingInfo *TimingInfo `json:"timing_info,omitempty"`
+}
+
+// MarshalJSON omits zero-valued CostDetails so empty Usage matches pre-CostDetails
+// payloads. encoding/json omitempty does not skip struct values in Go 1.21.
+func (u Usage) MarshalJSON() ([]byte, error) {
+	type Alias Usage
+	aux := &struct {
+		*Alias
+		CostDetails *CostDetails `json:"cost_details,omitempty"`
+	}{
+		Alias: (*Alias)(&u),
+	}
+	if u.CostDetails != (CostDetails{}) {
+		cd := u.CostDetails
+		aux.CostDetails = &cd
+	}
+	return json.Marshal(aux)
 }
 
 // CostDetails is host-supplied USD cost keyed like Langfuse usage_details.
@@ -248,6 +270,7 @@ func (rsp *Response) Clone() *Response {
 			TotalTokens:             rsp.Usage.TotalTokens,
 			PromptTokensDetails:     rsp.Usage.PromptTokensDetails,
 			CompletionTokensDetails: rsp.Usage.CompletionTokensDetails,
+			CostDetails:             rsp.Usage.CostDetails,
 		}
 		// Deep copy TimingInfo if present
 		if rsp.Usage.TimingInfo != nil {
