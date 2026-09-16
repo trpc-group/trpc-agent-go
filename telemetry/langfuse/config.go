@@ -133,7 +133,7 @@ func WithGenAISystem(system string) Option {
 // filter. When set, WithExtraBaggageAttributeKeys is ignored.
 func WithBaggageAttributeFilter(filter BaggageAttributeFilter) Option {
 	return func(cfg *config) {
-		cfg.baggageFilter = filter
+		cfg.ensureHooks().baggageFilter = filter
 	}
 }
 
@@ -141,7 +141,8 @@ func WithBaggageAttributeFilter(filter BaggageAttributeFilter) Option {
 // span attributes in addition to the default Langfuse allowlist.
 func WithExtraBaggageAttributeKeys(keys ...string) Option {
 	return func(cfg *config) {
-		cfg.extraBaggageKeys = append(cfg.extraBaggageKeys, keys...)
+		h := cfg.ensureHooks()
+		h.extraBaggageKeys = append(h.extraBaggageKeys, keys...)
 	}
 }
 
@@ -149,11 +150,21 @@ func WithExtraBaggageAttributeKeys(keys ...string) Option {
 // immediately before they are exported to Langfuse. Defaults to nil (no rewrite).
 func WithAttributeRewriter(rewriter AttributeRewriter) Option {
 	return func(cfg *config) {
-		cfg.attributeRewriter = rewriter
+		cfg.ensureHooks().attributeRewriter = rewriter
 	}
 }
 
+// configHooks holds non-comparable Start options (funcs and slices).
+// Kept behind a pointer so config itself stays comparable for go-apidiff.
+type configHooks struct {
+	baggageFilter     BaggageAttributeFilter
+	extraBaggageKeys  []string
+	attributeRewriter AttributeRewriter
+}
+
 // config holds Langfuse configuration options.
+// Comparable fields stay on the struct; hooks live behind a pointer so
+// adding opt-in identity options does not change config comparability.
 type config struct {
 	secretKey                    string
 	publicKey                    string
@@ -165,9 +176,16 @@ type config struct {
 	serviceVersion               string
 	instrumentName               string
 	genAISystem                  string
-	baggageFilter                BaggageAttributeFilter
-	extraBaggageKeys             []string
-	attributeRewriter            AttributeRewriter
+	hooks                        *configHooks
+}
+
+// ensureHooks lazily allocates configHooks so Option helpers can set fields
+// without forcing every config literal to construct hooks.
+func (cfg *config) ensureHooks() *configHooks {
+	if cfg.hooks == nil {
+		cfg.hooks = &configHooks{}
+	}
+	return cfg.hooks
 }
 
 // newConfigFromEnv creates a Langfuse config from environment variables.

@@ -28,7 +28,7 @@ import (
 )
 
 func TestResolveBaggageFilter_ExtraKeys(t *testing.T) {
-	filter := resolveBaggageFilter(&config{extraBaggageKeys: []string{"guild.agent_name"}})
+	filter := resolveBaggageFilter(&config{hooks: &configHooks{extraBaggageKeys: []string{"guild.agent_name"}}})
 
 	m, err := baggage.NewMemberRaw("guild.agent_name", "persona-a")
 	require.NoError(t, err)
@@ -45,9 +45,11 @@ func TestResolveBaggageFilter_ExtraKeys(t *testing.T) {
 
 func TestResolveBaggageFilter_CustomFilterOverridesExtras(t *testing.T) {
 	filter := resolveBaggageFilter(&config{
-		extraBaggageKeys: []string{"guild.agent_name"},
-		baggageFilter: func(m baggage.Member) bool {
-			return m.Key() == "custom.only"
+		hooks: &configHooks{
+			extraBaggageKeys: []string{"guild.agent_name"},
+			baggageFilter: func(m baggage.Member) bool {
+				return m.Key() == "custom.only"
+			},
 		},
 	})
 	custom, err := baggage.NewMemberRaw("custom.only", "1")
@@ -98,7 +100,7 @@ func TestNewSpanProcessor_ExtraBaggageKeysCopied(t *testing.T) {
 	ctx = baggage.ContextWithBaggage(ctx, b)
 
 	exp := &recordingExporter{}
-	filter := resolveBaggageFilter(&config{extraBaggageKeys: []string{"guild.agent_name"}})
+	filter := resolveBaggageFilter(&config{hooks: &configHooks{extraBaggageKeys: []string{"guild.agent_name"}}})
 	sp := newSpanProcessor(exp, filter)
 
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
@@ -229,6 +231,14 @@ func TestOptionHelpers_ApplyToConfig(t *testing.T) {
 	assert.Equal(t, "1.2.3", cfg.serviceVersion)
 	assert.Equal(t, "scope", cfg.instrumentName)
 	assert.Equal(t, "sys", cfg.genAISystem)
-	assert.Equal(t, []string{"k1", "k2"}, cfg.extraBaggageKeys)
-	assert.NotNil(t, cfg.attributeRewriter)
+	require.NotNil(t, cfg.hooks)
+	assert.Equal(t, []string{"k1", "k2"}, cfg.hooks.extraBaggageKeys)
+	assert.NotNil(t, cfg.hooks.attributeRewriter)
+}
+
+func TestConfigRemainsComparable(t *testing.T) {
+	// go-apidiff requires config to stay comparable when new Option fields are added.
+	// Non-comparable hooks live behind a pointer so == keeps compiling.
+	var a, b config
+	assert.True(t, a == b)
 }

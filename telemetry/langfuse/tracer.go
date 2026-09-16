@@ -88,8 +88,8 @@ func start(ctx context.Context, cfg *config, opts ...otlptracehttp.Option) (clea
 		return nil, err
 	}
 	var spanExp sdktrace.SpanExporter = exp
-	if cfg.attributeRewriter != nil {
-		spanExp = &attributeRewritingExporter{next: exp, rewrite: cfg.attributeRewriter}
+	if cfg.hooks != nil && cfg.hooks.attributeRewriter != nil {
+		spanExp = &attributeRewritingExporter{next: exp, rewrite: cfg.hooks.attributeRewriter}
 	}
 	processor := newSpanProcessor(spanExp, resolveBaggageFilter(cfg))
 	if provider == nil {
@@ -175,14 +175,14 @@ func encodeAuth(pk, sk string) string {
 }
 
 func resolveBaggageFilter(cfg *config) BaggageAttributeFilter {
-	if cfg != nil && cfg.baggageFilter != nil {
-		return cfg.baggageFilter
+	if cfg != nil && cfg.hooks != nil && cfg.hooks.baggageFilter != nil {
+		return cfg.hooks.baggageFilter
 	}
-	if cfg == nil || len(cfg.extraBaggageKeys) == 0 {
+	if cfg == nil || cfg.hooks == nil || len(cfg.hooks.extraBaggageKeys) == 0 {
 		return defaultLangfuseTraceAttributeFilter
 	}
-	extras := make(map[string]struct{}, len(cfg.extraBaggageKeys))
-	for _, k := range cfg.extraBaggageKeys {
+	extras := make(map[string]struct{}, len(cfg.hooks.extraBaggageKeys))
+	for _, k := range cfg.hooks.extraBaggageKeys {
 		if k == "" {
 			continue
 		}
