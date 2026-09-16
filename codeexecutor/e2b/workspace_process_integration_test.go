@@ -70,6 +70,22 @@ func TestIntegrationWorkspaceProcess(t *testing.T) {
 			require.Equal(t, "before\n__E2B_STDOUT_END__\nafter\n\n", result.Stdout)
 			require.Equal(t, "error\n", result.Stderr)
 			require.Equal(t, 7, result.ExitCode)
+			for _, signal := range []struct {
+				name string
+				exit int
+			}{{"TERM", 143}, {"KILL", 137}} {
+				t.Run("SIG"+signal.name, func(t *testing.T) {
+					result, err := executor.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+						Cmd: "/bin/sh", Args: []string{"-c", "printf 'before-signal\\n'; printf 'diagnostic\\n' >&2; kill -" + signal.name + " $$"},
+						Timeout: 5 * time.Second,
+					})
+					require.NoError(t, err)
+					require.Equal(t, signal.exit, result.ExitCode)
+					require.False(t, result.TimedOut)
+					require.Equal(t, "before-signal\n", result.Stdout)
+					require.Equal(t, "diagnostic\n", result.Stderr)
+				})
+			}
 			t.Run("empty stdin", func(t *testing.T) {
 				result, err := executor.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{Cmd: "cat", Timeout: 5 * time.Second})
 				require.NoError(t, err)

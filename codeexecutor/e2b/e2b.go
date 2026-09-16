@@ -481,6 +481,8 @@ func (c *CodeExecutor) StageDirectory(
 // RunProgram executes a command through native envd inside the sandbox workspace.
 // A non-positive timeout uses 30 seconds. Non-zero program exits are returned
 // in RunResult with a nil error; cancellation and transport failures are errors.
+// Recognized Linux signal termination returns exit code 128 + signal with a
+// nil error, preserving captured output (for example, SIGTERM returns 143).
 // Finite stdin requires a known envd version of at least 0.5.2. Output is
 // captured without trimming or truncation. There is no Code Interpreter fallback.
 // Remote programs default to root to match standard Code Interpreter workspace

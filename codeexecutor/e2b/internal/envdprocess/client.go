@@ -167,8 +167,9 @@ func originFromURL(u *url.URL) string {
 }
 
 // Run starts a process without a PTY and waits for its terminal EndEvent.
-// Non-zero exits from an EndEvent with Exited set are returned in Result with a
-// nil error. Transport, protocol, stdin, and failed EndEvent failures are
+// Normal exits and recognized Linux signal termination are returned in Result
+// with a nil error. Signals use exit code 128 + signal, matching shell status.
+// Transport, protocol, stdin, and unrecognized EndEvent failures are
 // returned as errors. Run owns the launched process: if caller cancellation,
 // initial stdin, transport, or protocol failure prevents a terminal result, it
 // makes a bounded best-effort SIGKILL before returning. Request.Timeout
