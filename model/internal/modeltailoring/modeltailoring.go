@@ -12,10 +12,42 @@ package modeltailoring
 
 import (
 	"context"
+	"reflect"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/statecopy"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+// ObserveChanges snapshots request messages and returns a function that records
+// any provider-side change. Callers should defer the returned function before
+// invoking a token tailoring strategy.
+func ObserveChanges(
+	ctx context.Context,
+	provider string,
+	request *model.Request,
+	maxInputTokens int,
+) func() {
+	if request == nil {
+		return func() {}
+	}
+	before := statecopy.Messages(request.Messages)
+	return func() {
+		if reflect.DeepEqual(before, request.Messages) {
+			return
+		}
+		modelrequest.RecordTokenTailoring(
+			ctx,
+			modelrequest.TokenTailoringRecord{
+				Provider:       provider,
+				MaxInputTokens: maxInputTokens,
+				BeforeMessages: len(before),
+				AfterMessages:  len(request.Messages),
+			},
+		)
+	}
+}
 
 // ApplyResult applies a token-tailored message slice when it is safe to do so.
 // It preserves the original non-empty request if a tailoring strategy returns an

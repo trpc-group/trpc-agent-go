@@ -17,6 +17,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -38,7 +39,8 @@ type reducer struct {
 type textPhase int
 
 const (
-	textReceiving textPhase = iota
+	textNotStarted textPhase = iota
+	textReceiving
 	textEnded
 )
 
@@ -78,11 +80,12 @@ const (
 
 // toolCallState is the state of the tool call.
 type toolCallState struct {
-	messageID string
-	name      string
-	content   strings.Builder
-	phase     toolPhase
-	index     int
+	messageID    string
+	name         string
+	content      strings.Builder
+	phase        toolPhase
+	index        int
+	messageIndex int
 }
 
 // Reduce reduces the AG-UI track events into message snapshots.
@@ -97,6 +100,11 @@ func Reduce(appName, userID string, events []session.TrackEvent, opt ...Option) 
 	for _, trackEvent := range events {
 		if err = r.reduce(trackEvent); err != nil {
 			err = fmt.Errorf("reduce: %w", err)
+			if opts.bestEffort {
+				log.Warnf("agui reduce: skip malformed track event: err=%v", err)
+				err = nil
+				continue
+			}
 			break
 		}
 	}
@@ -255,14 +263,10 @@ func (r *reducer) finalizePartial() {
 		if state.phase != toolAwaitingArgs || state.content.Len() == 0 {
 			continue
 		}
-		parentState, ok := r.texts[state.messageID]
+		parent, ok := r.toolCallParent(state)
 		if !ok {
 			continue
 		}
-		if parentState.index < 0 || parentState.index >= len(r.messages) {
-			continue
-		}
-		parent := r.messages[parentState.index]
 		if state.index < 0 || state.index >= len(parent.ToolCalls) {
 			continue
 		}
@@ -348,21 +352,23 @@ func (r *reducer) handleTextStart(e *aguievents.TextMessageStartEvent) error {
 	if e.MessageID == "" {
 		return fmt.Errorf("text message start missing id")
 	}
-	if _, exists := r.texts[e.MessageID]; exists {
-		return fmt.Errorf("duplicate text message start: %s", e.MessageID)
-	}
 	role := string(model.RoleAssistant)
 	if e.Role != nil && *e.Role != "" {
 		role = string(*e.Role)
 	}
-	name := ""
-	switch role {
-	case string(model.RoleUser):
-		name = r.userID
-	case string(model.RoleAssistant):
-		name = r.appName
-	default:
-		return fmt.Errorf("unsupported role: %s", role)
+	role, name, err := r.textIdentity(role)
+	if err != nil {
+		return err
+	}
+	if state, exists := r.texts[e.MessageID]; exists {
+		if state.phase == textReceiving {
+			return fmt.Errorf("duplicate text message start: %s", e.MessageID)
+		}
+		if err := validateTextIdentity(state, e.MessageID, role, name); err != nil {
+			return err
+		}
+		state.phase = textReceiving
+		return nil
 	}
 	r.messages = append(r.messages, &aguievents.Message{
 		ID:   e.MessageID,
@@ -381,7 +387,7 @@ func (r *reducer) handleTextStart(e *aguievents.TextMessageStartEvent) error {
 // handleTextContent handles the text message content event.
 func (r *reducer) handleTextContent(e *aguievents.TextMessageContentEvent) error {
 	state, ok := r.texts[e.MessageID]
-	if !ok {
+	if !ok || state.phase == textNotStarted {
 		return fmt.Errorf("text message content without start: %s", e.MessageID)
 	}
 	if state.phase != textReceiving {
@@ -394,7 +400,7 @@ func (r *reducer) handleTextContent(e *aguievents.TextMessageContentEvent) error
 // handleTextEnd handles the text message end event.
 func (r *reducer) handleTextEnd(e *aguievents.TextMessageEndEvent) error {
 	state, ok := r.texts[e.MessageID]
-	if !ok {
+	if !ok || state.phase == textNotStarted {
 		return fmt.Errorf("text message end without start: %s", e.MessageID)
 	}
 	if state.phase != textReceiving {
@@ -411,59 +417,86 @@ func (r *reducer) handleTextChunk(e *aguievents.TextMessageChunkEvent) error {
 	if e.MessageID == nil || *e.MessageID == "" {
 		return fmt.Errorf("text message chunk missing id")
 	}
-	if _, exists := r.texts[*e.MessageID]; exists {
+	messageID := *e.MessageID
+	if state, exists := r.texts[messageID]; exists && state.phase == textReceiving {
 		return fmt.Errorf("duplicate text message chunk: %s", *e.MessageID)
 	}
 	role := string(model.RoleAssistant)
 	if e.Role != nil && *e.Role != "" {
 		role = string(*e.Role)
 	}
-	name := ""
-	switch role {
-	case string(model.RoleUser):
-		name = r.userID
-	case string(model.RoleAssistant):
-		name = r.appName
-	default:
-		return fmt.Errorf("unsupported role: %s", role)
+	role, name, err := r.textIdentity(role)
+	if err != nil {
+		return err
 	}
 	content := ""
 	if e.Delta != nil {
 		content = strings.Clone(*e.Delta)
 	}
+	if state, exists := r.texts[messageID]; exists {
+		if err := validateTextIdentity(state, messageID, role, name); err != nil {
+			return err
+		}
+		state.content.WriteString(content)
+		state.phase = textEnded
+		text := strings.Clone(state.content.String())
+		r.messages[state.index].Content = &text
+		return nil
+	}
 	r.messages = append(r.messages, &aguievents.Message{
-		ID:      *e.MessageID,
+		ID:      messageID,
 		Role:    types.Role(role),
 		Name:    name,
 		Content: &content,
 	})
-	builder := strings.Builder{}
-	builder.WriteString(content)
-	r.texts[*e.MessageID] = &textState{
-		role:    role,
-		name:    name,
-		content: builder,
-		phase:   textEnded,
-		index:   len(r.messages) - 1,
+	state := &textState{
+		role:  role,
+		name:  name,
+		phase: textEnded,
+		index: len(r.messages) - 1,
 	}
+	state.content.WriteString(content)
+	r.texts[messageID] = state
 	return nil
+}
+
+func (r *reducer) textIdentity(role string) (string, string, error) {
+	switch role {
+	case string(model.RoleUser):
+		return role, r.userID, nil
+	case string(model.RoleAssistant):
+		return role, r.appName, nil
+	default:
+		return "", "", fmt.Errorf("unsupported role: %s", role)
+	}
+}
+
+func validateTextIdentity(state *textState, messageID, role, name string) error {
+	if state.role == role && state.name == name {
+		return nil
+	}
+	return fmt.Errorf("text message identity mismatch: %s", messageID)
 }
 
 func (r *reducer) handleReasoningMessageStart(e *aguievents.ReasoningMessageStartEvent) error {
 	if e.MessageID == "" {
 		return fmt.Errorf("reasoning message start missing id")
 	}
-	if _, exists := r.reasonings[e.MessageID]; exists {
-		return fmt.Errorf("duplicate reasoning message start: %s", e.MessageID)
+	role, name, err := r.reasoningIdentity(e.Role)
+	if err != nil {
+		return err
 	}
-	role := e.Role
-	switch role {
-	case "", string(types.RoleReasoning), string(model.RoleAssistant):
-		role = string(types.RoleReasoning)
-	default:
-		return fmt.Errorf("unsupported role: %s", role)
+	if state, exists := r.reasonings[e.MessageID]; exists {
+		if state.phase == reasoningReceiving {
+			return fmt.Errorf("duplicate reasoning message start: %s", e.MessageID)
+		}
+		if err := validateReasoningIdentity(state, e.MessageID, role, name); err != nil {
+			return err
+		}
+		state.phase = reasoningReceiving
+		state.started = true
+		return nil
 	}
-	name := r.appName
 	msg := &aguievents.Message{
 		ID:   e.MessageID,
 		Role: types.RoleReasoning,
@@ -522,11 +555,17 @@ func (r *reducer) handleReasoningChunk(e *aguievents.ReasoningMessageChunkEvent)
 
 	state, ok := r.reasonings[messageID]
 	if ok {
-		if state.phase != reasoningReceiving {
-			return fmt.Errorf("reasoning message chunk after end: %s", messageID)
-		}
 		if e.Delta == nil {
 			return nil
+		}
+		if state.phase == reasoningEnded {
+			if *e.Delta == "" {
+				return fmt.Errorf("duplicate reasoning message end: %s", messageID)
+			}
+			state.phase = reasoningReceiving
+		}
+		if state.phase != reasoningReceiving {
+			return fmt.Errorf("reasoning message chunk after end: %s", messageID)
 		}
 		if *e.Delta == "" {
 			state.phase = reasoningEnded
@@ -566,6 +605,22 @@ func (r *reducer) handleReasoningChunk(e *aguievents.ReasoningMessageChunkEvent)
 		}
 	}
 	return nil
+}
+
+func (r *reducer) reasoningIdentity(role string) (string, string, error) {
+	switch role {
+	case "", string(types.RoleReasoning), string(model.RoleAssistant):
+		return string(types.RoleReasoning), r.appName, nil
+	default:
+		return "", "", fmt.Errorf("unsupported role: %s", role)
+	}
+}
+
+func validateReasoningIdentity(state *reasoningState, messageID, role, name string) error {
+	if state.role == role && state.name == name {
+		return nil
+	}
+	return fmt.Errorf("reasoning message identity mismatch: %s", messageID)
 }
 
 func (r *reducer) handleReasoningEncryptedValue(e *aguievents.ReasoningEncryptedValueEvent) error {
@@ -624,7 +679,7 @@ func (r *reducer) handleToolStart(e *aguievents.ToolCallStartEvent) error {
 		parentState = &textState{
 			role:  string(model.RoleAssistant),
 			name:  r.appName,
-			phase: textEnded,
+			phase: textNotStarted,
 			index: len(r.messages) - 1,
 		}
 		r.texts[*e.ParentMessageID] = parentState
@@ -637,10 +692,11 @@ func (r *reducer) handleToolStart(e *aguievents.ToolCallStartEvent) error {
 		},
 	})
 	r.toolCalls[e.ToolCallID] = &toolCallState{
-		messageID: *e.ParentMessageID,
-		name:      e.ToolCallName,
-		phase:     toolAwaitingArgs,
-		index:     len(r.messages[parentState.index].ToolCalls) - 1,
+		messageID:    *e.ParentMessageID,
+		name:         e.ToolCallName,
+		phase:        toolAwaitingArgs,
+		index:        len(r.messages[parentState.index].ToolCalls) - 1,
+		messageIndex: parentState.index,
 	}
 	return nil
 }
@@ -667,11 +723,14 @@ func (r *reducer) handleToolEnd(e *aguievents.ToolCallEndEvent) error {
 	if state.phase != toolAwaitingArgs {
 		return fmt.Errorf("duplicate tool call end: %s", e.ToolCallID)
 	}
-	parentState, ok := r.texts[state.messageID]
+	parent, ok := r.toolCallParent(state)
 	if !ok {
 		return fmt.Errorf("tool call end missing parent message: %s", state.messageID)
 	}
-	r.messages[parentState.index].ToolCalls[state.index].Function.Arguments = strings.Clone(state.content.String())
+	if state.index < 0 || state.index >= len(parent.ToolCalls) {
+		return fmt.Errorf("tool call end missing parent tool call: %s", e.ToolCallID)
+	}
+	parent.ToolCalls[state.index].Function.Arguments = strings.Clone(state.content.String())
 	state.phase = toolAwaitingResult
 	return nil
 }
@@ -685,6 +744,10 @@ func (r *reducer) handleToolResult(e *aguievents.ToolCallResultEvent) error {
 	if !ok || state.phase != toolAwaitingResult {
 		return fmt.Errorf("tool call result without completed call: %s", e.ToolCallID)
 	}
+	parent, ok := r.toolCallParent(state)
+	if !ok {
+		return fmt.Errorf("tool call result missing parent message: %s", state.messageID)
+	}
 	role := string(model.RoleTool)
 	if e.Role != nil && *e.Role != "" {
 		role = *e.Role
@@ -697,9 +760,76 @@ func (r *reducer) handleToolResult(e *aguievents.ToolCallResultEvent) error {
 		Content:    &content,
 		ToolCallID: toolCallID,
 	}
-	r.messages = append(r.messages, msg)
+	r.insertMessage(r.toolResultInsertIndex(state.messageIndex, parent, e.ToolCallID), msg)
 	state.phase = toolCompleted
 	return nil
+}
+
+func (r *reducer) toolCallParent(state *toolCallState) (*aguievents.Message, bool) {
+	if state.messageIndex < 0 || state.messageIndex >= len(r.messages) {
+		return nil, false
+	}
+	parent := r.messages[state.messageIndex]
+	if parent == nil || parent.ID != state.messageID {
+		return nil, false
+	}
+	return parent, true
+}
+
+func (r *reducer) toolResultInsertIndex(parentIndex int, parent *aguievents.Message, toolCallID string) int {
+	toolCallOrder := make(map[string]int, len(parent.ToolCalls))
+	targetOrder := -1
+	for i, call := range parent.ToolCalls {
+		toolCallOrder[call.ID] = i
+		if call.ID == toolCallID {
+			targetOrder = i
+		}
+	}
+	if targetOrder < 0 {
+		return parentIndex + 1
+	}
+	index := parentIndex + 1
+	for index < len(r.messages) {
+		message := r.messages[index]
+		if message == nil || message.Role != types.RoleTool || message.ToolCallID == "" {
+			break
+		}
+		order, ok := toolCallOrder[message.ToolCallID]
+		if !ok || order >= targetOrder {
+			break
+		}
+		index++
+	}
+	return index
+}
+
+func (r *reducer) insertMessage(index int, message *aguievents.Message) {
+	if index < 0 || index >= len(r.messages) {
+		r.messages = append(r.messages, message)
+		return
+	}
+	r.messages = append(r.messages, nil)
+	copy(r.messages[index+1:], r.messages[index:])
+	r.messages[index] = message
+	r.shiftMessageIndexes(index)
+}
+
+func (r *reducer) shiftMessageIndexes(insertIndex int) {
+	for _, state := range r.texts {
+		if state.index >= insertIndex {
+			state.index++
+		}
+	}
+	for _, state := range r.reasonings {
+		if state.index >= insertIndex {
+			state.index++
+		}
+	}
+	for _, state := range r.toolCalls {
+		if state.messageIndex >= insertIndex {
+			state.messageIndex++
+		}
+	}
 }
 
 // handleActivity handles the activity event.

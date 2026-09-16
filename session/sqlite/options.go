@@ -41,6 +41,7 @@ type ServiceOpts struct {
 	sessionEventLimit int
 
 	sessionTTL         time.Duration
+	trackEventTTL      *time.Duration
 	appStateTTL        time.Duration
 	userStateTTL       time.Duration
 	enableAsyncPersist bool
@@ -85,6 +86,13 @@ func (opts ServiceOpts) shouldCascadeFullSessionSummary() bool {
 	return *opts.cascadeFullSessionSummary
 }
 
+func (opts ServiceOpts) effectiveTrackEventTTL() time.Duration {
+	if opts.trackEventTTL != nil {
+		return *opts.trackEventTTL
+	}
+	return opts.sessionTTL
+}
+
 // WithSessionEventLimit sets the event limit per session.
 func WithSessionEventLimit(limit int) ServiceOpt {
 	return func(opts *ServiceOpts) {
@@ -96,6 +104,15 @@ func WithSessionEventLimit(limit int) ServiceOpt {
 func WithSessionTTL(ttl time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.sessionTTL = ttl
+	}
+}
+
+// WithTrackEventTTL sets the TTL for track events.
+// If unset, track events use the session TTL. A non-positive TTL disables track
+// event expiration.
+func WithTrackEventTTL(ttl time.Duration) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.trackEventTTL = &ttl
 	}
 }
 

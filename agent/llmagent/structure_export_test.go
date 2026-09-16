@@ -43,7 +43,7 @@ func TestExport_LLMAgent_BasicSnapshot(t *testing.T) {
 	assertLLMSnapshotEqual(t, snapshot, &structure.Snapshot{
 		EntryNodeID: "assistant",
 		Nodes: []structure.Node{
-			{NodeID: "assistant", Kind: structure.NodeKindLLM, Name: "assistant"},
+			{NodeID: "assistant", Kind: structure.NodeKindAgent, Name: "assistant"},
 		},
 		Edges: []structure.Edge{},
 		Surfaces: []structure.Surface{
@@ -99,8 +99,8 @@ func TestExport_LLMAgent_ConfiguredSnapshot(t *testing.T) {
 	assertLLMSnapshotEqual(t, snapshot, &structure.Snapshot{
 		EntryNodeID: "assistant",
 		Nodes: []structure.Node{
-			{NodeID: "assistant", Kind: structure.NodeKindLLM, Name: "assistant"},
-			{NodeID: "assistant/sub", Kind: structure.NodeKindLLM, Name: "sub"},
+			{NodeID: "assistant", Kind: structure.NodeKindAgent, Name: "assistant"},
+			{NodeID: "assistant/sub", Kind: structure.NodeKindAgent, Name: "sub"},
 			{NodeID: "assistant/sub~2", Kind: structure.NodeKindAgent, Name: "sub"},
 		},
 		Edges: []structure.Edge{
@@ -191,7 +191,7 @@ func TestExport_LLMAgent_DoubleBraceSyntax(t *testing.T) {
 	assertLLMSnapshotEqual(t, snapshot, &structure.Snapshot{
 		EntryNodeID: "assistant",
 		Nodes: []structure.Node{
-			{NodeID: "assistant", Kind: structure.NodeKindLLM, Name: "assistant"},
+			{NodeID: "assistant", Kind: structure.NodeKindAgent, Name: "assistant"},
 		},
 		Edges: []structure.Edge{},
 		Surfaces: []structure.Surface{

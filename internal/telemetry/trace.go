@@ -680,6 +680,9 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 			attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens),
 			attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens),
 		)
+		if rsp.Usage.TotalTokens != 0 {
+			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, rsp.Usage.TotalTokens))
+		}
 		// Prompt cache tokens (if provided by the model provider)
 		if cached := rsp.Usage.PromptTokensDetails.CachedTokens; cached != 0 {
 			// OpenAI: cached_tokens

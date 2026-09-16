@@ -145,6 +145,14 @@ func TestKeyBuilder_TrackTimeIndexKey(t *testing.T) {
 	assert.Equal(t, "pfx:hashidx:trkidx:time:app:{u}:s:actions", kb2.TrackTimeIndexKey(key, "actions"))
 }
 
+func TestKeyBuilder_TrackIndexKey(t *testing.T) {
+	kb := newKeyBuilder("")
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
+	assert.Equal(t, "hashidx:trkidx:names:app:{u}:s", kb.TrackIndexKey(key))
+	kb2 := newKeyBuilder("pfx")
+	assert.Equal(t, "pfx:hashidx:trkidx:names:app:{u}:s", kb2.TrackIndexKey(key))
+}
+
 func TestKeyBuilder_TrackKeys(t *testing.T) {
 	kb := newKeyBuilder("")
 	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}

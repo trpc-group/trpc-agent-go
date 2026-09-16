@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
@@ -123,6 +124,38 @@ func TestJSONReadFromReaderNoChunk(t *testing.T) {
 	}
 	if rdr.Name() != "JSONReader" {
 		t.Errorf("unexpected reader name")
+	}
+}
+
+func TestJSONReaderRejectsNegativeChunkConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		option  reader.Option
+		wantErr error
+	}{
+		{
+			name:    "negative chunk size",
+			option:  reader.WithChunkSize(-1),
+			wantErr: chunking.ErrInvalidChunkSize,
+		},
+		{
+			name:    "negative overlap",
+			option:  reader.WithChunkOverlap(-1),
+			wantErr: chunking.ErrInvalidOverlap,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rdr := New(tt.option)
+			_, err := rdr.ReadFromReader(
+				"test.json",
+				strings.NewReader(`{"value":"text"}`),
+			)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("ReadFromReader() error = %v, want %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 

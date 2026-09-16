@@ -809,6 +809,40 @@ func TestMessage_AddAudioData(t *testing.T) {
 	}
 }
 
+func TestMessage_AddAudioURL(t *testing.T) {
+	msg := &Message{}
+	msg.AddAudioURL("https://example.com/audio.mp3", "audio/mpeg")
+
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, ContentTypeAudio, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].Audio)
+	assert.Equal(t, "https://example.com/audio.mp3", msg.ContentParts[0].Audio.URL)
+	assert.Equal(t, "audio/mpeg", msg.ContentParts[0].Audio.Format)
+}
+
+func TestMessage_AddVideoURL(t *testing.T) {
+	msg := &Message{}
+	msg.AddVideoURL("https://example.com/video.mp4", "video/mp4")
+
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, ContentTypeVideo, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].Video)
+	assert.Equal(t, "https://example.com/video.mp4", msg.ContentParts[0].Video.URL)
+	assert.Equal(t, "video/mp4", msg.ContentParts[0].Video.Format)
+}
+
+func TestMessage_AddVideoData(t *testing.T) {
+	data := []byte("video data")
+	msg := &Message{}
+	msg.AddVideoData(data, "mp4")
+
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, ContentTypeVideo, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].Video)
+	assert.Equal(t, data, msg.ContentParts[0].Video.Data)
+	assert.Equal(t, "mp4", msg.ContentParts[0].Video.Format)
+}
+
 func TestMessage_AddFilePath(t *testing.T) {
 	tests := []struct {
 		name        string

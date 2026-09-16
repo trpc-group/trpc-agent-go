@@ -12,11 +12,14 @@ package evalresult
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // EvalSetResult represents the evaluation result for an entire eval set.
@@ -35,6 +38,15 @@ type EvalSetResult struct {
 	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp,omitempty"`
 }
 
+// InferenceStats contains resource measurements for the actual agent
+// inference that produced an evaluation result.
+type InferenceStats struct {
+	// Duration is the total time spent executing the actual agent.
+	Duration time.Duration `json:"duration,omitempty"`
+	// TokenUsage is the total token usage reported by the actual agent.
+	TokenUsage *model.Usage `json:"tokenUsage,omitempty"`
+}
+
 // EvalCaseResult represents the result of a single evaluation case.
 type EvalCaseResult struct {
 	// EvalSetID identifies the eval set.
@@ -43,6 +55,8 @@ type EvalCaseResult struct {
 	EvalID string `json:"evalId,omitempty"`
 	// RunID identifies the run that produced this case result.
 	RunID int `json:"runId,omitempty"`
+	// Score is the aggregated case-level score.
+	Score float64 `json:"score,omitempty"`
 	// FinalEvalStatus is the final eval status for this eval case.
 	FinalEvalStatus status.EvalStatus `json:"finalEvalStatus,omitempty"`
 	// ErrorMessage contains the error message when evaluation execution failed.
@@ -55,6 +69,8 @@ type EvalCaseResult struct {
 	SessionID string `json:"sessionId,omitempty"`
 	// UserID is the user id used during inferencing stage of the eval.
 	UserID string `json:"userId,omitempty"`
+	// InferenceStats contains resource measurements for the actual agent for this eval case run.
+	InferenceStats *InferenceStats `json:"inferenceStats,omitempty"`
 }
 
 // EvalMetricResult represents the result of a single metric evaluation.
@@ -79,6 +95,8 @@ type EvalMetricResultDetails struct {
 	Reason string `json:"reason,omitempty"`
 	// Score is the score for the metric evaluation result.
 	Score float64 `json:"score,omitempty"`
+	// Value is the typed score value for this metric evaluation result.
+	Value *score.Value `json:"value,omitempty"`
 	// RubricScores contains the scores for the rubric items.
 	RubricScores []*RubricScore `json:"rubricScores,omitempty"`
 }

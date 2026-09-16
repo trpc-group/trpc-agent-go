@@ -63,6 +63,9 @@ type ServiceOpts struct {
 
 	// Memory extractor for auto memory mode.
 	extractor extractor.MemoryExtractor
+	// disableAutoMemoryOnExternalContext skips auto extraction after
+	// framework-owned external context when an extractor is configured.
+	disableAutoMemoryOnExternalContext bool
 
 	// Async memory worker configuration.
 	asyncMemoryNum   int
@@ -198,6 +201,37 @@ func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 			return
 		}
 		delete(opts.enabledTools, toolName)
+	}
+}
+
+// WithCustomTool sets a custom memory tool implementation.
+// The tool will be enabled by default.
+// If the tool name is invalid or creator is nil, this option will do nothing.
+func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if !imemory.IsValidToolName(toolName) || creator == nil {
+			return
+		}
+		if opts.toolCreators == nil {
+			opts.toolCreators = make(map[string]memory.ToolCreator)
+		}
+		if opts.enabledTools == nil {
+			opts.enabledTools = make(map[string]struct{})
+		}
+		if opts.userExplicitlySet == nil {
+			opts.userExplicitlySet = make(map[string]struct{})
+		}
+		opts.toolCreators[toolName] = creator
+		opts.enabledTools[toolName] = struct{}{}
+		opts.userExplicitlySet[toolName] = struct{}{}
+	}
+}
+
+// WithDisableAutoMemoryOnExternalContext stops future automatic memory
+// extraction for sessions that consumed framework-owned external context.
+func WithDisableAutoMemoryOnExternalContext(disable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.disableAutoMemoryOnExternalContext = disable
 	}
 }
 

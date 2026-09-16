@@ -113,8 +113,8 @@ memorySvc, err := memorygorm.NewService(
 
 ## Tests
 
-Run package tests from the repo root:
+Run package tests from the nested `memory/gorm` module:
 
 ```bash
-go test ./memory/gorm/...
+cd memory/gorm && go test ./...
 ```

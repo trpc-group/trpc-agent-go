@@ -455,6 +455,8 @@ type EvalSetInput struct {
 	EvalCaseIDs []string
 	// LossHints 为训练集失败指标补充业务侧已知的问题原因。
 	LossHints   []LossHint
+	// LossTargets 指定训练集失败指标 loss 开始反向传播的 trace 节点。
+	LossTargets []LossTarget
 }
 
 // LossHint 为单个评估用例上的单个失败指标补充问题原因。
@@ -468,11 +470,21 @@ type LossHint struct {
 	// Reason 是用于反向传播归因的问题原因文本。
 	Reason     string
 }
+
+// LossTarget 指定单个失败指标 loss 开始反向传播的 trace 节点。
+type LossTarget struct {
+	// MetricName 指定目标评估指标。
+	MetricName string
+	// NodeID 指定接收该指标 loss 的节点 ID。
+	NodeID     string
+}
 ```
 
 不指定 `EvalCaseIDs` 时，PromptIter 会运行对应评估集下的全部评估用例。指定非空列表时，只运行列出的评估用例。
 
 当业务侧已经知道某个训练集评估用例的具体问题时，可以用 `LossHint` 补充问题原因。PromptIter 会把 `Reason` 并入对应失败指标的优化信号，使反向传播归因同时参考评估器给出的原因和业务侧补充原因。使用 `LossHint` 时，`EvalCaseID` 和 `MetricName` 必须能匹配本次训练评估结果中的失败指标，`Severity` 取值为 `P0`、`P1`、`P2` 或 `P3`。`LossHint` 不改变评估分数，也不参与验证集接受判定。
+
+当某个训练集指标直接评价中间节点输出时，可以用 `LossTarget` 将该指标的失败原因直接注入目标 `NodeID` 对应的最后一次执行步骤。注入后的 loss 会作为该步骤的 incoming 输入进入现有反向传播逻辑，并继续向前序步骤传播。`LossTarget` 只影响训练集优化信号，不改变评估分数，也不参与验证集接受判定。
 
 训练集和验证集需要分离使用。训练集分数提升只能说明候选补丁在参与优化的样本上更接近指标要求，不能证明未参与优化的样本也满足指标。验证集用于暴露过拟合风险，并参与接受判定。
 
@@ -684,6 +696,10 @@ train := []engine.EvalSetInput{
 ```
 
 `LossHints` 只补充训练阶段的优化信号，不改变评估分数，也不会影响验证集接受判定。只有对应 EvalCase 的对应 Metric 在本次训练评估中处于 `failed` 状态时，PromptIter 才会使用 `LossHint`。如果该指标本轮通过，`LossHint` 不会把该评估用例改判为失败。
+
+默认情况下，PromptIter 会把失败指标的 `Reason` 注入该评估用例 trace 的终端步骤，再从终端步骤开始反向传播。对于 Graph Agent 或多节点 Agent，如果某个指标已经通过 trace 占位符评价了中间节点，可以在训练集 `EvalSetInput` 中设置 `LossTargets`，将该指标的 `Reason` 直接注入指定 `NodeID` 的最后一次执行步骤。后续处理仍复用现有反向传播逻辑：目标步骤先根据 incoming loss 生成自身梯度，再按 `PredecessorStepIDs` 生成前序步骤的梯度包。
+
+`LossTargets` 按 EvalSet 和 MetricName 匹配训练集评估结果。同一个 EvalSet 中，一个 MetricName 只能配置一个目标节点。如果配置的 MetricName 未出现在该 EvalSet 的训练评估结果中，本轮运行会失败。训练配置中的 `NodeID` 必须存在于当前结构快照中；如果某个评估用例本轮 trace 没有执行该节点，该指标 loss 会被跳过，不会回退到终端步骤。`LossTargets` 只在训练集 loss 提取中生效，验证集不支持 `LossTargets`，配置后请求会被拒绝。
 
 ### 反向传播器 Backwarder
 
@@ -1129,17 +1145,20 @@ type StopPolicy struct {
 	MaxRoundsWithoutAcceptance int
 	// TargetScore 是达到后即可停止的目标验证分数，nil 表示不启用。
 	TargetScore                *float64
+	// StopOnNoTrainLosses 在训练集评估未提取出 loss 时停止。
+	StopOnNoTrainLosses        bool
 }
 ```
 
 停止判定按以下顺序执行。
 
-1. 当前轮数达到 `MaxRounds`，停止
-2. 连续未接受轮数达到 `MaxRoundsWithoutAcceptance`，停止
-3. 当前基准的验证分数达到 `TargetScore`，停止
-4. 否则继续下一轮
+1. 启用 `StopOnNoTrainLosses` 且本轮训练集评估未提取出 loss，在 Backward 前停止
+2. 当前轮数达到 `MaxRounds`，停止
+3. 连续未接受轮数达到 `MaxRoundsWithoutAcceptance`，停止
+4. 当前基准的验证分数达到 `TargetScore`，停止
+5. 否则继续下一轮
 
-`MaxRounds` 本身是 `RunRequest` 的必填约束，必须大于 0。`TargetScore` 为 `nil` 时不会触发目标分数停止条件。
+`MaxRounds` 本身是 `RunRequest` 的必填约束，必须大于 0。`TargetScore` 为 `nil` 时不会触发目标分数停止条件。`StopOnNoTrainLosses` 默认为 `false`，保持空 loss 轮次继续执行 no-op 候选验证的历史行为。
 
 ### RunRequest
 
@@ -1189,6 +1208,8 @@ type EvalSetInput struct {
 	EvalCaseIDs []string
 	// LossHints 为训练集失败指标补充业务侧已知的问题原因。
 	LossHints   []LossHint
+	// LossTargets 指定训练集失败指标 loss 开始反向传播的 trace 节点。
+	LossTargets []LossTarget
 }
 
 // LossHint 为单个评估用例上的单个失败指标补充问题原因。
@@ -1201,6 +1222,14 @@ type LossHint struct {
 	Severity   promptiter.LossSeverity
 	// Reason 是用于反向传播归因的问题原因文本。
 	Reason     string
+}
+
+// LossTarget 指定单个失败指标 loss 开始反向传播的 trace 节点。
+type LossTarget struct {
+	// MetricName 指定目标评估指标。
+	MetricName string
+	// NodeID 指定接收该指标 loss 的节点 ID。
+	NodeID     string
 }
 
 // EvaluationOptions 配置训练集和验证集评估阶段。
@@ -1238,7 +1267,9 @@ type OptimizerOptions struct {
 }
 ```
 
-`RunRequest` 首先指定训练集和验证集。`Train` 用于产生优化信号，`Validation` 用于接受判定，二者均不能为空。每个 `EvalSetInput` 可以指向完整评估集，也可以通过 `EvalCaseIDs` 只运行其中部分评估用例。`LossHints` 只服务于训练集，用于补充业务侧已知的问题原因。
+`RunRequest` 首先指定训练集和验证集。`Train` 用于产生优化信号，`Validation` 用于接受判定，二者均不能为空。每个 `EvalSetInput` 可以指向完整评估集，也可以通过 `EvalCaseIDs` 只运行其中部分评估用例。`LossHints` 和 `LossTargets` 只服务于训练集，分别用于补充业务侧已知的问题原因，以及指定失败指标 loss 开始反向传播的 trace 节点。
+
+`StopPolicy.StopOnNoTrainLosses` 用于在训练集评估已经没有可用优化信号时提前结束。触发时，本轮结果会保留 `Train`、`Losses` 和 `Stop`，但不会写入 `Backward`、`Aggregation`、`Patches`、`OutputProfile`、`Validation` 或 `Acceptance`。
 
 `InitialProfile` 用于指定本次迭代的起始 Profile。未传入时，PromptIter 使用结构快照中的原始 surface 值作为起始基线。传入 `InitialProfile` 时，如果 `StructureID` 非空，需要与当前结构快照 ID 一致。
 

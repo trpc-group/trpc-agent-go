@@ -59,7 +59,10 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		imemory.ApplyAutoModeDefaults(opts.enabledTools, opts.userExplicitlySet)
 	}
 
-	db, dbClient, err := resolveGormDB(opts)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultDBInitTimeout)
+	defer cancel()
+
+	db, dbClient, err := resolveGormDB(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -73,8 +76,6 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 
 	if !opts.skipDBInit {
-		ctx, cancel := context.WithTimeout(context.Background(), defaultDBInitTimeout)
-		defer cancel()
 		if err := s.initDB(ctx); err != nil {
 			if s.dbClient != nil {
 				_ = s.dbClient.Close()
@@ -95,11 +96,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if opts.extractor != nil {
 		imemory.ConfigureExtractorEnabledTools(opts.extractor, opts.enabledTools)
 		config := imemory.AutoMemoryConfig{
-			Extractor:        opts.extractor,
-			AsyncMemoryNum:   opts.asyncMemoryNum,
-			MemoryQueueSize:  opts.memoryQueueSize,
-			MemoryJobTimeout: opts.memoryJobTimeout,
-			EnabledTools:     opts.enabledTools,
+			Extractor:                opts.extractor,
+			AsyncMemoryNum:           opts.asyncMemoryNum,
+			MemoryQueueSize:          opts.memoryQueueSize,
+			MemoryJobTimeout:         opts.memoryJobTimeout,
+			DisableOnExternalContext: opts.disableAutoMemoryOnExternalContext,
+			EnabledTools:             opts.enabledTools,
 		}
 		s.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, s)
 		s.autoMemoryWorker.Start()
@@ -390,7 +392,7 @@ func (s *Service) Close() error {
 	return nil
 }
 
-func resolveGormDB(opts ServiceOpts) (*gorm.DB, storage.Client, error) {
+func resolveGormDB(ctx context.Context, opts ServiceOpts) (*gorm.DB, storage.Client, error) {
 	if opts.db != nil {
 		return opts.db, nil, nil
 	}
@@ -411,7 +413,7 @@ func resolveGormDB(opts ServiceOpts) (*gorm.DB, storage.Client, error) {
 		return nil, nil, fmt.Errorf("gorm memory service requires WithDB, WithDialector, or WithGormInstance")
 	}
 
-	client, err := storage.GetClientBuilder()(context.Background(), builderOpts...)
+	client, err := storage.GetClientBuilder()(ctx, builderOpts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create gorm client failed: %w", err)
 	}

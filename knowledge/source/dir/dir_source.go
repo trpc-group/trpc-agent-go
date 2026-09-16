@@ -75,10 +75,10 @@ func New(dirPaths []string, opts ...Option) *Source {
 func (s *Source) initializeReaders() {
 	// Build reader options - pass all configurations to internal source layer
 	var readerOpts []isource.ReaderOption
-	if s.chunkSize > 0 {
+	if s.chunkSize != 0 {
 		readerOpts = append(readerOpts, isource.WithChunkSize(s.chunkSize))
 	}
-	if s.chunkOverlap > 0 {
+	if s.chunkOverlap != 0 {
 		readerOpts = append(readerOpts, isource.WithChunkOverlap(s.chunkOverlap))
 	}
 	if s.customChunkingStrategy != nil {

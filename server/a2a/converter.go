@@ -552,6 +552,8 @@ func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResultWithMetadata(
 		},
 		false,
 	)
+	appendChunk := evt.Response.IsPartial
+	taskArtifact.Append = &appendChunk
 	taskArtifact.Metadata = metadata
 	return &taskArtifact
 }
@@ -565,6 +567,13 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 ) (protocol.StreamingMessageResult, error) {
 	choice := event.Response.Choices[0]
 	parts := c.buildTextParts(choice.Delta)
+	usesSnapshot := false
+	if !event.Response.IsPartial {
+		if messageParts := c.buildTextParts(choice.Message); len(messageParts) > 0 {
+			parts = messageParts
+			usesSnapshot = true
+		}
+	}
 
 	mapperParts, err := c.runEventPartMappers(ctx, event)
 	if err != nil {
@@ -573,7 +582,13 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	parts = append(parts, mapperParts...)
 
 	if len(parts) > 0 {
-		return c.convertPartsToA2AStreamingResult(event, options, parts), nil
+		result := c.convertPartsToA2AStreamingResult(event, options, parts)
+		if update, ok := result.(*protocol.TaskArtifactUpdateEvent); ok &&
+			!usesSnapshot {
+			appendChunk := true
+			update.Append = &appendChunk
+		}
+		return result, nil
 	}
 
 	if result, ok := c.convertMetadataOnlyToA2AStreamingMessage(event, options); ok {

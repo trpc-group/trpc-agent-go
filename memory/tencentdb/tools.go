@@ -22,8 +22,11 @@ import (
 )
 
 const (
-	defaultSearchLimit = 5
-	maxSearchLimit     = 20
+	defaultSearchLimit             = 5
+	maxSearchLimit                 = 20
+	maxV3ScenarioNavigationEntries = 100
+	maxV3ScenarioNavigationBytes   = 8 << 10
+	maxV3ScenarioContentBytes      = 16 << 10
 )
 
 type searchMemoriesToolRequest struct {
@@ -31,6 +34,12 @@ type searchMemoriesToolRequest struct {
 	Limit int    `json:"limit,omitempty" description:"Maximum number of results to return. Defaults to 5, maximum 20."`
 	Type  string `json:"type,omitempty" description:"Optional memory type or layer selector supported by the TencentDB Agent Memory gateway."`
 	Scene string `json:"scene,omitempty" description:"Optional scene name to narrow the search if the gateway supports scene filtering."`
+}
+
+type searchMemoriesV3ToolRequest struct {
+	Query string `json:"query" description:"Search query for long-term memories. Use short keyword style queries when possible."`
+	Limit int    `json:"limit,omitempty" description:"Maximum number of results to return. Defaults to 5, maximum 20."`
+	Type  string `json:"type,omitempty" description:"Optional L1 memory type: episodic, persona, or instruction."`
 }
 
 type searchMemoriesToolResponse struct {
@@ -51,39 +60,44 @@ type searchConversationsToolResponse struct {
 	Total   int    `json:"total"`
 }
 
+type readScenarioToolRequest struct {
+	Path string `json:"path" description:"Scenario path returned by TencentDB scene navigation, for example reviews.md."`
+}
+
+type readScenarioToolResponse struct {
+	Path      string `json:"path"`
+	Version   string `json:"version"`
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated,omitempty"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type memorySearchCall struct {
+	query      string
+	limit      int
+	memoryType string
+	scene      string
+}
+
 type readOffloadRefToolRequest struct {
-	ResultRef string `json:"result_ref" description:"Relative result reference produced by TencentDB context offload, for example refs/node_20260612_000001.md."`
+	ResultRef string `json:"result_ref" description:"Result reference produced by TencentDB context offload, for example offload/session/refs/call_1.md."`
+	Query     string `json:"query,omitempty" description:"Optional case-insensitive text to locate within the archived result. Cannot be combined with line ranges."`
+	StartLine int    `json:"start_line,omitempty" description:"Optional one-based first line to read. Cannot be combined with query."`
+	EndLine   int    `json:"end_line,omitempty" description:"Optional one-based last line to read. Cannot be combined with query."`
+	MaxTokens int    `json:"max_tokens,omitempty" description:"Maximum response size in tokens. Defaults to 1600, maximum 4096."`
 }
 
 type readOffloadRefToolResponse struct {
-	ResultRef string `json:"result_ref"`
-	Content   string `json:"content"`
-	Truncated bool   `json:"truncated,omitempty"`
-}
-
-type readOffloadNodeToolRequest struct {
-	NodeID string `json:"node_id" description:"Mermaid node_id produced by TencentDB context offload."`
-}
-
-type readOffloadNodeToolResponse struct {
-	NodeID  string              `json:"node_id"`
-	Entries []offloadIndexEntry `json:"entries"`
-}
-
-type searchOffloadIndexToolRequest struct {
-	Query string `json:"query" description:"Keyword query over TencentDB context offload summaries, tool calls, node IDs, and result_refs."`
-	Limit int    `json:"limit,omitempty" description:"Maximum results. Defaults to 5, maximum 20."`
-}
-
-type searchOffloadIndexToolResponse struct {
-	Query   string              `json:"query"`
-	Entries []offloadIndexEntry `json:"entries"`
-	Total   int                 `json:"total"`
+	ResultRef  string `json:"result_ref"`
+	Content    string `json:"content"`
+	Truncated  bool   `json:"truncated"`
+	MatchFound *bool  `json:"match_found,omitempty"`
 }
 
 func (s *Service) buildTools() []tool.Tool {
-	out := make([]tool.Tool, 0, 5)
-	seen := make(map[string]struct{}, 5)
+	out := make([]tool.Tool, 0, 4)
+	seen := make(map[string]struct{}, 4)
 	add := func(t tool.Tool) {
 		if t == nil || t.Declaration() == nil {
 			return
@@ -107,8 +121,9 @@ func (s *Service) buildTools() []tool.Tool {
 	}
 	if s.opts.ContextOffload.Enabled {
 		add(s.newReadOffloadRefTool(s.nativeToolName("read_offload_ref")))
-		add(s.newReadOffloadNodeTool(s.nativeToolName("read_offload_node")))
-		add(s.newSearchOffloadIndexTool(s.nativeToolName("search_offload_index")))
+	}
+	if s.client.usesV3API() {
+		add(s.newScenarioReadTool(s.nativeToolName("read_scenario")))
 	}
 	return out
 }
@@ -126,31 +141,27 @@ func nativeToolName(opts Options, name string) string {
 }
 
 func (s *Service) newMemorySearchTool(name string) tool.CallableTool {
+	if s.client.usesV3API() {
+		return s.newV3MemorySearchTool(name)
+	}
+	return s.newLegacyMemorySearchTool(name)
+}
+
+func (s *Service) newLegacyMemorySearchTool(name string) tool.CallableTool {
 	fn := func(ctx context.Context, req *searchMemoriesToolRequest) (*searchMemoriesToolResponse, error) {
-		if req == nil || strings.TrimSpace(req.Query) == "" {
+		if req == nil {
 			return nil, fmt.Errorf("%s: query is required", name)
 		}
-		sess, err := currentSession(ctx)
-		if err != nil {
-			return nil, err
-		}
-		limit := normalizeLimit(req.Limit)
-		rsp, err := s.client.searchMemories(ctx, searchMemoriesRequest{
-			Query:  strings.TrimSpace(req.Query),
-			Limit:  limit,
-			Type:   strings.TrimSpace(req.Type),
-			Scene:  strings.TrimSpace(req.Scene),
-			UserID: sess.UserID,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return &searchMemoriesToolResponse{
-			Query:    strings.TrimSpace(req.Query),
-			Results:  strings.TrimSpace(rsp.Results),
-			Total:    rsp.Total,
-			Strategy: rsp.Strategy,
-		}, nil
+		return s.callMemorySearch(
+			ctx,
+			name,
+			memorySearchCall{
+				query:      req.Query,
+				limit:      req.Limit,
+				memoryType: req.Type,
+				scene:      req.Scene,
+			},
+		)
 	}
 	return function.NewFunctionTool(
 		fn,
@@ -158,6 +169,60 @@ func (s *Service) newMemorySearchTool(name string) tool.CallableTool {
 		function.WithDescription("Search TencentDB Agent Memory long-term memories scoped by the configured gateway sidecar. "+
 			"Use this directly when the current request depends on remembered facts, preferences, or prior episodes."),
 	)
+}
+
+func (s *Service) newV3MemorySearchTool(name string) tool.CallableTool {
+	fn := func(ctx context.Context, req *searchMemoriesV3ToolRequest) (*searchMemoriesToolResponse, error) {
+		if req == nil {
+			return nil, fmt.Errorf("%s: query is required", name)
+		}
+		return s.callMemorySearch(
+			ctx,
+			name,
+			memorySearchCall{
+				query:      req.Query,
+				limit:      req.Limit,
+				memoryType: req.Type,
+			},
+		)
+	}
+	return function.NewFunctionTool(
+		fn,
+		function.WithName(name),
+		function.WithDescription("Search TencentDB Agent Memory long-term memories scoped by the configured service, team, agent, and current user. "+
+			"Use this directly when the current request depends on remembered facts, preferences, or prior episodes."),
+	)
+}
+
+func (s *Service) callMemorySearch(
+	ctx context.Context,
+	name string,
+	call memorySearchCall,
+) (*searchMemoriesToolResponse, error) {
+	query := strings.TrimSpace(call.query)
+	if query == "" {
+		return nil, fmt.Errorf("%s: query is required", name)
+	}
+	sess, err := currentSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rsp, err := s.client.searchMemories(ctx, searchMemoriesRequest{
+		Query:  query,
+		Limit:  normalizeLimit(call.limit),
+		Type:   strings.TrimSpace(call.memoryType),
+		Scene:  strings.TrimSpace(call.scene),
+		UserID: sess.UserID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &searchMemoriesToolResponse{
+		Query:    query,
+		Results:  strings.TrimSpace(rsp.Results),
+		Total:    rsp.Total,
+		Strategy: rsp.Strategy,
+	}, nil
 }
 
 func (s *Service) newConversationSearchTool(name string) tool.CallableTool {
@@ -175,6 +240,7 @@ func (s *Service) newConversationSearchTool(name string) tool.CallableTool {
 			Query:      strings.TrimSpace(req.Query),
 			Limit:      limit,
 			SessionKey: sessionKey,
+			SessionID:  sess.ID,
 			UserID:     sess.UserID,
 		})
 		if err != nil {
@@ -186,18 +252,119 @@ func (s *Service) newConversationSearchTool(name string) tool.CallableTool {
 			Total:   rsp.Total,
 		}, nil
 	}
+	description := "Search TencentDB Agent Memory conversation history. " +
+		"Defaults to the current session_key and is useful for recalling earlier raw exchanges."
+	if s.client.usesV3API() {
+		description = "Search TencentDB Agent Memory conversation history. " +
+			"Defaults to the current session_id and is useful for recalling earlier raw exchanges."
+	}
 	return function.NewFunctionTool(
 		fn,
 		function.WithName(name),
-		function.WithDescription("Search TencentDB Agent Memory conversation history. "+
-			"Defaults to the current session_key and is useful for recalling earlier raw exchanges."),
+		function.WithDescription(description),
 	)
+}
+
+func (s *Service) newScenarioReadTool(name string) tool.CallableTool {
+	fn := func(ctx context.Context, req *readScenarioToolRequest) (*readScenarioToolResponse, error) {
+		if req == nil || strings.TrimSpace(req.Path) == "" {
+			return nil, fmt.Errorf("%s: path is required", name)
+		}
+		sess, err := currentSession(ctx)
+		if err != nil {
+			return nil, err
+		}
+		rsp, err := s.client.readScenarioV3(
+			ctx,
+			sess.UserID,
+			strings.TrimSpace(req.Path),
+		)
+		if err != nil {
+			return nil, err
+		}
+		content, truncated := truncateV3ScenarioContent(rsp.Content)
+		return &readScenarioToolResponse{
+			Path:      rsp.Path,
+			Version:   string(rsp.Version),
+			Content:   content,
+			Truncated: truncated,
+			CreatedAt: rsp.CreatedAt,
+			UpdatedAt: rsp.UpdatedAt,
+		}, nil
+	}
+	return function.NewFunctionTool(
+		fn,
+		function.WithName(name),
+		function.WithDescription("Read a TencentDB Agent Memory L2 scenario file by a path returned by scene navigation. "+
+			"Responses are capped at 16 KiB and mark truncated content."),
+	)
+}
+
+func formatV3ScenarioEntries(items []v3ScenarioEntry) (string, int) {
+	lines := make([]string, 0, maxV3ScenarioNavigationEntries)
+	bytesUsed := 0
+	truncated := false
+	for _, item := range items {
+		path := strings.TrimSpace(item.Path)
+		if path == "" {
+			continue
+		}
+		line := "- " + path
+		separatorBytes := 0
+		if len(lines) > 0 {
+			separatorBytes = 1
+		}
+		if len(lines) == maxV3ScenarioNavigationEntries ||
+			bytesUsed+separatorBytes+len(line) > maxV3ScenarioNavigationBytes {
+			truncated = true
+			break
+		}
+		lines = append(lines, line)
+		bytesUsed += separatorBytes + len(line)
+	}
+	for truncated && len(lines) > 0 &&
+		bytesUsed+len(v3TruncationMarker) > maxV3ScenarioNavigationBytes {
+		last := len(lines) - 1
+		bytesUsed -= len(lines[last])
+		if last > 0 {
+			bytesUsed--
+		}
+		lines = lines[:last]
+	}
+	context := strings.Join(lines, "\n")
+	if truncated {
+		if context == "" {
+			context = strings.TrimPrefix(v3TruncationMarker, "\n")
+		} else {
+			context += v3TruncationMarker
+		}
+	}
+	return context, len(lines)
+}
+
+func truncateV3ScenarioContent(content string) (string, bool) {
+	return truncateV3UTF8Bytes(content, maxV3ScenarioContentBytes)
 }
 
 func (s *Service) newReadOffloadRefTool(name string) tool.CallableTool {
 	fn := func(ctx context.Context, req *readOffloadRefToolRequest) (*readOffloadRefToolResponse, error) {
 		if req == nil || strings.TrimSpace(req.ResultRef) == "" {
 			return nil, fmt.Errorf("%s: result_ref is required", name)
+		}
+		query := strings.TrimSpace(req.Query)
+		if query != "" && (req.StartLine != 0 || req.EndLine != 0) {
+			return nil, fmt.Errorf("%s: query cannot be combined with line ranges", name)
+		}
+		if req.StartLine < 0 || req.EndLine < 0 ||
+			req.MaxTokens < 0 || req.MaxTokens > 4096 {
+			return nil, fmt.Errorf(
+				"%s: start_line, end_line, and max_tokens must be within the supported ranges",
+				name,
+			)
+		}
+		if req.StartLine > 0 && req.EndLine > 0 &&
+			req.StartLine > req.EndLine {
+			return nil, fmt.Errorf("%s: start_line must not exceed end_line", name)
 		}
 		inv, err := currentInvocation(ctx)
 		if err != nil {
@@ -207,9 +374,13 @@ func (s *Service) newReadOffloadRefTool(name string) tool.CallableTool {
 		if client == nil {
 			return nil, fmt.Errorf("%s: context offload gateway is unavailable", name)
 		}
-		rsp, err := client.offloadReadRef(ctx, offloadReadRefRequest{
-			Scope:     newOffloadScope(s.opts, inv.Session, inv.AgentName),
+		rsp, err := client.readRef(ctx, offloadReadRefRequest{
+			SessionID: s.sessionKey(inv.Session),
 			ResultRef: strings.TrimSpace(req.ResultRef),
+			Query:     query,
+			StartLine: optionalPositiveInt(req.StartLine),
+			EndLine:   optionalPositiveInt(req.EndLine),
+			MaxTokens: optionalPositiveInt(req.MaxTokens),
 		})
 		if err != nil {
 			return nil, err
@@ -220,9 +391,10 @@ func (s *Service) newReadOffloadRefTool(name string) tool.CallableTool {
 			}, nil
 		}
 		return &readOffloadRefToolResponse{
-			ResultRef: rsp.ResultRef,
-			Content:   rsp.Content,
-			Truncated: rsp.Truncated,
+			ResultRef:  rsp.ResultRef,
+			Content:    rsp.Content,
+			Truncated:  rsp.Truncated,
+			MatchFound: rsp.MatchFound,
 		}, nil
 	}
 	return function.NewFunctionTool(
@@ -233,81 +405,11 @@ func (s *Service) newReadOffloadRefTool(name string) tool.CallableTool {
 	)
 }
 
-func (s *Service) newReadOffloadNodeTool(name string) tool.CallableTool {
-	fn := func(ctx context.Context, req *readOffloadNodeToolRequest) (*readOffloadNodeToolResponse, error) {
-		if req == nil || strings.TrimSpace(req.NodeID) == "" {
-			return nil, fmt.Errorf("%s: node_id is required", name)
-		}
-		inv, err := currentInvocation(ctx)
-		if err != nil {
-			return nil, err
-		}
-		client := s.contextOffloadClient()
-		if client == nil {
-			return nil, fmt.Errorf("%s: context offload gateway is unavailable", name)
-		}
-		nodeID := strings.TrimSpace(req.NodeID)
-		rsp, err := client.offloadReadNode(ctx, offloadReadNodeRequest{
-			Scope:  newOffloadScope(s.opts, inv.Session, inv.AgentName),
-			NodeID: nodeID,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if rsp == nil {
-			return &readOffloadNodeToolResponse{NodeID: nodeID}, nil
-		}
-		return &readOffloadNodeToolResponse{
-			NodeID:  rsp.NodeID,
-			Entries: rsp.Entries,
-		}, nil
+func optionalPositiveInt(value int) *int {
+	if value <= 0 {
+		return nil
 	}
-	return function.NewFunctionTool(
-		fn,
-		function.WithName(name),
-		function.WithDescription("Read TencentDB context offload entries mapped to a Mermaid node_id. "+
-			"Use this to drill down from the active task Mermaid graph."),
-	)
-}
-
-func (s *Service) newSearchOffloadIndexTool(name string) tool.CallableTool {
-	fn := func(ctx context.Context, req *searchOffloadIndexToolRequest) (*searchOffloadIndexToolResponse, error) {
-		if req == nil || strings.TrimSpace(req.Query) == "" {
-			return nil, fmt.Errorf("%s: query is required", name)
-		}
-		inv, err := currentInvocation(ctx)
-		if err != nil {
-			return nil, err
-		}
-		client := s.contextOffloadClient()
-		if client == nil {
-			return nil, fmt.Errorf("%s: context offload gateway is unavailable", name)
-		}
-		query := strings.TrimSpace(req.Query)
-		limit := normalizeLimit(req.Limit)
-		rsp, err := client.offloadSearchIndex(ctx, offloadSearchIndexRequest{
-			Scope: newOffloadScope(s.opts, inv.Session, inv.AgentName),
-			Query: query,
-			Limit: limit,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if rsp == nil {
-			return &searchOffloadIndexToolResponse{Query: query}, nil
-		}
-		return &searchOffloadIndexToolResponse{
-			Query:   rsp.Query,
-			Entries: rsp.Entries,
-			Total:   rsp.Total,
-		}, nil
-	}
-	return function.NewFunctionTool(
-		fn,
-		function.WithName(name),
-		function.WithDescription("Search TencentDB context offload L1 summaries and refs for the current session. "+
-			"Use this when the active Mermaid graph does not show the exact result_ref needed."),
-	)
+	return &value
 }
 
 func currentSession(ctx context.Context) (*session.Session, error) {

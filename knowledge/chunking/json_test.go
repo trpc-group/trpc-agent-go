@@ -11,11 +11,121 @@ package chunking
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
+
+func TestOrderedJSONKeysMixedNumericAndLexical(t *testing.T) {
+	data := map[string]any{
+		"-100000000000000000000": nil,
+		"-99999999999999999999":  nil,
+		"1a":                     nil,
+		"10":                     nil,
+		"2":                      nil,
+		"02":                     nil,
+		"99999999999999999999":   nil,
+		"100000000000000000000":  nil,
+	}
+	want := []string{
+		"-100000000000000000000",
+		"-99999999999999999999",
+		"02",
+		"2",
+		"10",
+		"99999999999999999999",
+		"100000000000000000000",
+		"1a",
+	}
+
+	for i := 0; i < 1000; i++ {
+		if got := orderedJSONKeys(data); !slices.Equal(got, want) {
+			t.Fatalf("orderedJSONKeys() = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestJSONChunkingEmitsNumericKeysInNumericOrder(t *testing.T) {
+	data := map[string]any{
+		"items": []any{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+	}
+	chunks, err := NewJSONChunking(
+		WithJSONChunkSize(1000),
+	).SplitJSON(data, true)
+	if err != nil {
+		t.Fatalf("SplitJSON() error = %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("SplitJSON() chunks = %d, want 1", len(chunks))
+	}
+	want := `{"items":{"0":0,"1":1,"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"10":10,"11":11}}`
+	if chunks[0] != want {
+		t.Fatalf("SplitJSON() chunk = %s, want %s", chunks[0], want)
+	}
+}
+
+func TestJSONChunkingChunkEmitsArrayIndexesInOrder(t *testing.T) {
+	values := make([]string, 15)
+	for i := range values {
+		values[i] = fmt.Sprintf("value-%d-xxxxxxxx", i)
+	}
+	content, err := json.Marshal(map[string]any{"items": values})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	chunks, err := NewJSONChunking(
+		WithJSONChunkSize(100),
+	).Chunk(&document.Document{Content: string(content)})
+	if err != nil {
+		t.Fatalf("Chunk() error = %v", err)
+	}
+
+	var contents []string
+	for _, chunk := range chunks {
+		contents = append(contents, chunk.Content)
+	}
+	joined := strings.Join(contents, "\n")
+	previous := -1
+	for i := range values {
+		position := strings.Index(joined, fmt.Sprintf(`"%d":`, i))
+		if position < 0 {
+			t.Fatalf("Chunk() output does not contain index %d: %s", i, joined)
+		}
+		if position <= previous {
+			t.Fatalf("Chunk() index %d is out of order: %s", i, joined)
+		}
+		previous = position
+	}
+}
+
+func TestJSONChunkingRejectsInvalidChunkSize(t *testing.T) {
+	_, err := NewJSONChunking(
+		WithJSONChunkSize(-1),
+	).SplitJSON(map[string]any{"value": "text"}, false)
+	if !errors.Is(err, ErrInvalidChunkSize) {
+		t.Fatalf("SplitJSON() error = %v, want %v", err, ErrInvalidChunkSize)
+	}
+}
+
+func TestJSONChunkingSplitJSONRejectsCycles(t *testing.T) {
+	data := map[string]any{}
+	data["a"] = data
+	data["z"] = "after cycle"
+
+	_, err := NewJSONChunking().SplitJSON(data, false)
+	if err == nil {
+		t.Fatal("SplitJSON() error = nil, want cycle error")
+	}
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("SplitJSON() error = %q, want cycle error", err)
+	}
+}
 
 func TestJSONChunking(t *testing.T) {
 	// Test case 1: Simple JSON object.
@@ -380,6 +490,96 @@ func TestJSONChunkingDeepNesting(t *testing.T) {
 		// Verify chunk metadata
 		if chunk.Metadata[source.MetaChunkType] != "json" {
 			t.Errorf("Chunk %d missing chunk_type metadata", i)
+		}
+	}
+}
+
+func TestJSONChunkingSplitsLongStringWithinByteBudget(t *testing.T) {
+	value := strings.Repeat("中文abc", 30)
+	content, err := json.Marshal(map[string]any{
+		"payload": map[string]any{
+			"text": value,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	chunks, err := NewJSONChunking(
+		WithJSONChunkSize(100),
+	).Chunk(&document.Document{
+		ID:      "long-string",
+		Content: string(content),
+	})
+	if err != nil {
+		t.Fatalf("Chunk() error = %v", err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("len(chunks) = %d, want multiple chunks", len(chunks))
+	}
+
+	var reconstructed strings.Builder
+	for i, chunk := range chunks {
+		if len(chunk.Content) > 100 {
+			t.Errorf("chunk %d size = %d bytes, want <= 100", i, len(chunk.Content))
+		}
+		if !utf8.ValidString(chunk.Content) {
+			t.Errorf("chunk %d is not valid UTF-8", i)
+		}
+
+		var data map[string]any
+		if err := json.Unmarshal([]byte(chunk.Content), &data); err != nil {
+			t.Fatalf("unmarshal chunk %d: %v", i, err)
+		}
+		payload, ok := data["payload"].(map[string]any)
+		if !ok {
+			t.Fatalf("chunk %d payload type = %T", i, data["payload"])
+		}
+		fragment, ok := payload["text"].(string)
+		if !ok {
+			t.Fatalf("chunk %d text type = %T", i, payload["text"])
+		}
+		reconstructed.WriteString(fragment)
+	}
+	if reconstructed.String() != value {
+		t.Errorf("reconstructed value does not match original")
+	}
+}
+
+func TestJSONChunkingOrderIsDeterministic(t *testing.T) {
+	doc := &document.Document{
+		ID: "deterministic",
+		Content: `{
+			"zeta": "last value with enough text to require splitting",
+			"alpha": "first value with enough text to require splitting",
+			"middle": {
+				"item10": "ten",
+				"item2": "two"
+			}
+		}`,
+	}
+	chunker := NewJSONChunking(WithJSONChunkSize(60))
+
+	var baseline string
+	for run := 0; run < 20; run++ {
+		chunks, err := chunker.Chunk(doc)
+		if err != nil {
+			t.Fatalf("Chunk() run %d error = %v", run, err)
+		}
+		contents := make([]string, 0, len(chunks))
+		for _, chunk := range chunks {
+			contents = append(contents, chunk.Content)
+		}
+		current := strings.Join(contents, "\x00")
+		if run == 0 {
+			baseline = current
+			if !strings.Contains(chunks[0].Content, `"alpha"`) {
+				t.Fatalf("first chunk = %s, want alpha key first", chunks[0].Content)
+			}
+			continue
+		}
+		if current != baseline {
+			t.Fatalf("Chunk() run %d produced a different order", run)
 		}
 	}
 }

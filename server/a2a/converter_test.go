@@ -627,6 +627,37 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "non-partial streaming event with message content",
+			event: &event.Event{
+				Response: &model.Response{
+					ID:        "resp-final",
+					IsPartial: false,
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Content: "Final",
+							},
+						},
+					},
+				},
+			},
+			expected: func() protocol.StreamingMessageResult {
+				taskEvent := protocol.NewTaskArtifactUpdateEvent(
+					"test-task-id",
+					"test-ctx-id",
+					protocol.Artifact{
+						ArtifactID: "resp-final",
+						Parts: []protocol.Part{
+							protocol.NewTextPart("Final"),
+						},
+					},
+					false,
+				)
+				return &taskEvent
+			}(),
+			wantErr: false,
+		},
+		{
 			name: "streaming event with error response",
 			event: &event.Event{
 				ID: "error-event-456",
@@ -759,6 +790,61 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			if !compareStreamingMessageResults(result, tt.expected) {
 				t.Errorf("ConvertStreamingToA2AMessage() = %+v, want %+v", result, tt.expected)
 			}
+		})
+	}
+}
+
+func TestDefaultEventToA2AMessage_StreamingAppendSemantics(t *testing.T) {
+	converter := &defaultEventToA2AMessage{}
+	options := EventToA2AStreamingOptions{TaskID: "task", CtxID: "context"}
+	tests := []struct {
+		name       string
+		response   *model.Response
+		wantAppend bool
+	}{
+		{
+			name: "partial delta appends",
+			response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "hello"},
+				}},
+			},
+			wantAppend: true,
+		},
+		{
+			name: "complete message replaces",
+			response: &model.Response{
+				ID: "response",
+				Choices: []model.Choice{{
+					Message: model.Message{Content: "hello world"},
+				}},
+			},
+			wantAppend: false,
+		},
+		{
+			name: "legacy delta fallback appends",
+			response: &model.Response{
+				ID: "response",
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "hello"},
+				}},
+			},
+			wantAppend: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := converter.ConvertStreamingToA2AMessage(
+				context.Background(),
+				event.New("invocation", "agent", event.WithResponse(test.response)),
+				options,
+			)
+			require.NoError(t, err)
+			update := result.(*protocol.TaskArtifactUpdateEvent)
+			require.NotNil(t, update.Append)
+			require.Equal(t, test.wantAppend, *update.Append)
 		})
 	}
 }

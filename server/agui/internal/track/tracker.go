@@ -19,8 +19,6 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"go.uber.org/multierr"
-	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -30,12 +28,18 @@ const TrackAGUI session.Track = "agui"
 
 // Tracker is the interface for tracking AG-UI events.
 type Tracker interface {
-	// AppendEvent appends an AG-UI event to the session track.
+	// AppendEvent queues an AG-UI event for the next persistence flush.
 	AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error
 	// GetEvents retrieves the AG-UI track events from the session.
 	GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error)
-	// Flush flushes any pending aggregated events for the given session key.
+	// Flush flushes buffered events for the given session key without closing the session state.
 	Flush(ctx context.Context, key session.Key) error
+	// Close flushes buffered events and releases the session state for the given session key.
+	Close(ctx context.Context, key session.Key) error
+}
+
+type trackEventReader interface {
+	GetTrackEvents(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error)
 }
 
 // tracker is the implementation of the Tracker interface.
@@ -46,15 +50,16 @@ type tracker struct {
 	aggregatorFactory aggregator.Factory            // aggregatorFactory builds aggregators for new sessions.
 	aggregationOption []aggregator.Option           // aggregationOption applies to newly built aggregators.
 	sessionStates     map[session.Key]*sessionState // sessionStates stores the state of each session.
-	flushInterval     time.Duration                 // flushInterval is the interval for flushing the session state.
 }
 
 // sessionState stores the state of a session.
 type sessionState struct {
-	mu         sync.Mutex            // mu guards the aggregator and the done channel.
+	mu         sync.Mutex            // mu guards the aggregator and pending events.
+	persistMu  sync.Mutex            // persistMu serializes storage writes for the session.
 	aggregator aggregator.Aggregator // aggregator aggregates events.
-	done       chan struct{}         // done is closed when the session state is removed.
+	pending    []json.RawMessage     // pending stores immutable payloads waiting for persistence.
 	session    *session.Session      // session caches the ensured session to avoid repeated lookups.
+	closing    bool                  // closing rejects appends while Close is draining the final batch.
 }
 
 // New creates a new tracker.
@@ -70,11 +75,10 @@ func New(service session.Service, opt ...Option) (Tracker, error) {
 		aggregatorFactory: opts.aggregatorFactory,
 		aggregationOption: opts.aggregationOption,
 		sessionStates:     make(map[session.Key]*sessionState),
-		flushInterval:     opts.flushInterval,
 	}, nil
 }
 
-// AppendEvent appends an AG-UI event to the session track.
+// AppendEvent queues an AG-UI event for the next persistence flush.
 func (t *tracker) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
 	if event == nil {
 		return fmt.Errorf("event is nil")
@@ -85,17 +89,32 @@ func (t *tracker) AppendEvent(ctx context.Context, key session.Key, event aguiev
 	state := t.getSessionState(ctx, key)
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if state.closing {
+		return fmt.Errorf("session state is closing: %v", key)
+	}
 	aggregated, err := state.aggregator.Append(ctx, event)
 	if err != nil {
 		return fmt.Errorf("aggregate event: %w", err)
 	}
-	return t.persistEvents(ctx, key, state, aggregated)
+	payloads, err := snapshotEvents(aggregated)
+	state.pending = append(state.pending, payloads...)
+	if err != nil {
+		return fmt.Errorf("snapshot aggregated events: %w", err)
+	}
+	return nil
 }
 
 // GetEvents retrieves the AG-UI track events from the session.
 func (t *tracker) GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error) {
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, fmt.Errorf("session key: %w", err)
+	}
+	if reader, ok := t.sessionService.(trackEventReader); ok {
+		trackEvents, err := reader.GetTrackEvents(ctx, key, TrackAGUI, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("get track events: %w", err)
+		}
+		return trackEvents, nil
 	}
 	sess, err := t.sessionService.GetSession(ctx, key, opts...)
 	if err != nil {
@@ -111,22 +130,46 @@ func (t *tracker) GetEvents(ctx context.Context, key session.Key, opts ...sessio
 	return trackEvents, nil
 }
 
-// Flush flushes any pending aggregated events for the given session key.
+// Flush flushes buffered events for the given session key without closing the session state.
 func (t *tracker) Flush(ctx context.Context, key session.Key) error {
 	if err := key.CheckSessionKey(); err != nil {
 		return fmt.Errorf("session key: %w", err)
 	}
-	defer t.deleteSessionState(key)
-	state := t.getSessionState(ctx, key)
+	state := t.getExistingSessionState(key)
+	if state == nil {
+		return fmt.Errorf("session state not found: %v", key)
+	}
 	if err := t.flush(ctx, key, state); err != nil {
 		return fmt.Errorf("flush: %w", err)
 	}
 	return nil
 }
 
+// Close flushes buffered events and releases the session state for the given session key.
+func (t *tracker) Close(ctx context.Context, key session.Key) error {
+	if err := key.CheckSessionKey(); err != nil {
+		return fmt.Errorf("session key: %w", err)
+	}
+	state := t.getExistingSessionState(key)
+	if state == nil {
+		return nil
+	}
+	err := t.closeState(ctx, key, state)
+	t.deleteSessionState(key, state)
+	if err != nil {
+		return fmt.Errorf("flush: %w", err)
+	}
+	return nil
+}
+
 // persistEvents ensures the session exists and appends track events to storage.
-func (t *tracker) persistEvents(ctx context.Context, key session.Key, state *sessionState, events []aguievents.Event) error {
-	if len(events) == 0 {
+func (t *tracker) persistEvents(
+	ctx context.Context,
+	key session.Key,
+	state *sessionState,
+	payloads []json.RawMessage,
+) error {
+	if len(payloads) == 0 {
 		return nil
 	}
 	sess, err := t.ensureSessionExists(ctx, key, state)
@@ -134,12 +177,7 @@ func (t *tracker) persistEvents(ctx context.Context, key session.Key, state *ses
 		return fmt.Errorf("ensure session exists: %w", err)
 	}
 	var overallErr error
-	for _, e := range events {
-		payload, err := e.ToJSON()
-		if err != nil {
-			multierr.AppendInto(&overallErr, fmt.Errorf("marshal event %v: %w", e, err))
-			continue
-		}
+	for _, payload := range payloads {
 		trackEvent := &session.TrackEvent{
 			Track:     TrackAGUI,
 			Payload:   json.RawMessage(append([]byte(nil), payload...)),
@@ -156,9 +194,24 @@ func (t *tracker) persistEvents(ctx context.Context, key session.Key, state *ses
 		}
 	}
 	if overallErr != nil {
-		return fmt.Errorf("persist events: %v", overallErr)
+		return fmt.Errorf("persist events: %w", overallErr)
 	}
 	return nil
+}
+
+// snapshotEvents serializes aggregator outputs before their ownership is returned to the caller.
+func snapshotEvents(events []aguievents.Event) ([]json.RawMessage, error) {
+	payloads := make([]json.RawMessage, 0, len(events))
+	var overallErr error
+	for _, event := range events {
+		payload, err := event.ToJSON()
+		if err != nil {
+			multierr.AppendInto(&overallErr, fmt.Errorf("marshal event %v: %w", event, err))
+			continue
+		}
+		payloads = append(payloads, json.RawMessage(append([]byte(nil), payload...)))
+	}
+	return payloads, overallErr
 }
 
 // ensureSessionExists fetches the session or creates one when absent.
@@ -191,56 +244,69 @@ func (t *tracker) getSessionState(ctx context.Context, key session.Key) *session
 	}
 	state := &sessionState{
 		aggregator: t.aggregatorFactory(ctx, t.aggregationOption...),
-		done:       make(chan struct{}),
 	}
 	t.sessionStates[key] = state
-	if t.flushInterval > 0 {
-		state.done = make(chan struct{})
-		flushCtx := agent.CloneContext(ctx)
-		go t.flushPeriodically(flushCtx, key, state)
-	}
 	return state
 }
 
-// deleteSessionState removes the cached session state for the session key.
-func (t *tracker) deleteSessionState(key session.Key) {
+// getExistingSessionState returns the cached session state for the key when it exists.
+func (t *tracker) getExistingSessionState(key session.Key) *sessionState {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.flushInterval > 0 {
-		close(t.sessionStates[key].done)
-	}
-	delete(t.sessionStates, key)
+	return t.sessionStates[key]
 }
 
-// flushPeriodically flushes the session state periodically.
-func (t *tracker) flushPeriodically(ctx context.Context, key session.Key, state *sessionState) {
-	ticker := time.NewTicker(t.flushInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			if err := t.flush(ctx, key, state); err != nil {
-				log.WarnfContext(
-					ctx,
-					"flush: %v",
-					err,
-				)
-			}
-		case <-state.done:
-			return
-		case <-ctx.Done():
-			return
-		}
+// deleteSessionState removes the cached session state when it still matches state.
+func (t *tracker) deleteSessionState(key session.Key, state *sessionState) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.sessionStates[key] == state {
+		delete(t.sessionStates, key)
 	}
 }
 
 // flush flushes the session state.
 func (t *tracker) flush(ctx context.Context, key session.Key, state *sessionState) error {
+	state.persistMu.Lock()
+	defer state.persistMu.Unlock()
+	batch, drainErr := t.drainPending(ctx, state)
+	persistErr := t.persistEvents(ctx, key, state, batch)
+	return multierr.Combine(drainErr, persistErr)
+}
+
+func (t *tracker) closeState(ctx context.Context, key session.Key, state *sessionState) error {
+	state.persistMu.Lock()
+	defer state.persistMu.Unlock()
+	batch, drainErr := t.drainPendingForClose(ctx, state)
+	persistErr := t.persistEvents(ctx, key, state, batch)
+	return multierr.Combine(drainErr, persistErr)
+}
+
+func (t *tracker) drainPending(ctx context.Context, state *sessionState) ([]json.RawMessage, error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	return t.drainPendingLocked(ctx, state)
+}
+
+func (t *tracker) drainPendingForClose(ctx context.Context, state *sessionState) ([]json.RawMessage, error) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.closing = true
+	return t.drainPendingLocked(ctx, state)
+}
+
+func (t *tracker) drainPendingLocked(ctx context.Context, state *sessionState) ([]json.RawMessage, error) {
 	events, err := state.aggregator.Flush(ctx)
 	if err != nil {
-		return fmt.Errorf("aggregator flush: %w", err)
+		return nil, fmt.Errorf("aggregator flush: %w", err)
 	}
-	return t.persistEvents(ctx, key, state, events)
+	payloads, snapshotErr := snapshotEvents(events)
+	batch := make([]json.RawMessage, 0, len(state.pending)+len(payloads))
+	batch = append(batch, state.pending...)
+	batch = append(batch, payloads...)
+	state.pending = nil
+	if snapshotErr != nil {
+		return batch, fmt.Errorf("snapshot aggregated events: %w", snapshotErr)
+	}
+	return batch, nil
 }

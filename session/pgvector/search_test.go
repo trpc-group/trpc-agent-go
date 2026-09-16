@@ -202,7 +202,7 @@ func TestSearchEvents_Success(t *testing.T) {
 	)
 
 	mock.ExpectQuery(`SELECT se\.app_name`).
-		WithArgs(anyVectorArg{}, "app", "user").
+		WithArgs(anyVectorArg{}, "app", "user", timeArg{}).
 		WillReturnRows(rows)
 
 	results, err := s.SearchEvents(
@@ -288,10 +288,10 @@ func TestSearchEvents_HybridSuccess(t *testing.T) {
 	)
 
 	mock.ExpectQuery(`SELECT se\.app_name`).
-		WithArgs(anyVectorArg{}, "app", "user").
+		WithArgs(anyVectorArg{}, "app", "user", timeArg{}).
 		WillReturnRows(denseRows)
 	mock.ExpectQuery(`ts_rank\(se\.search_vector`).
-		WithArgs("hello", "app", "user").
+		WithArgs("hello", "app", "user", timeArg{}).
 		WillReturnRows(keywordRows)
 
 	results, err := s.SearchEvents(
@@ -353,10 +353,10 @@ func TestSearchEvents_HybridKeywordErrorFallsBackToDense(t *testing.T) {
 	)
 
 	mock.ExpectQuery(`SELECT se\.app_name`).
-		WithArgs(anyVectorArg{}, "app", "user").
+		WithArgs(anyVectorArg{}, "app", "user", timeArg{}).
 		WillReturnRows(denseRows)
 	mock.ExpectQuery(`ts_rank\(se\.search_vector`).
-		WithArgs("hello", "app", "user").
+		WithArgs("hello", "app", "user", timeArg{}).
 		WillReturnError(fmt.Errorf("keyword query failed"))
 
 	results, err := s.SearchEvents(
@@ -412,7 +412,7 @@ func TestSearchEvents_FallbackTextAndRoleFromEvent(t *testing.T) {
 	)
 
 	mock.ExpectQuery(`SELECT se\.app_name`).
-		WithArgs(anyVectorArg{}, "app", "user").
+		WithArgs(anyVectorArg{}, "app", "user", timeArg{}).
 		WillReturnRows(rows)
 
 	results, err := s.SearchEvents(
@@ -440,7 +440,7 @@ func TestSearchEvents_QueryError(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectQuery(`SELECT se\.app_name`).
-		WithArgs(anyVectorArg{}, "app", "user").
+		WithArgs(anyVectorArg{}, "app", "user", timeArg{}).
 		WillReturnError(fmt.Errorf("db connection lost"))
 
 	results, err := s.SearchEvents(
@@ -478,7 +478,7 @@ func TestSearchEvents_InvalidEventJSON(t *testing.T) {
 	)
 
 	mock.ExpectQuery(`SELECT se\.app_name`).
-		WithArgs(anyVectorArg{}, "app", "user").
+		WithArgs(anyVectorArg{}, "app", "user", timeArg{}).
 		WillReturnRows(rows)
 
 	results, err := s.SearchEvents(
@@ -516,7 +516,7 @@ func TestSearchEvents_ScanError(t *testing.T) {
 	)
 
 	mock.ExpectQuery(`SELECT se\.app_name`).
-		WithArgs(anyVectorArg{}, "app", "user").
+		WithArgs(anyVectorArg{}, "app", "user", timeArg{}).
 		WillReturnRows(rows)
 
 	results, err := s.SearchEvents(
@@ -549,7 +549,7 @@ func TestSearchEvents_TrimmedQuery(t *testing.T) {
 	)
 
 	mock.ExpectQuery(`SELECT se\.app_name`).
-		WithArgs(anyVectorArg{}, "app", "user").
+		WithArgs(anyVectorArg{}, "app", "user", timeArg{}).
 		WillReturnRows(rows)
 
 	_, err := s.SearchEvents(
@@ -583,7 +583,7 @@ func TestSearchEvents_UsesEmbedTimeout(t *testing.T) {
 		},
 	)
 	mock.ExpectQuery(`SELECT se\.app_name`).
-		WithArgs(anyVectorArg{}, "app", "user").
+		WithArgs(anyVectorArg{}, "app", "user", timeArg{}).
 		WillReturnRows(rows)
 
 	_, err := s.SearchEvents(
@@ -638,18 +638,23 @@ func TestBuildSearchEventsSQL_Filters(t *testing.T) {
 	assert.Contains(t, sql, "1 - (se.embedding <=> $1) >=")
 	assert.Contains(t, sql, "filterKey")
 	assert.Contains(t, sql, "LIMIT 7")
-	require.Len(t, args, 12)
+	assert.NotContains(t, sql, "localtime")
+	assert.Contains(t, sql, "ss.expires_at > $4")
+	assert.Contains(t, sql, "se.expires_at > $4")
+	require.Len(t, args, 13)
 	assert.Equal(t, "app", args[1])
 	assert.Equal(t, "user", args[2])
-	assert.Equal(t, []string{"sess-1", "sess-2"}, args[3])
-	assert.Equal(t, []string{"sess-3"}, args[4])
-	assert.Equal(t, []string{"assistant"}, args[5])
-	assert.Equal(t, after, args[6])
-	assert.Equal(t, before, args[7])
-	assert.Equal(t, 0.7, args[8])
-	assert.Equal(t, "branch/a", args[9])
-	assert.Equal(t, "branch/a/%", args[10])
-	assert.Equal(t, "branch/a", args[11])
+	_, ok := args[3].(time.Time)
+	require.True(t, ok)
+	assert.Equal(t, []string{"sess-1", "sess-2"}, args[4])
+	assert.Equal(t, []string{"sess-3"}, args[5])
+	assert.Equal(t, []string{"assistant"}, args[6])
+	assert.Equal(t, after, args[7])
+	assert.Equal(t, before, args[8])
+	assert.Equal(t, 0.7, args[9])
+	assert.Equal(t, "branch/a", args[10])
+	assert.Equal(t, "branch/a/%", args[11])
+	assert.Equal(t, "branch/a", args[12])
 }
 
 func TestBuildSearchEventsSQL_DefaultTopKAndTableName(t *testing.T) {
@@ -672,7 +677,9 @@ func TestBuildSearchEventsSQL_DefaultTopKAndTableName(t *testing.T) {
 	assert.Contains(t, sql, "FROM custom_session_events se")
 	assert.Contains(t, sql, "JOIN custom_session_states ss")
 	assert.Contains(t, sql, fmt.Sprintf("LIMIT %d", defaultMaxResults))
-	require.Len(t, args, 3)
+	require.Len(t, args, 4)
+	_, ok := args[3].(time.Time)
+	require.True(t, ok)
 }
 
 func TestBuildKeywordSearchEventsSQL_Filters(t *testing.T) {
@@ -708,18 +715,23 @@ func TestBuildKeywordSearchEventsSQL_Filters(t *testing.T) {
 	assert.Contains(t, sql, "se.created_at <= ")
 	assert.NotContains(t, sql, "embedding <=>")
 	assert.Contains(t, sql, "LIMIT 9")
-	require.Len(t, args, 11)
+	assert.NotContains(t, sql, "localtime")
+	assert.Contains(t, sql, "ss.expires_at > $4")
+	assert.Contains(t, sql, "se.expires_at > $4")
+	require.Len(t, args, 12)
 	assert.Equal(t, "kyoto trip", args[0])
 	assert.Equal(t, "app", args[1])
 	assert.Equal(t, "user", args[2])
-	assert.Equal(t, []string{"sess-1", "sess-2"}, args[3])
-	assert.Equal(t, []string{"sess-3"}, args[4])
-	assert.Equal(t, []string{"assistant"}, args[5])
-	assert.Equal(t, after, args[6])
-	assert.Equal(t, before, args[7])
-	assert.Equal(t, "branch/a", args[8])
-	assert.Equal(t, "branch/a/%", args[9])
-	assert.Equal(t, "branch/a", args[10])
+	_, ok := args[3].(time.Time)
+	require.True(t, ok)
+	assert.Equal(t, []string{"sess-1", "sess-2"}, args[4])
+	assert.Equal(t, []string{"sess-3"}, args[5])
+	assert.Equal(t, []string{"assistant"}, args[6])
+	assert.Equal(t, after, args[7])
+	assert.Equal(t, before, args[8])
+	assert.Equal(t, "branch/a", args[9])
+	assert.Equal(t, "branch/a/%", args[10])
+	assert.Equal(t, "branch/a", args[11])
 }
 
 func TestResolveHybridCandidateLimit(t *testing.T) {

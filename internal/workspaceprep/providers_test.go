@@ -11,6 +11,7 @@ package workspaceprep
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,7 +48,7 @@ func TestBootstrapProvider_FilesAndCommands(t *testing.T) {
 	require.Len(t, reqs, 2)
 
 	rec := NewReconciler()
-	_, err = rec.Reconcile(ctx, eng, ws, reqs)
+	_, _, err = rec.Reconcile(ctx, eng, ws, "", reqs)
 	require.NoError(t, err)
 
 	seed, err := os.ReadFile(filepath.Join(ws.Path, "work/seed.txt"))
@@ -269,8 +270,7 @@ func TestConversationFilesRequirement_Metadata(t *testing.T) {
 	require.Equal(t, KindConversationFile, r.Kind())
 	require.Equal(t, PhaseFile, r.Phase())
 	require.False(t, r.Required(),
-		"conversation files must stay optional so a partial stage "+
-			"degrades to a warning instead of aborting the turn")
+		"ordinary partial staging failures remain optional warnings")
 	require.Equal(t,
 		codeexecutor.DirWork+"/inputs",
 		r.Target(),
@@ -364,6 +364,36 @@ func TestConversationFilesRequirement_ApplyStagesInlineBytes(t *testing.T) {
 	))
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(got))
+}
+
+func TestConversationFilesRequirement_ApplyPropagatesStale(t *testing.T) {
+	inv := &agent.Invocation{
+		Message: model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name: "note.txt",
+					Data: []byte("hello"),
+				},
+			}},
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	stale := fmt.Errorf(
+		"metadata belongs to old instance: %w",
+		codeexecutor.ErrWorkspaceStale,
+	)
+	r := &conversationFilesRequirement{}
+
+	err := r.Apply(ctx, ApplyContext{
+		Engine: &fakeEngine{
+			fs: &fakeFS{collectErr: stale},
+		},
+		Workspace:  codeexecutor.Workspace{ID: "ws", Path: t.TempDir()},
+		Invocation: inv,
+	})
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
 }
 
 // TestFileDigest_ReturnsStableKeys pins the digest format the

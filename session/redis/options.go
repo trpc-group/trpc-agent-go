@@ -62,6 +62,7 @@ type ServiceOpts struct {
 	instanceName       string
 	extraOptions       []any
 	sessionTTL         time.Duration // TTL for session state and event list
+	trackEventTTL      *time.Duration
 	appStateTTL        time.Duration // TTL for app state
 	userStateTTL       time.Duration // TTL for user state
 	enableAsyncPersist bool
@@ -94,6 +95,8 @@ type ServiceOpts struct {
 	compatMode             CompatMode
 	enableTracing          bool
 	enableUserSessionIndex bool
+	// disableScriptCache runs Lua scripts via EVAL instead of EVALSHA-first.
+	disableScriptCache bool
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -119,6 +122,13 @@ func (opts ServiceOpts) shouldCascadeFullSessionSummary() bool {
 		return true
 	}
 	return *opts.cascadeFullSessionSummary
+}
+
+func (opts ServiceOpts) effectiveTrackEventTTL() time.Duration {
+	if opts.trackEventTTL != nil {
+		return *opts.trackEventTTL
+	}
+	return opts.sessionTTL
 }
 
 // WithSessionEventLimit sets the limit of events in a session.
@@ -158,6 +168,15 @@ func WithExtraOptions(extraOptions ...any) ServiceOpt {
 func WithSessionTTL(ttl time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.sessionTTL = ttl
+	}
+}
+
+// WithTrackEventTTL sets the TTL for track events.
+// If unset, track events use the session TTL. A non-positive TTL disables track
+// event expiration.
+func WithTrackEventTTL(ttl time.Duration) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.trackEventTTL = &ttl
 	}
 }
 
@@ -315,5 +334,19 @@ func WithEnableTracing(enable bool) ServiceOpt {
 func WithEnableUserSessionIndex(enable bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.enableUserSessionIndex = enable
+	}
+}
+
+// WithDisableScriptCache runs all Lua scripts via EVAL instead of the default
+// EVALSHA-first execution. Enable it for proxy/cluster Redis backends whose
+// server-side script cache is not reliably maintained — e.g. a Tendis cluster
+// fronted by twemproxy, whose own guidance is to use EVAL rather than EVALSHA.
+// It removes the repeated NOSCRIPT round-trips (and the resulting error-code
+// noise in tracing/monitoring) at the cost of sending the full script body on
+// every call. Leave it off (default) for standalone Redis or master-slave
+// Tendis where EVALSHA script caching works normally.
+func WithDisableScriptCache(disable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.disableScriptCache = disable
 	}
 }

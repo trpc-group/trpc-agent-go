@@ -10,39 +10,11 @@
 package evolution
 
 import (
-	"regexp"
-	"strings"
-
+	"trpc.group/trpc-go/trpc-agent-go/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-const reviewerRedactedValue = "[REDACTED]"
-
-var (
-	reviewerSensitiveNamePattern = regexp.MustCompile(
-		`(?i)\b[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|ACCESS_KEY|PRIVATE_KEY)\b[A-Z0-9_]*`,
-	)
-	reviewerAssignmentPattern = regexp.MustCompile(
-		`(?im)\b([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+)`,
-	)
-	reviewerColonPattern = regexp.MustCompile(
-		`(?im)(["']?)([A-Za-z_][A-Za-z0-9_]*)(["']?\s*:\s*)(\"[^\"]*\"|'[^']*'|[^,\s}\]]+)`,
-	)
-	reviewerSensitiveFlagPattern = regexp.MustCompile(
-		`(?i)(--(?:api-key|token|secret|password)\s+)(\"[^\"]*\"|'[^']*'|[^\s]+)`,
-	)
-	reviewerAuthorizationHeaderPattern = regexp.MustCompile(
-		`(?i)(authorization\s*:\s*bearer\s+)([^\s,;]+)`,
-	)
-	reviewerAuthorizationFieldPattern = regexp.MustCompile(
-		`(?im)(["']?authorization["']?\s*:\s*)(\"[^\"]*\"|'[^']*'|[^,\s}\]]+)`,
-	)
-	reviewerBearerTokenPattern = regexp.MustCompile(
-		`(?i)(\bbearer\s+)([A-Za-z0-9._~+/-]{12,}=*)`,
-	)
-	reviewerOpenAIKeyPattern = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{8,}\b`)
-	reviewerJWTPattern       = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`)
-)
+const reviewerRedactedValue = redact.Value
 
 func sanitizeReviewInput(in *ReviewInput) *ReviewInput {
 	if in == nil {
@@ -138,96 +110,17 @@ func sanitizeOutcome(in *Outcome) *Outcome {
 }
 
 func redactSensitiveText(text string) string {
-	if strings.TrimSpace(text) == "" {
-		return text
-	}
-	redacted := reviewerAuthorizationHeaderPattern.ReplaceAllString(
-		text,
-		`${1}`+reviewerRedactedValue,
-	)
-	redacted = reviewerAuthorizationFieldPattern.ReplaceAllStringFunc(
-		redacted,
-		redactAuthorizationFieldMatch,
-	)
-	redacted = reviewerBearerTokenPattern.ReplaceAllString(
-		redacted,
-		`${1}`+reviewerRedactedValue,
-	)
-	redacted = reviewerAssignmentPattern.ReplaceAllStringFunc(
-		redacted,
-		redactAssignmentMatch,
-	)
-	redacted = reviewerColonPattern.ReplaceAllStringFunc(
-		redacted,
-		redactColonMatch,
-	)
-	redacted = reviewerSensitiveFlagPattern.ReplaceAllString(
-		redacted,
-		`${1}`+reviewerRedactedValue,
-	)
-	redacted = reviewerOpenAIKeyPattern.ReplaceAllString(
-		redacted,
-		reviewerRedactedValue,
-	)
-	redacted = reviewerJWTPattern.ReplaceAllString(
-		redacted,
-		reviewerRedactedValue,
-	)
-	return redacted
-}
-
-func redactAuthorizationFieldMatch(match string) string {
-	parts := reviewerAuthorizationFieldPattern.FindStringSubmatch(match)
-	if len(parts) != 3 {
-		return match
-	}
-	return parts[1] + redactedStructuredValue(parts[2])
-}
-
-func redactAssignmentMatch(match string) string {
-	parts := reviewerAssignmentPattern.FindStringSubmatch(match)
-	if len(parts) != 4 || !isReviewerSensitiveName(parts[1]) {
-		return match
-	}
-	return parts[1] + parts[2] + redactedStructuredValue(parts[3])
-}
-
-func redactColonMatch(match string) string {
-	parts := reviewerColonPattern.FindStringSubmatch(match)
-	if len(parts) != 5 || !isReviewerSensitiveName(parts[2]) {
-		return match
-	}
-	return parts[1] + parts[2] + parts[3] + redactedStructuredValue(parts[4])
+	return redact.SensitiveText(text)
 }
 
 func redactedStructuredValue(raw string) string {
-	trimmedRight := strings.TrimRight(raw, " \t")
-	suffix := raw[len(trimmedRight):]
-	body := trimmedRight
-	trailing := ""
-
-	if strings.HasSuffix(body, ",") {
-		body = strings.TrimSuffix(body, ",")
-		trailing = ","
-	}
-
-	switch {
-	case hasWrappedQuotes(body, '"'):
-		return `"` + reviewerRedactedValue + `"` + trailing + suffix
-	case hasWrappedQuotes(body, '\''):
-		return `'` + reviewerRedactedValue + `'` + trailing + suffix
-	default:
-		return reviewerRedactedValue + trailing + suffix
-	}
+	return redact.StructuredValue(raw)
 }
 
 func hasWrappedQuotes(value string, quote byte) bool {
-	if len(value) < 2 {
-		return false
-	}
-	return value[0] == quote && value[len(value)-1] == quote
+	return redact.HasWrappedQuotes(value, quote)
 }
 
 func isReviewerSensitiveName(name string) bool {
-	return reviewerSensitiveNamePattern.MatchString(name)
+	return redact.IsSensitiveName(name)
 }

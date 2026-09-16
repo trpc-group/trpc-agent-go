@@ -105,6 +105,94 @@ func TestBuildAdminOptions_UsesAdminSourceConfigPathEnv(t *testing.T) {
 	require.Contains(t, string(runtimeData), "max_loaded_skills: 7")
 }
 
+func TestAdminRuntimeConfigProvider_ModelCatalogHidesAndRejectsLegacyModelFields(
+	t *testing.T,
+) {
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		"model:\n  base_url: https://legacy.example.com/v1\n",
+	)
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	provider, ok := buildAdminRuntimeConfigProvider(
+		opts,
+		resolvedModelCatalog{explicit: true},
+	).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	for _, section := range status.Sections {
+		require.NotEqual(t, "model", section.Key)
+	}
+
+	err = provider.SaveRuntimeConfigValue(
+		"model.base_url",
+		"https://api.example.com/v1",
+	)
+	require.ErrorContains(
+		t,
+		err,
+		"unavailable when a model catalog is configured",
+	)
+	require.NoError(t, provider.ResetRuntimeConfigValue("model.base_url"))
+
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "base_url")
+	require.NotContains(t, string(data), "openai_variant")
+}
+
+func TestAdminRuntimeConfigProvider_SourceCatalogProtectedForLegacyRuntime(
+	t *testing.T,
+) {
+	sourcePath := writeAdminRuntimeConfigTestFile(
+		t,
+		"model:\n"+
+			"  default: fast\n"+
+			"  models:\n"+
+			"    fast:\n"+
+			"      mode: mock\n"+
+			"  base_url: https://stale.example.com/v1\n",
+	)
+	runtimePath := writeAdminRuntimeConfigTestFile(
+		t,
+		"model:\n  mode: mock\n",
+	)
+	t.Setenv(AdminSourceConfigPathEnvName, sourcePath)
+
+	opts := adminRuntimeConfigTestOptions(runtimePath)
+	provider, ok := buildAdminRuntimeConfigProvider(
+		opts,
+	).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+	require.False(t, provider.modelCatalogActive)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	for _, section := range status.Sections {
+		require.NotEqual(t, "model", section.Key)
+	}
+	err = provider.SaveRuntimeConfigValue(
+		"model.openai_variant",
+		"openai",
+	)
+	require.ErrorContains(
+		t,
+		err,
+		"unavailable when a model catalog is configured",
+	)
+
+	require.NoError(t, provider.ResetRuntimeConfigValue("model.base_url"))
+	sourceData, err := os.ReadFile(sourcePath)
+	require.NoError(t, err)
+	require.NotContains(t, string(sourceData), "base_url")
+	require.Contains(t, string(sourceData), "models:")
+
+	runtimeData, err := os.ReadFile(runtimePath)
+	require.NoError(t, err)
+	require.Contains(t, string(runtimeData), "mode: mock")
+}
+
 func TestBuildAdminOptions_WithoutConfigPath(t *testing.T) {
 	t.Parallel()
 
@@ -1298,6 +1386,7 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 			"  host_exec_default_timeout: 60s\n"+
 			"  host_exec_max_timeout: 45s\n"+
 			"  host_exec_max_yield: 2s\n"+
+			"  host_exec_max_idle_wait: 20s\n"+
 			"  defer_direct_tools: [exec_command]\n"+
 			"  defer_default_direct_tools: false\n",
 	)
@@ -1310,6 +1399,7 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 	opts.HostExecDefaultTimeout = time.Minute
 	opts.HostExecMaxTimeout = 45 * time.Second
 	opts.HostExecMaxYield = 2 * time.Second
+	opts.HostExecMaxIdleWait = 20 * time.Second
 
 	provider, ok := buildAdminRuntimeConfigProvider(
 		opts,
@@ -1360,6 +1450,13 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 	)
 	require.Equal(t, "2s", hostMaxYield.RuntimeValue)
 	require.Equal(t, "2s", hostMaxYield.ConfiguredValue)
+	hostMaxIdleWait := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.host_exec_max_idle_wait",
+	)
+	require.Equal(t, "20s", hostMaxIdleWait.RuntimeValue)
+	require.Equal(t, "20s", hostMaxIdleWait.ConfiguredValue)
 	direct := findAdminRuntimeConfigField(
 		t,
 		status,

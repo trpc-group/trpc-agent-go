@@ -394,11 +394,13 @@ summary.WithCacheSafeForking(true)
 
 When enabled and the parent model request is available, the summarizer clones that request and appends one compaction user message at the end. This lets providers with prompt caching reuse the parent request prefix. If the parent request is not available, the summarizer falls back to the default standalone request.
 
+With cache-safe forking enabled, the standalone user message ends with a fixed source-data boundary followed by the same `WithCacheSafeForkPrompt(...)` instruction. This prevents the model from treating the source conversation as work to continue. The rendered instruction counts against the summary model's input budget in both fork and standalone requests.
+
 This mode has clear boundaries:
 
 1. It optimizes the **request used to generate summary**. It does not change storage, boundary semantics, or event semantics.
 2. It depends on a stable parent prefix: system prompt, tools, model, and context order should not change unnecessarily.
-3. `WithCacheSafeForkPrompt(...)` is different from `WithPrompt(...)`. In fork mode, the conversation is already in the parent request, so the appended prompt should not include `{conversation_text}`.
+3. `WithCacheSafeForkPrompt(...)` is different from `WithPrompt(...)`. In fork mode, the conversation and any injected summary are already in the parent request. In standalone fallback, the rendered `WithPrompt(...)` output and source boundary already precede the fork prompt. Therefore, the fork prompt should not include `{conversation_text}` or `{previous_summary}` in either request form.
 4. After summary is generated, ordinary requests should still use an injection strategy that fits cache and authority requirements.
 
 This is especially relevant to coding Agents, which tend to have large stable prefixes. For general Agents, tool sets and page context may vary more often, so the value of forked cache reuse depends on the product shape.

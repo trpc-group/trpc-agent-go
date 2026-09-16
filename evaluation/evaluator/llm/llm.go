@@ -222,6 +222,7 @@ func (r *LLMBaseEvaluator) collectOneSample(ctx context.Context,
 		Details: &evaluator.PerInvocationDetails{
 			Reason:       score.Reason,
 			Score:        score.Score,
+			Value:        score.Value,
 			RubricScores: score.RubricScores,
 		},
 	}, nil

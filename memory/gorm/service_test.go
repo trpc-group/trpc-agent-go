@@ -12,6 +12,7 @@ package gormmemory
 import (
 	"context"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,11 +21,14 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	storagegorm "trpc.group/trpc-go/trpc-agent-go/storage/gorm"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func testDB(t *testing.T) *gorm.DB {
@@ -679,4 +683,79 @@ func TestService_WithToolExposed_hidesAutoModeDefaults(t *testing.T) {
 		}
 		assert.NotEqual(t, memory.SearchToolName, decl.Name)
 	}
+}
+
+func TestService_WithCustomTool_replacesBuiltIn(t *testing.T) {
+	db := testDB(t)
+	custom := &stubCustomTool{name: memory.SearchToolName}
+	svc, err := NewService(
+		WithDB(db),
+		WithCustomTool(memory.SearchToolName, func() tool.Tool { return custom }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	tools := svc.Tools()
+	require.NotEmpty(t, tools)
+	found := false
+	for _, tl := range tools {
+		if tl.Declaration().Name == memory.SearchToolName {
+			assert.Same(t, custom, tl)
+			found = true
+		}
+	}
+	assert.True(t, found, "custom search tool should be returned by Tools()")
+}
+
+type trackingExtractor struct {
+	extractCalls atomic.Int32
+}
+
+func (e *trackingExtractor) Extract(
+	_ context.Context,
+	_ []model.Message,
+	_ []*memory.Entry,
+) ([]*extractor.Operation, error) {
+	e.extractCalls.Add(1)
+	return []*extractor.Operation{{
+		Type:   extractor.OperationAdd,
+		Memory: "tracked",
+	}}, nil
+}
+
+func (e *trackingExtractor) ShouldExtract(_ *extractor.ExtractionContext) bool { return true }
+
+func (e *trackingExtractor) SetPrompt(_ string) {}
+
+func (e *trackingExtractor) SetModel(_ model.Model) {}
+
+func (e *trackingExtractor) SetEnabledTools(_ map[string]struct{}) {}
+
+func (e *trackingExtractor) Metadata() map[string]any { return nil }
+
+func TestService_DisableAutoMemoryOnExternalContext_skipsPollutedSession(t *testing.T) {
+	db := testDB(t)
+	ext := &trackingExtractor{}
+	svc, err := NewService(
+		WithDB(db),
+		WithExtractor(ext),
+		WithDisableAutoMemoryOnExternalContext(true),
+		WithAsyncMemoryNum(1),
+		WithMemoryQueueSize(4),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	sess := session.NewSession("app", "user", "session")
+	sess.SetState(memory.SessionStateKeyMemoryMode, []byte(memory.MemoryModePolluted))
+	sess.Events = []event.Event{{
+		Timestamp: time.Now(),
+		Response: &model.Response{
+			Choices: []model.Choice{{Message: model.NewUserMessage("hello")}},
+		},
+	}}
+
+	require.NoError(t, svc.EnqueueAutoMemoryJob(context.Background(), sess))
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, int32(0), ext.extractCalls.Load())
 }

@@ -41,7 +41,7 @@ func (a *LLMAgent) Export(
 		Nodes: []structure.Node{
 			{
 				NodeID: rootNodeID,
-				Kind:   structure.NodeKindLLM,
+				Kind:   structure.NodeKindAgent,
 				Name:   name,
 			},
 		},

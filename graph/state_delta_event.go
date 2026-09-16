@@ -94,23 +94,28 @@ func EmitCustomStateDelta(
 	}
 
 	nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
+	invocationID := execCtx.InvocationID
+	if execCtx.Invocation != nil && execCtx.Invocation.InvocationID != "" {
+		invocationID = execCtx.Invocation.InvocationID
+	}
 	metadata := NodeCustomEventMetadata{
 		EventType:    options.EventType,
 		Category:     NodeCustomEventCategoryCustom,
 		NodeID:       nodeID,
-		InvocationID: execCtx.InvocationID,
+		InvocationID: invocationID,
 		Timestamp:    time.Now(),
 		Payload:      options.Payload,
 		Message:      options.Message,
 	}
 
 	evt := NewGraphEvent(
-		execCtx.InvocationID,
+		invocationID,
 		formatNodeAuthor(nodeID, AuthorGraphNode),
 		ObjectTypeGraphNodeCustom,
 		WithNodeCustomMetadata(metadata),
 	)
 	evt.StateDelta = mergeStateDeltaMaps(evt.StateDelta, stateDelta)
+	fillEventInvocationFields(execCtx.Invocation, evt)
 	return event.EmitEvent(ctx, execCtx.EventChan, evt)
 }
 

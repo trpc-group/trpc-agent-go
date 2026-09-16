@@ -11,10 +11,12 @@ package gormmemory
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
 func TestWrapDBErr(t *testing.T) {
@@ -45,3 +47,37 @@ func TestService_initDB_failure(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "init database failed")
 }
+
+func TestBoundIndexName(t *testing.T) {
+	short := boundIndexName("idx_memories_app_user")
+	assert.Equal(t, "idx_memories_app_user", short)
+
+	long := "idx_" + strings.Repeat("a", 80) + "_app_user"
+	got := boundIndexName(long)
+	assert.LessOrEqual(t, len(got), maxIndexNameLength)
+	assert.NotEqual(t, long, got)
+}
+
+func TestService_ensureMemoryIndexes_reservedTable(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	svc, err := NewService(WithDB(db), WithTableName("order"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	require.NoError(t, svc.AddMemory(ctx, memory.UserKey{AppName: "app", UserID: "user"}, "hello", nil))
+	entries, err := svc.ReadMemories(ctx, memory.UserKey{AppName: "app", UserID: "user"}, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	// Idempotent re-init should succeed without IF NOT EXISTS.
+	require.NoError(t, svc.ensureMemoryIndexes(ctx))
+}
+
+func TestQuoteIdent(t *testing.T) {
+	db := testDB(t)
+	quoted := quoteIdent(db, "order")
+	assert.Contains(t, quoted, "order")
+	assert.NotEqual(t, "order", quoted)
+}
+

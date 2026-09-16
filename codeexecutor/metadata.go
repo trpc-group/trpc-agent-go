@@ -286,6 +286,11 @@ type PreparedRecord struct {
 	Fingerprint string    `json:"fingerprint"`
 	Target      string    `json:"target,omitempty"`
 	PreparedAt  time.Time `json:"prepared_at"`
+	// Generation is an opaque, framework-owned identifier for the
+	// process-scoped physical workspace generation in which this record
+	// was prepared. Empty preserves the legacy behavior of managers
+	// without instance identity. Callers should not assign or reuse it.
+	Generation string `json:"generation,omitempty"`
 }
 
 // SkillMeta records a staged skill snapshot.

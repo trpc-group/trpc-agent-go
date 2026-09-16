@@ -2,7 +2,7 @@
 
 ## Overview
 
-tRPC-Agent-Go provides a `Codex` `Agent` implementation. It executes a local Codex CLI with `codex exec --json`, parses the JSONL event stream, and maps Codex activity into framework events.
+tRPC-Agent-Go provides a `Codex` `Agent` implementation. It executes a local Codex CLI with `codex exec --json`, parses the JSONL event stream, and maps Codex activity into framework events as the stream arrives.
 
 The primary use cases include:
 
@@ -77,15 +77,16 @@ If multiple external skill repositories are configured for that Codex CLI enviro
 
 ## Event mapping
 
-The agent emits tool events and one final response event. It does not emit intermediate reasoning events.
+The agent emits assistant, tool, and error events as Codex JSONL records arrive, then emits a final completion response after the Codex turn completes. Codex `agent_message` items are complete message items rather than token deltas, but the agent exposes them as partial `chat.completion.chunk` segments so session persistence stores only the final assistant response. The final completion response uses the last assistant message content and carries final usage and thread state. It does not emit intermediate reasoning events.
 
 | Codex JSONL output | Framework event |
 | --- | --- |
-| `type == "thread.started"` | Persisted into session state key `codex.StateKeyThreadID` |
+| `type == "thread.started"` | Persisted by default into session state key `codex.StateKeyThreadID` |
 | `item.type == "command_execution"` | tool-call and tool-result response events |
 | `item.type == "mcp_tool_call"` | tool-call and tool-result response events |
 | Built-in tool items such as `web_search`, `file_change`, `image_view`, and `image_generation` | tool-call and tool-result response events |
-| `item.type == "agent_message"` | final response event content |
+| `type == "turn.failed"` or `type == "error"` | non-terminal error observation chunk without `Response.Error`, followed by one terminal error after the command finishes |
+| `item.type == "agent_message"` | partial assistant chunk event; the last `agent_message` item also becomes the final response content |
 | `type == "turn.completed"` | final response usage |
 
 MCP tool calls are normalized to Claude Code-compatible names when possible: `mcp__<server>__<tool>`.
@@ -94,14 +95,58 @@ Current Codex CLI skill usage is often injected as prompt context or handled thr
 
 ## Multi-turn sessions
 
-Codex creates its own thread id. The agent persists that id in session state under `codex.StateKeyThreadID` and uses it on later turns:
+### Default mode: use Codex threads
 
-1. First turn: write the prompt to stdin of `codex exec --json`
-2. Later turns: write the prompt to stdin of `codex exec resume --json <thread-id>`
+By default, the agent uses Codex CLI's native thread history:
 
-If resume fails, the agent starts a fresh `codex exec` run and updates the stored thread id when the new run reports one. If both resume and create fail, the invocation returns a run error.
+1. On the first turn, the agent writes the prompt to stdin of `codex exec --json`.
+2. When Codex returns `thread.started`, the agent stores the thread id in session state under `codex.StateKeyThreadID`.
+3. On later turns, if session state has a thread id, the agent writes the prompt to stdin of `codex exec resume --json <thread-id>`.
 
-To keep context, use the same app name, user ID, and session ID in `runner`.
+If resume fails before any transcript event is emitted, the agent starts a fresh `codex exec` run and updates the stored thread id when the new run reports one. If resume has already emitted framework events, or if stdout parsing fails, the agent surfaces that failure instead of starting a fresh run to avoid duplicating visible progress or tool side effects. If both resume and create fail, the invocation returns a run error.
+
+This mode is best for single-instance services, or for deployments where requests are always routed to the same machine, user home, and Codex configuration environment. To keep context in this mode, use the same app name, user ID, and session ID in `runner`.
+
+Use `WithResumeEnabled(false)` to disable native Codex CLI resume. When disabled, the agent does not read `codex.StateKeyThreadID`, does not call `codex exec resume`, and does not write newly observed thread ids back to session state. Each invocation runs a fresh `codex exec`.
+
+### Use framework session events as context
+
+If your service runs multiple instances, rebuilds containers, or does not route each conversation to the same machine, Codex CLI's local thread history is not a reliable context source. In that case, keep context in a framework session service such as Redis or a database. All service instances can read the same session events by using the same app name, user ID, and session ID, and `WithMessageBuilder` can turn those events into the complete prompt passed to Codex CLI.
+
+Recommended configuration:
+
+1. Configure `runner` with a shared session service.
+2. Use `WithMessageBuilder` to build the complete prompt from `args.Events`.
+3. Use `WithResumeEnabled(false)` to disable local Codex thread resume, so the same history does not come from both the prompt and the local thread.
+
+`MessageBuilderArgs.Events` is a read-only shallow snapshot. Do not mutate events, responses, state deltas, or extensions inside it. When the agent is called through `runner.Run`, the runner persists the current-turn user message before invoking the agent, so the events already include the current user message. Do not append it again by default.
+
+The example below omits standard-library imports such as `context` and `strings`, and shows only the agent-specific import. It joins non-partial message text only; production builders can choose whether to include tool calls and tool results.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/codex"
+
+ag, err := codex.New(
+  codex.WithMessageBuilder(func(ctx context.Context, args *codex.MessageBuilderArgs) (string, error) {
+    var prompt strings.Builder
+    for _, evt := range args.Events {
+      if evt.Response == nil || len(evt.Choices) == 0 || evt.IsPartial {
+        continue
+      }
+      msg := evt.Choices[0].Message
+      if msg.Content == "" {
+        continue
+      }
+      prompt.WriteString(string(msg.Role))
+      prompt.WriteString(": ")
+      prompt.WriteString(msg.Content)
+      prompt.WriteString("\n")
+    }
+    return prompt.String(), nil
+  }),
+  codex.WithResumeEnabled(false),
+)
+```
 
 ## Persist raw CLI output
 
@@ -128,4 +173,6 @@ ag, err := codex.New(
 | `WithExtraArgs(args...)` | Appends `codex exec` flags before the optional resume session id. |
 | `WithEnv(env...)` | Adds CLI environment variables. Use `KEY=VALUE`. |
 | `WithWorkDir(dir)` | Sets the CLI process working directory. |
-| `WithRawOutputHook(hook)` | Observes raw stdout and stderr. The hook runs after the CLI finishes and before parsing. |
+| `WithRawOutputHook(hook)` | Observes raw stdout and stderr. The hook runs after the CLI finishes and after streamed transcript events are emitted; returning an error appends an error event and skips the final assistant response. |
+| `WithMessageBuilder(builder)` | Customizes the complete prompt passed to Codex CLI. |
+| `WithResumeEnabled(enabled)` | Controls whether the agent uses Codex CLI thread resume. Default is `true`. |

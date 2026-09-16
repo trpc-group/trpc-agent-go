@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/privatestate"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
@@ -29,6 +30,10 @@ import (
 )
 
 const defaultCandidateAttempts = 2
+
+var errCandidatePrivateStateMultipleSessions = errors.New(
+	"candidate selector: private state updates span multiple sessions",
+)
 
 // CandidateSelector selects the winning candidate from one candidate selection run.
 type CandidateSelector interface {
@@ -55,6 +60,11 @@ type CandidateAttempt struct {
 	Events []*event.Event
 	// FinalResponse is the last non-partial model response observed for the attempt.
 	FinalResponse *model.Response
+}
+
+type candidateAttemptResult struct {
+	attempt             *CandidateAttempt
+	privateStateUpdates []privatestate.UpdateRequest
 }
 
 // candidateSelectOption configures the low-level candidate selector runner option.
@@ -113,6 +123,8 @@ type candidateSelectorAgent struct {
 	opts     candidateSelectOptions
 }
 
+var _ agent.InvocationSkillLoadSupport = (*candidateSelectorAgent)(nil)
+
 func (a *candidateSelectorAgent) Info() agent.Info {
 	if a == nil || a.inner == nil {
 		return agent.Info{}
@@ -141,6 +153,14 @@ func (a *candidateSelectorAgent) FindSubAgent(name string) agent.Agent {
 	return a.inner.FindSubAgent(name)
 }
 
+func (a *candidateSelectorAgent) SupportsInvocationSkillLoads() bool {
+	if a == nil || a.inner == nil {
+		return false
+	}
+	support, ok := a.inner.(agent.InvocationSkillLoadSupport)
+	return ok && support.SupportsInvocationSkillLoads()
+}
+
 func (a *candidateSelectorAgent) Run(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -167,13 +187,19 @@ func (a *candidateSelectorAgent) run(
 	out chan<- *event.Event,
 ) {
 	defer close(out)
-	attempts, attemptErrs := a.runAttempts(ctx, base)
-	if len(attempts) == 0 {
+	results, attemptErrs := a.runAttempts(ctx, base)
+	if len(results) == 0 {
 		a.emitError(ctx, base, out, fmt.Sprintf(
 			"candidate selector: all attempts failed: %v",
 			errors.Join(attemptErrs...),
 		))
 		return
+	}
+	attempts := make([]*CandidateAttempt, 0, len(results))
+	for _, result := range results {
+		if result != nil && result.attempt != nil {
+			attempts = append(attempts, result.attempt)
+		}
 	}
 	req := &CandidateSelectRequest{
 		AppName:   base.Session.AppName,
@@ -192,13 +218,24 @@ func (a *candidateSelectorAgent) run(
 		a.emitError(ctx, base, out, "candidate selector: winner is invalid")
 		return
 	}
+	if err := persistCandidatePrivateState(
+		ctx,
+		base,
+		candidatePrivateStateUpdates(results, winner),
+	); err != nil {
+		a.emitError(ctx, base, out, fmt.Sprintf(
+			"candidate selector: persist private session state: %v",
+			err,
+		))
+		return
+	}
 	a.forwardWinner(ctx, base, out, winner)
 }
 
 func (a *candidateSelectorAgent) runAttempts(
 	ctx context.Context,
 	base *agent.Invocation,
-) ([]*CandidateAttempt, []error) {
+) ([]*candidateAttemptResult, []error) {
 	if a.opts.parallel {
 		return a.runAttemptsParallel(ctx, base)
 	}
@@ -208,8 +245,8 @@ func (a *candidateSelectorAgent) runAttempts(
 func (a *candidateSelectorAgent) runAttemptsSequential(
 	ctx context.Context,
 	base *agent.Invocation,
-) ([]*CandidateAttempt, []error) {
-	attempts := make([]*CandidateAttempt, 0, a.opts.attempts)
+) ([]*candidateAttemptResult, []error) {
+	attempts := make([]*candidateAttemptResult, 0, a.opts.attempts)
 	errs := make([]error, 0, a.opts.attempts)
 	for i := 0; i < a.opts.attempts; i++ {
 		attempt, err := a.runAttempt(ctx, base, i)
@@ -225,9 +262,9 @@ func (a *candidateSelectorAgent) runAttemptsSequential(
 func (a *candidateSelectorAgent) runAttemptsParallel(
 	ctx context.Context,
 	base *agent.Invocation,
-) ([]*CandidateAttempt, []error) {
+) ([]*candidateAttemptResult, []error) {
 	type attemptResult struct {
-		attempt *CandidateAttempt
+		attempt *candidateAttemptResult
 		err     error
 	}
 	results := make([]attemptResult, a.opts.attempts)
@@ -247,7 +284,7 @@ func (a *candidateSelectorAgent) runAttemptsParallel(
 			return nil
 		})
 	}
-	attempts := make([]*CandidateAttempt, 0, a.opts.attempts)
+	attempts := make([]*candidateAttemptResult, 0, a.opts.attempts)
 	errs := make([]error, 0, a.opts.attempts)
 	if err := group.Wait(); err != nil {
 		errs = append(errs, err)
@@ -279,7 +316,7 @@ func (a *candidateSelectorAgent) runAttempt(
 	ctx context.Context,
 	base *agent.Invocation,
 	index int,
-) (*CandidateAttempt, error) {
+) (*candidateAttemptResult, error) {
 	if base.Session == nil {
 		return nil, errors.New("session is nil")
 	}
@@ -308,12 +345,51 @@ func (a *candidateSelectorAgent) runAttempt(
 	}
 	collected := recorder.Events()
 	collected = appendCandidateStateUpdate(base, collected, attemptScope.DirectStateDelta())
-	return &CandidateAttempt{
-		Index:         index,
-		InvocationID:  innerInv.InvocationID,
-		Events:        collected,
-		FinalResponse: finalResponse,
+	return &candidateAttemptResult{
+		attempt: &CandidateAttempt{
+			Index:         index,
+			InvocationID:  innerInv.InvocationID,
+			Events:        collected,
+			FinalResponse: finalResponse,
+		},
+		privateStateUpdates: attemptScope.privateStateUpdates(),
 	}, nil
+}
+
+func persistCandidatePrivateState(
+	ctx context.Context,
+	base *agent.Invocation,
+	updates []privatestate.UpdateRequest,
+) error {
+	if base == nil {
+		return nil
+	}
+	if len(updates) > 1 {
+		return errCandidatePrivateStateMultipleSessions
+	}
+	for _, update := range updates {
+		if err := privatestate.Update(
+			ctx,
+			base.SessionService,
+			update.Key,
+			update.State,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func candidatePrivateStateUpdates(
+	results []*candidateAttemptResult,
+	winner *CandidateAttempt,
+) []privatestate.UpdateRequest {
+	for _, result := range results {
+		if result != nil && result.attempt == winner {
+			return result.privateStateUpdates
+		}
+	}
+	return nil
 }
 
 func runCandidateInnerAgent(

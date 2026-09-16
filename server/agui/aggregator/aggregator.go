@@ -20,7 +20,8 @@ import (
 
 // Aggregator buffers and merges AG-UI events before they are persisted.
 type Aggregator interface {
-	// Append ingests one event and returns zero or more aggregated events ready to persist.
+	// Append ingests one borrowed event and returns zero or more aggregated events ready to persist.
+	// Implementations that retain event data after Append returns must copy the data they need.
 	Append(ctx context.Context, event aguievents.Event) ([]aguievents.Event, error)
 	// Flush emits any buffered events and clears internal state.
 	Flush(ctx context.Context) ([]aguievents.Event, error)
@@ -76,7 +77,7 @@ func (a *aggregator) Append(_ context.Context, event aguievents.Event) ([]aguiev
 	}
 }
 
-// Flush flushes any buffered text and reasoning content.
+// Flush flushes any buffered content.
 func (a *aggregator) Flush(context.Context) ([]aguievents.Event, error) {
 	if !a.enabled {
 		return nil, nil

@@ -1,5 +1,7 @@
 # tRPC-Agent-Go A2A 集成指南
 
+> 本文介绍面向 A2A v0.2.x 的旧版 `server/a2a` 与 `agent/a2aagent` 包。新接入和迁移说明请参考 [A2A v1.0 接入与迁移指南](a2a_v1.md)。
+
 ## 概述
 
 tRPC-Agent-Go 提供了完整的 A2A (Agent-to-Agent) 解决方案，包含两个核心组件：
@@ -119,13 +121,23 @@ server, _ := a2aserver.New(
 
 ```go
 import (
+	"context"
+	"net/http"
+	"net/http/cookiejar"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
 func main() {
-	// 连接到 A2A 服务
-	client, _ := client.NewA2AClient("http://localhost:8080/")
+	jar, _ := cookiejar.New(nil)
+	httpClient := &http.Client{Jar: jar}
+	// 该 helper 会持久化匿名 Cookie，并在 principal 建立前串行化同一 client 的首次并发请求。
+	a2aClient, _ := a2aagent.NewAnonymousA2AClient(
+		"http://localhost:8080/",
+		client.WithHTTPClient(httpClient),
+	)
 
 	// 发送消息给 Agent
 	message := protocol.NewMessage(
@@ -134,10 +146,33 @@ func main() {
 	)
 
 	// Agent 会自动处理并返回结果
-	response, _ := client.SendMessage(context.Background(),
+	response, _ := a2aClient.SendMessage(context.Background(),
 		protocol.SendMessageParams{Message: message})
 }
 ```
+
+匿名直连 client 应复用同一个 client 和 Cookie Jar。`NewAnonymousA2AClient`
+会在服务端建立匿名 principal 期间，串行化该 client 发出的首次请求。
+这个保证只覆盖单个 client 实例；不同 client 需要自行协调。匿名直连 client
+会在 Cookie Jar 中遵循 anonymous `Set-Cookie` 的 Path、Domain、过期和删除指令。
+它不会接入 `SessionService`，也不负责持久化 session state。
+应先完成一次初始请求，再开始并发匿名消息发送，或者提供可信用户身份。
+
+`NewAnonymousA2AClient` 仅在请求期间从响应或自定义 HTTP handler 观察到有效匿名 Cookie，且配置的 Cookie Jar 接受同一值并可用于 agent URL 后，才解除初始化 gate。预加载 Cookie 会随请求发送，但本身不能确认初始化完成；自定义服务端必须通过 `Set-Cookie` 回写已接受的 Cookie，或返回替代值，后续请求才能并发执行。内置 A2A Server 已具备该行为。
+
+浏览器匿名身份连续性要求同站部署。服务端 Cookie 使用 `SameSite=Lax`，因此浏览器不会在跨站 JSON-RPC POST 请求中携带该 Cookie。当前端页面与 A2A 接口同站但跨源时，Fetch 请求必须设置 `credentials: "include"`，部署层还必须为该前端的明确 Origin 返回 `Access-Control-Allow-Origin`，并设置 `Access-Control-Allow-Credentials: true`。跨站部署应改为提供可信用户身份；当前不支持跨站匿名 Cookie 连续性。
+
+#### 匿名 Principal 行为
+
+当请求没有通过配置的 UserID header（默认是 `X-User-ID`）提供非空身份时，
+内置 A2A Server 认证会生成带有 `A2A_ANONYMOUS_` 前缀的随机 principal。
+服务端通过 HTTP-only Cookie `trpc_agent_a2a_anon` 返回该 principal，并利用
+这个 Cookie 维持后续请求的匿名身份连续性。A2A `contextID` 仍然用于标识
+session，不再作为 principal 的来源。
+
+需要保持连续性的客户端必须复用 Cookie Jar；不保留 Cookie 的客户端或独立请求，
+每次都可能获得新的匿名 principal。请求携带非空 UserID header 时，服务端使用
+header 中的身份，不走匿名 Cookie 流程。
 
 ### 高级配置
 
@@ -881,7 +916,7 @@ subAgent, _ := a2aagent.New(
 
 关于 A2A 协议中工具调用、代码执行、思考内容等事件的传递规范，以及 Metadata 字段定义、ADK 兼容模式、分布式追踪等详细说明，请参考独立文档：
 
-**[A2A 协议交互规范](a2a-interaction.md)**
+**[A2A 协议交互规范](https://trpc-group.github.io/trpc-agent-go/zh/a2a-interaction/)**
 
 该文档定义了 trpc-agent-go 在 A2A 协议之上的扩展规范，是 Client 和 Server 实现的标准参考。
 
@@ -928,8 +963,53 @@ subAgent, _ := a2aagent.New(
 | `WithErrorHandler(handler)` | 自定义错误处理 |
 | `WithA2AToAgentConverter(conv)` | 自定义 A2A→Agent 消息转换 |
 | `WithEventToA2AConverter(conv)` | 自定义 Event→A2A 消息转换 |
-| `WithExtraA2AOptions(opts...)` | 透传底层 A2A Server 选项 |
+| `WithExtraA2AOptions(opts...)` | 透传底层 A2A Server 选项；其中 middleware 可读取最终认证用户。自定义认证 provider 必须返回非空 UserID，空身份会被拒绝 |
+| `WithPreAuthA2AMiddleware(middlewares...)` | 添加必须在匿名 Cookie 认证前执行的请求 middleware |
 | `WithDebugLogging(enabled)` | 开启调试日志 |
+
+### A2AAgent 匿名身份协调
+
+对于使用持久化 session 的匿名 `A2AAgent` 调用，如果配置的
+`SessionService` 实现了 `session.StateInitializationService`，agent 会自动
+使用该能力。它会在共享同一后端的多个 agent 实例之间协调首次匿名 Cookie
+初始化。in-memory session service 只协调共享同一个 service 实例的调用方；
+Redis session service 可以跨 service 实例协调。
+
+如果后端不支持该能力，agent 会保留现有的单 agent 初始化锁和持久化行为。
+如果业务必须保证跨实例协调，可以开启 fail-closed 模式：
+
+```go
+a2aAgent, err := a2aagent.New(
+    a2aagent.WithAgentCardURL("http://remote:8888"),
+    a2aagent.WithRequireAnonymousIdentityCoordination(true),
+)
+```
+
+该选项默认为 `false`。启用后，strict 模式在缺少稳定持久化 session key，或
+`SessionService` 不支持协调能力时，会在联系远端 agent 前使调用失败。该能力检查
+无法判断不同 service 实例是否实际共享协调状态。需要跨进程协调的部署必须使用
+Redis 等共享后端，而不能使用相互独立的 in-memory service。
+
+在支持协调的路径中，规范 `.record.v1` 值和 legacy 投影会一起提交，因此新版本
+写入的状态仍可被变更前的旧版本读取。这种兼容性是有意设计为单向的：规范记录
+存在后，旧版本只能更新或删除 legacy key，而新版本仍会把规范记录视为权威值。
+因此，对于同一个可能被两个版本写入的逻辑 session，不支持混合版本滚动部署；
+应先排空旧版本的写入流量并完成升级，再继续复用这些 session。
+
+启用 Runner candidate selector 时，每个 speculative attempt 都使用隔离的
+attempt-scoped session state，不会暴露 `session.StateInitializationService`。首次使用
+匿名 Cookie 时，lenient 模式可能让每个 attempt 独立初始化并创建多个远端 principal；
+strict 模式则会在联系远端 agent 前让每个 attempt 失败，即使底层后端支持协调。
+已经存在的有效 Cookie 不受此限制。在 candidate-aware 集成完成前，不要将 candidate
+selector 与首次匿名 Cookie 协调初始化组合使用；可以先预热并持久化 Cookie，或等待
+后续的专门集成。
+
+Cookie record 仍然是私有 session state，不会出现在 event state delta 中。
+lease fencing 可以阻止过期 owner 覆盖新的 owner，但如果进程在远端返回后、
+持久化前退出，远端 principal 仍可能成为孤儿。
+
+这条基于 session 的路径与 `NewAnonymousA2AClient` 相互独立；后者没有框架级
+session service，只在自身 client 和 Cookie Jar 范围内生效。
 
 ### A2AAgent 完整配置项一览
 
@@ -943,3 +1023,4 @@ subAgent, _ := a2aagent.New(
 | `WithUserIDHeader(header)` | 自定义 UserID HTTP Header |
 | `WithCustomA2AConverter(conv)` | 自定义 Invocation→A2A 消息转换 |
 | `WithCustomEventConverter(conv)` | 自定义 A2A Response→Event 转换 |
+| `WithRequireAnonymousIdentityCoordination(enabled)` | 要求持久化 session 的匿名身份初始化必须经过协调 |

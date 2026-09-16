@@ -259,6 +259,12 @@ func WithCustomA2AConverter(converter InvocationA2AConverter) Option {
 }
 
 // WithA2AClientExtraOptions adds extra options to the A2A client.
+//
+// For anonymous invocations, A2AAgent places its anonymous-cookie middleware
+// outside the handler selected by these options. Custom HTTP clients,
+// transports, timeouts, non-anonymous cookies, and caller handlers are
+// therefore retained. These options are applied once while the shared base
+// client is constructed and are not replayed per invocation.
 func WithA2AClientExtraOptions(opts ...client.Option) Option {
 	return func(a *A2AAgent) {
 		a.extraA2AOptions = append(a.extraA2AOptions, opts...)
@@ -338,5 +344,16 @@ func WithUserIDHeader(header string) Option {
 func WithEnableStreaming(enable bool) Option {
 	return func(a *A2AAgent) {
 		a.enableStreaming = &enable
+	}
+}
+
+// WithRequireAnonymousIdentityCoordination controls fail-closed anonymous
+// identity initialization. When enabled, a first anonymous request requires a
+// stable persistent session key and a session service that implements
+// session.StateInitializationService. Existing valid cookie state can still be
+// used without coordination. The default is false.
+func WithRequireAnonymousIdentityCoordination(enabled bool) Option {
+	return func(a *A2AAgent) {
+		a.requireAnonymousIdentityCoordination = enabled
 	}
 }

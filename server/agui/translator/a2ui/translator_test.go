@@ -15,7 +15,9 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 )
@@ -81,21 +83,43 @@ func makeStreamingTextEvents() [][]aguievents.Event {
 }
 
 func TestNewFactory(t *testing.T) {
-	inner := &fakeTranslator{
-		events: makeTextEvents(),
-	}
-	var receivedOpts []translator.Option
 	factory := NewFactory(func(_ context.Context, _ *adapter.RunAgentInput, topts ...translator.Option) (translator.Translator, error) {
-		receivedOpts = append(receivedOpts, topts...)
-		return inner, nil
+		return translator.New(context.Background(), "thread", "run", topts...)
 	}, nil)
 	translated, err := factory(context.Background(), &adapter.RunAgentInput{
 		ThreadID: "thread",
 		RunID:    "run",
 	}, translator.WithGraphNodeLifecycleActivityEnabled(true))
-	assert.NoError(t, err)
-	assert.NotNil(t, translated)
-	assert.Len(t, receivedOpts, 1)
+	require.NoError(t, err)
+	require.NotNil(t, translated)
+	// Assert that the wrapper applies serial boundaries before A2UI parsing.
+	first, err := translated.Translate(context.Background(), streamingJSONTextEvent("msg-1", `{"type":"a"}`+"\n"))
+	require.NoError(t, err)
+	require.Len(t, first, 1)
+	firstRaw, ok := first[0].(*aguievents.RawEvent)
+	require.True(t, ok)
+	assert.Equal(t, "a", firstRaw.Event.(map[string]any)["type"])
+	second, err := translated.Translate(context.Background(), streamingJSONTextEvent("msg-2", `{"type":"b"}`+"\n"))
+	require.NoError(t, err)
+	require.Len(t, second, 1)
+	secondRaw, ok := second[0].(*aguievents.RawEvent)
+	require.True(t, ok)
+	assert.Equal(t, "b", secondRaw.Event.(map[string]any)["type"])
+}
+
+func streamingJSONTextEvent(messageID, content string) *agentevent.Event {
+	return &agentevent.Event{
+		Response: &model.Response{
+			ID:     messageID,
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: content,
+				},
+			}},
+		},
+	}
 }
 
 func TestNewFactoryNilInnerFactory(t *testing.T) {

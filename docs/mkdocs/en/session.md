@@ -1980,8 +1980,8 @@ Configure the summarizer behavior with the following options:
 **Summary Generation:**
 
 - **`WithMaxSummaryWords(maxWords int)`**: Limit the summary to a maximum word count. The limit is included in the prompt to guide the model's generation. Example: `WithMaxSummaryWords(150)` requests summaries within 150 words.
-- **`WithPrompt(prompt string)`**: Provide a custom summarization prompt. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the conversation content. When `WithMaxSummaryWords(...)` is set, include `{max_summary_words}` in either `WithPrompt(...)` or `WithSystemPrompt(...)`.
-- **`WithSystemPrompt(prompt string)`**: Add a dedicated system message for summarization instructions. It must not include `{conversation_text}`; keep the conversation content in `WithPrompt(...)` so the system message remains instruction-only.
+- **`WithPrompt(prompt string)`**: Provide a custom summarization prompt. The prompt must include `{conversation_text}` and may include `{previous_summary}` to place the previous rolling summary separately from newly uncovered conversation events. When `WithMaxSummaryWords(...)` is set, include `{max_summary_words}` in either `WithPrompt(...)` or `WithSystemPrompt(...)`.
+- **`WithSystemPrompt(prompt string)`**: Add a dedicated system message for summarization instructions. It must not include `{conversation_text}` or `{previous_summary}`; keep the conversation content in `WithPrompt(...)` so the system message remains instruction-only.
 - **`WithSkipRecent(skipFunc SkipRecentFunc)`**: Skip the _most recent_ events during summarization using a custom function. The function receives all events and returns how many tail events to skip. Return 0 to skip none. Useful for avoiding summarizing very recent/incomplete conversations, or applying time/content-based skipping strategies.
 
 #### Token Counter Configuration
@@ -2118,6 +2118,22 @@ summarizer := summary.NewSummarizer(
     summary.WithPrompt(customPrompt), // Custom Prompt
     summary.WithMaxSummaryWords(100), // Inject into {max_summary_words}
     summary.WithEventThreshold(15),
+)
+
+// Optionally position the previous rolling summary separately.
+incrementalPrompt := `<previous_summary>
+{previous_summary}
+</previous_summary>
+
+<new_conversation>
+{conversation_text}
+</new_conversation>
+
+Updated summary:`
+
+summarizer = summary.NewSummarizer(
+    summaryModel,
+    summary.WithPrompt(incrementalPrompt),
 )
 
 // Split instructions into a dedicated system message

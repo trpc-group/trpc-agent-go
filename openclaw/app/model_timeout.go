@@ -12,10 +12,13 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+const modelTimeoutMessagePrefix = "model request timeout after "
 
 type modelTimeoutResult struct {
 	ch  <-chan *model.Response
@@ -218,7 +221,7 @@ func timeoutResponse(
 	timeout time.Duration,
 	err error,
 ) *model.Response {
-	message := fmt.Sprintf("model request timeout after %s", timeout)
+	message := fmt.Sprintf("%s%s", modelTimeoutMessagePrefix, timeout)
 	if err != nil && err != context.DeadlineExceeded {
 		message = fmt.Sprintf("model request canceled: %v", err)
 	}
@@ -231,4 +234,12 @@ func timeoutResponse(
 		Timestamp: time.Now(),
 		Done:      true,
 	}
+}
+
+func isModelTimeoutResponse(resp *model.Response) bool {
+	if resp == nil || resp.Error == nil {
+		return false
+	}
+	return resp.Error.Type == model.ErrorTypeCancelled &&
+		strings.HasPrefix(resp.Error.Message, modelTimeoutMessagePrefix)
 }

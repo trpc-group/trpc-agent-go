@@ -11,8 +11,10 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -24,6 +26,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,6 +66,44 @@ max_total_content_length: 456
 	require.NoError(t, err)
 	require.Len(t, tools, 1)
 	require.NotEmpty(t, tools[0].Declaration().Name)
+	require.Contains(
+		t,
+		tools[0].Declaration().Description,
+		"Search-result pages are blocked",
+	)
+	require.Contains(
+		t,
+		tools[0].Declaration().Description,
+		"challenge pages are reported as blocked",
+	)
+}
+
+func TestNewHTTPWebFetchTools_SearchPageAndBlockedPageOptOut(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfg := yamlNode(t, `
+allow_all_domains: true
+allow_search_result_pages: true
+detect_blocked_pages: false
+`)
+	tools, err := newHTTPWebFetchTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.NoError(t, err)
+	require.Len(t, tools, 1)
+	require.NotContains(
+		t,
+		tools[0].Declaration().Description,
+		"Search-result pages are blocked",
+	)
+	require.NotContains(
+		t,
+		tools[0].Declaration().Description,
+		"challenge pages are reported as blocked",
+	)
 }
 
 func TestNewDuckDuckGoTools_Succeeds(t *testing.T) {
@@ -108,6 +149,49 @@ func TestNewDuckDuckGoTools_Succeeds(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"summary":"Found 1 html results`)
 	require.Contains(t, string(data), `"url":"https://example.com/gaia"`)
+}
+
+func TestNewDuckDuckGoTools_BlockedResultURLPatterns(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a" href="https://x.io/t">Trace mirror</a>
+  <a class="result__snippet">Benchmark trace mirror.</a>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fsource">Source page</a>
+  <a class="result__snippet">Primary source.</a>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	cfg := yamlNode(t, strings.Join([]string{
+		`base_url: "` + server.URL + `"`,
+		`backend: "html"`,
+		`blocked_result_url_patterns:`,
+		`  - "x.io/t"`,
+		"",
+	}, "\n"))
+	tools, err := newDuckDuckGoTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.NoError(t, err)
+
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+	raw, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"example benchmark"}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "filtered 1 result")
+	require.Contains(t, string(data), "https://example.com/source")
+	require.NotContains(t, string(data), "x.io/t")
 }
 
 func TestNewDuckDuckGoTools_InvalidBackend(t *testing.T) {
@@ -1064,6 +1148,97 @@ func TestNewEmailToolSet_NameOverride(t *testing.T) {
 	require.NotNil(t, ts)
 	require.Equal(t, "mail", ts.Name())
 	require.NotEmpty(t, ts.Tools(context.Background()))
+}
+
+func TestNewYouComToolSet_RequiresAPIKey(t *testing.T) {
+	t.Setenv(envYouComAPIKey, "")
+
+	_, err := newYouComToolSet(
+		registry.ToolSetProviderDeps{},
+		registry.PluginSpec{},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "api key is required")
+}
+
+func TestNewYouComToolSet_EnvFallbackAndNameOverride(t *testing.T) {
+	t.Setenv(envYouComAPIKey, "k")
+
+	cfg := yamlNode(t, `
+num_results: 5
+country: "US"
+safe_search: "moderate"
+timeout: 200ms
+`)
+	ts, err := newYouComToolSet(
+		registry.ToolSetProviderDeps{},
+		registry.PluginSpec{Name: "yc", Config: cfg},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ts)
+	require.Equal(t, "yc", ts.Name())
+	tools := ts.Tools(context.Background())
+	require.NotEmpty(t, tools)
+	require.Contains(
+		t,
+		tools[0].Declaration().Description,
+		"YOU.COM WEB SEARCH",
+	)
+}
+
+func TestNewYouComToolSet_ConfigAPIKeyWins(t *testing.T) {
+	t.Setenv(envYouComAPIKey, "from-env")
+
+	// The tool set builds its own HTTP client on top of http.DefaultTransport;
+	// point a cloned transport at the self-signed test cert for this test.
+	oldTransport := http.DefaultTransport
+	testTransport := oldTransport.(*http.Transport).Clone()
+	testTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test-only
+	http.DefaultTransport = testTransport
+	t.Cleanup(func() { http.DefaultTransport = oldTransport })
+
+	var mu sync.Mutex
+	var gotKey string
+	srv := httptest.NewTLSServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			gotKey = r.Header.Get("X-API-Key")
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":{"web":[],"news":[]}}`))
+		},
+	))
+	defer srv.Close()
+
+	cfg := yamlNode(t, fmt.Sprintf(`
+api_key: "from-config"
+base_url: %q
+num_results: 3
+`, srv.URL))
+	ts, err := newYouComToolSet(
+		registry.ToolSetProviderDeps{},
+		registry.PluginSpec{Name: "yc", Config: cfg},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ts)
+	require.Equal(t, "yc", ts.Name())
+	tools := ts.Tools(context.Background())
+	require.NotEmpty(t, tools)
+
+	// The configured key must win over the environment variable: assert it
+	// through an actual search request rather than construction alone.
+	searchTool, ok := tools[0].(interface {
+		Call(context.Context, []byte) (any, error)
+	})
+	require.True(t, ok)
+	reqJSON, err := json.Marshal(map[string]string{"query": "precedence"})
+	require.NoError(t, err)
+	_, err = searchTool.Call(context.Background(), reqJSON)
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, "from-config", gotKey)
 }
 
 func mcpConn(

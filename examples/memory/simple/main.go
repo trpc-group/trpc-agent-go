@@ -21,6 +21,7 @@
 //	go run main.go -memory=postgres
 //	go run main.go -memory=pgvector
 //	go run main.go -memory=gorm
+//	go run main.go -memory=chromadb
 //
 // Environment variables by memory type (example usage):
 //
@@ -63,6 +64,11 @@
 //		export PGVECTOR_PASSWORD=""
 //		export PGVECTOR_DATABASE="trpc_agent_go"
 //		export PGVECTOR_EMBEDDER_MODEL="text-embedding-3-small"
+//
+//	chromadb:
+//		export CHROMA_BASE_URL="http://localhost:8000"
+//		export CHROMA_COLLECTION="memories"
+//		export CHROMA_EMBEDDER_MODEL="text-embedding-3-small"
 package main
 
 import (
@@ -97,7 +103,7 @@ var (
 		"inmemory",
 		"Name of the memory service to use, "+
 			"inmemory / sqlite / sqlitevec / redis / "+
-			"mysql / mysqlvec / postgres / pgvector / gorm",
+			"mysql / mysqlvec / postgres / pgvector / gorm / chromadb",
 	)
 	streaming = flag.Bool(
 		"streaming",
@@ -108,7 +114,7 @@ var (
 		"soft-delete",
 		false,
 		"Enable soft delete for SQLite/SQLiteVec/"+
-			"MySQL/PostgreSQL/pgvector memory service",
+			"MySQL/PostgreSQL/pgvector/ChromaDB memory service",
 	)
 )
 

@@ -12,6 +12,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,8 +56,13 @@ func (f *fileToolSet) listFile(
 ) (*listFileResponse, error) {
 	rsp := &listFileResponse{
 		BaseDirectory: f.baseDir,
-		Path:          req.Path,
 	}
+	if req == nil {
+		err := errors.New("request cannot be nil")
+		rsp.Message = "Error: " + err.Error()
+		return rsp, err
+	}
+	rsp.Path = req.Path
 
 	ref, err := fileref.Parse(req.Path)
 	if err != nil {
@@ -65,7 +71,7 @@ func (f *fileToolSet) listFile(
 	}
 	if ref.Scheme == fileref.SchemeArtifact {
 		rsp.Message = "Error: listing artifact:// is not supported"
-		return rsp, fmt.Errorf("listing artifact:// is not supported")
+		return rsp, errors.New("listing artifact:// is not supported")
 	}
 	if ref.Scheme == fileref.SchemeWorkspace {
 		rsp.Path = fileref.WorkspaceRef(ref.Path)

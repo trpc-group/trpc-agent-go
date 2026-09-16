@@ -167,6 +167,7 @@ type BeforeToolArgs struct {
 type BeforeToolResult struct {
     Context           context.Context  // 可选，用于后续操作的上下文
     CustomResult      any              // 非空时跳过工具执行并返回此结果
+    SkipStateDelta    bool             // 跳过 CustomResult 的 state-delta provider
     ModifiedArguments []byte           // 可选，修改后的参数用于工具执行
 }
 
@@ -180,9 +181,11 @@ type AfterToolArgs struct {
 }
 
 type AfterToolResult struct {
-    Context      context.Context  // 可选，用于后续操作的上下文
-    CustomResult any              // 非空时替换原始结果
-    SkipSummarization bool        // 为 true 时在 tool.response 后结束本轮
+    Context             context.Context  // 可选，用于后续操作的上下文
+    CustomResult        any              // 非空时替换原始结果
+    SkipResultFormatter bool             // 对 CustomResult 使用默认 JSON 序列化
+    SkipStateDelta      bool             // 跳过 CustomResult 的 state-delta provider
+    SkipSummarization   bool             // 为 true 时在 tool.response 后结束本轮
 }
 ```
 
@@ -202,6 +205,11 @@ type AfterToolCallbackStructured  func(ctx context.Context, args *tool.AfterTool
   只给 `args.Arguments` 重新赋值，只会影响当前回调链中后续读取该字段的逻辑
 - BeforeToolCallbackStructured 返回非空自定义结果时，会跳过工具执行并直接使用该结果
 - `BeforeToolArgs` 和 `AfterToolArgs` 中提供了 `ToolCallID`
+- `AfterToolResult.SkipResultFormatter` 会让非空 `CustomResult` 跳过工具配置的 result
+  formatter，并使用默认 JSON 序列化。适用于替换结果是协议或错误 envelope、而不是工具
+  声明输出类型的正常值时
+- `BeforeToolResult.SkipStateDelta` 和 `AfterToolResult.SkipStateDelta` 会阻止非空
+  `CustomResult` 触发工具的 state-delta provider，适用于替换结果并非工具成功输出的场景
 - `AfterToolResult.SkipSummarization` 允许回调在判断工具结果后，让本轮在
   `tool.response` 后直接结束
 - `SkipSummarization` 只会跳过额外的总结型 LLM 调用；真正的结束信号仍然是

@@ -12,6 +12,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -68,7 +69,7 @@ func (f *fileToolSet) replaceContent(
 	// Validate old string.
 	if req.OldString == "" {
 		rsp.Message = "Error: old_string cannot be empty"
-		return rsp, fmt.Errorf("old_string cannot be empty")
+		return rsp, errors.New("old_string cannot be empty")
 	}
 	if req.OldString == req.NewString {
 		rsp.Message = "old_string equals new_string; no changes made"

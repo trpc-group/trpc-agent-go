@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestDefaultOptions(t *testing.T) {
@@ -152,3 +153,46 @@ func TestServiceOpts_WithExtractor(t *testing.T) {
 	WithExtractor(ext)(&opts)
 	assert.Same(t, ext, opts.extractor)
 }
+
+func TestServiceOpts_WithDisableAutoMemoryOnExternalContext(t *testing.T) {
+	opts := defaultOptions.clone()
+	assert.False(t, opts.disableAutoMemoryOnExternalContext)
+
+	WithDisableAutoMemoryOnExternalContext(true)(&opts)
+	assert.True(t, opts.disableAutoMemoryOnExternalContext)
+
+	WithDisableAutoMemoryOnExternalContext(false)(&opts)
+	assert.False(t, opts.disableAutoMemoryOnExternalContext)
+}
+
+func TestServiceOpts_WithCustomTool(t *testing.T) {
+	opts := ServiceOpts{
+		toolCreators: make(map[string]memory.ToolCreator),
+		enabledTools: make(map[string]struct{}),
+	}
+	creator := func() tool.Tool {
+		return &stubCustomTool{name: memory.AddToolName}
+	}
+
+	WithCustomTool(memory.AddToolName, creator)(&opts)
+	assert.NotNil(t, opts.toolCreators[memory.AddToolName])
+	_, enabled := opts.enabledTools[memory.AddToolName]
+	assert.True(t, enabled)
+	_, explicit := opts.userExplicitlySet[memory.AddToolName]
+	assert.True(t, explicit)
+
+	WithCustomTool(memory.SearchToolName, nil)(&opts)
+	assert.Nil(t, opts.toolCreators[memory.SearchToolName])
+
+	WithCustomTool("not-a-valid-tool", creator)(&opts)
+	assert.Nil(t, opts.toolCreators["not-a-valid-tool"])
+}
+
+type stubCustomTool struct {
+	name string
+}
+
+func (s *stubCustomTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name, Description: "custom"}
+}
+

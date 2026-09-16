@@ -38,6 +38,10 @@ type MessageRequest struct {
 	UserID    string `json:"user_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
+	// Model selects an alias from an explicitly configured model catalog.
+	// Empty delegates selection to the runtime profile and catalog default;
+	// an unknown alias is rejected with an invalid_model error.
+	Model string `json:"model,omitempty"`
 
 	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
 }

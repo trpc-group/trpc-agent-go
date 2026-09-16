@@ -142,23 +142,35 @@ func (s *Service) getTrackEvents(
 			len(sessionKeys),
 		)
 	}
+	trackLists := make([][]session.Track, len(sessionKeys))
+	for i := range sessionKeys {
+		tracks, err := session.TracksFromState(sessionStates[i].State)
+		if err != nil {
+			return nil, fmt.Errorf("get tracks from state: %w", err)
+		}
+		trackLists[i] = tracks
+	}
+	return s.getTrackEventsByTrackLists(ctx, sessionKeys, trackLists, limit, afterTime)
+}
 
+func (s *Service) getTrackEventsByTrackLists(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	trackLists [][]session.Track,
+	limit int,
+	afterTime time.Time,
+) ([]map[session.Track][]session.TrackEvent, error) {
 	type trackQuery struct {
 		sessionIdx int
 		track      session.Track
 		query      string
 		args       []any
 	}
-
 	queries := make([]*trackQuery, 0)
 	nowNs := time.Now().UTC().UnixNano()
 	afterNs := afterTime.UTC().UnixNano()
-
 	for i, key := range sessionKeys {
-		tracks, err := session.TracksFromState(sessionStates[i].State)
-		if err != nil {
-			return nil, fmt.Errorf("get tracks from state: %w", err)
-		}
+		tracks := trackLists[i]
 		for _, track := range tracks {
 			var (
 				query string
@@ -209,7 +221,6 @@ ORDER BY created_at DESC`,
 			})
 		}
 	}
-
 	out := make(
 		[]map[session.Track][]session.TrackEvent,
 		len(sessionKeys),
@@ -219,7 +230,6 @@ ORDER BY created_at DESC`,
 		if err != nil {
 			return nil, fmt.Errorf("query track events: %w", err)
 		}
-
 		events := make([]session.TrackEvent, 0)
 		for rows.Next() {
 			var eventBytes []byte

@@ -52,6 +52,10 @@ const (
 	// ToolCallFieldResponse is the data field key for tool call response.
 	ToolCallFieldResponse = "response"
 
+	// ToolCallFieldContentParts is the data field key for multimodal tool
+	// response content.
+	ToolCallFieldContentParts = "content_parts"
+
 	// CodeExecutionFieldCode is the data field key for executable code content.
 	// Used in ADK mode for code execution scenarios.
 	CodeExecutionFieldCode = "code"

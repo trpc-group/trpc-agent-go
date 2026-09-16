@@ -11,9 +11,11 @@ package aggregator
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 )
 
 // options stores optional aggregation behavior.
@@ -31,11 +33,7 @@ type Option func(*options)
 func newOptions(opt ...Option) *options {
 	opts := &options{
 		runOptions: []agent.RunOption{
-			agent.WithStructuredOutputJSON(
-				new(aggregatedGradientProposal),
-				true,
-				"One aggregated PromptIter gradient proposal.",
-			),
+			aggregatedGradientStructuredOutput(),
 		},
 		messageBuilder:    defaultMessageBuilder(),
 		userIDSupplier:    defaultUserIDSupplier(),
@@ -51,6 +49,50 @@ func newOptions(opt ...Option) *options {
 func WithRunOptions(runOptions ...agent.RunOption) Option {
 	return func(opts *options) {
 		opts.runOptions = append(opts.runOptions, runOptions...)
+	}
+}
+
+func aggregatedGradientStructuredOutput() agent.RunOption {
+	return func(opts *agent.RunOptions) {
+		agent.WithStructuredOutputJSONSchema(
+			"AggregatedGradientProposal",
+			aggregatedGradientProposalSchema(),
+			true,
+			"One aggregated PromptIter gradient proposal.",
+		)(opts)
+		opts.StructuredOutputType = reflect.TypeOf((*aggregatedGradientProposal)(nil))
+	}
+}
+
+func aggregatedGradientProposalSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"Gradients": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"Severity": map[string]any{
+							"type": "string",
+							"enum": []string{
+								string(promptiter.LossSeverityP0),
+								string(promptiter.LossSeverityP1),
+								string(promptiter.LossSeverityP2),
+								string(promptiter.LossSeverityP3),
+							},
+						},
+						"Gradient": map[string]any{
+							"type": "string",
+						},
+					},
+					"required":             []string{"Severity", "Gradient"},
+					"additionalProperties": false,
+				},
+			},
+		},
+		"required":             []string{"Gradients"},
+		"additionalProperties": false,
 	}
 }
 

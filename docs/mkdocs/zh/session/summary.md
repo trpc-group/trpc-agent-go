@@ -153,7 +153,7 @@ conversation text；如果配置了 `WithPreSummaryHook(...)`，还会先执行�
 hook。随后摘要模型收到的请求由下面两部分组成：
 
 - 可选的 system message，来自 `WithSystemPrompt(...)`。
-- 一条 user message，来自 `WithPrompt(...)`；其中 `{conversation_text}` 会被替换为提取出的对话文本。
+- 一条 user message，来自 `WithPrompt(...)`；其中 `{conversation_text}` 会被替换为提取出的对话文本。自定义 prompt 还可以使用 `{previous_summary}`，把上一版滚动摘要与本次新增的对话事件分别放置。
 
 这条请求和主 agent 的请求相互独立，因此同步摘要、异步摘要、手动调用摘要接口
 都能使用。
@@ -181,41 +181,84 @@ summarizer := summary.NewSummarizer(
 
 这样摘要请求和父请求拥有相同的前缀，支持 prompt cache 的模型服务就能复用更多
 已缓存输入。如果当前没有父请求，例如手动或外部调用摘要接口，摘要器会自动
-回退到独立摘要请求。
+回退到独立摘要请求。开启 cache-safe forking 后，这条独立请求的 user message 会先
+放入 `WithPrompt(...)` 的渲染结果，再追加固定的 source-data boundary 和
+`WithCacheSafeForkPrompt(...)` 渲染出的指令。boundary 会明确要求模型把前面的对话
+当作待总结的源数据，而不是需要继续执行的任务。其他 standalone fallback（包括
+bounded 请求和 retry 请求）也使用相同结构。
 
 无论最终使用哪种请求，发送前都会按摘要模型的有效输入预算做准入检查：如果模型
 能够提供 provider-specific input budget，框架会取它与“模型 context window 的
 70%”这层保守上限中的较小值。fork 请求超预算时，框架只修改 clone，不会污染父
-请求：先移除摘要调用不会使用的 tool schemas，再按完整 source round 从旧到新
-缩减并保护最新一轮，必要时替换较大的 tool arguments/results payload。如果仍然
-放不下，再重建为 bounded standalone 请求。standalone fallback 只对
-`{conversation_text}` 做首尾保留截断，固定的 system prompt 和 user prompt
-模板不会被截坏。
+请求：先移除摘要调用不会使用的 tool schemas，必要时再用明确的省略标记替换较大
+的 tool arguments/results payload，但不会删除 source conversation turn。如果仍然
+放不下，再重建为 bounded standalone 请求。完整渲染后的 fork prompt（包括自定义
+内容）在 fork 和 standalone 两种请求中都会占用输入预算。当预算能够容纳全部尚未
+覆盖的新对话时，standalone 路径会完整保留这些内容；使用
+`{previous_summary}` 时，只允许压缩这块上一版滚动摘要。固定的 system prompt、
+user prompt 模板、source boundary 和 fork prompt 都会保持完整。
+
+如果尚未覆盖的新对话无法一次放进 standalone 请求，摘要器可以先处理较旧的完整
+前缀，其余 events 保持未覆盖，留待后续摘要。前缀只能结束在稳定的 event 边界，
+不能拆开同一 response 的 chunks，也不能拆开仍未闭合的 tool call/result round。
+只有模型生成与 post-summary 处理都完成后，summary boundary 才会推进到所选前缀。
+如果连最小的完整前缀都放不下，请求会在调用模型前失败，原 boundary 保持不变。
+配置 `WithPreSummaryHook(...)` 时不会启用部分前缀 fallback，因为 hook 重写后的文本
+无法安全映射回 event boundary。前缀摘要始终使用 standalone 请求，不会复用
+cache-safe fork。
 
 预算适配和 fork → standalone 的选择发生在 `BeforeModel` callback 之前，因此
 callback 看到并修改的就是最终准备送模的请求。callback 返回后框架会再次计数；
 如果 callback 自己把请求扩到超预算，会明确失败，而不是再次换请求并静默丢失
 callback 的修改。如果 provider 仍返回 context-length error，或者非 custom 的
 模型调用返回空 summary，摘要器会用第一次输入预算的一半再做一次 bounded
-standalone 重试。
+standalone 重试；这次重试也可以按相同的边界规则选择更小的完整前缀。
 
 这里有一个重要的 branch 摘要行为：开启 `WithCacheSafeForking(true)` 后，非空
 branch 触发摘要时，可以用当前父请求 fork 来生成 branch 摘要；但同一轮 summary
-pass 不会再跑级联出来的全量会话摘要。框架会直接跳过这个全量摘要目标，而不是
-回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的 fork request。如果
-需要覆盖所有 branch 的全量摘要，需要单独触发一次全量会话摘要。
+pass 不会再发第二次独立的全量会话 LLM 调用。这既适用于最常见的单
+`filterKey` 会话，也适用于包含多个 filterKey 的会话。框架会跳过这次额外的
+LLM 目标，而不是回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的
+fork request。当 session 当前加载的所有事件都属于同一个 `filterKey` 时，如果
+本轮实际产出了 branch 摘要，该摘要会复制到 `SummaryFilterKeyAllContents`。这是
+基于当前加载窗口的优化：存储层事件数量限制可能省略其他 branch 的更早事件，
+因此不能仅凭这次复制推断 branch/full 的完整历史等价。多 filterKey 会话里，
+全量摘要 key 在这一轮保持不动；如果需要覆盖所有 branch 的全量摘要，请单独
+触发一次全量会话摘要。
+
+更一般地，branch 触发的全量摘要级联依赖 branch 目标在本轮实际产出摘要。如果
+branch gate 决定不更新摘要，框架会停止级联，不会独立推进全量会话摘要。后续
+目标失败时会返回错误，但不会创建独立的持久化恢复协议；后续普通调用必须重新
+通过 branch gate。如果 gate 没有触发，该调用可能返回 `nil`，但此前失败的全量
+目标仍未补齐。需要立即恢复时，应直接对 `SummaryFilterKeyAllContents` 强制生成
+摘要，或者在不携带 cache-safe parent fork 的 context 中用 `force=true` 重试
+branch cascade。携带 cache-safe parent 时，即使强制 branch cascade，后续全量
+LLM 目标仍会按设计跳过。
+
+异步 worker 会在执行结束后记录后续目标的错误；enqueue 成功只表示任务已接收，
+不会把 worker 稍后产生的错误同步返回给已经结束的 enqueue 调用。
+
+`WithSummaryJobTimeout(...)` 是整条 summary job 的 deadline。多 filterKey 级联会
+串行执行 branch 与全量摘要目标，两个目标共享同一个 deadline；配置时需要覆盖
+两段模型调用和持久化的总延迟。
 
 Prompt 规则：
 
 - `WithPrompt(...)` 配置独立摘要请求的 user prompt，必须包含
-  `{conversation_text}`。如果配置了 `WithMaxSummaryWords(...)`，
+  `{conversation_text}`，并可选包含 `{previous_summary}`。使用该可选占位符时，
+  `{previous_summary}` 是上一版滚动摘要，`{conversation_text}` 只包含摘要边界后
+  新增的事件；不使用时，上一版摘要继续合并在 `{conversation_text}` 中以保持兼容。
+  如果配置了 `WithMaxSummaryWords(...)`，
   `{max_summary_words}` 必须出现在 `WithPrompt(...)` 或
   `WithSystemPrompt(...)` 其中之一。
 - `WithSystemPrompt(...)` 配置独立摘要请求里可选的 system message，不能包含
-  `{conversation_text}`，可以包含 `{max_summary_words}`。
-- `WithCacheSafeForkPrompt(...)` 只配置 fork 模式下追加的 user message，不能
-  包含 `{conversation_text}`，因为克隆出来的父请求里已经有对话内容；它可以包含
-  `{max_summary_words}`。
+  `{conversation_text}` 或 `{previous_summary}`，可以包含 `{max_summary_words}`。
+- `WithCacheSafeForkPrompt(...)` 配置开启 cache-safe forking 后使用的最终摘要指令。
+  在 fork 模式下，它会作为 user message 追加到克隆的父请求；在 standalone
+  fallback 中，它会追加到同一条 standalone user message 的固定 source-data
+  boundary 之后。它不能包含 `{conversation_text}` 或 `{previous_summary}`，因为
+  两种请求结构都已在它前面放入源对话；它可以包含 `{max_summary_words}`，完整的
+  渲染结果会计入摘要模型的输入预算。
 
 即使开启了 cache-safe forking，也要保持独立摘要 prompt 有效，因为 fallback
 路径仍然会使用它。自定义 fork prompt 时，建议明确要求模型“总结上面的对话，
@@ -224,9 +267,11 @@ Prompt 规则：
 和 tool-use 指令当作事实写进摘要。
 
 `WithPreSummaryHook(...)` 仍然会在摘要模型调用前执行。独立摘要模式下，hook
-修改后的文本会渲染进 `{conversation_text}`；如果 fork 模式拿到了父请求，则
-这段文本不会再被塞进摘要请求，因为对话内容已经在克隆的父请求里。此时 hook
-仍可用于更新 context、做副作用处理，以及服务 fallback 到独立摘要请求的场景。
+修改后的文本会渲染进 `{conversation_text}`。当 prompt 使用
+`{previous_summary}` 时，hook 的 `Events` 和 `Text` 是本次新增对话，
+`PreviousSummary` 则是可以单独修改的上一版摘要。如果 fork 模式拿到了父请求，
+这些 payload 修改不会再被塞进摘要请求，因为对话内容已经在克隆的父请求里。
+此时 hook 仍可用于更新 context、做副作用处理，以及服务 fallback 到独立摘要请求的场景。
 
 在 fork 模式下，`WithPreSummaryHook(...)` 对 text 或 events 的修改不会对克隆
 出来的父请求做脱敏、redaction 或 filtering。如果这个 hook 用于在摘要前做脱敏
@@ -484,14 +529,19 @@ summarizer := summary.NewSummarizer(
 
 开启 cache-safe forking 时，`report.Call.Mode` 为 `cache_safe_fork`，请求估算值来自 fork
 后的父请求加上追加的 summary 指令。普通独立 summary prompt 模式下，mode 为 `standalone`。
-如果 `BeforeModel` callback 返回 custom response，实际没有发送 summary 模型请求，mode 为
-`custom_response`，prompt 估算值保持为 0。
+如果 `BeforeModel` callback 返回 custom response，该次尝试没有发送 summary 模型请求，
+mode 为 `custom_response`，prompt 估算值保持为 0。`Report.Call.Mode` 表示最后
+一次 summary 尝试的状态；若混合重试中较早一次已经调用 provider、最后一次改由
+callback 返回 custom response，它仍为 `custom_response`，usage 字段也可能保留
+较早一次 provider 调用的数据。结构化诊断字段 `model_call_status` 则聚合整次
+summary 操作：任意一次尝试调用过 provider，就上报为 `called`。
 
 高级集成如果要在高层 summary 流程前放入同一个 report，可以使用
 `summary.ContextWithReport(ctx, report)`，需要从 context 取出时使用
-`summary.ReportFromContext(ctx)`。单一路径会复用这个 report；cascade 并行生成多个
-summary 时，框架会给每个 worker 克隆一份 report，避免不同分支同时写同一个对象。
-这些 fork 出来的 report 会通过各自调用的 hook 发出，不会再合并回 root report。
+`summary.ReportFromContext(ctx)`。单一路径会复用这个 report；多 filterKey cascade
+中的独立 branch 和全量目标会各自获得一份克隆的 report，以隔离各自的写入。这些
+fork 出来的 report 会通过各自调用的 hook 发出，不会再合并回 root report。单
+filterKey 的 copy-persistence 优化不会产生这一对 target report。
 
 对于私有部署、endpoint ID、微调模型、新模型或多租户自定义模型配置，优先使用模型实例或单次运行 option，
 避免不同用户覆盖同一个进程级注册表：
@@ -568,10 +618,10 @@ summary.WithChecksAny(
 | 选项 | 说明 |
 | --- | --- |
 | `WithMaxSummaryWords(maxWords int)` | 限制摘要的最大字数，包含在提示词中指导模型生成 |
-| `WithPrompt(prompt string)` | 自定义摘要提示词，必须包含 `{conversation_text}` 占位符 |
-| `WithSystemPrompt(prompt string)` | 为摘要额外添加独立的 system message 指令；不能包含 `{conversation_text}` |
+| `WithPrompt(prompt string)` | 自定义摘要提示词，必须包含 `{conversation_text}`，可选包含 `{previous_summary}` |
+| `WithSystemPrompt(prompt string)` | 为摘要额外添加独立的 system message 指令；不能包含 `{conversation_text}` 或 `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | 在有父请求可用时，启用 cache-safe 摘要请求 forking。默认关闭 |
-| `WithCacheSafeForkPrompt(prompt string)` | 自定义 cache-safe fork 模式下追加的压缩 user message。可包含 `{max_summary_words}`，但不能包含 `{conversation_text}` |
+| `WithCacheSafeForkPrompt(prompt string)` | 自定义 cache-safe fork 请求的最终指令；standalone fallback 会在 source-data boundary 后追加同一指令，其渲染结果会计入输入预算。可包含 `{max_summary_words}`，但不能包含 `{conversation_text}` 或 `{previous_summary}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | 自定义函数跳过最近事件 |
 
 ### Hook 选项
@@ -699,10 +749,32 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-**必需占位符**：
+**Prompt 占位符**：
 
 - `{conversation_text}`：必须包含，会被对话内容替换
+- `{previous_summary}`：可选，用于把上一版滚动摘要与摘要边界后的新增事件分开；
+  第一次摘要时为空。不使用该占位符时，上一版摘要仍会合并进
+  `{conversation_text}`，保持原有行为
 - `{max_summary_words}`：当 `maxSummaryWords > 0` 时，必须包含在 `WithPrompt(...)` 或 `WithSystemPrompt(...)` 其中之一
+
+如果希望在增量摘要中单独放置上一版摘要，可以这样写：
+
+```go
+userPrompt := `请根据新增对话更新上一版摘要。
+
+<previous_summary>
+{previous_summary}
+</previous_summary>
+
+<new_conversation>
+{conversation_text}
+</new_conversation>
+
+更新后的摘要：`
+```
+
+`{previous_summary}` 适用于 standalone 请求和 cache-safe fallback 请求。
+cache-safe fork 成功时会直接使用克隆的父请求，摘要在父请求中的位置不会由该占位符改变。
 
 如果希望把摘要指令放到独立的 system message，可以组合使用
 `WithSystemPrompt` 和一个更轻量的 user prompt：
@@ -731,7 +803,8 @@ summarizer := summary.NewSummarizer(
 
 - `WithPrompt` 仍然渲染到 **user message**
 - `WithSystemPrompt` 会渲染到独立的 **system message**
-- `WithSystemPrompt` 不能包含 `{conversation_text}`；对话内容必须保留在 user prompt 中
+- `WithSystemPrompt` 不能包含 `{conversation_text}` 或
+  `{previous_summary}`；对话内容必须保留在 user prompt 中
 
 ## Token 计数器配置
 
@@ -879,6 +952,11 @@ type PostSummaryHookContext struct {
 
 type PostSummaryHook func(in *PostSummaryHookContext) error
 ```
+
+Hook 会看到本次 summary source 对应的临时 boundary。Hook 成功，或其错误被配置为
+不中断流程时，摘要器会在 Hook 返回后恢复该 source 的精确 boundary，因此 Hook 对
+summary boundary state 的写入不会保留。Hook 以错误中断或发生 panic 时，则恢复本次
+摘要尝试前的 boundary。
 
 ### 使用示例
 
@@ -1416,6 +1494,10 @@ evt.FilterKey = "my-app/user-messages"
 evt.FilterKey = "user-messages"
 ```
 
+`EventFilterKey` / `filter_key` 是业务提供的作用域标识，不应包含凭据、秘密或
+用户隐私。诊断日志可能输出原始值，但会按
+[生产环境摘要诊断](#生产环境摘要诊断) 中的长度限制截断显示。
+
 ### 为不同类型生成摘要
 
 ```go
@@ -1454,9 +1536,20 @@ sessionService := inmemory.NewSessionService(
 - `WithCascadeFullSessionSummary(...)` 控制非空分支触发摘要时，是否同时刷新
   全量会话摘要。
 - 开启 `WithCacheSafeForking(true)` 后，如果当前有父请求可 fork，branch 触发的
-  summary pass 只会生成 branch 摘要；级联出来的全量会话摘要目标会被跳过，不会
-  回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的 fork request。如果
-  确实需要覆盖所有 branch 的全量摘要，请单独触发一次全量会话摘要。
+  summary pass 只会跑 branch 摘要的 LLM 目标，不会回退到独立的全量摘要
+  prompt，也不会把这个 branch 视角的 fork request 再拿去发第二次 LLM 调用。
+  当 session 当前加载的所有事件都属于同一个 `filterKey` 时，如果本轮实际产出
+  了 branch 摘要，该摘要会复制到 `SummaryFilterKeyAllContents`。这是基于当前
+  加载窗口的优化，不能证明更早但未加载的历史中没有其他 branch。多 filterKey
+  会话里，级联出来的全量摘要目标会被跳过；如果确实需要覆盖所有 branch 的全量
+  摘要，请单独触发一次全量会话摘要。
+- 全量摘要级联以本轮 branch 目标实际产出摘要为前提；如果 branch 没有更新，
+  不会独立运行全量摘要目标。失败的后续目标不会根据推断或框架持久化的恢复状态
+  自动重试；后续调用必须重新产出 branch 摘要。需要立即恢复时，应直接强制生成
+  全量 key，或在不携带 cache-safe parent fork 的 context 中强制 branch cascade。
+- 异步 enqueue 成功不会返回 worker 稍后发生的错误；后续目标错误由 worker 记录。
+- `WithSummaryJobTimeout(...)` 作用于整条 summary job。branch 与全量摘要目标会
+  串行执行并共享同一个 deadline，因此配置时需要覆盖两段模型调用和持久化的总延迟。
 - 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入
   空 allowlist，并保持默认 cascade 开启：
 
@@ -1503,6 +1596,179 @@ sessionService, err := mysql.NewService(
 4. **自定义提示词**：根据应用需求定制摘要提示词。例如，如果你正在构建客户支持 Agent，应关注关键问题和解决方案
 5. **平衡字数限制**：设置 `WithMaxSummaryWords` 以在保留上下文和减少 token 使用之间取得平衡。典型值范围为 100-300 字
 6. **测试触发条件**：尝试不同的 `WithChecksAny` 和 `WithChecksAll` 组合，找到摘要频率和成本之间的最佳平衡
+
+## 生产环境摘要诊断
+
+摘要的生成与持久化诊断结果不会作为用户可见的模型响应直接返回。处理可能在后台
+异步执行，也可能在请求内同步完成（例如 LLM 调用前的 context compaction）。框
+架会输出四条稳定的日志记录，让你可以从生成一路追踪到注入。这些记录都在请求或
+任务的 context 上输出，因此与你现有的 trace 关联方式一致。
+
+**任何记录都不包含提示词、摘要正文、事件内容、模型输出、原始错误文本、连接串
+或凭据。** 框架自身的用户 ID 和会话 ID 不会被记录。调用方提供的 `filter_key`
+会被记录，不在该保证范围内。调用方提供的 `agent` 名称同样会被记录，不应包含
+凭据、秘密或用户隐私。框架不会 hash 或脱敏这些名称。
+
+`EventFilterKey` / `filter_key` 是业务提供的作用域标识，不应包含凭据、秘密或
+用户隐私。诊断记录会记录原始值（不会 hash）。显示值最多 255 个 Unicode code
+point，与常见的 `session_summaries.filter_key VARCHAR(255)` 一致，且该上限包含
+截断标记。未超限的 key 原样输出；超限时保留前缀，使前缀加上 `...` 标记总计仍
+为 255，并设置 `filter_key_truncated=true`（级联记录为
+`trigger_filter_key_truncated=true`）。空 key 仍清楚显示为 `filter_key=""`。截
+断只影响诊断显示，不会改变真实业务 key、数据库 key 或查询。`agent` 使用同一
+套有界 `%q` 显示规则，并带 `agent_truncated`。
+
+每条记录都在记录名之后立即带上 `schema_version=1`，便于采集侧识别后续不兼容
+的字段变化。在该诊断 schema 正式发布之前，版本保持为 1。
+
+这些记录用于观察生成、持久化、级联、注入和 LLM 调用前压缩。它们不新增公开的
+SessionService API，也不新增诊断开关。
+
+相对加入诊断前的 Redis 路径，已验证的返回契约：
+
+- 当 set-if-newer Lua 脚本本身执行成功时，`CreateSessionSummary` 仍然返回
+  nil error，即使回复不是 `int64` 的 0 或 1。无法识别的回复会记为
+  `persist_result=unknown` / `outcome=unknown_write`（Debug）。它不会被当成
+  stored、stale、`success` 或 `persistence_error`，也不会改变该方法的返回值。
+- 真正的脚本、序列化或过期设置失败仍然返回 error，并记为
+  `persist_result=error` / `outcome=persistence_error`。
+
+摘要选择、cutoff、级联调用顺序、`force` 值、错误包装、注入文本和 compaction
+判定仍走原有代码路径。
+
+### 诊断开销
+
+- 一次普通的 summary attempt 记录是常数级元数据：计数、枚举、耗时，以及截断后
+  的 filter key 显示。它不会复制事件、提示词或摘要正文。
+- 检查选中的注入 block 是否仍在请求中，复杂度是
+  `O(请求消息总字节数)`。该扫描只在该请求启用了 session summary injection 时
+  执行。不会复制完整请求。
+
+### 记录名称与关键字段
+
+| 记录 | 输出时机 | 关键字段 |
+| --- | --- | --- |
+| `Session summary result` | 每个摘要目标一条，摘要尝试完成之后 | `schema_version`、`outcome`、`dispatch`、`target_kind`、`filter_key`、`filter_key_truncated`、`triggered`、`trigger`、`trigger_metric`、`trigger_value`、`trigger_threshold`、`threshold_ratio`、`context_window`、`summary_view_present`、`summary_view_bound`、`binding_reason`、`input_source`、`selection_reason`、`eligible_events`、`skip_recent_requested`、`skip_recent_applied`、`selected_events`、`model_call_status`、`updated`、`boundary_advanced`、`persist_result` |
+| `Session summary cascade result` | 分支触发扩散到全会话目标的每次级联一条 | `schema_version`、`outcome`、`mode`、`trigger_filter_key`、`trigger_filter_key_truncated`、`targets`、`source_materialized`、`action`、`invariant` |
+| `Session summary injection result` | 使用会话摘要的每个模型请求一条，在返回的响应序列结束或被提前停止之后记录；若模型调用在返回响应序列之前失败，则立即记录 | `schema_version`、`outcome`、`agent`、`agent_truncated`、`filter_key`、`filter_key_truncated`、`lookup_strategy`、`lookup_result`、`selected`、`block_text_present`、`stored_summaries`、`matching_candidates`、`full_session_summary`、`session_events`、`history_messages`、`request_messages` |
+| `Pre-LLM context compaction result` | LLM 调用前的每次同步压缩尝试一条 | `schema_version`、`outcome`、`agent`、`agent_truncated`、`filter_key`、`filter_key_truncated`、`request_tokens`、`threshold`、`context_window`、`messages`、`summary_view_bound`、`binding_reason` |
+
+`Session summary result` 的 outcome：
+
+| Outcome | 级别 | 含义 |
+| --- | --- | --- |
+| `success` | Info | 生成了新摘要且后端确认写入 |
+| `copied` | Debug | 级联复用已有摘要，未调用摘要模型 |
+| `below_threshold` | Debug | 触发检查已执行但未达到阈值 |
+| `no_delta` | Debug | 摘要边界之后没有新增事件 |
+| `no_content` | Debug | 内建 summarizer 本轮发布了 trigger 观测，且没有可用内容进入摘要模型 |
+| `unobserved` | Debug | 本轮门控未触发，且没有发布 attempt-local trigger 观测。这是诊断不确定性，不能当成 `no_content` 或 `below_threshold` |
+| `cascade_suppressed` | Debug | 全会话目标仅因分支级联被请求，因此跳过 |
+| `unsafe_view` | Warn | 存在可摘要内容，但模型可见视图未绑定到模型真正回答的请求，无法安全摘要 |
+| `summary_error` | Warn | 摘要阶段失败；`model_call_status` 区分模型调用失败、模型调用前的构建失败、custom response，以及自定义 summarizer 未观测 |
+| `context_error` | Warn | 摘要 context 被取消或超时 |
+| `persistence_error` | Warn | 后端写入失败 |
+| `stale_write` | Debug | 已存在更新的摘要，后端跳过了本次 payload 写入。这是 set-if-newer 保护下的成功跳过，正常并发下可能发生。Redis zset 路径仍可能刷新 summary key 的 TTL；hashidx 路径保留剩余 TTL。文档不把 TTL 续期写成写入成功 |
+| `unknown_write` | Debug | 后端写入完成且没有 error，但结果无法判定为 stored 或 stale。包括无法识别的 set-if-newer 回复，以及 Mongo nil / 零计数 UpdateResult。这是诊断不确定性，不是业务失败 |
+| `not_stored` | Warn | 摘要已生成，但后端既未写入也未拒绝 |
+| `no_update` | Warn | 已触发的尝试没有产出可存储的摘要 |
+
+`model_call_status` 是稳定三态字段，不要把 `unobserved` 当成“模型未被调用”：
+
+| `model_call_status` | 含义 |
+| --- | --- |
+| `called` | 内建 summarizer 真正调用了摘要模型（`standalone` 或 `cache_safe_fork`） |
+| `custom_response` | before-model callback 直接给出了摘要响应，因此没有调用 provider |
+| `unobserved` | 本轮 attempt-local ModelCall recorder 没有发布调用模式，无法证明是否发生模型调用。常见于未发布 recorder 的自定义 summarizer；不要把 leftover `Report.Call.Mode` 当成这一次观测 |
+
+`Session summary injection result` 的 outcome：
+
+| Outcome | 级别 | 含义 |
+| --- | --- | --- |
+| `block_text_present` | Debug | 在返回的响应序列结束或被提前停止之后，同一份框架 `model.Request` 的任意消息 `Content` 中仍能找到与记录 block 相同的文本（`block_text_present=true`）。这不能证明原注入位置还在，也不描述 provider payload。若模型调用在返回响应序列之前失败，则立即观察 |
+| `not_selected` | Debug | 会话尚未存储任何摘要 |
+| `lookup_miss` | Debug | 其他分支存在摘要，但本次请求的作用域内没有 |
+| `scope_mismatch` | Debug | 分支作用域的请求在作用域内没有命中，而作用域之外存在全会话摘要。因为本次没有选中 in-scope 摘要，本次 summaryCutoff 保持为零，所以这一阶段仍会保留原始分支历史。这与作用域外的全会话摘要自身有没有 boundary/cutoff 无关 |
+| `block_text_missing` | Warn | 摘要已选中（`selected=true`），但在返回的响应序列结束或被提前停止之后，同一份框架 `model.Request` 的任意消息 `Content` 中都观察不到记录的 block 文本。这不表示 provider 的最终 payload，也不表示摘要从未写入请求。对会原地修改共享请求的内置 provider（包括 OpenAI），这通常是 token 裁剪导致的 |
+
+### 有多少历史在 hook 前被选定
+
+当 `outcome` 为 `no_content` 或 `unsafe_view` 时，`selection_reason` 指出究竟是
+哪个阶段清空了输入，否则这与"会话本来就没有内容"无法区分：
+
+| `selection_reason` | 含义 |
+| --- | --- |
+| `selected` | hook 前选定了事件；这不证明这些事件就是后来送进模型的 payload |
+| `no_candidates` | 该阶段本来就没有候选事件 |
+| `skip_recent_all` | `WithSkipRecent` 回调要求跳过的数量不少于可用事件数 |
+| `unsafe_prefix` | skip-recent 之后仍有事件，但保留的前缀既没有用户消息也没有前置的历史摘要作为锚点，因此被丢弃 |
+| `session_filter_empty` | 候选事件通过了 skip-recent，随后被摘要的分支作用域全部过滤掉 |
+| `unbound_view` | 存在模型可见视图，但未绑定到模型真正回答的请求 |
+| `boundary_unmapped` | 选中的条目没有对应到已存储事件的结构映射，因此丢弃摘要，而不是让边界越过无法再次定位的内容 |
+| `custom` | 本次摘要调用没有发布内置事件选择，计数未知 |
+| `none` | 没有 summarizer 运行，未观测到任何选择 |
+
+配套的计数描述的是接收 `WithSkipRecent` 回调的那个阶段：
+
+- `eligible_events`：交给该阶段的候选事件数，在 skip-recent 执行之前统计。对已
+  绑定的模型可见视图，它包含前置的历史摘要；对未绑定视图，它是未被考虑的视图条
+  目数。
+- `skip_recent_requested`：回调返回的原始数值，因此回调返回异常值时依然可见。未
+  配置回调时为 `0`。
+- `skip_recent_applied`：skip-recent 自身实际移除的事件数，即
+  `clamp(skip_recent_requested, 0, eligible_events)`。后续的不安全前缀、分支作用
+  域或边界无法映射，由 `selection_reason` 与 `selected_events` 说明，不计入此字
+  段。例如 `eligible_events=3`、`skip_recent_requested=1`、`unsafe_prefix` 时，
+  `skip_recent_applied=1` 且 `selected_events=0`。
+- `selected_events`：经过 skip-recent、分支作用域与边界映射之后，PreSummaryHook
+  运行前选定的事件数。它不是 hook 或 before-model callback 改写之后真正送进模型
+  的 payload 计数。
+
+当 `selection_reason` 为 `custom` 或 `none` 时，这四个计数均为 `-1`。
+
+`trigger` 与 `trigger_metric` 只来自本轮 attempt 的内部 trigger recorder。
+自定义 summarizer 或调用方只写入 `summary.Report.Trigger` 不会被诊断采用：
+门控为 true 但未发布时上报 `triggered=true` 且 `trigger=none`；门控为 false
+且未发布时上报 `outcome=unobserved` 且 `trigger=none`。leftover
+`Report.Trigger` 不会被拷进记录。当内部 recorder 已发布触发观测时，框架词
+汇表之外的 name/metric 会归一化为 `custom`，因此这两个字段始终有界，且不
+会携带应用侧字符串。`trigger_value`、`trigger_threshold`、
+`threshold_ratio` 与 `context_window` 原样上报。
+
+### 排查一次问题
+
+针对同一个请求或会话，按以下顺序查看记录：
+
+1. **`Session summary result`** 回答是否产出了摘要。`triggered` 与 `trigger*`
+   字段解释门控判定；`input_source`、`selection_reason` 与各项事件计数说明有多
+   少历史在 hook 前被选定，以及是哪个阶段移除了其余部分；
+   `binding_reason` 解释 `unsafe_view` 的成因；`persist_result` 区分后端确认写入、
+   stale 跳过、无法分类的写入，以及写入失败。
+2. **`Session summary cascade result`** 解释分支触发如何到达全会话目标。
+   `source_materialized` 只记录本轮分支是否物化。`action=copied` 需要 copy
+   成功；`action=dependent` 需要全会话目标实际开始。否则，只有在全会话目标
+   没有独立推进时，才是 `action=skipped` 且 `invariant=ok`，包括本轮分支未
+   更新，以及源已物化但 copy 未成功或 dependent 目标未开始。
+   `mode=dependent` 表示多 filter 顺序级联，而不是并发生成。
+   `invariant=violation` 仅表示全会话目标在本轮没有分支 materialization 的
+   情况下推进了。
+3. **`Session summary injection result`** 回答后续请求在返回的响应序列
+   结束或被提前停止之后，框架这份 `model.Request` 里是否还带着已存储的摘要。
+   若模型调用在返回响应序列之前失败，则立即观察。对比
+   `lookup_strategy`（由 `WithBranchFilterMode` 决定的配置作用域）与
+   `lookup_result`（该作用域实际找到的结果）以及 `full_session_summary`。
+   `scope_mismatch` 表示全会话摘要未被使用，并不表示分支历史已被丢弃：因为本
+   次没有选中 in-scope 摘要，本次 summaryCutoff 保持为零，这一阶段仍会保留原
+   始分支历史。
+4. **`Pre-LLM context compaction result`** 与 token 裁剪记录解释注入之后请求
+   发生了什么。对会原地修改共享请求的内置 provider，`block_text_missing`
+   与裁剪记录同时出现，说明同一份框架 `model.Request` 里已经观察不到原始摘要
+   block。自定义 `Model` 如果复制了请求，框架这份拷贝可能不会反映它实际发送
+   的内容，因此该记录仍然不描述 provider 最终 payload。
+
+`block_text_present`、healthy cascade、`copied`、`below_threshold` 等常规 Debug 记录
+需要把框架日志级别设为 `debug`。在正常的 Info 级别下，只能看到上表中的
+Info 与 Warn outcome。
 
 ## 性能考虑
 
