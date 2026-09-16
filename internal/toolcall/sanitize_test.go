@@ -1062,6 +1062,22 @@ func TestValidateNumericBounds_LargeInclusive(t *testing.T) {
 	assert.Contains(t, reason, "below minimum")
 }
 
+func TestValidateNumericBounds_SkipsUnparsableBound(t *testing.T) {
+	// An unparsable minimum must not disable a valid maximum.
+	schema := &tool.Schema{
+		Type:    "number",
+		Minimum: "not-a-number",
+		Maximum: "10",
+	}
+	ok, reason := validateNumericBounds(json.Number("11"), schema, "$")
+	assert.False(t, ok)
+	assert.Contains(t, reason, "above maximum")
+
+	ok, reason = validateNumericBounds(json.Number("5"), schema, "$")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+}
+
 func TestValidateValueAgainstSchema_StringPattern(t *testing.T) {
 	schema := &tool.Schema{Type: "string", Pattern: "^[a-z0-9_-]+$"}
 

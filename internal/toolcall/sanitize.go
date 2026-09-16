@@ -561,43 +561,28 @@ func compareJSONNumbers(a, b json.Number) (int, bool) {
 
 // validateNumericBounds enforces minimum, maximum, exclusiveMinimum, and
 // exclusiveMaximum from the schema against a decoded json.Number value.
+// An unparsable bound is skipped so the remaining bounds still apply.
 func validateNumericBounds(num json.Number, schema *tool.Schema, path string) (bool, string) {
 	if schema == nil {
 		return true, ""
 	}
 	if schema.Minimum != "" {
-		cmp, ok := compareJSONNumbers(num, schema.Minimum)
-		if !ok {
-			return true, ""
-		}
-		if cmp < 0 {
+		if cmp, ok := compareJSONNumbers(num, schema.Minimum); ok && cmp < 0 {
 			return false, fmt.Sprintf("number at %s is below minimum", path)
 		}
 	}
 	if schema.Maximum != "" {
-		cmp, ok := compareJSONNumbers(num, schema.Maximum)
-		if !ok {
-			return true, ""
-		}
-		if cmp > 0 {
+		if cmp, ok := compareJSONNumbers(num, schema.Maximum); ok && cmp > 0 {
 			return false, fmt.Sprintf("number at %s is above maximum", path)
 		}
 	}
 	if schema.ExclusiveMinimum != "" {
-		cmp, ok := compareJSONNumbers(num, schema.ExclusiveMinimum)
-		if !ok {
-			return true, ""
-		}
-		if cmp <= 0 {
+		if cmp, ok := compareJSONNumbers(num, schema.ExclusiveMinimum); ok && cmp <= 0 {
 			return false, fmt.Sprintf("number at %s is not above exclusiveMinimum", path)
 		}
 	}
 	if schema.ExclusiveMaximum != "" {
-		cmp, ok := compareJSONNumbers(num, schema.ExclusiveMaximum)
-		if !ok {
-			return true, ""
-		}
-		if cmp >= 0 {
+		if cmp, ok := compareJSONNumbers(num, schema.ExclusiveMaximum); ok && cmp >= 0 {
 			return false, fmt.Sprintf("number at %s is not below exclusiveMaximum", path)
 		}
 	}
