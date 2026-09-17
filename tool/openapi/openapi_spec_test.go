@@ -16,11 +16,92 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	openapi "github.com/getkin/kin-openapi/openapi3"
 )
+
+func TestLoadersIsolateLoadState(t *testing.T) {
+	const spec = `{
+		"openapi":"3.0.3",
+		"info":{"title":"loader state","version":"1"},
+		"paths":{},
+		"components":{"schemas":{"Pet":{"$ref":"custom://spec/schema.json#/components/schemas/Pet"}}}
+	}`
+	path := filepath.Join(t.TempDir(), "openapi.json")
+	if err := os.WriteFile(path, []byte(spec), 0600); err != nil {
+		t.Fatal(err)
+	}
+	type contextKey struct{}
+	reader := WithReadFromURI(func(l *openapi.Loader, location *url.URL) ([]byte, error) {
+		if err := l.Context.Err(); err != nil {
+			return nil, err
+		}
+		switch location.String() {
+		case "custom://spec/openapi.json":
+			return []byte(spec), nil
+		case "custom://spec/schema.json":
+			return []byte(fmt.Sprintf(`{"components":{"schemas":{"Pet":{"type":"object","description":%q}}}}`, l.Context.Value(contextKey{}))), nil
+		default:
+			return openapi.ReadFromFile(l, location)
+		}
+	})
+	for _, tt := range []struct {
+		name string
+		new  func(...LoaderOption) (Loader, error)
+	}{
+		{"data", func(opts ...LoaderOption) (Loader, error) { return NewDataLoader([]byte(spec), opts...) }},
+		{"file", func(opts ...LoaderOption) (Loader, error) { return NewFileLoader(path, opts...) }},
+		{"uri", func(opts ...LoaderOption) (Loader, error) {
+			return NewURILoader("custom://spec/openapi.json", opts...)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			loader, err := tt.new(WithExternalRefs(true), reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkLoad := func(t *testing.T, description string) {
+				t.Helper()
+				ctx := context.WithValue(context.Background(), contextKey{}, description)
+				doc, err := loader.Load(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pet := doc.Components.Schemas["Pet"].Value
+				if pet == nil {
+					t.Fatal("external Pet schema was not resolved")
+				}
+				if pet.Description != description {
+					t.Fatalf("schema description = %q, want %q from the current context", pet.Description, description)
+				}
+			}
+			t.Run("sequential", func(t *testing.T) {
+				checkLoad(t, "first")
+				checkLoad(t, "second")
+			})
+			t.Run("canceled", func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				if _, err := loader.Load(ctx); !errors.Is(err, context.Canceled) {
+					t.Fatalf("Load error = %v, want context.Canceled", err)
+				}
+				checkLoad(t, "after cancellation")
+			})
+			t.Run("concurrent", func(t *testing.T) {
+				for i := 0; i < 8; i++ {
+					t.Run(fmt.Sprintf("load-%d", i), func(t *testing.T) {
+						t.Parallel()
+						checkLoad(t, t.Name())
+					})
+				}
+			})
+		})
+	}
+}
 
 func TestURILoaderReadFromURI(t *testing.T) {
 	const uri = "custom://spec/openapi.json"

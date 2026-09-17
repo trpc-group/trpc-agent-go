@@ -44,13 +44,15 @@ type dataLoader struct {
 	data   []byte
 }
 
-// Load loads the OpenAPI spec from io.Reader.
+// Load loads the OpenAPI spec from data.
 func (d *dataLoader) Load(ctx context.Context) (*openapi.T, error) {
-	d.loader.Context = ctx
-	return d.loader.LoadFromData(d.data)
+	loader := *d.loader
+	loader.Context = ctx
+	return loader.LoadFromData(d.data)
 }
 
-// NewDataLoader creates a new data spec loader.
+// NewDataLoader creates a new data spec loader. Options are applied at construction
+// and preserved for each Load call, which uses its own parsing state and context.
 func NewDataLoader(data []byte, opts ...LoaderOption) (*dataLoader, error) {
 	loader := &openapi.Loader{}
 	for _, opt := range opts {
@@ -66,11 +68,13 @@ type fileLoader struct {
 
 // Load loads the OpenAPI spec from file.
 func (f *fileLoader) Load(ctx context.Context) (*openapi.T, error) {
-	f.loader.Context = ctx
-	return f.loader.LoadFromFile(f.path)
+	loader := *f.loader
+	loader.Context = ctx
+	return loader.LoadFromFile(f.path)
 }
 
-// NewFileLoader creates a new file spec loader.
+// NewFileLoader creates a new file spec loader. Options are applied at construction
+// and preserved for each Load call, which uses its own parsing state and context.
 func NewFileLoader(filePath string, opts ...LoaderOption) (*fileLoader, error) {
 	loader := &openapi.Loader{}
 	for _, opt := range opts {
@@ -93,7 +97,7 @@ func (u *urlLoader) Load(ctx context.Context) (*openapi.T, error) {
 }
 
 // NewURILoader creates a new url spec loader. Options are applied at construction
-// and preserved for each Load call, which uses the context passed to Load.
+// and preserved for each Load call, which uses its own parsing state and context.
 func NewURILoader(uri string, opts ...LoaderOption) (*urlLoader, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
