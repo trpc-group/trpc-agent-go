@@ -1380,6 +1380,15 @@ func (r *llmRunner) executeUserInputStage(
 						Content: resolved.Content,
 					})
 				}
+			} else if next, ok := retainTypedUserMessage(
+				state,
+				used[len(used)-1],
+				userInput,
+			); ok {
+				if !model.MessagesEqual(next, used[len(used)-1]) {
+					used[len(used)-1] = next
+					ops = append(ops, replaceLastUserMessage{message: next})
+				}
 			} else {
 				used[len(used)-1] = model.NewUserMessage(userInput)
 				ops = append(ops, ReplaceLastUser{Content: userInput})

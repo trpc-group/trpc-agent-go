@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -28,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	utilmessage "trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
@@ -504,7 +504,7 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
 	if invocation.Message.Role == model.RoleUser &&
 		!(isResuming && isPlainResumeInput(invocation.Message)) {
-		if userInput := textUserInput(invocation.Message); userInput != "" {
+		if userInput := utilmessage.TextContent(invocation.Message); userInput != "" {
 			initialState[graph.StateKeyUserInput] = userInput
 		}
 	}
@@ -522,24 +522,6 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	return initialState
 }
 
-// textUserInput returns the textual user input of msg. Non-empty Content is
-// returned unchanged. Otherwise non-empty text ContentParts are joined in
-// order with newlines. Nil, empty, and non-text parts are ignored so a
-// media-only payload does not fabricate user_input.
-func textUserInput(msg model.Message) string {
-	if msg.Content != "" {
-		return msg.Content
-	}
-	parts := make([]string, 0, len(msg.ContentParts))
-	for _, part := range msg.ContentParts {
-		if part.Type != model.ContentTypeText || part.Text == nil || *part.Text == "" {
-			continue
-		}
-		parts = append(parts, *part.Text)
-	}
-	return strings.Join(parts, "\n")
-}
-
 // isPlainResumeInput reports whether msg is the checkpoint resume sentinel.
 //
 // Legacy Content sentinel: when Content is non-empty, skip iff Content ==
@@ -553,7 +535,7 @@ func isPlainResumeInput(msg model.Message) bool {
 	if msg.Content != "" {
 		return msg.Content == "resume"
 	}
-	if textUserInput(msg) != "resume" {
+	if utilmessage.TextContent(msg) != "resume" {
 		return false
 	}
 	for _, part := range msg.ContentParts {
