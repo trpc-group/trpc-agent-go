@@ -1781,8 +1781,8 @@ func (m *Model) handleStreamingResponseWithEmitter(
 	extraFieldsMap := make(map[string]map[string]any)
 	// Aggregate reasoning deltas for final message fallback (some providers don't retain it in accumulator).
 	var reasoningBuf bytes.Buffer
-	// Track next available index for tool calls (for providers that don't set correct indices).
-	nextToolCallIndex := 0
+	// Keep provider-to-accumulator index mappings for anonymous continuations.
+	toolCallIndices := make(map[int64]*toolCallIndexState)
 
 	for stream.Next() {
 		chunk := stream.Current()
@@ -1794,7 +1794,7 @@ func (m *Model) handleStreamingResponseWithEmitter(
 
 		// Fix negative or conflicting tool call indices from compatible providers.
 		// This must be done before updateToolCallIndexMapping and accumulation.
-		chunk = fixToolCallIndices(chunk, idToIndexMap, &nextToolCallIndex)
+		chunk = fixToolCallIndices(chunk, toolCallIndices)
 
 		// Collect ExtraFields from chunk tool_calls (SDK accumulator doesn't preserve ExtraFields).
 		m.collectExtraFieldsFromChunk(chunk, extraFieldsMap)
@@ -1929,201 +1929,124 @@ func hasAccumulatorPayloadBeyondReasoning(
 		chunk.Usage.TotalTokens > 0
 }
 
+// toolCallIndexState tracks provider indices separately from accumulator indices
+// for one choice in one stream. This preserves anonymous continuations when a
+// negative or conflicting provider index has to be remapped.
 type toolCallIndexState struct {
-	idToIndexMap map[string]int
-	indexToID    map[int64]string
-	nextIndex    *int
+	idToIndexMap  map[string]int
+	rawToIndexMap map[int64]int64
+	indexToID     map[int64]string
+	nextIndex     int
 }
 
-func buildIndexToIDMap(
-	idToIndexMap map[string]int,
-	toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall,
-) map[int64]string {
-	indexToID := make(map[int64]string, len(toolCalls)+len(idToIndexMap))
-	for id, idx := range idToIndexMap {
-		indexToID[int64(idx)] = id
+func newToolCallIndexState() *toolCallIndexState {
+	return &toolCallIndexState{
+		idToIndexMap:  make(map[string]int),
+		rawToIndexMap: make(map[int64]int64),
+		indexToID:     make(map[int64]string),
 	}
-	return indexToID
 }
 
-func checkIfIndexFixNeeded(
-	toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall,
-	idToIndexMap map[string]int,
-	indexToID map[int64]string,
-) bool {
-	for _, tc := range toolCalls {
-		if tc.ID == "" {
-			continue
-		}
-		if existingIndex, exists := idToIndexMap[tc.ID]; exists {
-			if tc.Index != int64(existingIndex) {
-				return true
+// indexFor keeps IDs authoritative and uses the original provider index for
+// anonymous deltas. If several IDs share a provider index, anonymous deltas
+// remain ambiguous and retain the first mapping, as with the existing fallback.
+func (s *toolCallIndexState) indexFor(rawIndex int64, id string) int64 {
+	if id != "" {
+		if index, ok := s.idToIndexMap[id]; ok {
+			if _, exists := s.rawToIndexMap[rawIndex]; !exists {
+				s.rawToIndexMap[rawIndex] = int64(index)
 			}
-			indexToID[tc.Index] = tc.ID
-			continue
-		}
-		if existingID, exists := indexToID[tc.Index]; exists && existingID != tc.ID {
-			return true
-		}
-		indexToID[tc.Index] = tc.ID
-	}
-	return false
-}
-
-func updateIDToIndexMapFromToolCalls(
-	toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall,
-	idToIndexMap map[string]int,
-	nextIndex *int,
-) {
-	for _, tc := range toolCalls {
-		if tc.ID == "" {
-			continue
-		}
-		if _, exists := idToIndexMap[tc.ID]; !exists {
-			idToIndexMap[tc.ID] = int(tc.Index)
-			if int(tc.Index) >= *nextIndex {
-				*nextIndex = int(tc.Index) + 1
-			}
+			return int64(index)
 		}
 	}
-}
 
-func createDeepCopyOfChunkForFix(
-	chunk openai.ChatCompletionChunk,
-	delta openai.ChatCompletionChunkChoiceDelta,
-) openai.ChatCompletionChunk {
-	fixedChunk := chunk
-	fixedChunk.Choices = make([]openai.ChatCompletionChunkChoice, len(chunk.Choices))
-	copy(fixedChunk.Choices, chunk.Choices)
-	fixedChunk.Choices[0].Delta.ToolCalls = make(
-		[]openai.ChatCompletionChunkChoiceDeltaToolCall,
-		len(delta.ToolCalls),
-	)
-	copy(fixedChunk.Choices[0].Delta.ToolCalls, delta.ToolCalls)
-	return fixedChunk
-}
-
-func buildUsedIndicesSet(idToIndexMap map[string]int) map[int64]struct{} {
-	usedIndices := make(map[int64]struct{}, len(idToIndexMap))
-	for _, idx := range idToIndexMap {
-		usedIndices[int64(idx)] = struct{}{}
+	index, mapped := s.rawToIndexMap[rawIndex]
+	if mapped {
+		if owner := s.indexToID[index]; id != "" && owner != "" && owner != id {
+			index = int64(s.nextIndex)
+		}
+	} else {
+		index = rawIndex
+		if index < 0 {
+			// Prefer the upstream SDK's zero fallback when that slot is free.
+			// See https://github.com/openai/openai-go/commit/940e9a11d6d2063a350afaca02cd804fc17192fc.
+			index = 0
+		}
+		if _, used := s.indexToID[index]; used {
+			index = int64(s.nextIndex)
+		}
+		s.rawToIndexMap[rawIndex] = index
 	}
-	return usedIndices
-}
-
-func findNextAvailableIndex(usedIndices map[int64]struct{}, startFrom int) int64 {
-	candidate := int64(startFrom)
-	for {
-		if _, used := usedIndices[candidate]; !used {
-			return candidate
-		}
-		candidate++
+	if id != "" {
+		s.idToIndexMap[id] = int(index)
+		s.indexToID[index] = id
+	} else if _, used := s.indexToID[index]; !used {
+		s.indexToID[index] = ""
 	}
-}
-
-func applyToolCallIndexFixes(
-	fixedChunk *openai.ChatCompletionChunk,
-	state *toolCallIndexState,
-	usedIndices map[int64]struct{},
-) {
-	for i := range fixedChunk.Choices[0].Delta.ToolCalls {
-		tc := &fixedChunk.Choices[0].Delta.ToolCalls[i]
-		if tc.ID == "" {
-			continue
-		}
-		if existingIndex, exists := state.idToIndexMap[tc.ID]; exists {
-			tc.Index = int64(existingIndex)
-			continue
-		}
-		if _, used := usedIndices[tc.Index]; used {
-			tc.Index = findNextAvailableIndex(usedIndices, *state.nextIndex)
-		}
-		state.idToIndexMap[tc.ID] = int(tc.Index)
-		usedIndices[tc.Index] = struct{}{}
-		if int(tc.Index) >= *state.nextIndex {
-			*state.nextIndex = int(tc.Index) + 1
-		}
+	if int(index) >= s.nextIndex {
+		s.nextIndex = int(index) + 1
 	}
+	return index
 }
 
-// fixToolCallIndices normalizes tool call indices in streaming chunks.
-// Some providers return negative indices or set every tool call's index to 0.
-// The upstream openai-go accumulator uses ToolCalls[].Index as the slice position.
-// When indices are wrong, different tool calls get merged by concatenating Name and Arguments.
-// This function uses ToolCalls[].ID as the stable identity and rewrites indices to be consistent.
-// This function also handles the case where a single chunk contains multiple tool calls sharing the same index.
-// The idToIndexMap stores the canonical index for each tool call ID.
-// The nextIndex points to the next available canonical index and is advanced monotonically.
+// fixToolCallIndices preserves tool-call identity while assigning non-negative
+// accumulator indices. States must be retained across chunks and scoped by
+// choice index. Valid indices in each chunk are reserved before negative ones;
+// later collisions are remapped consistently, including anonymous continuations.
+// Only changed slices are copied, leaving the input chunk unchanged.
 func fixToolCallIndices(
 	chunk openai.ChatCompletionChunk,
-	idToIndexMap map[string]int,
-	nextIndex *int,
+	states map[int64]*toolCallIndexState,
 ) openai.ChatCompletionChunk {
-	// Normalize before recording IDs so partial and final responses agree with
-	// the SDK accumulator about each tool call's index.
-	chunk = clampNegativeToolCallIndices(chunk)
-	if len(chunk.Choices) == 0 {
-		return chunk
-	}
-	delta := chunk.Choices[0].Delta
-	if len(delta.ToolCalls) == 0 {
-		return chunk
-	}
-
-	indexToID := buildIndexToIDMap(idToIndexMap, delta.ToolCalls)
-	needsFix := checkIfIndexFixNeeded(delta.ToolCalls, idToIndexMap, indexToID)
-
-	if !needsFix {
-		updateIDToIndexMapFromToolCalls(delta.ToolCalls, idToIndexMap, nextIndex)
-		return chunk
-	}
-
-	fixedChunk := createDeepCopyOfChunkForFix(chunk, delta)
-	usedIndices := buildUsedIndicesSet(idToIndexMap)
-	state := &toolCallIndexState{
-		idToIndexMap: idToIndexMap,
-		indexToID:    indexToID,
-		nextIndex:    nextIndex,
-	}
-	applyToolCallIndexFixes(&fixedChunk, state, usedIndices)
-	return fixedChunk
-}
-
-// clampNegativeToolCallIndices backports openai-go's negative-index fallback
-// while preserving the input chunk. The v1.12.0 accumulator otherwise panics.
-// See https://github.com/openai/openai-go/commit/940e9a11d6d2063a350afaca02cd804fc17192fc.
-func clampNegativeToolCallIndices(chunk openai.ChatCompletionChunk) openai.ChatCompletionChunk {
 	fixed := chunk
 	choicesCopied := false
 	for i, choice := range chunk.Choices {
+		if len(choice.Delta.ToolCalls) == 0 {
+			continue
+		}
+		state := states[choice.Index]
+		if state == nil {
+			state = newToolCallIndexState()
+			states[choice.Index] = state
+		}
 		toolsCopied := false
-		for j, tc := range choice.Delta.ToolCalls {
-			if tc.Index >= 0 {
-				continue
+		for _, negative := range []bool{false, true} {
+			for j, tc := range choice.Delta.ToolCalls {
+				if (tc.Index < 0) != negative {
+					continue
+				}
+				index := state.indexFor(tc.Index, tc.ID)
+				if index == tc.Index {
+					continue
+				}
+				if !choicesCopied {
+					fixed.Choices = append([]openai.ChatCompletionChunkChoice(nil), chunk.Choices...)
+					choicesCopied = true
+				}
+				if !toolsCopied {
+					fixed.Choices[i].Delta.ToolCalls = append(
+						[]openai.ChatCompletionChunkChoiceDeltaToolCall(nil), choice.Delta.ToolCalls...,
+					)
+					toolsCopied = true
+				}
+				fixed.Choices[i].Delta.ToolCalls[j].Index = index
 			}
-			if !choicesCopied {
-				fixed.Choices = append([]openai.ChatCompletionChunkChoice(nil), chunk.Choices...)
-				choicesCopied = true
-			}
-			if !toolsCopied {
-				fixed.Choices[i].Delta.ToolCalls = append(
-					[]openai.ChatCompletionChunkChoiceDeltaToolCall(nil), choice.Delta.ToolCalls...,
-				)
-				toolsCopied = true
-			}
-			fixed.Choices[i].Delta.ToolCalls[j].Index = 0
 		}
 	}
 	return fixed
 }
 
-// updateToolCallIndexMapping updates the tool call index mapping.
+// updateToolCallIndexMapping records canonical indices for the first completion
+// choice, which processAccumulatedToolCalls uses for the final tool calls.
 func (m *Model) updateToolCallIndexMapping(chunk openai.ChatCompletionChunk, idToIndexMap map[string]int) {
-	if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
-		toolCall := chunk.Choices[0].Delta.ToolCalls[0]
-		index := int(toolCall.Index)
-		if toolCall.ID != "" {
-			idToIndexMap[toolCall.ID] = index
+	for _, choice := range chunk.Choices {
+		if choice.Index != 0 {
+			continue
+		}
+		for _, toolCall := range choice.Delta.ToolCalls {
+			if toolCall.ID != "" {
+				idToIndexMap[toolCall.ID] = int(toolCall.Index)
+			}
 		}
 	}
 }

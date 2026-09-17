@@ -595,13 +595,16 @@ model := openai.New("deepseek-v4-flash",
 ##### Streaming Tool-Call Index Compatibility
 
 The OpenAI-compatible adapter normalizes negative `tool_calls[].index` values
-to zero before its existing tool-call ID mapping and accumulation. This
-backports the newer OpenAI Go SDK's fallback without upgrading the SDK and
-prevents a panic with providers that return `-1` for a single tool call.
-Valid non-negative indices are preserved unless the existing ID mapping needs
-to resolve a conflict. Providers must still supply an unambiguous index or ID
-to distinguish interleaved calls; a missing ID and a shared invalid index do
-not contain enough information to recover the intended call.
+before accumulation, without upgrading the SDK. A single tool call with index
+`-1` uses zero, following the newer OpenAI Go SDK's fallback. For mixed or
+conflicting indices, the adapter assigns separate non-negative indices and
+retains the mapping from each provider index throughout the stream. This keeps
+continuation chunks that omit IDs attached to the correct tool call, even when
+a valid index arrives after a negative one. Mappings are scoped to each choice.
+Valid indices are preserved when they do not conflict with an assigned index.
+Providers must still supply an unambiguous index or ID to distinguish
+interleaved calls; a missing ID and an index shared by multiple calls do not
+contain enough information to recover the intended call.
 
 ##### Custom Streaming Usage Aggregation
 

@@ -61,17 +61,23 @@ func TestFixToolCallIndices_NegativeIndices(t *testing.T) {
 			indices: [][]int64{{3}},
 			mapping: map[string]int{"call_a": 3},
 		},
+		{
+			name:    "reserve valid index before negative index",
+			choices: `[{"index":0,"delta":{"tool_calls":[{"index":-1,"id":"call_a","function":{"name":"first","arguments":"{}"}},{"index":0,"id":"call_b","function":{"name":"second","arguments":"{}"}}]}}]`,
+			indices: [][]int64{{1, 0}},
+			mapping: map[string]int{"call_a": 1, "call_b": 0},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			raw := `{"id":"test","object":"chat.completion.chunk","choices":` + tt.choices + `}`
 			chunk := parseChunkWithExtraFields(t, raw)
 			original := parseChunkWithExtraFields(t, raw)
-			mapping := make(map[string]int)
-			nextIndex := 0
-			fixed := fixToolCallIndices(chunk, mapping, &nextIndex)
+			state := newToolCallIndexState()
+			states := map[int64]*toolCallIndexState{0: state}
+			fixed := fixToolCallIndices(chunk, states)
 			assert.Equal(t, original, chunk, "normalization must not mutate the input")
-			assert.Equal(t, tt.mapping, mapping)
+			assert.Equal(t, tt.mapping, state.idToIndexMap)
 			for i, indices := range tt.indices {
 				for j, index := range indices {
 					assert.Equal(t, index, fixed.Choices[i].Delta.ToolCalls[j].Index)
@@ -87,6 +93,39 @@ func TestFixToolCallIndices_NegativeIndices(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestFixToolCallIndices_ChoiceScopedMappings(t *testing.T) {
+	states := make(map[int64]*toolCallIndexState)
+	chunks := []string{
+		`{"id":"test","choices":[{"index":0,"delta":{"tool_calls":[{"index":-1,"id":"shared","function":{"name":"first","arguments":""}}]}},{"index":1,"delta":{"tool_calls":[{"index":0,"id":"valid","function":{"name":"second","arguments":""}},{"index":-1,"id":"shared","function":{"name":"third","arguments":""}}]}}]}`,
+		`{"id":"test","choices":[{"index":1,"delta":{"tool_calls":[{"index":-1,"function":{"arguments":"{\"c\":3}"}},{"index":0,"function":{"arguments":"{\"b\":2}"}}]}},{"index":0,"delta":{"tool_calls":[{"index":-1,"function":{"arguments":"{\"a\":1}"}}]}}]}`,
+		`{"id":"test","choices":[{"index":1,"delta":{"tool_calls":[{"index":-1,"id":"shared","function":{"arguments":""}}]}}]}`,
+	}
+	var acc openai.ChatCompletionAccumulator
+	var m Model
+	mapping := make(map[string]int)
+	for _, raw := range chunks {
+		chunk := parseChunkWithExtraFields(t, raw)
+		original := parseChunkWithExtraFields(t, raw)
+		fixed := fixToolCallIndices(chunk, states)
+		assert.Equal(t, original, chunk)
+		m.updateToolCallIndexMapping(fixed, mapping)
+		require.True(t, acc.AddChunk(fixed))
+	}
+	require.Len(t, acc.Choices, 2)
+	require.Len(t, acc.Choices[0].Message.ToolCalls, 1)
+	require.Len(t, acc.Choices[1].Message.ToolCalls, 2)
+	assert.Equal(t, "shared", acc.Choices[0].Message.ToolCalls[0].ID)
+	assert.Equal(t, `{"a":1}`, acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+	assert.Equal(t, "valid", acc.Choices[1].Message.ToolCalls[0].ID)
+	assert.Equal(t, `{"b":2}`, acc.Choices[1].Message.ToolCalls[0].Function.Arguments)
+	assert.Equal(t, "shared", acc.Choices[1].Message.ToolCalls[1].ID)
+	assert.Equal(t, `{"c":3}`, acc.Choices[1].Message.ToolCalls[1].Function.Arguments)
+	final := m.processAccumulatedToolCalls(acc, mapping, nil)
+	require.Len(t, final, 1)
+	require.NotNil(t, final[0].Index)
+	assert.Equal(t, 0, *final[0].Index)
 }
 
 func TestModel_StreamingNegativeToolIndices(t *testing.T) {
@@ -112,6 +151,45 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 				`{"tool_calls":[{"index":-1,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
 			},
 			ids: []string{"call_a", "call_b"}, args: []string{`{"a":1}`, `{"b":2}`},
+		},
+		{
+			name: "mixed indices in one chunk with anonymous continuation",
+			deltas: []string{
+				`{"tool_calls":[{"index":-1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}},{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":-1,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_b", "call_a"}, args: []string{`{"b":2}`, `{"a":1}`},
+		},
+		{
+			name: "valid index arrives after negative index",
+			deltas: []string{
+				`{"tool_calls":[{"index":-1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+				`{"tool_calls":[{"index":-1,"function":{"arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b"}, args: []string{`{"a":1}`, `{"b":2}`},
+		},
+		{
+			name: "negative index arrives after valid index",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":-1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":-1,"function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_b", "call_a"}, args: []string{`{"b":2}`, `{"a":1}`},
+		},
+		{
+			name: "shared negative index does not displace valid index",
+			deltas: []string{
+				`{"tool_calls":[{"index":-1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}},{"index":-1,"id":"call_b","type":"function","function":{"name":"second","arguments":""}},{"index":1,"id":"call_c","type":"function","function":{"name":"third","arguments":""}}]}`,
+				`{"tool_calls":[{"index":-1,"id":"call_b","function":{"arguments":"{\"b\":2}"}}]}`,
+				`{"tool_calls":[{"index":1,"function":{"arguments":"{\"c\":3}"}}]}`,
+				`{"tool_calls":[{"index":-1,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a", "call_c", "call_b"}, args: []string{`{"a":1}`, `{"c":3}`, `{"b":2}`},
 		},
 	}
 	for _, tt := range tests {
