@@ -53,6 +53,24 @@ func (op ReplaceLastUser) Apply(dst []model.Message) []model.Message {
 	return append(dst, model.NewUserMessage(op.Content))
 }
 
+// replaceLastUserMessage replaces the last user message entirely. It is used
+// when ContentParts must change without writing Content, which providers may
+// serialize together with ContentParts.
+type replaceLastUserMessage struct {
+	message model.Message
+}
+
+// Apply implements the MessageOp interface.
+func (op replaceLastUserMessage) Apply(dst []model.Message) []model.Message {
+	for i := len(dst) - 1; i >= 0; i-- {
+		if dst[i].Role == model.RoleUser {
+			dst[i] = op.message
+			return dst
+		}
+	}
+	return append(dst, op.message)
+}
+
 // RemoveAllMessages clears all messages for full rebuild scenarios.
 // Used sparingly: for reordering/trimming when starting fresh.
 type RemoveAllMessages struct{}
