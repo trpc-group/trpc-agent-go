@@ -317,11 +317,11 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 		{
 			name: "metadata continuation at assigned index",
 			deltas: []string{
-				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"first","arguments":""}},{"index":0,"id":"call_b","type":"function","function":{"name":"sec","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"first","arguments":""}},{"index":0,"id":"call_b","type":"function","function":{"name":"read_","arguments":""}}]}`,
 				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"a\":1}"}}]}`,
-				`{"tool_calls":[{"index":1,"function":{"name":"ond","arguments":"{\"b\":2}"}}]}`,
+				`{"tool_calls":[{"index":1,"function":{"name":"file","arguments":"{\"b\":2}"}}]}`,
 			},
-			ids: []string{"call_a", "call_b"}, names: []string{"first", "second"}, args: []string{`{"a":1}`, `{"b":2}`},
+			ids: []string{"call_a", "call_b"}, names: []string{"first", "read_file"}, args: []string{`{"a":1}`, `{"b":2}`},
 			partialIndices: [][]int{{0, 1}, {0}, {1}},
 		},
 		{
