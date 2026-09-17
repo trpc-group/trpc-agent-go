@@ -1792,7 +1792,7 @@ func (m *Model) handleStreamingResponseWithEmitter(
 			continue
 		}
 
-		// Fix tool call indices for providers that return all indices as 0.
+		// Fix negative or conflicting tool call indices from compatible providers.
 		// This must be done before updateToolCallIndexMapping and accumulation.
 		chunk = fixToolCallIndices(chunk, idToIndexMap, &nextToolCallIndex)
 
@@ -2047,7 +2047,7 @@ func applyToolCallIndexFixes(
 }
 
 // fixToolCallIndices normalizes tool call indices in streaming chunks.
-// Some providers incorrectly set ToolCalls[].Index to 0 for every tool call.
+// Some providers return negative indices or set every tool call's index to 0.
 // The upstream openai-go accumulator uses ToolCalls[].Index as the slice position.
 // When indices are wrong, different tool calls get merged by concatenating Name and Arguments.
 // This function uses ToolCalls[].ID as the stable identity and rewrites indices to be consistent.
@@ -2059,6 +2059,9 @@ func fixToolCallIndices(
 	idToIndexMap map[string]int,
 	nextIndex *int,
 ) openai.ChatCompletionChunk {
+	// Normalize before recording IDs so partial and final responses agree with
+	// the SDK accumulator about each tool call's index.
+	chunk = clampNegativeToolCallIndices(chunk)
 	if len(chunk.Choices) == 0 {
 		return chunk
 	}
@@ -2084,6 +2087,34 @@ func fixToolCallIndices(
 	}
 	applyToolCallIndexFixes(&fixedChunk, state, usedIndices)
 	return fixedChunk
+}
+
+// clampNegativeToolCallIndices backports openai-go's negative-index fallback
+// while preserving the input chunk. The v1.12.0 accumulator otherwise panics.
+// See https://github.com/openai/openai-go/commit/940e9a11d6d2063a350afaca02cd804fc17192fc.
+func clampNegativeToolCallIndices(chunk openai.ChatCompletionChunk) openai.ChatCompletionChunk {
+	fixed := chunk
+	choicesCopied := false
+	for i, choice := range chunk.Choices {
+		toolsCopied := false
+		for j, tc := range choice.Delta.ToolCalls {
+			if tc.Index >= 0 {
+				continue
+			}
+			if !choicesCopied {
+				fixed.Choices = append([]openai.ChatCompletionChunkChoice(nil), chunk.Choices...)
+				choicesCopied = true
+			}
+			if !toolsCopied {
+				fixed.Choices[i].Delta.ToolCalls = append(
+					[]openai.ChatCompletionChunkChoiceDeltaToolCall(nil), choice.Delta.ToolCalls...,
+				)
+				toolsCopied = true
+			}
+			fixed.Choices[i].Delta.ToolCalls[j].Index = 0
+		}
+	}
+	return fixed
 }
 
 // updateToolCallIndexMapping updates the tool call index mapping.

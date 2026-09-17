@@ -588,6 +588,15 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+##### 流式工具调用索引兼容
+
+OpenAI-compatible adapter 会在现有工具调用 ID 映射和累积之前，将负数
+`tool_calls[].index` 归零。这是在不升级 SDK 的情况下回补新版 OpenAI Go
+SDK 的兼容逻辑，避免服务方为单个工具调用返回 `-1` 时触发 panic。
+合法的非负索引会保留，除非现有 ID 映射需要处理索引冲突。对于交错的多个
+工具调用，服务方仍需提供能明确区分调用的索引或 ID；缺失 ID 且共用非法
+索引的分片没有足够信息来还原其所属调用。
+
 ##### 自定义流式 Usage 聚合
 
 OpenAI-compatible adapter 默认会请求流式 usage，并聚合服务方返回的
