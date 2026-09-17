@@ -1939,18 +1939,18 @@ type toolCallIndexState struct {
 	nextIndex     int
 }
 
-// toolCallIndexSlot retains the identity and origin of an accumulator slot.
-// An explicit non-negative index must not turn a new declaration into metadata
-// for an unrelated call whose negative index was normalized to that slot.
+// toolCallIndexSlot retains the identity and remapping origin of a slot.
+// negativeRemap also follows collisions with previously displaced calls, so a
+// new declaration cannot be mistaken for metadata of any call in that chain.
 type toolCallIndexSlot struct {
-	id           string
-	fromNegative bool
+	id            string
+	negativeRemap bool
 }
 
 // canContinue accepts delayed metadata when the slot's identity is compatible.
-// Missing indices retain the legacy zero-slot fallback without claiming a
-// provider index. Distinct explicit indices still separate negative-index calls
-// from new declarations; anonymous arguments retain the assigned-index fallback.
+// Missing indices do not claim a provider index. Distinct explicit indices still
+// separate calls displaced by negative indices from new declarations; anonymous
+// arguments retain the assigned-index fallback.
 func (s toolCallIndexSlot) canContinue(tc openai.ChatCompletionChunkChoiceDeltaToolCall) bool {
 	if tc.Index < 0 {
 		return false
@@ -1958,7 +1958,7 @@ func (s toolCallIndexSlot) canContinue(tc openai.ChatCompletionChunkChoiceDeltaT
 	if tc.ID != "" && s.id != "" && tc.ID != s.id {
 		return false
 	}
-	if !tc.JSON.Index.Valid() || !s.fromNegative {
+	if !tc.JSON.Index.Valid() || !s.negativeRemap {
 		return true
 	}
 	return tc.ID == "" && tc.Function.Name == ""
@@ -1972,8 +1972,26 @@ func newToolCallIndexState() *toolCallIndexState {
 	}
 }
 
+// uniqueCompatibleIndex resolves a missing index only when identity permits one
+// existing call. Multiple candidates must retain the deterministic zero fallback.
+func (s *toolCallIndexState) uniqueCompatibleIndex(tc openai.ChatCompletionChunkChoiceDeltaToolCall) (int64, bool) {
+	var index int64
+	found := false
+	for candidate, slot := range s.slots {
+		if !slot.canContinue(tc) {
+			continue
+		}
+		if found {
+			return 0, false
+		}
+		index, found = candidate, true
+	}
+	return index, found
+}
+
 // indexFor keeps IDs authoritative and uses the original provider index for
 // anonymous deltas. Missing or null indices must not create provider mappings.
+// They can continue a unique compatible call before falling back to zero.
 // Without a provider mapping, compatible metadata can still refer directly to
 // an assigned non-negative index, preserving the legacy fallback.
 // If several IDs share a provider index, anonymous deltas remain ambiguous and
@@ -1991,8 +2009,13 @@ func (s *toolCallIndexState) indexFor(tc openai.ChatCompletionChunkChoiceDeltaTo
 	}
 
 	index, mapped := s.rawToIndexMap[rawIndex]
-	if indexPresent && mapped {
-		if owner := s.slots[index].id; id != "" && owner != "" && owner != id {
+	if !indexPresent {
+		index, mapped = s.uniqueCompatibleIndex(tc)
+	}
+	negativeRemap := rawIndex < 0
+	if mapped {
+		if slot := s.slots[index]; id != "" && slot.id != "" && slot.id != id {
+			negativeRemap = negativeRemap || slot.negativeRemap
 			index = int64(s.nextIndex)
 		}
 	} else {
@@ -2003,6 +2026,7 @@ func (s *toolCallIndexState) indexFor(tc openai.ChatCompletionChunkChoiceDeltaTo
 			index = 0
 		}
 		if slot, used := s.slots[index]; used && !slot.canContinue(tc) {
+			negativeRemap = negativeRemap || slot.negativeRemap
 			index = int64(s.nextIndex)
 		}
 		if indexPresent {
@@ -2011,7 +2035,7 @@ func (s *toolCallIndexState) indexFor(tc openai.ChatCompletionChunkChoiceDeltaTo
 	}
 	slot, used := s.slots[index]
 	if !used {
-		slot.fromNegative = rawIndex < 0
+		slot.negativeRemap = negativeRemap
 	}
 	if id != "" {
 		s.idToIndexMap[id] = int(index)

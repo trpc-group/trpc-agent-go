@@ -602,13 +602,17 @@ retains the mapping from each provider index throughout the stream. This keeps
 continuation chunks that omit IDs attached to the correct tool call, even when
 a valid index arrives after a negative one. Mappings are scoped to each choice.
 Valid indices are preserved when they do not conflict with an assigned index.
-An omitted or null index does not establish a provider index mapping. When no
-provider mapping exists, compatible metadata or argument continuations can
-still use an already assigned non-negative index. This includes delayed names
-and IDs and function names split across chunks.
+Calls displaced by a negative-index call retain that distinction through later
+collisions, so subsequent declarations at distinct provider indices stay separate.
+An omitted or null index does not establish a provider index mapping. After
+matching a known ID, the adapter attaches such a delta to the unique compatible
+call, even at a nonzero index; otherwise, it retains the zero fallback. For an
+explicit index with no provider mapping, compatible metadata or argument
+continuations can still use an already assigned non-negative index. This
+includes delayed names and IDs and function names split across chunks.
 Providers must still supply an unambiguous index or ID to distinguish
-interleaved calls; a missing ID and an index shared by multiple calls do not
-contain enough information to recover the intended call.
+interleaved calls; a missing ID combined with a missing or shared index does not
+contain enough information to recover the intended call among multiple candidates.
 
 ##### Custom Streaming Usage Aggregation
 

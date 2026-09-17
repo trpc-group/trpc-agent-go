@@ -157,6 +157,7 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 		ids            []string
 		names          []string
 		args           []string
+		finalIndices   []int
 		partialIndices [][]int // -1 represents an omitted index.
 	}{
 		{
@@ -247,6 +248,92 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 			},
 			ids: []string{"call_a", "call_b"}, args: []string{`{"a":1}`, `{"b":2}`},
 			partialIndices: [][]int{{-1}, {1}, {-1}, {1}},
+		},
+		{
+			name: "missing index continues sole nonzero call",
+			deltas: []string{
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"read_","arguments":""}}]}`,
+				`{"tool_calls":[{"function":{"name":"file","arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a"}, names: []string{"read_file"}, args: []string{`{"a":1}`},
+			finalIndices: []int{1}, partialIndices: [][]int{{1}, {1}},
+		},
+		{
+			name: "null index continues sole nonzero call",
+			deltas: []string{
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"","arguments":""}}]}`,
+				`{"tool_calls":[{"index":null,"function":{"name":"first","arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a"}, names: []string{"first"}, args: []string{`{"a":1}`},
+			finalIndices: []int{1}, partialIndices: [][]int{{1}, {1}},
+		},
+		{
+			name: "missing index continuation does not claim provider zero",
+			deltas: []string{
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_b", "call_a"}, names: []string{"second", "first"}, args: []string{`{"b":2}`, `{"a":1}`},
+			partialIndices: [][]int{{1}, {1}, {0}, {0}},
+		},
+		{
+			name: "missing index attaches late ID to sole compatible call",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":"{\"b\":2}"}},{"index":1,"type":"function","function":{"name":"read_","arguments":""}}]}`,
+				`{"tool_calls":[{"id":"call_a","function":{"name":"file","arguments":"{\"a\":"}}]}`,
+				`{"tool_calls":[{"id":"call_a","function":{"arguments":"1}"}}]}`,
+			},
+			ids: []string{"call_b", "call_a"}, names: []string{"second", "read_file"}, args: []string{`{"b":2}`, `{"a":1}`},
+			partialIndices: [][]int{{0, 1}, {1}, {1}},
+		},
+		{
+			name: "ambiguous missing index retains zero fallback",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"first","arguments":""}},{"index":1,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":1,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b"}, names: []string{"first", "second"}, args: []string{`{"a":1}`, `{"b":2}`},
+			partialIndices: [][]int{{0, 1}, {-1}, {1}},
+		},
+		{
+			name: "three declarations in separate chunks preserve remapping origin",
+			deltas: []string{
+				`{"tool_calls":[{"index":-1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":1,"type":"function","function":{"name":"third","arguments":""}}]}`,
+				`{"tool_calls":[{"index":-1,"function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+				`{"tool_calls":[{"index":1,"function":{"arguments":"{\"c\":3}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b", "auto_call_2"}, names: []string{"first", "second", "third"},
+			args: []string{`{"a":1}`, `{"b":2}`, `{"c":3}`}, partialIndices: [][]int{{0}, {1}, {2}, {0}, {1}, {2}},
+		},
+		{
+			name: "four declarations in separate chunks preserve remapping origin",
+			deltas: []string{
+				`{"tool_calls":[{"index":-1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":1,"type":"function","function":{"name":"third","arguments":""}}]}`,
+				`{"tool_calls":[{"index":2,"type":"function","function":{"name":"fourth","arguments":""}}]}`,
+				`{"tool_calls":[{"index":2,"function":{"arguments":"{\"d\":4}"}},{"index":1,"function":{"arguments":"{\"c\":3}"}},{"index":0,"function":{"arguments":"{\"b\":2}"}},{"index":-1,"function":{"arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b", "auto_call_2", "auto_call_3"}, names: []string{"first", "second", "third", "fourth"},
+			args: []string{`{"a":1}`, `{"b":2}`, `{"c":3}`, `{"d":4}`}, partialIndices: [][]int{{0}, {1}, {2}, {3}, {3, 2, 1, 0}},
+		},
+		{
+			name: "conflicting IDs at mapped index preserve remapping origin",
+			deltas: []string{
+				`{"tool_calls":[{"index":-1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_c","type":"function","function":{"name":"third","arguments":""}}]}`,
+				`{"tool_calls":[{"index":2,"type":"function","function":{"name":"fourth","arguments":""}}]}`,
+				`{"tool_calls":[{"index":-1,"function":{"arguments":"{\"a\":1}"}},{"index":0,"function":{"arguments":"{\"b\":2}"}},{"index":0,"id":"call_c","function":{"arguments":"{\"c\":3}"}},{"index":2,"function":{"arguments":"{\"d\":4}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b", "call_c", "auto_call_3"}, names: []string{"first", "second", "third", "fourth"},
+			args: []string{`{"a":1}`, `{"b":2}`, `{"c":3}`, `{"d":4}`}, partialIndices: [][]int{{0}, {1}, {2}, {3}, {0, 1, 2, 3}},
 		},
 		{
 			name: "anonymous continuation at assigned index",
@@ -401,7 +488,11 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 				for i, call := range calls {
 					assert.Equal(t, tt.ids[i], call.ID)
 					require.NotNil(t, call.Index)
-					assert.Equal(t, i, *call.Index)
+					index := i
+					if tt.finalIndices != nil {
+						index = tt.finalIndices[i]
+					}
+					assert.Equal(t, index, *call.Index)
 					assert.Equal(t, tt.args[i], string(call.Function.Arguments))
 					if tt.names != nil {
 						assert.Equal(t, tt.names[i], call.Function.Name)
