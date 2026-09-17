@@ -1935,22 +1935,47 @@ func hasAccumulatorPayloadBeyondReasoning(
 type toolCallIndexState struct {
 	idToIndexMap  map[string]int
 	rawToIndexMap map[int64]int64
-	indexToID     map[int64]string
+	slots         map[int64]toolCallIndexSlot
 	nextIndex     int
+}
+
+// toolCallIndexSlot retains the identity and origin of an accumulator slot.
+// An explicit non-negative index must not turn a new declaration into metadata
+// for an unrelated call whose negative index was normalized to that slot.
+type toolCallIndexSlot struct {
+	id           string
+	fromNegative bool
+}
+
+// canContinue accepts delayed metadata when the slot's identity is compatible.
+// Missing indices retain the legacy zero-slot fallback without claiming a
+// provider index. Distinct explicit indices still separate negative-index calls
+// from new declarations; anonymous arguments retain the assigned-index fallback.
+func (s toolCallIndexSlot) canContinue(tc openai.ChatCompletionChunkChoiceDeltaToolCall) bool {
+	if tc.Index < 0 {
+		return false
+	}
+	if tc.ID != "" && s.id != "" && tc.ID != s.id {
+		return false
+	}
+	if !tc.JSON.Index.Valid() || !s.fromNegative {
+		return true
+	}
+	return tc.ID == "" && tc.Function.Name == ""
 }
 
 func newToolCallIndexState() *toolCallIndexState {
 	return &toolCallIndexState{
 		idToIndexMap:  make(map[string]int),
 		rawToIndexMap: make(map[int64]int64),
-		indexToID:     make(map[int64]string),
+		slots:         make(map[int64]toolCallIndexSlot),
 	}
 }
 
 // indexFor keeps IDs authoritative and uses the original provider index for
 // anonymous deltas. Missing or null indices must not create provider mappings.
-// Without a provider mapping, an anonymous continuation can still refer directly
-// to an assigned non-negative index, preserving the legacy fallback.
+// Without a provider mapping, compatible metadata can still refer directly to
+// an assigned non-negative index, preserving the legacy fallback.
 // If several IDs share a provider index, anonymous deltas remain ambiguous and
 // retain the first mapping, as with the existing fallback.
 func (s *toolCallIndexState) indexFor(tc openai.ChatCompletionChunkChoiceDeltaToolCall) int64 {
@@ -1967,7 +1992,7 @@ func (s *toolCallIndexState) indexFor(tc openai.ChatCompletionChunkChoiceDeltaTo
 
 	index, mapped := s.rawToIndexMap[rawIndex]
 	if indexPresent && mapped {
-		if owner := s.indexToID[index]; id != "" && owner != "" && owner != id {
+		if owner := s.slots[index].id; id != "" && owner != "" && owner != id {
 			index = int64(s.nextIndex)
 		}
 	} else {
@@ -1977,20 +2002,22 @@ func (s *toolCallIndexState) indexFor(tc openai.ChatCompletionChunkChoiceDeltaTo
 			// See https://github.com/openai/openai-go/commit/940e9a11d6d2063a350afaca02cd804fc17192fc.
 			index = 0
 		}
-		anonymousContinuation := rawIndex >= 0 && id == "" && tc.Function.Name == ""
-		if _, used := s.indexToID[index]; used && !anonymousContinuation {
+		if slot, used := s.slots[index]; used && !slot.canContinue(tc) {
 			index = int64(s.nextIndex)
 		}
 		if indexPresent {
 			s.rawToIndexMap[rawIndex] = index
 		}
 	}
+	slot, used := s.slots[index]
+	if !used {
+		slot.fromNegative = rawIndex < 0
+	}
 	if id != "" {
 		s.idToIndexMap[id] = int(index)
-		s.indexToID[index] = id
-	} else if _, used := s.indexToID[index]; !used {
-		s.indexToID[index] = ""
+		slot.id = id
 	}
+	s.slots[index] = slot
 	if int(index) >= s.nextIndex {
 		s.nextIndex = int(index) + 1
 	}

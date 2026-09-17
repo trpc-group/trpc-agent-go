@@ -603,8 +603,9 @@ continuation chunks that omit IDs attached to the correct tool call, even when
 a valid index arrives after a negative one. Mappings are scoped to each choice.
 Valid indices are preserved when they do not conflict with an assigned index.
 An omitted or null index does not establish a provider index mapping. When no
-provider mapping exists, anonymous argument continuations can still use an
-already assigned non-negative index for compatibility with existing providers.
+provider mapping exists, compatible metadata or argument continuations can
+still use an already assigned non-negative index. This includes delayed names
+and IDs and function names split across chunks.
 Providers must still supply an unambiguous index or ID to distinguish
 interleaved calls; a missing ID and an index shared by multiple calls do not
 contain enough information to recover the intended call.

@@ -155,6 +155,7 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 		name           string
 		deltas         []string
 		ids            []string
+		names          []string
 		args           []string
 		partialIndices [][]int // -1 represents an omitted index.
 	}{
@@ -268,6 +269,81 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 			ids: []string{"call_a", "auto_call_1"}, args: []string{`{"a":1}`, `{"b":2}`},
 			partialIndices: [][]int{{0}, {1}, {0}, {1}},
 		},
+		{
+			name: "late name without index",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"","arguments":""}}]}`,
+				`{"tool_calls":[{"function":{"name":"first","arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a"}, names: []string{"first"}, args: []string{`{"a":1}`},
+			partialIndices: [][]int{{0}, {-1}},
+		},
+		{
+			name: "late name with null index",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"","arguments":""}}]}`,
+				`{"tool_calls":[{"index":null,"function":{"name":"first","arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a"}, names: []string{"first"}, args: []string{`{"a":1}`},
+			partialIndices: [][]int{{0}, {-1}},
+		},
+		{
+			name: "split name without index",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"fir","arguments":""}}]}`,
+				`{"tool_calls":[{"function":{"name":"st","arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a"}, names: []string{"first"}, args: []string{`{"a":1}`},
+			partialIndices: [][]int{{0}, {-1}},
+		},
+		{
+			name: "late ID without initial index",
+			deltas: []string{
+				`{"tool_calls":[{"type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a"}, names: []string{"first"}, args: []string{`{"a":1}`},
+			partialIndices: [][]int{{-1}, {0}},
+		},
+		{
+			name: "late ID and split name without index",
+			deltas: []string{
+				`{"tool_calls":[{"type":"function","function":{"name":"fir","arguments":""}}]}`,
+				`{"tool_calls":[{"id":"call_a","function":{"name":"st","arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a"}, names: []string{"first"}, args: []string{`{"a":1}`},
+			partialIndices: [][]int{{-1}, {-1}},
+		},
+		{
+			name: "metadata continuation at assigned index",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"first","arguments":""}},{"index":0,"id":"call_b","type":"function","function":{"name":"sec","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":1,"function":{"name":"ond","arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b"}, names: []string{"first", "second"}, args: []string{`{"a":1}`, `{"b":2}`},
+			partialIndices: [][]int{{0, 1}, {0}, {1}},
+		},
+		{
+			name: "negative call metadata without index",
+			deltas: []string{
+				`{"tool_calls":[{"index":-1,"id":"call_a","type":"function","function":{"name":"","arguments":""}}]}`,
+				`{"tool_calls":[{"function":{"name":"first","arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a"}, names: []string{"first"}, args: []string{`{"a":1}`},
+			partialIndices: [][]int{{0}, {-1}},
+		},
+		{
+			name: "anonymous negative and positive declarations remain separate",
+			deltas: []string{
+				`{"tool_calls":[{"index":-1,"type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":-1,"function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"auto_call_0", "auto_call_1"}, names: []string{"first", "second"}, args: []string{`{"a":1}`, `{"b":2}`},
+			partialIndices: [][]int{{0}, {1}, {0}, {1}},
+		},
 	}
 	for _, tt := range tests {
 		for _, api := range []string{"iterator", "channel"} {
@@ -327,6 +403,9 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 					require.NotNil(t, call.Index)
 					assert.Equal(t, i, *call.Index)
 					assert.Equal(t, tt.args[i], string(call.Function.Arguments))
+					if tt.names != nil {
+						assert.Equal(t, tt.names[i], call.Function.Name)
+					}
 				}
 				if tt.partialIndices != nil {
 					assert.Equal(t, tt.partialIndices, partialIndices)
