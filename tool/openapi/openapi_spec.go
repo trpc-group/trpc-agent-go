@@ -86,11 +86,14 @@ type urlLoader struct {
 
 // Load loads the OpenAPI spec from url.
 func (u *urlLoader) Load(ctx context.Context) (*openapi.T, error) {
-	loader := openapi.Loader{Context: ctx}
+	// Preserve constructor options without retaining parsing state across loads.
+	loader := *u.loader
+	loader.Context = ctx
 	return loader.LoadFromURI(u.location)
 }
 
-// NewURILoader creates a new url spec loader.
+// NewURILoader creates a new url spec loader. Options are applied at construction
+// and preserved for each Load call, which uses the context passed to Load.
 func NewURILoader(uri string, opts ...LoaderOption) (*urlLoader, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
