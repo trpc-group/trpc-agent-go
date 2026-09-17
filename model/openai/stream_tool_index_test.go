@@ -128,12 +128,35 @@ func TestFixToolCallIndices_ChoiceScopedMappings(t *testing.T) {
 	assert.Equal(t, 0, *final[0].Index)
 }
 
+func TestFixToolCallIndices_ExplicitIndexAlias(t *testing.T) {
+	states := make(map[int64]*toolCallIndexState)
+	chunks := []string{
+		`{"id":"test","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_a","function":{"name":"first","arguments":""}}]}}]}`,
+		`{"id":"test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"arguments":"{\"a\":"}}]}}]}`,
+		`{"id":"test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"1}"}}]}}]}`,
+	}
+	var acc openai.ChatCompletionAccumulator
+	for _, raw := range chunks {
+		fixed := fixToolCallIndices(parseChunkWithExtraFields(t, raw), states)
+		assert.Equal(t, int64(1), fixed.Choices[0].Delta.ToolCalls[0].Index)
+		require.True(t, acc.AddChunk(fixed))
+	}
+	var m Model
+	final := m.processAccumulatedToolCalls(acc, states[0].idToIndexMap, nil)
+	require.Len(t, final, 1)
+	assert.Equal(t, "call_a", final[0].ID)
+	assert.Equal(t, `{"a":1}`, string(final[0].Function.Arguments))
+	require.NotNil(t, final[0].Index)
+	assert.Equal(t, 1, *final[0].Index)
+}
+
 func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 	tests := []struct {
-		name   string
-		deltas []string
-		ids    []string
-		args   []string
+		name           string
+		deltas         []string
+		ids            []string
+		args           []string
+		partialIndices [][]int // -1 represents an omitted index.
 	}{
 		{
 			name: "single tool with anonymous continuation",
@@ -191,6 +214,60 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 			},
 			ids: []string{"call_a", "call_c", "call_b"}, args: []string{`{"a":1}`, `{"c":3}`, `{"b":2}`},
 		},
+		{
+			name: "missing index on identified continuation",
+			deltas: []string{
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_b", "call_a"}, args: []string{`{"b":2}`, `{"a":1}`},
+			partialIndices: [][]int{{1}, {1}, {0}, {0}},
+		},
+		{
+			name: "null index on identified continuation",
+			deltas: []string{
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":null,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_b", "call_a"}, args: []string{`{"b":2}`, `{"a":1}`},
+			partialIndices: [][]int{{1}, {1}, {0}, {0}},
+		},
+		{
+			name: "missing index on new tool does not claim provider zero",
+			deltas: []string{
+				`{"tool_calls":[{"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b"}, args: []string{`{"a":1}`, `{"b":2}`},
+			partialIndices: [][]int{{-1}, {1}, {-1}, {1}},
+		},
+		{
+			name: "anonymous continuation at assigned index",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"first","arguments":""}},{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":1,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b"}, args: []string{`{"a":1}`, `{"b":2}`},
+			partialIndices: [][]int{{0, 1}, {0}, {1}},
+		},
+		{
+			name: "anonymous declaration does not reuse occupied index",
+			deltas: []string{
+				`{"tool_calls":[{"index":-1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":-1,"function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_a", "auto_call_1"}, args: []string{`{"a":1}`, `{"b":2}`},
+			partialIndices: [][]int{{0}, {1}, {0}, {1}},
+		},
 	}
 	for _, tt := range tests {
 		for _, api := range []string{"iterator", "channel"} {
@@ -203,7 +280,8 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 					fmt.Fprint(w, "data: {\"id\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n")
 				}))
 				defer server.Close()
-				m := New("test-model", WithBaseURL(server.URL), WithAPIKey("test-key"))
+				m := New("test-model", WithBaseURL(server.URL), WithAPIKey("test-key"),
+					WithShowToolCallDelta(tt.partialIndices != nil))
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				req := &model.Request{
@@ -211,10 +289,21 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 					GenerationConfig: model.GenerationConfig{Stream: true},
 				}
 				var final *model.Response
+				var partialIndices [][]int
 				consume := func(resp *model.Response) bool {
 					assert.Nil(t, resp.Error)
 					if !resp.IsPartial {
 						final = resp
+					} else if len(resp.Choices) > 0 && len(resp.Choices[0].Delta.ToolCalls) > 0 {
+						var indices []int
+						for _, call := range resp.Choices[0].Delta.ToolCalls {
+							index := -1
+							if call.Index != nil {
+								index = *call.Index
+							}
+							indices = append(indices, index)
+						}
+						partialIndices = append(partialIndices, indices)
 					}
 					return true
 				}
@@ -238,6 +327,9 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 					require.NotNil(t, call.Index)
 					assert.Equal(t, i, *call.Index)
 					assert.Equal(t, tt.args[i], string(call.Function.Arguments))
+				}
+				if tt.partialIndices != nil {
+					assert.Equal(t, tt.partialIndices, partialIndices)
 				}
 			})
 		}

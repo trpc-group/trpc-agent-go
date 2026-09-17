@@ -1948,12 +1948,17 @@ func newToolCallIndexState() *toolCallIndexState {
 }
 
 // indexFor keeps IDs authoritative and uses the original provider index for
-// anonymous deltas. If several IDs share a provider index, anonymous deltas
-// remain ambiguous and retain the first mapping, as with the existing fallback.
-func (s *toolCallIndexState) indexFor(rawIndex int64, id string) int64 {
+// anonymous deltas. Missing or null indices must not create provider mappings.
+// Without a provider mapping, an anonymous continuation can still refer directly
+// to an assigned non-negative index, preserving the legacy fallback.
+// If several IDs share a provider index, anonymous deltas remain ambiguous and
+// retain the first mapping, as with the existing fallback.
+func (s *toolCallIndexState) indexFor(tc openai.ChatCompletionChunkChoiceDeltaToolCall) int64 {
+	rawIndex, id := tc.Index, tc.ID
+	indexPresent := tc.JSON.Index.Valid()
 	if id != "" {
 		if index, ok := s.idToIndexMap[id]; ok {
-			if _, exists := s.rawToIndexMap[rawIndex]; !exists {
+			if _, exists := s.rawToIndexMap[rawIndex]; indexPresent && !exists {
 				s.rawToIndexMap[rawIndex] = int64(index)
 			}
 			return int64(index)
@@ -1961,7 +1966,7 @@ func (s *toolCallIndexState) indexFor(rawIndex int64, id string) int64 {
 	}
 
 	index, mapped := s.rawToIndexMap[rawIndex]
-	if mapped {
+	if indexPresent && mapped {
 		if owner := s.indexToID[index]; id != "" && owner != "" && owner != id {
 			index = int64(s.nextIndex)
 		}
@@ -1972,10 +1977,13 @@ func (s *toolCallIndexState) indexFor(rawIndex int64, id string) int64 {
 			// See https://github.com/openai/openai-go/commit/940e9a11d6d2063a350afaca02cd804fc17192fc.
 			index = 0
 		}
-		if _, used := s.indexToID[index]; used {
+		anonymousContinuation := rawIndex >= 0 && id == "" && tc.Function.Name == ""
+		if _, used := s.indexToID[index]; used && !anonymousContinuation {
 			index = int64(s.nextIndex)
 		}
-		s.rawToIndexMap[rawIndex] = index
+		if indexPresent {
+			s.rawToIndexMap[rawIndex] = index
+		}
 	}
 	if id != "" {
 		s.idToIndexMap[id] = int(index)
@@ -2015,7 +2023,7 @@ func fixToolCallIndices(
 				if (tc.Index < 0) != negative {
 					continue
 				}
-				index := state.indexFor(tc.Index, tc.ID)
+				index := state.indexFor(tc)
 				if index == tc.Index {
 					continue
 				}
