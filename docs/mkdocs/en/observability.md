@@ -66,6 +66,16 @@ You can view tracing data in the Langfuse console.
 
 For message payload compatibility and the recommended OTel `role + parts` fields, see [Multimodal Telemetry Messages](telemetry-multimodal.md).
 
+#### Skill Observability
+
+When `skill_load` activates a skill, tRPC-Agent-Go emits a Galileo-compatible `invoke_skill {skill.name}` INTERNAL child span under the existing `execute_tool skill_load` span. The `invoke_skill` span represents skill activation/materialization: validating the selected skill and materializing `SKILL.md` content into agent context. It does not cover later `chat`, `workspace_exec`, `skill_run`, `skill_exec`, or other tool execution.
+
+The same activation also records `gen_ai.request_cnt` and `gen_ai.client.operation.duration` on the `trpc_agent_go.internal.invoke_skill` meter. Metric attributes are limited to low-cardinality fields such as `gen_ai.operation.name`, `gen_ai.skill.name`, `gen_ai.skill.id`, `gen_ai.user.id`, `gen_ai.agent.id`, optional `gen_ai.agent.name`, optional `gen_ai.skill.version`, and `error.type` on failures. Paths, content hashes, document lists, tool call IDs, and prompt content are not metric attributes.
+
+By default, the Langfuse exporter drops `invoke_skill` spans so existing Langfuse observation types, tree shape, and token accounting stay unchanged. Galileo and generic OTel exporters can still consume the span and metrics.
+
+For privacy, the `gen_ai.invoke_skill_request` / `gen_ai.invoke_skill_response` span attributes use safe path/content summaries by default: a compact path representation, SHA-256 hashes, byte sizes, and a truncated content preview. Galileo exporters may convert these attributes into platform events for display. Use the span attribute policy to drop, omit, or further truncate these attributes when exporting sensitive skill repositories.
+
 ##### Integration Code Description
 Langfuse supports receiving Trace data via the `/api/public/otel` (OTLP) endpoint, supporting HTTP/protobuf only, not gRPC.
 The above code integrates with Langfuse by setting `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`.
