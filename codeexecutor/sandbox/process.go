@@ -59,10 +59,11 @@ func (s ProcessSpec) runProgramSpec() codeexecutor.RunProgramSpec {
 // Process without Wait can retain backend resources and, under serial workspace
 // concurrency, permanently block later runs on the same workspace.
 type Process struct {
-	prepared *preparedProcess
-	stdin    io.WriteCloser
-	stdout   io.ReadCloser
-	stderr   io.ReadCloser
+	prepared    *preparedProcess
+	stdin       io.WriteCloser
+	stdout      io.ReadCloser
+	stderr      io.ReadCloser
+	stderrSetup *processStderrSetupTracker
 
 	waitOnce sync.Once
 	waitDone chan struct{}
@@ -72,6 +73,7 @@ type Process struct {
 type preparedProcess struct {
 	cmd     *exec.Cmd
 	backend string
+	profile PermissionProfile
 	runCtx  context.Context
 	release func()
 	once    sync.Once
@@ -120,22 +122,45 @@ func (r *Runtime) StartProcess(
 		prepared.cleanup()
 		return nil, fmt.Errorf("sandbox: create process stderr: %w", err)
 	}
+	var stderrSetup *processStderrSetupTracker
+	if prepared.profile.network.Mode == NetworkControlled {
+		stderrSetup, err = newProcessStderrSetupTracker(
+			stderr,
+			controlledEgressSetupToken(prepared.cmd.Args),
+		)
+		if err != nil {
+			_ = stdin.Close()
+			_ = stdout.Close()
+			_ = stderr.Close()
+			prepared.cleanup()
+			return nil, fmt.Errorf("sandbox: track process stderr: %w", err)
+		}
+	}
 	if err := prepared.cmd.Start(); err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
 		_ = stderr.Close()
+		if stderrSetup != nil {
+			_ = stderrSetup.reader.Close()
+			_ = stderrSetup.writer.Close()
+		}
 		prepared.cleanup()
 		return nil, backendError(ErrSetupFailed, prepared.backend, err)
+	}
+	if stderrSetup != nil {
+		stderrSetup.start()
+		stderr = stderrSetup.reader
 	}
 	// Drop parent ExtraFiles promptly; Wait still runs backend cleanup for
 	// synthetic deny-read targets and other release hooks.
 	releaseCmdExtraFiles(prepared.cmd)
 	return &Process{
-		prepared: prepared,
-		stdin:    stdin,
-		stdout:   stdout,
-		stderr:   stderr,
-		waitDone: make(chan struct{}),
+		prepared:    prepared,
+		stdin:       stdin,
+		stdout:      stdout,
+		stderr:      stderr,
+		stderrSetup: stderrSetup,
+		waitDone:    make(chan struct{}),
 	}, nil
 }
 
@@ -176,6 +201,7 @@ func (r *Runtime) prepareProcess(
 	return &preparedProcess{
 		cmd:     cmd,
 		backend: backendName,
+		profile: prep.profile,
 		runCtx:  runCtx,
 		release: func() {
 			if backendCleanup != nil {
@@ -237,6 +263,17 @@ func (p *Process) Wait() error {
 				}
 			case context.Canceled:
 				p.waitErr = errors.Join(context.Canceled, processErr)
+			default:
+				exitCode, exitErr := exitCodeFromWait(processErr, false)
+				if exitErr == nil {
+					if setupErr := mapControlledEgressSetupExit(
+						p.prepared.profile,
+						exitCode,
+						p.stderrSetup.setupMarkerSeen(),
+					); setupErr != nil {
+						p.waitErr = setupErr
+					}
+				}
 			}
 		}
 		p.prepared.cleanup()
