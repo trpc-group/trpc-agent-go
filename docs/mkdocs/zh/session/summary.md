@@ -622,7 +622,6 @@ summary.WithChecksAny(
 | `WithSystemPrompt(prompt string)` | 为摘要额外添加独立的 system message 指令；不能包含 `{conversation_text}` 或 `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | 在有父请求可用时，启用 cache-safe 摘要请求 forking。默认关闭 |
 | `WithCacheSafeForkPrompt(prompt string)` | 自定义 cache-safe fork 请求的最终指令；standalone fallback 会在 source-data boundary 后追加同一指令，其渲染结果会计入输入预算。可包含 `{max_summary_words}`，但不能包含 `{conversation_text}` 或 `{previous_summary}` |
-| `WithSkipRecent(skipFunc SkipRecentFunc)` | 自定义函数跳过最近事件 |
 | `WithSkipRecentContext(skipFunc ContextSkipRecentFunc)` | 使用请求 `context.Context` 决定跳过最近事件；最后配置的 skip-recent 选项生效 |
 
 ### Hook 选项
@@ -876,20 +875,20 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 ## 跳过最近事件
 
-使用 `WithSkipRecent` 可以在摘要时跳过最近的事件：
+使用 `WithSkipRecentContext` 可以在摘要时跳过最近的事件：
 
 ```go
 // 跳过固定数量的事件
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(_ []event.Event) int { return 2 }), // 跳过最后 2 个事件
+    summary.WithSkipRecentContext(func(_ context.Context, _ []event.Event) int { return 2 }), // 跳过最后 2 个事件
     summary.WithEventThreshold(10),
 )
 
 // 跳过最近 5 分钟的事件（时间窗口）
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(events []event.Event) int {
+    summary.WithSkipRecentContext(func(_ context.Context, events []event.Event) int {
         cutoff := time.Now().Add(-5 * time.Minute)
         skip := 0
         for i := len(events) - 1; i >= 0; i-- {
@@ -907,7 +906,7 @@ summarizer := summary.NewSummarizer(
 // 只跳过尾部的工具调用消息
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(events []event.Event) int {
+    summary.WithSkipRecentContext(func(_ context.Context, events []event.Event) int {
         skip := 0
         for i := len(events) - 1; i >= 0; i-- {
             if events[i].Response != nil && len(events[i].Response.Choices) > 0 &&
@@ -936,9 +935,6 @@ summarizer := summary.NewSummarizer(
     }),
 )
 ```
-
-`WithSkipRecent` 会继续保留，已有调用方无需修改。两个 skip-recent 选项同时配置时，
-`NewSummarizer` 参数列表中最后出现的选项生效。
 
 ## 摘要 Hook
 
@@ -1718,7 +1714,7 @@ SessionService API，也不新增诊断开关。
 | --- | --- |
 | `selected` | hook 前选定了事件；这不证明这些事件就是后来送进模型的 payload |
 | `no_candidates` | 该阶段本来就没有候选事件 |
-| `skip_recent_all` | `WithSkipRecent` 回调要求跳过的数量不少于可用事件数 |
+| `skip_recent_all` | `WithSkipRecentContext` 回调要求跳过的数量不少于可用事件数 |
 | `unsafe_prefix` | skip-recent 之后仍有事件，但保留的前缀既没有用户消息也没有前置的历史摘要作为锚点，因此被丢弃 |
 | `session_filter_empty` | 候选事件通过了 skip-recent，随后被摘要的分支作用域全部过滤掉 |
 | `unbound_view` | 存在模型可见视图，但未绑定到模型真正回答的请求 |
@@ -1726,7 +1722,7 @@ SessionService API，也不新增诊断开关。
 | `custom` | 本次摘要调用没有发布内置事件选择，计数未知 |
 | `none` | 没有 summarizer 运行，未观测到任何选择 |
 
-配套的计数描述的是接收 `WithSkipRecent` 回调的那个阶段：
+配套的计数描述的是接收 `WithSkipRecentContext` 回调的那个阶段：
 
 - `eligible_events`：交给该阶段的候选事件数，在 skip-recent 执行之前统计。对已
   绑定的模型可见视图，它包含前置的历史摘要；对未绑定视图，它是未被考虑的视图条
