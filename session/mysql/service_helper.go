@@ -737,6 +737,10 @@ type eventRef struct {
 	id             int64
 	createdAt      time.Time
 	eventTimestamp time.Time
+	// timestampMissing marks a row removed between ID and timestamp reads.
+	// Retain its ordering metadata so a partially deleted batch still advances
+	// the cursor without prematurely ending the search for older events.
+	timestampMissing bool
 }
 
 // getLimitedSessionEvents loads a bounded event window for GetSession while
@@ -896,7 +900,7 @@ func (s *Service) getRecentEventRefsAfterEventTime(
 			break
 		}
 		for _, ref := range batch {
-			if ref.eventTimestamp.Before(eventAfterTime) {
+			if ref.timestampMissing || ref.eventTimestamp.Before(eventAfterTime) {
 				continue
 			}
 			refs = append(refs, ref)
@@ -1074,8 +1078,11 @@ func (s *Service) getEventRefsWithTimestamp(
 	before *eventRef,
 	limit int,
 ) ([]eventRef, error) {
+	// Keep JSON out of the ordered query. Even a JSON_EXTRACT projection can
+	// make MySQL carry the full document in filesort records and exhaust the
+	// sort buffer for large events.
 	query := fmt.Sprintf(
-		`SELECT id, created_at, JSON_UNQUOTE(JSON_EXTRACT(event, '$.timestamp')) FROM %s
+		`SELECT id, created_at FROM %s
 		WHERE app_name = ? AND user_id = ? AND session_id = ?
 		AND created_at >= ?
 		AND deleted_at IS NULL`,
@@ -1094,10 +1101,46 @@ func (s *Service) getEventRefsWithTimestamp(
 	refs := make([]eventRef, 0, limit)
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		var ref eventRef
-		var eventTimestamp sql.NullString
-		if err := rows.Scan(&ref.id, &ref.createdAt, &eventTimestamp); err != nil {
+		if err := rows.Scan(&ref.id, &ref.createdAt); err != nil {
 			return err
 		}
+		ref.timestampMissing = true
+		refs = append(refs, ref)
+		return nil
+	}, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch get events failed: %w", err)
+	}
+	if len(refs) == 0 {
+		return refs, nil
+	}
+
+	placeholders := make([]string, len(refs))
+	args = make([]any, len(refs), len(refs)+1)
+	refIndexes := make(map[int64]int, len(refs))
+	for i, ref := range refs {
+		placeholders[i] = "?"
+		args[i] = ref.id
+		refIndexes[ref.id] = i
+	}
+	// TDSQL PK is (id, user_id); retain user_id for shard routing. This query
+	// intentionally has no ORDER BY: fill timestamps by ID in the first
+	// query's order, without sorting the referenced JSON payloads.
+	query = fmt.Sprintf(`SELECT id, JSON_UNQUOTE(JSON_EXTRACT(event, '$.timestamp')) FROM %s
+		WHERE id IN (%s) AND user_id = ? AND deleted_at IS NULL`,
+		s.tableSessionEvents, strings.Join(placeholders, ","))
+	args = append(args, key.UserID)
+	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var id int64
+		var eventTimestamp sql.NullString
+		if err := rows.Scan(&id, &eventTimestamp); err != nil {
+			return err
+		}
+		index, ok := refIndexes[id]
+		if !ok {
+			return nil
+		}
+		ref := &refs[index]
 		ref.eventTimestamp = ref.createdAt
 		if eventTimestamp.Valid && eventTimestamp.String != "" {
 			parsed, err := time.Parse(time.RFC3339Nano, eventTimestamp.String)
@@ -1106,7 +1149,7 @@ func (s *Service) getEventRefsWithTimestamp(
 			}
 			ref.eventTimestamp = parsed
 		}
-		refs = append(refs, ref)
+		ref.timestampMissing = false
 		return nil
 	}, query, args...)
 	if err != nil {
@@ -1121,7 +1164,7 @@ func filterRefsByEventTimestamp(refs []eventRef, afterTime time.Time) []eventRef
 	}
 	filtered := make([]eventRef, 0, len(refs))
 	for _, ref := range refs {
-		if ref.eventTimestamp.Before(afterTime) {
+		if ref.timestampMissing || ref.eventTimestamp.Before(afterTime) {
 			continue
 		}
 		filtered = append(filtered, ref)
