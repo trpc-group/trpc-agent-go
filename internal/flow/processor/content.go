@@ -843,7 +843,8 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 		summaryText,
 		p.SessionSummaryInjectionMode == SessionSummaryInjectionUser,
 	)
-	return len(messages) == 0, view
+	return len(messages) == 0 &&
+		!hasMaskedCurrentInvocationMessage(invocation), view
 }
 
 func modelVisibleHistoryView(
@@ -1496,6 +1497,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 	}
 	filter := inv.GetEventFilterKey()
 	var includedInvocationMessage bool
+	maskedInvocationMessage := hasMaskedCurrentInvocationMessage(inv)
 
 	var events []event.Event
 	sessionEvents := sessionEventsSnapshot(inv.Session)
@@ -1552,7 +1554,9 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 	}
 
 	// insert invocation message
-	if !includedInvocationMessage && model.HasPayload(inv.Message) {
+	if !includedInvocationMessage &&
+		!maskedInvocationMessage &&
+		model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
@@ -1620,10 +1624,9 @@ func sessionEventsSnapshot(sess *session.Session) []event.Event {
 	if sess == nil {
 		return nil
 	}
-	sess.EventMu.RLock()
-	defer sess.EventMu.RUnlock()
-	events := make([]event.Event, len(sess.Events))
-	for i, evt := range sess.Events {
+	visible := sess.GetVisibleEvents()
+	events := make([]event.Event, len(visible))
+	for i, evt := range visible {
 		events[i] = cloneEventForContentSnapshot(evt)
 	}
 	return events
@@ -2669,6 +2672,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationHistory(
 		}
 	}
 	if !containsInvocationMessage(events, inv.Message) &&
+		!hasMaskedCurrentInvocationMessage(inv) &&
 		model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
@@ -2792,6 +2796,40 @@ func containsInvocationMessage(
 			continue
 		}
 		if invocationMessageEqual(invocationMessage, evt.Choices[0].Message) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMaskedCurrentInvocationMessage(inv *agent.Invocation) bool {
+	if inv == nil || inv.Session == nil {
+		return false
+	}
+	hasRequestID := inv.RunOptions.RequestID != ""
+	hasInvocationID := inv.InvocationID != ""
+	// Empty request and invocation IDs are not a current-turn identity; matching
+	// them would suppress a repeated prompt that shares content with a masked
+	// historical message.
+	if !hasRequestID && !hasInvocationID {
+		return false
+	}
+
+	inv.Session.EventMu.RLock()
+	events := append([]event.Event(nil), inv.Session.Events...)
+	inv.Session.EventMu.RUnlock()
+
+	for _, evt := range events {
+		if !inv.Session.IsEventMasked(evt.ID) {
+			continue
+		}
+		if hasRequestID && isStrictInvocationMessage(evt, inv) {
+			return true
+		}
+		if hasInvocationID &&
+			evt.InvocationID == inv.InvocationID &&
+			len(evt.Choices) > 0 &&
+			invocationMessageEqual(inv.Message, evt.Choices[0].Message) {
 			return true
 		}
 	}

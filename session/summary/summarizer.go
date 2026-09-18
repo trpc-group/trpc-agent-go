@@ -364,7 +364,11 @@ func (s *sessionSummarizer) evaluateTrigger(
 	ctx context.Context,
 	sess *session.Session,
 ) Trigger {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return Trigger{}
+	}
+	visible := sess.GetVisibleEvents()
+	if len(visible) == 0 {
 		return Trigger{}
 	}
 	selection := s.selectSummaryEvents(ctx, sess)
@@ -470,7 +474,11 @@ func (s *sessionSummarizer) selectSummaryEvents(
 ) summaryEventSelection {
 	view, ok := modelVisibleViewForSession(ctx, sess)
 	if !ok {
-		retained, decision := s.filterEventsForSummaryObserved(sess.Events)
+		// Prefer Pensieve-visible events so masked content is never summarized
+		// when a model-visible projection is unavailable.
+		retained, decision := s.filterEventsForSummaryObserved(
+			sess.GetVisibleEvents(),
+		)
 		events := filterSummaryInputEventsForSession(retained, sess)
 		recordSelection(
 			ctx,
@@ -539,7 +547,10 @@ func (s *sessionSummarizer) selectSummaryEvents(
 	unmapped := false
 	if boundary, found := view.BoundaryForItems(itemIndexes); found {
 		selection.boundary = boundary
-		if source := sourceEventsThroughBoundary(sess.Events, boundary); len(source) > 0 {
+		if source := sourceEventsThroughBoundary(
+			sess.GetVisibleEvents(),
+			boundary,
+		); len(source) > 0 {
 			selection.sourceEvents = filterSummaryInputEventsForSession(source, sess)
 		}
 	} else if len(itemIndexes) > 0 {
@@ -672,12 +683,12 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	ctx = s.ensureReportContext(ctx)
 	previousSummary, _ := isummarycontext.PreviousSummary(ctx)
 	separatePreviousSummary := promptContainsVar(s.prompt, previousSummaryVar)
-	if len(sess.Events) == 0 && (!separatePreviousSummary || previousSummary == "") {
+	visible := sess.GetVisibleEvents()
+	if len(visible) == 0 && (!separatePreviousSummary || previousSummary == "") {
 		return "", fmt.Errorf("no events to summarize for session %s (events=0)", sess.ID)
 	}
 
-	// Extract conversation text from events. Use filtered events for summarization
-	// to skip recent events while ensuring proper context.
+	// Extract conversation text from model-visible / filtered events.
 	selection := s.selectSummaryEvents(ctx, sess)
 	eventsToSummarize := selection.events
 	conversationEvents := eventsToSummarize
