@@ -29,6 +29,7 @@ func init() {
 	Register("gemini", geminiProvider)
 	Register("ollama", ollamaProvider)
 	Register("hunyuan", hunyuanProvider)
+	Register("litellm", litellmProvider)
 }
 
 // Provider builds a model.Model instance.
@@ -135,6 +136,18 @@ func openaiProvider(opts *Options) (model.Model, error) {
 	}
 	res = append(res, opts.OpenAIOption...)
 	return openai.New(opts.ModelName, res...), nil
+}
+
+// litellmProvider builds a model instance backed by a LiteLLM gateway, which
+// exposes an OpenAI-compatible API for 100+ providers. It reuses the OpenAI
+// adapter with the LiteLLM variant so the local proxy base URL and the
+// LITELLM_API_KEY environment variable are applied by default. Callers may
+// override the base URL with WithBaseURL to target a remote proxy.
+func litellmProvider(opts *Options) (model.Model, error) {
+	if opts.Variant == "" {
+		opts.Variant = string(openai.VariantLiteLLM)
+	}
+	return openaiProvider(opts)
 }
 
 // anthropicProvider builds an Anthropic-compatible model instance using the resolved options.

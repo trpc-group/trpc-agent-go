@@ -61,6 +61,7 @@ func TestNew(t *testing.T) {
 	t.Setenv(deepSeekAPIKeyName, testKey)
 	t.Setenv(miniMaxAPIKeyName, testKey)
 	t.Setenv(kimiAPIKeyName, testKey)
+	t.Setenv(litellmAPIKeyName, testKey)
 	tests := []struct {
 		name       string
 		modelName  string
@@ -137,6 +138,30 @@ func TestNew(t *testing.T) {
 				WithAPIKey(testKey),
 			},
 			expectOpts: nil,
+		},
+		{
+			name:      "variant litellm defaults to local proxy base url",
+			modelName: "gpt-4o",
+			opts: []Option{
+				WithVariant(VariantLiteLLM),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultLiteLLMBaseURL),
+			},
+		},
+		{
+			name:      "litellm variant preserves custom proxy base url",
+			modelName: "gpt-4o",
+			opts: []Option{
+				WithVariant(VariantLiteLLM),
+				WithBaseURL("https://litellm.example.com/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://litellm.example.com/v1"),
+				WithVariant(VariantLiteLLM),
+			},
 		},
 		{
 			name:      "infers minimax from international api base url",
@@ -10878,4 +10903,42 @@ func TestImageToURLOrBase64(t *testing.T) {
 			assert.Equal(t, tt.want, result)
 		})
 	}
+}
+
+func TestModel_ListModels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/models") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"object": "list",
+			"data": [
+				{"id": "gpt-4o-mini", "object": "model", "created": 1699200000, "owned_by": "openai"},
+				{"id": "claude-sonnet-4-6", "object": "model", "created": 1699200000, "owned_by": "anthropic"}
+			]
+		}`)
+	}))
+	defer server.Close()
+
+	m := New("gpt-4o-mini", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	ids, err := m.ListModels(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-4o-mini", "claude-sonnet-4-6"}, ids)
+}
+
+func TestModel_ListModels_FallsBackToConfiguredModel(t *testing.T) {
+	// Discovery unavailable (404) -> fall back to the configured model name.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	m := New("gpt-4o-mini", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	ids, err := m.ListModels(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-4o-mini"}, ids)
 }
