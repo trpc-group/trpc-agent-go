@@ -598,12 +598,15 @@ The OpenAI-compatible adapter normalizes negative `tool_calls[].index` values
 before accumulation, without upgrading the SDK. A single tool call with index
 `-1` uses zero, following the newer OpenAI Go SDK's fallback. For mixed or
 conflicting indices, the adapter assigns separate non-negative indices and
-retains the mapping from each provider index throughout the stream. This keeps
+retains provider-to-accumulator mappings for subsequent chunks. This keeps
 continuation chunks that omit IDs attached to the correct tool call, even when
 a valid index arrives after a negative one. Mappings are scoped to each choice.
 Valid indices are preserved when they do not conflict with an assigned index.
 Calls displaced by a negative-index call retain that distinction through later
 collisions, so subsequent declarations at distinct provider indices stay separate.
+A known ID can introduce an alias at a different index. If a new ID later
+declares a call at that alias, the new call takes over the alias. The original
+call keeps its assigned index and can still continue by ID.
 An omitted or null index does not establish a provider index mapping. After
 matching a known ID, the adapter attaches such a delta to the unique compatible
 call, even at a nonzero index; otherwise, it retains the zero fallback. For an

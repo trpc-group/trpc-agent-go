@@ -217,6 +217,84 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 			ids: []string{"call_a", "call_c", "call_b"}, args: []string{`{"a":1}`, `{"c":3}`, `{"b":2}`},
 		},
 		{
+			name: "explicit zero alias reused by new call",
+			deltas: []string{
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_b", "call_a"}, names: []string{"second", "first"}, args: []string{`{"b":2}`, `{"a":1}`},
+			partialIndices: [][]int{{1}, {1}, {0}, {0}},
+		},
+		{
+			name: "explicit nonzero alias reused by new call",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":2,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":2,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":2,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b"}, names: []string{"first", "second"}, args: []string{`{"a":1}`, `{"b":2}`},
+			finalIndices: []int{0, 2}, partialIndices: [][]int{{0}, {0}, {2}, {2}},
+		},
+		{
+			name: "explicit alias original owner does not reclaim new call mapping",
+			deltas: []string{
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","function":{"arguments":"{\"a\":"}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","function":{"arguments":"1}"}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_b", "call_a"}, names: []string{"second", "first"}, args: []string{`{"b":2}`, `{"a":1}`},
+			partialIndices: [][]int{{1}, {1}, {0}, {1}, {0}},
+		},
+		{
+			name: "negative alias continues known call",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":-1,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+			},
+			ids: []string{"call_a"}, names: []string{"first"}, args: []string{`{"a":1}`},
+			partialIndices: [][]int{{0}, {0}},
+		},
+		{
+			name: "explicit assigned index establishes primary mapping",
+			deltas: []string{
+				`{"tool_calls":[{"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","function":{"arguments":"{\"a\":"}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"1}"}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b"}, names: []string{"first", "second"}, args: []string{`{"a":1}`, `{"b":2}`},
+			partialIndices: [][]int{{-1}, {0}, {1}, {0}, {1}},
+		},
+		{
+			name: "primary provider mapping retained for repeated index",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b"}, names: []string{"first", "second"}, args: []string{`{"a":1}`, `{"b":2}`},
+			partialIndices: [][]int{{0}, {1}, {0}, {1}},
+		},
+		{
+			name: "reused alias displaced by negative index",
+			deltas: []string{
+				`{"tool_calls":[{"index":-1,"id":"call_c","type":"function","function":{"name":"third","arguments":""}}]}`,
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","function":{"arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":-1,"function":{"arguments":"{\"c\":3}"}},{"index":1,"function":{"arguments":"{\"a\":1}"}},{"index":0,"function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_c", "call_a", "call_b"}, names: []string{"third", "first", "second"},
+			args: []string{`{"c":3}`, `{"a":1}`, `{"b":2}`}, partialIndices: [][]int{{0}, {1}, {1}, {2}, {0, 1, 2}},
+		},
+		{
 			name: "missing index on identified continuation",
 			deltas: []string{
 				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,

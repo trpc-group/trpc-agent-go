@@ -1934,9 +1934,16 @@ func hasAccumulatorPayloadBeyondReasoning(
 // negative or conflicting provider index has to be remapped.
 type toolCallIndexState struct {
 	idToIndexMap  map[string]int
-	rawToIndexMap map[int64]int64
+	rawToIndexMap map[int64]toolCallIndexMapping
 	slots         map[int64]toolCallIndexSlot
 	nextIndex     int
+}
+
+// toolCallIndexMapping distinguishes an assigned provider index from an alias
+// introduced by a known ID at a different index. A new call may claim an alias.
+type toolCallIndexMapping struct {
+	index int64
+	alias bool
 }
 
 // toolCallIndexSlot retains the identity and remapping origin of a slot.
@@ -1967,7 +1974,7 @@ func (s toolCallIndexSlot) canContinue(tc openai.ChatCompletionChunkChoiceDeltaT
 func newToolCallIndexState() *toolCallIndexState {
 	return &toolCallIndexState{
 		idToIndexMap:  make(map[string]int),
-		rawToIndexMap: make(map[int64]int64),
+		rawToIndexMap: make(map[int64]toolCallIndexMapping),
 		slots:         make(map[int64]toolCallIndexSlot),
 	}
 }
@@ -1989,29 +1996,42 @@ func (s *toolCallIndexState) uniqueCompatibleIndex(tc openai.ChatCompletionChunk
 	return index, found
 }
 
+// mappedIndex looks up a continuation that was not already resolved by ID.
+// A conflicting new ID can claim an alias without replacing a primary mapping.
+func (s *toolCallIndexState) mappedIndex(tc openai.ChatCompletionChunkChoiceDeltaToolCall) (int64, bool) {
+	if !tc.JSON.Index.Valid() {
+		return s.uniqueCompatibleIndex(tc)
+	}
+	mapping, found := s.rawToIndexMap[tc.Index]
+	if mapping.alias && tc.ID != "" && tc.ID != s.slots[mapping.index].id {
+		return 0, false
+	}
+	return mapping.index, found
+}
+
 // indexFor keeps IDs authoritative and uses the original provider index for
 // anonymous deltas. Missing or null indices must not create provider mappings.
 // They can continue a unique compatible call before falling back to zero.
 // Without a provider mapping, compatible metadata can still refer directly to
 // an assigned non-negative index, preserving the legacy fallback.
-// If several IDs share a provider index, anonymous deltas remain ambiguous and
-// retain the first mapping, as with the existing fallback.
+// If several IDs share a primary provider index, anonymous deltas retain the
+// first mapping. Aliases introduced by known IDs may be claimed by new calls.
 func (s *toolCallIndexState) indexFor(tc openai.ChatCompletionChunkChoiceDeltaToolCall) int64 {
 	rawIndex, id := tc.Index, tc.ID
 	indexPresent := tc.JSON.Index.Valid()
 	if id != "" {
 		if index, ok := s.idToIndexMap[id]; ok {
 			if _, exists := s.rawToIndexMap[rawIndex]; indexPresent && !exists {
-				s.rawToIndexMap[rawIndex] = int64(index)
+				s.rawToIndexMap[rawIndex] = toolCallIndexMapping{
+					index: int64(index),
+					alias: rawIndex != int64(index),
+				}
 			}
 			return int64(index)
 		}
 	}
 
-	index, mapped := s.rawToIndexMap[rawIndex]
-	if !indexPresent {
-		index, mapped = s.uniqueCompatibleIndex(tc)
-	}
+	index, mapped := s.mappedIndex(tc)
 	negativeRemap := rawIndex < 0
 	if mapped {
 		if slot := s.slots[index]; id != "" && slot.id != "" && slot.id != id {
@@ -2030,7 +2050,7 @@ func (s *toolCallIndexState) indexFor(tc openai.ChatCompletionChunkChoiceDeltaTo
 			index = int64(s.nextIndex)
 		}
 		if indexPresent {
-			s.rawToIndexMap[rawIndex] = index
+			s.rawToIndexMap[rawIndex] = toolCallIndexMapping{index: index}
 		}
 	}
 	slot, used := s.slots[index]
