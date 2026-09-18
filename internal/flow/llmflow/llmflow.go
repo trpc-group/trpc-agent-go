@@ -50,6 +50,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -1001,6 +1002,11 @@ func (p *streamingResponseProcessor) process(
 		}
 		return true
 	}
+	if err := p.runBeforeResponseDispatchCallbacks(response); err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
 	llmResponseEvent := p.emitLLMResponse(
 		eventInvocation,
 		response,
@@ -1033,6 +1039,24 @@ func (p *streamingResponseProcessor) process(
 		responseSpan.SetAttributes(latencyResponseAttrs(response)...)
 	}
 	return true
+}
+
+func (p *streamingResponseProcessor) runBeforeResponseDispatchCallbacks(
+	response *model.Response,
+) error {
+	if p == nil || response == nil || response.IsPartial ||
+		p.currentInvocation == nil ||
+		p.currentInvocation.Plugins == nil {
+		return nil
+	}
+	runner, ok := p.currentInvocation.Plugins.(plugin.BeforeResponseDispatchManager)
+	if !ok {
+		return nil
+	}
+	return runner.RunBeforeResponseDispatch(p.ctx, &plugin.BeforeResponseDispatchArgs{
+		Request:  p.llmRequest,
+		Response: response,
+	})
 }
 
 func validateCompletedToolCallNames(response *model.Response) error {
