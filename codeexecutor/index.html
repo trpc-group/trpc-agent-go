@@ -922,6 +922,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Choosing a Backend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#e2b-workspace-programs" class="md-nav__link">
+    <span class="md-ellipsis">
+      E2B workspace programs
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3909,6 +3924,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Choosing a Backend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#e2b-workspace-programs" class="md-nav__link">
+    <span class="md-ellipsis">
+      E2B workspace programs
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -4416,6 +4446,52 @@ its framework default so your existing behavior is preserved.</p>
 <li>isolated or production-like execution: <code>container</code></li>
 <li>notebook workflows: <code>jupyter</code></li>
 </ul>
+<h3 id="e2b-workspace-programs">E2B workspace programs</h3>
+<p><code>e2b.CodeExecutor.RunProgram</code> and <code>Engine().Runner().RunProgram</code> use native
+envd Process RPCs. They do not require the Code Interpreter <code>/execute</code>
+endpoint. <code>ExecuteCode</code>, including explicitly submitted Bash code blocks,
+continues to use Code Interpreter kernels. Workspace filesystem operations
+still use <code>/execute</code>; this migration covers program execution only.</p>
+<ul>
+<li>A non-positive <code>RunProgramSpec.Timeout</code> uses 30 seconds. The timeout covers
+  directory preparation and the command. <code>WithExecutionTimeout</code> applies to
+  code cells, not workspace programs.</li>
+<li>Stdout and stderr preserve their exact bytes, including trailing newlines
+  and text matching the former output sentinels. Capture is not truncated.</li>
+<li>A normal non-zero exit is returned in <code>RunResult.ExitCode</code> with a nil error.
+  Caller cancellation and HTTP/RPC failures return errors. Only the process
+  deadline sets <code>TimedOut</code>; caller deadlines do not. Cancellation or a failed
+  stream triggers bounded, best-effort process cleanup, which can add latency
+  and may itself fail.</li>
+<li><code>CleanEnv</code> uses <code>env -i</code>, with workspace variables and caller <code>Env</code> values.
+  Caller values override workspace defaults. When no <code>PATH</code> is supplied, clean
+  mode adds the minimal system path. The Linux template must provide
+  <code>/bin/bash</code>, <code>/bin/mkdir</code>, and <code>/usr/bin/env</code> for directory preparation.</li>
+<li>Non-empty <code>Stdin</code> requires envd <strong>0.5.2 or newer</strong> to signal EOF. The version
+  is read from sandbox create/connect metadata; missing versions are refreshed
+  from sandbox info. Unknown or unsupported stdin capability fails before the
+  command starts. Empty stdin reaches EOF even on older envd versions.
+  There is no fallback to <code>/execute</code>.</li>
+</ul>
+<p>The native route reuses the sandbox domain, data-plane tokens and configured
+HTTP client for both new and connected sandboxes. It preserves an explicitly
+configured <code>http.Client.Timeout</code>; do not set that timeout shorter than the
+long-running commands you need. The default <code>WithRequestTimeout</code> is not imposed
+as a total timeout on the Process stream. Remote Process endpoints require
+HTTPS. Local debug can use <code>WithDebug(true)</code> with <code>WithDomain("localhost")</code> or
+a loopback IP, but HTTP cannot carry access tokens or configured headers.</p>
+<p>Remote workspace programs default to <code>root</code>, matching the standard Code
+Interpreter kernel that creates workspace directories, stages files, and reads
+outputs. This preserves access to existing workspaces and private staged files
+without changing their ownership or permissions. The native template default
+can be a different account, so the Code Interpreter adapter selects its account
+explicitly, independent of the envd version.</p>
+<p>For a custom template whose kernel runs as another account, configure the same
+account through <code>WithHeaders</code> using Basic authentication, for example
+<code>Authorization: Basic dXNlcjo=</code> for <code>user:</code> over HTTPS. An explicit
+<code>Authorization</code> header takes precedence. Credentialless loopback debug follows
+the local server's account. Kernel-local environment changes are not inherited
+by native processes; check HOME/PATH when migrating custom templates.</p>
 <h2 id="workspace-layout">Workspace Layout</h2>
 <p>Programs run inside a workspace. Common directories are:</p>
 <ul>
@@ -5515,7 +5591,7 @@ exposes it depends on the higher-level Agent and tool wiring.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 24, 2026 07:41:44 UTC">2026-07-24 07:41:44</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 18, 2026 06:38:35 UTC">2026-09-18 06:38:35</span>
   </span>
 
     
