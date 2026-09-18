@@ -45,6 +45,42 @@ func TestReplaceLastUserNoUserAppends(t *testing.T) {
 	require.Equal(t, "u-new", out[1].Content)
 }
 
+func TestReplaceLastUserMessageKeepsContentParts(t *testing.T) {
+	text := "hello"
+	updated := "HELLO"
+	messages := []model.Message{
+		model.NewAssistantMessage("a1"),
+		{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeText, Text: &text},
+				{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.com/a.png"}},
+			},
+		},
+	}
+	out := (replaceLastUserMessage{message: model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &updated},
+			{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.com/a.png"}},
+		},
+	}}).Apply(messages)
+	require.Len(t, out, 2)
+	require.Equal(t, model.RoleUser, out[1].Role)
+	require.Empty(t, out[1].Content)
+	require.Len(t, out[1].ContentParts, 2)
+	require.Equal(t, "HELLO", *out[1].ContentParts[0].Text)
+	require.Equal(t, model.ContentTypeImage, out[1].ContentParts[1].Type)
+}
+
+func TestReplaceLastUserMessageNoUserAppends(t *testing.T) {
+	messages := []model.Message{model.NewAssistantMessage("a1")}
+	out := (replaceLastUserMessage{message: model.NewUserMessage("u-new")}).Apply(messages)
+	require.Len(t, out, 2)
+	require.Equal(t, model.RoleUser, out[1].Role)
+	require.Equal(t, "u-new", out[1].Content)
+}
+
 func TestRemoveAllMessages(t *testing.T) {
 	base := []model.Message{model.NewUserMessage("x")}
 	out := (RemoveAllMessages{}).Apply(base)
