@@ -41,9 +41,10 @@ type manager struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 
-	maxLines int
-	jobTTL   time.Duration
-	baseEnv  map[string]string
+	maxLines  int
+	jobTTL    time.Duration
+	baseEnv   map[string]string
+	spawnHook func(*exec.Cmd) error
 
 	clock func() time.Time
 }
@@ -106,6 +107,7 @@ func (m *manager) exec(
 			timeout,
 			m.baseEnv,
 			m.maxLines,
+			m.spawnHook,
 		)
 		if err != nil {
 			return execResult{}, err
@@ -176,6 +178,7 @@ func runForeground(
 	timeout time.Duration,
 	baseEnv map[string]string,
 	maxLines int,
+	hook func(*exec.Cmd) error,
 ) (string, int, error) {
 	// A foreground session is never registered with the manager, so write_stdin
 	// can never reach it and no caller can answer a prompt it raises. Detach it
@@ -190,6 +193,7 @@ func runForeground(
 		timeout,
 		baseEnv,
 		maxLines,
+		hook,
 		detachStdin,
 	)
 	if err != nil {
@@ -205,6 +209,18 @@ func runForeground(
 
 	out, code := sess.allOutput()
 	return out, code, nil
+}
+
+// applySpawnHook runs the caller's spawn hook, if any, on a fully prepared
+// command. A nil hook is a no-op.
+func applySpawnHook(
+	cmd *exec.Cmd,
+	hook func(*exec.Cmd) error,
+) error {
+	if hook == nil {
+		return nil
+	}
+	return hook(cmd)
 }
 
 func timeoutDuration(timeoutS int) time.Duration {
@@ -298,6 +314,7 @@ func (m *manager) startBackground(
 		timeout,
 		m.baseEnv,
 		m.maxLines,
+		m.spawnHook,
 		keepStdin,
 	)
 	if err != nil {
@@ -323,6 +340,7 @@ func startSession(
 	timeout time.Duration,
 	baseEnv map[string]string,
 	maxLines int,
+	hook func(*exec.Cmd) error,
 	detach bool,
 ) (*session, error) {
 	runCtx, cancel := context.WithTimeout(
@@ -342,7 +360,7 @@ func startSession(
 	sess.cmd = cmd
 
 	if params.Pty {
-		master, closeIO, err := startPTY(cmd)
+		master, closeIO, err := startPTY(cmd, hook)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -356,12 +374,23 @@ func startSession(
 			sess.readFrom(master)
 		}()
 	} else {
+		// The hook runs before any pipe exists: a rejection then leaves nothing
+		// to close, whereas after startPipes the child ends would stay open
+		// until garbage collection. It also runs after preparePipeCommand so
+		// it sees the process attributes, which are reapplied afterwards
+		// because a hook that replaces SysProcAttr must not be able to drop
+		// the group leadership terminateProcessTree relies on.
+		preparePipeCommand(cmd, detach)
+		if err := applySpawnHook(cmd, hook); err != nil {
+			cancel()
+			return nil, err
+		}
+		preparePipeCommand(cmd, detach)
 		stdin, stdout, stderr, err := startPipes(cmd, detach)
 		if err != nil {
 			cancel()
 			return nil, err
 		}
-		preparePipeCommand(cmd, detach)
 		sess.stdin = stdin
 		sess.closeIO = func() error {
 			if stdin != nil {
