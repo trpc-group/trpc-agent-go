@@ -100,6 +100,11 @@ type Event struct {
 	// Response is the base struct for all LLM response functionality.
 	*model.Response
 
+	// RunOutcome describes the outcome of the run represented by this event.
+	// It is populated on runner completion events when the run was explicitly
+	// cancelled; it is nil for other events and normal completion.
+	RunOutcome *RunOutcome `json:"run_outcome,omitempty"`
+
 	// RequestID is the request ID of the event.
 	RequestID string `json:"requestID,omitempty"`
 
@@ -168,6 +173,24 @@ type Event struct {
 	Version int `json:"version,omitempty"`
 }
 
+// RunOutcome describes the outcome attached to a runner completion event.
+type RunOutcome struct {
+	Status RunOutcomeStatus `json:"status,omitempty"`
+}
+
+// RunOutcomeStatus identifies a runner execution outcome. Consumers should
+// ignore values they do not recognize so newer statuses remain compatible.
+type RunOutcomeStatus string
+
+const (
+	// RunOutcomeStatusCancelled indicates that the run was explicitly cancelled
+	// through the AG-UI cancel API.
+	RunOutcomeStatusCancelled RunOutcomeStatus = "cancelled"
+	// RunOutcomeStatusTimedOut indicates that the run ended because its deadline
+	// was exceeded.
+	RunOutcomeStatusTimedOut RunOutcomeStatus = "timed_out"
+)
+
 // ContainsTag checks if the event contains the specified tag.
 func (e *Event) ContainsTag(tag string) bool {
 	if e.Tag == "" {
@@ -200,6 +223,11 @@ func (e *Event) Clone() *Event {
 	}
 	clone := *e
 	clone.Response = e.Response.Clone()
+	if e.RunOutcome != nil {
+		clone.RunOutcome = &RunOutcome{
+			Status: e.RunOutcome.Status,
+		}
+	}
 	clone.LongRunningToolIDs = make(map[string]struct{})
 	clone.Version = CurrentVersion
 	clone.ID = uuid.NewString()
