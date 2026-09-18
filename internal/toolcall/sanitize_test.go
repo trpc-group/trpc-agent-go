@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -905,6 +906,15 @@ func TestValidateValueAgainstSchema_ScalarTypes(t *testing.T) {
 	assert.Empty(t, reason)
 
 	ok, reason = validateValueAgainstSchema(json.Number("1e309"), &tool.Schema{Type: "number"}, nil, "$")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+
+	overLong := json.Number("1e" + strings.Repeat("9", maxJSONNumberTokenLen))
+	ok, reason = validateValueAgainstSchema(overLong, &tool.Schema{Type: "number"}, nil, "$")
+	assert.False(t, ok)
+	assert.Contains(t, reason, "expected number")
+
+	ok, reason = validateValueAgainstSchema(json.Number("not-a-number"), &tool.Schema{Type: "number"}, nil, "$")
 	assert.False(t, ok)
 	assert.Contains(t, reason, "expected number")
 
@@ -915,6 +925,157 @@ func TestValidateValueAgainstSchema_ScalarTypes(t *testing.T) {
 	ok, reason = validateValueAgainstSchema(1.0, &tool.Schema{Type: "integer"}, nil, "$")
 	assert.False(t, ok)
 	assert.Contains(t, reason, "expected integer")
+}
+
+func TestSanitizeMessagesWithTools_DowngradesNumericBounds(t *testing.T) {
+	const large = "9007199254740993"
+	tools := map[string]tool.Tool{
+		"bounded_search": stubTool{decl: &tool.Declaration{
+			Name: "bounded_search",
+			InputSchema: &tool.Schema{
+				Type: "object",
+				Properties: map[string]*tool.Schema{
+					"page_size": {
+						Type:    "integer",
+						Minimum: "1",
+						Maximum: "10",
+					},
+					"nested": {
+						Type: "object",
+						Properties: map[string]*tool.Schema{
+							"cursor": {
+								Type:             "integer",
+								ExclusiveMinimum: large,
+								ExclusiveMaximum: "9007199254740995",
+							},
+						},
+					},
+				},
+			},
+		}},
+	}
+
+	t.Run("above maximum", func(t *testing.T) {
+		in := []model.Message{{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "bounded_search",
+					Arguments: []byte(`{"page_size":11}`),
+				},
+			}},
+		}}
+		out := SanitizeMessagesWithTools(context.Background(), in, tools)
+		require.Len(t, out, 1)
+		assert.Equal(t, model.RoleUser, out[0].Role)
+		assert.Contains(t, out[0].Content, "above maximum")
+		assert.Contains(t, out[0].Content, "$.page_size")
+	})
+
+	t.Run("below minimum", func(t *testing.T) {
+		in := []model.Message{{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "bounded_search",
+					Arguments: []byte(`{"page_size":0}`),
+				},
+			}},
+		}}
+		out := SanitizeMessagesWithTools(context.Background(), in, tools)
+		require.Len(t, out, 1)
+		assert.Contains(t, out[0].Content, "below minimum")
+	})
+
+	t.Run("nested exclusive bounds above 2^53", func(t *testing.T) {
+		in := []model.Message{{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "bounded_search",
+					Arguments: []byte(`{"nested":{"cursor":9007199254740993}}`),
+				},
+			}},
+		}}
+		out := SanitizeMessagesWithTools(context.Background(), in, tools)
+		require.Len(t, out, 1)
+		assert.Contains(t, out[0].Content, "exclusiveMinimum")
+		assert.Contains(t, out[0].Content, "$.nested.cursor")
+	})
+
+	t.Run("nested exclusive maximum", func(t *testing.T) {
+		in := []model.Message{{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "bounded_search",
+					Arguments: []byte(`{"nested":{"cursor":9007199254740995}}`),
+				},
+			}},
+		}}
+		out := SanitizeMessagesWithTools(context.Background(), in, tools)
+		require.Len(t, out, 1)
+		assert.Contains(t, out[0].Content, "exclusiveMaximum")
+	})
+
+	t.Run("nested exclusive in range preserved", func(t *testing.T) {
+		in := []model.Message{
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: "call_1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "bounded_search",
+						Arguments: []byte(`{"page_size":5,"nested":{"cursor":9007199254740994}}`),
+					},
+				}},
+			},
+			{
+				Role:    model.RoleTool,
+				ToolID:  "call_1",
+				Content: "ok",
+			},
+		}
+		out := SanitizeMessagesWithTools(context.Background(), in, tools)
+		require.Len(t, out, 2)
+		assert.Equal(t, model.RoleAssistant, out[0].Role)
+		assert.Equal(t, model.RoleTool, out[1].Role)
+	})
+}
+
+func TestValidateNumericBounds_LargeInclusive(t *testing.T) {
+	schema := &tool.Schema{
+		Type:    "integer",
+		Minimum: "9007199254740993",
+		Maximum: "9007199254740993",
+	}
+	ok, reason := validateValueAgainstSchema(json.Number("9007199254740993"), schema, nil, "$.id")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+
+	ok, reason = validateValueAgainstSchema(json.Number("9007199254740992"), schema, nil, "$.id")
+	assert.False(t, ok)
+	assert.Contains(t, reason, "below minimum")
+}
+
+func TestValidateNumericBounds_SkipsUnparsableBound(t *testing.T) {
+	// An unparsable minimum must not disable a valid maximum.
+	schema := &tool.Schema{
+		Type:    "number",
+		Minimum: "not-a-number",
+		Maximum: "10",
+	}
+	ok, reason := validateNumericBounds(json.Number("11"), schema, "$")
+	assert.False(t, ok)
+	assert.Contains(t, reason, "above maximum")
+
+	ok, reason = validateNumericBounds(json.Number("5"), schema, "$")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
 }
 
 func TestValidateValueAgainstSchema_StringPattern(t *testing.T) {
