@@ -50,6 +50,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -1001,7 +1002,7 @@ func (p *streamingResponseProcessor) process(
 		}
 		return true
 	}
-	if err := p.runBeforeToolExecutionCallbacks(response); err != nil {
+	if err := p.runBeforeResponseDispatchCallbacks(response); err != nil {
 		*p.err = err
 		responseErr = err
 		return false
@@ -1040,23 +1041,19 @@ func (p *streamingResponseProcessor) process(
 	return true
 }
 
-func (p *streamingResponseProcessor) runBeforeToolExecutionCallbacks(
+func (p *streamingResponseProcessor) runBeforeResponseDispatchCallbacks(
 	response *model.Response,
 ) error {
-	if p == nil || p.currentInvocation == nil ||
+	if p == nil || response == nil || response.IsPartial ||
+		p.currentInvocation == nil ||
 		p.currentInvocation.Plugins == nil {
 		return nil
 	}
-	runner, ok := p.currentInvocation.Plugins.(interface {
-		RunBeforeToolExecution(
-			context.Context,
-			*agent.BeforeToolExecutionArgs,
-		) error
-	})
+	runner, ok := p.currentInvocation.Plugins.(plugin.BeforeResponseDispatchManager)
 	if !ok {
 		return nil
 	}
-	return runner.RunBeforeToolExecution(p.ctx, &agent.BeforeToolExecutionArgs{
+	return runner.RunBeforeResponseDispatch(p.ctx, &plugin.BeforeResponseDispatchArgs{
 		Request:  p.llmRequest,
 		Response: response,
 	})

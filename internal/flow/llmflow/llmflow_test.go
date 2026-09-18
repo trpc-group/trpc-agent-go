@@ -655,7 +655,7 @@ func TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled(t *testin
 	require.Equal(t, "{\"a\":2}", string(response.Choices[0].Message.ToolCalls[0].Function.Arguments))
 }
 
-func TestProcessStreamingResponses_BeforeToolExecutionSeesFinalResponse(t *testing.T) {
+func TestProcessStreamingResponses_BeforeResponseDispatchSeesFinalResponse(t *testing.T) {
 	var seenArguments []byte
 	customResponse := &model.Response{
 		Done: true,
@@ -682,9 +682,9 @@ func TestProcessStreamingResponses_BeforeToolExecutionSeesFinalResponse(t *testi
 			) (*model.AfterModelResult, error) {
 				return &model.AfterModelResult{CustomResponse: customResponse}, nil
 			})
-			r.BeforeToolExecution(func(
+			r.BeforeResponseDispatch(func(
 				_ context.Context,
-				args *agent.BeforeToolExecutionArgs,
+				args *plugin.BeforeResponseDispatchArgs,
 			) error {
 				seenArguments = append(
 					[]byte(nil),
@@ -726,14 +726,56 @@ func TestProcessStreamingResponses_BeforeToolExecutionSeesFinalResponse(t *testi
 	require.Equal(t, `{"a":2}`, string(seenArguments))
 }
 
-func TestProcessStreamingResponses_BeforeToolExecutionErrorStopsProcessing(t *testing.T) {
+func TestProcessStreamingResponses_BeforeResponseDispatchSkipsPartialResponses(t *testing.T) {
+	var calls int
+	p := &hookPlugin{
+		name: "complete-response-hook",
+		reg: func(r *plugin.Registry) {
+			r.BeforeResponseDispatch(func(
+				_ context.Context,
+				_ *plugin.BeforeResponseDispatchArgs,
+			) error {
+				calls++
+				return nil
+			})
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationPlugins(plugin.MustNewManager(p)),
+	)
+	f := New(nil, nil, Options{})
+	responseSeq := func(yield func(*model.Response) bool) {
+		yield(&model.Response{IsPartial: true})
+		yield(&model.Response{Done: true})
+	}
+	eventChan := make(chan *event.Event, 2)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(context.Background(), "s")
+	defer span.End()
+
+	lastEvent, err := f.processStreamingResponses(
+		ctx,
+		inv,
+		nil,
+		&model.Request{},
+		responseSeq,
+		eventChan,
+		span,
+		true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Equal(t, 1, calls)
+}
+
+func TestProcessStreamingResponses_BeforeResponseDispatchErrorStopsProcessing(t *testing.T) {
 	wantErr := errors.New("before tool execution failed")
 	p := &hookPlugin{
 		name: "final-response-hook",
 		reg: func(r *plugin.Registry) {
-			r.BeforeToolExecution(func(
+			r.BeforeResponseDispatch(func(
 				_ context.Context,
-				_ *agent.BeforeToolExecutionArgs,
+				_ *plugin.BeforeResponseDispatchArgs,
 			) error {
 				return wantErr
 			})
@@ -763,14 +805,44 @@ func TestProcessStreamingResponses_BeforeToolExecutionErrorStopsProcessing(t *te
 	require.Nil(t, lastEvent)
 }
 
-func TestStreamingResponseProcessor_BeforeToolExecutionFailOpen(t *testing.T) {
+func TestStreamingResponseProcessor_BeforeResponseDispatchFailOpen(t *testing.T) {
 	var nilProcessor *streamingResponseProcessor
-	require.NoError(t, nilProcessor.runBeforeToolExecutionCallbacks(nil))
+	require.NoError(t, nilProcessor.runBeforeResponseDispatchCallbacks(nil))
 
 	processor := &streamingResponseProcessor{}
-	require.NoError(t, processor.runBeforeToolExecutionCallbacks(nil))
+	require.NoError(t, processor.runBeforeResponseDispatchCallbacks(nil))
 	processor.currentInvocation = &agent.Invocation{Plugins: stubPluginManager{}}
-	require.NoError(t, processor.runBeforeToolExecutionCallbacks(nil))
+	require.NoError(t, processor.runBeforeResponseDispatchCallbacks(nil))
+}
+
+func TestStreamingResponseProcessor_BeforeResponseDispatchSkipsPartialResponses(t *testing.T) {
+	var calls int
+	p := &hookPlugin{
+		name: "complete-response-hook",
+		reg: func(r *plugin.Registry) {
+			r.BeforeResponseDispatch(func(
+				_ context.Context,
+				_ *plugin.BeforeResponseDispatchArgs,
+			) error {
+				calls++
+				return nil
+			})
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationPlugins(plugin.MustNewManager(p)),
+	)
+	processor := &streamingResponseProcessor{
+		ctx:               context.Background(),
+		currentInvocation: inv,
+	}
+
+	require.NoError(t, processor.runBeforeResponseDispatchCallbacks(&model.Response{
+		IsPartial: true,
+	}))
+	require.Equal(t, 0, calls)
+	require.NoError(t, processor.runBeforeResponseDispatchCallbacks(&model.Response{}))
+	require.Equal(t, 1, calls)
 }
 
 func TestProcessStreamingResponses_RejectsEmptyCompletedToolCallNameBeforeEmit(t *testing.T) {

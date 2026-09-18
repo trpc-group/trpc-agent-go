@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	pluginbase "trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -155,63 +156,73 @@ func TestPluginStopsBeforeRepeatedToolBundle(t *testing.T) {
 			),
 		}},
 	}
-	err := manager.RunBeforeToolExecution(
+	err := manager.RunBeforeResponseDispatch(
 		ctx,
-		&agent.BeforeToolExecutionArgs{Response: response},
+		&pluginbase.BeforeResponseDispatchArgs{Response: response},
 	)
 	require.Error(t, err)
 	stopErr, ok := agent.AsStopError(err)
 	require.True(t, ok)
 	require.Contains(t, stopErr.Error(), "fingerprint")
 
-	err = manager.RunBeforeToolExecution(
+	err = manager.RunBeforeResponseDispatch(
 		ctx,
-		&agent.BeforeToolExecutionArgs{Response: response},
+		&pluginbase.BeforeResponseDispatchArgs{Response: response},
 	)
 	require.NoError(t, err)
 }
 
-func TestPluginBeforeToolExecutionFailOpenAndUsesDelta(t *testing.T) {
+func TestPluginBeforeResponseDispatchFailOpenAndUsesDelta(t *testing.T) {
 	plugin := &toolLoopWarningPlugin{stopAfterWarning: true}
 	var nilPlugin *toolLoopWarningPlugin
-	err := nilPlugin.beforeToolExecution(context.Background(), nil)
+	err := nilPlugin.beforeResponseDispatch(context.Background(), nil)
 	require.NoError(t, err)
-	err = plugin.beforeToolExecution(context.Background(), nil)
+	err = plugin.beforeResponseDispatch(context.Background(), nil)
 	require.NoError(t, err)
-	err = plugin.beforeToolExecution(
+	err = plugin.beforeResponseDispatch(
 		context.Background(),
-		&agent.BeforeToolExecutionArgs{Response: &model.Response{IsPartial: true}},
+		&pluginbase.BeforeResponseDispatchArgs{Response: &model.Response{IsPartial: true}},
 	)
 	require.NoError(t, err)
 
 	invocation := agent.NewInvocation()
 	ctx := agent.NewInvocationContext(context.Background(), invocation)
 	response := &model.Response{Done: true}
-	err = plugin.beforeToolExecution(
+	err = plugin.beforeResponseDispatch(
 		ctx,
-		&agent.BeforeToolExecutionArgs{Response: response},
+		&pluginbase.BeforeResponseDispatchArgs{Response: response},
 	)
 	require.NoError(t, err)
 
 	state := &detectorState{}
 	invocation.SetState(stateKey, state)
-	err = plugin.beforeToolExecution(
+	err = plugin.beforeResponseDispatch(
 		ctx,
-		&agent.BeforeToolExecutionArgs{Response: response},
+		&pluginbase.BeforeResponseDispatchArgs{Response: response},
 	)
 	require.NoError(t, err)
 
 	state.armedFingerprint = "armed"
-	err = plugin.beforeToolExecution(
+	err = plugin.beforeResponseDispatch(
 		ctx,
-		&agent.BeforeToolExecutionArgs{Response: response},
+		&pluginbase.BeforeResponseDispatchArgs{Response: response},
 	)
 	require.NoError(t, err)
 
 	state.armedFingerprint = "armed"
-	err = plugin.beforeToolExecution(
+	err = plugin.beforeResponseDispatch(
 		ctx,
-		&agent.BeforeToolExecutionArgs{Response: response},
+		&pluginbase.BeforeResponseDispatchArgs{Response: &model.Response{
+			IsPartial: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "armed", state.armedFingerprint)
+
+	state.armedFingerprint = "armed"
+	err = plugin.beforeResponseDispatch(
+		ctx,
+		&pluginbase.BeforeResponseDispatchArgs{Response: response},
 	)
 	require.NoError(t, err)
 
@@ -220,9 +231,9 @@ func TestPluginBeforeToolExecutionFailOpenAndUsesDelta(t *testing.T) {
 		Done:    true,
 		Choices: []model.Choice{{Message: assistantToolMessage(newToolCall("id", "", `{}`))}},
 	}
-	err = plugin.beforeToolExecution(
+	err = plugin.beforeResponseDispatch(
 		ctx,
-		&agent.BeforeToolExecutionArgs{Response: invalid},
+		&pluginbase.BeforeResponseDispatchArgs{Response: invalid},
 	)
 	require.NoError(t, err)
 
@@ -231,9 +242,9 @@ func TestPluginBeforeToolExecutionFailOpenAndUsesDelta(t *testing.T) {
 		Done:    true,
 		Choices: []model.Choice{{Message: assistantToolMessage(newToolCall("id", "other", `{}`))}},
 	}
-	err = plugin.beforeToolExecution(
+	err = plugin.beforeResponseDispatch(
 		ctx,
-		&agent.BeforeToolExecutionArgs{Response: different},
+		&pluginbase.BeforeResponseDispatchArgs{Response: different},
 	)
 	require.NoError(t, err)
 
@@ -243,9 +254,9 @@ func TestPluginBeforeToolExecutionFailOpenAndUsesDelta(t *testing.T) {
 		Done:    true,
 		Choices: []model.Choice{{Delta: assistantToolMessage(call)}},
 	}
-	err = plugin.beforeToolExecution(
+	err = plugin.beforeResponseDispatch(
 		ctx,
-		&agent.BeforeToolExecutionArgs{Response: delta},
+		&pluginbase.BeforeResponseDispatchArgs{Response: delta},
 	)
 	stopErr, ok := agent.AsStopError(err)
 	require.True(t, ok)
@@ -377,6 +388,7 @@ func TestPluginRunnerIntegrationStopsBeforeThirdToolBundle(t *testing.T) {
 	require.True(t, hasWarning(requests[2], defaultWarning))
 	require.Equal(t, int32(2), run.slowCalls.Load())
 	require.Equal(t, int32(2), run.fastCalls.Load())
+	assertStopAgentErrorEvent(t, run.events)
 	assertSessionHasNoWarning(t, run.sessionService, defaultWarning)
 }
 
@@ -392,7 +404,63 @@ func TestPluginRunnerIntegrationStopsAfterJSONRepair(t *testing.T) {
 	require.True(t, hasWarning(requests[2], defaultWarning))
 	require.Equal(t, int32(2), run.slowCalls.Load())
 	require.Equal(t, int32(2), run.fastCalls.Load())
+	assertStopAgentErrorEvent(t, run.events)
 	assertSessionHasNoWarning(t, run.sessionService, defaultWarning)
+}
+
+func TestPluginRunnerIntegrationStopsAfterTextRepair(t *testing.T) {
+	run := runRepeatedRound(t, repeatedRunConfig{
+		warningEnabled:    true,
+		stopAfterWarning:  true,
+		textRepairEnabled: true,
+		textThirdRound:    true,
+	})
+	requests := run.model.Requests()
+	require.Len(t, requests, 3)
+	require.True(t, hasWarning(requests[2], defaultWarning))
+	require.Equal(t, int32(2), run.slowCalls.Load())
+	require.Equal(t, int32(2), run.fastCalls.Load())
+	assertStopAgentErrorEvent(t, run.events)
+	assertSessionHasNoWarning(t, run.sessionService, defaultWarning)
+}
+
+func TestPluginRunnerIntegrationCombinesRunnerAndRunResponseHooks(t *testing.T) {
+	run := runRepeatedRound(t, repeatedRunConfig{
+		warningEnabled:          true,
+		stopAfterWarning:        true,
+		runResponseDispatchHook: true,
+	})
+	require.Equal(t, int32(2), run.responseDispatchCalls.Load())
+	require.Equal(t, int32(2), run.slowCalls.Load())
+	require.Equal(t, int32(2), run.fastCalls.Load())
+	assertStopAgentErrorEvent(t, run.events)
+}
+
+func TestPluginRunnerIntegrationCombinesRunAndRunnerResponseHooks(t *testing.T) {
+	run := runRepeatedRound(t, repeatedRunConfig{
+		warningEnabled:                  true,
+		stopAfterWarning:                true,
+		runResponseDispatchHook:         true,
+		responseDispatchHookRunnerLevel: true,
+		guardRunLevel:                   true,
+	})
+	require.Equal(t, int32(3), run.responseDispatchCalls.Load())
+	require.Equal(t, int32(2), run.slowCalls.Load())
+	require.Equal(t, int32(2), run.fastCalls.Load())
+	assertStopAgentErrorEvent(t, run.events)
+}
+
+func assertStopAgentErrorEvent(t *testing.T, events []*event.Event) {
+	t.Helper()
+	for _, evt := range events {
+		if evt == nil || evt.Response == nil || evt.Response.Error == nil {
+			continue
+		}
+		require.Equal(t, agent.ErrorTypeStopAgentError, evt.Response.Error.Type)
+		require.Contains(t, evt.Response.Error.Message, "tool loop guard stopped")
+		return
+	}
+	t.Fatal("expected caller-visible stop_agent_error event")
 }
 
 func newCallbackHarness(
@@ -487,6 +555,7 @@ type repeatedRoundModel struct {
 	requests            [][]model.Message
 	repeatThirdRound    bool
 	malformedThirdRound bool
+	textThirdRound      bool
 }
 
 func (m *repeatedRoundModel) Info() model.Info {
@@ -518,15 +587,34 @@ func (m *repeatedRoundModel) GenerateContent(
 		if callIndex == 2 && m.malformedThirdRound {
 			arguments = `{"value":"same",}`
 		}
-		response = &model.Response{
-			ID:   fmt.Sprintf("tool-response-%d", suffix),
-			Done: true,
-			Choices: []model.Choice{{
-				Message: assistantToolMessage(
-					newToolCall(fmt.Sprintf("call-slow-%d", suffix), "slow", arguments),
-					newToolCall(fmt.Sprintf("call-fast-%d", suffix), "fast", arguments),
-				),
-			}},
+		if callIndex == 2 && m.textThirdRound {
+			response = &model.Response{
+				ID:   fmt.Sprintf("tool-response-%d", suffix),
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(
+						"<tool_call>slow" +
+							"<arg_key>value</arg_key>" +
+							"<arg_value>same</arg_value>" +
+							"</tool_call>" +
+							"<tool_call>fast" +
+							"<arg_key>value</arg_key>" +
+							"<arg_value>same</arg_value>" +
+							"</tool_call>",
+					),
+				}},
+			}
+		} else {
+			response = &model.Response{
+				ID:   fmt.Sprintf("tool-response-%d", suffix),
+				Done: true,
+				Choices: []model.Choice{{
+					Message: assistantToolMessage(
+						newToolCall(fmt.Sprintf("call-slow-%d", suffix), "slow", arguments),
+						newToolCall(fmt.Sprintf("call-fast-%d", suffix), "fast", arguments),
+					),
+				}},
+			}
 		}
 	}
 	responses := make(chan *model.Response, 1)
@@ -550,24 +638,31 @@ type parallelInput struct {
 }
 
 type repeatedRunConfig struct {
-	warningEnabled        bool
-	stopAfterWarning      bool
-	jsonRepairEnabled     bool
-	malformedThirdRound   bool
-	executionTraceEnabled bool
-	perCallResults        bool
-	varyRawResults        bool
-	transformResults      bool
-	excludedTools         []string
+	warningEnabled                  bool
+	stopAfterWarning                bool
+	jsonRepairEnabled               bool
+	malformedThirdRound             bool
+	textRepairEnabled               bool
+	textThirdRound                  bool
+	executionTraceEnabled           bool
+	perCallResults                  bool
+	varyRawResults                  bool
+	transformResults                bool
+	runResponseDispatchHook         bool
+	responseDispatchHookRunnerLevel bool
+	guardRunLevel                   bool
+	excludedTools                   []string
 }
 
 type repeatedRun struct {
-	model          *repeatedRoundModel
-	slowCalls      *atomic.Int32
-	fastCalls      *atomic.Int32
-	sessionService *sessioninmemory.SessionService
-	runner         runner.Runner
-	traceInputs    []string
+	model                 *repeatedRoundModel
+	slowCalls             *atomic.Int32
+	fastCalls             *atomic.Int32
+	sessionService        *sessioninmemory.SessionService
+	runner                runner.Runner
+	traceInputs           []string
+	events                []*event.Event
+	responseDispatchCalls *atomic.Int32
 }
 
 func runRepeatedRound(t *testing.T, config repeatedRunConfig) repeatedRun {
@@ -612,6 +707,7 @@ func runRepeatedRound(t *testing.T, config repeatedRunConfig) repeatedRun {
 	modelStub := &repeatedRoundModel{
 		repeatThirdRound:    config.stopAfterWarning,
 		malformedThirdRound: config.malformedThirdRound,
+		textThirdRound:      config.textThirdRound,
 	}
 	agentInstance := llmagent.New(
 		"assistant",
@@ -621,20 +717,34 @@ func runRepeatedRound(t *testing.T, config repeatedRunConfig) repeatedRun {
 	)
 	sessionService := sessioninmemory.NewSessionService()
 	runnerOptions := []runner.Option{runner.WithSessionService(sessionService)}
+	var responseDispatchCalls atomic.Int32
+	var responseDispatchObserver pluginbase.Plugin
+	var warningPluginOptions []Option
+	if config.runResponseDispatchHook {
+		responseDispatchObserver = newResponseDispatchObserver(&responseDispatchCalls)
+	}
 	if config.warningEnabled {
-		pluginOptions := []Option{}
+		warningPluginOptions = []Option{}
 		if config.stopAfterWarning {
-			pluginOptions = append(pluginOptions, WithStopAfterWarning())
+			warningPluginOptions = append(warningPluginOptions, WithStopAfterWarning())
 		}
 		if len(config.excludedTools) > 0 {
-			pluginOptions = append(
-				pluginOptions,
+			warningPluginOptions = append(
+				warningPluginOptions,
 				WithExcludedToolNames(config.excludedTools...),
 			)
 		}
+		if !config.guardRunLevel {
+			runnerOptions = append(
+				runnerOptions,
+				runner.WithPlugins(New(warningPluginOptions...)),
+			)
+		}
+	}
+	if config.runResponseDispatchHook && config.responseDispatchHookRunnerLevel {
 		runnerOptions = append(
 			runnerOptions,
-			runner.WithPlugins(New(pluginOptions...)),
+			runner.WithPlugins(responseDispatchObserver),
 		)
 	}
 	runnerInstance := runner.NewRunner(
@@ -665,10 +775,28 @@ func runRepeatedRound(t *testing.T, config repeatedRunConfig) repeatedRun {
 			agent.WithToolCallArgumentsJSONRepairEnabled(true),
 		)
 	}
+	if config.textRepairEnabled {
+		runOptions = append(
+			runOptions,
+			agent.WithToolCallTextRepairEnabled(true),
+		)
+	}
 	if config.transformResults {
 		runOptions = append(
 			runOptions,
 			pluginbase.WithPlugins(newVisibleResultTransformer()),
+		)
+	}
+	if config.runResponseDispatchHook && !config.responseDispatchHookRunnerLevel {
+		runOptions = append(
+			runOptions,
+			pluginbase.WithPlugins(newResponseDispatchObserver(&responseDispatchCalls)),
+		)
+	}
+	if config.warningEnabled && config.guardRunLevel {
+		runOptions = append(
+			runOptions,
+			pluginbase.WithPlugins(New(warningPluginOptions...)),
 		)
 	}
 	events, err := runnerInstance.Run(
@@ -680,23 +808,29 @@ func runRepeatedRound(t *testing.T, config repeatedRunConfig) repeatedRun {
 	)
 	require.NoError(t, err)
 	var traceInputs []string
-	for event := range events {
-		if event == nil || event.ExecutionTrace == nil {
+	var runEvents []*event.Event
+	for evt := range events {
+		if evt != nil {
+			runEvents = append(runEvents, evt)
+		}
+		if evt == nil || evt.ExecutionTrace == nil {
 			continue
 		}
-		for _, step := range event.ExecutionTrace.Steps {
+		for _, step := range evt.ExecutionTrace.Steps {
 			if step.Input != nil {
 				traceInputs = append(traceInputs, step.Input.Text)
 			}
 		}
 	}
 	return repeatedRun{
-		model:          modelStub,
-		slowCalls:      &slowCalls,
-		fastCalls:      &fastCalls,
-		sessionService: sessionService,
-		runner:         runnerInstance,
-		traceInputs:    traceInputs,
+		model:                 modelStub,
+		slowCalls:             &slowCalls,
+		fastCalls:             &fastCalls,
+		sessionService:        sessionService,
+		runner:                runnerInstance,
+		traceInputs:           traceInputs,
+		events:                runEvents,
+		responseDispatchCalls: &responseDispatchCalls,
 	}
 }
 
@@ -733,6 +867,21 @@ func newVisibleResultTransformer() pluginbase.Plugin {
 				return &pluginbase.AfterToolMessagesResult{
 					ToolResultMessages: messages,
 				}, nil
+			})
+		},
+	}
+}
+
+func newResponseDispatchObserver(calls *atomic.Int32) pluginbase.Plugin {
+	return &testPlugin{
+		name: "response-dispatch-observer",
+		register: func(registry *pluginbase.Registry) {
+			registry.BeforeResponseDispatch(func(
+				context.Context,
+				*pluginbase.BeforeResponseDispatchArgs,
+			) error {
+				calls.Add(1)
+				return nil
 			})
 		},
 	}

@@ -271,15 +271,15 @@ func TestManager_ModelCallbacks_EarlyExit(t *testing.T) {
 	require.Equal(t, []string{"p1"}, calls)
 }
 
-func TestManager_BeforeToolExecutionRunsInPluginOrder(t *testing.T) {
+func TestManager_BeforeResponseDispatchRunsInPluginOrder(t *testing.T) {
 	var calls []string
 	m := plugin.MustNewManager(
 		&testPlugin{
 			name: "p1",
 			reg: func(r *plugin.Registry) {
-				r.BeforeToolExecution(func(
+				r.BeforeResponseDispatch(func(
 					_ context.Context,
-					args *agent.BeforeToolExecutionArgs,
+					args *plugin.BeforeResponseDispatchArgs,
 				) error {
 					calls = append(calls, "p1")
 					return nil
@@ -289,9 +289,9 @@ func TestManager_BeforeToolExecutionRunsInPluginOrder(t *testing.T) {
 		&testPlugin{
 			name: "p2",
 			reg: func(r *plugin.Registry) {
-				r.BeforeToolExecution(func(
+				r.BeforeResponseDispatch(func(
 					_ context.Context,
-					args *agent.BeforeToolExecutionArgs,
+					args *plugin.BeforeResponseDispatchArgs,
 				) error {
 					calls = append(calls, "p2")
 					return nil
@@ -300,40 +300,40 @@ func TestManager_BeforeToolExecutionRunsInPluginOrder(t *testing.T) {
 		},
 	)
 
-	err := m.RunBeforeToolExecution(
+	err := m.RunBeforeResponseDispatch(
 		context.Background(),
-		&agent.BeforeToolExecutionArgs{Response: &model.Response{Done: true}},
+		&plugin.BeforeResponseDispatchArgs{Response: &model.Response{Done: true}},
 	)
 	require.NoError(t, err)
 	require.Equal(t, []string{"p1", "p2"}, calls)
 }
 
-func TestManager_BeforeToolExecutionHandlesNilAndErrors(t *testing.T) {
-	args := &agent.BeforeToolExecutionArgs{}
+func TestManager_BeforeResponseDispatchHandlesNilAndErrors(t *testing.T) {
+	args := &plugin.BeforeResponseDispatchArgs{}
 	var nilManager *plugin.Manager
-	require.NoError(t, nilManager.RunBeforeToolExecution(context.Background(), args))
+	require.NoError(t, nilManager.RunBeforeResponseDispatch(context.Background(), args))
 
 	m := plugin.MustNewManager()
-	require.NoError(t, m.RunBeforeToolExecution(context.Background(), nil))
+	require.NoError(t, m.RunBeforeResponseDispatch(context.Background(), nil))
 
 	var nilRegistry *plugin.Registry
-	nilRegistry.BeforeToolExecution(nil)
-	(&plugin.Registry{}).BeforeToolExecution(nil)
+	nilRegistry.BeforeResponseDispatch(nil)
+	(&plugin.Registry{}).BeforeResponseDispatch(nil)
 
 	wantErr := errors.New("execution policy rejected response")
 	m = plugin.MustNewManager(&testPlugin{
 		name: "policy",
 		reg: func(r *plugin.Registry) {
-			r.BeforeToolExecution(nil)
-			r.BeforeToolExecution(func(
+			r.BeforeResponseDispatch(nil)
+			r.BeforeResponseDispatch(func(
 				context.Context,
-				*agent.BeforeToolExecutionArgs,
+				*plugin.BeforeResponseDispatchArgs,
 			) error {
 				return wantErr
 			})
 		},
 	})
-	err := m.RunBeforeToolExecution(context.Background(), args)
+	err := m.RunBeforeResponseDispatch(context.Background(), args)
 	require.ErrorIs(t, err, wantErr)
 	require.Contains(t, err.Error(), `plugin "policy"`)
 }

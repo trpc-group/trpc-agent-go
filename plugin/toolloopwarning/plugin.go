@@ -72,7 +72,7 @@ func (p *toolLoopWarningPlugin) Register(r *plugin.Registry) {
 	r.BeforeAgent(p.beforeAgent)
 	r.BeforeModel(p.beforeModel)
 	if p.stopAfterWarning {
-		r.BeforeToolExecution(p.beforeToolExecution)
+		r.BeforeResponseDispatch(p.beforeResponseDispatch)
 	}
 	r.AfterAgent(p.afterAgent)
 }
@@ -140,11 +140,12 @@ func (p *toolLoopWarningPlugin) beforeModel(
 	return nil, nil
 }
 
-func (p *toolLoopWarningPlugin) beforeToolExecution(
+func (p *toolLoopWarningPlugin) beforeResponseDispatch(
 	ctx context.Context,
-	args *agent.BeforeToolExecutionArgs,
+	args *plugin.BeforeResponseDispatchArgs,
 ) error {
-	if p == nil || args == nil || args.Response == nil || args.Response.IsPartial {
+	if p == nil || args == nil || args.Response == nil ||
+		args.Response.IsPartial {
 		return nil
 	}
 	invocation, ok := agent.InvocationFromContext(ctx)

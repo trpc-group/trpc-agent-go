@@ -48,6 +48,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -2178,6 +2179,14 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(currentInvocation) {
 		jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, config.Response)
 	}
+	if err := runBeforeResponseDispatchCallbacks(
+		ctx,
+		currentInvocation,
+		config.Request,
+		config.Response,
+	); err != nil {
+		return ctx, nil, err
+	}
 	llmEvent := event.NewResponseEvent(
 		config.InvocationID,
 		modelResponseAuthor(config),
@@ -2209,6 +2218,26 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		)
 	}
 	return ctx, llmEvent, nil
+}
+
+func runBeforeResponseDispatchCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	request *model.Request,
+	response *model.Response,
+) error {
+	if invocation == nil || invocation.Plugins == nil ||
+		response == nil || response.IsPartial {
+		return nil
+	}
+	runner, ok := invocation.Plugins.(plugin.BeforeResponseDispatchManager)
+	if !ok {
+		return nil
+	}
+	return runner.RunBeforeResponseDispatch(ctx, &plugin.BeforeResponseDispatchArgs{
+		Request:  request,
+		Response: response,
+	})
 }
 
 // responseHasReasoningContent reports whether any choice in the response

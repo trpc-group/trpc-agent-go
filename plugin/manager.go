@@ -50,6 +50,48 @@ type EventHook func(
 	e *event.Event,
 ) (*event.Event, error)
 
+// BeforeResponseDispatchManager is an optional PluginManager capability for
+// callbacks that run at the complete normalized model-response boundary.
+//
+// It is intentionally separate from agent.PluginManager so existing external
+// implementations remain source-compatible. Framework wrappers that compose
+// plugin managers must preserve this capability when any child manager
+// provides it.
+type BeforeResponseDispatchManager interface {
+	RunBeforeResponseDispatch(
+		ctx context.Context,
+		args *BeforeResponseDispatchArgs,
+	) error
+}
+
+// BeforeResponseDispatchArgs contains the complete model response that is
+// about to be emitted and dispatched.
+//
+// Response has already passed callback custom-response replacement and the
+// framework's enabled tool-call normalizers. The response may contain no tool
+// calls when the model produced an ordinary assistant response. Framework
+// flows do not invoke this capability for nil or partial responses.
+//
+// Request and Response are owned by the framework. Callbacks must treat them
+// as read-only; mutation would change what later callbacks and the execution
+// path observe.
+type BeforeResponseDispatchArgs struct {
+	// Request is the request that produced Response.
+	Request *model.Request
+	// Response is the final normalized response.
+	Response *model.Response
+}
+
+// BeforeResponseDispatchCallback is invoked once for each complete normalized
+// response, after custom response replacement and enabled tool-call
+// normalization, but before the response is emitted or any tool is executed.
+// Callbacks run in plugin registration order, and the first error stops
+// processing. Callbacks must not mutate args.Request or args.Response.
+type BeforeResponseDispatchCallback func(
+	ctx context.Context,
+	args *BeforeResponseDispatchArgs,
+) error
+
 // AfterRunArgs contains context available after one Runner.Run finishes.
 type AfterRunArgs struct {
 	// Invocation is the root invocation associated with the run.
@@ -67,16 +109,18 @@ type Registry struct {
 	mgr  *Manager
 }
 
-// BeforeToolExecution registers a callback at the final response execution
+// BeforeResponseDispatch registers a callback at the complete normalized response
 // boundary. It runs after custom response replacement and enabled tool-call
 // normalizers, but before the response is emitted or any tool is executed.
-func (r *Registry) BeforeToolExecution(cb agent.BeforeToolExecutionCallback) {
+// Framework flows invoke it once for each complete response, including an
+// ordinary assistant response with no tool calls.
+func (r *Registry) BeforeResponseDispatch(cb BeforeResponseDispatchCallback) {
 	if r == nil || r.mgr == nil || cb == nil {
 		return
 	}
-	r.mgr.beforeToolExecutionHooks = append(
-		r.mgr.beforeToolExecutionHooks,
-		namedBeforeToolExecutionHook{name: r.name, hook: cb},
+	r.mgr.beforeResponseDispatchHooks = append(
+		r.mgr.beforeResponseDispatchHooks,
+		namedBeforeResponseDispatchHook{name: r.name, hook: cb},
 	)
 }
 
@@ -226,19 +270,19 @@ func (r *Registry) AfterRun(hook AfterRunHook) {
 //
 // Manager implements agent.PluginManager.
 type Manager struct {
-	plugins                  []Plugin
-	agentCallbacks           *agent.Callbacks
-	modelCallbacks           *model.Callbacks
-	toolCallbacks            *tool.Callbacks
-	beforeToolExecutionHooks []namedBeforeToolExecutionHook
-	eventHooks               []namedEventHook
-	afterRunHooks            []namedAfterRunHook
-	afterToolMessagesHooks   []namedAfterToolMessagesHook
+	plugins                     []Plugin
+	agentCallbacks              *agent.Callbacks
+	modelCallbacks              *model.Callbacks
+	toolCallbacks               *tool.Callbacks
+	beforeResponseDispatchHooks []namedBeforeResponseDispatchHook
+	eventHooks                  []namedEventHook
+	afterRunHooks               []namedAfterRunHook
+	afterToolMessagesHooks      []namedAfterToolMessagesHook
 }
 
-type namedBeforeToolExecutionHook struct {
+type namedBeforeResponseDispatchHook struct {
 	name string
-	hook agent.BeforeToolExecutionCallback
+	hook BeforeResponseDispatchCallback
 }
 
 type namedEventHook struct {
@@ -337,16 +381,16 @@ func (m *Manager) ToolCallbacks() *tool.Callbacks {
 	return m.toolCallbacks
 }
 
-// RunBeforeToolExecution runs callbacks at the final response execution
+// RunBeforeResponseDispatch runs callbacks at the complete normalized response
 // boundary in plugin order.
-func (m *Manager) RunBeforeToolExecution(
+func (m *Manager) RunBeforeResponseDispatch(
 	ctx context.Context,
-	args *agent.BeforeToolExecutionArgs,
+	args *BeforeResponseDispatchArgs,
 ) error {
 	if m == nil || args == nil {
 		return nil
 	}
-	for _, h := range m.beforeToolExecutionHooks {
+	for _, h := range m.beforeResponseDispatchHooks {
 		if err := h.hook(ctx, args); err != nil {
 			return fmt.Errorf("plugin %q: %w", h.name, err)
 		}
