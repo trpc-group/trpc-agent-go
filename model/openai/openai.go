@@ -1998,12 +1998,15 @@ func (s *toolCallIndexState) uniqueCompatibleIndex(tc openai.ChatCompletionChunk
 
 // mappedIndex looks up a continuation that was not already resolved by ID.
 // A conflicting new ID can claim an alias without replacing a primary mapping.
+// At an alias, anonymous function names retain the original explicit-index
+// fallback so metadata arriving before its ID does not pollute the alias owner.
+// Argument-only deltas can still follow the alias.
 func (s *toolCallIndexState) mappedIndex(tc openai.ChatCompletionChunkChoiceDeltaToolCall) (int64, bool) {
 	if !tc.JSON.Index.Valid() {
 		return s.uniqueCompatibleIndex(tc)
 	}
 	mapping, found := s.rawToIndexMap[tc.Index]
-	if mapping.alias && tc.ID != "" && tc.ID != s.slots[mapping.index].id {
+	if mapping.alias && (tc.Function.Name != "" || tc.ID != "" && tc.ID != s.slots[mapping.index].id) {
 		return 0, false
 	}
 	return mapping.index, found

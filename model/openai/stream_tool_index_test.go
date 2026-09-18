@@ -239,6 +239,73 @@ func TestModel_StreamingNegativeToolIndices(t *testing.T) {
 			finalIndices: []int{0, 2}, partialIndices: [][]int{{0}, {0}, {2}, {2}},
 		},
 		{
+			name: "zero alias metadata before delayed ID",
+			deltas: []string{
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_b", "call_a"}, names: []string{"second", "first"}, args: []string{`{"b":2}`, `{"a":1}`},
+			partialIndices: [][]int{{1}, {1}, {0}, {0}},
+		},
+		{
+			name: "nonzero alias metadata before delayed ID",
+			deltas: []string{
+				`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":2,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":2,"type":"function","function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":2,"id":"call_b","function":{"arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"call_a", "call_b"}, names: []string{"first", "second"}, args: []string{`{"a":1}`, `{"b":2}`},
+			finalIndices: []int{0, 2}, partialIndices: [][]int{{0}, {0}, {2}, {2}},
+		},
+		{
+			name: "alias split metadata and arguments before delayed ID",
+			deltas: []string{
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"name":"read_","arguments":"{\"b\":"}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"name":"file","arguments":"2"}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","function":{"arguments":"}"}}]}`,
+			},
+			ids: []string{"call_b", "call_a"}, names: []string{"read_file", "first"}, args: []string{`{"b":2}`, `{"a":1}`},
+			partialIndices: [][]int{{1}, {1}, {0}, {0}, {0}},
+		},
+		{
+			name: "alias metadata without eventual ID",
+			deltas: []string{
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"name":"second","arguments":"{\"b\":2}"}}]}`,
+			},
+			ids: []string{"auto_call_0", "call_a"}, names: []string{"second", "first"}, args: []string{`{"b":2}`, `{"a":1}`},
+			partialIndices: [][]int{{1}, {1}, {0}},
+		},
+		{
+			name: "alias metadata with known ID continues original call",
+			deltas: []string{
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"read_","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"file","arguments":"{\"a\":"}}]}`,
+				`{"tool_calls":[{"index":1,"function":{"arguments":"1}"}}]}`,
+			},
+			ids: []string{"call_a"}, names: []string{"read_file"}, args: []string{`{"a":1}`},
+			finalIndices: []int{1}, partialIndices: [][]int{{1}, {1}, {1}},
+		},
+		{
+			name: "alias delayed ID after negative index displacement",
+			deltas: []string{
+				`{"tool_calls":[{"index":-1,"id":"call_c","type":"function","function":{"name":"third","arguments":""}}]}`,
+				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_a","function":{"arguments":"{\"a\":1}"}}]}`,
+				`{"tool_calls":[{"index":0,"function":{"name":"second","arguments":""}}]}`,
+				`{"tool_calls":[{"index":0,"id":"call_b","function":{"arguments":"{\"b\":2}"}}]}`,
+				`{"tool_calls":[{"index":-1,"function":{"arguments":"{\"c\":3}"}}]}`,
+			},
+			ids: []string{"call_c", "call_a", "call_b"}, names: []string{"third", "first", "second"},
+			args: []string{`{"c":3}`, `{"a":1}`, `{"b":2}`}, partialIndices: [][]int{{0}, {1}, {1}, {2}, {2}, {0}},
+		},
+		{
 			name: "explicit alias original owner does not reclaim new call mapping",
 			deltas: []string{
 				`{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"first","arguments":""}}]}`,

@@ -607,6 +607,10 @@ collisions, so subsequent declarations at distinct provider indices stay separat
 A known ID can introduce an alias at a different index. If a new ID later
 declares a call at that alias, the new call takes over the alias. The original
 call keeps its assigned index and can still continue by ID.
+At an alias, a function-name delta without an ID uses the original explicit-index
+fallback. This keeps names that arrive before their IDs out of the alias owner's
+call; later IDs and argument chunks follow the new mapping. Argument-only deltas
+can still follow an alias until another call claims it.
 An omitted or null index does not establish a provider index mapping. After
 matching a known ID, the adapter attaches such a delta to the unique compatible
 call, even at a nonzero index; otherwise, it retains the zero fallback. For an
