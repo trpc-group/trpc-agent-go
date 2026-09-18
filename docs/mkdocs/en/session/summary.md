@@ -677,7 +677,7 @@ summary.WithChecksAny(
 | `WithSystemPrompt(prompt string)` | Add a separate system message for summarization instructions; must not contain `{conversation_text}` or `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | Opt in to cache-safe summary request forking when a parent request is available. Disabled by default |
 | `WithCacheSafeForkPrompt(prompt string)` | Customize the final instruction used by cache-safe fork requests and appended after a source-data boundary in standalone fallbacks. Its rendered text counts against the input budget. May include `{max_summary_words}`, but not `{conversation_text}` or `{previous_summary}` |
-| `WithSkipRecent(skipFunc SkipRecentFunc)` | Custom function to skip recent events |
+| `WithSkipRecentContext(skipFunc ContextSkipRecentFunc)` | Context-aware function to skip recent events; the last configured skip-recent option takes precedence |
 
 ### Hook Options
 
@@ -937,20 +937,20 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 ## Skip Recent Events
 
-Use `WithSkipRecent` to skip recent events during summarization:
+Use `WithSkipRecentContext` to skip recent events during summarization:
 
 ```go
 // Skip a fixed number of events
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(_ []event.Event) int { return 2 }),
+    summary.WithSkipRecentContext(func(_ context.Context, _ []event.Event) int { return 2 }),
     summary.WithEventThreshold(10),
 )
 
 // Skip events from the last 5 minutes (time window)
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(events []event.Event) int {
+    summary.WithSkipRecentContext(func(_ context.Context, events []event.Event) int {
         cutoff := time.Now().Add(-5 * time.Minute)
         skip := 0
         for i := len(events) - 1; i >= 0; i-- {
@@ -968,7 +968,7 @@ summarizer := summary.NewSummarizer(
 // Skip only trailing tool call messages
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(events []event.Event) int {
+    summary.WithSkipRecentContext(func(_ context.Context, events []event.Event) int {
         skip := 0
         for i := len(events) - 1; i >= 0; i-- {
             if events[i].Response != nil && len(events[i].Response.Choices) > 0 &&
@@ -981,6 +981,20 @@ summarizer := summary.NewSummarizer(
         return skip
     }),
     summary.WithEventThreshold(10),
+)
+```
+
+Use `WithSkipRecentContext` when the skip decision needs request-scoped values
+such as a trace ID:
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecentContext(func(ctx context.Context, events []event.Event) int {
+        traceID, _ := ctx.Value(traceIDKey{}).(string)
+        _ = traceID
+        return 2
+    }),
 )
 ```
 
@@ -1802,7 +1816,7 @@ an idle session:
 | --- | --- |
 | `selected` | Events were selected before the hook; this does not prove they were the later model payload |
 | `no_candidates` | The stage had no candidate event to consider at all |
-| `skip_recent_all` | The `WithSkipRecent` callback asked to skip at least as many events as were available |
+| `skip_recent_all` | The `WithSkipRecentContext` callback asked to skip at least as many events as were available |
 | `unsafe_prefix` | Events remained after skip-recent, but the retained prefix had neither a user message nor a prepended previous summary to anchor the summary, so it was dropped |
 | `session_filter_empty` | Candidates survived skip-recent and were then all removed by the summary's branch scoping |
 | `unbound_view` | A model-visible view existed but was not bound to the request the model answered |
@@ -1810,7 +1824,7 @@ an idle session:
 | `custom` | The summary call did not publish the built-in event selection, so counts are unknown |
 | `none` | No summarizer ran, so no selection was observed |
 
-The accompanying counts describe the stage that receives the `WithSkipRecent`
+The accompanying counts describe the stage that receives the `WithSkipRecentContext`
 callback:
 
 - `eligible_events` is the number of candidate events handed to that stage,

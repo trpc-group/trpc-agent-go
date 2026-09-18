@@ -1807,6 +1807,60 @@ func TestSessionSummarizer_WithSkipRecent(t *testing.T) {
 	})
 }
 
+func TestSessionSummarizer_WithSkipRecentContext(t *testing.T) {
+	var gotTraceID string
+	var legacyCalled bool
+	var contextCalls int
+
+	s := NewSummarizer(
+		nil,
+		WithSkipRecent(func([]event.Event) int {
+			legacyCalled = true
+			return 0
+		}),
+		WithSkipRecentContext(func(ctx context.Context, _ []event.Event) int {
+			contextCalls++
+			gotTraceID, _ = ctx.Value("trace_id").(string)
+			return 0
+		}),
+	)
+
+	sess := &session.Session{Events: []event.Event{{
+		Author: "user",
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Content: "hello"},
+		}}},
+	}}}
+	ctx := context.WithValue(context.Background(), "trace_id", "trace-123")
+	shouldSummarize := s.(ContextAwareSummarizer).ShouldSummarizeWithContext(ctx, sess)
+
+	assert.True(t, shouldSummarize)
+	assert.Equal(t, "trace-123", gotTraceID)
+	assert.Equal(t, 2, contextCalls)
+	assert.False(t, legacyCalled)
+}
+
+func TestSessionSummarizer_SkipRecentOptionOrder(t *testing.T) {
+	var contextCalled bool
+	var legacyCalled bool
+
+	s := NewSummarizer(
+		nil,
+		WithSkipRecentContext(func(context.Context, []event.Event) int {
+			contextCalled = true
+			return 0
+		}),
+		WithSkipRecent(func([]event.Event) int {
+			legacyCalled = true
+			return 0
+		}),
+	)
+	s.(*sessionSummarizer).filterEventsForSummaryContext(context.Background(), nil)
+
+	assert.False(t, contextCalled)
+	assert.True(t, legacyCalled)
+}
+
 func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 	s := &sessionSummarizer{}
 
