@@ -34,6 +34,22 @@ func TestPermissionProfileEnforcement(t *testing.T) {
 	if got := ExternalSandboxProfile(NetworkPolicy{}).enforcement(); got != enforcementExternal {
 		t.Fatalf("external_sandbox enforcement = %s", got)
 	}
+	noHostRoot := WorkspaceWriteProfile().WithLinuxNoHostRoot()
+	if got := noHostRoot.enforcement(); got != enforcementManaged {
+		t.Fatalf("linux_no_host_root enforcement = %s", got)
+	}
+	if noHostRoot.exposesHostRoot() {
+		t.Fatal("WithLinuxNoHostRoot should not expose host root")
+	}
+	if !containsSpecialRule(noHostRoot, accessRead, specialRoot) {
+		t.Fatal("WithLinuxNoHostRoot should keep the host-root special for path policy")
+	}
+	if !WorkspaceWriteProfile().exposesHostRoot() || !ReadOnlyProfile().exposesHostRoot() {
+		t.Fatalf("host-root profiles should expose host root")
+	}
+	if !containsSpecialRule(noHostRoot, accessWrite, specialWork) {
+		t.Fatal("WithLinuxNoHostRoot should keep the work write grant")
+	}
 }
 
 func TestRuntimeDefaultProfileIsWorkspaceWrite(t *testing.T) {
@@ -662,6 +678,41 @@ func TestWorkspacePathUsesAppUserSessionShape(t *testing.T) {
 	plainPath, plainID := workspacePathForID(root, "app/user_a/session")
 	if collidingPath == plainPath || collidingID == plainID {
 		t.Fatalf("workspace IDs collided: %s/%s vs %s/%s", collidingPath, collidingID, plainPath, plainID)
+	}
+}
+
+func TestCreateWorkspaceAllowsNestedSessionPaths(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	parent, err := rt.CreateWorkspace(
+		context.Background(),
+		"app",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := rt.CreateWorkspace(
+		context.Background(),
+		"app",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Path != parent.Path {
+		t.Fatalf("reopened workspace path = %s, want %s", reopened.Path, parent.Path)
+	}
+	child, err := rt.CreateWorkspace(
+		context.Background(),
+		"app/user/session",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := parent.Path + string(os.PathSeparator)
+	if child.Path != parent.Path && !strings.HasPrefix(child.Path, prefix) {
+		t.Fatalf("nested workspace path = %s, want under %s", child.Path, parent.Path)
 	}
 }
 

@@ -251,19 +251,19 @@ Code Executor 是执行体系；sandbox 是其中一种更强调安全边界的�
 
 tRPC-Agent-Go sandbox 的权限模型围绕 `PermissionProfile` 展开。它把文件系统策略和网络策略放在同一个 profile 里，避免调用方组合出自相矛盾的策略。
 
-`ReadOnlyProfile` 表示宿主根文件系统只读、网络受限，适合只需要读取环境、尽量不写文件的任务。`WorkspaceWriteProfile` 是默认 managed profile：根文件系统只读，workspace 及其工作目录可写，网络受限，适合大多数本地 sandbox 执行。`DangerFullAccessProfile` 会显式禁用 sandbox 并开启网络，只适合完全可信、确实需要完整宿主权限的特殊任务。`ExternalSandboxProfile` 则表示隔离由外部系统提供，例如外部容器、远程平台或上层系统。
+`ReadOnlyProfile` 表示宿主根文件系统只读、网络受限，适合只需要读取环境、尽量不写文件的任务。`WorkspaceWriteProfile` 是默认 managed profile：根文件系统只读，workspace 及其工作目录可写，网络受限，适合大多数本地 sandbox 执行。在 Linux 上它会继续挂载宿主根以便系统工具能跑，但默认屏蔽常见凭证路径和其他 session 目录。名单外的宿主文件仍可读。`WithLinuxNoHostRoot` 会跳过 Linux 上的宿主根挂载，宿主 home 和其他 session 默认不可见。`DangerFullAccessProfile` 会显式禁用 sandbox 并开启网络，只适合完全可信、确实需要完整宿主权限的特殊任务。`ExternalSandboxProfile` 则表示隔离由外部系统提供，例如外部容器、远程平台或上层系统。
 
 `WorkspaceWriteProfile` 的含义非常贴近 Agent 执行：外部世界默认只读，真正允许写入的是 session workspace、`work`、`out`、`runs`、`skills`、`home`、`tmp` 等执行所需目录。
 
 在这个基础上，调用方可以通过 `WithReadPaths`、`WithWritePaths` 增加显式路径授权，也可以通过 `WithNoAccessPaths`、`WithNoAccessGlobs` 屏蔽敏感路径。这里的策略不是 prompt 约束，而是运行时挂载（mount）和路径规则约束。
 
-Linux 后端构造 bubblewrap 命令时，会从只读根开始：
+Linux 后端在宿主根可见的 profile 下，会从只读根开始：
 
 ```text
 --ro-bind / /
 ```
 
-然后再把 workspace 里允许写的路径重新以可写方式挂载，把受保护路径屏蔽掉。这个模型很重要：不是“默认都能写，再禁止一部分”，而是“默认只读，再显式开放写路径”。
+然后再隐藏同机其他 session 目录、屏蔽常见凭证路径，并把 workspace 里允许写的路径重新以可写方式挂载，把受保护路径屏蔽掉。这个模型很重要：不是“默认都能写，再禁止一部分”，而是“默认只读，再显式开放写路径”。`WithLinuxNoHostRoot` 不会 bind `/`，只挂载运行时目录和当前 session workspace。
 
 ### 2. 网络：默认限制，显式开启
 
