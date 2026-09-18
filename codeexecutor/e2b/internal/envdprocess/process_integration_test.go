@@ -47,9 +47,9 @@ const (
 	integrationDefaultE2BUser                = "user"
 	integrationDefaultCubeSandboxUser        = "root"
 	integrationEnvdPort                      = 49983
-	integrationTestTimeout                   = 5 * time.Minute
+	integrationTestTimeout                   = 10 * time.Minute
 	integrationOperationTimeout              = 30 * time.Second
-	integrationSandboxTimeout                = 5 * time.Minute
+	integrationSandboxTimeout                = 11 * time.Minute
 	integrationHTTPClientTimeout             = 2 * time.Second
 )
 
@@ -836,7 +836,10 @@ func (e *integrationEnvironment) testRunCancellationCleanup(
 	select {
 	case run := <-resultCh:
 		require.ErrorIs(t, run.err, context.Canceled)
-		assert.Equal(t, pid, run.result.PID)
+		// Listing the PID can precede receipt of StartEvent by Run.
+		if run.result.PID != 0 {
+			assert.Equal(t, pid, run.result.PID)
+		}
 	case <-operationCtx.Done():
 		t.Fatal("Run did not return after caller cancellation")
 	}

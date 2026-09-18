@@ -37,7 +37,7 @@ func TestStartReturnsControllableProcess(t *testing.T) {
 			return err
 		}
 		<-killed
-		return stream.Send(&processrpc.StartResponse{Event: endEvent(137)})
+		return stream.Send(&processrpc.StartResponse{Event: signalEndEvent("signal: killed")})
 	}
 	handler.sendInput = func(
 		_ context.Context,
