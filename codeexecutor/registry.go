@@ -23,19 +23,36 @@ var errWorkspaceRegistryTokenExhausted = errors.New(
 	"codeexecutor: workspace registry entry token exhausted",
 )
 
+var errWorkspaceManagerNil = errors.New(
+	"codeexecutor: WorkspaceManager must not be nil",
+)
+
 // WorkspaceRegistry keeps a process-level mapping of logical IDs to
 // created workspaces for reuse within a session.
 type WorkspaceRegistry struct {
-	mu        sync.Mutex
-	byID      map[string]workspaceRegistryEntry
-	inflight  map[string]*workspaceCreateCall
+	mu       sync.Mutex
+	byID     map[string]workspaceRegistryEntry
+	inflight map[string]*workspaceCreateCall
+	// releasing tracks in-flight Release cleanups so Acquire waits instead
+	// of racing a concurrent Cleanup, and so concurrent Release coalesces.
+	releasing map[string]*workspaceReleaseCall
 	nextToken uint64
+}
+
+type workspaceReleaseCall struct {
+	done chan struct{}
+	err  error
 }
 
 type workspaceRegistryEntry struct {
 	ws                Workspace
 	backendInstanceID WorkspaceInstanceID
 	entryToken        uint64
+	// manager is the WorkspaceManager that created this workspace.
+	// Release/ReleaseHandler always clean up through this manager,
+	// preventing callers from accidentally skipping Cleanup (nil) or
+	// running it against the wrong backend (mismatched manager).
+	manager WorkspaceManager
 }
 
 type workspaceCreateCall struct {
@@ -47,8 +64,9 @@ type workspaceCreateCall struct {
 // NewWorkspaceRegistry creates a new in-memory registry.
 func NewWorkspaceRegistry() *WorkspaceRegistry {
 	return &WorkspaceRegistry{
-		byID:     map[string]workspaceRegistryEntry{},
-		inflight: map[string]*workspaceCreateCall{},
+		byID:      map[string]workspaceRegistryEntry{},
+		inflight:  map[string]*workspaceCreateCall{},
+		releasing: map[string]*workspaceReleaseCall{},
 	}
 }
 
@@ -65,6 +83,9 @@ func NewWorkspaceRegistry() *WorkspaceRegistry {
 func (r *WorkspaceRegistry) Acquire(
 	ctx context.Context, m WorkspaceManager, id string,
 ) (Workspace, error) {
+	if m == nil {
+		return Workspace{}, errWorkspaceManagerNil
+	}
 	handle, err := r.AcquireHandle(ctx, m, id)
 	return handle.Workspace, err
 }
@@ -77,6 +98,9 @@ func (r *WorkspaceRegistry) AcquireHandle(
 	m WorkspaceManager,
 	id string,
 ) (WorkspaceHandle, error) {
+	if m == nil {
+		return WorkspaceHandle{}, errWorkspaceManagerNil
+	}
 	provider, _ := m.(WorkspaceInstanceProvider)
 	entry, err := r.acquire(ctx, m, provider, id)
 	if err != nil {
@@ -93,6 +117,16 @@ func (r *WorkspaceRegistry) acquire(
 ) (workspaceRegistryEntry, error) {
 	for {
 		r.mu.Lock()
+		if rel, ok := r.releasing[id]; ok {
+			r.mu.Unlock()
+			if err := waitWorkspaceRelease(ctx, rel); err != nil {
+				// ctx was canceled while cleanup is still in flight.
+				// Return instead of spinning until the detached
+				// cleanup completes.
+				return workspaceRegistryEntry{}, err
+			}
+			continue
+		}
 		entry, cached := r.byID[id]
 		if cached && provider == nil {
 			r.mu.Unlock()
@@ -130,7 +164,13 @@ func (r *WorkspaceRegistry) acquire(
 			return waitWorkspaceCreate(ctx, call)
 		}
 		latest, ok := r.byID[id]
-		if !ok || latest != entry {
+		// Compare only scalar fields — entry contains a WorkspaceManager
+		// interface whose dynamic type may be non-comparable (e.g.
+		// structs with slices/maps), so a full struct comparison would
+		// panic. entryToken uniquely identifies the registry entry
+		// and is sufficient to detect a stale cache entry replaced
+		// between unlock and re-lock.
+		if !ok || latest.entryToken != entry.entryToken {
 			r.mu.Unlock()
 			continue
 		}
@@ -172,12 +212,15 @@ func (r *WorkspaceRegistry) createWorkspace(
 		}
 	}
 	var ws Workspace
+	wsCreated := false
 	if err == nil {
 		ws, err = m.CreateWorkspace(ctx, id, WorkspacePolicy{})
+		wsCreated = err == nil
 	}
 	entry := workspaceRegistryEntry{
 		ws:                ws,
 		backendInstanceID: before,
+		manager:           m,
 	}
 	if err == nil && provider != nil {
 		after, probeErr := provider.InstanceID(ctx)
@@ -193,6 +236,17 @@ func (r *WorkspaceRegistry) createWorkspace(
 					"codeexecutor: workspace instance changed during creation",
 				),
 			)
+		}
+	}
+
+	// A workspace created but not cached is orphaned: no registry entry
+	// will ever reference it, so no Release can reclaim the backend
+	// workspace. Clean it up best-effort through the manager that created
+	// it (same ownership as the CreateWorkspace call), joining any cleanup
+	// failure onto the original error without changing its semantics.
+	if err != nil && wsCreated && m != nil {
+		if cleanupErr := m.Cleanup(ctx, ws); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
 		}
 	}
 
@@ -251,6 +305,179 @@ func (r *WorkspaceRegistry) Invalidate(handle WorkspaceHandle) bool {
 	}
 	delete(r.byID, handle.registryID)
 	return true
+}
+
+// Get returns a previously acquired workspace without creating one.
+// ok is false when id is unknown or a release is in flight.
+func (r *WorkspaceRegistry) Get(id string) (Workspace, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, releasing := r.releasing[id]; releasing {
+		return Workspace{}, false
+	}
+	entry, ok := r.byID[id]
+	return entry.ws, ok
+}
+
+// Release removes the current cache entry for id (generation-blind).
+// Prefer ReleaseHandle when holding a WorkspaceHandle.
+//
+// Cleanup always runs through the WorkspaceManager that was passed to
+// Acquire/AcquireHandle, stored in the registry entry. This prevents
+// callers from accidentally skipping Cleanup (nil manager) or running
+// it against the wrong backend (mismatched manager).
+//
+// Lifecycle symmetry (all wings):
+//   - concurrent Acquire waits for in-flight Release
+//   - Release waits for in-flight Create before cleaning
+//   - Cleanup runs asynchronously so the initiator can cancel waiting
+//   - failed Cleanup restores the entry so Release is retryable
+//   - concurrent Release coalesces on the same releasing call
+func (r *WorkspaceRegistry) Release(
+	ctx context.Context, id string,
+) error {
+	for {
+		r.mu.Lock()
+		if rel, ok := r.releasing[id]; ok {
+			r.mu.Unlock()
+			return waitWorkspaceRelease(ctx, rel)
+		}
+		if call, ok := r.inflight[id]; ok {
+			r.mu.Unlock()
+			if _, err := waitWorkspaceCreate(ctx, call); err != nil {
+				// Creation runs with WithoutCancel, so a canceled
+				// wait does not mean creation failed. A live entry
+				// may still be installed later. If creation has
+				// finished, re-loop to clean up the installed entry
+				// (do not report success — the workspace may leak).
+				// If creation is still in flight, return ctx.Err().
+				select {
+				case <-call.done:
+					continue
+				default:
+					return ctx.Err()
+				}
+			}
+			continue
+		}
+		entry, ok := r.byID[id]
+		if !ok {
+			r.mu.Unlock()
+			return nil
+		}
+		delete(r.byID, id)
+		if r.releasing == nil {
+			r.releasing = map[string]*workspaceReleaseCall{}
+		}
+		rel := &workspaceReleaseCall{done: make(chan struct{})}
+		r.releasing[id] = rel
+		cleanupCtx := context.WithoutCancel(ctx)
+		r.mu.Unlock()
+
+		go func(entry workspaceRegistryEntry, rel *workspaceReleaseCall) {
+			var err error
+			if entry.manager != nil {
+				err = entry.manager.Cleanup(cleanupCtx, entry.ws)
+			}
+			r.mu.Lock()
+			if err != nil {
+				if r.byID == nil {
+					r.byID = map[string]workspaceRegistryEntry{}
+				}
+				r.byID[id] = entry
+			}
+			rel.err = err
+			delete(r.releasing, id)
+			close(rel.done)
+			r.mu.Unlock()
+		}(entry, rel)
+
+		return waitWorkspaceRelease(ctx, rel)
+	}
+}
+
+// ReleaseHandle destroys only the exact generation in handle. If the cache
+// already holds a newer token, this is a no-op and does not Cleanup the newer
+// workspace.
+//
+// Cleanup always runs through the WorkspaceManager that was passed to
+// Acquire/AcquireHandle, stored in the registry entry.
+func (r *WorkspaceRegistry) ReleaseHandle(
+	ctx context.Context, handle WorkspaceHandle,
+) error {
+	if r == nil || handle.registry != r || handle.entryToken == 0 {
+		return nil
+	}
+	id := handle.registryID
+	for {
+		r.mu.Lock()
+		if rel, ok := r.releasing[id]; ok {
+			r.mu.Unlock()
+			return waitWorkspaceRelease(ctx, rel)
+		}
+		if call, ok := r.inflight[id]; ok {
+			r.mu.Unlock()
+			if _, err := waitWorkspaceCreate(ctx, call); err != nil {
+				// Creation runs with WithoutCancel, so a canceled
+				// wait does not mean creation failed. A live entry
+				// may still be installed later. If creation has
+				// finished, re-loop to clean up the installed entry
+				// (do not report success — the workspace may leak).
+				// If creation is still in flight, return ctx.Err().
+				select {
+				case <-call.done:
+					continue
+				default:
+					return ctx.Err()
+				}
+			}
+			continue
+		}
+		entry, ok := r.byID[id]
+		if !ok || entry.entryToken != handle.entryToken {
+			r.mu.Unlock()
+			return nil
+		}
+		delete(r.byID, id)
+		if r.releasing == nil {
+			r.releasing = map[string]*workspaceReleaseCall{}
+		}
+		rel := &workspaceReleaseCall{done: make(chan struct{})}
+		r.releasing[id] = rel
+		cleanupCtx := context.WithoutCancel(ctx)
+		r.mu.Unlock()
+
+		go func(entry workspaceRegistryEntry, rel *workspaceReleaseCall) {
+			var err error
+			if entry.manager != nil {
+				err = entry.manager.Cleanup(cleanupCtx, entry.ws)
+			}
+			r.mu.Lock()
+			if err != nil {
+				if r.byID == nil {
+					r.byID = map[string]workspaceRegistryEntry{}
+				}
+				if _, exists := r.byID[id]; !exists {
+					r.byID[id] = entry
+				}
+			}
+			rel.err = err
+			delete(r.releasing, id)
+			close(rel.done)
+			r.mu.Unlock()
+		}(entry, rel)
+
+		return waitWorkspaceRelease(ctx, rel)
+	}
+}
+
+func waitWorkspaceRelease(ctx context.Context, rel *workspaceReleaseCall) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-rel.done:
+		return rel.err
+	}
 }
 
 func (r *WorkspaceRegistry) handle(

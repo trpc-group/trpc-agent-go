@@ -5330,7 +5330,10 @@ func (e *fakeEngine) Manager() codeexecutor.WorkspaceManager { return nil }
 func (e *fakeEngine) FS() codeexecutor.WorkspaceFS           { return nil }
 func (e *fakeEngine) Runner() codeexecutor.ProgramRunner     { return e.r }
 func (e *fakeEngine) Describe() codeexecutor.Capabilities {
-	return codeexecutor.Capabilities{}
+	// fakeEngine backs tests that exercise policy mode (allowed/denied
+	// commands), which requires SupportsCleanEnv. Tests that do not
+	// touch policy mode are unaffected by this capability flag.
+	return codeexecutor.Capabilities{SupportsCleanEnv: true}
 }
 
 type engineExec struct {
@@ -5529,6 +5532,214 @@ func TestRunTool_WorkspacePersistsAcrossCalls(t *testing.T) {
 	require.Equal(t, 0, o2.ExitCode)
 	require.Len(t, o2.OutputFiles, 1)
 	require.Contains(t, o2.OutputFiles[0].Content, "hi")
+}
+
+// ephemeralProbeManager records workspace creation and cleanup so tests
+// can assert the production lifecycle of invocation-scoped workspaces.
+type ephemeralProbeManager struct {
+	creates []string
+	cleans  []string
+}
+
+func (m *ephemeralProbeManager) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.creates = append(m.creates, id)
+	return codeexecutor.Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (m *ephemeralProbeManager) Cleanup(
+	_ context.Context,
+	ws codeexecutor.Workspace,
+) error {
+	m.cleans = append(m.cleans, ws.ID)
+	return nil
+}
+
+// TestRunTool_EphemeralWorkspaceReleasedAfterInvocation verifies the
+// production skill_run path releases ephemeral (empty-ID session)
+// workspaces after each invocation: the manager cleanup runs and the
+// registry entry is removed, while valid session-scoped handles stay
+// cached and reusable.
+func TestRunTool_EphemeralWorkspaceReleasedAfterInvocation(t *testing.T) {
+	manager := &ephemeralProbeManager{}
+	eng := &managedEngine{
+		m: manager,
+		f: &stubFS{},
+		r: &stubRunner{res: codeexecutor.RunResult{ExitCode: 0}},
+	}
+	rt := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: eng},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{
+				WorkspaceSkillDir: path.Join(
+					codeexecutor.DirSkills,
+					testSkillName,
+				),
+			}, nil
+		})),
+	)
+	args, err := jsonMarshal(runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+	})
+	require.NoError(t, err)
+
+	// Empty session ID -> ephemeral invocation workspace.
+	eInv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+	)
+	eCtx := agent.NewInvocationContext(context.Background(), eInv)
+
+	_, err = rt.Call(eCtx, args)
+	require.NoError(t, err)
+	require.Len(t, manager.creates, 1,
+		"one ephemeral workspace must be created per invocation")
+	require.Len(t, manager.cleans, 1,
+		"ephemeral workspace must be cleaned up after the invocation")
+	require.Equal(t, manager.creates[0], manager.cleans[0])
+
+	// Registry removal: re-acquiring the same ephemeral key must create
+	// a fresh workspace instead of reusing the released entry.
+	reHandle, err := rt.wsr.CreateWorkspaceHandle(eCtx, eng, testSkillName)
+	require.NoError(t, err)
+	require.True(t, rt.wsr.IsEphemeralHandle(reHandle))
+	require.Len(t, manager.creates, 2,
+		"released registry entry must not be reused")
+	defer func() {
+		require.NoError(t, rt.wsr.ReleaseEphemeralHandle(eCtx, reHandle))
+	}()
+
+	// Valid sessions keep their workspace cached across calls: only one
+	// create, and the ephemeral cleanup above must not be repeated.
+	vInv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "sess-1"}),
+	)
+	vCtx := agent.NewInvocationContext(context.Background(), vInv)
+	for i := 0; i < 2; i++ {
+		_, err = rt.Call(vCtx, args)
+		require.NoError(t, err)
+	}
+	require.Len(t, manager.creates, 3,
+		"session-scoped workspace must be created once and reused")
+	require.Len(t, manager.cleans, 1,
+		"session-scoped workspace must not be released after each call")
+}
+
+// TestRunTool_EphemeralWorkspaceReleasedOnFailure is the production-path
+// failure regression: when workspace acquisition succeeds but the program
+// run (or staging) fails, the ephemeral workspace acquired for the empty-ID
+// session must still be cleaned up and removed from the registry instead
+// of leaking behind the failed invocation.
+func TestRunTool_EphemeralWorkspaceReleasedOnFailure(t *testing.T) {
+	manager := &ephemeralProbeManager{}
+	eng := &managedEngine{
+		m: manager,
+		f: &stubFS{},
+		r: &stubRunner{err: fmt.Errorf("program failed")},
+	}
+	rt := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: eng},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{
+				WorkspaceSkillDir: path.Join(
+					codeexecutor.DirSkills,
+					testSkillName,
+				),
+			}, nil
+		})),
+	)
+	args, err := jsonMarshal(runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+	})
+	require.NoError(t, err)
+
+	eInv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+	)
+	eCtx := agent.NewInvocationContext(context.Background(), eInv)
+
+	_, err = rt.Call(eCtx, args)
+	require.Error(t, err, "the failing runner must surface an error")
+	require.Len(t, manager.creates, 1,
+		"the ephemeral workspace is acquired before the failure")
+	require.Len(t, manager.cleans, 1,
+		"ephemeral workspace must be released when the invocation fails")
+	require.Equal(t, manager.creates[0], manager.cleans[0])
+
+	// Registry removal: re-acquiring the same ephemeral key must create
+	// a fresh workspace instead of reusing the released entry.
+	reHandle, err := rt.wsr.CreateWorkspaceHandle(eCtx, eng, testSkillName)
+	require.NoError(t, err)
+	require.True(t, rt.wsr.IsEphemeralHandle(reHandle))
+	require.Len(t, manager.creates, 2,
+		"released registry entry must not be reused")
+	defer func() {
+		require.NoError(t, rt.wsr.ReleaseEphemeralHandle(eCtx, reHandle))
+	}()
+}
+
+// failCleanupManager records cleanup attempts but always fails, so
+// tests can exercise releaseEphemeralWorkspace's warn branch.
+type failCleanupManager struct {
+	cleans []string
+}
+
+func (m *failCleanupManager) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	return codeexecutor.Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (m *failCleanupManager) Cleanup(
+	_ context.Context,
+	ws codeexecutor.Workspace,
+) error {
+	m.cleans = append(m.cleans, ws.ID)
+	return fmt.Errorf("cleanup failed")
+}
+
+// TestRunTool_ReleaseEphemeralWorkspace_NilGuardAndWarnOnFailure covers
+// the nil-receiver guard and the warning branch when the underlying
+// release fails: the error must be logged, not propagated or panicked.
+func TestRunTool_ReleaseEphemeralWorkspace_NilGuardAndWarnOnFailure(t *testing.T) {
+	// Nil receiver and nil resolver must be safe no-ops.
+	var rt *RunTool
+	rt.releaseEphemeralWorkspace(context.Background(), codeexecutor.WorkspaceHandle{})
+	rt = &RunTool{}
+	rt.releaseEphemeralWorkspace(context.Background(), codeexecutor.WorkspaceHandle{})
+
+	// A failing cleanup surfaces as a logged warning only.
+	manager := &failCleanupManager{}
+	eng := &managedEngine{
+		m: manager,
+		f: &stubFS{},
+		r: &stubRunner{res: codeexecutor.RunResult{ExitCode: 0}},
+	}
+	rt = NewRunTool(&mockRepo{}, &engineExec{eng: eng})
+
+	inv := agent.NewInvocation(agent.WithInvocationSession(&session.Session{}))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	handle, err := rt.wsr.CreateWorkspaceHandle(ctx, eng, testSkillName)
+	require.NoError(t, err)
+	require.True(t, rt.wsr.IsEphemeralHandle(handle))
+
+	rt.releaseEphemeralWorkspace(ctx, handle)
+	require.Len(t, manager.cleans, 1,
+		"release must still attempt cleanup when it fails")
 }
 
 func TestSkillStagingHelpers_EarlyReturns(t *testing.T) {

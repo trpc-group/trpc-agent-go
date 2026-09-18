@@ -530,6 +530,11 @@ func (t *sandboxExecTool) workspace(
 ) (codeexecutor.Workspace, error) {
 	workspaceID := "openclaw-exec-command"
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		if inv.Session != nil && strings.TrimSpace(inv.Session.ID) == "" {
+			return codeexecutor.Workspace{}, fmt.Errorf(
+				"sandbox exec_command: invocation session is present but Session.ID is empty",
+			)
+		}
 		if key := workspacesession.KeyFromInvocation(inv); key != "" {
 			workspaceID = key
 		}

@@ -115,10 +115,11 @@ func (r *Runtime) Describe() codeexecutor.Capabilities {
 		isolation = "external"
 	}
 	return codeexecutor.Capabilities{
-		Isolation:      isolation,
-		NetworkAllowed: profile.network.Mode == NetworkEnabled,
-		ReadOnlyMount:  profile.enforcement() == enforcementManaged,
-		Streaming:      false,
+		Isolation:             isolation,
+		NetworkAllowed:        profile.network.Mode == NetworkEnabled,
+		ReadOnlyMount:         profile.enforcement() == enforcementManaged,
+		Streaming:             false,
+		SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOTrue(),
 	}
 }
 
@@ -129,11 +130,27 @@ func (r *Runtime) CreateWorkspace(
 	execID string,
 	pol codeexecutor.WorkspacePolicy,
 ) (codeexecutor.Workspace, error) {
-	_ = ctx
 	if execID == "" {
 		execID = "default"
 	}
 	root, id := workspacePathForID(r.root, execID)
+	// Upgrade a pre-encoding-change PerSession workspace before creating
+	// the new directory; once root exists the legacy directory would be
+	// orphaned.
+	//
+	// The primary trigger is shape-based so every framework caller is
+	// covered without importing this package's private context key: the
+	// flow processor, workspacesession.Resolver, and openclaw all pass
+	// workspacesession.KeyFromInvocation(invocation) — i.e.
+	// codeexecutor.SessionWorkspaceKey(app, user, id) — as the workspace
+	// ID. When execID equals that value for the invocation's session,
+	// derive every legacy key form the session may have been persisted
+	// under ("app/user/id", "app/id", "user/id", or "id") and migrate.
+	// The context value (withLegacyWorkspaceKey) remains as an explicit
+	// override; it must not be the only trigger.
+	if err := r.migrateLegacyWorkspace(execID, resolveLegacyWorkspaceKeys(ctx, execID)); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return codeexecutor.Workspace{}, err
 	}

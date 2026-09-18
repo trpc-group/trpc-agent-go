@@ -334,6 +334,61 @@ func TestLocalCodeExecutor_ExecuteCode_WithoutWorkDir(t *testing.T) {
 	assert.Empty(t, result.OutputFiles)
 }
 
+// TestExecuteCode_SessionOnlyInvocationWorkspaceKey reproduces the
+// processor path where KeyFromInvocation's result is written into
+// input.ExecutionID: local.ExecuteCode must accept it as an
+// os.MkdirTemp pattern (no path separators, no Windows-illegal ':').
+func TestExecuteCode_SessionOnlyInvocationWorkspaceKey(t *testing.T) {
+	key := codeexecutor.SessionWorkspaceKey("", "", "test-session")
+	require.NotEmpty(t, key)
+	require.NotContains(t, key, "/")
+	require.NotContains(t, key, `\`)
+	require.NotContains(t, key, ":")
+
+	// Direct regression check for local.go's
+	// os.MkdirTemp("", "codeexec_"+input.ExecutionID).
+	tmpDir, err := os.MkdirTemp("", "codeexec_"+key)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+
+	// Full executor path: ExecuteCode with the session-derived key must
+	// not fail at temp-dir creation. Block-level failures (e.g. MSYS bash
+	// on Windows rejecting backslash script paths) only surface in
+	// result.Output, never as an ExecuteCode error.
+	executor := local.New()
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "bash",
+			Code:     "echo session-key-ok",
+		}},
+		ExecutionID: key,
+	}
+	_, err = executor.ExecuteCode(context.Background(), input)
+	require.NoError(t, err)
+}
+
+// TestExecuteCode_HazardousExecutionID verifies that ExecuteCode
+// sanitizes input.ExecutionID before building the os.MkdirTemp
+// pattern, so IDs containing path separators and Windows-illegal
+// characters ('/', ':', '|', '\') no longer fail temp-dir creation
+// with "pattern contains path separator".
+func TestExecuteCode_HazardousExecutionID(t *testing.T) {
+	executor := local.New()
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "bash",
+			Code:     "echo hazardous-id-ok",
+		}},
+		ExecutionID: `8:test-app/9:user\12:sess|x`,
+	}
+
+	// ExecuteCode must not error at temp-dir creation. Block-level
+	// failures (e.g. bash unavailable on Windows) only surface in
+	// result.Output, never as an ExecuteCode error.
+	_, err := executor.ExecuteCode(context.Background(), input)
+	require.NoError(t, err)
+}
+
 func TestLocalCodeExecutor_ExecuteCode_ContextCancellation(t *testing.T) {
 	executor := local.New()
 

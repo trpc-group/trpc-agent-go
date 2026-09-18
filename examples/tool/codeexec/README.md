@@ -60,6 +60,44 @@ export SSL_CERT_FILE=<caPATH>/rootCA.pem
 
 > Note: The demo will start a local Jupyter Kernel Gateway subprocess and will call `Close()` on exit to clean it up.
 
+#### OpenSandbox executor
+
+OpenSandbox is a universal sandbox platform open-sourced by Alibaba. The demo reads OpenSandbox connection settings from environment variables:
+
+```bash
+export OPENSANDBOX_ENDPOINT=localhost:8080                          # Server address (host:port)
+export OPENSANDBOX_API_KEY=your-api-key                             # API key
+# Optional overrides (defaults come from the OpenSandbox Go SDK):
+# export OPENSANDBOX_IMAGE=opensandbox/code-interpreter:latest      # Container image
+# export OPENSANDBOX_ENTRYPOINT="/opt/code-interpreter/code-interpreter.sh"  # Entrypoint (space-separated)
+# export OPENSANDBOX_USE_SERVER_PROXY=1                             # Route execd via server (Docker Desktop / WSL2)
+```
+
+The custom image (and its entrypoint) must provide a POSIX shell (`bash` or a compatible shell invoked via `bash -c`) plus GNU coreutils such as `readlink -m` and `stat -c`. Minimal or Alpine busybox images that lack these tools will create successfully but fail on the first workspace or output-collection operation. Use the default `opensandbox/code-interpreter` image unless you can guarantee these tools are present.
+
+Run with OpenSandbox backend:
+
+```bash
+cd tool/codeexec
+./codeexec-demo -model deepseek-v4-flash -executor opensandbox
+```
+
+**Self-hosted deployment (Docker Desktop / WSL2):** When running the OpenSandbox server locally via Docker Desktop (WSL2/macOS), sandbox containers live on a Docker bridge network that is not directly reachable from the host. Set `OPENSANDBOX_USE_SERVER_PROXY=1` so execd requests are routed through the server. On Linux hosts where the server returns `host.docker.internal` (which is not resolvable), use `opensandbox.WithEndpointHostRewrite` in code to remap it:
+
+```go
+executor, err := opensandbox.New(
+    opensandbox.WithDomain("localhost:8080"),
+    opensandbox.WithAPIKey("your-api-key"),
+    // Required for Docker Desktop / WSL2 — sandboxes are on a bridge
+    // network that the Windows/macOS host cannot reach directly.
+    opensandbox.WithUseServerProxy(true),
+    // Required on Linux hosts where host.docker.internal is undefined.
+    // opensandbox.WithEndpointHostRewrite(map[string]string{
+    //     "host.docker.internal": "localhost",
+    // }),
+)
+```
+
 ### 4. Example Conversation
 
 ```
@@ -204,6 +242,7 @@ tool := codeexec.NewTool(
 | `local.New()` | Local execution (unsafe) | `codeexecutor/local` |
 | `container.New()` | Docker container execution | `codeexecutor/container` |
 | `jupyter.New()` | Jupyter Kernel execution (requires `Close()`) | `codeexecutor/jupyter` |
+| `opensandbox.New()` | Remote OpenSandbox sandbox execution (requires `Close()` for owned sandboxes) | `codeexecutor/opensandbox` |
 
 ## Notes
 
