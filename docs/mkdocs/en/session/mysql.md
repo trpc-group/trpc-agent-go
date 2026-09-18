@@ -57,6 +57,7 @@ MySQL storage is suitable for production environments and applications requiring
 | --- | --- | --- | --- |
 | `WithTablePrefix(prefix string)` | `string` | `""` | Table name prefix |
 | `WithSkipDBInit(skip bool)` | `bool` | `false` | Skip automatic table creation |
+| `WithStateInitialization(enabled bool)` | `bool` | `false` | Enable coordinated session-state initialization |
 
 ### Hook Configuration
 
@@ -193,8 +194,10 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_states` (
     `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
     `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `state_initialization_active` TINYINT NULL DEFAULT NULL,
     PRIMARY KEY (`id`),
     UNIQUE KEY `idx_{{PREFIX}}session_states_unique_active` (`app_name`,`user_id`,`session_id`,`deleted_at`),
+    UNIQUE KEY `idx_{{PREFIX}}session_states_state_init_active` (`app_name`,`user_id`,`session_id`,`state_initialization_active`),
     KEY `idx_{{PREFIX}}session_states_expires` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
@@ -298,6 +301,105 @@ See [session/mysql/schema.sql](https://github.com/trpc-group/trpc-agent-go/blob/
 
 ## Version Upgrade
 
+### Coordinated Initialization Migration
+
+Coordinated state initialization requires exactly one active `session_states`
+row for each `(app_name, user_id, session_id)`. On an existing MySQL or TDSQL
+deployment, first deploy the new service version everywhere with
+`WithStateInitialization(false)`. Then quiesce session creation, migrate the
+active-row marker and unique index, provision the lease table and indexes, and
+re-enable the capability.
+
+Back up the table and resolve duplicate active rows before running the DDL:
+
+```sql
+-- Step 1: find duplicate active sessions. Resolve every returned group first.
+SELECT app_name, user_id, session_id, COUNT(*) AS active_count
+FROM `{{PREFIX}}session_states`
+WHERE deleted_at IS NULL
+GROUP BY app_name, user_id, session_id
+HAVING active_count > 1;
+
+-- Step 2: add and backfill the nullable marker. Soft-deleted rows stay NULL.
+ALTER TABLE `{{PREFIX}}session_states`
+    ADD COLUMN state_initialization_active TINYINT NULL DEFAULT NULL;
+UPDATE `{{PREFIX}}session_states`
+SET state_initialization_active = 1
+WHERE deleted_at IS NULL;
+
+-- Step 3: enforce one active row. For TDSQL, user_id remains in the UNIQUE
+-- index so the constraint is shard-local.
+CREATE UNIQUE INDEX `idx_{{PREFIX}}session_states_state_init_active`
+ON `{{PREFIX}}session_states`(
+    app_name, user_id, session_id, state_initialization_active
+);
+```
+
+Before re-enabling state initialization, provision the lease schema with the
+variant matching the deployment. When `WithSkipDBInit(true)` is set, the service
+does not create this table or its indexes, so they must be provisioned during
+the migration. Replace `{{PREFIX}}` with the configured table prefix. The
+expanded table names must fit MySQL's 64-character table-name limit. The Go
+initializer uses prefixed index names for the active-row index in Step 3 and the
+lease indexes below when they fit the 64-character index-name limit; for an
+overlong index name, use the deterministic table-scoped fallback (for example,
+`idx_session_states_state_init_active` or `idx_state_initialization_leases_uniq`)
+instead of truncating the prefix.
+
+MySQL:
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}state_initialization_leases` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `coordination_key` BINARY(32) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `owner_token` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `session_row_id` BIGINT NOT NULL,
+    `session_created_at` TIMESTAMP(6) NOT NULL,
+    `expires_at` TIMESTAMP(6) NOT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE UNIQUE INDEX `idx_{{PREFIX}}state_initialization_leases_uniq`
+    ON `{{PREFIX}}state_initialization_leases` (`coordination_key`, `user_id`);
+CREATE INDEX `idx_{{PREFIX}}state_initialization_leases_exp`
+    ON `{{PREFIX}}state_initialization_leases` (`expires_at`);
+```
+
+TDSQL:
+
+```sql
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}state_initialization_leases` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `coordination_key` BINARY(32) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `owner_token` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `session_row_id` BIGINT NOT NULL,
+    `session_created_at` TIMESTAMP(6) NOT NULL,
+    `expires_at` TIMESTAMP(6) NOT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (`id`, `user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id;
+
+CREATE UNIQUE INDEX `idx_{{PREFIX}}state_initialization_leases_uniq`
+    ON `{{PREFIX}}state_initialization_leases` (`coordination_key`, `user_id`);
+CREATE INDEX `idx_{{PREFIX}}state_initialization_leases_exp`
+    ON `{{PREFIX}}state_initialization_leases` (`expires_at`);
+```
+
+Startup fails closed while the column/index is missing, the index is not unique,
+or an active row does not have marker value `1`. After all instances use the
+migrated schema, re-enable state initialization. The service writes marker `1`
+for active rows and clears it on soft deletion. If writes could not be quiesced,
+repeat the duplicate check and marker `UPDATE` immediately before creating the
+unique index; do not re-enable the capability until they succeed. Startup also
+checks both sides of the invariant: rows with `deleted_at IS NULL` must have
+marker `1`, while soft-deleted rows must have a `NULL` marker. The check uses an
+`EXISTS` probe and stops after the first inconsistent row, but the existing
+indexes do not lead with either predicate column, so a healthy deployment may
+still scan the full table or an entire index once during startup.
+
 ### Legacy Data Migration
 
 If your database was created with an older version, follow these migration steps.
@@ -394,3 +496,4 @@ SHOW INDEX FROM session_summaries WHERE Key_name = 'idx_session_summaries_unique
 4. **Soft delete**: Enabled by default; queries automatically filter deleted records
 5. **MySQL version**: Requires MySQL 5.6.5+ for multiple TIMESTAMP columns with CURRENT_TIMESTAMP
 6. **Unique constraint**: MySQL's UNIQUE constraint does not prevent multiple NULL values; the application layer handles active record uniqueness
+7. **Coordinated initialization migration**: With state initialization enabled, `WithSkipDBInit(true)` still verifies that `session_states.created_at` uses `TIMESTAMP(6)`, that the active-row marker and unique index are consistent, and that the lease table and required indexes exist. Use `WithStateInitialization(false)` only as a temporary migration opt-out; it disables lease cleanup and causes consumers such as anonymous A2A coordination to use their unavailable-capability behavior.
