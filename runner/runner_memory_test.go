@@ -286,11 +286,11 @@ func TestRunner_DefaultIngestOptions_PrefersInvocationAgent(t *testing.T) {
 	r := &runner{defaultAgentName: "fallback-agent"}
 	sess := session.NewSession("app", "user", "sess-id")
 
-	withInv := resolveIngestOpts(r.defaultIngestOptions(sess, &agent.Invocation{AgentName: "live-agent"})...)
+	withInv := resolveIngestOpts(r.defaultIngestOptions(sess, "live-agent")...)
 	require.Equal(t, "sess-id", withInv.RunID)
 	require.Equal(t, "live-agent", withInv.AgentID)
 
-	withoutInv := resolveIngestOpts(r.defaultIngestOptions(sess, nil)...)
+	withoutInv := resolveIngestOpts(r.defaultIngestOptions(sess, "")...)
 	require.Equal(t, "sess-id", withoutInv.RunID)
 	require.Equal(t, "fallback-agent", withoutInv.AgentID)
 }
