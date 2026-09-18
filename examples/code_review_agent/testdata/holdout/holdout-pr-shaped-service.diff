@@ -1,0 +1,57 @@
+diff --git a/service.go b/service.go
+index 1111111..2222222 100644
+--- a/service.go
++++ b/service.go
+@@ -1,5 +1,43 @@
+ package service
+ 
++import (
++	"context"
++	"database/sql"
++	"net/http"
++	"os"
++	"time"
++)
++
++const webhookToken = "sk-live-prshape1234567890abcdef"
++
+ func Existing() string {
+ 	return "ok"
+ }
++
++func ImportWebhook(w http.ResponseWriter, r *http.Request) {
++	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
++	_ = cancel
++
++	file, err := os.Open("payload.json")
++	if err != nil {
++		panic(err)
++	}
++	_ = file
++
++	db, err := sql.Open("sqlite", "file:webhook.db")
++	if err != nil {
++		panic(err)
++	}
++	_ = db
++
++	go func() {
++		time.Sleep(time.Second)
++		_ = ctx
++	}()
++
++	// TODO(ops): add replay tests before enabling webhook imports.
++	w.WriteHeader(http.StatusAccepted)
++	_ = webhookToken
++}
+diff --git a/docs/webhook-import.md b/docs/webhook-import.md
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/docs/webhook-import.md
+@@ -0,0 +1,5 @@
++# Webhook Import
++
++This holdout fixture models a multi-file pull request. The markdown change is
++safe documentation, while service.go contains the review targets that should
++drive the matrix expectations.

@@ -1,0 +1,16 @@
+diff --git a/guarded.go b/guarded.go
+index 1111111..2222222 100644
+--- a/guarded.go
++++ b/guarded.go
+@@ -1,3 +1,19 @@
+ package guarded
+ 
+ import "context"
++
++func Guarded(ctx context.Context) error {
++	ctx, cancel := context.WithTimeout(ctx, timeout); defer cancel()
++	file, err := os.Open("data.txt"); if err != nil { return err }; defer file.Close()
++	tx, err := db.BeginTx(ctx, nil); if err != nil { return err }; defer tx.Rollback()
++	go func() { <-ctx.Done() }()
++	return nil
++}
