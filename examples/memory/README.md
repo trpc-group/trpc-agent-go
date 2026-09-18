@@ -72,6 +72,22 @@ go run main.go
 
 [Read full documentation →](./auto/README.md)
 
+### 📁 gorm/
+
+**GORM Memory — Shared Database Connection**
+
+Reference docs and DDL for episodic memory via [`memory/gorm`](../../memory/gorm) using an injected `*gorm.DB`. Run the interactive demo through `simple` or `auto` with `-memory=gorm`.
+
+**Getting Started:**
+
+```bash
+cd examples/memory/simple
+export OPENAI_API_KEY="your-api-key"
+go run main.go -memory=gorm
+```
+
+[Read full documentation →](./gorm/README.md)
+
 ### 📁 mem0/
 
 **Mem0 Integration - External Long-Term Memory Platform**
@@ -158,7 +174,10 @@ All examples support multiple storage backends:
 | `mysqlvec` | MySQL + vector search (embeddings)          | `-memory=mysqlvec` |
 | `postgres` | PostgreSQL-based storage                    | `-memory=postgres` |
 | `pgvector` | pgvector PostgreSQL storage with embeddings | `-memory=pgvector` |
+| `gorm`     | GORM-backed storage (shared `*gorm.DB`)     | `-memory=gorm`     |
 | `chromadb` | ChromaDB storage with cosine and hybrid search | `-memory=chromadb` |
+
+See also [`gorm/`](./gorm/) for a **shared `*gorm.DB`** example (not a `simple/` backend flag).
 
 ### Session Management
 
@@ -346,6 +365,9 @@ export PGVECTOR_PASSWORD=""
 export PGVECTOR_DATABASE=trpc-agent-go-pgmemory
 export PGVECTOR_EMBEDDER_MODEL=text-embedding-3-small
 go run main.go -memory pgvector
+
+# GORM memory service (SQLite default, or set GORM_DSN for PostgreSQL)
+go run main.go -memory gorm
 
 # ChromaDB memory service
 export CHROMA_BASE_URL=http://localhost:8000
