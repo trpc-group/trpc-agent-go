@@ -623,6 +623,7 @@ summary.WithChecksAny(
 | `WithCacheSafeForking(enable bool)` | 在有父请求可用时，启用 cache-safe 摘要请求 forking。默认关闭 |
 | `WithCacheSafeForkPrompt(prompt string)` | 自定义 cache-safe fork 请求的最终指令；standalone fallback 会在 source-data boundary 后追加同一指令，其渲染结果会计入输入预算。可包含 `{max_summary_words}`，但不能包含 `{conversation_text}` 或 `{previous_summary}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | 自定义函数跳过最近事件 |
+| `WithSkipRecentContext(skipFunc ContextSkipRecentFunc)` | 使用请求 `context.Context` 决定跳过最近事件；最后配置的 skip-recent 选项生效 |
 
 ### Hook 选项
 
@@ -921,6 +922,23 @@ summarizer := summary.NewSummarizer(
     summary.WithEventThreshold(10),
 )
 ```
+
+如果跳过逻辑需要读取请求级信息，例如 trace ID，可以使用
+`WithSkipRecentContext`：
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecentContext(func(ctx context.Context, events []event.Event) int {
+        traceID, _ := ctx.Value(traceIDKey{}).(string)
+        _ = traceID
+        return 2
+    }),
+)
+```
+
+`WithSkipRecent` 会继续保留，已有调用方无需修改。两个 skip-recent 选项同时配置时，
+`NewSummarizer` 参数列表中最后出现的选项生效。
 
 ## 摘要 Hook
 

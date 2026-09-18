@@ -9,6 +9,7 @@
 package summary
 
 import (
+	"context"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -32,6 +33,11 @@ func WithName(name string) Option {
 // It receives all events and returns the number of recent events to skip.
 // Return 0 to skip no events.
 type SkipRecentFunc func(events []event.Event) int
+
+// ContextSkipRecentFunc defines a function that determines how many recent
+// events to skip during summarization using the current request context.
+// Return 0 to skip no events.
+type ContextSkipRecentFunc func(context.Context, []event.Event) int
 
 // WithPrompt sets the custom prompt for summarization.
 // The prompt must include the placeholder {conversation_text}, which will be
@@ -134,6 +140,19 @@ func WithMaxSummaryWords(maxWords int) Option {
 func WithSkipRecent(skipFunc SkipRecentFunc) Option {
 	return func(s *sessionSummarizer) {
 		s.skipRecentFunc = skipFunc
+		s.skipRecentContextFunc = nil
+	}
+}
+
+// WithSkipRecentContext sets a context-aware function to determine how many
+// of the most recent events to skip during summarization. The context is the
+// same request context passed to ShouldSummarizeWithContext or Summarize.
+// Return 0 to skip no events. When both WithSkipRecent and
+// WithSkipRecentContext are configured, the last option takes precedence.
+func WithSkipRecentContext(skipFunc ContextSkipRecentFunc) Option {
+	return func(s *sessionSummarizer) {
+		s.skipRecentFunc = nil
+		s.skipRecentContextFunc = skipFunc
 	}
 }
 

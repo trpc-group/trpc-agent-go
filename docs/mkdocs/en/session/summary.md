@@ -678,6 +678,7 @@ summary.WithChecksAny(
 | `WithCacheSafeForking(enable bool)` | Opt in to cache-safe summary request forking when a parent request is available. Disabled by default |
 | `WithCacheSafeForkPrompt(prompt string)` | Customize the final instruction used by cache-safe fork requests and appended after a source-data boundary in standalone fallbacks. Its rendered text counts against the input budget. May include `{max_summary_words}`, but not `{conversation_text}` or `{previous_summary}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | Custom function to skip recent events |
+| `WithSkipRecentContext(skipFunc ContextSkipRecentFunc)` | Context-aware function to skip recent events; the last configured skip-recent option takes precedence |
 
 ### Hook Options
 
@@ -983,6 +984,24 @@ summarizer := summary.NewSummarizer(
     summary.WithEventThreshold(10),
 )
 ```
+
+Use `WithSkipRecentContext` when the skip decision needs request-scoped values
+such as a trace ID:
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSkipRecentContext(func(ctx context.Context, events []event.Event) int {
+        traceID, _ := ctx.Value(traceIDKey{}).(string)
+        _ = traceID
+        return 2
+    }),
+)
+```
+
+`WithSkipRecent` remains available for existing callers. When both skip-recent
+options are configured, the last option in the `NewSummarizer` argument list
+takes precedence.
 
 ## Summary Hooks
 
