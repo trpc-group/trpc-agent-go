@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -2594,9 +2595,45 @@ func (f *Flow) callLLM(
 			finalizationMessage,
 		),
 	)
+	var tailoringStateMu sync.Mutex
+	tailoringStateValid := true
 	ctx, tailoringObserver := imodelrequest.ObserveTokenTailoring(
 		ctx,
-		func(record imodelrequest.TokenTailoringRecord) {
+		func(change imodelrequest.TokenTailoringChange) {
+			tailoringStateMu.Lock()
+			defer tailoringStateMu.Unlock()
+
+			record := change.Record
+			if tailoringStateValid &&
+				tokenTailoringPreservesHistory(change, llmRequest) &&
+				summaryview.RebaseAfterTransform(
+					invocation,
+					change.Before,
+					change.After,
+					nil,
+				) {
+				summaryfork.Attach(
+					invocation,
+					requestWithoutCallLimitFinalizationMessage(
+						llmRequest,
+						finalizationMessage,
+					),
+				)
+				log.DebugfContext(
+					ctx,
+					"Model request token tailoring preserved history: "+
+						"provider=%s, max_input_tokens=%d, messages=%d->%d",
+					record.Provider,
+					record.MaxInputTokens,
+					record.BeforeMessages,
+					record.AfterMessages,
+				)
+				return
+			}
+			// Request-derived summary state is monotonic for this model call.
+			// Once one transform cannot be proven and rebased, a later local
+			// transform must not revive only one of the derived snapshots.
+			tailoringStateValid = false
 			summaryview.InvalidateBinding(invocation)
 			summaryfork.Invalidate(invocation)
 			if tokenTailoringCollapsedHistory(record) {
@@ -2657,6 +2694,20 @@ func tokenTailoringCollapsedHistory(
 	record imodelrequest.TokenTailoringRecord,
 ) bool {
 	return record.BeforeMessages > 2 && record.AfterMessages <= 2
+}
+
+func tokenTailoringPreservesHistory(
+	change imodelrequest.TokenTailoringChange,
+	request *model.Request,
+) bool {
+	record := change.Record
+	return request != nil &&
+		record.Provenance ==
+			imodelrequest.TokenTailoringProvenancePreserved &&
+		record.BeforeMessages == len(change.Before) &&
+		record.AfterMessages == len(change.After) &&
+		len(change.Before) == len(change.After) &&
+		reflect.DeepEqual(change.After, request.Messages)
 }
 
 func withResponseSeqFinalizer(
