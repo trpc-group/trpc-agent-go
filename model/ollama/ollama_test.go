@@ -477,6 +477,26 @@ func Test_convertMessage(t *testing.T) {
 	}
 }
 
+// Test_convertMessage_TextImageAndAppendedContext checks that flattening text
+// parts keeps the boundary between caller text and framework-appended context.
+func Test_convertMessage_TextImageAndAppendedContext(t *testing.T) {
+	userText := "Describe this screenshot"
+	clockText := "\n\nThe current date is: 2006-01-02"
+	msg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &userText},
+			{Type: model.ContentTypeImage, Image: &model.Image{Data: []byte("image-bytes"), Format: "png"}},
+			{Type: model.ContentTypeText, Text: &clockText},
+		},
+	}
+
+	result, err := convertMessage(msg)
+	assert.NoError(t, err)
+	assert.Len(t, result.Images, 1)
+	assert.Equal(t, userText+clockText, result.Content)
+}
+
 // Test_convertTools tests tool conversion.
 func Test_convertTools(t *testing.T) {
 	toolsMap := map[string]tool.Tool{

@@ -220,7 +220,18 @@ agent := llmagent.New(
 )
 ```
 
-**Suggestion**: The default date-only path is more cache-friendly. If you explicitly configure a full time format such as `WithTimeFormat("2006-01-02 15:04:05 MST")`, the old full timestamp behavior is still available, but it changes the request prefix more often.
+**Suggestion**: The default date-only path is more cache-friendly, and system placement remains the default. If you need a full timestamp such as `WithTimeFormat("2006-01-02 15:04:05 MST")`, keep it off the stable system prefix:
+
+```go
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithAddCurrentTime(true),
+    llmagent.WithTimeFormat("2006-01-02 15:04:05 MST"),
+    llmagent.WithTimePromptPlacement(llmagent.TimePromptPlacementUser),
+)
+```
+
+Use system placement with a full format only when exact time must remain in the system context.
 
 ## 5. What Users Can Configure and Observe
 
@@ -308,6 +319,7 @@ Recommended capabilities:
 | `summary.WithCacheSafeForking(true)` | summary generation request | Clones the parent request and appends a compaction message, reusing the parent prefix |
 | `llmagent.WithSessionSummaryInjectionMode(SessionSummaryInjectionUser)` | near history | Reduces prefix rewrite when summary changes frequently, with trimming tradeoff |
 | `llmagent.WithAddCurrentTime(true)` default date-only | system message / time tool | Date-level context is stable; precise time is available through `environment_context_current_time` when tools are enabled. Legacy `WithOutputSchema` disables this tool |
+| `llmagent.WithTimePromptPlacement(llmagent.TimePromptPlacementUser)` | latest user turn | Keeps a full timestamp out of the stable system prefix; system placement remains the default |
 | `agent.WithModelRequestExtraFields` with `prompt_cache_key` | request body | A stable key may help providers route similar long-prefix requests |
 | default `llmagent.WithReasoningContentMode` | assistant history | Drops historical reasoning content by default, reducing unnecessary input tokens |
 
@@ -319,7 +331,7 @@ Dynamic capabilities to use carefully:
 | `llmagent.WithRefreshToolSetsOnRun(true)` | tools schema | Re-fetching tools can change the visible tool surface | Fix the tool surface in cache-sensitive paths when possible |
 | `llmagent.WithSkillLoadMode` / `WithMaxLoadedSkills` | loaded Skills context | Affects how long dynamic Skill content stays in context | Control residency and size |
 | `llmagent.WithPreloadMemory` / `WithPreloadSessionRecall` | system message or history | Query-dependent recall in system message rewrites the prefix | Prefer user/history injection in cache-sensitive scenarios |
-| `llmagent.WithTimeFormat("2006-01-02 15:04:05 MST")` | system message | Full timestamp changes frequently | Use only when exact time must be in system context |
+| `llmagent.WithTimeFormat("2006-01-02 15:04:05 MST")` | system message by default | Full timestamp changes frequently | Pair with `llmagent.WithTimePromptPlacement(llmagent.TimePromptPlacementUser)` unless exact time must stay in system context |
 | dynamic `WithPostToolPrompt` | system message | Turns stable guidance into a dynamic prefix | Keep it stable; put temporary instructions later |
 | `agent.WithInjectedContextMessages` / `WithLateContextMessages` | near history | Injected messages can appear before stable history | Prefer late injection for temporary context |
 | `BeforeModel` / `EventMessageProjector` | any request message | Can rewrite system, tools, or history | Prefer append-only changes near the end |
