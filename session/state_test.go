@@ -164,3 +164,18 @@ func TestStateConstants(t *testing.T) {
 	assert.Equal(t, "user:", StateUserPrefix)
 	assert.Equal(t, "temp:", StateTempPrefix)
 }
+
+func TestIsInternalStateKey(t *testing.T) {
+	for _, key := range []string{
+		tracksStateKey,
+		SummaryLastIncludedTimestampStateKey,
+		SummaryLastIncludedEventIDStateKey,
+	} {
+		assert.True(t, IsInternalStateKey(key), "key %q should be internal", key)
+	}
+	for _, key := range []string{
+		"profile", "temp:scratch", "summary:custom", "tracks2", "",
+	} {
+		assert.False(t, IsInternalStateKey(key), "key %q should not be internal", key)
+	}
+}
